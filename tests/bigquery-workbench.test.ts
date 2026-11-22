@@ -6,7 +6,7 @@ import { queryStatusModel } from '../src/renderer/src/results/query-status'
 import { queryContextModel } from '../src/renderer/src/query-context'
 import type { LiveConnection } from '../src/renderer/src/services/connections'
 import { executePendingQuery } from '../src/renderer/src/services/connection-opening'
-import { deferred } from './fixtures/documents'
+import { deferred, TestEditor } from './fixtures/documents'
 import { readyBackend, workbenchFixture } from './fixtures/workbench'
 
 const id = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`
@@ -15,6 +15,52 @@ const target = (): PersistedConnectionTarget => ({ id: id(1), options: { provide
   details: { autoReconnect: 'inherit', environment: 'Production' }, inExplorer: true, resumeWanted: true, expectedPrincipal: principal })
 
 describe('BigQuery connections in the workbench (BQ-2)', () => {
+  // `#` starts a GoogleSQL comment, so a T-SQL comma move would take the comma out of it: `SELECT a # total,⏎  b` (a aliased b)
+  // became `SELECT a # total⏎ ,b`, two columns.
+  it('keeps Move Commas from rewriting a GoogleSQL query, from its own tab or a command that targets a SQL Server object', async () => {
+    const value = workbenchFixture()
+    try {
+      const sql = 'SELECT a # total,\n  b\nFROM t\n, u', query = value.documents.restore('commas.sql', sql, 'sql', 'lf', undefined, 'bigquery')
+      value.documents.bindEditor(new TestEditor().asEditor())
+      expect(value.documents.getModel(query.id)?.getLanguageId()).toBe('googlesql')
+      const node = { id: 1, connectionId: 'sql-server', kind: 'server', label: 'server', ref: { type: 'object', object: { kind: 'server' } }, lost: false } as const
+      for (const id of ['edit.commasToFront', 'edit.commasToEnd'] as const) {
+        expect(value.commands.isEnabled(id), id).toBe(false)
+        expect(value.commands.unavailableReason(id), id).toBe('Move Commas works only in SQL Server queries.')
+        expect(await value.commands.execute(id, undefined, 'palette'), id).toBe(false)
+        const args = { target: { kind: 'explorer' as const, node } }
+        expect(value.commands.isEnabled(id, args), id).toBe(false)
+        expect(await value.commands.execute(id, args, 'toolbar'), id).toBe(false)
+      }
+      expect(value.documents.getModel(query.id)?.getValue()).toBe(sql)
+      // This editor cannot apply edits, so a transform that ran would fail into the command banner rather than change the text.
+      expect(value.commands.getSnapshot().error).toBe('')
+      // A SQL Server query keeps both commands, with no reason to grey them.
+      const tsql = value.documents.restore('commas-tsql.sql', 'SELECT a,\n  b\nFROM t', 'sql', 'lf')
+      expect(value.documents.boundEditor?.getModel()).toBe(value.documents.getModel(tsql.id))
+      expect(value.documents.boundEditor?.getModel()?.getLanguageId()).toBe('sql')
+      for (const id of ['edit.commasToFront', 'edit.commasToEnd'] as const) {
+        expect(value.commands.isEnabled(id), id).toBe(true)
+        expect(value.commands.unavailableReason(id), id).toBeUndefined()
+      }
+    } finally { value.dispose() }
+  })
+
+  it('keeps Toggle Brackets from rewriting the bound GoogleSQL model when a command targets a SQL Server object', async () => {
+    const value = workbenchFixture()
+    try {
+      const sql = 'SELECT [1] AS items', query = value.documents.restore('arrays.sql', sql, 'sql', 'lf', undefined, 'bigquery')
+      const editor = new TestEditor()
+      value.documents.bindEditor(editor.asEditor())
+      expect(value.documents.getModel(query.id)?.getLanguageId()).toBe('googlesql')
+      const node = { id: 1, connectionId: 'sql-server', kind: 'server', label: 'server', ref: { type: 'object', object: { kind: 'server' } }, lost: false } as const
+      const args = { target: { kind: 'explorer' as const, node } }
+      expect(value.commands.isEnabled('edit.toggleBrackets', args)).toBe(false)
+      expect(await value.commands.execute('edit.toggleBrackets', args, 'toolbar')).toBe(false)
+      expect(value.documents.getModel(query.id)?.getValue()).toBe(sql)
+    } finally { value.dispose() }
+  })
+
   it('lists a restored BigQuery target by its project and dataset, and reconnects it at startup with its pinned account', async () => {
     const value = workbenchFixture(), ready = deferred<void>()
     try {

@@ -27,7 +27,7 @@ internal static class RestoreLiveChecks
     /// restores the differential taken after the point (the check below restores both), the logs that reach it.</summary>
     private static IReadOnlyList<string> Varia(string goal, IReadOnlyList<string> smo) => goal == "between log2 and the differential" ? ["full", "log1", "log2", "log3"] : smo;
 
-    public static async Task RunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json)
+    public static async Task RunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, Func<string, ConnectOptions> live, JsonSerializerOptions json)
     {
         async Task<SqlRun> Sql(string text, string database = "master")
         {
@@ -69,6 +69,16 @@ internal static class RestoreLiveChecks
         {
             Console.WriteLine("Restore Database scratch checks skipped. Set VARIA_TEST_SQL_SCRATCH=1 to allow creating and dropping a uniquely named database and its backup files on a disposable development server.");
             return;
+        }
+        if (sysadmin)
+        {
+            // The scratch principal exists only inside the transaction. Closing the session also rolls it back on error.
+            var user = "VariaScratch_" + Guid.NewGuid().ToString("N") + "_restore";
+            var asUser = "EXECUTE AS USER = N'" + user + "'; " + RestoreSql.Facts + " REVERT; ";
+            var permission = await Sql("BEGIN TRANSACTION; CREATE USER [" + user + "] WITHOUT LOGIN; " + asUser
+                + "GRANT CREATE DATABASE TO [" + user + "]; " + asUser + "ROLLBACK TRANSACTION;");
+            check(permission.Status == "completed" && permission.Sets is [[[_, _, _, "0" or "False"]], [[_, _, _, "1" or "True"]]],
+                "the same master user can create a restore destination only after its CREATE DATABASE grant: " + permission.Error);
         }
         await using var scratch = ScratchDatabase.Bare((text, database) => Sql(text, database));
         var folder = await scratch.CreateRestoreSourceAsync();
@@ -336,7 +346,7 @@ internal static class RestoreLiveChecks
             "the planner's plan over the fork restores every row, and to the point after the restore its rows, where the abandoned branch's plan fails (" + abandoned + "): " + string.Join(", ", forkOutcomes));
 
         // The run (D1f) on the same source and target.
-        await RestoreRunLiveChecks.RunAsync(check, service, info, json, (text, database) => Sql(text, database), scratch, sets, relocated);
+        await RestoreRunLiveChecks.RunAsync(check, service, info, live, json, (text, database) => Sql(text, database), scratch, sets, relocated);
 
         // Restore Files and Filegroups (D1g), on a database of its own.
         await RestoreFilesLiveChecks.RunAsync(check, service, info, json, (text, database) => Sql(text, database), scratch);

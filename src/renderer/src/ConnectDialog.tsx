@@ -275,6 +275,7 @@ export default function ConnectDialog({ initial, initialTargetId, raise, reviewO
   const stopped = useRef(new Set<string>())
   const stopButton = useRef<HTMLButtonElement>(null)
   const connectButton = useRef<HTMLButtonElement>(null)
+  const saveButton = useRef<HTMLButtonElement>(null)
   const match = rememberedProfile(library.profiles, savedIds, options, selectedId)
   const rememberable = canRememberPassword(options.authentication) && !!storage?.available
   const storageNote = canRememberPassword(options.authentication) && storage && !storage.available ? storageNotes[storage.reason ?? 'unavailable'] : ''
@@ -376,6 +377,14 @@ export default function ConnectDialog({ initial, initialTargetId, raise, reviewO
     if (busy) stopButton.current?.focus()
     else if ((dialog.current?.ownerDocument.activeElement ?? null) === stopButton.current) connectButton.current?.focus()
   }, [busy])
+  // Save's password check disables Save. Focus moves to Cancel, which stops the check, at once: left to the next frame, an
+  // Escape pressed meanwhile reaches the page instead of the dialog.
+  const checkingSave = testing?.kind === 'save'
+  useEffect(() => {
+    if (checkingSave) stopButton.current?.focus()
+    else if ((dialog.current?.ownerDocument.activeElement ?? null) === stopButton.current && !busy) saveButton.current?.focus()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checkingSave])
   useKeepFocus(dialog, !!sourcePrompt || !!reviewOpen || !!confirmClose)
   useEffect(() => {
     if (!currentOptions.current.password && !rememberEdited.current) setRemember(!!match)
@@ -1214,7 +1223,7 @@ export default function ConnectDialog({ initial, initialTargetId, raise, reviewO
             <button className="ui-button" data-control-variant="secondary" type="button" data-reserve-label={testConnectionLabel} title={testing ? undefined : 'Sign in with these settings without saving them or opening a session'} disabled={testing ? false : locked || !loaded || !ready} onClick={() => { if (testing) stopTest(); else if (isBigQuery) void testBigQuery(); else void testConnection() }}><span>{testing ? 'Stop' : testConnectionLabel}</span></button>
           </div>
           <div className="connect-footer-end">
-            <button className="ui-button" data-control-variant="secondary" type="button" title={saveTitle} disabled={locked || !loaded || !ready} onClick={() => void save()}>Save</button>
+            <button ref={saveButton} className="ui-button" data-control-variant="secondary" type="button" title={saveTitle} disabled={locked || !loaded || !ready} onClick={() => void save()}>Save</button>
             <button ref={connectButton} className="ui-button primary" type="submit" data-reserve-label={pendingConnectLabel ?? connectLabel} data-reserve-busy-label={connectingLabel} disabled={locked || !loaded || !ready}><span>{busy ? connectingLabel : connectLabel}</span></button>
             <button ref={stopButton} className="ui-button" data-control-variant="secondary" type="button" data-reserve-label={cancelLabel} disabled={saving} onClick={busy ? stop : testing ? stopTest : requestClose}><span>{busy ? 'Stop' : cancelLabel}</span></button>
           </div>

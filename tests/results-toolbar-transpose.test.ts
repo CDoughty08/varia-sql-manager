@@ -32,11 +32,11 @@ const columns: ResultColumn[] = [
 ]
 
 /** A query tab whose run returned two results of `rows` rows, and a way to draw something of it. */
-async function ran(rows = 10) {
+async function ran(rows = 10, patch: Partial<Parameters<typeof descriptor>[1]> = {}) {
   const f = workbenchFixture()
   mounted.add(f.dispose)
   const tab = f.documents.create('query.sql', 'SELECT 1', 'master')
-  const sets = [descriptor(1, { rowsRead: rows, rowsStored: rows, rowsAvailable: rows, columns }), descriptor(2, { index: 1, rowsRead: rows, rowsStored: rows, rowsAvailable: rows, columns })]
+  const sets = [descriptor(1, { rowsRead: rows, rowsStored: rows, rowsAvailable: rows, columns, ...patch }), descriptor(2, { index: 1, rowsRead: rows, rowsStored: rows, rowsAvailable: rows, columns, ...patch })]
   f.results.begin(tab.id, 'q1')
   for (const set of sets) f.resultClient.emit('q1', { type: 'resultSet.opened', descriptor: set })
   await f.results.finish(tab.id, 'q1', { summary: summaryOf(sets) })
@@ -87,8 +87,8 @@ describe('results toolbar Transposed', () => {
 
 describe('a results grid and its view\'s orientation', () => {
   /** Draws Result 1's grid, and names the GridView built for it last. */
-  async function grid(rows: number) {
-    const f = await ran(rows)
+  async function grid(rows: number, patch: Partial<Parameters<typeof descriptor>[1]> = {}) {
+    const f = await ran(rows, patch)
     const built: GridView[] = []
     // Every grid built is given its highlights (none, when it has none): that call names the views, in the order built.
     const setHighlights = vi.spyOn(GridView.prototype, 'setHighlights').mockImplementation(function (this: GridView, sets) {
@@ -142,6 +142,12 @@ describe('a results grid and its view\'s orientation', () => {
     expect(strip()).toBe('Showing the first 4,095 of 6,000 rows as columns. Filter the Table to see other rows.')
     await act(async () => { results.setOrientation(tab.id, key(), { transposed: false }) })
     expect(strip()).toBeUndefined()
+  })
+
+  it('does not tell the user to filter a windowed BigQuery result, which refuses filters', async () => {
+    const { results, tab, key, strip } = await grid(6000, { rowsStored: 0, residence: 'remote', revision: 0, rowsTotal: 6000 })
+    await act(async () => { results.setOrientation(tab.id, key(), { transposed: true }) })
+    expect(strip()).toBe('Showing the first 4,095 of 6,000 rows as columns. A result windowed in BigQuery cannot be filtered yet.')
   })
 
   it('has no cap strip for a view of at most 4,095 rows', async () => {

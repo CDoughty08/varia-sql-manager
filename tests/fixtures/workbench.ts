@@ -37,6 +37,7 @@ import { PivotService } from '../../src/renderer/src/results/PivotService'
 import { highlightsContribution } from '../../src/renderer/src/contributions/highlights'
 import { pivotContribution } from '../../src/renderer/src/contributions/pivot'
 import { transposeContribution } from '../../src/renderer/src/contributions/transpose'
+import { loadIntoMemoryContribution } from '../../src/renderer/src/contributions/load-into-memory'
 import { plansContribution } from '../../src/renderer/src/contributions/plans'
 import { compareContribution } from '../../src/renderer/src/contributions/compare'
 import { ResultsSearchService } from '../../src/renderer/src/results/search'
@@ -89,7 +90,9 @@ import { documentOwner } from '../../src/renderer/src/live/LiveService'
 import { fakeLiveViews } from './live-views'
 import { SsisOperationsService } from '../../src/renderer/src/ssis/SsisOperationsService'
 import { JobActivityService } from '../../src/renderer/src/agent/JobActivityService'
+import { LogViewerService } from '../../src/renderer/src/agent/LogViewerService'
 import { AgentJobStatusService } from '../../src/renderer/src/agent/AgentJobStatusService'
+import { JobDocumentService } from '../../src/renderer/src/agent/JobDocumentService'
 import { agentContribution } from '../../src/renderer/src/contributions/agent'
 import { ObjectSearchService } from '../../src/renderer/src/search/ObjectSearchService'
 import { fakeLive } from './live-handle'
@@ -344,6 +347,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
       ok: true, value: { deleteTarget: { name: [params.target.schema, params.target.name].filter(Boolean).join('.'), type: kindSpecs[params.target.kind].title, owner: 'dbo', warnings: [], dependentsTruncated: false }, elapsedMs: 1 }
     })),
     scriptObjectAction: vi.fn<VariaApi['scriptObjectAction']>(async params => ({ ok: true, value: { text: `-- ${params.action} ${params.target.name}`, database: params.action === 'createTable' ? params.target.name : params.action === 'createDatabase' ? 'master' : params.target.database ?? 'master', warnings: [] } })),
+    agentProfile: vi.fn<VariaApi['agentProfile']>(async () => ({ ok: true, value: { elapsedMs: 1, error: { code: 'NOT_SUPPORTED', message: 'No Agent here.', retryable: false } } })),
+    agentHistoryMessage: vi.fn<VariaApi['agentHistoryMessage']>(async () => ({ ok: true, value: { message: '', elapsedMs: 1 } })),
     executeObjectAction: vi.fn<VariaApi['executeObjectAction']>(async () => ({ ok: true, value: { steps: [{ status: 'done', title: 'Drop the object' }], messages: [], elapsedMs: 1 } })),
     cancelObjectActions: vi.fn<VariaApi['cancelObjectActions']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
     // Create Catalog: a server without a catalog and with CLR off; creating it succeeds.
@@ -441,6 +446,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const operations = new SsisOperationsService({ api, documents, panes, live, connections, settings, targetIdOf })
   const agentJobs = new AgentJobStatusService({ api, live, connections })
   const jobActivity = new JobActivityService({ api, documents, panes, live, connections, targetIdOf, started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt) })
+  const jobDocuments = new JobDocumentService({ api, documents, files, connections, live, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) })
+  const logViewer = new LogViewerService({ api, documents, panes, live, connections, targetIdOf })
   const objectSearch = new ObjectSearchService({ api, documents, connections, settings, targetIdOf })
   const inputMode = new InputModeService(fakeInputMode())
   const notifications = new NotificationService(options.timers ? { timers: options.timers } : {})
@@ -572,7 +579,9 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     activity,
     operations,
     jobActivity,
+    logViewer,
     agentJobs,
+    jobDocuments,
     objectSearch
   }
   const contributions = [
@@ -591,6 +600,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     compareContribution(workbench),
     pivotContribution(workbench),
     transposeContribution(workbench),
+    loadIntoMemoryContribution(workbench),
     plansContribution(workbench, api),
     shellContribution(workbench, host),
     paletteContribution(workbench, history),
@@ -624,6 +634,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     connectionPruning.dispose()
     disconnectPrompts.dispose()
     actionProgress.dispose()
+    jobDocuments.dispose()
     recovery.dispose()
     menus.dispose()
     quickInput.dispose()
@@ -656,6 +667,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     restore.dispose()
     operations.dispose()
     jobActivity.dispose()
+    logViewer.dispose()
     agentJobs.dispose()
     objectSearch.dispose()
     bookmarks.dispose()
@@ -717,6 +729,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     liveViews,
     operations,
     jobActivity,
+    jobDocuments,
+    logViewer,
     agentJobs,
     objectSearch,
     live,

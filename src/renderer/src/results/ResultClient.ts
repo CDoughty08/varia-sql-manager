@@ -1,7 +1,7 @@
 // The renderer's access to stored query results (the PR7 grid contract). Rows stay in the backend; the results worker
 // reads and decodes pages, and the UI thread receives only windows of display text. Live subscriptions run through the
 // same worker and port: their tables are ordinary stored results, opened with the same handles.
-import type { ApiResult, BackendStatus, DiffLayout, DiffMatch, IdentityBy, PivotValueSpec, QueryEvent, QueryResult, ResolvedViewFilter, ResultColumn, ResultDescriptor, ResultsDiffResult, ResultsDiffSeekResult, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, TruncationReason, VariaApi, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
+import type { ApiResult, BackendStatus, DiffLayout, DiffMatch, IdentityBy, PivotValueSpec, QueryEvent, QueryResult, ResolvedViewFilter, ResultColumn, ResultDescriptor, ResultResidence, ResultsDiffResult, ResultsDiffSeekResult, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, TruncationReason, VariaApi, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
 import type { MemoryFeature, MemoryReport, OperationPhase } from '../../../shared/ipc/port-messages'
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
@@ -56,10 +56,20 @@ export interface ResultSnapshot {
   state: 'open' | 'complete' | 'released' | 'lost'
   truncated?: TruncationReason
   incomplete: boolean
+  /** A BigQuery result's residence, BigQuery's total and its revision (ResultDescriptor). */
+  residence?: ResultResidence
+  rowsTotal?: number
+  revision?: number
+  /** A windowed result's projected size in memory (ResultDescriptor); only while it is windowed. */
+  projectedBytes?: number
+  /** While a windowed result loads into memory, the rows it showed before: the grid keeps drawing them (as loading past
+   *  the rows loaded so far) so it neither empties nor loses its scroll position. Gone once the load completes. */
+  rowsExpected?: number
 }
 /** What a window holds: columns [colStart, colEnd), cells cut at `maxCellChars`, and with `display` grid text. */
 export interface WindowShape { colStart?: number; colEnd?: number; maxCellChars?: number; display?: boolean }
-export interface WindowOptions extends WindowShape { textBudget?: number; signal?: AbortSignal }
+/** `viewer` names the grid reading (a windowed BigQuery result's read-ahead follows each grid's scrolling). */
+export interface WindowOptions extends WindowShape { textBudget?: number; signal?: AbortSignal; viewer?: number }
 export interface ResultHandle extends Disposable {
   readonly key: ResultKey
   readonly columns: readonly ResultColumn[]
@@ -187,6 +197,9 @@ interface ResultState {
   readonly listeners: Set<() => void>
   handle: ResultHandle | undefined
   scheduled: boolean
+  /** Its summary was applied: progress ticks that arrive later (sent before it, or before a switch it carried) are stale. A
+   *  newer revision (a load) starts counting again. */
+  settled?: boolean
   /** For a view's state, its result's state id. */
   readonly base?: string
 }
@@ -578,6 +591,7 @@ export class ResultClient implements Disposable {
       throw new ResultError('INVALID_PARAMS', 'A view needs a sort key or a filter, on columns of the result.')
     const replaces = o.replaces && o.replaces.base === base.handle && this.views.has(`${base.id}#${o.replaces.viewId}`) ? o.replaces.viewId : undefined
     const sort = keys.map(item => ({ column: item.column, descending: item.descending, mode: item.mode }))
+    const revision = base.snapshot.revision
     const response = await this.request(id => ({ type: 'view', id, key: base.key, sort, ...(filters ? { filters } : {}), ...(replaces === undefined ? {} : { replaces }) }), o.signal, undefined, o.onProgress)
     if (response.type !== 'view') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
     if (replaces !== undefined) this.endView(this.views.get(`${base.id}#${replaces}`), 'released')
@@ -588,6 +602,12 @@ export class ResultClient implements Disposable {
     }
     // Released or lost while it sorted: the backend dropped the view with its result.
     if (!this.tracked(base)) state.snapshot = { ...state.snapshot, state: base.snapshot.state }
+    // Switched while it sorted (the backend drops a result's views when it changes where its rows live, and may say so
+    // before it answers): the view is gone too, and asking the backend to close it is harmless if it is.
+    else if (base.snapshot.revision !== revision) {
+      this.views.set(state.id, state)
+      void this.closeView(state)
+    }
     else this.views.set(state.id, state)
     const baseHandle = base.handle ?? this.handleFor(base, () => this.release([{ generation: base.key.generation, resultId: base.key.resultId }]))
     return this.handleFor<ResultView>(state, () => this.closeView(state), () => ({ viewId: response.viewId, base: baseHandle, keys: sort, filters: response.filters ?? [], rows: response.rows, baseRows: response.baseRows, complete: response.complete, approximate: response.approximate }))
@@ -636,7 +656,12 @@ export class ResultClient implements Disposable {
 
   /** The summary's descriptors are final; events for the script that arrive later change nothing. */
   applySummary(summary: QueryResult): void {
-    for (const descriptor of summary.resultSets) this.update(this.state(descriptor), descriptor, true)
+    // A summary may overtake its residence event (the event comes through the worker): a newer revision is revised here.
+    for (const descriptor of summary.resultSets) {
+      const state = this.state(descriptor)
+      if ((descriptor.revision ?? 0) > (state.snapshot.revision ?? 0)) this.revise(state, descriptor, true)
+      else this.update(state, descriptor, true)
+    }
     for (const descriptor of summary.planSets ?? []) this.update(this.state(descriptor), descriptor, true)
   }
 
@@ -985,10 +1010,15 @@ export class ResultClient implements Disposable {
 
   private queryEvent(queryId: string, event: QueryEvent): void {
     if (event.type === 'resultSet.opened' || event.type === 'resultSet.closed') this.update(this.state(event.descriptor), event.descriptor, false)
+    else if (event.type === 'resultSet.residence') {
+      // A switch never opens a result: one released before its late residence event (the summary overtook it) stays released.
+      const state = this.results.get(keyOf(event.descriptor))
+      if (state) this.revise(state, event.descriptor)
+    }
     else if (event.type === 'progress') {
       for (const item of event.results) {
         const state = this.results.get(keyOf({ generation: this.generation, resultId: item.resultId }))
-        if (state) this.update(state, item, false)
+        if (state && !state.settled) this.update(state, item, false)
       }
     }
     for (const listener of [...this.queryListeners.get(queryId) ?? []]) listener(event)
@@ -1009,9 +1039,29 @@ export class ResultClient implements Disposable {
     return state
   }
 
-  /** Counters only grow, and a final (summary) descriptor settles the state; released and lost stay. */
+  /** A BigQuery result switched residence under a new revision: the rows read under the old one are stale, so the worker
+   *  drops its pages and the window cache its windows, and its counters start again from the new descriptor. The grid
+   *  keeps its scroll and reads the rows again. */
+  private revise(state: ResultState, descriptor: ResultDescriptor, final = false): void {
+    if ((descriptor.revision ?? 0) <= (state.snapshot.revision ?? 0) || !this.tracked(state)) return this.update(state, descriptor, final)
+    this.windows.dropResult(state.id)
+    // The backend dropped the result's views with its old pages: theirs go too, and each reports itself released.
+    for (const view of [...this.views.values()]) if (view.key.generation === state.key.generation && view.key.resultId === state.key.resultId) this.endView(view, 'released')
+    if (!this.failure && !this.disposed) void this.attached.then(() => this.worker.postMessage({ type: 'revise', key: state.key }), () => {})
+    this.update(state, descriptor, final)
+  }
+
+  /** Counters only grow, and a final (summary) descriptor settles the state; released and lost stay. A newer revision
+   *  (resultSet.residence) starts the counters again: a result switched to windowed stores no rows, and one loading into
+   *  memory stores them again from the first. */
   private update(state: ResultState, values: Partial<ResultDescriptor>, final: boolean): void {
-    const previous = state.snapshot
+    const current = state.snapshot
+    const revised = values.revision !== undefined && values.revision > (current.revision ?? 0)
+    // An older revision's descriptor (a progress tick sent before the switch) changes nothing.
+    if (values.revision !== undefined && values.revision < (current.revision ?? 0)) return
+    if (final) state.settled = true
+    else if (revised) state.settled = false
+    const previous: ResultSnapshot = revised ? { ...current, rowsRead: 0, rowsStored: 0, rowsAvailable: 0, bytesStored: 0, truncatedCells: 0, state: current.state === 'complete' ? 'open' : current.state } : current
     const max = (key: 'rowsRead' | 'rowsStored' | 'rowsAvailable' | 'bytesStored' | 'truncatedCells') => Math.max(previous[key], values[key] ?? 0)
     const sticky = previous.state === 'released' || previous.state === 'lost'
     const next: ResultSnapshot = {
@@ -1019,8 +1069,19 @@ export class ResultClient implements Disposable {
       state: sticky ? previous.state : values.state === 'released' ? 'released' : values.state === 'complete' || previous.state === 'complete' || final ? 'complete' : 'open',
       incomplete: values.incomplete ?? previous.incomplete
     }
-    const truncated = values.truncated ?? previous.truncated
+    const truncated = values.truncated ?? (revised ? undefined : previous.truncated)
     if (truncated) next.truncated = truncated
+    const residence = values.residence ?? previous.residence
+    if (residence) next.residence = residence
+    const rowsTotal = values.rowsTotal ?? previous.rowsTotal
+    if (rowsTotal !== undefined) next.rowsTotal = rowsTotal
+    const revision = values.revision ?? previous.revision
+    if (revision !== undefined) next.revision = revision
+    const projected = values.projectedBytes ?? (revised ? undefined : previous.projectedBytes)
+    if (projected !== undefined && residence === 'remote') next.projectedBytes = projected
+    // A windowed result loading into memory starts its counters again: the grid keeps the rows it showed until they load.
+    const expected = revised ? (current.residence === 'remote' && residence === 'memory' ? Math.max(current.rowsAvailable, current.rowsExpected ?? 0) : 0) : previous.rowsExpected ?? 0
+    if (next.state === 'open' && residence !== 'remote' && expected > next.rowsAvailable) next.rowsExpected = expected
     this.publish(state, next)
   }
 
@@ -1049,14 +1110,17 @@ export class ResultClient implements Disposable {
     const rows = Math.max(0, Math.min(Math.floor(count), wire.worker.windowRows, Math.floor(wire.worker.windowCells / width), state.snapshot.rowsAvailable - start))
     if (rows === 0) return { first: start, count: 0, colStart, colEnd, text: [], flags: new Uint8Array(0) }
     this.windowRequests++
+    // A window answered from the rows of an earlier revision (read before resultSet.residence) is neither kept nor shown.
+    const revision = state.snapshot.revision
     let response: WorkerResponse
     try {
       response = await this.request(id => ({
         type: 'window', id, key: state.key, wires: state.wires, first: start, count: rows, colStart, colEnd, maxCellChars,
-        textBudget: Math.min(o.textBudget ?? 1_000_000, wire.worker.windowCharacters), ...display ? { display: true } : {}
+        textBudget: Math.min(o.textBudget ?? 1_000_000, wire.worker.windowCharacters), ...display ? { display: true } : {}, ...o.viewer === undefined ? {} : { viewer: o.viewer }
       }), o.signal)
     } finally { this.windowRequests-- }
     if (response.type !== 'window') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
+    if (state.snapshot.revision !== revision) return { first: start, count: 0, colStart, colEnd, text: [], flags: new Uint8Array(0) }
     const window: RowWindow = { first: response.first, count: response.count, colStart: response.colStart, colEnd: response.colEnd, text: response.text, flags: response.flags }
     // A result released or lost meanwhile keeps nothing.
     if (this.tracked(state)) this.windows.set(WindowCache.key(state.id, start, Math.floor(count), colStart, colEnd, maxCellChars, display), state.id, window)

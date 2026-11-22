@@ -7,10 +7,13 @@ export const formatCount = (value: number): string => Math.max(0, Math.floor(val
 export const plural = (count: number, noun: string): string => count === 1 ? noun : noun + 's'
 /** A result caption's row count. A filtered grid counts its view's rows of the base rows the view was built from, not the
  *  set's current count: a view built while the set streamed covers only the rows sealed then, "so far" while more arrive
- *  (it is built again once they are all in). A rebuild that failed, or a set lost mid-stream, keeps the count, not "so far". */
-export function rowsFact(set: { readonly rowsAvailable: number; readonly state: string }, sort?: { readonly applied: readonly unknown[]; readonly view?: { readonly rows: number; readonly baseRows: number; readonly complete: boolean } }): string {
+ *  (it is built again once they are all in). A rebuild that failed, or a set lost mid-stream, keeps the count, not "so far".
+ *  A windowed BigQuery result says so, and when it came from BigQuery's cache (`cached`), that its table may expire early:
+ *  a cached result's table is an older one, nearer the end of its life. */
+export function rowsFact(set: { readonly rowsAvailable: number; readonly state: string; readonly residence?: string }, sort?: { readonly applied: readonly unknown[]; readonly view?: { readonly rows: number; readonly baseRows: number; readonly complete: boolean } }, cached = false): string {
   const view = sort?.view && sort.applied.length > 0 ? sort.view : undefined
-  if (!view) return `${formatCount(set.rowsAvailable)} ${plural(set.rowsAvailable, 'row')}`
+  // A windowed BigQuery result's rows stay in BigQuery and are read as the grid scrolls (docs/bigquery.md, Residence).
+  if (!view) return `${formatCount(set.rowsAvailable)} ${plural(set.rowsAvailable, 'row')}${set.residence === 'remote' ? ` · windowed in BigQuery${cached ? ' · cached result: may expire early' : ''}` : ''}`
   return `${formatCount(view.rows)} of ${formatCount(view.baseRows)} ${plural(view.baseRows, 'row')}${!view.complete && set.state === 'open' ? ' so far' : ''}`
 }
 const pad = (value: number) => String(value).padStart(2, '0')
@@ -116,3 +119,7 @@ export function messagesSummary(messages: readonly MessageEntry[]): { readonly c
     ...firstError ? { firstError } : {}, readable
   }
 }
+
+/** A result's rows as panels count them: a windowed BigQuery result stores none here, so it counts the rows its grid can read. */
+export const resultRows = (snapshot: { residence?: string; rowsStored: number; rowsAvailable: number }): number =>
+  snapshot.residence === 'remote' ? snapshot.rowsAvailable : snapshot.rowsStored

@@ -99,14 +99,23 @@ internal sealed partial class BigQueryService
         return false;
     }
 
-    /// <summary>An idempotent read with bounded retries on transient failures.</summary>
-    async Task<T> ReadAsync<T>(Func<CancellationToken, Task<T>> call, CancellationToken token, TimeSpan extra = default)
+    /// <summary>An idempotent read with bounded retries on transient failures; with <paramref name="rateLimits"/> false a
+    /// rate limit reaches the caller at once, for a caller that backs off on its own clock (a windowed result's blocks).</summary>
+    async Task<T> ReadAsync<T>(Func<CancellationToken, Task<T>> call, CancellationToken token, TimeSpan extra = default, bool rateLimits = true)
     {
         for (var attempt = 1; ; attempt++)
         {
             try { return await CallAsync(call, token, extra); }
-            catch (Exception error) when (attempt < ReadAttempts && Transient(error, token)) { await Task.Delay(Backoff(attempt), token); }
+            catch (Exception error) when (attempt < ReadAttempts && Transient(error, token) && (rateLimits || !RateLimited(error))) { await Task.Delay(Backoff(attempt), token); }
         }
+    }
+
+    /// <summary>BigQuery refused a request for its rate limit: HTTP 429, or the rateLimitExceeded reason.</summary>
+    internal static bool RateLimited(Exception error)
+    {
+        for (var current = error; current is not null; current = current.InnerException)
+            if (current is GoogleApiException api) return api.HttpStatusCode == HttpStatusCode.TooManyRequests || api.Error?.Errors?.Any(item => item.Reason == "rateLimitExceeded") == true;
+        return false;
     }
 
     /// <summary>Creates a query job under its client job id, never twice (see the class summary). <paramref name="dataset"/>,
@@ -203,6 +212,24 @@ internal sealed partial class BigQueryService
         request.FormatOptionsUseInt64Timestamp = true;
         return await SendRawAsync(service, request, token);
     }
+
+    /// <summary>
+    /// One <c>tabledata.list</c> page of a result's destination table (docs/bigquery.md, Residence): free, and random access
+    /// by <paramref name="startIndex"/>, then following <paramref name="pageToken"/>. Times are epoch microseconds, as
+    /// getQueryResults' are. Idempotent, so transport failures and 5xx are retried as other reads are; a rate limit reaches
+    /// the caller at once (a block's fetch backs off on its own clock).
+    /// </summary>
+    internal Task<BigQueryPage> TableRowsAsync(BigQueryConnection connection, TableReference table, long? startIndex, int maxResults, string? pageToken, CancellationToken token) =>
+        ReadAsync(t =>
+        {
+            var service = connection.Client.Service;
+            var request = service.Tabledata.List(table.ProjectId, table.DatasetId, table.TableId);
+            request.StartIndex = startIndex is { } start ? (ulong)start : null;
+            request.PageToken = pageToken;
+            request.MaxResults = maxResults;
+            request.FormatOptionsUseInt64Timestamp = true;
+            return SendRawAsync(service, request, t);
+        }, token, rateLimits: false);
 
     /// <summary>A REST read whose JSON body Varia parses itself, under <see cref="MaxPageBytes"/>: sent through the service's
     /// client (its credential and the library's own retries).</summary>

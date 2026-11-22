@@ -24,6 +24,7 @@ internal static class IdentityChecks
     public static void Run(Action<bool, string> check)
     {
         Hashing(check);
+        TimestampIdentity(check);
         Threads(check);
         Picking(check);
         Memory(check);
@@ -139,6 +140,24 @@ internal static class IdentityChecks
             if (allocated < least) (least, result) = (allocated, value);
         }
         return (result, least, runs);
+    }
+
+    private static void TimestampIdentity(Action<bool, string> check)
+    {
+        WireKind[] wires = [WireKind.Text];
+        var builder = new PageBuilder(1, wires);
+        foreach (var cell in new[] { "1970-01-01 00:00:00.000001 UTC", "1970-01-01 01:30:00.000001 +01:30", "1970-01-01 00:00:00.000002 UTC" })
+        {
+            builder.BeginRow();
+            builder.AppendText(cell);
+            builder.CommitRow();
+        }
+        var page = PageView.Parse(builder.Seal(), 1);
+        var google = new CellHasher([new("t", "TIMESTAMP", "text") { SortKind = ColumnTypes.Timestamp }], wires);
+        var sql = new CellHasher([new("t", "datetimeoffset", "text")], wires);
+        check(google.Same(page, 0, 0, sql, page, 0, 1) && !google.Same(page, 0, 2, sql, page, 0, 1)
+            && google.Cell(page, 0, 0) == sql.Cell(page, 0, 1) && google.Cell(page, 0, 2) != sql.Cell(page, 0, 1),
+            "timestamp identities and comparisons normalize UTC and numeric offsets while distinguishing adjacent microseconds");
     }
 
     /// <summary>Values SQL Server compares equal hash alike; others apart.</summary>

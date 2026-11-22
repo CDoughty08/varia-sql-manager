@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { editor, IRange } from 'monaco-editor'
-import { TestEditor } from './fixtures/documents'
+import { TestEditor, type TestModel } from './fixtures/documents'
 import { workbenchFixture } from './fixtures/workbench'
 import type { TextSelection } from '../src/renderer/src/editor/text-ops'
 
@@ -163,6 +163,15 @@ describe('editing commands', () => {
     expect(target.selections).toEqual([{ selectionStartLineNumber: 1, selectionStartColumn: 1, positionLineNumber: 1, positionColumn: 7 }])
     await commands.execute('edit.makeLowercase', undefined, 'menu')
     expect(text()).toBe('select 1\nfrom t')
+  })
+  // The GoogleSQL side (both commands greyed, the text unchanged) is in bigquery-workbench.test.ts.
+  it('move commas in a SQL Server query, in the statement around the caret', async () => {
+    const { commands, documents, tab, text } = setup()
+    ;(documents.getModel(tab.id) as unknown as TestModel).edit('SELECT a,\n  b\nFROM t')
+    expect(await commands.execute('edit.commasToFront', undefined, 'menu')).toBe(true)
+    expect(text()).toBe('SELECT a\n ,b\nFROM t')
+    expect(await commands.execute('edit.commasToEnd', undefined, 'palette')).toBe(true)
+    expect(text()).toBe('SELECT a,\n  b\nFROM t')
   })
   it("indent by the model's unit: a tab under Keep tabs (the default), spaces under Insert spaces", async () => {
     const { commands, text, settings } = setup()

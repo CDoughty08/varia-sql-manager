@@ -29,6 +29,9 @@ internal sealed partial class SqlService
             throw new RequestException("UNSUPPORTED_PROVIDER", "Stop on error, actual and live plans and client statistics are not available for BigQuery connections.");
         if (query.Dataset is { } tabDataset && !BqNames.IsDataset(tabDataset))
             throw new RequestException("INVALID_PARAMS", "A dataset name has only letters, numbers and underscores.");
+        // Bounded as Execute bounds them, though a preview's rows are always read into memory (its 1,000 rows).
+        ResidenceOf(query.Residence);
+        CacheBytesOf(query.WindowCacheMiB);
         var args = new PreviewRequest(query.ConnectionId, query.SessionId, query.QueryId, target.Project, target.Dataset, target.Table);
         using var cancellation = new CancellationTokenSource(BigQueryPreviewLimit);
         var running = new RunningQuery(args.ConnectionId, args.SessionId, cancellation);
@@ -61,7 +64,7 @@ internal sealed partial class SqlService
             using var table = await bigQuery.MetadataAsync(connection, t =>
             {
                 var call = connection.Client.Service.Tables.Get(args.Project, args.Dataset, args.Table);
-                call.SelectedFields = "schema,type";
+                call.Fields = "schema,type";
                 return bigQuery.SendRawAsync(connection.Client.Service, call, t);
             }, token);
             var type = table.Text("type");

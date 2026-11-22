@@ -3,7 +3,7 @@ import type { ApiResult, ResolvedViewFilter, ResultColumn, ResultsJobProgress, R
 import type { ResultHandle, ResultView } from '../src/renderer/src/results/ResultClient'
 import type { DocumentService } from '../src/renderer/src/services/documents'
 import { EventBus } from '../src/renderer/src/core/events'
-import { entryName, filterLabel, filteredColumns, kindLabel, ResultsService, resultLimits, transposedView } from '../src/renderer/src/results/ResultsService'
+import { entryName, filterLabel, filteredColumns, fitsFreeMemory, kindLabel, ResultsService, resultLimits, transposedView } from '../src/renderer/src/results/ResultsService'
 import { limits } from '../src/shared/ipc/wire/protocol'
 import { selectAll } from '../src/renderer/src/grid/selection'
 import { openEnd } from '../src/renderer/src/grid/constants'
@@ -12,7 +12,7 @@ import { descriptor, fakeResultClient, summaryOf, type FakeHandle } from './fixt
 import { manualTimers } from './fixtures/workbench'
 import { keyAt, noEntry } from './fixtures/entries'
 
-function fixture(o: { sortText?: () => ViewSortMode; onSortTextChange?: (listener: () => void) => () => void } = {}) {
+function fixture(o: { sortText?: () => ViewSortMode; onSortTextChange?: (listener: () => void) => () => void; memory?: () => { usedBytes: number; globalBytes: number } } = {}) {
   const client = fakeResultClient(), events = new EventBus(), timers = manualTimers()
   const frames: (() => void)[] = []
   const progress = new Set<(value: ResultsJobProgress) => void>()
@@ -21,7 +21,9 @@ function fixture(o: { sortText?: () => ViewSortMode; onSortTextChange?: (listene
     copyResults: vi.fn<VariaApi['copyResults']>(async () => ({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false, capped: 0 } })),
     saveResults: vi.fn<VariaApi['saveResults']>(async () => ({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false, capped: 0, fileName: 'SQLQuery1-Result1.csv', format: 'csv' as const } })),
     cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(async () => ({ ok: true, value: { cancelled: true } })),
-    onResultsJob: vi.fn<VariaApi['onResultsJob']>(listener => { progress.add(listener); return () => { progress.delete(listener) } })
+    onResultsJob: vi.fn<VariaApi['onResultsJob']>(listener => { progress.add(listener); return () => { progress.delete(listener) } }),
+    remoteQuery: vi.fn<VariaApi['remoteQuery']>(async () => ({ ok: false, error: 'Not faked.' })),
+    cancel: vi.fn<VariaApi['cancel']>(async () => ({ ok: true, value: { cancelled: true } }))
   }
   const documents = { openText: vi.fn<DocumentService['openText']>(o => ({ id: 'doc', name: o.name, kind: o.kind, database: '', dirty: false, savedVersionId: 1 })) }
   const clock = { now: 1000 }
@@ -274,6 +276,23 @@ describe('results service', () => {
     service.closeResults('t1')
     expect(tab().settled.size).toBe(0)
   })
+  it('sizes a windowed result in the stack by the rows its grid can read, and again when it switches residence', () => {
+    const { client, service, flush, tab } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.closed', descriptor: descriptor(1, { rowsStored: 3 }) })
+    client.emit('q1', { type: 'resultSet.closed', descriptor: descriptor(2, { index: 1, rowsStored: 0, rowsAvailable: 1_000_000, residence: 'remote', revision: 0, rowsTotal: 1_000_000 }) })
+    flush()
+    expect(tab().settled.get('1:2')).toEqual({ rows: 1_000_000, strip: false })
+    // A set that switches to windowed after it settled is sized again from the new revision.
+    client.emit('q1', { type: 'resultSet.residence', descriptor: descriptor(1, { rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 1, rowsTotal: 5_000 }) })
+    flush()
+    expect(tab().settled.get('1:1')).toEqual({ rows: 5_000, strip: false })
+    // Loading it back starts it open: it is not sized until it completes.
+    client.emit('q1', { type: 'resultSet.residence', descriptor: descriptor(1, { state: 'open', rowsStored: 0, rowsAvailable: 0, residence: 'memory', revision: 2 }) })
+    flush()
+    expect(tab().settled.has('1:1')).toBe(false)
+    service.dispose()
+  })
   it('bounds a run\'s sets and messages', () => {
     const { client, service, flush, tab } = fixture()
     service.begin('t1', 'q1')
@@ -461,6 +480,152 @@ describe('results service', () => {
     expect(api.saveResults.mock.calls.map(([request]) => [request.suggestedName, request.suggestedSuffix])).toEqual([
       ['SQLQuery1-Result2-Result1', '-Result1'], ['SQLQuery1-Result2', '-Result2'], ['SQLQuery1-Differences1-Result3', '-Result3'], ['SQLQuery1-Open orders', undefined]
     ])
+  })
+  it('copies a windowed result through the backend, which reads its rows from BigQuery', async () => {
+    const { api, service } = fixture()
+    service.begin('t1', 'q1')
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1), descriptor(2, { index: 1, rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 0, rowsTotal: 5_000 })]) })
+    for (const index of [0, 1]) service.setSelection('t1', keyAt(service, 't1', index), selectAll(keyAt(service, 't1', index)))
+    const first = deferred<ApiResult<ResultsJobResult>>()
+    api.copyResults.mockReturnValueOnce(first.promise)
+    const copying = service.copy('t1', keyAt(service, 't1', 0), false)
+    expect(await service.copy('t1', keyAt(service, 't1', 1), false)).toBeUndefined()
+    expect(api.copyResults).toHaveBeenCalledTimes(2)
+    expect(api.copyResults.mock.calls[1][0]).toMatchObject({ generation: 1, resultId: 2 })
+    first.resolve({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false, capped: 0 } })
+    await copying
+    service.dispose()
+  })
+  it('says a windowed result still running can be saved once it finishes', async () => {
+    const { api, client, service, flush } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(1, { state: 'open', rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 0, rowsTotal: 5_000 }) })
+    flush()
+    expect(await service.saveAs('t1', keyAt(service, 't1', 0), 'SQLQuery1')).toBe('Save the results after this result set finishes loading.')
+    expect(api.saveResults).not.toHaveBeenCalled()
+    service.dispose()
+  })
+  it('saves a windowed result through main, which streams its rows from BigQuery to the file', async () => {
+    const { api, service, flush } = fixture()
+    service.begin('t1', 'q1')
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 0, rowsTotal: 5_000 })]) })
+    flush()
+    await service.saveAs('t1', keyAt(service, 't1', 0), 'SQLQuery1')
+    expect(api.saveResults).toHaveBeenCalledWith(expect.objectContaining({ generation: 1, resultId: 1 }))
+    service.dispose()
+  })
+  it('saves a result that switched to windowed after it opened in memory', async () => {
+    const { api, client, service, flush } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(1, { state: 'open', residence: 'memory', revision: 0 }) })
+    client.emit('q1', { type: 'resultSet.residence', descriptor: descriptor(1, { rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 1, rowsTotal: 5_000 }) })
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 1, rowsTotal: 5_000 })]) })
+    flush()
+    await service.saveAs('t1', keyAt(service, 't1', 0), 'SQLQuery1')
+    expect(api.saveResults).toHaveBeenCalledWith(expect.objectContaining({ generation: 1, resultId: 1 }))
+    service.dispose()
+  })
+  it('loads a windowed result of a finished run into memory, following its own events after the run ended', async () => {
+    const { api, client, service, tab, flush, timers } = fixture()
+    service.begin('t1', 'q1')
+    const windowed = descriptor(1, { rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 0, rowsTotal: 5_000 })
+    service.finish('t1', 'q1', { summary: summaryOf([windowed]) })
+    flush()
+    const key = keyAt(service, 't1', 0)
+    expect(service.canLoadIntoMemory('t1', key)).toBe(true)
+    const answer = deferred<ApiResult<import('../src/shared/contracts').QueryResult>>()
+    api.remoteQuery.mockReturnValueOnce(answer.promise)
+    const loading = service.loadIntoMemory('t1', key)
+    expect(api.remoteQuery).toHaveBeenCalledWith({ queryId: 'job-1', generation: 1, resultId: 1, kind: 'load' })
+    flush()
+    expect(tab()!.loads?.get(key)).toEqual(expect.objectContaining({ stopping: false }))
+    expect(service.canLoadIntoMemory('t1', key)).toBe(false)
+    // The load's residence event arrives after the run finished: it is the load's, so the switch is said.
+    client.emit('job-1', { type: 'resultSet.residence', descriptor: { ...windowed, residence: 'memory', revision: 1, rowsAvailable: 0, state: 'open' } })
+    timers.advance(1_000)
+    flush()
+    expect(tab()!.announcement).toContain('The result is loading into memory.')
+    // Stop asks query.cancel with the load's own id, once.
+    service.stopLoad('t1', key)
+    service.stopLoad('t1', key)
+    expect(api.cancel).toHaveBeenCalledTimes(1)
+    expect(api.cancel).toHaveBeenCalledWith('job-1')
+    const before = tab()!.loads
+    flush()
+    expect(tab()!.loads?.get(key)).toEqual(expect.objectContaining({ stopping: true }))
+    // Snapshots share the entries: Stop replaces this one rather than changing it in place.
+    expect(before).not.toBe(tab()!.loads)
+    timers.advance(1_000)
+    flush()
+    expect(tab()!.announcement).toContain('Stopping the load')
+    const loaded = { ...windowed, residence: 'memory' as const, revision: 1, rowsStored: 5_000, state: 'complete' as const }
+    answer.resolve({ ok: true, value: { ...summaryOf([loaded]), messages: [{ text: 'The result was loaded into memory.', kind: 'info' }] } })
+    expect(await loading).toBeUndefined()
+    flush()
+    expect(tab()!.loads).toBeUndefined()
+    expect(client.listening('job-1')).toBe(0)
+    expect(tab()!.messages.at(-1)).toEqual({ text: 'The result was loaded into memory.', kind: 'info' })
+    expect(tab()!.settled.get('1:1')).toEqual(expect.objectContaining({ rows: 5_000 }))
+    service.dispose()
+  })
+  it('offers Load into memory only while the projection fits the result memory free', () => {
+    let memory = { usedBytes: 900, globalBytes: 1_000 }
+    const { service, flush } = fixture({ memory: () => memory })
+    service.begin('t1', 'q1')
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 0, rowsTotal: 5_000, projectedBytes: 200 })]) })
+    flush()
+    const key = keyAt(service, 't1', 0)
+    expect(service.canLoadIntoMemory('t1', key)).toBe(false)
+    expect(service.loadNeedsRoom('t1', key)).toBe(true)
+    memory = { usedBytes: 800, globalBytes: 1_000 }
+    expect(service.canLoadIntoMemory('t1', key)).toBe(true)
+    expect(service.loadNeedsRoom('t1', key)).toBe(false)
+    // Before memory's first report nothing is held back: the load itself switches back if the rows do not fit.
+    memory = { usedBytes: 0, globalBytes: 0 }
+    expect(service.canLoadIntoMemory('t1', key)).toBe(true)
+    service.dispose()
+  })
+  it('compares a projection with the room free', () => {
+    expect(fitsFreeMemory(undefined, { usedBytes: 10, globalBytes: 10 })).toBe(true)
+    expect(fitsFreeMemory(5, undefined)).toBe(true)
+    expect(fitsFreeMemory(5, { usedBytes: 5, globalBytes: 10 })).toBe(true)
+    expect(fitsFreeMemory(6, { usedBytes: 5, globalBytes: 10 })).toBe(false)
+    expect(fitsFreeMemory(1, { usedBytes: 12, globalBytes: 10 })).toBe(false)
+  })
+  it('says nothing of a load the user stopped by closing its result, nor of one a new run replaced', async () => {
+    const { api, service, tab, flush } = fixture()
+    service.begin('t1', 'q1')
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 0, rowsTotal: 5_000 }), descriptor(2, { index: 1 })]) })
+    flush()
+    const answer = deferred<ApiResult<import('../src/shared/contracts').QueryResult>>()
+    api.remoteQuery.mockReturnValueOnce(answer.promise)
+    const loading = service.loadIntoMemory('t1', keyAt(service, 't1', 0))
+    service.removeEntry('t1', keyAt(service, 't1', 0))
+    const before = tab()!.messages.length
+    answer.resolve({ ok: true, value: { ...summaryOf([]), status: 'failed', messages: [{ text: 'These results were closed.', kind: 'error' }] } })
+    await loading
+    flush()
+    expect(tab()!.messages.length).toBe(before)
+    expect(tab()!.strip).toBe(false)
+    expect(tab()!.loads).toBeUndefined()
+    service.dispose()
+  })
+  it('refuses Load into memory while the run still runs, and says why a refused load failed', async () => {
+    const { api, client, service, tab, flush } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(1, { state: 'complete', rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 0, rowsTotal: 5_000 }) })
+    flush()
+    const key = keyAt(service, 't1', 0)
+    expect(service.canLoadIntoMemory('t1', key)).toBe(false)
+    expect(await service.loadIntoMemory('t1', key)).toBe('Load the result into memory once its query has finished.')
+    expect(api.remoteQuery).not.toHaveBeenCalled()
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 0, rowsTotal: 5_000 })]) })
+    api.remoteQuery.mockResolvedValueOnce({ ok: false, error: 'Another result of this query is loading into memory.', code: 'BUSY' })
+    await service.loadIntoMemory('t1', key)
+    flush()
+    expect(tab()!.messages.at(-1)).toEqual({ text: 'Could not load the result into memory: Another result of this query is loading into memory.', kind: 'error' })
+    expect(tab()!.loads).toBeUndefined()
+    service.dispose()
   })
   it('saves a set through main, shows its strip 300 ms after the file is chosen, and says how the save ended', async () => {
     const { api, service, tab, timers, flush, progress, events } = fixture()
@@ -1003,6 +1168,196 @@ describe('results service sorting', () => {
     f.service.finish('t1', 'q1', { summary: summaryOf([descriptor(1)]) })
     return { ...f, handle: f.client.handle(1)! }
   }
+  it('drops a sort and its filters when a running result switches residence, and says so', async () => {
+    const { service, client, flush, tab, timers } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.closed', descriptor: descriptor(1, { index: 0 }) })
+    flush()
+    const handle = client.handle(1)!
+    const view = fakeView(handle, 1, [{ column: 1, descending: true, mode: 'value' }])
+    handle.sort.mockResolvedValueOnce(view)
+    service.sortBy('t1', keyAt(service, 't1', 0), 1, 'descending')
+    await settle()
+    flush()
+    expect(service.sortOf('t1', keyAt(service, 't1', 0))).toMatchObject({ view, sorting: false })
+    client.emit('q1', { type: 'resultSet.residence', descriptor: descriptor(1, { index: 0, residence: 'remote', revision: 1, rowsTotal: 5_000 }) })
+    flush()
+    timers.advance(1_000)
+    expect(service.sortOf('t1', keyAt(service, 't1', 0))).toBeUndefined()
+    expect(tab().announcement).toBe('The result is now windowed in BigQuery: rows are read as you scroll. Its sort and filters were removed.')
+    service.dispose()
+  })
+  it('drops a sort still building when its result switches, rather than installing a view of the old revision when it lands', async () => {
+    const { service, client, flush } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.closed', descriptor: descriptor(1, { index: 0 }) })
+    flush()
+    const handle = client.handle(1)!
+    const view = fakeView(handle, 1, [{ column: 1, descending: true, mode: 'value' }])
+    const building = deferred<typeof view>()
+    handle.sort.mockReturnValueOnce(building.promise)
+    service.sortBy('t1', keyAt(service, 't1', 0), 1, 'descending')
+    await settle()
+    const signal = (handle.sort.mock.calls[0][1] as { signal?: AbortSignal }).signal
+    // A selection drawn in a mounted grid is cleared there, repainted, and its listeners (the status bar) told.
+    const controller = { selectAll: vi.fn(), repaint: vi.fn(), fitColumn: vi.fn() }
+    service.registerGrid('t1', keyAt(service, 't1', 0), controller)
+    service.setSelection('t1', keyAt(service, 't1', 0), selectAll(keyAt(service, 't1', 0)))
+    controller.repaint.mockClear()
+    const told = vi.fn()
+    service.selections.subscribe(told)
+    client.emit('q1', { type: 'resultSet.residence', descriptor: descriptor(1, { index: 0, residence: 'remote', revision: 1, rowsTotal: 5_000 }) })
+    flush()
+    expect(signal?.aborted).toBe(true)
+    expect(controller.repaint).toHaveBeenCalled()
+    expect(told).toHaveBeenCalled()
+    building.resolve(view)
+    await settle()
+    flush()
+    expect(service.sortOf('t1', keyAt(service, 't1', 0))).toBeUndefined()
+    expect(view.close).toHaveBeenCalled()
+    service.dispose()
+  })
+  it('switches a result whose summary overtook its residence event: its sort goes, it is sized again and the change is said', async () => {
+    const { service, client, flush, tab, timers } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.closed', descriptor: descriptor(1, { index: 0, rowsStored: 3 }) })
+    flush()
+    const handle = client.handle(1)!
+    const view = fakeView(handle, 1, [{ column: 1, descending: true, mode: 'value' }])
+    handle.sort.mockResolvedValueOnce(view)
+    service.sortBy('t1', keyAt(service, 't1', 0), 1, 'descending')
+    await settle()
+    flush()
+    expect(service.sortOf('t1', keyAt(service, 't1', 0))).toMatchObject({ view })
+    // The summary arrives first; the residence event that follows the run is ignored.
+    const windowed = descriptor(1, { index: 0, rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 1, rowsTotal: 5_000 })
+    service.finish('t1', 'q1', { summary: summaryOf([windowed]) })
+    client.emit('q1', { type: 'resultSet.residence', descriptor: windowed })
+    flush()
+    timers.advance(1_000)
+    expect(service.sortOf('t1', keyAt(service, 't1', 0))).toBeUndefined()
+    expect(tab().settled.get('1:1')).toEqual({ rows: 5_000, strip: false })
+    expect(tab().announcement).toMatch(/^Query executed successfully\..* The result is now windowed in BigQuery: rows are read as you scroll\. Its sort and filters were removed\.$/)
+    service.dispose()
+  })
+  it('forgets the view a grid showed and closes its filter snapshots when its result switches, so a copy names no view of the old revision', async () => {
+    const { service, client, flush, api } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.closed', descriptor: descriptor(1, { index: 0, rowsStored: 10, rowsAvailable: 10, rowsRead: 10 }) })
+    flush()
+    const handle = client.handle(1)!
+    handle.snapshot = { ...handle.snapshot, rowsAvailable: 10, rowsRead: 10, rowsStored: 10, state: 'complete' }
+    const key = keyAt(service, 't1', 0)
+    service.registerGrid('t1', key, { selectAll: () => {}, repaint: () => {}, fitColumn: () => {}, filterColumn: () => {} })
+    const list = await handle.distinct(1)
+    const view = fakeView(handle, 1, [], true, [{ op: 'groups', column: 1, snapshotId: list.snapshotId, keep: true, values: 1, nulls: false, digest: 'a'.repeat(32) }])
+    handle.sort.mockResolvedValueOnce(view)
+    expect(service.applyColumnFilter('t1', key, 1, { kind: 'list', list })).toBe(true)
+    await settle()
+    flush()
+    service.viewShown('t1', key, view)
+    expect(list.close).not.toHaveBeenCalled()
+    client.emit('q1', { type: 'resultSet.residence', descriptor: descriptor(1, { index: 0, residence: 'remote', revision: 1, rowsTotal: 5_000, rowsAvailable: 5_000 }) })
+    flush()
+    expect(list.close).toHaveBeenCalledTimes(1)
+    service.setSelection('t1', key, selectAll(key))
+    await service.copy('t1', key, false)
+    expect(api.copyResults.mock.lastCall?.[0]).not.toHaveProperty('viewId')
+    service.dispose()
+  })
+  it('still says a switch whose event came just before the run ended, which the end of the run would otherwise drown out', () => {
+    const { service, client, flush, tab, timers } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(1, { index: 0, state: 'open', residence: 'memory', revision: 0 }) })
+    const windowed = descriptor(1, { index: 0, rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 1, rowsTotal: 5_000 })
+    client.emit('q1', { type: 'resultSet.residence', descriptor: windowed })
+    client.emit('q1', { type: 'resultSet.closed', descriptor: windowed })
+    flush()
+    timers.advance(50)
+    service.finish('t1', 'q1', { summary: summaryOf([windowed]) })
+    flush()
+    timers.advance(1_000)
+    expect(tab().announcement).toMatch(/^Query executed successfully\..* The result is now windowed in BigQuery: rows are read as you scroll\.$/)
+    // Heard on its own when the run ends later: said once, not again with the run's end.
+    service.begin('t1', 'q2')
+    client.emit('q2', { type: 'resultSet.opened', descriptor: descriptor(2, { index: 0, state: 'open', residence: 'memory', revision: 0 }) })
+    const later = descriptor(2, { index: 0, rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 1, rowsTotal: 5_000 })
+    client.emit('q2', { type: 'resultSet.residence', descriptor: later })
+    flush()
+    timers.advance(1_000)
+    expect(tab().announcement).toMatch(/is now windowed in BigQuery/)
+    client.emit('q2', { type: 'resultSet.closed', descriptor: later })
+    service.finish('t1', 'q2', { summary: summaryOf([later]) })
+    flush()
+    timers.advance(1_000)
+    expect(tab().announcement).not.toMatch(/windowed/)
+    service.dispose()
+  })
+  it('says a sentence waiting in the live region delay after a switch that arrives during it, rather than dropping it', () => {
+    const { service, client, flush, tab, timers } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(1, { index: 0, state: 'open', residence: 'memory', revision: 0 }) })
+    flush()
+    timers.advance(1_000)
+    service.notify('t1', 'Saved 12 rows to orders.csv.')
+    client.emit('q1', { type: 'resultSet.residence', descriptor: descriptor(1, { index: 0, state: 'open', rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 1, rowsTotal: 5_000 }) })
+    flush()
+    timers.advance(1_000)
+    expect(tab().announcement).toBe('The result is now windowed in BigQuery: rows are read as you scroll. Saved 12 rows to orders.csv.')
+    // Closing the tab with a switch unheard forgets it, and the sentence with it.
+    client.emit('q1', { type: 'resultSet.residence', descriptor: descriptor(1, { index: 0, state: 'open', residence: 'memory', revision: 2 }) })
+    service.announceSelection('t1', '3 cells selected')
+    service.release('t1')
+    const internals = service as unknown as { unheardSwitches: Map<string, unknown>; unheardSentence: Map<string, unknown> }
+    expect([internals.unheardSwitches.size, internals.unheardSentence.size]).toEqual([0, 0])
+    service.dispose()
+  })
+  it('says every switch that comes within the live region delay, and forgets unheard ones when the tab closes', () => {
+    const { service, client, flush, tab, timers } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(1, { index: 0, state: 'open', residence: 'memory', revision: 0 }) })
+    client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(2, { index: 1, state: 'open', residence: 'memory', revision: 0 }) })
+    flush()
+    const windowed = (id: number, index: number) => descriptor(id, { index, state: 'open', rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 1, rowsTotal: 5_000 })
+    // The grid's selection was over the older revision's rows: it goes, and the grid keeps its scroll.
+    const first = keyAt(service, 't1', 0)
+    service.selectAll('t1', first)
+    service.gridState('t1', first).topRow = 4_000
+    client.emit('q1', { type: 'resultSet.residence', descriptor: windowed(1, 0) })
+    client.emit('q1', { type: 'resultSet.residence', descriptor: windowed(2, 1) })
+    flush()
+    expect(service.selection('t1', first)).toBeUndefined()
+    expect(service.gridState('t1', first).topRow).toBe(4_000)
+    timers.advance(1_000)
+    expect(tab().announcement).toMatch(/Result 1 is now windowed in BigQuery: rows are read as you scroll\. Result 2 is now windowed in BigQuery/)
+    // Another sentence inside the delay (a selection's size) does not replace a switch: both are heard.
+    client.emit('q1', { type: 'resultSet.residence', descriptor: { ...windowed(1, 0), residence: 'memory', revision: 2 } })
+    service.announceSelection('t1', '12 cells selected')
+    flush()
+    timers.advance(1_000)
+    expect(tab().announcement).toMatch(/Result 1 .*memory.*12 cells selected$/)
+    // A run started again forgets a switch of the run it replaces that was not read out yet.
+    client.emit('q1', { type: 'resultSet.residence', descriptor: { ...windowed(1, 0), revision: 3 } })
+    service.begin('t1', 'q2')
+    expect((service as unknown as { unheardSwitches: Map<string, unknown> }).unheardSwitches.size).toBe(0)
+    service.release('t1')
+    expect((service as unknown as { unheardSwitches: Map<string, unknown> }).unheardSwitches.size).toBe(0)
+    service.dispose()
+  })
+  it('names each result that switched when a run has several', () => {
+    const { service, client, flush, tab, timers } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.closed', descriptor: descriptor(1, { index: 0, rowsStored: 3 }) })
+    client.emit('q1', { type: 'resultSet.closed', descriptor: descriptor(2, { index: 1, rowsStored: 3 }) })
+    flush()
+    const windowed = (id: number, index: number) => descriptor(id, { index, rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 1, rowsTotal: 5_000 })
+    service.finish('t1', 'q1', { summary: summaryOf([windowed(1, 0), windowed(2, 1)]) })
+    flush()
+    timers.advance(1_000)
+    expect(tab().announcement).toMatch(/ Result 1 is now windowed in BigQuery: rows are read as you scroll\. Result 2 is now windowed in BigQuery: rows are read as you scroll\.$/)
+    service.dispose()
+  })
   it('sorts a grid by a column, keeps showing its rows while the view is built, and closes a view once the grid shows another', async () => {
     const { service, handle, flush, tab } = sorted()
     const first = deferred<ResultView>()
@@ -2260,5 +2615,46 @@ describe('comparison kind filters', () => {
     expect(filterLabel({ op: 'kind', kinds: ['removed', 'changed'] }, [])).toBe('Changed or removed rows')
     const sort = { filters: [{ filter: { op: 'kind', kinds: ['added'] }, label: 'Added rows', named: true }, { filter: { op: 'in', column: 1, rows: [0] }, label: 'x', named: false }] }
     expect(filteredColumns(sort as never)).toEqual(new Set([1]))
+  })
+})
+
+describe('residence switch announcements', () => {
+  it('says a filter-only grid lost its filters when its result switches', async () => {
+    const { service, client, flush, tab, timers } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.closed', descriptor: descriptor(1, { index: 0, rowsStored: 10, rowsAvailable: 10, rowsRead: 10 }) })
+    flush()
+    const handle = client.handle(1)!
+    handle.snapshot = { ...handle.snapshot, rowsAvailable: 10, rowsRead: 10, rowsStored: 10, state: 'complete' }
+    const key = keyAt(service, 't1', 0)
+    service.registerGrid('t1', key, { selectAll: () => {}, repaint: () => {}, fitColumn: () => {}, filterColumn: () => {} })
+    const list = await handle.distinct(1)
+    const view = fakeView(handle, 1, [], true, [{ op: 'groups', column: 1, snapshotId: list.snapshotId, keep: true, values: 1, nulls: false, digest: 'a'.repeat(32) }])
+    handle.sort.mockResolvedValueOnce(view)
+    expect(service.applyColumnFilter('t1', key, 1, { kind: 'list', list })).toBe(true)
+    await settle()
+    flush()
+    expect(service.sortOf('t1', key)?.keys ?? []).toHaveLength(0)
+    timers.advance(1_000)
+    client.emit('q1', { type: 'resultSet.residence', descriptor: descriptor(1, { index: 0, residence: 'remote', revision: 1, rowsTotal: 5_000, rowsAvailable: 5_000 }) })
+    flush()
+    timers.advance(1_000)
+    expect(tab().announcement).toBe('The result is now windowed in BigQuery: rows are read as you scroll. Its sort and filters were removed.')
+    service.dispose()
+  })
+  it('does not repeat a sentence already read out with a later switch', () => {
+    const { service, client, flush, tab, timers } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(1, { index: 0, state: 'open', residence: 'memory', revision: 0 }) })
+    flush()
+    timers.advance(1_000)
+    service.notify('t1', 'Saved 12 rows to orders.csv.')
+    timers.advance(1_000)
+    expect(tab().announcement).toMatch(/Saved 12 rows/)
+    client.emit('q1', { type: 'resultSet.residence', descriptor: descriptor(1, { index: 0, state: 'open', rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 1, rowsTotal: 5_000 }) })
+    flush()
+    timers.advance(1_000)
+    expect(tab().announcement).toBe('The result is now windowed in BigQuery: rows are read as you scroll.')
+    service.dispose()
   })
 })

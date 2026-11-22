@@ -14,7 +14,7 @@ internal static class AgentActionChecks
     private static readonly ServerProfile Box2022 = new(16, "16.0.4135.4", 3, "sa", false, true, false, 16);
     private static readonly ObjectRefDto Job = new("agentJob", Name: "Nightly ETL");
     private static readonly ObjectRefDto AgentNode = new("agent");
-    private const string Created = "2026-11-02T21:07:12";
+    private const string JobId = "00000000-1111-2222-3333-444444444441";
 
     private sealed class Host(ServerProfile profile) : IActionHost
     {
@@ -56,7 +56,7 @@ internal static class AgentActionChecks
     }
 
     private static ActionArgs Args(string action, ObjectRefDto target) => new(action, Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), target);
-    private static ActionArgs JobArgs(string action) => Args(action, Job) with { AgentIdentity = new(Created) };
+    private static ActionArgs JobArgs(string action) => Args(action, Job) with { AgentIdentity = new(JobId) };
 
     public static async Task RunAsync(Action<bool, string> check)
     {
@@ -72,13 +72,13 @@ internal static class AgentActionChecks
     {
         var failures = AgentSql.LintWrites().Where(item => item.Problems.Count > 0).Select(item => item.Name + ": " + string.Join(", ", item.Problems)).ToList();
         check(failures.Count == 0 && AgentSql.Writes.Count == 6, "every Agent write passes its lint, as do the job verbs' own reads" + (failures.Count == 0 ? "" : ": " + string.Join("; ", failures)));
-        check(ActionSql.Lint().Count(item => item.Name.StartsWith("agent ", StringComparison.Ordinal)) == AgentSql.Writes.Count + 2 + AgentSql.LintServerWrites().Count(), "the object actions' lint runs the Agent writes too, SQL Server Agent Properties' included");
+        check(ActionSql.Lint().Count(item => item.Name.StartsWith("agent ", StringComparison.Ordinal)) == AgentSql.Writes.Count + 2 + AgentSql.LintJobSaves().Count() + AgentSql.LintServerWrites().Count() + AgentSql.LintHistoryWrites().Count(), "the object actions' lint runs the Agent writes too, SQL Server Agent Properties', the job document's saves and Delete History's included");
         var start = AgentSql.StartJob.Text;
         string Call(string call) => AgentSql.Resolve + call + AgentSql.Check;
         var misses = new (string Text, string Problem)[]
         {
             (start.Replace("msdb.dbo.sp_start_job", "master.dbo.xp_servicecontrol N'Start', N'SQLServerAgent'", StringComparison.Ordinal), "uses xp_servicecontrol"),
-            (Call("EXEC @rc = msdb.dbo.sp_add_job @job_id = @job_id;"), "EXECs sp_add_job, which is not an Agent write procedure"),
+            (Call("EXEC @rc = msdb.dbo.sp_add_job @job_id = @job_id;"), "EXECs sp_add_job, which only a job save calls"),
             (Call("EXEC @rc = msdb.dbo.sp_purge_jobhistory @job_id = @job_id;"), "passes @job_id to sp_purge_jobhistory"),
             (Call("EXEC @rc = msdb.dbo.sp_stop_job @job_id = @job_id, @step_name = @step_name;"), "passes @step_name to sp_stop_job"),
             (Call("EXEC @rc = msdb.dbo.sp_update_job @job_id = @job_id, @enabled = @new_name;"), "passes @enabled another parameter's value"),
@@ -89,9 +89,9 @@ internal static class AgentActionChecks
             (start[..^AgentSql.Check.Length] + ";", "does not check the return code last")
         };
         foreach (var (text, problem) in misses) check(AgentSql.LintExecutable(text).Contains(problem), "the Agent write lint refuses a write that " + problem);
-        check(AgentSql.Resolve.Contains("CONVERT(char(19), j.date_created, 126) = @created", StringComparison.Ordinal) && AgentSql.Resolve.Contains("THROW 50010", StringComparison.Ordinal)
+        check(AgentSql.Resolve.Contains("j.name = @name AND j.job_id = @expected_job_id", StringComparison.Ordinal) && AgentSql.Resolve.Contains("THROW 50010", StringComparison.Ordinal)
             && AgentSql.Check.Contains("IF @@ERROR <> 0 OR @rc <> 0 THROW 50012", StringComparison.Ordinal),
-            "a write resolves the job by name and date_created to the second (50010 otherwise) and THROWs on msdb's return code, which RAISERROR leaves without @@ERROR");
+            "a write resolves the job by name and immutable job ID (50010 otherwise) and THROWs on msdb's return code, which RAISERROR leaves without @@ERROR");
     }
 
     private static void Validation(Action<bool, string> check)
@@ -111,13 +111,13 @@ internal static class AgentActionChecks
         foreach (var (name, args) in valid) check(Answer(args) == "accepted", "a job's or the service's verb validates: " + name);
         var invalid = new (string Name, ActionArgs Args, bool Script)[]
         {
-            ("start without the identity", JobArgs("startJob") with { AgentIdentity = null }, false), ("a date with milliseconds", JobArgs("stopJob") with { AgentIdentity = new("2026-11-02T21:07:12.123") }, false),
-            ("not a date", JobArgs("stopJob") with { AgentIdentity = new("2026-02-30T00:00:00") }, false), ("a step on stop", JobArgs("stopJob") with { StepName = "Load" }, false),
+            ("start without the identity", JobArgs("startJob") with { AgentIdentity = null }, false), ("a timestamp instead of a job ID", JobArgs("stopJob") with { AgentIdentity = new("2026-11-02T21:07:12.123") }, false),
+            ("a malformed job ID", JobArgs("stopJob") with { AgentIdentity = new(JobId + " ") }, false), ("a step on stop", JobArgs("stopJob") with { StepName = "Load" }, false),
             ("a step name with U+0000", JobArgs("startJob") with { StepName = "a\0b" }, false), ("schedules on a disable", JobArgs("disable") with { DeleteUnusedSchedule = true }, false),
             ("a rename to the same name", JobArgs("rename") with { NewName = "Nightly ETL" }, false), ("a job's delete closing connections", JobArgs("delete") with { CloseConnections = true, DeleteHistory = true }, false),
-            ("a job's stop with a new name", JobArgs("stopJob") with { NewName = "x" }, false), ("a job's enable with a login identity", JobArgs("enable") with { LoginIdentity = new("01", Created + ".000") }, false),
-            ("an identity on a table", Args("rename", new ObjectRefDto("table", "AppData", "dbo", "Orders")) with { NewName = "x", AgentIdentity = new(Created) }, false),
-            ("start on a table", Args("startJob", new ObjectRefDto("table", "AppData", "dbo", "Orders")) with { AgentIdentity = new(Created) }, false),
+            ("a job's stop with a new name", JobArgs("stopJob") with { NewName = "x" }, false), ("a job's enable with a login identity", JobArgs("enable") with { LoginIdentity = new("01", "2026-11-02T21:07:12.000") }, false),
+            ("an identity on a table", Args("rename", new ObjectRefDto("table", "AppData", "dbo", "Orders")) with { NewName = "x", AgentIdentity = new(JobId) }, false),
+            ("start on a table", Args("startJob", new ObjectRefDto("table", "AppData", "dbo", "Orders")) with { AgentIdentity = new(JobId) }, false),
             ("properties of a job", JobArgs("properties"), false), ("the service on a job", Args("startAgent", Job), false),
             ("the service with a member", Args("stopAgent", AgentNode) with { NewName = "x" }, false), ("the service's script", Args("restartAgent", AgentNode), true),
             ("the service named", Args("startAgent", new ObjectRefDto("agent", Name: "x")), false)

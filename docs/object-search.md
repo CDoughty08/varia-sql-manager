@@ -187,13 +187,14 @@ the reads held when it is made:
 - **Match Case.** Off by default; matching is ordinal and ignores case.
 - **Wildcards.** Without regex, `*` is any characters on one line and `?` one character; the rest is literal. A search
   matches anywhere in a name, so `Cust*` and `Cust` find the same; under Match Whole Word an outer `*` matches the rest of
-  the identifier (`Cust*` finds `Customers`).
+  the identifier (`Cust*` finds `Customers`). An internal star can stretch to the word boundary, so `Order*Id` finds `OrderIdArchiveId`.
 - **Dots.** A name search with a dot matches the qualified name `database.schema.name` (a child's
   `database.schema.parent.name`) with a dot at each end. `.Sales` and `Sales.` find schema `Sales` and its contents
   (`.Sales` also finds names starting `Sales`, such as `dbo.SalesOrders`); `AppData.dbo.Orders` finds that table in
   AppData only; `PartialSchema*.Orders` finds `Orders` in every schema starting `PartialSchema`. Only the
   schema-qualified part is marked. A regex with a dot matches `schema.name` as it is.
-- **Match Whole Word.** No identifier character (letter, digit, `_`, `@`, `#`, `$`) on either side.
+- **Match Whole Word.** No identifier character (letter, digit, `_`, `@`, `#`, `$`) on either side. A regex may stretch
+  to the word's end to get there (`Order.*?Id` finds `OrderIdArchiveId`).
 - **Use Regular Expression.** .NET's `NonBacktracking` engine (linear time). Lookarounds and backreferences are refused
   with a message.
 - **Scope.** All (names and definitions), Names or Definitions.
@@ -206,7 +207,7 @@ the reads held when it is made:
   found but not together, then within edits, then by sound, each by fewest edits), then definition-only matches. A dotted
   search counts the schema-qualified name (`dbo.Orders` matches `dbo.Orders` exactly, `dbo.Orders.id` by prefix). Within
   a group, by database then name.
-- **Definition hits** show the line, a preview with the match marked, and how many more matches the definition has.
+- **Definition hits** show the line, a preview with the visible portion of the match marked, and how many more matches the definition has.
 - **During a build** a search answers from what the index holds so far and runs again when the build ends, keeping the
   selected hit (so Enter in Object Explorer's box continues from it) and the scroll position.
 
@@ -280,7 +281,7 @@ child's parent) show at once; reads start once the selection has rested 80 ms.
   cache, so an unchanged table starts no SMO job). Other kinds Script As can write (a trigger, an index, a login…) show
   their CREATE script; others say they have no definition.
 - A definition hit's matched line is marked and scrolled a third of the way into view: the index's line for a module's
-  text, else the script line holding the match's preview nearest that line.
+  text, else the script line holding the match's preview nearest that line. Tabs in the SQL match the spaces shown in the preview.
 - Tables and views also show Columns: Peek's Columns list, which comes with the properties (no read of its own), as a card
   grid with Peek's columns (Name, Type, Nullable, Key, Identity, Computed, Default, Definition) that selects, sorts and
   copies as a results grid does. Up to 1,024 columns are listed; a note says when there are more.
@@ -318,9 +319,62 @@ child's parent) show at once; reads start once the selection has rested 80 ms.
   disconnected. The index line counts every server's index and names each that leaves objects out (skipped databases,
   server objects or SQL Server Agent objects skipped, names only, no index, a failed build).
 
+## BigQuery
+
+A BigQuery connection has an index of its own, searched in every way above (the box, the tab, the header's Search and All
+servers, which spans SQL Server and BigQuery connections together). It lives under the same 512 MiB budget and is built and
+dropped the same way, from BigQuery's free metadata calls only: no job runs and nothing is billed.
+
+- **Two passes.** Names first: each project's `datasets.list`, then each dataset's `tables.list`, `routines.list` and
+  `models.list`, four datasets at a time, so names are searchable within seconds. Then details: `tables.get` for each
+  table, view, materialized view and external table (columns with types, nested STRUCT fields by path such as
+  `address.city`, descriptions, partitioning, clustering, rows, size and view text) and `routines.get` for each routine
+  (body and signature), eight at a time through the connection's shared metadata limiter (16 calls in flight per
+  principal). The status says "Indexing N of M datasets", then "Reading details of N of M objects"; each dataset becomes
+  searchable with its details as soon as they are read.
+- **Projects.** The billing project is read in both passes; the extra projects by name only, unless Options › Object
+  Explorer › Commands › Index BigQuery extra projects' schemas (`objectExplorer.search.bigQueryExtraProjects`) is on. The
+  index line says how many projects are indexed by name only.
+- **Sharded tables.** Tables whose names end in a valid date (`events_20260101`, `events_20260102`, …), two or more with
+  the same prefix, are one entry, the newest shard, whose row names the shard count and date range. Its schema is read
+  once.
+- **Refresh.** A rebuild lists everything again and reuses what an earlier read knew about an object whose creation time
+  (and, for routines and models, last change) is unchanged, since `tables.list` reports no change time. Refresh on a
+  project or dataset in Object Explorer re-reads that project or dataset whole, on a node below a dataset, that dataset, and
+  on the connection's node, everything (a rebuild).
+  DDL run from a query tab (CREATE, ALTER, DROP or UNDROP) marks the dataset it changed, and a script the tab's default
+  dataset (DDL in a script that names another dataset, or with no default dataset, waits for a Refresh); they are re-read
+  whole once the query ends, or by a build already running when it reaches them; a query that failed re-reads whatever DDL
+  before the failure marked. A refresh asked while a build runs waits for it; after a rebuild fails, only another rebuild
+  runs.
+- **Failures.** A project whose datasets cannot be listed, or a dataset whose objects cannot, is skipped with BigQuery's
+  reason (`PERMISSION_DENIED`, `NOT_FOUND`, `TIMEOUT`, `QUOTA`, `API_DISABLED`, …); a dataset whose objects' details could
+  not all be read keeps their names and is counted as "details missing". Each metadata call has 30 s. A dataset dropped
+  since its last read leaves the index without a skip.
+- **Limits** (`objectSearchLimits.bigQuery`, `BigQueryIndexLimits`): 500 pages of 1,000 per listing, 10,000 columns per
+  table, and 1,024 characters of each column description or routine signature.
+
+Searching and hits:
+
+- **Kinds.** Datasets, tables, views, materialized views, external tables, routines, models and columns. Tables,
+  Views, Columns and Procedures are shared with SQL Server's chips; Materialized views, External tables, Snapshots,
+  Clones, Routines, Table functions, Models and Datasets show when a BigQuery connection is searched. Each server is sent
+  only its own engine's kinds; a server none of the chosen types apply to answers no hits. A clone in a project read by
+  name only is listed as a table (only its details say it is a clone).
+- **Names and definitions.** Name search covers dataset, object and column names (a column by its field path); definition
+  search covers view and materialized view text and routine bodies. A Database scope does not apply to BigQuery.
+- **A hit's row** shows its name without the dataset, and the project, dataset and folder, then a column's type or a
+  sharded table's shards. Reveal walks project › dataset › folder › object (a column through its table and the record
+  columns above it).
+- **Its menu** has Preview Rows (tables), Script As and Copy (Name, and Fully Qualified Name: the backtick-quoted path).
+  The details pane shows a table's, view's or routine's script.
+
 ## Protocol
 
-`explorer.index` (no deadline, cancellable, droppable `explorer.index.progress` EVENTs with `{ done, total, objects }`
+`explorer.index` (no deadline, cancellable, droppable `explorer.index.progress` EVENTs with `{ done, total, objects }`, and
+BigQuery's `phase`,
 relayed only to the requesting window, at most 4 a second) and `explorer.search` (15 s) run on the explorer lane and are
 cancelled with `explorerCancel` by `requestId`; docs/ipc.md has the details. Failures are values: an invalid pattern
-answers `problem`, and skipped databases are listed in the status.
+answers `problem`, and skipped databases are listed in the status. Both methods serve BigQuery connections too: `explorer.index`
+takes BigQuery's `extraDetails`, `scope` (a project, or a project's dataset) and `stale` (SQL Server refuses them), and
+`explorer.search` its `project` and `dataset` (SQL Server's `database` is refused for BigQuery, and theirs for SQL Server).

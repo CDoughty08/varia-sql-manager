@@ -2,8 +2,9 @@
 // the smoke runs open the release gate): the Agent node's menu opens one live document per connection listing the jobs with
 // tiles and tones, a view chip and Clear filters narrow and restore the list through live.update, two selected jobs get Start
 // as one request each with a result line per job, the status bar follows the newest started job to its outcome, the Last run
-// chevron shows the selected job's last run in place, closing ends the view, and Enter on the Job Activity Monitor node opens
-// it again. Screenshots in Dark and Light go to artifacts/.
+// chevron shows the selected job's last run in place, View history opens the Log File Viewer (AG-5a) with the selected job
+// checked, whose sources, outcome filter, selected run, whole message and Delete History work against the fake history, closing
+// ends the view, and Enter on the Job Activity Monitor node opens it again. Screenshots in Dark and Light go to artifacts/.
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
@@ -93,8 +94,8 @@ try {
   await expect(results.getByRole('listitem')).toHaveCount(2)
   await expect(results.getByRole('listitem').filter({ hasText: 'Start requested' })).toHaveCount(2)
   const starts = (await calls('actions.execute')).filter(call => call.action === 'startJob')
-  expect(starts.map(call => ({ name: call.target.name, kind: call.target.kind, created: call.agentIdentity.created }))).toEqual([
-    { name: 'Nightly', kind: 'agentJob', created: '2026-01-02T03:04:05' }, { name: 'Backup', kind: 'agentJob', created: '2026-01-03T03:04:05' }
+  expect(starts.map(call => ({ name: call.target.name, kind: call.target.kind, jobId: call.agentIdentity.jobId }))).toEqual([
+    { name: 'Nightly', kind: 'agentJob', jobId: 'a1b2c3d4-0000-4000-8000-000000000001' }, { name: 'Backup', kind: 'agentJob', jobId: 'a1b2c3d4-0000-4000-8000-000000000002' }
   ])
   // The status bar follows the newest started job (one more behind it) until it ends; the list shows both running meanwhile or after.
   const item = statusBar(page).getByRole('status').filter({ has: page.getByRole('button', { name: 'Dismiss Backup', exact: true }) })
@@ -123,6 +124,50 @@ try {
   await lastRun.getByRole('button', { name: 'Hide the last run', exact: true }).click()
   await expect(lastRun).toHaveCount(0)
   console.log('Last run passed: the chevron shows the selected job\'s last run in place and hides it again.')
+
+  step = 'history'
+  // View history opens the Log File Viewer with the selected job checked; All jobs, the outcome filter, a run's rows and its
+  // whole message, and Delete History behind its confirmation.
+  const nightlyId = 'a1b2c3d4-0000-4000-8000-000000000001'
+  const viewer = () => documentFrame(page, 'Log File Viewer')
+  const runsSelector = liveGridSelector('Runs')
+  const runs = () => page.evaluate(({ grid, row, cell }) => {
+    const text = (element, column) => [...element.querySelectorAll(cell)].find(item => item.style.display !== 'none' && item.getAttribute('aria-colindex') === String(column + 2))?.textContent
+    return [...document.querySelectorAll(`${grid} ${row}`)].filter(element => element.style.display !== 'none' && element.hasAttribute('aria-rowindex'))
+      .map(element => ({ index: Number(element.getAttribute('aria-rowindex')) - 2, text: `${text(element, 1)} ${text(element, 2)}` })).sort((a, b) => a.index - b.index).map(item => item.text)
+  }, { grid: runsSelector, row: gridPart.row, cell: gridPart.cell })
+  await jobCell('Nightly').click()
+  await expect(bulkBar()).toContainText('1 job selected')
+  await bulkBar().getByRole('button', { name: 'View history', exact: true }).click()
+  await expect(documentTab(page, 'Log File Viewer - server-a')).toHaveAttribute('aria-selected', 'true')
+  await expect.poll(runs).toEqual(['Nightly Failed', 'Nightly Succeeded'])
+  expect((await calls('live.subscribe')).find(call => call.source === 'agent.history')).toMatchObject({ args: { jobs: [nightlyId], days: 7 }, probes: [{ probe: 'agent.history.list' }] })
+  const sources = viewer().getByRole('region', { name: 'Select logs', exact: true })
+  await expect(sources.getByRole('checkbox', { name: 'Nightly', exact: true })).toBeChecked()
+  await sources.getByRole('checkbox', { name: 'All jobs', exact: true }).check()
+  await expect.poll(runs).toEqual(['Nightly Failed', 'Backup Succeeded', 'Nightly Succeeded'])
+  await viewer().getByRole('toolbar', { name: 'History filters', exact: true }).getByLabel('Outcome', { exact: true }).selectOption('failed')
+  await expect.poll(runs).toEqual(['Nightly Failed'])
+  await liveGrid(page, 'Runs').locator(gridPart.row, { has: page.locator(gridPart.cell, { hasText: /^Nightly$/ }) }).locator(gridPart.cell).nth(1).click()
+  await expect(liveGrid(page, 'Run steps')).toContainText('(Job outcome)')
+  const details = viewer().getByRole('region', { name: 'Message details', exact: true })
+  await expect(details).toContainText('The last step to run was step 2 (Load).')
+  expect((await calls('agent.historyMessage')).at(-1)).toMatchObject({ jobId: nightlyId, instanceId: 12 })
+  await page.screenshot({ path: 'artifacts/agent-history-dark.png' })
+  // Delete History asks first (Cancel takes focus), then purges the checked jobs and says what msdb reported.
+  await viewer().getByRole('button', { name: 'Delete History…', exact: true }).click()
+  const confirm = page.getByRole('alertdialog', { name: 'Delete History', exact: true })
+  await expect(confirm).toContainText('This cannot be undone.')
+  await expect(confirm.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()
+  await confirm.getByRole('radio', { name: 'All of their history', exact: true }).check()
+  await confirm.getByRole('button', { name: 'Delete', exact: true }).click()
+  await expect(confirm).toHaveCount(0)
+  await expect(viewer().getByRole('status').filter({ hasText: 'Deleted the history of 3 jobs.' })).toBeVisible()
+  expect((await calls('actions.execute')).filter(call => call.action === 'deleteJobHistory').at(-1)).toMatchObject({ target: { kind: 'agent' }, agentHistory: { all: true } })
+  await expect.poll(runs).toEqual([])
+  await page.getByRole('button', { name: 'Close Log File Viewer - server-a', exact: true }).click()
+  await expect(documentTab(page, tabName)).toHaveAttribute('aria-selected', 'true')
+  console.log("History passed: View history opens the Log File Viewer on the selected job; sources, filters, each run's rows and message, and Delete History work.")
 
   step = 'light'
   await page.evaluate(() => window.varia.setThemePreference({ mode: 'light' }))

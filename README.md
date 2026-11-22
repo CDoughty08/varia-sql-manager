@@ -27,8 +27,8 @@ database management tools in one app, with SSMS's features and keys and a modern
   connections, a main window that reopens where you left it (safely back on screen if a monitor is gone), remappable keyboard shortcuts and mouse gestures, Dark, Light or System themes, customizable.
 - **Authentication**: SQL Server, Windows (Kerberos on Linux and macOS) and Microsoft Entra ID.
 - **BigQuery (in progress)**: connect to Google BigQuery from the same Connect dialog (gcloud credentials, a service
-  account key or identity federation), with saved connections, favourites and a dataset picker; running queries comes
-  next ([BigQuery](docs/bigquery.md)).
+  account key or identity federation), with saved connections, favourites and a dataset picker. Results too large for memory stay windowed in BigQuery,
+  read as you scroll, with Copy, streaming Save Results As and Load into memory ([BigQuery](docs/bigquery.md)).
 
 Varia supports SQL Server 2016 through 2025 and runs on Windows, Linux and macOS.
 
@@ -103,7 +103,7 @@ release record; see [cutting a release](docs/release-notes.md#cutting-a-release)
 
 An Electron + React + Monaco + Dockview front end talks to a .NET sidecar (Microsoft.Data.SqlClient and SMO) over a
 length-prefixed MessagePack protocol on stdio. The renderer is sandboxed and untrusted; it reaches the system only
-through a small preload API that main verifies, and query results stay in backend memory under a budget with explicit truncation, never on disk.
+through a small preload API that main verifies, and query results stay in backend memory under a budget with explicit truncation, never on disk (a windowed BigQuery result keeps only a budgeted block cache and reads the rest from BigQuery).
 
 - [Architecture invariants](docs/architecture.md)
 - [IPC protocol](docs/ipc.md)

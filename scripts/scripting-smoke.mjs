@@ -307,7 +307,7 @@ try {
   await expandExplorerPath(page, ...jobPath.slice(0, -1))
   // The job sits below the tree the earlier steps expanded, so it is scrolled into view first.
   await (await revealExplorerRow(page, ...jobPath)).click({ button: 'right', force: true })
-  expect(await menuItemNames(explorerMenu())).toEqual(['Start Job at Step…', 'Stop Job', 'Script Job as', 'Copy Name', 'Disable', 'Rename', 'Delete', 'Refresh'])
+  expect(await menuItemNames(explorerMenu())).toEqual(['New Job…', 'View History', 'Start Job at Step…', 'Stop Job', 'Script Job as', 'Copy Name', 'Disable', 'Rename', 'Delete', 'Refresh', 'Properties'])
   await explorerMenu().getByRole('menuitem', { name: 'Script Job as', exact: true }).click()
   expect(await menuItemNames(menuNamed('Script Job as'))).toEqual(['CREATE To', 'DROP To', 'DROP And CREATE To'])
   await menuNamed('Script Job as').getByRole('menuitem', { name: 'CREATE To', exact: true }).click()

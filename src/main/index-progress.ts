@@ -27,7 +27,7 @@ export function indexProgressRelay(requestId: string, target: IndexProgressTarge
   const push = (event: ObjectIndexProgressEvent) => {
     last = now()
     held = undefined
-    if (!target.isDestroyed()) target.send('varia:explorer-index-progress', { requestId, done: event.done, total: event.total, objects: event.objects })
+    if (!target.isDestroyed()) target.send('varia:explorer-index-progress', { requestId, done: event.done, total: event.total, objects: event.objects, ...event.phase ? { phase: event.phase } : {} })
   }
   const flush = () => {
     timer = undefined

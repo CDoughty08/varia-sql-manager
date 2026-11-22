@@ -32,7 +32,14 @@ internal sealed class DatabaseIndex(string database, ObjectTable table, long byt
     /// <summary>An index of <paramref name="objects"/> as they are, holding no pool references (checks and benchmarks).</summary>
     public DatabaseIndex(string database, IndexedObject[] objects, long bytes, int modules, int cut) : this(database, ObjectTable.Of(objects), bytes, modules, cut) { }
 
+    /// <summary>The database; for BigQuery, the project.</summary>
     public string Database { get; } = database;
+    /// <summary>BigQuery: the dataset whose objects this holds (its schema, in the table); null for a project's own entry and for SQL Server.</summary>
+    public string? Dataset { get; init; }
+    /// <summary>What the connection's index holds it under: the database, or for a BigQuery dataset its project and name.</summary>
+    public string Key => Dataset is null ? Database : Database + "\u0001" + Dataset;
+    /// <summary>BigQuery's facts beside the entries (creation times, rows, size, layout, shard groups, column descriptions), or null.</summary>
+    public BigQueryFacts? Facts { get; init; }
     public ObjectTable Table { get; } = table;
     /// <summary>The memory its records hold (<see cref="IndexMemory"/>), charged against the index's budget until the database is
     /// replaced or dropped. Its names and definitions are the pool's (<see cref="Pooled"/>).</summary>
@@ -42,7 +49,9 @@ internal sealed class DatabaseIndex(string database, ObjectTable table, long byt
     /// <summary>The part of <see cref="Bytes"/> the read took from the share of the index it replaces (<see cref="CreditFrom"/>)
     /// rather than from the budget: the swap moves that share over instead of giving it back.</summary>
     public long Credited { get; } = credited;
-    public DatabaseIndex? CreditFrom { get; } = creditFrom;
+    /// <summary>Let go once the read is held (or dropped), so a held read does not keep every read before it alive.</summary>
+    public DatabaseIndex? CreditFrom { get; private set; } = creditFrom;
+    internal void Credit() => CreditFrom = null;
     public int Modules { get; } = modules;
     /// <summary>Definitions cut at the per-module limit, or left out once the budget was spent.</summary>
     public int Cut { get; } = cut;
@@ -275,13 +284,16 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
     private void Settle(DatabaseIndex? old, DatabaseIndex value)
     {
         // The new read already holds its own references, so texts both reads hold stay in the pool.
-        if (old is not null && ReferenceEquals(old, value.CreditFrom)) { Drop(old, old.Bytes - value.Credited); return; }
+        var from = value.CreditFrom;
+        value.Credit();
+        if (old is not null && ReferenceEquals(old, from)) { Drop(old, old.Bytes - value.Credited); return; }
         if (old is not null) Drop(old, old.Bytes);
         if (value.Credited > 0) budget.Force(value.Credited);
     }
 
     private void Drop(DatabaseIndex value, long bytes)
     {
+        value.Credit();
         budget.Release(bytes);
         value.Dropped(budget);
         pool?.Release(value.Pooled);
@@ -305,10 +317,24 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
         lock (gate)
         {
             if (Disposed) { Drop(value, value.Bytes - value.Credited); return; }
-            databases.Remove(value.Database, out var old);
+            databases.Remove(value.Key, out var old);
             Settle(old, value);
-            databases[value.Database] = value;
+            databases[value.Key] = value;
         }
+    }
+
+    /// <summary>Drops the reads <paramref name="keep"/> refuses (a BigQuery listing's datasets and projects that are gone).</summary>
+    public void KeepWhere(Func<DatabaseIndex, bool> keep)
+    {
+        lock (gate)
+            foreach (var (key, value) in databases.Where(pair => !keep(pair.Value)).ToList())
+                if (databases.Remove(key, out var old)) Drop(old, old.Bytes);
+    }
+
+    /// <summary>The read held under <paramref name="key"/> (<see cref="DatabaseIndex.Key"/>), or null.</summary>
+    public DatabaseIndex? Get(string key)
+    {
+        lock (gate) return databases.GetValueOrDefault(key);
     }
 
     /// <summary>Drops the databases a new listing no longer names.</summary>
@@ -348,17 +374,22 @@ internal sealed class SearchMatcher
     private readonly StringComparison comparison;
     private readonly Regex? regex;
     private readonly bool wholeWord;
+    /// <summary>Whether the regex is a Whole word pattern wrapped in one separator on each side, run over padded input.</summary>
+    private readonly bool bounded;
+    // Each search owns its matcher. Reuse the boundary buffer across its names and definitions.
+    private char[] boundedInput = [];
     /// <summary>For a plain search, the longest run of its text without a dot or wildcard: a name the search can match with a
     /// dot must contain it, which spares building the qualified name of every object that cannot.</summary>
     private readonly string hint;
 
-    private SearchMatcher(string text, bool caseSensitive, bool wholeWord, Regex? regex, bool plain)
+    private SearchMatcher(string text, bool caseSensitive, bool wholeWord, Regex? regex, bool plain, bool bounded = false)
     {
         this.text = text;
         hint = plain ? text.Split(['.', '*', '?']).MaxBy(part => part.Length) ?? "" : "";
         comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
         this.wholeWord = wholeWord;
         this.regex = regex;
+        this.bounded = bounded;
     }
 
     /// <summary>The matcher, or the reason the pattern cannot be one (a syntax error, or a construct NonBacktracking lacks).</summary>
@@ -369,11 +400,57 @@ internal sealed class SearchMatcher
         {
             var literal = wholeWord ? text : text.Trim('*');
             if (literal.IndexOfAny(['*', '?']) < 0) return (new SearchMatcher(literal, caseSensitive, wholeWord, null, true), null);
-            return (new SearchMatcher(literal, caseSensitive, wholeWord, new Regex(Wildcard(literal), options, timeout), true), null);
+            var pattern = Wildcard(literal);
+            if (wholeWord)
+            {
+                // Only stars can match nothing. Whole Word requires a nonempty match.
+                if (literal.All(c => c == '*')) pattern = @"[\p{L}\p{Nd}_@#$]+";
+                pattern = Separator + pattern + Separator;
+            }
+            try { return (new SearchMatcher(literal, caseSensitive, wholeWord, new Regex(pattern, options, timeout), true, wholeWord), null); }
+            catch (NotSupportedException) { return (null, "The wildcard pattern is too complex. Try a shorter pattern."); }
         }
-        try { return (new SearchMatcher(text, caseSensitive, wholeWord, new Regex(text, options, timeout), false), null); }
+        Regex own;
+        try { own = new Regex(text, options, timeout); }
         catch (ArgumentException error) { return (null, Problem(error)); }
         catch (NotSupportedException) { return (null, "Regular expressions here cannot use lookarounds, backreferences, atomic groups or conditionals."); }
+        // Checking each first match's neighbours would miss a longer whole-word match from the same start (Order.*?Id in
+        // OrderIdArchiveId), so the separators go in the pattern. The pattern was checked alone above, so its offsets in any
+        // error are the user's and the group cannot close early. \A, \z and \Z (and ^ or $ under (?-m)) cannot hold after a
+        // consumed separator, and a (?x) comment can swallow the group's end: those keep the neighbour check.
+        if (wholeWord && !TextAnchored(text))
+        {
+            try { return (new SearchMatcher(text, caseSensitive, wholeWord, new Regex(Separator + "(?:" + text + ")" + Separator, options, timeout), false, true), null); }
+            catch (ArgumentException) { }
+            catch (NotSupportedException) { }
+        }
+        return (new SearchMatcher(text, caseSensitive, wholeWord, own, false), null);
+    }
+
+    /// <summary>One character that is not an identifier character, compared exactly whatever the case option.</summary>
+    private const string Separator = @"(?-i:[^\p{L}\p{Nd}_@#$])";
+
+    /// <summary>Whether a pattern can name the ends of the whole input rather than of a line: \A, \z, \Z or \G, or an inline
+    /// option that turns Multiline off, after which ^ and $ do. A false positive only keeps the neighbour check.</summary>
+    internal static bool TextAnchored(string pattern)
+    {
+        for (var at = 0; at + 1 < pattern.Length; at++)
+        {
+            if (pattern[at] == '(' && pattern[at + 1] == '?')
+            {
+                var off = false;
+                for (var option = at + 2; option < pattern.Length && pattern[option] is 'i' or 'm' or 'n' or 's' or 'x' or '-'; option++)
+                {
+                    if (pattern[option] == '-') off = true;
+                    else if (off && pattern[option] == 'm') return true;
+                }
+                continue;
+            }
+            if (pattern[at] != '\\') continue;
+            if (pattern[at + 1] is 'A' or 'z' or 'Z' or 'G') return true;
+            at++;
+        }
+        return false;
     }
 
     /// <summary>A plain search's wildcards as a pattern: * any characters on one line (as few as reach the rest), ? one character,
@@ -421,8 +498,39 @@ internal sealed class SearchMatcher
     private bool Has(string? value) => value is not null && value.Contains(hint, comparison);
 
     /// <summary>The first match at or after <paramref name="start"/>.</summary>
-    public bool Find(ReadOnlySpan<char> value, int start, out int index, out int length)
+    public bool Find(ReadOnlySpan<char> value, int start, out int index, out int length) =>
+        FindPrepared(Prepare(value), start, out index, out length);
+
+    /// <summary>Whole-word patterns consume one separator on each side. Pad the true ends with line breaks, which keep ^ and $
+    /// true there, so the same pattern works at any offset. The span is valid until the next Prepare on this query's matcher.</summary>
+    internal ReadOnlySpan<char> Prepare(ReadOnlySpan<char> value)
     {
+        if (!bounded) return value;
+        var size = value.Length + 2;
+        if (boundedInput.Length < size) boundedInput = new char[Math.Max(size, boundedInput.Length * 2)];
+        var padded = boundedInput.AsSpan(0, size);
+        padded[0] = padded[^1] = '\n';
+        value.CopyTo(padded[1..]);
+        return padded;
+    }
+
+    internal bool FindPrepared(ReadOnlySpan<char> value, int start, out int index, out int length)
+    {
+        if (bounded)
+        {
+            // In padded coordinates the preceding separator starts at the original match index. A regex can match nothing
+            // between two separators, which Whole word does not count: look again from the next character.
+            while (start <= value.Length - 2)
+            {
+                var matches = regex!.EnumerateMatches(value, start);
+                if (!matches.MoveNext()) break;
+                (index, length) = (matches.Current.Index, matches.Current.Length - 2);
+                if (length > 0) return true;
+                start = index + 1;
+            }
+            (index, length) = (-1, 0);
+            return false;
+        }
         while (start <= value.Length)
         {
             if (regex is not null)
@@ -462,7 +570,20 @@ internal static class IndexClock
 /// <summary>What a search asks: its text and options, where to look, and how many hits to answer. Fuzzy adds approximate name
 /// matches (<see cref="FuzzyName"/>) below the exact ones; it never applies to a regular expression or to definitions.</summary>
 internal sealed record SearchQuery(string Text, bool CaseSensitive, bool WholeWord, bool Regex, bool Names, bool Definitions, IReadOnlySet<string>? Kinds, string? Database, int Limit,
-    bool Fuzzy = false);
+    bool Fuzzy = false, string? Project = null, string? Dataset = null)
+{
+    /// <summary>The BigQuery kinds split by subtype, each a filter of its own (src/shared/explorer/search.ts bigQuerySearchTypes): a plain
+    /// kind keeps only its shapes without one of these subtypes.</summary>
+    public static readonly string[] Variants = ["bqTable:snapshot", "bqTable:clone", "bqRoutine:procedure", "bqRoutine:tableValued"];
+
+    /// <summary>Whether the search's kinds keep objects of <paramref name="shape"/>: its kind:subtype variant when it has one, else its kind.</summary>
+    public bool Keeps(ObjectShapes.Shape shape)
+    {
+        if (Kinds is null) return true;
+        var variant = shape.Subtype is null ? null : shape.Kind + ":" + shape.Subtype;
+        return variant is not null && Array.IndexOf(Variants, variant) >= 0 ? Kinds.Contains(variant) : Kinds.Contains(shape.Kind);
+    }
+}
 
 /// <summary>Searches a connection's index. Names rank first (an exact name, then one that starts with the text, then any, then
 /// under Fuzzy Match the approximate ones: every word found but apart, within edits, then by sound, each by fewest edits),
@@ -478,7 +599,8 @@ internal static class IndexSearch
     /// <summary>A hit as the scan finds it, before its result is built: its rank, the object and where its name matched (From is
     /// -1 when only its definition did, whose first match it then carries). The scan keeps at most the candidate cap of these;
     /// labels are built only for the kept ones, and results (match counts, previews, dates) only for the best `limit`.</summary>
-    private readonly record struct Candidate(int Rank, int Score, string? Database, ObjectTable Table, int At, int From, int Length, bool Approximate, int DefinitionAt, int DefinitionLength);
+    private readonly record struct Candidate(int Rank, int Score, string? Database, ObjectTable Table, int At, int From, int Length, bool Approximate, int DefinitionAt, int DefinitionLength,
+        BigQueryFacts? Facts = null);
 
     public static ObjectSearchResult Run(ConnectionIndex index, SearchQuery query, SearchMatcher matcher, ObjectIndexLimits limits, ObjectIndexStatus status, CancellationToken token)
     {
@@ -493,18 +615,21 @@ internal static class IndexSearch
         var dotted = query.Text.Contains('.');
         // Long definitions are packed: each is unpacked into this search's own buffers as it is read.
         var scratch = new PackedText.Scratch();
-        var databases = index.Databases.OrderBy(value => value.Database, StringComparer.OrdinalIgnoreCase).ToList();
-        var sources = new List<(string? Database, ObjectTable Table)>();
-        if (query.Database is null && index.Server is { } server) sources.Add((null, server.Table));
-        if (query.Database is null && index.Agent is { } agent) sources.Add((null, agent.Table));
-        sources.AddRange(databases.Where(value => query.Database is null || string.Equals(value.Database, query.Database, StringComparison.Ordinal))
-            .Select(value => ((string?)value.Database, value.Table)));
+        var databases = index.Databases.OrderBy(value => value.Database, StringComparer.OrdinalIgnoreCase).ThenBy(value => value.Dataset ?? "", StringComparer.OrdinalIgnoreCase).ToList();
+        var sources = new List<(string? Database, ObjectTable Table, BigQueryFacts? Facts)>();
+        if (query.Database is null && index.Server is { } server) sources.Add((null, server.Table, null));
+        if (query.Database is null && index.Agent is { } agent) sources.Add((null, agent.Table, null));
+        // A BigQuery search narrowed to a project or dataset keeps only its reads (a dataset's leaves out the project's own entry).
+        sources.AddRange(databases.Where(value => (query.Database is null || string.Equals(value.Database, query.Database, StringComparison.Ordinal))
+                && (query.Project is null || string.Equals(value.Database, query.Project, StringComparison.Ordinal))
+                && (query.Dataset is null || string.Equals(value.Dataset, query.Dataset, StringComparison.Ordinal)))
+            .Select(value => ((string?)value.Database, value.Table, value.Facts)));
         if (index.Resource is { } resource)
-            sources.Add((query.Database ?? databases.FirstOrDefault(value => value.Database == "master")?.Database ?? databases.FirstOrDefault()?.Database ?? "master", resource.Table));
-        foreach (var (name, table) in sources)
+            sources.Add((query.Database ?? databases.FirstOrDefault(value => value.Database == "master")?.Database ?? databases.FirstOrDefault()?.Database ?? "master", resource.Table, null));
+        foreach (var (name, table, facts) in sources)
         {
             // Which of the table's shapes the search's kinds keep, worked out once per table rather than once per object.
-            var kept = query.Kinds is null ? null : table.Shapes.Select(shape => query.Kinds.Contains(shape.Kind)).ToArray();
+            var kept = query.Kinds is null ? null : table.Shapes.Select(query.Keeps).ToArray();
             for (var at = 0; at < table.Count; at++)
             {
                 // The budget and Stop are checked by objects scanned, not hits found: a search with few hits still reads every
@@ -518,6 +643,7 @@ internal static class IndexSearch
                 }
                 if (kept is not null && !kept[table.ShapeOf(at)]) continue;
                 if (!Match(name, table, at, query, matcher, fuzzy, dotted, scratch, out var candidate)) continue;
+                if (facts is not null) candidate = candidate with { Facts = facts };
                 total++;
                 var key = (candidate.Rank, candidate.Score, table.System(at));
                 if (found.Count < limits.Candidates) found.Enqueue(candidate, key);
@@ -620,12 +746,13 @@ internal static class IndexSearch
         var (first, size) = (hit.DefinitionAt, hit.DefinitionLength);
         var stored = table.StoredDefinition(at);
         var text = query.Definitions && stored is not null && !(first < 0 && late) ? DefinitionText.Read(stored, scratch) : default;
+        var input = matcher.Prepare(text);
         if (query.Definitions && stored is not null && first < 0 && late) stopped = true;
-        else if (query.Definitions && stored is not null && (first >= 0 || matcher.Find(text, 0, out first, out size)))
+        else if (query.Definitions && stored is not null && (first >= 0 || matcher.FindPrepared(input, 0, out first, out size)))
         {
             var count = 1;
             var next = first + Math.Max(1, size);
-            for (; !late && count < limits.MatchesCounted && next <= text.Length && matcher.Find(text, next, out var again, out var width); count++)
+            for (; !late && count < limits.MatchesCounted && next <= text.Length && matcher.FindPrepared(input, next, out var again, out var width); count++)
             {
                 next = again + Math.Max(1, width);
                 token.ThrowIfCancellationRequested();
@@ -639,8 +766,13 @@ internal static class IndexSearch
         }
         var parent = table.Parent(at);
         var via = table.Via(at);
+        var modified = table.Modified(at)?.ToString("yyyy-MM-ddTHH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
+        int[]? range = hit.From < 0 ? null : [hit.From, hit.Length];
+        if (BigQueryFacts.IsBigQuery(table.Kind(at)))
+            return new(BigQueryFacts.RefOf(table, at, hit.Database!), table.Folder(at), label, range, modified, definition, table.Subtype(at), parent < 0 ? null : table.Folder(parent),
+                Approximate: hit.Approximate ? true : null, Type: table.Kind(at) == "bqColumn" ? table.Typed(at)?.TypeName : null, Shards: hit.Facts?.Shards(at));
         var value = new ObjectRefDto(table.Kind(at), hit.Database, table.Schema(at), table.Name(at), parent < 0 ? null : new ParentRefDto(table.Kind(parent), table.Schema(parent)!, table.Name(parent)));
-        return new(value, table.Folder(at), label, hit.From < 0 ? null : [hit.From, hit.Length], table.Modified(at)?.ToString("yyyy-MM-ddTHH:mm:ss", System.Globalization.CultureInfo.InvariantCulture),
+        return new(value, table.Folder(at), label, range, modified,
             definition, table.Subtype(at), parent < 0 ? null : table.Folder(parent), via >= 0 ? new ViaRefDto(table.Schema(via)!, table.Name(via), table.Folder(via)) : null, hit.Approximate ? true : null);
     }
 
@@ -660,6 +792,8 @@ internal static class IndexSearch
         if (to - from > chars) to = from + chars;
         from = Math.Max(start, from);
         var preview = new string(text[from..to]).Replace('\t', ' ');
-        return new(line, index - start + 1, preview, [index - from, Math.Min(shown, to - index)], from > start, to < end, count, cut);
+        var highlightStart = Math.Clamp(index, from, to);
+        var highlightEnd = Math.Clamp(index + shown, highlightStart, to);
+        return new(line, index - start + 1, preview, [highlightStart - from, highlightEnd - highlightStart], from > start, to < end, count, cut);
     }
 }

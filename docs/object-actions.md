@@ -25,7 +25,7 @@ and re-derives the subtype in the action's own connection before any DDL runs.
 | `enable` | Enable | `explorer.enable` | inline | `explorer.context` | `6_state` 1 | b | — | — | SQL Server, Managed Instance | `explorerActionEnable` |
 | `unlock` | Unlock… | `explorer.unlock` | dialog (`unlockLogin`) | `explorer.context` | `6_state` 2 | u | — | — | SQL Server, Managed Instance | `explorerActionUnlock` |
 | `startJob` | Start Job at Step… | `explorer.startJob` | dialog (`startJobAtStep`) | `explorer.context` | `2_job` 1 | t | — | — | SQL Server, Managed Instance | `explorerActionStartJob` |
-| `stopJob` | Stop Job | `explorer.stopJob` | inline | `explorer.context` | `2_job` 2 | p | — | — | SQL Server, Managed Instance | `explorerActionStopJob` |
+| `stopJob` | Stop Job | `explorer.stopJob` | inline | `explorer.context` | `2_job` 2 | j | — | — | SQL Server, Managed Instance | `explorerActionStopJob` |
 | `startAgent` | Start | `explorer.startAgent` | dialog (`startAgent`) | `explorer.context` | `2_service` 1 | s | — | — | SQL Server, Managed Instance | `explorerActionStartAgent` |
 | `stopAgent` | Stop | `explorer.stopAgent` | dialog (`stopAgent`) | `explorer.context` | `2_service` 2 | t | — | — | SQL Server, Managed Instance | `explorerActionStopAgent` |
 | `restartAgent` | Restart | `explorer.restartAgent` | dialog (`restartAgent`) | `explorer.context` | `2_service` 3 | e | — | — | SQL Server, Managed Instance | `explorerActionRestartAgent` |
@@ -75,7 +75,7 @@ is reserved on Windows and Linux.
 | `function` | none, `inline`, `tableValued`, `clrTableValued`, `scalar`, `clrScalar` | – | ✓ | ✓ | – | – | – | – | – | – | – | – | – | – | – | – |
 | `function` | `aggregate` | – | ✓ | ○ | – | – | – | – | – | – | – | – | – | – | – | – |
 | `agent` | none | – | – | – | ✓ | – | – | – | – | – | – | – | – | ✓ | ✓ | ✓ |
-| `agentJob` | none | – | ✓ | ✓ | – | – | – | – | ✓ | – | – | ✓ | ✓ | – | – | – |
+| `agentJob` | none | – | ✓ | ✓ | ✓ | – | – | – | ✓ | – | – | ✓ | ✓ | – | – | – |
 
 ## Folder actions
 
@@ -140,6 +140,7 @@ the Servers column above says which, and on another server the menu hides the it
 | `stopAgent` | Stop SQL Server Agent | Modal dialog | `stopAgent` | General (`settings-gear`) | Yes |
 | `restartAgent` | Restart SQL Server Agent | Modal dialog | `restartAgent` | General (`settings-gear`) | Yes |
 | `agentProperties` | SQL Server Agent Properties | Modal dialog | `agentProperties` | General (`settings-gear`), History (`history`) | No |
+| `agentJob` | Job Properties - <name> | Document tab | `agentJob` | General (`settings-gear`), Steps (`settings-gear`), Schedules (`settings-gear`), Notifications (`settings-gear`), Targets (`settings-gear`), Alerts (`settings-gear`), History (`history`) | No |
 
 A modal dialog is for a confirmation (Delete Object). A property sheet opens as a document tab instead (U1 D2): its
 pages are sections in one scrolling column with a section list beside it, and a Script drawer under it.
@@ -759,6 +760,9 @@ SQL Backend are refused until it ends: Stop it first) on the long gate, and the 
 RESTORE's STATS percent (`action.progress`), an overall percent (the sets done and the running set's percent, each set
 alike) and the time. Answering the bar moves focus to the Run panel's title (Restore, Stop) or back to the verb (Cancel,
 Keep restoring).
+
+For a new destination, a login can restore with `CREATE DATABASE` in master, `CREATE ANY DATABASE` on the server,
+or membership in dbcreator or sysadmin.
 
 The backend first checks what the request names, on the action's own connection: the destination's identity (an
 existing database must be the one the document read), a snapshot or a database without RESTORING rights, whether the
@@ -1457,6 +1461,7 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `AGENT_STOPPED` | No |
 | `JOB_STATE` | No |
 | `SERVICE_UNREACHABLE` | No |
+| `STALE` | No |
 
 ## Limits
 

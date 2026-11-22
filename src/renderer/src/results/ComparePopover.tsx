@@ -8,7 +8,7 @@ import { trapFocus } from '../trap-focus'
 import type { UnpairedColumn } from './compare-pairing'
 import type { CompareAnchor } from './CompareService'
 import { comparedNames, comparisonName, distinctName, entryName, entryOf, entrySecondary, numberedName, type ResultSetEntry, type TabResults } from './ResultsService'
-import { formatCount } from './status'
+import { formatCount, resultRows } from './status'
 
 const nameOf = (column: UnpairedColumn) => column.name || '(No column name)'
 const width = 300
@@ -210,14 +210,14 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
   }
   // Compare (or Show It) shows the comparison and closes the popover: the keyboard focus goes to the comparison's grid,
   // unless the user has put it somewhere other than this popover since.
-  const start = async () => {
+  const start = async (context?: number) => {
     if (running || !sides) return
     const owner = card.current?.ownerDocument, form = card.current
     // Asked once the comparison is there: with the focus in another dialog (the palette), the popover stays for it to come
     // back. Any Compare popover of the document counts (closed and opened again on the pair, it is a new one), and so does
     // a focus lost to the page (a press on the popover's text), which nothing else holds.
     const holdsFocus = () => { const at = owner?.activeElement; return !at || at === owner.body || !at.isConnected || !!at.closest('.compare-popover') }
-    const focused = await compare.run(tabId, { holdsFocus })
+    const focused = await compare.run(tabId, { holdsFocus, ...context === undefined ? {} : { context } })
     const at = owner?.activeElement
     const lost = !at || at === owner.body || !at.isConnected || !!form?.contains(at)
     if (focused !== undefined && lost && results.getSnapshot()[tabId]?.focused === focused) focusResultGrid(owner, tabId, focused)
@@ -234,12 +234,14 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
   const reordered = (entry: ResultSetEntry) => { const sort = results.sortOf(tabId, entry.key); return !!sort && (sort.keys.length > 0 || sort.filters.length > 0) }
   const filtered = sides ? [sides.old, sides.neu].filter(reordered) : []
   const left = sides ? [...sides.pairing.oldOnly.map(column => [column, sides.old, sides.neu] as const), ...sides.pairing.newOnly.map(column => [column, sides.neu, sides.old] as const)] : []
-  const rows = (entry: ResultSetEntry) => { const stored = entry.handle.getSnapshot().rowsStored; return `${formatCount(stored)} ${stored === 1 ? 'row' : 'rows'}` }
+  const rows = (entry: ResultSetEntry) => { const stored = resultRows(entry.handle.getSnapshot()); return `${formatCount(stored)} ${stored === 1 ? 'row' : 'rows'}` }
   const side = (entry: ResultSetEntry, old: boolean) => <div className="compare-side" role="group" aria-label={old ? 'Old side' : 'New side'}
     title={old ? 'Old side: its rows that differ show as removed (−)' : 'New side: its rows that differ show as added (+)'}>
     <span className={old ? 'compare-sign removed' : 'compare-sign added'} aria-hidden="true">{old ? '−' : '+'}</span>
     <b {...entrySecondary(entry) ? { title: numberedName(entry) } : {}}>{numberedName(entry)}</b>{!list && <small>{rows(entry)}</small>}
   </div>
+  // A pair compared before in this tab matches rows as it last did (its remembered match).
+  const matching = sides ? compare.pickerMatch(tabId) : undefined
   const title = sides ? comparisonName(...comparedNames(sides.old, sides.neu, tab.sets), picker.exact) : ''
 
   return <>
@@ -273,6 +275,7 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
           <button type="button" className="icon-button" aria-label="Swap old and new" title="Swap old and new" onClick={() => compare.swap(tabId)}><Icon name="arrow-swap" /></button>
           {side(sides.neu, false)}
         </div>}
+        {sides && matching && <p className="compare-note compare-matching">Match rows by: {matching.text}{matching.remembered && <span className="compare-remembered"> (remembered)</span>}</p>}
         {left.length > 0 && <section className="compare-unpaired" aria-labelledby={ids + 'unpaired'}>
           <h3 id={ids + 'unpaired'}>Not compared <span className="compare-info" title={pairingRule} aria-label={pairingRule} role="img"><Icon name="info" /></span></h3>
           <ul>{left.map(([column, own, other]) => <li key={own.key + ':' + column.index}>
@@ -283,6 +286,8 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
         {filtered.length > 0 && <p className="compare-note warning"><Icon name="filter" /><span>{filtered.map(entry => distinctName(entry, tab.sets)).join(' and ')} {filtered.length > 1 ? 'are' : 'is'} sorted or filtered here. The comparison uses all the stored rows, in their own order.</span></p>}
         {/* Mounted, and in the accessibility tree, while the popover is, so a failure written into it is read out. */}
         <p className={picker.error ? 'compare-note error' : picker.cancelled ? 'compare-note' : 'visually-hidden'} role="status">{picker.error ?? (picker.cancelled ? 'Comparison cancelled.' : '')}</p>
+        {/* All rows did not fit: the same comparison with Changes only, from here. */}
+        {picker.refusedRows && sides && <button type="button" className="compare-refused-action" onClick={() => void start(0)}>Show changes only</button>}
       </div>
       <div className="compare-foot">
         <label className="compare-exact" title="Case and trailing spaces count"><input type="checkbox" checked={picker.exact} onChange={event => compare.setExact(tabId, event.target.checked)} /> Exact text</label>

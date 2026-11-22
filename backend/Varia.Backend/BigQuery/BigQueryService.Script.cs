@@ -174,7 +174,6 @@ internal sealed partial class BigQueryService
         {
             "PROCEDURE" => "DROP PROCEDURE IF EXISTS ",
             "TABLE_VALUED_FUNCTION" => "DROP TABLE FUNCTION IF EXISTS ",
-            "AGGREGATE_FUNCTION" => "DROP AGGREGATE FUNCTION IF EXISTS ",
             _ => "DROP FUNCTION IF EXISTS "
         };
         return statement + BqNames.RoutinePath(project, dataset, name) + ";";
@@ -186,7 +185,7 @@ internal sealed partial class BigQueryService
         var table = await MetadataAsync(connection, t =>
         {
             var call = connection.Client.Service.Tables.Get(project, dataset, name);
-            call.SelectedFields = "schema,type";
+            call.Fields = "schema,type";
             return call.ExecuteAsync(t);
         }, token);
         return Template(verb, table.Type, table.Schema?.Fields ?? [], BqNames.TablePath(project, dataset, name));

@@ -13,7 +13,7 @@ export default function IndexStatus() {
   const objects = running.reduce((sum, entry) => sum + entry.objects, 0)
   const servers = running.length > 1 ? ` on ${running.length} servers` : ''
   const text = total ? `Indexing objects ${numbers.format(done)} / ${numbers.format(total)}${servers}` : `Indexing objects${servers}…`
-  return <span className="index-status" role="status" title={`Search Objects is reading object names and definitions, one database at a time: ${numbers.format(objects)} objects so far.`}>
+  return <span className="index-status" role="status" title={`Search Objects is reading object names and definitions, database by database (BigQuery: dataset by dataset, then each object's details): ${numbers.format(objects)} objects so far.`}>
     <Icon name="search" />
     <button type="button" className="index-status-text" onClick={() => void commands.execute('explorer.searchObjects', undefined, 'toolbar')}>{text}</button>
     <button type="button" onClick={() => void commands.execute('explorer.stopIndexing', undefined, 'toolbar')}>Stop</button>

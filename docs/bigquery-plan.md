@@ -1055,48 +1055,18 @@ Flattening nested columns into grid columns is not planned (BigQuery's console d
 
 ### Search Objects for BigQuery (BQ-6a)
 
-The index is the single metadata source, so one BigQuery index serves Search Objects, the header's Search (Ctrl+Q) and
-IntelliSense. As for SQL Server, it is one index per connection, in backend memory only, under the shared 512 MiB
-`IndexBudget`, and dropped on disconnect.
+Shipped: docs/object-search.md's [BigQuery](object-search.md#bigquery) section describes the index (two free REST passes,
+sharded groups, extra projects by name unless `objectExplorer.search.bigQueryExtraProjects`, refresh by scope and after DDL)
+and how Search Objects searches it. BQ-6b reads the same index: a table's columns are child entries named by field path with
+their types in `ObjectDetails`, views' and routines' text are definitions, and `ObjectSearchService.Lookup` still answers
+null for a BigQuery connection until BQ-6b gives it a reader.
 
-**Free REST calls are enough. The indexer does not need `INFORMATION_SCHEMA`.** It builds in two passes, so names are
-searchable within seconds and details fill in behind them:
+Still to do, outside BQ-6a:
 
-1. **Names:** `datasets.list` for each project, then `tables.list`, `routines.list` and `models.list` for each dataset:
-   every object's name, kind (table, view, materialized view, external, snapshot, clone), creation and modified times,
-   and labels. Date-sharded tables (`events_20260101`, `events_20260102`, …) are grouped into one entry with their
-   shard range, as the console does.
-2. **Details:** `tables.get` for each table (one per sharded group: its newest shard): columns with types, descriptions
-   and nested STRUCT fields, partitioning, clustering, row count and size, and view text. `routines.get` gives a
-   routine's arguments, return type and body. Extra projects get pass 1 only by default (`textEditor.googleSql.indexExtraProjects`),
-   since a public project can hold tens of thousands of tables.
-
-What REST costs is time, not money: one `tables.get` per table, within BigQuery's 100 requests a second per user and
-method. One rate limiter per principal is shared by the index, Explorer, Preview Rows and pickers, capped below that
-(16 in flight), so 10,000 tables take about two minutes for pass 2 while names are already searchable. **Refresh:**
-Explorer's Refresh on a node and Search Objects' Refresh re-list that scope and re-read only objects whose
-`lastModifiedTime` changed; DDL run from a tab marks its dataset stale. The optional bulk path (off by default) replaces
-pass 2 with region-scoped `INFORMATION_SCHEMA.COLUMN_FIELD_PATHS` (plus `ROUTINES`, `VIEWS`) queries, each billing at
-least 10 MiB and never cached, after the cost rules.
-
-Search Objects enhancements this needs (in BQ-6a, with the index's limits mirrored in C#):
-
-- Index entries carry the scope `project` › `dataset` › `name` in place of `database` › `schema` › `name`, with
-  BigQuery's lengths: dataset and table names up to 1,024 UTF-8 bytes, column names and nested paths up to 300 per
-  part. BQ-6a owns the index DTO's scope and column-type fields.
-- Kind filters list the BigQuery kinds (table, view, materialized view, external table, snapshot, clone, routine,
-  procedure, table function, model), shown only for BigQuery connections.
-- Name search covers project, dataset and object names. Definition search covers view and materialized view text and
-  routine bodies. Column search covers column names and nested field paths (`address.city`), with the column's type.
-- The details pane shows the schema, partitioning and clustering, rows, size, labels and the view or routine text,
-  paged by the existing `shownChars` rule.
-- Result actions: Locate in Object Explorer, Preview Rows (tables only), Script As, copy the backtick-quoted full name,
-  and open a new query on the object's connection.
-- "All servers" search spans SQL Server and BigQuery connections together. Each result row shows its provider and
-  connection.
-- Progress, partial results and per-dataset failures use the existing build status and skipped values, worded for
-  datasets. `explorer.index` builds the BigQuery index through the same method, routed by provider.
-- Never log names, definitions or search text (the existing rule).
+- BQ-6a-2, the optional billed bulk path (off by default): region-scoped `INFORMATION_SCHEMA.COLUMN_FIELD_PATHS` (plus `ROUTINES`,
+  `VIEWS`) in place of pass 2, each query billing at least 10 MiB and never cached, after BQ-7's estimate and prompt.
+- The details pane's BigQuery facts (partitioning, clustering, rows, size, labels, column descriptions) beside the script
+  it shows now, and a New Query action on a result.
 
 ### IntelliSense from the index (BQ-6b)
 
@@ -1273,7 +1243,8 @@ error codes in their enums; tab, AutoRecover and target records; method `provide
 | **BQ-3c-2** Remote views | Derived remote results for sort and filter; value lists; filter mapping and refusals; fallback to the original query; view estimates through `bigquery.dryRun`; the `view` and `distinct` kinds; disabled features and tooltips | M | BQ-3c-1, BQ-7 | |
 | **BQ-3c-3** Copy, Save and loading | Copy limits; streaming Save; Load into memory UI; Load sample and Re-run (the `sample` and `rerun` kinds); `REMOTE_EXPIRED` UI | M | BQ-3c-1, BQ-7 (sample and Re-run are billed) | README |
 | **BQ-5** Object Explorer | Catalogue kinds and scope fields; REST listers and shared rate limiter; Preview Rows; Script As; Properties facts | M | BQ-3a (Preview Rows reads through its converter), BQ-7 (Script As CREATE is billed); AG-1 first or rebase | generated Explorer and Script As docs |
-| **BQ-6a** Search Objects index | Two-pass REST index (sharded groups, extra projects by name, refresh triggers); index DTO scope and column types; optional billed bulk path; Search Objects scope, kinds, searches, details, actions, All servers | M–L | BQ-1, BQ-5 (BQ-7 for the billed bulk path) | |
+| **BQ-6a** Search Objects index | Two-pass REST index (sharded groups, extra projects by name, refresh triggers); index DTO scope and column types; Search Objects scope, kinds, searches, actions, All servers (shipped; the billed bulk path is BQ-6a-2, and details-pane facts remain, below) | M–L | BQ-1, BQ-5 | |
+| **BQ-6a-2** Billed bulk index | `INFORMATION_SCHEMA` in place of pass 2 behind BQ-7's dry-run estimate and prompt, off by default; fills the same index entries | S–M | BQ-6a, BQ-7 | |
 | **BQ-6b** IntelliSense | Completion from the index with alias scope; hover | L | BQ-4, BQ-6a, and the index's column metadata from the editor plan | |
 | **BQ-9** Job history | `bigquery` live scope and REST runner; `bigquery.jobs` source, args schema and `idleIntervalMs`; `bigquery.jobs.get` and `bigquery.jobs.cancel`; Job History document with `LiveGrid`, scope toggle, filters, script grouping, details pane; Cancel job, Open results, Re-attach, Open SQL, Re-run, Copy job id and console link; entry points in Explorer, palette and the Messages job id link; Show in Job History in the records-without-a-tab dialog | M | BQ-3d (Open results and Re-attach), BQ-5 (Explorer menus), BQ-7 (Re-run's cost rules) | live catalogue docs regenerated, README |
 | **BQ-8** Live checks and docs | Real-project opt-in suite and fixture refresh; windowed smoke; Getting Started guide and sample (`src/shared/help/catalog.ts`); final docs pass | M | lands alongside each lane; final pass last | README, testing.md, help |
@@ -1294,6 +1265,10 @@ and Properties can move to 0.11 without hurting the core experience.
   endpoint in the UI.
 - Table actions (delete, copy, expiration, labels), dataset creation, the external-account `executable` source behind
   an explicit opt-in.
+- Move Commas to Front and to End in GoogleSQL queries. They are SQL Server only today because `moveCommaEdits` and
+  `statementAt` read T-SQL tokens. A GoogleSQL version reads `shared/googlesql/lexer.ts` tokens instead: `#`, `--` and
+  non-nesting `/* */` comments, backtick names, raw and triple-quoted strings. Statements end only at semicolons and
+  blank lines (no `GO` or SQLCMD lines). The tests need a `#`-comment case.
 - From the 2026-11-16 mock review (ideas, not yet scoped):
   - A permissions page for datasets, tables and views: who has which role, from the IAM policy, with grant and revoke.
   - An authorized views manager: which views, routines and datasets a dataset authorizes, shown from both sides, with

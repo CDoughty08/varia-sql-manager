@@ -83,7 +83,7 @@ import { decodePage, encodePage } from '../../src/shared/ipc/wire/pages.ts'
 import { copyText, exportText, isHidden, validTurn } from '../../src/shared/results/text-writer.ts'
 import { parseDirective, shapes } from './backend/shapes.mjs'
 import { backendMethods } from '../../src/shared/ipc/methods.ts'
-import { sameName } from '../../src/shared/ordinal-casing.ts'
+import { nameKey } from '../../src/shared/ordinal-casing.ts'
 import { gunzipSync } from 'node:zlib'
 import { fixturePlan } from './plans/model.mjs'
 
@@ -717,11 +717,18 @@ function buildIdentity(result, by, column) {
 // checked by its own checks), numbers compare by value. Look-alikes (poss) follow ResultDiffer.LookAlikes' rules.
 function buildDiff(left, right, exact, context, match = { mode: 'auto' }, layout = 'unified') {
   const visible = result => result.columns.map((item, at) => ({ item, at })).filter(({ item }) => !isHidden(item))
-  const used = new Set(), pairs = []
+  // ResultDiffer.Pairs: the same name by OrdinalIgnoreCase and the same wire (tests/fixtures/compare-pairing), the first
+  // unused right column of each, taken from a queue per name key and wire so wide results pair in linear time.
+  const pairQueues = new Map(), pairs = []
+  const pairKey = item => item.wire + ':' + nameKey(item.name)
+  for (const { item, at } of visible(right)) {
+    const queue = pairQueues.get(pairKey(item))
+    if (queue) queue.at.push(at)
+    else pairQueues.set(pairKey(item), { at: [at], next: 0 })
+  }
   for (const { item, at } of visible(left)) {
-    // ResultDiffer.Pairs: the same name by OrdinalIgnoreCase and the same wire (tests/fixtures/compare-pairing).
-    const paired = visible(right).find(other => !used.has(other.at) && sameName(other.item.name, item.name) && other.item.wire === item.wire)
-    if (paired) { used.add(paired.at); pairs.push([at, paired.at]) }
+    const queue = pairQueues.get(pairKey(item))
+    if (queue && queue.next < queue.at.length) pairs.push([at, queue.at[queue.next++]])
   }
   if (pairs.length === 0) return undefined
   if (match.mode === 'columns' && match.columns.some(pair => pair >= pairs.length)) return { invalid: 'Choose 1 to 16 different paired columns to match rows by.' }
@@ -848,7 +855,8 @@ function buildDiff(left, right, exact, context, match = { mode: 'auto' }, layout
   const columns = [...pairs.map(pair => right.columns[pair[1]]), ...olds, { ...column('Change', 'nvarchar(1)'), role: 'mark', maxLength: 1 }, { ...column('Old row', 'bigint'), role: 'leftRow' }, { ...column('New row', 'bigint'), role: 'rightRow' },
     { ...column('', 'nvarchar(500)'), role: 'tone', maxLength: 500 }]
   const count = kind => entries.filter(entry => entry.kind === kind).length
-  const oneSided = (result, side) => visible(result).filter(({ at }) => !pairs.some(pair => pair[side] === at)).map(({ item }) => item.name).slice(0, 64)
+  const pairedAt = [new Set(pairs.map(pair => pair[0])), new Set(pairs.map(pair => pair[1]))]
+  const oneSided = (result, side) => visible(result).filter(({ at }) => !pairedAt[side].has(at)).map(({ item }) => item.name).slice(0, 64)
   const cellsOf = test => entries.reduce((sum, entry) => sum + entry.cells.filter(test).length, 0)
   return {
     set: { columns, rows, kind: 'diff', batchNumber: right.batchNumber, iteration: right.iteration }, match: { mode, columns: keys.map(p => right.columns[pairs[p][1]].name) },
@@ -1307,9 +1315,9 @@ const fixtures = {
 function liveSubscribe(id, credit, params) {
   if (credit === undefined) return fail(id, 'INVALID_PARAMS', 'A live subscription is a stream: it needs credit.')
   const explorer = params.source === 'explorer' && Array.isArray(params.probes) && explorerStatus() !== undefined, ssis = params.source === 'ssis.catalog'
-  const operations = params.source === 'ssis.operations', agent = params.source === 'agent.jobs'
+  const operations = params.source === 'ssis.operations', agent = params.source === 'agent.jobs' || params.source === 'agent.history'
   if ((params.source !== 'debug.synthetic' && params.source !== 'activity' && !explorer && !ssis && !operations && !agent) || !Array.isArray(params.probes)) return fail(id, 'INVALID_PARAMS', 'Unknown live source.')
-  if (!explorer && params.probes.some(probe => !(params.source === 'activity' ? liveProbes[probe.probe]?.source === 'activity' : ssis ? probe.probe === 'ssis.catalogProbe' : operations ? probe.probe === ssisOperationsProbe : agent ? liveProbes[probe.probe]?.source === 'agent.jobs' : syntheticProbes.includes(probe.probe)))) return fail(id, 'INVALID_PARAMS', 'The fake backend does not implement this probe.')
+  if (!explorer && params.probes.some(probe => !(params.source === 'activity' ? liveProbes[probe.probe]?.source === 'activity' : ssis ? probe.probe === 'ssis.catalogProbe' : operations ? probe.probe === ssisOperationsProbe : agent ? liveProbes[probe.probe]?.source === params.source : syntheticProbes.includes(probe.probe)))) return fail(id, 'INVALID_PARAMS', 'The fake backend does not implement this probe.')
   if (explorer && !workbenchConnections.has(params.connectionId)) return fail(id, 'NOT_CONNECTED', 'Connect to a SQL Server first.')
   if ([...lives.values()].some(live => live.subscriptionId === params.subscriptionId)) return fail(id, 'DUPLICATE_REQUEST', 'This live view is already open.')
   // A CANCEL that came while the request was logged or held: SqlService registers the request before it reads the next
@@ -1650,6 +1658,7 @@ function wakeLive(live) {
     else if (probe.probe === ssisOperationsProbe && live.missing) errors.push({ probe: probe.probe, ...live.missing, retryInMs: 0, terminal: true })
     else if (probe.probe === ssisOperationsProbe) samples.push({ ...sample, ...ssisSample(live, probe, n) })
     else if (live.source === 'agent.jobs') samples.push({ ...sample, ...agentJobsSample(live, probe) })
+    else if (live.source === 'agent.history') samples.push({ ...sample, ...agentHistorySample(live, probe) })
     else if (probe.probe === 'debug.synthetic.status') samples.push({ ...sample, status: [{ id: 'phase', value: n % 2 === 0 ? 'even' : 'odd' }, { id: 'samples', value: n }] })
     else if (probe.probe === 'ssis.catalogProbe') { const { gap, ...rest } = sample; samples.push({ ...rest, ...gap === 'late' ? { gap } : {}, status: catalogFingerprints() }) }
     else if (live.args.errorEvery && n % live.args.errorEvery === 0) errors.push({ probe: probe.probe, code: 'SQL_ERROR', message: 'The synthetic source failed this sample, as the test asked.', retryInMs: probe.intervalMs, terminal: false })
@@ -1766,7 +1775,7 @@ function liveUpdate(id, params) {
     if ((patch.view !== undefined || patch.filter !== undefined || patch.clear?.some(item => item === 'view' || item === 'filter')) && !probe.paused) probe.dueAt = Math.min(probe.dueAt, now)
   }
   for (const track of params.track ?? []) live.probes.get(track.probe)?.tracks.set(track.table, track)
-  if (params.args) live.args = live.source === 'ssis.operations' || live.source === 'agent.jobs' ? { ...params.args } : { ...live.args, ...params.args }
+  if (params.args) live.args = live.source === 'ssis.operations' || live.source === 'agent.jobs' || live.source === 'agent.history' ? { ...params.args } : { ...live.args, ...params.args }
   if (params.paused !== undefined) { if (live.paused && !params.paused) for (const probe of live.probes.values()) resume(probe); live.paused = params.paused }
   if (params.refresh) for (const probe of live.probes.values()) if (!probe.paused) probe.dueAt = Math.min(probe.dueAt, now)
   respond(id, { applied: true, probes: [...live.probes.values()].map(probe => ({ probe: probe.probe, intervalMs: probe.intervalMs, effectiveIntervalMs: probe.intervalMs, paused: live.paused || !!probe.paused })) })
@@ -1829,12 +1838,125 @@ function agentJobsSample(live, probe) {
     tables: [{ table: 0, descriptor: describe(jobs), revision: n, ...(retired.length ? { retired } : {}), ...(tracked ? { tracked } : {}) }, { table: 1, descriptor: describe(runs), revision: n }]
   }
 }
+// The job document (AG-6a) on the fake jobs: each job's General and Notifications, its version (the STALE guard's), three steps and
+// one alert. The job-save-race control file bumps a job's version once, as another session's save would; New Job's save adds a job.
+const agentJobDocs = new Map()
+const agentOperators = [
+  { name: 'DBA Team', enabled: true, email: true, pager: true, netSend: false, pagerDays: 62, weekday: { start: 80000, end: 180000 }, saturday: { start: 0, end: 0 }, sunday: { start: 0, end: 0 } },
+  { name: 'On Call', enabled: true, email: true, pager: false, netSend: false, pagerDays: 0, weekday: { start: 0, end: 0 }, saturday: { start: 0, end: 0 }, sunday: { start: 0, end: 0 } }
+]
+function agentJobDoc(job) {
+  if (!agentJobDocs.has(job.id)) agentJobDocs.set(job.id, { description: `${job.name} maintenance.`, owner: 'sa', emailLevel: 2, emailOperator: 'DBA Team', pageLevel: 0, pageOperator: '', netSendLevel: 0, netSendOperator: '', eventLogLevel: 2, deleteLevel: 0, version: 3, modified: '2026-11-10T09:15:30.120', alerts: [{ id: 7, name: `${job.name} failed`, enabled: true, severity: 0, messageId: 50001 }] })
+  return agentJobDocs.get(job.id)
+}
+const agentJobSteps = job => Array.from({ length: job.steps }, (_, index) => ({ id: index + 1, name: ['Check integrity', 'Rebuild indexes', 'Update statistics'][index] ?? `Step ${index + 1}`, subsystem: 'TSQL' }))
+function agentJobDocument(params) {
+  const base = { login: 'sa', sysadmin: true, platform: 'windows', categories: ['[Uncategorized (Local)]', 'Database Maintenance'], operators: agentOperators, owners: ['sa', 'CONTOSO\agent'], alertsEditable: true, mail: { checked: true, xps: true, profiles: 1, sysadmin: true, useDatabaseMail: true, agentProfile: 'Varia Mail' } }
+  if (params.target.kind === 'agent') return { agentJobDocument: { ...base, steps: [], jobs: agentJobs.map(job => job.name).sort() }, elapsedMs: 1 }
+  const job = agentJobs.find(item => item.name === params.target.name)
+  if (!job) return undefined
+  const doc = agentJobDoc(job)
+  const record = { jobId: job.id.toUpperCase(), name: job.name, enabled: job.enabled, description: doc.description, category: job.category, owner: doc.owner,
+    emailLevel: doc.emailLevel, emailOperator: doc.emailOperator, pageLevel: doc.pageLevel, pageOperator: doc.pageOperator, netSendLevel: doc.netSendLevel, netSendOperator: doc.netSendOperator,
+    eventLogLevel: doc.eventLogLevel, deleteLevel: doc.deleteLevel, created: job.created, modified: doc.modified, version: doc.version, startStepId: 1, lastRun: job.lastRun.replace(' ', 'T'), lastOutcome: job.outcome }
+  return { agentJobDocument: { ...base, job: record, steps: agentJobSteps(job), alerts: doc.alerts }, elapsedMs: 1 }
+}
+async function agentJobSave(params) {
+  const refused = (code, message, field) => ({ steps: [], messages: [], elapsedMs: 1, error: { code, message, retryable: false, ...field ? { field } : {} } })
+  const save = params.agentJob
+  const stamp = () => new Date().toISOString().slice(0, 23)
+  const fields = ['description', 'owner', 'emailLevel', 'emailOperator', 'pageLevel', 'pageOperator', 'netSendLevel', 'netSendOperator', 'eventLogLevel', 'deleteLevel']
+  if (params.target.kind === 'agent') {
+    if (agentJobs.some(job => job.name === save.name)) return refused('NAME_IN_USE', `A job named ${save.name} already exists.`, 'name')
+    const n = agentJobs.length + 1
+    const job = { id: `a1b2c3d4-0000-4000-8000-${String(n).padStart(12, '0')}`, name: save.name, enabled: save.enabled ?? true, created: `2026-11-20T10:00:${String(n).padStart(2, '0')}`, outcome: 5, lastRun: '2026-11-20 10:00:00', steps: 0, category: save.category ?? '[Uncategorized (Local)]' }
+    agentJobs.push(job)
+    const doc = agentJobDoc(job)
+    for (const field of fields) if (save[field] !== undefined) doc[field] = save[field]
+    Object.assign(doc, { alerts: [], version: 1, modified: stamp() })
+    return { steps: [{ status: 'done', title: 'Create the job' }], messages: [], elapsedMs: 1 }
+  }
+  const job = agentJobs.find(item => item.name === params.target.name)
+  if (!job) return refused('NOT_FOUND', `The job ${params.target.name} no longer exists.`)
+  if (params.agentIdentity?.jobId?.toLowerCase() !== job.id) return refused('NOT_FOUND', `The job ${job.name} was replaced since it was listed.`)
+  const doc = agentJobDoc(job)
+  // Another session's save: its description and version change before this one lands.
+  if (await controlled('job-save-race', true)) Object.assign(doc, { description: 'Changed by someone else.', version: doc.version + 1, modified: stamp() })
+  if (save.version !== doc.version || save.modified !== doc.modified) return refused('STALE', 'Someone changed this job after it was read. Nothing was saved.')
+  if (save.name !== undefined) job.name = save.name.trim()
+  if (save.enabled !== undefined) job.enabled = save.enabled
+  if (save.category !== undefined) job.category = save.category
+  for (const field of fields) if (save[field] !== undefined) doc[field] = save[field]
+  if (save.removeAlerts) doc.alerts = doc.alerts.filter(alert => !save.removeAlerts.some(removed => removed.id === alert.id))
+  Object.assign(doc, { version: doc.version + 1, modified: stamp() })
+  return { steps: [{ status: 'done', title: 'Save the job' }], messages: [], elapsedMs: 1 }
+}
 /** A job verb (AG-2's actions.execute on an agentJob) against the fake jobs: one result per job, JOB_STATE when there is nothing to do. */
+// The Log File Viewer's history (agent.history) of the same jobs: Nightly's last run failed at its second step, an older one
+// succeeded; Backup's run succeeded. Rows follow the catalogue's columns and are grouped as AgentHistoryReader groups them;
+// Delete History empties the named jobs' history.
+const historyColumns = table => liveProbes['agent.history.list'].tables[table].columns.map(spec => ({ name: spec.name, dataType: spec.dataType, wire: 'text', nullable: true, ...spec.role ? { role: spec.role } : {} }))
+const agentHistory = [
+  { job: agentJobs[0].id, instance: 12, outcome: 0, date: '2026-11-15 02:30:00', message: 'The job failed.  The Job was invoked by Schedule 1 (Nightly).  The last step to run was step 2 (Load).',
+    steps: [{ instance: 10, id: 1, name: 'Truncate', outcome: 1, message: 'Executed as user: sa. The step succeeded.' }, { instance: 11, id: 2, name: 'Load', outcome: 0, message: 'Executed as user: sa. Violation of PRIMARY KEY constraint. The step failed.' }] },
+  { job: agentJobs[0].id, instance: 8, outcome: 1, date: '2026-11-14 02:30:00', message: 'The job succeeded.  The Job was invoked by Schedule 1 (Nightly).',
+    steps: [{ instance: 6, id: 1, name: 'Truncate', outcome: 1, message: 'Executed as user: sa. The step succeeded.' }, { instance: 7, id: 2, name: 'Load', outcome: 1, message: 'Executed as user: sa. The step succeeded.' }] },
+  { job: agentJobs[1].id, instance: 5, outcome: 1, date: '2026-11-15 01:00:00', message: 'The job succeeded.  The Job was invoked by User sa.',
+    steps: [{ instance: 4, id: 1, name: 'Copy files', outcome: 1, message: 'Executed as user: sa. The step succeeded.' }] }
+]
+const historyOutcomeIds = { 0: 'failed', 1: 'succeeded', 2: 'retry', 3: 'canceled' }
+const historyTones = { 0: 'error', 2: 'warning', 3: 'muted' }
+function agentHistorySample(live, probe) {
+  const args = live.args ?? {}
+  const checked = args.jobs?.map(id => id.toLowerCase())
+  const named = run => checked === undefined || checked.includes(run.job)
+  const text = args.text?.toLowerCase()
+  const kept = agentHistory.filter(run => named(run) && (!args.outcome || historyOutcomeIds[run.outcome] === args.outcome)
+    && (!text || [run.message, ...run.steps.map(step => step.message)].some(message => message.toLowerCase().includes(text)))
+    && (args.step === undefined || args.step === 0 || run.steps.some(step => step.id === args.step)))
+    // Newest first, as AgentHistoryReader orders them.
+    .sort((a, b) => b.date.localeCompare(a.date) || b.instance - a.instance)
+  const jobName = id => agentJobs.find(job => job.id === id)?.name ?? id
+  const key = run => `${run.job}:${run.instance}`
+  const runs = storeResult({ columns: historyColumns(0), rows: kept.map(run => [run.date, jobName(run.job), agentOutcomes[run.outcome], '00:00:02', String(run.steps.length), run.message, key(run), run.job.toUpperCase(), historyTones[run.outcome] ?? null]) }, 0)
+  const selected = args.run && agentHistory.find(run => run.job === args.run.job.toLowerCase() && run.instance === args.run.instance && named(run))
+  const stepRow = (step, run) => [String(step.id), step.name, agentOutcomes[step.outcome], run.date, '00:00:01', '0', '0', '0', step.message, String(step.instance), run.job.toUpperCase(), historyTones[step.outcome] ?? null]
+  const steps = storeResult({ columns: historyColumns(1), rows: selected ? [stepRow({ id: 0, name: '(Job outcome)', outcome: selected.outcome, message: selected.message, instance: selected.instance }, selected), ...selected.steps.map(step => stepRow(step, selected))] : [] }, 0)
+  const jobs = storeResult({ columns: historyColumns(2), rows: [...agentJobs].sort((a, b) => a.name.localeCompare(b.name)).map(job => [job.id.toUpperCase(), job.name, 'sa', agentRunning(job) ? 'Yes' : 'No', job.enabled ? 'Yes' : 'No']) }, 0)
+  // Each table keeps its last two revisions and retires its own older ones, as the backend does.
+  live.revisions.push(runs.resultId, steps.resultId, jobs.resultId)
+  live.historyRevisions ??= [[], [], []]
+  const retiredOf = [runs, steps, jobs].map((result, table) => {
+    const list = live.historyRevisions[table]
+    list.push(result.resultId)
+    const gone = list.length > 2 ? list.splice(0, list.length - 2) : []
+    for (const resultId of gone) { stored.delete(resultId); live.revisions.splice(live.revisions.indexOf(resultId), 1) }
+    return gone
+  })
+  const n = probe.samples, track = probe.tracks.get(0)
+  const tracked = track && { seq: track.seq, rows: track.keys.map(wanted => kept.findIndex(run => key(run) === wanted.toLowerCase())) }
+  return {
+    status: [{ id: 'historyMaxRows', value: 1000 }, { id: 'historyMaxRowsPerJob', value: 100 }],
+    tables: [runs, steps, jobs].map((result, table) => ({ table, descriptor: describe(result), revision: n, ...(retiredOf[table].length ? { retired: retiredOf[table] } : {}), ...(table === 0 && tracked ? { tracked } : {}) }))
+  }
+}
+function agentHistoryMessage(params) {
+  const run = agentHistory.find(item => item.job === params.jobId.toLowerCase() && (item.instance === params.instanceId || item.steps.some(step => step.instance === params.instanceId)))
+  if (!run) return { elapsedMs: 1, error: { code: 'NOT_FOUND', message: 'This history row no longer exists.', retryable: false } }
+  return { message: run.instance === params.instanceId ? run.message : run.steps.find(step => step.instance === params.instanceId).message, elapsedMs: 1 }
+}
+function agentDeleteHistory(params) {
+  const jobs = params.agentHistory.jobs.map(id => id.toLowerCase())
+  const before = agentHistory.length
+  for (let at = agentHistory.length - 1; at >= 0; at--) if (jobs.includes(agentHistory[at].job)) agentHistory.splice(at, 1)
+  return { steps: [{ status: 'done', title: 'Delete job history', detail: `${jobs.length} ${jobs.length === 1 ? 'job' : 'jobs'}` }], messages: [`${before - agentHistory.length} history runs purged.`], elapsedMs: 1 }
+}
+
 function agentJobVerb(params) {
   const job = agentJobs.find(item => item.name === params.target.name)
   const refused = (code, message) => ({ steps: [], messages: [], elapsedMs: 1, error: { code, message, retryable: false } })
   if (!job) return refused('NOT_FOUND', `The job ${params.target.name} no longer exists.`)
-  if (params.agentIdentity?.created !== job.created) return refused('CHANGED', `The job ${job.name} was replaced since it was listed.`)
+  if (params.agentIdentity?.jobId?.toLowerCase() !== job.id) return refused('NOT_FOUND', `The job ${job.name} was replaced since it was listed.`)
   if (params.action === 'startJob') {
     if (agentRunning(job)) return refused('JOB_STATE', `${job.name} is already running.`)
     agentRuns.set(job.id, { samples: 0, started: new Date().toISOString().slice(0, 19).replace('T', ' ') })
@@ -2218,6 +2340,16 @@ async function workbench(id, method, params, credit) {
       if (closed) reportMemory()
       return respond(id, { closed, usedBytes: usedBytes() })
     }
+    // Load into memory as the real backend runs it: the result switches residence under a new revision (an EVENT), then
+    // the summary names it. The fake's results are all in memory already; this only exercises main's handling.
+    case 'results.remoteQuery': {
+      const result = stored.get(params.resultId)
+      if (!result) return missing(id, params.resultId)
+      const descriptor = { ...describe(result), residence: 'memory', revision: 1, rowsTotal: available(result) }
+      write(FrameKind.EVENT, id, 0, { type: 'resultSet.residence', descriptor })
+      write(FrameKind.EVENT, id, 0, { type: 'resultSet.closed', descriptor })
+      return respond(id, { resultSets: [descriptor], discardedResultSets: 0, messages: [info('The result was loaded into memory.')], recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1, database: '', messagesTruncated: false, budget: summaryBudget(), completedAt: new Date().toISOString().replace('Z', '0000+00:00') })
+    }
   }
   const connection = workbenchConnections.get(params.connectionId)
   if (!connection) return fail(id, 'NOT_CONNECTED', 'Connect to a SQL Server first.')
@@ -2236,19 +2368,41 @@ async function workbench(id, method, params, credit) {
           server: { level: 16, sysadmin: true, filestreamLevel: 0, pathSeparator: '\\', edition: 3, containedAuthentication: false }, sessions: 0
         }, elapsedMs: 1 })
         // The table designer: the database's schemas and default filegroup.
+        // The job document: the job's model, or New Job's (with the jobs Copy an existing job picks from).
+        case 'agentJob': {
+          const value = agentJobDocument(params)
+          // As the backend answers a job msdb no longer has: an error in the result, not a failed request.
+          return respond(id, value ?? { elapsedMs: 1, error: { code: 'NOT_FOUND', message: `The job ${params.target.name} no longer exists.`, retryable: false } })
+        }
         case 'tableDesigner': return respond(id, { tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', canCreate: true }, elapsedMs: 1 })
         default: return respond(id, { deleteTarget: { name: [params.target.schema, params.target.name].filter(Boolean).join('.'), type: 'Table', owner: 'dbo', warnings: [], dependentsTruncated: false }, elapsedMs: 1 })
       }
     case 'actions.script':
       switch (params.action) {
         case 'createTable': return respond(id, { text: `CREATE TABLE ${params.design.schema}.${params.design.name}\r\n\t(\r\n\t)  ON [PRIMARY]\r\nGO\r\n`, database: params.target.name, warnings: [] })
+        case 'agentJob': return respond(id, { text: `USE [msdb]
+GO
+BEGIN TRANSACTION
+DECLARE @ReturnCode INT
+SELECT @ReturnCode = 0
+EXEC @ReturnCode = msdb.dbo.sp_update_job @job_name=N'${params.target.name ?? params.agentJob.name}'
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+COMMIT TRANSACTION
+GOTO EndSave
+QuitWithRollback:
+    IF (@@TRANCOUNT > 0) ROLLBACK TRANSACTION
+EndSave:
+GO
+`, database: 'msdb', warnings: [] })
         case 'properties': return respond(id, { text: `USE [master]\r\nGO\r\nALTER DATABASE [${params.target.name}] SET RECOVERY SIMPLE WITH NO_WAIT\r\nGO\r\n`, database: 'master', warnings: [] })
         default: return respond(id, { text: 'DROP TABLE [dbo].[Orders]', database: params.target.database ?? 'master', warnings: [] })
       }
     // Progress EVENTs as a long step's STATS sends them, at once: main pushes step 0's first at once, holds its second (inside its
     // 250 ms) until step 1 replaces it, and drops the out-of-range one.
     case 'actions.execute':
+      if (params.action === 'agentJob') return respond(id, await agentJobSave(params))
       if (params.target?.kind === 'agentJob') return respond(id, agentJobVerb(params))
+      if (params.action === 'deleteJobHistory') return respond(id, agentDeleteHistory(params))
       for (const [step, percent] of [[0, 25], [0, 100], [0, 101], [1, 40]]) write(FrameKind.EVENT, id, 0, { type: 'action.progress', step, percent })
       return respond(id, { steps: [{ status: 'done', title: 'Drop the object' }], messages: [], elapsedMs: 1 })
     case 'tables.columns': return respond(id, { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false })
@@ -2269,6 +2423,7 @@ async function workbench(id, method, params, credit) {
     case 'activity.details': return respond(id, activityDetails(params))
     case 'activity.kill': return respond(id, activityKill(params))
     // SQL Server Agent's capability read: a sysadmin on Windows with Agent XPs on, in no Agent role (sysadmin is dbo in msdb).
+    case 'agent.historyMessage': return respond(id, agentHistoryMessage(params))
     case 'agent.profile': return respond(id, { profile: { platform: 'windows', engineEdition: 3, msdbAccess: true, sysadmin: true, userRole: false, readerRole: false, operatorRole: false, purgeHistory: true, serverServices: true, sessions: true, alterAnyCredential: true, clustered: false, agentXps: true, databaseMailXps: false, databaseMail: true }, elapsedMs: 1 })
     case 'ssis.execute': return respond(id, ssisExecute(params))
     case 'query.execute': {

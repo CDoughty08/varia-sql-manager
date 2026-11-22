@@ -18,7 +18,7 @@ const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error
  */
 export function searchContribution(workbench: Pick<Workbench, 'commands' | 'objectSearch' | 'documents' | 'connections' | 'explorer' | 'quickInput'>, api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
   const { commands, objectSearch, documents, connections, explorer, quickInput } = workbench
-  const live = (id: string | undefined) => id !== undefined && connections.isLiveSqlServer(id) ? id : undefined
+  const live = (id: string | undefined) => id !== undefined && connections.isLive(id) ? id : undefined
   const target = (args?: CommandArgs): string | undefined => {
     const node = explorerNodeOf(args)
     if (node) return node.lost ? undefined : live(node.connectionId)
@@ -32,7 +32,7 @@ export function searchContribution(workbench: Pick<Workbench, 'commands' | 'obje
     if (connectionId) return go(connectionId)
     // A retained context menu belongs to its server even after that server disconnects.
     if (explorerNodeOf(args)) return report(new Error('The server is not connected.'))
-    const choices = connections.liveSqlServer()
+    const choices = connections.live()
     if (choices.length === 1) return go(choices[0].id)
     if (!choices.length) return report(new Error('Connect to a server to search its objects.'))
     quickInput.show({ ariaLabel: placeholder, placeholder, noun: 'servers', items: serverItems(choices), onDidAccept: item => go(item.id) })
@@ -40,7 +40,7 @@ export function searchContribution(workbench: Pick<Workbench, 'commands' | 'obje
   const hitOf = (args?: CommandArgs): FocusedHit | undefined => {
     const target = searchHitOf(args)
     const hit = target ? { searchId: target.searchId, connectionId: target.node.connectionId, index: target.index, hit: target.hit } : args?.target ? undefined : objectSearch.focusedHit()
-    return hit && connections.isLiveSqlServer(hit.connectionId) ? hit : undefined
+    return hit && connections.isLive(hit.connectionId) ? hit : undefined
   }
   const copy = (id: 'search.copyName' | 'search.copySchemaName' | 'search.copyQualifiedName' | 'search.copyBracketedName', pick: (names: SearchHitNames) => string | undefined) => {
     const text = (args?: CommandArgs) => { const hit = hitOf(args); return hit ? pick(searchHitNames(hit.hit.object)) || undefined : undefined }
@@ -63,7 +63,7 @@ export function searchContribution(workbench: Pick<Workbench, 'commands' | 'obje
     commands.register('explorer.searchObjects', {
       when: args => !explorerNodeOf(args) || target(args) !== undefined,
       run: args => {
-        const node = explorerNodeOf(args), choices = connections.liveSqlServer()
+        const node = explorerNodeOf(args), choices = connections.live()
         if (node || choices.length < 2) {
           const database = node?.ref.type === 'object' && node.ref.object.kind === 'database' ? node.ref.object.name : undefined
           withServer('Select a server to search', id => { objectSearch.open(id, undefined, false, database) })(args)
@@ -76,7 +76,7 @@ export function searchContribution(workbench: Pick<Workbench, 'commands' | 'obje
     commands.register('explorer.rebuildIndex', {
       run: args => {
         const tab = objectSearch.getSnapshot().documents[documents.getSnapshot().activeId]
-        if (!explorerNodeOf(args) && tab?.allServers) { for (const connection of connections.liveSqlServer()) objectSearch.build(connection.id); return }
+        if (!explorerNodeOf(args) && tab?.allServers) { for (const connection of connections.live()) objectSearch.build(connection.id); return }
         withServer('Select a server to index', id => objectSearch.build(id))(args)
       }
     }),

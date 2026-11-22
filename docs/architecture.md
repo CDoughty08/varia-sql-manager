@@ -200,7 +200,9 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
 - **SQL text transforms** (Toggle Brackets, Move Commas to Front/End: `editor/sql-transforms.ts`) work on tokens from
   `shared/sql/lexer.ts`, never regular expressions over the text, so strings, comments, variables and quoted names never
   change. They return offset edits applied as one undo step with selections mapped through them, refuse a model over
-  `textOpLimits.characters`, and are tested in `tests/sql-transforms.test.ts`.
+  `textOpLimits.characters`, and are tested in `tests/sql-transforms.test.ts`. They are SQL Server only, with a handler
+  `when` on the bound model's language too, since a command target (an Explorer node) could supply SQL Server's context
+  while the editor shows a GoogleSQL query.
 - **Peek's language service** serves query documents and Peek's read-only definition models (`peekModelContext`:
   connection, database and the model's UUID as document id), nothing else. A Peek model gets hover and Go To Definition
   only, never completion or diagnostics, from its first request; its `onWillDispose` ends it as closing a query does
@@ -220,6 +222,23 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   the renderer are validated with `portRequestSchema`, ownership and the current generation. Peek's Top rows are no
   exception: Select Top Rows' script with N = 10 through `query.execute`, in Peek's own session and results entry
   (`PeekService`), released when its card or tab closes, moves on or refreshes, and on backend loss.
+- **A windowed BigQuery result keeps its rows in BigQuery** (docs/bigquery.md, Residence): its set holds no pages, only a
+  per-result block cache (`Results/RemoteResult.cs`) charged to the global budget and read from the job's destination
+  table with `tabledata.list` (Preview Rows' own `tabledata.list` reads a stored table's first rows into memory under the
+  budget instead, and never a windowed result's). The residence is decided once, after the first page (`SqlService.DecideResidenceAsync`);
+  a switch between memory and windowed (a misestimate, Load into memory) goes only through `ResultStore.Demote` and
+  `ResultSetBuffer.Promote`, bumps the descriptor's `revision` and sends `resultSet.residence`, after which the renderer
+  drops every page and window of the older revision. Only `results.read`, `results.rowBytes` (cache only), and Copy and
+  Save read a windowed result, and only `results.remoteQuery` loads it; every other reader of stored pages finds its set through
+  `SqlService.Stored`, which answers `REMOTE_RESULT` before any work, while Copy and Save (`ResultJobs`, whose `Lease` holds
+  either kind) read a windowed set's rows through `RemoteResult.ReadPagesAsync` and its `IRemoteRows` export, never its pages; a
+  switch after that check is refused where the hold is taken (`SealedSnapshot`, `AddView`, `AddSnapshot`,
+  `Released`); `Demote` marks the set windowed before it drops views and snapshots, so a hold finished meanwhile is refused
+  or dropped, and searches and operations stop on any revision change, even one loaded back
+  (`tests/result-page-access.test.ts`). The cache reserves each block's estimate before it fetches and any overrun after,
+  within its own limit (past it, up to twice the limit, only for blocks reads wait for, trimmed back after), always
+  through the global budget, never forcing a charge, and never builds a block past that limit
+  (`tests/working-memory-lint.test.ts`).
 - **Column types are classified once.** A result column's `sortKind` is set by one factory (`ColumnTypes.SortKindOf`,
   mirrored by `sortKindOf` in `src/shared/results/sort-kind.ts`); sort, filter, pivot, profiles, row identity, Copy and
   Save, highlights and length sorts read `sortKind`, never type-name lists. SQL Server-only refinements the kinds lack
@@ -479,7 +498,9 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   `tests/fixtures/compare-pairing/cases.json`, read by `DiffChecks.cs` and `tests/compare-pairing.test.ts`: change both
   and add a case. Names compare through one table, `src/shared/ordinal-casing.ts`, in the backend (`OrdinalNames`), the
   renderer and the fake backend, never ICU casing (its Unicode version differs by platform); `DiffChecks.OrdinalCasing`
-  checks it against the runtime. Pivots and comparisons share the window's `DerivedJobs` (four at once, busy refusals
+  checks it against the runtime. All three pair by looking columns up under the name's key (`nameKey`,
+  `OrdinalNames.KeyOf`) and wire, never by scanning the other side per column, so results of thousands of columns pair in
+  linear time. Pivots and comparisons share the window's `DerivedJobs` (four at once, busy refusals
   retried), count each other's in-flight results against a run's 1,000 (`adding`; a change of a comparison is not
   counted). A run has one comparison per ordered pair (`pairId`, without Exact text); asked again with other options while
   its first run is in flight, the first run is given up. Its options (layout, Exact text, match, rows) are its state: a
@@ -573,7 +594,7 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
 - **Peek lists** (`peekLists` in `src/shared/explorer/peek.ts`) come with the facts in `explorer.peek`'s batch, each
   `TOP (@take)` in a fixed order, and show through `PeekListGrid` (card or page preset). Columns' and Parameters'
   Definition is composed in C# (`PeekSql.ColumnRow`, `ParameterRow`) from names the batch quotes with `QUOTENAME`, since
-  catalogue SQL holds no literals; a T-SQL parameter's default comes from its module's header (`ModuleHeader`).
+  catalogue SQL holds no literals; a T-SQL parameter's default comes from its module's header (`ModuleHeader`), matched by its declared catalog spelling.
 - **View Dependencies** (`src/shared/explorer/dependencies.ts`, `DependenciesService`, `dependency-tree.ts`) has no SQL
   of its own: a level is `explorer.dependencies`, Peek's lookup and one of the Dependencies tab's two listings
   (`PeekSql.Level`, joined by `PeekSql.Dependencies`), on Peek's slot and budget. A level is read only on expand, at most
@@ -593,7 +614,10 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
   fingerprint in `ResourceCatalog`. Object Explorer's search box and the Search Objects tab are one search
   (`SearchPanel`, `ObjectSearchService`), and the header's Search (Ctrl+Q) lists objects only from it (`quickSearch`);
   the tree has no filter of loaded rows. Regex runs only `NonBacktracking` with a match timeout; an unreadable database is
-  a skipped value. Never log names, definitions or search text.
+  a skipped value. Never log names, definitions or search text. A BigQuery connection's index (`ObjectSearchService.BigQuery`,
+  `BigQueryIndex.cs`) is the same per-connection index and budget, one read per dataset (`DatabaseIndex.Dataset`), built only
+  from free REST metadata calls (`IBigQueryIndexSource`, through the per-principal limiter) and never a job; DDL marks
+  datasets stale for the next `stale` build (`MarkStale`).
 - **Script As.** Verbs, titles, URN types and preflight ids live only in `src/shared/scripting/catalog.ts`, options only in
   `options.ts` (regenerate `docs/scripting.md` and embedded `Scripting/scripting-catalog.json`). Its own pool
   (`READ COMMITTED`, `LOCK_TIMEOUT 10000`, database context restored before pooling); SMO only through `ScriptPipeline`

@@ -12,9 +12,9 @@ internal static class ModuleHeader
     private readonly record struct Token(Kind Kind, string Text, int Start, int End);
 
     public static IReadOnlySet<string>? ParameterDefaults(string? definition) =>
-        ParameterDefaultTexts(definition) is { } defaults ? defaults.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase) : null;
+        ParameterDefaultTexts(definition) is { } defaults ? defaults.Keys.ToHashSet(StringComparer.Ordinal) : null;
 
-    /// <summary>The parameters that declare a default, by name (any case), each with its default as written (<c>0</c>,
+    /// <summary>The parameters that declare a default, by their declared catalog spelling, each with its default as written (<c>0</c>,
     /// <c>N'x'</c>, <c>-1</c>, <c>NULL</c>); null when the header is not one this reads.</summary>
     public static IReadOnlyDictionary<string, string>? ParameterDefaultTexts(string? definition)
     {
@@ -52,7 +52,7 @@ internal static class ModuleHeader
         if (IsSymbol(";")) { current = Next(); Expect(current.Kind == Kind.Number); current = Next(); }
         var parenthesized = IsSymbol("(");
         if (parenthesized) current = Next();
-        var defaults = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var defaults = new Dictionary<string, string>(StringComparer.Ordinal);
         var count = 0;
         while (current.Kind == Kind.Variable)
         {
