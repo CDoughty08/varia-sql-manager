@@ -454,8 +454,12 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     keeps only a partner per row, so the build keeps more: as `LookAlikes` scores a pair it records which compared pairs' hashes differ, and `DiffIndex`
     stores that as a changed-pair bitset beside each partner (one bit a pair), charged in `BytesFor` with the partner.
     A seek still reads only the index, so architecture.md's change-index bullet gains "and each look-alike's differing
-    pairs". The renderer compares no cells, so collation and soft equality stay the backend's. The answer's `hidden`
-    case gives the hidden-partner sentence. Both members go through every results-path step.
+    pairs". The renderer compares no cells, so collation and soft equality stay the backend's. Both members go
+    through every results-path step.
+  - A view seek's `hidden` answer carries no row (`diffSeekResultSchema`'s strict `{ hidden: true }`), so the card
+    seeks `partnerOf` on the comparison's base result, whose stored rows are never hidden, for the partner's stored
+    row, `differing` and `compared`, and reads that row through the base handle. A seek on the view then says whether
+    the partner is hidden (the hidden-partner sentence) or where Go to Possible Match lands.
   - Window reads already serve hidden columns, since the gutter reads them.
 - **Diff worker** (`results/value-diff.worker.ts`, as `plans/comparison.worker.ts` is for plans):
   - Myers O(ND) over word tokens, then characters inside changed tokens.
@@ -497,8 +501,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     `monaco-keybindings`), and Close and Close Others.
 - **Catalogues:**
   - commands `output.compareChangeDetails` ("Show Change Details", `mod+i` when `(outputGridFocus ||
-    comparisonDetailsFocus) && resultsGridComparison`; the submenu with `when: outputGridComparison`) and
-    `output.compareValuesInTab` ("Compare Values in Tab", C5b);
+    comparisonDetailsFocus) && resultsGridComparison`; the submenu with `when: outputGridComparison`, More results
+    tools' `6_compareactions`, the palette) and `output.compareValuesInTab` ("Compare Values in Tab", C5b, in the same
+    places);
   - Alt+F5 and Alt+Shift+F5's `when` gains `|| comparisonDetailsFocus`;
   - context key `comparisonDetailsFocus`. Whether hover opens a card is read from the tone by the grid, not a context
     key, since the command itself works on any comparison cell;
@@ -668,9 +673,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - **Target table:** `[database.]schema.table`, each part 1 to 128 characters, parsed as SQL Server parses a multipart
     name: parts plain, bracketed (`[my.schema].Orders`, with `]]` inside brackets) or double-quoted. One part is refused
     ("Name the schema too, such as dbo.Orders."), and so are four ("A linked server cannot be the target. Name the table
-    as [database.]schema.table."). Empty the first time, with suggestions from Search Objects' index for the
-    comparison's connection, and Script waits for it ("Choose the target table."); after that, the pair's remembered
-    draft.
+    as [database.]schema.table."), and a part holding a line break or other control character ("A table name cannot
+    hold a line break."), which the query window would normalize inside brackets. Empty the first time, with
+    suggestions from Search Objects' index for the comparison's connection, and Script waits for it ("Choose the
+    target table."); after that, the pair's remembered draft.
     - **Database.** A two-part name is in the query document's current database, and a line under the field always
       names the database the script will change ("In Sales_Test, SQLQuery3.sql's database"). A three-part name picks
       another. Suggestions are three-part (`Sales_Test.dbo.Orders`), so two databases with the same schema on one
@@ -745,8 +751,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       one included, so the counts and the zero-count rules hold while a refusal shows. An UPDATE whose changed columns
       are all unticked is skipped, so the counts said after Script, which are the script's own, can be lower.
 - **The script:**
-  - A header comment names the comparison, the match, the server and database, the direction and the time, and says
-    "Review it before you run it. Varia does not run it for you."
+  - A header of `--` lines names the comparison, the match, the server and database, the direction and the time, and
+    says "Review it before you run it. Varia does not run it for you." Every name in it (results, the query document,
+    key columns, server, database, target) goes through the comment escape below, so a name holding a line break
+    cannot end a comment line and put its text into the script as a statement.
   - Then `SET XACT_ABORT ON;` and `BEGIN TRANSACTION;`.
   - DELETEs, then UPDATEs, then INSERTs, so a reused key cannot collide.
     - One statement per row, keyed by the match's key columns, NULL-safe (`[k] IS NULL`).
@@ -756,9 +764,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - Each UPDATE and DELETE is followed by `IF @@ROWCOUNT <> 1 THROW 50000, N'Row id = 1002 was not found exactly
       once.', 1;` (an UPDATE's says "…exactly once with the values it changes from."). THROW takes only a literal or
       a variable, so the key text there is one plain literal: the raw key text is cut to 200 code points first (never
-      inside a surrogate pair), then escaped, with quotes doubled and
-      backslash, tab, CR, LF and other control characters written as Copy as Diff writes them (`\\`, `\t`, `\r`, `\n`,
-      `\u2028`), never as `NCHAR` joins. Escaping after the cut means a doubled quote or an escape is never split.
+      inside a surrogate pair), then escaped by the script's comment escape: quotes doubled, `\\`, `\t`, `\r` and `\n`
+      for backslash, tab, CR and LF, and `\uXXXX` for every other control character (U+0000–U+001F, U+007F–U+009F),
+      U+2028 and U+2029, never `NCHAR` joins. Copy as Diff escapes only the first four, so this is `DiffScript`'s own
+      rule. Escaping after the cut means a doubled quote or an escape is never split.
   - `COMMIT TRANSACTION;`.
   - The New Query Editor Window opens on the comparison's connection, as Script As does, and does not run.
 - **Generating:** the dialog shows progress. Cancel then stops generating and keeps the window open with its draft; the
@@ -790,11 +799,12 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       differences.", with **Choose key columns…** (the default button) and **Use updated_at as key columns**. Automatic can pick a column
       that is unique only by chance, such as a timestamp (§ 1), and keying on it would turn every changed row into a
       DELETE and an INSERT, firing delete triggers and cascades;
-    - **Choose key columns…** brings the main window forward, shows the Results pane and the comparison's tab, and opens
-      the Match menu at the toolbar's Match button, or beside ⋯ when Match is folded (`MatchMenuFrom` gains `script`).
-      The dialog is a child window, always above the main one, so it hides while the menu is open and comes back with
-      the focus whenever the menu closes (Apply, Cancel, a press outside, F6, the pane hiding or the comparison
-      closing); the replace that follows refreshes it;
+    - **Choose key columns…** closes the dialog, keeping its draft, brings the main window forward, shows the Results
+      pane and the comparison's tab, and opens the Match menu at the toolbar's Match button, or beside ⋯ when Match is
+      folded (`MatchMenuFrom` gains `script`). The dialog is a child window, always above the main one, so it would
+      cover the menu, and a dialog window cannot be hidden (`DialogWindow` only opens, focuses and closes one). Whenever
+      the menu closes (Apply, Cancel, a press outside, F6, the pane hiding or the comparison closing), the main
+      window's renderer opens the dialog again from the draft, with the focus; the replace that follows refreshes it;
     - with an input closed, rows cannot be matched again, so the buttons are unavailable and the sentence's last part
       becomes "…, and Result 1 is closed, so rows cannot be matched again. Run the query again to script differences."
       The as-shown refusal does the same: "Result 1 is closed, so the comparison cannot be rebuilt."
@@ -860,10 +870,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - its reservations (Budget below);
     - the fake backend, and `FakeHandle` in `tests/fixtures/results.ts`.
   - **Params:** `{ resultId, viewId?, rows?: ranges (as Copy's parts), target: { database, schema, name } (each 1–128
-    characters, no NUL; the renderer resolves a two-part name to the query document's database, so it is always
-    sent), direction: 'toNew' | 'toOld', columns: number[], identity?: number, statements: { delete,
-    update, insert }, transaction, checkRows, identityInsert, maxLines? }`. `columns` holds distinct pair indexes, at
-    most `limits.page.maxColumns` in zod, each below the pair count (checked in C#). `identity` is the pair the index
+    characters, no control characters, U+2028 or U+2029; the renderer resolves a two-part name to the query
+    document's database, so it is always sent), direction: 'toNew' | 'toOld', columns: number[], identity?: number,
+    statements: { delete, update, insert }, transaction, checkRows, identityInsert, maxLines? }`. `columns` holds
+    distinct pair indexes, at most `limits.page.maxColumns` in zod, each below the pair count (checked in C#). `identity` is the pair the index
     names as the target's identity column, one of `columns` (checked in both): only the renderer knows it, from Search
     Objects. `DiffScript` leaves it out of every SET. With `identityInsert` on it wraps the INSERTs in `SET
     IDENTITY_INSERT`; with it off it leaves the identity column out of the INSERTs, and refuses (`INVALID_PARAMS`) when
@@ -874,11 +884,12 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     and always the counts by kind for the chosen rows, even when it refuses (the refusal then comes back as the answer's
     `refusal` sentence, not an error). It
     reads only the rows those lines need, and skips the size estimate.
-  - **Answer:** `{ text (≤ 1,000,000 characters), deletes, updates, inserts, complete }`. Past 1,000,000 characters,
-    estimated first, it answers `TOO_LARGE`, well inside the 16 MiB response limit. Other refusals are `INVALID_PARAMS` with the sentences
-    above. The backend itself refuses a comparison whose match is not a `columns` match, so Automatic's choice can never
-    be scripted by accident (Use updated_at as key columns replaces the comparison with that `columns` match first), and
-    a comparison of rows as shown (the diff set records whether a side was read as shown).
+  - **Answer:** `{ text (≤ 1,000,000 characters), deletes, updates, inserts, complete, refusal? }`. Past 1,000,000
+    characters, estimated first, it answers `TOO_LARGE`, well inside the 16 MiB response limit. Other refusals are
+    `INVALID_PARAMS` with the sentences above. The backend itself refuses a comparison whose match is not a `columns`
+    match, so Automatic's choice can never be scripted by accident (Use updated_at as key columns replaces the
+    comparison with that `columns` match first), and a comparison of rows as shown (the diff set records whether a side
+    was read as shown).
 - **Backend `Results/DiffScript.cs`:** literals by the column's `dataType`, precision and scale:
 
   | Type | Literal |
@@ -886,16 +897,27 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   | Integers; decimal, numeric, money, smallmoney | As stored; decimals exactly |
   | float, real | Stored as G15 and G7 text: that text when it reads back as the value, else the exact value kept beside it (`CellLengths.TryExact`), written round-trip. Always with an exponent (`3.0000000000000004E-1`, `1E0`): without one, T-SQL reads the text as a numeric literal, whose conversion to float may not round correctly |
   | bit | 0 or 1 |
-  | char, varchar, text; nchar, nvarchar, ntext | `N'…'` with `''` escaping. A non-N literal is read in the database's default code page, so even char columns get `N'…'`, converted to the column's collation on assignment. CR, LF, U+0085, U+2028, U+2029 and every other control character but tab are written as `NCHAR(n)` joins (`N'a' + NCHAR(13) + NCHAR(10) + N'b'`): the query window's model normalizes line breaks and the clipboard may convert them. A joined value over 4,000 characters starts with `CAST(N'…' AS nvarchar(max))`, since joining shorter strings stops at 4,000 |
+  | char, varchar, text; nchar, nvarchar, ntext | `N'…'` with `''` escaping. A non-N literal is read in the database's default code page, so even char columns get `N'…'`, converted to the column's collation on assignment. CR, LF, U+0085, U+2028, U+2029 and every other control character but tab are written as `NCHAR(n)` joins (`N'a' + NCHAR(13) + NCHAR(10) + N'b'`): the query window's model normalizes line breaks and the clipboard may convert them. A joined value over 4,000 characters starts with `CAST(N'…' AS nvarchar(max))`, since joining shorter strings stops at 4,000. A value that would need more than 64 joins (pretty-printed JSON or XML, a long multi-line note) is written instead as one exact term, `CAST(0x<its UTF-16LE bytes> AS nvarchar(max))`: a chain of thousands of `+` terms risks SQL Server's nesting and expression limits (errors 191, 8631, 8632), which would fail the statement and roll the script back. The size estimate counts its 4 hex digits a code unit |
   | date, time(n), datetime2(n), datetimeoffset(n) | ISO 8601 text in a `CAST('…' AS <type>)` of the column's own type and precision |
   | datetime, smalldatetime | `CAST('yyyy-MM-ddTHH:mm:ss.fff' AS <type>)`: the stored `yyyy-MM-dd HH:mm:ss` form depends on DATEFORMAT and language, the `T` form does not |
   | uniqueidentifier | Quoted |
   | binary, varbinary, image | `0x…` |
-  | xml, json | `N'…'`, with the same joins |
+  | xml | `CONVERT(xml, N'…', 1)`, with the same joins or hex term inside: plain assignment converts with style 0, which drops whitespace-only text nodes, so a value stored with style 1 would not round-trip |
+  | json | `N'…'`, with the same joins or hex term |
 
+  - **Two changes to the diff** that only C4 needs:
+    - Exact floats by their own column. `UnifiedDiff.Row` keeps a float's exact value only when Result 3's column holds
+      one (`ColumnTypes.HoldsExact(set.Columns[p])`), so a Result 1 float paired with a Result 3 decimal keeps only its
+      G15 text in removed rows and `changedOld` halves. `Row` tests the source column instead (Result 1's on that
+      side), as `Previous` already does.
+    - Cut lists in both layouts. A cut tone lists only the first changed cells, and the change index keeps a cut row's
+      full changed-pair list only in One row (`keepsList: cut`); Two rows' halves keep none. C4 keeps it on a cut Two
+      rows entry's new half too, charged by `CutBytes` as now, and `DiffScript` takes an entry's changed pairs (its SET
+      columns and Q11's) from that list whenever the tone was cut. `DiffIndex`'s summary and architecture.md's
+      change-index bullet say both layouts.
   - Names are bracket-quoted by the existing shared `ScriptFormatter.Quote`, unchanged: it has many callers (Script As,
-    restore, the alter and DML templates among them), so a NUL in a target name is refused by the request's zod schema
-    and by C#'s request validation instead.
+    restore, the alter and DML templates among them), so a control character in a target name (NUL and line breaks
+    among them) is refused by the request's zod schema and by C#'s request validation instead.
   - The backend never runs this text. The "SQL the backend runs" rule (server-side `QUOTENAME`) is about executed SQL. An
     offline lint pins that `DiffScript` output never reaches a `SqlCommand`, as ScriptPipeline never executes DDL.
 - **Budget:** the text is built in 1 MiB chunks charged as working memory (2 bytes a character, at most 2 MB) and
@@ -928,12 +950,17 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - a value with CR, LF, NUL and U+2028, and one over 4,000 characters with line breaks, written with `NCHAR` joins and
       the `nvarchar(max)` cast; a key with those characters in its THROW message, and one with a quote straddling the
       200-point cut;
-    - Result 1 values by Result 1's types in both layouts (a float pair against decimal, datetime against date);
+    - Result 1 values by Result 1's types in both layouts (a float against decimal whose G15 text does not read back,
+      datetime against date);
+    - a cut Two rows entry, whose UPDATE SETs every changed column, not only the tone's;
+    - the hex term at 65 joins and not at 64; xml as `CONVERT(…, 1)`;
+    - names with line breaks in every header line, written escaped, and target parts with control characters refused;
     - identity with SET IDENTITY_INSERT on and off, and off refused for an identity key;
     - floats with 17 significant digits and none after the point, written with an exponent;
     - key columns a WHERE cannot use, unnamed and repeated names, an identity pair never SET, pairs whose types differ.
   - A **live round trip** (`VARIA_TEST_SQL_SCRATCH`): two scratch tables with every type (multi-line and control-character
-    text, and 17-digit floats, included), compare their SELECTs, script,
+    text, a value with 10,000 line breaks, an xml value stored with style 1, and 17-digit floats, included), compare
+    their SELECTs, script,
     run the script on the target, then compare again and expect no differences. Run it in both directions, and under a
     non-English language and DATEFORMAT. Then run a script of the wrong direction and expect the check's THROW, with
     the target unchanged. It is a new live `Suite(...)` with a `LiveGroups.Suites` entry, and its CI
