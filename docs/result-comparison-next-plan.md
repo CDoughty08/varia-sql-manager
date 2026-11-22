@@ -811,8 +811,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       `UNSUPPORTED_PROVIDER` for a BigQuery result;
     - its reservations (Budget below);
     - the fake backend, and `FakeHandle` in `tests/fixtures/results.ts`.
-  - **Params:** `{ resultId, viewId?, rows?: ranges (as Copy's parts), target: { database?, schema, name } (each 1–128
-    characters, no NUL), direction: 'toNew' | 'toOld', columns: number[], identity?: number, statements: { delete,
+  - **Params:** `{ resultId, viewId?, rows?: ranges (as Copy's parts), target: { database, schema, name } (each 1–128
+    characters, no NUL; the renderer resolves a two-part name to the query document's database, so it is always
+    sent), direction: 'toNew' | 'toOld', columns: number[], identity?: number, statements: { delete,
     update, insert }, transaction, checkRows, identityInsert, maxLines? }`. `columns` holds distinct pair indexes, at
     most `limits.page.maxColumns` in zod, each below the pair count (checked in C#). `identity` is the pair the index
     names as the target's identity column, one of `columns` (checked in both): only the renderer knows it, from Search
