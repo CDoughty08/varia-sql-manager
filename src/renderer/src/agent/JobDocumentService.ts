@@ -484,7 +484,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     this.patch(id, {
       phase: create ? 'choosing' : 'ready', model, draft: create ? undefined : initialAgentJobDraft(model), revision: current.revision + 1, changes: 0, error: undefined, stale: undefined,
       notice, script: { state: 'idle', message: noScriptNotice }, scriptRevision: undefined, deletion: undefined, parse: undefined,
-      ...current.step && !model.steps.some(step => `s${step.id}` === current.step) ? { step: undefined } : {}
+      step: this.stepFollowing(current, model.steps.map(step => ({ key: `s${step.id}`, name: step.name })))
     })
     this.options.documents.setDirty(id, false)
     if (model.job) this.follow(id, model.job.jobId)
@@ -602,7 +602,8 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const { current, keepServer } = state.stale
     const draft = rebaseAgentJobDraft(state.model, current, state.draft, new Set(keepServer))
     // A pending delete's Undo would bring its step back with the id it was read under, which another session may since have changed.
-    this.patch(id, { model: current, draft, stale: undefined, error: undefined, revision: state.revision + 1, edits: state.edits + 1, deletion: undefined })
+    this.patch(id, { model: current, draft, stale: undefined, error: undefined, revision: state.revision + 1, edits: state.edits + 1, deletion: undefined, parse: undefined,
+      step: this.stepFollowing(state, draft.steps.steps) })
     this.afterDraft(id)
   }
   /** Discard mine and reload: the job as read now. */
@@ -610,7 +611,9 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const state = this.get(id)
     if (!state?.stale) return
     const { current } = state.stale
-    this.patch(id, { model: current, draft: initialAgentJobDraft(current), stale: undefined, error: undefined, revision: state.revision + 1, edits: state.edits + 1, deletion: undefined })
+    const draft = initialAgentJobDraft(current)
+    this.patch(id, { model: current, draft, stale: undefined, error: undefined, revision: state.revision + 1, edits: state.edits + 1, deletion: undefined, parse: undefined,
+      step: this.stepFollowing(state, draft.steps.steps) })
     this.afterDraft(id)
   }
 
@@ -785,6 +788,11 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     this.put(next)
   }
   private put(state: JobDocumentState): void { this.publish({ documents: { ...this.getSnapshot().documents, [state.id]: state } }) }
+  /** The selected step's key among `steps` after a read or a rebase re-keyed them: the step of the same name (step numbers move), else none. */
+  private stepFollowing(state: JobDocumentState, steps: readonly { readonly key: string; readonly name: string }[]): string | undefined {
+    const name = state.step === undefined ? undefined : state.draft?.steps.steps.find(step => step.key === state.step)?.name.trim().toUpperCase()
+    return name === undefined ? undefined : steps.find(step => step.name.trim().toUpperCase() === name)?.key
+  }
   private connectionOf(id: string): string | undefined { return this.options.documents.get(id)?.connectionId }
   /** The job's connection, which the step editor's language service uses. */
   connectionId(id: string): string | undefined { return this.connectionOf(id) }

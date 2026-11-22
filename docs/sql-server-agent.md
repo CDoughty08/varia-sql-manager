@@ -94,7 +94,7 @@ a later lane, behind the same gate until 0.11.0.
   the package picked inline from SSISDB's folders, projects and packages (or SQL Server and file system sources), its
   parameters, environment, 32-bit runtime and logging; Analysis Services Command and Query with the Server they run on. On success and On failure choose next step, quit with success, quit
   with failure or go to a named step; More options (retries, output file and its append, log to table, history output)
-  stays folded with a one-line summary. Problems block only what msdb refuses (a missing name or command, a go-to past the
+  stays folded with a one-line summary. Problems block only what msdb refuses (a missing name, a go-to past the
   last step, a proxy not granted to the type) and warn on the rest. The describe reads at most 50 steps and each command up to
   100,000 characters (1,000,000 for all of them): a longer job lists its first 50 steps read-only, and a cut command only warns
   until the steps are part of a save, which it then blocks, so Varia never writes a cut command or a renumbering it could not see.

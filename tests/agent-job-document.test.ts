@@ -384,6 +384,23 @@ describe("the job document's Steps page", () => {
     jobDocuments.undoDeleteStep(id)
     expect(keys(jobDocuments, id)).toEqual(['s1', 's2'])
   })
+  it('keeps the selection on the same step and drops its Parse when a reload renumbers the steps', async () => {
+    const fixture = opened(stepped()), { jobDocuments, answers, setModel } = fixture
+    Object.assign(fixture.api, { languageParse: vi.fn(async () => ({ ok: true as const, value: { errors: [], truncated: false } })) })
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    jobDocuments.selectStep(id, 's3')
+    await jobDocuments.parseStep(id, 's3')
+    jobDocuments.updateDraft(id, { description: 'mine' })
+    const inserted = { ...stepped(), job: record({ version: 8 }), steps: [{ id: 1, name: 'Precheck', subsystem: 'TSQL', command: 'SELECT 0;', onSuccessAction: 3, onFailAction: 2 }, ...stepped().steps.map(step => ({ ...step, id: step.id + 1, ...step.onFailStepId ? { onFailStepId: step.onFailStepId + 1 } : {} }))] }
+    setModel(inserted)
+    answers.push({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'STALE', message: 'stale', retryable: false } } })
+    expect(await jobDocuments.save(id)).toBe(false)
+    jobDocuments.reloadKeep(id)
+    const state = jobDocuments.get(id)!
+    expect(state.parse).toBeUndefined()
+    expect(state.draft?.steps.steps.find(step => step.key === state.step)?.name).toBe('Notify')
+  })
   it('lists the steps of a job with more than Varia reads read-only, with no problems', async () => {
     const { jobDocuments } = opened({ ...stepped(), stepsTruncated: true })
     const id = jobDocuments.openJob('c1', 'Nightly load')

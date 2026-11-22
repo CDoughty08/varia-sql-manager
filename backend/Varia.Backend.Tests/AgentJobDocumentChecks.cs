@@ -365,6 +365,11 @@ internal static class AgentJobDocumentChecks
         check(script.Contains("EXEC @ReturnCode = msdb.dbo.sp_update_jobstep @job_name=N'Nightly '']'' -- load', \n\t\t@step_id=1, \n\t\t@step_name=N'" + Temp(1) + "'", StringComparison.Ordinal)
             && script.Contains("@start_step_id=2", StringComparison.Ordinal) && script.Contains("@proxy_id=4", StringComparison.Ordinal),
             "the save's script renames, writes and sets the Start step by the job's name");
+        // Renamed in the same save: the job's own call names it as it was, every later call by its new name.
+        var renamed = ActionService.AgentJobDocumentScript(Save(Changed(new(Name: "Nightly 2", Steps: swap))), Job);
+        check(renamed.Contains("sp_update_job @job_name=N'Nightly '']'' -- load', \n\t\t@new_name=N'Nightly 2'", StringComparison.Ordinal)
+            && renamed.Contains("sp_update_jobstep @job_name=N'Nightly 2', \n\t\t@step_id=1", StringComparison.Ordinal) && !renamed.Contains("sp_update_jobstep @job_name=N'Nightly ''", StringComparison.Ordinal),
+            "a script that renames the job names it by its new name after the rename: " + renamed);
     }
     /// <summary>language.parse: ScriptDom alone, batches split on GO, errors with their position and number, and the text bounded.</summary>
     private static void Parse(Action<bool, string> check)

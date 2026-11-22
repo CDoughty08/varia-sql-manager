@@ -463,6 +463,8 @@ internal sealed partial class ActionService
         };
         var text = new StringBuilder("USE [msdb]\nGO\nBEGIN TRANSACTION\nDECLARE @ReturnCode INT\nSELECT @ReturnCode = 0\n");
         if (create) text.Append("DECLARE @jobId BINARY(16)\n");
+        // Calls after the job's own sp_update_job name it by the name that call gives it.
+        var name = target.Name!;
         foreach (var call in batch.Calls)
         {
             var parts = call.Arguments.Select(argument => argument.Name switch
@@ -470,10 +472,12 @@ internal sealed partial class ActionService
                 "@job_id" when argument.Output => "@job_id = @jobId OUTPUT",
                 "@job_id" when call.Procedure == "sp_update_alert" => "@job_id=" + Value(Guid.Empty),
                 "@job_id" when create => "@job_id = @jobId",
-                "@job_id" => "@job_name=" + Literal(target.Name!),
+                "@job_id" => "@job_name=" + Literal(name),
                 _ => argument.Name + "=" + Value(argument.Value)
             });
             if (call.Procedure == "sp_add_jobserver") parts = parts.Append("@server_name = N'(local)'");
+            parts = parts.ToList();
+            if (call.Procedure == "sp_update_job" && call.Arguments.FirstOrDefault(argument => argument.Name == "@new_name")?.Value is string renamed) name = renamed;
             text.Append("EXEC @ReturnCode = msdb.dbo.").Append(call.Procedure).Append(' ').Append(string.Join(", \n\t\t", parts)).Append('\n')
                 .Append("IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback\n");
         }
