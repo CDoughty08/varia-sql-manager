@@ -89,11 +89,13 @@ internal sealed partial class SqlService
         using var cancellation = args.TimeoutSeconds == 0 ? new CancellationTokenSource() : new CancellationTokenSource(TimeSpan.FromSeconds(args.TimeoutSeconds));
         var running = new RunningQuery(args.ConnectionId, args.SessionId, cancellation) { Detachable = true };
         if (!Register(args.QueryId, running)) throw new RequestException("DUPLICATE_QUERY", "This query is already running.");
-        void Unregister()
+        // Ended completes only once the tab is free (bigQueryTabs, the session's queue), so an attach that superseded this one
+        // and waits for it never finds the tab still busy.
+        void Unregister(bool end = true)
         {
             queries.TryRemove(new(args.QueryId, running));
             if (attach is not null) attachments.TryRemove(new(attach.JobId, running));
-            running.Ended.TrySetResult();
+            if (end) running.Ended.TrySetResult();
         }
         if (attach is not null)
         {
@@ -279,10 +281,16 @@ internal sealed partial class SqlService
             {
                 // The job already exists: after the identity check its session (when adopted) and state are taken over, and the
                 // poll below follows it as it would a job this request inserted.
-                var own = await bigQuery.OwnJobAsync(connection, jobId, location, token);
+                Job own;
+                // Stop before the identity check answers cancels the held job this attach follows, as the waiting path does.
+                using (following ? token.Register(() =>
+                {
+                    if (running.LeavesJob || session.Tail is not { } followed || followed.JobId != jobId || followed.Cancelled) return;
+                    followed.Cancelled = true;
+                    bigQuery.CancelJob(connection, project, followed.JobId, followed.Location);
+                }) : default)
+                    own = await bigQuery.OwnJobAsync(connection, jobId, location, token);
                 sent = created = true;
-                if (following) session.Tail = null;
-                session.ActiveJob = attach.AdoptSession && own.Status?.State != "DONE";
                 location = KnownLocation(own.JobReference?.Location) ?? location;
                 if (attach.AdoptSession && own.Statistics?.SessionInfo?.SessionId is { } jobSession && BigQuerySql.SessionId().IsMatch(jobSession))
                 {
@@ -296,12 +304,16 @@ internal sealed partial class SqlService
                     }
                     sessionJob = session.Id == jobSession;
                 }
+                // Set before the tail is cleared, so a close in between still sees a job to leave running; only a job in the
+                // tab's own session holds it.
+                session.ActiveJob = sessionJob && own.Status?.State != "DONE";
+                if (following) session.Tail = null;
                 startState = session.Transaction;
                 var since = own.Statistics?.CreationTime is { } createdAt and > 0 ? DateTimeOffset.UtcNow - DateTimeOffset.FromUnixTimeMilliseconds(createdAt) : (TimeSpan?)null;
                 messages.Add("Re-attached to BigQuery job " + JobName(project, location, jobId) + (since is { } ago ? ", started " + Ago(ago) : "")
                     + (own.Status?.State == "DONE" ? ", which finished meanwhile." : ", which is still running."));
                 if (attach.Detached) messages.Add("The job was left running: Varia waits for it to finish, holding the tab's BigQuery session, and reads no results.");
-                events.Job(JobEvent(project, jobId, location, "running", startState));
+                events.Job(JobEvent(project, jobId, location, own.Status?.State == "DONE" ? "done" : "running", startState));
             }
             else location = await TabLocationAsync(session, connection, dataset, token);
             for (var attempt = 1; attach is null; attempt++)
@@ -497,7 +509,7 @@ internal sealed partial class SqlService
             // A job BigQuery refused at insert is already DONE with its error, and holds nothing either.
             // A job left running stays the session's held job, polled until DONE; one a later attach took over is that one's.
             // A superseded attach keeps the job for the session too, until the attach that took it over passes its own checks.
-            if (sent && !complete && session.Id is not null && (!running.Superseded || attach is { AdoptSession: true }) && !(created && error is BigQueryJobException) && (created || !BigQueryService.NeverCreated(error)))
+            if (sent && !complete && session.Id is not null && (attach is null || sessionJob) && (!running.Superseded || attach is { AdoptSession: true }) && !(created && error is BigQueryJobException) && (created || !BigQueryService.NeverCreated(error)))
             {
                 var tail = new BigQueryTail(jobId, location, cancelled: token.IsCancellationRequested && !running.LeavesJob || childFailed, created || error is BigQueryJobMayExist { Exists: true });
                 session.Tail = tail;
@@ -548,7 +560,7 @@ internal sealed partial class SqlService
         finally
         {
             watch.Stop();
-            Unregister();
+            Unregister(end: false);
             foreach (var set in sets.Where(set => set.IsOpen))
             {
                 set.Complete();
@@ -565,6 +577,7 @@ internal sealed partial class SqlService
                 session.Queue.Release();
             }
             bigQueryTabs.TryRemove(args.SessionId, out _);
+            running.Ended.TrySetResult();
         }
         if (summary is not null && BigQueryCost.Summary(summary, args.Prices != false) is { } cost) messages.Add(cost);
         var output = messages.Snapshot();

@@ -91,6 +91,54 @@ internal static partial class BigQuerySessionChecks
             var ended = await reading.Close(readTab);
             check(hung.Task.IsCompleted && kept.Code == "JOB_FINISHED" && ended is { Code: "ok", Result.Closed: true } && reading.Bq.Aborts.Contains("sess-1"),
                 $"Leave it running on an execution with no job running in BigQuery is not a detach: {kept.Code} {ended.Code} aborts {string.Join(",", reading.Bq.Aborts)}");
+
+            // Nor does bigquery.endIdleSessions keep such a session: nothing of it is running in BigQuery.
+            var idleTab = Tab();
+            await reading.Execute(idleTab, "SELECT 1");
+            var idleHung = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            reading.Bq.AlsoHang = request =>
+            {
+                if (request.Method != "GET" || !reading.Bq.Jobs.Values.Any(job => job.Sql == "SELECT read" && request.Url.Contains("/jobs/" + job.Id, StringComparison.Ordinal))) return false;
+                idleHung.TrySetResult();
+                return true;
+            };
+            reading.BigQuery.CallLimit = TimeSpan.FromMilliseconds(500);
+            var readRun = reading.Execute(idleTab, "SELECT read");
+            await Task.WhenAny(idleHung.Task, readRun).WaitAsync(TimeSpan.FromSeconds(30));
+            var idleBefore = reading.Bq.Aborts.Count;
+            var idleEnd = await reading.Call("bigquery.endIdleSessions", new JsonObject());
+            reading.Bq.AlsoHang = null;
+            try { await readRun.WaitAsync(TimeSpan.FromSeconds(30)); } catch (Exception) when (readRun.IsCompleted) { }
+            check(idleHung.Task.IsCompleted && idleEnd.Code == "ok" && reading.Bq.Aborts.Count == idleBefore + 1,
+                $"endIdleSessions ends a session whose execution only reads a finished job: {idleEnd.Code} aborts {reading.Bq.Aborts.Count - idleBefore}");
+        }
+
+        // Stop while a re-attach of the tab's own held job is still checking its identity cancels that job.
+        using (var following = new Harness(new Bq()))
+        {
+            await following.ConnectAsync(key);
+            var followTab = Tab();
+            await following.Execute(followTab, "SELECT 1");
+            var (fArgs, fRun, fJob) = await HeldAsync(following, followTab);
+            await following.Call("query.cancel", new JsonObject { ["queryId"] = fArgs["queryId"]!.GetValue<string>(), ["detach"] = true });
+            await fRun.WaitAsync(TimeSpan.FromSeconds(30));
+            following.Bq.Jobs[fJob].Hold = true;
+            var checking = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            following.Bq.AlsoHang = request =>
+            {
+                if (request.Method != "GET" || !request.Url.Contains("/jobs/" + fJob, StringComparison.Ordinal)) return false;
+                checking.TrySetResult();
+                return true;
+            };
+            var attachArgs = AttachArgs(following, followTab, fJob);
+            var attachRun = following.Call("query.attach", attachArgs);
+            await Task.WhenAny(checking.Task, attachRun).WaitAsync(TimeSpan.FromSeconds(30));
+            await following.Call("query.cancel", new JsonObject { ["queryId"] = attachArgs["queryId"]!.GetValue<string>() });
+            var stoppedAttach = (await attachRun.WaitAsync(TimeSpan.FromSeconds(30))).Result as QueryResult;
+            check(checking.Task.IsCompleted && stoppedAttach is { Status: "cancelled" } && following.Bq.Cancels.Contains(fJob),
+                $"Stop during a following attach's identity check cancels the held job: {stoppedAttach?.Status} cancels {string.Join(",", following.Bq.Cancels)}");
+            following.Bq.AlsoHang = null;
+            following.Bq.Release(following.Bq.Jobs[fJob]);
         }
 
         // Leave it running on an execution still waiting behind a held job (no job of its own yet) is a stop: nothing of its
@@ -226,6 +274,21 @@ internal static partial class BigQuerySessionChecks
         var read = await harness.Call("query.attach", AttachArgs(harness, reader, doneJob, args => args["adoptSession"] = false));
         check(read.Result is QueryResult { Status: "completed", ResultSets.Count: 1 } done && Says(done, "which finished meanwhile") && !harness.BigQuery.OwnsSession(reader),
             $"a finished job's results are read again; without adoptSession the tab takes no session: {read.Code} {(read.Result as QueryResult)?.Status}");
+        // A job already DONE is reported done at once, so main's record is dropped even when its results are gone.
+        var goneTab = Tab();
+        await harness.Execute(goneTab, "SELECT 1");
+        var goneJob = JobOf(bq.UserInserts.Last());
+        bq.ExpiredResults.Add(goneJob);
+        var goneEvents = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        using (var goneContext = new Protocol.RequestContext(2, "query.attach", Protocol.RequestLane.Query, 0, sendEvent: (_, body, _) =>
+            goneEvents.Enqueue(System.Text.Json.JsonSerializer.Serialize(body, body.GetType(), new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)))))
+        {
+            var gone = await harness.Call("query.attach", AttachArgs(harness, Tab(), goneJob, args => args["adoptSession"] = false), goneContext);
+            var jobEvents = goneEvents.Where(item => item.Contains("\"query.job\"", StringComparison.Ordinal)).ToList();
+            check(gone.Result is QueryResult { Error.Code: "REMOTE_EXPIRED" } && jobEvents.Count > 0 && jobEvents.All(item => item.Contains("\"state\":\"done\"", StringComparison.Ordinal)),
+                $"a re-attached job that is already DONE is reported done, never running: {(gone.Result as QueryResult)?.Error?.Code} {string.Join(" ", jobEvents)}");
+        }
+        bq.ExpiredResults.Remove(goneJob);
 
         // A script: its children are listed again and read in statement order.
         bq.Scripts["SCRIPT two"] = [("SELECT", null), ("INSERT", null), ("SELECT", null)];

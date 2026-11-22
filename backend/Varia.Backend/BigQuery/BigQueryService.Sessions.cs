@@ -60,8 +60,9 @@ internal sealed class BigQueryTabSession(string tabId, BigQueryConnection connec
     public bool Active => StopActive is not null;
     /// <summary>The job key of the tab's last execution or attach, so bigquery.endIdleSessions can keep a kept tab's session.</summary>
     public string? LastJobKey { get; set; }
-    /// <summary>Whether the session holds a job: one running in it that Varia has not cancelled, or a detached one.</summary>
-    public bool HoldsJob => Active && !ActiveCancelled || Tail is { Holds: true };
+    /// <summary>Whether the session holds a job: one running in it in BigQuery that Varia has not cancelled, or a detached one.
+    /// An execution before its insert, or reading a finished job's rows, holds nothing.</summary>
+    public bool HoldsJob => ActiveJob && !ActiveCancelled || Tail is { Holds: true };
 }
 
 /// <summary>What a close found when it settled the session's last job.</summary>
