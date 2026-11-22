@@ -156,7 +156,9 @@ internal static class AgentScheduleChecks
         {
             ("daily at a time", Daily), ("every 15 minutes in a window", EveryQuarterHour), ("weekdays", new(8, 62, 1, 0, 0, 1, 20_260_101, 99_991_231, 60_000, 235_959)),
             ("the last Friday", new(32, 6, 1, 0, 16, 1, 20_260_101, 99_991_231, 0, 235_959)), ("once", new(1, 0, 0, 0, 0, 0, 20_261_122, 99_991_231, 30_000, 235_959)),
-            ("every 10 seconds overnight", new(4, 1, 2, 10, 0, 0, 20_260_101, 20_261_231, 220_000, 40_000)), ("at Agent start", new(64, 0, 0, 0, 0, 0, 20_260_101, 99_991_231, 0, 235_959))
+            ("every 10 seconds overnight", new(4, 1, 2, 10, 0, 0, 20_260_101, 20_261_231, 220_000, 40_000)), ("at Agent start", new(64, 0, 0, 0, 0, 0, 20_260_101, 99_991_231, 0, 235_959)),
+            // sp_verify_schedule stores an end of 00:00:00 as 23:59:59, so every hour from midnight to 00:00 is the whole day.
+            ("every hour, the whole day, ending at 00:00", new(4, 1, 8, 1, 0, 0, 20_260_101, 99_991_231, 0, 0))
         };
         foreach (var (name, timing) in valid) check(ActionService.ScheduleTimingProblem(timing) is null, "a timing sp_verify_schedule accepts passes: " + name);
         var invalid = new (string Name, AgentScheduleTimingDto Timing)[]
@@ -164,7 +166,7 @@ internal static class AgentScheduleChecks
             ("freq_type 2", Daily with { FreqType = 2 }), ("daily every 0 days", Daily with { FreqInterval = 0 }), ("weekly with no day", new(8, 0, 1, 0, 0, 1, 20_260_101, 99_991_231, 0, 235_959)),
             ("weekly every 0 weeks", new(8, 2, 1, 0, 0, 0, 20_260_101, 99_991_231, 0, 235_959)), ("monthly day 32", new(16, 32, 1, 0, 0, 1, 20_260_101, 99_991_231, 0, 235_959)),
             ("relative third of nothing", new(32, 11, 1, 0, 4, 1, 20_260_101, 99_991_231, 0, 235_959)), ("every 5 seconds", Daily with { FreqSubdayType = 2, FreqSubdayInterval = 5 }),
-            ("a repeat with equal start and end", EveryQuarterHour with { ActiveEndTime = 60_000 }), ("an end before the start", Daily with { ActiveEndDate = 20_251_231 }),
+            ("a repeat with equal start and end", EveryQuarterHour with { ActiveEndTime = 60_000 }), ("a repeat from 23:59:59 to 00:00", EveryQuarterHour with { ActiveStartTime = 235_959, ActiveEndTime = 0 }), ("an end before the start", Daily with { ActiveEndDate = 20_251_231 }),
             ("1989", Daily with { ActiveStartDate = 19_891_231 }), ("February 30", Daily with { ActiveStartDate = 20_260_230 }), ("24:00", Daily with { ActiveStartTime = 240_000 }),
             ("12:60", Daily with { ActiveStartTime = 126_000 }), ("once with a frequency", new(1, 1, 0, 0, 0, 0, 20_260_101, 99_991_231, 0, 235_959)),
             ("a relative interval on a daily", Daily with { FreqRelativeInterval = 1 }), ("a daily interval at a time", Daily with { FreqSubdayInterval = 3 })

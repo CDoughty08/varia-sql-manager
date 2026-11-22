@@ -6,7 +6,7 @@
 import { z } from 'zod'
 import { agentLimits, type AgentPlatform } from '../agent/catalog.ts'
 import {
-  freq, normalizedTiming, sameTiming, scheduleProblems, timingKeys, validDate, validTime, type AgentMoment, type AgentScheduleFields, type AgentScheduleTiming, type ScheduleProblem
+  effectiveEndTime, freq, normalizedTiming, sameTiming, scheduleProblems, timingKeys, validDate, validTime, type AgentMoment, type AgentScheduleFields, type AgentScheduleTiming, type ScheduleProblem
 } from '../agent/schedule.ts'
 import { ident } from '../explorer/schema.ts'
 
@@ -158,6 +158,7 @@ export const jobScheduleText = {
   pickHint: 'Matches names and when they run. Schedules already on this job are left out; only ones you may use are listed.',
   noMatch: 'No shared schedule matches.',
   tooMany: `Varia adds schedules to a job only while it holds at most ${agentLimits.schedulesPerJob}.`,
+  tooManyRemoved: `One save removes at most ${agentLimits.schedulesPerJob} schedules: save, then remove the rest.`,
   unguarded: 'This schedule\'s version could not be read, so it cannot be attached. Search again, or reload the job.',
   onlyYourJobs: 'Only your own jobs are listed.',
   jobsReadFailed: 'Which jobs use it could not be read.',
@@ -172,6 +173,7 @@ export function jobScheduleProblems(entries: readonly JobScheduleEntry[], now?: 
   const out: { key?: string; problem: ScheduleProblem }[] = []
   const kept = entries.filter(entry => !entry.remove)
   if (kept.length > agentLimits.schedulesPerJob && kept.some(entry => entry.id === undefined || entry.attached)) out.push({ problem: { field: 'name', severity: 'error', message: jobScheduleText.tooMany } })
+  if (entries.filter(entry => entry.remove && entry.id !== undefined && !entry.attached).length > agentLimits.schedulesPerJob) out.push({ problem: { field: 'name', severity: 'error', message: jobScheduleText.tooManyRemoved } })
   for (const entry of kept) {
     if (entry.attached && (!entry.base || !guardOf(entry.base))) out.push({ key: entry.key, problem: { field: 'name', severity: 'error', message: jobScheduleText.unguarded } })
     for (const problem of scheduleProblems(entry.fields, now)) out.push({ key: entry.key, problem })
@@ -278,7 +280,7 @@ export function timingProblem(timing: AgentScheduleTiming): string | undefined {
   if (t.freqType !== freq.relative && t.freqRelativeInterval !== 0) return 'Only a relative monthly schedule has a relative interval.'
   if (t.freqSubdayType === 1 || t.freqSubdayType === 0) return t.freqSubdayInterval ? 'A schedule that runs once a day has no daily interval.' : undefined
   if (t.freqSubdayInterval < 1 || (t.freqSubdayType === 2 && t.freqSubdayInterval < 10)) return 'A daily interval is at least 1 (10 seconds).'
-  if (t.activeStartTime === t.activeEndTime) return 'A repeating schedule needs different start and end times.'
+  if (t.activeStartTime === effectiveEndTime(t.activeEndTime)) return 'A repeating schedule needs different start and end times.'
   return undefined
 }
 

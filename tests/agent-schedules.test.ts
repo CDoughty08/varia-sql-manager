@@ -8,7 +8,7 @@ import type { ActionDescribeResult, ActionExecuteResult, ActionRequest } from '.
 import { agentLimits } from '../src/shared/agent/catalog'
 import {
   defaultSchedule, formatRun, freeSlotCheck, freeSlotText, freq, matchingPreset, median, nextRuns, noEndDate, noRunsReason, schedulePresets, scheduleMatches, scheduleProblems, scheduleSavable,
-  scheduleSentence, scheduleWhen, subday, withFrequency, type AgentMoment, type AgentScheduleFields
+  sameTiming, scheduleSentence, scheduleWhen, subday, withFrequency, type AgentMoment, type AgentScheduleFields
 } from '../src/shared/agent/schedule'
 import { commandDescriptor } from '../src/shared/commands/catalog'
 import { submenus } from '../src/shared/commands/menus'
@@ -112,6 +112,16 @@ describe('schedule encoding, sentences and runs', () => {
     // A run that starts exactly as this one ends, or ends exactly as it starts, is no clash.
     expect(freeSlotCheck(fields(), now, 60, [{ name: 'Edge', enabled: true, usualSeconds: 60, schedules: [fields({ activeStartTime: 23100 }), fields({ activeStartTime: 22900 })] }]).clashes).toEqual([])
   })
+  it('takes an end time of 00:00 as the 23:59:59 msdb stores', () => {
+    const evening = fields({ freqSubdayType: subday.minutes, freqSubdayInterval: 15, activeStartTime: 180000, activeEndTime: 0 })
+    expect(scheduleProblems(evening, now)).toEqual([])
+    expect(nextRuns(evening, { date: 20261122, time: 234000 }, 2).map(formatRun)).toEqual(['Sun 2026-11-22 23:45', 'Mon 2026-11-23 18:00'])
+    expect(sameTiming(evening, { ...evening, activeEndTime: 235959 })).toBe(true)
+    // The whole day, every hour: msdb accepts it, so neither check refuses it.
+    const allDay = fields({ freqSubdayType: subday.hours, freqSubdayInterval: 1, activeStartTime: 0, activeEndTime: 0 })
+    expect(timingProblem(allDay)).toBeUndefined()
+    expect(scheduleSavable(scheduleProblems(allDay, now))).toBe(true)
+  })
   it('reads the server clock', () => {
     expect(momentOfText('2026-11-22T14:30:05')).toEqual({ date: 20261122, time: 143005 })
     expect(momentOfText('nope')).toBeUndefined()
@@ -158,6 +168,9 @@ describe("the job document's schedule saves", () => {
     const many = initialJobSchedules(Array.from({ length: agentLimits.schedulesPerJob + 2 }, (_, at) => record(at + 1)))
     expect(jobScheduleProblems(many, now)).toEqual([])
     expect(jobScheduleProblems([...many, { key: 'n:1', fields: fields() }], now).map(item => item.problem.message)).toEqual([jobScheduleText.tooMany])
+    // One save removes at most schedulesPerJob of them, as zod and C# bound it.
+    expect(jobScheduleProblems(many.map((entry, at) => at <= agentLimits.schedulesPerJob ? { ...entry, remove: 'detach' as const } : entry), now).map(item => item.problem.message)).toEqual([jobScheduleText.tooManyRemoved])
+    expect(jobScheduleProblems(many.map((entry, at) => at < agentLimits.schedulesPerJob ? { ...entry, remove: 'detach' as const } : entry), now)).toEqual([])
     const unguarded = record(9, { version: undefined })
     expect(jobScheduleProblems([{ key: 's:9', id: 9, attached: true, base: unguarded, fields: scheduleFieldsOf(unguarded) }], now)).toEqual([{ key: 's:9', problem: expect.objectContaining({ severity: 'error', message: jobScheduleText.unguarded }) }])
   })
@@ -365,6 +378,39 @@ describe('the Schedules document', () => {
     expect(await schedules.save(id)).toBe(true)
     expect(executes()[1]).toMatchObject({ agentSchedule: { op: 'update', schedule: { id: 1, version: 4 }, name: 'Mine' } })
     expect(executes()[1]).not.toHaveProperty('agentSchedule.timing')
+  })
+  it('reads the chosen jobs again after a STALE Create, keeps a pending new schedule, and drops a jobs read from before a re-read', async () => {
+    const { schedules, setModel, executes, answers, api } = schedulesWorkbench()
+    const id = schedules.open('c1', true)
+    await settled()
+    schedules.update(id, { ...schedules.draft(id)!.fields, name: 'Month end' })
+    schedules.toggleJob(id, jobB.id, true)
+    // New schedule again (or New › Schedule…, or Duplicate) keeps the half-filled one.
+    schedules.newSchedule(id)
+    schedules.duplicate(id)
+    expect(schedules.draft(id)?.fields.name).toBe('Month end')
+    expect(schedules.get(id)?.notice).toBe(schedulesText.newPending)
+    setModel(schedulesModel({ jobs: [jobA, { ...jobB, version: 10 }] }))
+    answers.push({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'STALE', message: 'Changed.', retryable: false } } })
+    expect(await schedules.save(id)).toBe(false)
+    await settled()
+    expect(schedules.get(id)?.error?.message).toBe(schedulesText.staleJobs)
+    expect(await schedules.save(id)).toBe(true)
+    expect(executes()[1]).toMatchObject({ agentSchedule: { op: 'create', name: 'Month end', jobs: [{ jobId: jobB.id, version: 10, attach: true }] } })
+    await settled()
+    // Below sysadmin, a schedule's jobs read that answers after the schedules were read again is dropped.
+    setModel(schedulesModel({ sysadmin: false, links: undefined }))
+    schedules.refresh(id)
+    await settled()
+    let answer: (value: ApiResult<ActionDescribeResult>) => void = () => {}
+    api.describeObject.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    schedules.select(id, '2')
+    expect(schedules.get(id)?.scheduleJobs?.[2]?.state).toBe('loading')
+    schedules.refresh(id)
+    await settled()
+    answer({ ok: true, value: { agentSchedules: { ...schedulesModel(), schedules: [], scheduleJobs: [jobA] }, elapsedMs: 1 } })
+    await settled()
+    expect(schedules.jobsOf(id, 2)?.map(job => job.name)).toEqual(['Backup'])
   })
   it("moves a draft's guard with its own Enabled toggle, not with someone else's change", async () => {
     const { schedules, setModel, executes } = schedulesWorkbench()

@@ -73,6 +73,8 @@ export const schedulesText = {
   unchangeable: 'Varia could not read this schedule\'s version, so it cannot change it.',
   truncated: `Only the first ${agentLimits.listRows} schedules are listed.`,
   unusedNote: 'Unused counts every job, including jobs you cannot see.',
+  staleJobs: 'Someone changed a job you chose after it was read, so nothing was created. The jobs are read again: check them, then create again.',
+  newPending: 'Finish or discard the new schedule first.',
   staleKept: 'Someone changed this schedule or one of its jobs after it was read, so nothing was saved. It now shows their change with yours on top: check it, then save again.',
   copyName: (name: string) => `${name} (copy)`.slice(0, agentLimits.nameChars)
 } as const
@@ -110,6 +112,8 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
   private readonly registration: Disposable
   private readonly stopConnections: () => void
   private readonly requests = new Map<string, Set<string>>()
+  /** Bumped by each read of the schedules, which forgets their jobs: a jobs read from before it is dropped. */
+  private readonly generations = new Map<string, number>()
   private readonly targetBindings: CustomDocumentTargets
   private disposed = false
 
@@ -168,6 +172,7 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
     const ids = new Set(model.schedules.map(record => String(record.id)))
     const drafts = Object.fromEntries(Object.entries(current.drafts).filter(([key]) => key === newScheduleKey || ids.has(key)))
     const selected = select ?? (current.selected === newScheduleKey || (current.selected && ids.has(current.selected)) ? current.selected : undefined)
+    this.generations.set(id, (this.generations.get(id) ?? 0) + 1)
     this.patch(id, { phase: 'ready', model, drafts, selected, scheduleJobs: undefined, error: undefined, notice, revision: current.revision + 1 })
     this.dirtyChanged(id)
     if (selected && selected !== newScheduleKey) this.ensureScheduleJobs(id, Number(selected))
@@ -177,9 +182,10 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
     const state = this.get(id), connectionId = this.connectionOf(id)
     if (!state?.model || !connectionId || state.model.links || state.scheduleJobs?.[scheduleId] || !this.live(id)) return
     this.patch(id, { scheduleJobs: { ...state.scheduleJobs, [scheduleId]: { state: 'loading' } } })
+    const generation = this.generations.get(id) ?? 0
     void this.request(id, requestId => this.options.api.describeObject({ connectionId, requestId, dialog: 'agentSchedules', target: { kind: 'agent' }, schedule: scheduleId })).then(result => {
       const current = this.get(id)
-      if (!current || !result) return
+      if (!current || !result || (this.generations.get(id) ?? 0) !== generation) return
       const jobs = result.ok && !result.value.error ? result.value.agentSchedules?.scheduleJobs : undefined
       this.patch(id, { scheduleJobs: { ...current.scheduleJobs, [scheduleId]: jobs ? { state: 'ready', jobs } : { state: 'failed' } } })
     })
@@ -289,6 +295,7 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
   newSchedule(id: string, from?: AgentScheduleFields): void {
     const state = this.get(id)
     if (!state || state.busy) return
+    if (state.drafts[newScheduleKey]) { this.patch(id, { selected: newScheduleKey, confirmDelete: undefined, notice: schedulesText.newPending }); this.options.focus?.(id); return }
     const fields = from ? { ...from, name: schedulesText.copyName(from.name) } : defaultSchedule(this.now(id).date)
     this.patch(id, { drafts: { ...state.drafts, [newScheduleKey]: { fields, jobs: [] } }, selected: newScheduleKey, confirmDelete: undefined, error: undefined, notice: undefined })
     this.dirtyChanged(id)
@@ -335,7 +342,7 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
     const name = save.name ?? this.record(id, key)?.name ?? ''
     const outcome = await this.execute(id, 'saving', save)
     if (!outcome) {
-      if (save.op === 'update' && this.get(id)?.error?.code === 'STALE') await this.keepStale(id, key)
+      if ((save.op === 'update' || save.op === 'create') && this.get(id)?.error?.code === 'STALE') await this.keepStale(id, key)
       return false
     }
     const current = this.get(id)
@@ -373,8 +380,10 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
     await this.describe(id)
     const current = this.get(id), draft = current?.drafts[key], record = this.record(id, key)
     if (!current || !error) return
+    const jobs = draft?.jobs.map(change => ({ ...change, version: this.job(id, change.jobId)?.version ?? change.version })) ?? []
+    // A new schedule's STALE can only be a chosen job's version: those are read again.
+    if (draft && key === newScheduleKey) { this.patch(id, { drafts: { ...current.drafts, [key]: { ...draft, jobs } }, error: { ...error, message: schedulesText.staleJobs } }); return }
     if (!draft?.base || !record) { this.patch(id, { error }); return }
-    const jobs = draft.jobs.map(change => ({ ...change, version: this.job(id, change.jobId)?.version ?? change.version }))
     this.patch(id, { drafts: { ...current.drafts, [key]: { base: record, fields: rebaseScheduleFields(draft.base, record, draft.fields), jobs } }, error: { ...error, message: schedulesText.staleKept } })
     this.dirtyChanged(id)
   }
@@ -426,6 +435,7 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
   closed(id: string): void {
     this.cancel([...this.requests.get(id) ?? []])
     this.requests.delete(id)
+    this.generations.delete(id)
     this.targetBindings.forget(id)
     this.publish({ documents: Object.fromEntries(Object.entries(this.getSnapshot().documents).filter(([key]) => key !== id)) })
   }

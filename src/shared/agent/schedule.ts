@@ -52,6 +52,8 @@ export function dateOfDay(day: number): number {
   return value.getUTCFullYear() * 10_000 + (value.getUTCMonth() + 1) * 100 + value.getUTCDate()
 }
 /** hhmmss as seconds since midnight. */
+/** The end time msdb keeps: sp_verify_schedule stores an end of 00:00:00 as 23:59:59. */
+export const effectiveEndTime = (time: number) => time === 0 ? 235959 : time
 export const secondsOf = (time: number) => Math.floor(time / 10_000) * 3600 + Math.floor(time / 100) % 100 * 60 + time % 100
 /** Seconds since midnight as hhmmss. */
 export const timeOf = (seconds: number) => Math.floor(seconds / 3600) * 10_000 + Math.floor(seconds / 60) % 60 * 100 + seconds % 60
@@ -332,8 +334,8 @@ export function scheduleProblems(fields: AgentScheduleFields, now?: AgentMoment)
       if (fields.freqSubdayType === subday.seconds && whole(fields.freqSubdayInterval, 1, 9)) error('dailyFrequency', scheduleText.seconds)
       else if (!whole(fields.freqSubdayInterval, 1, most)) error('dailyFrequency', scheduleText.interval(`${unitOf(fields.freqSubdayType)}s`, most))
       if (!validTime(fields.activeEndTime)) error('endTime', scheduleText.endTime)
-      else if (fields.activeEndTime === fields.activeStartTime) error('endTime', scheduleText.sameTimes)
-      else if (fields.activeEndTime < fields.activeStartTime) warn('endTime', scheduleText.spansMidnight)
+      else if (effectiveEndTime(fields.activeEndTime) === fields.activeStartTime) error('endTime', scheduleText.sameTimes)
+      else if (effectiveEndTime(fields.activeEndTime) < fields.activeStartTime) warn('endTime', scheduleText.spansMidnight)
     }
     if (fields.activeEndDate !== noEndDate && !validDate(fields.activeEndDate)) error('endDate', scheduleText.endDate)
     else if (fields.activeEndDate < fields.activeStartDate) error('endDate', scheduleText.endBeforeStart)
@@ -354,6 +356,7 @@ export const scheduleSavable = (problems: readonly ScheduleProblem[]) => !proble
  * re-read agree.
  */
 export function normalizedTiming(timing: AgentScheduleTiming): AgentScheduleTiming {
+  timing = { ...timing, activeEndTime: effectiveEndTime(timing.activeEndTime) }
   if (timing.freqType === freq.once || timing.freqType === freq.agentStart || timing.freqType === freq.idle) {
     return { ...timing, freqInterval: 0, freqSubdayType: 0, freqSubdayInterval: 0, freqRelativeInterval: 0, freqRecurrenceFactor: 0 }
   }
@@ -415,7 +418,7 @@ function timesOfDay(timing: AgentScheduleTiming): number[] {
   const start = secondsOf(timing.activeStartTime)
   if (timing.freqSubdayType === subday.once || timing.freqSubdayType === 0) return [start]
   const step = Math.max(1, timing.freqSubdayInterval) * (timing.freqSubdayType === subday.seconds ? 1 : timing.freqSubdayType === subday.minutes ? 60 : 3600)
-  const end = secondsOf(timing.activeEndTime)
+  const end = secondsOf(effectiveEndTime(timing.activeEndTime))
   const times: number[] = []
   // An end before the start spans midnight: the window runs from the start to the day's end, and from midnight to the end.
   if (end >= start) for (let t = start; t <= end; t += step) times.push(t)

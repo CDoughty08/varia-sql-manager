@@ -98,7 +98,7 @@ Schedules document manages the shared schedules. The job document's Steps sectio
 - **Schedules** (`src/shared/agent/schedule.ts` for the encoding, sentences, presets, runs and free-slot check;
   `src/shared/actions/agent-schedule.ts` for the saves). The job document's **Schedules** section lists the job's schedules, each
   with its short "when" and whether other jobs share it, and edits the selected one in place with SSMS's own fields (Occurs,
-  Daily frequency, Duration), preset chips that only fill those fields ("Every day at…", "Weekdays at…", "Weekly on…", "Every N
+  Daily frequency, Duration; an ending time of 00:00 is 23:59:59, as msdb stores it), preset chips that only fill those fields ("Every day at…", "Weekdays at…", "Weekly on…", "Every N
   minutes", "Monthly on day…", and under More… agent start, CPU idle and one time), SSMS's sentence, the next five runs in server
   time (the describe reads the server's clock; disabled, agent-start and idle schedules say why they have none) and, for
   sysadmin, a **free-slot check**: this schedule's next runs, each lasting the job's usual duration (the median of its last 10

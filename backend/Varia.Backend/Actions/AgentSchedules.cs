@@ -48,7 +48,8 @@ internal sealed partial class ActionService
         if (t.FreqType != 32 && t.FreqRelativeInterval != 0) return "relative interval";
         if (t.FreqSubdayType is 0 or 1) return t.FreqSubdayInterval != 0 ? "daily interval" : null;
         if (t.FreqSubdayInterval < 1 || (t.FreqSubdayType == 2 && t.FreqSubdayInterval < 10)) return "daily interval";
-        return t.ActiveStartTime == t.ActiveEndTime ? "start and end times" : null;
+        // sp_verify_schedule stores an end of 00:00:00 as 23:59:59.
+        return t.ActiveStartTime == (t.ActiveEndTime == 0 ? 235959 : t.ActiveEndTime) ? "start and end times" : null;
     }
 
     private static bool ScheduleGuardValid(int? id, int? version, string? modified) => id >= 1 && version >= 0 && modified is not null && JobModified(modified) is not null;
