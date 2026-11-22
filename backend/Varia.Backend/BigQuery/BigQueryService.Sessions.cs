@@ -48,6 +48,11 @@ internal sealed class BigQueryTabSession(string tabId, BigQueryConnection connec
     public string? Location { get; set; }
     public BigQueryTransaction Transaction { get; set; }
     public BigQueryTail? Tail { get; set; }
+    readonly Queue<string> inserted = new();
+    /// <summary>Records a job this session's execution inserted (the newest 64 are kept).</summary>
+    public void AddInserted(string jobId) { lock (inserted) { inserted.Enqueue(jobId); if (inserted.Count > 64) inserted.Dequeue(); } }
+    /// <summary>Whether this session (on its one connection) inserted the job: a re-attach to it needs no jobs.list.</summary>
+    public bool HasInserted(string jobId) { lock (inserted) return inserted.Contains(jobId); }
     /// <summary>The execution holding the queue, and whether Varia stopped it; Stop issues its jobs.cancel.</summary>
     public Action? StopActive { get; set; }
     public bool ActiveCancelled { get; set; }
@@ -204,6 +209,30 @@ internal sealed partial class BigQueryService
 
     /// <summary>jobs.cancel, best-effort: BigQuery may already have finished the job, and may still bill work done before it
     /// stops. Leases the client, so a Stop that comes with a Disconnect still reaches BigQuery.</summary>
+    /// <summary>Cancels a job once the re-attach identity check proves it is this account's (a Stop that came first), best-effort.</summary>
+    internal void CancelOwnJob(BigQueryConnection connection, string jobId, string? location, bool inserted)
+    {
+        var lease = connection.Lease();
+        if (lease is null) return;
+        _ = Task.Run(async () =>
+        {
+            using (lease)
+            {
+                try
+                {
+                    using var limit = CancellationTokenSource.CreateLinkedTokenSource(stopping.Token);
+                    limit.CancelAfter(TimeSpan.FromSeconds(30));
+                    var own = await OwnJobAsync(connection, jobId, location, limit.Token, inserted);
+                    if (own.Status?.State == "DONE") return;
+                    var request = connection.Client.Service.Jobs.Cancel(connection.Options.Project, jobId);
+                    request.Location = own.JobReference?.Location ?? location;
+                    await ReadAsync(t => request.ExecuteAsync(t), limit.Token);
+                }
+                catch (Exception) { /* Best-effort, as CancelJob: another principal's job, or one the check cannot reach, is left alone. */ }
+            }
+        });
+    }
+
     internal void CancelJob(BigQueryConnection connection, string project, string jobId, string? location)
     {
         var lease = connection.Lease();

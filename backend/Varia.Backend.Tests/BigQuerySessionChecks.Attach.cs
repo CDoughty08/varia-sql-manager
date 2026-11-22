@@ -395,6 +395,48 @@ internal static partial class BigQuerySessionChecks
             && listAnswer is { Status: "completed" } && !bq.Cancels.Contains(listJob),
             $"without jobs.list a tab re-attaches to its own held job, and another tab's re-attach names the permission: {deniedAttach?.Status} {deniedAttach?.Error?.Code} {listAnswer?.Status} {Texts(listAnswer?.Messages ?? [])}");
 
+        // Without jobs.list, the tab's own job that the background poll settled meanwhile (no longer its held job) still
+        // re-attaches: the session inserted it.
+        var settledTab = Tab();
+        await harness.Execute(settledTab, "SELECT 1");
+        var (settledArgs, settledRun, settledJob) = await HeldAsync(harness, settledTab);
+        await harness.Call("query.cancel", new JsonObject { ["queryId"] = settledArgs["queryId"]!.GetValue<string>(), ["detach"] = true });
+        await settledRun.WaitAsync(TimeSpan.FromSeconds(30));
+        bq.Release(bq.Jobs[settledJob]);
+        var settledFree = await Poll(() => harness.State(settledTab).Result.State is { Job: "none" });
+        bq.ListDenied = true;
+        var settledAttach = (await harness.Call("query.attach", AttachArgs(harness, settledTab, settledJob))).Result as QueryResult;
+        bq.ListDenied = false;
+        check(settledFree && settledAttach is { Status: "completed" },
+            $"without jobs.list a tab re-attaches to its own job after the poll settled it: {settledFree} {settledAttach?.Status} {settledAttach?.Error?.Code}");
+
+        // Stop while a restored tab's re-attach is still checking the job's identity cancels the job once the check passes.
+        // The job was left by an earlier backend (stopped), so no session here polls it.
+        string stopJob;
+        using (var earlier = new Harness(bq))
+        {
+            await earlier.ConnectAsync(key);
+            var earlierTab = Tab();
+            await earlier.Execute(earlierTab, "SELECT 1");
+            (_, _, stopJob) = await HeldAsync(earlier, earlierTab);
+        }
+        var stopChecking = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        bq.AlsoHang = request =>
+        {
+            if (request.Method != "GET" || !request.Url.Contains("/jobs/" + stopJob, StringComparison.Ordinal) || stopChecking.Task.IsCompleted) return false;
+            stopChecking.TrySetResult();
+            return true;
+        };
+        var stopAttachArgs = AttachArgs(harness, Tab(), stopJob, args => args["adoptSession"] = false);
+        var stopAttach = harness.Call("query.attach", stopAttachArgs);
+        await Task.WhenAny(stopChecking.Task, stopAttach).WaitAsync(TimeSpan.FromSeconds(30));
+        await harness.Call("query.cancel", new JsonObject { ["queryId"] = stopAttachArgs["queryId"]!.GetValue<string>() });
+        var stoppedCheck = (await stopAttach.WaitAsync(TimeSpan.FromSeconds(30))).Result as QueryResult;
+        bq.AlsoHang = null;
+        check(stopChecking.Task.IsCompleted && stoppedCheck is { Status: "cancelled" } && await Poll(() => bq.Cancels.Contains(stopJob)),
+            $"Stop during a restored tab's identity check cancels the job once it proves this account's: {stoppedCheck?.Status} cancels {string.Join(",", bq.Cancels)}");
+        bq.Release(bq.Jobs[stopJob]);
+
         // A rate limit answered as 403 during the identity check is QUOTA (the job kept), not another principal's job.
         var limitedTab = Tab();
         await harness.Execute(limitedTab, "SELECT 1");

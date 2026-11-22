@@ -230,17 +230,27 @@ export class BackendSupervisor {
       })
     })
     if (sent.id) o.onSent?.(sent.id, connection.generation)
-    const result = await sent.done
+    let result
+    try { result = await sent.done } catch (error) {
+      // A lost backend never cancels a BigQuery job: the run's tab hears that, not SQL Server's rollback.
+      if (error instanceof BackendError && error.code === 'BACKEND_LOST' && provider === 'bigquery' && (method === 'query.execute' || method === 'query.attach')) throw new BackendError('BACKEND_LOST', sentences.lostBigQuery)
+      throw error
+    }
     return this.registered(method, params, result, connection) as BackendMethods[M]['result']
   }
 
   /** More credit for a results.read stream of `generation`, if that generation is still current. */
   credit(generation: number, id: number, bytes: number): void {
-    if (this.connection?.generation === generation) this.connection.credit(id, bytes)
+    this.of(generation)?.credit(id, bytes)
   }
 
   cancel(generation: number, id: number, reason: CancelReason): void {
-    if (this.connection?.generation === generation) this.connection.cancel(id, reason)
+    this.of(generation)?.cancel(id, reason)
+  }
+
+  /** The connection of `generation`: the current one, or the one a restart is ending idle sessions in. */
+  private of(generation: number): BackendConnection | undefined {
+    return this.connection?.generation === generation ? this.connection : this.draining?.generation === generation ? this.draining : undefined
   }
 
   /** Ends the current generation (its sessions end with it) and starts the next one at once. A manual restart also
@@ -327,6 +337,8 @@ export class BackendSupervisor {
 
   /** The generation a restart is ending idle sessions in, for a session close or state read of one of its own sessions. */
   private drainingFor(method: BackendMethod, params: unknown): BackendConnection | undefined {
+    // Stop or Leave it running meanwhile reaches the run it names: nothing runs in the next generation before it launches.
+    if (this.draining && method === 'query.cancel') return this.draining
     if (!this.draining || (method !== 'query.session.close' && method !== 'query.session.state')) return undefined
     const sessionId = idOf(params, 'sessionId')
     return sessionId !== undefined && this.sessions.get(sessionId) === this.draining.generation ? this.draining : undefined

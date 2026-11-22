@@ -291,8 +291,19 @@ internal sealed partial class SqlService
                     followed.Cancelled = true;
                     bigQuery.CancelJob(connection, project, followed.JobId, followed.Location);
                 }) : default)
-                    own = await bigQuery.OwnJobAsync(connection, jobId, location, token, inserted: following);
+                {
+                    var ours = following || session.HasInserted(jobId);
+                    try { own = await bigQuery.OwnJobAsync(connection, jobId, location, token, inserted: ours); }
+                    // Stop (or Cancel the job) before the check answered: the job is cancelled once it proves to be this account's.
+                    catch (Exception) when (!following && token.IsCancellationRequested && !running.LeavesJob && bigQuery.Find(args.ConnectionId) == connection)
+                    {
+                        bigQuery.CancelOwnJob(connection, jobId, location, ours);
+                        throw;
+                    }
+                }
                 sent = created = true;
+                // A Stop between the check and here found nothing sent to cancel: it is asked again now.
+                if (!following && token.IsCancellationRequested && Interlocked.Exchange(ref stopAsked, 0) != 0) StopJob();
                 location = KnownLocation(own.JobReference?.Location) ?? location;
                 if (attach.AdoptSession && own.Statistics?.SessionInfo?.SessionId is { } jobSession && BigQuerySql.SessionId().IsMatch(jobSession))
                 {
@@ -354,6 +365,7 @@ internal sealed partial class SqlService
                     var inserted = await bigQuery.InsertJobAsync(connection, job, dataset, token);
                     if (sessionJob && BigQueryJobException.Of(inserted) is { } gone && BigQueryService.SessionGone(gone, session.Id)) throw gone;
                     created = true;
+                    session.AddInserted(jobId);
                     bigQuery.Reached();
                     location = KnownLocation(inserted.JobReference?.Location) ?? location;
                     BigQueryService.CaptureSession(session, inserted, location);
