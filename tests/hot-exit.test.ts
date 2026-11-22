@@ -231,8 +231,15 @@ describe('hot exit', () => {
     await files.closeWindow(async () => {})
     expect(files.getSnapshot().error).toContain('stayed open so you can read what became of the cancelled BigQuery jobs')
     expect(api.closeWindow).not.toHaveBeenCalled()
+    // The quit waits for cancels still under way before it closes.
+    let settled!: (value: boolean) => void
+    queries.restoredCancelsSettled = vi.fn(() => new Promise<boolean>(resolve => { settled = resolve }))
+    const closing = files.closeWindow(async () => {})
+    await new Promise(resolve => { setTimeout(resolve, 0) })
+    expect(api.closeWindow).not.toHaveBeenCalled()
     said = false
-    await files.closeWindow(async () => {})
+    settled(said)
+    await closing
     expect(api.closeWindow).toHaveBeenCalledTimes(1)
   })
   it('closes without asking about unsaved queries, keeping them, and still asks about open transactions', async () => {
