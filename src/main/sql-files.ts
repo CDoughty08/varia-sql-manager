@@ -71,7 +71,7 @@ const ownershipCodes = new Set(['EPERM', 'EINVAL', 'ENOTSUP', 'EOPNOTSUPP', 'ENO
  *  `missing` keeps the last content's hash: a file deleted and then written back unchanged is no change. */
 interface Stamp { readonly size: number; readonly mtimeMs: number; readonly sha256: string; readonly missing?: true }
 interface FileBaseline { readonly baseSha256?: string }
-interface SaveConflict { readonly sha256?: string }
+interface SaveConflict { readonly sha256: string }
 interface RegisteredFile extends FileBaseline { readonly file: SqlFile; readonly kind: DocumentKind }
 interface FileReadOptions {
   readonly reload?: boolean
@@ -378,14 +378,15 @@ export class SqlFileStore {
     return (await this.saveConflict(fileId)) !== undefined
   }
 
-  /** The disk version that Save would replace, or a conflict without a hash when it cannot be verified. */
+  /** The disk version that Save would replace, if it differs from the version the buffer was based on. */
   async saveConflict(fileId: string): Promise<SaveConflict | undefined> {
     const { baseSha256 } = this.registered(fileId)
     // A sync or copy can preserve the size and timestamp. Verify the bytes immediately before offering to replace them.
+    // A file that cannot be read now (an antivirus or sync hold) is judged by what was last seen, rather than reported
+    // as modified outside: the write that follows reports a lasting failure itself.
     const comparison = await this.compare(fileId, true).catch(() => undefined)
-    if (!comparison) return {}
-    const { stamp } = comparison
-    if (!stamp.missing && (this.conflicts.has(fileId) || stamp.sha256 !== baseSha256)) return { sha256: stamp.sha256 }
+    const stamp = comparison?.stamp ?? this.stamps.get(fileId)
+    if (stamp && !stamp.missing && (this.conflicts.has(fileId) || stamp.sha256 !== baseSha256)) return { sha256: stamp.sha256 }
   }
 
   /** How the file differs from its stamp, and the stamp that records what was seen; undefined when it cannot tell. */
@@ -572,15 +573,14 @@ export async function saveDocument(files: SqlFileStore, request: SaveSqlFile, sp
     else overwriteReadOnly = true
   }
   const checkedFile = !saveAs && detectChanges ? request.fileId : undefined
-  let accepted: SaveConflict | undefined
+  let accepted: string | undefined
   // A confirmation covers the version the user was asked about. An external write while a dialog is open needs its own.
   const confirmChanges = async (): Promise<boolean> => {
     if (!checkedFile) return true
     let conflict = await files.saveConflict(checkedFile)
-    while (conflict && (!accepted || conflict.sha256 !== accepted.sha256)) {
+    while (conflict && conflict.sha256 !== accepted) {
       if (!await prompts.changed(files.get(checkedFile).path)) return false
-      accepted = conflict
-      if (!conflict.sha256) return true
+      accepted = conflict.sha256
       conflict = await files.saveConflict(checkedFile)
     }
     return true

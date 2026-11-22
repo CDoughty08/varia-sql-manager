@@ -1077,6 +1077,18 @@ describe('changes made outside', () => {
     expect(asked).toBe(2)
     expect(await readFile(path, 'utf8')).toBe('later external edit')
   })
+  it('saves without a File changed prompt when the unchanged file cannot be read for the check', async () => {
+    let held = false
+    const store = new SqlFileStore({ stat: async target => { if (held) throw Object.assign(new Error('busy'), { code: 'EBUSY' }); return stat(target) } })
+    const path = join(directory, 'held.sql')
+    await writeFile(path, 'SELECT 1')
+    const opened = await store.read(path)
+    held = true
+    const answers = prompts()
+    expect(await saveDocument(store, request('SELECT 2', opened.id), undefined, answers.value, true)).not.toBeNull()
+    expect(answers.asked).toEqual([])
+    expect(await readFile(path, 'utf8')).toBe('SELECT 2')
+  })
   it('verifies restored file bytes on save when a later external edit preserves the size and timestamp', async () => {
     const store = new SqlFileStore(), path = join(directory, 'pinned.sql'), time = new Date('2026-01-01T00:00:00Z')
     await writeFile(path, 'SELECT 1')
