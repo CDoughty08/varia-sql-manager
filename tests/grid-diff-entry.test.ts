@@ -45,7 +45,7 @@ function source(columns: readonly ResultColumn[], cells: readonly (readonly Cell
   return handle as unknown as ResultHandle
 }
 
-function mount(columns: readonly ResultColumn[], cells: readonly (readonly Cell[])[], o: { diffChanged?: readonly boolean[]; active?: readonly [number, number] } = {}) {
+function mount(columns: readonly ResultColumn[], cells: readonly (readonly Cell[])[], o: { diffChanged?: readonly boolean[]; diffKeys?: readonly boolean[]; active?: readonly [number, number] } = {}) {
   const handle = source(columns, cells)
   const root = document.createElement('div'), scroller = document.createElement('div')
   for (const [name, value] of Object.entries({ 'data-output-view': 'grid', 'data-tab-id': 'query', 'data-result-entry': 'e1', 'data-result-generation': '1', 'data-result-id': '1' })) root.setAttribute(name, value)
@@ -57,12 +57,14 @@ function mount(columns: readonly ResultColumn[], cells: readonly (readonly Cell[
   const state: GridViewState = { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: true, ...selection ? { selection } : {} }
   const view = new GridView({
     root, scroller, handle, client: { windowsInFlight: 0 }, descriptor, state, entry: 'e1', resultNumber: 3, resultCount: 3, platform: 'win32',
-    diffSides: { old: 'Result 1', new: 'Result 2', rows: cells.length }, ...o.diffChanged ? { diffChanged: o.diffChanged } : {},
+    diffSides: { old: 'Result 1', new: 'Result 2', rows: cells.length }, ...o.diffChanged ? { diffChanged: o.diffChanged } : {}, ...o.diffKeys ? { diffKeys: o.diffKeys } : {},
     onSelection: () => {}, onFirstCell: () => {}, onCopy: () => {}, onEscape: () => false, onStatus: () => {}, onError: error => { throw error }, onOpenValue: () => {}, onSort: () => {}, onFilter: () => {}
   })
   const frame = async () => { await new Promise(done => setTimeout(done, 0)); view.invalidate(); await new Promise(done => requestAnimationFrame(() => done(undefined))); await new Promise(done => setTimeout(done, 0)) }
   const cellAt = (row: number, col: number) => root.querySelector<HTMLElement>(`[role="row"][aria-rowindex="${row + 2}"] > [role="gridcell"][aria-colindex="${col + 2}"]`)
-  return { root, view, frame, cellAt, state }
+  const headerAt = (col: number) => root.querySelector<HTMLElement>(`[role="columnheader"][aria-colindex="${col + 2}"]`)
+  const rowAt = (row: number) => root.querySelector<HTMLElement>(`[role="row"][aria-rowindex="${row + 2}"]`)
+  return { root, view, frame, cellAt, headerAt, rowAt, state }
 }
 
 describe('a comparison\'s grid', () => {
@@ -138,5 +140,51 @@ describe('a comparison\'s grid', () => {
       expect(cellAt(row, 1)!.querySelector('.rg-old')).toBeNull()
       view.dispose()
     }
+  })
+
+  it('underlines and dots the columns with changes and marks the key columns, for screen readers too', async () => {
+    const { view, frame, headerAt } = mount(entryColumns, entryRows, { diffChanged: [false, true], diffKeys: [true, false] })
+    await frame()
+    const id = headerAt(0)!, price = headerAt(1)!
+    expect([id.classList.contains('key'), id.classList.contains('chg'), id.getAttribute('aria-description')]).toEqual([true, false, 'Key column'])
+    expect([price.classList.contains('key'), price.classList.contains('chg'), price.getAttribute('aria-description')]).toEqual([false, true, 'Has changes'])
+    // The header's tooltip says it too.
+    price.dispatchEvent(new MouseEvent('pointerover', { bubbles: true }))
+    expect(price.title).toBe('Price (nvarchar(max), null)\nHas changes')
+    view.dispose()
+  })
+
+  it('draws a hidden run of unchanged rows as a dashed rule and names it, in Changes only with no sort or filter', async () => {
+    const columns = [column('Id'), column('Price'), ...suffix]
+    const rows: Cell[][] = [
+      ['1', '9.00', '+', null, '4', 'added gap=312'],
+      ['5', '7.00', '−', '9', null, 'removed gap=1'],
+      ['6', '8.00', '+', null, '11', 'added']
+    ]
+    const { view, frame, rowAt, root } = mount(columns, rows)
+    await frame()
+    await frame()
+    const name = (row: number) => rowAt(row)!.querySelector('[role="rowheader"]')!.textContent
+    const ruled = () => [0, 1, 2].map(row => rowAt(row)!.dataset.gap ?? '')
+    // Not shown until the grid says so (its sort and filters are the shell's).
+    expect(ruled()).toEqual(['', '', ''])
+    expect(name(0)).toBe('Added; row 4 in Result 2')
+    view.setDiffGaps({ shown: true, trailing: 12 })
+    await frame()
+    expect(ruled()).toEqual(['above', 'above', 'below'])
+    expect(name(0)).toBe('Added; row 4 in Result 2. 312 unchanged rows hidden')
+    expect(name(1)).toBe('Removed; row 9 in Result 1. 1 unchanged row hidden')
+    expect(name(2)).toBe('Added; row 11 in Result 2. 12 unchanged rows hidden after it')
+    // The row numbers draw the rule too, with the count in their tooltip.
+    const marks = [...root.querySelectorAll<HTMLElement>('.rg-rn[data-gap]')]
+    expect(marks.map(mark => [mark.dataset.gap, mark.title])).toEqual([
+      ['above', 'Added; row 4 in Result 2. 312 unchanged rows hidden'], ['above', 'Removed; row 9 in Result 1. 1 unchanged row hidden'], ['below', 'Added; row 11 in Result 2. 12 unchanged rows hidden after it']])
+    // A sort or filter: no rules and no counts.
+    view.setDiffGaps({ shown: false, trailing: 12 })
+    await frame()
+    expect(ruled()).toEqual(['', '', ''])
+    expect(root.querySelectorAll('.rg-rn[data-gap]')).toHaveLength(0)
+    expect(name(0)).toBe('Added; row 4 in Result 2')
+    view.dispose()
   })
 })
