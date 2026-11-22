@@ -244,7 +244,7 @@ const agentPreview = agentPreviewEnabled(process.env)
  *  queries. A page has records only after a write, which waited for settings, so `current()` holds the loaded values. */
 function lossDetailsFor(generation: number, restores?: 'pins' | 'session') {
   const values = settings.current()
-  return lossDetails({ enabled: values['environment.autoRecover.enabled'], minutes: values['environment.autoRecover.intervalMinutes'], saved: recovery.hasRecords(generation) }, restores)
+  return lossDetails({ enabled: values['environment.autoRecover.enabled'], minutes: values['environment.autoRecover.intervalMinutes'], saved: recovery.hasRecords(generation) }, restores, backend?.hasProvider('bigquery') ?? false)
 }
 // Tools › Options › Environment › Shortcuts. Only main reads and writes the file; menus read current() (empty until the first load).
 const shortcuts = new ShortcutStore(join(app.getPath('userData'), 'shortcuts.json'))
@@ -518,7 +518,7 @@ function restartBackend(): Promise<boolean> {
       if (backend.connectionCount() > 0 || longRuns.total > 0) {
         const { response } = await pageDialog((window, signal) => {
           const count = backend.connectionCount()
-          return count === 0 && longRuns.total === 0 ? Promise.resolve({ response: 0 }) : dialog.showMessageBox(window, { type: 'warning', title: 'Restart SQL backend', message: 'Restart the SQL backend?', detail: restartDetail(longRuns, count), buttons: ['Restart', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, signal })
+          return count === 0 && longRuns.total === 0 ? Promise.resolve({ response: 0 }) : dialog.showMessageBox(window, { type: 'warning', title: 'Restart SQL backend', message: 'Restart the SQL backend?', detail: restartDetail(longRuns, count, backend.hasProvider('bigquery')), buttons: ['Restart', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, signal })
         }, { response: 1 }, true)
         if (response !== 0) return false
       }

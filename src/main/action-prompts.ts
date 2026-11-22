@@ -19,7 +19,9 @@ export const parseLongRuns = (value: unknown): LongRunState => longRunStateSchem
 /** The reload prompt's detail: the running work it would stop, first, then what AutoRecover keeps. */
 export const reloadDetail = (runs: LongRunState, loss: string): string => [longRunMessages.reload(runs), loss].filter(Boolean).join('\n\n')
 /** The Restart SQL Backend prompt's detail: the running work it would stop, first, then the connections it closes. */
-export const restartDetail = (runs: LongRunState, connections: number): string => [
+export const restartDetail = (runs: LongRunState, connections: number, bigQuery = false): string => [
   longRunMessages.restart(runs),
-  connections === 1 ? 'The connection closes and uncommitted transactions are rolled back.' : connections > 1 ? `All ${connections} connections close and uncommitted transactions are rolled back.` : undefined
+  connections === 1 ? 'The connection closes and uncommitted transactions are rolled back.' : connections > 1 ? `All ${connections} connections close and uncommitted transactions are rolled back.` : undefined,
+  // docs/bigquery.md, Re-attaching to jobs: a restart never cancels a BigQuery job.
+  bigQuery ? 'Running BigQuery jobs carry on in BigQuery and are re-attached once their tabs reconnect.' : undefined
 ].filter(Boolean).join('\n\n')
