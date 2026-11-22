@@ -584,6 +584,28 @@ describe('the Schedules document', () => {
     expect(schedules.draft(id)?.jobs).toEqual([])
     expect(schedules.draftJobs(id).map(job => job.name)).toEqual(['Backup'])
   })
+  it("waits below sysadmin for the schedule's own jobs read before keeping a detach after a STALE save", async () => {
+    const { schedules, api, answers, executes } = schedulesWorkbench()
+    let model = schedulesModel({ sysadmin: false, links: undefined }), using = [jobA]
+    api.describeObject.mockImplementation(async params => ({ ok: true, value: (params.schedule !== undefined ? { agentSchedules: { ...model, schedules: [], scheduleJobs: using }, elapsedMs: 1 }
+      : { agentSchedules: model, elapsedMs: 1 }) as ActionDescribeResult }))
+    const id = schedules.open('c1')
+    await settled()
+    schedules.select(id, '1')
+    await settled()
+    expect(schedules.jobsOf(id, 1)?.map(job => job.name)).toEqual(['ETL'])
+    schedules.toggleJob(id, jobA.id, false)
+    // Someone else detached ETL (its version moved).
+    model = schedulesModel({ sysadmin: false, links: undefined, jobs: [{ ...jobA, version: 5 }, jobB] })
+    using = []
+    answers.push({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'STALE', message: 'Changed.', retryable: false } } })
+    expect(await schedules.save(id)).toBe(false)
+    await settled()
+    expect(schedules.get(id)?.error?.message).toBe(`${schedulesText.staleKept} ${schedulesText.jobsDropped(1)}`)
+    expect(schedules.draft(id)?.jobs).toEqual([])
+    expect(schedules.get(id)?.busy).toBeUndefined()
+    expect(executes()).toHaveLength(1)
+  })
   it("starts New › Schedule…'s untouched draft on the server's date once read, not the local one", async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     try {

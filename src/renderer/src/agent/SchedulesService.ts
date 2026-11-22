@@ -125,6 +125,8 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
   private readonly generations = new Map<string, number>()
   /** Each document's latest schedules read: an older one that answers later is dropped. */
   private readonly reads = new Map<string, number>()
+  /** Each schedule's jobs read under way (below sysadmin), by document and schedule. */
+  private readonly jobReads = new Map<string, Promise<void>>()
   private readonly targetBindings: CustomDocumentTargets
   private disposed = false
 
@@ -203,18 +205,25 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
     return true
   }
   /** One schedule's jobs, where the read has no links (below sysadmin): read once per schedule and read. */
-  ensureScheduleJobs(id: string, scheduleId: number): void {
+  ensureScheduleJobs(id: string, scheduleId: number): void { void this.scheduleJobsRead(id, scheduleId) }
+  /** The read ensureScheduleJobs starts, or the one under way, for those that must wait for it (keepStale). */
+  private scheduleJobsRead(id: string, scheduleId: number): Promise<void> {
+    const key = `${id}
+${scheduleId}`, pending = this.jobReads.get(key)
     const state = this.get(id), connectionId = this.connectionOf(id)
     const read = state?.scheduleJobs?.[scheduleId]
-    if (!state?.model || !connectionId || state.model.links || (read && read.state !== 'failed') || !this.live(id)) return
+    if (read?.state === 'loading' && pending) return pending
+    if (!state?.model || !connectionId || state.model.links || (read && read.state !== 'failed') || !this.live(id)) return Promise.resolve()
     this.patch(id, { scheduleJobs: { ...state.scheduleJobs, [scheduleId]: { state: 'loading' } } })
     const generation = this.generations.get(id) ?? 0
-    void this.request(id, requestId => this.options.api.describeObject({ connectionId, requestId, dialog: 'agentSchedules', target: { kind: 'agent' }, schedule: scheduleId })).then(result => {
+    const done = this.request(id, requestId => this.options.api.describeObject({ connectionId, requestId, dialog: 'agentSchedules', target: { kind: 'agent' }, schedule: scheduleId })).then(result => {
       const current = this.get(id)
       if (!current || !result || (this.generations.get(id) ?? 0) !== generation) return
       const jobs = result.ok && !result.value.error ? result.value.agentSchedules?.scheduleJobs : undefined
       this.patch(id, { scheduleJobs: { ...current.scheduleJobs, [scheduleId]: jobs ? { state: 'ready', jobs } : { state: 'failed' } } })
-    })
+    }).finally(() => { if (this.jobReads.get(key) === done) this.jobReads.delete(key) })
+    this.jobReads.set(key, done)
+    return done
   }
 
   // --- What the view asks --------------------------------------------------------------------------------------------
@@ -435,7 +444,14 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
    *  each job change guarded by the job's version as read now. The next Save is the user's. */
   private async keepStale(id: string, key: string): Promise<void> {
     const error = this.get(id)?.error
-    const read = await this.readAfter(id, 'saving')
+    let read = await this.readAfter(id, 'saving')
+    // Below sysadmin the schedule's jobs come from their own read, which the re-read started over: wait for it (still busy), so a job
+    // change someone else already made is known before it is kept.
+    if (read && key !== newScheduleKey && !this.get(id)?.model?.links) {
+      this.patch(id, { busy: 'saving' })
+      try { await this.scheduleJobsRead(id, Number(key)) } finally { this.patch(id, { busy: undefined }) }
+      read = !!this.get(id)
+    }
     const current = this.get(id), draft = current?.drafts[key], record = this.record(id, key)
     if (!current || !error) return
     // Not read again: nothing moved, so the STALE stands with why the read failed, and the next Save is STALE until a read lands.
