@@ -173,6 +173,7 @@ function ThenSection({ state, model, draft, editable, problems, service }: Props
         <button type="button" onClick={() => setAdding(undefined)}>Cancel</button>
         <p className="field-note">{agentAlertText.newOperatorHint}</p>
       </div>}
+      {model.operatorsTruncated && <p className="field-note">Only the first {agentLimits.operatorRows} operators are offered.</p>}
     </PropertyField>
   </div>
 }

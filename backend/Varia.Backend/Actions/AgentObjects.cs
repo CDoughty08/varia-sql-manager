@@ -402,7 +402,7 @@ internal sealed partial class ActionService
             countersTruncated = counterRows.Truncated;
         }
         return new(null, 0, AgentAlertDocument: new(alert, login, sysadmin, platform!, notifications, databases, mail, !sysadmin ? AlertReadOnlyMessage : id is not null && !Read(AgentSql.AlertNotifications, out _) ? NotificationsUnreadMessage : null, operators?.Select(OperatorChoice).ToList(),
-            jobs, counters, countersTruncated ? true : null, messageText));
+            jobs, counters, countersTruncated ? true : null, messageText, operators is not null && operatorRows!.Truncated ? true : null));
     }
 
     /// <summary>The operator document's describe: the operator named by <paramref name="target"/>, or New Operator's (the Agent node).</summary>

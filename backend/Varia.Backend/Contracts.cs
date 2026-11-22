@@ -823,7 +823,7 @@ internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long 
 /// <summary>The alert document's describe (AG-7, agent-alert.ts AgentAlertDocumentModel). Dates are yyyy-MM-ddTHH:mm:ss, server time.</summary>
 internal sealed record AgentAlertDocumentDto(AgentAlertRecordDto? Alert, string Login, bool Sysadmin, string Platform, List<AgentAlertNotifyDto> Notifications, List<string> Databases,
     AgentJobMailDto Mail, string? ReadOnly = null, List<AgentJobOperatorDto>? Operators = null, List<AgentAlertJobDto>? Jobs = null, List<AgentCounterDto>? Counters = null,
-    bool? CountersTruncated = null, string? MessageText = null);
+    bool? CountersTruncated = null, string? MessageText = null, bool? OperatorsTruncated = null);
 internal sealed record AgentAlertRecordDto(int Id, string Name, bool Enabled, string Kind, int MessageId, int Severity, string Database, string Keyword, string Condition, string WmiNamespace,
     string WmiQuery, string JobId, string JobName, int Delay, int IncludeIn, string Message, int Occurrences, string? LastOccurred = null, string? LastResponse = null, string? CountReset = null);
 internal sealed record AgentAlertNotifyDto(string Operator, int Methods);

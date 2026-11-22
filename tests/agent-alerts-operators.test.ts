@@ -90,6 +90,12 @@ describe("the alert document's shared rules", () => {
     expect(agentAlertSaveSchema.safeParse({ newOperators: Array.from({ length: agentLimits.newOperators + 1 }, (_, at) => ({ name: `o${at}` })) }).success).toBe(false)
     expect(agentAlertSaveSchema.safeParse({ enabled: true, other: 1 }).success).toBe(false)
   })
+  it('does not call an operator past a capped listing unknown', () => {
+    const notify = [{ operator: 'Far', methods: notifyEmail }]
+    const unknown = (model: AgentAlertDocumentModel) => agentAlertProblems(model, { ...initialAgentAlertDraft(model), notify }).some(problem => problem.message.includes('is not an operator'))
+    expect(unknown(alertModel())).toBe(true)
+    expect(unknown(alertModel({ operatorsTruncated: true }))).toBe(false)
+  })
   it('warns about notifications that reach no one, and only a missing or invalid value blocks Save', () => {
     const model = alertModel(), draft = initialAgentAlertDraft(model)
     const warned = agentAlertProblems(model, { ...draft, notify: [{ operator: 'On-call', methods: notifyEmail }] })

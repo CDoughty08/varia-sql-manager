@@ -71,6 +71,8 @@ export interface AgentAlertDocumentModel {
   readonly readOnly?: string
   /** Absent when the login may not read operators. */
   readonly operators?: readonly AgentJobOperator[]
+  /** The operator listing stopped at its cap, so a name missing from it may still be an operator. */
+  readonly operatorsTruncated?: boolean
   readonly notifications: readonly AgentAlertNotify[]
   /** The jobs msdb lets the login see; absent when they could not be read. */
   readonly jobs?: readonly AgentAlertJob[]
@@ -365,7 +367,7 @@ export function agentAlertProblems(model: AgentAlertDocumentModel, draft: AgentA
   for (const entry of draft.notify) {
     if (draft.newOperators.some(added => added.name === entry.operator) || !known) continue
     const operator = known.find(candidate => candidate.name === entry.operator)
-    if (!operator) { warning('notify', `${entry.operator} is not an operator on this server.`); continue }
+    if (!operator) { if (!model.operatorsTruncated) warning('notify', `${entry.operator} is not an operator on this server.`); continue }
     if (!operator.enabled) warning('notify', `${entry.operator} is disabled, so it is not notified.`)
     if (entry.methods & notifyEmail && !operator.email) warning('notify', `${entry.operator} has no e-mail address.`)
     if (entry.methods & notifyPager) {
