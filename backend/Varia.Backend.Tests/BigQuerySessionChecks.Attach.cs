@@ -176,7 +176,9 @@ internal static partial class BigQuerySessionChecks
             await Task.WhenAny(checking.Task, attachRun).WaitAsync(TimeSpan.FromSeconds(30));
             await following.Call("query.cancel", new JsonObject { ["queryId"] = attachArgs["queryId"]!.GetValue<string>() });
             var stoppedAttach = (await attachRun.WaitAsync(TimeSpan.FromSeconds(30))).Result as QueryResult;
-            check(checking.Task.IsCompleted && stoppedAttach is { Status: "cancelled" } && following.Bq.Cancels.Contains(fJob),
+            // The cancel is sent in the background, and may land after the run ends.
+            var followedCancelled = await Poll(() => following.Bq.Cancels.Contains(fJob));
+            check(checking.Task.IsCompleted && stoppedAttach is { Status: "cancelled" } && followedCancelled,
                 $"Stop during a following attach's identity check cancels the held job: {stoppedAttach?.Status} cancels {string.Join(",", following.Bq.Cancels)}");
             following.Bq.AlsoHang = null;
             following.Bq.Release(following.Bq.Jobs[fJob]);
