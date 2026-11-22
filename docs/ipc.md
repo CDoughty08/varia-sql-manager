@@ -1101,7 +1101,8 @@ and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residen
 
 - `residence`: `memory` or `remote` (absent for SQL Server and for Preview Rows, which always reads into memory); `rowsTotal`: BigQuery's own total, which may pass
   `rowsAvailable` (at most 2,147,483,647 rows, the grid's 32-bit indexes; a Messages line says so);
-  `revision`: 0, bumped by every switch.
+  `revision`: 0, bumped by every switch; `projectedBytes` (windowed only): the result's projected size in memory, its
+  measured row cost times its rows, which the renderer offers Load into memory under.
 - **Choosing.** `query.execute` takes `residence` (`automatic`, the default; `memory`; `windowed`) and `windowCacheMiB`
   (16 – 4,096, default 64), BigQuery only: main (`optionsAllow`) and the backend refuse them for SQL Server. The backend
   decides after the first page, before `resultSet.opened`: memory when the rows arrived whole, under `memory`, or when
@@ -1139,12 +1140,20 @@ and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residen
   fetch error); a rate limit past the read's wait answers with the rows sent, none included, without an error. The
   grid reads on from there, under the new revision after a switch. After a release it is `RESULT_RELEASED`.
 - **Refusals.** Every other reader of stored pages (`results.view`, distinct values, profiles, search, row identities,
-  diffs, pivots, Copy and Save) answers `REMOTE_RESULT` before any work, and so does one whose set switched to windowed
-  after that check: the page snapshot, a new view, a lease and an operation's release token refuse a windowed set as they
+  diffs, pivots) answers `REMOTE_RESULT` before any work, and so does one whose set switched to windowed
+  after that check: the page snapshot, a new view and an operation's release token refuse a windowed set as they
   take hold, a search or operation whose set switched (even one loaded back since) answers `REMOTE_RESULT`, and a copy
   the switch overtakes is refused rather than cut short. Both codes are in the shared `errorCodes` list. A 404 from `tabledata.list` (BigQuery's
   result table expired) answers `REMOTE_EXPIRED` when the read reaches an uncached block before it has sent any row; a read that sent cached rows first
   answers short with them.
+- **Copy and Save.** `results.copy` of a windowed result reads its rows block by block through the cache (under its own
+  viewer, so a grid's read-ahead is not disturbed) and stops with `TOO_LARGE` before sending text past `maxBytes`, or
+  before any read when the separators alone pass it; a `viewId` answers `VIEW_NOT_FOUND`. `results.export` streams every
+  row the query keeps from BigQuery (Storage Read, else `tabledata.list`) through `ResultTextWriter`, each page reserved
+  from the budget while it is written, never through the cache. Both answer `REMOTE_EXPIRED` for an expired table (Copy
+  only past the rows cached). Copy, and a transposed Save (which reads its rows through the cache), answer `RESULT_OPEN`
+  when the result starts loading into memory under them and `RESULT_RELEASED` after a release; a Save reads the table
+  itself, so it carries on through either (its lease holds the result).
 - **`results.remoteQuery { queryId: uuid, resultId, generation, kind: 'load' }`** runs a query over a windowed result
   like `query.execute`: unary with EVENTs, the same summary, stopped by `query.cancel(queryId)`. Main sends it only for a
   result its renderer owns in that generation (else `RESULT_UNAVAILABLE`) and pins the request to it; while the query

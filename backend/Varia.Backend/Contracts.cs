@@ -80,10 +80,12 @@ internal sealed record ResultColumn(string Name, string DataType, string Wire, s
 internal sealed record ResultCollation(int Lcid, int SortId, int CodePage, bool Utf8, int Options);
 /// <summary>A stored result set. rowsAvailable counts rows in sealed pages (what results.read can serve); main adds the
 /// backend generation before the renderer sees it. Name is the query's own name for the set, from a #Name="…" marker comment
-/// (ResultNames.cs): 1 to ResultNames.MaxChars characters, none of the refused ones; null (left out) when it has none.</summary>
+/// (ResultNames.cs): 1 to ResultNames.MaxChars characters, none of the refused ones; null (left out) when it has none.
+/// ProjectedBytes is a windowed result's projected size in memory (its measured row cost times its rows), which the
+/// renderer offers Load into memory under; null for any other result.</summary>
 internal sealed record ResultDescriptor(uint ResultId, int Index, int BatchNumber, int Iteration, string Kind, IReadOnlyList<ResultColumn> Columns,
     long RowsRead, long RowsStored, long RowsAvailable, long BytesStored, long TruncatedCells, string State, string? Truncated, bool Incomplete, string? Name = null,
-    string? Residence = null, long? RowsTotal = null, int? Revision = null);
+    string? Residence = null, long? RowsTotal = null, int? Revision = null, long? ProjectedBytes = null);
 internal sealed record ColumnInfo(string Name, string DataType);
 internal sealed record TableColumnsResult(List<ColumnInfo> Columns, bool Truncated);
 internal sealed record QueryFailure(string Code, string Message, int BatchNumber, int Iteration);

@@ -1221,6 +1221,12 @@ export const commandCatalog = {
     title: 'Transpose Results', category: 'Query', icon: 'transpose', keywords: ['transpose', 'transposed', 'rotate', 'swap', 'flip', 'columns', 'rows', 'record', 'grid', 'result', 'orientation'], toggled: 'resultsGridTransposed', providers: both,
     menus: [{ menu: 'output.transposeMenu', group: '1_rows', order: 1, title: 'Transposed', mnemonic: 't', when: 'outputGridTransposable' }, { menu: 'output.tools', group: '2_view', order: 3, title: 'Transposed', mnemonic: 't' }]
   },
+  // A windowed BigQuery result of a finished run read into result memory (results.remoteQuery `load`), in place: its grid's
+  // strip offers it too, and Stop while it runs.
+  'output.loadIntoMemory': {
+    title: 'Load Result into Memory', category: 'Query', icon: 'cloud-download', keywords: ['bigquery', 'windowed', 'load', 'memory', 'remote', 'rows', 'grid', 'result'], providers: ['bigquery'], methods: ['results.remoteQuery'],
+    menus: [{ menu: 'output.tools', group: '2_view', order: 5, title: 'Load into Memory', mnemonic: 'i' }]
+  },
   'output.transposeSelectedRows': {
     title: 'Transpose Selected Rows', category: 'Query', icon: 'transpose', keywords: ['transpose', 'rotate', 'record', 'selected', 'rows', 'details', 'keep', 'grid'], providers: both,
     menus: [{ menu: 'output.transposeMenu', group: '1_rows', order: 2, title: 'Selected Rows', mnemonic: 's', when: 'outputGridTransposable' }]

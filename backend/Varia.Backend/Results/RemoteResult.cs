@@ -62,6 +62,15 @@ internal sealed class RemoteBlockWriter(uint resultId, IReadOnlyList<WireKind> w
         bytes += page.Cost;
     }
 
+    /// <summary>The pages sealed so far, handed over and forgotten (Save writes them as they fill, keeping none). The byte
+    /// count still counts them, so a limit holds for every page the writer built.</summary>
+    public List<RemotePage> TakeSealed()
+    {
+        var taken = new List<RemotePage>(pages);
+        pages.Clear();
+        return taken;
+    }
+
     /// <summary>The pages written, the last one sealed: a block whose last page takes it past <c>maxBytes</c> is refused too, so
     /// no block costs more than its cache holds.</summary>
     public List<RemotePage> Finish()
@@ -83,6 +92,20 @@ internal sealed class RemoteExpiredException(Exception? inner = null) : Exceptio
 /// <summary>A block's fetch stopped backing off on rate limits (no read is left waiting for it): a read that joined it
 /// answers with the rows it has, and the next read asks again.</summary>
 internal sealed class RemoteRetryException(Exception inner) : Exception("BigQuery's rate limit was reached.", inner);
+
+/// <summary>What a windowed result's engine offers beyond its block cache: Save Results As streams every row the result
+/// keeps (<see cref="Rows"/>: Maximum rows honoured, the grid's 32-bit cap not) straight from the remote table, in order,
+/// as pages built for the one write and never cached; and the engine's error value for a failure of a read.</summary>
+internal interface IRemoteRows
+{
+    /// <summary>The rows Save writes: the result as its query keeps it, past the grid's cap.</summary>
+    long Rows { get; }
+    /// <summary>Calls <paramref name="page"/> with every page in order, built for the call; the engine's failures come back as
+    /// <see cref="RequestException"/> (REMOTE_EXPIRED once the table is gone).</summary>
+    Task ExportAsync(Func<RemotePage, ValueTask> page, CancellationToken token);
+    /// <summary>The error value for a block read's failure (a fetch's own exception).</summary>
+    RequestException Failure(Exception error);
+}
 
 /// <summary>
 /// A windowed result (docs/bigquery.md, Residence): its rows stay in a remote table and are read in blocks sized by
@@ -155,7 +178,7 @@ internal sealed class RemoteResult : IDisposable
     /// <param name="rowBytes">A row's measured cost in pages (from the first page), which sizes blocks.</param>
     /// <param name="cacheLimit">The cache's own limit (queryResults.bigQuery.windowCacheMiB).</param>
     internal static RemoteResult Create(ResultStore store, uint resultId, IReadOnlyList<WireKind> wires, long rows, bool capped, double rowBytes, long cacheLimit,
-        SemaphoreSlim connectionLane, RemoteFetch fetch, object? source = null) => new(store, resultId, wires, rows, capped, rowBytes, cacheLimit, connectionLane, fetch) { Source = source };
+        SemaphoreSlim connectionLane, RemoteFetch fetch, object? source = null, IRemoteRows? export = null) => new(store, resultId, wires, rows, capped, rowBytes, cacheLimit, connectionLane, fetch) { Source = source, Export = export };
 
     // Private: a cache is built only through Create, which only the residence code calls (tests/result-page-access.test.ts),
     // where every switch bumps the revision, sends resultSet.residence and settles the budget.
@@ -208,6 +231,12 @@ internal sealed class RemoteResult : IDisposable
     public long CacheLimit { get; }
     /// <summary>What the engine reads the rows from (its job and table), for Load into memory and later remote queries.</summary>
     public object? Source { get; init; }
+    /// <summary>Save's whole-table read and the engine's error values (null in checks that build a bare cache).</summary>
+    public IRemoteRows? Export { get; init; }
+    /// <summary>The measured bytes a row costs in pages (from the first page): Load into memory's projection.</summary>
+    public double RowCost => rowBytes;
+    /// <summary>The cache was disposed: the result was released or loaded into memory, and its reads answer short.</summary>
+    public bool Disposed => disposed.IsCancellationRequested;
     public long CachedBytes => Interlocked.Read(ref held);
 
     /// <summary>Checks only: the most the cache has held at once.</summary>
@@ -267,7 +296,11 @@ internal sealed class RemoteResult : IDisposable
     /// answers with the rows sent so far. Returns the row after the last one sent. Throws <see cref="RemoteExpiredException"/>
     /// once the table is gone and the rows asked are not cached, and a fetch's own failure.
     /// </summary>
-    public async Task<long> ReadAsync(long firstRow, int maxRows, uint viewer, Func<byte[], ValueTask> send, TimeSpan wait, CancellationToken token)
+    public Task<long> ReadAsync(long firstRow, int maxRows, uint viewer, Func<byte[], ValueTask> send, TimeSpan wait, CancellationToken token) =>
+        ReadPagesAsync(firstRow, maxRows, viewer, page => send(page.Body), wait, token);
+
+    /// <summary><see cref="ReadAsync"/> handing over the cached pages themselves, with their lengths (Copy and Save's jobs).</summary>
+    public async Task<long> ReadPagesAsync(long firstRow, int maxRows, uint viewer, Func<RemotePage, ValueTask> send, TimeSpan wait, CancellationToken token)
     {
         var end = Math.Min(Rows, firstRow + maxRows);
         if (firstRow >= end) return firstRow;
@@ -372,7 +405,7 @@ internal sealed class RemoteResult : IDisposable
                     if (page.FirstRow + page.Rows <= next) continue;
                     if (page.FirstRow > next || page.FirstRow >= end) break;
                     token.ThrowIfCancellationRequested();
-                    await send(page.Body);
+                    await send(page);
                     next = page.FirstRow + page.Rows;
                 }
                 return next;
@@ -746,6 +779,18 @@ internal sealed class RemoteResult : IDisposable
         {
             AheadChosen?.Invoke(block.Index);
             _ = Ensure(block, key, block.End);
+        }
+    }
+
+    /// <summary>Forgets a viewer that reads no more (a Copy or Save that ended): its last range no longer keeps blocks, and
+    /// the read-ahead it started that no read waits for stops (no one will read those rows).</summary>
+    public void Forget(uint viewer)
+    {
+        if (viewer == 0) return;
+        lock (gate)
+        {
+            viewers.Remove(viewer);
+            foreach (var block in blocks.Values.Where(block => block.AheadOf == viewer && block.Waiters == 0 && block.Fetching is not null)) block.Stop?.Cancel();
         }
     }
 
