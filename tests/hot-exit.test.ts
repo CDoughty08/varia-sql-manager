@@ -233,7 +233,7 @@ describe('hot exit', () => {
     expect(api.closeWindow).not.toHaveBeenCalled()
     // The quit waits for cancels still under way before it closes.
     let settled!: (value: boolean) => void
-    queries.restoredCancelsSettled = vi.fn(() => new Promise<boolean>(resolve => { settled = resolve }))
+    Object.assign(queries, { restoredCancelsSettled: vi.fn(() => new Promise<boolean>(resolve => { settled = resolve })) })
     const closing = files.closeWindow(async () => {})
     await new Promise(resolve => { setTimeout(resolve, 0) })
     expect(api.closeWindow).not.toHaveBeenCalled()
