@@ -33,6 +33,8 @@ export class JobRecordStore {
   private records: JobRecord[] = []
   private loaded: Promise<void> | undefined
   private queue: Promise<void> = Promise.resolve()
+  // A write is queued and has not taken its snapshot yet: later changes ride on it.
+  private writeQueued = false
   private held: ReadonlySet<string> = new Set()
   /** The file was read (or found missing): only then may a write replace it. */
   private readable = false
@@ -158,7 +160,10 @@ export class JobRecordStore {
   }
 
   private persist(): void {
+    if (this.writeQueued) return
+    this.writeQueued = true
     this.queue = this.queue.then(async () => {
+      this.writeQueued = false
       if (!this.readable) await this.load()
       // Taken when the write runs, after the read merged the file's records in.
       const snapshot = { version: 1 as const, records: this.records.map(record => ({ ...record })) }
