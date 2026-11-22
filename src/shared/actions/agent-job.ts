@@ -7,7 +7,7 @@
 import { z } from 'zod'
 import { agentGateOpen, agentLimits, notifyLevels, type AgentPlatform } from '../agent/catalog.ts'
 import {
-  agentStepChangeCountFrom, agentStepProblems, agentStepsSaveProblems, agentStepsSaveSchema, initialStepsDraft, planAgentSteps, rebaseSteps, stepsText, stepsValue,
+  agentStepChangeCountFrom, agentStepProblems, agentStepsSaveProblems, agentStepsSaveSchema, initialStepsDraft, planAgentSteps, rebaseSteps, stepsChangesText, stepsText, stepsValue,
   type AgentJobProxy, type AgentJobStepRecord, type AgentStepsDraft, type AgentStepsSave
 } from '../agent/steps.ts'
 import { ident } from '../explorer/schema.ts'
@@ -225,6 +225,8 @@ export function agentJobSave(model: AgentJobDocumentModel, draft: AgentJobDraft)
         break
       }
       case 'steps': {
+        // Never a plan over steps the describe did not read whole (the page is read-only then).
+        if (model.stepsTruncated) break
         const steps = planAgentSteps(job ? model.steps : undefined, draft.steps, job?.startStepId)
         if (steps) save.steps = steps
         break
@@ -438,10 +440,12 @@ export function agentJobCompare(opened: AgentJobDocumentModel, current: AgentJob
   const base = initialAgentJobDraft(opened), server = initialAgentJobDraft(current)
   const mine = new Set(changedAgentJobFields(base, draft)), theirs = new Set(changedAgentJobFields(base, server))
   const alerts = [...(opened.alerts ?? []), ...(current.alerts ?? [])]
+  // Steps say what each side changed, by step, so two edits of the same names never read the same.
+  const text = (side: AgentJobDraft, field: AgentJobField) => field === 'steps' ? stepsChangesText(base.steps, side.steps) : agentJobFieldText(side, field, alerts)
   const rows = agentJobFields.filter(field => mine.has(field) || theirs.has(field)).map((field): AgentJobCompareRow => ({
     field,
-    ...(theirs.has(field) ? { server: agentJobFieldText(server, field, alerts) } : {}),
-    ...(mine.has(field) ? { yours: agentJobFieldText(draft, field, alerts) } : {}),
+    ...(theirs.has(field) ? { server: text(server, field) } : {}),
+    ...(mine.has(field) ? { yours: text(draft, field) } : {}),
     conflict: mine.has(field) && theirs.has(field) && fieldValue(server, field) !== fieldValue(draft, field)
   }))
   return [...rows.filter(row => row.conflict), ...rows.filter(row => !row.conflict)]
@@ -461,7 +465,8 @@ export function rebaseAgentJobDraft(opened: AgentJobDocumentModel, current: Agen
       case 'delete': next.deleteLevel = draft.deleteLevel; break
       case 'alerts': next.removeAlerts = draft.removeAlerts.filter(id => (current.alerts ?? []).some(alert => alert.id === id)); break
       case 'enabled': next.enabled = draft.enabled; break
-      case 'steps': next.steps = rebaseSteps(opened.steps, current.steps, draft.steps); break
+      // A job now past the steps the describe reads keeps the server's steps: the document cannot save them.
+      case 'steps': if (!current.stepsTruncated) next.steps = rebaseSteps(opened.steps, current.steps, draft.steps, opened.job?.startStepId, current.job?.startStepId); break
       default: next[field] = draft[field]
     }
   }

@@ -81,14 +81,14 @@ export interface JobStepParse { readonly key: string; readonly running: boolean;
 export interface JobSsisPicker {
   readonly folders?: readonly string[]
   readonly projects: Readonly<Record<string, readonly string[]>>
-  /** `folder\project` and its describe. */
-  readonly project?: { readonly key: string; readonly model: SsisProjectModel }
-  /** `folder\project\package` and its describe. */
-  readonly package?: { readonly key: string; readonly model: SsisPackageModel }
+  /** Project describes by `folder\project`, and package describes by `folder\project\package`: browsing the tree never loses the selected
+   *  step's, and a late reply only fills its own entry. */
+  readonly projectModels: Readonly<Record<string, SsisProjectModel>>
+  readonly packageModels: Readonly<Record<string, SsisPackageModel>>
+  /** The project the tree has open (`folder\project`); the selected step's when the user has opened none. */
+  readonly open?: string
   readonly loading?: string
   readonly error?: string
-  /** The `folder\project\package` the latest loadSsisPackage asked for: a reply to an earlier request is dropped. */
-  readonly wanted?: string
 }
 export interface JobDocumentSnapshot { readonly documents: Readonly<Record<string, JobDocumentState>> }
 
@@ -265,14 +265,15 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   }
   /** Each SSIS step's required parameters without a value, for the steps whose project and package the picker has read. */
   private ssisProblems(state: JobDocumentState): ReadonlyMap<string, readonly string[]> | undefined {
-    const project = state.ssis?.project, packaged = state.ssis?.package
-    if (!state.draft || !project || !packaged) return undefined
+    const ssis = state.ssis
+    if (!state.draft || !ssis) return undefined
     const found = new Map<string, readonly string[]>()
     for (const step of state.draft.steps.steps) {
       if (step.subsystem !== 'SSIS') continue
       const command = parseSsisCommand(step.command)
-      if (!command || `${command.folder}\\${command.project}` !== project.key || `${project.key}\\${command.package}` !== packaged.key) continue
-      const messages = ssisProblems(ssisParameterRows(command, project.model.parameters, packaged.model.parameters))
+      const project = command && ssis.projectModels[`${command.folder}\\${command.project}`], packaged = command && ssis.packageModels[`${command.folder}\\${command.project}\\${command.package}`]
+      if (!command || !project || !packaged) continue
+      const messages = ssisProblems(ssisParameterRows(command, project.parameters, packaged.parameters))
       if (messages.length) found.set(step.key, messages)
     }
     return found
@@ -400,7 +401,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   // --- The SSIS step's catalog picker ------------------------------------------------------------------------------
 
   private patchSsis(id: string, patch: Partial<JobSsisPicker>): void {
-    const ssis = this.get(id)?.ssis ?? { projects: {} }
+    const ssis = this.get(id)?.ssis ?? { projects: {}, projectModels: {}, packageModels: {} }
     const next = { ...ssis, ...patch } as JobSsisPicker & Record<string, unknown>
     for (const name of Object.keys(patch)) if (next[name] === undefined) delete next[name]
     this.patch(id, { ssis: next })
@@ -426,28 +427,27 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     this.patchSsis(id, failure ? { loading: undefined, error: failure } : { loading: undefined, projects: { ...projects, [folder]: result.ok ? result.value.nodes.map(node => node.label) : [] } })
   }
   /** The project's describe (its packages, parameters and environment references) and the package's (its parameters). */
-  async loadSsisPackage(id: string, folder: string, project: string, packageName?: string): Promise<void> {
+  async loadSsisPackage(id: string, folder: string, project: string, packageName?: string, browse = false): Promise<void> {
     const connectionId = this.connectionOf(id), describe = this.options.api.describeSsis
     if (!connectionId || !describe) return
-    const projectKey = `${folder}\\${project}`, wanted = `${projectKey}\\${packageName ?? ''}`
-    this.patchSsis(id, { wanted })
-    const current = () => !this.disposed && this.get(id)?.ssis?.wanted === wanted
-    if (this.get(id)?.ssis?.project?.key !== projectKey) {
+    const projectKey = `${folder}\\${project}`
+    if (browse) this.patchSsis(id, { open: projectKey })
+    if (!this.get(id)?.ssis?.projectModels[projectKey]) {
       this.patchSsis(id, { loading: projectKey, error: undefined })
       const result = await this.call(() => describe({ connectionId, requestId: this.newId(), view: 'project', target: { kind: 'ssisProject', name: project, ssisFolder: folder } }))
-      if (!current()) return
+      if (this.disposed || !this.get(id)) return
       const model = result.ok && result.value.model?.view === 'project' ? result.value.model : undefined
       if (!model) { this.patchSsis(id, { loading: undefined, error: !result.ok ? result.error : result.value.error?.message ?? 'The project could not be read.' }); return }
-      this.patchSsis(id, { loading: undefined, project: { key: projectKey, model }, package: undefined })
+      this.patchSsis(id, { loading: undefined, projectModels: { ...this.get(id)?.ssis?.projectModels, [projectKey]: model } })
     }
     if (!packageName) return
     const packageKey = `${projectKey}\\${packageName}`
-    if (this.get(id)?.ssis?.package?.key === packageKey) return
+    if (this.get(id)?.ssis?.packageModels[packageKey]) return
     this.patchSsis(id, { loading: packageKey, error: undefined })
     const result = await this.call(() => describe({ connectionId, requestId: this.newId(), view: 'package', target: { kind: 'ssisPackage', name: packageName, ssisFolder: folder, ssisProject: project } }))
-    if (!current()) return
+    if (this.disposed || !this.get(id)) return
     const model = result.ok && result.value.model?.view === 'package' ? result.value.model : undefined
-    this.patchSsis(id, model ? { loading: undefined, package: { key: packageKey, model } } : { loading: undefined, error: !result.ok ? result.error : result.value.error?.message ?? 'The package could not be read.' })
+    this.patchSsis(id, model ? { loading: undefined, packageModels: { ...this.get(id)?.ssis?.packageModels, [packageKey]: model } } : { loading: undefined, error: !result.ok ? result.error : result.value.error?.message ?? 'The package could not be read.' })
   }
 
   // --- Reading -------------------------------------------------------------------------------------------------------

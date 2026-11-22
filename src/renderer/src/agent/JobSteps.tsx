@@ -221,8 +221,9 @@ function SsisSection({ state, step, editable, update, service, id }: { readonly 
   const choose = (folder: string, project: string, packageName: string) => write(parsed
     ? { ...parsed, folder, project, package: packageName, ...parsed.folder === folder && parsed.project === project ? {} : { parameters: [], environmentReference: undefined } }
     : newSsisCommand(state.server, folder, project, packageName))
-  const projectModel = parsed && picker?.project?.key === `${parsed.folder}\\${parsed.project}` ? picker.project.model : undefined
-  const packageModel = parsed && picker?.package?.key === `${parsed.folder}\\${parsed.project}\\${parsed.package}` ? picker.package.model : undefined
+  const projectModel = parsed ? picker?.projectModels[`${parsed.folder}\\${parsed.project}`] : undefined
+  const packageModel = parsed ? picker?.packageModels[`${parsed.folder}\\${parsed.project}\\${parsed.package}`] : undefined
+  const openProject = picker?.open ?? (parsed ? `${parsed.folder}\\${parsed.project}` : undefined)
   const rows = parsed && projectModel && packageModel ? ssisParameterRows(parsed, projectModel.parameters, packageModel.parameters) : undefined
   const needle = filter.trim().toLowerCase()
   return <div className="agent-step-ssis">
@@ -239,10 +240,10 @@ function SsisSection({ state, step, editable, update, service, id }: { readonly 
             return <div key={folder} role="treeitem" aria-expanded={!!projects} aria-selected={false}>
               <button type="button" className="agent-step-tree-row" onClick={() => void service.loadSsisProjects(state.id, folder)}><Icon name={projects ? 'chevron-down' : 'chevron-right'} /><Icon name="folder" />{folder}</button>
               {projects && <div role="group">{projects.map(project => {
-                const open = picker?.project?.key === `${folder}\\${project}`
-                const packages = open ? picker!.project!.model.packages.filter(item => !needle || item.name.toLowerCase().includes(needle)) : []
+                const browsed = picker?.projectModels[`${folder}\\${project}`], open = openProject === `${folder}\\${project}` && !!browsed
+                const packages = open ? browsed!.packages.filter(item => !needle || item.name.toLowerCase().includes(needle)) : []
                 return <div key={project} role="treeitem" aria-expanded={open} aria-selected={false}>
-                  <button type="button" className="agent-step-tree-row agent-step-tree-2" onClick={() => void service.loadSsisPackage(state.id, folder, project)}><Icon name={open ? 'chevron-down' : 'chevron-right'} /><Icon name="project" />{project}</button>
+                  <button type="button" className="agent-step-tree-row agent-step-tree-2" onClick={() => void service.loadSsisPackage(state.id, folder, project, undefined, true)}><Icon name={open ? 'chevron-down' : 'chevron-right'} /><Icon name="project" />{project}</button>
                   {open && <div role="group">{packages.map(item => {
                     const selected = parsed?.folder === folder && parsed.project === project && parsed.package === item.name
                     return <div key={item.name} role="treeitem" aria-selected={selected}>
@@ -311,6 +312,12 @@ function StepEditor(props: StepsProps & { readonly step: AgentStepDraft; readonl
   const { state, model, editable, service, step, position, problems } = props
   const id = `agent-step-${state.id}`
   const update = (patch: Partial<AgentStepDraft>) => service.updateStep(state.id, step.key, patch)
+  // An SSIS step shows fields or text as it was when opened (or its type was chosen), not as each keystroke leaves it, so typing never swaps
+  // the editor away; Show as fields switches once the text parses.
+  const ssisAsText = () => step.subsystem === 'SSIS' && !!step.command.trim() && !parseSsisCommand(step.command)
+  const [ssisText, setSsisText] = useState(ssisAsText)
+  const [decided, setDecided] = useState(`${step.key} ${step.subsystem}`)
+  if (decided !== `${step.key} ${step.subsystem}`) { setDecided(`${step.key} ${step.subsystem}`); setSsisText(ssisAsText()) }
   const types = model.subsystems?.length ? model.subsystems : [...mainTypes]
   const more = types.filter(type => !(mainTypes as readonly string[]).includes(type))
   const name = problemText(problems, step.key, 'name'), command = problemText(problems, step.key, 'command')
@@ -357,10 +364,11 @@ function StepEditor(props: StepsProps & { readonly step: AgentStepDraft; readonl
       </div>}
       <RunAs step={step} model={model} editable={editable} problems={problems} update={update} id={`${id}-runas`} />
     </div>
-    {step.subsystem === 'SSIS' && !step.command.trim() || step.subsystem === 'SSIS' && parseSsisCommand(step.command) ? <SsisSection state={state} step={step} editable={editable} update={update} service={service} id={id} /> : <div className="agent-step-command">
+    {step.subsystem === 'SSIS' && !ssisText && (!step.command.trim() || parseSsisCommand(step.command)) ? <SsisSection state={state} step={step} editable={editable} update={update} service={service} id={id} /> : <div className="agent-step-command">
       <div className="agent-step-command-head">
         <span id={`${id}-command-label`}>Command</span>
         {step.subsystem === 'SSIS' && <span className="field-note"><Icon name="info" />{stepText.unmodelled}</span>}
+        {step.subsystem === 'SSIS' && (!step.command.trim() || parseSsisCommand(step.command)) && <button type="button" onClick={() => setSsisText(false)}>Show as fields</button>}
         <span className="agent-step-inline">
           {step.subsystem === 'TSQL' && <button type="button" onClick={() => void service.parseStep(state.id, step.key)} disabled={parse?.running}><Icon name="check" />Parse</button>}
           {step.subsystem === 'TSQL' && <button type="button" onClick={() => service.openStepInQuery(state.id, step.key)}><Icon name="link-external" />Open in query window</button>}

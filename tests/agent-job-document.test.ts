@@ -396,7 +396,7 @@ describe("the job document's Steps page", () => {
     expect(keys(jobDocuments, id)).toEqual(['s1', 's2', 's3'])
     expect(jobDocuments.stepProblems(id)).toEqual([])
   })
-  it("keeps only the latest SSIS package's describe when an earlier reply comes back last", async () => {
+  it("keeps every SSIS describe it read, whichever reply comes back last", async () => {
     const fixture = opened(stepped()), { jobDocuments } = fixture
     const replies: ((value: unknown) => void)[] = []
     const describeSsis = vi.fn(() => new Promise(resolve => { replies.push(resolve) }))
@@ -411,6 +411,9 @@ describe("the job document's Steps page", () => {
     await second
     replies[0]!(project('P1'))
     await first
-    expect(jobDocuments.get(id)?.ssis?.project?.key).toBe('F\\P2')
+    // Each reply fills its own entry, whichever comes back last; browsing opens a project without dropping another's describe.
+    expect(Object.keys(jobDocuments.get(id)?.ssis?.projectModels ?? {}).sort()).toEqual(['F\\P1', 'F\\P2'])
+    void jobDocuments.loadSsisPackage(id, 'F', 'P1', undefined, true)
+    expect(jobDocuments.get(id)?.ssis).toMatchObject({ open: 'F\\P1', projectModels: { 'F\\P2': expect.anything() } })
   })
 })

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { agentJobChangeCount, agentJobProblems, agentJobSave, agentJobSaveProblems, agentJobSaveSchema, initialAgentJobDraft, rebaseAgentJobDraft, type AgentJobDocumentModel } from '../src/shared/actions/agent-job'
+import { agentJobChangeCount, agentJobCompare, agentJobProblems, agentJobSave, agentJobSaveProblems, agentJobSaveSchema, initialAgentJobDraft, rebaseAgentJobDraft, type AgentJobDocumentModel, type AgentJobDraft } from '../src/shared/actions/agent-job'
 import { agentJobSaveCalls, agentLimits, stepFlags } from '../src/shared/agent/catalog'
 import {
   addStep, agentStepProblems, agentStepsSaveProblems, agentStepsSaveSchema, deleteStep, initialStepsDraft, moveStep, newStepDraft, planAgentSteps, stepFlagChoices, stepFlagsWith,
-  stepOptionsSummary, stepTargetShort, stepText, temporaryStepPrefix, undoStepDeletion, withSubsystem, type AgentJobStepRecord, type AgentStepsDraft, type AgentStepsSave, type AgentStepWrite
+  stepOptionsSummary, stepTargetShort, stepText, temporaryStepPrefix, undoStepDeletion, withSubsystem, type AgentJobStepRecord, type AgentStepDraft, type AgentStepsDraft, type AgentStepsSave, type AgentStepWrite
 } from '../src/shared/agent/steps'
 import {
   buildSsisCommand, newSsisCommand, parseSsisCommand, ssisAdvancedSummary, ssisParameterRows, ssisProblems, withSsisParameter
@@ -247,19 +247,56 @@ describe('steps in the job save', () => {
     expect(agentJobSaveSchema.safeParse(save).success).toBe(true)
     expect(agentJobProblems(opened, { ...changed, steps: { ...removed, steps: removed.steps.map(item => ({ ...item, name: 'Same' })) } }).filter(problem => problem.field === 'steps')).toHaveLength(3)
   })
-  it('keeps the user\'s steps over a reload, turning steps that changed under them into new ones', () => {
+  it('rebases the steps by name over a reload: another session\'s renames, deletes, inserts and Start step stand, the user\'s edits land on the step they edited', () => {
     const openedModel = model(), draft = initialAgentJobDraft(openedModel)
-    const mine = { ...draft, steps: moveStep(draft.steps, 's4', 0) }
-    const current = model({ job: { ...openedModel.job!, version: 9 }, steps: [described[0]!, described[1]!, described[2]!, step(4, 'Page the DBA')] })
+    const edited = (patch: Partial<AgentStepDraft>, key = 's1') => ({ ...draft, steps: { ...draft.steps, steps: draft.steps.steps.map(item => item.key === key ? { ...item, ...patch } : item) } })
+    const names = (rebased: AgentJobDraft) => rebased.steps.steps.map(item => [item.name, item.from])
+    const at = (steps: AgentJobStepRecord[], start = 1) => model({ job: { ...openedModel.job!, version: 9, startStepId: start }, steps })
+    // Renamed elsewhere, untouched here: the server's name stands, with no copy of the old step.
+    const renamed = at([described[0]!, step(2, 'Rebuild all'), described[2]!, described[3]!])
+    const mine = edited({ command: 'mine' })
+    expect(names(rebaseAgentJobDraft(openedModel, renamed, mine))).toEqual([['Check integrity', 1], ['Rebuild all', 2], ['Statistics', 3], ['Notify', 4]])
+    expect(agentJobSave(renamed, rebaseAgentJobDraft(openedModel, renamed, mine))!.steps).toEqual({ writes: [expect.objectContaining({ id: 1, command: 'mine' })] })
+    // Deleted elsewhere, untouched here: it stays deleted, and the steps that went to it quit reporting failure as msdb left them.
+    const deleted = at([described[0]!, step(2, 'Rebuild'), step(3, 'Statistics', { onSuccessAction: 1 })])
+    expect(names(rebaseAgentJobDraft(openedModel, deleted, mine))).toEqual([['Check integrity', 1], ['Rebuild', 2], ['Statistics', 3]])
+    // Inserted elsewhere: every step keeps its own content at its new id, the edit lands on Check integrity (now 2), and nothing is duplicated.
+    const inserted = at([step(1, 'Precheck'), step(2, 'Check integrity'), step(3, 'Rebuild', { onFailAction: 4, onFailStepId: 5 }), step(4, 'Statistics', { onSuccessAction: 1, onFailAction: 4, onFailStepId: 5 }), step(5, 'Notify', { subsystem: 'PowerShell', databaseName: '', onSuccessAction: 2 })], 2)
+    const rebased = rebaseAgentJobDraft(openedModel, inserted, mine)
+    expect(names(rebased)).toEqual([['Precheck', 1], ['Check integrity', 2], ['Rebuild', 3], ['Statistics', 4], ['Notify', 5]])
+    expect(stepTargetShort(rebased.steps, rebased.steps.steps[2]!, 'fail')).toBe('Step 5')
+    expect(agentJobSave(inserted, rebased)!.steps).toEqual({ writes: [expect.objectContaining({ id: 2, command: 'mine' })] })
+    // The Start step: the server's (Check integrity, read as 2), since the user did not change it.
+    expect(rebased.steps.steps.find(item => item.key === rebased.steps.startKey)?.name).toBe('Check integrity')
+    // An edited step the job no longer has under its name becomes a new step, never written over another by number.
+    const gone = at([described[0]!, described[2]!, described[3]!].map((item, index) => ({ ...item, id: index + 1 })))
+    expect(names(rebaseAgentJobDraft(openedModel, gone, edited({ command: 'mine' }, 's2')))).toEqual([['Check integrity', 1], ['Rebuild', undefined], ['Statistics', 2], ['Notify', 3]])
+  })
+  it("keeps the server's steps over a reload when the job now has more steps than the describe reads, and never plans over them", () => {
+    const openedModel = model(), draft = initialAgentJobDraft(openedModel)
+    const mine = { ...draft, steps: { ...draft.steps, steps: draft.steps.steps.map(item => item.key === 's1' ? { ...item, command: 'mine' } : item) } }
+    const current = model({ job: { ...openedModel.job!, version: 9 }, stepsTruncated: true })
     const rebased = rebaseAgentJobDraft(openedModel, current, mine)
-    expect(rebased.steps.steps[0]).not.toHaveProperty('from')
-    expect(rebased.steps.steps[1]).toMatchObject({ from: 1 })
-    // Another session's step 4 (renamed under the user) is kept after the user's steps, not deleted.
-    expect(rebased.steps.steps.map(item => [item.name, item.from])).toEqual([['Notify', undefined], ['Check integrity', 1], ['Rebuild', 2], ['Statistics', 3], ['Page the DBA', 4]])
-    const save = agentJobSave(current, rebased)!
-    expect(save.steps?.deletes).toBeUndefined()
-    expect(save.steps?.adds?.map(item => item.id)).toEqual([1])
-    expect(save.steps?.writes?.map(item => item.name)).toEqual(['Notify', 'Check integrity', 'Rebuild', 'Statistics', 'Page the DBA'])
+    expect(rebased.steps.steps[0]?.command).toBe('-- Check integrity')
+    expect(agentJobSave(current, { ...mine, description: 'x' })).not.toHaveProperty('steps')
+  })
+  it('keeps the Start step another session set unless the user changed it, and says what each side changed in the compare', () => {
+    const openedModel = model(), draft = initialAgentJobDraft(openedModel)
+    const current = model({ job: { ...openedModel.job!, version: 9, startStepId: 2 } })
+    const mine = { ...draft, steps: { ...draft.steps, steps: draft.steps.steps.map(item => item.key === 's1' ? { ...item, command: 'mine' } : item) } }
+    const rebased = rebaseAgentJobDraft(openedModel, current, mine)
+    expect(rebased.steps.startKey).toBe('s2')
+    expect(agentJobSave(current, rebased)!.steps?.startStepId).toBeUndefined()
+    expect(rebaseAgentJobDraft(openedModel, current, { ...mine, steps: { ...mine.steps, startKey: 's3' } }).steps.startKey).toBe('s3')
+    const rows = agentJobCompare(openedModel, model({ job: { ...openedModel.job!, version: 9 }, steps: [described[0]!, step(2, 'Rebuild', { command: 'theirs' }), described[2]!, described[3]!] }), mine)
+    expect(rows.find(row => row.field === 'steps')).toMatchObject({ server: 'Edited Rebuild', yours: 'Edited Check integrity' })
+  })
+  it('counts a step deleted and undone as untouched over a reload, so another session\'s edit of a step that went to it stands', () => {
+    const openedModel = model(), draft = initialAgentJobDraft(openedModel)
+    const removed = deleteStep(draft.steps, 's4')!
+    const undone = { ...draft, steps: undoStepDeletion(removed.draft, removed.deletion), description: 'x' }
+    const current = model({ job: { ...openedModel.job!, version: 9 }, steps: [described[0]!, step(2, 'Rebuild', { command: 'theirs', onFailAction: 4, onFailStepId: 4 }), described[2]!, described[3]!] })
+    expect(rebaseAgentJobDraft(openedModel, current, undone).steps.steps[1]).toMatchObject({ command: 'theirs' })
   })
   it("keeps another session's edit of a step the user did not touch, and the user's edit of one they did", () => {
     const openedModel = model(), draft = initialAgentJobDraft(openedModel)

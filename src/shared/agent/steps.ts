@@ -111,8 +111,8 @@ export function newStepKey(steps: readonly AgentStepDraft[]): string {
 }
 /** A unique name for a new step: "Step n", counting up past names in use. */
 export function newStepName(steps: readonly AgentStepDraft[]): string {
-  const names = new Set(steps.map(step => step.name.toLowerCase()))
-  for (let at = steps.length + 1; ; at++) if (!names.has(`step ${at}`)) return `Step ${at}`
+  const names = new Set(steps.map(step => step.name.toUpperCase()))
+  for (let at = steps.length + 1; ; at++) if (!names.has(`STEP ${at}`)) return `Step ${at}`
 }
 /** A new step of `subsystem` as SSMS's New Step opens it (go to the next step on success, quit reporting failure on failure). */
 export function newStepDraft(steps: readonly AgentStepDraft[], subsystem = 'TSQL', databaseName = 'master'): AgentStepDraft {
@@ -458,25 +458,85 @@ export function stepsText(draft: AgentStepsDraft): string {
 export function stepsValue(draft: AgentStepsDraft): string {
   return JSON.stringify([draft.steps.map((step, at) => writeOf(draft, step, at + 1)), draft.startKey ? draft.steps.findIndex(step => step.key === draft.startKey) : -1])
 }
-/** Reload and keep my changes, step by step: a step the user did not touch takes the job's version read now (another session's edit stays),
- *  an edited one keeps the user's, and one whose described id the job no longer has under the same name becomes a new step, so the save
- *  never writes over another session's step by its number. Steps another session added (ids that were not read under that name) are kept,
- *  after the user's; a step the user deleted stays deleted. */
-export function rebaseSteps(opened: readonly AgentJobStepRecord[], current: readonly AgentJobStepRecord[], draft: AgentStepsDraft): AgentStepsDraft {
-  const read = new Map(initialStepsDraft(opened, undefined).steps.map(step => [step.key, step]))
-  const same = (id: number) => { const was = opened.find(item => item.id === id), now = current.find(item => item.id === id); return was && now && was.name === now.name ? now : undefined }
-  const steps: AgentStepDraft[] = draft.steps.map(step => {
-    if (step.from === undefined) return step
-    const now = same(step.from)
-    if (!now) { const { from: _from, ...rest } = step; return rest }
-    return JSON.stringify(step) === JSON.stringify(read.get(step.key)) ? { ...stepDraftOf(now), key: step.key } : step
-  })
-  for (const now of current) {
-    if (same(now.id)) continue
-    const key = steps.some(step => step.key === keyOf(now.id)) ? newStepKey(steps) : keyOf(now.id)
-    steps.push({ ...stepDraftOf(now), key })
+/** A step's content with its go-tos as the names they reach, so the same step compares equal however the draft keys or orders it. */
+function stepContent(draft: AgentStepsDraft, step: AgentStepDraft): string {
+  const name = (key: string | undefined) => key === undefined ? undefined : draft.steps.find(item => item.key === key)?.name ?? key
+  const { key: _key, from: _from, truncated: _truncated, onSuccessTarget, onFailTarget, ...rest } = step
+  const fields: Record<string, unknown> = { ...rest, onSuccessTarget: name(onSuccessTarget), onFailTarget: name(onFailTarget) }
+  return JSON.stringify(Object.keys(fields).sort().map(field => [field, fields[field]]))
+}
+/** Names compare upper-cased, as msdb (and the backend's OrdinalIgnoreCase) treat step names. */
+const foldName = (name: string) => name.trim().toUpperCase()
+
+/**
+ * Reload and keep my changes, step by step. Steps match by name (unique within a job), not by number, since another session may have
+ * renumbered them. A step the user did not touch takes the job's version read now, or goes when the job no longer has it; an edited one keeps
+ * the user's content at its current id, or becomes a new step when the job no longer has it, so the save never writes over another step by its
+ * number. Steps another session added or renamed are kept where the job has them; a step the user deleted stays deleted. The Start step is the job's
+ * now unless the user changed it. Go-tos of the server's steps are mapped to the draft's keys (to a step that is not kept: quit reporting failure).
+ */
+export function rebaseSteps(opened: readonly AgentJobStepRecord[], current: readonly AgentJobStepRecord[], draft: AgentStepsDraft, openedStart?: number, currentStart?: number): AgentStepsDraft {
+  const read = initialStepsDraft(opened, openedStart)
+  const readByKey = new Map(read.steps.map(step => [step.key, step]))
+  const openedById = new Map(opened.map(step => [step.id, step]))
+  const currentByName = new Map(current.map(step => [foldName(step.name), step]))
+  const openedNames = new Set(opened.map(step => foldName(step.name)))
+  const keyOfCurrent = new Map<number, string>()
+  const fromServer = new Set<string>()
+  const steps: AgentStepDraft[] = []
+  for (const step of draft.steps) {
+    if (step.from === undefined) { steps.push(step); continue }
+    const was = openedById.get(step.from), now = was ? currentByName.get(foldName(was.name)) : undefined
+    const before = readByKey.get(step.key)
+    if (before && stepContent(draft, step) === stepContent(read, before)) {
+      if (now) { steps.push({ ...stepDraftOf(now), key: step.key }); keyOfCurrent.set(now.id, step.key); fromServer.add(step.key) }
+      continue
+    }
+    if (now) { steps.push({ ...step, from: now.id }); keyOfCurrent.set(now.id, step.key) }
+    else { const { from: _from, ...rest } = step; steps.push(rest) }
   }
-  return { ...draft, steps }
+  // Each step another session added goes where the job has it: after the step before it there (first when none), so the save does not reorder.
+  for (const now of [...current].sort((x, y) => x.id - y.id)) {
+    if (openedNames.has(foldName(now.name))) continue
+    const key = newStepKey(steps)
+    const before = [...current].filter(item => item.id < now.id && keyOfCurrent.has(item.id)).sort((x, y) => y.id - x.id)[0]
+    const at = before ? steps.findIndex(step => step.key === keyOfCurrent.get(before.id)) + 1 : 0
+    steps.splice(at, 0, { ...stepDraftOf(now), key }); keyOfCurrent.set(now.id, key); fromServer.add(key)
+  }
+  // The server's steps name their go-tos by the job's current ids (`s<id>` from stepDraftOf): map them to the draft's keys.
+  const mapped = steps.map(step => {
+    if (!fromServer.has(step.key)) return step
+    const target = (code: StepAction, key: string | undefined): [StepAction, string | undefined] => {
+      if (code !== 4 || !key) return [code, undefined]
+      const id = describedId(key), to = id === undefined ? undefined : keyOfCurrent.get(id)
+      return to ? [4, to] : id !== undefined && !current.some(item => item.id === id) ? [4, key] : [2, undefined]
+    }
+    const [onSuccess, onSuccessTarget] = target(step.onSuccess, step.onSuccessTarget), [onFail, onFailTarget] = target(step.onFail, step.onFailTarget)
+    const { onSuccessTarget: _s, onFailTarget: _f, ...rest } = step
+    return { ...rest, onSuccess, onFail, ...onSuccessTarget ? { onSuccessTarget } : {}, ...onFailTarget ? { onFailTarget } : {} } as AgentStepDraft
+  })
+  const keys = new Set(mapped.map(step => step.key))
+  const serverStart = currentStart === undefined ? undefined : keyOfCurrent.get(currentStart)
+  const startKey = draft.startKey !== read.startKey && draft.startKey && keys.has(draft.startKey) ? draft.startKey : serverStart ?? mapped[0]?.key
+  return { steps: mapped, ...startKey ? { startKey } : {} }
+}
+
+/** What changed in the steps from `base` to `next`, by name, for the STALE compare: "Added Notify · edited Extract · reordered · Start step Load". */
+export function stepsChangesText(base: AgentStepsDraft, next: AgentStepsDraft): string {
+  const byName = (draft: AgentStepsDraft) => new Map(draft.steps.map(step => [foldName(step.name), step]))
+  const was = byName(base), now = byName(next)
+  const added = next.steps.filter(step => !was.has(foldName(step.name))).map(step => step.name)
+  const deleted = base.steps.filter(step => !now.has(foldName(step.name))).map(step => step.name)
+  const edited = next.steps.filter(step => { const before = was.get(foldName(step.name)); return before && stepContent(next, step) !== stepContent(base, before) }).map(step => step.name)
+  const common = (draft: AgentStepsDraft, other: Map<string, AgentStepDraft>) => draft.steps.filter(step => other.has(foldName(step.name))).map(step => foldName(step.name)).join('\n')
+  const startName = (draft: AgentStepsDraft) => draft.steps.find(step => step.key === draft.startKey)?.name
+  const parts = [
+    added.length ? `added ${added.join(', ')}` : '', deleted.length ? `deleted ${deleted.join(', ')}` : '', edited.length ? `edited ${edited.join(', ')}` : '',
+    common(base, now) !== common(next, was) ? 'reordered' : '', startName(base) !== startName(next) && startName(next) ? `Start step ${startName(next)}` : ''
+  ].filter(Boolean)
+  if (!parts.length) return stepsText(next)
+  const text = parts.join(' · ')
+  return text[0]!.toUpperCase() + text.slice(1)
 }
 
 // --- Bounds (zod here, C# in ActionService.ValidateAgentJob) -------------------------------------------------------------
@@ -529,14 +589,14 @@ export function agentStepsSaveProblems(save: AgentStepsSave, create: boolean): s
     const final = temporary.length + adds.length
     if (adds.some(item => item.id > final)) problems.push('A new step is inserted past the last step.')
     if (writes.length !== final || !writes.every((write, at) => write.id === at + 1)) problems.push('After renumbering, every step is written once, in order.')
-    const names = [...temporary, ...adds].map(item => item.name)
+    const names = [...temporary, ...adds].map(item => item.name.toUpperCase())
     if (new Set(names).size !== names.length) problems.push('A temporary name is used twice.')
     if (final > 0 && save.startStepId === undefined) problems.push('After renumbering, the Start step is set.')
   } else {
     if (new Set(writes.map(write => write.id)).size !== writes.length) problems.push('A step is written twice.')
   }
   if (create || deletes.length || temporary.length || adds.length) {
-    const names = writes.map(write => write.name.toLowerCase())
+    const names = writes.map(write => write.name.toUpperCase())
     if (new Set(names).size !== names.length) problems.push('Two steps have the same name.')
   }
   const count = create || deletes.length || temporary.length || adds.length ? writes.length : agentLimits.stepsPerJob

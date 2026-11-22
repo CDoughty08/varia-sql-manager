@@ -97,7 +97,9 @@ a later lane, behind the same gate until 0.11.0.
   last step, a proxy not granted to the type) and warn on the rest. The describe reads at most 50 steps and each command up to
   100,000 characters (1,000,000 for all of them): a longer job lists its first 50 steps read-only, and a cut command only warns
   until the steps are part of a save, which it then blocks, so Varia never writes a cut command or a renumbering it could not see.
-  Reload and keep my changes keeps another session's edits to steps you did not touch and the steps it added.
+  Reload and keep my changes matches steps by name: steps you did not touch take the job's version now (another session's renames,
+  deletes, inserts and Start step stand), your edits land on the step you edited at its current number, and the compare's Steps row
+  says what each side added, deleted, edited or reordered.
   Another owner's job below sysadmin opens read-only with the reason. Edits mark the tab dirty, Save counts them ("Save · 2
   changes"), closing asks to save, and Problems warn and only block what msdb would refuse (a missing name, owner or operator).
   **Save** sends only what changed with the version and modified date the describe read, as one batch in one transaction:
