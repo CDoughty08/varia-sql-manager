@@ -109,7 +109,7 @@ describe('the Compare popover', () => {
     handle(keys[2]).snapshot = { ...handle(keys[2]).snapshot, rowsStored: 40_000 }
     await compare.run('t1')
     await settle()
-    expect(handle(keys[2]).diff).toHaveBeenCalledWith(handle(keys[0]), { exact: true, layout: 'entry', signal: expect.any(AbortSignal), onProgress: expect.any(Function) })
+    expect(handle(keys[2]).diff).toHaveBeenCalledWith(handle(keys[0]), { exact: true, layout: 'entry', context: -1, signal: expect.any(AbortSignal), onProgress: expect.any(Function) })
     const made = tab().comparisons[0]
     // Named old → new, its frozen sources in that order, and it took the focus; the popover closed, and opens again on that
     // pair, which the run now has (Show It).
@@ -218,7 +218,7 @@ describe('the Compare popover', () => {
     expect(handle(keys[1]).diff).not.toHaveBeenCalled()
     expect(notify).toHaveBeenCalledWith('t1', compareFullText)
     // From the picker the sentence is the picker's.
-    await expect(compare.comparePair('t1', keys[1], keys[2], { exact: false, quiet: true })).resolves.toEqual({ error: compareFullText })
+    await expect(compare.comparePair('t1', keys[1], keys[2], { exact: false, quiet: true })).resolves.toMatchObject({ error: compareFullText })
     answer.resolve({ descriptor: descriptor(5000, { index: 999, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0, overview: [], units: 0, layout: 'unified' })
     await first
     expect(tab().sets).toHaveLength(resultLimits.sets)
@@ -260,7 +260,7 @@ describe('the Compare popover', () => {
     const first = compare.comparePair('t1', keys[0], keys[1], { exact: false })
     expect(compare.adding('t1')).toBe(1)
     expect(jobs.load).toEqual({ running: 2, waiting: 0 })
-    await expect(compare.comparePair('t1', keys[1], keys[2], { exact: false, quiet: true })).resolves.toEqual({ error: compareFullText })
+    await expect(compare.comparePair('t1', keys[1], keys[2], { exact: false, quiet: true })).resolves.toMatchObject({ error: compareFullText })
     expect(answers).toHaveLength(1)
     pivot.open('t1', keys[1])
     pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })

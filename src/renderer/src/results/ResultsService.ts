@@ -1364,6 +1364,23 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** Whether the grid has rows selected to keep (more than the filter takes still runs the command, which then says so). */
   canKeepSelectedRows(tabId: string, key: EntryKey): boolean { return !!this.keepTarget(tabId, key) }
 
+  /**
+   * A comparison's chips (D11): its kind filter keeps exactly `kinds`, read from the change index, before its other
+   * filters; none removes it. Its sort keys and other filters stay. False when nothing was applied (not a comparison, or
+   * a sort or filter of it still being built).
+   */
+  setKindFilter(tabId: string, key: EntryKey, kinds: readonly DiffKindName[]): boolean {
+    const run = this.runs.get(tabId), set = this.entry(run, key)
+    if (!run || !set || set.descriptor.kind !== 'diff' || !this.filterable(set) || this.heldOff(tabId, set.key)) return false
+    const filters = run.sorts.get(set.key)?.filters ?? [], others = filters.filter(item => item.filter.op !== 'kind')
+    if (kinds.length === 0) {
+      if (others.length !== filters.length) this.applyView(tabId, run, set.key, run.sorts.get(set.key)?.keys ?? [], others, 'filter')
+      return true
+    }
+    const filter: ViewFilter = { op: 'kind', kinds: [...kinds] }
+    return this.addFilter(tabId, run, set.key, others, { filter, label: kindLabel(kinds), named: true }, 0)
+  }
+
   /** Adds a filter after the grid's others, or at `at` among them (where the one it replaces stood, since filters apply in
    *  order and a duplicates filter after it counts only the rows it keeps); a grid that has as many as a view takes says
    *  so and keeps them. */

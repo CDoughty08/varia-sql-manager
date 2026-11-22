@@ -421,6 +421,8 @@ describe('menu state', () => {
       'output.transpose', 'output.transposeSelectedRows', 'output.transposeWithHeaders', 'output.transposeChooseHeaders',
       // A windowed BigQuery result's strip offers Load into Memory, also in the results toolbar's ⋯ menu.
       'output.loadIntoMemory',
+      // A comparison's toolbar controls, also in the results toolbar's More results tools.
+      'output.compareMatch', 'output.compareChangesOnly', 'output.compareOneRow', 'output.compareExactText', 'output.compareSwapSides', 'output.compareGoToOld', 'output.compareGoToNew',
       // Stepping through the results' tabs: keys, the tabs' own arrow keys and the palette; Window › Go to Result… lists them.
       'output.nextResult', 'output.previousResult', 'output.nextResultView', 'output.previousResultView',
       // Browser tab keys and the palette: Go to Result 1 to 8 and the last, and the same for query tabs.
@@ -433,7 +435,7 @@ describe('menu state', () => {
       const placed = commandDescriptor(id).menus?.some(placement => nativeMenuIds.includes(placement.menu)) ?? false
       expect(menuCommandIds.includes(id), id).toBe(placed && !commandDescriptor(id).role)
     }
-    expect(toggleCommandIds).toEqual(['view.toggleResultsPane', 'query.includeActualPlan', 'query.includeLivePlan', 'query.includeClientStatistics', 'explorer.groupBySchema', 'ssis.pauseOperations', 'editor.toggleWordWrap', 'editor.toggleOvertype', 'editor.toggleWhitespace', 'editor.toggleLineNumbers', 'activity.togglePause', 'activity.toggleSplit', 'output.showSpaces', 'output.showAllWhitespace', 'output.sortTextByChars', 'output.sortTextByBytes', 'output.transpose', 'output.toggleColumnProfile', 'output.toggleProfileSelectedColumns', 'output.toggleResultsTabs', 'output.toggleRowSize', 'window.togglePanelTabs'])
+    expect(toggleCommandIds).toEqual(['view.toggleResultsPane', 'query.includeActualPlan', 'query.includeLivePlan', 'query.includeClientStatistics', 'explorer.groupBySchema', 'ssis.pauseOperations', 'editor.toggleWordWrap', 'editor.toggleOvertype', 'editor.toggleWhitespace', 'editor.toggleLineNumbers', 'activity.togglePause', 'activity.toggleSplit', 'output.showSpaces', 'output.showAllWhitespace', 'output.sortTextByChars', 'output.sortTextByBytes', 'output.transpose', 'output.compareChangesOnly', 'output.compareOneRow', 'output.compareExactText', 'output.toggleColumnProfile', 'output.toggleProfileSelectedColumns', 'output.toggleResultsTabs', 'output.toggleRowSize', 'window.togglePanelTabs'])
     // Main checks only toggles the schema names.
     expect(menuStateSchema.safeParse({ disabled: [], checked: ['editor.toggleWhitespace', 'editor.toggleLineNumbers'] }).success).toBe(true)
   })
