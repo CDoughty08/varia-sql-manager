@@ -340,8 +340,8 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
   through the block cache or the store: through Storage Read when it qualifies (each stream in turn, a transient stream
   fault resumed at its offset without repeating rows), else `tabledata.list` pages, each page reserved from the result
   budget while it is written. It has the usual progress and Cancel, so the rows touch disk only in the file the user chose
-  (written to a temporary file and renamed). A transposed Save reads its rows as Copy does. An expired table answers
-  `REMOTE_EXPIRED` and leaves no file. A sorted or filtered view's Save waits for windowed sort and filter.
+  (written to a temporary file and renamed). A transposed Save reads its rows as Copy does, holding them in result memory (at most 128 MB). An expired table answers
+  `REMOTE_EXPIRED` and leaves no file. Save reads the table itself, so it carries on through a load or Close Results. A sorted or filtered view's Save waits for windowed sort and filter.
 - **Expiry.** A destination table lasts about 24 hours: once it has expired, a read answers with the cached rows from the
   start of its window, and one that starts on rows not cached answers `REMOTE_EXPIRED`. The grid keeps the rows it has, and
   its strip says BigQuery no longer keeps the result and offers Re-run…, which runs the tab's query again through Execute
@@ -481,7 +481,7 @@ expires, snapshot time), in UTC and binary units. Empty facts are left out and v
 | `RESULT_TOO_LARGE` | `responseTooLarge` | Over BigQuery's 10 GB result limit: filter or aggregate |
 | `COST_CAP` | `bytesBilledLimitExceeded` | Names the cap the job carried (the connection's own, else Options') and Google's figure, in bytes alone under Bytes only; raise the cap or read less |
 | `CANCELLED` | `stopped` | The job was cancelled |
-| `REMOTE_RESULT` | Sort, filter, search, profiles, distinct values, pivots, row identities, comparisons, Copy or Save of a windowed result | "This result is windowed in BigQuery: its rows are not in memory, so this is not available for it yet." |
+| `REMOTE_RESULT` | Sort, filter, search, profiles, distinct values, pivots, row identities or comparisons of a windowed result | "This result is windowed in BigQuery: its rows are not in memory, so this is not available for it yet." |
 | `REMOTE_EXPIRED` | Rows of a windowed result not cached, or a load into memory, once BigQuery's temporary result table expired (about 24 hours) | "BigQuery no longer has this result…": run the query again |
 | `BUSY` | A load (`results.remoteQuery`) while the query that made the result still runs, or while another result of that query loads | Refused until that query or load has finished |
 | `ROW_ACCESS` | Preview Rows on a table with row access policies | Use Script As › SELECT to query it (billed) |
@@ -518,7 +518,8 @@ and TIME columns, writes BYTES base64-encoded twice and exits on ARRAY columns; 
   the row limit and budget, resume from an offset, failures, Stop, and a local proxy that must receive the channel's
   CONNECT. Its Residence part covers the decision and both settings, the block cache (sizes, LRU, budget, lanes,
   read-ahead per viewer, a jump, waits, expiry, rate limits), every reader's `REMOTE_RESULT`, the switch to windowed on
-  a misestimate through REST and Arrow, and Load into memory with its refusal and Stop. `tests/bigquery-remote-results.test.ts`,
+  a misestimate through REST and Arrow, Load into memory with its refusal and Stop, and Copy and Save (the Copy limit,
+  transposed rows across blocks, expiry, release, Save through Storage Read and REST with Maximum rows and a resumed stream). `tests/bigquery-remote-results.test.ts`,
   `tests/results-port.test.ts` and `tests/result-client.test.ts` cover main's and the renderer's side.
   `tests/bigquery-credentials.test.ts`, `tests/bigquery-connection-store.test.ts` and
   `tests/bigquery-connection-open.test.ts` cover main's side; `tests/bigquery-connect-form.test.ts`,

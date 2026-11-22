@@ -57,9 +57,11 @@ const lostText = 'These results are no longer available because the SQL backend 
 const incompleteText = 'This result is incomplete because an error, cancellation, or timeout stopped it. See Messages.'
 export const windowedText = 'This result is windowed in BigQuery: rows are read as you scroll. Load it into memory to sort, filter, search or pivot it.'
 /** A load into memory's strip: how many rows it has read of how many, or that it is stopping. */
-export function loadingText(loading: string, snapshot: { rowsAvailable: number; rowsExpected?: number; rowsTotal?: number }): string | undefined {
+export function loadingText(loading: string, snapshot: { rowsAvailable: number; rowsExpected?: number; rowsTotal?: number; residence?: string }): string | undefined {
   if (!loading) return undefined
   if (loading === 'stopping') return 'Stopping the load: the result stays windowed in BigQuery.'
+  // Until the result switches (and once it has switched back, refused), its rows are not the load's to count.
+  if (snapshot.residence !== 'memory') return 'Loading into memory…'
   const total = snapshot.rowsExpected ?? snapshot.rowsTotal
   return total ? `Loading into memory: ${formatCount(snapshot.rowsAvailable)} of ${formatCount(total)} rows.` : `Loading into memory: ${formatCount(snapshot.rowsAvailable)} rows.`
 }
@@ -290,7 +292,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
     : undefined
   const action = stop ?? load
   // An expired windowed result offers Re-run: Execute for its tab, which estimates the query and asks as any run does.
-  const rerun = snapshot.residence === 'remote' ? { label: 'Re-run…', icon: commandDescriptor('query.execute').icon, title: withKey('Run the query again: Execute estimates what it processes first', executeKey), keys: executeKey?.aria,
+  const rerun = snapshot.residence === 'remote' && !bare ? { label: 'Re-run…', icon: commandDescriptor('query.execute').icon, title: withKey('Run the query again: Execute estimates what it processes first', executeKey), keys: executeKey?.aria,
     run: () => { if (documents.getSnapshot().activeId === tabId) void commands.execute('query.execute', undefined, 'toolbar') } } : undefined
   // The entry's key names the grid for commands and menus; the generation and result id say which stored result it showed
   // when a target was read from it, so a target read before a re-run is told from the new one.

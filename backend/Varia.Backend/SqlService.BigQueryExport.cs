@@ -41,6 +41,8 @@ internal sealed partial class SqlService
     {
         RequestException request => request,
         RemoteExpiredException => Expired(),
+        // The connection closed under the read (its clients disposed), as the REST path says.
+        ObjectDisposedException => new RequestException("NOT_CONNECTED", "The connection was closed."),
         _ when NotFound(error) => Expired(),
         Grpc.Core.RpcException { StatusCode: Grpc.Core.StatusCode.NotFound } => Expired(),
         Grpc.Core.RpcException rpc => BigQueryService.ReadFailure(rpc, project),

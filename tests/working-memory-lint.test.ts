@@ -208,6 +208,9 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   // ...and Save Results As, which writes a windowed result's pages to the file as they come (SqlService.BigQueryExport.cs).
   expect(uses(/\bTableRowsAsync\b/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'SqlService.BigQueryExport.cs', 'SqlService.BigQueryResidence.cs'])
   expect(count(exporting, /\bbigQuery\.TableRowsAsync\(/g)).toBe(1)
+  // ...and one Storage Read session, read stream by stream: the allowlists name the file, these pin its calls.
+  expect(count(exporting, /\bOpenReadSessionAsync\(/g)).toBe(1)
+  expect(count(exporting, /\bReadRowsAsync\(/g)).toBe(1)
   const delegate = residence.slice(residence.indexOf('private RemoteFetch BigQueryFetch('))
   expect(delegate.slice(0, delegate.indexOf('\n    };')).includes('bigQuery.TableRowsAsync(')).toBe(true)
   // Each page it reads is written into the block's writer and disposed there: none is kept for a later block, and the

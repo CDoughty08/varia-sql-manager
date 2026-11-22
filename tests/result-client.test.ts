@@ -322,6 +322,12 @@ describe('ResultClient', () => {
     await settle()
     expect(handle.getSnapshot().rowsExpected).toBeUndefined()
     expect(drawnRowCount(handle.getSnapshot())).toBe(3000)
+    // A load refused part way switches back to windowed: nothing is expected of it any more.
+    worker().toWorker({ t: 'query', queryId: 'query-3', event: { type: 'resultSet.residence', descriptor: { ...windowed, revision: 3, residence: 'memory', rowsRead: 0, rowsAvailable: 0, state: 'open' } } })
+    worker().toWorker({ t: 'query', queryId: 'query-3', event: { type: 'resultSet.residence', descriptor: { ...windowed, revision: 4 } } })
+    await settle()
+    expect(handle.getSnapshot()).toMatchObject({ residence: 'remote', revision: 4, rowsAvailable: 5000 })
+    expect(handle.getSnapshot().rowsExpected).toBeUndefined()
   })
 
   it('keeps no expected rows when a result switches from memory to windowed', async () => {

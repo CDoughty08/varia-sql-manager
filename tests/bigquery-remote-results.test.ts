@@ -199,7 +199,7 @@ describe('the user-facing text about windowed results', () => {
     const remoteQuery = ipc.slice(start, ipc.indexOf('\n- ', start + 3))
     expect(remoteQuery).toMatch(/`RESULT_RELEASED`/)
     expect(bigquery.slice(bigquery.indexOf('- **Load into memory.**'), bigquery.indexOf('- **What waits.**'))).toMatch(/Closing the result stops the load/)
-    // No renderer command loads a windowed result yet: the docs must not tell the user to.
+    // While no renderer command loads a windowed result, the docs must not tell the user to (Load into memory now does).
     const renderer = join(__dirname, '..', 'src', 'renderer', 'src')
     const sources = (readdirSync(renderer, { recursive: true }) as string[]).filter(name => /\.tsx?$/.test(name))
     // A real call on a code line: a comment, or a wrapper's own declaration, does not turn the gate off.

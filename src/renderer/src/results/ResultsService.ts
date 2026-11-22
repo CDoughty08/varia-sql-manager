@@ -784,7 +784,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     try {
       const params: ResultsRemoteQueryParams = { queryId, generation, resultId, kind: 'load' }
       const answer = await this.api.remoteQuery(params)
-      if (this.runs.get(tabId) !== run || this.disposed) return undefined
+      // The run replaced, or this result closed (Close Results, its caption's close), stopped the load: the user's own
+      // close is not reported as its failure.
+      if (this.runs.get(tabId) !== run || run.entries.get(key) !== set || this.disposed) return undefined
       if (answer.ok) this.loaded(tabId, run, answer.value)
       else refusal = `Could not load the result into memory: ${answer.error}`
     } catch (error) {
@@ -794,7 +796,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       if (run.loads.get(key) === load) { const loads = new Map(run.loads); loads.delete(key); run.loads = loads }
       if (this.runs.get(tabId) === run) this.schedule(tabId)
     }
-    if (refusal && this.runs.get(tabId) === run) {
+    if (refusal && this.runs.get(tabId) === run && run.entries.get(key) === set) {
       this.addMessage(tabId, refusal, 'error')
       this.announce(tabId, refusal)
     }

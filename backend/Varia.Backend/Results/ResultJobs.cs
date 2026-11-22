@@ -219,14 +219,14 @@ internal sealed class ResultJobs(ResultStore store)
             var plans = args.Parts.Select(part => Resolve(part, set.Columns, available)).ToList();
             var eolBytes = args.Eol == "crlf" ? 2 : 1;
             // Nothing is read of a windowed selection the limit refuses anyway: its rows' separators alone pass it.
-            if (remote is not null && CopyFloor(plans, args.Transposed, eolBytes) is var floor && floor > args.MaxBytes) throw CopyTooLarge(floor, args.MaxBytes);
-            var fetched = remote is not null && args.Transposed ? await TurnedRowsAsync(remote, set, plans, context.Token) : null;
-            using var turner = args.Transposed ? new Turner(source, args.HeaderColumn, args.Headers, context.Token, fetched) : null;
+            if (remote is not null && CopyFloor(plans, args.Transposed, eolBytes) is var floor && floor > args.MaxBytes) throw CopyTooLarge(floor, args.MaxBytes, exact: false);
+            using var fetched = remote is not null && args.Transposed ? await TurnedRowsAsync(remote, set, plans, save: false, context.Token) : null;
+            using var turner = args.Transposed ? new Turner(source, args.HeaderColumn, args.Headers, context.Token, fetched?.Pages) : null;
             var turned = turner is null ? [] : plans.Select(turner.Plan).ToList();
             // A windowed selection's text is measured as it is written (its rows are read once): past the limit, it stops
             // before the chunk that passes it is sent.
             var estimate = turner is not null ? turned.Sum(plan => turner.Estimate(plan, args.Headers, eolBytes)) : remote is null ? Estimate(source, plans, args.Headers, eolBytes) : 0;
-            if (estimate > args.MaxBytes) throw CopyTooLarge(estimate, args.MaxBytes);
+            if (estimate > args.MaxBytes) throw CopyTooLarge(estimate, args.MaxBytes, exact: true);
             var output = new ChunkedBuffer();
             var writer = new ResultTextWriter(output, TextOptions.Copy(args.Headers, args.Eol == "crlf"), set.Columns);
             // Transposed, progress counts lines (source columns): no source row is finished before the last line.
@@ -261,8 +261,10 @@ internal sealed class ResultJobs(ResultStore store)
         finally { set.ReleaseLease(); }
     }
 
-    private static RequestException CopyTooLarge(long bytes, long limit) =>
-        new("TOO_LARGE", "The selection is too large to copy (" + (bytes > limit ? "more than " + Size(limit) : Size(bytes)) + "; the limit is " + Size(limit) + "). Use Save Results As instead.");
+    // `exact`: the selection's whole size is known (the estimate of rows in memory); otherwise `bytes` is only how far the
+    // text got before it passed the limit.
+    private static RequestException CopyTooLarge(long bytes, long limit, bool exact = false) =>
+        new("TOO_LARGE", "The selection is too large to copy (" + (exact ? Size(bytes) : "more than " + Size(limit)) + "; the limit is " + Size(limit) + "). Use Save Results As instead.");
 
     private static RequestException ViewGone() => new("VIEW_NOT_FOUND", "This sorted view was closed. Sort the results again.");
 
@@ -276,14 +278,16 @@ internal sealed class ResultJobs(ResultStore store)
             if (plan.Columns.Length == 0) continue;
             var rows = transposed ? plan.Rows.Sum(range => Math.Max(0, Math.Min(range.Last, ResultTextWriter.MaxTransposedRows - 1) - range.First + 1))
                 : plan.Rows.Sum(range => range.Last - range.First + 1);
-            floor += transposed ? plan.Columns.Length * (rows + eolBytes) : rows * (plan.Columns.Length - 1 + eolBytes);
+            // A line of n fields has n - 1 separators (a transposed line's name field may be off), and the last line no end.
+            floor += transposed ? plan.Columns.Length * (rows - 1 + eolBytes) : rows * (plan.Columns.Length - 1 + eolBytes);
         }
-        return floor;
+        return Math.Max(0, floor - eolBytes);
     }
 
-    /// <summary>A job reads a windowed result's blocks as this viewer, so its read-ahead runs in the direction it writes,
-    /// apart from every grid's (the renderer's viewers are 31-bit).</summary>
-    internal const uint JobViewer = 0x8000_0001;
+    /// <summary>Each job reads a windowed result's blocks as a viewer of its own, so its read-ahead runs in the direction it
+    /// writes, apart from every grid's (the renderer's viewers are 31-bit) and other jobs'; it is forgotten when the job ends.</summary>
+    private static int jobViewers;
+    private static uint NextJobViewer() => 0x8000_0000u | ((uint)Interlocked.Increment(ref jobViewers) & 0x7FFF_FFFFu);
 
     /// <summary>How long one read of a windowed result's blocks waits before the job asks again (within its own deadline).</summary>
     internal TimeSpan RemoteWait { get; init; } = TimeSpan.FromSeconds(20);
@@ -299,11 +303,18 @@ internal sealed class ResultJobs(ResultStore store)
     /// copy that looks whole. The table gone is REMOTE_EXPIRED, and the engine maps its other failures.</summary>
     private async Task ReadRemotePagesAsync(RemoteResult remote, ResultSetBuffer set, long first, long last, CancellationToken token, Func<RemotePage, long, Task> each)
     {
+        var viewer = NextJobViewer();
+        try { await ReadRemotePagesAsync(remote, set, first, last, viewer, token, each); }
+        finally { remote.Forget(viewer); }
+    }
+
+    private async Task ReadRemotePagesAsync(RemoteResult remote, ResultSetBuffer set, long first, long last, uint viewer, CancellationToken token, Func<RemotePage, long, Task> each)
+    {
         for (var row = first; row <= last;)
         {
             var bodies = new List<RemotePage>();
             long next;
-            try { next = await remote.ReadPagesAsync(row, (int)Math.Min(last - row + 1, remote.BlockRows), JobViewer, page => { bodies.Add(page); return ValueTask.CompletedTask; }, RemoteWait, token); }
+            try { next = await remote.ReadPagesAsync(row, (int)Math.Min(last - row + 1, remote.BlockRows), viewer, page => { bodies.Add(page); return ValueTask.CompletedTask; }, RemoteWait, token); }
             catch (RemoteExpiredException) { throw SqlService.Expired(); }
             catch (Exception error) when (error is not (RequestException or OperationCanceledException))
             {
@@ -342,27 +353,59 @@ internal sealed class ResultJobs(ResultStore store)
     }
 
     /// <summary>The rows a transposed job of a windowed result writes, read through its block cache into pages kept for the
-    /// job (the first <see cref="ResultTextWriter.MaxTransposedRows"/> at most, from the first row asked).</summary>
-    private async Task<StoredPage[]> TurnedRowsAsync(RemoteResult remote, ResultSetBuffer set, List<Plan> plans, CancellationToken token)
+    /// job (the first <see cref="ResultTextWriter.MaxTransposedRows"/> at most, from the first row asked).
+    /// The pages are working memory reserved from the result's budget (the cache may evict its own copies meanwhile), given
+    /// back when the job disposes them.</summary>
+    private async Task<TurnedRows> TurnedRowsAsync(RemoteResult remote, ResultSetBuffer set, List<Plan> plans, bool save, CancellationToken token)
     {
         var ranges = plans.SelectMany(plan => plan.Rows).Where(range => range.First < ResultTextWriter.MaxTransposedRows).ToList();
-        if (ranges.Count == 0) return [];
+        var rows = new TurnedRows(set);
+        if (ranges.Count == 0) return rows;
         var first = ranges.Min(range => range.First);
         var last = Math.Min(ranges.Max(range => range.Last), ResultTextWriter.MaxTransposedRows - 1);
         var pages = new List<StoredPage>();
-        long held = 0;
-        await ReadRemotePagesAsync(remote, set, first, last, token, (page, _) =>
+        try
         {
-            // A page that continues the rows kept: a later read answers from where an earlier one stopped, so it may repeat one.
-            if (pages.Count == 0 || page.FirstRow >= pages[^1].FirstRow + pages[^1].Rows)
+            await ReadRemotePagesAsync(remote, set, first, last, token, (page, _) =>
             {
-                held += page.Cost;
-                if (held > MaxTurnedBytes) throw CopyTooLarge(held, MaxTurnedBytes);
-                pages.Add(new StoredPage(page.FirstRow, page.Rows, page.Body, page.Lengths));
-            }
-            return Task.CompletedTask;
-        });
-        return [.. pages];
+                // A page that continues the rows kept: a later read answers from where an earlier one stopped, so it may repeat one.
+                var end = pages.Count == 0 ? -1 : pages[^1].FirstRow + pages[^1].Rows;
+                // One that overlaps the kept rows and runs past them (a block fetched again, cut differently) cannot be kept
+                // without repeating rows, nor skipped without losing some.
+                if (page.FirstRow < end && page.FirstRow + page.Rows > end)
+                    throw new RequestException("BACKEND_ERROR", "The rows changed shape while they were read. Try again.");
+                if (pages.Count == 0 || page.FirstRow >= end)
+                {
+                    if (rows.Reserved + page.Cost > MaxTurnedBytes)
+                        throw save ? new RequestException("TOO_LARGE", "These rows are too large to save transposed (more than " + Size(MaxTurnedBytes) + "). Save them without Transpose instead.")
+                            : CopyTooLarge(rows.Reserved + page.Cost, MaxTurnedBytes);
+                    if (!set.TryReserveWork(page.Cost))
+                        throw new RequestException("TOO_LARGE", "There is not enough result memory to turn these rows. Close other results to free memory, then try again.");
+                    rows.Reserved += page.Cost;
+                    pages.Add(new StoredPage(page.FirstRow, page.Rows, page.Body, page.Lengths));
+                }
+                return Task.CompletedTask;
+            });
+        }
+        catch
+        {
+            rows.Dispose();
+            throw;
+        }
+        rows.Pages = [.. pages];
+        return rows;
+    }
+
+    /// <summary>A transposed windowed job's pages and the working memory reserved for them, given back on dispose.</summary>
+    private sealed class TurnedRows(ResultSetBuffer set) : IDisposable
+    {
+        public StoredPage[] Pages { get; set; } = [];
+        public long Reserved { get; set; }
+        public void Dispose()
+        {
+            set.ReturnWork(Reserved);
+            Reserved = 0;
+        }
     }
 
     public async Task<ResultsJobResult> ExportAsync(ResultsExportArgs args, RequestContext? context)
@@ -390,8 +433,8 @@ internal sealed class ResultJobs(ResultStore store)
             var token = context?.Token ?? CancellationToken.None;
             var available = remote?.Rows ?? source.Available;
             // Transposed, the rows a transposed grid draws (the first MaxTransposedRows), read through the cache first.
-            var fetched = remote is not null && args.Transposed
-                ? await TurnedRowsAsync(remote, set, [new Plan(available > 0 ? [(0, available - 1)] : [], SavedColumns(set))], token) : null;
+            using var fetched = remote is not null && args.Transposed
+                ? await TurnedRowsAsync(remote, set, [new Plan(available > 0 ? [(0, available - 1)] : [], SavedColumns(set))], save: true, token) : null;
             var directory = Path.GetDirectoryName(args.Path);
             if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory)) throw Failed("NOT_FOUND");
             if (Directory.Exists(args.Path)) throw Failed("IS_DIRECTORY");
@@ -402,7 +445,7 @@ internal sealed class ResultJobs(ResultStore store)
             int[] all = SavedColumns(set);
             // A JSON object always names its column and its fields; a line without headers has only its rows' values.
             var named = args.Headers || format == TextFormat.Json;
-            using var turner = args.Transposed ? new Turner(source, args.HeaderColumn, named, token, fetched) : null;
+            using var turner = args.Transposed ? new Turner(source, args.HeaderColumn, named, token, fetched?.Pages) : null;
             var turned = turner?.Plan(new Plan(available > 0 ? [(0, available - 1)] : [], all));
             var progress = new Progress(context, turned is null ? export?.Rows ?? available : all.Length, ProgressInterval);
             // A file the user chose to replace keeps its permissions: a private (0600) results file must not come back

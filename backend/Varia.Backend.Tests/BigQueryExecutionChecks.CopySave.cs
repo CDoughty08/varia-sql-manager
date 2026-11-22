@@ -111,6 +111,24 @@ internal static partial class BigQueryExecutionChecks
             var (code, _, _, message, _) = await copying;
             check(code == "RESULT_RELEASED", $"a windowed result closed while Copy reads it answers RESULT_RELEASED: {code} {message}");
         }
+        using (var harness = new Harness(Lines(3000)))
+        {
+            await harness.ConnectAsync();
+            var (_, result, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = result!.ResultSets.Single().ResultId;
+            var remote = harness.Service.Results.Find(id)!.Remote!;
+            var viewers = remote.ViewerCount;
+            // Warm the cache with every row first, so what the transposed copy leaves behind is only what it kept itself.
+            var (code, _, _, message, _) = await Copy(harness, CopyRequest(id, 0, 2999, 1, 1L << 20));
+            var warm = harness.Service.Results.UsedBytes;
+            check(code == "ok" && remote.ViewerCount == viewers, $"a Copy's own viewer is forgotten once it ends, so its last range keeps no blocks: {code} {message} {remote.ViewerCount - viewers}");
+            (code, var text, var copied, message, _) = await Copy(harness, CopyRequest(id, 0, 2999, 1, 1L << 20, transposed: true));
+            var lines = text.Split('\n');
+            check(code == "ok" && copied is { Rows: 3000 } && lines.Length == 2 && lines[0] == string.Join("\t", Enumerable.Range(0, 3000)) && lines[1].Split('\t')[2999] == "row 2999",
+                $"a transposed Copy of windowed rows across blocks writes every row once, in order: {code} {message} {copied?.Rows}");
+            check(harness.Service.Results.UsedBytes == warm && remote.ViewerCount == viewers,
+                $"a transposed Copy gives back the result memory its rows took, and forgets its viewer: {harness.Service.Results.UsedBytes - warm} {remote.ViewerCount - viewers}");
+        }
     }
 
     static async Task<(string Code, string Text, ResultsJobResult? Result, string Message)> Save(Harness harness, uint resultId, bool transposed = false, Action<JsonObject>? change = null)

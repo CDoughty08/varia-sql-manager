@@ -752,6 +752,12 @@ internal sealed class RemoteResult : IDisposable
         }
     }
 
+    /// <summary>Forgets a viewer that reads no more (a Copy or Save that ended): its last range no longer keeps blocks.</summary>
+    public void Forget(uint viewer)
+    {
+        lock (gate) viewers.Remove(viewer);
+    }
+
     /// <summary>Checks only: how many viewers' read-ahead state is remembered.</summary>
     internal int ViewerCount { get { lock (gate) return viewers.Count; } }
 

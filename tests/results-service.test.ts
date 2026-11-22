@@ -562,6 +562,24 @@ describe('results service', () => {
     expect(tab()!.settled.get('1:1')).toEqual(expect.objectContaining({ rows: 5_000 }))
     service.dispose()
   })
+  it('says nothing of a load the user stopped by closing its result, nor of one a new run replaced', async () => {
+    const { api, service, tab, flush } = fixture()
+    service.begin('t1', 'q1')
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 0, rowsTotal: 5_000 }), descriptor(2, { index: 1 })]) })
+    flush()
+    const answer = deferred<ApiResult<import('../src/shared/contracts').QueryResult>>()
+    api.remoteQuery.mockReturnValueOnce(answer.promise)
+    const loading = service.loadIntoMemory('t1', keyAt(service, 't1', 0))
+    service.removeEntry('t1', keyAt(service, 't1', 0))
+    const before = tab()!.messages.length
+    answer.resolve({ ok: true, value: { ...summaryOf([]), status: 'failed', messages: [{ text: 'These results were closed.', kind: 'error' }] } })
+    await loading
+    flush()
+    expect(tab()!.messages.length).toBe(before)
+    expect(tab()!.strip).toBe(false)
+    expect(tab()!.loads).toBeUndefined()
+    service.dispose()
+  })
   it('refuses Load into memory while the run still runs, and says why a refused load failed', async () => {
     const { api, client, service, tab, flush } = fixture()
     service.begin('t1', 'q1')

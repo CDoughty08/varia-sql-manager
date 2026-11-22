@@ -42,8 +42,10 @@ describe('the truncation strip\'s budget figure', () => {
 describe('a windowed result loading into memory', () => {
   it('says how many rows have loaded of those it showed, or that it is stopping', () => {
     expect(loadingText('', { rowsAvailable: 0 })).toBeUndefined()
-    expect(loadingText('loading', { rowsAvailable: 1_200, rowsExpected: 5_000, rowsTotal: 9_000 })).toBe('Loading into memory: 1,200 of 5,000 rows.')
-    expect(loadingText('loading', { rowsAvailable: 0, rowsTotal: 9_000 })).toBe('Loading into memory: 0 of 9,000 rows.')
+    expect(loadingText('loading', { rowsAvailable: 1_200, rowsExpected: 5_000, rowsTotal: 9_000, residence: 'memory' })).toBe('Loading into memory: 1,200 of 5,000 rows.')
+    expect(loadingText('loading', { rowsAvailable: 0, rowsTotal: 9_000, residence: 'memory' })).toBe('Loading into memory: 0 of 9,000 rows.')
+    // Before the switch (and after a refused load switched back) the windowed rows are not the load's: no count.
+    expect(loadingText('loading', { rowsAvailable: 5_000, rowsTotal: 5_000, residence: 'remote' })).toBe('Loading into memory…')
     expect(loadingText('stopping', { rowsAvailable: 10 })).toBe('Stopping the load: the result stays windowed in BigQuery.')
   })
 })
