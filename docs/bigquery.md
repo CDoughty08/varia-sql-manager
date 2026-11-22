@@ -299,8 +299,11 @@ In the workbench:
   sign-in, a busy session, a permission) or that ran in another project (kept for a connection to that project); another
   principal's job, one Stop cancelled or one whose results are gone is dropped. Each job is tried once per connection.
 - **The prompt.** Closing a tab, Change Connection, Disconnect, a location switch or quitting asks about a tab that
-  holds a job it runs, follows or left running: Cancel the job, Leave it running, or Don't close (the default). It never
+  holds a job it runs, follows or left running, naming how long it ran and its estimate (with dollars unless Show cost as
+  is Bytes only): Cancel the job, Leave it running, or Don't close (the default). It never
   asks about that tab's transaction: Cancel the job rolls it back, and Leave it running keeps it open in the session.
+  When the tab's jobs run outside its session (restored ones not re-attached) and the session itself may hold a
+  transaction, Leave it running is followed by the Commit or Roll Back box for that session.
   "Remember my choice" sets `queryExecution.bigQuery.closeRunningJob` (Ask, Cancel the job, Leave it running), which
   then answers without asking, except at a quit. Beside other executing queries (SQL Server, or a BigQuery run without a
   job such as Preview Rows) the box keeps their buttons, and the BigQuery choice is its "Leave BigQuery jobs running"
@@ -311,7 +314,7 @@ In the workbench:
   Close All and Disconnect All keep tabs that hold jobs open without asking.
 - **Quitting Varia leaves jobs running.** Kept tabs that hold a job are not asked about, their records stay, and their
   sessions stay open while a transaction may be open. Tabs that will not be restored are always asked, even with a
-  remembered choice, and the box lists their job ids (up to 8 per tab, for the first 10 tabs).
+  remembered choice, and the box lists their job ids (up to 8 per tab with a count of the rest, for the first 10 tabs, job tabs listed first).
 - **Close Results while a job runs.** It is available once a BigQuery job has started and asks the same three choices (Don't Close is
   the default), or follows the remembered choice. Cancel the job stops it as Stop does. Leave it running sends
   `query.cancel` with `detach`: the results close, the job keeps the tab's session, the next Execute waits for it (Stop

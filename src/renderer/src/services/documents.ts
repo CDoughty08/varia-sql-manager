@@ -1,7 +1,7 @@
 import type { editor } from 'monaco-editor'
 import type { DocumentKind, LineEnding, RestoredDocument, VariaApi } from '../../../shared/contracts'
 import { cleanTabName } from '../../../shared/files/session'
-import { bigQueryCommitTimeout, type SessionCloseNote, type SessionPlanEntry } from '../../../shared/sessions'
+import { bigQueryCommitTimeout, type SessionCloseNote, type SessionEnd, type SessionPlanEntry } from '../../../shared/sessions'
 import type { SettingsValues } from '../../../shared/settings/catalog'
 import type { ProviderId } from '../../../shared/providers'
 import { afterClose, documentInfo, isCustomKind, isQueryDocument, queryLanguages, type CustomDocumentKind, type QueryDocument } from '../documents'
@@ -579,7 +579,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
    */
   async endSession(id: string, entry?: SessionPlanEntry, options: { readonly abortOnRefusedCommit?: boolean } = {}): Promise<SessionCloseNote | undefined> {
     // A BigQuery job is left running (keepJob: the session is not aborted) or cancelled and waited for (cancelJob).
-    const transaction = entry === 'commit' || entry === 'rollback' ? entry : undefined
+    const transaction: SessionEnd | undefined = entry === 'commit' || entry === 'leaveCommit' ? 'commit' : entry === 'rollback' || entry === 'leaveRollback' ? 'rollback' : undefined
     const params = { ...transaction ? { transaction } : {}, ...entry === 'leave' ? { keepJob: true as const } : entry === 'cancelJob' ? { cancelJob: true as const } : {},
       ...options.abortOnRefusedCommit === undefined ? {} : { abortOnRefusedCommit: options.abortOnRefusedCommit } }
     const result = Object.keys(params).length ? await this.api.closeQuerySession(id, params) : await this.api.closeQuerySession(id)

@@ -165,7 +165,13 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
   it("wires main's record cancels: profiles from connect, restored cancels, jobs without a tab and profile deletes (index.ts)", async () => {
     const source = await readFile(join(__dirname, '..', 'src', 'main', 'index.ts'), 'utf8')
     expect(source).toContain('if (outcome.ok) await rememberConnectionProfile(')
-    expect(source).toContain("jobRecorder(queryId!, jobKey, connectionProfiles.get(")
+    expect(source).toContain("jobRecorder(queryId!, jobKey, profileOf(")
+    // Deleting a connection lists ten job ids and counts the rest, in its first box and its failed-cancel box.
+    expect(source).toContain('ids = listedIds(running.map(record => record.jobId))')
+    expect(source).toContain('detail: `${listedIds(failed)}')
+    expect(source).toMatch(/function listedIds[^]*?… and \$\{jobIds\.length - 10\} more/)
+    // A connection that runs a job moves to the end, so the 512 bound evicts idle handles, not a busy long-lived one.
+    expect(source).toMatch(/function profileOf\(connectionId: string\)[^]*?connectionProfiles\.delete\(connectionId\); connectionProfiles\.set\(connectionId, profile\)/)
     expect(source).toContain("jobRecords.record(jobKey, event, profileId)")
     expect(source).toContain("handle('varia:jobs-cancel-restored', async value => {\n    const keys = z.array(jobKeySchema).min(1).max(jobLimits.keys).parse(value)")
     expect(source).toContain("handle('varia:jobs-without-tab', async value => {\n    const keys = z.array(jobKeySchema).max(jobLimits.keys).parse(value)")

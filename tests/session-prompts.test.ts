@@ -115,6 +115,8 @@ describe('session prompts', () => {
     expect(prompt.message).toContain('q.sql is in US')
     expect(prompt.buttons.map(button => `${button.label}=${button.answer}`)).toEqual(['Switch=proceed', "Don't Switch=cancel"])
     expect(prompt.buttons[prompt.cancelId].answer).toBe('cancel')
+    // A job running in the session is asked about next, and leaving it running keeps the session.
+    expect(prompt.detail).toContain('leaving it running keeps that session open')
     // The request carries the location only for a switch, with one query, which need not have anything open.
     const valid = { action: 'switchLocation', tabs: [{ name: 'q.sql', transactions: 0, running: false, provider: 'bigquery' }], location }
     expect(sessionPromptRequestSchema.parse(valid)).toEqual(valid)
@@ -151,9 +153,13 @@ describe('BigQuery job prompts', () => {
       expect(prompt.buttons[2].label).toMatch(/^Don't /)
       expect([prompt.defaultId, prompt.cancelId]).toEqual([2, 2])
       expect(prompt.checkbox).toEqual(action === 'exit' ? undefined : { label: 'Remember my choice', checked: false, remembers: true })
-      expect(prompt.detail).toContain('• a.sql (running 12 minutes, estimated 3.0 GiB)')
+      expect(prompt.detail).toContain('• a.sql (running 12 minutes, estimated 3.00 GiB · $0.02)')
       expect(prompt.detail).toContain('stays open until the session ends')
     }
+    // Show cost as Bytes only leaves the dollars out, in the session boxes and Close Results' box alike.
+    expect(sessionPrompt({ action: 'close', tabs: [job('a.sql', { estimateBytes: 3 * 2 ** 30 })] }, 'ask', false)!.detail).toContain('• a.sql (running 12 minutes, estimated 3.00 GiB)\n')
+    expect(runningJobPrompt({ name: 'a.sql', job: { elapsedMs: 0, estimateBytes: 2 ** 40 } }).detail).toContain('estimated 1.00 TiB · $6.25')
+    expect(runningJobPrompt({ name: 'a.sql', job: { elapsedMs: 0, estimateBytes: 2 ** 40 } }, false).detail).not.toContain('$')
     expect(sessionPrompt({ action: 'exit', tabs: [job('a.sql')] })!.buttons[2].label).toBe("Don't Quit")
     expect(sessionPrompt({ action: 'disconnect', tabs: [job('a.sql')] })!.buttons[2].label).toBe("Don't Disconnect")
   })
@@ -162,6 +168,10 @@ describe('BigQuery job prompts', () => {
     expect(quit.detail).toContain('• a.sql (running 12 minutes): job_1')
     expect(quit.detail).toContain('• b.sql (left running): job_2')
     expect(quit.detail).toContain('note its job id')
+    // Ids beyond the eight sent are counted, and a quit's mixed box names job tabs before a long list of SQL Server ones.
+    expect(sessionPrompt({ action: 'exit', tabs: [job('a.sql', { jobIds: ['job_1'], moreJobIds: 3 })] })!.detail).toContain('• a.sql (running 12 minutes): job_1 and 3 more')
+    const crowded = sessionPrompt({ action: 'exit', tabs: [...Array.from({ length: 12 }, (_, k) => running(`s${k}.sql`)), job('b.sql', { jobIds: ['job_9'] })] })!
+    expect(crowded.detail).toContain('• b.sql (running 12 minutes): job_9')
     expect(sessionPrompt({ action: 'close', tabs: [job('a.sql', { jobIds: ['job_1'] })] })!.detail).not.toContain('job_1')
   })
   it("keeps SQL Server's buttons beside executing SQL Server queries, with Leave BigQuery jobs running as the checkbox", () => {
@@ -169,6 +179,9 @@ describe('BigQuery job prompts', () => {
     expect(mixed.buttons.map(button => button.answer)).toEqual(['proceed', 'cancel'])
     expect(mixed.checkbox).toEqual({ label: 'Leave BigQuery jobs running', checked: true, remembers: false })
     expect(sessionPrompt({ action: 'close', tabs: [running('s.sql'), job('b.sql')] })!.checkbox?.checked).toBe(false)
+    expect(mixed.message).toBe('2 queries are still executing.')
+    // A job left running or not re-attached is not executing in its tab.
+    expect(sessionPrompt({ action: 'close', tabs: [running('s.sql'), { ...job('b.sql', { detached: true }), running: false }] })!.message).toBe('2 queries are still executing or hold running BigQuery jobs.')
   })
   it('answers from the remembered choice only when the box would ask about BigQuery jobs alone', () => {
     const only = { action: 'close' as const, tabs: [job('a.sql')] }

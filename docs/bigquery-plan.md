@@ -649,7 +649,7 @@ with a running or detached job the box offers **Cancel the job**, **Leave it run
   box's checkbox, "Leave BigQuery jobs running" (its default from the setting). Proceeding cancels SQL Server queries
   as today, and BigQuery jobs per the checkbox.
 - **Contract.**
-  - `SessionTab` gains optional `provider` (in BQ-3a-2, for decision 54's note) and `job` (`elapsedMs`, `estimateBytes`, `detached`); an open or possibly
+  - `SessionTab` gains optional `provider` (in BQ-3a-2, for decision 54's note) and `job` (`elapsedMs`, `estimateBytes`, `detached`, `unattached`, `jobIds`, `moreJobIds`); an open or possibly
     open transaction uses today's `transactions` and `unchecked`; the
     schema's `refine`, which accepts only running, transactions or unchecked tabs, also accepts a tab with a `job`.
   - `SessionAnswer` gains `leave`; in the mixed box, the "Leave BigQuery jobs running" checkbox turns its Cancel Queries

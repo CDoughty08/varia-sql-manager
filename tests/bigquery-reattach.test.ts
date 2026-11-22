@@ -257,6 +257,37 @@ describe('the job prompt', () => {
     expect(dropJobRecords).toHaveBeenLastCalledWith(key)
     expect(dropJobRecords).toHaveBeenCalledTimes(3)
   })
+  it("asks the transaction of a session that holds none of the tab's jobs after Leave it running, and ends it as answered", async () => {
+    // A restored job whose re-attach failed its project check: kept as a reference, outside the tab's session.
+    const f = fixture(), notifyJobs = vi.fn(), dropJobRecords = vi.fn<VariaApi['dropJobRecords']>(async () => ({ ok: true, value: undefined }))
+    Object.assign(f.queryApi, { dropJobRecords })
+    f.queries.notifyJobs = notifyJobs
+    f.queryApi.attach.mockResolvedValueOnce({ ok: false, error: 'Another project.', code: 'AUTH_IDENTITY' })
+    f.queries.restoreJobs(f.tab.id, [job('job_p')])
+    await settle(); await settle()
+    expect(f.queries.getSnapshot()[f.tab.id].jobs?.map(held => held.jobId)).toEqual(['job_p'])
+    // The tab then opened a transaction in its own session, which holds no job.
+    f.queryApi.querySessionState.mockResolvedValue({ ok: true, value: { transactionCount: 1, checked: true, job: 'none' } })
+    f.queryApi.confirmSessions.mockResolvedValueOnce({ ok: true, value: 'leave' }).mockResolvedValueOnce({ ok: true, value: 'commit' })
+    const prepared = await f.queries.prepareSessions('close', [f.tab.id])
+    expect(f.queryApi.confirmSessions.mock.calls.map(call => call[0].tabs.map(tab => [tab.transactions, !!tab.job]))).toEqual([[[0, true]], [[1, false]]])
+    expect(prepared?.plan.get(f.tab.id)).toBe('leaveCommit')
+    // The session ends with the commit, not keepJob (which the backend refuses with JOB_FINISHED), and the job is left as Leave leaves it.
+    f.documents.sessionHooks = { message: vi.fn(), bigQuery: () => true, ended: (id, entry) => f.queries.sessionClosed(id, entry) }
+    await f.documents.endSession(f.tab.id, prepared!.plan.get(f.tab.id))
+    expect(f.api.closeQuerySession).toHaveBeenLastCalledWith(f.tab.id, { transaction: 'commit' })
+    expect(notifyJobs).toHaveBeenCalledWith("orders.sql: BigQuery job job_p was left running. Find it in BigQuery's job history.", ['job_p'])
+    expect(f.queries.getSnapshot()[f.tab.id].jobs).toBeUndefined()
+    // Cancel the job still rolls the transaction back with the job, so the transaction is not asked.
+    const g = fixture()
+    g.queryApi.attach.mockResolvedValueOnce({ ok: false, error: 'Another project.', code: 'AUTH_IDENTITY' })
+    g.queries.restoreJobs(g.tab.id, [job('job_p')])
+    await settle(); await settle()
+    g.queryApi.querySessionState.mockResolvedValue({ ok: true, value: { transactionCount: 1, checked: true, job: 'none' } })
+    g.queryApi.confirmSessions.mockResolvedValueOnce({ ok: true, value: 'proceed' })
+    expect((await g.queries.prepareSessions('close', [g.tab.id]))?.plan.get(g.tab.id)).toBe('cancelJob')
+    expect(g.queryApi.confirmSessions).toHaveBeenCalledTimes(1)
+  })
   it('ends a session with keepJob for Leave it running and cancelJob for Cancel the job', async () => {
     const f = fixture(), ended = vi.fn()
     f.documents.sessionHooks = { message: vi.fn(), bigQuery: () => true, ended }

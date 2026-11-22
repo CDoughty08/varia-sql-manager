@@ -231,6 +231,10 @@ let quitKeepJobKeys: readonly string[] | undefined
 let pendingFailedAborts = 0
 // Each BigQuery connection's saved profile, so its jobs' records can be cancelled after a restart without a connection.
 const connectionProfiles = new Map<string, string>()
+/** Up to ten job ids as a box's bullet list, counting the rest. */
+function listedIds(jobIds: readonly string[]): string {
+  return [...jobIds.slice(0, 10).map(jobId => `• ${jobId}`), ...jobIds.length > 10 ? [`… and ${jobIds.length - 10} more`] : []].join('\n')
+}
 /** Remembers the saved BigQuery profile a new connection was opened from (matched by its identity, as the library does). */
 async function rememberConnectionProfile(connectionId: string, options: ProviderConnectionOptions, context: unknown): Promise<void> {
   if (options.provider !== 'bigquery' || !bigQueryStore) return
@@ -240,8 +244,14 @@ async function rememberConnectionProfile(connectionId: string, options: Provider
   const profile = matching.find(item => item.id === selected) ?? matching[0]
   if (!profile) return
   connectionProfiles.set(connectionId, profile.id)
-  // Bounded: the oldest handles go first.
+  // Bounded: the least recently used handles go first (profileOf moves a handle to the end).
   while (connectionProfiles.size > 512) connectionProfiles.delete(connectionProfiles.keys().next().value!)
+}
+/** The saved profile of a connection that runs a job, marked as recently used so the bound evicts idle handles first. */
+function profileOf(connectionId: string): string | undefined {
+  const profile = connectionProfiles.get(connectionId)
+  if (profile !== undefined) { connectionProfiles.delete(connectionId); connectionProfiles.set(connectionId, profile) }
+  return profile
 }
 /**
  * Cancels recorded jobs through their saved profiles' credentials (bigquery.cancelJobs: no connection handle; it waits for
@@ -1124,7 +1134,7 @@ app.whenReady().then(async () => {
     }
     const running = bigQuery ? jobRecords.forProfile(id).filter(record => record.state === 'running' && !record.auxiliary) : []
     if (running.length) {
-      const one = running.length === 1, ids = running.slice(0, 10).map(record => `• ${record.jobId}`).join('\n')
+      const one = running.length === 1, ids = listedIds(running.map(record => record.jobId))
       const { response } = await pageDialog((window, signal) => dialog.showMessageBox(window, {
         type: 'warning', title: 'Delete connection', message: one ? 'A BigQuery job run on this connection is still running.' : `${running.length} BigQuery jobs run on this connection are still running.`,
         detail: `${ids}\n\nOnce the connection is deleted, Varia cannot cancel ${one ? 'it' : 'them'}. Cancel ${one ? 'it' : 'them'} first, or keep the connection.`,
@@ -1141,12 +1151,12 @@ app.whenReady().then(async () => {
         const error = cancel.jobs.find(job => !job.cancelled && job.error)?.error
         const { response: anyway } = await pageDialog((window, signal) => dialog.showMessageBox(window, {
           type: 'warning', title: 'Delete connection', message: failed.length === 1 ? 'A BigQuery job could not be cancelled.' : `${failed.length} BigQuery jobs could not be cancelled.`,
-          detail: `${failed.slice(0, 10).map(jobId => `• ${jobId}`).join('\n')}${error ? `\n\n${error}` : ''}\n\nDelete Anyway leaves ${failed.length === 1 ? 'it' : 'them'} to BigQuery's job history, where ${failed.length === 1 ? 'it' : 'they'} can be cancelled.`,
+          detail: `${listedIds(failed)}${error ? `\n\n${error}` : ''}\n\nDelete Anyway leaves ${failed.length === 1 ? 'it' : 'them'} to BigQuery's job history, where ${failed.length === 1 ? 'it' : 'they'} can be cancelled.`,
           buttons: ['Delete Anyway', 'Keep Connection'], defaultId: 1, cancelId: 1, noLink: true, signal
         }), { response: 1, checkboxChecked: false }, true)
         if (anyway !== 0) throw new Error(`The connection was kept: BigQuery job ${failed.slice(0, 5).join(', ')} could not be cancelled.${notes.length ? ` ${notes.slice(0, 5).join(' ')}` : ''}`)
       }
-      if (notes.length) await pageDialog((window, signal) => dialog.showMessageBox(window, { type: 'info', title: 'Delete connection', message: 'What became of the cancelled BigQuery jobs:', detail: notes.slice(0, 10).join('\n\n'), buttons: ['OK'], noLink: true, signal }), { response: 0, checkboxChecked: false }, true)
+      if (notes.length) await pageDialog((window, signal) => dialog.showMessageBox(window, { type: 'info', title: 'Delete connection', message: 'What became of the cancelled BigQuery jobs:', detail: [...notes.slice(0, 10), ...notes.length > 10 ? [`… and ${notes.length - 10} more`] : []].join('\n\n'), buttons: ['OK'], noLink: true, signal }), { response: 0, checkboxChecked: false }, true)
       jobRecords.dropJobs(running.map(record => record.jobId))
     }
     return library.remove(id)
@@ -1305,7 +1315,7 @@ app.whenReady().then(async () => {
       const queryId = method === 'query.execute' || method === 'query.attach' ? (validated as RpcMethods['query.execute' | 'query.attach']['params']).queryId : remote?.queryId
       // A BigQuery request's job key: its query.job events become job records under it, before they are forwarded.
       const jobKey = queryId === undefined ? undefined : (validated as { jobKey?: string }).jobKey
-      const jobs = jobKey === undefined ? undefined : jobRecorder(queryId!, jobKey, connectionProfiles.get((validated as { connectionId?: string }).connectionId ?? ''))
+      const jobs = jobKey === undefined ? undefined : jobRecorder(queryId!, jobKey, profileOf((validated as { connectionId?: string }).connectionId ?? ''))
       // An Object Explorer load, a script, an object action, an SSIS Catalog read or write, a session's Details or a connect
       // with a requestId is registered before it is sent, so its cancel channel can always find it.
       const cancellable = cancellableRequests(method, { explorer: explorerRequests, scripting: scriptingRequests, actions: actionRequests, ssis: ssisRequests, activity: activityRequests, connections: connectionRequests }, prepared.context?.requestId)
@@ -1584,10 +1594,10 @@ app.whenReady().then(async () => {
   handle('varia:confirm-sessions', async value => {
     const request = sessionPromptRequestSchema.parse(value)
     // BigQuery jobs (docs/bigquery.md, The prompt): a remembered choice answers a box that would ask only about them.
-    const closeRunningJob = (await settings.load().catch(() => ({ values: settings.current() }))).values['queryExecution.bigQuery.closeRunningJob']
+    const values = (await settings.load().catch(() => ({ values: settings.current() }))).values, closeRunningJob = values['queryExecution.bigQuery.closeRunningJob']
     const remembered = rememberedJobAnswer(request, closeRunningJob)
     if (remembered) return remembered
-    const prompt = sessionPrompt(request, closeRunningJob)
+    const prompt = sessionPrompt(request, closeRunningJob, values['queryExecution.bigQuery.showCost'] !== 'bytes')
     if (!prompt) return 'proceed'
     const { response, checkboxChecked } = await pageDialog((window, signal) => dialog.showMessageBox(window, { type: 'warning', title: prompt.title, message: prompt.message, detail: prompt.detail, buttons: prompt.buttons.map(button => button.label), defaultId: prompt.defaultId, cancelId: prompt.cancelId, noLink: true, signal,
       ...prompt.checkbox ? { checkboxLabel: prompt.checkbox.label, checkboxChecked: prompt.checkbox.checked } : {} }), { response: prompt.cancelId, checkboxChecked: false }, true)
@@ -1598,9 +1608,9 @@ app.whenReady().then(async () => {
   // Close Results while a BigQuery job runs: the same three choices and remembered setting, but the tab's session stays.
   handle('varia:confirm-running-job', async value => {
     const request = runningJobRequestSchema.parse(value)
-    const closeRunningJob = (await settings.load().catch(() => ({ values: settings.current() }))).values['queryExecution.bigQuery.closeRunningJob']
+    const values = (await settings.load().catch(() => ({ values: settings.current() }))).values, closeRunningJob = values['queryExecution.bigQuery.closeRunningJob']
     if (closeRunningJob !== 'ask') return closeRunningJob === 'cancel' ? 'proceed' : 'leave'
-    const prompt = runningJobPrompt(request)
+    const prompt = runningJobPrompt(request, values['queryExecution.bigQuery.showCost'] !== 'bytes')
     const { response, checkboxChecked } = await pageDialog((window, signal) => dialog.showMessageBox(window, { type: 'warning', title: prompt.title, message: prompt.message, detail: prompt.detail, buttons: prompt.buttons.map(button => button.label), defaultId: prompt.defaultId, cancelId: prompt.cancelId, noLink: true, signal,
       checkboxLabel: prompt.checkbox!.label, checkboxChecked: false }), { response: prompt.cancelId, checkboxChecked: false }, true)
     const { answer, remember } = jobPromptAnswer(prompt, response, checkboxChecked)

@@ -287,7 +287,9 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
    * A query's session ended as the prompt planned (DocumentService.endSession). A job left running is no tab's any more:
    * the tab forgets it, its records go, and a notification shows its id to copy. A cancelled job is forgotten too.
    */
-  sessionClosed(tabId: string, entry: SessionPlanEntry | undefined): void {
+  sessionClosed(tabId: string, planned: SessionPlanEntry | undefined): void {
+    // A session ended with a commit or rollback beside jobs left running outside it: its jobs are left as Leave leaves them.
+    const entry = planned === 'leaveCommit' || planned === 'leaveRollback' ? 'leave' : planned
     if (this.disposed || (entry !== 'leave' && entry !== 'cancelJob')) return
     const ids = this.heldJobIds(tabId), state = this.getSnapshot()[tabId]
     const running = !!state?.running && state.running.kind !== 'estimate'
@@ -756,7 +758,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       // they go with it to the new connection and are not asked about. A SQL Server connection would re-attach nothing.
       const connecting = action === 'changeConnection' && !!connectingTo?.bigQuery && !running && !this.connected(id)
       const holding = bigQuery && (running || (!connecting && !!this.getSnapshot()[id]?.jobs?.length))
-      return document ? [{ id, name: document.name.slice(0, sessionPromptLimits.name), running, estimating, operation, bigQuery, holding, job: undefined as SessionJob | undefined,
+      return document ? [{ id, name: document.name.slice(0, sessionPromptLimits.name), running, estimating, operation, bigQuery, holding, job: undefined as SessionJob | undefined, outside: undefined as TransactionState | undefined,
         connectionId: document.connectionId, generation: connection?.generation, version: this.executionVersions.get(id),
         state: !running && this.connected(id) ? mayBeOpen : nothingOpen }] : []
     })
@@ -770,12 +772,27 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       if (this.disposed) return undefined
     }
     for (const tab of candidates.filter(candidate => candidate.holding)) {
-      const state = this.getSnapshot()[tab.id], jobIds = this.heldJobIds(tab.id).slice(0, sessionPromptLimits.jobIds)
+      const state = this.getSnapshot()[tab.id], held = this.heldJobIds(tab.id), jobIds = held.slice(0, sessionPromptLimits.jobIds)
       // A job it does not run is one left running (detached), or a restored one not re-attached yet.
       const following = tab.running && !!state?.running && !this.isGated(tab.id), estimateBytes = following ? state.running!.estimateBytes : undefined
-      tab.job = { elapsedMs: tab.running && tab.operation ? Math.max(0, this.now() - tab.operation.startedAt) : 0, ...following ? {} : state?.jobs?.length && state.jobs.every(job => job.detached) ? { detached: true as const } : { unattached: true as const }, ...estimateBytes !== undefined ? { estimateBytes } : {}, ...jobIds.length ? { jobIds } : {} }
+      tab.job = { elapsedMs: tab.running && tab.operation ? Math.max(0, this.now() - tab.operation.startedAt) : 0, ...following ? {} : state?.jobs?.length && state.jobs.every(job => job.detached) ? { detached: true as const } : { unattached: true as const }, ...estimateBytes !== undefined ? { estimateBytes } : {}, ...jobIds.length ? { jobIds } : {}, ...held.length > jobIds.length ? { moreJobIds: held.length - jobIds.length } : {} }
       // Its session is asked about only through its job: Cancel the job rolls a transaction back, Leave it running keeps it.
       tab.state = nothingOpen
+    }
+    // Unless its session holds no job (its jobs are references outside it: restored, or kept from a failed re-attach): Leave
+    // it running cannot keep that session's transaction for a job, so the transaction is read and asked about after it.
+    const outside = candidates.filter(tab => tab.holding && !tab.running && this.connected(tab.id))
+    if (outside.length) {
+      let expired = false
+      const reading = Promise.all(outside.map(async tab => {
+        try {
+          const response = await this.api.querySessionState(tab.id)
+          if (!expired && response.ok && response.value.job === 'none') tab.outside = response.value.checked ? { transactions: response.value.transactionCount } : mayBeOpen
+        } catch { /* Not read: the session is left to keepJob, which refuses a close it cannot carry out. */ }
+      }))
+      await Promise.race([reading, this.wait(stateBudgetMs)])
+      expired = true
+      if (this.disposed) return undefined
     }
     const reads = candidates.filter(tab => tab.state !== nothingOpen)
     if (reads.length) {
@@ -803,13 +820,17 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     // The first box: executing queries, and BigQuery jobs (Cancel the job, or Leave it running).
     const first = running.length ? await ask(running) : 'proceed'
     if (first === 'cancel') return undefined
-    const answer = open.length ? await ask(open) : 'rollback'
+    const opened = (state?: TransactionState) => !!state && (state.transactions > 0 || !!state.unchecked)
+    // Jobs left running outside a session that may hold a transaction: the second box asks about that transaction too.
+    const leavingOutside = first === 'leave' ? running.filter(tab => tab.job && opened(tab.outside)) : []
+    const second = [...open, ...leavingOutside.map(tab => ({ ...tab, job: undefined, state: tab.outside! }))]
+    const answer = second.length ? await ask(second) : 'rollback'
     if (answer === 'cancel') return undefined
     // A BigQuery job is cancelled or left by its session's close (cancelJob, keepJob), never by query.cancel here.
     // A run still in its estimate or cost prompt is stopped even beside held jobs: it sent nothing.
     const stopping = [...running.filter(tab => !tab.job || this.isGated(tab.id)), ...estimates]
     return {
-      plan: new Map(tabs.map(tab => [tab.id, tab.job ? first === 'leave' ? 'leave' : 'cancelJob' : !tab.running && answer === 'commit' ? 'commit' : 'rollback'])),
+      plan: new Map(tabs.map(tab => [tab.id, tab.job ? first === 'leave' ? leavingOutside.includes(tab) ? answer === 'commit' ? 'leaveCommit' : 'leaveRollback' : 'leave' : 'cancelJob' : !tab.running && answer === 'commit' ? 'commit' : 'rollback'])),
       stopping: stopping.map(tab => ({ id: tab.id, queryId: tab.operation!.queryId })),
       current: () => !this.disposed && candidates.every(tab => {
         const document = this.documents.get(tab.id), connection = tab.connectionId ? this.getConnection(tab.connectionId) : undefined

@@ -882,7 +882,7 @@ and that its previous transaction was rolled back, unless the query moves to ano
 `changeConnection`, `disconnectQuery`, `disconnect`, `disconnectAll`, `exit` or `switchLocation`; ≤ 1,024 tabs `{ name ≤
 512, transactions, running, unchecked?, provider?, job? }`, only those with an open or unchecked transaction, a running
 script or a BigQuery job). `provider` (`sqlserver` or `bigquery`) picks the "not checked" note's causes. `job` (BigQuery
-only: `{ elapsedMs, estimateBytes?, detached?, unattached?, jobIds? ≤ 8 }`) asks about the tab's job instead of its transaction, and
+only: `{ elapsedMs, estimateBytes?, detached?, unattached?, jobIds? ≤ 8, moreJobIds? }`) asks about the tab's job instead of its transaction, and
 the answer may be `leave` ([The prompt](bigquery.md#re-attaching-to-jobs)); a box that would ask only about jobs is
 answered from `queryExecution.bigQuery.closeRunningJob` when that remembers a choice, except at a quit (`exit`), which
 always asks. `varia:confirm-running-job { name,
