@@ -27,8 +27,9 @@ export const recoveryDiscardSchema = z.object({ ids: z.array(recordId).min(1).ma
 export const recoveryTakeSchema = z.object({ id: recordId }).strict()
 
 /** One record, `<id>.json`. `owner` is the main process (`instance`) and renderer generation that wrote or took it.
- *  Version 2 (0.10.0, `WorkbenchAutoRecover/`) adds the query's provider; a version 1 record (0.9.0's `AutoRecover/`) reads as
- *  version 2, SQL Server's. */
+ *  Version 2 (0.10.0, `WorkbenchAutoRecover/`) adds the query's provider and its file's disk fingerprint (`fileSha256`, the
+ *  version its text was based on, so Save can tell a change made while Varia was closed); a version 1 record (0.9.0's
+ *  `AutoRecover/`) reads as version 2, SQL Server's, without a fingerprint. */
 const recordFields = {
   id: recordId, owner: z.object({ instance: z.uuid(), generation: z.int().min(0) }).strict(),
   name, kind: z.enum(documentKinds), path: z.string().min(1).max(recoveryLimits.pathChars).optional(), eol, server: server.optional(), database: database.optional(),
