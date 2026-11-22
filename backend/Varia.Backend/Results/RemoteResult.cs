@@ -62,12 +62,12 @@ internal sealed class RemoteBlockWriter(uint resultId, IReadOnlyList<WireKind> w
         bytes += page.Cost;
     }
 
-    /// <summary>The pages sealed so far, handed over and forgotten (Save writes them as they fill, keeping none).</summary>
+    /// <summary>The pages sealed so far, handed over and forgotten (Save writes them as they fill, keeping none). The byte
+    /// count still counts them, so a limit holds for every page the writer built.</summary>
     public List<RemotePage> TakeSealed()
     {
         var taken = new List<RemotePage>(pages);
         pages.Clear();
-        bytes = 0;
         return taken;
     }
 
@@ -175,8 +175,7 @@ internal sealed class RemoteResult : IDisposable
     /// <param name="rowBytes">A row's measured cost in pages (from the first page), which sizes blocks.</param>
     /// <param name="cacheLimit">The cache's own limit (queryResults.bigQuery.windowCacheMiB).</param>
     internal static RemoteResult Create(ResultStore store, uint resultId, IReadOnlyList<WireKind> wires, long rows, bool capped, double rowBytes, long cacheLimit,
-        SemaphoreSlim connectionLane, RemoteFetch fetch, object? source = null, IRemoteRows? export = null) =>
-        new(store, resultId, wires, rows, capped, rowBytes, cacheLimit, connectionLane, fetch) { Source = source, Export = export };
+        SemaphoreSlim connectionLane, RemoteFetch fetch, object? source = null, IRemoteRows? export = null) => new(store, resultId, wires, rows, capped, rowBytes, cacheLimit, connectionLane, fetch) { Source = source, Export = export };
 
     // Private: a cache is built only through Create, which only the residence code calls (tests/result-page-access.test.ts),
     // where every switch bumps the revision, sends resultSet.residence and settles the budget.
