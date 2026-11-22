@@ -83,7 +83,7 @@ import { decodePage, encodePage } from '../../src/shared/ipc/wire/pages.ts'
 import { copyText, exportText, isHidden, validTurn } from '../../src/shared/results/text-writer.ts'
 import { parseDirective, shapes } from './backend/shapes.mjs'
 import { backendMethods } from '../../src/shared/ipc/methods.ts'
-import { sameName } from '../../src/shared/ordinal-casing.ts'
+import { nameKey } from '../../src/shared/ordinal-casing.ts'
 import { gunzipSync } from 'node:zlib'
 import { fixturePlan } from './plans/model.mjs'
 
@@ -717,11 +717,18 @@ function buildIdentity(result, by, column) {
 // checked by its own checks), numbers compare by value. Look-alikes (poss) follow ResultDiffer.LookAlikes' rules.
 function buildDiff(left, right, exact, context, match = { mode: 'auto' }, layout = 'unified') {
   const visible = result => result.columns.map((item, at) => ({ item, at })).filter(({ item }) => !isHidden(item))
-  const used = new Set(), pairs = []
+  // ResultDiffer.Pairs: the same name by OrdinalIgnoreCase and the same wire (tests/fixtures/compare-pairing), the first
+  // unused right column of each, taken from a queue per name key and wire so wide results pair in linear time.
+  const pairQueues = new Map(), pairs = []
+  const pairKey = item => item.wire + ':' + nameKey(item.name)
+  for (const { item, at } of visible(right)) {
+    const queue = pairQueues.get(pairKey(item))
+    if (queue) queue.at.push(at)
+    else pairQueues.set(pairKey(item), { at: [at], next: 0 })
+  }
   for (const { item, at } of visible(left)) {
-    // ResultDiffer.Pairs: the same name by OrdinalIgnoreCase and the same wire (tests/fixtures/compare-pairing).
-    const paired = visible(right).find(other => !used.has(other.at) && sameName(other.item.name, item.name) && other.item.wire === item.wire)
-    if (paired) { used.add(paired.at); pairs.push([at, paired.at]) }
+    const queue = pairQueues.get(pairKey(item))
+    if (queue && queue.next < queue.at.length) pairs.push([at, queue.at[queue.next++]])
   }
   if (pairs.length === 0) return undefined
   if (match.mode === 'columns' && match.columns.some(pair => pair >= pairs.length)) return { invalid: 'Choose 1 to 16 different paired columns to match rows by.' }
@@ -848,7 +855,8 @@ function buildDiff(left, right, exact, context, match = { mode: 'auto' }, layout
   const columns = [...pairs.map(pair => right.columns[pair[1]]), ...olds, { ...column('Change', 'nvarchar(1)'), role: 'mark', maxLength: 1 }, { ...column('Old row', 'bigint'), role: 'leftRow' }, { ...column('New row', 'bigint'), role: 'rightRow' },
     { ...column('', 'nvarchar(500)'), role: 'tone', maxLength: 500 }]
   const count = kind => entries.filter(entry => entry.kind === kind).length
-  const oneSided = (result, side) => visible(result).filter(({ at }) => !pairs.some(pair => pair[side] === at)).map(({ item }) => item.name).slice(0, 64)
+  const pairedAt = [new Set(pairs.map(pair => pair[0])), new Set(pairs.map(pair => pair[1]))]
+  const oneSided = (result, side) => visible(result).filter(({ at }) => !pairedAt[side].has(at)).map(({ item }) => item.name).slice(0, 64)
   const cellsOf = test => entries.reduce((sum, entry) => sum + entry.cells.filter(test).length, 0)
   return {
     set: { columns, rows, kind: 'diff', batchNumber: right.batchNumber, iteration: right.iteration }, match: { mode, columns: keys.map(p => right.columns[pairs[p][1]].name) },

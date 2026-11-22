@@ -495,7 +495,9 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   `tests/fixtures/compare-pairing/cases.json`, read by `DiffChecks.cs` and `tests/compare-pairing.test.ts`: change both
   and add a case. Names compare through one table, `src/shared/ordinal-casing.ts`, in the backend (`OrdinalNames`), the
   renderer and the fake backend, never ICU casing (its Unicode version differs by platform); `DiffChecks.OrdinalCasing`
-  checks it against the runtime. Pivots and comparisons share the window's `DerivedJobs` (four at once, busy refusals
+  checks it against the runtime. All three pair by looking columns up under the name's key (`nameKey`,
+  `OrdinalNames.KeyOf`) and wire, never by scanning the other side per column, so results of thousands of columns pair in
+  linear time. Pivots and comparisons share the window's `DerivedJobs` (four at once, busy refusals
   retried), count each other's in-flight results against a run's 1,000 (`adding`; a change of a comparison is not
   counted). A run has one comparison per ordered pair (`pairId`, without Exact text); asked again with other options while
   its first run is in flight, the first run is given up. Its options (layout, Exact text, match, rows) are its state: a
