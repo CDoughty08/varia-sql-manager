@@ -176,9 +176,9 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   // (The jobs resource is reached only for its other calls: held in a variable or used for another member, a jobs.query
   // would pass the ban above. A job list's own Jobs and SSIS's created.Jobs are not the resource.)
   // ...nor by its resource or request classes built directly (a JobsResource of one's own, a QueryRequest however aliased):
-  // only Jobs.cs's GetRequest and Sessions.cs's ListRequest name them.
+  // only Jobs.cs's GetRequest and the ListRequest of Sessions.cs and Held.cs (the job identity check) name them.
   expect(bigQueryUses(/\bJobsResource\b(?!\s*\.\s*(?:GetRequest|ListRequest)\b)|\bQueryRequest\b/g)).toEqual([])
-  expect(bigQueryUses(/\bJobsResource\b/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'BigQuery/BigQueryService.Sessions.cs'])
+  expect(bigQueryUses(/\bJobsResource\b/g).sort()).toEqual(['BigQuery/BigQueryService.Held.cs', 'BigQuery/BigQueryService.Jobs.cs', 'BigQuery/BigQueryService.Sessions.cs'])
   // In BigQuery code a Jobs member is reached for those calls alone (a job list's own Jobs in Sessions.cs aside). These
   // text bans are the readable first line; BigQueryExecutionChecks.References holds the rule on the compiled backend, where
   // no spelling (a property pattern, a held resource, a target-typed request) hides a jobs.query.

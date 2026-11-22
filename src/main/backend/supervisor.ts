@@ -114,6 +114,8 @@ export class BackendSupervisor {
   private started = false
   private closing = false
   private stopping: Promise<void> | undefined
+  /** A restart waiting for bigquery.endIdleSessions before it launches the next generation. */
+  private endingIdle: Promise<void> | undefined
   private restartTimer: unknown
   /** Unexpected losses since the counters were last reset, and when each happened (for the breaker). */
   private attempts = 0
@@ -245,6 +247,7 @@ export class BackendSupervisor {
     // Nothing has launched yet: the launch to come is the restart, with the settings as they are when it is made.
     if (this.awaitingFirst) return
     if (reason === 'reload' && this.snapshot.status === 'failed') return
+    if (this.endingIdle) return this.endingIdle
     if (reason === 'manual') { this.attempts = 0; this.losses = [] }
     this.clock.clearTimeout(this.restartTimer)
     const previous = this.connection
@@ -257,11 +260,13 @@ export class BackendSupervisor {
       let finished!: () => void
       const marker = new Promise<void>(resolve => { finished = resolve })
       this.retiring.add(marker)
+      // Another restart meanwhile (a Reload during Restart Backend) joins this one rather than launching a second backend.
+      this.endingIdle = marker
       try {
         const failedAborts = await ending
         if (failedAborts > 0) this.deps.onFailedAborts?.(failedAborts)
         if (this.closing) { await previous.close(undefined, new BackendError('BACKEND_UNAVAILABLE', sentences.closing)); return }
-      } finally { this.retiring.delete(marker); finished() }
+      } finally { this.retiring.delete(marker); this.endingIdle = undefined; finished() }
     }
     if (previous) this.setState({ status: 'restarting', generation: previous.generation, lost: this.retire(previous, reason), retryInMs: 0 })
     this.launch()
@@ -299,7 +304,8 @@ export class BackendSupervisor {
    * the backend's jobs carry on either way (docs/bigquery.md, Re-attaching to jobs).
    */
   private endIdleSessions(connection: BackendConnection): number | Promise<number> {
-    if (!connection.isReady || connection.lost) return 0
+    // A hung backend (Restart is what unresponsive offers) would only spend the deadline.
+    if (!connection.isReady || connection.lost || this.snapshot.status === 'unresponsive') return 0
     if (![...this.live].some(([id, generation]) => generation === connection.generation && this.providers.get(id) === 'bigquery')) return 0
     return this.sendEndIdle(connection)
   }

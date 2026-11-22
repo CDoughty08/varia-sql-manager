@@ -287,6 +287,30 @@ describe('BackendSupervisor restarts', () => {
     // A stop's failures cannot be shown.
     expect(failed).toEqual([2])
   })
+  it('joins a second restart to one waiting for endIdleSessions, launching one backend, and skips the wait for a hung backend', async () => {
+    const { value, advance, backends } = simulated({ configure: backend => { backend.held.add('bigquery.endIdleSessions') } })
+    await value.request('connections.connect', { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', credential: { source: 'metadata' } } as never)
+    const first = value.restart('manual')
+    await advance(0)
+    const ending = backends[0].requests.find(request => request.method === 'bigquery.endIdleSessions')!
+    expect(ending).toBeDefined()
+    // A Reload while the aborts run: it waits for the same restart.
+    const second = value.restart('reload')
+    await advance(0)
+    expect(backends).toHaveLength(1)
+    backends[0].respond(ending)
+    await Promise.all([first, second])
+    await advance(0)
+    expect(backends).toHaveLength(2)
+    expect(value.state).toMatchObject({ status: 'ready', generation: 2 })
+    // An unresponsive backend is restarted at once, without asking it to end sessions.
+    await value.request('connections.connect', { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', credential: { source: 'metadata' } } as never)
+    ;(value as unknown as { snapshot: unknown }).snapshot = { status: 'unresponsive', generation: 2, silentMs: 30_000 }
+    await value.restart('manual')
+    await advance(0)
+    expect(backends[1].requests.map(request => request.method)).not.toContain('bigquery.endIdleSessions')
+    expect(backends).toHaveLength(3)
+  })
   it('stop closes stdin, then kills a backend that does not exit within the grace period', async () => {
     const { value, advance, last } = simulated({ configure: backend => { backend.exitOnEnd = false } })
     await value.request('system.health', {})

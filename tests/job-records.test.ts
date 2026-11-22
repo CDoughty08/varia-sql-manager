@@ -99,6 +99,48 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     expect((await onDisk(directory)).records).toHaveLength(1)
   })
 
+  it('never replaces a file it could not read, and keeps the file records when a job is recorded before the read', async () => {
+    const directory = await folder()
+    // A directory where the file should be: the read throws, as a locked file does.
+    const { mkdir } = await import('node:fs/promises')
+    await mkdir(join(directory, 'jobs.json'))
+    const errors: unknown[] = []
+    const store = new JobRecordStore(directory, { onWriteError: error => errors.push(error) })
+    await expect(store.load()).rejects.toThrow()
+    store.record(keyA, job('varia_1'))
+    await store.flush()
+    expect(errors).toHaveLength(1)
+    expect((await readdir(join(directory, 'jobs.json')))).toEqual([])
+    // A record made before the read finishes merges with the file's, rather than overwriting them.
+    const other = await folder()
+    const first = new JobRecordStore(other)
+    await first.load()
+    first.record(keyA, job('varia_old'))
+    await first.flush()
+    const second = new JobRecordStore(other)
+    second.record(keyB, job('varia_new'))
+    await second.load()
+    await second.flush()
+    expect((await onDisk(other)).records.map(record => record.jobId).sort()).toEqual(['varia_new', 'varia_old'])
+  })
+
+  it('refuses a reference the file schema would refuse, so one odd event cannot quarantine the rest', async () => {
+    const directory = await folder()
+    const store = new JobRecordStore(directory)
+    await store.load()
+    store.record(keyA, job('varia_1'))
+    store.record(keyA, { ...job('varia_2'), location: 'us_central' })
+    await store.flush()
+    expect((await onDisk(directory)).records.map(record => record.jobId)).toEqual(['varia_1'])
+  })
+
+  it('marks Leave it running from the request own detached answer (index.ts), which may come before the query.cancel answer', async () => {
+    const source = await readFile(join(__dirname, '..', 'src', 'main', 'index.ts'), 'utf8')
+    expect(source).toContain("if (result.status === 'detached') { jobRecords.markDetached(jobKey); return }")
+    // Read after SessionStore's purge, which deletes interrupted writes in the same folder.
+    expect(source).toContain('void openSession.purge(retentionDays(settings)).catch(() => {}).then(() => jobRecords.load())')
+  })
+
   it('defers drops for the keys a quit keeps, and applies them when the quit stops', async () => {
     const store = new JobRecordStore(await folder())
     await store.load()

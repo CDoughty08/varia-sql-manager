@@ -220,7 +220,7 @@ const recovery = new RecoveryStore(join(app.getPath('userData'), profileFiles.au
 // Hot exit's copy of the open tabs, user-only, in the profile; see session-store.ts.
 const openSession = new SessionStore(join(app.getPath('userData'), profileFiles.session.current), { pathsRefused })
 // BigQuery jobs main heard of, under their tabs' job keys (docs/bigquery.md, Re-attaching to jobs); never their SQL or secrets.
-const jobRecords = new JobRecordStore(join(app.getPath('userData'), profileFiles.session.current))
+const jobRecords = new JobRecordStore(join(app.getPath('userData'), profileFiles.session.current), { onWriteError: () => console.error('The BigQuery job records could not be written.') })
 // The job key of each running BigQuery request, so Leave it running (query.cancel detach) can mark its records.
 const requestJobKeys = new Map<string, string>()
 // From the start of a quit: the kept tabs' job keys, which bigquery.endIdleSessions leaves (keepJobKeys).
@@ -505,7 +505,9 @@ function jobRecorder(queryId: string, jobKey: string) {
   return {
     event(event: QueryEvent): void { if (event.type !== 'query.job') return; seen.add(event.jobId); jobRecords.record(jobKey, event) },
     summary(result: QueryResult): void {
-      if (result.status === 'detached' || result.status === 'superseded') return
+      // Leave it running on Close Results: marked from the answer itself, which may arrive before query.cancel's does.
+      if (result.status === 'detached') { jobRecords.markDetached(jobKey); return }
+      if (result.status === 'superseded') return
       jobRecords.drop(jobKey, record => seen.has(record.jobId) && !record.detached && (record.state === 'done' || result.status === 'cancelled'))
     },
     end(): void { if (requestJobKeys.get(queryId) === jobKey) requestJobKeys.delete(queryId) }
@@ -844,8 +846,6 @@ app.whenReady().then(async () => {
   const liveness = Number.isInteger(livenessMs) && livenessMs >= 200 ? { unresponsiveMs: livenessMs, limits: { pingMs: Math.floor(livenessMs / 4) } } : {}
   // Read early, but never awaited before the window: the renderer waits at most 1.5 s for it.
   const loaded = settings.load()
-  // The records are read once, early; one that cannot be read leaves none (records made meanwhile merge in).
-  void jobRecords.load().catch(() => {})
   loaded.catch(() => {})
   backend = new BackendSupervisor(backendSpawnSpec({ packaged: app.isPackaged, root, resourcesPath: process.resourcesPath, platform: process.platform, smokeTest: process.env.VARIA_SMOKE_TEST === '1', env: process.env, locale: app.getSystemLocale(), userData: app.getPath('userData') }), {
     appVersion: app.getVersion(),
@@ -886,7 +886,9 @@ app.whenReady().then(async () => {
   // may have changed.
   void recovery.purge(retentionDays(settings))
   // Hot exit's quarantined sessions and interrupted writes hold query text too: they go by the same retention.
-  void openSession.purge(retentionDays(settings))
+  // The job records are read after the purge, which removes interrupted writes in the same folder and so must run alone;
+  // records made meanwhile merge in, and nothing is written until the read succeeds.
+  void openSession.purge(retentionDays(settings)).catch(() => {}).then(() => jobRecords.load()).catch(() => {})
   settings.onDidChange(state => {
     updater?.settingsChanged()
     memoryLimit.settingsChanged()

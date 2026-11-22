@@ -1,6 +1,6 @@
 import { chmod, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
-import { jobLimits, jobRecordsFileSchema, type JobRecord, type JobTransaction } from '../shared/bigquery/jobs'
+import { jobLimits, jobRecordSchema, jobRecordsFileSchema, type JobRecord, type JobTransaction } from '../shared/bigquery/jobs'
 import { quarantine, readJsonFile, writeJsonAtomic } from './json-file'
 
 /** The file's byte cap: 1,024 records of bounded strings fit well inside it. */
@@ -34,6 +34,8 @@ export class JobRecordStore {
   private loaded: Promise<void> | undefined
   private queue: Promise<void> = Promise.resolve()
   private held: ReadonlySet<string> = new Set()
+  /** The file was read (or found missing): only then may a write replace it. */
+  private readable = false
   private deferred: (() => void)[] = []
   private readonly now: () => number
 
@@ -43,9 +45,12 @@ export class JobRecordStore {
 
   private get path(): string { return join(this.dir, 'jobs.json') }
 
-  /** Reads the file once; later calls wait for the same read. A file-system failure leaves no records and is thrown. */
+  /**
+   * Reads the file once; later calls wait for the same read. Writes wait for it, and a read that failed (a locked file, a
+   * refused quarantine) lets the next load try again and writes nothing meanwhile, so an unread file is never replaced.
+   */
   load(): Promise<void> {
-    return this.loaded ??= (async () => {
+    const loading = this.loaded ??= (async () => {
       const read = await readJsonFile(this.path, jobRecordsMaxBytes)
       if (read.kind === 'missing') return
       const parsed = read.kind === 'ok' ? jobRecordsFileSchema.safeParse(read.value) : undefined
@@ -57,6 +62,8 @@ export class JobRecordStore {
       this.trim()
       if (kept.length !== parsed.data.records.length || fresh.size) this.persist()
     })()
+    loading.then(() => { this.readable = true }, () => { if (this.loaded === loading) this.loaded = undefined })
+    return loading
   }
 
   /** Every record, oldest first (a copy). */
@@ -82,8 +89,9 @@ export class JobRecordStore {
       createdAt: existing?.createdAt ?? this.now(), state: event.state, auxiliary: event.auxiliary,
       ...existing?.detached ? { detached: true } : {}, transaction: existing?.transaction ?? event.transaction
     }
-    // A detached job found DONE has nothing left to re-attach to.
-    if (next.detached && next.state === 'done') { this.persist(); return }
+    // A detached job found DONE has nothing left to re-attach to; a reference the file's schema refuses is not kept, so
+    // one odd event never quarantines every other record at the next start.
+    if (next.detached && next.state === 'done' || !jobRecordSchema.safeParse(next).success) { this.persist(); return }
     this.records.push(next)
     this.trim()
     this.persist()
@@ -147,8 +155,10 @@ export class JobRecordStore {
   }
 
   private persist(): void {
-    const snapshot = { version: 1 as const, records: this.records.map(record => ({ ...record })) }
     this.queue = this.queue.then(async () => {
+      if (!this.readable) await this.load()
+      // Taken when the write runs, after the read merged the file's records in.
+      const snapshot = { version: 1 as const, records: this.records.map(record => ({ ...record })) }
       await mkdir(this.dir, { recursive: true, mode: 0o700 })
       if (posix) await chmod(this.dir, 0o700).catch(() => {})
       await writeJsonAtomic(this.path, snapshot, jobRecordsMaxBytes, 'The BigQuery job records are too large.', { mode: 0o600 })
