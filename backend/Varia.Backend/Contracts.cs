@@ -605,7 +605,19 @@ internal sealed record ActionArgs(string Action, string ConnectionId, string Req
     bool? DropConnections = null, RestoreFilesOptionsDto? RestoreFiles = null, List<UserMappingDto>? Mappings = null, bool? UpdateStatistics = null, bool? DetachOffline = null, LoginIdentityDto? LoginIdentity = null,
     bool? DropMappedUsers = null, string? Mode = null, LoginChangesDto? LoginChanges = null, List<PermissionDto>? Permissions = null, TableChangesDto? TableChanges = null,
     AgentIdentityDto? AgentIdentity = null, string? StepName = null, bool? DeleteUnusedSchedule = null,
-    AgentPropertiesChangesDto? AgentProperties = null, AgentHistoryPurgeDto? AgentPurge = null, AgentHistoryDeleteDto? AgentHistory = null, AgentJobSaveDto? AgentJob = null);
+    AgentPropertiesChangesDto? AgentProperties = null, AgentHistoryPurgeDto? AgentPurge = null, AgentHistoryDeleteDto? AgentHistory = null, AgentJobSaveDto? AgentJob = null,
+    AgentProxySaveDto? AgentProxy = null, CredentialSaveDto? Credential = null, int? ProxyId = null);
+/// <summary>The proxy document's Save (AG-8b, src/shared/actions/agent-proxy.ts AgentProxySave): an existing proxy's changes (the request's
+/// ProxyId names it), or New Proxy's name and credential (an existing one, or NewCredential, created first in the same transaction, whose secret
+/// is the request's Secrets.Secret). Subsystems are syssubsystems ids; principals are granted by kind and revoked by name.</summary>
+internal sealed record AgentProxySaveDto(string? Name = null, bool? Enabled = null, string? Description = null, string? Credential = null, NewCredentialDto? NewCredential = null,
+    List<int>? GrantSubsystems = null, List<int>? RevokeSubsystems = null, List<ProxyPrincipalDto>? GrantPrincipals = null, List<string>? RevokePrincipals = null);
+internal sealed record NewCredentialDto(string Name, string Identity);
+/// <summary>A principal that may use a proxy: Kind is login, serverRole or msdbRole.</summary>
+internal sealed record ProxyPrincipalDto(string Name, string Kind);
+/// <summary>The credential document's Save (AG-8b): New Credential's Name, Identity and Provider, or an existing credential's Id and Modified
+/// (yyyy-MM-ddTHH:mm:ss.fff, the STALE guard) with its Identity. The secret is the request's Secrets.Secret, always sent with the identity.</summary>
+internal sealed record CredentialSaveDto(string Identity, int? Id = null, string? Modified = null, string? Name = null, string? Provider = null);
 /// <summary>The job document's Save (AG-6a, src/shared/actions/agent-job.ts AgentJobSave). An existing job's carries the Version and Modified
 /// (yyyy-MM-ddTHH:mm:ss.fff) its describe read, which the STALE guard compares, and only what changed; New Job's (target the Agent node) every
 /// field it sets and no version. A notification goes as its level (0 to 3) and operator together, the operator '' exactly with level 0.
@@ -696,11 +708,12 @@ internal sealed class ActionDesignConverter : JsonConverter<ActionDesign>
 /// <summary>Passwords an action needs (New Login and Login Properties, later): only actions.execute carries them, which is
 /// sensitive as a whole (its frame is zeroed once read); Validate refuses them on actions.script and on every other action.
 /// Never logged, echoed or persisted; ActionService.Validate bounds them. The record never prints them, so neither does an ActionArgs.</summary>
-internal sealed record LoginSecretsDto(string? Password = null, string? OldPassword = null)
+internal sealed record LoginSecretsDto(string? Password = null, string? OldPassword = null, string? Secret = null)
 {
     private bool PrintMembers(System.Text.StringBuilder builder)
     {
-        builder.Append("Password = ").Append(Password is null ? "null" : "<redacted>").Append(", OldPassword = ").Append(OldPassword is null ? "null" : "<redacted>");
+        builder.Append("Password = ").Append(Password is null ? "null" : "<redacted>").Append(", OldPassword = ").Append(OldPassword is null ? "null" : "<redacted>")
+            .Append(", Secret = ").Append(Secret is null ? "null" : "<redacted>");
         return true;
     }
 }
@@ -758,7 +771,7 @@ internal sealed record BlockerDto(int SessionId, string? Program, string? Host, 
 /// (D4c): Login, its facts with what it owns, and Mappings, the database users mapped to it.</summary>
 internal sealed record DeleteTargetDto(string Name, string Type, string? Owner, List<ActionWarningDto> Warnings, bool DependentsTruncated, bool? IsSnapshot = null, int? Sessions = null,
     int? WithTransaction = null, List<BlockerDto>? Blockers = null, bool? BlockersTruncated = null, string? CloseConnectionsNote = null, List<string>? TransactionTabs = null,
-    LoginFactsDto? Login = null, LoginMappingsDto? Mappings = null, DatabaseIdentityDto? Identity = null, AgentIdentityDto? AgentIdentity = null);
+    LoginFactsDto? Login = null, LoginMappingsDto? Mappings = null, DatabaseIdentityDto? Identity = null, AgentIdentityDto? AgentIdentity = null, int? ProxyId = null);
 /// <summary>Database Properties' General page; sizes in MB, dates as ISO 8601, a backup of "None" when msdb has no history.</summary>
 internal sealed record DatabaseGeneralDto(string Name, string Status, bool Standby, string? Owner, string Created, double SizeMb, double? SpaceAvailableMb = null, int? Users = null,
     string? LastBackup = null, string? LastLogBackup = null, string? Collation = null, double? MemoryAllocatedMb = null, double? MemoryUsedMb = null, int? Id = null);
@@ -796,7 +809,19 @@ internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long 
     RenameDatabaseDto? RenameDatabase = null, LoginFactsDto? Login = null, LoginLockFactsDto? Lock = null,
     LoginPropertiesDto? LoginProperties = null, EffectivePermissionsDto? EffectivePermissions = null, WindowsPrincipalDto? WindowsPrincipal = null,
     TablePropertiesDto? TableProperties = null, AgentJobFactsDto? AgentJob = null, AgentServiceFactsDto? AgentService = null, AgentPropertiesDto? AgentProperties = null,
-    AgentJobDocumentDto? AgentJobDocument = null);
+    AgentJobDocumentDto? AgentJobDocument = null, AgentProxyDocumentDto? AgentProxyDocument = null, CredentialDocumentDto? CredentialDocument = null);
+/// <summary>The proxy document's describe (AG-8b, src/shared/actions/agent-proxy.ts AgentProxyDocumentModel).</summary>
+internal sealed record AgentProxyDocumentDto(AgentProxyRecordDto? Proxy, string Platform, List<ProxySubsystemDto> Subsystems, List<ProxyCredentialDto> Credentials, bool CredentialsTruncated,
+    bool CanCreateCredential, List<ProxyPrincipalDto> PrincipalChoices, List<ProxyReferenceDto>? References = null, bool? ReferencesTruncated = null);
+internal sealed record AgentProxyRecordDto(int Id, string Name, bool Enabled, string Description, string Credential, List<int> Subsystems, List<ProxyPrincipalDto> Principals, string? CredentialIdentity = null);
+internal sealed record ProxySubsystemDto(int Id, string Name);
+internal sealed record ProxyCredentialDto(string Name, string Identity);
+internal sealed record ProxyReferenceDto(string Job, int StepId, string Step, string Subsystem);
+/// <summary>The credential document's describe (AG-8b, CredentialDocumentModel). The secret is never read.</summary>
+internal sealed record CredentialDocumentDto(CredentialRecordDto? Credential, string Platform, List<string> Providers, string? ReadOnly = null, List<CredentialUseDto>? UsedBy = null, bool? UsedByTruncated = null);
+internal sealed record CredentialRecordDto(int Id, string Name, string Identity, string Created, string Modified, string? Provider = null);
+internal sealed record CredentialUseDto(string Proxy, List<string> Subsystems, List<CredentialStepDto> Steps);
+internal sealed record CredentialStepDto(string Job, int StepId, string Step);
 /// <summary>The job document's describe (AG-6a, src/shared/actions/agent-job.ts AgentJobDocumentModel). Job is null for New Job; Operators null
 /// when the login may not read them; Owners for sysadmin only; Alerts null where the section is hidden (below SQLAgentOperatorRole, or a
 /// platform without alerts).</summary>

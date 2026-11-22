@@ -131,9 +131,9 @@ internal static class SeamChecks
             && Bounded(new("Zq9x", longest + "q")).EndsWith("secrets.oldPassword.", StringComparison.Ordinal)
             && Bounded(new(longest, longest)).EndsWith("target.", StringComparison.Ordinal) && Bounded(new("Pa😀ss")).EndsWith("target.", StringComparison.Ordinal),
             "every action that takes secrets gets a password and old password of at most 128 UTF-16 units, without U+0000 or an unpaired surrogate, refused without echoing it");
-        var printed = (Rename(Table, "x") with { Secrets = new("Pa'ss-" + "Z9q", "Ol'd-" + "Z9q") }).ToString();
-        check(!printed.Contains("Z9q", StringComparison.Ordinal) && printed.Contains("Password = <redacted>, OldPassword = <redacted>", StringComparison.Ordinal)
-            && new LoginSecretsDto().ToString() == "LoginSecretsDto { Password = null, OldPassword = null }",
+        var printed = (Rename(Table, "x") with { Secrets = new("Pa'ss-" + "Z9q", "Ol'd-" + "Z9q", "Se'cret-" + "Z9q") }).ToString();
+        check(!printed.Contains("Z9q", StringComparison.Ordinal) && printed.Contains("Password = <redacted>, OldPassword = <redacted>, Secret = <redacted>", StringComparison.Ordinal)
+            && new LoginSecretsDto().ToString() == "LoginSecretsDto { Password = null, OldPassword = null, Secret = null }",
             "an ActionArgs never prints its secrets, which its record would otherwise write in clear: " + printed.Replace("Z9q", "***", StringComparison.Ordinal));
         var parsed = JsonSerializer.Deserialize<ActionArgs>("{\"action\":\"rename\",\"connectionId\":\"" + Guid.NewGuid() + "\",\"requestId\":\"" + Guid.NewGuid()
             + "\",\"target\":{\"kind\":\"table\",\"database\":\"AppData\",\"schema\":\"dbo\",\"name\":\"Orders\"},\"newName\":\"x\",\"secrets\":{\"password\":\"" + secret + "\"}}", Json);

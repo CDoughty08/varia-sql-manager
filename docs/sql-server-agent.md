@@ -95,6 +95,34 @@ later lanes, behind the same gate until 0.11.0.
   start panel: Blank job, or Copy an existing job, which fills General and Notifications from the job picked ("Copy of …");
   nothing is created until Create, which runs `sp_add_job` and `sp_add_jobserver` in one transaction. The save batches have
   their own exact-shape lint, `AgentSql.LintJobSave`. Pager duty against the job's schedules comes with the Schedules lane.
+- **Proxies and credentials** (`agentProxy`, `credential`, object actions, docs/object-actions.md). A proxy's document ("Proxy
+  Account Properties - FileShareWriter") opens from a proxy's node (Enter, double-click or Properties); **New Proxy…** from the
+  Proxies folder, a subsystem's folder (the proxy starts active to it), Unassigned Proxies or a proxy, and **Proxy…** from the
+  SQL Server Agent node's New submenu (SQL Server only: Managed Instance has no proxies). Only sysadmin reads or changes
+  proxies; below it the describe answers `PERMISSION_DENIED`. One screen: **Proxy** (name, the credential, description,
+  enabled), **Subsystems** (every subsystem but T-SQL), **Principals** (logins, msdb roles and server roles that may use it
+  besides sysadmin, picked or typed) and **References** (the job steps that run as it). The credential is picked, or created
+  in place (name, identity, password and its confirmation) for a login with ALTER ANY CREDENTIAL. **Save** sends only what
+  changed under the `proxy_id` the describe read (a proxy renamed or replaced since is `NOT_FOUND`) in two batches: first, in
+  one transaction, CREATE CREDENTIAL when the save makes one, `sp_add_proxy` or `sp_update_proxy`, and the subsystem grants and
+  revokes; then, without a transaction, the principal grants and revokes, because msdb checks a principal that is not a login
+  with `EXECUTE AS LOGIN` inside TRY/CATCH, which dooms any open transaction (3930). A refused first batch changes nothing and
+  keeps the draft; a refused second batch leaves the rest saved, so the document reads the proxy again and shows which
+  principal was refused. msdb ignores a grant to a sysadmin member, who may use every proxy anyway. A **credential's
+  document** ("Credential Properties - …", Security › Credentials, on SQL Server and Managed Instance; New Credential… on the
+  folder or a credential) shows its name, identity, creation and modification dates, and **Used by** (the proxies that run as
+  it with their subsystems, then their job steps; sysadmin only). SQL Server never returns a secret, so the password starts
+  empty behind **Change identity and password**, and Save sends the identity and the password together (ALTER CREDENTIAL sets
+  both) behind a STALE guard on the credential's id, name and `modify_date`. Without ALTER ANY CREDENTIAL it opens read-only.
+  New Credential lists the server's enabled cryptographic providers when it has any. **Secrets**: the password fields are
+  uncontrolled; what is typed lives only in the renderer's per-document secret slot (a snapshot learns only whether it is
+  set, confirmed, well formed and within `credentialSecretChars`), travels only in that one `actions.execute`'s
+  `secrets.secret`, and the slot is emptied after Save, on Reload, when the proxy goes back to an existing credential, when
+  the change is unchecked and when the tab closes. The backend builds the statement on the server from parameters (the name
+  through `QUOTENAME`, the identity and secret quoted by a binary-collation `REPLACE`), never logs it, scrubs it from any
+  error text, and Script writes `<secret>` in its place. **Rename** and **Delete** of a proxy are the object actions' (Delete
+  Object reads the proxy's id; Rename from the tree finds it by name). Each batch has an exact-shape lint
+  (`AgentSql.LintProxySave`, `CredentialSql.Lint`).
 - **Log File Viewer** (`agent.history`, docs/live.md). Job › View History, the Agent node's and the Jobs folder's View
   History, Job Activity Monitor's View history (the selected jobs) and the palette's SQL Server Agent: View History open one
   document per connection ("Log File Viewer - server"), focused if open with its sources replaced. **Select logs** lists every
@@ -513,13 +541,13 @@ Writes (from AG-2) call only these, each followed by a return-code check:
 | `msdb.dbo.sp_update_notification` | later lanes | AG-7 |
 | `msdb.dbo.sp_delete_notification` | later lanes | AG-7 |
 | `msdb.dbo.sp_set_sqlagent_properties` | `@sqlserver_restart`, `@monitor_autostart`, `@jobhistory_max_rows`, `@jobhistory_max_rows_per_job` | AG-8a |
-| `msdb.dbo.sp_add_proxy` | later lanes | AG-8b |
-| `msdb.dbo.sp_update_proxy` | later lanes | AG-8b |
-| `msdb.dbo.sp_delete_proxy` | later lanes | AG-8b |
-| `msdb.dbo.sp_grant_proxy_to_subsystem` | later lanes | AG-8b |
-| `msdb.dbo.sp_revoke_proxy_from_subsystem` | later lanes | AG-8b |
-| `msdb.dbo.sp_grant_login_to_proxy` | later lanes | AG-8b |
-| `msdb.dbo.sp_revoke_login_from_proxy` | later lanes | AG-8b |
+| `msdb.dbo.sp_add_proxy` | `@proxy_name`, `@enabled`, `@description`, `@credential_name`, `@proxy_id` | AG-8b |
+| `msdb.dbo.sp_update_proxy` | `@proxy_id`, `@credential_name`, `@new_name`, `@enabled`, `@description` | AG-8b |
+| `msdb.dbo.sp_delete_proxy` | `@proxy_id` | AG-8b |
+| `msdb.dbo.sp_grant_proxy_to_subsystem` | `@proxy_id`, `@subsystem_id` | AG-8b |
+| `msdb.dbo.sp_revoke_proxy_from_subsystem` | `@proxy_id`, `@subsystem_id` | AG-8b |
+| `msdb.dbo.sp_grant_login_to_proxy` | `@proxy_id`, `@login_name`, `@fixed_server_role`, `@msdb_role` | AG-8b |
+| `msdb.dbo.sp_revoke_login_from_proxy` | `@proxy_id`, `@name` | AG-8b |
 | `msdb.dbo.sp_cycle_agent_errorlog` | later lanes | AG-5b |
 
 msdb error numbers the actions map (AG-2 onward; reads map 15281 to `AGENT_DISABLED` instead):
@@ -568,6 +596,15 @@ msdb error numbers the actions map (AG-2 onward; reads map 15281 to `AGENT_DISAB
 | `retentionDays` | 7 | The days of history "What this keeps" measures each job's rate over |
 | `retentionJobs` | 200 | Jobs "What this keeps" lists, those with the most rows first; more set `truncated` |
 | `historyAgeDays` | 400 | Whole days of age the purge's row estimate counts separately (older rows count together) |
+| `proxySubsystems` | 32 | Subsystems one proxy save may grant or revoke (AG-8b) |
+| `proxyPrincipals` | 64 | Principals one proxy save may grant or revoke, and the most a proxy's Principals list shows |
+| `principalChoices` | 1,000 | Logins, msdb roles and server roles the proxy document's principal picker lists (a name can still be typed) |
+| `proxyReferences` | 500 | Job steps a proxy's References and a credential's Used by list; more set `truncated` |
+| `credentials` | 1,000 | Credentials the proxy document's credential picker lists; more set `truncated` |
+| `credentialProxies` | 100 | Proxies a credential's Used by lists |
+| `credentialIdentityChars` | 128 | Characters of a credential's identity (CREATE and ALTER CREDENTIAL refuse more, error 15540) |
+| `credentialSecretChars` | 4,000 | UTF-16 code units of a credential's secret (its own bound: a credential secret is not a login password) |
+| `cryptographicProviders` | 64 | Cryptographic providers New Credential lists (`sys.cryptographic_providers`) |
 | `purgeCount` | 999 | The most days, weeks or months "Delete old history now" goes back (999 months stays inside `datetime`) |
 
 A job save makes at most 204 calls at these caps, below the 255 a THROW state can number.

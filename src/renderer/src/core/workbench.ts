@@ -117,7 +117,10 @@ import { JobActivityService } from '../agent/JobActivityService'
 import { LogViewerService } from '../agent/LogViewerService'
 import { AgentJobStatusService } from '../agent/AgentJobStatusService'
 import { JobDocumentService } from '../agent/JobDocumentService'
+import { ProxyDocumentService } from '../agent/ProxyDocumentService'
+import { CredentialDocumentService } from '../agent/CredentialDocumentService'
 import { agentContribution } from '../contributions/agent'
+import { agentProxyContribution } from '../contributions/agent-proxy'
 import { SearchDetailsService } from '../search/SearchDetailsService'
 import { ObjectSearchService } from '../search/ObjectSearchService'
 import { MenuService } from '../menus/MenuService'
@@ -280,6 +283,9 @@ export interface Workbench extends Disposable {
   /** The status bar's running Agent jobs this window started, followed while hidden (AG-3). */
   readonly agentJobs: AgentJobStatusService
   readonly jobDocuments: JobDocumentService
+  /** The proxy and Credential documents (AG-8b). */
+  readonly proxyDocuments: ProxyDocumentService
+  readonly credentialDocuments: CredentialDocumentService
   /** Search Objects: each connected server's object index (built in the backend) and the Search Objects tabs. */
   readonly objectSearch: ObjectSearchService
   /** The Search Objects tabs' details pane: the selected hit's properties and definition. */
@@ -522,6 +528,13 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       ;(root?.querySelector<HTMLElement>('[data-agent-job-focus]') ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]'))?.focus()
     })
   })
+  // The proxy and Credential documents (AG-8b): New's name field, else the first section's item in the list.
+  const focusAgentObject = (attribute: string, field: string) => (id: string) => focusLater(() => {
+    const root = document.querySelector<HTMLElement>(`[${attribute}="${CSS.escape(id)}"]`)
+    ;(root?.querySelector<HTMLElement>(`[${field}]:not(:disabled)`) ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]'))?.focus()
+  })
+  const proxyDocuments = new ProxyDocumentService({ api, documents, files, connections, targetIdOf, focus: focusAgentObject('data-agent-proxy', 'data-agent-proxy-focus') })
+  const credentialDocuments = new CredentialDocumentService({ api, documents, files, connections, targetIdOf, focus: focusAgentObject('data-credential', 'data-credential-focus') })
   const jobActivity = new JobActivityService({
     api, documents, panes, groups: editorGroups, live, connections, targetIdOf,
     started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt),
@@ -721,6 +734,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     logViewer,
     agentJobs,
     jobDocuments,
+    proxyDocuments,
+    credentialDocuments,
     objectSearch,
     searchDetails,
     theme,
@@ -776,6 +791,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       logViewer.dispose()
       agentJobs.dispose()
       jobDocuments.dispose()
+      proxyDocuments.dispose()
+      credentialDocuments.dispose()
       // Before the live views: each monitor disposes its own; then the client, while the port is still there.
       activity.dispose()
       // Before the client: its views cancel their subscriptions while the port is still there.
@@ -861,6 +878,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     ssisContribution(workbench),
     activityContribution(workbench),
     agentContribution(workbench, { agentEnabled: api.agentPreview }),
+    agentProxyContribution(workbench, { agentEnabled: api.agentPreview }),
     searchContribution(workbench, api),
     settingsContribution(workbench),
     notificationsContribution(workbench)
