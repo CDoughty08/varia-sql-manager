@@ -178,6 +178,9 @@ describe('BigQuery job prompts', () => {
     expect(sessionPrompt({ action: 'exit', tabs: [job('a.sql', { jobIds: ['job_1'], moreJobIds: 3 })] })!.detail).toContain('• a.sql (running 12 minutes): job_1 and 3 more')
     const crowded = sessionPrompt({ action: 'exit', tabs: [...Array.from({ length: 12 }, (_, k) => running(`s${k}.sql`)), job('b.sql', { jobIds: ['job_9'] })] })!
     expect(crowded.detail).toContain('• b.sql (running 12 minutes): job_9')
+    // One tab holding several jobs is asked about them in the plural.
+    const several = sessionPrompt({ action: 'close', tabs: [job('a.sql', { jobIds: ['job_1', 'job_2'] })] })!
+    expect([several.message, several.buttons[0].label]).toEqual(['a.sql holds BigQuery jobs that are still running.', 'Cancel the Jobs'])
     expect(sessionPrompt({ action: 'close', tabs: [job('a.sql', { jobIds: ['job_1'] })] })!.detail).not.toContain('job_1')
   })
   it("keeps SQL Server's buttons beside executing SQL Server queries, with Leave BigQuery jobs running as the checkbox", () => {

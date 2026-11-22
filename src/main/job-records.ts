@@ -171,3 +171,18 @@ export class JobRecordStore {
     }).catch(error => { this.options.onWriteError?.(error) })
   }
 }
+
+/**
+ * The running records deleting saved profile `profileId` asks about. A job the backend reported on a connection it still
+ * holds, opened through that same profile, is the connected tab's to stop: deleting the profile disconnects nothing, and
+ * cancelling it here would also end that tab's session. Any other record (a reference a tab only holds, a job run through
+ * another profile's connection) can be cancelled only while the profile exists.
+ */
+export function profileDeleteJobs(records: readonly JobRecord[], profileId: string, connectionOf: (jobId: string) => string | undefined,
+  live: (connectionId: string) => boolean, profileOfConnection: (connectionId: string) => string | undefined): JobRecord[] {
+  return records.filter(record => {
+    if (record.profileId !== profileId || record.state !== 'running' || record.auxiliary) return false
+    const connectionId = connectionOf(record.jobId)
+    return connectionId === undefined || !live(connectionId) || profileOfConnection(connectionId) !== profileId
+  })
+}

@@ -206,10 +206,11 @@ function jobPrompt(action: SessionAction, jobs: readonly SessionTab[], running: 
       checkbox: { label: 'Leave BigQuery jobs running', checked: closeRunningJob === 'leave', remembers: false }
     }
   }
-  const one = jobs.length === 1
+  // One tab can hold several running jobs (the newest, and older ones not re-attached).
+  const one = jobs.length === 1 && (jobs[0].job!.jobIds?.length ?? 0) + (jobs[0].job!.moreJobIds ?? 0) <= 1
   return {
     title: one ? 'BigQuery job running' : 'BigQuery jobs running',
-    message: one ? `${jobs[0].name} holds a BigQuery job that is still running.` : `${queries(jobs.length)} hold BigQuery jobs that are still running.`,
+    message: one ? `${jobs[0].name} holds a BigQuery job that is still running.` : jobs.length === 1 ? `${jobs[0].name} holds BigQuery jobs that are still running.` : `${queries(jobs.length)} hold BigQuery jobs that are still running.`,
     detail: [listed(jobs, jobNote(action, prices)), cancelNote, action === 'disconnect' ? disconnectNote : '', leaveNote, quitNote].filter(Boolean).join('\n\n'),
     defaultId: 2, cancelId: 2,
     buttons: [{ label: one ? 'Cancel the Job' : 'Cancel the Jobs', answer: 'proceed' }, { label: 'Leave It Running', answer: 'leave' }, { label: dont[action], answer: 'cancel' }],

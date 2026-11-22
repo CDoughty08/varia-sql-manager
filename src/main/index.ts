@@ -48,7 +48,7 @@ import { effectiveRules } from '../shared/commands/effective'
 import { toPlatform } from '../shared/commands/keybindings'
 import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWriteSchema, retentionDays } from './recovery-store'
 import { migrateProfile, profileFiles } from './profile-migration'
-import { JobRecordStore } from './job-records'
+import { JobRecordStore, profileDeleteJobs } from './job-records'
 import { cancelJobsResultSchema, jobKeySchema, jobLimits, restoredJobs, type JobRecord, type RecordedJobsCancel } from '../shared/bigquery/jobs'
 import { connectionKey } from '../shared/connections'
 import { encodeReloadSession, SessionStore, sessionWriteSchema, type SessionInput, type SessionRecord, type SessionRecordDocument } from './session-store'
@@ -231,15 +231,16 @@ let quitKeepJobKeys: readonly string[] | undefined
 let pendingFailedAborts = 0
 // Each BigQuery connection's saved profile, so its jobs' records can be cancelled after a restart without a connection.
 const connectionProfiles = new Map<string, string>()
-// The connection each job key last ran on, so deleting a profile leaves the jobs of tabs still connected through it alone.
-const jobKeyConnections = new Map<string, string>()
+// The connection the backend reported each job on, so deleting a profile leaves the jobs of tabs still connected through it alone.
+const jobConnections = new Map<string, string>()
 /** Up to ten job ids as a box's bullet list, counting the rest. */
 function listedIds(jobIds: readonly string[]): string {
   return [...jobIds.slice(0, 10).map(jobId => `• ${jobId}`), ...jobIds.length > 10 ? [`… and ${jobIds.length - 10} more`] : []].join('\n')
 }
 /** Remembers the saved BigQuery profile a new connection was opened from (matched by its identity, as the library does). */
 async function rememberConnectionProfile(connectionId: string, options: ProviderConnectionOptions, context: unknown): Promise<void> {
-  if (options.provider !== 'bigquery' || !bigQueryStore) return
+  // A handle Connect handed back again (same settings) keeps the profile it was first opened from.
+  if (options.provider !== 'bigquery' || !bigQueryStore || connectionProfiles.has(connectionId)) return
   // The entry Connect chose wins over another saved with the same settings (the library allows twins).
   const selected = z.object({ selectedProfileId: z.uuid() }).safeParse(context).data?.selectedProfileId
   const key = connectionKey(options), matching = (await bigQueryStore.load()).library.profiles.filter(item => connectionKey(item.options) === key)
@@ -587,10 +588,6 @@ function requestClose(intent: CloseIntent): void {
  * without a summary (BACKEND_LOST) or left running (`detached`, `superseded`) keeps them for a re-attach.
  */
 function jobRecorder(queryId: string, jobKey: string, profileId?: string, connectionId?: string) {
-  if (connectionId !== undefined) {
-    jobKeyConnections.delete(jobKey); jobKeyConnections.set(jobKey, connectionId)
-    while (jobKeyConnections.size > jobLimits.records) jobKeyConnections.delete(jobKeyConnections.keys().next().value!)
-  }
   const seen = new Set<string>()
   const entry = { jobKey, seen }
   requestJobKeys.set(queryId, entry)
@@ -598,7 +595,14 @@ function jobRecorder(queryId: string, jobKey: string, profileId?: string, connec
   // reached a tab: its records stay for the kept tab to re-attach.
   const generation = rendererGeneration
   return {
-    event(event: QueryEvent): void { if (event.type !== 'query.job') return; seen.add(event.jobId); jobRecords.record(jobKey, event, profileId) },
+    event(event: QueryEvent): void {
+      if (event.type !== 'query.job') return
+      seen.add(event.jobId); jobRecords.record(jobKey, event, profileId)
+      if (connectionId !== undefined) {
+        jobConnections.delete(event.jobId); jobConnections.set(event.jobId, connectionId)
+        while (jobConnections.size > jobLimits.records) jobConnections.delete(jobConnections.keys().next().value!)
+      }
+    },
     summary(result: QueryResult): void {
       // Leave it running on Close Results: marked from the answer itself, which may arrive before query.cancel's does.
       if (result.status === 'detached') { jobRecords.markDetached(jobKey, seen); return }
@@ -1138,10 +1142,8 @@ app.whenReady().then(async () => {
       }), { response: 1, checkboxChecked: false }, true)
       if (response !== 0) throw new Error('The connection was kept: its BigQuery job records could not be read.')
     }
-    // A job in a tab still connected through this profile is that tab's to stop: deleting the profile disconnects nothing,
-    // and cancelling it here would also end the tab's session.
-    const connectedTab = (jobKey: string) => { const connectionId = jobKeyConnections.get(jobKey); return connectionId !== undefined && backend.hasConnection(connectionId) }
-    const running = bigQuery ? jobRecords.forProfile(id).filter(record => record.state === 'running' && !record.auxiliary && !connectedTab(record.jobKey)) : []
+    // A job running on a connection still open through this profile is its tab's to stop (profileDeleteJobs).
+    const running = bigQuery ? profileDeleteJobs(jobRecords.forProfile(id), id, jobId => jobConnections.get(jobId), connectionId => backend.hasConnection(connectionId), connectionId => connectionProfiles.get(connectionId)) : []
     if (running.length) {
       const one = running.length === 1, ids = listedIds(running.map(record => record.jobId))
       const { response } = await pageDialog((window, signal) => dialog.showMessageBox(window, {

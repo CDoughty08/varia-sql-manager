@@ -660,6 +660,13 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     // Preview Rows reads without a job and never waits behind the session's held jobs: its summary settles none.
     const settledBy = lostInSummary || preview ? undefined : summary
     let jobs = forgotten ? [] : heldAfter(attach, held, [...reported.values()], settledBy, lostCode)
+    // A run's summary settles only the detached jobs this backend's session left running (it waited behind those); a
+    // restored detached job it never held (its re-attach failed) is still the tab's.
+    if (!forgotten && settledBy && !attach && settledBy.status !== 'superseded' && settledBy.status !== 'detached' && held?.length) {
+      const here = this.detachedHere.get(tabId)
+      const kept = held.filter(job => job.detached && !here?.has(this.attachKey(job, connection)) && !jobs.includes(job))
+      if (kept.length) jobs = held.filter(job => jobs.includes(job) || kept.includes(job))
+    }
     // A failed run may have failed waiting for them: only a run that got past them settles them.
     if (settledBy && !attach && settledBy.status !== 'superseded' && settledBy.status !== 'failed' && sessionHeld?.size) {
       jobs = jobs.filter(job => job.detached || sessionHeld.get(job.jobId) !== this.attachKey(job, connection))
@@ -674,7 +681,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     }
     this.update(tabId, { summary, error, session: liveSession, provenance, ...livePlan ? { livePlan } : {}, ...jobs.length ? { jobs } : {} })
     // A job that carries on in BigQuery is never unseen: the tab says so, and re-attaches once its connection is back.
-    const lost = jobs.filter(job => !job.detached && job.state === 'running' && !held?.includes(job))
+    // A re-attach that failed for a passing reason on a live connection is not one whose connection went away.
+    const lost = jobs.filter(job => !job.detached && job.state === 'running' && !held?.includes(job) && (job.jobId !== attach?.jobId || backendGone.has(lostCode)))
     if (lost.length) this.addSessionMessage(tabId, jobStillRunning(lost.map(job => job.jobId)), 'info')
     // A job left running is followed by this backend already: it is re-attached only after a restart.
     if (summary?.status === 'detached') {

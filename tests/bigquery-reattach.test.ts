@@ -579,6 +579,11 @@ describe('the prompt beside a cost gate and held jobs', () => {
     // query.session.state answers job 'none' (the fixture's default): the job was never in this session.
     await expect(f.queries.holdsJob(f.tab.id)).resolves.toBe(true)
     expect(f.queries.getSnapshot()[f.tab.id].jobs?.map(item => item.jobId)).toEqual(['job_d'])
+    // Nor does a later run in the tab, whose session never waited behind it.
+    await f.queries.execute(f.tab.id); await settle()
+    expect(f.queries.getSnapshot()[f.tab.id].jobs?.map(item => [item.jobId, !!item.detached])).toEqual([['job_d', true]])
+    // A failed re-attach on a live connection never says the job re-attaches once the connection is back.
+    expect(f.results.addMessage.mock.calls.flat().join(' ')).not.toContain("connection is back")
   })
   it('waits at a quit for Cancel the job carried out through main, and says whether it reported anything', async () => {
     const f = fixture({ connected: false }), cancel = deferred<ApiResult<RecordedJobsCancel>>()

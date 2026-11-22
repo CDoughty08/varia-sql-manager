@@ -2,7 +2,8 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { JobRecordStore, type JobEventInput } from '../src/main/job-records'
+import { JobRecordStore, profileDeleteJobs, type JobEventInput } from '../src/main/job-records'
+import type { JobRecord } from '../src/shared/bigquery/jobs'
 import { jobLimits, jobRecordsFileSchema, queryAttachParamsSchema } from '../src/shared/bigquery/jobs'
 import { mainOnlyMethods, methodPolicies } from '../src/shared/ipc/methods'
 import { requestSchemas } from '../src/main/validation'
@@ -116,6 +117,16 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     expect(running.list().some(record => record.jobId === `varia_run_${jobLimits.records}`)).toBe(false)
   })
 
+  it("asks a profile delete about every running job but those the backend reported on a live connection through that profile", () => {
+    const record = (jobId: string, patch: Partial<JobRecord> = {}): JobRecord => ({ jobKey: keyA, jobId, project: 'p', profileId: 'P0', createdAt: 1, state: 'running', auxiliary: false, transaction: 'none', ...patch })
+    const records = [record('in_tab'), record('reference'), record('other_profile'), record('gone'), record('done', { state: 'done' }), record('elsewhere', { profileId: 'P9' })]
+    const connections: Record<string, string> = { in_tab: 'c0', other_profile: 'c1', gone: 'c2' }
+    const asked = profileDeleteJobs(records, 'P0', jobId => connections[jobId], connectionId => connectionId !== 'c2', connectionId => ({ c0: 'P0', c1: 'P1' })[connectionId])
+    // A reference the tab only holds (a failed re-attach, a passed-over job), one run through another profile's live
+    // connection and one whose connection is gone are asked; the one running in a tab connected through P0 is not.
+    expect(asked.map(item => item.jobId)).toEqual(['reference', 'other_profile', 'gone'])
+  })
+
   it('quarantines an unreadable file instead of overwriting it', async () => {
     const directory = await folder()
     await writeFile(join(directory, 'jobs.json'), JSON.stringify({ version: 1, records: [{ jobKey: 'not-a-key' }] }))
@@ -190,8 +201,8 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     expect(source).toContain('ids = listedIds(running.map(record => record.jobId))')
     // Deleting a profile leaves the jobs of tabs still connected through it (running or left running) to those tabs.
     expect(source).toContain("jobRecorder(queryId!, jobKey, profileOf((validated as { connectionId?: string }).connectionId ?? ''), (validated as { connectionId?: string }).connectionId)")
-    expect(source).toContain("record.state === 'running' && !record.auxiliary && !connectedTab(record.jobKey)")
-    expect(source).toMatch(/const connectedTab = \(jobKey: string\) => \{ const connectionId = jobKeyConnections\.get\(jobKey\); return connectionId !== undefined && backend\.hasConnection\(connectionId\) \}/)
+    expect(source).toContain("profileDeleteJobs(jobRecords.forProfile(id), id, jobId => jobConnections.get(jobId), connectionId => backend.hasConnection(connectionId), connectionId => connectionProfiles.get(connectionId))")
+    expect(source).toMatch(/seen\.add\(event\.jobId\); jobRecords\.record\(jobKey, event, profileId\)\s+if \(connectionId !== undefined\) \{\s+jobConnections\.delete\(event\.jobId\); jobConnections\.set\(event\.jobId, connectionId\)/)
     expect(source).toContain('detail: `${listedIds(failed)}')
     expect(source).toMatch(/function listedIds[^]*?… and \$\{jobIds\.length - 10\} more/)
     // A connection that runs a job moves to the end, so the 512 bound evicts idle handles, not a busy long-lived one.
@@ -213,7 +224,6 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     expect(source).toContain('if (value.disconnected) connectionProfiles.delete(connectionId)')
     expect(source).toContain("buttons: [one ? 'Cancel Job' : 'Cancel Jobs', 'Keep'], defaultId: 1, cancelId: 1")
     // Deleting a profile with running jobs asks, and keeps the profile when a cancel fails.
-    expect(source).toContain("const running = bigQuery ? jobRecords.forProfile(id).filter(record => record.state === 'running' && !record.auxiliary && !connectedTab(record.jobKey)) : []")
     // A SQL Server delete reads no job records; Keep Connection after failed cancels still says what the others noted.
     expect(source).toContain('const unread = bigQuery && await jobRecords.load().then(() => false, () => true)')
     expect(source).toMatch(/could not be cancelled\.\$\{notes\.length \? ` \$\{notes\.slice\(0, 5\)\.join\(' '\)\}` : ''\}`\)/)
