@@ -3,10 +3,6 @@ using Varia.Backend.Agent;
 
 namespace Varia.Backend.Language;
 
-internal sealed record LanguageParseArgs(string Text);
-internal sealed record LanguageParseError(int Line, int Column, int Number, string Message);
-internal sealed record LanguageParseResult(IReadOnlyList<LanguageParseError> Errors, bool Truncated);
-
 /// <summary>language.parse (AG-6b, src/shared/agent/parse.ts): the job step editor's Parse. ScriptDom's parser alone, like SSMS's Parse, with no
 /// connection and nothing executed; the text and the errors are bounded by the Agent catalogue's parseChars and parseErrors.</summary>
 internal static class StepParser

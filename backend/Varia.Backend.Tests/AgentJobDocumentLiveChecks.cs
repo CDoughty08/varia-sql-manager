@@ -158,5 +158,13 @@ internal static class AgentJobDocumentLiveChecks
         var cut = (await Call<ActionDescribeResult>("actions.describe", new ActionDescribeArgs(info.Id, Guid.NewGuid().ToString(), "agentJob", new ObjectRefDto("agentJob", Name: job)))).AgentJobDocument?.Steps;
         check(cut is [{ CommandTruncated: true } only] && only.Command?.Length == limit,
             "the job document's describe cuts a step command over stepCommandChars and marks it: " + (cut is null ? "no steps" : string.Join(",", cut.Select(item => item.Command?.Length + "/" + item.CommandTruncated))));
+
+        // More steps than stepsPerJob: the describe lists the first ones and says so, and the document then leaves the steps alone.
+        var perJob = (int)AgentCatalog.Current.Limit("stepsPerJob");
+        await sql("DECLARE @id uniqueidentifier = (SELECT job_id FROM msdb.dbo.sysjobs WHERE name = " + Quote(job) + "), @at int = 2; "
+            + "WHILE @at <= " + (perJob + 1) + " BEGIN DECLARE @name sysname = CONCAT(N'More ', @at); EXEC msdb.dbo.sp_add_jobstep @job_id = @id, @step_id = @at, @step_name = @name, @subsystem = N'TSQL', @command = N'SELECT 1;'; SET @at += 1; END;", "msdb");
+        var many = (await Call<ActionDescribeResult>("actions.describe", new ActionDescribeArgs(info.Id, Guid.NewGuid().ToString(), "agentJob", new ObjectRefDto("agentJob", Name: job)))).AgentJobDocument;
+        check(many is { StepsTruncated: true } && many.Steps.Count == perJob,
+            "the job document's describe of a job with more than stepsPerJob steps lists that many and marks the rest: " + many?.Steps.Count + "/" + many?.StepsTruncated);
     }
 }

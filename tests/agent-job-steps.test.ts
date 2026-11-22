@@ -183,6 +183,26 @@ describe('the steps draft', () => {
     expect(agentStepProblems(big, { sysadmin: true, original: big })).toEqual([])
     expect(agentStepProblems({ ...big, startKey: 's2' }, { sysadmin: true, original: big }).map(problem => problem.field)).toEqual(['command'])
   })
+  it('drops a proxy when a step becomes T-SQL, which msdb refuses (14517)', () => {
+    const cmd = { ...newStepDraft([], 'CmdExec'), proxyId: 5 }
+    expect(withSubsystem(cmd, 'TSQL').proxyId).toBe(0)
+    expect(withSubsystem(cmd, 'PowerShell').proxyId).toBe(5)
+    const draft = initialStepsDraft([step(1, 'A', { subsystem: 'TSQL', proxyId: 7 })], 1)
+    expect(planAgentSteps(undefined, draft, undefined, guid)!.writes?.[0]?.proxyId).toBe(0)
+  })
+  it('refuses, only when the steps are saved, what a save cannot send: too many steps, a go-to past them, unmodelled flags and long retries', () => {
+    const many = initialStepsDraft(Array.from({ length: agentLimits.stepsPerJob }, (_, at) => step(at + 1, `S${at + 1}`)), 1)
+    const added = addStep(many, newStepDraft(many.steps))
+    expect(agentStepProblems(added, { sysadmin: true, original: many }).map(problem => problem.message)).toEqual([stepText.tooMany])
+    const odd = initialStepsDraft([step(1, 'A', { onFailAction: 4, onFailStepId: agentLimits.stepsPerJob + 3, flags: 128, retryAttempts: agentLimits.stepRetries + 1 }), step(2, 'B')], 1)
+    expect(agentStepProblems(odd, { sysadmin: true, original: odd }).filter(problem => problem.severity === 'error')).toEqual([])
+    const moved = moveStep(odd, 's2', 0)
+    expect(agentStepProblems(moved, { sysadmin: true, original: odd }).filter(problem => problem.severity === 'error').map(problem => problem.message))
+      .toEqual([stepText.targetPast, stepText.unsavableOptions, stepText.retriesPast])
+    // Names compare upper-cased, as the backend's OrdinalIgnoreCase does.
+    const dotless = initialStepsDraft([step(1, 'ı'), step(2, 'I')], 1)
+    expect(agentStepProblems(dotless, { sysadmin: true }).filter(problem => problem.field === 'name')).toHaveLength(2)
+  })
   it('writes a dangling go-to by its id only while no step has that id', () => {
     const read = [step(1, 'A', { onFailAction: 4, onFailStepId: 3 }), step(2, 'B')]
     const dangling = initialStepsDraft(read, 1)
@@ -234,9 +254,20 @@ describe('steps in the job save', () => {
     const rebased = rebaseAgentJobDraft(openedModel, current, mine)
     expect(rebased.steps.steps[0]).not.toHaveProperty('from')
     expect(rebased.steps.steps[1]).toMatchObject({ from: 1 })
+    // Another session's step 4 (renamed under the user) is kept after the user's steps, not deleted.
+    expect(rebased.steps.steps.map(item => [item.name, item.from])).toEqual([['Notify', undefined], ['Check integrity', 1], ['Rebuild', 2], ['Statistics', 3], ['Page the DBA', 4]])
     const save = agentJobSave(current, rebased)!
-    expect(save.steps?.deletes).toEqual([4])
+    expect(save.steps?.deletes).toBeUndefined()
     expect(save.steps?.adds?.map(item => item.id)).toEqual([1])
+    expect(save.steps?.writes?.map(item => item.name)).toEqual(['Notify', 'Check integrity', 'Rebuild', 'Statistics', 'Page the DBA'])
+  })
+  it("keeps another session's edit of a step the user did not touch, and the user's edit of one they did", () => {
+    const openedModel = model(), draft = initialAgentJobDraft(openedModel)
+    const mine = { ...draft, steps: { ...draft.steps, steps: draft.steps.steps.map(item => item.key === 's1' ? { ...item, command: 'mine' } : item) } }
+    const current = model({ job: { ...openedModel.job!, version: 9 }, steps: [step(1, 'Check integrity', { command: 'theirs 1' }), step(2, 'Rebuild', { command: 'theirs 2', onFailAction: 4, onFailStepId: 4 }), described[2]!, described[3]!] })
+    const rebased = rebaseAgentJobDraft(openedModel, current, mine)
+    expect(rebased.steps.steps.map(item => item.command)).toEqual(['mine', 'theirs 2', '-- Statistics', '-- Notify'])
+    expect(agentJobSave(current, rebased)!.steps).toEqual({ writes: [expect.objectContaining({ id: 1, command: 'mine' })] })
   })
 })
 
@@ -251,6 +282,15 @@ describe('the SSIS step', () => {
     const spaced = withSsisParameter(parsed, 'package', 'Label', 'a "quoted" value; with spaces')
     expect(parseSsisCommand(buildSsisCommand(spaced))?.parameters.find(item => item.name === 'Label')?.value).toBe('a "quoted" value; with spaces')
     expect(ssisAdvancedSummary(parsed)).toBe('Logging level Basic · no dump on errors · no property overrides')
+  })
+  it('keeps SYNCHRONIZED as written, writes no /SERVER the command had none of, and escapes quotes in names', () => {
+    const unsynced = ssms.replace('SYNCHRONIZED(Boolean)\\"";True', 'SYNCHRONIZED(Boolean)\\"";False')
+    expect(buildSsisCommand(parseSsisCommand(unsynced)!)).toBe(unsynced)
+    const local = ssms.replace(' /SERVER "\\"sql-prod-01\\""', '')
+    expect(parseSsisCommand(local)?.server).toBe('')
+    expect(buildSsisCommand(parseSsisCommand(local)!)).toBe(local)
+    const quoted = withSsisParameter(parseSsisCommand(ssms)!, 'package', 'Odd"Name', 'v')
+    expect(parseSsisCommand(buildSsisCommand(quoted))?.parameters.find(item => item.name === 'Odd"Name')?.value).toBe('v')
   })
   it('keeps a command it cannot lay out as text', () => {
     expect(parseSsisCommand('/FILE "\\"D:\\pkg.dtsx\\"" /CHECKPOINTING OFF /REPORTING E')).toBeUndefined()

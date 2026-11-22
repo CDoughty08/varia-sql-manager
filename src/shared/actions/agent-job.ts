@@ -99,6 +99,8 @@ export interface AgentJobDocumentModel {
   readonly subsystems?: readonly string[]
   /** The proxies Run as offers, with the types each is active for; absent where the platform has none or the login may read none. */
   readonly proxies?: readonly AgentJobProxy[]
+  /** The job has more steps than agentLimits.stepsPerJob: the first ones are listed and Steps is read-only. */
+  readonly stepsTruncated?: boolean
   /** The databases a T-SQL step's Database offers. */
   readonly databases?: readonly string[]
 }
@@ -385,7 +387,8 @@ export function agentJobProblems(model: AgentJobDocumentModel, draft: AgentJobDr
   check('netSend', draft.netSendLevel, draft.netSendOperator)
   if (draft.emailLevel !== 0) { const mail = mailProblem(model.mail, model.platform); if (mail) problems.push({ field: 'email', severity: 'warning', message: mail }) }
   // Each step's problem, named by its position, on the Steps section (which shows them on their fields).
-  for (const problem of agentStepProblems(draft.steps, { sysadmin: model.sysadmin, ...model.proxies ? { proxies: model.proxies } : {}, ...ssis ? { ssis } : {}, ...model.job ? { original: initialStepsDraft(model.steps, model.job.startStepId) } : {} })) {
+  // A job whose steps were not all read lists them read-only: its go-tos past them are not problems Varia can fix.
+  for (const problem of model.stepsTruncated ? [] : agentStepProblems(draft.steps, { sysadmin: model.sysadmin, ...model.proxies ? { proxies: model.proxies } : {}, ...ssis ? { ssis } : {}, ...model.job ? { original: initialStepsDraft(model.steps, model.job.startStepId) } : {} })) {
     const at = draft.steps.steps.findIndex(step => step.key === problem.key)
     problems.push({ field: 'steps', severity: problem.severity, message: at >= 0 ? `Step ${at + 1} '${draft.steps.steps[at]!.name}': ${problem.message}` : problem.message })
   }

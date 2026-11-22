@@ -175,8 +175,8 @@ export function undoStepDeletion(draft: AgentStepsDraft, deletion: StepDeletion)
   const startKey = deletion.startMoved && draft.startKey === deletion.before.steps.find(step => step.key !== deletion.deleted.key)?.key ? deletion.deleted.key : draft.startKey ?? deletion.deleted.key
   return { steps, startKey }
 }
-/** Changes a step's type, dropping what the new type cannot keep (msdb refuses flag 4 outside T-SQL and 64 outside CmdExec, and clears a
- *  CmdExec step's database and a non-T-SQL step's database user). */
+/** Changes a step's type, dropping what the new type cannot keep (msdb refuses flag 4 outside T-SQL, 64 outside CmdExec and a proxy on a
+ *  T-SQL step (14517), and clears a CmdExec step's database and a non-T-SQL step's database user). */
 export function withSubsystem(step: AgentStepDraft, subsystem: string): AgentStepDraft {
   if (step.subsystem === subsystem) return step
   let flags = step.flags
@@ -185,7 +185,7 @@ export function withSubsystem(step: AgentStepDraft, subsystem: string): AgentSte
   else if (step.subsystem !== 'TSQL' && tsql && (flags & includeAllOutput)) flags = (flags & ~includeAllOutput) | stepFlags.includeStepOutputInHistory
   if (subsystem !== 'CmdExec') flags &= ~cmdExecAbortEvent
   if (!tableLogSubsystems.has(subsystem)) flags &= ~(stepFlags.logToTable | stepFlags.logToTableAppend)
-  return { ...step, subsystem, flags, databaseName: tsql ? step.databaseName || 'master' : subsystem === 'CmdExec' ? '' : step.databaseName, databaseUserName: tsql ? step.databaseUserName : '' }
+  return { ...step, subsystem, flags, databaseName: tsql ? step.databaseName || 'master' : subsystem === 'CmdExec' ? '' : step.databaseName, databaseUserName: tsql ? step.databaseUserName : '', proxyId: tsql ? 0 : step.proxyId }
 }
 
 // --- Flags (docs/agent-plan.md › Step dialog Advanced) ----------------------------------------------------------------------
@@ -265,7 +265,12 @@ export const stepText = {
   truncated: `This command is longer than Varia reads (${agentLimits.stepCommandChars.toLocaleString('en-US')} characters a step), so only its start is shown. Edit it in SSMS.`,
   truncatedSave: `This command was cut when it was read (over ${agentLimits.stepCommandChars.toLocaleString('en-US')} characters a step), so the steps cannot be saved from here. Undo the step changes to save the rest, and edit the steps in SSMS.`,
   runAsUserSysadmin: 'Only sysadmin can set Run as user; msdb ignores it for other logins.',
-  unmodelled: 'Varia cannot lay this command out field by field, so it is kept as text.',
+  unmodelled: 'Varia cannot lay this command out field by field, so it is edited as text.',
+  tooMany: `A job saved from here holds at most ${agentLimits.stepsPerJob} steps.`,
+  stepsTruncated: `This job has more than ${agentLimits.stepsPerJob} steps. Varia lists the first ${agentLimits.stepsPerJob} and does not change its steps; edit them in SSMS.`,
+  targetPast: `It goes to a step past step ${agentLimits.stepsPerJob}, which a save from here cannot write: choose where it goes.`,
+  unsavableOptions: 'This step has flags or a run priority Varia does not edit, so the steps cannot be saved from here. Edit them in SSMS.',
+  retriesPast: `Retry attempts and the retry interval are at most ${agentLimits.stepRetries.toLocaleString('en-US')} each.`,
   parseOk: 'Commands completed successfully. (Parsed only; nothing ran.)',
   parseUnavailable: 'Parse is not available: the SQL backend is not running.'
 } as const
@@ -290,7 +295,8 @@ export interface AgentStepContext {
 export function agentStepProblems(draft: AgentStepsDraft, context: AgentStepContext): AgentStepProblem[] {
   const problems: AgentStepProblem[] = []
   const names = new Map<string, number>()
-  for (const step of draft.steps) names.set(step.name.trim().toLowerCase(), (names.get(step.name.trim().toLowerCase()) ?? 0) + 1)
+  // Upper-cased, as the backend's OrdinalIgnoreCase compares names.
+  for (const step of draft.steps) names.set(step.name.trim().toUpperCase(), (names.get(step.name.trim().toUpperCase()) ?? 0) + 1)
   const keys = new Set(draft.steps.map(step => step.key))
   const saved = !context.original || stepsValue(context.original) !== stepsValue(draft)
   let commandChars = 0
@@ -300,13 +306,17 @@ export function agentStepProblems(draft: AgentStepsDraft, context: AgentStepCont
     if (!name) push('name', 'error', 'The step needs a name.')
     else if (name.length > agentLimits.nameChars) push('name', 'error', `A step name holds at most ${agentLimits.nameChars} characters.`)
     else if (name.toLowerCase().startsWith(temporaryStepPrefix)) push('name', 'error', `A step name cannot start with ${temporaryStepPrefix}: Save uses it while it renumbers.`)
-    else if ((names.get(name.toLowerCase()) ?? 0) > 1) push('name', 'error', `Another step is also named '${name}'; step names are unique within a job.`)
+    else if ((names.get(name.toUpperCase()) ?? 0) > 1) push('name', 'error', `Another step is also named '${name}'; step names are unique within a job.`)
     for (const which of ['onSuccess', 'onFail'] as const) {
       const target = which === 'onSuccess' ? step.onSuccessTarget : step.onFailTarget
       if (step[which] !== 4) continue
       if (target === step.key) push(which, 'error', 'A step cannot go to itself.')
+      else if (saved && target && !keys.has(target) && (describedId(target) ?? 0) > agentLimits.stepsPerJob) push(which, 'error', stepText.targetPast)
       else if (!target || !keys.has(target)) push(which, 'warning', `It goes to step ${target ? describedId(target) ?? '?' : '?'}, which no longer exists: choose where it goes.`)
     }
+    // Values msdb holds that a save cannot send back (the save's bounds, agentStepWriteSchema): only a save that writes the steps is refused.
+    if (saved && (step.flags < 0 || step.flags > 114 || !stepRunPriorities.includes(step.osRunPriority))) push('type', 'error', stepText.unsavableOptions)
+    if (saved && (step.retryAttempts > agentLimits.stepRetries || step.retryInterval > agentLimits.stepRetryMinutes)) push('output', 'error', stepText.retriesPast)
     if (step.truncated) push('command', saved ? 'error' : 'warning', saved ? stepText.truncatedSave : stepText.truncated)
     else if (saved && step.command.length > agentLimits.stepCommandChars) push('command', 'error', `A step's command holds at most ${agentLimits.stepCommandChars.toLocaleString('en-US')} characters.`)
     commandChars += step.command.length
@@ -320,6 +330,7 @@ export function agentStepProblems(draft: AgentStepsDraft, context: AgentStepCont
     if (!step.proxyId && !context.sysadmin && step.subsystem !== 'TSQL') push('runAs', 'warning', stepText.serviceAccountSysadmin)
     for (const message of context.ssis?.get(step.key) ?? []) push('package', 'warning', message)
   }
+  if (saved && draft.steps.length > agentLimits.stepsPerJob) problems.push({ key: draft.steps[agentLimits.stepsPerJob]!.key, field: 'name', severity: 'error', message: stepText.tooMany })
   if (saved && commandChars > agentLimits.stepCommandTotalChars) problems.push({ key: draft.steps[0]?.key ?? '', field: 'command', severity: 'error', message: `The steps' commands hold at most ${agentLimits.stepCommandTotalChars.toLocaleString('en-US')} characters together.` })
   return problems
 }
@@ -328,6 +339,8 @@ export function agentStepProblems(draft: AgentStepsDraft, context: AgentStepCont
 
 /** The prefix of the names Save gives every surviving step while it renumbers (then a GUID's 32 hex digits): under 128 characters. */
 export const temporaryStepPrefix = '__varia_step_'
+/** sp_add_jobstep's @os_run_priority values (agentStepWriteSchema). */
+const stepRunPriorities: readonly number[] = [-15, -1, 0, 1, 15]
 export const temporaryStepPattern = /^__varia_step_[0-9a-f]{32}$/
 /** One step's whole content written into step `id`: sp_update_jobstep (an existing job's) or sp_add_jobstep (New Job's). Go-to targets are
  *  final ids. A proxy of 0 is the service account (sp_update_jobstep's @proxy_name = N''). Strings are '' for none (msdb stores NULL). */
@@ -379,7 +392,7 @@ function writeOf(draft: AgentStepsDraft, step: AgentStepDraft, id: number): Agen
     id, name: step.name.trim(), subsystem: step.subsystem, command: step.command, databaseName: step.subsystem === 'CmdExec' ? '' : step.databaseName.trim(),
     databaseUserName: step.subsystem === 'TSQL' ? step.databaseUserName.trim() : '', onSuccessAction, onSuccessStepId,
     onFailAction, onFailStepId, retryAttempts: step.retryAttempts, retryInterval: step.retryInterval,
-    outputFileName: step.outputFileName.trim(), flags: step.flags, cmdexecSuccessCode: step.cmdexecSuccessCode, proxyId: step.proxyId, server: step.server, osRunPriority: step.osRunPriority
+    outputFileName: step.outputFileName.trim(), flags: step.flags, cmdexecSuccessCode: step.cmdexecSuccessCode, proxyId: step.subsystem === 'TSQL' ? 0 : step.proxyId, server: step.server, osRunPriority: step.osRunPriority
   }
 }
 const sameWrite = (a: AgentStepWrite, b: AgentStepWrite) => JSON.stringify(a) === JSON.stringify(b)
@@ -445,16 +458,24 @@ export function stepsText(draft: AgentStepsDraft): string {
 export function stepsValue(draft: AgentStepsDraft): string {
   return JSON.stringify([draft.steps.map((step, at) => writeOf(draft, step, at + 1)), draft.startKey ? draft.steps.findIndex(step => step.key === draft.startKey) : -1])
 }
-/** Reload and keep my changes: the user's steps over the job read now. A step whose described id the job no longer has with the same name
- *  becomes a new step, so the save never writes over another session's step by its number. */
+/** Reload and keep my changes, step by step: a step the user did not touch takes the job's version read now (another session's edit stays),
+ *  an edited one keeps the user's, and one whose described id the job no longer has under the same name becomes a new step, so the save
+ *  never writes over another session's step by its number. Steps another session added (ids that were not read under that name) are kept,
+ *  after the user's; a step the user deleted stays deleted. */
 export function rebaseSteps(opened: readonly AgentJobStepRecord[], current: readonly AgentJobStepRecord[], draft: AgentStepsDraft): AgentStepsDraft {
-  const steps = draft.steps.map(step => {
+  const read = new Map(initialStepsDraft(opened, undefined).steps.map(step => [step.key, step]))
+  const same = (id: number) => { const was = opened.find(item => item.id === id), now = current.find(item => item.id === id); return was && now && was.name === now.name ? now : undefined }
+  const steps: AgentStepDraft[] = draft.steps.map(step => {
     if (step.from === undefined) return step
-    const was = opened.find(item => item.id === step.from), now = current.find(item => item.id === step.from)
-    if (was && now && was.name === now.name) return step
-    const { from: _from, ...rest } = step
-    return rest
+    const now = same(step.from)
+    if (!now) { const { from: _from, ...rest } = step; return rest }
+    return JSON.stringify(step) === JSON.stringify(read.get(step.key)) ? { ...stepDraftOf(now), key: step.key } : step
   })
+  for (const now of current) {
+    if (same(now.id)) continue
+    const key = steps.some(step => step.key === keyOf(now.id)) ? newStepKey(steps) : keyOf(now.id)
+    steps.push({ ...stepDraftOf(now), key })
+  }
   return { ...draft, steps }
 }
 

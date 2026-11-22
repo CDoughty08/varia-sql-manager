@@ -53,8 +53,8 @@ function unquote(value: string): string {
 }
 /** `x` as SSMS writes a value: bare when it has no space, quote or semicolon, else `"\"x\""`. */
 const quoteValue = (value: string) => value !== '' && !/[\s";]/.test(value) ? value : `"\\"${value.replace(/"/g, '\\"')}\\""`
-/** A name or path as SSMS writes it: always `"\"x\""`. */
-const quoteName = (value: string) => `"\\"${value}\\""`
+/** A name or path as SSMS writes it: always `"\"x\""`, a quote inside escaped as quoteValue escapes it. */
+const quoteName = (value: string) => `"\\"${value.replace(/"/g, '\\"')}\\""`
 
 /** Splits `"\"name\"";value` at the first semicolon outside quotes. */
 function splitPar(token: string): [string, string] | undefined {
@@ -95,7 +95,8 @@ export function parseSsisCommand(command: string): SsisStepCommand | undefined {
       const bare = typed[1]!, type = typed[2]
       if (/^\$ServerOption::/i.test(bare)) {
         const optionName = bare.slice('$ServerOption::'.length).toUpperCase()
-        if (optionName === 'SYNCHRONIZED') continue
+        // SSMS always writes True; any other value is kept as written, and the builder then writes no True of its own.
+        if (optionName === 'SYNCHRONIZED' && /^true$/i.test(value)) continue
         if (optionName === 'LOGGING_LEVEL' && /^[0-4]$/.test(value)) { loggingLevel = Number(value); continue }
         if (optionName === 'DUMP_ON_ERROR' && /^(true|false)$/i.test(value)) { dumpOnError = /^true$/i.test(value); continue }
         extra.push(`/Par ${next}`)
@@ -113,7 +114,8 @@ export function parseSsisCommand(command: string): SsisStepCommand | undefined {
 
 /** The command SSMS writes for `step`: package path, server, environment, parameters, server options, then 32-bit and the caller. */
 export function buildSsisCommand(step: SsisStepCommand): string {
-  const parts = [`/ISSERVER ${quoteName(`\\SSISDB\\${step.folder}\\${step.project}\\${step.package}`)}`, `/SERVER ${quoteName(step.server)}`]
+  // No /SERVER when the command had none: dtexec then runs the package on the local server, as before.
+  const parts = [`/ISSERVER ${quoteName(`\\SSISDB\\${step.folder}\\${step.project}\\${step.package}`)}`, ...step.server ? [`/SERVER ${quoteName(step.server)}`] : []]
   if (step.environmentReference !== undefined) parts.push(`/ENVREFERENCE ${step.environmentReference}`)
   for (const parameter of step.parameters) {
     const name = (parameter.scope === 'project' ? '$Project::' : '') + parameter.name + (parameter.type ? `(${parameter.type})` : '')
@@ -121,7 +123,7 @@ export function buildSsisCommand(step: SsisStepCommand): string {
   }
   if (step.loggingLevel !== undefined) parts.push(`/Par ${quoteName('$ServerOption::LOGGING_LEVEL(Int16)')};${step.loggingLevel}`)
   if (step.dumpOnError !== undefined) parts.push(`/Par ${quoteName('$ServerOption::DUMP_ON_ERROR(Boolean)')};${step.dumpOnError ? 'True' : 'False'}`)
-  parts.push(`/Par ${quoteName('$ServerOption::SYNCHRONIZED(Boolean)')};True`)
+  if (!step.extra.some(token => /\$ServerOption::SYNCHRONIZED/i.test(token))) parts.push(`/Par ${quoteName('$ServerOption::SYNCHRONIZED(Boolean)')};True`)
   parts.push(...step.extra)
   if (step.x86) parts.push('/X86')
   parts.push('/CALLERINFO SQLAGENT /REPORTING E')

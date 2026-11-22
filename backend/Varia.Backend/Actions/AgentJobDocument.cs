@@ -195,6 +195,7 @@ internal sealed partial class ActionService
 
         AgentJobRecordDto? job = null;
         var steps = new List<AgentJobStepRowDto>();
+        var stepsTruncated = false;
         if (row is not null)
         {
             var jobRows = results[AgentSql.JobDocument.Id];
@@ -209,6 +210,8 @@ internal sealed partial class ActionService
                 IntOf(Value("notify_level_netsend")), Operator("notify_level_netsend", "notify_netsend_operator"), IntOf(Value("notify_level_eventlog")), IntOf(Value("delete_level")),
                 row.Created, modified, IntOf(Value("version_number")), IntOf(Value("start_step_id"), 1), RunStamp(IntOf(Value("last_run_date")), IntOf(Value("last_run_time"))), outcome);
             var stepRows = results[AgentSql.JobDocumentSteps.Id];
+            // More steps than stepsPerJob: the document lists those it read and leaves the steps alone (go-tos past them would not resolve).
+            stepsTruncated = stepRows.Truncated;
             // Commands are nvarchar(max): each is bounded by stepCommandChars and all of them by stepCommandTotalChars, so the describe stays
             // far below the response limit; a cut command is marked, and the document never writes it back.
             var commandRoom = catalogue.Limit("stepCommandTotalChars");
@@ -285,7 +288,7 @@ internal sealed partial class ActionService
         var readOnly = job is not null && !sysadmin && !string.Equals(job.Owner, login, StringComparison.OrdinalIgnoreCase) ? JobReadOnlyMessage : null;
         var mail = new AgentJobMailDto(mailChecked, sysadmin, mailXps is { } on ? on == 1 : null, profiles, useDatabaseMail, agentProfile);
         return new(null, 0, AgentJobDocument: new(job, login, sysadmin, platform, categories, steps, alerts is not null && sysadmin, mail, readOnly, operators, owners, alerts, jobs, jobIds,
-            subsystems, proxyReads.Count > 0 ? [.. proxies.Values.OrderBy(proxy => proxy.Name, StringComparer.CurrentCultureIgnoreCase)] : null, databases));
+            subsystems, proxyReads.Count > 0 ? [.. proxies.Values.OrderBy(proxy => proxy.Name, StringComparer.CurrentCultureIgnoreCase)] : null, databases, stepsTruncated ? true : null));
     }
 
     // --- Plan --------------------------------------------------------------------------------------------------------------

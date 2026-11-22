@@ -631,6 +631,10 @@ internal sealed record AgentAlertRefDto(int Id, string Name);
 internal sealed record AgentStepsSaveDto(List<int>? Deletes = null, List<AgentStepNameDto>? Temporary = null, List<AgentStepNameDto>? Adds = null, List<AgentStepWriteDto>? Writes = null,
     int? StartStepId = null);
 internal sealed record AgentStepNameDto(int Id, string Name);
+/// <summary>language.parse (AG-6b, src/shared/agent/parse.ts): the job step editor's Parse of one T-SQL text.</summary>
+internal sealed record LanguageParseArgs(string Text);
+internal sealed record LanguageParseError(int Line, int Column, int Number, string Message);
+internal sealed record LanguageParseResult(IReadOnlyList<LanguageParseError> Errors, bool Truncated);
 /// <summary>One step's whole content (src/shared/agent/steps.ts AgentStepWrite): strings '' for none, ProxyId 0 for the service account.</summary>
 internal sealed record AgentStepWriteDto(int Id, string Name, string Subsystem, string Command, string DatabaseName, string DatabaseUserName, int OnSuccessAction, int OnSuccessStepId,
     int OnFailAction, int OnFailStepId, int RetryAttempts, int RetryInterval, string OutputFileName, int Flags, int CmdexecSuccessCode, int ProxyId, string Server, int OsRunPriority);
@@ -822,7 +826,8 @@ internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long 
 /// platform without alerts).</summary>
 internal sealed record AgentJobDocumentDto(AgentJobRecordDto? Job, string Login, bool Sysadmin, string Platform, List<string> Categories, List<AgentJobStepRowDto> Steps, bool AlertsEditable,
     AgentJobMailDto Mail, string? ReadOnly = null, List<AgentJobOperatorDto>? Operators = null, List<string>? Owners = null, List<AgentJobAlertDto>? Alerts = null,
-    List<string>? Jobs = null, List<string>? JobIds = null, List<string>? Subsystems = null, List<AgentJobProxyDto>? Proxies = null, List<string>? Databases = null);
+    List<string>? Jobs = null, List<string>? JobIds = null, List<string>? Subsystems = null, List<AgentJobProxyDto>? Proxies = null, List<string>? Databases = null,
+    bool? StepsTruncated = null);
 /// <summary>A proxy the step editor's Run as offers (AG-6b): the step types sp_help_proxy @subsystem_name lists it for.</summary>
 internal sealed record AgentJobProxyDto(int Id, string Name, bool Enabled, List<string> Subsystems, string? Identity = null);
 internal sealed record AgentJobRecordDto(string JobId, string Name, bool Enabled, string Description, string Category, string Owner, int EmailLevel, string EmailOperator, int PageLevel,

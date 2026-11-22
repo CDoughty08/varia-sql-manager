@@ -28,6 +28,7 @@ import { deliverScript, type DeliverScriptDeps } from '../scripting/deliver'
 import type { LiveConnection } from '../services/connections'
 import { CustomDocumentTargets, type CustomDocumentTargetOptions } from '../services/custom-document-targets'
 import type { CustomDocumentProvider, DocumentService } from '../services/documents'
+import { agentLimits } from '../../../shared/agent/catalog.ts'
 import { addStep, agentStepProblems, deleteStep, initialStepsDraft, moveStep, newStepDraft, newStepKey, undoStepDeletion, withSubsystem, type AgentStepDraft, type AgentStepProblem, type StepDeletion } from '../../../shared/agent/steps.ts'
 import { parseSsisCommand, ssisParameterRows, ssisProblems } from '../../../shared/agent/ssis-step.ts'
 import type { LanguageParseError } from '../../../shared/agent/parse.ts'
@@ -86,6 +87,8 @@ export interface JobSsisPicker {
   readonly package?: { readonly key: string; readonly model: SsisPackageModel }
   readonly loading?: string
   readonly error?: string
+  /** The `folder\project\package` the latest loadSsisPackage asked for: a reply to an earlier request is dropped. */
+  readonly wanted?: string
 }
 export interface JobDocumentSnapshot { readonly documents: Readonly<Record<string, JobDocumentState>> }
 
@@ -256,7 +259,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   /** The steps' problems by step and field, as the Steps section shows them (the header counts them through problems()). */
   stepProblems(id: string): AgentStepProblem[] {
     const state = this.get(id)
-    if (!state?.model || !state.draft) return []
+    if (!state?.model || !state.draft || state.model.stepsTruncated) return []
     const ssis = this.ssisProblems(state)
     return agentStepProblems(state.draft.steps, { sysadmin: state.model.sysadmin, ...state.model.proxies ? { proxies: state.model.proxies } : {}, ...ssis ? { ssis } : {}, ...state.model.job ? { original: initialStepsDraft(state.model.steps, state.model.job.startStepId) } : {} })
   }
@@ -299,6 +302,8 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
 
   // --- Steps (AG-6b) ---------------------------------------------------------------------------------------------------
 
+  /** Steps can change: the job is editable and its steps were read whole. */
+  canEditSteps(id: string): boolean { return this.canEdit(id) && !this.get(id)?.model?.stepsTruncated }
   /** The step the editor pane shows: the selected one, else the first. */
   selectedStep(id: string): AgentStepDraft | undefined {
     const state = this.get(id), steps = state?.draft?.steps.steps ?? []
@@ -313,16 +318,16 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
    *  finds the deleted step missing and puts it back. */
   addStepOf(id: string, subsystem = 'TSQL'): void {
     const state = this.get(id)
-    if (!state?.draft || !this.canEdit(id)) return
+    if (!state?.draft || !this.canEditSteps(id) || state.draft.steps.steps.length >= agentLimits.stepsPerJob) return
     const steps = state.draft.steps.steps
     const step = { ...newStepDraft(steps, subsystem), key: newStepKey(state.deletion ? [...steps, state.deletion.deleted] : steps) }
     this.updateDraft(id, { steps: addStep(state.draft.steps, step) })
     this.patch(id, { step: step.key, parse: undefined })
   }
-  /** Moves a step to `index` (drag, Move up and down, Alt+Up and Alt+Down); go-to targets follow, being keys. */
+  /** Moves a step to `index` (drag, Move up and Move down); go-to targets follow, being keys. */
   moveStepTo(id: string, key: string, index: number): void {
     const state = this.get(id)
-    if (!state?.draft || !this.canEdit(id)) return
+    if (!state?.draft || !this.canEditSteps(id)) return
     const moved = moveStep(state.draft.steps, key, index)
     if (moved !== state.draft.steps) this.updateDraft(id, { steps: moved })
   }
@@ -333,7 +338,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   /** Delete acts on the draft at once: steps that went to it quit reporting failure, the banner says which, and Undo puts it back. */
   deleteStepOf(id: string, key: string): void {
     const state = this.get(id)
-    if (!state?.draft || !this.canEdit(id)) return
+    if (!state?.draft || !this.canEditSteps(id)) return
     const result = deleteStep(state.draft.steps, key)
     if (!result) return
     const steps = result.draft.steps
@@ -343,7 +348,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   }
   undoDeleteStep(id: string): void {
     const state = this.get(id)
-    if (!state?.draft || !state.deletion || !this.canEdit(id)) return
+    if (!state?.draft || !state.deletion || !this.canEditSteps(id)) return
     const deletion = state.deletion
     this.updateDraft(id, { steps: undoStepDeletion(state.draft.steps, deletion) })
     this.patch(id, { deletion: undefined, step: deletion.deleted.key })
@@ -352,7 +357,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   /** One step's fields; a type change drops what the new type cannot keep. */
   updateStep(id: string, key: string, patch: Partial<Omit<AgentStepDraft, 'key' | 'from'>>): void {
     const state = this.get(id)
-    if (!state?.draft || !this.canEdit(id)) return
+    if (!state?.draft || !this.canEditSteps(id)) return
     let changed = false
     const steps = state.draft.steps.steps.map(step => {
       if (step.key !== key) return step
@@ -368,7 +373,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   }
   setStartStep(id: string, key: string): void {
     const state = this.get(id)
-    if (!state?.draft || !this.canEdit(id) || state.draft.steps.startKey === key || !state.draft.steps.steps.some(step => step.key === key)) return
+    if (!state?.draft || !this.canEditSteps(id) || state.draft.steps.startKey === key || !state.draft.steps.steps.some(step => step.key === key)) return
     this.updateDraft(id, { steps: { ...state.draft.steps, startKey: key } })
   }
   /** Parse: ScriptDom's parse of the step's T-SQL in the backend (`language.parse`); nothing runs. */
@@ -424,11 +429,13 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   async loadSsisPackage(id: string, folder: string, project: string, packageName?: string): Promise<void> {
     const connectionId = this.connectionOf(id), describe = this.options.api.describeSsis
     if (!connectionId || !describe) return
-    const projectKey = `${folder}\\${project}`
+    const projectKey = `${folder}\\${project}`, wanted = `${projectKey}\\${packageName ?? ''}`
+    this.patchSsis(id, { wanted })
+    const current = () => !this.disposed && this.get(id)?.ssis?.wanted === wanted
     if (this.get(id)?.ssis?.project?.key !== projectKey) {
       this.patchSsis(id, { loading: projectKey, error: undefined })
       const result = await this.call(() => describe({ connectionId, requestId: this.newId(), view: 'project', target: { kind: 'ssisProject', name: project, ssisFolder: folder } }))
-      if (this.disposed || !this.get(id)) return
+      if (!current()) return
       const model = result.ok && result.value.model?.view === 'project' ? result.value.model : undefined
       if (!model) { this.patchSsis(id, { loading: undefined, error: !result.ok ? result.error : result.value.error?.message ?? 'The project could not be read.' }); return }
       this.patchSsis(id, { loading: undefined, project: { key: projectKey, model }, package: undefined })
@@ -438,7 +445,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     if (this.get(id)?.ssis?.package?.key === packageKey) return
     this.patchSsis(id, { loading: packageKey, error: undefined })
     const result = await this.call(() => describe({ connectionId, requestId: this.newId(), view: 'package', target: { kind: 'ssisPackage', name: packageName, ssisFolder: folder, ssisProject: project } }))
-    if (this.disposed || !this.get(id)) return
+    if (!current()) return
     const model = result.ok && result.value.model?.view === 'package' ? result.value.model : undefined
     this.patchSsis(id, model ? { loading: undefined, package: { key: packageKey, model } } : { loading: undefined, error: !result.ok ? result.error : result.value.error?.message ?? 'The package could not be read.' })
   }
@@ -592,7 +599,8 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     if (!state?.stale || !state.model || !state.draft) return
     const { current, keepServer } = state.stale
     const draft = rebaseAgentJobDraft(state.model, current, state.draft, new Set(keepServer))
-    this.patch(id, { model: current, draft, stale: undefined, error: undefined, revision: state.revision + 1, edits: state.edits + 1 })
+    // A pending delete's Undo would bring its step back with the id it was read under, which another session may since have changed.
+    this.patch(id, { model: current, draft, stale: undefined, error: undefined, revision: state.revision + 1, edits: state.edits + 1, deletion: undefined })
     this.afterDraft(id)
   }
   /** Discard mine and reload: the job as read now. */

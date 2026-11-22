@@ -11,7 +11,9 @@ internal sealed record AgentParameter(string Name, SqlDbType Type, int Size = 0)
 /// <summary>One Agent read statement: constant text with values as parameters, the columns the reader takes from its first
 /// result set (an msdb procedure returns more, and its column set varies by version, so these are read by name), and the
 /// catalogue limit that caps its rows.</summary>
-internal sealed record AgentStatement(string Id, string Text, IReadOnlyList<string> Columns, IReadOnlyList<AgentParameter> Parameters, string Cap);
+/// <summary>`TextChars`, when set, bounds every text cell the reader keeps: it reads the row sequentially and keeps at most TextChars + 1
+/// characters of each, so an nvarchar(max) value is never held whole (the caller sees the extra character and marks the cut).</summary>
+internal sealed record AgentStatement(string Id, string Text, IReadOnlyList<string> Columns, IReadOnlyList<AgentParameter> Parameters, string Cap, int? TextChars = null);
 
 /// <summary>SQL Server Agent's read statements and their lint (docs/agent-plan.md › SQL rules). Every Agent read that EXECs, in
 /// any caller (live, listing, Search Objects, describe), is checked by <see cref="LintRead"/>: <see cref="LiveSql.Lint"/>'s
@@ -108,7 +110,7 @@ internal static partial class AgentSql
     public static readonly AgentStatement JobDocumentSteps = new("jobDocumentSteps", "EXEC msdb.dbo.sp_help_jobstep @job_id = @job_id;", ["step_id", "step_name", "subsystem",
         "command", "flags", "cmdexec_success_code", "on_success_action", "on_success_step_id", "on_fail_action", "on_fail_step_id", "server", "database_name", "database_user_name",
         "retry_attempts", "retry_interval", "os_run_priority", "output_file_name", "proxy_id"],
-        [new("@job_id", SqlDbType.UniqueIdentifier)], "stepsPerJob");
+        [new("@job_id", SqlDbType.UniqueIdentifier)], "stepsPerJob", (int)AgentCatalog.Current.Limit("stepCommandChars"));
     /// <summary>The databases a T-SQL step's Database offers (AG-6b).</summary>
     public static readonly AgentStatement JobStepDatabases = new("jobStepDatabases", "SELECT d.name FROM sys.databases AS d ORDER BY d.name;", ["name"], [], "listRows");
     /// <summary>The proxies active for one step type (AG-6b's Run as; below sysadmin only those granted to the login), one statement per type

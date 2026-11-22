@@ -4,7 +4,7 @@
 // scroll with an inline SSISDB picker; SSMS's Advanced page is the More options fold. JobDocumentService keeps every state.
 import { useEffect, useRef, useState, type DragEvent } from 'react'
 import type { editor } from 'monaco-editor'
-import { stepActions } from '../../../shared/agent/catalog.ts'
+import { agentLimits, stepActions } from '../../../shared/agent/catalog.ts'
 import {
   stepFlagChoices, stepFlagsWith, stepOptionsSummary, stepTargetShort, stepText, stepTypeLabel, stepTypeShort, type AgentStepDraft, type AgentStepField,
   type AgentStepProblem, type StepAction
@@ -217,7 +217,6 @@ function SsisSection({ state, step, editable, update, service, id }: { readonly 
   const [filter, setFilter] = useState('')
   useEffect(() => { void service.loadSsisFolders(state.id) }, [service, state.id])
   useEffect(() => { if (parsed) void service.loadSsisPackage(state.id, parsed.folder, parsed.project, parsed.package) }, [service, state.id, parsed?.folder, parsed?.project, parsed?.package])
-  if (step.command.trim() && !parsed) return <p className="field-note"><Icon name="info" />{stepText.unmodelled}</p>
   const write = (command: SsisStepCommand) => update({ command: buildSsisCommand(command) })
   const choose = (folder: string, project: string, packageName: string) => write(parsed
     ? { ...parsed, folder, project, package: packageName, ...parsed.folder === folder && parsed.project === project ? {} : { parameters: [], environmentReference: undefined } }
@@ -358,9 +357,10 @@ function StepEditor(props: StepsProps & { readonly step: AgentStepDraft; readonl
       </div>}
       <RunAs step={step} model={model} editable={editable} problems={problems} update={update} id={`${id}-runas`} />
     </div>
-    {step.subsystem === 'SSIS' ? <SsisSection state={state} step={step} editable={editable} update={update} service={service} id={id} /> : <div className="agent-step-command">
+    {step.subsystem === 'SSIS' && !step.command.trim() || step.subsystem === 'SSIS' && parseSsisCommand(step.command) ? <SsisSection state={state} step={step} editable={editable} update={update} service={service} id={id} /> : <div className="agent-step-command">
       <div className="agent-step-command-head">
         <span id={`${id}-command-label`}>Command</span>
+        {step.subsystem === 'SSIS' && <span className="field-note"><Icon name="info" />{stepText.unmodelled}</span>}
         <span className="agent-step-inline">
           {step.subsystem === 'TSQL' && <button type="button" onClick={() => void service.parseStep(state.id, step.key)} disabled={parse?.running}><Icon name="check" />Parse</button>}
           {step.subsystem === 'TSQL' && <button type="button" onClick={() => service.openStepInQuery(state.id, step.key)}><Icon name="link-external" />Open in query window</button>}
@@ -395,7 +395,9 @@ function StepEditor(props: StepsProps & { readonly step: AgentStepDraft; readonl
 }
 
 /** The Steps section: the delete banner, the list and the selected step's editor. */
-export default function JobSteps(props: StepsProps) {
+export default function JobSteps(outer: StepsProps) {
+  // A job with more steps than Varia reads keeps its steps as they are: they are listed, never saved.
+  const props = outer.model.stepsTruncated ? { ...outer, editable: false } : outer
   const { state, draft, editable, service } = props
   const [dragging, setDragging] = useState<string | undefined>(undefined)
   const [over, setOver] = useState<number | undefined>(undefined)
@@ -415,6 +417,7 @@ export default function JobSteps(props: StepsProps) {
   const types = props.model.subsystems?.length ? props.model.subsystems : [...mainTypes]
   const retargeted = deletion ? deletion.retargeted.map(key => steps.findIndex(step => step.key === key) + 1).filter(at => at > 0) : []
   return <div className="agent-job-steps">
+    {props.model.stepsTruncated && <p className="field-note" role="note"><Icon name="info" />{stepText.stepsTruncated}</p>}
     {deletion && <div className="agent-step-banner" role="status">
       <Icon name="trash" />
       <span className="agent-step-banner-text">{[stepText.deleted(deletion.position + 1, deletion.deleted.name), stepText.retargeted(retargeted), deletion.startMoved ? stepText.startMoved : '', stepText.notYet].filter(Boolean).join(' ')}</span>
@@ -460,7 +463,7 @@ export default function JobSteps(props: StepsProps) {
           {dragging && <div className="agent-step-drop-end" data-drop-before={over === steps.length || undefined} onDragOver={event => { event.preventDefault(); setOver(steps.length) }} onDrop={event => drop(event, steps.length)} />}
         </div>
         <div className="agent-step-add">
-          <button type="button" disabled={!editable} onClick={() => service.addStepOf(state.id, adding)}><Icon name="add" />Add step</button>
+          <button type="button" disabled={!editable || steps.length >= agentLimits.stepsPerJob} title={steps.length >= agentLimits.stepsPerJob ? stepText.tooMany : undefined} onClick={() => service.addStepOf(state.id, adding)}><Icon name="add" />Add step</button>
           <select className="property-input" aria-label="Type of the step to add" value={adding} disabled={!editable} onChange={event => setAdding(event.target.value)}>
             {types.map(type => <option key={type} value={type}>{stepTypeShort(type)}</option>)}
           </select>
