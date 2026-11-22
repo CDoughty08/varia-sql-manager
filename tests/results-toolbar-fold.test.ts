@@ -25,7 +25,7 @@ describe('results toolbar in a narrow pane', () => {
     for (const platform of ['win32', 'linux', 'darwin'] as const) {
       const items = buildMenuModel('output.tools', platform).map(entry => entry.kind === 'command' ? entry.id : entry.kind === 'separator' ? '-' : entry.kind)
       expect(items).toEqual([
-        'output.toggleResultsTabs', 'output.goToResult', '-', 'output.pivot', 'output.compare', 'output.transpose', 'output.transposeChooseHeaders', '-',
+        'output.toggleResultsTabs', 'output.goToResult', '-', 'output.pivot', 'output.compare', 'output.transpose', 'output.transposeChooseHeaders', 'output.loadIntoMemory', '-',
         'output.toggleColumnProfile', 'output.toggleProfileSelectedColumns', 'output.toggleRowSize', '-', 'output.showSpaces', 'output.showAllWhitespace', 'output.sortTextByChars', 'output.sortTextByBytes', '-', 'output.closeResults'
       ])
     }
