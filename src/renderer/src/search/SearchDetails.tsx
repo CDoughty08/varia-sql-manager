@@ -103,11 +103,13 @@ export function matchedLine(text: string, hit: ObjectSearchHit, exact: boolean):
   if (!match) return undefined
   const lines = text.split('\n')
   const wanted = match.preview.trim()
-  if (exact && match.line >= 1 && match.line <= lines.length && (!wanted || lines[match.line - 1]!.includes(wanted))) return match.line
+  // IndexSearch displays each tab as one space in its preview. Keep the original source for rendering.
+  const matches = (line: string) => line.includes(wanted) || line.includes('\t') && line.replaceAll('\t', ' ').includes(wanted)
+  if (exact && match.line >= 1 && match.line <= lines.length && matches(lines[match.line - 1]!)) return match.line
   if (!wanted) return undefined
   let best: number | undefined
   lines.forEach((line, index) => {
-    if (line.includes(wanted) && (best === undefined || Math.abs(index + 1 - match.line) < Math.abs(best - match.line))) best = index + 1
+    if (matches(line) && (best === undefined || Math.abs(index + 1 - match.line) < Math.abs(best - match.line))) best = index + 1
   })
   return best
 }

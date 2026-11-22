@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { BackendSupervisor } from './backend/supervisor'
-import { BackendError } from './backend/errors'
+import { BackendError, sentences } from './backend/errors'
 import { backendSpawnSpec, resultMemoryEnvironment } from './backend/spawn-spec'
 import { ResultMemoryLimit } from './backend/result-memory'
 import { rendererUrlVerifier } from './trusted-renderer'
@@ -86,7 +86,7 @@ import type { CommandId } from '../shared/commands/catalog'
 import { sanitizeLabel } from '../shared/theme/format'
 import type { ResolvedTheme, ThemeState } from '../shared/theme/types'
 import { Updater } from './updater'
-import { applyUpdate, installTargetFor, relaunchEnv, removeReplacedPortable, testUpdateTarget, type InstallTarget } from './update-install'
+import { applyUpdate, installTargetFor, relaunchEnv, removeReplaced, testUpdateTarget, type InstallTarget } from './update-install'
 import { applyStaged, helperStaging } from './update-staging'
 import { assetUrl, releasesPageUrl, updateErrors, updateFeedUrl, updateManifestName, type InstallKind } from '../shared/updates'
 import { productLinkUrl, productName } from '../shared/product'
@@ -1132,7 +1132,11 @@ app.whenReady().then(async () => {
       // Only main creates the compressed wire form; the renderer cannot supply compressed data or an encoding.
       if (method === 'plans.parse') prepared.params = await preparePlan((validated as { xml: string }).xml)
       // A script's events reach the results worker; its results become readable by this renderer.
-      const queryId = method === 'query.execute' ? (validated as RpcMethods['query.execute']['params']).queryId : undefined
+      // A remote query (Load into memory) is a query over a result: its events and summary go the same way, and only a result
+      // this renderer owns in the current generation may be named (the generation goes with it, so a restart refuses it).
+      const remote = method === 'results.remoteQuery' ? validated as RpcMethods['results.remoteQuery']['params'] : undefined
+      if (remote && !results.owns(remote.generation, remote.resultId)) return failure(new BackendError('RESULT_UNAVAILABLE', sentences.resultUnavailable), 'Backend request failed.')
+      const queryId = method === 'query.execute' ? (validated as RpcMethods['query.execute']['params']).queryId : remote?.queryId
       // An Object Explorer load, a script, an object action, an SSIS Catalog read or write, a session's Details or a connect
       // with a requestId is registered before it is sent, so its cancel channel can always find it.
       const cancellable = cancellableRequests(method, { explorer: explorerRequests, scripting: scriptingRequests, actions: actionRequests, ssis: ssisRequests, activity: activityRequests, connections: connectionRequests }, prepared.context?.requestId)
@@ -1147,7 +1151,7 @@ app.whenReady().then(async () => {
         try {
           if (method === 'actions.execute') bindingMutation = connectionOpen?.beginBindingMutation(validated as RpcMethods['actions.execute']['params'])
           result = await backend.request(method as RpcMethod, prepared.params as never, { ...queryId !== undefined ? { onEvent: (queryEvent: import('../shared/contracts').QueryEvent) => results.queryEvent(queryId, queryEvent) }
-            : load ? { onSent: load.sent, ...progress ? { onActionProgress: progress.event } : {}, ...indexing ? { onIndexProgress: indexing.event } : {} } : {}, ...bindingMutation ? { generation: backend.current?.generation } : {} })
+            : load ? { onSent: load.sent, ...progress ? { onActionProgress: progress.event } : {}, ...indexing ? { onIndexProgress: indexing.event } : {} } : {}, ...bindingMutation ? { generation: backend.current?.generation } : remote ? { generation: remote.generation } : {} })
         } finally {
           load?.end()
           progress?.close()
@@ -1436,7 +1440,7 @@ function startUpdater(settingsLoaded: Promise<unknown>): void {
     settings: () => ({ checkAutomatically: settings.current()['environment.updates.checkAutomatically'], downloadAutomatically: settings.current()['environment.updates.downloadAutomatically'] }),
     publish: state => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:updates-changed', state) }
   })
-  if (target.kind === 'portable' && !feed) void removeReplacedPortable(process.env)
+  if (!feed) void removeReplaced(target.kind, process.env)
   void settingsLoaded.catch(() => {}).finally(() => updater?.start())
 }
 

@@ -770,6 +770,8 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
             new SsisOperationsReader(Ssis.SsisCatalog.Current, (SsisOperationsLiveArgs?)args, () => host.SsisCatalog, host.SsisIgnoresLinux)),
         Agent.AgentJobsReader.Source when source.Scope == "server" && TestSql is null => new SqlSampler(host, Gates, subscriptionId, connectionId, source, Limits, TestText, null,
             new Agent.AgentJobsReader((Agent.AgentJobsLiveArgs?)args)),
+        Agent.AgentHistoryReader.Source when source.Scope == "server" && TestSql is null => new SqlSampler(host, Gates, subscriptionId, connectionId, source, Limits, TestText, null,
+            new Agent.AgentHistoryReader((Agent.AgentHistoryLiveArgs?)args)),
         _ when source.Scope is "server" or "ssisdb" => new SqlSampler(host, Gates, subscriptionId, connectionId, source, Limits, TestText, TestSql,
             source.Id == ActivityCatalog.Current.Source && TestSql is null ? new ActivityReader(host, connectionId, (ActivityLiveArgs?)args) : null),
         _ => throw Invalid("Unknown live source.")
@@ -842,6 +844,7 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
                 SyntheticSampler.Source => SyntheticSampler.Check(element.Deserialize<SyntheticLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source."), maxTail),
                 SsisOperationsSource => SsisOperationsArgs.Check(element.Deserialize<SsisOperationsLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source."), Ssis.SsisCatalog.Current),
                 Agent.AgentJobsReader.Source => Agent.AgentJobsArgs.Check(element.Deserialize<Agent.AgentJobsLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source."), Agent.AgentCatalog.Current),
+                Agent.AgentHistoryReader.Source => Agent.AgentHistoryArgs.Check(element.Deserialize<Agent.AgentHistoryLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source."), Agent.AgentCatalog.Current),
                 _ when source.Id == ActivityCatalog.Current.Source => ActivityReader.Check(element.Deserialize<ActivityLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source."), ActivityCatalog.Current),
                 _ => throw Invalid("This source takes no arguments.")
             };

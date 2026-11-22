@@ -194,7 +194,7 @@ export class BackendSupervisor {
         const parsed = queryEventSchema.safeParse(raw)
         if (!parsed.success) return false
         const event = parsed.data
-        onEvent(event.type === 'resultSet.opened' || event.type === 'resultSet.closed' ? { ...event, descriptor: stamp(event.descriptor, connection.generation) } : event)
+        onEvent(event.type === 'resultSet.opened' || event.type === 'resultSet.closed' || event.type === 'resultSet.residence' ? { ...event, descriptor: stamp(event.descriptor, connection.generation) } : event)
       } : onLive ? (raw, bytes) => {
         const parsed = liveEventSchema.safeParse(raw)
         if (!parsed.success || parsed.data.seq !== nextSeq || !subscribed || !liveEventFits(parsed.data, subscribed)) return false
@@ -308,8 +308,8 @@ export class BackendSupervisor {
       return { ...parsed.data, generation: connection.generation }
     }
     // The summary's descriptors name results this generation holds, and its budget's seq counts in this generation; main
-    // stamps the generation on both.
-    if (method === 'query.execute') {
+    // stamps the generation on both. A remote query (Load into memory) answers a query's summary.
+    if (method === 'query.execute' || method === 'results.remoteQuery') {
       const parsed = queryResultSchema.safeParse(result)
       if (!parsed.success) throw new BackendError('BACKEND_ERROR', sentences.invalid)
       const { planSets, resultSets, budget, ...summary } = parsed.data

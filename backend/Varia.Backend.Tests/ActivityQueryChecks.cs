@@ -88,6 +88,14 @@ internal static class ActivityQueryChecks
         deltas.Next(cut: false);
         check(recached is null && fell is null && cachedInWindow is [4, 8] && deltas.Apply(Statement(5, [6, 9], Noon), whole: true) is [2, 1],
             "a plan cached again or totals that went down start again (no change known), a plan cached within the window counts whole, and then from its kept totals");
+        var counters = Enumerable.Range(1, QueryStatement.Count).Select(index => (double)index).ToArray();
+        deltas.Apply(Statement(6, counters), whole: false);
+        var growth = counters.Select(value => value * 3).ToArray();
+        var all = deltas.Apply(Statement(6, growth), whole: false);
+        var reset = (double[])growth.Clone();
+        reset[^1]--;
+        check(all is not null && all.SequenceEqual(counters.Select(value => value * 2)) && deltas.Apply(Statement(6, reset), whole: false) is null,
+            "every query counter contributes its own change and a fall in even the final counter invalidates the baseline");
         check(Catalog.Limit("queryDeltaKeys") == 20_000 && Catalog.Limit("textCache") == 2_000 && Catalog.Limit("textBatch") == ActivitySql.TextSlots && ActivityQueryRows.FirstLookback == TimeSpan.FromMinutes(10),
             "the statements kept, the text cache and the text statement's slots come from the catalogue's limits, and a first sample reads the last 10 minutes (as docs/activity-monitor.md says)");
         check(new StatementKey(Bytes(7, 44), 2, 40, null).Equals(new StatementKey(Bytes(7, 44), 2, 40, null)) && !Key(7).Equals(new StatementKey(Bytes(7, 44), 0, -1, null))

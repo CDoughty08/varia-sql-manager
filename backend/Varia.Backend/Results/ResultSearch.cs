@@ -34,9 +34,13 @@ internal static class ResultSearcher
     /// <summary>The most parsed page layouts (44 bytes per column each) a search through a view keeps at once.</summary>
     internal const int LayoutCacheBytes = 1 << 20;
 
-    /// <summary>Whether a search must stop without an outcome: its result was released or its view closed.</summary>
-    public static Func<bool> Stopped(ResultStore store, ResultSetBuffer set, ResultView? view) =>
-        () => set.IsReleased || (view is not null && !store.HasView(view));
+    /// <summary>Whether a search must stop without an outcome: its result was released, switched residence (a windowed
+    /// BigQuery result's pages are gone, docs/bigquery.md), or its view closed.</summary>
+    public static Func<bool> Stopped(ResultStore store, ResultSetBuffer set, ResultView? view)
+    {
+        var revision = set.Revision;
+        return () => set.IsReleased || set.Revision != revision || (view is not null && !store.HasView(view));
+    }
 
     /// <summary>The fewest positions a thread of a search reads; fewer than two of these are read on one.</summary>
     internal const int MinSlice = 1 << 15;

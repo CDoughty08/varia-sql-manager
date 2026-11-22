@@ -43,6 +43,8 @@ const expectedTree = [
   'Query Results',
   '  SQL Server',
   '    Results to Grid (queryResults.sqlServer.grid)',
+  '  BigQuery',
+  '    Results (queryResults.bigQuery.results)',
   'SQL Server Object Explorer',
   '  Commands (objectExplorer.commands)',
   '  Scripting (objectExplorer.scripting)',

@@ -338,6 +338,12 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
     this.selectionChanged(id)
   }
   grid(id: string): LiveGrid | undefined { return this.grids.get(id)?.grid }
+  /** The selected jobs once the grid's selection has been read: a click just before (Enter, a double-click) is read first. */
+  async settledSelection(id: string): Promise<readonly SelectedJob[]> {
+    const entry = this.grids.get(id)
+    for (let reading = entry?.reading; entry && reading; reading = entry.reading === reading ? undefined : entry.reading) await reading.catch(() => {})
+    return this.get(id)?.selected ?? []
+  }
 
   private selectionChanged(id: string): void {
     const entry = this.grids.get(id)

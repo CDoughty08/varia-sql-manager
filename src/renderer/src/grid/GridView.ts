@@ -42,6 +42,8 @@ const classes = Array.from({ length: 4096 }, (_, bits) => 'rg-c' + (bits & NULL 
   + (bits & HIT ? ' is-hit' : '') + (bits & CUR ? ' is-cur' : '') + (bits & DIM ? ' is-dim' : '') + (bits & CHG ? ' is-chg' : '') + (bits & SOFT ? ' is-soft' : ''))
 /** A header's search mark: 0 none, 1 matched, 2 the active match, 3 dimmed. */
 const headerMarks = ['', 'hit', 'cur', 'dim'] as const
+/** A comparison's header cues by bits (1 has changes, 2 key column): what a screen reader hears, and the tooltip's line. */
+const headerCues = ['', 'Has changes', 'Key column', 'Key column, has changes'] as const
 const truncatedAt: Record<string, string> = { binary: '32,766 bytes', document: '2,097,152 characters', text: '65,535 characters' }
 // A row's look is one class string too: odd or even, and its tone (none, one of liveTones, or a diff's kind: an unchanged
 // row, a changed entry in one row, an added or removed row, or a changed entry's old or new half); the row number's likewise.
@@ -115,6 +117,8 @@ interface HeaderSlot {
   /** Transposed, where a header stands for a row: the text it shows ("Row 3", or the header column's value once read),
    *  the row's highlight (as RowSlot's) and its row-size bar. */
   label: string; highlight: number; size: string
+  /** A comparison's column cue it shows: 0 none, else its changes (1) and key (2) bits (headerCues). */
+  cue: number
 }
 /** A sorted column as its header shows it: its place among the sort's keys and its direction. */
 export interface HeaderSortKey { readonly column: number; readonly descending: boolean }
@@ -191,6 +195,8 @@ export interface GridViewOptions {
   /** A one-row comparison's pairs that have changed cells (its answer's `columnChanges`): only their widths make room for
    *  the previous value beside the new one. */
   readonly diffChanged?: readonly boolean[]
+  /** A comparison's key columns (per visible column), marked ⚷ in their headers. */
+  readonly diffKeys?: readonly boolean[]
   /** The columns the grid is sorted by, in order; their headers show it. */
   readonly sort?: readonly HeaderSortKey[]
   /** A header's sort button was clicked (`add`: grid.addSortKey's modifier was held); without it headers have none. */
@@ -267,6 +273,8 @@ export class GridView {
   private readonly columns: number
   private readonly tone: number
   private readonly diff: DiffSuffix | undefined
+  /** A comparison's hidden runs of unchanged rows as drawn (setDiffGaps). */
+  private gaps: { readonly shown: boolean; readonly trailing: number } = { shown: false, trailing: 0 }
   /** Rows a live revision lists as departed: muted, whatever their tone column says. */
   private muted: ReadonlySet<number> = new Set()
   /** Highlighted rows (setHighlights); only those of the handle shown are drawn. */
@@ -605,6 +613,16 @@ export class GridView {
 
   /** The grid's highlighted rows, one set per handle it may show (its result's and a sorted view's): it draws the set of the
    *  handle it shows, now and after a swap. */
+  /** A comparison in Changes only: whether its hidden runs of unchanged rows are drawn (no sort or filter applied), and the
+   *  run hidden after its last row. Each run is a dashed rule, its count in the row header's name and tooltip. */
+  setDiffGaps(o: { readonly shown: boolean; readonly trailing: number }): void {
+    if (o.shown === this.gaps.shown && o.trailing === this.gaps.trailing) return
+    this.gaps = { shown: o.shown, trailing: o.trailing }
+    for (const slot of this.rowSlots) slot.gutterKey = '\0'
+    this.pinSlot.gutterKey = '\0'
+    this.schedule()
+  }
+
   setHighlights(sets: readonly RowHighlights[]): void {
     this.highlightSets = sets
     const shown = sets.find(set => set.handle === this.handle)
@@ -1242,7 +1260,8 @@ export class GridView {
     if (slot?.header && slot.header.column >= 0) title = this.rotated ? this.rowTitle(slot.header.column, slot.header.label) : this.headerTitle(slot.header.column)
     else if (slot?.cell) {
       const bits = slot.cell.bits
-      if (bits & ERR) title = 'This value could not be read and is shown as NULL.'
+      if (bits & LOAD) title = ''
+      else if (bits & ERR) title = 'This value could not be read and is shown as NULL.'
       else if (bits & TRUNC) title = `This value was truncated at ${this.truncationLimit(this.rotated ? Math.max(0, slot.row?.row ?? 0) : slot.cell.column)}.`
       else if (bits & LINK) title = 'Open in a new tab (Enter)'
     } else if (this.rotated && slot?.row && slot.row.row >= 0) title = this.headerTitle(slot.row.row)
@@ -1251,7 +1270,8 @@ export class GridView {
   /** A column's tooltip: its whole name, its type and whether it takes NULL. */
   private headerTitle(column: number): string {
     const info = this.descriptor.columns[column]
-    return `${columnTitle(info.name)} (${this.types[column]}, ${info.nullable ? 'null' : 'not null'})`
+    const cue = this.diff ? headerCues[(this.o.diffChanged?.[column] ? 1 : 0) | (this.o.diffKeys?.[column] ? 2 : 0)] : ''
+    return `${columnTitle(info.name)} (${this.types[column]}, ${info.nullable ? 'null' : 'not null'})${cue ? '\n' + cue : ''}`
   }
   /** A transposed header's tooltip: the row it stands for, and the header column's value when that is what it shows. */
   private rowTitle(row: number, label: string): string {
@@ -1403,7 +1423,7 @@ export class GridView {
         const funnel = this.o.onFilter && !this.rotated ? this.funnelButton(el) : undefined
         if (funnel) el.classList.add('fb')
         this.head.append(el)
-        const header: HeaderSlot = { el, text, type, column: -1, sel: false, mark: 0, shown: false, left: Number.NaN, width: -1, label: '', highlight: 0, size: '', ...sort ? { sort } : {}, ...funnel ? { funnel } : {} }
+        const header: HeaderSlot = { el, text, type, column: -1, sel: false, mark: 0, shown: false, left: Number.NaN, width: -1, label: '', highlight: 0, size: '', cue: 0, ...sort ? { sort } : {}, ...funnel ? { funnel } : {} }
         this.slots.set(el, { header })
         this.headerSlots.push(header)
       }
@@ -1420,9 +1440,10 @@ export class GridView {
     if (this.rotated) { this.measureShared(rows); return }
     if (state.sized || this.measuring || rows <= 0 || this.columns === 0 || performance.now() < this.measureAfter) return
     this.measuring = true
-    this.handle.measure(0, Math.min(g.measureInitialRows, rows), 0, this.measuredEnd()).then(({ widths }) => {
+    this.handle.measure(0, Math.min(g.measureInitialRows, rows), 0, this.measuredEnd()).then(({ rows: measured, widths }) => {
       this.measuring = false
       if (this.disposed || state.sized) return
+      if (measured <= 0 && this.measureShort++ < g.measureRetries) { this.measureShortly(); return }
       for (let column = 0; column < this.columns; column++) {
         if (state.userSized?.has(column)) continue
         this.layout.setWidth(column, initialWidth(this.headerTextWidth(column), withPrevious(widths[column] ?? 0, widths[this.previousOf(column)] ?? 0), this.charWidth))
@@ -1433,11 +1454,20 @@ export class GridView {
       this.measuring = false
       if (this.disposed) return
       // A full results port has room again shortly.
-      if (portBusy(error)) { this.measureAfter = performance.now() + g.busyRetryMs; this.later(() => this.schedule()); return }
+      if (portBusy(error)) { this.measureShortly(); return }
       // The type hints stay; a released or lost result is shown as such by its shell.
       state.sized = true
       if ((error as Error)?.name !== 'AbortError') this.schedule()
     })
+  }
+
+  /** First measures that read no rows so far (bounded by g.measureRetries). */
+  private measureShort = 0
+  /** Measures again shortly: the results port was full, or a windowed result's rows were not read yet (the measure
+   *  answered none), and sizing from headers alone would stay for good. */
+  private measureShortly(): void {
+    this.measureAfter = performance.now() + g.busyRetryMs
+    this.later(() => this.schedule())
   }
 
   /** A one-row comparison's previous-value column of a pair that has changes, else -1. */
@@ -1457,9 +1487,10 @@ export class GridView {
     const kept = this.o.state.transposed!
     if (kept.sized || this.measuring || rows <= 0 || this.columns === 0 || performance.now() < this.measureAfter) return
     this.measuring = true
-    this.handle.measure(0, Math.min(g.measureInitialRows, rows), 0, this.columns).then(({ widths }) => {
+    this.handle.measure(0, Math.min(g.measureInitialRows, rows), 0, this.columns).then(({ rows: measured, widths }) => {
       this.measuring = false
       if (this.disposed || kept.sized) return
+      if (measured <= 0 && this.measureShort++ < g.measureRetries) { this.measureShortly(); return }
       let chars = 0
       for (let index = 0; index < widths.length; index++) chars = Math.max(chars, widths[index])
       this.uniform!.setShared(this.sharedWidth(chars))
@@ -1468,7 +1499,7 @@ export class GridView {
     }, error => {
       this.measuring = false
       if (this.disposed) return
-      if (portBusy(error)) { this.measureAfter = performance.now() + g.busyRetryMs; this.later(() => this.schedule()); return }
+      if (portBusy(error)) { this.measureShortly(); return }
       kept.sized = true
       if ((error as Error)?.name !== 'AbortError') this.schedule()
     })
@@ -1723,7 +1754,7 @@ export class GridView {
       // 4980.00", in two rows "Price, old value 5120.00" on the − half and "Price, new value 4980.00" on the + half.
       const changedName = bits & CHG && active ? this.changedName(activeCell, active.row, active.column) : undefined
       const diff = changedName ? '' : bits & CHG ? ', changed' : bits & SOFT ? ', differs only by collation' : ''
-      const label = bits & LOAD ? 'Loading' : (changedName ?? displayText(activeCell.value) + (bits & ERR ? ', could not be read' : bits & NULL ? ', null value' : ''))
+      const label = bits & LOAD ? (bits & ERR ? 'Not loaded, use Retry to read these rows again' : 'Loading') : (changedName ?? displayText(activeCell.value) + (bits & ERR ? ', could not be read' : bits & NULL ? ', null value' : ''))
         + (bits & TRUNC ? ', truncated' : '') + (bits & LINK ? ', link, press Enter to open' : '') + (bits & HIT ? ', search match' : '') + diff + (toned && !changedName ? ', ' + toned : '')
       if (label !== activeCell.label) { activeCell.label = label; activeCell.el.setAttribute('aria-label', label) }
     }
@@ -1936,10 +1967,18 @@ export class GridView {
     const diff = this.diff!, mark = this.hiddenText(row, diff.mark, tile), left = this.hiddenText(row, diff.leftRow, tile), right = this.hiddenText(row, diff.rightRow, tile)
     const tone = diff.tone < 0 ? null : this.hiddenText(row, diff.tone, tile)
     const loaded = mark !== undefined && left !== undefined && right !== undefined && tone !== undefined
-    const key = loaded ? `${mark}|${left}|${right}|${tone}` : ''
+    // The run hidden after the last row is drawn on that row; setDiffGaps clears the keys when the gaps change.
+    const trailing = this.gaps.trailing > 0 && row === this.rows() - 1 ? this.gaps.trailing : 0
+    const key = loaded ? `${mark}|${left}|${right}|${tone}|${trailing}` : ''
     if (key === slot.gutterKey) return
     slot.gutterKey = key
-    const gutter = loaded ? diffGutter(mark, left, right, this.o.diffSides, tone) : undefined
+    const gutter = loaded ? diffGutter(mark, left, right, this.o.diffSides, tone, { shown: this.gaps.shown, trailing }) : undefined
+    // Changes only: a dashed rule over the row after a hidden run, and under the last row before a trailing one.
+    const gap = [gutter?.above ? 'above' : '', gutter?.below ? 'below' : ''].filter(Boolean).join(' ')
+    for (const el of slot.mark ? [slot.el, slot.mark.el] : [slot.el]) {
+      if (gap) el.dataset.gap = gap
+      else delete el.dataset.gap
+    }
     // The pinned active row has no drawn number, only its header, which still names the row.
     if (slot.mark?.diffMark) { slot.mark.diffMark.nodeValue = gutter?.mark ?? ''; slot.mark.text.nodeValue = gutter?.number ?? '' }
     if (slot.mark?.diffFlag) slot.mark.diffFlag.nodeValue = gutter?.flag ?? ''
@@ -1960,7 +1999,11 @@ export class GridView {
     // The cell's place in the result: its text, link and marks are read there; the selection and the active cell are as drawn.
     const sourceRow = this.rotated ? column : row, sourceColumn = this.rotated ? row : column
     const window = tile(sourceRow, sourceColumn)
-    if (!window || sourceRow - window.first >= window.count) bits = LOAD
+    if (!window || sourceRow - window.first >= window.count) {
+      bits = LOAD
+      // A tile whose read failed (the strip offers Retry) is not loading: LOAD with ERR names it as not loaded.
+      if (this.data.failed(tileKey(Math.floor(sourceRow / this.tiles.rows), Math.floor(sourceColumn / this.tiles.columns)))) bits |= ERR
+    }
     else {
       const index = (sourceRow - window.first) * (window.colEnd - window.colStart) + sourceColumn - window.colStart
       const flags = window.flags[index]
@@ -2109,6 +2152,17 @@ export class GridView {
         if (header.mark) header.el.classList.remove(headerMarks[header.mark])
         if (mark) header.el.classList.add(headerMarks[mark])
         header.mark = mark
+      }
+      // A comparison (never transposed) underlines and dots its columns with changes, the cue for changes off-screen, and
+      // marks its key columns ⚷ (CSS); a transposed header's description is its highlight's.
+      const cue = this.diff ? (this.o.diffChanged?.[column] ? 1 : 0) | (this.o.diffKeys?.[column] ? 2 : 0) : 0
+      if (cue !== header.cue) {
+        header.cue = cue
+        header.el.classList.toggle('chg', (cue & 1) !== 0)
+        header.el.classList.toggle('key', (cue & 2) !== 0)
+        if (cue) header.el.setAttribute('aria-description', headerCues[cue])
+        else header.el.removeAttribute('aria-description')
+        if (this.hovered === header.el) header.el.title = this.headerTitle(column)
       }
       if (header.sort) this.paintSort(header.el, header.sort, column)
       if (header.funnel) this.paintFunnel(header.funnel, column)

@@ -17,7 +17,7 @@ import { actionDialog, isModalDialog } from '../../../shared/actions/catalog'
  * and Restore Files and Filegroups… on the Databases folder or as a database's Tasks › Restore › Database… and Files and
  * Filegroups….
  */
-export function actionsContribution({ commands, explorer, actions, dialogs, properties, tableProperties, newDatabase, restore, documents, ssisCatalog, connections }: Pick<Workbench, 'commands' | 'explorer' | 'actions' | 'dialogs' | 'properties' | 'tableProperties' | 'newDatabase' | 'restore' | 'documents' | 'ssisCatalog' | 'connections'>, options: { readonly agentEnabled?: boolean } = {}): Disposable {
+export function actionsContribution({ commands, explorer, actions, dialogs, properties, tableProperties, newDatabase, restore, documents, ssisCatalog, connections, jobDocuments }: Pick<Workbench, 'commands' | 'explorer' | 'actions' | 'dialogs' | 'properties' | 'tableProperties' | 'newDatabase' | 'restore' | 'documents' | 'ssisCatalog' | 'connections' | 'jobDocuments'>, options: { readonly agentEnabled?: boolean } = {}): Disposable {
   // The verbs act on the document whose header runs them (`tabId`), else the active one.
   const propertiesOf = (args?: CommandArgs): string | undefined => { const id = args?.tabId ?? documents.getSnapshot().activeId; return properties.get(id) ? id : undefined }
   const on = (when: (id: string) => boolean, run: (id: string) => unknown) => ({
@@ -123,6 +123,11 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
         const dialog = node.ref.type === 'object' ? actionDialog(node.ref.object.kind, 'properties') : undefined
         if (dialog && isModalDialog(dialog)) { dialogs.open(dialog, node); return }
         if (dialog === 'tableProperties') tableProperties.open(node)
+        // A job's Properties is the job document (AG-6a), behind the release gate with the rest of SQL Server Agent.
+        else if (dialog === 'agentJob') {
+          if (!options.agentEnabled || node.ref.type !== 'object' || node.ref.object.name === undefined) return
+          try { jobDocuments.openJob(node.connectionId, node.ref.object.name) } catch (error) { commands.reportError(error instanceof Error ? error.message : 'The job could not be opened.'); return }
+        }
         else properties.open(node)
         // The menu returned focus to the tree; the document's section list mounts on a later frame.
         documents.focusActive()

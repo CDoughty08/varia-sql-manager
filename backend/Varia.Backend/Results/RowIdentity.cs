@@ -424,9 +424,7 @@ internal sealed class CellHasher
             case Kind.Guid:
                 return Guid.TryParse(Decode(a[..Math.Min(a.Length, 40)]), out var x) && Guid.TryParse(other.Decode(b[..Math.Min(b.Length, 40)]), out var y) ? x == y : a.SequenceEqual(b);
             case Kind.Ticks:
-                return DateTimeOffset.TryParse(Decode(a[..Math.Min(a.Length, 64)]), CultureInfo.InvariantCulture, DateTimeStyles.None, out var p)
-                    && DateTimeOffset.TryParse(other.Decode(b[..Math.Min(b.Length, 64)]), CultureInfo.InvariantCulture, DateTimeStyles.None, out var q)
-                    ? p.UtcTicks == q.UtcTicks : a.SequenceEqual(b);
+                return Instant(a) is { } p && other.Instant(b) is { } q ? p == q : a.SequenceEqual(b);
             default: return a.SequenceEqual(b);
         }
     }
@@ -483,10 +481,9 @@ internal sealed class CellHasher
             }
             case Kind.Ticks:
             {
-                var text = Decode(cell[..Math.Min(cell.Length, 64)]);
-                if (!DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.None, out var value)) return Bytes(hash, cell);
+                if (Instant(cell) is not { } ticks) return Bytes(hash, cell);
                 Span<byte> bytes = stackalloc byte[8];
-                BinaryPrimitives.WriteInt64LittleEndian(bytes, value.UtcTicks);
+                BinaryPrimitives.WriteInt64LittleEndian(bytes, ticks);
                 return Bytes(hash, bytes);
             }
             default: return Bytes(hash, cell);
@@ -526,6 +523,9 @@ internal sealed class CellHasher
         negative = negative && !(whole.IsEmpty && fraction.IsEmpty);
         return true;
     }
+
+    private long? Instant(ReadOnlySpan<byte> cell) => ViewSorter.UtcTicks(cell) ??
+        (DateTimeOffset.TryParse(Decode(cell[..Math.Min(cell.Length, 64)]), CultureInfo.InvariantCulture, DateTimeStyles.None, out var value) ? value.UtcTicks : null);
 
     private ReadOnlySpan<char> Decode(ReadOnlySpan<byte> utf8)
     {

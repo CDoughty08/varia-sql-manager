@@ -9,7 +9,7 @@ import { columnTitle } from '../grid/selection'
 import type { WhitespaceMode } from '../grid/whitespace'
 import Icon from '../Icon'
 import { entryOf } from './ResultsService'
-import { searchBoxKeyAction, searchCount, type SearchMode } from './search'
+import { searchBoxKeyAction, searchCount, skippedText, type SearchMode } from './search'
 import { formatCount } from './status'
 
 interface Choice<T> { readonly mode: T; readonly label: string; readonly title: string; readonly command?: CommandId }
@@ -71,7 +71,7 @@ function ResultsSearchBox({ tabId }: { tabId: string }) {
         onChange={event => resultsSearch.setText(tabId, event.target.value)} onKeyDown={keyDown} />
     </span>
     {/* The count follows each keystroke and grid; the live region says only the settled count (TabSearch.announcement). */}
-    <span className="results-search-count" title={search.error || count || undefined}>{count}</span>
+    <span className="results-search-count" title={search.error || (search.skipped ? [count, skippedText].filter(Boolean).join('. ') : count) || undefined}>{count}</span>
     <span className="visually-hidden" role="status" aria-live="polite">{search.announcement}</span>
     <button type="button" tabIndex={-1} aria-label="Previous match" title="Previous match (Shift+Enter)" disabled={search.total === 0} onClick={() => resultsSearch.step(tabId, -1)}><Icon name="arrow-up" /></button>
     <button type="button" tabIndex={-1} aria-label="Next match" title="Next match (Enter)" disabled={search.total === 0} onClick={() => resultsSearch.step(tabId, 1)}><Icon name="arrow-down" /></button>

@@ -209,6 +209,106 @@ describe('results worker core', () => {
     expect([answer(first), answer(second)].map(result => result?.type === 'window' && result.count)).toEqual([128, 128])
   })
 
+  it('keeps a longer page from a row it holds a page from (a windowed block fetched again), replacing pages it overlaps', () => {
+    const { window, reads, core, answer } = fixture()
+    // The first page of a windowed result: rows 0-49 alone.
+    const first = window(0, 50)
+    core.receive({ t: 'page', rid: 1, seq: 1, body: page(0, 50) })
+    core.receive({ t: 'end', rid: 1, ok: true, result: { nextRow: 50, rowsAvailable: 10_000, complete: false, pages: 1, rows: 50 } })
+    expect(answer(first)?.type === 'window' && (answer(first) as { count: number }).count).toBe(50)
+    // Rows 60-109, after the block was evicted and fetched again: its page now starts at row 0 and holds 200 rows.
+    const later = window(60, 50)
+    const read = reads().at(-1)!
+    expect(read.firstRow).toBe(60)
+    core.receive({ t: 'page', rid: read.rid, seq: 1, body: page(0, 200) })
+    core.receive({ t: 'end', rid: read.rid, ok: true, result: { nextRow: 200, rowsAvailable: 10_000, complete: false, pages: 1, rows: 140 } })
+    const result = answer(later)
+    expect(result?.type === 'window' && [result.first, result.count, result.text[0]]).toEqual([60, 50, '60'])
+    // The longer page replaced the shorter one it overlaps: one page, and rows on either side of row 50 read without a gap.
+    expect(core.cachedPages).toBe(1)
+    // ...and its bytes are all the cache counts: the shorter page left the result's index too, so none is kept uncounted
+    // by an eviction that never sees it.
+    const alone = fixture()
+    alone.window(0, 200)
+    alone.core.receive({ t: 'page', rid: 1, seq: 1, body: page(0, 200) })
+    alone.core.receive({ t: 'end', rid: 1, ok: true, result: { nextRow: 200, rowsAvailable: 10_000, complete: false, pages: 1, rows: 200 } })
+    expect(alone.core.cachedPages).toBe(1)
+    expect(core.cachedBytes).toBe(alone.core.cachedBytes)
+    const across = window(40, 20)
+    expect(reads()).toHaveLength(2)
+    expect(answer(across)?.type === 'window' && (answer(across) as { count: number }).count).toBe(20)
+  })
+
+  it('keeps rows of overlapping pages of a windowed result: a partial overlap, a pending window, a page held by a longer one', () => {
+    const count = (message: ReturnType<ReturnType<typeof fixture>['answer']>) => message?.type === 'window' ? (message as { count: number }).count : message?.type
+    const end = (core: ResultsWorkerCore, rid: number, nextRow: number) => core.receive({ t: 'end', rid, ok: true, result: { nextRow, rowsAvailable: 10_000, complete: false, pages: 1, rows: 1 } })
+    // A partial overlap: [0,30) cached, then a block fetched again answers [20,40). Rows 0-19 stay readable.
+    {
+      const { window, reads, core, answer } = fixture()
+      window(0, 30)
+      core.receive({ t: 'page', rid: 1, seq: 1, body: page(0, 30) })
+      end(core, 1, 30)
+      const wider = window(0, 40)
+      const read = reads().at(-1)!
+      core.receive({ t: 'page', rid: read.rid, seq: 1, body: page(20, 20) })
+      end(core, read.rid, 40)
+      expect(count(answer(wider))).toBe(40)
+      const again = window(0, 40)
+      expect(reads()).toHaveLength(2)
+      expect(count(answer(again))).toBe(40)
+    }
+    // A pending window over a cached [20,40): its first read brings [0,30), and the rows 30-39 it relied on stay.
+    {
+      const { window, reads, core, answer } = fixture()
+      window(20, 20)
+      core.receive({ t: 'page', rid: 1, seq: 1, body: page(20, 20) })
+      end(core, 1, 40)
+      const pending = window(0, 60)
+      const [low, high] = reads().slice(1)
+      core.receive({ t: 'page', rid: low.rid, seq: 1, body: page(0, 30) })
+      end(core, low.rid, 30)
+      core.receive({ t: 'page', rid: high.rid, seq: 1, body: page(40, 20) })
+      end(core, high.rid, 60)
+      expect(count(answer(pending))).toBe(60)
+    }
+    // A page a cached longer one holds whole does not replace it.
+    {
+      const { window, reads, core, answer } = fixture()
+      const a = window(0, 10)
+      const b = window(100, 10)
+      const [first, second] = reads()
+      core.receive({ t: 'page', rid: first.rid, seq: 1, body: page(0, 200) })
+      end(core, first.rid, 200)
+      core.receive({ t: 'page', rid: second.rid, seq: 1, body: page(90, 50) })
+      end(core, second.rid, 140)
+      expect([count(answer(a)), count(answer(b))]).toEqual([10, 10])
+      const across = window(0, 150)
+      expect(reads()).toHaveLength(2)
+      expect(count(answer(across))).toBe(150)
+    }
+  })
+
+  it('reads a cell again when a new revision ends its read, rather than saying the row is not available', () => {
+    const { core, reads, serve, posted, sent } = fixture()
+    core.handle({ type: 'cell', id: 70, key, wires, row: 10, col: 1 })
+    expect(reads()).toHaveLength(1)
+    core.handle({ type: 'revise', key })
+    expect(reads()).toHaveLength(2)
+    // The read the new revision overtook is ended in the backend too, so its stream stops holding a results slot and credit.
+    expect(sent).toContainEqual({ t: 'cancel', rid: reads()[0].rid })
+    expect(posted.some(message => 'id' in message && message.id === 70)).toBe(false)
+    serve(reads()[1].rid)
+    expect(posted.find(message => 'id' in message && message.id === 70)).toEqual({ type: 'cell', id: 70, text: 'name 10', isNull: false, truncated: false, error: false, formatted: false })
+    // Only once: a second read that ends without the row says it is not available rather than reading forever.
+    core.handle({ type: 'revise', key })
+    core.handle({ type: 'cell', id: 71, key, wires, row: 10, col: 1 })
+    core.handle({ type: 'revise', key })
+    const before = reads().length
+    core.handle({ type: 'revise', key })
+    expect(reads()).toHaveLength(before)
+    expect(posted.find(message => 'id' in message && message.id === 71)).toMatchObject({ code: 'RESULT_UNAVAILABLE' })
+  })
+
   it('fails pending work when the backend generation changes, and refuses the old generation afterwards', () => {
     const { window, core, posted, serve, answer } = fixture()
     window(0, 64)

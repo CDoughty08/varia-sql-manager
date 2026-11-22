@@ -49,7 +49,7 @@ internal sealed partial class ActionService
         }
         if (args.Target?.Kind != "agentJob" || !JobVerbs.Contains(args.Action)) throw Invalid("target.");
         var target = Target(args.Target, args.Action);
-        if (args.AgentIdentity is { } identity ? !(identity.JobId is { Length: 36 } && Guid.TryParseExact(identity.JobId, "D", out _)) : !script) throw Invalid("agentIdentity.");
+        if (args.AgentIdentity is { } identity ? !AgentJobId(identity.JobId) : !script) throw Invalid("agentIdentity.");
         if (args.StepName is not null && (args.Action != "startJob" || !ExplorerRefs.Ident(args.StepName))) throw Invalid("stepName.");
         if (args.DeleteUnusedSchedule is not null && args.Action != "delete") throw Invalid("deleteUnusedSchedule.");
         // Each verb's own members; nothing else.
@@ -76,7 +76,10 @@ internal sealed partial class ActionService
 
     // --- Describe ---------------------------------------------------------------------------------------------------------
 
-    private sealed record JobRow(Guid Id, string Name, bool Enabled, string? Owner);
+    private sealed record JobRow(Guid Id, string Name, string Created, bool Enabled, string? Owner);
+
+    /// <summary>An agentIdentity's job_id: a uniqueidentifier in its 36-character "D" form.</summary>
+    internal static bool AgentJobId(string? text) => text is { Length: 36 } && Guid.TryParseExact(text, "D", out _);
 
     private static async Task<JobRow?> ReadJobAsync(SqlConnection connection, string name, CancellationToken token)
     {
@@ -86,7 +89,7 @@ internal sealed partial class ActionService
         Add(command, "@name", SqlDbType.NVarChar, 128, name);
         await using var reader = await command.ExecuteReaderAsync(token);
         if (!await reader.ReadAsync(token)) return null;
-        return new(reader.GetGuid(0), reader.GetString(1), Convert.ToInt32(reader.GetValue(2), CultureInfo.InvariantCulture) != 0, reader.IsDBNull(3) ? null : reader.GetString(3));
+        return new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2).Trim(), Convert.ToInt32(reader.GetValue(3), CultureInfo.InvariantCulture) != 0, reader.IsDBNull(4) ? null : reader.GetString(4));
     }
 
     private ActionError JobGone(ObjectRefDto target) => Error("NOT_FOUND", "The job " + Display(target) + " no longer exists. Refresh Object Explorer.");

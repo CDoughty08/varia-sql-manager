@@ -249,6 +249,14 @@ describe('Search Objects details pane', () => {
     expect(scrollKey(1, 3)).toBe(scrollKey(1, matchedLine(module, procedure, true)))
   })
 
+  it('locates tab-separated SQL using the index preview, preferring the reported line over duplicates', () => {
+    const module = 'CREATE PROCEDURE dbo.p AS\nSELECT\t42 AS value;\nSELECT 42 AS value;'
+    const hit = { ...procedure, definition: { ...procedure.definition!, line: 2, preview: 'SELECT 42 AS value;' } }
+    expect(matchedLine(module, hit, true)).toBe(2)
+    expect(matchedLine('SET NOCOUNT ON\n' + module, hit, false)).toBe(3)
+    expect(matchedLine(module.replaceAll('42', '41'), hit, true)).toBeUndefined()
+  })
+
   it('lists a hit\'s type and place before anything is read', () => {
     expect(hitProperties(table)).toEqual([{ label: 'Type', value: 'Table' }, { label: 'Database', value: 'Sales' }, { label: 'Schema', value: 'dbo' }])
     expect(hitProperties(trigger)).toEqual([{ label: 'Type', value: 'Trigger' }, { label: 'Database', value: 'Sales' }, { label: 'Schema', value: 'dbo' }, { label: 'Table', value: 'Orders' }])

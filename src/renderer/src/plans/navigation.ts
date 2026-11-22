@@ -63,12 +63,26 @@ export function xmlLocations(xml: string): XmlLocation[] {
   }
   return locations
 }
-export function locateXml(xml: string, target: PlanXmlTarget): XmlLocation | undefined {
-  return xmlLocations(xml).find(location => location.target.statement === target.statement && location.target.operator === target.operator
+/** Both navigation directions share the last index for this mounted document. Read its XML only on first use after an edit. */
+export function documentXmlLocations(model: { getValue(): string; getVersionId(): number }): () => readonly XmlLocation[] {
+  let revision: number | undefined
+  let locations: XmlLocation[] = []
+  return () => {
+    const current = model.getVersionId()
+    if (current !== revision) {
+      locations = xmlLocations(model.getValue())
+      revision = current
+    }
+    return locations
+  }
+}
+
+export function locateXml(locations: readonly XmlLocation[], target: PlanXmlTarget): XmlLocation | undefined {
+  return locations.find(location => location.target.statement === target.statement && location.target.operator === target.operator
     && (target.nodeId === undefined || target.nodeId === location.target.nodeId))
 }
-export function targetAtXmlOffset(xml: string, offset: number): PlanXmlTarget | undefined {
+export function targetAtXmlOffset(locations: readonly XmlLocation[], offset: number): PlanXmlTarget | undefined {
   let found: XmlLocation | undefined
-  for (const location of xmlLocations(xml)) if (location.start <= offset && offset < location.end && (!found || location.start >= found.start)) found = location
+  for (const location of locations) if (location.start <= offset && offset < location.end && (!found || location.start >= found.start)) found = location
   return found?.target
 }

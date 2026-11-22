@@ -818,7 +818,7 @@ internal static partial class ViewSorter
         Key key = kind switch
         {
             Kind.Chars or Kind.Bytes => new LengthKey(capacity),
-            Kind.Exact => new NumberKey(capacity, kept, source, column, exact: true),
+            Kind.Exact => new NumberKey(capacity, kept, source, column, exact: true, boolean: meta.SortKind == ColumnTypes.Boolean),
             Kind.Approximate => new NumberKey(capacity, kept, source, column, exact: false),
             Kind.Ticks => new TicksKey(capacity),
             Kind.Guid => new GuidKey(capacity),
@@ -1044,6 +1044,7 @@ internal static partial class ViewSorter
             ticks += fraction;
         }
         if (at == text.Length) return true;
+        if (dated && text[at..].SequenceEqual(" UTC"u8)) { zoned = true; return true; }
         if (text.Length - at != 7 || text[at] != (byte)' ' || text[at + 1] is not ((byte)'+' or (byte)'-') || text[at + 4] != (byte)':') return false;
         if (!Number(text.Slice(at + 2, 2), out var hours) || !Number(text.Slice(at + 5, 2), out var minutes) || hours > 14 || minutes > 59 || (hours == 14 && minutes > 0)) return false;
         offset = (hours * 60L + minutes) * TimeSpan.TicksPerMinute * (text[at + 1] == (byte)'-' ? -1 : 1);
@@ -1478,7 +1479,7 @@ internal static partial class ViewSorter
     /// the values) compare their text exactly. Only while a value may have more than <see cref="DoubleDigits"/> significant
     /// digits, though: up to that many a double tells any two values apart, so equal doubles are equal values, and a
     /// column of repeated values (a status, a flag, a foreign key) sorts without two reads of the pages per tie.</summary>
-    private sealed class NumberKey(int rows, int[]? map, PageSource source, int column, bool exact) : Key(rows, map)
+    private sealed class NumberKey(int rows, int[]? map, PageSource source, int column, bool exact, bool boolean = false) : Key(rows, map)
     {
         /// <summary>The significant decimal digits every double keeps (DBL_DIG); a cell this long or shorter has no more.</summary>
         internal const int DoubleDigits = 15;
@@ -1487,6 +1488,7 @@ internal static partial class ViewSorter
         private bool textTies;
         public override void Set(int row, ReadOnlySpan<byte> cell, Scratch scratch)
         {
+            if (boolean) cell = ColumnTypes.BooleanNumber(cell);
             var parsed = double.TryParse(cell, NumberStyles.Float, CultureInfo.InvariantCulture, out var value);
             values[row] = parsed ? value : double.NaN;
             if (!parsed || cell.Length > DoubleDigits) textTies = true;

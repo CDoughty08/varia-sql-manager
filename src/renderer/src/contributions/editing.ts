@@ -127,7 +127,11 @@ export function editingContribution(workbench: Pick<Workbench, 'commands' | 'doc
     commands.register('edit.makeLowercase', { run: changeCase('lower') }),
     commands.register('edit.increaseIndent', { run: indent('increase') }),
     commands.register('edit.decreaseIndent', { run: indent('decrease') }),
-    commands.register('edit.toggleBrackets', { run: toggleBrackets }),
+    // An object target can supply another engine's context. This transform always edits the bound text model.
+    commands.register('edit.toggleBrackets', { run: toggleBrackets, when: () => {
+      const model = documents.boundEditor?.getModel()
+      return !model || model.getLanguageId() === 'sql'
+    } }),
     commands.register('edit.commasToFront', { run: moveCommas('front') }),
     commands.register('edit.commasToEnd', { run: moveCommas('end') }),
     commands.register('editor.toggleWhitespace', { run: () => editorOptions.toggleWhitespace() }),

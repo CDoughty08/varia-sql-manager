@@ -206,7 +206,7 @@ the reads held when it is made:
   found but not together, then within edits, then by sound, each by fewest edits), then definition-only matches. A dotted
   search counts the schema-qualified name (`dbo.Orders` matches `dbo.Orders` exactly, `dbo.Orders.id` by prefix). Within
   a group, by database then name.
-- **Definition hits** show the line, a preview with the match marked, and how many more matches the definition has.
+- **Definition hits** show the line, a preview with the visible portion of the match marked, and how many more matches the definition has.
 - **During a build** a search answers from what the index holds so far and runs again when the build ends, keeping the
   selected hit (so Enter in Object Explorer's box continues from it) and the scroll position.
 
@@ -280,7 +280,7 @@ child's parent) show at once; reads start once the selection has rested 80 ms.
   cache, so an unchanged table starts no SMO job). Other kinds Script As can write (a trigger, an index, a login…) show
   their CREATE script; others say they have no definition.
 - A definition hit's matched line is marked and scrolled a third of the way into view: the index's line for a module's
-  text, else the script line holding the match's preview nearest that line.
+  text, else the script line holding the match's preview nearest that line. Tabs in the SQL match the spaces shown in the preview.
 - Tables and views also show Columns: Peek's Columns list, which comes with the properties (no read of its own), as a card
   grid with Peek's columns (Name, Type, Nullable, Key, Identity, Computed, Default, Definition) that selects, sorts and
   copies as a results grid does. Up to 1,024 columns are listed; a note says when there are more.

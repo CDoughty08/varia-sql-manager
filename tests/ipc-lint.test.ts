@@ -53,11 +53,18 @@ await import(${JSON.stringify(core)})`
     // Main turns a code it does not know into BACKEND_ERROR, so a new backend code must be added to errorCodes. Only codes
     // written where they are thrown are seen: one passed through a variable (a connection failure's) is not.
     const sources = (directory: string): string[] => readdirSync(directory, { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? (entry.name === 'bin' || entry.name === 'obj' ? [] : sources(join(directory, entry.name))) : entry.name.endsWith('.cs') ? [join(directory, entry.name)] : [])
-    const thrown = new Set(sources(join('backend', 'Varia.Backend')).flatMap(file => [...readFileSync(file, 'utf8').matchAll(/RequestException\("([A-Z_]+)"/g)].map(match => match[1])))
+    const thrown = new Set(sources(join('backend', 'Varia.Backend')).flatMap(file => [...readFileSync(file, 'utf8').matchAll(/RequestException\("([A-Z_]+)"|\bnew\("([A-Z][A-Z_]+)", \$?"/g)].map(match => match[1] ?? match[2])))
     expect(thrown).toContain('BUDGET_STOPPED')
+    // A target-typed new("CODE", "message") is seen too.
+    expect(thrown).toContain('REMOTE_RESULT')
+    expect(thrown).toContain('REMOTE_EXPIRED')
     expect([...thrown].filter(code => !(errorCodes as readonly string[]).includes(code))).toEqual([])
     const docs = readFileSync(join('docs', 'ipc.md'), 'utf8')
     expect(errorCodes.filter(code => !docs.includes('`' + code + '`'))).toEqual([])
+    // ...and in the catalogue of codes by origin, not only somewhere in the text.
+    const table = docs.slice(docs.indexOf('| Origin | Codes |'), docs.indexOf('\n\n', docs.indexOf('| Origin | Codes |')))
+    expect(table.length).toBeGreaterThan(100)
+    expect(errorCodes.filter(code => !table.includes('`' + code + '`'))).toEqual([])
   })
   it('reads a backend answer\'s null member as absent: the backend leaves nulls out (Contracts.cs, WhenWritingNull)', () => {
     // A bare .nullable() member is required, so an answer that leaves it out is refused, and the feature reads it as a

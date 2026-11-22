@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (366)
+## Commands (383)
 
 ### File
 
@@ -162,7 +162,7 @@ keys it uses are listed below.
 | Copy with Headers (not in the palette) | `output.copyWithHeaders` | Ctrl+Shift+C (`outputGridFocus`) | Ctrl+Shift+C (`outputGridFocus`) | ⇧⌘C (`outputGridFocus`) | Always | Query Output context menu › Copy with Headers |
 | Copy Column Name (not in the palette) | `output.copyColumnName` | — | — | — | Always | Query Output context menu › Copy Column Name |
 | Select All (not in the palette) | `output.selectAll` | Ctrl+A (`outputGridFocus \|\| messagesFocus`) | Ctrl+A (`outputGridFocus \|\| messagesFocus`) | ⌘A (`outputGridFocus \|\| messagesFocus`) | Always | Query Output context menu › Select All |
-| Save Results As… | `output.saveResultsAs` | Ctrl+S (`outputGridFocus`) | Ctrl+S (`outputGridFocus`) | ⌘S (`outputGridFocus`) | Always | Query Output context menu › Save Results As… |
+| Save Results As… | `output.saveResultsAs` | Ctrl+S (`outputGridFocus`) | Ctrl+S (`outputGridFocus`) | ⌘S (`outputGridFocus`) | Always | Query Output context menu › Save Results As…; Results toolbar › More results tools › Save Results As… |
 | Close Results | `output.closeResults` | — | — | — | `!documentBusy` | Query Output context menu › Close Results; Results toolbar › More results tools › Close Results |
 | Close Result | `output.closeResult` | — | — | — | `!documentBusy` | Query Output context menu › Close Just This Result |
 | Show Spaces and Tabs in Results | `output.showSpaces` | — | — | — | Always; checked when `resultsWhitespaceSpaces` | Query Output context menu › Show Spaces and Tabs; Results toolbar › More results tools › Show Spaces and Tabs |
@@ -205,6 +205,13 @@ keys it uses are listed below.
 | Transpose Using Column as Headers | `output.transposeWithHeaders` | — | — | — | Always | Query Output context menu › Transpose › Using Column as Headers |
 | Choose Headers for Transposed Results… | `output.transposeChooseHeaders` | — | — | — | Always | Query Output context menu › Transpose › Choose Headers…; Results toolbar › More results tools › Choose Headers… |
 | Compare with Previous Result (Exact Text) | `output.compareWithPreviousExact` | — | — | — | Always | — |
+| Match Rows By… | `output.compareMatch` | — | — | — | Always | Results toolbar › More results tools › Match Rows By… |
+| Changes Only | `output.compareChangesOnly` | — | — | — | Always; checked when `comparisonChangesOnly` | Results toolbar › More results tools › Changes Only |
+| One Row per Entry | `output.compareOneRow` | — | — | — | Always; checked when `comparisonOneRow` | Results toolbar › More results tools › One Row per Entry |
+| Exact Text | `output.compareExactText` | — | — | — | Always; checked when `comparisonExactText` | Results toolbar › More results tools › Exact Text |
+| Swap Sides | `output.compareSwapSides` | — | — | — | Always | Results toolbar › More results tools › Swap Sides |
+| Go to Old Result | `output.compareGoToOld` | — | — | — | Always | Results toolbar › More results tools › Go to Old Result |
+| Go to New Result | `output.compareGoToNew` | — | — | — | Always | Results toolbar › More results tools › Go to New Result |
 | Show Column Profile | `output.toggleColumnProfile` | — | — | — | Always; checked when `resultsColumnProfile` | Query Output context menu › Column Profile; Results toolbar › More results tools › Column Profile |
 | Column Profile: Selected Columns Only | `output.toggleProfileSelectedColumns` | — | — | — | Always; checked when `resultsProfileSelectedOnly` | Results toolbar › More results tools › Profile Selected Columns Only |
 | Show Results as Tabs | `output.toggleResultsTabs` | — | — | — | Always; checked when `resultsTabs` | Window › Results as Tabs; Results toolbar › More results tools › Results as Tabs |
@@ -427,6 +434,16 @@ keys it uses are listed below.
 | Stop Jobs | `agent.stopJobs` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
 | Enable Jobs | `agent.enableJobs` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
 | Disable Jobs | `agent.disableJobs` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
+| Open Job… | `agent.openJob` | Enter (`activeDocumentIsJobActivity && outputGridFocus`) | Enter (`activeDocumentIsJobActivity && outputGridFocus`) | ↩ (`activeDocumentIsJobActivity && outputGridFocus`) | `agentEnabled && backendReady && hasConnection` | — |
+| New Job… | `agent.newJob` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › New Job… |
+| Save Job | `agentJob.save` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentJob` | — |
+| Start Job | `agentJob.start` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentJob` | — |
+| Start Job at Step… | `agentJob.startAtStep` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentJob` | — |
+| Stop Job | `agentJob.stop` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentJob` | — |
+| Reload Job | `agentJob.reload` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentJob` | — |
+| View History | `agent.viewHistory` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › View History |
+| Refresh History | `agent.refreshHistory` | — | — | — | `agentEnabled && backendReady && activeDocumentIsLogViewer` | — |
+| Delete History… | `agent.deleteHistory` | — | — | — | `agentEnabled && backendReady && activeDocumentIsLogViewer` | — |
 
 ### Preferences
 
@@ -714,12 +731,14 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `0_connect` | En**v**ironment… | `connection.environment` | `explorerNode == 'server' && !explorerServerLost` |
 | `0_new` | **N**ew › | Submenu: Object Explorer context menu › New | `explorerNode == 'folder' && (explorerFolder == 'tables' \|\| (explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance') && !explorerServerLost))` |
 | `0_new` | **N**ew Database… | `explorer.newDatabase` | `explorerNode == 'folder' && explorerFolder == 'databases' && !explorerServerLost && explorerServerEngine == 'box'` |
+| `0_new` | **N**ew Job… | `agent.newJob` | `((explorerNode == 'folder' && explorerFolder == 'agentJobs') \|\| explorerNode == 'agentJob') && !explorerServerLost` |
 | `0_new` | **N**ew Login… | `explorer.newLogin` | `((explorerNode == 'folder' && explorerFolder == 'logins') \|\| explorerNode == 'login') && !explorerServerLost && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance')` |
 | `0_new` | **A**ttach… | `explorer.attachDatabase` | `explorerActionAttach != '' && explorerNode == 'folder'` |
 | `0_new` | Crea**t**e Catalog… | `explorer.createCatalog` | `explorerNode == 'folder' && explorerFolder == 'integrationServicesCatalogs' && !explorerServerLost` |
 | `0_new` | **R**estore Database… | `explorer.restoreDatabase` | `explorerActionRestore != '' && explorerNode == 'folder'` |
 | `0_new` | R**e**store Files and Filegroups… | `explorer.restoreFiles` | `explorerActionRestoreFiles != '' && explorerNode == 'folder'` |
 | `1_monitor` | **J**ob Activity Monitor | `agent.jobActivity` | `(explorerNode == 'agent' \|\| explorerNode == 'agentJobActivity') && !explorerServerLost` |
+| `1_monitor` | View **H**istory | `agent.viewHistory` | `(explorerNode == 'agent' \|\| (explorerNode == 'folder' && explorerFolder == 'agentJobs') \|\| explorerNode == 'agentJob') && !explorerServerLost` |
 | `1_operations` | A**c**tive Operations | `ssis.activeOperations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_operations` | All E**x**ecutions | `ssis.allExecutions` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_operations` | All Vali**d**ations | `ssis.allValidations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
@@ -733,7 +752,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `1_query` | Searc**h** Objects… | `explorer.searchObjects` | `(explorerNode == 'server' && !explorerServerLost) \|\| explorerNode == 'database'` |
 | `1_query` | Pee**k** | `explorer.peek` | `explorerNodePeekable && !explorerServerLost` |
 | `2_job` | S**t**art Job at Step… | `explorer.startJob` | `explorerActionStartJob != '' && explorerNode != 'background'` |
-| `2_job` | Sto**p** Job | `explorer.stopJob` | `explorerActionStopJob != '' && explorerNode != 'background'` |
+| `2_job` | Stop **J**ob | `explorer.stopJob` | `explorerActionStopJob != '' && explorerNode != 'background'` |
 | `2_script` | **S**cript … as › | Submenu: Object Explorer context menu › Script … as | `explorerScriptTitle != '' && explorerNode != 'background'` |
 | `2_script` | View **D**ependencies | `explorer.viewDependencies` | `explorerNodeDependencies && !explorerServerLost` |
 | `2_service` | **S**tart | `explorer.startAgent` | `explorerActionStartAgent != '' && explorerNode != 'background'` |
@@ -1072,6 +1091,14 @@ Click the ⋯ button at the end of the results toolbar (More results tools), or 
 | `4_text` | Show All **W**hite Space | `output.showAllWhitespace` | Always |
 | `4_text` | So**r**t Text by Characters | `output.sortTextByChars` | Always |
 | `4_text` | Sort Text b**y** Bytes | `output.sortTextByBytes` | Always |
+| `5_compare` | **M**atch Rows By… | `output.compareMatch` | `resultsGridComparison` |
+| `5_compare` | Chang**e**s Only | `output.compareChangesOnly` | `resultsGridComparison` |
+| `5_compare` | O**n**e Row per Entry | `output.compareOneRow` | `resultsGridComparison` |
+| `5_compare` | E**x**act Text | `output.compareExactText` | `resultsGridComparison` |
+| `5_compare` | Sw**a**p Sides | `output.compareSwapSides` | `resultsGridComparison` |
+| `5_compare` | Go to Ol**d** Result | `output.compareGoToOld` | `resultsGridComparison` |
+| `5_compare` | Go to New Res**u**lt | `output.compareGoToNew` | `resultsGridComparison` |
+| `5_compare` | Sa**v**e Results As… | `output.saveResultsAs` | `resultsGridComparison` |
 | `z_close` | C**l**ose Results | `output.closeResults` | Always |
 
 #### Peek Properties context menu (`peek.properties.context`)
@@ -1099,7 +1126,7 @@ Right-click the execution plan's Properties pane, or press Shift+F10 or the cont
 | `1_copy` | **C**opy | `plan.copyProperties` | Always |
 | `1_copy` | Copy **V**alue | `plan.copyPropertyValues` | Always |
 
-## Context keys (178)
+## Context keys (183)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1142,6 +1169,8 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `activeDocumentIsSsis` | boolean | state | The active document is the properties of an SSIS Catalog folder, project, package or environment. |
 | `activeDocumentIsSsisOperations` | boolean | state | The active document is Integration Services Operations. |
 | `activeDocumentIsJobActivity` | boolean | state | The active document is SQL Server Agent's Job Activity Monitor. |
+| `activeDocumentIsAgentJob` | boolean | state | The active document is a SQL Server Agent job (Job Properties, or New Job). |
+| `activeDocumentIsLogViewer` | boolean | state | The active document is SQL Server Agent's Log File Viewer (job history). |
 | `ssisOperationStoppable` | boolean | state | The operation selected in the active Integration Services Operations document is an execution or validation that is running or pending, and no stop of it is on its way. |
 | `ssisOperationsPaused` | boolean | state | The active Integration Services Operations document is paused (Pause): it reads nothing until resumed. |
 | `ssisOperationsRefreshable` | boolean | state | The active Integration Services Operations document reads the catalog, or stopped on a failure that Refresh may get past (not a missing catalog). |
@@ -1286,6 +1315,9 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `resultsGridComparison` | boolean | state | The results grid that last had the focus in the active query is a comparison (Compare); in a results grid's own menu, that grid is. |
 | `comparisonInputsOpen` | boolean | state | Both results that comparison compared are still open, so its toolbar and commands can change it; while one is closed they are unavailable. |
 | `outputGridComparison` | boolean | target | The menu is for a comparison's results grid. |
+| `comparisonExactText` | boolean | state | That comparison compares text exactly: values that differ only by case or trailing spaces count as changed (its Exact text toggle). |
+| `comparisonOneRow` | boolean | state | That comparison shows one row per entry (its Layout is One row). |
+| `comparisonChangesOnly` | boolean | state | That comparison shows only its changed, added and removed rows (its Rows choice is Changes only). |
 
 ## Reserved keys
 

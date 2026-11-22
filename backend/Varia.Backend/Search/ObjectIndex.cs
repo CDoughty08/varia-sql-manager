@@ -660,6 +660,8 @@ internal static class IndexSearch
         if (to - from > chars) to = from + chars;
         from = Math.Max(start, from);
         var preview = new string(text[from..to]).Replace('\t', ' ');
-        return new(line, index - start + 1, preview, [index - from, Math.Min(shown, to - index)], from > start, to < end, count, cut);
+        var highlightStart = Math.Clamp(index, from, to);
+        var highlightEnd = Math.Clamp(index + shown, highlightStart, to);
+        return new(line, index - start + 1, preview, [highlightStart - from, highlightEnd - highlightStart], from > start, to < end, count, cut);
     }
 }

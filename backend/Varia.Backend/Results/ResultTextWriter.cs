@@ -339,9 +339,14 @@ internal sealed class ResultTextWriter
             case ValueKind.Number when typed && options.Format == TextFormat.Json && IsJsonNumber(value) && KeepsValue(value):
                 Write(value);
                 return;
-            case ValueKind.Bit when typed && options.Format == TextFormat.Json && value.Length == 1 && value[0] is (byte)'0' or (byte)'1':
-                Write(value[0] == '1' ? "true"u8 : "false"u8);
-                return;
+            case ValueKind.Bit when typed && options.Format == TextFormat.Json:
+                var bit = ColumnTypes.BooleanNumber(value);
+                if (bit.Length == 1 && bit[0] is (byte)'0' or (byte)'1')
+                {
+                    Write(bit[0] == '1' ? "true"u8 : "false"u8);
+                    return;
+                }
+                break;
         }
         switch (options.Format)
         {
@@ -492,11 +497,7 @@ internal sealed class ResultTextWriter
                 bytes = bytes[1..];
                 continue;
             }
-            for (var i = 0; i < count; i++)
-            {
-                span[2 * i] = Hex[bytes[i] >> 4];
-                span[2 * i + 1] = Hex[bytes[i] & 15];
-            }
+            Convert.TryToHexString(bytes[..count], span, out _);
             output.Advance(2 * count);
             Bytes += 2 * count;
             bytes = bytes[count..];
