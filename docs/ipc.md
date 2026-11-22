@@ -275,7 +275,7 @@ noted where it matters.
 | `live.subscribe` | port | stream of credited EVENTs ([Live subscriptions](#live-subscriptions)) | live (no slot) | none, no backstop: only CANCEL, disconnect, shutdown, failure or its source ending ends it |
 | `live.update` | port | unary | control | 10 s |
 | `explorer.children` | invoke; `explorerCancel` | unary | explorer | 45 s, budget 40 s |
-| `explorer.index` | invoke; `explorerCancel` | unary with droppable `explorer.index.progress` EVENTs (relayed to the requesting window, ≤ 4/s) | explorer | none; 120 s budget per database ([Search Objects](object-search.md)) |
+| `explorer.index` | invoke; `explorerCancel` | unary with droppable `explorer.index.progress` EVENTs (relayed to the requesting window, ≤ 4/s) | explorer | none; 120 s budget per database, 30 s per BigQuery metadata call ([Search Objects](object-search.md)) |
 | `explorer.search` | invoke; `explorerCancel` | unary | explorer | 15 s; stops at 5 s and answers `partial` |
 | `explorer.peek` | invoke; `explorerCancel` | unary | explorer (Peek's slot per connection) | 30 s, budget 15 s from when it has the slot |
 | `explorer.peekDependencies` | as `explorer.peek` | unary | as `explorer.peek` | as `explorer.peek` |

@@ -204,7 +204,7 @@ internal sealed partial class ObjectSearchService
                 var held = Hold(state, project, dataset, entries, definitions);
                 if (held is not null) Skip(held);
                 if (failed is { } first)
-                    Skip(first with { Message = failures == 1 ? "The details of 1 object could not be read: " + first.Message : "The details of " + failures.ToString(System.Globalization.CultureInfo.InvariantCulture) + " objects could not be read: " + first.Message });
+                    Skip(first with { Details = true, Message = failures == 1 ? "The details of 1 object could not be read: " + first.Message : "The details of " + failures.ToString(System.Globalization.CultureInfo.InvariantCulture) + " objects could not be read: " + first.Message });
                 else if (held is null or { Code: ChildrenLeftOut }) lock (state.Gate) state.Stale.Remove(pair.Key);
             });
             Report(detailsDone, wanted, "details", true);

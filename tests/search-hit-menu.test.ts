@@ -58,6 +58,28 @@ describe('a Search Objects result\'s context menu', () => {
     expect(menu(login)).toEqual(['Reveal in Object Explorer', '---', 'Script Login as >', '  CREATE To >', '  DROP To >', '  DROP And CREATE To >', '---', 'Copy >', '  Name', '  ---', '  Bracketed Name'])
   })
 
+  it('offers a BigQuery result Script As and its backtick-quoted full name, not a bracketed one', async () => {
+    const fixture = workbenchFixture()
+    cleanups.push(fixture.dispose)
+    fixture.api.push(readyBackend())
+    fixture.connections.add({ id: 'bq-a', generation: 1, server: 'varia-alpha', database: '', serverVersion: 'BigQuery', providerId: 'bigquery' } as never, { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' } as never)
+    const { menus, explorer, commands, api } = fixture
+    const object: ObjectRef = { kind: 'bqTable', project: 'varia-alpha', dataset: 'sales', name: 'orders' }
+    const target = searchHitTarget(explorer, 'bq-a', 'search-1', 0, hitOf(object, { folder: 'bqTables', label: 'sales.orders' }), false)
+    const menu = lines(menus.resolve('search.hit.context', target))
+    expect(menu.slice(0, 3)).toEqual(['Reveal in Object Explorer', '---', 'Preview Rows'])
+    expect(menu.some(line => line.startsWith('Script Table as >'))).toBe(true)
+    // A view has no Preview Rows (tabledata.list reads tables only).
+    const view = lines(menus.resolve('search.hit.context', searchHitTarget(explorer, 'bq-a', 'search-1', 0, hitOf({ ...object, kind: 'bqView' }, { folder: 'bqViews', label: 'sales.orders' }), false)))
+    expect(view).not.toContain('Preview Rows')
+    expect(commands.isEnabled('explorer.previewRows', argsFor(target))).toBe(true)
+    expect(menu.slice(menu.indexOf('Copy >'))).toEqual(['Copy >', '  Name', '  Fully Qualified Name'])
+    const args = argsFor(target)
+    expect(await commands.execute('search.copyQualifiedName', args, 'menu')).toBe(true)
+    expect(vi.mocked(api.writeClipboardText).mock.calls.at(-1)).toEqual(['`varia-alpha.sales.orders`'])
+    expect(commands.isEnabled('search.revealHit', args)).toBe(true)
+  })
+
   it('reads the result\'s keys in preconditions, and copies its names', async () => {
     const { commands, explorer, api } = connected()
     const args = argsFor(searchHitTarget(explorer, 'server-a', 'search-1', 0, hitOf(column), false))

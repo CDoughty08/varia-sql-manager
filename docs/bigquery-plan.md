@@ -1055,48 +1055,18 @@ Flattening nested columns into grid columns is not planned (BigQuery's console d
 
 ### Search Objects for BigQuery (BQ-6a)
 
-The index is the single metadata source, so one BigQuery index serves Search Objects, the header's Search (Ctrl+Q) and
-IntelliSense. As for SQL Server, it is one index per connection, in backend memory only, under the shared 512 MiB
-`IndexBudget`, and dropped on disconnect.
+Shipped: docs/object-search.md's [BigQuery](object-search.md#bigquery) section describes the index (two free REST passes,
+sharded groups, extra projects by name unless `objectExplorer.search.bigQueryExtraProjects`, refresh by scope and after DDL)
+and how Search Objects searches it. BQ-6b reads the same index: a table's columns are child entries named by field path with
+their types in `ObjectDetails`, views' and routines' text are definitions, and `ObjectSearchService.Lookup` still answers
+null for a BigQuery connection until BQ-6b gives it a reader.
 
-**Free REST calls are enough. The indexer does not need `INFORMATION_SCHEMA`.** It builds in two passes, so names are
-searchable within seconds and details fill in behind them:
+Still to do, outside BQ-6a:
 
-1. **Names:** `datasets.list` for each project, then `tables.list`, `routines.list` and `models.list` for each dataset:
-   every object's name, kind (table, view, materialized view, external, snapshot, clone), creation and modified times,
-   and labels. Date-sharded tables (`events_20260101`, `events_20260102`, …) are grouped into one entry with their
-   shard range, as the console does.
-2. **Details:** `tables.get` for each table (one per sharded group: its newest shard): columns with types, descriptions
-   and nested STRUCT fields, partitioning, clustering, row count and size, and view text. `routines.get` gives a
-   routine's arguments, return type and body. Extra projects get pass 1 only by default (`textEditor.googleSql.indexExtraProjects`),
-   since a public project can hold tens of thousands of tables.
-
-What REST costs is time, not money: one `tables.get` per table, within BigQuery's 100 requests a second per user and
-method. One rate limiter per principal is shared by the index, Explorer, Preview Rows and pickers, capped below that
-(16 in flight), so 10,000 tables take about two minutes for pass 2 while names are already searchable. **Refresh:**
-Explorer's Refresh on a node and Search Objects' Refresh re-list that scope and re-read only objects whose
-`lastModifiedTime` changed; DDL run from a tab marks its dataset stale. The optional bulk path (off by default) replaces
-pass 2 with region-scoped `INFORMATION_SCHEMA.COLUMN_FIELD_PATHS` (plus `ROUTINES`, `VIEWS`) queries, each billing at
-least 10 MiB and never cached, after the cost rules.
-
-Search Objects enhancements this needs (in BQ-6a, with the index's limits mirrored in C#):
-
-- Index entries carry the scope `project` › `dataset` › `name` in place of `database` › `schema` › `name`, with
-  BigQuery's lengths: dataset and table names up to 1,024 UTF-8 bytes, column names and nested paths up to 300 per
-  part. BQ-6a owns the index DTO's scope and column-type fields.
-- Kind filters list the BigQuery kinds (table, view, materialized view, external table, snapshot, clone, routine,
-  procedure, table function, model), shown only for BigQuery connections.
-- Name search covers project, dataset and object names. Definition search covers view and materialized view text and
-  routine bodies. Column search covers column names and nested field paths (`address.city`), with the column's type.
-- The details pane shows the schema, partitioning and clustering, rows, size, labels and the view or routine text,
-  paged by the existing `shownChars` rule.
-- Result actions: Locate in Object Explorer, Preview Rows (tables only), Script As, copy the backtick-quoted full name,
-  and open a new query on the object's connection.
-- "All servers" search spans SQL Server and BigQuery connections together. Each result row shows its provider and
-  connection.
-- Progress, partial results and per-dataset failures use the existing build status and skipped values, worded for
-  datasets. `explorer.index` builds the BigQuery index through the same method, routed by provider.
-- Never log names, definitions or search text (the existing rule).
+- The optional billed bulk path (off by default): region-scoped `INFORMATION_SCHEMA.COLUMN_FIELD_PATHS` (plus `ROUTINES`,
+  `VIEWS`) in place of pass 2, each query billing at least 10 MiB and never cached, after BQ-7's estimate and prompt.
+- The details pane's BigQuery facts (partitioning, clustering, rows, size, labels, column descriptions) beside the script
+  it shows now, and a New Query action on a result.
 
 ### IntelliSense from the index (BQ-6b)
 

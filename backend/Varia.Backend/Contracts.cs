@@ -425,7 +425,7 @@ internal sealed record BigQueryIndexScope(string Project, string? Dataset = null
 /// <summary>A database the index could not read: its code (NO_DB_ACCESS, TIMEOUT, TOO_LARGE, CATALOG_ERROR) and a sentence.</summary>
 /// <summary>Agent: SQL Server Agent's objects were left out, not the database named (msdb, where they are read).</summary>
 /// <summary>Project: a BigQuery dataset's project (Database is the dataset, or empty when the project's listing failed).</summary>
-internal sealed record ObjectIndexSkip(string Database, string Code, string Message, bool? Agent = null, string? Project = null);
+internal sealed record ObjectIndexSkip(string Database, string Code, string Message, bool? Agent = null, string? Project = null, bool? Details = null);
 /// <summary>The index as a search finds it. State: none (never built), building, or ready. BuiltAt: UTC, when the last build ended.</summary>
 /// <summary>BigQuery: Databases and Indexed count datasets; Phase is names (pass 1) or details (pass 2) while building; NamesOnly lists
 /// the projects indexed without schemas (extra projects, by default).</summary>

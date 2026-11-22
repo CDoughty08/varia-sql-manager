@@ -8,6 +8,8 @@ import Icon from '../Icon'
 import EmptyState from '../kit/EmptyState'
 import { useMenuTarget } from '../menus/useMenuTarget'
 import EnvironmentTag from '../EnvironmentTag'
+import { isBigQueryConnection, isLiveConnection } from '../services/connection-availability'
+import type { ProviderId } from '../../../shared/providers.ts'
 import { hitServer, serverGroups, serverHitKey, shownHits, type IndexEntry, type SearchDocumentState, type SearchQueryState, type ServerGroup } from './ObjectSearchService'
 import { isCopyKey, revealHit, searchHitTarget } from './hit-actions'
 import SearchFilters from './SearchFilters'
@@ -78,12 +80,38 @@ const fuzzyTitle = 'Fuzzy Match: names also match with typos or by sound (not wi
  * and anything else its database and folder (Sales › Columns; the label names a child's parent).
  */
 export function searchHitPath(hit: ObjectSearchHit): string {
-  if (hit.object.database === undefined) {
+  const object = hit.object
+  if (object.project !== undefined) {
+    // BigQuery: the project, its dataset and the folder (a dataset is listed by its project alone), then a column's type or a
+    // sharded table's shards.
+    const where = [object.project, ...object.dataset === undefined ? [] : [object.dataset], ...hit.folder ? [folderSpecs[hit.folder].label] : []].join(' › ')
+    const shards = hit.shards && `${count(hit.shards.count, 'shard')}, ${hit.shards.first}–${hit.shards.last}`
+    return [where, hit.type, shards].filter(Boolean).join(' · ')
+  }
+  if (!hit.folder) return object.database ?? ''
+  if (object.database === undefined) {
     const labels: string[] = []
     for (let at: FolderId | undefined = hit.folder; at; at = folderSpecs[at].parent) labels.unshift(folderSpecs[at].label)
     return labels.join(' › ')
   }
   return `${hit.object.database} › ${folderSpecs[hit.folder].label}`
+}
+
+/** The engines of the servers a search asks. */
+export function searchProviders(connections: readonly { readonly providerId?: string; readonly options?: { readonly provider?: string } }[]): ReadonlySet<ProviderId> {
+  return new Set(connections.map((connection): ProviderId => isBigQueryConnection(connection) ? 'bigquery' : 'sqlserver'))
+}
+
+/** A hit's name as its row shows it, with the match's range in it: a BigQuery object's or column's label without its dataset,
+ *  which the path names (orders, orders.address.city). */
+export function searchHitLabel(hit: ObjectSearchHit): { readonly text: string; readonly range?: readonly [number, number] } {
+  const dataset = hit.object.project !== undefined && hit.object.kind !== 'bqDataset' ? hit.object.dataset : undefined
+  if (dataset === undefined || !hit.label.startsWith(dataset + '.')) return { text: hit.label, ...hit.range ? { range: hit.range } : {} }
+  const cut = dataset.length + 1, text = hit.label.slice(cut)
+  if (!hit.range) return { text }
+  // A match inside the dataset name is not in the text shown: what is left of it, if any, is marked.
+  const start = Math.max(0, hit.range[0] - cut), end = Math.max(0, hit.range[0] + hit.range[1] - cut)
+  return end > start ? { text, range: [start, end - start] } : { text }
 }
 
 /** The note after a definition match for the matches past it: "+N more", "+N+ more" when the count is only a lower bound (it
@@ -96,6 +124,7 @@ export function moreMatches(definition: DefinitionMatch): string | undefined {
 
 /** What the index holds, for the summary line. */
 export function indexSummary(entry: IndexEntry | undefined, status: ObjectIndexStatus | undefined): string {
+  if (status?.provider === 'bigquery' || entry?.phase) return bigQueryIndexSummary(entry, status)
   if (entry?.requestId) return `Indexing ${numbers.format(entry.done)} of ${count(entry.total, 'database')} (${count(entry.objects, 'object')} so far)…`
   if (entry?.error) return `The index could not be built: ${entry.error}`
   if (!status || status.state === 'none') return 'This server has no index yet.'
@@ -108,6 +137,26 @@ export function indexSummary(entry: IndexEntry | undefined, status: ObjectIndexS
     + (partial ? ` · columns and other children left out of ${count(partial, 'large database')}` : '')
   const modules = status.definitions ? `, ${count(status.modules, 'definition')}` : ' (names only)'
   return `Index: ${count(status.objects, 'object')}${modules} in ${count(status.indexed, 'database')}${skipped}`
+}
+
+/** A BigQuery index's summary: datasets in place of databases, the pass a build is in (names, then details), and the projects
+ *  read by name only. */
+function bigQueryIndexSummary(entry: IndexEntry | undefined, status: ObjectIndexStatus | undefined): string {
+  if (entry?.requestId) return entry.phase === 'details'
+    ? `Reading details of ${numbers.format(entry.done)} of ${count(entry.total, 'object')}…`
+    : `Indexing ${numbers.format(entry.done)} of ${count(entry.total, 'dataset')} (${count(entry.objects, 'object')} so far)…`
+  if (entry?.error) return `The index could not be built: ${entry.error}`
+  if (!status || status.state === 'none') return 'This connection has no index yet.'
+  const partial = status.skipped.filter(skip => skip.code === childrenLeftOut).length
+  const datasets = status.skipped.filter(skip => skip.database && skip.code !== childrenLeftOut && !skip.details).length
+  const details = status.skipped.filter(skip => skip.details).length
+  const projects = status.skipped.filter(skip => !skip.database).length
+  const namesOnly = status.namesOnly?.length ?? 0
+  const skipped = (projects ? ` · ${count(projects, 'project')} skipped` : '') + (datasets ? ` · ${count(datasets, 'dataset')} skipped` : '')
+    + (details ? ` · details missing in ${count(details, 'dataset')}` : '') + (partial ? ` · columns left out of ${count(partial, 'large dataset')}` : '')
+    + (namesOnly ? ` · ${count(namesOnly, 'project')} by name only` : '')
+  const modules = status.definitions ? `, ${count(status.modules, 'definition')}` : ' (names only)'
+  return `Index: ${count(status.objects, 'object')}${modules} in ${count(status.indexed, 'dataset')}${skipped}`
 }
 
 /**
@@ -135,12 +184,15 @@ export function indexGap(entry: IndexEntry): string | undefined {
   if (entry.error) return 'index could not be built'
   const status = entry.status
   if (!status || status.state === 'none') return 'no index yet'
-  const databases = status.skipped.filter(skip => skip.database && skip.code !== childrenLeftOut && !skip.agent).length
+  const bigQuery = status.provider === 'bigquery'
+  const databases = status.skipped.filter(skip => skip.database && skip.code !== childrenLeftOut && !skip.agent && !skip.details).length
   const partial = status.skipped.filter(skip => skip.code === childrenLeftOut).length
   const gaps = [
-    databases ? `${count(databases, 'database')} skipped` : '', status.skipped.some(skip => !skip.database) ? 'server objects skipped' : '',
+    databases ? `${count(databases, bigQuery ? 'dataset' : 'database')} skipped` : '',
+    status.skipped.some(skip => !skip.database) ? bigQuery ? 'projects skipped' : 'server objects skipped' : '',
+    status.skipped.some(skip => skip.details) ? 'details missing' : '',
     status.skipped.some(skip => skip.agent) ? 'SQL Server Agent objects skipped' : '',
-    partial ? `children left out of ${count(partial, 'database')}` : '', status.definitions ? '' : 'names only'
+    partial ? `children left out of ${count(partial, bigQuery ? 'dataset' : 'database')}` : '', status.definitions ? '' : 'names only'
   ].filter(Boolean)
   return gaps.length ? gaps.join(', ') : undefined
 }
@@ -248,6 +300,7 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   const workbench = useWorkbench()
   const { objectSearch, explorer, commands, platform, searchDetails } = workbench
   const snapshot = useServiceSnapshot(objectSearch)
+  const connectionList = useServiceSnapshot(workbench.connections)
   // Only the tab has a details pane, so Object Explorer's band reads nothing of it.
   const detailsHidden = useServiceSelector(searchDetails, details => layout !== 'tab' || details.hidden)
   const detailsShare = useServiceSelector(searchDetails, details => layout === 'tab' ? details.size : undefined)
@@ -298,6 +351,8 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   if (!state) return null
   const pane = layout === 'pane'
   const spanning = !!state.allServers && !pane
+  // The engines searched (every connected server's with All servers): their type chips show.
+  const providers = searchProviders(connectionList.filter(connection => isLiveConnection(connection) && (!!state.allServers || connection.id === state.connectionId)))
   const entry = spanning ? undefined : snapshot.indexes[state.connectionId]
   const result = state.result
   const set = (patch: Partial<SearchQueryState>) => objectSearch.setQuery(searchId, patch)
@@ -420,7 +475,7 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   // In Object Explorer's band, progress and an incomplete index stay visible and a healthy index's detail is a click away; the
   // tab (All servers included, which is tab only) always shows the line, naming each server whose index leaves objects out.
   const indexNotice = indexIncomplete(entry, index)
-  const unbuilt = unindexedServers(spanning ? workbench.connections.liveSqlServer().map(connection => connection.id) : workbench.connections.isLiveSqlServer(state.connectionId) ? [state.connectionId] : [],
+  const unbuilt = unindexedServers(spanning ? workbench.connections.live().map(connection => connection.id) : workbench.connections.isLive(state.connectionId) ? [state.connectionId] : [],
     snapshot.indexes, spanning ? undefined : result?.index)
   const buildIndex = unbuilt.length ? <> <button type="button" className="object-search-build" onClick={() => { for (const id of unbuilt) objectSearch.build(id) }}>{unbuilt.length > 1 ? 'Build indexes' : 'Build index'}</button></> : null
   const paneSummary = result && asked && !state.requestId && !state.error && !result.problem && !result.partial
@@ -494,14 +549,14 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   const stop = shown ? listTabStop(groups.map(group => group.connectionId), shown, current, focusedHead) : { hit: current ?? 0 }
   const tabStop = stop.hit
   const hitRow = (hit: ObjectSearchHit, index: number, server: string) => {
-    const path = searchHitPath(hit)
+    const path = searchHitPath(hit), label = searchHitLabel(hit)
     // A click selects; in the tab only a double-click (or Enter) reveals, so a click never takes focus away from the list.
     // Each hit is an option, the tab stop on the selected one, which a screen reader announces as selected.
     return <li key={serverHitKey(server, hit)} role="presentation" className="object-search-hit">
       <div ref={menuTarget} role="option" className="object-search-open" data-hit data-index={index} tabIndex={index === tabStop ? 0 : -1} aria-selected={index === current}
-        title={`Reveal in Object Explorer: ${displayText(hit.label)}`} onClick={() => { if (pane) open(index); else objectSearch.pick(searchId, index) }} onDoubleClick={pane ? undefined : () => open(index)}>
+        title={`Reveal in Object Explorer: ${displayText(label.text)}`} onClick={() => { if (pane) open(index); else objectSearch.pick(searchId, index) }} onDoubleClick={pane ? undefined : () => open(index)}>
         <KindBadge kind={hit.object.kind} />
-        <span className="object-search-name"><Marked text={hit.label} range={hit.range} approximate={hit.approximate} /></span>
+        <span className="object-search-name"><Marked text={label.text} range={label.range} approximate={hit.approximate} /></span>
         <span className="object-search-path">{displayText(path)}</span>
         {hit.definition && <span className="object-search-line">
           <span className="object-search-line-number">{hit.definition.line}:</span>
@@ -529,7 +584,6 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
       queueMicrotask(() => { if (left.isConnected) { focusInList.current = false; objectSearch.listFocused(searchId, false) } })
     }
   }
-  const connectionList = workbench.connections.getSnapshot()
   const hitsView = asked && !result!.problem && result!.hits.length === 0 && !state.requestId
     ? <EmptyState icon="search" title="No objects match" detail={(spanning ? Object.values(snapshot.indexes).some(item => item.requestId) : entry?.requestId) ? 'The index is still being built; results update when it finishes.' : `Try another spelling, turn off Match Case or Whole Word, or search names and definitions${state.types.length ? ' of every type' : ''}.`} />
     : spanning
@@ -570,8 +624,8 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
       </div>
       {!pane && state.database !== undefined && <DatabaseScope database={state.database} onClear={() => { focusInput(); set({ database: undefined }) }} />}
       {showHits && <>
-        {pane ? <PaneSearchFilters id={searchId} scope={state.scope} types={state.types} onScope={scope => set({ scope })} onTypes={types => set({ types })} />
-          : <SearchFilters id={searchId} scope={state.scope} types={state.types} onScope={scope => set({ scope })} onTypes={types => set({ types })} options={options} />}
+        {pane ? <PaneSearchFilters id={searchId} scope={state.scope} types={state.types} onScope={scope => set({ scope })} onTypes={types => set({ types })} providers={providers} />
+          : <SearchFilters id={searchId} scope={state.scope} types={state.types} onScope={scope => set({ scope })} onTypes={types => set({ types })} options={options} providers={providers} />}
         {(!pane || indexNotice) && <p className="object-search-index">{indexText}{buildIndex}</p>}
       </>}
       {pane ? <div className="object-search-pane-status">

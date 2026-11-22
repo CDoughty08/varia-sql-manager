@@ -274,7 +274,8 @@ internal static class BigQueryIndexChecks
         var skips = result.Status.Skipped;
         check(skips.Any(skip => skip is { Project: "varia-alpha", Database: "archive", Code: "PERMISSION_DENIED" })
             && skips.Any(skip => skip is { Project: "varia-beta", Database: "", Code: "PERMISSION_DENIED" })
-            && skips.Any(skip => skip is { Project: "varia-alpha", Database: "sales", Code: "PERMISSION_DENIED" } && skip.Message.StartsWith("The details of 1 object", StringComparison.Ordinal)),
+            && skips.Any(skip => skip is { Project: "varia-alpha", Database: "sales", Code: "PERMISSION_DENIED", Details: true } && skip.Message.StartsWith("The details of 1 object", StringComparison.Ordinal))
+            && skips.Where(skip => skip.Database != "sales").All(skip => skip.Details is null),
             "a refused dataset, a refused project listing and a refused object's details are skips naming their project: " + string.Join(" | ", skips.Select(skip => skip.Project + "/" + skip.Database + " " + skip.Code + " " + skip.Message)));
         check((await harness.Search("totals")).Hits.Any(hit => hit.Object.Name == "totals") && (await harness.Search("city")).Hits.Count > 0 && result.Status.State == "ready",
             "the rest is indexed: an object whose details failed keeps its name");

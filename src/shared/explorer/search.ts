@@ -3,6 +3,8 @@
 import { z } from 'zod'
 import { maxIdentifierLength } from '../sql/identifiers.ts'
 import { bracketName, scriptName } from '../designer/catalog.ts'
+import { bigQueryFieldText, bigQueryPath, isBigQueryName } from '../bigquery/names.ts'
+import type { ProviderId } from '../providers.ts'
 import type { ObjectRef } from './refs.ts'
 import type { FolderId, NodeKind, NodeSubtype } from './catalog.ts'
 
@@ -36,7 +38,10 @@ export const objectSearchLimits = {
   /** The most words a Fuzzy Match search may have; one with more matches exactly only (FuzzyName.MaxWords). */
   fuzzyWords: 8,
   /** The longest word Fuzzy Match compares, in UTF-16 code units; a search with a longer one matches exactly only. */
-  fuzzyWordChars: 64
+  fuzzyWordChars: 64,
+  /** BigQuery's index (BigQueryIndexLimits): pages one listing reads (1,000 items each), datasets listed at once, details read at
+   *  once, columns kept per table, and the longest column description or routine signature kept. */
+  bigQuery: { listPages: 500, datasets: 4, details: 8, columns: 10_000, factChars: 1024 }
 } as const
 
 /** The kinds the index holds, as Object Explorer names them: every kind it lists but the server, return values and the SSIS
@@ -49,7 +54,22 @@ export const searchKinds = [
   'partitionFunction', 'searchPropertyList', 'planGuide', 'xmlSchemaCollection', 'rule', 'default', 'securityPolicy',
   'column', 'key', 'constraint', 'index', 'statistic', 'parameter', 'agentJob', 'agentAlert', 'agentOperator'
 ] as const satisfies readonly NodeKind[]
-export type SearchKind = typeof searchKinds[number]
+/** BigQuery's indexed kinds (ObjectSearchService.BigQueryKinds): every kind Object Explorer lists for BigQuery but the project. */
+export const bigQuerySearchKinds = ['bqDataset', 'bqTable', 'bqView', 'bqMaterializedView', 'bqExternalTable', 'bqRoutine', 'bqModel', 'bqColumn'] as const satisfies readonly NodeKind[]
+/** BigQuery kinds split by subtype, each a filter of its own (SearchQuery.Variants): a plain kind then keeps only its objects
+ *  without one of these subtypes (`bqTable` is a table that is neither a snapshot nor a clone). */
+export const bigQuerySearchVariants = ['bqTable:snapshot', 'bqTable:clone', 'bqRoutine:procedure', 'bqRoutine:tableValued'] as const
+export type SearchKind = typeof searchKinds[number] | typeof bigQuerySearchKinds[number]
+/** What a search's `kinds` may name: a kind, or a BigQuery kind's subtype variant. */
+export type SearchKindFilter = SearchKind | typeof bigQuerySearchVariants[number]
+/** Every value `kinds` accepts, in the order the backend lists them. */
+export const searchKindFilters = [...searchKinds, ...bigQuerySearchKinds, ...bigQuerySearchVariants] as const satisfies readonly SearchKindFilter[]
+/** The filters of `kinds` an index of `provider` holds, in order; with none given, every filter it holds (each engine's search
+ *  is sent only its own kinds, so a type chosen for the other engine never reaches it). */
+export function providerSearchKinds(provider: ProviderId, kinds?: readonly SearchKindFilter[]): SearchKindFilter[] {
+  const own = provider === 'bigquery' ? (value: string) => value.startsWith('bq') : (value: string) => !value.startsWith('bq')
+  return (kinds ?? searchKindFilters).filter(own)
+}
 /** SQL Server Agent's indexed kinds: searched only behind the Agent release gate (ObjectSearchService.ask). */
 export const agentSearchKinds = ['agentJob', 'agentAlert', 'agentOperator'] as const satisfies readonly SearchKind[]
 /** Kinds Object Explorer lists that the index does not hold (ObjectSearchService.Unindexed): Agent's proxies, their
@@ -62,30 +82,46 @@ export type SearchScope = typeof searchScopes[number]
 export const searchMatches = ['exact', 'fuzzy'] as const
 export type SearchMatch = typeof searchMatches[number]
 
-/** Search Objects' type filters, in the order the chips show: each names a set of kinds, and together they name every kind the
- *  index holds exactly once (tests/object-search.test.ts). A search with none chosen searches every kind; with some, the kinds
- *  of those it names. */
+const sqlServer = ['sqlserver'] as const satisfies readonly ProviderId[]
+const bigQuery = ['bigquery'] as const satisfies readonly ProviderId[]
+const both = ['sqlserver', 'bigquery'] as const satisfies readonly ProviderId[]
+/** Search Objects' type filters, in the order the chips show: each names a set of kinds (and BigQuery subtype variants), and
+ *  together they name every value `kinds` accepts exactly once (tests/object-search.test.ts). A chip shows when a server of one of
+ *  its `providers` is searched: Tables, Views, Columns and Procedures serve both engines, the rest one. A search with none chosen
+ *  searches every kind; with some, the kinds of those it names, sent to every server (another engine's kinds match nothing). */
 export const searchTypes = [
-  { id: 'tables', label: 'Tables', kinds: ['table'] },
-  { id: 'views', label: 'Views', kinds: ['view'] },
-  { id: 'columns', label: 'Columns', kinds: ['column'] },
-  { id: 'procedures', label: 'Procedures', kinds: ['procedure'] },
-  { id: 'functions', label: 'Functions', kinds: ['function'] },
-  { id: 'parameters', label: 'Parameters', kinds: ['parameter'] },
-  { id: 'triggers', label: 'Triggers', kinds: ['trigger', 'databaseTrigger', 'serverTrigger'] },
-  { id: 'indexes', label: 'Keys and indexes', kinds: ['key', 'constraint', 'index', 'statistic'] },
-  { id: 'schemas', label: 'Schemas', kinds: ['schema'] },
-  { id: 'types', label: 'Types', kinds: ['type', 'tableType', 'xmlSchemaCollection', 'rule', 'default'] },
+  { id: 'tables', label: 'Tables', kinds: ['table', 'bqTable'], providers: both },
+  { id: 'views', label: 'Views', kinds: ['view', 'bqView'], providers: both },
+  { id: 'columns', label: 'Columns', kinds: ['column', 'bqColumn'], providers: both },
+  { id: 'procedures', label: 'Procedures', kinds: ['procedure', 'bqRoutine:procedure'], providers: both },
+  { id: 'functions', label: 'Functions', kinds: ['function'], providers: sqlServer },
+  { id: 'bqMaterializedViews', label: 'Materialized views', kinds: ['bqMaterializedView'], providers: bigQuery },
+  { id: 'bqExternalTables', label: 'External tables', kinds: ['bqExternalTable'], providers: bigQuery },
+  { id: 'bqSnapshots', label: 'Snapshots', kinds: ['bqTable:snapshot'], providers: bigQuery },
+  { id: 'bqClones', label: 'Clones', kinds: ['bqTable:clone'], providers: bigQuery },
+  { id: 'bqRoutines', label: 'Routines', kinds: ['bqRoutine'], providers: bigQuery },
+  { id: 'bqTableFunctions', label: 'Table functions', kinds: ['bqRoutine:tableValued'], providers: bigQuery },
+  { id: 'bqModels', label: 'Models', kinds: ['bqModel'], providers: bigQuery },
+  { id: 'bqDatasets', label: 'Datasets', kinds: ['bqDataset'], providers: bigQuery },
+  { id: 'parameters', label: 'Parameters', kinds: ['parameter'], providers: sqlServer },
+  { id: 'triggers', label: 'Triggers', kinds: ['trigger', 'databaseTrigger', 'serverTrigger'], providers: sqlServer },
+  { id: 'indexes', label: 'Keys and indexes', kinds: ['key', 'constraint', 'index', 'statistic'], providers: sqlServer },
+  { id: 'schemas', label: 'Schemas', kinds: ['schema'], providers: sqlServer },
+  { id: 'types', label: 'Types', kinds: ['type', 'tableType', 'xmlSchemaCollection', 'rule', 'default'], providers: sqlServer },
   { id: 'security', label: 'Security', kinds: [
     'login', 'serverRole', 'credential', 'cryptographicProvider', 'audit', 'serverAuditSpecification', 'user', 'databaseRole', 'applicationRole', 'asymmetricKey',
     'certificate', 'symmetricKey', 'columnMasterKey', 'columnEncryptionKey', 'databaseAuditSpecification', 'securityPolicy'
-  ] },
+  ], providers: sqlServer },
   { id: 'other', label: 'Other', kinds: [
     'synonym', 'sequence', 'database', 'assembly', 'backupDevice', 'linkedServer', 'externalDataSource', 'externalFileFormat', 'fullTextCatalog', 'fullTextStoplist',
     'partitionScheme', 'partitionFunction', 'searchPropertyList', 'planGuide', 'agentJob', 'agentAlert', 'agentOperator'
-  ] }
-] as const satisfies readonly { readonly id: string; readonly label: string; readonly kinds: readonly SearchKind[] }[]
+  ], providers: sqlServer }
+] as const satisfies readonly { readonly id: string; readonly label: string; readonly kinds: readonly SearchKindFilter[]; readonly providers: readonly ProviderId[] }[]
 export type SearchType = typeof searchTypes[number]['id']
+/** The type filters a search over servers of `providers` shows. */
+export function searchTypesFor(providers: ReadonlySet<ProviderId>): readonly typeof searchTypes[number][] {
+  return searchTypes.filter(type => type.providers.some(provider => providers.has(provider)))
+}
 
 /** A result's kind badge: its tone (a theme key, `searchKind.<tone>Background`) and a letter, as Search Objects' mock draws
  *  T, V, P and F (the tone and the path tell kinds that share a letter apart); tests/object-search.test.ts checks every kind has one. */
@@ -93,7 +129,9 @@ export const searchKindTones = ['table', 'view', 'procedure', 'function', 'colum
 export type SearchKindTone = typeof searchKindTones[number]
 const typeTones: Record<SearchType, SearchKindTone> = {
   tables: 'table', views: 'view', columns: 'column', procedures: 'procedure', functions: 'function', parameters: 'column', triggers: 'procedure',
-  indexes: 'key', schemas: 'database', types: 'other', security: 'security', other: 'other'
+  indexes: 'key', schemas: 'database', types: 'other', security: 'security', other: 'other',
+  bqMaterializedViews: 'view', bqExternalTables: 'table', bqSnapshots: 'table', bqClones: 'table', bqRoutines: 'function',
+  bqTableFunctions: 'function', bqModels: 'other', bqDatasets: 'database'
 }
 const kindLetters: Record<SearchKind, string> = {
   table: 'T', view: 'V', procedure: 'P', function: 'F', synonym: 'S', sequence: 'Q', trigger: 'G', type: 'Y', tableType: 'Y', databaseTrigger: 'G',
@@ -102,7 +140,9 @@ const kindLetters: Record<SearchKind, string> = {
   symmetricKey: 'K', columnMasterKey: 'K', columnEncryptionKey: 'K', databaseAuditSpecification: 'A', externalDataSource: 'E', externalFileFormat: 'E',
   fullTextCatalog: 'X', fullTextStoplist: 'X', partitionScheme: 'P', partitionFunction: 'P', searchPropertyList: 'X', planGuide: 'G',
   xmlSchemaCollection: 'X', rule: 'R', default: 'D', securityPolicy: 'P', column: 'C', key: 'K', constraint: 'K', index: 'I', statistic: 'S', parameter: 'A',
-  agentJob: 'J', agentAlert: 'A', agentOperator: 'O'
+  agentJob: 'J', agentAlert: 'A', agentOperator: 'O',
+  // BigQuery, as Search Objects' mock draws them: M a materialized view, R a routine, ML a model.
+  bqDataset: 'D', bqTable: 'T', bqView: 'V', bqMaterializedView: 'M', bqExternalTable: 'E', bqRoutine: 'R', bqModel: 'ML', bqColumn: 'C'
 }
 /** A kind the renderer does not know (a newer backend's) still gets a badge, so one row can never take the list down. */
 export const unknownKindBadge = { letters: '?', tone: 'other' } as const satisfies { readonly letters: string; readonly tone: SearchKindTone }
@@ -114,19 +154,33 @@ export function searchKindBadge(kind: SearchKind | string): { readonly letters: 
 }
 
 /** The kinds a search with these type filters names, in the index's order; undefined (every kind) when none is chosen. */
-export function searchTypeKinds(types: readonly SearchType[]): SearchKind[] | undefined {
+export function searchTypeKinds(types: readonly SearchType[]): SearchKindFilter[] | undefined {
   if (!types.length) return undefined
-  const chosen = new Set<SearchKind>(searchTypes.filter(type => types.includes(type.id)).flatMap(type => type.kinds))
-  return searchKinds.filter(kind => chosen.has(kind))
+  const chosen = new Set<SearchKindFilter>(searchTypes.filter(type => types.includes(type.id)).flatMap(type => type.kinds))
+  return searchKindFilters.filter(kind => chosen.has(kind))
 }
 
 /** Skip codes a status lists for a database the index still holds (ObjectSearchService.ChildrenLeftOut): its objects without
  *  their columns, indexes, statistics and parameters, which would have taken the index past its memory. */
 export const childrenLeftOut = 'CHILDREN_LEFT_OUT'
 
-export interface ObjectIndexParams { readonly connectionId: string; readonly requestId: string; readonly definitions?: boolean }
-/** `agent`: SQL Server Agent's objects were left out, not the database named (msdb, where they are read). */
-export interface ObjectIndexSkip { readonly database: string; readonly code: string; readonly message: string; readonly agent?: boolean }
+/** A BigQuery refresh's scope: one of the connection's projects, or one of its datasets. */
+export interface BigQueryIndexScope { readonly project: string; readonly dataset?: string }
+/** BigQuery only (SQL Server refuses them): `extraDetails` reads the extra projects' schemas too
+ *  (`textEditor.googleSql.indexExtraProjects`), `scope` re-reads one project or dataset whole (Object Explorer's Refresh), and
+ *  `stale` re-reads only the datasets DDL run from a tab marked. */
+export interface ObjectIndexParams {
+  readonly connectionId: string
+  readonly requestId: string
+  readonly definitions?: boolean
+  readonly extraDetails?: boolean
+  readonly scope?: BigQueryIndexScope
+  readonly stale?: true
+}
+/** `agent`: SQL Server Agent's objects were left out, not the database named (msdb, where they are read). `project`: a BigQuery
+ *  dataset's project (`database` is the dataset, or empty when the project's listing failed). `details`: the dataset is indexed, but
+ *  some of its objects' details (pass 2) could not be read. */
+export interface ObjectIndexSkip { readonly database: string; readonly code: string; readonly message: string; readonly agent?: boolean; readonly project?: string; readonly details?: boolean }
 /** none: never built; building: a build is reading; ready: the last build ended. `indexed` counts the databases read so far. */
 export interface ObjectIndexStatus {
   readonly state: 'none' | 'building' | 'ready'
@@ -140,6 +194,12 @@ export interface ObjectIndexStatus {
   readonly definitions: boolean
   /** UTC, when the last build ended. */
   readonly builtAt?: string
+  /** A BigQuery connection's index: `databases` and `indexed` count datasets. */
+  readonly provider?: 'bigquery'
+  /** BigQuery, while building: names (pass 1) or details (pass 2: schemas, view and routine text). */
+  readonly phase?: 'names' | 'details'
+  /** BigQuery: the projects indexed by name only (extra projects, unless their details were asked for). */
+  readonly namesOnly?: readonly string[]
 }
 export interface ObjectIndexResult { readonly status: ObjectIndexStatus; readonly elapsedMs: number }
 
@@ -151,10 +211,14 @@ export interface ObjectSearchParams {
   readonly wholeWord?: boolean
   readonly regex?: boolean
   readonly in?: SearchScope
-  readonly kinds?: readonly SearchKind[]
+  readonly kinds?: readonly SearchKindFilter[]
+  /** SQL Server only. */
   readonly database?: string
   readonly limit?: number
   readonly match?: SearchMatch
+  /** BigQuery only: one project, or with `dataset` one of its datasets. */
+  readonly project?: string
+  readonly dataset?: string
 }
 /** A definition's first match: line and column are 1-based; range is [start, length] in preview. */
 export interface DefinitionMatch {
@@ -169,9 +233,12 @@ export interface DefinitionMatch {
   /** The search ran past its budget before counting every match: matches is only a lower bound. */
   readonly uncounted?: boolean
 }
+/** A date-sharded table group (events_20260101, …) a BigQuery hit stands for: its prefix, shards and first and last date suffix. */
+export interface BigQueryShards { readonly prefix: string; readonly count: number; readonly first: string; readonly last: string }
 export interface ObjectSearchHit {
   readonly object: ObjectRef
-  readonly folder: FolderId
+  /** The folder that lists the object; '' for a BigQuery dataset, which its project lists directly. */
+  readonly folder: FolderId | ''
   /** schema.name, parentSchema.parent.name for a child (a column, key or trigger), or the name alone. */
   readonly label: string
   /** The name match's [start, length] in label: for an approximate hit, from its first matched word to its last. */
@@ -187,15 +254,22 @@ export interface ObjectSearchHit {
   /** The table (in the hit's database, listed in `folder`) whose history row is a temporal or ledger history table: the hit
    *  itself, or a child's parent. */
   readonly via?: { readonly schema: string; readonly name: string; readonly folder: FolderId }
+  /** A BigQuery column's type (INT64, ARRAY<STRING>, STRUCT). */
+  readonly type?: string
+  /** A BigQuery table that stands for its date-sharded group (it is the newest shard). */
+  readonly shards?: BigQueryShards
 }
+/** Whether a hit is a BigQuery object (its ref names a project). */
+export const isBigQueryHit = (hit: ObjectSearchHit): boolean => hit.object.project !== undefined
 /** A search hit's names as Copy gives them: `qualified` brackets only the parts that need it, `bracketed` every part. */
 export interface SearchHitNames {
   readonly name: string
   /** In a schema (the object's, or its parent's for a column, key or trigger): schema, parent and name. */
   readonly schema?: string
-  /** With the schema-qualified name, the database first. */
+  /** With the schema-qualified name, the database first; a BigQuery object's backtick-quoted path. */
   readonly qualified?: string
-  readonly bracketed: string
+  /** Every part bracketed; none for a BigQuery object. */
+  readonly bracketed?: string
 }
 /**
  * The names Copy offers for a hit's object, unescaped for display nowhere: Name is the name as SQL Server stores it; the
@@ -205,6 +279,14 @@ export interface SearchHitNames {
  */
 export function searchHitNames(object: ObjectRef): SearchHitNames {
   const name = object.name ?? ''
+  // BigQuery: the name, and the backtick-quoted full name (`project.dataset.table`, a column's table path then its field path) as
+  // its fully qualified one; BigQuery has no schema-qualified or bracketed form.
+  if (object.project !== undefined) {
+    const full = object.kind === 'bqColumn' && object.dataset !== undefined && object.table !== undefined
+      ? bigQueryPath(object.project, object.dataset, object.table) + '.' + bigQueryFieldText(name)
+      : bigQueryPath(...[object.project, object.dataset, name].filter((part): part is string => part !== undefined))
+    return { name, qualified: full }
+  }
   const schema = object.parent ? object.parent.schema : object.schema
   if (!schema) return { name, bracketed: bracketName(name) }
   const parts = [schema, ...object.parent ? [object.parent.name] : [], name]
@@ -223,19 +305,27 @@ export interface ObjectSearchResult {
 
 /** A build's progress EVENT, as the backend sends it. */
 export const objectIndexProgressEventSchema = z.object({
-  type: z.literal('explorer.index.progress'), done: z.number().int().min(0), total: z.number().int().min(0), objects: z.number().int().min(0)
+  type: z.literal('explorer.index.progress'), done: z.number().int().min(0), total: z.number().int().min(0), objects: z.number().int().min(0),
+  phase: z.enum(['names', 'details']).optional()
 }).strict().refine(value => value.done <= value.total, 'A build cannot have read more databases than it lists.')
 export type ObjectIndexProgressEvent = z.infer<typeof objectIndexProgressEventSchema>
 /** What main pushes on `varia:explorer-index-progress` to the window that started the build. */
-export interface ObjectIndexProgress { readonly requestId: string; readonly done: number; readonly total: number; readonly objects: number }
+export interface ObjectIndexProgress { readonly requestId: string; readonly done: number; readonly total: number; readonly objects: number; readonly phase?: 'names' | 'details' }
 
 // zod's max() counts code points; the backend counts UTF-16 code units.
 const units = (max: number) => z.string().min(1).refine(value => value.length <= max, `At most ${max} UTF-16 code units.`)
-export const objectIndexParamsSchema = z.object({ connectionId: z.uuid(), requestId: z.uuid(), definitions: z.boolean().optional() }).strict() satisfies z.ZodType<ObjectIndexParams>
+const bigQueryName = (kind: 'project' | 'dataset') => z.string().refine(value => isBigQueryName(kind, value), `Not a BigQuery ${kind} name.`)
+export const objectIndexParamsSchema = z.object({
+  connectionId: z.uuid(), requestId: z.uuid(), definitions: z.boolean().optional(), extraDetails: z.boolean().optional(),
+  scope: z.object({ project: bigQueryName('project'), dataset: bigQueryName('dataset').optional() }).strict().optional(), stale: z.literal(true).optional()
+}).strict().refine(value => !(value.scope && value.stale), 'A refresh is scoped or stale-only, not both.') satisfies z.ZodType<ObjectIndexParams>
 export const objectSearchParamsSchema = z.object({
   connectionId: z.uuid(), requestId: z.uuid(), text: units(objectSearchLimits.text).refine(value => !value.includes('\u0000'), 'The text cannot contain U+0000.'),
   caseSensitive: z.boolean().optional(), wholeWord: z.boolean().optional(), regex: z.boolean().optional(), in: z.enum(searchScopes).optional(),
-  kinds: z.array(z.enum(searchKinds)).min(1).max(objectSearchLimits.kinds).optional(),
+  kinds: z.array(z.enum(searchKindFilters)).min(1).max(objectSearchLimits.kinds).optional(),
   database: units(maxIdentifierLength).refine(value => !value.includes('\u0000'), 'A name cannot contain U+0000.').optional(),
-  limit: z.number().int().min(1).max(objectSearchLimits.hits).optional(), match: z.enum(searchMatches).optional()
-}).strict().refine(value => !(value.match === 'fuzzy' && value.regex), 'Fuzzy Match cannot go with a regular expression.') satisfies z.ZodType<ObjectSearchParams>
+  limit: z.number().int().min(1).max(objectSearchLimits.hits).optional(), match: z.enum(searchMatches).optional(),
+  project: bigQueryName('project').optional(), dataset: bigQueryName('dataset').optional()
+}).strict().refine(value => !(value.match === 'fuzzy' && value.regex), 'Fuzzy Match cannot go with a regular expression.')
+  .refine(value => value.dataset === undefined || value.project !== undefined, 'A dataset needs its project.')
+  .refine(value => value.database === undefined || (value.project === undefined && value.dataset === undefined), 'A database is SQL Server\'s, a project and dataset BigQuery\'s.') satisfies z.ZodType<ObjectSearchParams>

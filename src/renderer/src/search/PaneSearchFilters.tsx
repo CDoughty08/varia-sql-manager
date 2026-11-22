@@ -1,7 +1,8 @@
 import { useId, useRef } from 'react'
 import { searchTypes, type SearchScope, type SearchType } from '../../../shared/explorer/search.ts'
+import type { ProviderId } from '../../../shared/providers.ts'
 import Segmented from '../kit/Segmented'
-import { searchScopeSegments, toggleSearchType } from './SearchFilters'
+import { searchScopeSegments, shownSearchTypes, toggleSearchType } from './SearchFilters'
 import SearchPopover from './SearchPopover'
 
 interface Props {
@@ -10,10 +11,12 @@ interface Props {
   readonly types: readonly SearchType[]
   readonly onScope: (scope: SearchScope) => void
   readonly onTypes: (types: SearchType[]) => void
+  /** The engines of the server searched: their types show. */
+  readonly providers: ReadonlySet<ProviderId>
 }
 
 /** Scope stays visible; the complete type list opens over the results rather than adding rows to a narrow sidebar. */
-export default function PaneSearchFilters({ id, scope, types, onScope, onTypes }: Props) {
+export default function PaneSearchFilters({ id, scope, types, onScope, onTypes, providers }: Props) {
   const scopeLabel = useId()
   const root = useRef<HTMLDivElement>(null)
   const chosen = searchTypes.filter(type => types.includes(type.id))
@@ -27,7 +30,7 @@ export default function PaneSearchFilters({ id, scope, types, onScope, onTypes }
         trigger={<><span className="object-search-type-label">{label}</span><span className="object-search-type-short" aria-hidden>{chosen.length ? `Types · ${chosen.length}` : 'Types'}</span></>}>
         <label className="object-search-check object-search-all-types"><input type="checkbox" checked={!types.length} onChange={() => onTypes([])} /><span>All types</span></label>
         <div className="object-search-type-grid">
-          {searchTypes.map(type => <label key={type.id} className="object-search-check"><input type="checkbox" checked={types.includes(type.id)} onChange={() => onTypes(toggleSearchType(types, type.id))} /><span>{type.label}</span></label>)}
+          {shownSearchTypes(providers, types).map(type => <label key={type.id} className="object-search-check"><input type="checkbox" checked={types.includes(type.id)} onChange={() => onTypes(toggleSearchType(types, type.id))} /><span>{type.label}</span></label>)}
         </div>
       </SearchPopover>
     </div>

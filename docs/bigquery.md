@@ -2,8 +2,8 @@
 
 Varia connects to Google BigQuery beside SQL Server. This page describes how it works now: the Connect dialog, saved
 connections, sign-in, identity pins, connect and disconnect, the pre-connect methods, execution, Object Explorer, errors,
-emulator mode and testing. Search Objects and Object Explorer's status chips leave BigQuery out until later lanes
-(docs/bigquery-plan.md).
+emulator mode and testing. Search Objects indexes BigQuery connections too ([Search Objects › BigQuery](object-search.md#bigquery));
+Object Explorer's status chips leave BigQuery out until a later lane (docs/bigquery-plan.md).
 
 ## Connect dialog
 
@@ -438,6 +438,8 @@ Properties on a table-like object opens a read-only document tab from one `table
 (full name, type, location, description, labels, base table of a snapshot or clone), Storage (rows, logical, long-term and
 physical size), Layout (partitioning, partition filter, clustering, column count) and History (created, last modified,
 expires, snapshot time), in UTC and binary units. Empty facts are left out and values are clipped at 2,000 characters.
+
+Refresh on a project or dataset node also re-reads it in the Search Objects index ([Search Objects › BigQuery](object-search.md#bigquery)).
 
 ## Errors
 

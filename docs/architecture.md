@@ -609,7 +609,10 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
   fingerprint in `ResourceCatalog`. Object Explorer's search box and the Search Objects tab are one search
   (`SearchPanel`, `ObjectSearchService`), and the header's Search (Ctrl+Q) lists objects only from it (`quickSearch`);
   the tree has no filter of loaded rows. Regex runs only `NonBacktracking` with a match timeout; an unreadable database is
-  a skipped value. Never log names, definitions or search text.
+  a skipped value. Never log names, definitions or search text. A BigQuery connection's index (`ObjectSearchService.BigQuery`,
+  `BigQueryIndex.cs`) is the same per-connection index and budget, one read per dataset (`DatabaseIndex.Dataset`), built only
+  from free REST metadata calls (`IBigQueryIndexSource`, through the per-principal limiter) and never a job; DDL marks
+  datasets stale for the next `stale` build (`MarkStale`).
 - **Script As.** Verbs, titles, URN types and preflight ids live only in `src/shared/scripting/catalog.ts`, options only in
   `options.ts` (regenerate `docs/scripting.md` and embedded `Scripting/scripting-catalog.json`). Its own pool
   (`READ COMMITTED`, `LOCK_TIMEOUT 10000`, database context restored before pooling); SMO only through `ScriptPipeline`

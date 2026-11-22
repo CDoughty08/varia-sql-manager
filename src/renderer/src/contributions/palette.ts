@@ -103,7 +103,7 @@ export function paletteContribution(workbench: PaletteWorkbench, history = new C
       shown = document
       wasIndexing = indexing
       // With the last server gone the box is back to queries and commands, as it is before one connects.
-      if (!document?.text.trim() || !connections.liveSqlServer().length) { found = { text: '', hits: new Map() }; said = undefined; quickInput.setAnswer({ items: [] }); return }
+      if (!document?.text.trim() || !connections.live().length) { found = { text: '', hits: new Map() }; said = undefined; quickInput.setAnswer({ items: [] }); return }
       // Only hits that answer the text as it is now: the answer to the text before is not offered while the new one is on
       // its way, or Enter would reveal an object the text no longer names.
       const current = document.asked?.text === document.text
@@ -147,7 +147,7 @@ export function paletteContribution(workbench: PaletteWorkbench, history = new C
     void objectSearch.reveal(explorer, connectionId, hit).then(outcome => { if (!outcome.ok && !outcome.cancelled) commands.reportError(outcome.message) }, onUnexpectedError)
   }
   const openSearchObjects = (text: string) => {
-    const live = connections.liveSqlServer()
+    const live = connections.live()
     // With Fuzzy Match, as the rows were found, so the tab has every hit they were the first of.
     try { workbench.objectSearch?.open(live.length > 1 ? undefined : live[0]?.id, text, live.length > 1, undefined, true) }
     catch (error) { commands.reportError(error instanceof Error ? error.message : 'Search Objects could not open.') }
