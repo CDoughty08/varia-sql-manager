@@ -839,12 +839,12 @@ export const commandCatalog = {
     menus: [{ menu: 'edit.advanced', group: '5_sql', order: 1, mnemonic: 'b' }, { menu: 'editor.context', group: '3_format', order: 1, mnemonic: 'b' }]
   },
   'edit.commasToFront': {
-    title: 'Move Commas to Front', category: 'Edit', keywords: ['commas', 'leading', 'select', 'list', 'format', 'style'], providers: both,
+    title: 'Move Commas to Front', category: 'Edit', keywords: ['commas', 'leading', 'select', 'list', 'format', 'style'],
     precondition: 'activeDocumentIsQuery', unavailableHint: openFirst,
     menus: [{ menu: 'edit.advanced', group: '5_sql', order: 2, mnemonic: 'f' }, { menu: 'editor.context', group: '3_format', order: 2, mnemonic: 'm' }]
   },
   'edit.commasToEnd': {
-    title: 'Move Commas to End', category: 'Edit', keywords: ['commas', 'trailing', 'select', 'list', 'format', 'style'], providers: both,
+    title: 'Move Commas to End', category: 'Edit', keywords: ['commas', 'trailing', 'select', 'list', 'format', 'style'],
     precondition: 'activeDocumentIsQuery', unavailableHint: openFirst,
     menus: [{ menu: 'edit.advanced', group: '5_sql', order: 3, mnemonic: 'e' }, { menu: 'editor.context', group: '3_format', order: 3, mnemonic: 'v' }]
   },

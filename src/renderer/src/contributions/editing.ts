@@ -83,6 +83,12 @@ export function editingContribution(workbench: Pick<Workbench, 'commands' | 'doc
     if (mode === 'none') { commands.reportWarning(sqlTransformMessages.nothingToBracket(!!ranges)); return }
     applyTextOp(target, 'varia.toggleBrackets', sqlTransformOp(model, text, edits, current))
   })
+  // The comma commands read T-SQL tokens (`#` starts a GoogleSQL comment, not a temporary table), so they edit only a SQL
+  // Server query. An Explorer target can supply another provider's context, so the bound model's language decides.
+  const boundModelIsTsql = () => {
+    const model = documents.boundEditor?.getModel()
+    return !model || model.getLanguageId() === 'sql'
+  }
   const moveCommas = (position: 'front' | 'end') => withEditor((target, model) => {
     const text = transformText(model), current = selections(target), selected = selectedRanges(model, current)
     const tokens = lexSql(text)
@@ -128,8 +134,8 @@ export function editingContribution(workbench: Pick<Workbench, 'commands' | 'doc
     commands.register('edit.increaseIndent', { run: indent('increase') }),
     commands.register('edit.decreaseIndent', { run: indent('decrease') }),
     commands.register('edit.toggleBrackets', { run: toggleBrackets }),
-    commands.register('edit.commasToFront', { run: moveCommas('front') }),
-    commands.register('edit.commasToEnd', { run: moveCommas('end') }),
+    commands.register('edit.commasToFront', { run: moveCommas('front'), when: boundModelIsTsql }),
+    commands.register('edit.commasToEnd', { run: moveCommas('end'), when: boundModelIsTsql }),
     commands.register('editor.toggleWhitespace', { run: () => editorOptions.toggleWhitespace() }),
     commands.register('editor.toggleLineNumbers', { run: () => editorOptions.toggleLineNumbers() }),
     commands.register('edit.toggleBookmark', { run: () => { focusedEditor(documents); bookmarks.toggle() } }),
