@@ -106,6 +106,11 @@ try {
   const section = job('Nightly').getByRole('group', { name: /^Schedules/ })
   await expect(section.getByRole('button', { name: /Nightly 02:30/ })).toBeVisible()
   await section.getByRole('button', { name: 'New schedule', exact: true }).click()
+  // A schedule that blocks Save says so on its row and under the list, even while another is selected.
+  await section.getByRole('button', { name: /Nightly 02:30/ }).click()
+  await expect(section.getByRole('button', { name: /needs a fix before Save/ })).toBeVisible()
+  await expect(section.getByText('(no name): The schedule needs a name.', { exact: true })).toBeVisible()
+  await section.getByRole('button', { name: /needs a fix before Save/ }).click()
   await section.getByLabel('Name', { exact: true }).fill('Weekly reports')
   await section.getByRole('button', { name: 'Weekdays at…', exact: true }).click()
   await expect(section.getByText('Occurs every week on Monday, Tuesday, Wednesday, Thursday, Friday at 00:00.', { exact: false })).toBeVisible()

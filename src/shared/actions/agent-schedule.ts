@@ -160,6 +160,7 @@ export const jobScheduleText = {
   tooMany: `Varia adds schedules to a job only while it holds at most ${agentLimits.schedulesPerJob}.`,
   tooManyRemoved: `One save removes at most ${agentLimits.schedulesPerJob} schedules: save, then remove the rest.`,
   unguarded: 'This schedule\'s version could not be read, so it cannot be attached. Search again, or reload the job.',
+  needsFix: 'needs a fix before Save',
   onlyYourJobs: 'Only your own jobs are listed.',
   jobsReadFailed: 'Which jobs use it could not be read.',
   attachHint: 'Attaching adds it to this job when you save; nothing changes on the server until then.',

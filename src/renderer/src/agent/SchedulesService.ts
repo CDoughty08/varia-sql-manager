@@ -102,6 +102,12 @@ function jobNamesBySchedule(model: AgentSchedulesModel | undefined): Map<number,
   return out
 }
 
+/** The local clock, which stands in for the server's before the first read. */
+function localMoment(): AgentMoment {
+  const date = new Date()
+  return { date: date.getFullYear() * 10_000 + (date.getMonth() + 1) * 100 + date.getDate(), time: date.getHours() * 10_000 + date.getMinutes() * 100 + date.getSeconds() }
+}
+
 /**
  * The Schedules documents (custom document kind 'agentSchedules'): Manage Schedules on the Jobs folder and the palette opens it, New ›
  * Schedule… on the Agent node opens it with a new schedule in its editor. One per connection.
@@ -181,8 +187,15 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
     this.generations.set(id, (this.generations.get(id) ?? 0) + 1)
     this.patch(id, { phase: 'ready', model, drafts, selected, scheduleJobs: undefined, error: undefined, notice, revision: current.revision + 1 })
     this.dirtyChanged(id)
-    // Opened on a new schedule: its Name is drawn only once the first read is in, so the caret goes there now.
-    if (!current.model && selected === newScheduleKey) this.options.focus?.(id, 'name')
+    // Opened on a new schedule: its Name is drawn only once the first read is in, so the caret goes there now, and an untouched draft
+    // made from the local date moves to the server's (its start date and weekday).
+    if (!current.model && selected === newScheduleKey) {
+      const draft = drafts[newScheduleKey], local = defaultSchedule(localMoment().date)
+      if (draft && !draft.jobs.length && JSON.stringify(draft.fields) === JSON.stringify(local) && local.activeStartDate !== this.now(id).date) {
+        this.patch(id, { drafts: { ...drafts, [newScheduleKey]: { ...draft, fields: defaultSchedule(this.now(id).date) } } })
+      }
+      this.options.focus?.(id, 'name')
+    }
     if (selected && selected !== newScheduleKey) this.ensureScheduleJobs(id, Number(selected))
   }
   /** One schedule's jobs, where the read has no links (below sysadmin): read once per schedule and read. */
@@ -206,9 +219,7 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
   now(id: string): AgentMoment {
     const read = this.get(id)?.model?.now
     const moment = read ? momentOfText(read) : undefined
-    if (moment) return moment
-    const date = new Date()
-    return { date: date.getFullYear() * 10_000 + (date.getMonth() + 1) * 100 + date.getDate(), time: date.getHours() * 10_000 + date.getMinutes() * 100 + date.getSeconds() }
+    return moment ?? localMoment()
   }
   /** What the schedules read says about idle schedules: the platform and whether an idle CPU condition is set. */
   server(id: string): ScheduleServer {
@@ -285,6 +296,11 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
     if (!state || !save || !draft || state.busy || !this.live(id) || state.phase !== 'ready') return false
     if (save.op !== 'create' && this.readOnly(id, this.record(id, state.selected))) return false
     return scheduleSavable(scheduleProblems(draft.fields, this.now(id), this.server(id))) && scheduleSaveProblems(save).length === 0
+  }
+  /** File › Save and the palette's Save Schedule: any changed draft, whichever is selected. */
+  canSaveAll(id: string): boolean {
+    const state = this.get(id)
+    return !!state && !state.busy && this.live(id) && state.phase === 'ready' && this.isDirty(id)
   }
   canDelete(id: string): boolean {
     const state = this.get(id), record = this.record(id, state?.selected)

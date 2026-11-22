@@ -78,7 +78,7 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
       when: args => { const node = explorerNodeOf(args); return !node || (!node.lost && connections.isLiveSqlServer(node.connectionId)) },
       run: args => withServer(args, 'New Schedule', connectionId => report(() => schedules.open(connectionId, true), 'New Schedule could not open.'))
     }),
-    commands.register('agentSchedules.save', onSchedules(id => schedules.canSave(id), id => schedules.save(id))),
+    commands.register('agentSchedules.save', onSchedules(id => schedules.canSaveAll(id), id => schedules.save(id))),
     commands.register('agentSchedules.refresh', onSchedules(id => schedules.canRefresh(id), id => schedules.refresh(id))),
     commands.register('agentSchedules.delete', onSchedules(id => schedules.canDelete(id), id => schedules.askDelete(id))),
     commands.register('agent.jobActivity', {

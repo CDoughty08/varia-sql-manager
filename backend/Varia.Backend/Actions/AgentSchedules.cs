@@ -202,6 +202,11 @@ internal sealed partial class ActionService
         })];
     }
 
+    /// <summary>The Schedules describe's reads: every login's, then sysadmin's (the links, the durations only the free-slot check uses, and
+    /// the idle condition).</summary>
+    internal static readonly AgentStatement[] SchedulesRead = [AgentSql.JobDocumentFacts, AgentSql.ServerClock, AgentSql.Schedules, AgentSql.ScheduleVersions, AgentSql.Jobs];
+    internal static readonly AgentStatement[] SchedulesSysadminRead = [AgentSql.ScheduleLinks, AgentSql.JobDurations, AgentSql.IdleCondition];
+
     /// <summary>The Schedules describe: everything the document shows, or with <paramref name="schedule"/> one schedule's jobs.</summary>
     private async Task<ActionDescribeResult> DescribeAgentSchedulesAsync(SqlConnection connection, ServerProfile profile, int? schedule, CancellationToken token)
     {
@@ -209,13 +214,11 @@ internal sealed partial class ActionService
         if (catalogue.PlatformOf(profile.EngineEdition, profile.Linux) is not { } platform) return new(null, 0, Error("NOT_SUPPORTED", AgentProfileSql.Unsupported(profile.EngineEdition)));
         var reader = new AgentReader();
         List<AgentStatement> first = schedule is null
-            ? [AgentSql.JobDocumentFacts, AgentSql.ServerClock, AgentSql.Schedules, AgentSql.ScheduleVersions, AgentSql.Jobs, AgentSql.JobDurations]
+            ? [.. SchedulesRead]
             : [AgentSql.JobDocumentFacts, AgentSql.ServerClock, AgentSql.JobsInSchedule];
         var (results, errors) = await reader.ReadAsync(connection, null, first, (_, parameter) => parameter.Name switch
         {
             "@schedule_id" => schedule,
-            "@step_id" => 0,
-            "@run_status" => 1,
             _ => null
         }, token);
         AgentReadError? Failed(AgentStatement statement) => errors.FirstOrDefault(error => error.Statement == statement.Id);
@@ -232,13 +235,19 @@ internal sealed partial class ActionService
         var listed = results[AgentSql.Schedules.Id];
         var records = ScheduleRecords(listed, Read(AgentSql.ScheduleVersions, out var versions) ? versions : null, login, profile.PrincipalId).OrderBy(record => record.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
         List<AgentScheduleJobDto>? jobs = Read(AgentSql.Jobs, out var jobRows) ? ScheduleJobs(jobRows) : null;
-        List<AgentJobDurationDto>? durations = Read(AgentSql.JobDurations, out var durationRows) ? JobDurations(durationRows) : null;
+        List<AgentJobDurationDto>? durations = null;
         List<AgentScheduleLinkDto>? links = null;
         bool? idle = null;
         if (sysadmin)
         {
-            var (more, moreErrors) = await reader.ReadAsync(connection, null, [AgentSql.ScheduleLinks, AgentSql.IdleCondition], (_, _) => null, token);
+            var (more, moreErrors) = await reader.ReadAsync(connection, null, [.. SchedulesSysadminRead], (_, parameter) => parameter.Name switch
+            {
+                "@step_id" => 0,
+                "@run_status" => 1,
+                _ => null
+            }, token);
             bool ReadMore(AgentStatement statement, out AgentResult result) => more.TryGetValue(statement.Id, out result!) && moreErrors.All(error => error.Statement != statement.Id);
+            if (ReadMore(AgentSql.JobDurations, out var durationRows)) durations = JobDurations(durationRows);
             if (ReadMore(AgentSql.ScheduleLinks, out var linkRows))
                 links = [.. linkRows.Rows.Where(row => linkRows.Value(row, "job_id") is Guid).Select(row => new AgentScheduleLinkDto(IntOf(linkRows.Value(row, "schedule_id")), ((Guid)linkRows.Value(row, "job_id")!).ToString("D")))];
             // SSMS's Define idle CPU condition: the poller on with a percent and a duration.

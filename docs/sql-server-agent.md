@@ -118,7 +118,7 @@ Schedules document manages the shared schedules. The job document's Steps sectio
   index, so a schedule changed since it was read is `STALE` on the Schedules field and nothing commits.
 - **Schedules document** (Manage Schedules on the Jobs folder's menu and the palette; New › Schedule… on the Agent node). One
   document per connection replaces SSMS's Manage Schedules dialog: a grid of the shared schedules (name, when, Enabled, how many
-  jobs, owner) with All, Unused and Disabled views and a filter that matches schedule and job names and when schedules run, and
+  jobs, owner) with All, Unused and Disabled views and a filter that matches schedule names, job names (sysadmin, whose read has the links) and when schedules run, and
   beside it the selected schedule's editor (the same one as the job document's), the jobs that use it with Detach and Attach a
   job (only jobs the login owns, or any for sysadmin, as msdb allows), and Save. Edits are kept per schedule until saved, each guarded by the schedule as its edit began, so neither Refresh nor
   the read after another save lets it pass over someone else's change; a STALE save reads again and shows their change with the

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   agentScheduleCommandEntries, initialJobSchedules, jobScheduleChangeCount, jobScheduleProblems, jobScheduleText, jobSchedulesSave, jobSchedulesSaveProblems, jobSchedulesSaveSchema, momentOfText,
   rebaseJobSchedules, rebaseScheduleFields, refreshPickedSchedules, scheduleDraftSave, scheduleFieldsOf, scheduleSaveProblems, scheduleSaveSchema, timingProblem, type AgentScheduleRecord, type AgentSchedulesModel, type JobScheduleEntry
@@ -477,6 +477,9 @@ describe('the Schedules document', () => {
     schedules.select(id, '2')
     schedules.update(id, { ...schedules.draft(id)!.fields, name: 'Two' })
     schedules.select(id, '3')
+    // The palette's Save Schedule follows any changed draft, not only the selected one.
+    expect(schedules.canSave(id)).toBe(false)
+    expect(schedules.canSaveAll(id)).toBe(true)
     let answer: (value: ApiResult<ActionExecuteResult>) => void = () => {}
     api.executeObjectAction.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
     const saving = schedules.save(id)
@@ -506,6 +509,18 @@ describe('the Schedules document', () => {
     late({ ok: true, value: { agentSchedules: schedulesModel({ schedules: [record(1, { name: 'Stale' })] }), elapsedMs: 1 } })
     await settled()
     expect(schedules.get(id)?.model?.schedules.map(item => item.name)).not.toContain('Stale')
+  })
+  it("starts New › Schedule…'s untouched draft on the server's date once read, not the local one", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date(2026, 10, 25, 9, 0, 0))
+      const { schedules } = schedulesWorkbench()
+      const id = schedules.open('c1', true)
+      expect(schedules.draft(id)?.fields.activeStartDate).toBe(20261125)
+      await settled()
+      // The server reads 2026-11-22, a Sunday.
+      expect(schedules.draft(id)?.fields).toMatchObject({ activeStartDate: 20261122, freqInterval: 1 })
+    } finally { vi.useRealTimers() }
   })
   it("moves a draft's guard with its own Enabled toggle, not with someone else's change", async () => {
     const { schedules, setModel, executes } = schedulesWorkbench()

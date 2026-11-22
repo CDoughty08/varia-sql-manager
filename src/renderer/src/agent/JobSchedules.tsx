@@ -64,14 +64,14 @@ function freeSlot(state: JobDocumentState, model: AgentJobDocumentModel, entry: 
   return freeSlotText(freeSlotCheck(entry.fields, now, mine, others))
 }
 
-function EntryRow({ entry, selected, record, onSelect }: { readonly entry: JobScheduleEntry; readonly selected: boolean; readonly record?: AgentScheduleRecord; readonly onSelect: () => void }) {
+function EntryRow({ entry, selected, record, invalid, onSelect }: { readonly entry: JobScheduleEntry; readonly selected: boolean; readonly record?: AgentScheduleRecord; readonly invalid: boolean; readonly onSelect: () => void }) {
   const shared = record ? record.jobCount - (entry.attached ? 0 : 1) : 0
   const tag = entry.remove ? jobScheduleText.removed : entry.id === undefined ? 'new' : entry.attached ? 'attached on save' : undefined
   return <li>
-    <button type="button" className="agent-schedule-item" aria-current={selected || undefined} data-removed={entry.remove ? true : undefined} onClick={onSelect}>
-      <Icon name="agent-schedule" />
+    <button type="button" className="agent-schedule-item" aria-current={selected || undefined} data-removed={entry.remove ? true : undefined} data-invalid={invalid || undefined} onClick={onSelect}>
+      <Icon name={invalid ? 'error' : 'agent-schedule'} />
       <span className="agent-schedule-item-text">
-        <span className="agent-schedule-item-name">{entry.fields.name || '(no name)'}{tag && <span className="agent-schedule-tag"> · {tag}</span>}</span>
+        <span className="agent-schedule-item-name">{entry.fields.name || '(no name)'}{tag && <span className="agent-schedule-tag"> · {tag}</span>}{invalid && <span className="agent-schedule-tag"> · {jobScheduleText.needsFix}</span>}</span>
         <span className="field-note">{scheduleWhen(entry.fields)}{entry.fields.enabled ? '' : ' · disabled'} · {shared > 0 ? `shared with ${shared} ${shared === 1 ? 'job' : 'jobs'}` : 'this job only'}</span>
       </span>
     </button>
@@ -167,16 +167,21 @@ export default function JobSchedules(props: Props) {
   const usable = (sharedState?.model?.schedules ?? []).filter(item => !onJob.has(item.id) && (model.sysadmin || ownsSchedule(item, model.login)))
   const matches = search.trim() ? usable.filter(item => scheduleMatches(item, search)) : []
   const picked = selected?.startsWith('pick:') ? usable.find(item => item.id === Number(selected.slice(5))) ?? sharedState?.model?.schedules.find(item => item.id === Number(selected.slice(5))) : undefined
-  const listProblems = jobScheduleProblems(draft.schedules, undefined, model.schedules, { platform: model.platform }).filter(item => !item.key)
+  const allProblems = jobScheduleProblems(draft.schedules, undefined, model.schedules, { platform: model.platform })
+  const listProblems = allProblems.filter(item => !item.key)
+  // Each entry's first error, which blocks the job's Save: marked on its row and named under the list, selected or not.
+  const entryErrors = new Map<string, string>()
+  for (const item of allProblems) if (item.key && item.problem.severity === 'error' && !entryErrors.has(item.key)) entryErrors.set(item.key, item.problem.message)
   const searchId = `agent-schedule-search-${state.id}`
   return <div className="agent-schedules">
     <div className="agent-schedule-list">
       <h4 id={`${searchId}-on`}>On this job</h4>
       {draft.schedules.length ? <ul aria-labelledby={`${searchId}-on`}>
-        {draft.schedules.map(item => <EntryRow key={item.key} entry={item} selected={item.key === selected} record={service.scheduleRecord(state.id, item)} onSelect={() => service.selectSchedule(state.id, item.key)} />)}
+        {draft.schedules.map(item => <EntryRow key={item.key} entry={item} selected={item.key === selected} record={service.scheduleRecord(state.id, item)} invalid={entryErrors.has(item.key)} onSelect={() => service.selectSchedule(state.id, item.key)} />)}
       </ul> : <p className="field-note">{jobScheduleText.noneYet}</p>}
       {state.error?.field === 'schedules' && <p className="property-field-error" role="alert"><Icon name="error" />{state.error.message}</p>}
       {listProblems.map(item => <p key={item.problem.message} className="property-field-error" role="alert"><Icon name="error" />{item.problem.message}</p>)}
+      {draft.schedules.filter(item => entryErrors.has(item.key)).map(item => <p key={item.key} className="property-field-error"><Icon name="error" />{item.fields.name || '(no name)'}: {entryErrors.get(item.key)}</p>)}
       <h4>Add</h4>
       <input id={searchId} className="property-input" type="search" placeholder="Search shared schedules" aria-label="Search shared schedules" maxLength={agentLimits.nameChars} value={search}
         disabled={!editable || sharedState?.state === 'failed'} onChange={event => service.setScheduleSearch(state.id, event.target.value)} />

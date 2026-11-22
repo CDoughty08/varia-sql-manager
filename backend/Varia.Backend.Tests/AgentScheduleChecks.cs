@@ -279,6 +279,8 @@ internal static class AgentScheduleChecks
         var durations = ActionService.JobDurations(history);
         check(durations.Single(item => item.JobId == a.ToString("D")).Seconds == 112 && durations.Single(item => item.JobId == b.ToString("D")).Seconds == 5,
             "a job's usual duration is the median of its newest ten successful runs (hhmmss decoded): one long run does not move it, older runs are not read");
+        check(!ActionService.SchedulesRead.Contains(AgentSql.JobDurations) && ActionService.SchedulesSysadminRead.Contains(AgentSql.JobDurations) && ActionService.SchedulesSysadminRead.Contains(AgentSql.ScheduleLinks),
+            "the Schedules describe reads job history only for sysadmin, with the links the free-slot check needs");
         var rows = new AgentResult(["schedule_id", "schedule_name", "enabled", "freq_type", "freq_interval", "freq_subday_type", "freq_subday_interval", "freq_relative_interval", "freq_recurrence_factor",
             "active_start_date", "active_end_date", "active_start_time", "active_end_time", "job_count"],
             [[5, "Nightly", (byte)1, 4, 1, 1, 0, 0, 0, 20_260_101, 99_991_231, 23_000, 235_959, 2], [6, "Theirs", (byte)0, 64, 0, 0, 0, 0, 0, 20_260_101, 99_991_231, 0, 235_959, 1]], false);
