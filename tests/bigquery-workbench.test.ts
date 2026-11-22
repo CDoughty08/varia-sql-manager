@@ -15,6 +15,37 @@ const target = (): PersistedConnectionTarget => ({ id: id(1), options: { provide
   details: { autoReconnect: 'inherit', environment: 'Production' }, inExplorer: true, resumeWanted: true, expectedPrincipal: principal })
 
 describe('BigQuery connections in the workbench (BQ-2)', () => {
+  // `#` starts a GoogleSQL comment, so a T-SQL comma move would take the comma out of it: `SELECT a # total,⏎  b` (a aliased b)
+  // became `SELECT a # total⏎ ,b`, two columns.
+  it('keeps Move Commas from rewriting a GoogleSQL query, from its own tab or a command that targets a SQL Server object', async () => {
+    const value = workbenchFixture()
+    try {
+      const sql = 'SELECT a # total,\n  b\nFROM t\n, u', query = value.documents.restore('commas.sql', sql, 'sql', 'lf', undefined, 'bigquery')
+      value.documents.bindEditor(new TestEditor().asEditor())
+      expect(value.documents.getModel(query.id)?.getLanguageId()).toBe('googlesql')
+      const node = { id: 1, connectionId: 'sql-server', kind: 'server', label: 'server', ref: { type: 'object', object: { kind: 'server' } }, lost: false } as const
+      for (const id of ['edit.commasToFront', 'edit.commasToEnd'] as const) {
+        expect(value.commands.isEnabled(id), id).toBe(false)
+        expect(value.commands.unavailableReason(id), id).toBe('Move Commas works only in SQL Server queries.')
+        expect(await value.commands.execute(id, undefined, 'palette'), id).toBe(false)
+        const args = { target: { kind: 'explorer' as const, node } }
+        expect(value.commands.isEnabled(id, args), id).toBe(false)
+        expect(await value.commands.execute(id, args, 'toolbar'), id).toBe(false)
+      }
+      expect(value.documents.getModel(query.id)?.getValue()).toBe(sql)
+      // This editor cannot apply edits, so a transform that ran would fail into the command banner rather than change the text.
+      expect(value.commands.getSnapshot().error).toBe('')
+      // A SQL Server query keeps both commands, with no reason to grey them.
+      const tsql = value.documents.restore('commas-tsql.sql', 'SELECT a,\n  b\nFROM t', 'sql', 'lf')
+      expect(value.documents.boundEditor?.getModel()).toBe(value.documents.getModel(tsql.id))
+      expect(value.documents.boundEditor?.getModel()?.getLanguageId()).toBe('sql')
+      for (const id of ['edit.commasToFront', 'edit.commasToEnd'] as const) {
+        expect(value.commands.isEnabled(id), id).toBe(true)
+        expect(value.commands.unavailableReason(id), id).toBeUndefined()
+      }
+    } finally { value.dispose() }
+  })
+
   it('keeps Toggle Brackets from rewriting the bound GoogleSQL model when a command targets a SQL Server object', async () => {
     const value = workbenchFixture()
     try {

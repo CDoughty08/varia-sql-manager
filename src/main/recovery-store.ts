@@ -27,15 +27,16 @@ export const recoveryDiscardSchema = z.object({ ids: z.array(recordId).min(1).ma
 export const recoveryTakeSchema = z.object({ id: recordId }).strict()
 
 /** One record, `<id>.json`. `owner` is the main process (`instance`) and renderer generation that wrote or took it.
- *  Version 2 (0.10.0, `WorkbenchAutoRecover/`) adds the query's provider; a version 1 record (0.9.0's `AutoRecover/`) reads as
- *  version 2, SQL Server's. */
+ *  Version 2 (0.10.0, `WorkbenchAutoRecover/`) adds the query's provider and its file's disk fingerprint (`fileSha256`, the
+ *  version its text was based on, so Save can tell a change made while Varia was closed); a version 1 record (0.9.0's
+ *  `AutoRecover/`) reads as version 2, SQL Server's, without a fingerprint. */
 const recordFields = {
   id: recordId, owner: z.object({ instance: z.uuid(), generation: z.int().min(0) }).strict(),
   name, kind: z.enum(documentKinds), path: z.string().min(1).max(recoveryLimits.pathChars).optional(), eol, server: server.optional(), database: database.optional(),
   savedAt: z.iso.datetime(), text: z.string().max(maxDocumentCharacters)
 }
 const v1RecordSchema = z.object({ ...recordFields, version: z.literal(1), database: z.string().min(1).max(recoveryLimits.databaseChars).optional() }).strict().refine(fits)
-const v2RecordSchema = z.object({ ...recordFields, version: z.literal(2), provider: provider.optional() }).strict().refine(fits).refine(databaseFits)
+const v2RecordSchema = z.object({ ...recordFields, version: z.literal(2), provider: provider.optional(), fileSha256: z.string().regex(/^[0-9a-f]{64}$/).optional() }).strict().refine(fits).refine(databaseFits)
 export const recoveryRecordSchema = z.union([v2RecordSchema, v1RecordSchema.transform(record => ({ ...record, version: 2 as const }))])
 const recordSchema = recoveryRecordSchema
 export type RecoveryRecord = z.infer<typeof v2RecordSchema>
@@ -128,14 +129,14 @@ export class RecoveryStore {
    * Keeps `request`'s query for `generation`, replacing that generation's earlier copy. A record another process or
    * generation owns is refused, and so is a write past 64 records or 256 MB in all.
    */
-  write(request: RecoveryWrite & { readonly path?: string }, generation: number): Promise<void> {
+  write(request: RecoveryWrite & { readonly path?: string; readonly fileSha256?: string }, generation: number): Promise<void> {
     return this.serial(async () => {
       const mine = this.owned.get(request.id)
       if (mine !== undefined && mine !== generation) throw new Error('This AutoRecover copy belongs to an earlier window.')
       if (mine === undefined && await stat(this.path(request.id)).then(() => true, () => false)) throw new Error('This AutoRecover copy belongs to an earlier window.')
       const record: RecoveryRecord = {
         version: 2, id: request.id, owner: { instance: this.instance, generation }, name: request.name, kind: request.kind,
-        ...request.path && request.path.length <= recoveryLimits.pathChars ? { path: request.path } : {}, eol: request.eol,
+        ...request.path && request.path.length <= recoveryLimits.pathChars ? { path: request.path, fileSha256: request.fileSha256 } : {}, eol: request.eol,
         ...request.server ? { server: request.server } : {}, ...request.database ? { database: request.database } : {}, ...request.provider ? { provider: request.provider } : {},
         savedAt: this.now().toISOString(), text: request.text
       }
@@ -187,7 +188,7 @@ export class RecoveryStore {
       this.owned.set(id, generation)
       this.offered.delete(id)
       if (!this.options.pathsRefused) return record
-      const { path: _path, ...withoutFile } = record
+      const { path: _path, fileSha256: _baseline, ...withoutFile } = record
       return withoutFile
     })
   }

@@ -200,7 +200,9 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
 - **SQL text transforms** (Toggle Brackets, Move Commas to Front/End: `editor/sql-transforms.ts`) work on tokens from
   `shared/sql/lexer.ts`, never regular expressions over the text, so strings, comments, variables and quoted names never
   change. They return offset edits applied as one undo step with selections mapped through them, refuse a model over
-  `textOpLimits.characters`, and are tested in `tests/sql-transforms.test.ts`.
+  `textOpLimits.characters`, and are tested in `tests/sql-transforms.test.ts`. They are SQL Server only, with a handler
+  `when` on the bound model's language too, since a command target (an Explorer node) could supply SQL Server's context
+  while the editor shows a GoogleSQL query.
 - **Peek's language service** serves query documents and Peek's read-only definition models (`peekModelContext`:
   connection, database and the model's UUID as document id), nothing else. A Peek model gets hover and Go To Definition
   only, never completion or diagnostics, from its first request; its `onWillDispose` ends it as closing a query does
@@ -496,7 +498,9 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   `tests/fixtures/compare-pairing/cases.json`, read by `DiffChecks.cs` and `tests/compare-pairing.test.ts`: change both
   and add a case. Names compare through one table, `src/shared/ordinal-casing.ts`, in the backend (`OrdinalNames`), the
   renderer and the fake backend, never ICU casing (its Unicode version differs by platform); `DiffChecks.OrdinalCasing`
-  checks it against the runtime. Pivots and comparisons share the window's `DerivedJobs` (four at once, busy refusals
+  checks it against the runtime. All three pair by looking columns up under the name's key (`nameKey`,
+  `OrdinalNames.KeyOf`) and wire, never by scanning the other side per column, so results of thousands of columns pair in
+  linear time. Pivots and comparisons share the window's `DerivedJobs` (four at once, busy refusals
   retried), count each other's in-flight results against a run's 1,000 (`adding`; a change of a comparison is not
   counted). A run has one comparison per ordered pair (`pairId`, without Exact text); asked again with other options while
   its first run is in flight, the first run is given up. Its options (layout, Exact text, match, rows) are its state: a

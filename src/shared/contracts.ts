@@ -630,6 +630,8 @@ export interface ExplorerNode {
   readonly subtype?: NodeSubtype
   readonly status?: NodeStatus
   readonly created?: string
+  /** The immutable msdb identifier of a SQL Server Agent job. */
+  readonly jobId?: string
   readonly database?: DatabaseRuntime
   readonly connectDenied?: boolean
 }

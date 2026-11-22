@@ -154,6 +154,9 @@ internal sealed class RemoteResult : IDisposable
         public long Filled = first;
         public long Bytes;
         public Task? Fetching;
+        /// <summary>Completes once the running fetch has reserved its room, or ended without it: a read's next block waits for
+        /// it before reserving its own, so a read's earlier blocks always take room before its later ones.</summary>
+        public TaskCompletionSource? Room;
         public CancellationTokenSource? Stop;
         /// <summary>Reads waiting for or sending this block: it is not evicted meanwhile, nor its read-ahead cancelled.</summary>
         public int Waiters;
@@ -317,11 +320,18 @@ internal sealed class RemoteResult : IDisposable
         }
         try
         {
-            // The read's own blocks are asked for first, in order, then its viewer's read-ahead.
+            // The read's own blocks are asked for first, in order, then its viewer's read-ahead. Each reserves its room only
+            // once the one before it has: started together, they would reserve in whatever order their lanes free, and later
+            // blocks could take the room (up to OverLimit) before the first, refused then with no rows sent.
             // Each fetch started here is the one the read waits for first, even if it has already ended (a failure clears
             // block.Fetching): asking again would repeat a failed call for the same read.
             var started = new Task?[targets.Count];
-            for (var i = 0; i < targets.Count; i++) started[i] = Ensure(targets[i], 0, Math.Min(end, targets[i].End));
+            Task? after = null;
+            for (var i = 0; i < targets.Count; i++)
+            {
+                started[i] = Ensure(targets[i], 0, Math.Min(end, targets[i].End), after);
+                lock (gate) after = targets[i].Fetching is not null ? targets[i].Room?.Task : null;
+            }
             ReadAhead(viewer, first, last);
             using var limit = CancellationTokenSource.CreateLinkedTokenSource(token);
             limit.CancelAfter(wait);
@@ -463,8 +473,9 @@ internal sealed class RemoteResult : IDisposable
     }
 
     /// <summary>Starts the block's fetch from its cached rows to <paramref name="need"/>'s block end, unless one runs or the rows
-    /// are cached; <paramref name="aheadOf"/> names the viewer whose read-ahead asks. Returns the running fetch, or null.</summary>
-    private Task? Ensure(Block block, uint aheadOf, long need)
+    /// are cached; <paramref name="aheadOf"/> names the viewer whose read-ahead asks, and a new fetch reserves its room only once
+    /// <paramref name="after"/> (the read's previous block's <see cref="Block.Room"/>) completes. Returns the running fetch, or null.</summary>
+    private Task? Ensure(Block block, uint aheadOf, long need, Task? after = null)
     {
         lock (gate)
         {
@@ -479,28 +490,46 @@ internal sealed class RemoteResult : IDisposable
             var stop = CancellationTokenSource.CreateLinkedTokenSource(disposed.Token);
             block.Stop = stop;
             block.AheadOf = aheadOf;
-            var task = FetchAsync(block, stop.Token);
-            block.Fetching = task;
+            // Asynchronous continuations: the next block's fetch never runs inside this one's reservation.
+            var room = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            block.Room = room;
+            var task = FetchAsync(block, after, room, stop.Token);
+            // What reads and overruns wait for: the fetch's outcome once its bookkeeping is done, resuming them off the thread
+            // that ends it. Resumed inline, one waiter (a read sending its rows) would run before the next, so an overrun waiting
+            // for the same fetch would stay parked for as long as the read sends.
+            var settled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            block.Fetching = settled.Task;
             _ = task.ContinueWith(done =>
             {
                 lock (gate)
                 {
-                    if (block.Fetching == done) { block.Fetching = null; block.Stop = null; block.AheadOf = 0; block.Holding = block.Settling = false; }
+                    if (block.Fetching == settled.Task) { block.Fetching = null; block.Room = null; block.Stop = null; block.AheadOf = 0; block.Holding = block.Settling = false; }
                     DropIfIdleLocked(block);
                     TrimLocked();
                 }
                 stop.Dispose();
+                room.TrySetResult();
+                if (done.IsCanceled) settled.TrySetCanceled();
+                else if (done.Exception is { } failure) settled.TrySetException(failure.InnerExceptions);
+                else settled.TrySetResult();
                 // Observed here: a failure reaches the reads awaiting it, and a read-ahead's has no one to tell.
                 _ = done.Exception;
+                _ = settled.Task.Exception;
             }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-            return task;
+            return settled.Task;
         }
     }
 
-    private async Task FetchAsync(Block block, CancellationToken token)
+    private async Task FetchAsync(Block block, Task? after, TaskCompletionSource room, CancellationToken token)
     {
         // Off the caller's thread: a read's request never runs the fetch inline.
         await Task.Yield();
+        // Before the lanes: a block waiting here holds none, so the earlier block it waits for always gets one.
+        if (after is { IsCompleted: false })
+        {
+            AwaitingRoom?.Invoke(block.Index);
+            await after.WaitAsync(token);
+        }
         await resultLane.WaitAsync(token);
         try
         {
@@ -531,6 +560,7 @@ internal sealed class RemoteResult : IDisposable
                     }
                     NotePeak();
                 }
+                room.TrySetResult();
                 Reserved?.Invoke(block.Index);
                 // Never more than the cache holds: a block whose rows grew far wider than the first page's stops being built.
                 var writer = new RemoteBlockWriter(resultId, wires, from, CacheLimit);
@@ -769,6 +799,9 @@ internal sealed class RemoteResult : IDisposable
 
     /// <summary>Checks only: called once a fetch has reserved its block's room, before it reads the block.</summary>
     internal Action<long>? Reserved { get; set; }
+
+    /// <summary>Checks only: called as a read's block starts waiting for the read's previous block to reserve its room.</summary>
+    internal Action<long>? AwaitingRoom { get; set; }
 
     /// <summary>Checks only: called as a block's overrun, refused, waits for the other fetches holding room to settle.</summary>
     internal Action<long>? OverrunWaiting { get; set; }

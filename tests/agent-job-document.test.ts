@@ -139,7 +139,7 @@ describe('the job document', () => {
     setModel(model({ job: record({ description: 'Rebuilds', version: 8 }), alerts: [{ id: 12, name: 'Severity 017', enabled: true, severity: 17, messageId: 0 }] }))
     expect(await jobDocuments.save(id)).toBe(true)
     expect(executes()).toEqual([{
-      action: 'agentJob', target: { kind: 'agentJob', name: 'Nightly load' }, agentIdentity: { created: '2026-01-02T03:04:05' }, connectionId: 'c1', requestId: expect.any(String),
+      action: 'agentJob', target: { kind: 'agentJob', name: 'Nightly load' }, agentIdentity: { jobId: '11111111-1111-1111-1111-111111111111' }, connectionId: 'c1', requestId: expect.any(String),
       agentJob: { version: 7, modified: '2026-11-20T14:32:07.123', description: 'Rebuilds', removeAlerts: [{ id: 11, name: 'Log full' }] }
     }])
     expect(jobDocuments.get(id)).toMatchObject({ phase: 'ready', changes: 0, notice: jobDocumentText.saved, model: { job: { version: 8 } } })
@@ -286,13 +286,13 @@ describe('the job document', () => {
     const handle = (live.handles as FakeLiveHandle[]).find(item => item.owner.key === 'agent-job:' + id)!
     expect(handle.spec).toMatchObject({ source: 'agent.jobs', args: { watch: ['11111111-1111-1111-1111-111111111111'] } })
     await jobDocuments.start(id, 'Load')
-    expect(executes().at(-1)).toMatchObject({ action: 'startJob', target: { kind: 'agentJob', name: 'Nightly load' }, agentIdentity: { created: '2026-01-02T03:04:05' }, stepName: 'Load' })
+    expect(executes().at(-1)).toMatchObject({ action: 'startJob', target: { kind: 'agentJob', name: 'Nightly load' }, agentIdentity: { jobId: '11111111-1111-1111-1111-111111111111' }, stepName: 'Load' })
     expect(handle.refreshes).toBe(1)
     handle.deliver({ type: 'live.tick', seq: 1, sampledAt: 1, samples: [{ probe: 'agent.jobs.watched', costMs: 1, effectiveIntervalMs: 2000, metrics: [1, 2, 2, 0, 1, 0] }] })
     expect(jobDocuments.get(id)?.live).toMatchObject({ running: true, step: 2, steps: 2 })
     expect(jobDocuments.canStart(id)).toBe(false)
     await jobDocuments.stop(id)
-    expect(executes().at(-1)).toMatchObject({ action: 'stopJob', agentIdentity: { created: '2026-01-02T03:04:05' } })
+    expect(executes().at(-1)).toMatchObject({ action: 'stopJob', agentIdentity: { jobId: '11111111-1111-1111-1111-111111111111' } })
     // A lost connection clears the header's state but keeps its view, which LiveService resumes after a reconnect.
     connections.markLostBefore(2)
     expect(jobDocuments.get(id)?.live).toBeUndefined()
