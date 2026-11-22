@@ -212,6 +212,8 @@ internal static partial class AgentSql
         "last_pager_date", "last_pager_time", "last_netsend_date", "last_netsend_time"];
     /// <summary>Every operator with its addresses, pager duty and when it was last notified.</summary>
     public static readonly AgentStatement OperatorRows = new("operatorRows", "EXEC msdb.dbo.sp_help_operator;", OperatorDocumentColumns, [], "operatorRows");
+    /// <summary>One operator by id (the operator document), so an operator past the listing's cap still opens.</summary>
+    public static readonly AgentStatement OperatorDocument = new("operatorDocument", "EXEC msdb.dbo.sp_help_operator @operator_id = @operator_id;", OperatorDocumentColumns, [new("@operator_id", SqlDbType.Int)], "listRows");
     /// <summary>Every notification (alert, operator, methods), for SQLAgentOperatorRole and sysadmin.</summary>
     public static readonly AgentStatement Notifications = new("notifications", "SELECT n.alert_id, n.operator_id, n.notification_method FROM msdb.dbo.sysnotifications AS n;",
         ["alert_id", "operator_id", "notification_method"], [], "listRows");

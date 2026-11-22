@@ -49,7 +49,7 @@ internal static class AgentObjectChecks
         var failures = results.Where(item => item.Problems.Count > 0).Select(item => item.Name + ": " + string.Join(", ", item.Problems)).ToList();
         check(failures.Count == 0 && results.Count == 8, "the alert and operator batch shapes pass their lint" + (failures.Count == 0 ? "" : ": " + string.Join("; ", failures)));
         check(AgentSql.LintWrites().Count(item => item.Name.StartsWith("object batch ", StringComparison.Ordinal)) == 8, "the Agent write lint (and so the object actions' lint) runs the alert and operator batches too");
-        foreach (var statement in new[] { AgentSql.AlertDocument, AgentSql.AlertRows, AgentSql.OperatorRows, AgentSql.Notifications, AgentSql.AlertNotifications, AgentSql.OperatorNotifications, AgentSql.JobNotifications, AgentSql.AlertJobs, AgentSql.AlertDatabases,
+        foreach (var statement in new[] { AgentSql.AlertDocument, AgentSql.AlertRows, AgentSql.OperatorRows, AgentSql.OperatorDocument, AgentSql.Notifications, AgentSql.AlertNotifications, AgentSql.OperatorNotifications, AgentSql.JobNotifications, AgentSql.AlertJobs, AgentSql.AlertDatabases,
             AgentSql.Counters, AgentSql.CounterValues, AgentSql.MessageText })
             check(AgentSql.Known(statement) && AgentSql.Lint(statement, null).Count == 0, "the alert and operator read " + statement.Id + " is one the reader runs, and passes the Agent read lint: " + string.Join(", ", AgentSql.Lint(statement, null)));
         check(AgentSql.LintRead(AgentSql.AlertByName, null).Count == 0 && AgentSql.LintRead(AgentSql.OperatorByName, null).Count == 0, "the by-name reads pass the Agent read lint");

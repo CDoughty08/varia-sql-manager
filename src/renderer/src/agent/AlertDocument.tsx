@@ -42,6 +42,8 @@ function WhenSection({ state, model, draft, editable, problems, service }: Props
   const kinds: AgentAlertKind[] = model.alert ? [model.alert.kind] : alertKindsOffered(model.platform)
   const wmi = draft.kind === 'wmi'
   const name = { description: 'The alert\'s name, unique on this server.', ...fieldText('name', problems) }
+  const database = { description: 'Only events in this database; all databases when empty.', ...fieldText('database', problems) }
+  const keyword = { description: 'Only events whose message contains this text.', ...fieldText('keyword', problems) }
   const when = { description: draft.kind === 'performance' ? agentAlertText.countersHint : 'The error number or the severity the alert raises on.', ...fieldText('when', problems), ...wmi ? { note: agentAlertText.wmiReadOnly } : {} }
   const objects = [...new Set((model.counters ?? []).map(counter => counter.object))]
   const counters = (model.counters ?? []).filter(counter => counter.object === draft.object).map(counter => counter.counter)
@@ -70,16 +72,16 @@ function WhenSection({ state, model, draft, editable, problems, service }: Props
             </select>
             : <input className="property-input" type="text" inputMode="numeric" aria-label="Error number" maxLength={10} value={draft.messageId} disabled={!editable} onChange={event => update({ messageId: event.target.value })} />}
         </span>
-        {draft.raiseOn === 'message' && model.messageText && <p className="field-note">{model.messageText}</p>}
+        {draft.raiseOn === 'message' && model.messageText && draft.messageId.trim() === String(model.alert?.messageId) && <p className="field-note">{model.messageText}</p>}
       </PropertyField>
-      <PropertyField id={ids.database} label="Database" description="Only events in this database; all databases when empty." {...fieldText('database', problems)}>
-        <select id={ids.database} className="property-input" value={draft.database} disabled={!editable} onChange={event => update({ database: event.target.value })}>
+      <PropertyField id={ids.database} label="Database" {...database}>
+        <select id={ids.database} className="property-input" value={draft.database} disabled={!editable} {...fieldAria(ids.database, database)} onChange={event => update({ database: event.target.value })}>
           <option value="">(All databases)</option>
           {(model.databases.includes(draft.database) || !draft.database ? model.databases : [draft.database, ...model.databases]).map(name => <option key={name} value={name}>{name}</option>)}
         </select>
       </PropertyField>
-      <PropertyField id={ids.keyword} label="Message contains" description="Only events whose message contains this text." {...fieldText('keyword', problems)}>
-        <input id={ids.keyword} className="property-input" type="text" maxLength={agentLimits.alertKeywordChars + 1} value={draft.keyword} disabled={!editable} onChange={event => update({ keyword: event.target.value })} />
+      <PropertyField id={ids.keyword} label="Message contains" {...keyword}>
+        <input id={ids.keyword} className="property-input" type="text" maxLength={agentLimits.alertKeywordChars + 1} value={draft.keyword} disabled={!editable} {...fieldAria(ids.keyword, keyword)} onChange={event => update({ keyword: event.target.value })} />
       </PropertyField>
     </>}
     {draft.kind === 'performance' && <PropertyField id={ids.when} label="Condition" {...when} {...!model.counters ? { note: agentAlertText.countersTyped } : {}}>
@@ -178,17 +180,19 @@ function ThenSection({ state, model, draft, editable, problems, service }: Props
 function OptionsSection({ state, model, draft, editable, problems, service }: Props) {
   const update = (patch: Partial<AgentAlertDraft>) => service.updateDraft(state.id, current => ({ ...current, ...patch }))
   const ids = { includeIn: fieldId(state.id, 'includeIn'), message: fieldId(state.id, 'message'), delay: fieldId(state.id, 'delay'), count: fieldId(state.id, 'count') }
+  const message = { description: 'Sent with every notification.', ...fieldText('message', problems) }
+  const delay = { description: agentAlertText.delayHint, ...fieldText('delay', problems) }
   return <div className="properties-fields agent-alert-options">
     <PropertyField id={ids.includeIn} label="Include the error text in" labelFor={false} description="Which notifications carry the error's own message." {...fieldText('includeIn', problems)}>
       <span className="agent-alert-include" id={ids.includeIn}>
         {methodChoices.map(choice => <label key={choice.bit}><input type="checkbox" checked={(draft.includeIn & choice.bit) !== 0} disabled={!editable} onChange={() => update({ includeIn: draft.includeIn ^ choice.bit })} /> {choice.label}</label>)}
       </span>
     </PropertyField>
-    <PropertyField id={ids.message} label="Additional message" description="Sent with every notification." {...fieldText('message', problems)}>
-      <textarea id={ids.message} className="property-input" rows={3} maxLength={agentLimits.alertMessageChars + 1} value={draft.message} disabled={!editable} onChange={event => update({ message: event.target.value })} />
+    <PropertyField id={ids.message} label="Additional message" {...message}>
+      <textarea id={ids.message} className="property-input" rows={3} maxLength={agentLimits.alertMessageChars + 1} value={draft.message} disabled={!editable} {...fieldAria(ids.message, message)} onChange={event => update({ message: event.target.value })} />
     </PropertyField>
-    <PropertyField id={ids.delay} label="Delay between responses (seconds)" description={agentAlertText.delayHint} {...fieldText('delay', problems)}>
-      <input id={ids.delay} className="property-input" type="number" min={0} max={agentLimits.alertDelaySeconds} step={1} value={draft.delay} disabled={!editable}
+    <PropertyField id={ids.delay} label="Delay between responses (seconds)" {...delay}>
+      <input id={ids.delay} className="property-input" type="number" min={0} max={agentLimits.alertDelaySeconds} step={1} value={draft.delay} disabled={!editable} {...fieldAria(ids.delay, delay)}
         onChange={event => update({ delay: Math.max(0, Math.round(Number(event.target.value) || 0)) })} />
     </PropertyField>
     {model.alert && <PropertyField id={ids.count} label="Occurrence count" labelFor={false} description={draft.resetCount ? agentAlertText.resetPending : model.sysadmin ? 'How many times the alert has fired since its count was reset.' : agentAlertText.resetSysadmin} {...fieldText('count', problems)}>

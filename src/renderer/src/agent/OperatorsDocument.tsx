@@ -177,13 +177,13 @@ export default function OperatorsDocument({ documentId }: { documentId: string }
   const [chosen, setDialog] = useState<'delete' | 'recommended'>()
   const state = documents[documentId]
   // Add recommended alerts from the Alerts folder asks for its dialog once the grid has read the server.
-  const askable = !!state?.model?.sysadmin && !!state.model.alerts && !state.model.readOnly
+  const askable = !!state?.model?.sysadmin && !!state.model.alerts && !state.model.readOnly && state.changes === 0
   const dialog = chosen ?? (state?.ask && askable ? state.ask : undefined)
   useEffect(() => {
     if (!state?.ask || !state.model || askable) return
     operatorsDocuments.setAsk(state.id, undefined)
-    commands.reportError(state.model.readOnly ?? (state.model.platform === 'windows' ? agentAlertText.readAlertsDenied : agentAlertText.platformAlerts))
-  }, [state?.ask, state?.model, state?.id, askable, operatorsDocuments, commands])
+    commands.reportError(state.changes > 0 ? agentObjectText.saveFirst : state.model.readOnly ?? (state.model.platform === 'windows' ? agentAlertText.readAlertsDenied : agentAlertText.platformAlerts))
+  }, [state?.ask, state?.model, state?.id, state?.changes, askable, operatorsDocuments, commands])
   if (!state) return <div className="agent-operators-document" />
   const { model, draft } = state
   const editable = operatorsDocuments.canEdit(state.id)

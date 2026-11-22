@@ -422,7 +422,7 @@ internal sealed partial class ActionService
         var (login, sysadmin, mail, failure) = await AgentObjectFactsAsync(reader, connection, token);
         if (failure is not null) return new(null, 0, failure);
         var alertsOffered = AgentCatalog.Current.Offers("alerts", platform!);
-        List<AgentStatement> reads = [AgentSql.OperatorRows, AgentSql.JobNotifications];
+        List<AgentStatement> reads = id is null ? [AgentSql.OperatorRows, AgentSql.JobNotifications] : [AgentSql.OperatorRows, AgentSql.OperatorDocument, AgentSql.JobNotifications];
         if (alertsOffered) reads.AddRange(id is null ? [AgentSql.AlertRows] : [AgentSql.AlertRows, AgentSql.OperatorNotifications]);
         var (results, errors) = await reader.ReadAsync(connection, null, reads, (_, parameter) => parameter.Name == "@operator_id" ? id : null, token);
         bool Read(AgentStatement statement, out AgentResult result) => results.TryGetValue(statement.Id, out result!) && errors.All(error => error.Statement != statement.Id);
@@ -430,7 +430,8 @@ internal sealed partial class ActionService
         AgentOperatorRecordDto? record = null;
         if (id is not null)
         {
-            var rows = results[AgentSql.OperatorRows.Id];
+            if (ReadFailure(errors.FirstOrDefault(error => error.Statement == AgentSql.OperatorDocument.Id)) is { } documentFailure) return new(null, 0, documentFailure);
+            var rows = results[AgentSql.OperatorDocument.Id];
             var row = rows.Rows.FirstOrDefault(item => IntOf(rows.Value(item, "id")) == id);
             if (row is null) return new(null, 0, ObjectGone(target));
             record = OperatorRecord(rows, row);
