@@ -100,5 +100,7 @@ internal static partial class AgentSql
         foreach (var item in LintJobSaves()) yield return item;
         // Delete History's batches (AG-5a, AgentSql.History.cs).
         foreach (var item in LintHistoryWrites()) yield return item;
+        // Alerts and operators (AG-7, AgentSql.Objects.cs).
+        foreach (var item in LintObjectWrites()) yield return item;
     }
 }

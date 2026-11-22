@@ -57,7 +57,7 @@ describe('table designer catalogue', () => {
   it('keeps its describe and request ids out of the object-action catalogue but in the describe schema', () => {
     expect(designerDescribeIds).toEqual(['tableDesigner'])
     expect(designerRequestActions).toEqual(['createTable'])
-    expect(describeIds).toEqual([...dialogIds, 'renameDatabase', 'loginFacts', 'tableDesigner', 'serverFiles', 'restoreDatabase', 'loginDatabaseRoles', 'loginEffectivePermissions', 'windowsPrincipal'])
+    expect(describeIds).toEqual([...dialogIds, 'renameDatabase', 'loginFacts', 'agentOperators', 'tableDesigner', 'serverFiles', 'restoreDatabase', 'loginDatabaseRoles', 'loginEffectivePermissions', 'windowsPrincipal'])
     expect(designerLimits.scriptChars).toBe(maxScriptCharacters)
   })
   it('generates commands with valid preconditions, menus and keys, F4 only inside a designer', () => {
@@ -83,6 +83,8 @@ describe('table designer catalogue', () => {
       expect(new Set(context.filter(entry => !entry.when).map(entry => entry.mnemonic)).size).toBe(context.filter(entry => !entry.when).length)
       // Security › New holds Login… (D2a); each item shows only on its own folder.
       expect(buildMenuModel('explorer.new', platform).map(entry => entry.kind === 'command' ? [entry.id, entry.title, entry.mnemonic] : [])).toEqual([
+        // The SQL Server Agent node's New › Job…, Alert… and Operator… (AG-7).
+        ['agent.newJobOnAgent', 'Job…', 'j'], ['agent.newAlertOnAgent', 'Alert…', 'a'], ['agent.newOperatorOnAgent', 'Operator…', 'o'], [],
         ['explorer.newLoginOnSecurity', 'Login…', 'l'], [], ['explorer.newTable', 'Table…', 't']])
       expect((['explorer.newLoginOnSecurity', 'explorer.newTable'] as const).map(id => commandDescriptor(id).menus?.find(placement => placement.menu === 'explorer.new')?.when))
         .toEqual(["explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' || explorerServerEngine == 'managedInstance')", "explorerFolder == 'tables'"])

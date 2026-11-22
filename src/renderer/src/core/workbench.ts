@@ -117,7 +117,9 @@ import { JobActivityService } from '../agent/JobActivityService'
 import { LogViewerService } from '../agent/LogViewerService'
 import { AgentJobStatusService } from '../agent/AgentJobStatusService'
 import { JobDocumentService } from '../agent/JobDocumentService'
+import { AlertOperatorDocumentService, alertSpec, operatorSpec, operatorsSpec, type AlertDocumentService, type OperatorDocumentService, type OperatorsDocumentService } from '../agent/AlertOperatorDocumentService'
 import { agentContribution } from '../contributions/agent'
+import { agentObjectsContribution } from '../contributions/agent-objects'
 import { SearchDetailsService } from '../search/SearchDetailsService'
 import { ObjectSearchService } from '../search/ObjectSearchService'
 import { MenuService } from '../menus/MenuService'
@@ -280,6 +282,10 @@ export interface Workbench extends Disposable {
   /** The status bar's running Agent jobs this window started, followed while hidden (AG-3). */
   readonly agentJobs: AgentJobStatusService
   readonly jobDocuments: JobDocumentService
+  /** The alert and operator documents and the Operators and notifications grid (AG-7). */
+  readonly alertDocuments: AlertDocumentService
+  readonly operatorDocuments: OperatorDocumentService
+  readonly operatorsDocuments: OperatorsDocumentService
   /** Search Objects: each connected server's object index (built in the backend) and the Search Objects tabs. */
   readonly objectSearch: ObjectSearchService
   /** The Search Objects tabs' details pane: the selected hit's properties and definition. */
@@ -522,6 +528,14 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       ;(root?.querySelector<HTMLElement>('[data-agent-job-focus]') ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]'))?.focus()
     })
   })
+  // The alert and operator documents and the grid (AG-7): the first field of a new one, otherwise the section list.
+  const agentObjectFocus = (attribute: string) => (id: string) => focusLater(() => {
+    const root = document.querySelector<HTMLElement>(`[${attribute}="${CSS.escape(id)}"]`)
+    ;(root?.querySelector<HTMLElement>('[data-agent-object-focus]') ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]'))?.focus()
+  })
+  const alertDocuments = new AlertOperatorDocumentService(alertSpec, { api, documents, files, connections, targetIdOf, focus: agentObjectFocus('data-agent-alert') })
+  const operatorDocuments = new AlertOperatorDocumentService(operatorSpec, { api, documents, files, connections, targetIdOf, focus: agentObjectFocus('data-agent-operator') })
+  const operatorsDocuments = new AlertOperatorDocumentService(operatorsSpec, { api, documents, files, connections, targetIdOf, focus: agentObjectFocus('data-agent-operators') })
   const jobActivity = new JobActivityService({
     api, documents, panes, groups: editorGroups, live, connections, targetIdOf,
     started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt),
@@ -721,6 +735,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     logViewer,
     agentJobs,
     jobDocuments,
+    alertDocuments,
+    operatorDocuments,
+    operatorsDocuments,
     objectSearch,
     searchDetails,
     theme,
@@ -776,6 +793,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       logViewer.dispose()
       agentJobs.dispose()
       jobDocuments.dispose()
+      alertDocuments.dispose()
+      operatorDocuments.dispose()
+      operatorsDocuments.dispose()
       // Before the live views: each monitor disposes its own; then the client, while the port is still there.
       activity.dispose()
       // Before the client: its views cancel their subscriptions while the port is still there.
@@ -861,6 +881,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     ssisContribution(workbench),
     activityContribution(workbench),
     agentContribution(workbench, { agentEnabled: api.agentPreview }),
+    agentObjectsContribution(workbench, { agentEnabled: api.agentPreview }),
     searchContribution(workbench, api),
     settingsContribution(workbench),
     notificationsContribution(workbench)

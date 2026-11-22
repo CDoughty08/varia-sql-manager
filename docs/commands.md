@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (384)
+## Commands (400)
 
 ### File
 
@@ -442,6 +442,22 @@ keys it uses are listed below.
 | Start Job at Step… | `agentJob.startAtStep` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentJob` | — |
 | Stop Job | `agentJob.stop` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentJob` | — |
 | Reload Job | `agentJob.reload` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentJob` | — |
+| New Alert… | `agent.newAlert` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › New Alert… |
+| Alert… (not in the palette) | `agent.newAlertOnAgent` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › New › Alert… |
+| Open Alert… | `agent.openAlert` | — | — | — | `agentEnabled && backendReady && hasConnection` | — |
+| Add Recommended Alerts… | `agent.addRecommendedAlerts` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › Add Recommended Alerts… |
+| Save Alert | `agentAlert.save` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentAlert` | — |
+| Reload Alert | `agentAlert.reload` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentAlert` | — |
+| New Operator… | `agent.newOperator` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › New Operator… |
+| Operator… (not in the palette) | `agent.newOperatorOnAgent` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › New › Operator… |
+| Job… (not in the palette) | `agent.newJobOnAgent` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › New › Job… |
+| Open Operator… | `agent.openOperator` | — | — | — | `agentEnabled && backendReady && hasConnection` | — |
+| Operators and Notifications… | `agent.operators` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › Operators and Notifications… |
+| Save Operator | `agentOperator.save` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentOperator` | — |
+| Reload Operator | `agentOperator.reload` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentOperator` | — |
+| Send Test E-mail | `agentOperator.sendTest` | — | — | — | `agentEnabled && backendReady && (activeDocumentIsAgentOperator \|\| activeDocumentIsAgentOperators)` | — |
+| Save Notifications | `agentOperators.save` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentOperators` | — |
+| Reload Notifications | `agentOperators.reload` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentOperators` | — |
 | View History | `agent.viewHistory` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › View History |
 | Refresh History | `agent.refreshHistory` | — | — | — | `agentEnabled && backendReady && activeDocumentIsLogViewer` | — |
 | Delete History… | `agent.deleteHistory` | — | — | — | `agentEnabled && backendReady && activeDocumentIsLogViewer` | — |
@@ -730,12 +746,16 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `0_connect` | **R**econnect… | `connection.reconnect` | `explorerServerLost` |
 | `0_connect` | Rem**o**ve from Explorer | `connection.removeFromExplorer` | `explorerServerLost` |
 | `0_connect` | En**v**ironment… | `connection.environment` | `explorerNode == 'server' && !explorerServerLost` |
-| `0_new` | **N**ew › | Submenu: Object Explorer context menu › New | `explorerNode == 'folder' && (explorerFolder == 'tables' \|\| (explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance') && !explorerServerLost))` |
+| `0_new` | **N**ew › | Submenu: Object Explorer context menu › New | `explorerNode == 'folder' && (explorerFolder == 'tables' \|\| (explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance') && !explorerServerLost)) \|\| (explorerNode == 'agent' && !explorerServerLost)` |
+| `0_new` | **N**ew Alert… | `agent.newAlert` | `((explorerNode == 'folder' && explorerFolder == 'agentAlerts') \|\| explorerNode == 'agentAlert') && !explorerServerLost` |
 | `0_new` | **N**ew Database… | `explorer.newDatabase` | `explorerNode == 'folder' && explorerFolder == 'databases' && !explorerServerLost && explorerServerEngine == 'box'` |
 | `0_new` | **N**ew Job… | `agent.newJob` | `((explorerNode == 'folder' && explorerFolder == 'agentJobs') \|\| explorerNode == 'agentJob') && !explorerServerLost` |
 | `0_new` | **N**ew Login… | `explorer.newLogin` | `((explorerNode == 'folder' && explorerFolder == 'logins') \|\| explorerNode == 'login') && !explorerServerLost && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance')` |
+| `0_new` | **N**ew Operator… | `agent.newOperator` | `((explorerNode == 'folder' && explorerFolder == 'agentOperators') \|\| explorerNode == 'agentOperator') && !explorerServerLost` |
+| `0_new` | Add **R**ecommended Alerts… | `agent.addRecommendedAlerts` | `explorerNode == 'folder' && explorerFolder == 'agentAlerts' && !explorerServerLost` |
 | `0_new` | **A**ttach… | `explorer.attachDatabase` | `explorerActionAttach != '' && explorerNode == 'folder'` |
 | `0_new` | Crea**t**e Catalog… | `explorer.createCatalog` | `explorerNode == 'folder' && explorerFolder == 'integrationServicesCatalogs' && !explorerServerLost` |
+| `0_new` | **O**perators and Notifications… | `agent.operators` | `explorerNode == 'folder' && (explorerFolder == 'agentOperators' \|\| explorerFolder == 'agentAlerts') && !explorerServerLost` |
 | `0_new` | **R**estore Database… | `explorer.restoreDatabase` | `explorerActionRestore != '' && explorerNode == 'folder'` |
 | `0_new` | R**e**store Files and Filegroups… | `explorer.restoreFiles` | `explorerActionRestoreFiles != '' && explorerNode == 'folder'` |
 | `1_monitor` | **J**ob Activity Monitor | `agent.jobActivity` | `(explorerNode == 'agent' \|\| explorerNode == 'agentJobActivity') && !explorerServerLost` |
@@ -782,6 +802,9 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
+| `1_agent` | **J**ob… | `agent.newJobOnAgent` | `explorerNode == 'agent' && !explorerServerLost` |
+| `1_agent` | **A**lert… | `agent.newAlertOnAgent` | `explorerNode == 'agent' && agentRole == 'sysadmin' && explorerServerEngine == 'box' && !explorerServerLinux && !explorerServerLost` |
+| `1_agent` | **O**perator… | `agent.newOperatorOnAgent` | `explorerNode == 'agent' && agentRole == 'sysadmin' && !explorerServerLost` |
 | `1_security` | **L**ogin… | `explorer.newLoginOnSecurity` | `explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance')` |
 | `1_table` | **T**able… | `explorer.newTable` | `explorerFolder == 'tables'` |
 
@@ -1129,7 +1152,7 @@ Right-click the execution plan's Properties pane, or press Shift+F10 or the cont
 | `1_copy` | **C**opy | `plan.copyProperties` | Always |
 | `1_copy` | Copy **V**alue | `plan.copyPropertyValues` | Always |
 
-## Context keys (184)
+## Context keys (187)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1173,6 +1196,9 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `activeDocumentIsSsisOperations` | boolean | state | The active document is Integration Services Operations. |
 | `activeDocumentIsJobActivity` | boolean | state | The active document is SQL Server Agent's Job Activity Monitor. |
 | `activeDocumentIsAgentJob` | boolean | state | The active document is a SQL Server Agent job (Job Properties, or New Job). |
+| `activeDocumentIsAgentAlert` | boolean | state | The active document is a SQL Server Agent alert (Alert Properties, or New Alert). |
+| `activeDocumentIsAgentOperator` | boolean | state | The active document is a SQL Server Agent operator (Operator Properties, or New Operator). |
+| `activeDocumentIsAgentOperators` | boolean | state | The active document is SQL Server Agent's Operators and notifications grid. |
 | `activeDocumentIsLogViewer` | boolean | state | The active document is SQL Server Agent's Log File Viewer (job history). |
 | `ssisOperationStoppable` | boolean | state | The operation selected in the active Integration Services Operations document is an execution or validation that is running or pending, and no stop of it is on its way. |
 | `ssisOperationsPaused` | boolean | state | The active Integration Services Operations document is paused (Pause): it reads nothing until resumed. |

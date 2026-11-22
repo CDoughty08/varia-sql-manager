@@ -349,7 +349,33 @@ export const agentLimits = {
   /** Ages, in whole days, the describe counts history rows by (older rows count in the last), so "Delete old history now" can say about how many rows it removes. */
   historyAgeDays: 400,
   /** The most days, weeks or months "Delete old history now" goes back: 999 months stays inside `datetime`, so the cut-off is never NULL. */
-  purgeCount: 999
+  purgeCount: 999,
+  /** Alerts and operators (AG-7): the notifications one alert or operator save changes, each one msdb call. */
+  notificationChanges: 64,
+  /** Operators an alert save creates in place (the inline New operator), each one sp_add_operator. */
+  newOperators: 4,
+  /** Characters of an alert's additional notification message (`sysalerts.notification_message` is nvarchar(512)). */
+  alertMessageChars: 512,
+  /** Characters of an alert's "Message contains" text (`sysalerts.event_description_keyword` is nvarchar(100)). */
+  alertKeywordChars: 100,
+  /** Characters of a performance condition, `object|counter|instance|comparator|value` (`sysalerts.performance_condition` is nvarchar(512)). */
+  conditionChars: 512,
+  /** Characters of an operator's e-mail, pager and net send addresses (`sysoperators` holds nvarchar(100) each). */
+  addressChars: 100,
+  /** The most seconds an alert waits between responses (a day). */
+  alertDelaySeconds: 86_400,
+  /** Performance counters (object and counter pairs) the alert document's pickers list; more set `truncated`. */
+  counterRows: 4_000,
+  /** Instances one counter's current values list (the alert document's "Now on" table); more set `truncated`. */
+  counterInstances: 500,
+  /** Alerts one Add recommended alerts creates (each an sp_add_alert and an sp_add_notification). */
+  recommendedAlerts: 16,
+  /** Characters of Send test e-mail's subject and body. */
+  testMailChars: 256,
+  /** Alerts the Operators and notifications grid and an operator's Notifications list (sp_help_alert); more set `truncated`. */
+  alertRows: 1_000,
+  /** Operators one listing reads (sp_help_operator); more set `truncated`. */
+  operatorRows: 500
 } as const
 export type AgentLimit = keyof typeof agentLimits
 
@@ -438,8 +464,10 @@ export const writeProcedures: readonly WriteProcedure[] = [
   { name: 'sp_add_job', lane: 'AG-6a', database: 'msdb', arguments: ['@job_name', '@enabled', '@description', '@category_name', '@owner_login_name', '@notify_level_eventlog', '@notify_level_email',
     '@notify_level_netsend', '@notify_level_page', '@notify_email_operator_name', '@notify_netsend_operator_name', '@notify_page_operator_name', '@delete_level', '@job_id'] },
   { name: 'sp_add_jobserver', lane: 'AG-6a', database: 'msdb', arguments: ['@job_id'] },
-  // The job's Alerts section's Remove (sysadmin): the alert by name, its job set to none (the zero uniqueidentifier). AG-7 adds its own arguments.
-  { name: 'sp_update_alert', lane: 'AG-6a', database: 'msdb', arguments: ['@name', '@job_id'] },
+  // The job's Alerts section's Remove (sysadmin): the alert by name, its job set to none (the zero uniqueidentifier). The alert document (AG-7)
+  // adds the rest: a rename, Enable and Disable, When, Then and Options, and Reset count (@occurrence_count = 0).
+  { name: 'sp_update_alert', lane: 'AG-6a', database: 'msdb', arguments: ['@name', '@job_id', '@new_name', '@enabled', '@message_id', '@severity', '@delay_between_responses', '@notification_message',
+    '@include_event_description_in', '@database_name', '@event_description_keyword', '@occurrence_count', '@performance_condition'] },
   { name: 'sp_add_jobstep', lane: 'AG-6b', database: 'msdb' },
   { name: 'sp_update_jobstep', lane: 'AG-6b', database: 'msdb' },
   { name: 'sp_delete_jobstep', lane: 'AG-6b', database: 'msdb' },
@@ -449,14 +477,14 @@ export const writeProcedures: readonly WriteProcedure[] = [
   { name: 'sp_add_schedule', lane: 'AG-6c', database: 'msdb' },
   { name: 'sp_update_schedule', lane: 'AG-6c', database: 'msdb' },
   { name: 'sp_delete_schedule', lane: 'AG-6c', database: 'msdb' },
-  { name: 'sp_add_operator', lane: 'AG-7', database: 'msdb' },
-  { name: 'sp_update_operator', lane: 'AG-7', database: 'msdb' },
-  { name: 'sp_delete_operator', lane: 'AG-7', database: 'msdb' },
-  { name: 'sp_add_alert', lane: 'AG-7', database: 'msdb' },
-  { name: 'sp_delete_alert', lane: 'AG-7', database: 'msdb' },
-  { name: 'sp_add_notification', lane: 'AG-7', database: 'msdb' },
-  { name: 'sp_update_notification', lane: 'AG-7', database: 'msdb' },
-  { name: 'sp_delete_notification', lane: 'AG-7', database: 'msdb' },
+  { name: 'sp_add_operator', lane: 'AG-7', database: 'msdb', arguments: ['@name', '@enabled', '@email_address', '@pager_address', '@weekday_pager_start_time', '@weekday_pager_end_time', '@saturday_pager_start_time', '@saturday_pager_end_time', '@sunday_pager_start_time', '@sunday_pager_end_time', '@pager_days', '@netsend_address'] },
+  { name: 'sp_update_operator', lane: 'AG-7', database: 'msdb', arguments: ['@name', '@new_name', '@enabled', '@email_address', '@pager_address', '@weekday_pager_start_time', '@weekday_pager_end_time', '@saturday_pager_start_time', '@saturday_pager_end_time', '@sunday_pager_start_time', '@sunday_pager_end_time', '@pager_days', '@netsend_address'] },
+  { name: 'sp_delete_operator', lane: 'AG-7', database: 'msdb', arguments: ['@name', '@reassign_to_operator'] },
+  { name: 'sp_add_alert', lane: 'AG-7', database: 'msdb', arguments: ['@name', '@message_id', '@severity', '@enabled', '@delay_between_responses', '@notification_message', '@include_event_description_in', '@database_name', '@event_description_keyword', '@job_id', '@performance_condition'] },
+  { name: 'sp_delete_alert', lane: 'AG-7', database: 'msdb', arguments: ['@name'] },
+  { name: 'sp_add_notification', lane: 'AG-7', database: 'msdb', arguments: ['@alert_name', '@operator_name', '@notification_method'] },
+  { name: 'sp_update_notification', lane: 'AG-7', database: 'msdb', arguments: ['@alert_name', '@operator_name', '@notification_method'] },
+  { name: 'sp_delete_notification', lane: 'AG-7', database: 'msdb', arguments: ['@alert_name', '@operator_name'] },
   { name: 'sp_set_sqlagent_properties', lane: 'AG-8a', database: 'msdb', arguments: ['@sqlserver_restart', '@monitor_autostart', '@jobhistory_max_rows', '@jobhistory_max_rows_per_job'] },
   { name: 'sp_add_proxy', lane: 'AG-8b', database: 'msdb' },
   { name: 'sp_update_proxy', lane: 'AG-8b', database: 'msdb' },
@@ -465,7 +493,9 @@ export const writeProcedures: readonly WriteProcedure[] = [
   { name: 'sp_revoke_proxy_from_subsystem', lane: 'AG-8b', database: 'msdb' },
   { name: 'sp_grant_login_to_proxy', lane: 'AG-8b', database: 'msdb' },
   { name: 'sp_revoke_login_from_proxy', lane: 'AG-8b', database: 'msdb' },
-  { name: 'sp_cycle_agent_errorlog', lane: 'AG-5b', database: 'msdb' }
+  { name: 'sp_cycle_agent_errorlog', lane: 'AG-5b', database: 'msdb' },
+  // Send test e-mail (AG-7, sysadmin): one message to an operator through SQL Server Agent's own Database Mail profile.
+  { name: 'sp_notify_operator', lane: 'AG-7', database: 'msdb', arguments: ['@profile_name', '@name', '@subject', '@body'] }
 ]
 
 /** msdb's error numbers as AG-0 found them on SQL Server 2025, for the action mapping (AG-2). 22022 is not mapped by

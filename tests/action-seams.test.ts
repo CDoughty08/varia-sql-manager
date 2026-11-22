@@ -49,7 +49,10 @@ describe('server engines', () => {
       // SQL Server Agent Properties (AG-8a) opens on the Agent node, read-only on Managed Instance.
       { action: 'agentProperties', class: 'dialog', kind: 'agent', verb: 'properties', engines: ['box', 'managedInstance'] },
       // The job document (AG-6a) is what a job's Properties opens.
-      { action: 'agentJob', class: 'dialog', kind: 'agentJob', verb: 'properties', engines: ['box', 'managedInstance'] }])
+      { action: 'agentJob', class: 'dialog', kind: 'agentJob', verb: 'properties', engines: ['box', 'managedInstance'] },
+      // The alert and operator documents (AG-7): alerts are SQL Server on Windows boxes only; Managed Instance has operators.
+      { action: 'agentAlert', class: 'dialog', kind: 'agentAlert', verb: 'properties', engines: ['box'] },
+      { action: 'agentOperator', class: 'dialog', kind: 'agentOperator', verb: 'properties', engines: ['box', 'managedInstance'] }])
     expect(json.limits.cleanupMs).toBe(10_000)
     expect(designerEngines).toEqual(['box', 'managedInstance'])
     expect(JSON.parse(designerCatalogJson()).engines).toEqual(['box', 'managedInstance'])

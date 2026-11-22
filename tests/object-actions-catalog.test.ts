@@ -45,7 +45,7 @@ describe('object action catalogue', () => {
       for (const subtype of Object.keys(spec.subtypes ?? {})) expect(kindSpecs[kind].subtypes, `${kind} ${subtype}`).toContain(subtype)
     }
     for (const subtype of Object.keys(actionKindSpecs.login?.subtypeStatuses ?? {})) expect(kindSpecs.login.subtypes, subtype).toContain(subtype)
-    expect(Object.keys(actionKindSpecs).sort()).toEqual(['agent', 'agentJob', 'database', 'function', 'login', 'procedure', 'table', 'view'])
+    expect(Object.keys(actionKindSpecs).sort()).toEqual(['agent', 'agentAlert', 'agentJob', 'agentOperator', 'database', 'function', 'login', 'procedure', 'table', 'view'])
     expect(actionRow('table', 'clr' as NodeSubtype)).toBeUndefined()
     expect(actionMenuState({ kind: 'folder' })).toEqual(none)
     // A login of a type the Logins folder does not list has no subtype, and no actions.
@@ -70,7 +70,7 @@ describe('object action catalogue', () => {
     expect([states('database'), states('database', 'system'), states('database', 'snapshot')]).toEqual(['- enabled enabled enabled - - -', '- disabled disabled enabled - - -', '- disabled enabled enabled - - -'])
     // A login's Properties (D2c) opens Login Properties, a database's the Database Properties document, a table's Table Properties, and the
     // SQL Server Agent node's SQL Server Agent Properties (AG-8a).
-    expect(nodeKinds.filter(kind => actionOffered(kind, 'properties'))).toEqual(['login', 'database', 'table', 'agent', 'agentJob'])
+    expect(nodeKinds.filter(kind => actionOffered(kind, 'properties'))).toEqual(['login', 'database', 'table', 'agent', 'agentJob', 'agentAlert', 'agentOperator'])
     expect([actionDialog('agent', 'properties'), kindDialogActionSpecs.agentProperties]).toEqual(['agentProperties', { title: 'SQL Server Agent Properties', dialog: 'agentProperties', kind: 'agent', verb: 'properties', engines: ['box', 'managedInstance'] }])
     // Tasks › Detach…, Take Offline, Bring Online and Restore › Database…: user databases only; greyed on SQL Server's own (as SSMS for
     // Detach and the state changes; critic A19 for a restore, which takes T-SQL there), absent on a snapshot, which cannot be restored over.
@@ -207,7 +207,7 @@ describe('object action catalogue', () => {
   })
   it('declares Delete Object and Database Properties with SSMS\'s titles, pages and Script button wording', () => {
     expect(dialogIds).toEqual(['deleteObject', 'databaseProperties', 'newDatabase', 'attachDatabase', 'newLogin', 'takeOffline', 'bringOnline', 'detachDatabase', 'unlockLogin', 'loginProperties', 'tableProperties',
-      'startJobAtStep', 'startAgent', 'stopAgent', 'restartAgent', 'agentProperties', 'agentJob'])
+      'startJobAtStep', 'startAgent', 'stopAgent', 'restartAgent', 'agentProperties', 'agentJob', 'agentAlert', 'agentOperator'])
     // SSMS's SQL Server Agent Properties (AG-8a) stays a modal dialog, with General and History.
     expect(dialogSpecs.agentProperties).toEqual({ title: 'SQL Server Agent Properties', surface: 'modal', titleFormat: 'plain', size: 'large', action: 'agentProperties',
       pages: [{ id: 'general', title: 'General', icon: 'settings-gear' }, { id: 'history', title: 'History', icon: 'history' }] })
@@ -271,9 +271,12 @@ describe('object action catalogue', () => {
     expect(actionRow('database', undefined, 'unavailable', specs)).toEqual({ rename: 'enabled', delete: 'disabled' })
     expect(actionRow('database', 'system', 'readOnly', specs)).toEqual({ rename: 'disabled', properties: 'enabled' })
     expect(actionRow('database', undefined, 'noAccess', specs)).toEqual({ rename: 'enabled', delete: 'enabled' })
-    // Only logins (D4b) and Agent jobs (AG-2) have an overlay, so a status leaves every other kind's row as it is, and the menu keys with it.
+    // Only logins (D4b), Agent jobs (AG-2), alerts and operators (AG-7) have an overlay, so a status leaves every other kind's row as it is, and the menu keys with it.
     expect(actionStatuses('agentJob')).toEqual(['disabled'])
-    for (const kind of nodeKinds.filter(kind => kind !== 'login' && kind !== 'agentJob')) {
+    expect(actionStatuses('agentAlert')).toEqual(['disabled'])
+    expect(actionStatuses('agentOperator')).toEqual(['disabled'])
+    expect(actionRow('agentAlert', undefined, 'disabled')).toEqual({ enable: 'enabled', rename: 'enabled', delete: 'enabled', properties: 'enabled' })
+    for (const kind of nodeKinds.filter(kind => kind !== 'login' && kind !== 'agentJob' && kind !== 'agentAlert' && kind !== 'agentOperator')) {
       expect(actionStatuses(kind), kind).toEqual([])
       for (const status of ['disabled', 'unavailable', 'readOnly', 'noAccess'] as const) expect(actionRow(kind, undefined, status), kind).toEqual(actionRow(kind))
     }
@@ -311,8 +314,8 @@ describe('object action catalogue', () => {
     // Offline wins: the first rule that applies gives the reason.
     expect(databaseActionState(actionRow('database')!, { ...online, state: 6, readOnly: true }).reasons.rename).toBe('The database must be online to be renamed.')
     // The fact describes serve Rename, on databases only, and a login's Disable, on logins only, and the backend's copy names them.
-    expect(factDescribeSpecs).toEqual({ renameDatabase: { action: 'rename', kinds: ['database'] }, loginFacts: { action: 'disable', kinds: ['login'] } })
-    expect(JSON.parse(actionsCatalogJson()).describes).toEqual([{ action: 'rename', describe: 'renameDatabase', kinds: ['database'] }, { action: 'disable', describe: 'loginFacts', kinds: ['login'] }])
+    expect(factDescribeSpecs).toEqual({ renameDatabase: { action: 'rename', kinds: ['database'] }, loginFacts: { action: 'disable', kinds: ['login'] }, agentOperators: { action: 'properties', kinds: ['agent'] } })
+    expect(JSON.parse(actionsCatalogJson()).describes).toEqual([{ action: 'rename', describe: 'renameDatabase', kinds: ['database'] }, { action: 'disable', describe: 'loginFacts', kinds: ['login'] }, { action: 'properties', describe: 'agentOperators', kinds: ['agent'] }])
   })
   it('greys Take Offline and Bring Online by the database\'s state, with the reason the menu shows', () => {
     const at = (state: number) => { const { row, reasons } = databaseActionState(actionRow('database')!, { ...online, state }); return [row.takeOffline, row.bringOnline, reasons.takeOffline ?? '', reasons.bringOnline ?? ''] }

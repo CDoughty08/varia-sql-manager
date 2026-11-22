@@ -7,6 +7,8 @@ import { scriptCommandEntries, scriptUnavailableHint } from '../scripting/catalo
 import { operationsCommandEntries } from '../ssis/operations.ts'
 import { jobActivityCommandEntries } from '../agent/jobs.ts'
 import { agentJobCommandEntries } from '../actions/agent-job.ts'
+import { agentAlertCommandEntries } from '../actions/agent-alert.ts'
+import { agentOperatorCommandEntries } from '../actions/agent-operator.ts'
 import { logViewerCommandEntries } from '../agent/history.ts'
 import type { IconId } from '../icons.ts'
 import { ssisCommandEntries } from '../ssis/catalog.ts'
@@ -490,6 +492,9 @@ export const commandCatalog = {
   ...jobActivityCommandEntries(),
   // The SQL Server Agent job document (AG-6a): Open Job, New Job and the document's verbs, from src/shared/actions/agent-job.ts.
   ...agentJobCommandEntries(),
+  // The alert and operator documents and the Operators and notifications grid (AG-7): from src/shared/actions/agent-alert.ts and agent-operator.ts.
+  ...agentAlertCommandEntries(),
+  ...agentOperatorCommandEntries(),
   ...logViewerCommandEntries(),
   // Script as › <verb> To › <destination>: 30 commands generated from src/shared/scripting/catalog.ts, which keep the
   // table menu's explorer.scriptCreateTo* ids. Each acts on its menu's node, else the selection.

@@ -605,7 +605,27 @@ internal sealed record ActionArgs(string Action, string ConnectionId, string Req
     bool? DropConnections = null, RestoreFilesOptionsDto? RestoreFiles = null, List<UserMappingDto>? Mappings = null, bool? UpdateStatistics = null, bool? DetachOffline = null, LoginIdentityDto? LoginIdentity = null,
     bool? DropMappedUsers = null, string? Mode = null, LoginChangesDto? LoginChanges = null, List<PermissionDto>? Permissions = null, TableChangesDto? TableChanges = null,
     AgentIdentityDto? AgentIdentity = null, string? StepName = null, bool? DeleteUnusedSchedule = null,
-    AgentPropertiesChangesDto? AgentProperties = null, AgentHistoryPurgeDto? AgentPurge = null, AgentHistoryDeleteDto? AgentHistory = null, AgentJobSaveDto? AgentJob = null);
+    AgentPropertiesChangesDto? AgentProperties = null, AgentHistoryPurgeDto? AgentPurge = null, AgentHistoryDeleteDto? AgentHistory = null, AgentJobSaveDto? AgentJob = null,
+    AgentAlertSaveDto? AgentAlert = null, AgentOperatorSaveDto? AgentOperator = null, AgentRecommendedDto? AgentRecommended = null, int? AgentObjectId = null, string? ReassignTo = null);
+/// <summary>The alert document's Save (AG-7, src/shared/actions/agent-alert.ts AgentAlertSave): an existing alert's changed arguments, New Alert's every one
+/// it sets. NewOperators are created first and Notifications applied last, each one msdb call.</summary>
+internal sealed record AgentAlertSaveDto(string? Name = null, bool? Enabled = null, int? MessageId = null, int? Severity = null, string? Database = null, string? Keyword = null,
+    string? Condition = null, string? JobId = null, int? Delay = null, int? IncludeIn = null, string? Message = null, bool? ResetCount = null, List<AgentNewOperatorDto>? NewOperators = null,
+    List<AgentNotificationChangeDto>? Notifications = null);
+internal sealed record AgentNewOperatorDto(string Name, string? Email = null, string? Pager = null);
+/// <summary>One notification change: Name is the other side's (the operator in an alert's save, the alert in an operator's); Change add, update or delete.</summary>
+internal sealed record AgentNotificationChangeDto(string Name, int Methods, string Change);
+/// <summary>The operator document's Save (AG-7, agent-operator.ts AgentOperatorSave); pager duty goes as its days and six times together.</summary>
+internal sealed record AgentOperatorSaveDto(string? Name = null, bool? Enabled = null, string? Email = null, string? Pager = null, string? NetSend = null, int? PagerDays = null,
+    int? WeekdayStart = null, int? WeekdayEnd = null, int? SaturdayStart = null, int? SaturdayEnd = null, int? SundayStart = null, int? SundayEnd = null,
+    List<AgentNotificationChangeDto>? Notifications = null);
+/// <summary>Add recommended alerts (AG-7): the alerts to create, and one operator (with its methods) and one delay for all.</summary>
+internal sealed record AgentRecommendedDto(List<AgentRecommendedAlertDto>? Alerts = null, int Methods = 0, int Delay = 0, string? Operator = null);
+internal sealed record AgentRecommendedAlertDto(string Name, int MessageId, int Severity);
+/// <summary>agent.counterValues (AG-7): one performance counter's current values per instance.</summary>
+internal sealed record AgentCounterValuesArgs(string ConnectionId, string RequestId, string Object, string Counter);
+internal sealed record AgentCounterValueDto(string Instance, double Value);
+internal sealed record AgentCounterValuesResult(List<AgentCounterValueDto>? Values, long ElapsedMs, ActionError? Error = null, bool? Truncated = null, string? ReadAt = null);
 /// <summary>The job document's Save (AG-6a, src/shared/actions/agent-job.ts AgentJobSave). An existing job's carries the Version and Modified
 /// (yyyy-MM-ddTHH:mm:ss.fff) its describe read, which the STALE guard compares, and only what changed; New Job's (target the Agent node) every
 /// field it sets and no version. A notification goes as its level (0 to 3) and operator together, the operator '' exactly with level 0.
@@ -758,7 +778,9 @@ internal sealed record BlockerDto(int SessionId, string? Program, string? Host, 
 /// (D4c): Login, its facts with what it owns, and Mappings, the database users mapped to it.</summary>
 internal sealed record DeleteTargetDto(string Name, string Type, string? Owner, List<ActionWarningDto> Warnings, bool DependentsTruncated, bool? IsSnapshot = null, int? Sessions = null,
     int? WithTransaction = null, List<BlockerDto>? Blockers = null, bool? BlockersTruncated = null, string? CloseConnectionsNote = null, List<string>? TransactionTabs = null,
-    LoginFactsDto? Login = null, LoginMappingsDto? Mappings = null, DatabaseIdentityDto? Identity = null, AgentIdentityDto? AgentIdentity = null);
+    LoginFactsDto? Login = null, LoginMappingsDto? Mappings = null, DatabaseIdentityDto? Identity = null, AgentIdentityDto? AgentIdentity = null,
+    int? AgentObjectId = null, List<string>? ReassignChoices = null, AgentNotifiedByDto? NotifiedBy = null);
+internal sealed record AgentNotifiedByDto(int Alerts, int Jobs);
 /// <summary>Database Properties' General page; sizes in MB, dates as ISO 8601, a backup of "None" when msdb has no history.</summary>
 internal sealed record DatabaseGeneralDto(string Name, string Status, bool Standby, string? Owner, string Created, double SizeMb, double? SpaceAvailableMb = null, int? Users = null,
     string? LastBackup = null, string? LastLogBackup = null, string? Collation = null, double? MemoryAllocatedMb = null, double? MemoryUsedMb = null, int? Id = null);
@@ -796,7 +818,28 @@ internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long 
     RenameDatabaseDto? RenameDatabase = null, LoginFactsDto? Login = null, LoginLockFactsDto? Lock = null,
     LoginPropertiesDto? LoginProperties = null, EffectivePermissionsDto? EffectivePermissions = null, WindowsPrincipalDto? WindowsPrincipal = null,
     TablePropertiesDto? TableProperties = null, AgentJobFactsDto? AgentJob = null, AgentServiceFactsDto? AgentService = null, AgentPropertiesDto? AgentProperties = null,
-    AgentJobDocumentDto? AgentJobDocument = null);
+    AgentJobDocumentDto? AgentJobDocument = null, AgentAlertDocumentDto? AgentAlertDocument = null, AgentOperatorDocumentDto? AgentOperatorDocument = null,
+    AgentOperatorsDto? AgentOperators = null);
+/// <summary>The alert document's describe (AG-7, agent-alert.ts AgentAlertDocumentModel). Dates are yyyy-MM-ddTHH:mm:ss, server time.</summary>
+internal sealed record AgentAlertDocumentDto(AgentAlertRecordDto? Alert, string Login, bool Sysadmin, string Platform, List<AgentAlertNotifyDto> Notifications, List<string> Databases,
+    AgentJobMailDto Mail, string? ReadOnly = null, List<AgentJobOperatorDto>? Operators = null, List<AgentAlertJobDto>? Jobs = null, List<AgentCounterDto>? Counters = null,
+    bool? CountersTruncated = null, string? MessageText = null);
+internal sealed record AgentAlertRecordDto(int Id, string Name, bool Enabled, string Kind, int MessageId, int Severity, string Database, string Keyword, string Condition, string WmiNamespace,
+    string WmiQuery, string JobId, string JobName, int Delay, int IncludeIn, string Message, int Occurrences, string? LastOccurred = null, string? LastResponse = null, string? CountReset = null);
+internal sealed record AgentAlertNotifyDto(string Operator, int Methods);
+internal sealed record AgentAlertJobDto(string Id, string Name);
+internal sealed record AgentCounterDto(string Object, string Counter);
+/// <summary>The operator document's describe (AG-7, agent-operator.ts AgentOperatorDocumentModel).</summary>
+internal sealed record AgentOperatorDocumentDto(AgentOperatorRecordDto? Operator, string Login, bool Sysadmin, string Platform, List<AgentNotificationRowDto> Notifications, AgentJobMailDto Mail,
+    string? ReadOnly = null, List<AgentAlertRowDto>? Alerts = null, bool? AlertsTruncated = null, List<AgentJobNotifyRowDto>? Jobs = null);
+internal sealed record AgentOperatorRecordDto(int Id, string Name, bool Enabled, string Email, string Pager, string NetSend, int PagerDays, AgentDutyHoursDto Weekday, AgentDutyHoursDto Saturday,
+    AgentDutyHoursDto Sunday, string? LastEmail = null, string? LastPager = null, string? LastNetSend = null);
+internal sealed record AgentAlertRowDto(int Id, string Name, bool Enabled, string Kind, int MessageId, int Severity);
+internal sealed record AgentNotificationRowDto(int AlertId, int OperatorId, int Methods);
+internal sealed record AgentJobNotifyRowDto(string Id, string Name, string Email, string Page, string NetSend);
+/// <summary>The Operators and notifications grid's describe (AG-7, agent-operator.ts AgentOperatorsModel).</summary>
+internal sealed record AgentOperatorsDto(string Login, bool Sysadmin, string Platform, List<AgentOperatorRecordDto> Operators, List<AgentNotificationRowDto> Notifications, AgentJobMailDto Mail,
+    string? ReadOnly = null, bool? OperatorsTruncated = null, List<AgentAlertRowDto>? Alerts = null, bool? AlertsTruncated = null, List<AgentJobNotifyRowDto>? Jobs = null);
 /// <summary>The job document's describe (AG-6a, src/shared/actions/agent-job.ts AgentJobDocumentModel). Job is null for New Job; Operators null
 /// when the login may not read them; Owners for sysadmin only; Alerts null where the section is hidden (below SQLAgentOperatorRole, or a
 /// platform without alerts).</summary>

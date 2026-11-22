@@ -46,7 +46,20 @@ const limitNotes: { readonly [L in AgentLimit]: string } = {
   retentionDays: 'The days of history "What this keeps" measures each job\'s rate over',
   retentionJobs: 'Jobs "What this keeps" lists, those with the most rows first; more set `truncated`',
   historyAgeDays: 'Whole days of age the purge\'s row estimate counts separately (older rows count together)',
-  purgeCount: 'The most days, weeks or months "Delete old history now" goes back (999 months stays inside `datetime`)'
+  purgeCount: 'The most days, weeks or months "Delete old history now" goes back (999 months stays inside `datetime`)',
+  notificationChanges: 'Notification changes one alert or operator save makes (each one msdb call)',
+  newOperators: 'Operators an alert save creates in place (the inline New operator)',
+  alertMessageChars: 'Characters of an alert\'s additional notification message',
+  alertKeywordChars: 'Characters of an alert\'s "Message contains" text',
+  conditionChars: 'Characters of a performance condition (object|counter|instance|comparator|value)',
+  addressChars: 'Characters of an operator\'s e-mail, pager and net send addresses',
+  alertDelaySeconds: 'The most seconds an alert waits between responses',
+  counterRows: 'Performance counters the alert document\'s pickers list',
+  counterInstances: 'Instances one counter\'s current values list',
+  recommendedAlerts: 'Alerts one Add recommended alerts creates',
+  testMailChars: 'Characters of Send test e-mail\'s subject and body',
+  alertRows: 'Alerts the Operators and notifications grid reads',
+  operatorRows: 'Operators one listing reads'
 }
 
 /** The generated reference: code tables, gates, procedures and limits. */

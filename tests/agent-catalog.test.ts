@@ -113,7 +113,12 @@ describe('Agent catalogue', () => {
       ['sp_delete_job', ['@job_id', '@delete_history', '@delete_unused_schedule']]
     ])
     // The job document (AG-6a): New Job's sp_add_job (the id its OUTPUT) and sp_add_jobserver, and the Alerts section's sp_update_alert detach.
-    expect(writeProcedures.filter(procedure => procedure.lane === 'AG-6a').map(procedure => [procedure.name, procedure.arguments?.length])).toEqual([['sp_add_job', 14], ['sp_add_jobserver', 1], ['sp_update_alert', 2]])
+    expect(writeProcedures.filter(procedure => procedure.lane === 'AG-6a').map(procedure => [procedure.name, procedure.arguments?.length])).toEqual([['sp_add_job', 14], ['sp_add_jobserver', 1], ['sp_update_alert', 13]])
+    // Alerts and operators (AG-7): every procedure has its arguments, and Send test e-mail's sp_notify_operator names Agent's profile.
+    expect(writeProcedures.filter(procedure => procedure.lane === 'AG-7').map(procedure => [procedure.name, procedure.arguments?.length])).toEqual([
+      ['sp_add_operator', 12], ['sp_update_operator', 13], ['sp_delete_operator', 2], ['sp_add_alert', 11], ['sp_delete_alert', 1], ['sp_add_notification', 3], ['sp_update_notification', 3],
+      ['sp_delete_notification', 2], ['sp_notify_operator', 4]
+    ])
     for (const shape of masterReadShapes) {
       expect(shape.shape, shape.name).toMatch(new RegExp(`^EXEC (@rc = )?master\\.dbo\\.${shape.name} `))
       expect(shape.shape.endsWith(';'), shape.name).toBe(true)

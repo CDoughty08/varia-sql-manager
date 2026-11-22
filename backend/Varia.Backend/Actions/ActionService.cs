@@ -255,6 +255,8 @@ internal sealed partial class ActionService : IDisposable
         // New Login's Check Names (D2e) asks about a Windows account named DOMAIN\name, which need not have a login.
         if (args.Dialog is not null && args.Dialog == catalog.Logins.CheckNamesDescribe) return WindowsAccount(args.Target);
         if (args.Dialog is not null && designer.Describes.Contains(args.Dialog)) return DatabaseTarget(args.Target);
+        // The Operators and notifications grid (AG-7) reads the SQL Server Agent node, whose own Properties is SQL Server Agent Properties.
+        if (args.Dialog == "agentOperators") return AgentRoot(args.Target) ? Target(args.Target, "agentProperties") : throw Invalid("target.");
         if (args.Dialog is not null && catalog.Describes.TryGetValue(args.Dialog, out var kinds))
         {
             if (args.Target is null || !kinds.Contains(args.Target.Kind)) throw Invalid("target.");
@@ -262,6 +264,9 @@ internal sealed partial class ActionService : IDisposable
         }
         if (args.Dialog is null || !catalog.Dialogs.ContainsKey(args.Dialog)) throw Invalid("dialog.");
         // New Job (AG-6a) describes the SQL Server Agent node: the job document's choices before there is a job.
+        // New Alert and New Operator (AG-7) describe the SQL Server Agent node too.
+        if (args.Dialog is "agentAlert" or "agentOperator" && args.Target is { Kind: "agent" })
+            return AgentRoot(args.Target) ? Target(args.Target, "agentProperties") : throw Invalid("target.");
         if (args.Dialog == "agentJob" && args.Target is { Kind: "agent" })
             return args.Target is { Name: null, Database: null, Schema: null, Parent: null, SsisFolder: null, SsisProject: null } ? Target(args.Target, "agentProperties") : throw Invalid("target.");
         // New Login opens on the server: its action makes a login rather than acting on a row.
@@ -297,6 +302,8 @@ internal sealed partial class ActionService : IDisposable
         Ids(args.ConnectionId, args.RequestId);
         if (args.Secrets is not null && (script || !SecretActions.Contains(args.Action))) throw Invalid("this request takes no secrets.");
         if (args.Secrets is { } secrets) { Secret(secrets.Password, "password"); Secret(secrets.OldPassword, "oldPassword"); }
+        // Alerts and operators (AG-7) validate themselves: their documents' Save, the tree's verbs on them, Add recommended alerts and Send test e-mail.
+        if (ValidateAgentObjects(args, script) is { } objectTarget) return objectTarget;
         // The job document's Save (AG-6a) validates itself, before the job verbs, which take every other action on a job.
         if (ValidateAgentJob(args, script) is { } jobTarget) return jobTarget;
         // The Log File Viewer's Delete History (AG-5a) is no catalogue action and validates itself.
@@ -480,6 +487,10 @@ internal sealed partial class ActionService : IDisposable
                 "deleteObject" when target.Kind == "agentJob" => DescribeAgentJobDeleteAsync(connection, target, job),
                 "agentProperties" => DescribeAgentPropertiesAsync(connection, profile, job),
                 "agentJob" => DescribeAgentJobDocumentAsync(connection, profile, target, job),
+                "deleteObject" when target.Kind is "agentAlert" or "agentOperator" => DescribeAgentObjectDeleteAsync(connection, target, job),
+                "agentAlert" => DescribeAgentAlertDocumentAsync(connection, profile, target, job),
+                "agentOperator" => DescribeAgentOperatorDocumentAsync(connection, profile, target, job),
+                "agentOperators" => DescribeAgentOperatorsAsync(connection, profile, job),
                 _ => DescribeJobAsync(connection, args.ConnectionId, profile.Explorer(explorer).ServerEngine, target, action, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error), reading ? "Reading the file" : "Reading the object", own: reading ? OwnGate.Browse : OwnGate.None);
@@ -490,6 +501,7 @@ internal sealed partial class ActionService : IDisposable
         var target = Validate(args, script: true);
         if (args.Action == "createLogin") return ScriptNewLoginAsync(args, token);
         if (args.Action == "agentJob") return ScriptAgentJobDocument(args, target);
+        if (args.Action is "agentAlert" or "agentOperator" or AddRecommendedAlertsAction || target.Kind is "agentAlert" or "agentOperator") return ScriptAgentObject(args, target);
         if (target.Kind == "agentJob") return ScriptAgentJob(args, target);
         if (args.Action == "agentProperties") return ScriptAgentProperties(args);
         // The restores' Script reads nothing: it is written from the request and the catalogue, on no connection and under no gate.
@@ -529,6 +541,7 @@ internal sealed partial class ActionService : IDisposable
         if (NewLoginEngineRefusal(args) is { } refused) return Task.FromResult(new ActionExecuteResult([], [], 0, refused));
         if (AgentServiceActions.Contains(args.Action)) return ExecuteAgentServiceAsync(args, token);
         if (args.Action == DeleteJobHistoryAction) return ExecuteAgentHistoryAsync(args, token);
+        if (args.Action is "agentAlert" or "agentOperator" or AddRecommendedAlertsAction or NotifyOperatorAction || target.Kind is "agentAlert" or "agentOperator") return ExecuteAgentObjectRequestAsync(args, target, token);
         // Managed Instance refuses sp_set_sqlagent_properties (41905): refused before any connection opens, as the dialog opens read-only there.
         if (args.Action == "agentProperties" && AgentPropertiesRefusal(args) is { } agentRefused) return Task.FromResult(new ActionExecuteResult([], [], 0, agentRefused));
         var progress = new ActionProgress(catalog.IsLong(args.Action) ? events : null, Options.ProgressInterval);

@@ -1849,6 +1849,50 @@ function agentJobDoc(job) {
   if (!agentJobDocs.has(job.id)) agentJobDocs.set(job.id, { description: `${job.name} maintenance.`, owner: 'sa', emailLevel: 2, emailOperator: 'DBA Team', pageLevel: 0, pageOperator: '', netSendLevel: 0, netSendOperator: '', eventLogLevel: 2, deleteLevel: 0, version: 3, modified: '2026-11-10T09:15:30.120', alerts: [{ id: 7, name: `${job.name} failed`, enabled: true, severity: 0, messageId: 50001 }] })
   return agentJobDocs.get(job.id)
 }
+// Alerts and operators (AG-7) on the fake server: two operators, one alert notifying DBA Team by e-mail. A save applies its notification
+// changes and new alerts, and every document reads the lists again.
+const agentMail = { checked: true, xps: true, profiles: 1, sysadmin: true, useDatabaseMail: true, agentProfile: 'Varia Mail' }
+const day = { start: 80000, end: 180000 }
+const agentOperatorRows = [
+  { id: 1, name: 'DBA Team', enabled: true, email: 'dba@example.test', pager: 'dba-pager@example.test', netSend: '', pagerDays: 62, weekday: day, saturday: day, sunday: day },
+  { id: 2, name: 'On Call', enabled: true, email: 'oncall@example.test', pager: '', netSend: '', pagerDays: 127, weekday: day, saturday: day, sunday: day }
+]
+const agentAlertRows = [{ id: 21, name: 'Severity 017', enabled: true, kind: 'event', messageId: 0, severity: 17, delay: 60, includeIn: 1, message: '', jobId: '', jobName: '', database: '', keyword: '' }]
+const agentNotifications = [{ alertId: 21, operatorId: 1, methods: 1 }]
+const alertRow = alert => ({ id: alert.id, name: alert.name, enabled: alert.enabled, kind: alert.kind, messageId: alert.messageId, severity: alert.severity })
+const agentObjectsBase = () => ({ login: 'sa', sysadmin: true, platform: 'windows', mail: agentMail })
+function agentAlertDocument(params) {
+  const alert = params.target.kind === 'agent' ? undefined : agentAlertRows.find(row => row.name === params.target.name)
+  if (params.target.kind !== 'agent' && !alert) return { elapsedMs: 1, error: { code: 'NOT_FOUND', message: `The alert ${params.target.name} no longer exists.`, retryable: false } }
+  const operators = agentOperatorRows.map(row => ({ name: row.name, enabled: row.enabled, email: !!row.email, pager: !!row.pager, netSend: false, pagerDays: row.pagerDays, weekday: row.weekday, saturday: row.saturday, sunday: row.sunday }))
+  return { agentAlertDocument: {
+    ...agentObjectsBase(), operators, databases: ['master', 'Sales'], jobs: agentJobs.map(job => ({ id: job.id, name: job.name })),
+    notifications: alert ? agentNotifications.filter(row => row.alertId === alert.id).map(row => ({ operator: agentOperatorRows.find(op => op.id === row.operatorId).name, methods: row.methods })) : [],
+    ...alert ? { alert: { ...alert, condition: '', wmiNamespace: '', wmiQuery: '', occurrences: 0 } } : {}
+  }, elapsedMs: 1 }
+}
+function agentOperatorDocument(params) {
+  const operator = params.target.kind === 'agent' ? undefined : agentOperatorRows.find(row => row.name === params.target.name)
+  return { agentOperatorDocument: { ...agentObjectsBase(), alerts: agentAlertRows.map(alertRow), notifications: agentNotifications, jobs: [], ...operator ? { operator } : {} }, elapsedMs: 1 }
+}
+const agentOperatorsGrid = () => ({ agentOperators: { ...agentObjectsBase(), operators: agentOperatorRows, alerts: agentAlertRows.map(alertRow), notifications: agentNotifications, jobs: [] }, elapsedMs: 1 })
+function agentObjectSave(params) {
+  if (params.action === 'agentAlert') {
+    const save = params.agentAlert
+    let alert = agentAlertRows.find(row => row.id === params.agentObjectId)
+    if (!alert) { alert = { id: 21 + agentAlertRows.length, name: save.name, enabled: true, kind: 'event', messageId: save.messageId ?? 0, severity: save.severity ?? 0, delay: save.delay ?? 60, includeIn: save.includeIn ?? 1, message: save.message ?? '', jobId: save.jobId ?? '', jobName: agentJobs.find(job => job.id === save.jobId)?.name ?? '', database: '', keyword: '' }; agentAlertRows.push(alert) }
+    else Object.assign(alert, Object.fromEntries(Object.entries(save).filter(([key]) => key in alert)))
+    for (const change of save.notifications ?? []) {
+      const operator = agentOperatorRows.find(row => row.name === change.name)
+      if (!operator) continue
+      const at = agentNotifications.findIndex(row => row.alertId === alert.id && row.operatorId === operator.id)
+      if (change.change === 'delete') { if (at >= 0) agentNotifications.splice(at, 1) }
+      else if (at >= 0) agentNotifications[at].methods = change.methods
+      else agentNotifications.push({ alertId: alert.id, operatorId: operator.id, methods: change.methods })
+    }
+  }
+  return { steps: [], messages: [], elapsedMs: 1 }
+}
 const agentJobSteps = job => Array.from({ length: job.steps }, (_, index) => ({ id: index + 1, name: ['Check integrity', 'Rebuild indexes', 'Update statistics'][index] ?? `Step ${index + 1}`, subsystem: 'TSQL' }))
 function agentJobDocument(params) {
   const base = { login: 'sa', sysadmin: true, platform: 'windows', categories: ['[Uncategorized (Local)]', 'Database Maintenance'], operators: agentOperators, owners: ['sa', 'CONTOSO\agent'], alertsEditable: true, mail: { checked: true, xps: true, profiles: 1, sysadmin: true, useDatabaseMail: true, agentProfile: 'Varia Mail' } }
@@ -2374,6 +2418,9 @@ async function workbench(id, method, params, credit) {
           // As the backend answers a job msdb no longer has: an error in the result, not a failed request.
           return respond(id, value ?? { elapsedMs: 1, error: { code: 'NOT_FOUND', message: `The job ${params.target.name} no longer exists.`, retryable: false } })
         }
+        case 'agentAlert': return respond(id, agentAlertDocument(params))
+        case 'agentOperator': return respond(id, agentOperatorDocument(params))
+        case 'agentOperators': return respond(id, agentOperatorsGrid())
         case 'tableDesigner': return respond(id, { tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', canCreate: true }, elapsedMs: 1 })
         default: return respond(id, { deleteTarget: { name: [params.target.schema, params.target.name].filter(Boolean).join('.'), type: 'Table', owner: 'dbo', warnings: [], dependentsTruncated: false }, elapsedMs: 1 })
       }
@@ -2394,6 +2441,8 @@ QuitWithRollback:
 EndSave:
 GO
 `, database: 'msdb', warnings: [] })
+        case 'agentAlert':
+        case 'agentOperator': return respond(id, { text: 'USE [msdb]\nGO\nEXEC msdb.dbo.sp_update_alert @name = N\'Severity 017\'\nGO\n', database: 'msdb', warnings: [] })
         case 'properties': return respond(id, { text: `USE [master]\r\nGO\r\nALTER DATABASE [${params.target.name}] SET RECOVERY SIMPLE WITH NO_WAIT\r\nGO\r\n`, database: 'master', warnings: [] })
         default: return respond(id, { text: 'DROP TABLE [dbo].[Orders]', database: params.target.database ?? 'master', warnings: [] })
       }
@@ -2403,6 +2452,7 @@ GO
       if (params.action === 'agentJob') return respond(id, await agentJobSave(params))
       if (params.target?.kind === 'agentJob') return respond(id, agentJobVerb(params))
       if (params.action === 'deleteJobHistory') return respond(id, agentDeleteHistory(params))
+      if (params.action === 'agentAlert' || params.action === 'agentOperator' || params.action === 'notifyOperator' || params.action === 'addRecommendedAlerts') return respond(id, agentObjectSave(params))
       for (const [step, percent] of [[0, 25], [0, 100], [0, 101], [1, 40]]) write(FrameKind.EVENT, id, 0, { type: 'action.progress', step, percent })
       return respond(id, { steps: [{ status: 'done', title: 'Drop the object' }], messages: [], elapsedMs: 1 })
     case 'tables.columns': return respond(id, { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false })

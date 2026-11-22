@@ -17,7 +17,7 @@ import { actionDialog, isModalDialog } from '../../../shared/actions/catalog'
  * and Restore Files and Filegroups… on the Databases folder or as a database's Tasks › Restore › Database… and Files and
  * Filegroups….
  */
-export function actionsContribution({ commands, explorer, actions, dialogs, properties, tableProperties, newDatabase, restore, documents, ssisCatalog, connections, jobDocuments }: Pick<Workbench, 'commands' | 'explorer' | 'actions' | 'dialogs' | 'properties' | 'tableProperties' | 'newDatabase' | 'restore' | 'documents' | 'ssisCatalog' | 'connections' | 'jobDocuments'>, options: { readonly agentEnabled?: boolean } = {}): Disposable {
+export function actionsContribution({ commands, explorer, actions, dialogs, properties, tableProperties, newDatabase, restore, documents, ssisCatalog, connections, jobDocuments, alertDocuments, operatorDocuments }: Pick<Workbench, 'commands' | 'explorer' | 'actions' | 'dialogs' | 'properties' | 'tableProperties' | 'newDatabase' | 'restore' | 'documents' | 'ssisCatalog' | 'connections' | 'jobDocuments' | 'alertDocuments' | 'operatorDocuments'>, options: { readonly agentEnabled?: boolean } = {}): Disposable {
   // The verbs act on the document whose header runs them (`tabId`), else the active one.
   const propertiesOf = (args?: CommandArgs): string | undefined => { const id = args?.tabId ?? documents.getSnapshot().activeId; return properties.get(id) ? id : undefined }
   const on = (when: (id: string) => boolean, run: (id: string) => unknown) => ({
@@ -37,6 +37,8 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
   const nodeOf = (args?: CommandArgs): ExplorerMenuNode | undefined => args?.target ? explorerNodeOf(args) : explorer.menuNode(explorer.getSnapshot().selected)
   // An action that needs no tree row also takes a Search Objects result's object (`searchResults` in the catalogue).
   const isJob = (node: ExplorerMenuNode) => node.ref.type === 'object' && node.ref.object.kind === 'agentJob'
+  const isAgentObject = (node: ExplorerMenuNode) => node.ref.type === 'object' && (node.ref.object.kind === 'agentAlert' || node.ref.object.kind === 'agentOperator')
+  const changeState = (node: ExplorerMenuNode, verb: 'disable' | 'enable') => isJob(node) ? actions.changeJobState(node, verb) : isAgentObject(node) ? actions.changeAgentObjectState(node, verb) : actions.changeLoginState(node, verb)
   const listedJob = (node: ExplorerMenuNode) => {
     if (!isJob(node)) return undefined
     if (!node.jobId) throw new Error(jobActionMessages.unidentified)
@@ -73,12 +75,12 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
     commands.register('explorer.disable', {
       when: args => actions.canRun('disable', nodeOf(args)),
       unavailable: args => actions.unavailable('disable', nodeOf(args)),
-      run: async args => { const node = nodeOf(args); if (node) await (isJob(node) ? actions.changeJobState(node, 'disable') : actions.changeLoginState(node, 'disable')) }
+      run: async args => { const node = nodeOf(args); if (node) await changeState(node, 'disable') }
     }),
     commands.register('explorer.enable', {
       when: args => actions.canRun('enable', nodeOf(args)),
       unavailable: args => actions.unavailable('enable', nodeOf(args)),
-      run: async args => { const node = nodeOf(args); if (node) await (isJob(node) ? actions.changeJobState(node, 'enable') : actions.changeLoginState(node, 'enable')) }
+      run: async args => { const node = nodeOf(args); if (node) await changeState(node, 'enable') }
     }),
     // SQL Server Agent (AG-2), registered only behind the release gate so the palette offers none of them without it: Start Job at
     // Step... is a modal (with the job ID the tree listed, so a job replaced since is refused); Stop Job is a status-bar job; the
@@ -127,6 +129,12 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
         else if (dialog === 'agentJob') {
           if (!options.agentEnabled || node.ref.type !== 'object' || node.ref.object.name === undefined) return
           try { jobDocuments.openJob(node.connectionId, node.ref.object.name) } catch (error) { commands.reportError(error instanceof Error ? error.message : 'The job could not be opened.'); return }
+        }
+        // An alert's or operator's Properties is its document (AG-7), behind the same gate.
+        else if (dialog === 'agentAlert' || dialog === 'agentOperator') {
+          if (!options.agentEnabled || node.ref.type !== 'object' || node.ref.object.name === undefined) return
+          const service = dialog === 'agentAlert' ? alertDocuments : operatorDocuments
+          try { service.open(node.connectionId, { kind: dialog, name: node.ref.object.name }) } catch (error) { commands.reportError(error instanceof Error ? error.message : 'The document could not be opened.'); return }
         }
         else properties.open(node)
         // The menu returned focus to the tree; the document's section list mounts on a later frame.
