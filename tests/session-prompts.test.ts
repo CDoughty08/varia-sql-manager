@@ -162,7 +162,7 @@ describe('BigQuery job prompts', () => {
     expect(runningJobPrompt({ name: 'a.sql', job: { elapsedMs: 0, estimateBytes: 2 ** 40 } }, false).detail).not.toContain('$')
     expect(sessionPrompt({ action: 'exit', tabs: [job('a.sql')] })!.buttons[2].label).toBe("Don't Quit")
     expect(sessionPrompt({ action: 'disconnect', tabs: [job('a.sql')] })!.buttons[2].label).toBe("Don't Disconnect")
-    // A server Disconnect warns that an unconfirmed cancel stops it, as its SQL Server box does; a close does not.
+    // A server Disconnect says an unconfirmed job cancel lets it go on, reporting the outcome as unknown; a close does not.
     expect(sessionPrompt({ action: 'disconnect', tabs: [job('a.sql')] })!.detail).toContain('the disconnect goes on and says the outcome is unknown')
     expect(sessionPrompt({ action: 'disconnect', tabs: [job('a.sql')] })!.detail).not.toContain('disconnect stops with every tab open')
     expect(sessionPrompt({ action: 'close', tabs: [job('a.sql')] })!.detail).not.toContain('disconnect stops')

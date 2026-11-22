@@ -202,12 +202,13 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     expect(source).toMatch(/const removed = await library\.remove\(id\)\s+if \(running\.length\) jobRecords\.dropJobs/)
     expect(source).toContain('for (const [connectionId, profileId] of [...connectionProfiles]) if (profileId === id) connectionProfiles.delete(connectionId)')
     expect(source).toContain('if (kept !== undefined && matching.some(item => item.id === kept)) return')
-    expect(source).toContain("if (attach && result.status === 'failed' && !heldThroughFailure.has(result.error?.code ?? '')) for (const jobId of seen) if (jobConnections.get(jobId) === connectionId) jobConnections.delete(jobId)")
-    expect(source).toMatch(/heldThroughFailure: ReadonlySet<string> = new Set\(\['CONNECTION_LOST', 'QUOTA'/)
+    // A failed re-attach keeps its connection (the backend may hold the job); one its identity check refused drops its record.
+    expect(source).not.toContain('jobConnections.delete(jobId)')
+    expect(source).toContain("if (attachJobId !== undefined && result.status === 'failed' && result.error?.code === 'AUTH_IDENTITY') jobRecords.drop(jobKey, record => record.jobId === attachJobId)")
     // Deleting a connection lists ten job ids and counts the rest, in its first box and its failed-cancel box.
     expect(source).toContain('ids = listedIds(running.map(record => record.jobId))')
     // Deleting a profile leaves the jobs of tabs still connected through it (running or left running) to those tabs.
-    expect(source).toContain("jobRecorder(queryId!, jobKey, profileOf((validated as { connectionId?: string }).connectionId ?? ''), (validated as { connectionId?: string }).connectionId, method === 'query.attach')")
+    expect(source).toContain("jobRecorder(queryId!, jobKey, profileOf((validated as { connectionId?: string }).connectionId ?? ''), (validated as { connectionId?: string }).connectionId, method === 'query.attach' ? (validated as { jobId?: string }).jobId : undefined)")
     expect(source).toContain("profileDeleteJobs(jobRecords.forProfile(id), id, jobId => jobConnections.get(jobId), connectionId => backend.hasConnection(connectionId), connectionId => connectionProfiles.get(connectionId))")
     expect(source).toMatch(/seen\.add\(event\.jobId\); jobRecords\.record\(jobKey, event, profileId\)\s+if \(connectionId !== undefined\) \{\s+jobConnections\.delete\(event\.jobId\); jobConnections\.set\(event\.jobId, connectionId\)/)
     expect(source).toContain('detail: `${listedIds(failed)}')

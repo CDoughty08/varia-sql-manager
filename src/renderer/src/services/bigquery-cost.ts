@@ -316,6 +316,12 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
    * dataset, else a new dry run, which goes first: a pending diagnostics run is dropped), then the prompts. Resolves
    * whether to run.
    */
+  /** The bytes of the last dry run of exactly `sql` on the tab's dataset, if it is the one held. */
+  estimateFor(tabId: string, sql: string): number | undefined {
+    const estimated = this.entries.get(tabId)?.estimated
+    return estimated && estimated.sql === sql && estimated.dataset === this.dataset(tabId) ? estimated.result.bytesProcessed : undefined
+  }
+
   async beforeExecute(tabId: string, sql: string, origin: { readonly line: number; readonly column: number } = { line: 1, column: 1 }, signal?: AbortSignal): Promise<boolean> {
     const connection = this.connection(tabId), entry = this.entries.get(tabId)
     if (!connection || !entry) return true

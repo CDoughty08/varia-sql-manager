@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ApiResult, ConnectionInfo, QueryResult, VariaApi } from '../src/shared/contracts'
-import { failedAbortsText, heldAfter, jobStillRunning, QueryService, restoredJobRunning, type QueryApi, type TabJob } from '../src/renderer/src/services/queries'
+import { failedAbortsText, heldAfter, jobHeldAfterFailure, jobStillRunning, QueryService, restoredJobRunning, type QueryApi, type TabJob } from '../src/renderer/src/services/queries'
 import type { ResultsService } from '../src/renderer/src/results/ResultsService'
 import { deferred, documentFixture } from './fixtures/documents'
 import { defaultSettings } from '../src/shared/settings/catalog'
@@ -105,6 +105,26 @@ describe('BigQuery job references', () => {
   })
 })
 
+describe('a run that failed while its job ran', () => {
+  it('keeps the job the session holds, says so, and settles it once a later run completes', async () => {
+    const f = fixture(), pending = deferred<ApiResult<QueryResult>>()
+    f.queryApi.execute.mockReturnValueOnce(pending.promise)
+    const run = f.queries.execute(f.tab.id)
+    await settle()
+    f.job({ jobId: 'job_1', location: 'US', state: 'running' })
+    pending.resolve({ ok: true, value: output({ status: 'failed', error: { code: 'QUOTA', message: 'Rate limited.', batchNumber: 1, iteration: 1 } }) })
+    await run; await settle()
+    expect(f.queries.getSnapshot()[f.tab.id].jobs?.map(item => item.jobId)).toEqual(['job_1'])
+    await expect(f.queries.holdsJob(f.tab.id)).resolves.toBe(true)
+    expect(f.results.addMessage).toHaveBeenCalledWith(f.tab.id, jobHeldAfterFailure(['job_1']), 'info')
+    expect(f.results.addMessage).not.toHaveBeenCalledWith(f.tab.id, jobStillRunning(['job_1']), 'info')
+    // This backend's session follows it already: no re-attach.
+    expect(f.queryApi.attach).not.toHaveBeenCalled()
+    await f.queries.execute(f.tab.id); await settle()
+    expect(f.queries.getSnapshot()[f.tab.id].jobs).toBeUndefined()
+  })
+})
+
 describe('a run after Leave it running', () => {
   it('keeps the detached job through a run that failed (perhaps waiting for it), and settles it after one that completed', async () => {
     const f = fixture(), pending = deferred<ApiResult<QueryResult>>()
@@ -188,6 +208,8 @@ describe('heldAfter', () => {
   it('keeps what each ending leaves for a re-attach', () => {
     expect(heldAfter(undefined, [], [running, done], output({ status: 'detached' }), undefined)).toEqual([{ ...running, detached: true }])
     expect(heldAfter(undefined, [detached, running], [], output(), undefined)).toEqual([running])
+    // A run that failed while its job ran (no done event): the backend holds the job in the session.
+    expect(heldAfter(undefined, [detached], [running, done], output({ status: 'failed', error: { code: 'QUOTA', message: 'Rate limited.', batchNumber: 1, iteration: 1 } }), undefined)).toEqual([running])
     expect(heldAfter(running, [detached], [], output(), undefined)).toEqual([detached])
     expect(heldAfter(undefined, [], [running, done], undefined, 'BACKEND_LOST')).toEqual([running])
     expect(heldAfter(done, [], [], undefined, 'CONNECTION_LOST')).toEqual([done])
@@ -361,7 +383,8 @@ describe('Close Results while a BigQuery job runs', () => {
   })
   it('names the estimate the run started with, and a restored job as not re-attached yet', async () => {
     const f = fixture()
-    f.queries.estimateOf = () => 3 * 2 ** 30
+    // The estimate of the text sent, not the whole document's held by the cost service.
+    f.queries.estimateOf = (_tab, sql) => sql === 'SELECT 1' ? 3 * 2 ** 30 : 5 * 2 ** 40
     const confirmRunningJob = vi.fn<VariaApi['confirmRunningJob']>(async () => ({ ok: true, value: 'cancel' }))
     Object.assign(f.queryApi, { confirmRunningJob })
     const pending = deferred<ApiResult<QueryResult>>()

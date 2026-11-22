@@ -82,7 +82,8 @@ const attachPassing: ReadonlySet<string> = new Set(['QUOTA', 'TIMEOUT', 'AUTH_EX
  * A re-attach that failed for a passing reason (quota, a timeout, an expired sign-in, a busy session, a permission) keeps
  * its running job, tried again on the next connection (once per connection, never in a loop). Any other failure of a
  * re-attach (Stop cancels its job; another principal's job; results gone) drops its job. A re-attach's own job keeps its
- * reference (left running, its age) with the state the backend reported.
+ * reference (left running, its age) with the state the backend reported. A normal run that failed while its job still ran
+ * keeps that job, which the backend holds in the tab's session until it is DONE.
  */
 export function heldAfter(attach: TabJob | undefined, held: readonly TabJob[] = [], reported: readonly TabJob[], summary: QueryResult | undefined, code: ErrorCode | undefined): TabJob[] {
   const attached = attach && { ...attach, state: reported.find(job => job.jobId === attach.jobId)?.state ?? attach.state }
@@ -90,12 +91,17 @@ export function heldAfter(attach: TabJob | undefined, held: readonly TabJob[] = 
   if (summary?.status === 'detached') return [...held, ...own.filter(job => job.state === 'running').map(job => ({ ...job, detached: true }))]
   // AUTH_IDENTITY before the run is the project check (another project's job): kept for a connection to that project.
   if (attached && attached.state === 'running' && (attachPassing.has((summary ? summary.status === 'failed' ? summary.error?.code : undefined : code) ?? '') || !summary && code === 'AUTH_IDENTITY')) return [...held, attached]
-  if (summary) return attach || summary.status === 'superseded' ? [...held] : held.filter(job => !job.detached)
+  if (summary) return attach || summary.status === 'superseded' ? [...held]
+    // A run that failed mid-job (its job never reported done) leaves it held in the session, polled until DONE.
+    : summary.status === 'failed' ? [...held.filter(job => !job.detached), ...reported.filter(job => job.state === 'running' && !held.some(other => other.jobId === job.jobId))]
+    : held.filter(job => !job.detached)
   if (backendGone.has(code)) return [...held, ...attached ? [attached] : reported.filter(job => job.state === 'running')]
   return [...held]
 }
 const jobList = (ids: readonly string[]) => ids.length === 1 ? `BigQuery job ${ids[0]} is` : `BigQuery jobs ${ids.join(', ')} are`
 /** A run whose backend or connection was lost while its job ran: the job carries on in BigQuery. */
+ /** A run that failed while its job still ran: the session holds the job. */
+export const jobHeldAfterFailure = (ids: readonly string[]) => `${jobList(ids)} still running in BigQuery and ${ids.length === 1 ? 'holds' : 'hold'} this tab's BigQuery session: the next query waits for ${ids.length === 1 ? 'it' : 'them'}, and closing the tab asks whether to cancel ${ids.length === 1 ? 'it' : 'them'} or leave ${ids.length === 1 ? 'it' : 'them'} running.`
 export const jobStillRunning = (ids: readonly string[]) => `${jobList(ids)} still running in BigQuery. Varia re-attaches to ${ids.length === 1 ? 'it' : 'them'} once this query's connection is back.`
 /** A restored tab that is not connected: its job from the last session runs on unseen otherwise. */
 export const restoredJobRunning = (ids: readonly string[]) => `${ids.length === 1 ? `BigQuery job ${ids[0]} from the last session is` : `BigQuery jobs ${ids.join(', ')} from the last session are`} still running in BigQuery. The tab re-attaches once it is connected.`
@@ -140,8 +146,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   private readonly forgotten = new Set<string>()
   /** Shows that BigQuery jobs were left running, with their ids to copy (no tab follows them any more). Set by the workbench. */
   notifyJobs?: (text: string, jobIds: readonly string[]) => void
-  /** BigQuery: the tab's current dry-run estimate in bytes (BigQueryCostService), kept with a run for the job prompt. */
-  estimateOf?: (tabId: string) => number | undefined
+  /** BigQuery: the dry-run estimate in bytes of exactly `sql` (BigQueryCostService), kept with a run for the job prompt. */
+  estimateOf?: (tabId: string, sql: string) => number | undefined
   constructor(private documents: DocumentService, private api: QueryApi, private getConnection: (id: string) => QueryConnection | undefined, private events: EventBus,
     private results: Pick<ResultsService, 'begin' | 'finish'> & Partial<Pick<ResultsService, 'addMessage'>>, private now: () => number = () => Date.now(), private wait: (ms: number) => Promise<void> = ms => new Promise(resolve => { setTimeout(resolve, ms) }),
     private settings: () => SettingsValues = () => defaultSettings, private retainedPlans?: RetainedPlansService) {
@@ -307,7 +313,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const connected = this.connected(tabId), connectionId = this.documents.get(tabId)?.connectionId, connection = connectionId ? this.getConnection(connectionId) : undefined
     const here = this.detachedHere.get(tabId)
     const sessionOwn = (job: TabJob) => connected && !!connection && job.detached && !!here?.has(this.attachKey(job, connection))
-    const targets = (state?.jobs ?? []).filter(job => job.jobId !== state?.running?.jobId && !sessionOwn(job)).map(job => job.jobId)
+    const targets = (state?.jobs ?? []).filter(job => job.state === 'running' && job.jobId !== state?.running?.jobId && !sessionOwn(job)).map(job => job.jobId)
     if (entry === 'cancelJob' && targets.length && key && this.api.cancelRestoredJobs) {
       const cancelling = this.cancelRestored(name, key, targets)
       this.restoredCancels.add(cancelling)
@@ -578,9 +584,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     // a re-attach takes its own job over.
     const held = before?.jobs?.filter(job => job.jobId !== attach?.jobId)
     const reported = new Map<string, TabJob>()
-    const estimateBytes = bigQuery && !attach && !preview ? this.estimateOf?.(tabId) : undefined
     // A re-attached job has run since it was created, which the job prompt names.
-    this.update(tabId, { running: { queryId, connectionId: connection.id, startedAt: attach ? Math.min(this.now(), attach.createdAt) : this.now(), ...attach ? { kind: 'attach' as const, jobId: attach.jobId, ...attach.state === 'running' ? {} : { finished: true as const } } : preview ? { kind: 'preview' as const } : {}, ...estimateBytes !== undefined ? { estimateBytes } : {} }, session: previous, provenance, ...livePlan ? { livePlan } : {}, ...held?.length ? { jobs: held } : {} })
+    this.update(tabId, { running: { queryId, connectionId: connection.id, startedAt: attach ? Math.min(this.now(), attach.createdAt) : this.now(), ...attach ? { kind: 'attach' as const, jobId: attach.jobId, ...attach.state === 'running' ? {} : { finished: true as const } } : preview ? { kind: 'preview' as const } : {} }, session: previous, provenance, ...livePlan ? { livePlan } : {}, ...held?.length ? { jobs: held } : {} })
     // The text's version and scope as sent, read before the gate: an edit while it waits must not make the run's error
     // locations point into the edited text.
     const revision = this.documents.revision(tabId), sqlScope = sql === this.documents.getModel(tabId)?.getValue() ? 'document' as const : 'selection' as const
@@ -597,6 +602,13 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       }
       if (!run) { this.stopGated(tabId, queryId); return }
       this.gated.delete(tabId)
+    }
+    // The estimate the job prompt names: the dry run of the text sent (the gate's), never the whole document's or an
+    // earlier text's.
+    const estimateBytes = bigQuery && !attach && !preview ? this.estimateOf?.(tabId, sql) : undefined
+    if (estimateBytes !== undefined) {
+      const current = this.getSnapshot()[tabId]
+      if (current?.running?.queryId === queryId) this.update(tabId, { ...current, running: { ...current.running, estimateBytes } })
     }
     if (!attach) this.sources.set(tabId, { queryId, revision })
     const planContext = this.retainedPlans && !attach ? this.planContext(tabId, queryId, sql, startLine, this.now(), undefined, sqlScope) : undefined
@@ -680,16 +692,25 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     // A re-attach that failed in its run for a passing reason after its identity check (the backend reported the job, so it
     // adopted the job's session): the next run waits for it too. One that failed at the check holds nothing in the session.
     const keptAttach = attach && settledBy?.status === 'failed' && reported.has(attach.jobId) && jobs.some(job => job.jobId === attach.jobId && job.state === 'running')
-    if ((lostCode === 'CONNECTION_LOST' || keptAttach) && bigQuery) {
+    // So does a normal run's job that was still running when the run failed.
+    const keptFailed = !attach && settledBy?.status === 'failed' ? jobs.filter(job => !job.detached && job.state === 'running' && reported.has(job.jobId) && !held?.includes(job)) : []
+    if ((lostCode === 'CONNECTION_LOST' || keptAttach || keptFailed.length) && bigQuery) {
       const kept = jobs.filter(job => !job.detached && job.state === 'running' && (!held?.includes(job) || job.jobId === attach?.jobId))
       if (kept.length) this.heldBySession.set(tabId, new Map([...[...sessionHeld ?? []].slice(-sessionPromptLimits.jobIds * 8), ...kept.map(job => [job.jobId, this.attachKey(job, connection)] as const)]))
     }
     this.update(tabId, { summary, error, session: liveSession, provenance, ...livePlan ? { livePlan } : {}, ...jobs.length ? { jobs } : {} })
     // A job that carries on in BigQuery is never unseen: the tab says so, and re-attaches once its connection is back.
     // A re-attach that failed for a passing reason on a live connection is not one whose connection went away.
-    const lost = jobs.filter(job => !job.detached && job.state === 'running' && !held?.includes(job) && (job.jobId !== attach?.jobId || backendGone.has(lostCode)))
+    const lost = jobs.filter(job => !job.detached && job.state === 'running' && !held?.includes(job) && !keptFailed.includes(job) && (job.jobId !== attach?.jobId || backendGone.has(lostCode)))
     if (lost.length) this.addSessionMessage(tabId, jobStillRunning(lost.map(job => job.jobId)), 'info')
-    // A job left running is followed by this backend already: it is re-attached only after a restart.
+    if (keptFailed.length) this.addSessionMessage(tabId, jobHeldAfterFailure(keptFailed.map(job => job.jobId)), 'info')
+    // A job left running, or held after a failed run, is followed by this backend already: it is re-attached only after a
+    // restart.
+    if (keptFailed.length) {
+      const tried = this.attachTried.get(tabId) ?? new Map<string, number>()
+      for (const job of keptFailed) tried.set(this.attachKey(job, connection), job.createdAt)
+      this.attachTried.set(tabId, tried)
+    }
     if (summary?.status === 'detached') {
       const tried = this.attachTried.get(tabId) ?? new Map<string, number>()
       for (const job of jobs) tried.set(this.attachKey(job, connection), job.createdAt)
