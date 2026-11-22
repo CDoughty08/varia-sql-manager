@@ -1110,7 +1110,7 @@ app.whenReady().then(async () => {
   // A saved BigQuery profile whose jobs still run asks first: its jobs cannot be cancelled once it is gone.
   handle('varia:connections-remove', async value => {
     const id = z.uuid().parse(value)
-    // Only a BigQuery profile has job records; a SQL Server delete never waits on (or fails with) BigQuery's files.
+    // Only a BigQuery profile has job records: a SQL Server delete reads none and never fails with BigQuery's files.
     const bigQuery = !!bigQueryStore && !!(await bigQueryStore.load().catch(() => undefined))?.library.profiles.some(profile => profile.id === id)
     const unread = bigQuery && await jobRecords.load().then(() => false, () => true)
     // Records that cannot be read now may name this connection's jobs: it asks before it goes.

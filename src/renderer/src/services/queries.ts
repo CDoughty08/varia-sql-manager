@@ -322,7 +322,9 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     try {
       const response = await this.api.cancelRestoredJobs!([key])
       // Main cancels every running record under the key; only the jobs the backend did not cancel itself are reported.
-      failed = response.ok ? [...response.value.uncancellable, ...response.value.jobs.filter(job => !job.cancelled).map(job => job.jobId)].filter(id => targets.includes(id)) : []
+      // A held job main has no record of (a deleted connection's, its records dropped) was not cancelled either.
+      const known = response.ok ? new Set([...response.value.uncancellable, ...response.value.jobs.map(job => job.jobId)]) : undefined
+      failed = response.ok ? [...response.value.uncancellable, ...response.value.jobs.filter(job => !job.cancelled).map(job => job.jobId)].filter(id => targets.includes(id)).concat(targets.filter(id => !known!.has(id))) : []
       // A commit before the cancel, an unknown outcome or a session not ended: never unseen.
       if (response.ok && !this.disposed) for (const text of cancelNotesText(name, response.value.jobs.filter(job => targets.includes(job.jobId)))) { this.notify?.(text); said = true }
       if (!response.ok && !this.disposed) { this.notify?.(`${name}: its BigQuery jobs could not be cancelled. ${response.error}`); said = true }

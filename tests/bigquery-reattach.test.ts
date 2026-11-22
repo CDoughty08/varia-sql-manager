@@ -364,14 +364,15 @@ describe('restored jobs cancelled from their records', () => {
     f.queries.notifyJobs = notifyJobs
     const key = '6f2b8f84-2b7c-4b55-9c55-9d6f8c2a1b10'
     f.documents.update(f.tab.id, { jobKey: key })
-    f.queries.restoreJobs(f.tab.id, [job('job_1'), job('job_2', { createdAt: 2 }), job('job_3', { createdAt: 3 })])
+    f.queries.restoreJobs(f.tab.id, [job('job_1'), job('job_2', { createdAt: 2 }), job('job_3', { createdAt: 3 }), job('job_4', { createdAt: 4 })])
     f.queries.sessionClosed(f.tab.id, 'cancelJob')
     await settle(); await settle()
     expect(cancelRestoredJobs).toHaveBeenCalledWith([key])
     // A job the tab starts while the cancel waits for DONE keeps its record: main dropped only the ones it read.
     expect(order).toEqual(['cancel'])
     expect(f.queries.getSnapshot()[f.tab.id].jobs).toBeUndefined()
-    expect(notifyJobs).toHaveBeenCalledWith("orders.sql: BigQuery jobs job_3, job_2 could not be cancelled. Cancel them in BigQuery's job history.", ['job_3', 'job_2'])
+    // job_4 has no record in main (a deleted connection's): not cancelled either.
+    expect(notifyJobs).toHaveBeenCalledWith("orders.sql: BigQuery jobs job_3, job_2, job_4 could not be cancelled. Cancel them in BigQuery's job history.", ['job_3', 'job_2', 'job_4'])
   })
   it('leaves a running query to the backend: Cancel the job on its session cancels it there', async () => {
     const f = fixture(), cancelRestoredJobs = vi.fn<VariaApi['cancelRestoredJobs']>()
