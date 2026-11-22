@@ -76,6 +76,7 @@ export const schedulesText = {
   unusedNote: 'Unused counts every job, including jobs you cannot see.',
   staleJobs: 'Someone changed a job you chose after it was read, so nothing was created. The jobs are read again: check them, then create again.',
   newPending: 'Finish or discard the new schedule first.',
+  jobsDropped: (count: number) => count === 1 ? 'One job you chose is gone or no longer yours to change, so it is left out.' : `${count} jobs you chose are gone or no longer yours to change, so they are left out.`,
   staleKept: 'Someone changed this schedule or one of its jobs after it was read, so nothing was saved. It now shows their change with yours on top: check it, then save again.',
   copyName: (name: string) => `${name} (copy)`.slice(0, agentLimits.nameChars)
 } as const
@@ -436,11 +437,15 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
     if (!current || !error) return
     // Not read again: nothing moved, so the STALE stands with why the read failed, and the next Save is STALE until a read lands.
     if (!read) { this.patch(id, { error: { ...error, message: `${error.message} ${current.error && current.error !== error ? current.error.message : ''}`.trim() } }); return }
-    const jobs = draft?.jobs.map(change => ({ ...change, version: this.job(id, change.jobId)?.version ?? change.version })) ?? []
+    // Each job change takes the job's version as read now. A job gone since, or no longer the login's to change, is left out (the
+    // view could neither show nor undo it, and every save would be refused), and the message says how many.
+    const jobs = (draft?.jobs ?? []).flatMap(change => { const job = this.job(id, change.jobId); return job && this.canChangeJob(id, job) ? [{ ...change, version: job.version }] : [] })
+    const dropped = (draft?.jobs.length ?? 0) - jobs.length
+    const message = (text: string) => dropped ? `${text} ${schedulesText.jobsDropped(dropped)}` : text
     // A new schedule's STALE can only be a chosen job's version: those are read again.
-    if (draft && key === newScheduleKey) { this.patch(id, { drafts: { ...current.drafts, [key]: { ...draft, jobs } }, error: { ...error, message: schedulesText.staleJobs } }); return }
+    if (draft && key === newScheduleKey) { this.patch(id, { drafts: { ...current.drafts, [key]: { ...draft, jobs } }, error: { ...error, message: message(schedulesText.staleJobs) } }); return }
     if (!draft?.base || !record) { this.patch(id, { error }); return }
-    this.patch(id, { drafts: { ...current.drafts, [key]: { base: record, fields: rebaseScheduleFields(draft.base, record, draft.fields), jobs } }, error: { ...error, message: schedulesText.staleKept } })
+    this.patch(id, { drafts: { ...current.drafts, [key]: { base: record, fields: rebaseScheduleFields(draft.base, record, draft.fields), jobs } }, error: { ...error, message: message(schedulesText.staleKept) } })
     this.dirtyChanged(id)
   }
   askDelete(id: string): void { if (this.canDelete(id)) this.patch(id, { confirmDelete: true, error: undefined }) }

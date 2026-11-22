@@ -546,6 +546,22 @@ describe('the Schedules document', () => {
     expect(schedules.get(id)?.busy).toBeUndefined()
     expect(schedules.draft(id)?.fields.name).toBe('Mine')
   })
+  it('leaves out a chosen job that is gone after a STALE save, so the next save does not send it', async () => {
+    const { schedules, setModel, executes, answers } = schedulesWorkbench()
+    const id = schedules.open('c1', true)
+    await settled()
+    schedules.update(id, { ...schedules.draft(id)!.fields, name: 'Month end' })
+    schedules.toggleJob(id, jobA.id, true)
+    schedules.toggleJob(id, jobB.id, true)
+    setModel(schedulesModel({ jobs: [jobA], links: [{ scheduleId: 1, jobId: jobA.id }] }))
+    answers.push({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'STALE', message: 'Changed.', retryable: false } } })
+    expect(await schedules.save(id)).toBe(false)
+    await settled()
+    expect(schedules.get(id)?.error?.message).toBe(`${schedulesText.staleJobs} ${schedulesText.jobsDropped(1)}`)
+    expect(await schedules.save(id)).toBe(true)
+    expect(executes()[1]).toMatchObject({ agentSchedule: { op: 'create', name: 'Month end', jobs: [{ jobId: jobA.id, attach: true }] } })
+    expect((executes()[1] as { agentSchedule?: { jobs?: unknown[] } }).agentSchedule?.jobs).toHaveLength(1)
+  })
   it("starts New › Schedule…'s untouched draft on the server's date once read, not the local one", async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     try {
