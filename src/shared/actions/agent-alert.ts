@@ -308,7 +308,8 @@ export const agentAlertText = {
   objectRequired: 'Choose the counter\'s object.',
   counterRequired: 'Choose the counter.',
   valueRequired: 'Type the value the counter is compared with.',
-  valueInvalid: 'The value is a number.',
+  valueInvalid: 'The value is a number that starts with a digit, such as 1000 or 0.5.',
+  instanceNeeded: 'This counter has instances, so pick one: msdb refuses a blank instance for it.',
   conditionTooLong: `A performance condition holds at most ${agentLimits.conditionChars} characters.`,
   conditionPipe: 'An object, counter or instance cannot contain |.',
   messageTooLong: `The message holds at most ${agentLimits.alertMessageChars} characters.`,
@@ -349,7 +350,7 @@ export function agentAlertProblems(model: AgentAlertDocumentModel, draft: AgentA
     if (!draft.object.trim()) error('when', agentAlertText.objectRequired)
     else if (!draft.counter.trim()) error('when', agentAlertText.counterRequired)
     else if (!draft.value.trim()) error('when', agentAlertText.valueRequired)
-    else if (!Number.isFinite(Number(draft.value.trim()))) error('when', agentAlertText.valueInvalid)
+    else if (!conditionValue.test(draft.value.trim())) error('when', agentAlertText.valueInvalid)
     else if ([draft.object, draft.counter, draft.instance].some(pipe)) error('when', agentAlertText.conditionPipe)
     else if (conditionOf(draft).length > agentLimits.conditionChars) error('when', agentAlertText.conditionTooLong)
   }
@@ -381,6 +382,11 @@ export function agentAlertProblems(model: AgentAlertDocumentModel, draft: AgentA
   if (!draft.jobId && !draft.notify.some(entry => entry.methods > 0)) warning('notify', agentAlertText.noResponse)
   return problems
 }
+/** msdb's sp_verify_performance_condition wants the value to start with a digit (its PATINDEX), so no sign, leading point or exponent. */
+const conditionValue = /^[0-9]+([.][0-9]+)?$/
+/** A blank instance msdb would refuse: it matches only a counter row whose instance is empty, which a counter with instances lacks. */
+export const blankInstanceRefused = (instance: string, read: readonly { readonly instance: string }[] | undefined) =>
+  !instance.trim() && !!read?.length && read.every(value => value.instance !== '')
 export const agentAlertSavable = (problems: readonly AgentAlertProblem[]) => !problems.some(problem => problem.severity === 'error')
 
 /** The alert kinds New Alert offers on the platform; an existing alert keeps its own. */

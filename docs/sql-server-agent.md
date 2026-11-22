@@ -101,7 +101,7 @@ later lanes, behind the same gate until 0.11.0.
   the Agent node's New › Alert… and Operator…, the Alerts and Operators folders' New, and the palette open New Alert and New Operator,
   which create nothing until Create. The **alert document** is one screen: **When** (a SQL Server event: an error number or a
   severity, a database and a "Message contains" text; or a performance condition: object, counter, instance, comparison and value,
-  with the counter's current values read through `agent.counterValues`), **Then** (a job to run, and the operators to notify as chips
+  with the counter's current values read through `agent.counterValues`; msdb wants a value that starts with a digit, and an instance for a counter that has them), **Then** (a job to run, and the operators to notify as chips
   with E-mail, Pager and Net send toggles, an "Add an operator" pick and an inline New operator created in the same save) and
   **Options** (the delay between responses, the error text in e-mail, pager or net send, an additional message). The header shows
   the history: when it last fired and how often. A WMI alert's When is read-only; its Then and Options can change. The **operator document** has General (name, enabled,

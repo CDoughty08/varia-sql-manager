@@ -3,7 +3,7 @@
 // AlertOperatorDocumentService keeps every state; this only draws it.
 import { useState } from 'react'
 import {
-  alertComparators, alertKindLabels, alertKindsOffered, agentAlertText, notifyEmail, notifyNetSend, notifyPager, type AgentAlertDocumentModel, type AgentAlertDraft, type AgentAlertField,
+  alertComparators, alertKindLabels, alertKindsOffered, agentAlertText, blankInstanceRefused, notifyEmail, notifyNetSend, notifyPager, type AgentAlertDocumentModel, type AgentAlertDraft, type AgentAlertField,
   type AgentAlertKind, type AgentAlertProblem, type AgentComparator
 } from '../../../shared/actions/agent-alert.ts'
 import { agentLimits } from '../../../shared/agent/catalog.ts'
@@ -90,13 +90,14 @@ function WhenSection({ state, model, draft, editable, problems, service }: Props
         <datalist id={`${ids.when}-objects`}>{objects.map(object => <option key={object} value={object} />)}</datalist>
         <input className="property-input" type="text" list={`${ids.when}-counters`} {...fieldAria(ids.when, when)} aria-label="Counter" placeholder="Counter" maxLength={128} value={draft.counter} disabled={!editable} onChange={event => update({ counter: event.target.value })} />
         <datalist id={`${ids.when}-counters`}>{counters.map(counter => <option key={counter} value={counter} />)}</datalist>
-        <input className="property-input" type="text" list={`${ids.when}-instances`} aria-label="Instance" placeholder="Instance (any)" maxLength={128} value={draft.instance} disabled={!editable} onChange={event => update({ instance: event.target.value })} />
+        <input className="property-input" type="text" list={`${ids.when}-instances`} aria-label="Instance" placeholder="Instance" maxLength={128} value={draft.instance} disabled={!editable} onChange={event => update({ instance: event.target.value })} />
         <datalist id={`${ids.when}-instances`}>{(reading?.result?.values ?? []).map(value => <option key={value.instance} value={value.instance} />)}</datalist>
         <select className="property-input" aria-label="Comparison" value={draft.comparator} disabled={!editable} onChange={event => update({ comparator: event.target.value as AgentComparator })}>
           {alertComparators.map(entry => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
         </select>
         <input className="property-input" type="text" inputMode="decimal" {...fieldAria(ids.when, when)} aria-label="Value" placeholder="Value" maxLength={32} value={draft.value} disabled={!editable} onChange={event => update({ value: event.target.value })} />
       </span>
+      {blankInstanceRefused(draft.instance, reading?.result?.error ? undefined : reading?.result?.values) && <p className="field-note">{agentAlertText.instanceNeeded}</p>}
       <CounterValues state={state} draft={draft} service={service} />
     </PropertyField>}
     {wmi && model.alert && <PropertyField id={ids.when} label="WMI query" labelFor={false} {...when}>

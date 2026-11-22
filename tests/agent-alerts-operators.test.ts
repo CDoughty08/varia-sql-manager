@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-  agentAlertChangeCount, agentAlertCommandEntries, agentAlertProblems, agentAlertSavable, agentAlertSave, agentAlertSaveSchema, agentRecommendedSchema, initialAgentAlertDraft,
-  notificationChanges, notifyEmail, notifyPager, parseCondition, recommendedAlertStates, conditionOf, type AgentAlertDocumentModel, type AgentAlertRecord
+  agentAlertChangeCount, agentAlertCommandEntries, agentAlertProblems, agentAlertText, agentAlertSavable, agentAlertSave, agentAlertSaveSchema, agentRecommendedSchema, initialAgentAlertDraft,
+  blankInstanceRefused, notificationChanges, notifyEmail, notifyPager, parseCondition, recommendedAlertStates, conditionOf, type AgentAlertDocumentModel, type AgentAlertRecord
 } from '../src/shared/actions/agent-alert'
 import {
   agentOperatorChangeCount, agentOperatorCommandEntries, agentOperatorText, agentOperatorProblems, agentOperatorSave, agentOperatorSaveSchema, initialAgentOperatorDraft, matrixChangeCount, matrixChanges,
@@ -90,6 +90,17 @@ describe("the alert document's shared rules", () => {
     expect(agentAlertSaveSchema.safeParse({ notifications: [] }).success).toBe(false)
     expect(agentAlertSaveSchema.safeParse({ newOperators: Array.from({ length: agentLimits.newOperators + 1 }, (_, at) => ({ name: `o${at}` })) }).success).toBe(false)
     expect(agentAlertSaveSchema.safeParse({ enabled: true, other: 1 }).success).toBe(false)
+  })
+  it('holds a performance condition to what msdb accepts: a value starting with a digit, and an instance for a counter that has them', () => {
+    const model = alertModel({ alert: undefined })
+    const draft = { ...initialAgentAlertDraft(model), name: 'Log', kind: 'performance' as const, object: 'SQLServer:Databases', counter: 'Log File(s) Used Size (KB)', instance: '_Total', comparator: '>' as const }
+    const invalid = (value: string) => agentAlertProblems(model, { ...draft, value }).some(problem => problem.message === agentAlertText.valueInvalid)
+    expect(['1000', '0.5'].map(invalid)).toEqual([false, false])
+    expect(['-1', '.5', '1e3', '1.'].map(invalid)).toEqual([true, true, true, true])
+    expect(blankInstanceRefused('', [{ instance: 'tempdb' }, { instance: '_Total' }])).toBe(true)
+    expect(blankInstanceRefused('', [{ instance: '' }])).toBe(false)
+    expect(blankInstanceRefused('_Total', [{ instance: '_Total' }])).toBe(false)
+    expect(blankInstanceRefused('', undefined)).toBe(false)
   })
   it('does not call an operator past a capped listing unknown', () => {
     const notify = [{ operator: 'Far', methods: notifyEmail }]
