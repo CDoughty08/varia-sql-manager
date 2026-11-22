@@ -298,8 +298,13 @@ describe('BackendSupervisor restarts', () => {
     const second = value.restart('reload')
     await advance(0)
     expect(backends).toHaveLength(1)
+    // A Restart Backend that joins it still resets the crash breaker.
+    const breaker = value as unknown as { attempts: number, losses: number[] }
+    breaker.attempts = 3; breaker.losses = [1, 2]
+    const third = value.restart('manual')
+    expect([breaker.attempts, breaker.losses]).toEqual([0, []])
     backends[0].respond(ending)
-    await Promise.all([first, second])
+    await Promise.all([first, second, third])
     await advance(0)
     expect(backends).toHaveLength(2)
     expect(value.state).toMatchObject({ status: 'ready', generation: 2 })

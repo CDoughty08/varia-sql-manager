@@ -375,6 +375,25 @@ internal static partial class BigQuerySessionChecks
             $"closing a tab that follows another session's job leaves the job running: {foreignClose.Code} {foreignAnswer?.Status} cancels {string.Join(",", bq.Cancels)}");
         bq.Release(bq.Jobs[holderJob]);
 
+        // A re-attach from a tab with no session, to a job whose session another tab still holds, does not adopt that session,
+        // nor take it over when the job finishes: closing the attaching tab never ends the other tab's session.
+        var keeperTab = Tab();
+        await harness.Execute(keeperTab, "SELECT 1");
+        var (keeperArgs, keeperRun, keeperJob) = await HeldAsync(harness, keeperTab);
+        await harness.Call("query.cancel", new JsonObject { ["queryId"] = keeperArgs["queryId"]!.GetValue<string>(), ["detach"] = true });
+        await keeperRun.WaitAsync(TimeSpan.FromSeconds(30));
+        bq.Jobs[keeperJob].Hold = true;
+        var borrowerTab = Tab();
+        bq.Polling = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var borrowerRun = harness.Call("query.attach", AttachArgs(harness, borrowerTab, keeperJob));
+        await Task.WhenAny(bq.Polling.Task, borrowerRun).WaitAsync(TimeSpan.FromSeconds(30));
+        bq.Release(bq.Jobs[keeperJob]);
+        var borrowerAnswer = (await borrowerRun.WaitAsync(TimeSpan.FromSeconds(30))).Result as QueryResult;
+        var borrowerAborts = bq.Aborts.Count;
+        var borrowerClose = await harness.Call("query.session.close", new JsonObject { ["sessionId"] = borrowerTab });
+        check(borrowerAnswer is { Status: "completed" } && borrowerClose.Code == "ok" && bq.Aborts.Count == borrowerAborts,
+            $"a re-attach that left another tab's session alone never ends it on close: {borrowerAnswer?.Status} {borrowerClose.Code} aborts {string.Join(",", bq.Aborts.Skip(borrowerAborts))}");
+
         // A re-attach outside any session (adoptSession false, in a tab that never ran anything): Leave it running on its close
         // leaves the job running, and only Cancel the job cancels it.
         var outsideHolder = Tab();

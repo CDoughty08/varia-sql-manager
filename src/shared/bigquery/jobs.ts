@@ -12,7 +12,7 @@ export const jobLimits = {
   perKey: 64, records: 1024,
   /** Job keys bigquery.endIdleSessions and session.cancelRestoredJobs take; jobs bigquery.cancelJobs cancels at once. */
   keys: 1024, cancel: 64,
-  /** A record expires this long after its job was created: the result table's lifetime. */
+  /** A record expires this long after main first heard of its job (about when it was created): the result table's lifetime. */
   lifetimeMs: 24 * 60 * 60 * 1000
 } as const
 
@@ -40,7 +40,7 @@ export type QueryAttachParams = z.infer<typeof queryAttachParamsSchema>
 /**
  * One record in WorkbenchSession/jobs.json: a BigQuery request's top-level job under its tab's job key, with the saved
  * profile it ran on (absent for an ad-hoc connection), when main first heard of it, whether it is still running, auxiliary
- * (a results.remoteQuery kind) or detached (Leave it running on Close Results), and the session's tracked transaction as
+ * (reserved: no job event sets it yet) or detached (Leave it running on Close Results), and the session's tracked transaction as
  * it started (decision 54). No secrets and no SQL text: a job id is useless without the principal's credentials.
  */
 export const jobRecordSchema = z.object({

@@ -90,6 +90,26 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     expect(records.at(-1)).toEqual(expect.objectContaining({ jobId: `varia_done_${jobLimits.perKey + 4}` }))
   })
 
+  it('keeps 1,024 records in all, dropping the oldest finished ones first, then the newest running ones', async () => {
+    let now = 1
+    const store = new JobRecordStore(await folder(), { now: () => now++ })
+    await store.load()
+    const key = (k: number) => `${String(k).padStart(8, '0')}-1111-4111-8111-111111111111`
+    store.record(key(0), job('varia_running_first'))
+    for (let i = 0; i < jobLimits.records + 4; i++) store.record(key(1 + i % 20), job(`varia_done_${i}`, 'done'))
+    const records = store.list()
+    expect(records).toHaveLength(jobLimits.records)
+    expect(records.some(record => record.jobId === 'varia_running_first')).toBe(true)
+    expect(records.some(record => record.jobId === 'varia_done_0')).toBe(false)
+    expect(records.some(record => record.jobId === `varia_done_${jobLimits.records + 3}`)).toBe(true)
+    // Only running records past the cap: the newest is not kept.
+    const running = new JobRecordStore(await folder(), { now: () => now++ })
+    await running.load()
+    for (let i = 0; i <= jobLimits.records; i++) running.record(key(1 + i % 20), job(`varia_run_${i}`))
+    expect(running.list()).toHaveLength(jobLimits.records)
+    expect(running.list().some(record => record.jobId === `varia_run_${jobLimits.records}`)).toBe(false)
+  })
+
   it('quarantines an unreadable file instead of overwriting it', async () => {
     const directory = await folder()
     await writeFile(join(directory, 'jobs.json'), JSON.stringify({ version: 1, records: [{ jobKey: 'not-a-key' }] }))

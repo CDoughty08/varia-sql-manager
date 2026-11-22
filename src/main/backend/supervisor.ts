@@ -247,8 +247,9 @@ export class BackendSupervisor {
     // Nothing has launched yet: the launch to come is the restart, with the settings as they are when it is made.
     if (this.awaitingFirst) return
     if (reason === 'reload' && this.snapshot.status === 'failed') return
-    if (this.endingIdle) return this.endingIdle
+    // Before the join: a Restart Backend that joins a pending Reload still resets the breaker.
     if (reason === 'manual') { this.attempts = 0; this.losses = [] }
+    if (this.endingIdle) return this.endingIdle
     this.clock.clearTimeout(this.restartTimer)
     const previous = this.connection
     this.connection = undefined

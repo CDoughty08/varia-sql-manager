@@ -262,7 +262,7 @@ backend side of re-attaching:
 
 - **Job keys and records.** A BigQuery request may carry its tab's `jobKey` (a uuid). Main records each request's
   top-level job from its `query.job` event in `WorkbenchSession/jobs.json`: job id, project, location, state, whether it
-  is auxiliary or left running, and the session's transaction state as it started. No SQL text and no secrets. The file
+  is left running (an auxiliary flag is reserved and always false), and the session's transaction state as it started. No SQL text and no secrets. The file
   has a strict schema, holds 64 records per key and 1,024 in all (the oldest finished go first; running jobs' records go
   only past 1,024 of them, newest first), is written atomically on every change and quarantined when unreadable, and
   records expire 24 hours after main first recorded their job. A finished job's records go once its summary reached the tab; a job still running when the
