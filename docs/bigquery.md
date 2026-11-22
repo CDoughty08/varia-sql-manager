@@ -353,7 +353,9 @@ BigQuery" in their tooltips.
   unticks). The list is a small result in memory, read whole, with the snapshot the checklist ticks; when the column has a filter of its own,
   each value starts ticked when the grid's filters keep it.
 - **Filters.** A checklist, Equals, Not equals, Between, NULL and not NULL apply in BigQuery. The values a filter names
-  are the value list's rows, so the filter keeps the list for as long as it applies. A checklist keeps the ticked values
+  are the value list's rows, read from its table in BigQuery (so the estimate includes that small scan, and no value is
+  sent), and the filter keeps the list for as long as it applies; once the list's table expires, the filter says to open
+  the column's filter again. A checklist keeps the ticked values
   when the list is whole and they are no more than the others, and otherwise drops the unticked ones, as in memory.
   Filters that name the grid's rows rather than values (Filter by Selection, duplicates, Keep Selected Rows) say they need
   the rows in memory.

@@ -348,7 +348,11 @@ or aggregate. "Save to a BigQuery table" in 0.11 lifts it.
 
 - A sort or filter becomes a **derived remote result** with its own descriptor and entry id, as a held view is today.
   Its query is ``SELECT * FROM `dest` WHERE … ORDER BY …``, built from constant templates in `BigQuerySql`, columns
-  through `BqNames.Quote` from the result's own schema, every value a query parameter. Its own destination table is
+  through `BqNames.Quote` from the result's own schema. A filter names its values by their row numbers in the column's
+  value list (INT64 query parameters), resolved against that list's destination table:
+  ``col IN (SELECT value FROM `list` WHERE r IN UNNEST(@rows))``, so no value is sent and the estimate includes the list's
+  extra scan; once the list's table has expired the filter answers `REMOTE_EXPIRED` and says to reopen the value list.
+  Its own destination table is
   then read by the same residence rule, so a filter that shrinks a billion rows to fifty thousand brings that view into
   memory, and pivot, compare and profile work on it.
 - Querying the anonymous table is cheap but best-effort (Google discourages depending on cached results). When it is
