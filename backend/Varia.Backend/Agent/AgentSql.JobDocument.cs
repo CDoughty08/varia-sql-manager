@@ -14,7 +14,7 @@ internal sealed record AgentSaveBatch(string Text, IReadOnlyList<(AgentParameter
 
 /// <summary>The job document (AG-6a): its describe's reads (run by <see cref="AgentReader"/>, each in <see cref="All"/> and so under
 /// <see cref="LintRead"/>) and its save. A save is one batch in one transaction (the action's XACT_ABORT prologue and a SqlTransaction):
-/// an existing job's resolves the job by name and date_created (<see cref="Resolve"/>, 50010), then checks that its version_number and
+/// an existing job's resolves the job by name and its immutable job_id (<see cref="Resolve"/>, 50010), then checks that its version_number and
 /// date_modified are those the document read (<see cref="StaleGuard"/>, 50011, STALE), then one sp_update_job with only the changed arguments and,
 /// per removed alert, a guard that the alert still runs this job (50011) and sp_update_alert with the zero job id; New Job's is sp_add_job with
 /// the job id as its OUTPUT and sp_add_jobserver on the local server. Every call is followed by <see cref="CheckAt"/>, whose THROW state is the
@@ -45,7 +45,7 @@ internal static partial class AgentSql
     }
 
     private static readonly AgentParameter NameParameter = new("@name", SqlDbType.NVarChar, 128);
-    private static readonly AgentParameter CreatedParameter = new("@created", SqlDbType.Char, 19);
+    private static readonly AgentParameter ExpectedJobIdParameter = new("@expected_job_id", SqlDbType.UniqueIdentifier);
     private static readonly AgentParameter VersionParameter = new("@version", SqlDbType.Int);
     private static readonly AgentParameter ModifiedParameter = new("@modified", SqlDbType.DateTime);
     private static readonly AgentParameter NoJobParameter = new("@no_job", SqlDbType.UniqueIdentifier);
@@ -66,14 +66,14 @@ internal static partial class AgentSql
         "EXEC @rc = msdb.dbo." + call.Procedure + " " + string.Join(", ", call.Arguments.Select(argument => argument.Name + " = " + argument.Parameter.Name + (argument.Output ? " OUTPUT" : ""))) + ";";
 
     /// <summary>The batch for <paramref name="calls"/>: New Job's (<paramref name="create"/>: sp_add_job then sp_add_jobserver) or an existing job's
-    /// (resolve, STALE guard, then the calls). <paramref name="name"/>, <paramref name="created"/>, <paramref name="version"/> and
+    /// (resolve, STALE guard, then the calls). <paramref name="name"/>, <paramref name="jobId"/>, <paramref name="version"/> and
     /// <paramref name="modified"/> bind the guards of an existing job's.</summary>
-    public static AgentSaveBatch JobSave(bool create, IReadOnlyList<AgentSaveCall> calls, string? name = null, string? created = null, int? version = null, DateTime? modified = null)
+    public static AgentSaveBatch JobSave(bool create, IReadOnlyList<AgentSaveCall> calls, string? name = null, Guid? jobId = null, int? version = null, DateTime? modified = null)
     {
         if (calls.Count == 0 || calls.Count > CallIndexLimit) throw new InvalidOperationException("A job save makes 1 to 255 calls.");
         var text = new StringBuilder(create ? NewJobHead : Resolve + StaleGuard);
         var parameters = new List<(AgentParameter, object?)>();
-        if (!create) parameters.AddRange([(NameParameter, name), (CreatedParameter, created), (VersionParameter, version), (ModifiedParameter, modified)]);
+        if (!create) parameters.AddRange([(NameParameter, name), (ExpectedJobIdParameter, jobId), (VersionParameter, version), (ModifiedParameter, modified)]);
         if (calls.Any(call => call.AlertId is not null)) parameters.Add((NoJobParameter, Guid.Empty));
         for (var i = 0; i < calls.Count; i++)
         {
@@ -185,7 +185,7 @@ internal static partial class AgentSql
         var batches = new (string Name, AgentSaveBatch Batch)[]
         {
             ("new job", JobSave(true, [new("sp_add_job", Every(true)), new("sp_add_jobserver", [new("@job_id", new("@job_id", SqlDbType.UniqueIdentifier), null)])])),
-            ("job update", JobSave(false, [new("sp_update_job", Every(false)), DetachAlert(2, 7, "a"), DetachAlert(3, 8, "b")], "x", "2026-01-01T00:00:00", 1, DateTime.UnixEpoch))
+            ("job update", JobSave(false, [new("sp_update_job", Every(false)), DetachAlert(2, 7, "a"), DetachAlert(3, 8, "b")], "x", Guid.Empty, 1, DateTime.UnixEpoch))
         };
         foreach (var (name, batch) in batches)
         {

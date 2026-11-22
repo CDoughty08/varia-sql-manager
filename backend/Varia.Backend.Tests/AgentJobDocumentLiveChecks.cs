@@ -20,8 +20,8 @@ internal static class AgentJobDocumentLiveChecks
         async Task<T> Call<T>(string method, object args) => (T)await service.DispatchAsync(method, JsonSerializer.SerializeToElement(args, json), json);
         async Task<AgentJobDocumentDto?> Describe(string name) =>
             (await Call<ActionDescribeResult>("actions.describe", new ActionDescribeArgs(info.Id, Guid.NewGuid().ToString(), "agentJob", new ObjectRefDto("agentJob", Name: name)))).AgentJobDocument;
-        Task<ActionExecuteResult> Save(string name, string created, AgentJobSaveDto save) =>
-            Call<ActionExecuteResult>("actions.execute", new ActionArgs("agentJob", info.Id, Guid.NewGuid().ToString(), new ObjectRefDto("agentJob", Name: name), AgentIdentity: new(created), AgentJob: save));
+        Task<ActionExecuteResult> Save(string name, string jobId, AgentJobSaveDto save) =>
+            Call<ActionExecuteResult>("actions.execute", new ActionArgs("agentJob", info.Id, Guid.NewGuid().ToString(), new ObjectRefDto("agentJob", Name: name), AgentIdentity: new(jobId), AgentJob: save));
         async Task<string?> Column(string column) => (await sql("SELECT CONVERT(nvarchar(512), " + column + ") FROM msdb.dbo.sysjobs WHERE job_id = '" + id.ToString("D") + "';", "msdb")).Scalar;
 
         var first = await Describe(job);
@@ -35,27 +35,27 @@ internal static class AgentJobDocumentLiveChecks
         // sp_add_job's default event log level is 2, so the save sets 3 and the refused save 0: either landing shows.
         // A save carrying the version it read lands, and moves the version on; the same save again is refused STALE and changes nothing.
         var marked = ScratchDatabase.JobMarker;
-        var saved = await Save(job, before.Created, new AgentJobSaveDto(before.Version, before.Modified, EventLogLevel: 3));
+        var saved = await Save(job, before.JobId, new AgentJobSaveDto(before.Version, before.Modified, EventLogLevel: 3));
         var after = await Describe(job);
         check(saved.Error is null && after?.Job is { EventLogLevel: 3 } now && now.Version > before.Version && await Column("description") == marked,
             "a job document save under the version it read changes the job and its version: " + Said(saved) + " " + JsonSerializer.Serialize(after?.Job));
-        var stale = await Save(job, before.Created, new AgentJobSaveDto(before.Version, before.Modified, EventLogLevel: 0));
+        var stale = await Save(job, before.JobId, new AgentJobSaveDto(before.Version, before.Modified, EventLogLevel: 0));
         check(stale.Error is { Code: "STALE", Retryable: false } && await Column("notify_level_eventlog") == "3",
             "a job document save under a version the job has moved past is refused STALE and changes nothing: " + Said(stale));
         if (after?.Job is not { } current) return;
 
         // One transaction: an operator that does not exist fails the notification call after the description's, and nothing commits.
-        var failed = await Save(job, current.Created, new AgentJobSaveDto(current.Version, current.Modified, Description: "rolled back", EmailLevel: 2, EmailOperator: "VariaNoSuchOperator_" + Guid.NewGuid().ToString("N")[..8]));
+        var failed = await Save(job, current.JobId, new AgentJobSaveDto(current.Version, current.Modified, Description: "rolled back", EmailLevel: 2, EmailOperator: "VariaNoSuchOperator_" + Guid.NewGuid().ToString("N")[..8]));
         var unchanged = await Describe(job);
         check(failed.Error is { Code: not "NOT_FOUND", Field: "email" } && await Column("description") == marked && unchanged?.Job?.Version == current.Version,
             "a job document save whose later call fails commits nothing, lands on the operator's field and is not NOT_FOUND (the job is there): " + Said(failed));
 
         // A hostile name goes through as a parameter and comes back through sp_help_job; renaming back keeps the identity.
         var hostile = job + "]'; --é";
-        var renamed = await Save(job, current.Created, new AgentJobSaveDto(current.Version, current.Modified, Name: hostile));
+        var renamed = await Save(job, current.JobId, new AgentJobSaveDto(current.Version, current.Modified, Name: hostile));
         var named = await Column("name");
         var read2 = renamed.Error is null ? await Describe(hostile) : null;
-        var back = read2?.Job is { } hostileJob ? await Save(hostile, hostileJob.Created, new AgentJobSaveDto(hostileJob.Version, hostileJob.Modified, Name: job)) : null;
+        var back = read2?.Job is { } hostileJob ? await Save(hostile, hostileJob.JobId, new AgentJobSaveDto(hostileJob.Version, hostileJob.Modified, Name: job)) : null;
         if (await Column("name") != job) await sql("EXEC msdb.dbo.sp_update_job @job_id = '" + id.ToString("D") + "', @new_name = " + Quote(job) + ";", "msdb");
         check(renamed.Error is null && named == hostile && read2?.Job?.Name == hostile && back?.Error is null && await Column("name") == job,
             "a job document save renames the job to a hostile name, describes it by that name and renames it back: " + Said(renamed) + " " + (back is null ? "" : Said(back)));
@@ -63,7 +63,7 @@ internal static class AgentJobDocumentLiveChecks
         // Script's text runs back against msdb batch by batch (the shape SSMS's Script Job As gives) and makes the same change.
         var latest = (await Describe(job))?.Job;
         var scripted = await Call<ActionScriptResult>("actions.script", new ActionArgs("agentJob", info.Id, Guid.NewGuid().ToString(), new ObjectRefDto("agentJob", Name: job),
-            AgentIdentity: latest is null ? null : new(latest.Created), AgentJob: new AgentJobSaveDto(latest?.Version, latest?.Modified, DeleteLevel: 0, EventLogLevel: 1)));
+            AgentIdentity: latest is null ? null : new(latest.JobId), AgentJob: new AgentJobSaveDto(latest?.Version, latest?.Modified, DeleteLevel: 0, EventLogLevel: 1)));
         var text = scripted.Text ?? "";
         var batches = text.Replace("\r\n", "\n", StringComparison.Ordinal).Split("\nGO\n").Select(batch => batch.Trim()).Where(batch => batch.Length > 0 && !batch.StartsWith("USE ", StringComparison.Ordinal)).ToList();
         var runs = new List<SqlRun>();
@@ -86,7 +86,7 @@ internal static class AgentJobDocumentLiveChecks
         {
             var read = await describe(job);
             var listed = read?.Alerts?.FirstOrDefault(item => item.Name == alert);
-            var removed = read?.Job is { } held && listed is not null ? await save(job, held.Created, new AgentJobSaveDto(held.Version, held.Modified, RemoveAlerts: [new(listed.Id, listed.Name)])) : null;
+            var removed = read?.Job is { } held && listed is not null ? await save(job, held.JobId, new AgentJobSaveDto(held.Version, held.Modified, RemoveAlerts: [new(listed.Id, listed.Name)])) : null;
             var jobOf = (await sql("SELECT CONVERT(nvarchar(36), job_id) FROM msdb.dbo.sysalerts WHERE name = " + Quote(alert) + ";", "msdb")).Scalar;
             var reread = await describe(job);
             check(added.Status == "completed" && listed is not null && removed?.Error is null && jobOf == Guid.Empty.ToString("D") && reread?.Alerts?.All(item => item.Name != alert) == true,

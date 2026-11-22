@@ -21,40 +21,61 @@ internal static class AgentActionLiveChecks
     {
         async Task<T> Call<T>(string method, object args) => (T)await service.DispatchAsync(method, JsonSerializer.SerializeToElement(args, json), json);
         ObjectRefDto Job(string name) => new("agentJob", Name: name);
-        Task<ActionExecuteResult> Execute(string action, string name, string created, string? newName = null, string? stepName = null) =>
-            Call<ActionExecuteResult>("actions.execute", new ActionArgs(action, info.Id, Guid.NewGuid().ToString(), Job(name), NewName: newName, AgentIdentity: new(created), StepName: stepName));
+        Task<ActionExecuteResult> Execute(string action, string name, string jobId, string? newName = null, string? stepName = null) =>
+            Call<ActionExecuteResult>("actions.execute", new ActionArgs(action, info.Id, Guid.NewGuid().ToString(), Job(name), NewName: newName, AgentIdentity: new(jobId), StepName: stepName));
         async Task<string?> Enabled() => (await sql("SELECT CONVERT(nvarchar(1), enabled) FROM msdb.dbo.sysjobs WHERE job_id = '" + id.ToString("D") + "';", "msdb")).Scalar;
 
         // The service verbs' host read runs on every server, so the Linux live job parses it too (only Windows runs the service verbs).
         var host = await sql(AgentSql.ServiceHost, "master");
         check(host.Status == "completed" && host.Sets is [[[_, _, "0" or "1"], ..], ..], "the service verbs' host read (machine, instance, IsClustered) runs on this server: " + host.Error);
 
-        var created = (await sql("SELECT CONVERT(char(19), date_created, 126) FROM msdb.dbo.sysjobs WHERE job_id = '" + id.ToString("D") + "';", "msdb")).Scalar ?? "";
+        var jobId = id.ToString("D");
         var described = await Call<ActionDescribeResult>("actions.describe", new ActionDescribeArgs(info.Id, Guid.NewGuid().ToString(), "startJobAtStep", Job(job)));
-        check(described is { Error: null, AgentJob: { Enabled: true, Running: false, StepsTruncated: false, Steps: [{ Id: 1, Name: "Step 1" }] } facts } && facts.AgentIdentity.Created == created && facts.Name == job,
-            "Start Job at Step describes the scratch job: enabled, idle, its one step, and the creation time the tree lists: " + JsonSerializer.Serialize(described.AgentJob) + " " + described.Error?.Message);
+        check(described is { Error: null, AgentJob: { Enabled: true, Running: false, StepsTruncated: false, Steps: [{ Id: 1, Name: "Step 1" }] } facts } && facts.AgentIdentity.JobId == jobId && facts.Name == job,
+            "Start Job at Step describes the scratch job: enabled, idle, its one step, and the job ID the tree lists: " + JsonSerializer.Serialize(described.AgentJob) + " " + described.Error?.Message);
 
         // Agent's message 22022 on an idle job is read again: the job is idle, so JOB_STATE in Varia's words.
-        var idle = await Execute("stopJob", job, created);
+        var idle = await Execute("stopJob", job, jobId);
         check(idle.Error?.Code == "JOB_STATE", "Stop Job on an idle job answers JOB_STATE: " + Steps(idle));
 
-        var disabled = await Execute("disable", job, created);
+        var disabled = await Execute("disable", job, jobId);
         var off = await Enabled();
-        var enabled = await Execute("enable", job, created);
+        var enabled = await Execute("enable", job, jobId);
         var on = await Enabled();
         check(disabled.Error is null && off == "0" && enabled.Error is null && on == "1", "a job's Disable and Enable change sysjobs.enabled: " + Steps(disabled) + " / " + Steps(enabled));
 
-        // A job created at another time under the name is not the one the tree read: refused before msdb runs anything.
-        var stale = await Execute("disable", job, "2000-01-01T00:00:00");
+        // A different job ID under the same name is not the one the tree read: refused before msdb runs anything.
+        var stale = await Execute("disable", job, Guid.NewGuid().ToString("D"));
         check(stale.Error?.Code == "NOT_FOUND" && await Enabled() == "1", "a job's verb with a stale identity is refused NOT_FOUND and changes nothing: " + Steps(stale));
 
+        // The listed job renamed away and another created under its name in the same second (a script that drops and adds a job does
+        // that): date_created to the second cannot tell them apart, so the replacement's creation time is set to the original's here.
+        var moved = job + "_m";
+        var replaced = await sql("SET NOCOUNT ON; DECLARE @id uniqueidentifier;\nEXEC msdb.dbo.sp_update_job @job_id = '" + jobId + "', @new_name = " + Quote(moved) + ";\n"
+            + "EXEC msdb.dbo.sp_add_job @job_name = " + Quote(job) + ", @job_id = @id OUTPUT;\n"
+            + "UPDATE msdb.dbo.sysjobs SET date_created = (SELECT date_created FROM msdb.dbo.sysjobs WHERE job_id = '" + jobId + "') WHERE job_id = @id;\n"
+            + "SELECT CONVERT(nvarchar(36), @id);", "msdb");
+        var replacement = Guid.TryParse(replaced.Scalar, out var other) ? other.ToString("D") : null;
+        try
+        {
+            var hijack = await Execute("disable", job, jobId);
+            var untouched = (await sql("SELECT CONVERT(nvarchar(1), enabled) FROM msdb.dbo.sysjobs WHERE job_id = '" + replacement + "';", "msdb")).Scalar;
+            check(replacement is not null && hijack.Error?.Code == "NOT_FOUND" && untouched == "1" && await Enabled() == "1",
+                "a job created in the same second under the listed job's name is refused NOT_FOUND and left enabled: " + replaced.Error + " " + Steps(hijack));
+        }
+        finally
+        {
+            await sql("IF EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name = " + Quote(job) + " AND job_id <> '" + jobId + "') EXEC msdb.dbo.sp_delete_job @job_name = " + Quote(job) + ";\n"
+                + "EXEC msdb.dbo.sp_update_job @job_id = '" + jobId + "', @new_name = " + Quote(job) + ";", "msdb");
+        }
+
         var renamedName = job + "_r";
-        var renamed = await Execute("rename", job, created, newName: renamedName);
+        var renamed = await Execute("rename", job, jobId, newName: renamedName);
         var named = (await sql("SELECT name FROM msdb.dbo.sysjobs WHERE job_id = '" + id.ToString("D") + "';", "msdb")).Scalar;
-        var back = await Execute("rename", renamedName, created, newName: job);
+        var back = await Execute("rename", renamedName, jobId, newName: job);
         check(renamed.Error is null && named == renamedName && back.Error is null, "a job's Rename runs sp_update_job @new_name and keeps the job's identity: " + Steps(renamed) + " / " + Steps(back));
 
-        var started = await Execute("startJob", job, created);
+        var started = await Execute("startJob", job, jobId);
         check(started.Error is null && started.Steps is [{ Status: "done" }], "Start Job asks SQL Server Agent to start the job: " + Steps(started));
         // Wait for the run to end before Delete, so it deletes an idle job (Agent's own session's activity row has a stop time).
         var deadline = Environment.TickCount64 + 30_000;
@@ -68,9 +89,9 @@ internal static class AgentActionLiveChecks
 
         var target = await Call<ActionDescribeResult>("actions.describe", new ActionDescribeArgs(info.Id, Guid.NewGuid().ToString(), "deleteObject", Job(job)));
         var deleted = await Call<ActionExecuteResult>("actions.execute", new ActionArgs("delete", info.Id, Guid.NewGuid().ToString(), Job(job), CloseConnections: false, DeleteHistory: true,
-            AgentIdentity: target.DeleteTarget?.AgentIdentity ?? new(created), DeleteUnusedSchedule: true));
+            AgentIdentity: target.DeleteTarget?.AgentIdentity ?? new(jobId), DeleteUnusedSchedule: true));
         var gone = (await sql("SELECT COUNT(*) FROM msdb.dbo.sysjobs WHERE job_id = '" + id.ToString("D") + "';", "msdb")).Scalar;
-        check(target.DeleteTarget?.AgentIdentity?.Created == created && deleted.Error is null && gone == "0",
+        check(target.DeleteTarget?.AgentIdentity?.JobId == jobId && deleted.Error is null && gone == "0",
             "Delete Object describes the job with its identity and deletes it with its history: " + Steps(deleted) + " " + target.Error?.Message);
     }
 

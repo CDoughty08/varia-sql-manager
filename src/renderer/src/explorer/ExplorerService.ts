@@ -207,6 +207,7 @@ const targetOf = (node: TreeNode, connection: Pick<LiveConnection, 'engineEditio
   connectionId: node.connectionId, ref: node.ref, kind: node.kind, ...(node.folder ? { folder: node.folder } : {}), ...(node.subtype ? { subtype: node.subtype } : {}), label: node.label,
   ...(node.status ? { status: node.status } : {}), ...(runtime ? { database: runtime } : {}), ...(node.listedAt !== undefined ? { listedAt: node.listedAt } : {}),
   engine: serverEngineOf(connection?.engineEdition), linux: !!connection?.linux, ...(connection?.options.provider === 'bigquery' ? { provider: 'bigquery' as const } : {}),
+  ...(node.jobId !== undefined ? { jobId: node.jobId } : {}),
   ...(node.created !== undefined ? { created: node.created } : {}), ...(agent ? { agent } : {})
 })
 
@@ -1425,6 +1426,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (node.icon !== wire.icon) { node.icon = wire.icon; changed = true }
     if (node.status !== wire.status) { node.status = wire.status; changed = true }
     if (!!node.connectDenied !== !!wire.connectDenied) { node.connectDenied = wire.connectDenied || undefined; changed = true }
+    if (node.jobId !== wire.jobId) { node.jobId = wire.jobId; changed = true }
     if (node.created !== wire.created) { node.created = wire.created; changed = true }
     this.takeRuntime(node, wire)
     // The subtype picks the folders below (a table's history row), so they are listed again.
@@ -1553,6 +1555,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     node.subtype = wire.subtype
     node.status = wire.status
     if (wire.connectDenied) node.connectDenied = true
+    node.jobId = wire.jobId
     node.created = wire.created
     this.takeRuntime(node, wire)
     node.hasChildren = wire.hasChildren

@@ -44,7 +44,7 @@ internal sealed partial class ActionService
         {
             if (args.Target?.Kind != "agentJob") throw Invalid("target.");
             target = Target(args.Target, "agentJob");
-            if (args.AgentIdentity is { } identity ? !AgentCreated(identity.Created) : !script) throw Invalid("agentIdentity.");
+            if (args.AgentIdentity is { } identity ? !AgentJobId(identity.JobId) : !script) throw Invalid("agentIdentity.");
         }
         if (args with { AgentJob = null, AgentIdentity = null } != new ActionArgs(args.Action, args.ConnectionId, args.RequestId, args.Target!)) throw Invalid("agentJob takes only the save and the job's identity.");
         var limits = AgentCatalog.Current;
@@ -236,7 +236,7 @@ internal sealed partial class ActionService
         }
         else if (arguments.Count > 1) calls.Add(new("sp_update_job", arguments));
         foreach (var alert in save.RemoveAlerts ?? []) calls.Add(AgentSql.DetachAlert(calls.Count + 1, alert.Id, alert.Name));
-        return create ? AgentSql.JobSave(true, calls) : AgentSql.JobSave(false, calls, target.Name, args.AgentIdentity?.Created, save.Version, JobModified(save.Modified!));
+        return create ? AgentSql.JobSave(true, calls) : AgentSql.JobSave(false, calls, target.Name, args.AgentIdentity is { } identity ? Guid.ParseExact(identity.JobId, "D") : null, save.Version, JobModified(save.Modified!));
     }
 
     // --- Execute -----------------------------------------------------------------------------------------------------------
