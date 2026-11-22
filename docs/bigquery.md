@@ -298,9 +298,9 @@ In the workbench:
   about that tab's transaction: Cancel the job rolls it back, and Leave it running keeps it open in the session.
   "Remember my choice" sets `queryExecution.bigQuery.closeRunningJob` (Ask, Cancel the job, Leave it running), which
   then answers without asking, except at a quit. Beside
-  executing SQL Server queries the box keeps SQL Server's buttons, and the BigQuery choice is its "Leave BigQuery jobs
+  other executing queries (SQL Server, or a BigQuery run without a job such as Preview Rows) the box keeps their buttons, and the BigQuery choice is its "Leave BigQuery jobs
   running" checkbox. Cancel the job waits for the job to stop, then ends the session; a commit before the cancel, an unknown outcome or a session
-  that could not be ended is shown as a notification. A tab not connected has its jobs
+  that could not be ended is shown in the tab's Messages, or as a notification once the tab is gone. A tab not connected has its jobs
   cancelled through its saved connection's credentials (`session.cancelRestoredJobs`). Leave it running drops the tab's
   records and shows the job ids with Copy Job IDs. Close All and Disconnect All keep tabs that hold jobs open without
   asking.
@@ -315,7 +315,9 @@ In the workbench:
   asked about once: Cancel Jobs or Keep (the default). Jobs an AutoRecover copy may still reopen are left for it. Finished
   ones are dropped silently.
 - **Deleting a saved connection.** One whose jobs still run asks first: Cancel Jobs and Delete, or Keep Connection (the
-  default). Varia cannot cancel them once the connection is gone.
+  default). Varia cannot cancel them once the connection is gone. Jobs that cannot be cancelled (broken credentials, a job
+  that finished long ago) ask again, with Delete Anyway leaving them to BigQuery's job history; so does a connection whose
+  job records cannot be read.
 - **Idle sessions whose end failed.** They are shown as a notification after Disconnect, Reload or a backend restart. Varia
   retries them the next time the connection reaches BigQuery.
 

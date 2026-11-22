@@ -441,6 +441,15 @@ describe('the prompt beside a cost gate and held jobs', () => {
     expect(dropJobRecords).toHaveBeenCalledTimes(2)
     expect(f.queries.getSnapshot()[f.tab.id].jobs).toBeUndefined()
   })
+  it('names how long a re-attached job has run since it was created', async () => {
+    const f = fixture(), pending = deferred<ApiResult<QueryResult>>()
+    f.queryApi.attach.mockReturnValueOnce(pending.promise)
+    f.queries.restoreJobs(f.tab.id, [job('job_1', { createdAt: 1000 })])
+    await settle()
+    await f.queries.prepareSessions('close', [f.tab.id])
+    expect(f.queryApi.confirmSessions.mock.calls[0][0].tabs[0].job).toMatchObject({ elapsedMs: 4000 })
+    pending.resolve({ ok: true, value: output() })
+  })
   it("never holds a finished job's reference for the prompt", async () => {
     const f = fixture({ connected: false })
     f.queries.restoreJobs(f.tab.id, [job('job_1', { state: 'done' })])

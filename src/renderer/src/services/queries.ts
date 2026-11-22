@@ -542,7 +542,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const held = before?.jobs?.filter(job => job.jobId !== attach?.jobId)
     const reported = new Map<string, TabJob>()
     const estimateBytes = bigQuery && !attach && !preview ? this.estimateOf?.(tabId) : undefined
-    this.update(tabId, { running: { queryId, connectionId: connection.id, startedAt: this.now(), ...attach ? { kind: 'attach' as const, jobId: attach.jobId } : preview ? { kind: 'preview' as const } : {}, ...estimateBytes !== undefined ? { estimateBytes } : {} }, session: previous, provenance, ...livePlan ? { livePlan } : {}, ...held?.length ? { jobs: held } : {} })
+    // A re-attached job has run since it was created, which the job prompt names.
+    this.update(tabId, { running: { queryId, connectionId: connection.id, startedAt: attach ? Math.min(this.now(), attach.createdAt) : this.now(), ...attach ? { kind: 'attach' as const, jobId: attach.jobId } : preview ? { kind: 'preview' as const } : {}, ...estimateBytes !== undefined ? { estimateBytes } : {} }, session: previous, provenance, ...livePlan ? { livePlan } : {}, ...held?.length ? { jobs: held } : {} })
     // The text's version and scope as sent, read before the gate: an edit while it waits must not make the run's error
     // locations point into the edited text.
     const revision = this.documents.revision(tabId), sqlScope = sql === this.documents.getModel(tabId)?.getValue() ? 'document' as const : 'selection' as const
