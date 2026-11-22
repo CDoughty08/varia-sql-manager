@@ -70,14 +70,16 @@ async function mount(setup: { initial?: ProviderConnectionOptions; bigQuery?: Bi
       element.dispatchEvent(new Event(element instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }))
     })
   }
-  return { ...workbench, host, $, button, click, set, api, connect: workbench.api.connect, onConnected, onClose, library: () => bigQuery, text: () => document.body.textContent ?? '' }
+  const serverType = () => $<HTMLButtonElement>('[data-server-type][aria-pressed="true"]')?.dataset.serverType
+  const setServerType = async (type: 'sqlserver' | 'bigquery') => { await act(async () => $<HTMLButtonElement>(`[data-server-type="${type}"]`)!.click()) }
+  return { ...workbench, host, $, button, click, set, serverType, setServerType, api, connect: workbench.api.connect, onConnected, onClose, library: () => bigQuery, text: () => document.body.textContent ?? '' }
 }
 
 describe('Connect dialog: BigQuery', () => {
   it('swaps the field block for BigQuery, keeps each type\'s fields across switches, and Undo restores the previous type', async () => {
     const view = await mount()
     await view.set('#connect-server', 'sql01.example')
-    await view.set('#connect-server-type', 'bigquery')
+    await view.setServerType('bigquery')
     expect(view.$('#connect-server')).toBeNull()
     expect(view.$('#connect-bq-project')).not.toBeNull()
     // Encrypt, TLS, SqlClient's Advanced Properties and the connection string are SQL Server's.
@@ -85,9 +87,9 @@ describe('Connect dialog: BigQuery', () => {
     expect([...view.host.querySelectorAll('[role="tab"]')].map(tab => tab.textContent)).not.toContain('Connection String')
     await view.set('#connect-bq-project', 'varia-alpha')
     await view.click('Undo')
-    expect(view.$<HTMLSelectElement>('#connect-server-type')!.value).toBe('sqlserver')
+    expect(view.serverType()).toBe('sqlserver')
     expect(view.$<HTMLInputElement>('#connect-server')!.value).toBe('sql01.example')
-    await view.set('#connect-server-type', 'bigquery')
+    await view.setServerType('bigquery')
     expect(view.$<HTMLInputElement>('#connect-bq-project')!.value).toBe('varia-alpha')
     // Undo is offered only for the switch just made.
     await view.click('Undo')
@@ -97,7 +99,7 @@ describe('Connect dialog: BigQuery', () => {
   it('opens with the type used last, and shows the account gcloud signs in as', async () => {
     const profile: BigQueryConnectionProfile = { id: id(1), options: { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' }, favorite: false, lastConnected: '2026-11-10T10:00:00.000Z' }
     const view = await mount({ bigQuery: [profile], sqlLastConnected: '2026-11-09T10:00:00.000Z' })
-    expect(view.$<HTMLSelectElement>('#connect-server-type')!.value).toBe('bigquery')
+    expect(view.serverType()).toBe('bigquery')
     await vi.waitFor(() => expect(view.host.querySelector('.bq-account')?.textContent).toContain('Signed in to gcloud as ada@example.com'))
     expect(view.api.bigQueryAccount).toHaveBeenLastCalledWith({ authentication: 'gcloud' })
   })
@@ -110,7 +112,7 @@ describe('Connect dialog: BigQuery', () => {
     const settle = () => act(async () => { await vi.advanceTimersByTimeAsync(1000) })
     await settle()
     expect(view.api.bigQueryAccount).not.toHaveBeenCalled()
-    await view.set('#connect-server-type', 'bigquery')
+    await view.setServerType('bigquery')
     await settle()
     expect(view.api.bigQueryAccount).toHaveBeenCalledTimes(1)
     await view.click('Undo')
@@ -190,13 +192,12 @@ describe('Connect dialog: BigQuery', () => {
 
   it('sets the cost cap, impersonation and extra projects in Advanced', async () => {
     const view = await mount({ initial: { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' } })
-    await view.click('Advanced…')
+    await view.click('Advanced')
     await view.set('#bq-max-bytes', '500')
     await view.set('#bq-impersonate', 'etl@varia-alpha.iam.gserviceaccount.com')
     await view.set('#bq-extra-project', 'bigquery-public-data')
     await view.click('Add')
-    await view.click('OK')
-    expect(view.host.textContent).toContain('3 properties set')
+    expect(view.button('Advanced (3 set)').querySelector('.connect-tab-badge')?.textContent).toBe('3')
     await view.click('Connect')
     expect(view.connect.mock.calls[0]![0]).toMatchObject({ maximumBytesBilled: 500 * 2 ** 30, impersonateServiceAccount: 'etl@varia-alpha.iam.gserviceaccount.com', extraProjects: ['bigquery-public-data'] })
   })
@@ -207,7 +208,7 @@ describe('Connect dialog: BigQuery', () => {
     const row = [...view.host.querySelectorAll<HTMLButtonElement>('.connection-choice')].find(value => value.textContent?.includes('varia-alpha'))!
     expect(row.textContent).toContain('BigQuery · sales · Service account key file (reader.json)')
     await act(async () => row.click())
-    expect(view.$<HTMLSelectElement>('#connect-server-type')!.value).toBe('bigquery')
+    expect(view.serverType()).toBe('bigquery')
     expect(view.$<HTMLInputElement>('#connect-bq-keyfile')!.value).toBe('reader.json')
     await view.click('Favorite varia-alpha')
     expect(view.api.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ id: profile.id, favorite: true, options: profile.options }))
@@ -233,7 +234,7 @@ describe('Connect dialog: BigQuery', () => {
   it('keeps Reconnect on startup per type across a switch and Undo', async () => {
     const profile: BigQueryConnectionProfile = { id: id(1), options: { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' }, favorite: false, lastConnected: '2026-11-10T10:00:00.000Z', autoReconnect: 'off' }
     const view = await mount({ bigQuery: [profile], sqlLastConnected: '2026-11-11T10:00:00.000Z' })
-    expect(view.$<HTMLSelectElement>('#connect-server-type')!.value).toBe('sqlserver')
+    expect(view.serverType()).toBe('sqlserver')
     await view.set('#connect-auto-reconnect', 'on')
     const row = [...view.host.querySelectorAll<HTMLButtonElement>('.connection-choice')].find(value => value.textContent?.includes('varia-alpha'))!
     await act(async () => row.click())
@@ -242,17 +243,17 @@ describe('Connect dialog: BigQuery', () => {
     await view.click('Reset')
     expect(view.$<HTMLSelectElement>('#connect-auto-reconnect')!.value).toBe('inherit')
     await view.click('Undo')
-    expect(view.$<HTMLSelectElement>('#connect-server-type')!.value).toBe('sqlserver')
+    expect(view.serverType()).toBe('sqlserver')
     expect(view.$<HTMLSelectElement>('#connect-auto-reconnect')!.value).toBe('on')
   })
 
   it('asks about unsaved edits in the type not shown before closing, showing that type', async () => {
     const view = await mount()
     await view.set('#connect-server', 'sql02.example')
-    await view.set('#connect-server-type', 'bigquery')
+    await view.setServerType('bigquery')
     await view.click('Cancel')
     expect(view.text()).toContain('Save sql02.example to History?')
-    expect(view.$<HTMLSelectElement>('#connect-server-type')!.value).toBe('sqlserver')
+    expect(view.serverType()).toBe('sqlserver')
     expect(view.onClose).not.toHaveBeenCalled()
     await view.click("Don't Save")
     expect(view.onClose).toHaveBeenCalledTimes(1)

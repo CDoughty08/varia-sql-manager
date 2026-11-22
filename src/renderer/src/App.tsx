@@ -87,7 +87,8 @@ export default function App() {
   const shell = useServiceSnapshot(workbench.shellOptions)
   const toasts = useServiceSnapshot(workbench.notifications)
   const [explorerError, setExplorerError] = useState('')
-  const [showConnect, setShowConnect] = useState(false)
+  // 0 while Connect is closed; each open/reconnect request increments it, raising the existing window when open.
+  const [showConnect, setShowConnect] = useState(0)
   // 0 while About is closed; each Help › About counts up, raising its window when it is already open.
   const [showAbout, setShowAbout] = useState(0)
   const [options, setOptions] = useState<ProviderConnectionOptions>(() => connectionDefaults(workbench.platform))
@@ -155,7 +156,7 @@ export default function App() {
     resetLayout: () => workspaceRef.current?.reset(),
     flushLayout: async () => { await workspaceRef.current?.flush(true) },
     layoutCloseCancelled: () => workspaceRef.current?.closeCancelled(),
-    showConnect: () => { setReconnecting(undefined); setPendingExecute(undefined); setPendingMonitor(false); setShowConnect(true) },
+    showConnect: () => { setReconnecting(undefined); setPendingExecute(undefined); setPendingMonitor(false); setShowConnect(count => count + 1) },
     reconnect: id => {
       const lost = workbench.connections.get(id)
       if (!lost) return
@@ -168,7 +169,7 @@ export default function App() {
       setPendingExecute(undefined)
       setPendingMonitor(false)
       setOptions(lost.options)
-      setShowConnect(true)
+      setShowConnect(count => count + 1)
     },
     editEnvironment: id => setEnvironmentFor(id),
     closePane: pane => workspaceRef.current?.close(pane),
@@ -208,9 +209,9 @@ export default function App() {
         const tab = documents.get(event.tabId), remembered = tab?.targetId ? workbench.connections.get(tab.targetId) : undefined
         setReconnecting(remembered?.targetId)
         if (remembered) setOptions(remembered.options)
-        setPendingExecute(event.tabId); setPendingMonitor(false); setShowConnect(true)
+        setPendingExecute(event.tabId); setPendingMonitor(false); setShowConnect(count => count + 1)
       }
-      if (event.type === 'activity.connectRequested') { setReconnecting(undefined); setPendingExecute(undefined); setPendingMonitor(true); setShowConnect(true) }
+      if (event.type === 'activity.connectRequested') { setReconnecting(undefined); setPendingExecute(undefined); setPendingMonitor(true); setShowConnect(count => count + 1) }
       if (event.type === 'help.aboutRequested') setShowAbout(count => count + 1)
     })
     return () => subscription.dispose()
@@ -242,7 +243,7 @@ export default function App() {
       if (choice === 'cancel') return
       const info = finishConnectionDetails(workbench.connections, opened, choice)
       if (!info) { setExplorerError('This connection changed while reviewing its details. Select it again to reconnect.'); return }
-      setShowConnect(false)
+      setShowConnect(0)
       setReconnecting(undefined)
       setPendingExecute(undefined)
       setPendingMonitor(false)
@@ -322,8 +323,8 @@ export default function App() {
       {!shell.queryStatusBar && queryStatus}<ScriptingStatus /><IndexStatus /><EditorStatus /><DiscardStatus /><MemoryIndicator /><UpdateStatus /><AgentJobStatus />
     </footer>
     {environmentFor && <EnvironmentDialog key={environmentFor} connectionId={environmentFor} onClose={() => setEnvironmentFor(undefined)} />}
-    {showConnect && <ConnectDialog initial={options} reviewOpen={!!detailsReview} initialTargetId={reconnecting && workbench.connectionTargets.get(workbench.connections.get(reconnecting)?.targetId ?? '') ? workbench.connections.get(reconnecting)?.targetId : undefined} initialAutoReconnect={reconnecting ? workbench.connections.details(reconnecting)?.autoReconnect : undefined} onConnected={connected} onClose={() => { detailsReview?.association?.abandon(true); setDetailsReview(undefined); setShowConnect(false); setReconnecting(undefined); setPendingExecute(undefined); setPendingMonitor(false) }} />}
-    {detailsReview && <ConnectionDetailsDialog current={detailsReview.current} selected={detailsReview.selected} server={workbench.connections.get(detailsReview.id)?.server ?? ''} database={workbench.connections.get(detailsReview.id)?.database ?? ''} account={workbench.connections.get(detailsReview.id)?.login} onChoose={choice => { void finishConnected(detailsReview, choice).catch(error => setExplorerError(errorText(error))) }} />}
+    {showConnect > 0 && <ConnectDialog initial={options} raise={showConnect} reviewOpen={!!detailsReview} review={detailsReview ? <ConnectionDetailsDialog current={detailsReview.current} selected={detailsReview.selected} server={workbench.connections.get(detailsReview.id)?.server ?? ''} database={workbench.connections.get(detailsReview.id)?.database ?? ''} account={workbench.connections.get(detailsReview.id)?.login} onChoose={choice => { void finishConnected(detailsReview, choice).catch(error => setExplorerError(errorText(error))) }} /> : undefined} initialTargetId={reconnecting && workbench.connectionTargets.get(workbench.connections.get(reconnecting)?.targetId ?? '') ? workbench.connections.get(reconnecting)?.targetId : undefined} initialAutoReconnect={reconnecting ? workbench.connections.details(reconnecting)?.autoReconnect : undefined} onConnected={connected} onClose={() => { detailsReview?.association?.abandon(true); setDetailsReview(undefined); setShowConnect(0); setReconnecting(undefined); setPendingExecute(undefined); setPendingMonitor(false) }} />}
+    {showConnect === 0 && detailsReview && <ConnectionDetailsDialog current={detailsReview.current} selected={detailsReview.selected} server={workbench.connections.get(detailsReview.id)?.server ?? ''} database={workbench.connections.get(detailsReview.id)?.database ?? ''} account={workbench.connections.get(detailsReview.id)?.login} onChoose={choice => { void finishConnected(detailsReview, choice).catch(error => setExplorerError(errorText(error))) }} />}
     <DisconnectDialog service={workbench.disconnectPrompts} />
     {filterFolder !== undefined && <FilterDialog key={filterFolder} folderId={filterFolder} />}
     {optionsDialog.open && <OptionsDialog page={optionsDialog.page} setting={optionsDialog.setting} />}

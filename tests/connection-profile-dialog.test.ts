@@ -69,7 +69,6 @@ async function mount(initialAutoReconnect?: 'inherit' | 'on' | 'off', setup: {
   }
   const select = () => host.querySelector<HTMLSelectElement>('#connect-auto-reconnect')!
   const preference = async (value: 'inherit' | 'on' | 'off') => {
-    if (button('Custom Properties').getAttribute('aria-expanded') !== 'true') await act(async () => button('Custom Properties').click())
     await act(async () => { select().value = value; select().dispatchEvent(new Event('change', { bubbles: true })) })
   }
   const releaseLibrary = async () => { await act(async () => held.resolve()) }
@@ -276,7 +275,6 @@ describe('Reset and the form environment', () => {
     const server = () => view.host.querySelector<HTMLInputElement>('#connect-server')!
     const environment = () => view.host.querySelector<HTMLSelectElement>('#connect-environment')!
     await type(server(), 'sql-prod-01')
-    await act(async () => view.button('Custom Properties').click())
     expect(environment().value).toBe('Production')
     await act(async () => { environment().value = 'Staging'; environment().dispatchEvent(new Event('change', { bubbles: true })) })
     await act(async () => view.button('Reset').click())
@@ -290,7 +288,6 @@ describe('Reset and the form environment', () => {
 })
 
 const pick = async (view: Awaited<ReturnType<typeof mount>>, selector: string, value: string) => {
-  if (view.button('Custom Properties').getAttribute('aria-expanded') !== 'true') await act(async () => view.button('Custom Properties').click())
   const field = view.host.querySelector<HTMLSelectElement | HTMLInputElement>(selector)!
   await act(async () => {
     if (field instanceof HTMLInputElement) Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, value)
@@ -826,7 +823,6 @@ describe('closing with a new, unsaved connection', () => {
   it('does not offer to save back an entry the user removed while editing it', async () => {
     const view = await mount()
     await view.choose('Off profile')
-    if (view.button('Custom Properties').getAttribute('aria-expanded') !== 'true') await act(async () => view.button('Custom Properties').click())
     await type(view, '#connect-name', 'Edited')
     const remaining = view.profiles().filter(value => value.options.displayName !== 'Off profile')
     ;(window as unknown as { varia: VariaApi }).varia.removeConnectionProfile = vi.fn<VariaApi['removeConnectionProfile']>(async () => ({ ok: true, value: { library: { version: 1, profiles: remaining }, savedPasswords: [] } }))
@@ -834,5 +830,29 @@ describe('closing with a new, unsaved connection', () => {
     await act(async () => view.button('Cancel').click())
     expect(prompt()).toBeNull()
     expect(view.closed).toHaveBeenCalledOnce()
+  })
+})
+
+describe('Connect v2 sidebar deduplication, filter clear and Undo', () => {
+  it('deduplicates Favorites out of Recent Connections, clears filter via the clear button, and restores removed profiles on Undo', async () => {
+    const fav = { ...profile('Primary Prod', 10, 'inherit'), lastConnected: '2026-11-12T10:00:00.000Z' }
+    const recentOnly = { ...profile('Staging Db', 11, 'inherit'), favorite: false, lastConnected: '2026-11-11T10:00:00.000Z' }
+    const view = await mount(undefined, { profiles: [fav, recentOnly] })
+    const choices = () => [...view.host.querySelectorAll('.connection-choice strong')].map(el => el.textContent)
+    expect(choices()).toEqual(['Primary Prod', 'Staging Db'])
+    const filter = view.host.querySelector<HTMLInputElement>('.connection-filter')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(filter, 'Primary')
+      filter.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(choices()).toEqual(['Primary Prod'])
+    await act(async () => view.button('Clear filter').click())
+    expect(filter.value).toBe('')
+    expect(choices()).toEqual(['Primary Prod', 'Staging Db'])
+    ;(window as unknown as { varia: VariaApi }).varia.removeConnectionProfile = vi.fn<VariaApi['removeConnectionProfile']>(async () => ({ ok: true, value: { library: { version: 1, profiles: [fav] }, savedPasswords: [] } }))
+    await act(async () => view.button('Remove saved Staging Db').click())
+    expect(choices()).toEqual(['Primary Prod'])
+    await act(async () => view.button('Undo').click())
+    expect(view.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ saved: false, registered: false, favorite: false, options: recentOnly.options }))
   })
 })

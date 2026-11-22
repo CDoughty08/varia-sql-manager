@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { advancedCount, advancedSummary, colorName, customSummary, listStep, rowTitle } from '../src/renderer/src/connect-form'
+import { advancedCount, advancedSummary, clampConnectRailWidth, colorName, connectRailLimits, customSummary, listStep, parseConnectionString, rowTitle } from '../src/renderer/src/connect-form'
 import EnvironmentTag from '../src/renderer/src/EnvironmentTag'
 import { advancedDefaults, advancedToStore } from '../src/shared/connections'
 import { connectionPresets } from '../src/shared/theme/connection-colors'
@@ -62,17 +62,19 @@ describe('Connect dialog v2 form', () => {
   })
   it('puts a saved row\'s name in its tooltip, since the narrow list cuts it short', () => {
     expect(rowTitle({ displayName: 'Production Finance Reporting Cluster Primary', server: 'prod-sql-01', database: 'FinanceDW' })).toBe('Production Finance Reporting Cluster Primary\nprod-sql-01 · FinanceDW')
-    expect(rowTitle({ displayName: '', server: 'localhost', database: '' })).toBe('localhost · <default>')
+    expect(rowTitle({ displayName: '', server: 'localhost', database: '' })).toBe('localhost')
   })
   it('keeps one bounded two-pane size, stacking the panes in a narrow window', () => {
-    expect(valueOf('.connection-modal.connect-dialog', 'width')).toBe('min(820px, calc(100vw - 40px))')
-    expect(valueOf('.connection-modal.connect-dialog', 'height')).toBe('min(520px, calc(100vh - 40px))')
+    expect(valueOf('.connection-modal.connect-dialog', 'width')).toBe('min(900px, calc(100vw - 40px))')
+    expect(valueOf('.connection-modal.connect-dialog', 'height')).toBe('min(730px, calc(100vh - 40px))')
     expect(valueOf('.connection-modal.connect-dialog', 'display')).toBe('grid')
-    expect(valueOf('.connection-modal.connect-dialog', 'grid-template-columns')).toBe('272px minmax(0, 1fr)')
-    // The panes are the grid's cells side by side; the actions are their sibling, outside every scroll, under the form.
+    expect(valueOf('.connection-modal.connect-dialog', 'grid-template-columns')).toBe('var(--connect-rail-width, 320px) 5px minmax(0, 1fr)')
+    // The panes are the grid's cells side by side with a 5px splitter; the actions are their sibling under the form.
     expect(valueOf('.connect-panes', 'display')).toBe('contents')
     expect(valueOf('.connect-sources-pane', 'grid-row')).toBe('2 / 4')
-    expect(valueOf('.connect-actions', 'grid-column')).toBe('2')
+    expect(valueOf('.connect-splitter', 'grid-column')).toBe('2')
+    expect(valueOf('.connect-splitter', 'grid-row')).toBe('2 / 4')
+    expect(valueOf('.connect-actions', 'grid-column')).toBe('3')
     expect(valueOf('.connect-actions', 'position')).toBeUndefined()
     // Both panes scroll on their own, and what sits under Connect is bounded, so Connect stays in view.
     expect(valueOf('.connect-sources-pane .connection-sources', 'min-height')).toBe('0')
@@ -82,18 +84,21 @@ describe('Connect dialog v2 form', () => {
     expect(valueOf('.environment-tag', 'flex')).toBe('none')
     expect(rules.filter(rule => rule.selector.includes('[data-place="list"]') && rule.declarations.some(declaration => declaration.property.startsWith('flex'))).map(rule => rule.selector)).toEqual(['.connect-sources-pane .environment-tag[data-place="list"][data-custom]'])
     expect(valueOf('.connect-form-scroll', 'overflow-y')).toBe('auto')
-    // The outcome sits above the footer, so Connect and Stop never move; together they keep at most half the dialog.
-    expect(valueOf('.connect-actions', 'max-height')).toBe('calc(min(520px, 100vh - 40px) / 2)')
+    // The outcome sits above the footer, so Connect and Stop never move; together they keep at most 45% of the dialog.
+    expect(valueOf('.connect-actions', 'max-height')).toBe('45%')
     expect(valueOf('.connect-outcome', 'min-height')).toBe('0')
     expect(valueOf('.connect-outcome', 'overflow-y')).toBe('auto')
-    // Stacked (a narrow or zoomed window): one scroll, the list two rows tall, and Connect under the scroll, across the
-    // dialog. Sticky inside the form pane, it could not rise above that pane's top and left the view when scrolled up.
-    const stacked = ['@media (max-width: 760px)']
+    // Stacked (a narrow or zoomed window, via class or viewport media query): one scroll, splitter hidden, actions across.
+    expect(valueOf('.connection-modal.connect-dialog.is-stacked', 'grid-template-columns')).toBe('minmax(0, 1fr)')
+    expect(valueOf('.connection-modal.connect-dialog.is-stacked .connect-splitter', 'display')).toBe('none')
+    expect(valueOf('.connection-modal.connect-dialog.is-stacked .connect-actions', 'grid-column')).toBe('1')
+    const stacked = ['@media (max-width: 720px)']
     expect(valueOf('.connection-modal.connect-dialog', 'grid-template-columns', stacked)).toBe('minmax(0, 1fr)')
     expect(valueOf('.connect-panes', 'display', stacked)).toBe('flex')
     expect(valueOf('.connect-panes', 'flex-direction', stacked)).toBe('column')
     expect(valueOf('.connect-panes', 'overflow-y', stacked)).toBe('auto')
-    expect(valueOf('.connect-sources-pane .connection-sources', 'height', stacked)).toBe('136px')
+    expect(valueOf('.connect-splitter', 'display', stacked)).toBe('none')
+    expect(valueOf('.connect-sources-pane .connection-sources', 'height', stacked)).toBe('156px')
     expect(valueOf('.connect-form-scroll', 'overflow-y', stacked)).toBe('visible')
     expect(valueOf('.connect-actions', 'position', stacked)).toBeUndefined()
     expect(valueOf('.connect-actions', 'grid-column', stacked)).toBe('1')
@@ -103,6 +108,32 @@ describe('Connect dialog v2 form', () => {
     expect(valueOf('.ui-field:focus-visible, .ui-button:focus-visible', 'outline-offset')).toBe('calc(-1 * var(--varia-space-0))')
     expect(valueOf('.connect-sources-pane .browse-toolbar', 'flex-wrap')).toBeUndefined()
     expect(valueOf('.connect-sources-pane .browse-toolbar select', 'min-width')).toBe('0')
+  })
+  it('clamps the resizable saved-connections rail safely against the form minimum width', () => {
+    expect(connectRailLimits.defaultWidth).toBe(320)
+    expect(clampConnectRailWidth(undefined, 900)).toBe(320)
+    expect(clampConnectRailWidth(120, 900)).toBe(220)
+    expect(clampConnectRailWidth(380, 900)).toBe(380)
+    expect(clampConnectRailWidth(600, 900)).toBe(320)
+    expect(clampConnectRailWidth(460, 740)).toBe(320)
+  })
+  it('parses ADO.NET / SqlClient connection strings without importing passwords', () => {
+    const parsed = parseConnectionString('Server="tcp:sql.corp.local,1433";Initial Catalog=SalesLedger;User ID=reader;Password=super-secret;Encrypt=True;TrustServerCertificate=False;ApplicationIntent=ReadOnly;Connect Timeout=30;MultipleActiveResultSets=True;')
+    expect(parsed.passwordOmitted).toBe(true)
+    expect(parsed.patch).toEqual({ server: 'sql.corp.local,1433', database: 'SalesLedger', authentication: 'sql', username: 'reader', encrypt: 'mandatory', trustServerCertificate: false })
+    expect(parsed.patch).not.toHaveProperty('password')
+    expect(parsed.advancedPatch).toEqual({ applicationIntent: 'ReadOnly', connectTimeout: 30, multipleActiveResultSets: true })
+    expect(parsed.matchedCount).toBe(8)
+    expect(parseConnectionString('Data Source=localhost;Integrated Security=SSPI;Pwd=secret')).toEqual({
+      patch: { server: 'localhost', authentication: 'windows' },
+      advancedPatch: {},
+      matchedCount: 2,
+      passwordOmitted: true
+    })
+    expect(parseConnectionString('Server=az.database.windows.net;Authentication=Active Directory Interactive').patch).toEqual({
+      server: 'az.database.windows.net',
+      authentication: 'entraMfa'
+    })
   })
   it('marks only a custom environment label as one that may give way', () => {
     const html = (environment: string) => renderToStaticMarkup(createElement(EnvironmentTag, { environment, place: 'list' }))
