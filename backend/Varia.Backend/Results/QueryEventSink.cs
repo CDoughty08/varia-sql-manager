@@ -58,6 +58,17 @@ internal sealed class QueryEventSink : IDisposable
         }
     }
 
+    /// <summary>resultSet.residence: a BigQuery set switched between memory and windowed (a misestimate, Load into memory),
+    /// with its new descriptor and revision. Essential: a dropped one would leave the grid reading released pages.</summary>
+    public void Residence(ResultSetBuffer set)
+    {
+        lock (gate)
+        {
+            if (!open.Contains(set)) open.Add(set);
+            Emit(new { Type = "resultSet.residence", Descriptor = set.Describe() }, false);
+        }
+    }
+
     public void Closed(ResultSetBuffer set)
     {
         lock (gate)

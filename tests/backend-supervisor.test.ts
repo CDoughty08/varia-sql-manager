@@ -130,7 +130,7 @@ describe('BackendSupervisor over the fake backend process', () => {
 })
 
 describe('BackendSupervisor restarts', () => {
-  it('replaces an exited backend after 0, 1 and 2 s, losing its connections and running scripts', async () => {
+  it('replaces an exited backend after 0, 1 and 2 s, losing its connections and running queries', async () => {
     const { value, advance, statuses, states, backends } = simulated({ deps: { policy: { breakerLosses: 10 } } })
     const connection = await value.request('connections.connect', options)
     expect(connection).toMatchObject({ id: 'connection-1-1', generation: 1 })
@@ -616,6 +616,12 @@ describe('BackendSupervisor results', () => {
     // The budget follows the initial results.memory event in this generation.
     expect(result.budget).toMatchObject({ generation: 1, seq: 2 })
     expect(events.map(event => event.type === 'resultSet.opened' || event.type === 'resultSet.closed' ? [event.type, event.descriptor.generation] : [event.type])).toEqual([['session.opened'], ['resultSet.opened', 1], ['resultSet.closed', 1]])
+    // A remote query (Load into memory) is stamped as a query is: its residence event, its closed set and its summary.
+    const remoteEvents: QueryEvent[] = []
+    const loaded = await value.request('results.remoteQuery', { queryId: crypto.randomUUID(), resultId: 1, generation: 1, kind: 'load' }, { generation: 1, onEvent: event => { remoteEvents.push(event) } })
+    expect(remoteEvents.map(event => 'descriptor' in event ? [event.type, event.descriptor.generation, event.descriptor.revision] : [event.type])).toEqual([['resultSet.residence', 1, 1], ['resultSet.closed', 1, 1]])
+    expect(loaded.resultSets).toEqual([expect.objectContaining({ generation: 1, resultId: 1, residence: 'memory', revision: 1 })])
+    expect(loaded.budget).toMatchObject({ generation: 1 })
     const pages: ArrayBuffer[] = []
     let id = 0
     const params = { resultId: 1, firstRow: 0, maxRows: 10 }

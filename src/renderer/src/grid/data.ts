@@ -13,6 +13,9 @@ const workerStopped = (error: unknown): boolean => (error as { code?: unknown } 
 /** Main refused the read because its results port had too many reads open: a moment later it has room. */
 export const portBusy = (error: unknown): boolean => (error as { code?: unknown } | null)?.code === 'TOO_MANY_REQUESTS'
 
+/** A tile whose rows did not come after its reads were tried again (a windowed result's block rate limited or refused). */
+export const stalledText = 'These rows did not arrive. Retry to read them again.'
+
 /**
  * What a grid has read of its result: tiles of 128 rows × 32 columns in the client's shared window cache, read centre
  * first, at most 4 at a time per grid and 16 per client. A tile the frame no longer wants for 2 frames is aborted. A
@@ -30,8 +33,14 @@ export const portBusy = (error: unknown): boolean => (error as { code?: unknown 
  * A tile is read again only from where its rows end: when its rows' pages do not fit the worker's cache together (large
  * XML or JSON values), the worker answers with the rows it holds, and the tile's next part starts after them at once.
  */
+// Viewer ids name grids across the page; 1 up to 2^31 - 1, then round again (a few hundred grids live at once).
+let viewers = 0
+const nextViewer = (): number => (viewers = viewers % 0x7ffffffe + 1)
+
 export class GridData {
   readonly counters: TileCounters = { hits: 0, misses: 0 }
+  /** This grid as a reader of a windowed BigQuery result (results.read `viewer`): its read-ahead follows this grid alone. */
+  readonly viewer = nextViewer()
   private readonly handle: Pick<ResultHandle, 'getWindow' | 'peekWindow' | 'prefetch'>
   private readonly columns: number
   /** The tiles' size (tiles.ts); 128 rows × 32 columns unless the grid asks for another. */
@@ -61,10 +70,17 @@ export class GridData {
   private readonly shortened = new Set<number>()
   private rows = 0
   private refetches: number[] = []
+  /** Tiles whose reads brought no rows they did not have (a windowed result's block rate limited, refused room, or shorter
+   *  than BigQuery said): each is read again after a doubling wait (its own wake: a complete result sends no more
+   *  events), at once when the frames stop wanting it (scrolled away) or more rows arrive, and after g.stallRetries it is
+   *  marked failed so the grid offers Retry. */
+  private readonly stalls = new Map<number, { count: number; due: number; rows: number }>()
   private settleUntil = 0
   /** Frames in a row that moved more than 3 views. */
   private fastFrames = 0
   private timer: unknown
+  /** When the pending timer fires: an earlier wake replaces it (a stalled tile's long wait must not hold back others). */
+  private timerDue = 0
   private idleFrames = 0
   private prefetched = ''
   private disposed = false
@@ -123,6 +139,7 @@ export class GridData {
   retry(): void {
     this.errors.clear()
     this.retried.clear()
+    this.stalls.clear()
     this.changed()
   }
 
@@ -147,6 +164,7 @@ export class GridData {
     // joins of tiles this frame wants, so browsing on cannot hold more rows than the cache allows (a tile wanted again is
     // joined again from the parts the cache still has).
     for (const key of this.joined.keys()) if (!wanted.has(key)) this.joined.delete(key)
+    for (const key of this.stalls.keys()) if (!wanted.has(key)) this.stalls.delete(key)
     for (const [key, tile] of this.inflight) {
       if (wanted.has(key)) tile.missed = 0
       else if (++tile.missed >= g.abortAfterFrames) { tile.controller.abort(); this.inflight.delete(key) }
@@ -171,10 +189,16 @@ export class GridData {
       if (window) {
         this.counters.hits++
         if (isFrontier(window, rows, this.shape)) {
+          // More rows than when it stalled: read it again at once.
+          const stall = this.stalls.get(key)
+          if (stall && rows > stall.rows) this.stalls.delete(key)
+          else if (stall && now < stall.due) { this.wake(stall.due - now); continue }
           // Rows that arrived since are read at most 10 times a second; rows the worker could not hold with the rest at once.
           const shortened = this.shortened.has(key)
           if (!shortened && !this.refetchAllowed(now)) { this.wake(1000 / g.frontierPerSecond); continue }
-          if (!this.capacity()) continue
+          // Other grids hold the client's reads, and their answers wake only them: look again shortly (a windowed result
+          // answers short often, and sends no more events once complete).
+          if (!this.capacity()) { if (this.inflight.size === 0) this.wake(g.settleMs); continue }
           if (!shortened) this.refetches.push(now)
           this.read(key, window.first + window.count)
           issued++
@@ -255,7 +279,12 @@ export class GridData {
 
   /** Another frame after `ms`: reading resumes once scrolling settles or a refetch is allowed again. */
   private wake(ms: number): void {
-    if (this.timer !== undefined) return
+    const due = this.now() + ms
+    if (this.timer !== undefined) {
+      if (this.timerDue <= due) return
+      this.timers.clearTimeout(this.timer)
+    }
+    this.timerDue = due
     this.timer = this.timers.setTimeout(() => { this.timer = undefined; if (!this.disposed) this.changed() }, ms)
   }
 
@@ -271,12 +300,20 @@ export class GridData {
       this.parts.set(key, starts)
     }
     this.handle.getWindow(from, end - from, {
-      colStart, colEnd: this.colEnd(colStart), maxCellChars: g.maxCellChars, textBudget: g.textBudget, display: false, signal: controller.signal
+      colStart, colEnd: this.colEnd(colStart), maxCellChars: g.maxCellChars, textBudget: g.textBudget, display: false, signal: controller.signal, viewer: this.viewer
     }).then(window => {
       if (this.inflight.get(key) === tile) this.inflight.delete(key)
       this.retried.delete(key)
       // Fewer rows than were there: the worker could not hold them all (a still arriving tile ends at the rows available).
       if (window.count > 0 && window.first + window.count < Math.min(end, this.rows)) this.shortened.add(key)
+      // No rows past where it read from: wait longer before reading it again, then stop.
+      if (window.first + window.count > from) this.stalls.delete(key)
+      else {
+        const count = (this.stalls.get(key)?.count ?? 0) + 1
+        // Past its retries the tile is marked failed, so the grid offers Retry rather than drawing it as loading for good.
+        if (count > g.stallRetries) { this.stalls.delete(key); this.errors.set(key, stalledText) }
+        else this.stalls.set(key, { count, due: this.now() + g.busyRetryMs * 2 ** (count - 1), rows: this.rows })
+      }
       if (!this.disposed) this.changed()
     }, error => {
       if (this.inflight.get(key) === tile) this.inflight.delete(key)

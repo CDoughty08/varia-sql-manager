@@ -261,6 +261,9 @@ internal sealed partial class ActionService : IDisposable
             return Target(args.Target, catalog.ActionOf(args.Dialog));
         }
         if (args.Dialog is null || !catalog.Dialogs.ContainsKey(args.Dialog)) throw Invalid("dialog.");
+        // New Job (AG-6a) describes the SQL Server Agent node: the job document's choices before there is a job.
+        if (args.Dialog == "agentJob" && args.Target is { Kind: "agent" })
+            return args.Target is { Name: null, Database: null, Schema: null, Parent: null, SsisFolder: null, SsisProject: null } ? Target(args.Target, "agentProperties") : throw Invalid("target.");
         // New Login opens on the server: its action makes a login rather than acting on a row.
         if (args.Dialog == "newLogin") return ServerTarget(args.Target);
         // A server action's document (New Database) describes the server it makes something on.
@@ -294,6 +297,10 @@ internal sealed partial class ActionService : IDisposable
         Ids(args.ConnectionId, args.RequestId);
         if (args.Secrets is not null && (script || !SecretActions.Contains(args.Action))) throw Invalid("this request takes no secrets.");
         if (args.Secrets is { } secrets) { Secret(secrets.Password, "password"); Secret(secrets.OldPassword, "oldPassword"); }
+        // The job document's Save (AG-6a) validates itself, before the job verbs, which take every other action on a job.
+        if (ValidateAgentJob(args, script) is { } jobTarget) return jobTarget;
+        // The Log File Viewer's Delete History (AG-5a) is no catalogue action and validates itself.
+        if (ValidateAgentHistory(args, script) is { } historyTarget) return historyTarget;
         // SQL Server Agent's job verbs and service control (AG-2) validate themselves.
         if (ValidateAgent(args, script) is { } agentTarget) return agentTarget;
         // SQL Server Agent Properties (AG-8a) validates itself too.
@@ -472,6 +479,7 @@ internal sealed partial class ActionService : IDisposable
                 "startJobAtStep" => DescribeStartJobAsync(connection, target, job),
                 "deleteObject" when target.Kind == "agentJob" => DescribeAgentJobDeleteAsync(connection, target, job),
                 "agentProperties" => DescribeAgentPropertiesAsync(connection, profile, job),
+                "agentJob" => DescribeAgentJobDocumentAsync(connection, profile, target, job),
                 _ => DescribeJobAsync(connection, args.ConnectionId, profile.Explorer(explorer).ServerEngine, target, action, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error), reading ? "Reading the file" : "Reading the object", own: reading ? OwnGate.Browse : OwnGate.None);
@@ -481,6 +489,7 @@ internal sealed partial class ActionService : IDisposable
     {
         var target = Validate(args, script: true);
         if (args.Action == "createLogin") return ScriptNewLoginAsync(args, token);
+        if (args.Action == "agentJob") return ScriptAgentJobDocument(args, target);
         if (target.Kind == "agentJob") return ScriptAgentJob(args, target);
         if (args.Action == "agentProperties") return ScriptAgentProperties(args);
         // The restores' Script reads nothing: it is written from the request and the catalogue, on no connection and under no gate.
@@ -519,6 +528,7 @@ internal sealed partial class ActionService : IDisposable
             return Task.FromResult(new ActionExecuteResult([], [], 0, Error("NOT_SUPPORTED", ManagedInstanceCloseNote)));
         if (NewLoginEngineRefusal(args) is { } refused) return Task.FromResult(new ActionExecuteResult([], [], 0, refused));
         if (AgentServiceActions.Contains(args.Action)) return ExecuteAgentServiceAsync(args, token);
+        if (args.Action == DeleteJobHistoryAction) return ExecuteAgentHistoryAsync(args, token);
         // Managed Instance refuses sp_set_sqlagent_properties (41905): refused before any connection opens, as the dialog opens read-only there.
         if (args.Action == "agentProperties" && AgentPropertiesRefusal(args) is { } agentRefused) return Task.FromResult(new ActionExecuteResult([], [], 0, agentRefused));
         var progress = new ActionProgress(catalog.IsLong(args.Action) ? events : null, Options.ProgressInterval);
@@ -536,6 +546,7 @@ internal sealed partial class ActionService : IDisposable
                 "detach" => ExecuteDetachJobAsync(connection, args, target, profile.Linux, band, job),
                 "loginProperties" => ExecuteLoginPropertiesJobAsync(connection, args, target, job),
                 "tableProperties" => ExecuteTableJobAsync(connection, args, target, band, job),
+                "agentJob" => ExecuteAgentJobDocumentAsync(connection, args, target, job),
                 _ when target.Kind == "agentJob" => ExecuteAgentJobAsync(connection, args, target, job),
                 "agentProperties" => ExecuteAgentPropertiesAsync(connection, args, job),
                 _ => ExecuteJobAsync(connection, args, target, profile.Explorer(explorer).ServerEngine, band, progress, job)

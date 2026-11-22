@@ -1,5 +1,5 @@
 import type { ResultColumn } from '../../../shared/contracts'
-import { sameName } from '../../../shared/ordinal-casing'
+import { nameKey, sameName } from '../../../shared/ordinal-casing'
 import { isHiddenColumn } from '../grid/hidden-columns'
 
 export { sameName }
@@ -17,7 +17,22 @@ export interface ColumnPairing {
 
 type PairableColumn = Pick<ResultColumn, 'name' | 'wire' | 'role'> & Partial<Pick<ResultColumn, 'dataType'>>
 
-const hidden = (column: PairableColumn) => isHiddenColumn(column)
+interface SameName { first: PairableColumn; wires: Map<PairableColumn['wire'], { indices: number[]; next: number }> }
+
+function indexColumns(columns: readonly PairableColumn[]) {
+  const names = new Map<string, SameName>()
+  const keys = columns.map((column, i) => {
+    if (isHiddenColumn(column)) return undefined
+    const key = nameKey(column.name)
+    let named = names.get(key)
+    if (!named) names.set(key, named = { first: column, wires: new Map() })
+    let wire = named.wires.get(column.wire)
+    if (!wire) named.wires.set(column.wire, wire = { indices: [], next: 0 })
+    wire.indices.push(i)
+    return key
+  })
+  return { names, keys, columns, used: new Array<boolean>(columns.length).fill(false) }
+}
 
 /**
  * The backend's pairing (ResultDiffer.Pairs), copied for the Compare popover: each visible column of the old side, in order,
@@ -25,23 +40,25 @@ const hidden = (column: PairableColumn) => isHiddenColumn(column)
  * pairs. tests/fixtures/compare-pairing/cases.json pins this to the backend's rule; both test suites read it.
  */
 export function pairColumns(old: readonly PairableColumn[], neu: readonly PairableColumn[]): ColumnPairing {
-  const used = new Array<boolean>(neu.length).fill(false)
+  const left = indexColumns(old), right = indexColumns(neu)
   const pairs: [number, number][] = []
-  const paired = new Array<boolean>(old.length).fill(false)
   old.forEach((column, l) => {
-    if (hidden(column)) return
-    const r = neu.findIndex((other, at) => !used[at] && !hidden(other) && sameName(column.name, other.name) && column.wire === other.wire)
-    if (r < 0) return
-    used[r] = true
-    paired[l] = true
+    const key = left.keys[l]
+    const wire = key === undefined ? undefined : right.names.get(key)?.wires.get(column.wire)
+    if (!wire || wire.next === wire.indices.length) return
+    const r = wire.indices[wire.next++]
+    right.used[r] = true
+    left.used[l] = true
     pairs.push([l, r])
   })
-  const unpaired = (columns: readonly PairableColumn[], taken: readonly boolean[], others: readonly PairableColumn[]): UnpairedColumn[] =>
-    columns.flatMap((column, index) => {
-      if (taken[index] || hidden(column)) return []
-      const named = others.filter(item => !hidden(item) && sameName(item.name, column.name))
-      const other = named.find(item => item.wire === column.wire) ?? named[0]
+  const unpaired = (source: typeof left, opposite: typeof right): UnpairedColumn[] =>
+    source.columns.flatMap((column, index) => {
+      const key = source.keys[index]
+      if (source.used[index] || key === undefined) return []
+      const named = opposite.names.get(key)
+      const wire = named?.wires.get(column.wire)
+      const other = wire ? opposite.columns[wire.indices[0]] : named?.first
       return [{ index, name: column.name, dataType: column.dataType ?? '', ...other ? { otherType: other.dataType ?? '' } : {}, ...other?.wire === column.wire ? { repeat: true as const } : {} }]
     })
-  return { pairs, oldOnly: unpaired(old, paired, neu), newOnly: unpaired(neu, used, old) }
+  return { pairs, oldOnly: unpaired(left, right), newOnly: unpaired(right, left) }
 }

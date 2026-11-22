@@ -76,6 +76,9 @@ internal sealed partial class SqlService
             throw new RequestException("INVALID_PARAMS", "A dataset name has only letters, numbers and underscores.");
         if (BigQueryErrors.IsLegacySql(args.Sql)) throw new RequestException("LEGACY_SQL", BigQueryErrors.LegacySql);
         if (args.MaximumBytesBilled is < 1 or > BigQueryLimits.MaxSafeInteger) throw new RequestException("INVALID_PARAMS", "Maximum bytes billed is outside its supported range.");
+        // Checked before any job runs, so a bad setting costs nothing.
+        ResidenceOf(args.Residence);
+        CacheBytesOf(args.WindowCacheMiB);
         // The connection's own cap (Advanced Properties) wins over Tools › Options' default.
         var cap = connection.Options.MaximumBytesBilled ?? args.MaximumBytesBilled;
 
@@ -159,9 +162,21 @@ internal sealed partial class SqlService
                 var set = store.Open(budget!, sets.Count, 1, 1, "rows", childPlan.Columns, childPlan.Wires, lengths: childPlan.Lengths);
                 if (set is null) { first.Dispose(); discarded++; return; }
                 sets.Add(set);
-                events.Opened(set);
                 currentSet = set;
-                await ReadBigQueryRowsAsync(args, connection, project, child.Id, child.Location ?? location, childPlan, first, set, budget!, rows, roomWaited, events, warn, token);
+                BigQueryWindow? window = null;
+                RemoteResult? windowed;
+                // The first page is the reader's only once the residence is decided: a failure or Stop while deciding frees it, and
+                // the set is still announced, so the run's end closes a set the grid heard open.
+                try { windowed = await DecideResidenceAsync(args, connection, project, child.Id, child.Location ?? location, null, true, childPlan, first, set, budget!, messages, value => window = value, token); }
+                catch
+                {
+                    first.Dispose();
+                    events.Opened(set);
+                    throw;
+                }
+                events.Opened(set);
+                if (windowed is null) await ReadBigQueryRowsAsync(args, connection, project, child.Id, child.Location ?? location, childPlan, first, set, budget!, rows, roomWaited, events, warn, token, window, messages);
+                else first.Dispose();
                 set.Complete();
                 events.Closed(set);
                 currentSet = null;
@@ -201,6 +216,7 @@ internal sealed partial class SqlService
             session.StopActive = running.Cancel;
             // This query now owns the tab, so the tab's earlier results are released before any new row is stored.
             budget = store.BeginQuery(args.SessionId);
+            budget.Executing = true;
             if (session.Tail is { } tail)
             {
                 // The session's last job (stopped, or cut off by the network) must reach DONE first; Stop cancels it.
@@ -355,17 +371,30 @@ internal sealed partial class SqlService
                         else
                         {
                             sets.Add(currentSet);
-                            events.Opened(currentSet);
-                            // Large results that did not arrive whole are read through Storage Read; the rest, and every fallback, through REST.
-                            var readSession = await BigQueryStorageSessionAsync(args, connection, project, jobId, location, plan, page, messages, token);
-                            // The reader owns the page from here.
-                            var reading = page;
-                            page = null;
-                            if (readSession is null) await ReadBigQueryRowsAsync(args, connection, project, jobId, location, plan, reading, currentSet, budget, totalRows, roomWaited, events, warn, token);
-                            else
+                            // In memory or windowed, decided from the first page before the set is announced.
+                            BigQueryWindow? window = null;
+                            RemoteResult? windowed;
+                            // Announced even when deciding fails or is stopped, so the run's end closes a set the grid heard open.
+                            try { windowed = await DecideResidenceAsync(args, connection, project, jobId, location, finished, false, plan, page, currentSet, budget, messages, value => window = value, token); }
+                            catch
                             {
-                                reading.Dispose();
-                                await ReadBigQueryArrowAsync(args, readSession, currentSet, budget, totalRows, roomWaited, events, warn, token);
+                                events.Opened(currentSet);
+                                throw;
+                            }
+                            events.Opened(currentSet);
+                            if (windowed is null)
+                            {
+                                // Large results that did not arrive whole are read through Storage Read; the rest, and every fallback, through REST.
+                                var readSession = await BigQueryStorageSessionAsync(args, connection, project, jobId, location, plan, page, messages, token);
+                                // The reader owns the page from here.
+                                var reading = page;
+                                page = null;
+                                if (readSession is null) await ReadBigQueryRowsAsync(args, connection, project, jobId, location, plan, reading, currentSet, budget, totalRows, roomWaited, events, warn, token, window, messages);
+                                else
+                                {
+                                    reading.Dispose();
+                                    await ReadBigQueryArrowAsync(args, readSession, currentSet, budget, totalRows, roomWaited, events, warn, token, window, messages);
+                                }
                             }
                             currentSet.Complete();
                             events.Closed(currentSet);
@@ -438,6 +467,8 @@ internal sealed partial class SqlService
                 set.Complete();
                 events.Closed(set);
             }
+            // Its sets are final now: Load into memory may take one.
+            if (budget is not null) budget.Executing = false;
             if (queued)
             {
                 session.StopActive = null;
@@ -505,7 +536,8 @@ internal sealed partial class SqlService
     /// row limit, the budget). Rows not read then are counted from BigQuery's total, as SQL Server's reader counts the rows
     /// it reads past. Each page's bytes are charged to the query's budget while its rows are decoded (one page at a time).</summary>
     private async Task ReadBigQueryRowsAsync(QueryArgs args, BigQueryConnection connection, string project, string jobId, string? location, BigQueryColumnPlan plan,
-        BigQueryPage first, ResultSetBuffer set, QueryBudget budget, long totalRows, RoomWaited roomWaited, QueryEventSink events, Action<string> warn, CancellationToken token)
+        BigQueryPage first, ResultSetBuffer set, QueryBudget budget, long totalRows, RoomWaited roomWaited, QueryEventSink events, Action<string> warn, CancellationToken token,
+        BigQueryWindow? window = null, QueryMessages? messages = null)
     {
         var page = first;
         long counted = 0;
@@ -516,10 +548,16 @@ internal sealed partial class SqlService
             while (true)
             {
                 var charge = page.Cost(plan.Columns.Count);
+                // Under Maximum rows only the rows the set will still store are decoded: the page's share for them is charged,
+                // so a small capped result is not refused (or switched to windowed) for a page mostly read past.
+                if (args.MaxRows > 0 && page.RowCount > 0 && args.MaxRows - storedRows < page.RowCount)
+                    charge = (long)Math.Ceiling((double)charge * Math.Max(0, args.MaxRows - storedRows) / page.RowCount);
                 if (!store.TryReserve(budget, charge, true, out var refusal))
                 {
                     // The page does not fit beside the rows already stored, so neither would its rows.
                     charge = 0;
+                    // An Automatic read switches to windowed instead (docs/bigquery.md, Residence: Misestimate).
+                    if (window is not null && SwitchesOn(set, refusal) && SwitchToWindowed(set, window, events, messages!, refusal)) return;
                     set.Skip(refusal);
                     budget.Stop(refusal);
                     storing = false;
@@ -548,6 +586,8 @@ internal sealed partial class SqlService
                 }
                 finally { store.Return(budget, charge); }
                 events.RowsChanged();
+                // A row the budget refused in an Automatic read: the set switches to windowed rather than truncating.
+                if (!storing && Switches(set, window) && SwitchToWindowed(set, window!, events, messages!)) return;
                 // The rows so far become readable while the next page loads.
                 if (set.HasPendingRows)
                 {
@@ -559,7 +599,10 @@ internal sealed partial class SqlService
                 // A limit reached on a page's last row stops here, not one page later.
                 if (storing && args.MaxRows > 0 && storedRows >= args.MaxRows && next is not null) { set.Skip(TruncationReason.RowLimit); storing = false; }
                 if (next is null || !storing) break;
-                page = await bigQuery.QueryResultsAsync(connection, project, jobId, location, next, BigQueryPageRows(plan.Columns.Count), 0, token);
+                // No more rows than Maximum rows still lets the set store (the rows past it are counted from BigQuery's total).
+                var pageRows = BigQueryPageRows(plan.Columns.Count);
+                if (args.MaxRows > 0) pageRows = (int)Math.Max(1, Math.Min(pageRows, args.MaxRows - storedRows));
+                page = await bigQuery.QueryResultsAsync(connection, project, jobId, location, next, pageRows, 0, token);
             }
         }
         finally { page.Dispose(); }

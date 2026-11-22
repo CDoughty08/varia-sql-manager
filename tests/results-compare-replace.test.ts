@@ -3,7 +3,7 @@ import type { DiffLayout, ResultColumn, ResultsJobProgress, VariaApi } from '../
 import { EventBus } from '../src/renderer/src/core/events'
 import type { GridSelection } from '../src/renderer/src/grid/selection'
 import { comparisonTabLabel } from '../src/renderer/src/grid/result-picker'
-import { CompareService, fallbackText, layoutFor, publishText } from '../src/renderer/src/results/CompareService'
+import { CompareService, comparisonNotices, fallbackText, layoutFor, publishText } from '../src/renderer/src/results/CompareService'
 import { DerivedJobs } from '../src/renderer/src/results/derived-jobs'
 import { HighlightsService, highlightText } from '../src/renderer/src/results/HighlightsService'
 import type { ResultHandle } from '../src/renderer/src/results/ResultClient'
@@ -76,13 +76,13 @@ describe('a comparison changed in place', () => {
     await settle()
     expect(made).toEqual({ key: slot().key })
     // A first comparison takes the layout setting: one row per entry, with each pair's previous value.
-    expect(handle(keys[0]).diff).toHaveBeenLastCalledWith(handle(keys[1]), { exact: false, layout: 'entry', signal: expect.any(AbortSignal), onProgress: expect.any(Function) })
+    expect(handle(keys[0]).diff).toHaveBeenLastCalledWith(handle(keys[1]), { exact: false, layout: 'entry', context: -1, signal: expect.any(AbortSignal), onProgress: expect.any(Function) })
     expect(info()).toMatchObject({ layout: 'entry', pairs: 2, exact: false })
     expect(compare.getSnapshot().announcements.get(slot().key)?.text).toBe('Comparison ready: matched by Id, 1 changed, 1 added, 0 removed.')
     const before = slot(), sets = tab().sets.length
     await compare.replace('t1', before.key, { layout: 'unified' })
     await settle()
-    expect(handle(keys[0]).diff).toHaveBeenLastCalledWith(handle(keys[1]), { exact: false, layout: 'unified', replaces: before.entry.handle, signal: expect.any(AbortSignal), onProgress: expect.any(Function) })
+    expect(handle(keys[0]).diff).toHaveBeenLastCalledWith(handle(keys[1]), { exact: false, layout: 'unified', context: -1, replaces: before.entry.handle, signal: expect.any(AbortSignal), onProgress: expect.any(Function) })
     // The same entry, number, place and name; another result, the old one released once the new one was shown.
     expect(slot()).toMatchObject({ key: before.key, entry: { number: before.entry.number, label: before.entry.label } })
     expect(slot().entry.descriptor.resultId).not.toBe(before.entry.descriptor.resultId)
@@ -346,8 +346,9 @@ describe('a comparison changed in place', () => {
     expect(layoutFor('entry', wire.diff.maxEntryPairs)).toEqual({ layout: 'entry', fallback: false })
     expect(layoutFor('entry', wire.diff.maxEntryPairs + 1)).toEqual({ layout: 'unified', fallback: true })
     expect(layoutFor('unified', wire.diff.maxEntryPairs + 1)).toEqual({ layout: 'unified', fallback: false })
-    const info = { left: 'e1', right: 'e2', leftNumber: 1, rightNumber: 2, match: { mode: 'auto' as const, columns: ['Id'] }, layout: 'unified' as const, fallback: true as const, pairs: 3000, columnChanges: [], exact: false, same: 1, changed: 2, added: 0, removed: 1, soft: 0, leftOnly: [], rightOnly: [], approximate: false }
-    expect(publishText(info, false)).toBe(`Comparison ready: matched by Id, 2 changed, 0 added, 1 removed. ${fallbackText}`)
+    const info = { left: 'e1', right: 'e2', leftNumber: 1, rightNumber: 2, match: { mode: 'auto' as const, columns: ['Id'] }, layout: 'unified' as const, fallback: true as const, pairs: 3000, columnChanges: [], exact: false, same: 1, changed: 2, added: 0, removed: 1, soft: 0, leftOnly: [], rightOnly: [], approximate: false, repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, trailingHidden: 0, leftRows: 4, rightRows: 4 }
+    expect(comparisonNotices(info).map(notice => notice.text)).toEqual([fallbackText])
+    expect(publishText(info, false, comparisonNotices(info).map(notice => notice.text))).toBe(`Comparison ready: matched by Id, 2 changed, 0 added, 1 removed. ${fallbackText}`)
   })
 })
 

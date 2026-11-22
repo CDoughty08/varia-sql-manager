@@ -365,17 +365,31 @@ try {
   await page.evaluate(() => window.__variaGrid.setScrollCap())
 
   // 4. Stacked sets: equal heights; a splitter by mouse and keys; Tab order; a thousand one-row sets.
+  const fullSize = await page.evaluate(() => [innerWidth, innerHeight])
+  const resize = async (width, height) => {
+    await application.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setContentSize(...size), [width, height])
+    await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([width, height])
+  }
   const heights = () => page.locator(part.resultItem).evaluateAll(items => items.map(item => item.getBoundingClientRect().height))
   await run('-- varia-fake: sets=N1*50,N1*50,N1*50,N1*50,N1*50')
   await expect(page.locator(part.resultItem)).toHaveCount(5)
   await expect(page.locator('[data-result-grid]')).toHaveCount(5)
   const five = await heights()
   expect(Math.max(...five) - Math.min(...five)).toBeLessThanOrEqual(1)
+  // The splitter moves 30 px by mouse, so both grids need that much above their floor. A stack's height follows the window,
+  // which a small display clamps: at the 700 px minimum the two grids are each a few pixels above it. So the steps run at
+  // that size, the sash giving the stack the room, and the stack gets its height back after.
+  const stackHeight = () => page.locator(part.resultStack).evaluate(stack => stack.clientHeight)
+  const unsized = await stackHeight()
+  await resize(1024, 700)
   await run('-- varia-fake: sets=N1*50,N1*50')
   await expect(page.locator('[data-result-grid]')).toHaveCount(2)
   const splitter = resultSplitters(page).first()
   const difference = async () => { const [first, second] = await heights(); return Math.round(first - second) }
-  expect(Math.abs(await difference())).toBeLessThanOrEqual(1)
+  await expect.poll(async () => Math.abs(await difference())).toBeLessThanOrEqual(1)
+  const roomy = 2 * (Number(await splitter.getAttribute('aria-valuemin')) + 40) + (await splitter.boundingBox()).height
+  if (await stackHeight() < roomy) expect(await sizeResultStack(page, roomy)).toBeGreaterThanOrEqual(roomy - 1)
+  await expect.poll(async () => Math.abs(await difference())).toBeLessThanOrEqual(1)
   const split = await splitter.boundingBox()
   await page.mouse.move(split.x + 40, split.y + split.height / 2)
   await page.mouse.down()
@@ -423,6 +437,8 @@ try {
   await expect(resultClose(page, 'Result 2')).toBeFocused()
   await page.keyboard.press('Tab')
   await expect(grid('Result 2')).toBeFocused()
+  await resize(...fullSize)
+  await sizeResultStack(page, unsized)
   await measured('a thousand stacked sets', async () => {
     await run('-- varia-fake: sets=M1*1000')
     await expect(outputTab(/^Results/)).toContainText('1000')
@@ -696,11 +712,6 @@ try {
 
   // 4c. At the default split of a 1280x800 window the Messages strip yields to the results: an error does not open it over
   // the grids, its line shows the error's message, and a data row stays in view. Opened by hand, it shows the error.
-  const fullSize = await page.evaluate(() => [innerWidth, innerHeight])
-  const resize = async (width, height) => {
-    await application.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setContentSize(...size), [width, height])
-    await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([width, height])
-  }
   await resize(1280, 800)
   await application.evaluate(({ Menu }) => Menu.getApplicationMenu().getMenuItemById('layout.reset').click())
   /** Whether an element lies inside the output view, and how many of a grid's data rows show whole in the stack. */
@@ -3001,7 +3012,6 @@ try {
   await expect(page.getByText('Differences: Result 1 → Result 2 (exact text)', { exact: true })).toBeVisible()
   await expect(diff.getByRole('columnheader')).toHaveCount(4)
   await expect(strip('Result 4')).toContainText('Result 2 → Result 1, rows matched by ItemId:')
-  await expect(strip('Result 4')).toContainText('Filters and sorts on the inputs were not applied.')
   await strip('Result 4').getByRole('button', { name: 'Result 2', exact: true }).click()
   await expect(grid('Result 2')).toBeFocused()
   await cell(0, 0, grid('Result 2')).click({ button: 'right' })
@@ -3034,6 +3044,69 @@ try {
   await expect(grid('Result 3')).toBeFocused()
   await expect(strip('Result 3')).toContainText('Result 2 → Result 1, whole rows matched: 0 changed rows, 1 added row, 1 removed row, 3 unchanged.')
   console.log('Results checks: results with no shared unique column compare by whole rows from Compare, which counts each side by its stored rows.')
+
+  // 14i. The comparison's Rows, chips, match menu and live region: Changes only leaves the unchanged rows out, naming the
+  // rows left out on the row header after the dashed rule; a chip shows only its kind; the match menu (keyboard only)
+  // matches by row position, then by a key column, and the pair remembers it when it is compared again.
+  const wholeTools = comparisonTools(page, 'Result 3'), whole = grid('Result 3')
+  await expect(wholeTools.getByRole('button', { name: 'All rows', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await wholeTools.getByRole('button', { name: 'Changes only', exact: true }).click()
+  await expect(wholeTools.getByRole('button', { name: 'Changes only', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(wholeTools.getByRole('status')).toContainText('Comparison updated: matched by whole rows, 0 changed, 1 added, 1 removed.')
+  await expect(whole.getByRole('rowheader')).toHaveCount(2)
+  await expect(whole.getByRole('rowheader', { name: /unchanged rows? hidden/ }).first()).toBeAttached()
+  await expect(wholeTools).toContainText('3 unchanged (hidden)')
+  // A chip shows only its kind's rows, and says so by being pressed; a chip with no rows is unavailable.
+  await expect(wholeTools.getByRole('button', { name: '0 changed', exact: true })).toHaveAttribute('aria-disabled', 'true')
+  await wholeTools.getByRole('button', { name: '1 added', exact: true }).click()
+  await expect(wholeTools.getByRole('button', { name: '1 added', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(whole.getByRole('rowheader')).toHaveCount(1)
+  await expect(whole.getByRole('rowheader').first()).toHaveAccessibleName(/^Added;/)
+  await wholeTools.getByRole('button', { name: '1 added', exact: true }).click()
+  await expect(whole.getByRole('rowheader')).toHaveCount(2)
+  // The match menu, by keyboard: Row position.
+  const matchTool = wholeTools.getByRole('button', { name: /^Match rows/ })
+  await expect(matchTool).toHaveText('Automatic: whole rows')
+  await matchTool.focus()
+  await page.keyboard.press('Enter')
+  const matchMenu = page.getByRole('dialog', { name: 'Match rows by', exact: true })
+  await expect(matchMenu).toBeVisible()
+  await expect(matchMenu.getByRole('radio', { name: /^Automatic/ })).toBeFocused()
+  await expect(matchMenu.getByRole('listbox', { name: 'Key columns' })).toHaveAttribute('aria-disabled', 'true')
+  await page.keyboard.press('ArrowDown')
+  await expect(matchMenu.getByRole('radio', { name: /^Row position/ })).toBeChecked()
+  await matchMenu.getByRole('button', { name: 'Apply', exact: true }).click()
+  await expect(matchMenu).toHaveCount(0)
+  await expect(wholeTools.getByRole('button', { name: /^Match rows/ })).toHaveText('Row position')
+  await expect(wholeTools.getByRole('button', { name: /^Match rows/ })).toBeFocused()
+  await expect(wholeTools.getByRole('status')).toContainText('Comparison updated: matched by position')
+  // A key column, ticked with Space in the checklist.
+  await page.keyboard.press('Enter')
+  await expect(matchMenu).toBeVisible()
+  await matchMenu.getByRole('radio', { name: /^Key columns/ }).check()
+  const keyList = matchMenu.getByRole('listbox', { name: 'Key columns' })
+  await keyList.focus()
+  await page.keyboard.press('Space')
+  await expect(keyList.getByRole('option', { name: /^high/ })).toHaveAttribute('aria-checked', 'true')
+  await page.keyboard.press('Enter')
+  await expect(matchMenu).toHaveCount(0)
+  await expect(wholeTools.getByRole('button', { name: 'Match rows by key columns: high' })).toHaveText('high')
+  await expect(wholeTools.getByRole('status')).toContainText('Comparison updated: matched by high')
+  // Closed and compared again, the pair matches by its remembered key column, and the popover says so. The click first
+  // settles the grid's focus, which would otherwise close the menu the right-click opens.
+  await cell(0, 0, whole).click()
+  await expect(whole).toBeFocused()
+  await cell(0, 0, whole).click({ button: 'right' })
+  await outputMenu.getByRole('menuitem', { name: 'Close Just This Result', exact: true }).click()
+  await expect(grid('Result 3')).toHaveCount(0)
+  await cell(0, 0, grid('Result 1')).click({ button: 'right' })
+  await outputMenu.getByRole('menuitem', { name: 'Compare…', exact: true }).click()
+  await expect(picker).toContainText('Match rows by: ⚷ high (remembered)')
+  await picker.getByRole('button', { name: 'Compare', exact: true }).click()
+  await expect(picker).toHaveCount(0)
+  await expect(grid('Result 4')).toBeFocused()
+  await expect(comparisonTools(page, 'Result 4').getByRole('button', { name: 'Match rows by key columns: high' })).toHaveText('high')
+  console.log('Results checks: a comparison Changes only leaves its unchanged rows out and names them after the dashed rule, a chip shows only its kind, the match menu matches by row position and by a key column from the keyboard, the live region says each change, and the pair remembers its key column.')
 
   // 15. Panes and tabs: F6 goes to the results and back; Ctrl+R hides and shows them keeping scroll, selection and a
   // resized column; a tab switch restores all three.

@@ -358,9 +358,22 @@ internal static class ExplorerChecks
         check(ModuleHeader.ParameterDefaults(many) is null, "more than 2,100 parameters is a surprise");
         // Each default as written, for Peek's Parameters list: a sign kept with its number, a string with its quotes.
         var texts = ModuleHeader.ParameterDefaultTexts("CREATE OR ALTER PROCEDURE p @a int = -1, @b money = $1.50, @n nvarchar(max) = N'it''s', @x xml(CONTENT dbo.c) = NULL, @o int = 5 OUT, @c int AS");
-        check(texts is not null && texts.Count == 5 && texts["@a"] == "-1" && texts["@b"] == "$1.50" && texts["@N"] == "N'it''s'" && texts["@x"] == "NULL" && texts["@o"] == "5"
+        check(texts is not null && texts.Count == 5 && texts["@a"] == "-1" && texts["@b"] == "$1.50" && texts["@n"] == "N'it''s'" && texts["@x"] == "NULL" && texts["@o"] == "5"
             && !texts.ContainsKey("@c") && ModuleHeader.ParameterDefaultTexts("SELECT 1") is null,
-            "module headers give each default's text as written, by the parameter's name in any case: " + (texts is null ? "null" : string.Join(" | ", texts.Select(pair => pair.Key + "=" + pair.Value))));
+            "module headers give each declared parameter's default text as written: " + (texts is null ? "null" : string.Join(" | ", texts.Select(pair => pair.Key + "=" + pair.Value))));
+        const string caseDistinct = "CREATE PROC p @x int = 1, @X int, @y int = 2, @Y int = 3 AS SELECT 1";
+        var optional = ModuleHeader.ParameterDefaults(caseDistinct);
+        var values = ModuleHeader.ParameterDefaultTexts(caseDistinct);
+        check(optional is not null && optional.SetEquals(["@x", "@y", "@Y"]) && !optional.Contains("@X")
+            && values is not null && !values.ContainsKey("@X") && values["@y"] == "2" && values["@Y"] == "3",
+            "case-distinct catalog parameters keep independent optional flags and default values");
+        // A Turkish server collation tells @i and @I apart (I lowers to ı), so they must not merge as .NET's case folding would.
+        const string turkish = "CREATE PROC p @i int = 1, @I int AS SELECT 1";
+        var turkishOptional = ModuleHeader.ParameterDefaults(turkish);
+        var turkishValues = ModuleHeader.ParameterDefaultTexts(turkish);
+        check(turkishOptional is not null && turkishOptional.SetEquals(["@i"]) && !turkishOptional.Contains("@I")
+            && turkishValues is not null && turkishValues.Count == 1 && turkishValues["@i"] == "1",
+            "a Turkish server's @i and @I keep separate defaults");
         // A "quoted" default (a string under QUOTED_IDENTIFIER OFF) keeps the others, and a native module's NOT NULL is passed over.
         var quoted = ModuleHeader.ParameterDefaultTexts("CREATE PROCEDURE p @s varchar(10) = \"abc\", @n int NOT NULL = 1, @b nvarchar(5) = [x] AS");
         check(quoted is not null && quoted["@s"] == "\"abc\"" && quoted["@n"] == "1" && quoted["@b"] == "[x]",

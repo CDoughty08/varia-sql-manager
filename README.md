@@ -103,7 +103,7 @@ release record; see [cutting a release](docs/release-notes.md#cutting-a-release)
 
 An Electron + React + Monaco + Dockview front end talks to a .NET sidecar (Microsoft.Data.SqlClient and SMO) over a
 length-prefixed MessagePack protocol on stdio. The renderer is sandboxed and untrusted; it reaches the system only
-through a small preload API that main verifies, and query results stay in backend memory under a budget with explicit truncation, never on disk.
+through a small preload API that main verifies, and query results stay in backend memory under a budget with explicit truncation, never on disk (a windowed BigQuery result keeps only a budgeted block cache and reads the rest from BigQuery).
 
 - [Architecture invariants](docs/architecture.md)
 - [IPC protocol](docs/ipc.md)

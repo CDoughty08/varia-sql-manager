@@ -15,14 +15,14 @@ const rows = (entry: string, top: number, bottom: number): GridSelection => ({
   entry, blocks: [{ kind: 'rows', anchor: { row: top, column: 0 }, focus: { row: bottom, column: 0 } }], active: { row: top, column: 0 }
 })
 
-function fixture() {
+function fixture(o: { frame?: (callback: () => void) => void } = {}) {
   const client = fakeResultClient(), events = new EventBus(), timers = manualTimers()
   const progress = new Set<(value: ResultsJobProgress) => void>()
   const api = {
     copyResults: vi.fn<VariaApi['copyResults']>(), saveResults: vi.fn<VariaApi['saveResults']>(), cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(),
     onResultsJob: vi.fn<VariaApi['onResultsJob']>(listener => { progress.add(listener); return () => { progress.delete(listener) } })
   }
-  const results = new ResultsService({ client, api, events, frame: callback => callback(), timers: timers.timers, newId: () => crypto.randomUUID() })
+  const results = new ResultsService({ client, api, events, frame: o.frame ?? (callback => callback()), timers: timers.timers, newId: () => crypto.randomUUID() })
   const highlights = new HighlightsService(results, { timers: timers.timers })
   /** Runs the tab's query once more: its one set is result `resultId`, of `count` complete rows. */
   const run = (resultId: number, count = 10, queryId = `q${resultId}`) => {
@@ -44,6 +44,48 @@ describe('highlights', () => {
     expect(colorAt(undefined, 2)).toBe(0)
     expect(mergeRows([[5, 7], [0, 1], [2, 3], [6, 9], [12, 12]])).toEqual([[0, 3], [5, 9], [12, 12]])
     expect(highlightColors).toEqual(['yellow', 'green', 'blue', 'purple', 'red'])
+  })
+
+  it('says when the rows cannot be told apart, and tries again on the next highlight (a windowed result loaded meanwhile)', async () => {
+    const { results, highlights, run, shown } = fixture()
+    const handle = run(1)
+    const notify = vi.spyOn(results, 'notify')
+    vi.mocked(handle.identify).mockRejectedValueOnce(new Error('This result is windowed in BigQuery.'))
+    results.setSelection('t1', keyAt(results, 't1', 0), rows(keyAt(results, 't1', 0), 2, 3))
+    await highlights.highlight('t1', keyAt(results, 't1', 0), 1)
+    await settle()
+    expect(notify).toHaveBeenCalledWith('t1', 'Could not find the highlighted rows: This result is windowed in BigQuery.')
+    await highlights.highlight('t1', keyAt(results, 't1', 0), 1)
+    await settle()
+    expect(handle.identify).toHaveBeenCalledTimes(2)
+    expect(shown()).toMatchObject({ count: 2, found: 2 })
+  })
+
+  it('asks a result that cannot tell its rows apart once per highlight, not again on every publish (a windowed re-run)', async () => {
+    // Publishing on a later turn, as the workbench's animation frame does.
+    const { client, results, highlights, run } = fixture({ frame: callback => { void Promise.resolve().then(callback) } })
+    run(1)
+    await settle()
+    results.setSelection('t1', keyAt(results, 't1', 0), rows(keyAt(results, 't1', 0), 2, 3))
+    await highlights.highlight('t1', keyAt(results, 't1', 0), 1)
+    await settle()
+    const notify = vi.spyOn(results, 'notify')
+    // The next run's result is windowed: it refuses identities every time.
+    const open = client.open.getMockImplementation()!
+    client.open.mockImplementationOnce(value => {
+      const handle = open(value) as FakeHandle
+      vi.mocked(handle.identify).mockRejectedValue(new Error('This result is windowed in BigQuery.'))
+      return handle
+    })
+    const next = run(2)
+    for (let i = 0; i < 20; i++) await settle()
+    expect(next.identify).toHaveBeenCalledTimes(1)
+    expect(notify).toHaveBeenCalledTimes(1)
+    // A highlight asks again.
+    results.setSelection('t1', keyAt(results, 't1', 0), rows(keyAt(results, 't1', 0), 2, 3))
+    await highlights.highlight('t1', keyAt(results, 't1', 0), 1)
+    for (let i = 0; i < 20; i++) await settle()
+    expect(next.identify).toHaveBeenCalledTimes(2)
   })
 
   it('tells the rows apart on the first highlight, colours the selected rows, and turns a colour off when every row has it', async () => {

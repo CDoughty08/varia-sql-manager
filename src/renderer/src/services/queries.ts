@@ -236,7 +236,9 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       // BigQuery: Options' cap goes with every job when the connection sets none (the backend prefers the connection's),
       // and Bytes only leaves the dollars out of Messages.
       ...connection.providerId === 'bigquery' && settings['queryExecution.bigQuery.maximumBytesBilled'] > 0 ? { maximumBytesBilled: settings['queryExecution.bigQuery.maximumBytesBilled'] * 2 ** 30 } : {},
-      ...connection.providerId === 'bigquery' && settings['queryExecution.bigQuery.showCost'] === 'bytes' ? { prices: false } : {}
+      ...connection.providerId === 'bigquery' && settings['queryExecution.bigQuery.showCost'] === 'bytes' ? { prices: false } : {},
+      // BigQuery: where results live and each windowed result's block cache (docs/bigquery.md, Residence); SQL Server refuses both.
+      ...connection.providerId === 'bigquery' ? { residence: settings['queryResults.bigQuery.residence'], windowCacheMiB: settings['queryResults.bigQuery.windowCacheMiB'] } : {}
     }
   }
   private planContext(tabId: string, executionId: string, sql: string, startLine: number, startedAt: number, estimateMode?: EstimatedPlanMode, sqlScope?: 'document' | 'selection'): PlanExecutionContext {
