@@ -116,7 +116,7 @@ describe('session prompts', () => {
     expect(prompt.buttons.map(button => `${button.label}=${button.answer}`)).toEqual(['Switch=proceed', "Don't Switch=cancel"])
     expect(prompt.buttons[prompt.cancelId].answer).toBe('cancel')
     // A job running in the session is asked about next, and leaving it running keeps the session.
-    expect(prompt.detail).toContain('leaving it running keeps that session open')
+    expect(prompt.detail).toContain('leaving it running keeps the job's session open')
     // The request carries the location only for a switch, with one query, which need not have anything open.
     const valid = { action: 'switchLocation', tabs: [{ name: 'q.sql', transactions: 0, running: false, provider: 'bigquery' }], location }
     expect(sessionPromptRequestSchema.parse(valid)).toEqual(valid)

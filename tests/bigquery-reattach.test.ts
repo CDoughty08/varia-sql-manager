@@ -164,6 +164,20 @@ describe('a run after Leave it running', () => {
     expect(f.queryApi.confirmSessions.mock.calls[0][0].tabs[0].job).toMatchObject({ detached: true })
     await expect(f.queries.holdsJob(f.tab.id)).resolves.toBe(false)
   })
+  it('leaves a job held after a failed run to the backend when Cancel the job ends its session', async () => {
+    const cancelRestoredJobs = vi.fn<VariaApi['cancelRestoredJobs']>(async () => ({ ok: true, value: { jobs: [], uncancellable: [] } }))
+    const f = fixture(), pending = deferred<ApiResult<QueryResult>>()
+    Object.assign(f.queryApi, { cancelRestoredJobs, dropJobRecords: vi.fn(async () => ({ ok: true, value: undefined })) })
+    f.queryApi.execute.mockReturnValueOnce(pending.promise)
+    const run = f.queries.execute(f.tab.id)
+    await settle()
+    f.job({ jobId: 'job_2', location: 'US', state: 'running' })
+    pending.resolve({ ok: true, value: output({ status: 'failed', error: { code: 'QUOTA', message: 'Rate limited.', batchNumber: 1, iteration: 1 } }) })
+    await run; await settle()
+    f.queries.sessionClosed(f.tab.id, 'cancelJob')
+    await settle()
+    expect(cancelRestoredJobs).not.toHaveBeenCalled()
+  })
 })
 
 describe('re-attaching restored tabs', () => {

@@ -259,7 +259,7 @@ function locationPrompt(tab: SessionTab, { dataset, from, to }: SessionLocationS
   return {
     title: `Switch this tab to ${to}?`,
     message: `${dataset} is in ${to}; the BigQuery session of ${tab.name} is in ${from}.`,
-    detail: `Switching ends the tab's session: its temp tables, variables and any open transaction are lost. If a BigQuery job still runs in it, the job is asked about next (or handled as Remember my choice set it), and leaving it running keeps that session open. The next Execute starts a session in ${to}.`,
+    detail: `Switching ends the tab's session: its temp tables, variables and any open transaction are lost. If a BigQuery job still runs in it, the job is asked about next (or handled as Remember my choice set it), and leaving it running keeps the job's session open. The next Execute starts a session in ${to}.`,
     defaultId: 0, cancelId: 1,
     buttons: [{ label: 'Switch', answer: 'proceed' }, { label: "Don't Switch", answer: 'cancel' }]
   }

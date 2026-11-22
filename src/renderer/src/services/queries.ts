@@ -102,9 +102,9 @@ export function heldAfter(attach: TabJob | undefined, held: readonly TabJob[] = 
   return [...held]
 }
 const jobList = (ids: readonly string[]) => ids.length === 1 ? `BigQuery job ${ids[0]} is` : `BigQuery jobs ${ids.join(', ')} are`
+/** A run that failed while its job still ran: the session holds the job. */
+export const jobHeldAfterFailure = (ids: readonly string[]) => `${jobList(ids)} still running in BigQuery and ${ids.length === 1 ? 'holds' : 'hold'} this tab's BigQuery session: the next query waits for ${ids.length === 1 ? 'it' : 'them'}, and closing the tab asks whether to cancel ${ids.length === 1 ? 'it' : 'them'} or leave ${ids.length === 1 ? 'it' : 'them'} running (unless a choice is remembered).`
 /** A run whose backend or connection was lost while its job ran: the job carries on in BigQuery. */
- /** A run that failed while its job still ran: the session holds the job. */
-export const jobHeldAfterFailure = (ids: readonly string[]) => `${jobList(ids)} still running in BigQuery and ${ids.length === 1 ? 'holds' : 'hold'} this tab's BigQuery session: the next query waits for ${ids.length === 1 ? 'it' : 'them'}, and closing the tab asks whether to cancel ${ids.length === 1 ? 'it' : 'them'} or leave ${ids.length === 1 ? 'it' : 'them'} running.`
 export const jobStillRunning = (ids: readonly string[]) => `${jobList(ids)} still running in BigQuery. Varia re-attaches to ${ids.length === 1 ? 'it' : 'them'} once this query's connection is back.`
 /** A restored tab that is not connected: its job from the last session runs on unseen otherwise. */
 export const restoredJobRunning = (ids: readonly string[]) => `${ids.length === 1 ? `BigQuery job ${ids[0]} from the last session is` : `BigQuery jobs ${ids.join(', ')} from the last session are`} still running in BigQuery. The tab re-attaches once it is connected.`
@@ -317,7 +317,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     // request's. A restored detached job whose re-attach failed is in no session here: main cancels it too.
     const connected = this.connected(tabId), connectionId = this.documents.get(tabId)?.connectionId, connection = connectionId ? this.getConnection(connectionId) : undefined
     const here = this.detachedHere.get(tabId)
-    const sessionOwn = (job: TabJob) => connected && !!connection && job.detached && !!here?.has(this.attachKey(job, connection))
+    const heldHere = this.heldHere.get(tabId)
+    const sessionOwn = (job: TabJob) => connected && !!connection && !!(job.detached ? here : heldHere)?.has(this.attachKey(job, connection))
     const targets = (state?.jobs ?? []).filter(job => job.state === 'running' && job.jobId !== state?.running?.jobId && !sessionOwn(job)).map(job => job.jobId)
     if (entry === 'cancelJob' && targets.length && key && this.api.cancelRestoredJobs) {
       const cancelling = this.cancelRestored(name, key, targets)
