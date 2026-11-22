@@ -63,6 +63,8 @@ internal static partial class BigQueryExecutionChecks
         await LoadWhileRunningAsync(check);
         Trace("ForkedPlans");
         ForkedPlans(check);
+        Trace("RemoteViews");
+        await RemoteViewsAsync(check);
     }
 
     /// <summary>Forks of one column plan decode side by side exactly as one plan decodes alone (block fetches run in parallel).</summary>

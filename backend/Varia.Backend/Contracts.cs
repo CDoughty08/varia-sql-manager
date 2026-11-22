@@ -155,8 +155,19 @@ internal sealed record SessionState(int TransactionCount, bool Checked);
 internal sealed record ResultsReadArgs(uint ResultId, long FirstRow, int MaxRows, uint? ViewId = null, uint? Viewer = null);
 internal sealed record ResultsReadResult(long NextRow, long RowsAvailable, bool Complete, int Pages, int Rows);
 /// <summary>results.remoteQuery: a query over a windowed BigQuery result (docs/ipc.md). QueryId is its own, for query.cancel;
-/// Generation is the source result's, which main checks before sending; Kind is "load" (Load into memory) for now.</summary>
-internal sealed record RemoteQueryArgs(string QueryId, uint ResultId, int Generation, string Kind);
+/// Generation is the source result's, which main checks before sending. Kind "load" (Load into memory) takes nothing more;
+/// "view" (a sort or filter) takes 0 to 16 Sort keys and 0 to 16 Filters, at least one of either; "distinct" (a value list)
+/// takes the Column, the other columns' Filters and, optionally, the Kept filters whose rows tick its values. Fallback runs
+/// the original query again when its result table expired (BigQueryViewSql.CanFallBack).</summary>
+internal sealed record RemoteQueryArgs(string QueryId, uint ResultId, int Generation, string Kind, RemoteSortArgs[]? Sort = null, RemoteFilterArgs[]? Filters = null,
+    int? Column = null, RemoteFilterArgs[]? Kept = null, bool? Fallback = null);
+/// <summary>One sort key of a remote view: a column of the windowed result, ascending (NULL first) or descending (NULL last).</summary>
+internal sealed record RemoteSortArgs(int Column, bool Descending);
+/// <summary>One filter of a remote view or value list (results.view's ViewFilter, its values in a value list): Op "in" or
+/// "notIn" keeps or drops the values at Rows of the value list List (a result a distinct query made for this column), and
+/// NULL when Nulls says; "between" keeps the values from Rows[0]'s to Rows[1]'s of List; "groups" keeps what the ticks of
+/// SnapshotId, a value list snapshot of List, keep. "in" and "notIn" with no Rows name no list.</summary>
+internal sealed record RemoteFilterArgs(string Op, int Column, uint? List = null, int[]? Rows = null, bool? Nulls = null, uint? SnapshotId = null);
 internal sealed record ResultsCloseArgs(uint[] ResultIds);
 internal sealed record ResultsCloseResult(int Closed, long UsedBytes);
 /// <summary>results.visibility: the results whose grids are shown in any window now, at most ResultVisibility.MaxResults

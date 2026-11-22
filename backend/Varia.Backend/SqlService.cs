@@ -520,7 +520,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "connections.disconnect" => await DisconnectAsync(Read<ConnectionArgs>(parameters, json)),
         "bigquery.account" => await bigQuery.AccountAsync(Read<BigQueryCredentialArgs>(parameters, json), Token(context)),
         "bigquery.projects" => await bigQuery.ProjectsAsync(Read<BigQueryProjectsArgs>(parameters, json), Token(context)),
-        "bigquery.dryRun" => await bigQuery.DryRunQueryAsync(Read<BigQueryDryRunArgs>(parameters, json), Token(context)),
+        "bigquery.dryRun" => await BigQueryDryRunAsync(Read<BigQueryDryRunArgs>(parameters, json), Token(context)),
         "bigquery.properties" => await bigQuery.PropertiesAsync(Read<BigQueryPropertiesArgs>(parameters, json), Token(context)),
         "language.status" => GetLanguageStatus(parameters, json),
         "language.complete" => await language.CompleteAsync(Read<LanguageRequest>(parameters, json), Token(context)),
@@ -2240,7 +2240,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var progress = ProgressOf(context);
         if (args.ResultId == 0 || args.ViewId == 0 || args.KeptViewId == 0)
             throw new RequestException("INVALID_PARAMS", "Distinct values need a result, a column and views of that result.");
-        var set = Stored(store.Find(args.ResultId) ?? throw Unavailable(args.ResultId));
+        var found = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
+        // A BigQuery value list is already grouped (SqlService.BigQueryViews.cs).
+        if (found.ValueList is { } valueList) return ValueListSnapshot(found, valueList, args);
+        var set = Stored(found);
         if (!Shown(set, args.Column))
             throw new RequestException("INVALID_PARAMS", "The column is not one of the result's.");
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;

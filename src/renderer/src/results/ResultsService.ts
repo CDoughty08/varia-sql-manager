@@ -20,6 +20,7 @@ import { orderPlanEntries } from '../plans/sources'
 import { ResultOperations, type OperationTicket } from './operations'
 import { nameMeetsOthers, sameFileName, saveName, type SaveSubject } from './save-names'
 import { isHiddenColumn, visibleColumnCount } from '../grid/hidden-columns'
+import { isRemoteHandle, isRemoteView, RemoteDeclined, remoteOrderable, remoteSelectionText, unorderableText, type RemoteViews } from './remote-views'
 
 export type RunStatus = 'running' | QueryStatus | 'lost' | 'closed'
 /**
@@ -446,6 +447,7 @@ const stillSorting = 'Save the results after they are sorted.'
 // Said before the file dialog, as the backend would refuse the save after it (REMOTE_RESULT).
 const windowedSave = 'Could not save the results: This result is windowed in BigQuery: its rows are not in memory, so it cannot be saved yet.'
 const windowedCopy = 'Could not copy the results: This result is windowed in BigQuery: its rows are not in memory, so they cannot be copied yet.'
+const remoteUnavailable = 'This result is windowed in BigQuery, and this window cannot query BigQuery. Load it into memory first.'
 // A view built while rows still arrived whose rebuild from every row was cancelled: nothing builds it again by itself.
 const partialView = 'The grid is sorted or filtered over only the rows that had arrived. Sort or filter it again to include every row, then save.'
 const saveCancelled = 'Saving was cancelled. The file was not written.'
@@ -495,6 +497,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   private readonly api: Pick<VariaApi, 'copyResults' | 'saveResults' | 'cancelResultsJob' | 'onResultsJob'>
   private readonly documents: Pick<DocumentService, 'openText'> | undefined
   private readonly retainedPlans?: RetainedPlansService
+  /** Sort, filter and value lists of results windowed in BigQuery (remote-views.ts); without it they are refused. */
+  private readonly remote?: RemoteViews
   /** How text columns sort (queryResults.grid.sortText). */
   private readonly sortText: () => ViewSortMode
   /** The last number each value tab name used (XML_F52E2B61-…3.xml), for the window's lifetime. */
@@ -562,6 +566,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary' | 'release' | 'onGeneration'>; api: Pick<VariaApi, 'copyResults' | 'saveResults' | 'cancelResultsJob' | 'onResultsJob'>; events: EventBus
     documents?: Pick<DocumentService, 'openText'>; frame?: (callback: () => void) => void; timers?: Timers; now?: () => number; newId?: () => string; retainedPlans?: RetainedPlansService
     sortText?: () => ViewSortMode
+    remote?: RemoteViews
     /** Calls the listener when settings change; sorted grids sort again when the text mode did. Returns the unsubscribe. */
     onSortTextChange?: (listener: () => void) => () => void
   }) {
@@ -571,6 +576,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.api = o.api
     this.documents = o.documents
     this.retainedPlans = o.retainedPlans
+    this.remote = o.remote
     this.sortText = o.sortText ?? (() => 'value')
     let sortText = this.sortText()
     if (o.onSortTextChange) this.subscriptions.push(o.onSortTextChange(() => { const next = this.sortText(); if (next !== sortText) { sortText = next; this.resort() } }))
@@ -1173,7 +1179,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    */
   sortBy(tabId: string, key: EntryKey, column: number, direction: SortDirection, add = false): void {
     const run = this.runs.get(tabId), set = this.entry(run, key)
-    if (!run || !set || column < 0 || column >= set.descriptor.columns.length || this.heldOff(tabId, set.key)) return
+    if (!run || !set || column < 0 || column >= set.descriptor.columns.length || this.heldOff(tabId, set.key) || this.unorderable(tabId, set, column, direction !== 'none')) return
     this.applySort(tabId, run, set.key, sortKeysBy(run.sorts.get(set.key)?.keys ?? [], column, direction, add, wire.views.maxKeys, (descending): ViewSortKey => ({ column, descending, mode: 'value' })))
   }
 
@@ -1181,8 +1187,23 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    *  the sort. With `add`, the column changes in place among the keys (a new one goes last); without, it becomes the only key. */
   cycleSort(tabId: string, key: EntryKey, column: number, add = false): void {
     const run = this.runs.get(tabId), set = this.entry(run, key)
-    if (!run || !set || column < 0 || column >= set.descriptor.columns.length || this.heldOff(tabId, set.key)) return
+    if (!run || !set || column < 0 || column >= set.descriptor.columns.length || this.heldOff(tabId, set.key) || this.unorderable(tabId, set, column, true)) return
     this.applySort(tabId, run, set.key, cycleSortKeys(run.sorts.get(set.key)?.keys ?? [], column, add, wire.views.maxKeys, (descending): ViewSortKey => ({ column, descending, mode: 'value' })))
+  }
+
+  /** Whether a column of a grid can be sorted by and filtered by value: a windowed BigQuery result's only when BigQuery can
+   *  order its type (its header's sort button and funnel say why not). */
+  canOrderColumn(tabId: string, key: EntryKey, column: number): boolean {
+    const set = this.entry(this.runs.get(tabId), key), item = set?.descriptor.columns[column]
+    return !!item && (!isRemoteHandle(set!.handle) || remoteOrderable(item))
+  }
+
+  /** A windowed result's column BigQuery cannot order, said in the toolbar when `say`. */
+  private unorderable(tabId: string, set: ResultSetEntry, column: number, say: boolean): boolean {
+    const item = set.descriptor.columns[column]
+    if (!item || !isRemoteHandle(set.handle) || remoteOrderable(item)) return false
+    if (say) this.notify(tabId, unorderableText(item))
+    return say
   }
 
   clearSort(tabId: string, key: EntryKey): void {
@@ -1199,6 +1220,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    */
   filterSelection(tabId: string, key: EntryKey, kind: SelectionFilter): boolean {
     const run = this.runs.get(tabId), set = this.entry(run, key), target = this.filterTarget(tabId, key, kind)
+    if (set && this.needsRows(tabId, set)) return false
     if (!run || !set || !target || this.heldOff(tabId, set.key)) return false
     const index = set.key
     const items = target.columns.map(({ column, ranges }): GridFilter => {
@@ -1213,12 +1235,20 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     return this.addFilter(tabId, run, index, (run.sorts.get(index)?.filters ?? []).filter(other => !same(other)), items)
   }
 
+  /** A windowed BigQuery result has no rows here for a filter that names rows: the toolbar says so. */
+  private needsRows(tabId: string, set: ResultSetEntry): boolean {
+    if (!isRemoteHandle(set.handle)) return false
+    this.notify(tabId, remoteSelectionText)
+    return true
+  }
+
   /** Whether `filterSelection` can filter the grid's selection that way. */
   canFilterSelection(tabId: string, key: EntryKey, kind: SelectionFilter): boolean { return !!this.filterTarget(tabId, key, kind) }
 
   /** Keeps a grid's rows whose values in the selected columns (every column with `allColumns`) repeat, each group together. */
   filterDuplicates(tabId: string, key: EntryKey, allColumns = false): boolean {
     const run = this.runs.get(tabId), set = this.entry(run, key), columns = this.duplicateColumns(tabId, key, allColumns)
+    if (set && this.needsRows(tabId, set)) return false
     if (!run || !set || !columns || this.heldOff(tabId, set.key)) return false
     const index = set.key
     const names = set.descriptor.columns
@@ -1235,6 +1265,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    */
   keepSelectedRows(tabId: string, key: EntryKey, kept?: () => void): boolean {
     const run = this.runs.get(tabId), set = this.entry(run, key), target = this.keepTarget(tabId, key)
+    if (set && this.needsRows(tabId, set)) return false
     if (!run || !set || !target || this.heldOff(tabId, set.key)) return false
     const maxRows = wire.transpose.maxRows, maxRanges = wire.views.maxFilterRanges
     if (target.rows > maxRows || target.ranges.length > maxRanges) {
@@ -1273,7 +1304,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** Whether a grid's column can open the funnel's popover: a result's own column (not a hidden one) on a mounted grid. */
   canFilterColumn(tabId: string, key: EntryKey, column: number): boolean {
     const set = this.entry(this.runs.get(tabId), key)
-    return !!set && this.filterable(set) && Number.isInteger(column) && column >= 0 && column < set.descriptor.columns.length && !isHiddenColumn(set.descriptor.columns[column])
+    return !!set && this.filterable(set) && Number.isInteger(column) && column >= 0 && column < set.descriptor.columns.length && !isHiddenColumn(set.descriptor.columns[column]) && this.canOrderColumn(tabId, set.key, column)
       && !!this.controllers.get(set.key)?.filterColumn
   }
 
@@ -1295,6 +1326,17 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (this.heldOff(tabId, set.key) || sort?.sorting) throw new Error('The results are still being sorted or filtered. Try again when they are shown.')
     const filters = sort?.filters ?? [], others = filters.filter(item => { const own = columnFilterKind(item.filter, column); return own === undefined || own === 'between' })
     const signal = o.signal ? { signal: o.signal } : {}
+    if (isRemoteHandle(set.handle)) {
+      // A query in BigQuery under the other filters, its values ticked by every filter when the column has one of its own.
+      if (!this.remote) throw new Error(remoteUnavailable)
+      if (!this.canOrderColumn(tabId, set.key, column)) throw new Error(unorderableText(set.descriptor.columns[column]))
+      try {
+        return await this.remote.values(tabId, set.handle, column, others, others.length === filters.length ? undefined : filters, o.signal)
+      } catch (error) {
+        if (error instanceof RemoteDeclined) throw new Error('The value list was not loaded.')
+        throw error
+      }
+    }
     if (others.length === filters.length) return (sort?.view ?? set.handle).distinct(column, signal)
     const base = others.length > 0 ? await set.handle.sort([], { filters: others.map(item => item.filter), ...signal }) : undefined
     try {
@@ -1321,10 +1363,14 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       this.notify(tabId, `Could not filter the results: a filter holds at most ${formatCount(wire.views.maxFilterValues)} values.`)
       return false
     }
-    if (condition.kind === 'list' && (condition.list.column !== column || set.handle.key.resultId !== condition.list.resultId || set.handle.key.generation !== condition.list.generation)) return false
+    // A list of the grid's own result, or a BigQuery value list of it (whose own small result holds the values).
+    const list = 'list' in condition ? condition.list : undefined
+    if (list && (list.column !== column || list.generation !== set.handle.key.generation || (list.source ? list.source.resultId : list.resultId) !== set.handle.key.resultId)) return false
+    // A windowed result's filter names values by a value list's rows.
+    if (isRemoteHandle(set.handle) && 'rows' in filter && filter.rows.length > 0 && !list?.source) return false
     const name = columnName(set.descriptor.columns, column)
     const item: GridFilter = condition.kind === 'null' || condition.kind === 'notNull' ? { filter, label: `${name} is ${condition.kind === 'null' ? '' : 'not '}NULL`, named: true }
-      : { filter, label: `${name}: filtering…`, ...condition.kind === 'list' ? { list: condition.list } : {} }
+      : { filter, label: `${name}: filtering…`, ...list ? { list } : {} }
     // In the place of the first filter it replaces: before it, every filter is one of the others.
     const replaced = filters.findIndex(item => !others.includes(item))
     return this.addFilter(tabId, run, index, others, item, replaced < 0 ? others.length : replaced)
@@ -1348,7 +1394,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   resort(): void {
     for (const [tabId, run] of this.runs) for (const [index, sort] of run.sorts) {
       const columns = run.entries.get(index)?.descriptor.columns
-      if (columns && sort.keys.some(key => columns[key.column] && lengthSortable(columns[key.column]))) this.applySort(tabId, run, index, sort.keys)
+      // BigQuery orders text one way: its views do not depend on the mode, and sorting again would bill a query.
+      const handle = run.entries.get(index)?.handle
+      if (columns && !(handle && isRemoteHandle(handle)) && sort.keys.some(key => columns[key.column] && lengthSortable(columns[key.column]))) this.applySort(tabId, run, index, sort.keys)
     }
   }
 
@@ -1659,6 +1707,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (entry) {
       run.sorting.get(entry.key)?.abort()
       run.sorting.delete(entry.key)
+      // A view built in BigQuery is a result of its own, which the backend kept: it is closed with them.
+      for (const view of run.held.get(entry.key)?.views ?? []) if (isRemoteView(view)) void view.close()
       run.held.delete(entry.key)
     }
     if (entry && sort) {
@@ -1829,7 +1879,12 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     controller.signal.addEventListener('abort', () => ticket?.end('dropped'), { once: true })
     // No `replaces`: the old view stays readable until the grid has swapped to the new one, and a sort given up after the
     // backend built it cannot take the shown view with it.
-    set.handle.sort(sort, { ...filters.length ? { filters: filters.map(item => item.filter) } : {}, signal: controller.signal, onProgress: (phase, percent) => ticket?.progress(phase, percent) }).then(view => {
+    // A windowed BigQuery result sorts and filters in BigQuery: a billed query after its estimate and the cost prompts,
+    // whose answer is a result of its own shown as the view.
+    const building = isRemoteHandle(set.handle)
+      ? this.remote ? this.remote.view(tabId, set.handle, sort, filters, controller.signal) : Promise.reject(new Error(remoteUnavailable))
+      : set.handle.sort(sort, { ...filters.length ? { filters: filters.map(item => item.filter) } : {}, signal: controller.signal, onProgress: (phase, percent) => ticket?.progress(phase, percent) })
+    building.then(view => {
       if (run.sorting.get(index) !== controller || this.runs.get(tabId) !== run) { ticket?.end('dropped'); void view.close(); return }
       run.sorting.delete(index)
       ticket?.end('done')
@@ -1849,6 +1904,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       if (run.sorting.get(index) !== controller || this.runs.get(tabId) !== run) return
       run.sorting.delete(index)
       this.keepLastView(tabId, run, index, set)
+      // A declined cost prompt ran nothing: the grid keeps what it showed, and nothing needs saying.
+      if (error instanceof RemoteDeclined) return
       const reason = error instanceof Error ? error.message : 'The rows could not be sorted.'
       this.notify(tabId, (action === 'filter' ? 'Could not filter the results: ' : 'Could not sort the results: ') + reason)
     })
@@ -1871,7 +1928,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    */
   private filterTarget(tabId: string, key: EntryKey, kind: SelectionFilter): { columns: { column: number; ranges: [number, number][] }[]; viewId?: number } | undefined {
     const run = this.runs.get(tabId), set = this.entry(run, key), selection = set && this.selection(tabId, set.key)
-    if (!run || !set || !selection || !this.filterable(set)) return undefined
+    if (!run || !set || !selection || !this.filterable(set) || isRemoteHandle(set.handle)) return undefined
     const shown = run.held.get(set.key)?.shown as ResultView | undefined
     const rows = (shown ?? set.handle).getSnapshot().rowsAvailable, names = set.descriptor.columns, count = names.length
     if (kind === 'notNull') return selection.active.column < count ? { columns: [{ column: selection.active.column, ranges: [] }] } : undefined
@@ -1894,7 +1951,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** The rows a grid's selection covers, as merged ranges of positions in the view the grid shows, and how many they are. */
   private keepTarget(tabId: string, key: EntryKey): { ranges: [number, number][]; rows: number; viewId?: number } | undefined {
     const run = this.runs.get(tabId), set = this.entry(run, key), selection = set && this.selection(tabId, set.key)
-    if (!run || !set || !selection || !this.filterable(set)) return undefined
+    if (!run || !set || !selection || !this.filterable(set) || isRemoteHandle(set.handle)) return undefined
     const shown = run.held.get(set.key)?.shown as ResultView | undefined
     const blocks = resolveBlocks(selection, (shown ?? set.handle).getSnapshot().rowsAvailable, set.descriptor.columns.length)
     const ranges = mergeRanges(blocks.map((block): [number, number] => [block.top, block.bottom - block.top + 1]))
@@ -1904,7 +1961,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
 
   private duplicateColumns(tabId: string, key: EntryKey, allColumns: boolean): number[] | undefined {
     const run = this.runs.get(tabId), set = this.entry(run, key)
-    if (!run || !set || !this.filterable(set)) return undefined
+    if (!run || !set || !this.filterable(set) || isRemoteHandle(set.handle)) return undefined
     const columns = set.descriptor.columns.length
     // A hidden column (a tone, a diff's suffix) is not one of the rows' values.
     const shownColumns = set.descriptor.columns.flatMap((item, column) => isHiddenColumn(item) ? [] : [column])
@@ -1934,6 +1991,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       if (filter.op === 'kind') return { ...item, label: filterLabel(filter, columns), named: true }
       // Its words are its rows' count, known once the view resolved its cells.
       if (filter.op === 'keepRows') return 'rows' in filter ? { ...item, label: filterLabel(filter, columns), named: true } : item
+      if (filter.op === 'groups' && item.list?.source) return { ...item, label: await remoteGroupsLabel(item.list, filter.column, columns), named: true }
       if (filter.op === 'groups') {
         if (!('keep' in filter)) return item
         const resolved = filter as ResolvedGroupsFilter
@@ -1942,7 +2000,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       }
       if (!('rows' in filter)) return item
       const wanted = filter.op === 'between' ? filter.rows : filter.rows.length === 1 && !filter.nulls ? filter.rows : []
-      const texts = await Promise.all(wanted.map(row => valueText(set.handle, row, filter.column)))
+      // A BigQuery value list's rows are rows of its own result, whose first column holds the values.
+      const values = item.list?.source?.values
+      const texts = await Promise.all(wanted.map(row => values ? valueText(values, row, 0) : valueText(set.handle, row, filter.column)))
       const label = filterLabel(filter as ResolvedViewFilter, columns, texts)
       // A value that could not be read is read again the next time the view is built.
       return texts.every(text => text !== undefined) ? { ...item, filter, label, named: true } : { ...item, filter, label }
@@ -2312,6 +2372,16 @@ async function valueText(handle: ResultHandle, row: number, column: number): Pro
     const text = window.text[0].replace(/\s+/g, ' ')
     return `'${text.length > 24 ? text.slice(0, 24) + '…' : text}'`
   } catch { return undefined }
+}
+
+/** A BigQuery value list's filter words, from its ticks as the backend applies them (DistinctSnapshot.Freeze): it keeps the
+ *  ticked values when the list is whole and they are no more than the others, else drops the others. */
+async function remoteGroupsLabel(list: DistinctList, column: number, columns: readonly ResultColumn[]): Promise<string> {
+  const ticks = await list.read({ order: 'value', offset: 0, count: 1 })
+  const distinct = list.summary.distinct, hasNull = list.summary.nulls > 0, cleared = distinct - ticks.checked
+  const keep = list.summary.complete && ticks.checked <= cleared
+  const nulls = hasNull && (keep ? ticks.nullsChecked : !ticks.nullsChecked)
+  return filterLabel({ op: 'groups', column, snapshotId: list.snapshotId, keep, values: keep ? ticks.checked : cleared, nulls, digest: '' }, columns)
 }
 
 /** A resolved filter's words, with the texts of its rows' values where it names them (one value, or Between's two). */

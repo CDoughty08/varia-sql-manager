@@ -8,6 +8,7 @@ import type { ResultHandle } from '../results/ResultClient'
 import { capStripText, entryName, entryNumber, filteredColumns, groupOf, pivotOutOfDate, queryName, setKey, slotOf, type EntryKey, type GridSort, type ResultSetEntry } from '../results/ResultsService'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { resultsFilterSource } from '../results/ColumnFilterPopover'
+import { remoteHeader } from '../results/remote-views'
 import { compareDetails, compareSources, compareText, type CompareInfo } from '../results/CompareService'
 import { highlightText } from '../results/HighlightsService'
 import ComparisonToolbar from '../results/ComparisonToolbar'
@@ -227,7 +228,11 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
     return () => abort.abort()
   }, [target, entry])
   const source = useMemo(() => resultsFilterSource(results, tabId, key), [results, tabId, key])
-  const funnels = useMemo<GridFunnels>(() => ({ source, filtered, columnName: column => entry.descriptor.columns[column]?.name }), [source, filtered, entry])
+  // A windowed BigQuery result sorts and filters in BigQuery: its tooltips say so, and columns BigQuery cannot order have
+  // no funnel and a sort button that says why.
+  const windowed = snapshot.residence === 'remote'
+  const header = useMemo(() => windowed ? remoteHeader(entry.descriptor.columns) : undefined, [windowed, entry])
+  const funnels = useMemo<GridFunnels>(() => ({ source, filtered, ...header ?? {}, columnName: column => entry.descriptor.columns[column]?.name }), [source, filtered, header, entry])
   const onApi = useCallback((api: GridShellApi | undefined) => { apiRef.current = api }, [])
   const setRootEl = useCallback((element: HTMLDivElement | null) => { rootEl.current = element }, [])
   const lost = snapshot.state === 'lost'

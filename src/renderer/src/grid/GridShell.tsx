@@ -2,7 +2,7 @@ import { Component, Fragment, useCallback, useEffect, useLayoutEffect, useMemo, 
 import { onUnexpectedError } from '../core/errors'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { ColumnFilterPopover, type ColumnFilterSource, type ColumnFilterTarget } from '../results/ColumnFilterPopover'
-import { GridView, type GridStatus, type GridViewOptions, type HeaderSortKey } from './GridView'
+import { GridView, type GridStatus, type GridViewOptions, type HeaderNotes, type HeaderSortKey } from './GridView'
 import type { WhitespaceMode } from './whitespace'
 import type { IconId } from '../../../shared/icons'
 import Icon from '../Icon'
@@ -34,6 +34,8 @@ export interface GridFunnels {
   readonly filtered: ReadonlySet<number>
   /** Only these columns' headers have a funnel; every column's without it. */
   readonly filterable?: ReadonlySet<number>
+  /** What the sort buttons and funnels add to their tooltips (a windowed BigQuery result's). */
+  readonly notes?: HeaderNotes
   columnName(column: number): string | undefined
 }
 
@@ -161,12 +163,13 @@ export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mo
     }
   }, [mountKey, resultClient, platform])
   const resultCount = update?.resultCount ?? 1, showTypes = update?.showTypes, rowSize = update?.rowSize, headerColumn = update?.headerColumn
-  const filtered = funnels?.filtered, filterable = funnels?.filterable
+  const filtered = funnels?.filtered, filterable = funnels?.filterable, notes = funnels?.notes
   const ring = busy?.shown && busy.column !== undefined ? busy.column : undefined, ringPercent = ring === undefined ? undefined : busy?.percent
   useEffect(() => {
-    viewRef.current?.update({ resultCount, whitespace, sort, ...showTypes !== undefined ? { showTypes } : {}, ...rowSize !== undefined ? { rowSize } : {}, ...filtered ? { filtered } : {}, ...filterable ? { filterable } : {}, ...headerColumn !== undefined ? { headerColumn } : {},
+    viewRef.current?.update({ resultCount, whitespace, sort, ...showTypes !== undefined ? { showTypes } : {}, ...rowSize !== undefined ? { rowSize } : {}, ...filtered ? { filtered } : {}, ...filterable ? { filterable } : funnels ? { filterable: null } : {}, ...headerColumn !== undefined ? { headerColumn } : {},
+      notes: notes ?? null,
       busy: ring === undefined ? null : { column: ring, ...ringPercent === undefined ? {} : { percent: ringPercent } } })
-  }, [resultCount, showTypes, whitespace, sort, rowSize, filtered, filterable, headerColumn, mountKey, gone, ring, ringPercent])
+  }, [resultCount, showTypes, whitespace, sort, rowSize, filtered, filterable, headerColumn, notes, mountKey, gone, ring, ringPercent])
   // A popover opened before the sort or filter began closes: its condition would wait anyway.
   const heldNow = !!busy?.held
   // Marked busy and dimmed only once the operation shows: one quicker than the delay holds clicks off without a flash.

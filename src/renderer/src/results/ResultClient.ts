@@ -137,6 +137,10 @@ export interface DistinctList {
   readonly resultId: number
   readonly snapshotId: number
   readonly column: number
+  /** A BigQuery value list (results.remoteQuery, kind distinct): `resultId` is the list's own small result, of `source`'s
+   *  column; its rows name values to a remote filter (`values`, the list result, holds them in its first column), and closing
+   *  it releases the list too. */
+  readonly source?: { readonly resultId: number; readonly values: ResultHandle }
   readonly summary: ResultsDistinctResult
   read(o: Omit<ResultsDistinctReadParams, 'resultId' | 'snapshotId'> & { signal?: AbortSignal }): Promise<ResultsDistinctReadResult>
   tick(o: Omit<ResultsDistinctTickParams, 'resultId' | 'snapshotId'>): Promise<ResultsDistinctTickResult>

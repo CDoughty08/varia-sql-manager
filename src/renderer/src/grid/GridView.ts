@@ -98,7 +98,10 @@ interface SortButton { readonly el: HTMLSpanElement; readonly glyph: HTMLSpanEle
 /** A sort or filter building the grid's view: the column whose sort button shows its ring, and its percentage (none while
  *  the backend has no total). */
 export interface GridBusy { readonly column?: number; readonly percent?: number }
-interface FunnelButton { readonly el: HTMLSpanElement; readonly glyph: HTMLSpanElement; on: boolean }
+interface FunnelButton { readonly el: HTMLSpanElement; readonly glyph: HTMLSpanElement; on: boolean; note?: string }
+/** What a header's sort button and funnel add to their tooltips: where they work (a windowed BigQuery result's, " in BigQuery"),
+ *  and the columns whose sort is refused, with why. */
+export interface HeaderNotes { readonly where: string; readonly refused: ReadonlyMap<number, string> }
 /** A transposed grid's row mark is a name cell: it holds a column's name where a row number goes, with the type, sort
  *  button and funnel a header has. `look` is the class string it shows now (selected, unnamed, filterable, its search mark). */
 interface NameParts { readonly type?: Text; readonly sort?: SortButton; readonly funnel?: FunnelButton; look?: string }
@@ -307,6 +310,7 @@ export class GridView {
   private busy: GridBusy | undefined
   private filtered: ReadonlySet<number>
   private filterable: ReadonlySet<number> | undefined
+  private notes: HeaderNotes | undefined
   /** The row-size bar's sizes for the handle shown, while the bar is on. */
   private sizes: RowSizes | undefined
   private rowHeader = 0
@@ -512,7 +516,13 @@ export class GridView {
     this.schedule()
   }
   /** `headerColumn` (a transposed grid's): a column, or null for none; absent leaves it as it is. */
-  update(o: { resultCount: number; showTypes?: boolean; whitespace?: WhitespaceMode; sort?: readonly HeaderSortKey[]; rowSize?: boolean; filtered?: ReadonlySet<number>; filterable?: ReadonlySet<number>; headerColumn?: number | null; busy?: GridBusy | null }): void {
+  update(o: { resultCount: number; showTypes?: boolean; whitespace?: WhitespaceMode; sort?: readonly HeaderSortKey[]; rowSize?: boolean; filtered?: ReadonlySet<number>; filterable?: ReadonlySet<number> | null; headerColumn?: number | null; busy?: GridBusy | null; notes?: HeaderNotes | null }): void {
+    if (o.notes !== undefined && (o.notes ?? undefined) !== this.notes) {
+      this.notes = o.notes ?? undefined
+      // Every sort button and funnel paints its tooltip again.
+      for (const header of this.headerSlots) { if (header.sort) header.sort.state = '0000'; if (header.funnel) header.funnel.note = '0000' }
+      this.schedule()
+    }
     if (o.busy !== undefined && (o.busy?.column !== this.busy?.column || o.busy?.percent !== this.busy?.percent)) { this.busy = o.busy ?? undefined; this.schedule() }
     if (this.rotated && o.headerColumn !== undefined && this.validHeaderColumn(o.headerColumn) !== this.headerColumn) {
       // Its tile is read with the rows from the next frame on, and each header shows its value once read.
@@ -520,8 +530,9 @@ export class GridView {
       this.schedule()
     }
     if (o.filtered && !sameSet(o.filtered, this.filtered)) { this.filtered = o.filtered; this.schedule() }
-    if (o.filterable && (!this.filterable || !sameSet(o.filterable, this.filterable))) {
-      this.filterable = o.filterable
+    // null: every column has a funnel again (a windowed result loaded into memory).
+    if (o.filterable !== undefined && (o.filterable === null ? this.filterable !== undefined : !this.filterable || !sameSet(o.filterable, this.filterable))) {
+      this.filterable = o.filterable ?? undefined
       // Each header shows or hides its funnel again (a transposed grid's name cells do each frame).
       for (const header of this.headerSlots) header.column = -1
       this.schedule()
@@ -2135,11 +2146,13 @@ export class GridView {
   /** A column's funnel, filled while the column has a filter. */
   private paintFunnel(funnel: FunnelButton, column: number): void {
     const on = this.filtered.has(column)
-    if (on === funnel.on) return
+    const note = this.notes?.where ?? ''
+    if (on === funnel.on && note === (funnel.note ?? '')) return
+    funnel.note = note
     funnel.on = on
     funnel.el.classList.toggle('on', on)
     funnel.glyph.className = codiconClass(on ? 'filter-filled' : 'filter')
-    funnel.el.title = on ? 'Filter column values (filtered)' : 'Filter column values'
+    funnel.el.title = `Filter column values${note}${on ? ' (filtered)' : ''}`
   }
 
   /** Whether a column's header has a funnel. */
@@ -2163,7 +2176,7 @@ export class GridView {
    *  while its header is hovered. */
   private paintSort(target: HTMLElement, sort: SortButton, column: number): void {
     const key = this.sortKeys.get(column), busy = this.busy?.column === column ? this.busy : undefined
-    const state = (key ? `${key.at}:${key.descending ? 1 : 0}:${this.sortKeys.size}` : '') + (busy ? `|${busy.percent ?? '-'}` : '')
+    const state = (key ? `${key.at}:${key.descending ? 1 : 0}:${this.sortKeys.size}` : '') + (busy ? `|${busy.percent ?? '-'}` : '') + (this.notes ? `|${this.notes.where}|${this.notes.refused.get(column) ?? ''}` : '')
     if (state === sort.state) return
     sort.state = state
     sort.el.classList.toggle('on', !!key)
@@ -2173,7 +2186,8 @@ export class GridView {
     sort.busy.nodeValue = busy?.percent !== undefined ? `${busy.percent}%` : ''
     sort.glyph.className = codiconClass(key?.descending ? 'arrow-down' : 'arrow-up')
     sort.order.nodeValue = key && this.sortKeys.size > 1 ? String(key.at + 1) : ''
-    sort.el.title = !key ? 'Sort ascending' : key.descending ? 'Clear sort' : 'Sort descending'
+    const refused = this.notes?.refused.get(column)
+    sort.el.title = refused ?? (!key ? 'Sort ascending' : key.descending ? 'Clear sort' : 'Sort descending') + (this.notes?.where ?? '')
     if (key && key.at === 0) target.setAttribute('aria-sort', key.descending ? 'descending' : 'ascending')
     else target.removeAttribute('aria-sort')
   }
