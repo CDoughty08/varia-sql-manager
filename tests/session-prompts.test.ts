@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bigQueryCommitTimeout, needsSessionPrompt, rememberedJobAnswer, quitStoppingNotes, sessionActions, sessionCloseNoteText, sessionPrompt, sessionPromptLimits, sessionPromptRequestSchema, type SessionAction, type SessionCloseNoteCode, type SessionTab } from '../src/shared/sessions'
+import { bigQueryCommitTimeout, needsSessionPrompt, rememberedJobAnswer, quitStoppingNotes, runningJobPrompt, runningJobRequestSchema, sessionActions, sessionCloseNoteText, sessionPrompt, sessionPromptLimits, sessionPromptRequestSchema, type SessionAction, type SessionCloseNoteCode, type SessionTab } from '../src/shared/sessions'
 
 const open = (name: string, transactions = 1): SessionTab => ({ name, transactions, running: false })
 const running = (name: string, transactions = 0): SessionTab => ({ name, transactions, running: true })
@@ -182,5 +182,21 @@ describe('BigQuery job prompts', () => {
     expect(needsSessionPrompt([{ ...job('a.sql'), running: false }])).toBe(true)
     for (const tab of [{ ...job('a.sql'), provider: undefined }, job('a.sql', { elapsedMs: -1 }), job('a.sql', { jobIds: Array.from({ length: 9 }, (_, index) => `job_${index}`) }), job('a.sql', { jobIds: ['bad id'] }), { ...job('a.sql'), job: { elapsedMs: 0, extra: 1 } }])
       expect(sessionPromptRequestSchema.safeParse({ action: 'close', tabs: [tab] }).success, JSON.stringify(tab)).toBe(false)
+  })
+})
+
+describe('Close Results while a BigQuery job runs', () => {
+  it("offers Cancel the Job, Leave It Running or Don't Close, with Don't Close the default, and Remember my choice", () => {
+    const prompt = runningJobPrompt({ name: 'orders.sql', job: { elapsedMs: 120_000, jobIds: ['job_1'] } })
+    expect(prompt.buttons).toEqual([{ label: 'Cancel the Job', answer: 'proceed' }, { label: 'Leave It Running', answer: 'leave' }, { label: "Don't Close", answer: 'cancel' }])
+    expect([prompt.defaultId, prompt.cancelId]).toEqual([2, 2])
+    expect(prompt.checkbox).toEqual({ label: 'Remember my choice', checked: false, remembers: true })
+    expect(prompt.detail).toContain('the next Execute in this tab waits for it')
+  })
+  it('accepts a bounded, strict request', () => {
+    expect(runningJobRequestSchema.safeParse({ name: 'orders.sql', job: { elapsedMs: 1 } }).success).toBe(true)
+    expect(runningJobRequestSchema.safeParse({ name: 'orders.sql', job: { elapsedMs: 1 }, extra: true }).success).toBe(false)
+    expect(runningJobRequestSchema.safeParse({ name: 'x'.repeat(sessionPromptLimits.name + 1), job: { elapsedMs: 1 } }).success).toBe(false)
+    expect(runningJobRequestSchema.safeParse({ name: 'orders.sql', job: { elapsedMs: 1, jobIds: Array.from({ length: sessionPromptLimits.jobIds + 1 }, (_, i) => `job_${i}`) } }).success).toBe(false)
   })
 })

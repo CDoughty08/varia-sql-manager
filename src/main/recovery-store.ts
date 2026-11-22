@@ -178,6 +178,19 @@ export class RecoveryStore {
     })
   }
 
+  /** The job keys of every readable copy, whoever owns it: a BigQuery query that may still be recovered keeps its jobs. */
+  jobKeys(): Promise<string[]> {
+    return this.serial(async () => {
+      const keys: string[] = []
+      for (const file of await this.records()) {
+        if (!file.canonical) continue
+        const record = await this.read(file.id).catch(() => undefined)
+        if (record?.jobKey) keys.push(record.jobKey)
+      }
+      return keys
+    })
+  }
+
   /** A record offered to `generation`, with its text, moved to that generation. One the generation already took (or wrote)
    *  is not offered to it again: two tabs would share one record, and closing either would delete the other's copy. */
   take(id: string, generation: number): Promise<RecoveryRecord> {

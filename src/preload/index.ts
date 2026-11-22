@@ -208,6 +208,7 @@ const api: VariaApi = {
   confirmClose: name => ipcRenderer.invoke('varia:confirm-close', name),
   confirmOpenConnections: () => ipcRenderer.invoke('varia:confirm-open-connections'),
   confirmSessions: request => ipcRenderer.invoke('varia:confirm-sessions', request),
+  confirmRunningJob: request => ipcRenderer.invoke('varia:confirm-running-job', request),
   confirmAction: request => ipcRenderer.invoke('varia:confirm-action', request),
   setLongRuns: state => ipcRenderer.invoke('varia:long-runs', state),
   closeWindow: () => ipcRenderer.invoke('varia:close-window'),

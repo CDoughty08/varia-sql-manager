@@ -28,7 +28,7 @@ import type { SsisCatalogSetupRequest, SsisCatalogSetupResult, SsisDescribeReque
 import type { AgentProfileRequest, AgentProfileResult } from './agent/profile.ts'
 import type { AgentHistoryMessageRequest, AgentHistoryMessageResult } from './agent/history.ts'
 import type { SettingsLoad, SettingsPatch, SettingsState } from './settings/schema'
-import type { SessionAnswer, SessionCloseOptions, SessionCloseResult, SessionEnd, SessionPromptRequest } from './sessions.ts'
+import type { RunningJobRequest, SessionAnswer, SessionCloseOptions, SessionCloseResult, SessionEnd, SessionPromptRequest } from './sessions.ts'
 import type { RecentFile } from './files/recent'
 import type { UpdateState } from './updates'
 import type { ProductLink } from './product'
@@ -1127,6 +1127,9 @@ export interface VariaApi {
   /** Asks, in main's message box, what to do with the open transactions and running queries of sessions that are about
    *  to end (src/shared/sessions.ts composes the prompt). */
   confirmSessions(request: SessionPromptRequest): Promise<ApiResult<SessionAnswer>>
+  /** Close Results while a BigQuery job runs: `proceed` (Cancel the job), `leave` (Leave it running) or `cancel` (Don't
+   *  Close), asked in main's box unless queryExecution.bigQuery.closeRunningJob remembers a choice. */
+  confirmRunningJob(request: RunningJobRequest): Promise<ApiResult<SessionAnswer>>
   /** An object action's confirmation (src/shared/actions/prompts.ts) in main's message box: the chosen button's answer. */
   confirmAction(request: ActionPromptRequest): Promise<ApiResult<ActionPromptAnswer>>
   /** The page's long runs (src/shared/long-runs.ts), all of them, whenever they change: main's reload prompt names them. */

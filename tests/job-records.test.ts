@@ -156,6 +156,24 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     expect(source).toContain('backend.stop().then(() => jobRecords.flush())')
   })
 
+  it("wires main's record cancels: profiles from connect, restored cancels, jobs without a tab and profile deletes (index.ts)", async () => {
+    const source = await readFile(join(__dirname, '..', 'src', 'main', 'index.ts'), 'utf8')
+    expect(source).toContain('if (outcome.ok) await rememberConnectionProfile(')
+    expect(source).toContain("jobRecorder(queryId!, jobKey, connectionProfiles.get(")
+    expect(source).toContain("jobRecords.record(jobKey, event, profileId)")
+    expect(source).toContain("handle('varia:jobs-cancel-restored', async value => {\n    const keys = z.array(jobKeySchema).min(1).max(jobLimits.keys).parse(value)")
+    expect(source).toContain("handle('varia:jobs-without-tab', async value => {\n    const keys = z.array(jobKeySchema).max(jobLimits.keys).parse(value)")
+    // A copy AutoRecover may still reopen keeps its jobs; a store that cannot be read asks about nothing.
+    expect(source).toContain('const orphans = jobRecords.withoutTab([...keys, ...kept])')
+    expect(source).toContain("buttons: [one ? 'Cancel Job' : 'Cancel Jobs', 'Keep'], defaultId: 1, cancelId: 1")
+    // Deleting a profile with running jobs asks, and keeps the profile when a cancel fails.
+    expect(source).toContain("const running = jobRecords.forProfile(id).filter(record => record.state === 'running' && !record.auxiliary)")
+    expect(source).toContain("if (failed.length) throw new Error(`The connection was kept")
+    // Credentials are the saved profile's, per project, at most jobLimits.cancel per call.
+    expect(source).toContain('for (let next = 0; next < group.length; next += jobLimits.cancel)')
+    expect(source).toContain("handle('varia:confirm-running-job', async value => {\n    const request = runningJobRequestSchema.parse(value)")
+  })
+
   it('defers drops for the keys a quit keeps, and applies them when the quit stops', async () => {
     const store = new JobRecordStore(await folder())
     await store.load()

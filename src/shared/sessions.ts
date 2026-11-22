@@ -207,6 +207,28 @@ function jobPrompt(action: SessionAction, jobs: readonly SessionTab[], running: 
   }
 }
 
+/** varia:confirm-running-job, from the renderer: Close Results on a BigQuery tab whose job runs (not a session action: the
+ *  tab and its session stay). */
+export const runningJobRequestSchema = z.object({ name: z.string().min(1).max(sessionPromptLimits.name), job: jobSchema }).strict()
+export type RunningJobRequest = z.infer<typeof runningJobRequestSchema>
+/**
+ * Close Results while a BigQuery job runs (decision 52): Cancel the job (`proceed`: stopped as Stop does), Leave it running
+ * (`leave`: the job carries on in the tab's session, which the next Execute waits for), or Don't Close (`cancel`, the
+ * default and Escape), with "Remember my choice".
+ */
+export function runningJobPrompt({ name, job }: RunningJobRequest): SessionPrompt {
+  return {
+    title: 'BigQuery job running',
+    message: `The BigQuery job of ${name} is still running.`,
+    detail: [`${name}${jobNote('close')({ name, transactions: 0, running: true, provider: 'bigquery', job })}`,
+      'Cancel the job stops it in BigQuery, as Stop does, and closes the results.',
+      "Leave it running closes the results and lets the job finish in BigQuery; Varia reads none of its rows. It still holds the tab's BigQuery session, which runs one query at a time, so the next Execute in this tab waits for it (Stop cancels it), and closing the tab asks about it again while it runs."].join('\n\n'),
+    defaultId: 2, cancelId: 2,
+    buttons: [{ label: 'Cancel the Job', answer: 'proceed' }, { label: 'Leave It Running', answer: 'leave' }, { label: "Don't Close", answer: 'cancel' }],
+    checkbox: { label: 'Remember my choice', checked: false, remembers: true }
+  }
+}
+
 /** Decision 18's question: a BigQuery session lives in one location, so a dataset in another ends it. Switch proceeds;
  *  Don't Switch (and Escape) keeps the tab's dataset and session. */
 function locationPrompt(tab: SessionTab, { dataset, from, to }: SessionLocationSwitch): SessionPrompt {

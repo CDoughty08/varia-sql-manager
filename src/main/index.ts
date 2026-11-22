@@ -72,7 +72,7 @@ import { agentPreviewArgument, agentPreviewEnabled } from '../shared/agent/gate'
 import { contentSecurityPolicy } from '../shared/csp'
 import { homedir, userInfo } from 'node:os'
 import { parseWorkspaceLayout } from '../shared/layouts'
-import { rememberedJobAnswer, sessionPrompt, sessionPromptRequestSchema } from '../shared/sessions'
+import { rememberedJobAnswer, runningJobPrompt, runningJobRequestSchema, sessionPrompt, sessionPromptRequestSchema } from '../shared/sessions'
 import { confirmOpenConnectionsSchema, openConnectionsAnswer, openConnectionsBox } from './open-connections'
 import { actionMessageBox, actionPromptAnswer, confirmActionBox, noLongRuns, parseLongRuns, reloadDetail, restartDetail } from './action-prompts'
 import type { LongRunState } from '../shared/long-runs.ts'
@@ -1481,7 +1481,10 @@ app.whenReady().then(async () => {
   handle('varia:jobs-without-tab', async value => {
     const keys = z.array(jobKeySchema).max(jobLimits.keys).parse(value)
     await jobRecords.load().catch(() => {})
-    const orphans = jobRecords.withoutTab(keys)
+    // A query AutoRecover kept (offered, or left for a later start) may still reopen and re-attach: its jobs are not asked about.
+    const kept = await recovery.jobKeys().catch(() => undefined)
+    if (!kept) return null
+    const orphans = jobRecords.withoutTab([...keys, ...kept])
     // A finished job without a tab has nothing to decide: its result table expires by itself.
     jobRecords.dropJobs(orphans.filter(record => record.state !== 'running' || record.auxiliary).map(record => record.jobId))
     const running = orphans.filter(record => record.state === 'running' && !record.auxiliary)
@@ -1541,6 +1544,18 @@ app.whenReady().then(async () => {
     // "Remember my choice" sets the option; a mixed box's "Leave BigQuery jobs running" turns its Cancel into Leave for BigQuery.
     if (prompt.checkbox.remembers) await settings.update({ 'queryExecution.bigQuery.closeRunningJob': answer === 'proceed' ? 'cancel' : 'leave' }).catch(() => {})
     return answer === 'proceed' && !prompt.checkbox.remembers ? 'leave' : answer
+  })
+  // Close Results while a BigQuery job runs: the same three choices and remembered setting, but the tab's session stays.
+  handle('varia:confirm-running-job', async value => {
+    const request = runningJobRequestSchema.parse(value)
+    const closeRunningJob = (await settings.load().catch(() => ({ values: settings.current() }))).values['queryExecution.bigQuery.closeRunningJob']
+    if (closeRunningJob !== 'ask') return closeRunningJob === 'cancel' ? 'proceed' : 'leave'
+    const prompt = runningJobPrompt(request)
+    const { response, checkboxChecked } = await pageDialog((window, signal) => dialog.showMessageBox(window, { type: 'warning', title: prompt.title, message: prompt.message, detail: prompt.detail, buttons: prompt.buttons.map(button => button.label), defaultId: prompt.defaultId, cancelId: prompt.cancelId, noLink: true, signal,
+      checkboxLabel: prompt.checkbox!.label, checkboxChecked: false }), { response: prompt.cancelId, checkboxChecked: false }, true)
+    const answer = prompt.buttons[response]?.answer ?? 'cancel'
+    if (checkboxChecked && (answer === 'proceed' || answer === 'leave')) await settings.update({ 'queryExecution.bigQuery.closeRunningJob': answer === 'proceed' ? 'cancel' : 'leave' }).catch(() => {})
+    return answer
   })
   // An object action's confirmation (Rename Database's Open Connections, Disable Login): main writes the box from the
   // catalogue and validated facts; a page that reloads or crashes while it is open gets the prompt's cancel answer.

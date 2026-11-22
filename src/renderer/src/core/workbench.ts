@@ -879,7 +879,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // once the workbench is up.
   const welcome = () => { if (!disposed) documents.create('SQLQuery1.sql', welcomeQueryText, 'master') }
   if (api.hotExit) void restoreSession({ api, documents, files, groups: editorGroups, connectionTargets, resumeRecovery: (tabId, id) => recovery.resume(tabId, id), restoredJobs: (tabId, jobs) => queries.restoreJobs(tabId, jobs), otherwise: welcome })
-    .catch(() => {}).then(() => { connectionRestored(); if (!disposed) void recovery.start() })
-  else { welcome(); connectionRestored(); void recovery.start() }
+    .catch(() => {}).then(() => { connectionRestored(); if (!disposed) { void recovery.start(); void queries.reviewJobsWithoutTab(api) } })
+  else { welcome(); connectionRestored(); void recovery.start(); void queries.reviewJobsWithoutTab(api) }
   return workbench
 }
