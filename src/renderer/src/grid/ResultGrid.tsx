@@ -97,13 +97,14 @@ const keysOf = (sort: GridSort | undefined) => (sort?.keys.map(key => `${key.col
  * shell with its own source (LiveGridPane).
  */
 function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, group, bare, onFocus, onWide }: ResultGridProps) {
-  const { results, commands, gridStats, panes, settings, resultsSearch, highlights, compare, pivot, queries, resultVisibility } = useWorkbench()
+  const { results, commands, gridStats, panes, settings, resultsSearch, highlights, compare, pivot, queries, resultVisibility, documents } = useWorkbench()
   // The query still running that made the rows shown: an estimate runs without results, and a finished run's results stay
   // drawn until its tab's state catches up, so the tab's run must be this result's run and still running.
   const runningId = useSyncExternalStore(queries.subscribe, () => queries.getSnapshot()[tabId]?.running?.queryId)
   const resultsRun = useSyncExternalStore(results.subscribe, () => { const run = results.getSnapshot()[tabId]; return run?.status === 'running' ? run.queryId : undefined })
   const running = runningId !== undefined && runningId === resultsRun
   const cancelKey = useKeybindingLabel('query.cancel')
+  const executeKey = useKeybindingLabel('query.execute')
   const marked = useSyncExternalStore(highlights.subscribe, () => highlights.getSnapshot()[tabId]?.get(entry.key))
   const compared = useSyncExternalStore(compare.subscribe, () => compare.getSnapshot().info.get(setKey(entry.descriptor)))
   // What its last change that did not publish said (a failure, a cancel, an input closed), until its next change.
@@ -288,6 +289,9 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
       run: () => void results.loadIntoMemory(tabId, key).then(refused => { if (refused) results.announce(tabId, refused) }) }
     : undefined
   const action = stop ?? load
+  // An expired windowed result offers Re-run: Execute for its tab, which estimates the query and asks as any run does.
+  const rerun = snapshot.residence === 'remote' ? { label: 'Re-run…', icon: commandDescriptor('query.execute').icon, title: withKey('Run the query again: Execute estimates what it processes first', executeKey), keys: executeKey?.aria,
+    run: () => { if (documents.getSnapshot().activeId === tabId) void commands.execute('query.execute', undefined, 'toolbar') } } : undefined
   // The entry's key names the grid for commands and menus; the generation and result id say which stored result it showed
   // when a target was read from it, so a target read before a re-run is told from the new one.
   return <GridShell mountKey={`${tabId}|${key}|${instanceKey(entry)}${turnedView ? '|transposed' : ''}`} mount={mount} onApi={onApi}
@@ -304,7 +308,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
     }}
     sort={sort?.keys} onSort={(column, add) => results.cycleSort(tabId, key, column, add)} funnels={funnels} busy={busy} onHeld={() => results.operations.refused(tabId, key)}
     update={{ resultCount: count, showTypes, rowSize, ...turnedView ? { headerColumn: headerColumn ?? null } : {} }} gone={lost ? lostText : undefined}
-    strip={note ? { text: note, ...action ? { action } : {}, ...lead ? { lead } : {} } : undefined} rootRef={setRootEl}
+    strip={note ? { text: note, ...action ? { action } : {}, ...lead ? { lead } : {} } : undefined} {...rerun ? { expired: rerun } : {}} rootRef={setRootEl}
     head={compared && !bare && !lost ? <ComparisonToolbar tabId={tabId} entry={entry} info={compared} sources={sources} goTo={goTo} /> : undefined} />
 }
 

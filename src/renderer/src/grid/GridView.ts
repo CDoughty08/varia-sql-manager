@@ -127,7 +127,8 @@ interface Drag { readonly pointerId: number; readonly x0: number; readonly y0: n
 /** A column border being dragged: the width follows the pointer once a frame, and Escape puts `width0` back. */
 interface Resize { readonly pointerId: number; readonly column: number; readonly x0: number; readonly width0: number; readonly wasUserSized: boolean; x: number; applied: number }
 /** What the React shell shows under the grid: a failed tile read, or a grid that stopped after repeated failures. */
-export interface GridStatus { readonly tileError?: string; readonly renderError?: boolean }
+/** `expired`: a tile read failed with REMOTE_EXPIRED (BigQuery no longer keeps the windowed result), so Retry cannot help. */
+export interface GridStatus { readonly tileError?: string; readonly renderError?: boolean; readonly expired?: boolean }
 /** What a frame showed: the first and last rows in the body, the rows available, and whether the view is at the end. */
 export interface GridViewport { readonly firstRow: number; readonly lastRow: number; readonly rows: number; readonly atEnd: boolean }
 
@@ -842,7 +843,7 @@ export class GridView {
   }
 
   private setStatus(status: GridStatus): void {
-    if (status.tileError === this.status.tileError && status.renderError === this.status.renderError) return
+    if (status.tileError === this.status.tileError && status.renderError === this.status.renderError && status.expired === this.status.expired) return
     this.status = status
     this.o.onStatus(status)
   }
@@ -1644,8 +1645,8 @@ export class GridView {
     }
     this.lastTopRow = offsets.topRow
     this.lastFirstColumn = range.firstColumn
-    const tileError = this.data.error
-    if (tileError !== this.status.tileError) this.setStatus({ ...this.status, tileError })
+    const tileError = this.data.error, expired = tileError !== undefined && this.data.expired ? true : undefined
+    if (tileError !== this.status.tileError || expired !== this.status.expired) this.setStatus({ ...this.status, tileError, expired })
     const visibleColumns = headerRange.lastColumn - headerRange.firstColumn + 1
     if (this.pools(bodyRows + 1 + 2 * overscan.rows, Math.max(1, visibleColumns))) columnsMoved = true
     this.paint(range, headerRange, drawnRows, drawnColumns, rebased, columnsMoved)

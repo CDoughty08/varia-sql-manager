@@ -55,6 +55,9 @@ export interface StripLink { readonly label: string; readonly title?: string; re
 /** Links drawn first, joined by ` → `, then `detail`; the strip's `text` stays its tooltip. */
 export interface StripLead { readonly links: readonly StripLink[]; readonly detail: string }
 
+/** The strip of a windowed BigQuery result that expired: the rows already read stay; the rest need the query run again. */
+export const expiredText = 'BigQuery no longer keeps this result (query results expire after about 24 hours). The rows already shown stay; run the query again to read the rest.'
+
 export interface GridShellProps {
   /** The grid element's own attributes (its name, the data-* the menus read, focus handlers). */
   readonly rootProps: HTMLAttributes<HTMLDivElement> & Record<`data-${string}`, string | number | undefined>
@@ -85,6 +88,9 @@ export interface GridShellProps {
   readonly gone?: string
   /** A note under the rows when nothing failed (a truncation, a highlight, a failed copy), and a button after it that acts on it. */
   readonly strip?: { readonly text: string; readonly error?: boolean; readonly action?: StripAction; readonly lead?: StripLead }
+  /** A windowed BigQuery result whose rows BigQuery no longer keeps (a read answered REMOTE_EXPIRED): its strip says so and
+   *  offers this (Re-run) in place of Retry, which cannot help. */
+  readonly expired?: StripAction
   /** Drawn above the grid in its frame (a comparison's toolbar), outside the grid's own focus and keys. */
   readonly head?: ReactNode
   /** What the render error strip calls the grid's contents. */
@@ -104,7 +110,7 @@ export interface GridShellProps {
  */
 export interface GridShellBusy { readonly shown: boolean; readonly held: boolean; readonly column?: number; readonly percent?: number; readonly label: string }
 
-export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mount, mountKey, sort, onSort, funnels, update, busy, onHeld, gone, strip, head, contents = 'result', whitespace: ownWhitespace, onApi, children }: GridShellProps) {
+export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mount, mountKey, sort, onSort, funnels, update, busy, onHeld, gone, strip, expired, head, contents = 'result', whitespace: ownWhitespace, onApi, children }: GridShellProps) {
   const { resultClient, platform, settings } = useWorkbench()
   const values = useServiceSnapshot(settings).values, setting = values['queryResults.grid.whitespace']
   const filterWidth = values['queryResults.grid.filterPopupWidth'], filterHeight = values['queryResults.grid.filterPopupHeight']
@@ -208,6 +214,7 @@ export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mo
     {children}
     {gone && <div className="rg-overlay" role="status">{gone}</div>}
     {!gone && status.renderError ? <div className="rg-strip error" role="status">{failed} <button onClick={retry}>Retry</button></div>
+      : !gone && status.tileError && status.expired && expired ? <div className="rg-strip error" role="status">{expiredText} <button type="button" title={expired.title} onClick={expired.run}>{expired.label}</button></div>
       : !gone && status.tileError ? <div className="rg-strip error" role="status">Some rows could not be loaded: {status.tileError} <button onClick={retry}>Retry</button></div>
         : strip ? <div className={(strip.error ? 'rg-strip error' : 'rg-strip') + (action ? ' has-action' : '')} role="status" title={strip.text}>
           {action ? <><span className="rg-strip-text">{strip.text}</span>
