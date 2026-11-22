@@ -60,12 +60,15 @@ export interface RecoveredDocument {
 
 /** The crash, hang and reload prompts' details: AutoRecover's wording once it has kept this page's queries. */
 export interface LossDetails { readonly stopped: string; readonly unresponsive: string; readonly reload: string }
-export function lossDetails(autoRecover: { readonly enabled: boolean; readonly minutes: number; readonly saved: boolean }, restores?: 'pins' | 'session'): LossDetails {
+/** BigQuery's case (docs/bigquery.md, Re-attaching to jobs): jobs carry on and re-attach; an idle session's transaction
+ *  is rolled back (bigquery.endIdleSessions aborts it); a session holding a job keeps its transaction until it ends. */
+export const bigQueryLoss = 'Running BigQuery jobs carry on in BigQuery and are re-attached in kept tabs; a BigQuery session running a job keeps its transaction open until the session ends.'
+export function lossDetails(autoRecover: { readonly enabled: boolean; readonly minutes: number; readonly saved: boolean }, restores?: 'pins' | 'session', bigQuery = false): LossDetails {
   const keepsPins = restores === 'pins'
   const pinned = keepsPins ? 'Pinned tabs reopen with their text. ' : ''
-  const stoppedConnections = 'Connections were closed and uncommitted transactions were rolled back.'
+  const stoppedConnections = 'Connections were closed and uncommitted transactions were rolled back.' + (bigQuery ? ' ' + bigQueryLoss : '')
   const retrySession = restores === 'session' ? `Reload retries opening the saved tabs. ${stoppedConnections}` : undefined
-  const connections = 'Connections are closed and uncommitted transactions are rolled back.'
+  const connections = 'Connections are closed and uncommitted transactions are rolled back.' + (bigQuery ? ' ' + bigQueryLoss : '')
   const reloadSession = restores === 'session' ? `Kept queries reopen; tabs outside the session limits may be lost. ${connections}` : undefined
   if (!autoRecover.enabled || !autoRecover.saved) {
     return {

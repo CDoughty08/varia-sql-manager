@@ -79,8 +79,8 @@ export type SessionInput = Omit<SessionWrite, 'documents'> & { readonly document
 /** Why a write was refused at the cap; a fixed sentence, as the banner shows it. */
 export const sessionCapMessage = 'The open queries are too large to keep for the next start (64 MB in all).'
 const posix = process.platform !== 'win32'
-/** What a quarantine of either file leaves (`json-file.ts`'s `quarantine`), and a write a crash interrupted (`writeBytesAtomic`'s temporary file). */
-const leftover = /^((session|previous)\.json\.invalid-[0-9a-f-]{36}\.json|\.varia-[0-9a-f-]{36}\.tmp)$/i
+/** What a quarantine of either file (or of jobs.json, `job-records.ts`) leaves (`json-file.ts`'s `quarantine`), and a write a crash interrupted (`writeBytesAtomic`'s temporary file). */
+const leftover = /^((session|previous|jobs)\.json\.invalid-[0-9a-f-]{36}\.json|\.varia-[0-9a-f-]{36}\.tmp)$/i
 const dayMs = 86_400_000
 
 export interface SessionStoreOptions {

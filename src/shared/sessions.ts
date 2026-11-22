@@ -25,7 +25,12 @@ export type SessionAnswer = 'commit' | 'rollback' | 'proceed' | 'cancel'
 export type SessionEnd = 'commit' | 'rollback'
 /** query.session.close's options: `abortOnRefusedCommit` (default true) lets a BigQuery commit refused on an unchecked
  *  session end the session anyway; quitting sets it false, since the closing app could show nothing. */
-export interface SessionCloseOptions { readonly transaction?: SessionEnd; readonly abortOnRefusedCommit?: boolean }
+export interface SessionCloseOptions {
+  readonly transaction?: SessionEnd; readonly abortOnRefusedCommit?: boolean
+  /** BigQuery: Leave it running (the job carries on and the session is not aborted) or Cancel the job (it is cancelled and
+   *  waited for, then the session ends); a tab holding a job gets one of these, never a transaction. */
+  readonly keepJob?: true; readonly cancelJob?: true
+}
 /** What became of a BigQuery commit or session end (docs/bigquery.md, Sessions), with BigQuery's message or the job it names. */
 export interface SessionCloseNote { readonly code: SessionCloseNoteCode; readonly message?: string; readonly jobId?: string }
 export type SessionCloseNoteCode = 'commitNotApplied' | 'committedBeforeCancel' | 'outcomeUnknown' | 'abortFailed' | 'sessionExpired'

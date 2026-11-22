@@ -6,7 +6,7 @@ import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWrite
 import { SettingsStore } from '../src/main/settings-store'
 import { writeJsonAtomic } from '../src/main/json-file'
 import { SqlFileStore } from '../src/main/sql-files'
-import { lossDetails, recoveryCapMessage, recoveryLimits, type RecoveryWrite } from '../src/shared/files/recovery'
+import { bigQueryLoss, lossDetails, recoveryCapMessage, recoveryLimits, type RecoveryWrite } from '../src/shared/files/recovery'
 
 let directory: string, folder: string
 beforeEach(async () => {
@@ -283,6 +283,11 @@ describe('the AutoRecover store', () => {
 
   it('words the crash, hang and reload prompts for AutoRecover only once it kept the page\'s queries', () => {
     const lost = lossDetails({ enabled: true, minutes: 5, saved: false })
+    // With a BigQuery handle open, the crash and reload prompts say its jobs carry on (docs/bigquery.md, Re-attaching to jobs).
+    const bigQuery = lossDetails({ enabled: true, minutes: 5, saved: false }, undefined, true)
+    expect(bigQuery.stopped).toBe(lost.stopped + ' ' + bigQueryLoss)
+    expect(bigQuery.reload).toBe(lost.reload + ' ' + bigQueryLoss)
+    expect(lost.reload).not.toContain('BigQuery')
     expect(lossDetails({ enabled: false, minutes: 5, saved: true })).toEqual(lost)
     expect(lost).toEqual({
       stopped: 'Unsaved queries were lost. Connections were closed and uncommitted transactions were rolled back.',

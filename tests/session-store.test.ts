@@ -338,13 +338,13 @@ describe('the hot exit session store', () => {
     const day = 86_400_000, now = Date.now()
     await mkdir(folder, { recursive: true })
     const old = `session.json.invalid-${randomUUID()}.json`, oldPrevious = `previous.json.invalid-${randomUUID()}.json`, recent = `session.json.invalid-${randomUUID()}.json`
-    const interrupted = `.varia-${randomUUID()}.tmp`
-    for (const name of [old, oldPrevious, recent, interrupted, 'session.json', 'previous.json', 'notes.txt']) await writeFile(join(folder, name), 'SELECT 1')
-    for (const name of [old, oldPrevious, 'session.json', 'previous.json', 'notes.txt']) await utimes(join(folder, name), new Date(now - 30 * day), new Date(now - 30 * day))
+    const interrupted = `.varia-${randomUUID()}.tmp`, oldJobs = `jobs.json.invalid-${randomUUID()}.json`
+    for (const name of [old, oldPrevious, oldJobs, recent, interrupted, 'session.json', 'previous.json', 'notes.txt']) await writeFile(join(folder, name), 'SELECT 1')
+    for (const name of [old, oldPrevious, oldJobs, 'session.json', 'previous.json', 'notes.txt']) await utimes(join(folder, name), new Date(now - 30 * day), new Date(now - 30 * day))
     await utimes(join(folder, recent), new Date(now - 3 * day), new Date(now - 3 * day))
     const store = new SessionStore(folder, { now: () => new Date(now) })
     await store.purge(Promise.reject(new Error('settings.json could not be read')))
-    expect(await files()).toHaveLength(7)
+    expect(await files()).toHaveLength(8)
     await store.purge(Promise.resolve(7))
     expect(await files()).toEqual(['notes.txt', 'previous.json', recent, 'session.json'].sort())
     await store.purge(Promise.resolve(2))

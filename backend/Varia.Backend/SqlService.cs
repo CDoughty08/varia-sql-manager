@@ -39,6 +39,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
         "ssis.describe", "ssis.execute", "ssis.catalogSetup",
         "bigquery.account", "bigquery.projects", "bigquery.dryRun", "bigquery.properties", "agent.profile", "agent.historyMessage", "results.remoteQuery",
+        "query.attach", "bigquery.endIdleSessions", "bigquery.cancelJobs",
         "results.diffSeek", "language.parse"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
@@ -138,6 +139,25 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         public bool UserCancelled { get; private set; }
         public Plans.LivePlanTarget? PlanTarget;
         public void Cancel() { UserCancelled = true; TryCancel(Source); }
+        /// <summary>A BigQuery query's job may be left running (query.cancel with detach); null for every other query.</summary>
+        public bool Detachable { get; set; }
+        /// <summary>A BigQuery re-attach that reads outside the tab's session (adoptSession false): the tab's close leaves
+        /// its job running, or cancels it only for Cancel the job.</summary>
+        public bool ReadsOutside { get; set; }
+        /// <summary>Leave it running: the request ends with status detached and its job carries on in BigQuery.</summary>
+        public bool Detached { get; private set; }
+        /// <summary>A later query.attach took this attachment's job over: the request ends with status superseded.</summary>
+        public bool Superseded { get; private set; }
+        /// <summary>The backend is stopping: the job carries on in BigQuery for a later re-attach.</summary>
+        public bool Abandoned { get; private set; }
+        /// <summary>Whether the job must be left alone as the request ends.</summary>
+        public bool LeavesJob => Detached || Superseded || Abandoned;
+        public void Abandon() => Abandoned = true;
+        /// <summary>A query already stopped stays stopped: its job was cancelled, so there is nothing to leave running.</summary>
+        public void Detach() { if (UserCancelled) return; Detached = true; TryCancel(Source); }
+        public void Supersede() { Superseded = true; TryCancel(Source); }
+        /// <summary>Completes when the request has ended (query.attach waits for an attachment it supersedes).</summary>
+        public TaskCompletionSource Ended { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     /// <summary>The most query sessions the app keeps open at once (each holds its own unpooled connection). SSMS has no
@@ -433,7 +453,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// copies and exports take one of 16 result slots.</summary>
     public RequestLane LaneOf(string method) => method switch
     {
-        "query.execute" or "plans.estimate" or "results.remoteQuery" => RequestLane.Query,
+        "query.execute" or "plans.estimate" or "results.remoteQuery" or "query.attach" => RequestLane.Query,
         "results.read" or "results.copy" or "results.export" or "results.view" or "results.identify" or "results.findRows" or "results.diff" or "results.search" or "results.profile" or "results.pivot" or "results.distinct" or "results.distinctRead" or "results.distinctTick" or "results.diffSeek" => RequestLane.Results,
         "explorer.children" or "explorer.peek" or "explorer.peekDependencies" or "explorer.peekDefinition" or "explorer.dependencies" or "explorer.index" or "explorer.search" or "agent.profile" => RequestLane.Explorer,
         "actions.execute" => RequestLane.Actions,
@@ -441,7 +461,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "live.subscribe" or "activity.details" => RequestLane.Live,
         // Kill Process takes no metadata slot: it runs at once under its own gates, as object actions do under theirs.
         "activity.kill" => RequestLane.Actions,
-        "system.health" or "connections.disconnect" or "bigquery.account" or "bigquery.projects" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "results.viewClose" or "results.distinctClose" or "results.rowIds" or "results.setMemoryLimit" or "results.visibility" or "entra.cache.clear"
+        "system.health" or "connections.disconnect" or "bigquery.account" or "bigquery.projects" or "bigquery.endIdleSessions" or "bigquery.cancelJobs" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "results.viewClose" or "results.distinctClose" or "results.rowIds" or "results.setMemoryLimit" or "results.visibility" or "entra.cache.clear"
             or "live.update" or "language.status" or "language.refresh" or "language.close" => RequestLane.Control,
         SynthesizeMethod when hooks => RequestLane.Metadata,
         _ when Array.IndexOf(MethodNames, method) < 0 => RequestLane.Control,
@@ -453,7 +473,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     /// <summary>The methods whose frames may carry a password or a sensitive value: methodPolicies' sensitive entries
     /// (tests/validation.test.ts compares the two lists), zeroed here as main zeroes its copy.</summary>
-    internal static readonly string[] SensitiveMethods = ["connections.connect", "connections.databases", "connections.preview", "ssis.execute", "actions.execute", "bigquery.account", "bigquery.projects"];
+    internal static readonly string[] SensitiveMethods = ["connections.connect", "connections.databases", "connections.preview", "ssis.execute", "actions.execute", "bigquery.account", "bigquery.projects", "bigquery.cancelJobs"];
     public bool Sensitive(string method) => Array.IndexOf(SensitiveMethods, method) >= 0;
 
     /// <summary>The result memory budget: global, and the most one query may use.</summary>
@@ -542,6 +562,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "query.session.state" => await SessionStateAsync(Read<SessionStateArgs>(parameters, json), Token(context)),
         "results.read" => await ReadResultsAsync(Read<ResultsReadArgs>(parameters, json), context),
         "results.remoteQuery" => await RemoteQueryAsync(Read<RemoteQueryArgs>(parameters, json), context),
+        "query.attach" => await AttachBigQueryAsync(Read<BigQueryAttachArgs>(parameters, json), context),
+        "bigquery.endIdleSessions" => await bigQuery.EndIdleSessionsAsync(Read<BigQueryEndIdleArgs>(parameters, json), Token(context)),
+        "bigquery.cancelJobs" => await bigQuery.CancelJobsAsync(Read<BigQueryCancelJobsArgs>(parameters, json), Token(context)),
         "results.close" => CloseResults(Read<ResultsCloseArgs>(parameters, json)),
         "results.visibility" => SetVisibility(Read<ResultsVisibilityArgs>(parameters, json)),
         "results.setMemoryLimit" => SetMemoryLimit(Read<ResultsMemoryLimitArgs>(parameters, json)),
@@ -862,12 +885,13 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         // A BigQuery handle has none of the SQL Server state below.
         if (bigQuery.Owns(args.ConnectionId))
         {
-            // Its running queries end as cancelled before the client they read through is disposed.
+            // Its running queries end as cancelled before the client they read through is disposed (a job left running was
+            // detached first); its idle sessions end, and those holding a detached job are left to BigQuery.
             foreach (var query in queries.Values.Where(query => query.ConnectionId == args.ConnectionId)) query.Cancel();
-            var disconnected = bigQuery.Disconnect(args.ConnectionId);
+            var disconnected = await bigQuery.DisconnectAsync(args.ConnectionId, CancellationToken.None);
             search.Forget(args.ConnectionId);
             ReportIndexMemory();
-            return new { Disconnected = disconnected };
+            return disconnected;
         }
         bool removed;
         string? connectionString;
@@ -3073,6 +3097,15 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     private object Cancel(CancelArgs args)
     {
         RunningQuery? query;
+        if (args.Detach == true)
+        {
+            // Leave it running ends a BigQuery query's request and leaves its job; a query not running has nothing to leave.
+            query = queries.GetValueOrDefault(args.QueryId);
+            if (query is null) return new { Cancelled = false };
+            if (!query.Detachable) throw new RequestException("UNSUPPORTED_PROVIDER", "Only a BigQuery query's job can be left running.");
+            query.Detach();
+            return new { Cancelled = true };
+        }
         lock (cancelGate)
         {
             if (!queries.TryGetValue(args.QueryId, out query) && Guid.TryParse(args.QueryId, out _)) RememberEarlyStop(args.QueryId, Environment.TickCount64);
@@ -3187,11 +3220,26 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     {
         if (!Guid.TryParse(args.SessionId, out _)) throw new RequestException("INVALID_PARAMS", "A valid session ID is required.");
         if (args.Transaction is not (null or "commit" or "rollback")) throw new RequestException("INVALID_PARAMS", "A transaction ends by commit or rollback.");
+        var keepJob = args.KeepJob == true;
+        var cancelJob = args.CancelJob == true;
+        // A tab holding a job gets a job answer only: it is asked in the first box, never about its transaction.
+        if (keepJob && cancelJob || (keepJob || cancelJob) && args.Transaction is not null)
+            throw new RequestException("INVALID_PARAMS", "A job is left running or cancelled, and its transaction is not asked about.");
+        // A re-attach outside the tab's session is in no session the close below sees: it stops following its job (which
+        // belongs to another session, or to none), and only Cancel the job cancels it.
+        foreach (var query in queries.Values.Where(query => query.SessionId == args.SessionId && query.ReadsOutside))
+        {
+            if (cancelJob) query.Cancel();
+            else query.Detach();
+        }
         if (bigQuery.OwnsSession(args.SessionId))
         {
-            // A plain close stops the tab's running query (Stop), then waits for its job before ending the session.
-            return await bigQuery.CloseAsync(args.SessionId, args.Transaction, args.AbortOnRefusedCommit ?? true, token);
+            // Cancel the job stops the tab's running job, then waits for it before ending the session; a plain close and
+            // Leave it running leave a session holding a job.
+            return await bigQuery.CloseAsync(args.SessionId, args.Transaction, args.AbortOnRefusedCommit ?? true, token, keepJob, cancelJob);
         }
+        if ((keepJob || cancelJob) && sessions.ContainsKey(args.SessionId))
+            throw new RequestException("UNSUPPORTED_PROVIDER", "Leaving a job running and cancelling a job apply only to BigQuery queries.");
         // A rollback is the close itself: SQL Server rolls back what a closed session left open, on its own time. An explicit
         // ROLLBACK would hold this request until the rollback finished, since an attention waits for it too.
         if (args.Transaction == "commit" && sessions.TryGetValue(args.SessionId, out var open)) await CommitAsync(args.SessionId, open, token);
@@ -3329,6 +3377,11 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         }
     }
 
+    /// <summary>A stop never cancels a BigQuery job: each running BigQuery request leaves its job before shutdown cancels it.</summary>
+    public void BeginShutdown()
+    {
+        foreach (var query in queries.Values) if (query.Detachable) query.Abandon();
+    }
     public void CancelAll()
     {
         foreach (var query in queries.Values) query.Cancel();
