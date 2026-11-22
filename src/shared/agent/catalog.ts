@@ -313,6 +313,12 @@ export const agentLimits = {
   stepsPerJob: 50,
   /** Schedules one job save may hold. */
   schedulesPerJob: 16,
+  /** Alerts one job save may detach (the job document's Alerts section, AG-6a). */
+  jobAlerts: 32,
+  /** Characters of a job's description (`sysjobs.description` is nvarchar(512)). */
+  descriptionChars: 512,
+  /** Logins the job document's owner picker lists (sysadmin; the owner can still be typed). */
+  ownerLogins: 1_000,
   /** Jobs one standalone schedule save may attach or detach. */
   scheduleJobChanges: 64,
   /** History rows Job Activity Monitor's last run reads, newest first, then cancels the rest: the outcome row and up to 200 steps,
@@ -350,8 +356,8 @@ export type AgentLimit = keyof typeof agentLimits
 /** THROW states carry a save's call index, 1 to 255, so a save's calls stay below this, guards included. */
 export const agentCallIndexLimit = 255
 /** The most calls one job save can make at its caps: per step a temporary rename and a final update (or an add and an
- *  update), per schedule an attach or detach plus an add, and the job's own calls and guards. */
-export const agentJobSaveCalls = agentLimits.stepsPerJob * 2 + agentLimits.schedulesPerJob * 2 + 8
+ *  update), per schedule an attach or detach plus an add, per removed alert its guard and its detach, and the job's own calls and guards. */
+export const agentJobSaveCalls = agentLimits.stepsPerJob * 2 + agentLimits.schedulesPerJob * 2 + agentLimits.jobAlerts * 2 + 8
 
 // --- Procedures -----------------------------------------------------------------------------------------------------
 
@@ -385,7 +391,9 @@ export const readProcedures: readonly ReadProcedure[] = [
   { name: 'sp_enum_login_for_proxy', arguments: [{ name: '@proxy_id' }], who: 'SQLAgentOperatorRole and sysadmin' },
   { name: 'sp_help_jobs_in_schedule', arguments: [{ name: '@schedule_id' }], who: 'Every Agent role (its own jobs for SQLAgentUserRole)' },
   { name: 'sp_enum_sqlagent_subsystems', arguments: [], who: 'Every Agent role' },
-  { name: 'sp_get_sqlagent_properties', arguments: [], who: 'Every Agent role (AG-0: SQLAgentUserRole gets values); fails with 15281 while Agent XPs is off' }
+  { name: 'sp_get_sqlagent_properties', arguments: [], who: 'Every Agent role (AG-0: SQLAgentUserRole gets values); fails with 15281 while Agent XPs is off' },
+  // The job document's Database Mail readiness (AG-6a): msdb grants it to DatabaseMailUserRole; others are refused and see no mail warning.
+  { name: 'sysmail_help_profile_sp', arguments: [], who: 'sysadmin and DatabaseMailUserRole' }
 ]
 
 export interface MasterReadShape {
@@ -419,14 +427,19 @@ export interface WriteProcedure {
 export const writeProcedures: readonly WriteProcedure[] = [
   { name: 'sp_start_job', lane: 'AG-2', database: 'msdb', arguments: ['@job_id', '@step_name'] },
   { name: 'sp_stop_job', lane: 'AG-2', database: 'msdb', arguments: ['@job_id'] },
-  { name: 'sp_update_job', lane: 'AG-2', database: 'msdb', arguments: ['@job_id', '@enabled', '@new_name'] },
+  // The job document (AG-6a) adds the General and Notifications arguments; sp_update_job leaves an argument it is not passed as it is.
+  { name: 'sp_update_job', lane: 'AG-2', database: 'msdb', arguments: ['@job_id', '@enabled', '@new_name', '@description', '@category_name', '@owner_login_name', '@notify_level_eventlog', '@notify_level_email',
+    '@notify_level_netsend', '@notify_level_page', '@notify_email_operator_name', '@notify_netsend_operator_name', '@notify_page_operator_name', '@delete_level'] },
   { name: 'sp_delete_job', lane: 'AG-2', database: 'msdb', arguments: ['@job_id', '@delete_history', '@delete_unused_schedule'] },
   // Agent Properties' server-wide purge (AG-8a) passes only @oldest_date (its lint refuses @job_id); Delete History (AG-5a) passes @job_id,
   // and @oldest_date for "older than", with its own template and lint (AgentSql.LintHistoryDelete).
   { name: 'sp_purge_jobhistory', lane: 'AG-8a', database: 'msdb', arguments: ['@oldest_date', '@job_id'] },
-  { name: 'sp_add_job', lane: 'AG-6a', database: 'msdb' },
-  { name: 'sp_add_jobserver', lane: 'AG-6a', database: 'msdb' },
-  { name: 'sp_update_alert', lane: 'AG-6a', database: 'msdb' },
+  // New Job: @job_id is the OUTPUT the batch's later calls use; sp_add_jobserver's server defaults to the local one.
+  { name: 'sp_add_job', lane: 'AG-6a', database: 'msdb', arguments: ['@job_name', '@enabled', '@description', '@category_name', '@owner_login_name', '@notify_level_eventlog', '@notify_level_email',
+    '@notify_level_netsend', '@notify_level_page', '@notify_email_operator_name', '@notify_netsend_operator_name', '@notify_page_operator_name', '@delete_level', '@job_id'] },
+  { name: 'sp_add_jobserver', lane: 'AG-6a', database: 'msdb', arguments: ['@job_id'] },
+  // The job's Alerts section's Remove (sysadmin): the alert by name, its job set to none (the zero uniqueidentifier). AG-7 adds its own arguments.
+  { name: 'sp_update_alert', lane: 'AG-6a', database: 'msdb', arguments: ['@name', '@job_id'] },
   { name: 'sp_add_jobstep', lane: 'AG-6b', database: 'msdb' },
   { name: 'sp_update_jobstep', lane: 'AG-6b', database: 'msdb' },
   { name: 'sp_delete_jobstep', lane: 'AG-6b', database: 'msdb' },
@@ -463,6 +476,7 @@ export const agentErrorNumbers: readonly { readonly number: number, readonly cod
   { number: 14234, code: 'SQL_ERROR', meaning: 'An argument is not valid (such as an owner login that does not exist).' },
   { number: 14266, code: 'SQL_ERROR', meaning: 'An argument is not one of its valid values (such as a schedule\'s frequency type).' },
   { number: 14372, code: 'IN_USE', meaning: 'A schedule is still used by a job.' },
+  { number: 14525, code: 'PERMISSION_DENIED', meaning: 'Only sysadmin may change a job another login owns (the job document Save).' },
   { number: 14392, code: 'PERMISSION_DENIED', meaning: 'Only sysadmin and SQLAgentOperatorRole may purge the history of every job, or of a job the login does not own.' },
   { number: 15281, code: 'AGENT_STOPPED', meaning: 'Agent XPs is off (SQL Server Agent is stopped or disabled).' },
   { number: 22022, code: 'JOB_STATE', meaning: 'SQL Server Agent refused a start or stop; decided by a re-read, never by number.' },
