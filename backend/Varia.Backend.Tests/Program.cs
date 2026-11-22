@@ -307,7 +307,7 @@ if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live"
         }
         else if (lane == "--restore-live")
         {
-            await RestoreLiveChecks.RunAsync(Check, focusedService, focusedInfo, json);
+            await RestoreLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json);
             Console.WriteLine("Passed " + passed + " focused Restore Database checks.");
         }
         else if (lane == "--server-files-live")
@@ -1056,7 +1056,7 @@ try
     await Suite("Detach", () => DetachLiveChecks.RunAsync(Check, service, info, Live, json));
     await Suite("ActionProgress", () => ActionProgressLiveChecks.RunAsync(Check, service, info, Live, json));
     await Suite("Attach", () => AttachLiveChecks.RunAsync(Check, service, info, Live, json));
-    await Suite("Restore", () => RestoreLiveChecks.RunAsync(Check, service, info, json));
+    await Suite("Restore", () => RestoreLiveChecks.RunAsync(Check, service, info, Live, json));
     await Suite("Login", () => LoginLiveChecks.RunAsync(Check, service, info, Live, json));
     await Suite("LoginListing", () => LoginListingLiveChecks.RunAsync(Check, service, info, json));
     await Suite("LoginAction", () => LoginActionLiveChecks.RunAsync(Check, service, info, Live, json));

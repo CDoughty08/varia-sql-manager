@@ -27,7 +27,7 @@ internal static class RestoreLiveChecks
     /// restores the differential taken after the point (the check below restores both), the logs that reach it.</summary>
     private static IReadOnlyList<string> Varia(string goal, IReadOnlyList<string> smo) => goal == "between log2 and the differential" ? ["full", "log1", "log2", "log3"] : smo;
 
-    public static async Task RunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json)
+    public static async Task RunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, Func<string, ConnectOptions> live, JsonSerializerOptions json)
     {
         async Task<SqlRun> Sql(string text, string database = "master")
         {
@@ -346,7 +346,7 @@ internal static class RestoreLiveChecks
             "the planner's plan over the fork restores every row, and to the point after the restore its rows, where the abandoned branch's plan fails (" + abandoned + "): " + string.Join(", ", forkOutcomes));
 
         // The run (D1f) on the same source and target.
-        await RestoreRunLiveChecks.RunAsync(check, service, info, json, (text, database) => Sql(text, database), scratch, sets, relocated);
+        await RestoreRunLiveChecks.RunAsync(check, service, info, live, json, (text, database) => Sql(text, database), scratch, sets, relocated);
 
         // Restore Files and Filegroups (D1g), on a database of its own.
         await RestoreFilesLiveChecks.RunAsync(check, service, info, json, (text, database) => Sql(text, database), scratch);
