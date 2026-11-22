@@ -295,7 +295,9 @@ In the workbench:
   with the tab, which asks about them on close, without re-attaching (an attach would replace the newest's results).
   While it is not connected, Messages says the job carries on. A finished job's reference only waits for its results:
   the prompt does not ask about it. A job cut off by a lost backend or network stays with the tab and re-attaches on the
-  next connection. Each job is tried once per connection.
+  next connection, as does a running job whose re-attach failed for a passing reason (quota, a timeout, an expired
+  sign-in, a busy session, a permission); another principal's job, one Stop cancelled or one whose results are gone is
+  dropped. Each job is tried once per connection.
 - **The prompt.** Closing a tab, Change Connection, Disconnect, a location switch or quitting asks about a tab that
   holds a job it runs, follows or left running: Cancel the job, Leave it running, or Don't close (the default). It never
   asks about that tab's transaction: Cancel the job rolls it back, and Leave it running keeps it open in the session.

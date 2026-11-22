@@ -175,6 +175,20 @@ describe('heldAfter', () => {
     expect(heldAfter(done, [], [], undefined, 'CONNECTION_LOST')).toEqual([done])
     expect(heldAfter(running, [detached], [], undefined, 'AUTH_IDENTITY')).toEqual([detached])
   })
+  it("keeps a re-attach's running job through a passing failure, and its reference through a lost backend", () => {
+    const failed = (code: string) => output({ status: 'failed', error: { code, message: 'x', batchNumber: 1, iteration: 1 } })
+    // A quota or timeout says nothing about the job: tried again on the next connection.
+    expect(heldAfter(running, [detached], [running], failed('QUOTA'), undefined)).toEqual([detached, running])
+    expect(heldAfter(running, [], [], undefined, 'SESSION_BUSY')).toEqual([running])
+    // Another principal's job, or one Stop cancelled, is dropped.
+    expect(heldAfter(running, [], [running], failed('AUTH_IDENTITY'), undefined)).toEqual([])
+    expect(heldAfter(running, [], [running], output({ status: 'cancelled' }), undefined)).toEqual([])
+    // A finished job's re-attach cut off keeps it, to read its results on the next connection.
+    expect(heldAfter(running, [], [{ ...running, state: 'done', createdAt: 99 }], undefined, 'BACKEND_LOST')).toEqual([{ ...running, state: 'done' }])
+    // A left-running job stays left running, with its own age, not the report's.
+    const left = job('d', { detached: true })
+    expect(heldAfter(left, [], [{ ...left, detached: undefined, createdAt: 99 }], undefined, 'BACKEND_LOST')).toEqual([left])
+  })
 })
 
 describe('the job prompt', () => {
@@ -527,6 +541,24 @@ describe('the prompt beside a cost gate and held jobs', () => {
     await settle(); await settle()
     expect(settled).toBe(true)
     await expect(f.queries.restoredCancelsSettled()).resolves.toBe(false)
+  })
+  it('settles a job a lost connection held when a later run, which waited for it, is left running', async () => {
+    const f = fixture(), pending = deferred<ApiResult<QueryResult>>()
+    f.queryApi.attach.mockResolvedValue({ ok: false, error: 'Network.', code: 'CONNECTION_LOST' })
+    f.queryApi.execute.mockReturnValueOnce(pending.promise)
+    const run = f.queries.execute(f.tab.id)
+    await settle()
+    f.job({ jobId: 'job_1', state: 'running' })
+    pending.resolve({ ok: true, value: output({ status: 'failed', error: { code: 'CONNECTION_LOST', message: 'Network lost.', batchNumber: 1, iteration: 1 } }) })
+    await run; await settle(); await settle()
+    const second = deferred<ApiResult<QueryResult>>()
+    f.queryApi.execute.mockReturnValueOnce(second.promise)
+    const next = f.queries.execute(f.tab.id)
+    await settle()
+    f.job({ jobId: 'job_2', state: 'running' })
+    second.resolve({ ok: true, value: output({ status: 'detached' }) })
+    await next; await settle()
+    expect(f.queries.getSnapshot()[f.tab.id].jobs?.map(item => [item.jobId, !!item.detached])).toEqual([['job_2', true]])
   })
   it('settles a job a lost connection held once a later run on that connection, which waited for it, finishes', async () => {
     const f = fixture(), pending = deferred<ApiResult<QueryResult>>()

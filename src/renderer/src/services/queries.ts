@@ -73,18 +73,24 @@ const nothingOpen: TransactionState = { transactions: 0 }
 const mayBeOpen: TransactionState = { transactions: 0, unchecked: true }
 
 const backendGone: ReadonlySet<ErrorCode | undefined> = new Set<ErrorCode | undefined>(['BACKEND_LOST', 'CONNECTION_LOST', 'NOT_CONNECTED'])
+// A re-attach's failures that say nothing about its job: it is kept and tried again on the next connection.
+const attachPassing: ReadonlySet<string> = new Set(['QUOTA', 'TIMEOUT', 'AUTH_EXPIRED', 'PERMISSION_DENIED', 'SESSION_BUSY'])
 /**
  * The jobs a tab holds after a run (docs/bigquery.md, Re-attaching to jobs). Leave it running keeps the run's running jobs
  * detached. A lost backend or connection keeps them (and a re-attach's own job) to re-attach to. A summary otherwise means
  * the run's jobs reached the tab; a normal run waited behind the detached ones, and a re-attach leaves the others for theirs.
- * Any other failure of a re-attach (Stop cancels its job; another principal's job; results gone) drops its job, so a
- * re-attach is never retried in a loop.
+ * A re-attach that failed for a passing reason (quota, a timeout, an expired sign-in, a busy session, a permission) keeps
+ * its running job, tried again on the next connection (once per connection, never in a loop). Any other failure of a
+ * re-attach (Stop cancels its job; another principal's job; results gone) drops its job. A re-attach's own job keeps its
+ * reference (left running, its age) with the state the backend reported.
  */
 export function heldAfter(attach: TabJob | undefined, held: readonly TabJob[] = [], reported: readonly TabJob[], summary: QueryResult | undefined, code: ErrorCode | undefined): TabJob[] {
-  const own = reported.length ? reported : attach ? [attach] : []
+  const attached = attach && { ...attach, state: reported.find(job => job.jobId === attach.jobId)?.state ?? attach.state }
+  const own = attached ? [attached] : reported
   if (summary?.status === 'detached') return [...held, ...own.filter(job => job.state === 'running').map(job => ({ ...job, detached: true }))]
+  if (attached && attached.state === 'running' && attachPassing.has((summary ? summary.status === 'failed' ? summary.error?.code : undefined : code) ?? '')) return [...held, attached]
   if (summary) return attach || summary.status === 'superseded' ? [...held] : held.filter(job => !job.detached)
-  if (backendGone.has(code)) return [...held, ...own.filter(job => job.state === 'running' || job === attach)]
+  if (backendGone.has(code)) return [...held, ...attached ? [attached] : reported.filter(job => job.state === 'running')]
   return [...held]
 }
 const jobList = (ids: readonly string[]) => ids.length === 1 ? `BigQuery job ${ids[0]} is` : `BigQuery jobs ${ids.join(', ')} are`
@@ -646,7 +652,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     // Preview Rows reads without a job and never waits behind the session's held jobs: its summary settles none.
     const settledBy = lostInSummary || preview ? undefined : summary
     let jobs = forgotten ? [] : heldAfter(attach, held, [...reported.values()], settledBy, lostCode)
-    if (settledBy && !attach && settledBy.status !== 'detached' && settledBy.status !== 'superseded' && sessionHeld?.size) {
+    if (settledBy && !attach && settledBy.status !== 'superseded' && sessionHeld?.size) {
       jobs = jobs.filter(job => job.detached || sessionHeld.get(job.jobId) !== this.attachKey(job, connection))
       this.heldBySession.delete(tabId)
     }
