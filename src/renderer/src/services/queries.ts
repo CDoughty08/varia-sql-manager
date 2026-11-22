@@ -320,7 +320,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       if (response.ok && !this.disposed) for (const text of cancelNotesText(name, response.value.jobs.filter(job => targets.includes(job.jobId)))) { this.notify?.(text); said = true }
       if (!response.ok && !this.disposed) { this.notify?.(`${name}: its BigQuery jobs could not be cancelled. ${response.error}`); said = true }
     } catch { failed = [] }
-    await this.api.dropJobRecords?.(key).catch(() => {})
+    // Main dropped the records it read for the cancel (what could not be cancelled stays in BigQuery's job history); a
+    // job the tab started meanwhile keeps its record.
     if (failed.length) said = true
     if (failed.length && !this.disposed) this.notifyJobs?.(`${name}: ${failed.length === 1 ? `BigQuery job ${failed[0]} could not be cancelled` : `BigQuery jobs ${failed.join(', ')} could not be cancelled`}. Cancel ${failed.length === 1 ? 'it' : 'them'} in BigQuery's job history.`, failed)
     return said

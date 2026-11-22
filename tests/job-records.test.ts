@@ -183,11 +183,15 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     expect(source).toContain('if (value.disconnected) connectionProfiles.delete(connectionId)')
     expect(source).toContain("buttons: [one ? 'Cancel Job' : 'Cancel Jobs', 'Keep'], defaultId: 1, cancelId: 1")
     // Deleting a profile with running jobs asks, and keeps the profile when a cancel fails.
-    expect(source).toContain("const running = jobRecords.forProfile(id).filter(record => record.state === 'running' && !record.auxiliary)")
+    expect(source).toContain("const running = bigQuery ? jobRecords.forProfile(id).filter(record => record.state === 'running' && !record.auxiliary) : []")
+    // A SQL Server delete reads no job records; Keep Connection after failed cancels still says what the others noted.
+    expect(source).toContain('const unread = bigQuery && await jobRecords.load().then(() => false, () => true)')
+    expect(source).toMatch(/could not be cancelled\.\$\{notes\.length \? ` \$\{notes\.slice\(0, 5\)\.join\(' '\)\}` : ''\}`\)/)
+    // A cancel through main drops only the records it read: a job started while it waited keeps its record.
+    expect(source).toMatch(/const records = jobRecords\.forKeys\(keys\)\n    const cancel = await cancelRecordedJobs\(records\.filter[^\n]*\n    jobRecords\.dropJobs\(records\.map\(record => record\.jobId\)\)/)
     expect(source).toContain("buttons: ['Delete Anyway', 'Keep Connection'], defaultId: 1, cancelId: 1")
     expect(source).toContain('if (anyway !== 0) throw new Error(`The connection was kept')
     // Records that cannot be read ask before a BigQuery connection goes; reads leave out expired records.
-    expect(source).toContain('const unread = await jobRecords.load().then(() => false, () => true)')
     expect(source).toContain('const failed = [...cancel.uncancellable, ...cancel.jobs.filter(job => !job.cancelled).map(job => job.jobId)]')
     // A review from a page replaced while it read asks nothing; its successor asks.
     expect(source).toMatch(/if \(generation !== rendererGeneration\) return null\n    const orphans/)

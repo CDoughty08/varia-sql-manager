@@ -339,7 +339,7 @@ describe('Close Results while a BigQuery job runs', () => {
 })
 
 describe('restored jobs cancelled from their records', () => {
-  it("cancels a restored tab's jobs through main before dropping its records, and shows what could not be cancelled", async () => {
+  it("cancels a restored tab's jobs through main, which drops the records it read (not the tab's whole key), and shows what could not be cancelled", async () => {
     const f = fixture({ connected: false }), notifyJobs = vi.fn(), order: string[] = []
     const cancelRestoredJobs = vi.fn<VariaApi['cancelRestoredJobs']>(async () => { order.push('cancel'); return { ok: true, value: { jobs: [{ jobId: 'job_1', cancelled: true }, { jobId: 'job_2', cancelled: false, error: 'Access denied.' }], uncancellable: ['job_3'] } } })
     const dropJobRecords = vi.fn<VariaApi['dropJobRecords']>(async () => { order.push('drop'); return { ok: true, value: undefined } })
@@ -351,7 +351,8 @@ describe('restored jobs cancelled from their records', () => {
     f.queries.sessionClosed(f.tab.id, 'cancelJob')
     await settle(); await settle()
     expect(cancelRestoredJobs).toHaveBeenCalledWith([key])
-    expect(order).toEqual(['cancel', 'drop'])
+    // A job the tab starts while the cancel waits for DONE keeps its record: main dropped only the ones it read.
+    expect(order).toEqual(['cancel'])
     expect(f.queries.getSnapshot()[f.tab.id].jobs).toBeUndefined()
     expect(notifyJobs).toHaveBeenCalledWith("orders.sql: BigQuery jobs job_3, job_2 could not be cancelled. Cancel them in BigQuery's job history.", ['job_3', 'job_2'])
   })

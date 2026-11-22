@@ -314,9 +314,9 @@ In the workbench:
   the default), or follows the remembered choice. Cancel the job stops it as Stop does. Leave it running sends
   `query.cancel` with `detach`: the results close, the job keeps the tab's session, the next Execute waits for it (Stop
   cancels it), and closing the tab asks about it again while it runs.
-- **Jobs without a tab.** After a start whose tabs were restored (or with nothing to restore), running jobs whose tab is gone (a crash, a tab whose copy was discarded)
-  are asked about once: Cancel Jobs or Keep (the default). Jobs an AutoRecover copy may still reopen are left for it.
-  Finished ones are dropped silently.
+- **Jobs without a tab.** After a start whose tabs were restored (or with nothing to restore), running jobs whose tab is
+  gone (a crash, or an AutoRecover copy discarded, then asked at the next start) are asked about once: Cancel Jobs or
+  Keep (the default). Jobs an AutoRecover copy may still reopen are left for it. Finished ones are dropped silently.
 - **Deleting a saved connection.** One whose jobs still run asks first: Cancel Jobs and Delete, or Keep Connection (the
   default). Varia cannot cancel them once the connection is gone. Jobs that cannot be cancelled (broken credentials, a
   job that finished long ago) ask again, with Delete Anyway leaving them to BigQuery's job history; so does a connection
