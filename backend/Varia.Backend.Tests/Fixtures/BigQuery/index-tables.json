@@ -1,0 +1,15 @@
+{"kind":"bigquery#tableList","etag":"example","tables":[
+{"kind":"bigquery#table","tableReference":{"projectId":"varia-alpha","datasetId":"sales","tableId":"orders"},"type":"TABLE","creationTime":"1700000000000"},
+{"kind":"bigquery#table","tableReference":{"projectId":"varia-alpha","datasetId":"sales","tableId":"events_20260101"},"type":"TABLE","creationTime":"1767225600000"},
+{"kind":"bigquery#table","tableReference":{"projectId":"varia-alpha","datasetId":"sales","tableId":"events_20260103"},"type":"TABLE","creationTime":"1767398400000"},
+{"kind":"bigquery#table","tableReference":{"projectId":"varia-alpha","datasetId":"sales","tableId":"events_20260102"},"type":"TABLE","creationTime":"1767312000000"},
+{"kind":"bigquery#table","tableReference":{"projectId":"varia-alpha","datasetId":"sales","tableId":"events_summary"},"type":"TABLE","creationTime":"1700000000000"},
+{"kind":"bigquery#table","tableReference":{"projectId":"varia-alpha","datasetId":"sales","tableId":"audit_20261399"},"type":"TABLE","creationTime":"1700000000000"},
+{"kind":"bigquery#table","tableReference":{"projectId":"varia-alpha","datasetId":"sales","tableId":"audit_20261398"},"type":"TABLE","creationTime":"1700000000000"},
+{"kind":"bigquery#table","tableReference":{"projectId":"varia-alpha","datasetId":"sales","tableId":"orders_2024"},"type":"SNAPSHOT","creationTime":"1700000000000"},
+{"kind":"bigquery#table","tableReference":{"projectId":"varia-alpha","datasetId":"sales","tableId":"orders_copy"},"type":"TABLE","creationTime":"1700000000000"},
+{"kind":"bigquery#table","tableReference":{"projectId":"varia-alpha","datasetId":"sales","tableId":"daily"},"type":"VIEW","creationTime":"1700000000000"},
+{"kind":"bigquery#table","tableReference":{"projectId":"varia-alpha","datasetId":"sales","tableId":"totals"},"type":"MATERIALIZED_VIEW","creationTime":"1700000000000"},
+{"kind":"bigquery#table","tableReference":{"projectId":"varia-alpha","datasetId":"sales","tableId":"landing"},"type":"EXTERNAL","creationTime":"1700000000000"},
+{"kind":"bigquery#table","tableReference":{"projectId":"varia-alpha","datasetId":"sales","tableId":"bad`name"},"type":"TABLE","creationTime":"1700000000000"}
+],"totalItems":13}

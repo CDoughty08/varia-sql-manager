@@ -328,6 +328,8 @@ internal sealed partial class SqlService
                     // A listing that fails leaves the children unread: the parent's own rows are shown, and the summary says so.
                     catch (Exception error) when (!token.IsCancellationRequested && error is not (BigQueryJobException or ChildReadFailure)) { children = null; }
                 }
+                // DDL changes what the Search Objects index holds: its datasets are re-read by the next build (MarkStale).
+                foreach (var (ddlProject, ddlDataset) in DdlDatasets(finished, statement, children, project, dataset)) search.MarkStale(args.ConnectionId, ddlProject, ddlDataset);
                 if (sessionJob)
                 {
                     if (!script) session.Transaction = BigQueryService.Apply(startState, statement, jobFailed is not null);
@@ -616,6 +618,30 @@ internal sealed partial class SqlService
 
     /// <summary><c>project:LOCATION.job_id</c>, the fully qualified id the console and bq show.</summary>
     internal static string JobName(string project, string? location, string jobId) => project + ":" + (location is null ? "" : location + ".") + jobId;
+
+    /// <summary>Whether a statement type is DDL that can change what an index lists (CREATE_TABLE, DROP_VIEW, ALTER_TABLE, CREATE_SCHEMA …).</summary>
+    internal static bool ChangesObjects(string? statement) =>
+        statement is not null && (statement.StartsWith("CREATE_", StringComparison.Ordinal) || statement.StartsWith("DROP_", StringComparison.Ordinal) || statement.StartsWith("ALTER_", StringComparison.Ordinal));
+
+    /// <summary>
+    /// The datasets a finished job's DDL changed: its target table's, routine's or dataset's, as the job's statistics name them. A
+    /// script's child jobs carry no target in their listing, so DDL among them marks the tab's default dataset (the one an unqualified
+    /// name lands in); DDL that names another dataset inside a script is found by the next full build or a Refresh.
+    /// </summary>
+    internal static IEnumerable<(string Project, string Dataset)> DdlDatasets(Google.Apis.Bigquery.v2.Data.Job job, string? statement, IReadOnlyList<BigQueryChild>? children, string project, string? dataset)
+    {
+        var query = job.Statistics?.Query;
+        var found = new HashSet<(string, string)>();
+        if (ChangesObjects(statement))
+        {
+            if (query?.DdlTargetTable is { ProjectId: { } tableProject, DatasetId: { } tableDataset }) found.Add((tableProject, tableDataset));
+            else if (query?.DdlTargetRoutine is { ProjectId: { } routineProject, DatasetId: { } routineDataset }) found.Add((routineProject, routineDataset));
+            else if (query?.DdlTargetDataset is { ProjectId: { } datasetProject, DatasetId: { } targetDataset }) found.Add((datasetProject, targetDataset));
+            else if (dataset is not null) found.Add((project, dataset));
+        }
+        if (dataset is not null && children is not null && children.Any(child => ChangesObjects(child.StatementType))) found.Add((project, dataset));
+        return found;
+    }
 
     /// <summary>"CREATE TABLE completed." from a statement type and DDL operation BigQuery reports.</summary>
     internal static string StatementSentence(string statement, string? ddl)

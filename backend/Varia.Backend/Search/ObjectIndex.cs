@@ -32,7 +32,14 @@ internal sealed class DatabaseIndex(string database, ObjectTable table, long byt
     /// <summary>An index of <paramref name="objects"/> as they are, holding no pool references (checks and benchmarks).</summary>
     public DatabaseIndex(string database, IndexedObject[] objects, long bytes, int modules, int cut) : this(database, ObjectTable.Of(objects), bytes, modules, cut) { }
 
+    /// <summary>The database; for BigQuery, the project.</summary>
     public string Database { get; } = database;
+    /// <summary>BigQuery: the dataset whose objects this holds (its schema, in the table); null for a project's own entry and for SQL Server.</summary>
+    public string? Dataset { get; init; }
+    /// <summary>What the connection's index holds it under: the database, or for a BigQuery dataset its project and name.</summary>
+    public string Key => Dataset is null ? Database : Database + "\u0001" + Dataset;
+    /// <summary>BigQuery's facts beside the entries (creation times, rows, size, layout, shard groups, column descriptions), or null.</summary>
+    public BigQueryFacts? Facts { get; init; }
     public ObjectTable Table { get; } = table;
     /// <summary>The memory its records hold (<see cref="IndexMemory"/>), charged against the index's budget until the database is
     /// replaced or dropped. Its names and definitions are the pool's (<see cref="Pooled"/>).</summary>
@@ -305,10 +312,24 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
         lock (gate)
         {
             if (Disposed) { Drop(value, value.Bytes - value.Credited); return; }
-            databases.Remove(value.Database, out var old);
+            databases.Remove(value.Key, out var old);
             Settle(old, value);
-            databases[value.Database] = value;
+            databases[value.Key] = value;
         }
+    }
+
+    /// <summary>Drops the reads <paramref name="keep"/> refuses (a BigQuery listing's datasets and projects that are gone).</summary>
+    public void KeepWhere(Func<DatabaseIndex, bool> keep)
+    {
+        lock (gate)
+            foreach (var (key, value) in databases.Where(pair => !keep(pair.Value)).ToList())
+                if (databases.Remove(key, out var old)) Drop(old, old.Bytes);
+    }
+
+    /// <summary>The read held under <paramref name="key"/> (<see cref="DatabaseIndex.Key"/>), or null.</summary>
+    public DatabaseIndex? Get(string key)
+    {
+        lock (gate) return databases.GetValueOrDefault(key);
     }
 
     /// <summary>Drops the databases a new listing no longer names.</summary>
@@ -462,7 +483,20 @@ internal static class IndexClock
 /// <summary>What a search asks: its text and options, where to look, and how many hits to answer. Fuzzy adds approximate name
 /// matches (<see cref="FuzzyName"/>) below the exact ones; it never applies to a regular expression or to definitions.</summary>
 internal sealed record SearchQuery(string Text, bool CaseSensitive, bool WholeWord, bool Regex, bool Names, bool Definitions, IReadOnlySet<string>? Kinds, string? Database, int Limit,
-    bool Fuzzy = false);
+    bool Fuzzy = false, string? Project = null, string? Dataset = null)
+{
+    /// <summary>The BigQuery kinds split by subtype, each a filter of its own (src/shared/explorer/search.ts bigQuerySearchTypes): a plain
+    /// kind keeps only its shapes without one of these subtypes.</summary>
+    public static readonly string[] Variants = ["bqTable:snapshot", "bqTable:clone", "bqRoutine:procedure", "bqRoutine:tableValued"];
+
+    /// <summary>Whether the search's kinds keep objects of <paramref name="shape"/>: its kind:subtype variant when it has one, else its kind.</summary>
+    public bool Keeps(ObjectShapes.Shape shape)
+    {
+        if (Kinds is null) return true;
+        var variant = shape.Subtype is null ? null : shape.Kind + ":" + shape.Subtype;
+        return variant is not null && Array.IndexOf(Variants, variant) >= 0 ? Kinds.Contains(variant) : Kinds.Contains(shape.Kind);
+    }
+}
 
 /// <summary>Searches a connection's index. Names rank first (an exact name, then one that starts with the text, then any, then
 /// under Fuzzy Match the approximate ones: every word found but apart, within edits, then by sound, each by fewest edits),
@@ -478,7 +512,8 @@ internal static class IndexSearch
     /// <summary>A hit as the scan finds it, before its result is built: its rank, the object and where its name matched (From is
     /// -1 when only its definition did, whose first match it then carries). The scan keeps at most the candidate cap of these;
     /// labels are built only for the kept ones, and results (match counts, previews, dates) only for the best `limit`.</summary>
-    private readonly record struct Candidate(int Rank, int Score, string? Database, ObjectTable Table, int At, int From, int Length, bool Approximate, int DefinitionAt, int DefinitionLength);
+    private readonly record struct Candidate(int Rank, int Score, string? Database, ObjectTable Table, int At, int From, int Length, bool Approximate, int DefinitionAt, int DefinitionLength,
+        BigQueryFacts? Facts = null);
 
     public static ObjectSearchResult Run(ConnectionIndex index, SearchQuery query, SearchMatcher matcher, ObjectIndexLimits limits, ObjectIndexStatus status, CancellationToken token)
     {
@@ -493,18 +528,21 @@ internal static class IndexSearch
         var dotted = query.Text.Contains('.');
         // Long definitions are packed: each is unpacked into this search's own buffers as it is read.
         var scratch = new PackedText.Scratch();
-        var databases = index.Databases.OrderBy(value => value.Database, StringComparer.OrdinalIgnoreCase).ToList();
-        var sources = new List<(string? Database, ObjectTable Table)>();
-        if (query.Database is null && index.Server is { } server) sources.Add((null, server.Table));
-        if (query.Database is null && index.Agent is { } agent) sources.Add((null, agent.Table));
-        sources.AddRange(databases.Where(value => query.Database is null || string.Equals(value.Database, query.Database, StringComparison.Ordinal))
-            .Select(value => ((string?)value.Database, value.Table)));
+        var databases = index.Databases.OrderBy(value => value.Database, StringComparer.OrdinalIgnoreCase).ThenBy(value => value.Dataset ?? "", StringComparer.OrdinalIgnoreCase).ToList();
+        var sources = new List<(string? Database, ObjectTable Table, BigQueryFacts? Facts)>();
+        if (query.Database is null && index.Server is { } server) sources.Add((null, server.Table, null));
+        if (query.Database is null && index.Agent is { } agent) sources.Add((null, agent.Table, null));
+        // A BigQuery search narrowed to a project or dataset keeps only its reads (a dataset's leaves out the project's own entry).
+        sources.AddRange(databases.Where(value => (query.Database is null || string.Equals(value.Database, query.Database, StringComparison.Ordinal))
+                && (query.Project is null || string.Equals(value.Database, query.Project, StringComparison.Ordinal))
+                && (query.Dataset is null || string.Equals(value.Dataset, query.Dataset, StringComparison.Ordinal)))
+            .Select(value => ((string?)value.Database, value.Table, value.Facts)));
         if (index.Resource is { } resource)
-            sources.Add((query.Database ?? databases.FirstOrDefault(value => value.Database == "master")?.Database ?? databases.FirstOrDefault()?.Database ?? "master", resource.Table));
-        foreach (var (name, table) in sources)
+            sources.Add((query.Database ?? databases.FirstOrDefault(value => value.Database == "master")?.Database ?? databases.FirstOrDefault()?.Database ?? "master", resource.Table, null));
+        foreach (var (name, table, facts) in sources)
         {
             // Which of the table's shapes the search's kinds keep, worked out once per table rather than once per object.
-            var kept = query.Kinds is null ? null : table.Shapes.Select(shape => query.Kinds.Contains(shape.Kind)).ToArray();
+            var kept = query.Kinds is null ? null : table.Shapes.Select(query.Keeps).ToArray();
             for (var at = 0; at < table.Count; at++)
             {
                 // The budget and Stop are checked by objects scanned, not hits found: a search with few hits still reads every
@@ -518,6 +556,7 @@ internal static class IndexSearch
                 }
                 if (kept is not null && !kept[table.ShapeOf(at)]) continue;
                 if (!Match(name, table, at, query, matcher, fuzzy, dotted, scratch, out var candidate)) continue;
+                if (facts is not null) candidate = candidate with { Facts = facts };
                 total++;
                 var key = (candidate.Rank, candidate.Score, table.System(at));
                 if (found.Count < limits.Candidates) found.Enqueue(candidate, key);
@@ -639,8 +678,13 @@ internal static class IndexSearch
         }
         var parent = table.Parent(at);
         var via = table.Via(at);
+        var modified = table.Modified(at)?.ToString("yyyy-MM-ddTHH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
+        int[]? range = hit.From < 0 ? null : [hit.From, hit.Length];
+        if (BigQueryFacts.IsBigQuery(table.Kind(at)))
+            return new(BigQueryFacts.RefOf(table, at, hit.Database!), table.Folder(at), label, range, modified, definition, table.Subtype(at), parent < 0 ? null : table.Folder(parent),
+                Approximate: hit.Approximate ? true : null, Type: table.Kind(at) == "bqColumn" ? table.Typed(at)?.TypeName : null, Shards: hit.Facts?.Shards(at));
         var value = new ObjectRefDto(table.Kind(at), hit.Database, table.Schema(at), table.Name(at), parent < 0 ? null : new ParentRefDto(table.Kind(parent), table.Schema(parent)!, table.Name(parent)));
-        return new(value, table.Folder(at), label, hit.From < 0 ? null : [hit.From, hit.Length], table.Modified(at)?.ToString("yyyy-MM-ddTHH:mm:ss", System.Globalization.CultureInfo.InvariantCulture),
+        return new(value, table.Folder(at), label, range, modified,
             definition, table.Subtype(at), parent < 0 ? null : table.Folder(parent), via >= 0 ? new ViaRefDto(table.Schema(via)!, table.Name(via), table.Folder(via)) : null, hit.Approximate ? true : null);
     }
 

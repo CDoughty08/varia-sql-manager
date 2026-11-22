@@ -1,0 +1,1 @@
+{"models":[{"etag":"example","modelReference":{"projectId":"varia-alpha","datasetId":"sales","modelId":"orders_forecast"},"modelType":"ARIMA_PLUS","creationTime":"1700000000000","lastModifiedTime":"1700000700000"}]}
