@@ -207,15 +207,23 @@ internal static partial class BigQueryExecutionChecks
             $"a value list's ticks are the kept filters' rows: {keptCode} {keptMessage} {InsertedSql(harness)}");
         // A snapshot the list cannot keep (past its 24) returns its memory once: the budget's count stays true.
         {
-            // Opened until the list refuses one (it already keeps a few), measuring before each.
-            string full = "ok";
+            using var roomy = new Harness(Lines(3000), new ResultStore(256L << 20, 64L << 20));
+            await roomy.ConnectAsync();
+            var (_, executed, _) = await roomy.Execute("SELECT n, s FROM t", Windowed);
+            var roomyId = executed!.ResultSets.Single().ResultId;
+            ValueListRows(roomy, (null, 5, true), ("apple", 7, true), ("kiwi", 2, false));
+            var (_, listed, _, _) = await Run(roomy, "results.remoteQuery", new JsonObject { ["queryId"] = Guid.NewGuid().ToString(), ["resultId"] = roomyId, ["generation"] = 1, ["kind"] = "distinct", ["column"] = 1 });
+            var roomyList = listed!.ResultSets.Single().ResultId;
+            string full = "ok", refusal = "";
             long before = 0;
             for (var open = 0; open <= ViewSorter.MaxDistinctSnapshots && full == "ok"; open++)
             {
-                before = harness.Service.Results.UsedBytes;
-                full = (await harness.Call("results.distinct", new JsonObject { ["resultId"] = list.ResultId, ["column"] = 0 })).Item1;
+                before = roomy.Service.Results.UsedBytes;
+                var answered = await roomy.Call("results.distinct", new JsonObject { ["resultId"] = roomyList, ["column"] = 0 });
+                (full, refusal) = (answered.Item1, answered.Item3);
             }
-            check(full == "TOO_LARGE" && harness.Service.Results.UsedBytes == before, $"a value list's snapshot past the limit returns its memory once: {full} {before} -> {harness.Service.Results.UsedBytes}");
+            check(full == "TOO_LARGE" && refusal.Contains("as many value lists", StringComparison.Ordinal) && roomy.Service.Results.UsedBytes == before,
+                $"a value list's snapshot past the limit returns its memory once: {full} {refusal} {before} -> {roomy.Service.Results.UsedBytes}");
         }
         // Values that do not fit the store are refused whole, never kept in part.
         {
