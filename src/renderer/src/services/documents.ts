@@ -346,10 +346,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     const number = /^SQLQuery(\d+)\.sql$/i.exec(o.baseName ?? o.name)?.[1]
     if (number && Number(number) < 1_000_000) this.queryCounter = Math.max(this.queryCounter, Number(number))
     const extra = { ...o.baseName ? { baseName: o.baseName } : {}, ...!kind && o.server ? { lastServer: o.server } : {}, ...o.provider ? { provider: o.provider } : {}, ...!kind && o.targetId ? { targetId: o.targetId, attachWanted: o.attachWanted ?? false, sessionNotice: 'restarted' as const } : {}, ...o.pinned ? { pinned: true } : {} }
-    const document = this.add(o.name, o.text, kind ? '' : o.database ?? (o.provider === 'bigquery' ? '' : 'master'), undefined, o.dirty, o.file, kind, !!kind && o.text.length > gridLimits.documentBracketChars, o.eol, extra)
-    // A file whose text was all deleted is still a change to save.
-    if (o.dirty && !o.text && o.file) this.markUnsaved(document.id)
-    return this.get(document.id) ?? document
+    return this.add(o.name, o.text, kind ? '' : o.database ?? (o.provider === 'bigquery' ? '' : 'master'), undefined, o.dirty, o.file, kind, !!kind && o.text.length > gridLimits.documentBracketChars, o.eol, extra)
   }
   /** Whether a large value is still being appended to the document: its text is not all there yet. */
   isFilling(id: string): boolean { return !!this.entries.get(id)?.fill }
@@ -368,14 +365,16 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     // Before the saved version is read: setting the line ending is a change, though not one Undo reverts.
     if (eol) model.setEOL(eol === 'crlf' ? 1 : 0)
     const targetId = !kind && connectionId ? this.options.target?.(connectionId) : undefined
-    const document: QueryDocument = { id, name, database, connectionId, file, dirty: unsaved && !!text, savedVersionId: unsaved && text ? null : model.getAlternativeVersionId(), ...kind ? { kind } : {}, ...targetId ? { targetId, attachWanted: true } : {}, ...extra }
+    // A recovered file can have an unsaved deletion of its entire contents.
+    const dirty = unsaved && (!!file || text.length > 0)
+    const document: QueryDocument = { id, name, database, connectionId, file, dirty, savedVersionId: dirty ? null : model.getAlternativeVersionId(), ...kind ? { kind } : {}, ...targetId ? { targetId, attachWanted: true } : {}, ...extra }
     const subscription = model.onDidChangeContent(() => {
       if (this.pendingReveal?.id === id) this.dropPendingFocus()
       const current = this.get(id), entry = this.entries.get(id), fill = entry?.fill
       if (entry && !fill?.appending) entry.edits++
       if (!current) return
       if (fill) { if (!fill.appending) fill.userEdited = true; return }
-      const dirty = current.savedVersionId === null ? model.getValueLength() > 0 : model.getAlternativeVersionId() !== current.savedVersionId
+      const dirty = current.savedVersionId === null ? !!current.file || model.getValueLength() > 0 : model.getAlternativeVersionId() !== current.savedVersionId
       // SQL never enters a React snapshot; ordinary typing only publishes a dirty transition.
       if (dirty !== current.dirty) this.replace(id, { dirty })
     })

@@ -301,7 +301,10 @@ internal static class SearchPackedChecks
                         if (index + length > text.Length) continue;
                         var now = IndexSearch.Preview(text.AsSpan(), index, length, 3, chars, false);
                         var then = OldPreview(text, index, length, 3, chars, false);
-                        if (now.Line != then.Line || now.Column != then.Column || now.Preview != then.Preview || !now.Range.SequenceEqual(then.Range) || now.Before != then.Before || now.After != then.After)
+                        // Intersect the old source-relative range with the characters the preview actually contains.
+                        var first = Math.Clamp(then.Range[0], 0, then.Preview.Length);
+                        var last = Math.Clamp(then.Range[0] + then.Range[1], first, then.Preview.Length);
+                        if (now.Line != then.Line || now.Column != then.Column || now.Preview != then.Preview || !now.Range.SequenceEqual([first, last - first]) || now.Before != then.Before || now.After != then.After)
                             differ.Add(which + ":" + index + "+" + length + "/" + chars);
                     }
         }

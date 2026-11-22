@@ -189,12 +189,12 @@ internal static class AgentChecks
     private static void Catalog(Action<bool, string> check)
     {
         var catalog = AgentCatalog.Current;
-        check(AgentCatalog.Version == 1 && catalog.EngineEditions.SetEquals([1, 2, 3, 8]) && catalog.ReadProcedures.Count == 15 && catalog.MasterReadShapes.Count == 4
+        check(AgentCatalog.Version == 1 && catalog.EngineEditions.SetEquals([1, 2, 3, 8]) && catalog.ReadProcedures.Count == 16 && catalog.ReadProcedures.ContainsKey("sysmail_help_profile_sp") && catalog.MasterReadShapes.Count == 4
             && !catalog.WriteProcedures.ContainsKey("xp_servicecontrol") && catalog.WriteProcedures.Values.All(database => database == "msdb") && catalog.WriteProcedures["sp_start_job"] == "msdb" && !catalog.ReadProcedures.ContainsKey("sp_purge_jobhistory")
             && catalog.ReadProcedures["sp_help_jobhistory"].Arguments["@mode"].SetEquals(["N'FULL'"]) && catalog.ReadProcedures["sp_help_job"].Arguments["@job_id"].Count == 0
             && catalog.Limit("historyRows") == 10_000 && catalog.Limit("serviceWaitMs") == 60_000 && catalog.RunStatuses[4] == "In Progress" && catalog.ExecutionStatuses[3] == "Between retries"
             && catalog.LastRunOutcomes[5] == "Unknown",
-            "the embedded Agent catalogue is version 1: Agent on editions 1, 2, 3 and 8, fifteen msdb read procedures (never sp_purge_jobhistory), four master shapes, the write list (msdb only: no xp_servicecontrol, AG-2) and the limits");
+            "the embedded Agent catalogue is version 1: Agent on editions 1, 2, 3 and 8, sixteen msdb read procedures (the job document's sysmail_help_profile_sp among them) (never sp_purge_jobhistory), four master shapes, the write list (msdb only: no xp_servicecontrol, AG-2) and the limits");
         check(catalog.Offers("serviceControl", "windows") && !catalog.Offers("serviceControl", "linux") && !catalog.Offers("alerts", "managedInstance") && catalog.Offers("proxies", "linux")
             && catalog.PlatformOf(3, false) == "windows" && catalog.PlatformOf(2, true) == "linux" && catalog.PlatformOf(8, false) == "managedInstance" && catalog.PlatformOf(4, false) is null
             && catalog.PlatformOf(5, false) is null && catalog.PlatformSubsystems["linux"].SetEquals(["TSQL", "Distribution", "Snapshot", "LogReader"]),

@@ -324,6 +324,9 @@ internal static class BigQueryExplorerChecks
             "Script As › SELECT reads tables.get's schema and runs in the dataset: " + select.Result?.Text);
         var drop = await harness.Script("drop", (JsonObject)Object("bqRoutine", "refresh_totals")["object"]!.DeepClone());
         check(drop.Result?.Text == "DROP PROCEDURE IF EXISTS `varia-alpha`.`sales`.`refresh_totals`;", "a routine's DROP reads its type from routines.get: " + drop.Result?.Text);
+        harness.Fake.On("GET", Sales + "/routines/total", new BigQueryFake.Reply(200, """{"routineType":"AGGREGATE_FUNCTION"}"""));
+        var aggregate = await harness.Script("drop", (JsonObject)Object("bqRoutine", "total")["object"]!.DeepClone());
+        check(aggregate.Result?.Text == "DROP FUNCTION IF EXISTS `varia-alpha`.`sales`.`total`;", "an aggregate routine uses DROP FUNCTION: " + aggregate.Result?.Text);
         var jobsBefore = harness.Fake.To(BigQueryFake.Jobs).Count();
         var estimate = await harness.Script("create", (JsonObject)orders.DeepClone(), estimateOnly: true);
         var dryRun = harness.Fake.To(BigQueryFake.Jobs).Skip(jobsBefore).Select(request => JsonNode.Parse(request.Body)!).ToArray();
@@ -487,6 +490,14 @@ internal static class BigQueryExplorerChecks
         var (planCode, _, _) = await harness.Call("query.execute", plan);
         check(hostile == "INVALID_PARAMS" && datasetCode == "INVALID_PARAMS" && planCode == "UNSUPPORTED_PROVIDER",
             $"a preview of a refused name, with a refused tab dataset, or with SQL Server's options is refused: {hostile} {datasetCode} {planCode}");
+        // A preview reads into memory whatever Keep results says, but its residence and window cache are bounded as Execute's.
+        var badResidence = Query("preview");
+        badResidence["residence"] = "disk";
+        var (residenceCode, _, _) = await harness.Call("query.execute", badResidence);
+        var badCache = Query("preview");
+        badCache["windowCacheMiB"] = 1;
+        var (cacheCode, _, _) = await harness.Call("query.execute", badCache);
+        check(residenceCode == "INVALID_PARAMS" && cacheCode == "INVALID_PARAMS", $"a preview refuses an invalid residence or window cache: {residenceCode} {cacheCode}");
 
         // The tab keeps its own dataset (here the connection's), not the previewed table's, which may be another project's.
         harness.Fake.On("GET", Base + "/datasets/staging/tables/preview", BigQueryFake.Fixture("table-preview"));

@@ -91,5 +91,11 @@ export const queryResultsSettings = [
     values: [{ value: 'entry', label: 'One row per entry' }, { value: 'unified', label: 'Two rows (−/+)' }], default: 'entry',
     keywords: ['compare', 'comparison', 'diff', 'differences', 'layout', 'one row', 'two rows', 'unified', 'old', 'new'],
     description: 'How a new comparison draws its rows. One row per entry, the default, shows a changed row once, each changed value as old → new. Two rows shows a changed row as its old row (−) and its new row (+), with the changed values coloured. A comparison too wide for one row per entry (more than 2,046 compared columns) shows two rows. The Layout button in a comparison toolbar changes that comparison only.'
+  },
+  {
+    key: 'queryResults.compare.rows', page: 'queryResults.sqlServer.grid', group: 'Comparisons', label: 'Rows of a comparison', title: 'Comparison rows', type: 'enum', varia: true,
+    values: [{ value: 'all', label: 'All rows' }, { value: 'changes', label: 'Changes only' }], default: 'all',
+    keywords: ['compare', 'comparison', 'diff', 'differences', 'rows', 'changes', 'unchanged', 'context', 'hide'],
+    description: 'Which rows a new comparison keeps. All rows, the default, keeps unchanged rows too, uncoloured. Changes only keeps the changed, added and removed rows, with a dashed rule where unchanged rows were left out. The Rows button in a comparison toolbar changes that comparison only.'
   }
 ] as const satisfies readonly SettingDef[]

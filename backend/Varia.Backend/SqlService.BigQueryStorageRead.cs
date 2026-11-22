@@ -72,7 +72,8 @@ internal sealed partial class SqlService
     /// <summary>Reads a session's streams into the set until they end or the set stores no more (the row limit, the budget).
     /// Rows not read are counted from BigQuery's total, as REST's reader counts them.</summary>
     private async Task ReadBigQueryArrowAsync(QueryArgs args, BigQueryReadSession session, ResultSetBuffer set, QueryBudget budget, long totalRows, RoomWaited roomWaited,
-        QueryEventSink events, Action<string> warn, CancellationToken token)
+        QueryEventSink events, Action<string> warn, CancellationToken token,
+        BigQueryWindow? window = null, QueryMessages? messages = null)
     {
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(token);
         // Batches charged but not yet stored, whatever the stream count: one being read and one ready. A stream takes a slot
@@ -90,6 +91,9 @@ internal sealed partial class SqlService
         long storedRows = 0;
         var storing = true;
         long extra = 0;
+        // An Automatic read the budget refused: the set switches to windowed once the read has stopped.
+        var switched = false;
+        TruncationReason? switchedFor = null;
         try
         {
             await foreach (var chunk in queue.Reader.ReadAllAsync(stop.Token))
@@ -98,6 +102,7 @@ internal sealed partial class SqlService
                 {
                     if (chunk.Refusal != TruncationReason.None)
                     {
+                        if (window is not null && SwitchesOn(set, chunk.Refusal)) { switched = true; switchedFor = chunk.Refusal; break; }
                         set.Skip(chunk.Refusal);
                         budget.Stop(chunk.Refusal);
                         storing = false;
@@ -111,6 +116,7 @@ internal sealed partial class SqlService
                     {
                         if (!store.TryReserve(budget, decoded, true, out var refusal))
                         {
+                            if (window is not null && SwitchesOn(set, refusal)) { switched = true; switchedFor = refusal; break; }
                             set.Skip(refusal);
                             budget.Stop(refusal);
                             storing = false;
@@ -153,10 +159,11 @@ internal sealed partial class SqlService
                 }
                 // A limit reached on a batch's last row stops here; the rest is counted from BigQuery's total.
                 if (storing && args.MaxRows > 0 && storedRows >= args.MaxRows && counted < totalRows) { set.Skip(TruncationReason.RowLimit); storing = false; }
-                if (!storing) break;
+                if (!storing && Switches(set, window)) switched = true;
+                if (!storing || switched) break;
             }
             // A stream's failure ends the queue with its error once the batches before it are read.
-            if (storing) await queue.Reader.Completion;
+            if (storing && !switched) await queue.Reader.Completion;
         }
         finally
         {
@@ -167,6 +174,7 @@ internal sealed partial class SqlService
             // Batches queued but never read give their charge back.
             while (queue.Reader.TryRead(out var left)) store.Return(budget, left.Charge);
         }
+        if (switched && SwitchToWindowed(set, window!, events, messages!, switchedFor)) return;
         if (totalRows > counted) set.CountRows(totalRows - counted);
         events.RowsChanged();
     }

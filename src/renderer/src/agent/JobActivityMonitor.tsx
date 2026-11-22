@@ -9,6 +9,7 @@ import {
 } from '../../../shared/agent/jobs'
 import { liveProbes, type LiveTone } from '../../../shared/live/catalog'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
+import { gridTarget } from '../grid/anchor'
 import Icon from '../Icon'
 import { Chip, ChipGroup } from '../kit/Chip'
 import DocumentFrame from '../kit/DocumentFrame'
@@ -158,10 +159,20 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
           <span className="agent-bulk-count">{state.overCap ? `More than ${formatCount(selected.length)} jobs selected: select at most ${formatCount(selected.length)}` : selected.length ? `${formatCount(selected.length)} ${plural(selected.length, 'job')} selected` : 'No job selected'}</span>
           {agentBulkVerbs.map(verb => <button key={verb} type="button" disabled={!!bulkWhy} title={bulkWhy ?? agentBulkTitles[verb].dialog}
             onClick={() => void workbench.commands.execute(agentBulkCommands[verb], { tabId: documentId }, 'toolbar')}>{agentBulkTitles[verb].button}</button>)}
+          <button type="button" disabled={!one} title={one ? `Open ${one.name} (Enter)` : 'Select one job to open it'}
+            onClick={() => void workbench.commands.execute('agent.openJob', { tabId: documentId }, 'toolbar')}>Open</button>
           <button type="button" className="agent-chevron" aria-expanded={expandedHere} disabled={!one} title={one ? 'Show the last run of the selected job below the list' : 'Select one job to see its last run'}
             onClick={() => service.toggleExpanded(documentId, one)}><Icon name={expandedHere ? 'chevron-down' : 'chevron-right'} />Last run</button>
+          <button type="button" disabled={!selected.length || state.overCap} title={selected.length ? 'Open the Log File Viewer with the selected jobs checked' : 'Select one or more jobs to view their history'}
+            onClick={() => void workbench.commands.execute('agent.viewHistory', { tabId: documentId }, 'toolbar')}><Icon name="history" />View history</button>
         </div>
-        <div className="agent-jobs-grid">
+        <div className="agent-jobs-grid" onDoubleClick={event => {
+          // Only on a job's row (GridView's own hit test): a header's border fits its column, and the area below the rows is no job.
+          // The grid's pointer layer lies over its rows, so every element under the pointer is asked, not just the event's target.
+          const root = (event.target as Element).closest('[role="grid"]')
+          const onRow = !!root && root.ownerDocument.elementsFromPoint(event.clientX, event.clientY).some(element => root.contains(element) && gridTarget(root, element).target?.row !== undefined)
+          if (onRow) void workbench.commands.execute('agent.openJob', { tabId: documentId }, 'toolbar')
+        }}>
           {unavailable ? <EmptyState icon="agent-activity" title="Job Activity Monitor is not available" detail={unavailable} />
             : <>
               <LiveGridPane live={handle} probe={agentJobsProbe} label="Jobs" toneLabel={toneLabel} filters={filters} state={service.gridState(documentId)} onGrid={grid => service.attachGrid(documentId, grid)} />

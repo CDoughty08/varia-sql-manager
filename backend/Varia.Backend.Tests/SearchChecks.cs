@@ -368,6 +368,12 @@ internal static class SearchChecks
             "a long line's preview is cut around the match and says so");
         preview = IndexSearch.Preview("a\tb needle", 4, 6, 1, 160, false);
         check(!preview.Preview.Contains('\t'), "a preview shows tabs as spaces");
+        // The match is the m run: whatever of it the preview shows is marked, and nothing outside it.
+        var longMatch = IndexSearch.Preview(new string('x', 50) + new string('m', 240) + new string('y', 110), 50, 240, 2, 160, false);
+        var marked = longMatch.Preview.Substring(longMatch.Range[0], longMatch.Range[1]);
+        check(longMatch.Range is [0, 160] && longMatch.Preview.Length == 160 && marked.All(c => c == 'm') && !longMatch.Preview.Remove(longMatch.Range[0], longMatch.Range[1]).Contains('m')
+            && longMatch.Column == 51 && longMatch.Before && longMatch.After,
+            "a match longer than its preview highlights every visible matching character and keeps its source column");
         preview = IndexSearch.Preview("one\ntwo", 2, 3, 1, 160, false);
         check(preview.Line == 1 && preview.Range[1] == 1, "a match that spans lines shows up to its own line's end");
     }

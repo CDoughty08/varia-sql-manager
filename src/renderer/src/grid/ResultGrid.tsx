@@ -17,7 +17,7 @@ import GridShell, { GridErrorBoundary, instanceKey, type GridFunnels, type GridS
 import { gridOperation, operationNoun } from '../results/operations'
 import type { GridView } from './GridView'
 import { describeSelection } from './selection'
-import type { DiffSides } from './diff-gutter'
+import { diffKeyFlags, type DiffSides } from './diff-gutter'
 import { visibleColumnCount } from './hidden-columns'
 
 /** The name a grid's accessible label starts with for a Pivot or a comparison: its own ("Differences: Result 1 → Result 3"),
@@ -57,8 +57,13 @@ const lostText = 'These results are no longer available because the SQL backend 
 const incompleteText = 'This result is incomplete because an error, cancellation, or timeout stopped it. See Messages.'
 
 /** Why the grid shows fewer rows than the query read, if it does (B8 strips). */
-export function truncationText(o: { truncated?: string; rowsStored: number; rowsRead: number; budget?: QueryResult['budget'] }): string | undefined {
-  const shown = `Only the first ${formatCount(o.rowsStored)} of ${formatCount(o.rowsRead)} rows are shown`
+export function truncationText(o: { truncated?: string; rowsStored: number; rowsRead: number; budget?: QueryResult['budget']; residence?: string; rowsAvailable?: number }): string | undefined {
+  // A windowed BigQuery result keeps no rows here: what it can show is what the grid can read, capped by the rows-kept limit
+  // or, past that, by 32-bit row indexes.
+  const remote = o.residence === 'remote'
+  if (remote && !o.truncated) return undefined
+  if (remote && (o.rowsAvailable ?? 0) >= 2_147_483_647) return `Only the first ${formatCount(o.rowsAvailable ?? 0)} of ${formatCount(o.rowsRead)} rows can be shown: a grid reads at most ${formatCount(2_147_483_647)} rows of a result windowed in BigQuery.`
+  const shown = `Only the first ${formatCount(remote ? o.rowsAvailable ?? 0 : o.rowsStored)} of ${formatCount(o.rowsRead)} rows are shown`
   if (o.truncated === 'systemMemory') return `${shown} because the computer is low on memory. Execution continued.`
   if (o.truncated === 'queryBudget' || o.truncated === 'globalBudget') {
     // The figure the query stopped at when it did, not today's: the limit can change while the backend runs.
@@ -93,8 +98,6 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
   const cancelKey = useKeybindingLabel('query.cancel')
   const marked = useSyncExternalStore(highlights.subscribe, () => highlights.getSnapshot()[tabId]?.get(entry.key))
   const compared = useSyncExternalStore(compare.subscribe, () => compare.getSnapshot().info.get(setKey(entry.descriptor)))
-  // What its last change that did not publish said (a failure, a cancel, an input closed), until its next change.
-  const notice = useSyncExternalStore(compare.subscribe, () => compared ? compare.getSnapshot().notices.get(entry.key) : undefined)
   // A comparison's inputs, each the entry its link goes to while that exact result is open (else it reads closed), as a
   // string so the grid renders again only when one closes.
   const sourceKeys = useSyncExternalStore(results.subscribe, () => {
@@ -148,7 +151,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
       handle: shownRef.current.handle, descriptor: entry.descriptor, state: results.gridState(tabId, key),
       entry: key, resultNumber: entry.number, ...queryName(entry) ? { resultName: queryName(entry) } : {}, ...label ? { label } : {}, resultCount: now.count, stats: gridStats, showTypes: now.showTypes, rowSize: now.rowSize,
       ...now.turnedView ? { transposed: true, ...now.headerColumn === undefined ? {} : { headerColumn: now.headerColumn } } : {},
-      ...compared ? { diffSides: diffSidesOf(compared, results.getSnapshot()[tabId]?.sets ?? []), diffChanged: compared.columnChanges.map(column => column.changed > 0) } : {},
+      ...compared ? { diffSides: diffSidesOf(compared, results.getSnapshot()[tabId]?.sets ?? []), diffChanged: compared.columnChanges.map(column => column.changed > 0), diffKeys: diffKeyFlags(compared.match, entry.descriptor.columns.slice(0, visibleColumnCount(entry.descriptor)).map(column => column.name)) } : {},
       onSelection: selection => {
         const current = entry.handle.getSnapshot()
         results.announceSelection(tabId, describeSelection(selection, current.rowsAvailable, visibleColumnCount(entry.descriptor)))
@@ -221,20 +224,27 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
     else void view.prepare(target, 0, abort.signal).then(swap)
     return () => abort.abort()
   }, [target, entry])
+  // Changes only draws its hidden runs of unchanged rows only over the comparison's own rows in their own order: a sort or
+  // filter (a kind chip included) moves or drops the rows the runs sit between.
+  useEffect(() => {
+    if (!compared) return
+    const shown = shownRef.current.handle === entry.handle && !sort?.keys.length && !sort?.filters.length
+    viewRef.current?.setDiffGaps({ shown, trailing: compared.trailingHidden })
+  }, [compared, sort, target, swaps, tabId, entry, turnedView])
   const source = useMemo(() => resultsFilterSource(results, tabId, key), [results, tabId, key])
   const funnels = useMemo<GridFunnels>(() => ({ source, filtered, columnName: column => entry.descriptor.columns[column]?.name }), [source, filtered, entry])
   const onApi = useCallback((api: GridShellApi | undefined) => { apiRef.current = api }, [])
   const setRootEl = useCallback((element: HTMLDivElement | null) => { rootEl.current = element }, [])
   const lost = snapshot.state === 'lost'
-  const truncation = truncationText({ truncated: snapshot.truncated, rowsStored: snapshot.rowsStored, rowsRead: snapshot.rowsRead, budget })
+  const truncation = truncationText({ ...snapshot, budget })
   const sources = useMemo(() => { const tab = results.getSnapshot()[tabId]; return compared ? compareSources(tab, slotOf(tab, entry.key)?.sources ?? []) : undefined }, [compared, sourceKeys, results, tabId, entry])
-  // A comparison's strip says what it found, with what its highlights or last change say after it.
-  const compareNote = compared ? [compareText(compared, sources, notice), highlightText(marked, { comparison: true })].filter(Boolean).join(' ') : undefined
+  // A comparison's strip says what it found, with what its highlights say after it; its notices are under its toolbar.
+  const compareNote = compared ? [compareText(compared, sources), highlightText(marked, { comparison: true })].filter(Boolean).join(' ') : undefined
   const highlightNote = !lost && snapshot.state === 'complete' ? compareNote ?? (pivoted ? pivotStrip(pivoted, highlightText(marked), outOfDate) : highlightText(marked)) : undefined
   // Transposed, the first rows of the view (the sorted and filtered one, when the grid shows one) are drawn as columns:
   // past them the strip says so first, since no scrolling reaches the rest.
   const shownRows = useSyncExternalStore((target ?? entry.handle).subscribe, () => (target ?? entry.handle).getSnapshot().rowsAvailable)
-  const cap = turnedView && !lost && shownRows > wire.transpose.maxRows ? capStripText(shownRows, entry.descriptor.kind === 'pivot') : undefined
+  const cap = turnedView && !lost && shownRows > wire.transpose.maxRows ? capStripText(shownRows, entry.descriptor.kind === 'pivot', snapshot.residence === 'remote') : undefined
   const other = lost ? undefined : snapshot.incomplete ? incompleteText : truncation ?? highlightNote
   const note = cap && other ? `${cap} ${other}` : cap ?? other
   // A comparison's strip starts with links to its inputs: one goes to that grid (focused, so the stack scrolls to it).
@@ -257,7 +267,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
     focusResultGrid(rootEl.current?.ownerDocument, tabId, target)
   }, [results, tabId])
   const lead: StripLead | undefined = compared && sources?.length === 2 && note === compareNote
-    ? { links: sources.map(source => source.entry === undefined ? { label: source.name, closed: true, title: `${source.name} was closed after it was compared` } : { label: source.name, title: `Go to ${source.name}`, run: () => goTo(source.entry!) }), detail: [compareDetails(compared, notice), highlightText(marked, { comparison: true })].filter(Boolean).join(' ') }
+    ? { links: sources.map(source => source.entry === undefined ? { label: source.name, closed: true, title: `${source.name} was closed after it was compared` } : { label: source.name, title: `Go to ${source.name}`, run: () => goTo(source.entry!) }), detail: [compareDetails(compared), highlightText(marked, { comparison: true })].filter(Boolean).join(' ') }
     : undefined
   // While the query that filled the budget still runs, the strip can stop it: the catalogue's Cancel Executing Query, for this
   // grid's tab, whose running state stands in for the active tab's in the command's precondition.
