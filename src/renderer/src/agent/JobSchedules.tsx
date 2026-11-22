@@ -104,7 +104,7 @@ function PickPreview(props: Props & { readonly record: AgentScheduleRecord }) {
       </section>
     </div>
     <p>
-      <button type="button" className="primary" disabled={!editable || full} onClick={() => service.attachSchedule(state.id, record)}><Icon name="add" />Attach to this job</button>
+      <button type="button" className="primary" disabled={!editable || full || record.version === undefined || !record.modified} onClick={() => service.attachSchedule(state.id, record)}><Icon name="add" />Attach to this job</button>
       {full && <span className="field-note"> {jobScheduleText.tooMany}</span>}
     </p>
     <p className="field-note">{jobScheduleText.attachHint}</p>
@@ -131,6 +131,7 @@ function EntryEditor(props: Props & { readonly entry: JobScheduleEntry; readonly
   const { state, model, editable, service, entry, record } = props
   const now = service.now(state.id)
   const changeable = service.canChangeSchedule(state.id, record)
+  const detachable = service.canDetachSchedule(state.id, entry)
   const others = record ? otherJobs(state, model, record.id) : undefined
   const sharedCount = record ? record.jobCount - (entry.attached ? 0 : 1) : 0
   const problems = scheduleProblems(entry.fields, now, { platform: model.platform, idleDefined: state.shared?.model?.idleDefined })
@@ -140,13 +141,14 @@ function EntryEditor(props: Props & { readonly entry: JobScheduleEntry; readonly
     {others?.length ? <ul className="agent-schedule-jobs">{others.map(job => <li key={job.id}><Icon name="agent-job" />{job.name}{job.enabled ? '' : <span className="field-note"> · job disabled</span>}</li>)}</ul>
       : sharedCount > 0 && <p className="field-note">{state.scheduleJobs?.[record.id]?.state === 'failed' ? jobScheduleText.jobsReadFailed : jobScheduleText.onlyYourJobs}</p>}
     {readOnly ? <p className="field-note"><Icon name="lock" />{readOnly}</p> : sharedCount > 0 && <p className="field-note">{jobScheduleText.shared(sharedCount)}</p>}
-    <button type="button" disabled={!editable} onClick={() => service.copySchedule(state.id, entry.key)}><Icon name="copy" />{jobScheduleText.copy}</button>
+    <button type="button" disabled={!editable || !detachable} onClick={() => service.copySchedule(state.id, entry.key)}><Icon name="copy" />{jobScheduleText.copy}</button>
   </section> : undefined
   return <div className="agent-schedule-entry">
     <ScheduleEditor idPrefix={`agent-schedule-${state.id}-${entry.key.replace(/[^\w-]/g, '_')}`} fields={entry.fields} base={record ? scheduleFieldsOf(record) : undefined}
       disabled={!editable || !changeable} problems={problems} now={now} freeSlot={freeSlot(state, model, entry, now)} aside={aside} platform={model.platform}
       onChange={fields => service.updateSchedule(state.id, entry.key, fields)} />
-    <p><button type="button" disabled={!editable} onClick={() => service.removeSchedule(state.id, entry.key)}><Icon name="trash" />Remove from this job</button></p>
+    <p><button type="button" disabled={!editable || !detachable} onClick={() => service.removeSchedule(state.id, entry.key)}><Icon name="trash" />Remove from this job</button></p>
+    {!detachable && <p className="field-note"><Icon name="lock" />{jobScheduleText.unseen}</p>}
   </div>
 }
 

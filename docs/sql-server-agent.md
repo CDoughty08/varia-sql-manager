@@ -105,7 +105,7 @@ Schedules document manages the shared schedules. The job document's Steps sectio
   successful runs from `sp_help_jobhistory`, or a minute when it has none; a run is at least a second, so two starting together clash), against the runs of every other enabled job's
   schedules lasting theirs. A schedule shared with other jobs names them and says a change moves them too, with **Copy for this
   job only** (detach the shared one as read, add a copy that keeps the edits); one the login neither owns nor may change
-  (below sysadmin) is read-only with Copy. **Add** searches the shared schedules the login can see (any owner's: msdb's `sp_attach_schedule` asks only for the job's owner) by name or by when they run ("night", "every
+  (below sysadmin) is read-only with Copy, and one msdb hides from the login (another login's, below SQLAgentReaderRole) can be neither removed nor copied, since `sp_detach_schedule` could not find it. **Add** searches the shared schedules the login can see (any owner's: msdb's `sp_attach_schedule` asks only for the job's owner) by name or by when they run ("night", "every
   15 minutes", "sunday"); a match shows a preview (sentence, owner, next runs, the jobs that use it) with Attach, and New
   schedule starts from SSMS's defaults, named from the search. **Remove** marks the job's schedule removed with Undo and a
   choice: detach it and keep the schedule, or (its owner and sysadmin) detach it and delete it when no job uses it. Nothing

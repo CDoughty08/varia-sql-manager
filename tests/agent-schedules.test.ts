@@ -672,7 +672,7 @@ describe("the job document's Schedules section", () => {
     login: 'sa', sysadmin: true, platform: 'windows', categories: [uncategorizedCategory], operators: [], owners: ['sa'], steps: [], alerts: [], alertsEditable: true, mail: { checked: false, sysadmin: true },
     schedules: [record(1)], now: '2026-11-22T14:30:00'
   }
-  function jobWorkbench() {
+  function jobWorkbench(document = job) {
     const fixture = workbenchFixture({ agentPreview: true })
     cleanups.push(() => fixture.dispose())
     fixture.api.push(readyBackend())
@@ -680,7 +680,7 @@ describe("the job document's Schedules section", () => {
     let shared = schedulesModel()
     const answers: ApiResult<ActionExecuteResult>[] = []
     fixture.api.describeObject.mockImplementation(async params => ({ ok: true, value: (params.dialog === 'agentSchedules' ? { agentSchedules: shared, elapsedMs: 1 }
-      : params.dialog === 'agentJob' ? { agentJobDocument: job, elapsedMs: 1 } : { elapsedMs: 1 }) as ActionDescribeResult }))
+      : params.dialog === 'agentJob' ? { agentJobDocument: document, elapsedMs: 1 } : { elapsedMs: 1 }) as ActionDescribeResult }))
     fixture.api.executeObjectAction.mockImplementation(async () => answers.shift() ?? { ok: true, value: { steps: [], messages: [], elapsedMs: 1 } })
     const executes = () => fixture.api.executeObjectAction.mock.calls.map(([sent]) => sent as ActionRequest)
     return { ...fixture, executes, answers, setShared: (next: AgentSchedulesModel) => { shared = next } }
@@ -764,6 +764,25 @@ describe("the job document's Schedules section", () => {
     await settled()
     expect(jobDocuments.get(id)!.draft!.schedules.some(entry => entry.id === 2)).toBe(false)
     expect(jobDocuments.get(id)?.notice).toBe(jobScheduleText.pickedGone(1))
+  })
+  it("neither removes nor copies a job's schedule the login cannot see, and attaches no schedule without a guard", async () => {
+    const unseen = record(7, { name: 'Theirs', owner: undefined, version: undefined, modified: undefined })
+    const { jobDocuments } = jobWorkbench({ ...job, job: { ...job.job!, owner: 'pat' }, owners: ['pat'], login: 'pat', sysadmin: false, schedules: [unseen, record(1, { owner: 'pat' })] })
+    const id = jobDocuments.openJob('c1', 'ETL')
+    await settled()
+    const entry = jobDocuments.get(id)!.draft!.schedules[0]!
+    expect(jobDocuments.canDetachSchedule(id, entry)).toBe(false)
+    jobDocuments.removeSchedule(id, entry.key)
+    jobDocuments.copySchedule(id, entry.key)
+    expect(jobDocuments.get(id)!.draft!.schedules[0]).toEqual(entry)
+    expect(jobDocuments.get(id)!.draft!.schedules).toHaveLength(2)
+    jobDocuments.attachSchedule(id, record(8, { version: undefined }))
+    expect(jobDocuments.get(id)!.draft!.schedules).toHaveLength(2)
+    // One it can see leaves as before, and a guarded pick attaches: the job is the login's to edit.
+    jobDocuments.removeSchedule(id, jobDocuments.get(id)!.draft!.schedules[1]!.key)
+    expect(jobDocuments.get(id)!.draft!.schedules[1]?.remove).toBe('detach')
+    jobDocuments.attachSchedule(id, record(8))
+    expect(jobDocuments.get(id)!.draft!.schedules).toHaveLength(3)
   })
   it('drops a shared read that answers after a save started the reads over', async () => {
     const { jobDocuments, api } = jobWorkbench()

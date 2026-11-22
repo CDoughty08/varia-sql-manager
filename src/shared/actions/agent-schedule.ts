@@ -161,6 +161,7 @@ export const jobScheduleText = {
   tooManyRemoved: `One save removes at most ${agentLimits.schedulesPerJob} schedules: save, then remove the rest.`,
   unguarded: 'This schedule\'s version could not be read, so it cannot be attached. Search again, or reload the job.',
   needsFix: 'needs a fix before Save',
+  unseen: 'SQL Server Agent does not show you this schedule, so only its owner or a sysadmin can detach it from this job.',
   pickedGone: (count: number) => count === 1 ? 'A shared schedule you attached was deleted since, so it is no longer attached.' : `${count} shared schedules you attached were deleted since, so they are no longer attached.`,
   onlyYourJobs: 'Only your own jobs are listed.',
   jobsReadFailed: 'Which jobs use it could not be read.',

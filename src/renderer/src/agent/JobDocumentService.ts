@@ -696,7 +696,8 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   /** Attach a shared schedule: added to the job when it is saved, guarded by the version the pick read. */
   attachSchedule(id: string, record: AgentScheduleRecord): void {
     const draft = this.get(id)?.draft
-    if (!draft || !this.canEdit(id) || draft.schedules.some(entry => entry.id === record.id && !entry.remove)) return
+    // Without a guard (its version unread) an attach could not be sent.
+    if (!draft || !this.canEdit(id) || record.version === undefined || !record.modified || draft.schedules.some(entry => entry.id === record.id && !entry.remove)) return
     const kept = draft.schedules.filter(entry => entry.id !== record.id)
     const key = scheduleKey(record.id)
     // A schedule removed from this job and picked again is the job's own once more.
@@ -710,10 +711,17 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     this.updateDraft(id, { schedules: draft.schedules.map(entry => entry.key === key ? { ...entry, fields } : entry) })
   }
   /** Remove: the job's own schedule is marked (detach by default) with Undo until Save; a new or picked one simply goes. */
+  /** Whether an entry can leave the job: a new or picked one always; one of the job's own only when its version was read, since msdb's
+   *  sp_detach_schedule finds the schedule through sysschedules_localserver_view, which hides another login's below SQLAgentReaderRole. */
+  canDetachSchedule(id: string, entry: JobScheduleEntry): boolean {
+    if (entry.id === undefined || entry.attached) return true
+    const record = this.scheduleRecord(id, entry)
+    return record?.version !== undefined && !!record.modified
+  }
   removeSchedule(id: string, key: string): void {
     const draft = this.get(id)?.draft
     const entry = draft?.schedules.find(item => item.key === key)
-    if (!draft || !entry) return
+    if (!draft || !entry || !this.canDetachSchedule(id, entry)) return
     if (entry.id === undefined || entry.attached) { this.setSchedules(id, draft.schedules.filter(item => item !== entry), ''); return }
     this.updateDraft(id, { schedules: draft.schedules.map(item => item === entry ? { ...item, remove: 'detach' } : item) })
   }
@@ -731,7 +739,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   copySchedule(id: string, key: string): void {
     const draft = this.get(id)?.draft
     const entry = draft?.schedules.find(item => item.key === key)
-    if (!draft || !entry || !this.canEdit(id)) return
+    if (!draft || !entry || !this.canEdit(id) || !this.canDetachSchedule(id, entry)) return
     const record = this.scheduleRecord(id, entry)
     const copy: JobScheduleEntry = { key: `n:${this.newId()}`, fields: { ...entry.fields, name: jobScheduleText.copyName(record?.name ?? entry.fields.name) } }
     const rest = entry.attached ? draft.schedules.filter(item => item !== entry) : draft.schedules.map(item => item === entry ? { key: item.key, id: item.id, fields: record ? scheduleFieldsOf(record) : item.fields, remove: 'detach' as const } : item)
