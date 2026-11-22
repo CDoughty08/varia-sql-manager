@@ -88,7 +88,8 @@ export function heldAfter(attach: TabJob | undefined, held: readonly TabJob[] = 
   const attached = attach && { ...attach, state: reported.find(job => job.jobId === attach.jobId)?.state ?? attach.state }
   const own = attached ? [attached] : reported
   if (summary?.status === 'detached') return [...held, ...own.filter(job => job.state === 'running').map(job => ({ ...job, detached: true }))]
-  if (attached && attached.state === 'running' && attachPassing.has((summary ? summary.status === 'failed' ? summary.error?.code : undefined : code) ?? '')) return [...held, attached]
+  // AUTH_IDENTITY before the run is the project check (another project's job): kept for a connection to that project.
+  if (attached && attached.state === 'running' && (attachPassing.has((summary ? summary.status === 'failed' ? summary.error?.code : undefined : code) ?? '') || !summary && code === 'AUTH_IDENTITY')) return [...held, attached]
   if (summary) return attach || summary.status === 'superseded' ? [...held] : held.filter(job => !job.detached)
   if (backendGone.has(code)) return [...held, ...attached ? [attached] : reported.filter(job => job.state === 'running')]
   return [...held]
@@ -652,12 +653,15 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     // Preview Rows reads without a job and never waits behind the session's held jobs: its summary settles none.
     const settledBy = lostInSummary || preview ? undefined : summary
     let jobs = forgotten ? [] : heldAfter(attach, held, [...reported.values()], settledBy, lostCode)
-    if (settledBy && !attach && settledBy.status !== 'superseded' && sessionHeld?.size) {
+    // A failed run may have failed waiting for them: only a run that got past them settles them.
+    if (settledBy && !attach && settledBy.status !== 'superseded' && settledBy.status !== 'failed' && sessionHeld?.size) {
       jobs = jobs.filter(job => job.detached || sessionHeld.get(job.jobId) !== this.attachKey(job, connection))
       this.heldBySession.delete(tabId)
     }
-    if (lostCode === 'CONNECTION_LOST' && bigQuery) {
-      const kept = jobs.filter(job => !job.detached && job.state === 'running' && !held?.includes(job))
+    // A re-attach that failed in its run for a passing reason adopted the job's session: the next run waits for it too.
+    const keptAttach = attach && settledBy?.status === 'failed' && jobs.some(job => job.jobId === attach.jobId && job.state === 'running')
+    if ((lostCode === 'CONNECTION_LOST' || keptAttach) && bigQuery) {
+      const kept = jobs.filter(job => !job.detached && job.state === 'running' && (!held?.includes(job) || job.jobId === attach?.jobId))
       if (kept.length) this.heldBySession.set(tabId, new Map([...[...sessionHeld ?? []].slice(-sessionPromptLimits.jobIds * 8), ...kept.map(job => [job.jobId, this.attachKey(job, connection)] as const)]))
     }
     this.update(tabId, { summary, error, session: liveSession, provenance, ...livePlan ? { livePlan } : {}, ...jobs.length ? { jobs } : {} })

@@ -148,7 +148,8 @@ describe('re-attaching restored tabs', () => {
   })
   it("drops a job another principal ran, and Stop on a re-attach cancels it like a query's", async () => {
     const f = fixture(), pending = deferred<ApiResult<QueryResult>>()
-    f.queryApi.attach.mockResolvedValueOnce({ ok: false, error: 'This job was run by another account.', code: 'AUTH_IDENTITY' })
+    // The principal check runs in the attach (jobs.get, jobs.list): the backend answers it as a failed summary.
+    f.queryApi.attach.mockResolvedValueOnce({ ok: true, value: output({ status: 'failed', error: { code: 'AUTH_IDENTITY', message: 'This job was run by another account.', batchNumber: 1, iteration: 1 } }) })
     f.queries.restoreJobs(f.tab.id, [job('job_1')])
     await settle()
     expect(f.queries.getSnapshot()[f.tab.id].jobs).toBeUndefined()
@@ -173,7 +174,9 @@ describe('heldAfter', () => {
     expect(heldAfter(running, [detached], [], output(), undefined)).toEqual([detached])
     expect(heldAfter(undefined, [], [running, done], undefined, 'BACKEND_LOST')).toEqual([running])
     expect(heldAfter(done, [], [], undefined, 'CONNECTION_LOST')).toEqual([done])
-    expect(heldAfter(running, [detached], [], undefined, 'AUTH_IDENTITY')).toEqual([detached])
+    // Before the run, AUTH_IDENTITY is the project check: another project's job waits for a connection to that project.
+    expect(heldAfter(running, [detached], [], undefined, 'AUTH_IDENTITY')).toEqual([detached, running])
+    expect(heldAfter(running, [detached], [], undefined, 'DUPLICATE_QUERY')).toEqual([detached])
   })
   it("keeps a re-attach's running job through a passing failure, and its reference through a lost backend", () => {
     const failed = (code: string) => output({ status: 'failed', error: { code, message: 'x', batchNumber: 1, iteration: 1 } })
@@ -541,6 +544,19 @@ describe('the prompt beside a cost gate and held jobs', () => {
     await settle(); await settle()
     expect(settled).toBe(true)
     await expect(f.queries.restoredCancelsSettled()).resolves.toBe(false)
+  })
+  it("settles a re-attach kept after a passing failure once a later run, which waited for it, completes (not one that failed)", async () => {
+    const f = fixture()
+    f.queryApi.attach.mockResolvedValueOnce({ ok: true, value: output({ status: 'failed', error: { code: 'QUOTA', message: 'Rate limited.', batchNumber: 1, iteration: 1 } }) })
+    f.queries.restoreJobs(f.tab.id, [job('job_1')])
+    await settle(); await settle()
+    expect(f.queries.getSnapshot()[f.tab.id].jobs?.map(item => item.jobId)).toEqual(['job_1'])
+    // A run that failed may have failed waiting for it: the job stays.
+    f.queryApi.execute.mockResolvedValueOnce({ ok: true, value: output({ status: 'failed', error: { code: 'QUOTA', message: 'Rate limited.', batchNumber: 1, iteration: 1 } }) })
+    await f.queries.execute(f.tab.id); await settle()
+    expect(f.queries.getSnapshot()[f.tab.id].jobs?.map(item => item.jobId)).toEqual(['job_1'])
+    await f.queries.execute(f.tab.id); await settle()
+    expect(f.queries.getSnapshot()[f.tab.id].jobs).toBeUndefined()
   })
   it('settles a job a lost connection held when a later run, which waited for it, is left running', async () => {
     const f = fixture(), pending = deferred<ApiResult<QueryResult>>()
