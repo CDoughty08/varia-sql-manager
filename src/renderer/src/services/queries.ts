@@ -717,8 +717,11 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       const tried = this.attachTried.get(tabId) ?? new Map<string, number>()
       for (const job of keptFailed) tried.set(this.attachKey(job, connection), job.createdAt)
       this.attachTried.set(tabId, tried)
+    }
+    // Both are the session's own: its close ends them, and its state says when they finish.
+    if (keptFailed.length || keptAttach) {
       const heldHere = new Set([...this.heldHere.get(tabId) ?? []].slice(-sessionPromptLimits.jobIds * 8))
-      for (const job of keptFailed) heldHere.add(this.attachKey(job, connection))
+      for (const job of keptAttach ? [attach] : keptFailed) heldHere.add(this.attachKey(job, connection))
       this.heldHere.set(tabId, heldHere)
     }
     if (summary?.status === 'detached') {
@@ -826,7 +829,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     for (const tab of candidates.filter(candidate => candidate.holding)) {
       const state = this.getSnapshot()[tab.id], held = this.heldJobIds(tab.id), jobIds = held.slice(0, sessionPromptLimits.jobIds)
       // A job it does not run is one left running (detached) or held after a failed run, or a restored one not re-attached yet.
-      const following = tab.running && !!state?.running && !this.isGated(tab.id), estimateBytes = following ? state.running!.estimateBytes : undefined
+      const following = tab.running && !!state?.running && state.running.kind !== 'preview' && state.running.kind !== 'estimate' && !this.isGated(tab.id), estimateBytes = following ? state.running!.estimateBytes : undefined
       const connectionOf = this.documents.get(tab.id)?.connectionId, live = connectionOf ? this.getConnection(connectionOf) : undefined, heldHere = this.heldHere.get(tab.id)
       const inSession = (job: TabJob) => job.detached || !!live && !!heldHere?.has(this.attachKey(job, live))
       tab.job = { elapsedMs: tab.running && tab.operation ? Math.max(0, this.now() - tab.operation.startedAt) : 0, ...following ? {} : state?.jobs?.some(job => job.state === 'running') && state.jobs.filter(job => job.state === 'running').every(inSession) ? { detached: true as const } : { unattached: true as const }, ...estimateBytes !== undefined ? { estimateBytes } : {}, ...jobIds.length ? { jobIds } : {}, ...held.length > jobIds.length ? { moreJobIds: held.length - jobIds.length } : {} }

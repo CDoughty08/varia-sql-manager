@@ -48,7 +48,7 @@ import { effectiveRules } from '../shared/commands/effective'
 import { toPlatform } from '../shared/commands/keybindings'
 import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWriteSchema, retentionDays } from './recovery-store'
 import { migrateProfile, profileFiles } from './profile-migration'
-import { JobRecordStore, profileDeleteJobs } from './job-records'
+import { JobRecordStore, noteJobConnection, profileDeleteJobs } from './job-records'
 import { cancelJobsResultSchema, jobKeySchema, jobLimits, restoredJobs, type JobRecord, type RecordedJobsCancel } from '../shared/bigquery/jobs'
 import { connectionKey } from '../shared/connections'
 import { encodeReloadSession, SessionStore, sessionWriteSchema, type SessionInput, type SessionRecord, type SessionRecordDocument } from './session-store'
@@ -600,10 +600,7 @@ function jobRecorder(queryId: string, jobKey: string, profileId?: string, connec
     event(event: QueryEvent): void {
       if (event.type !== 'query.job') return
       seen.add(event.jobId); jobRecords.record(jobKey, event, profileId)
-      if (connectionId !== undefined) {
-        jobConnections.delete(event.jobId); jobConnections.set(event.jobId, connectionId)
-        while (jobConnections.size > jobLimits.records) jobConnections.delete(jobConnections.keys().next().value!)
-      }
+      if (connectionId !== undefined) noteJobConnection(jobConnections, event.jobId, connectionId, () => jobRecords.list().map(record => record.jobId), jobLimits.records)
     },
     summary(result: QueryResult): void {
       // Leave it running on Close Results: marked from the answer itself, which may arrive before query.cancel's does.

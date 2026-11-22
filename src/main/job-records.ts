@@ -178,6 +178,16 @@ export class JobRecordStore {
  * cancelling it here would also end that tab's session. Any other record (a reference a tab only holds, a job run through
  * another profile's connection) can be cancelled only while the profile exists.
  */
+/** Notes a reported job's connection, within `limit`: jobs no record names go first, so a long job still recorded keeps
+ * its connection however many short ones follow it. */
+export function noteJobConnection(connections: Map<string, string>, jobId: string, connectionId: string, recorded: () => Iterable<string>, limit: number): void {
+  connections.delete(jobId); connections.set(jobId, connectionId)
+  if (connections.size <= limit) return
+  const live = new Set(recorded())
+  for (const id of connections.keys()) if (!live.has(id) && id !== jobId) connections.delete(id)
+  while (connections.size > limit) connections.delete(connections.keys().next().value!)
+}
+
 export function profileDeleteJobs(records: readonly JobRecord[], profileId: string, connectionOf: (jobId: string) => string | undefined,
   live: (connectionId: string) => boolean, profileOfConnection: (connectionId: string) => string | undefined): JobRecord[] {
   return records.filter(record => {

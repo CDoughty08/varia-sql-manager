@@ -2,7 +2,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { JobRecordStore, profileDeleteJobs, type JobEventInput } from '../src/main/job-records'
+import { JobRecordStore, noteJobConnection, profileDeleteJobs, type JobEventInput } from '../src/main/job-records'
 import type { JobRecord } from '../src/shared/bigquery/jobs'
 import { jobLimits, jobRecordsFileSchema, queryAttachParamsSchema } from '../src/shared/bigquery/jobs'
 import { mainOnlyMethods, methodPolicies } from '../src/shared/ipc/methods'
@@ -210,7 +210,7 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     // Deleting a profile leaves the jobs of tabs still connected through it (running or left running) to those tabs.
     expect(source).toContain("jobRecorder(queryId!, jobKey, profileOf((validated as { connectionId?: string }).connectionId ?? ''), (validated as { connectionId?: string }).connectionId, method === 'query.attach' ? (validated as { jobId?: string }).jobId : undefined)")
     expect(source).toContain("profileDeleteJobs(jobRecords.forProfile(id), id, jobId => jobConnections.get(jobId), connectionId => backend.hasConnection(connectionId), connectionId => connectionProfiles.get(connectionId))")
-    expect(source).toMatch(/seen\.add\(event\.jobId\); jobRecords\.record\(jobKey, event, profileId\)\s+if \(connectionId !== undefined\) \{\s+jobConnections\.delete\(event\.jobId\); jobConnections\.set\(event\.jobId, connectionId\)/)
+    expect(source).toMatch(/seen\.add\(event\.jobId\); jobRecords\.record\(jobKey, event, profileId\)\s+if \(connectionId !== undefined\) noteJobConnection\(jobConnections, event\.jobId, connectionId, \(\) => jobRecords\.list\(\)\.map\(record => record\.jobId\), jobLimits\.records\)/)
     expect(source).toContain('detail: `${listedIds(failed)}')
     expect(source).toMatch(/function listedIds[^]*?… and \$\{jobIds\.length - 10\} more/)
     // A connection that runs a job moves to the end, so the 512 bound evicts idle handles, not a busy long-lived one.
@@ -293,5 +293,13 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     expect(queryAttachParamsSchema.safeParse({ ...params, jobId: 'x'.repeat(jobLimits.jobId + 1) }).success).toBe(false)
     expect(queryAttachParamsSchema.safeParse({ ...params, jobId: 'a/b' }).success).toBe(false)
     expect(queryAttachParamsSchema.safeParse({ ...params, extra: true }).success).toBe(false)
+  })
+  it("keeps a recorded job's connection when later jobs fill the map, dropping unrecorded ones first", () => {
+    const connections = new Map<string, string>()
+    noteJobConnection(connections, 'job_long', 'bq-a', () => ['job_long'], 3)
+    for (let index = 0; index < 5; index++) noteJobConnection(connections, `job_${index}`, 'bq-b', () => ['job_long'], 3)
+    expect(connections.get('job_long')).toBe('bq-a')
+    expect(connections.get('job_4')).toBe('bq-b')
+    expect(connections.size).toBeLessThanOrEqual(3)
   })
 })
