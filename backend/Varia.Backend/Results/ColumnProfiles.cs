@@ -397,7 +397,10 @@ internal static class ColumnProfiler
         private double? Measure(ReadOnlySpan<byte> cell)
         {
             if (basis == Basis.Value)
+            {
+                if (meta.SortKind == ColumnTypes.Boolean) cell = ColumnTypes.BooleanNumber(cell);
                 return double.TryParse(cell, NumberStyles.Float, CultureInfo.InvariantCulture, out var number) && double.IsFinite(number) ? number : null;
+            }
             // The text the backend writes is read directly; anything else by the general parser.
             if (ViewSorter.TryInstant(cell, out var written, out var offset, out var dated, out var zoned))
             {
@@ -419,7 +422,7 @@ internal static class ColumnProfiler
         {
             switch (kind)
             {
-                case ViewSorter.Kind.Exact: return Canonical(cell);
+                case ViewSorter.Kind.Exact: return Canonical(meta.SortKind == ColumnTypes.Boolean ? ColumnTypes.BooleanNumber(cell) : cell);
                 case ViewSorter.Kind.Approximate:
                     return Ordered(double.TryParse(cell, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed) ? parsed : double.NaN);
                 case ViewSorter.Kind.Ticks:

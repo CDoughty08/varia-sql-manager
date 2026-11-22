@@ -154,16 +154,26 @@ internal sealed class QueryDeltas(int capacity)
     {
         double[]? delta = null;
         var totals = statement.Totals;
-        if (entries.TryGet(statement.Key, out var before) && Applies(before, statement)) delta = [.. totals.Zip(before.Totals, (now, then) => now - then)];
+        if (entries.TryGet(statement.Key, out var before) && Applies(before, statement))
+        {
+            delta = new double[totals.Length];
+            for (var index = 0; index < totals.Length; index++) delta[index] = totals[index] - before.Totals[index];
+        }
         if (delta is null && whole) delta = [.. totals];
         entries.Set(statement.Key, new(totals, statement.Created, sample, statement.Hash, statement.PlanHash, statement.MaxElapsedUs));
         return delta;
     }
 
     /// <summary>Whether kept totals measure the statement's change: kept since the latest cut sample before this one (an
-    /// earlier one may have missed a run), from the same plan, and none of them larger now.</summary>
-    private bool Applies(Baseline before, QueryStatement statement) =>
-        before.Seen >= cutBefore && before.Created == statement.Created && statement.Totals.Zip(before.Totals).All(pair => pair.First >= pair.Second);
+    /// earlier one may have missed a run), from the same plan, and no counter has fallen.</summary>
+    private bool Applies(Baseline before, QueryStatement statement)
+    {
+        var totals = statement.Totals;
+        if (before.Seen < cutBefore || before.Created != statement.Created || before.Totals.Length != totals.Length) return false;
+        for (var index = 0; index < totals.Length; index++)
+            if (!(totals[index] >= before.Totals[index])) return false;
+        return true;
+    }
 
     /// <summary>The kept statements' facts for each of <paramref name="hashes"/>: every plan of the query the monitor has seen
     /// since it started reading, not only those that ran in the window.</summary>

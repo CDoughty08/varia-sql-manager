@@ -63,7 +63,8 @@ internal static class AgentPropertiesChecks
             (Server("EXEC @rc = msdb.dbo.sp_set_sqlagent_properties @monitor_autostart = @monitor_autostart, @monitor_autostart = @monitor_autostart;"), "passes @monitor_autostart twice"),
             (Server("EXEC @rc = msdb.dbo.sp_set_sqlagent_properties @monitor_autostart = 1;"), "is not one msdb call in the server write shape"),
             (Server("EXEC @rc = msdb.dbo.sp_set_sqlagent_properties @monitor_autostart = @monitor_autostart; DROP TABLE dbo.t;"), "is not one msdb call in the server write shape"),
-            (Server("EXEC @rc = msdb.dbo.sp_add_job @job_name = @job_name;"), "EXECs sp_add_job, which is not an Agent write procedure"),
+            (Server("EXEC @rc = msdb.dbo.sp_add_jobstep @step_name = @step_name;"), "EXECs sp_add_jobstep, which is not an Agent write procedure"),
+            (Server("EXEC @rc = msdb.dbo.sp_add_job @job_name = @job_name;"), "EXECs sp_add_job, which only a job save calls"),
             (Server("EXEC @rc = master.dbo.xp_servicecontrol @a = @a;"), "uses xp_servicecontrol"),
             (set[AgentSql.ServerHead.Length..], "does not open with the server write's declaration"),
             (set[..^AgentSql.Check.Length] + ";", "does not check the return code last")

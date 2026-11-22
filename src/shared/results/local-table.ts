@@ -2,7 +2,7 @@
 // the results grid without becoming a backend result (docs/architecture.md, Grid). Its rows are display text, so nothing
 // that is not on screen (a masked value's secret) can leave through Copy or Save. Copy and Save text is written by the
 // TypeScript twin of ResultTextWriter (text-writer.ts) over a page built here, so it matches a results grid's byte for byte.
-import type { PageView } from '../ipc/wire/pages.ts'
+import type { ColumnView, PageView } from '../ipc/wire/pages.ts'
 import { copyText, exportText, jsonKeyBytes, NO_COLUMN_NAME, type TextColumn, type TextFormat, type TextPart, type TextWriter } from './text-writer.ts'
 
 /** How a column's values read: numbers right-align, sort by value and are numbers in JSON; the rest is text. */
@@ -83,11 +83,13 @@ const encoder = new TextEncoder()
 /** The writer's columns: a number column is `decimal`, so JSON writes its values as numbers when they are numbers. */
 export const textColumns = (columns: readonly LocalColumn[]): TextColumn[] => columns.map(column => ({ name: column.name, dataType: column.kind === 'number' ? 'decimal' : 'nvarchar', wire: 'text' }))
 
-/** One page over every row, as a decoded result page holds them (pages.ts ColumnView), in the order given. */
-export function localPage(table: LocalTableData, order?: readonly number[], first = 0, rows?: number): PageView {
+/** Build a page in the given display order, retaining the original column indexes when only selected cells are needed. */
+export function localPage(table: LocalTableData, order?: readonly number[], first = 0, rows?: number, selected?: readonly number[]): PageView {
   const count = Math.max(0, Math.min(rows ?? Number.MAX_SAFE_INTEGER, (order?.length ?? table.rows.length) - first))
-  let byteLength = 0
+  let byteLength = 0, empty: ColumnView | undefined
+  const wanted = selected && selected.length < table.columns.length ? new Set(selected) : undefined
   const columns = table.columns.map((_, column) => {
+    if (wanted && !wanted.has(column)) return empty ??= { wire: 'text', validity: new Uint8Array(Math.ceil(count / 8)), offsets: new Uint32Array(count + 1), data: new Uint8Array(), truncated: undefined, errors: undefined }
     const parts: Uint8Array[] = [], offsets = new Uint32Array(count + 1), validity = new Uint8Array(Math.ceil(count / 8))
     let at = 0
     for (let index = 0; index < count; index++) {
@@ -117,12 +119,16 @@ const decoder = new TextDecoder('utf-8', { ignoreBOM: true })
 /** A local copy stopped at its bound (`maxBytes`): parts that overlap copy their rows again, past what the table holds. */
 export class LocalCopyTooLarge extends RangeError {}
 export async function localCopyText(table: LocalTableData, parts: readonly TextPart[], o: { headers: boolean; crlf: boolean; order?: readonly number[]; maxBytes?: number; afterPage?: () => Promise<void> }): Promise<{ text: string; rows: number }> {
-  // Pages of the rows the copy reaches, built as it reaches them: a cell's copy encodes its page, not the table.
-  const pages = new Map<number, PageView>()
-  const pageAt = (row: number) => {
-    const first = row - row % localSavePageRows
-    let page = pages.get(first)
-    if (!page) pages.set(first, page = localPage(table, o.order, first, localSavePageRows))
+  let previous: { page: PageView; columns?: readonly number[] } | undefined
+  const pageAt = (row: number, last = row, selected?: readonly number[]) => {
+    const count = Math.min(localSavePageRows - row % localSavePageRows, last - row + 1)
+    // Overlapping parts can reuse this projection. Retain only the most recent page while writing the clipboard text.
+    if (previous && row >= previous.page.firstRow && row + count <= previous.page.firstRow + previous.page.rowCount) {
+      const columns = previous.columns
+      if (!columns || columns.length === table.columns.length || (selected?.length === columns.length && selected.every((column, i) => column === columns[i]))) return previous.page
+    }
+    const page = localPage(table, o.order, row, count, selected)
+    previous = { page, columns: selected }
     return page
   }
   const maxBytes = o.maxBytes ?? Number.MAX_SAFE_INTEGER
