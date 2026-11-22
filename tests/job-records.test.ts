@@ -130,6 +130,9 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     await store.load()
     store.record(keyA, job('varia_1'))
     store.record(keyA, { ...job('varia_2'), location: 'us_central' })
+    // Nor does an odd update of a kept job remove the record it would have replaced.
+    store.record(keyB, { ...job('varia_1'), location: 'us_central' })
+    expect(store.forKeys([keyA]).map(record => record.jobId)).toEqual(['varia_1'])
     await store.flush()
     expect((await onDisk(directory)).records.map(record => record.jobId)).toEqual(['varia_1'])
   })
@@ -141,7 +144,8 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     expect(source).toContain('void openSession.purge(retentionDays(settings)).catch(() => {}).then(() => jobRecords.load())')
     // A quit waits for the records written while the stop ends idle sessions.
     // A run Varia timed out had its job cancelled, as Stop does: its record goes.
-    expect(source).toContain("result.status === 'cancelled' || result.status === 'timedOut'")
+    // A job Stop cancelled goes even if Leave it running marked it before (a later detached re-attach, or a detach that came too late).
+    expect(source).toContain("seen.has(record.jobId) && (record.state === 'done' || result.status === 'cancelled' || result.status === 'timedOut')")
     // The crash prompt's BigQuery line is decided before the reset restarts the backend.
     expect(source).toMatch(/const hadBigQuery = backend\?\.hasProvider\('bigquery'\) \?\? false\n    resetRendererState/)
     expect(source).toContain('backend.stop().then(() => jobRecords.flush())')

@@ -82,7 +82,6 @@ export class JobRecordStore {
     this.records = this.expire(this.records)
     const index = this.records.findIndex(record => record.jobId === event.jobId && record.project === event.project)
     const existing = index < 0 ? undefined : this.records[index]
-    if (existing) this.records.splice(index, 1)
     const next: JobRecord = {
       jobKey, jobId: event.jobId, project: event.project, ...event.location ? { location: event.location } : {},
       ...(profileId ?? existing?.profileId) ? { profileId: profileId ?? existing?.profileId } : {},
@@ -91,7 +90,10 @@ export class JobRecordStore {
     }
     // A detached job found DONE has nothing left to re-attach to; a reference the file's schema refuses is not kept, so
     // one odd event never quarantines every other record at the next start.
-    if (next.detached && next.state === 'done' || !jobRecordSchema.safeParse(next).success) { this.persist(); return }
+    // A refused update keeps the record it would have replaced.
+    if (!jobRecordSchema.safeParse(next).success) return
+    if (existing) this.records.splice(index, 1)
+    if (next.detached && next.state === 'done') { this.persist(); return }
     this.records.push(next)
     this.trim()
     this.persist()

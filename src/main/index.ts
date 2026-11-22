@@ -509,7 +509,7 @@ function jobRecorder(queryId: string, jobKey: string) {
       // Leave it running on Close Results: marked from the answer itself, which may arrive before query.cancel's does.
       if (result.status === 'detached') { jobRecords.markDetached(jobKey); return }
       if (result.status === 'superseded') return
-      jobRecords.drop(jobKey, record => seen.has(record.jobId) && !record.detached && (record.state === 'done' || result.status === 'cancelled' || result.status === 'timedOut'))
+      jobRecords.drop(jobKey, record => seen.has(record.jobId) && (record.state === 'done' || result.status === 'cancelled' || result.status === 'timedOut'))
     },
     end(): void { if (requestJobKeys.get(queryId) === jobKey) requestJobKeys.delete(queryId) }
   }

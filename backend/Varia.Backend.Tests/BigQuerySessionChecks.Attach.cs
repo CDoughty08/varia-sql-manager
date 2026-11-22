@@ -113,6 +113,33 @@ internal static partial class BigQuerySessionChecks
                 $"endIdleSessions ends a session whose execution only reads a finished job: {idleEnd.Code} aborts {reading.Bq.Aborts.Count - idleBefore}");
         }
 
+        // A job refused at insert holds nothing, even while the error is still being explained (the dataset's location looked
+        // up): Leave it running then asks about the transaction it left (JOB_FINISHED), never keeps the session for a job.
+        using (var refusing = new Harness(new Bq()))
+        {
+            await refusing.ConnectAsync(key);
+            refusing.Bq.Statements["BEGIN TRANSACTION"] = "BEGIN_TRANSACTION";
+            refusing.Bq.Failures["SELECT elsewhere"] = Failure("notFound", "Not found: Dataset varia-alpha:sales was not found in location US");
+            refusing.Bq.FailAtInsert.Add("SELECT elsewhere");
+            var refuseTab = Tab();
+            await refusing.Execute(refuseTab, "BEGIN TRANSACTION");
+            var lookingUp = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            refusing.Bq.AlsoHang = request =>
+            {
+                if (request.Method != "GET" || !request.Url.Contains("/datasets/sales", StringComparison.Ordinal)) return false;
+                lookingUp.TrySetResult();
+                return true;
+            };
+            var refusedRun = refusing.Execute(refuseTab, "SELECT elsewhere");
+            await Task.WhenAny(lookingUp.Task, refusedRun).WaitAsync(TimeSpan.FromSeconds(30));
+            var refusedClose = await refusing.Call("query.session.close", new JsonObject { ["sessionId"] = refuseTab, ["keepJob"] = true });
+            refusing.Bq.AlsoHang = null;
+            try { await refusedRun.WaitAsync(TimeSpan.FromSeconds(30)); } catch (Exception) when (refusedRun.IsCompleted) { }
+            check(lookingUp.Task.IsCompleted && refusedClose.Code == "JOB_FINISHED",
+                $"Leave it running while a refused insert's error is explained asks about the transaction: {refusedClose.Code}");
+            await refusing.Close(refuseTab, "rollback");
+        }
+
         // Stop while a re-attach of the tab's own held job is still checking its identity cancels that job.
         using (var following = new Harness(new Bq()))
         {

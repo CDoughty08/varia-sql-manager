@@ -362,8 +362,11 @@ internal sealed partial class SqlService
                     // A job refused at insert is already DONE with its error: main drops its record rather than keep it running.
                     var refused = BigQueryJobException.Of(inserted);
                     events.Job(JobEvent(project, jobId, location, refused is null ? "running" : "done", startState));
-                    if (refused is not null) throw refused;
-                    session.ActiveJob = true;
+                    if (refused is not null)
+                    {
+                        session.ActiveJob = false;
+                        throw refused;
+                    }
                     break;
                 }
                 // The session expired (24 hours idle or 7 days): the refused job ran nothing, so the query runs once more in a
@@ -508,6 +511,9 @@ internal sealed partial class SqlService
             // A script failed by a child's rows still runs in BigQuery: it is cancelled, as Stop does, and held until DONE.
             var childFailed = error is ChildReadFailure;
             if (error is ChildReadFailure read) error = read.InnerException!;
+            // No job of this run is left in BigQuery (refused, or never created): a close during the slow work below (the
+            // location lookup) ends the session as usual rather than leave it for a job.
+            if (!created && BigQueryService.NeverCreated(error) || created && !complete && error is BigQueryJobException) session.ActiveJob = false;
             if (childFailed && sent && !complete)
             {
                 bigQuery.CancelJob(connection, project, jobId, location);

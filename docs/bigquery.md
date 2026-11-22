@@ -262,9 +262,9 @@ backend side of re-attaching:
 - **Job keys and records.** A BigQuery request may carry its tab's `jobKey` (a uuid). Main records each request's
   top-level job from its `query.job` event in `WorkbenchSession/jobs.json`: job id, project, location, state, whether it
   is auxiliary or left running, and the session's transaction state as it started. No SQL text and no secrets. The file
-  has a strict schema, holds 64 records per key and 1,024 in all (the oldest finished go first; a running job's record
-  never does), is written atomically on every change and quarantined when unreadable, and records expire 24 hours after
-  their job was created. A finished job's records go once its summary reached the tab; a job still running when the
+  has a strict schema, holds 64 records per key and 1,024 in all (the oldest finished go first; running jobs' records go
+  only past 1,024 of them, newest first), is written atomically on every change and quarantined when unreadable, and
+  records expire 24 hours after main first recorded their job. A finished job's records go once its summary reached the tab; a job still running when the
   backend was lost, or left running, keeps its record. A job re-attached under another key moves to it.
 - **`query.attach`** re-attaches a tab to a job by reference (`jobId`, `project`, `location?`), as a query: it first checks
   that the connection's principal created the job (`jobs.get`, then a free `jobs.list` over its creation time must name
