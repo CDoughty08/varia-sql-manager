@@ -112,6 +112,10 @@ describe('catalogue providers', () => {
       expect(commandAllowsProvider(id, keys('bigquery', 'sqlserver')), id).toBe(false)
       expect(commandAllowsProvider(id, keys('sqlserver', 'bigquery')), id).toBe(true)
     }
+    expect(commandAllowsProvider('edit.toggleBrackets', keys('bigquery', 'sqlserver'))).toBe(false)
+    expect(commandAllowsProvider('edit.toggleBrackets', keys('sqlserver', 'bigquery'))).toBe(true)
+    // Greyed in a BigQuery tab, its reason names the engine rather than asking for a query that is already open.
+    expect(commandDescriptor('edit.toggleBrackets').unavailableHint).toBe('Open a SQL Server query first.')
     expect(commandAllowsProvider('query.estimatePlan', keys('sqlserver', ''))).toBe(true)
     expect(commandAllowsProvider('query.estimatePlan', keys('bigquery', 'sqlserver'))).toBe(false)
     expect(commandAllowsProvider('query.estimatePlan', keys('', 'bigquery'))).toBe(true)

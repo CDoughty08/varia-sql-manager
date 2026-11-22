@@ -836,8 +836,8 @@ export const commandCatalog = {
   // (src/renderer/src/editor/sql-transforms.ts). Ctrl+[ is free in the query editor: Monaco's indent and outdent lines
   // actions are not loaded, and Tab and Shift+Tab indent.
   'edit.toggleBrackets': {
-    title: 'Toggle Brackets', category: 'Edit', keywords: ['brackets', 'quote', 'quotename', 'identifiers', 'names', 'delimit', 'square'], providers: both,
-    precondition: 'activeDocumentIsQuery', unavailableHint: openFirst,
+    title: 'Toggle Brackets', category: 'Edit', keywords: ['brackets', 'quote', 'quotename', 'identifiers', 'names', 'delimit', 'square'],
+    precondition: 'activeDocumentIsQuery', unavailableHint: 'Open a SQL Server query first.',
     keybindings: [{ key: 'mod+[', when: 'editorTextFocus' }],
     menus: [{ menu: 'edit.advanced', group: '5_sql', order: 1, mnemonic: 'b' }, { menu: 'editor.context', group: '3_format', order: 1, mnemonic: 'b' }]
   },

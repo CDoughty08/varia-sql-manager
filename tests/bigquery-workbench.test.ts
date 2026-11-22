@@ -46,6 +46,21 @@ describe('BigQuery connections in the workbench (BQ-2)', () => {
     } finally { value.dispose() }
   })
 
+  it('keeps Toggle Brackets from rewriting the bound GoogleSQL model when a command targets a SQL Server object', async () => {
+    const value = workbenchFixture()
+    try {
+      const sql = 'SELECT [1] AS items', query = value.documents.restore('arrays.sql', sql, 'sql', 'lf', undefined, 'bigquery')
+      const editor = new TestEditor()
+      value.documents.bindEditor(editor.asEditor())
+      expect(value.documents.getModel(query.id)?.getLanguageId()).toBe('googlesql')
+      const node = { id: 1, connectionId: 'sql-server', kind: 'server', label: 'server', ref: { type: 'object', object: { kind: 'server' } }, lost: false } as const
+      const args = { target: { kind: 'explorer' as const, node } }
+      expect(value.commands.isEnabled('edit.toggleBrackets', args)).toBe(false)
+      expect(await value.commands.execute('edit.toggleBrackets', args, 'toolbar')).toBe(false)
+      expect(value.documents.getModel(query.id)?.getValue()).toBe(sql)
+    } finally { value.dispose() }
+  })
+
   it('lists a restored BigQuery target by its project and dataset, and reconnects it at startup with its pinned account', async () => {
     const value = workbenchFixture(), ready = deferred<void>()
     try {

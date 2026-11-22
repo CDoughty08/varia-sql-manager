@@ -200,9 +200,9 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
 - **SQL text transforms** (Toggle Brackets, Move Commas to Front/End: `editor/sql-transforms.ts`) work on tokens from
   `shared/sql/lexer.ts`, never regular expressions over the text, so strings, comments, variables and quoted names never
   change. They return offset edits applied as one undo step with selections mapped through them, refuse a model over
-  `textOpLimits.characters`, and are tested in `tests/sql-transforms.test.ts`. The comma commands are SQL Server only, with
-  a handler `when` on the bound model's language too, since a command target (an Explorer node) could supply SQL Server's
-  context while the editor shows a GoogleSQL query.
+  `textOpLimits.characters`, and are tested in `tests/sql-transforms.test.ts`. They are SQL Server only, with a handler
+  `when` on the bound model's language too, since a command target (an Explorer node) could supply SQL Server's context
+  while the editor shows a GoogleSQL query.
 - **Peek's language service** serves query documents and Peek's read-only definition models (`peekModelContext`:
   connection, database and the model's UUID as document id), nothing else. A Peek model gets hover and Go To Definition
   only, never completion or diagnostics, from its first request; its `onWillDispose` ends it as closing a query does

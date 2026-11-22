@@ -65,7 +65,7 @@ Varia's backend, not SQL Tools.
 
 These SQL Server commands read the query's tokens, so text in strings, comments, variables, temporary tables and quoted
 names never changes. Each is one undo step, on the editor's context menu, **Edit › Advanced** and the command palette.
-The comma commands are available only in SQL Server queries: GoogleSQL reads text differently (`#` starts a comment).
+They are available only in SQL Server queries: GoogleSQL reads text differently (`#` starts a comment, `[1]` is an array).
 
 - **Toggle Brackets** (**Ctrl+[**, **⌘[** on macOS) brackets every name in the selection, or in the whole query when
   nothing is selected: `dbo.Orders o` becomes `[dbo].[Orders] [o]`. When every name already has brackets, it takes them off
