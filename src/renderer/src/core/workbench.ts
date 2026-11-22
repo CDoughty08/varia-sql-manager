@@ -369,7 +369,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // Each counts the other's new results in flight against a run's 1,000.
   // A new comparison takes the layout setting; a change of one carries its highlights over (D15).
   const compare: CompareService = new CompareService(results, {
-    jobs: derivedJobs, adding: tabId => pivot.adding(tabId), layout: () => settings.get('queryResults.compare.layout'), carry: (tabId, key, o) => highlights.carry(tabId, key, o)
+    jobs: derivedJobs, adding: tabId => pivot.adding(tabId), layout: () => settings.get('queryResults.compare.layout'), rows: () => settings.get('queryResults.compare.rows'), carry: (tabId, key, o) => highlights.carry(tabId, key, o)
   })
   // A shown Pivot rebuilds by itself when its Table's filters change; what is shown depends on the results' layout.
   const pivot: PivotService = new PivotService(results, {
@@ -581,6 +581,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     resultsSteppable: results.steppable,
     resultsTurned: results.turned,
     resultsComparing: results.comparing,
+    comparisonToggles: compare.toggles,
     scripting: scripting.running,
     bookmarks,
     inputMode,
