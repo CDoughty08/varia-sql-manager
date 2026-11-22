@@ -100,7 +100,8 @@ export const jobStillRunning = (ids: readonly string[]) => `${jobList(ids)} stil
 /** A restored tab that is not connected: its job from the last session runs on unseen otherwise. */
 export const restoredJobRunning = (ids: readonly string[]) => `${ids.length === 1 ? `BigQuery job ${ids[0]} from the last session is` : `BigQuery jobs ${ids.join(', ')} from the last session are`} still running in BigQuery. The tab re-attaches once it is connected.`
 /** Idle BigQuery sessions whose ABORT_SESSION failed (a Disconnect, a Reload or a backend restart). */
-export const failedAbortsText = (count: number) => `Varia could not end ${count === 1 ? 'an idle BigQuery session' : `${count} idle BigQuery sessions`}. Any transaction in ${count === 1 ? 'it' : 'them'} stays open until ${count === 1 ? 'it expires' : 'they expire'}, other transactions on ${count === 1 ? 'its' : 'their'} tables fail meanwhile, and ${count === 1 ? 'its' : 'their'} temporary tables are billed as storage. Varia tries again the next time the connection reaches BigQuery.`
+/** `retried` false: the sessions were in a backend that a stop or restart then ended, so nothing tries again. */
+export const failedAbortsText = (count: number, retried = true) => `Varia could not end ${count === 1 ? 'an idle BigQuery session' : `${count} idle BigQuery sessions`}. Any transaction in ${count === 1 ? 'it' : 'them'} stays open until ${count === 1 ? 'it expires' : 'they expire'}, other transactions on ${count === 1 ? 'its' : 'their'} tables fail meanwhile, and ${count === 1 ? 'its' : 'their'} temporary tables are billed as storage.${retried ? ' Varia tries again the next time the connection reaches BigQuery.' : ''}`
 /** BigQuery's estimate and prompts before a run: the text, where it starts in the document (a selection's line and
  *  column, for dry-run markers), and a signal Cancel aborts. Resolves whether to run. */
 export type CostGate = (tabId: string, sql: string, origin: { readonly line: number; readonly column: number }, signal: AbortSignal) => Promise<boolean>
@@ -279,7 +280,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     }
   }
   /** Idle BigQuery sessions whose end failed: a notification, since their tabs may be gone. */
-  failedAborts(count: number): void { if (!this.disposed && count > 0) this.notify?.(failedAbortsText(count)) }
+  failedAborts(count: number, retried = true): void { if (!this.disposed && count > 0) this.notify?.(failedAbortsText(count, retried)) }
   /** The ids of the BigQuery jobs the tab holds: its running request's, then those it holds without following. */
   private heldJobIds(tabId: string): string[] {
     const state = this.getSnapshot()[tabId]

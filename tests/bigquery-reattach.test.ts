@@ -737,6 +737,9 @@ describe('failed aborts', () => {
     f.queries.failedAborts(0)
     expect(notify.mock.calls).toEqual([[failedAbortsText(2)]])
     expect(failedAbortsText(1)).toContain('an idle BigQuery session')
+    // Before a stop or restart (main's onFailedAborts) the backend that would retry ends: no retry is promised.
+    expect(failedAbortsText(1, false)).not.toContain('tries again')
+    expect(failedAbortsText(1)).toContain('tries again')
     expect(failedAbortsText(2)).toContain('2 idle BigQuery sessions')
   })
 })

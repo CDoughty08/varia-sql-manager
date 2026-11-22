@@ -392,7 +392,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   queries.notify = text => { notifications.notify({ severity: 'warning', message: text }) }
   // A BigQuery job left running is no tab's any more: its id can be copied to find it in BigQuery's job history.
   queries.notifyJobs = (text, jobIds) => { notifications.notify({ severity: 'info', message: text, actions: [{ label: jobIds.length === 1 ? 'Copy Job ID' : 'Copy Job IDs', run: () => { void api.writeClipboardText(jobIds.join('\n')) } }] }) }
-  const failedAbortsSubscription = api.onFailedAborts?.(count => { queries.failedAborts(count) })
+  const failedAbortsSubscription = api.onFailedAborts?.(count => { queries.failedAborts(count, false) })
   documents.sessionHooks = {
     message: (id, text, kind) => { queries.addSessionMessage(id, text, kind) },
     note: (id, note) => { queries.sessionNote(id, note) },

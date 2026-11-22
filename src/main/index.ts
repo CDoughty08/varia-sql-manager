@@ -239,11 +239,13 @@ function listedIds(jobIds: readonly string[]): string {
 }
 /** Remembers the saved BigQuery profile a new connection was opened from (matched by its identity, as the library does). */
 async function rememberConnectionProfile(connectionId: string, options: ProviderConnectionOptions, context: unknown): Promise<void> {
-  // A handle Connect handed back again (same settings) keeps the profile it was first opened from.
-  if (options.provider !== 'bigquery' || !bigQueryStore || connectionProfiles.has(connectionId)) return
+  if (options.provider !== 'bigquery' || !bigQueryStore) return
   // The entry Connect chose wins over another saved with the same settings (the library allows twins).
   const selected = z.object({ selectedProfileId: z.uuid() }).safeParse(context).data?.selectedProfileId
   const key = connectionKey(options), matching = (await bigQueryStore.load()).library.profiles.filter(item => connectionKey(item.options) === key)
+  // A handle Connect handed back again (same settings) keeps the profile it was first opened from while that still exists.
+  const kept = connectionProfiles.get(connectionId)
+  if (kept !== undefined && matching.some(item => item.id === kept)) return
   const profile = matching.find(item => item.id === selected) ?? matching[0]
   if (!profile) return
   connectionProfiles.set(connectionId, profile.id)
@@ -587,7 +589,7 @@ function requestClose(intent: CloseIntent): void {
  * finished jobs it read are dropped (their results are in the tab), and a stopped request's jobs too. A request that ends
  * without a summary (BACKEND_LOST) or left running (`detached`, `superseded`) keeps them for a re-attach.
  */
-function jobRecorder(queryId: string, jobKey: string, profileId?: string, connectionId?: string) {
+function jobRecorder(queryId: string, jobKey: string, profileId?: string, connectionId?: string, attach = false) {
   const seen = new Set<string>()
   const entry = { jobKey, seen }
   requestJobKeys.set(queryId, entry)
@@ -606,6 +608,8 @@ function jobRecorder(queryId: string, jobKey: string, profileId?: string, connec
     summary(result: QueryResult): void {
       // Leave it running on Close Results: marked from the answer itself, which may arrive before query.cancel's does.
       if (result.status === 'detached') { jobRecords.markDetached(jobKey, seen); return }
+      // A re-attach that failed after its job was reported may not hold it in the session: a profile delete asks about it.
+      if (attach && result.status === 'failed') for (const jobId of seen) if (jobConnections.get(jobId) === connectionId) jobConnections.delete(jobId)
       if (result.status === 'superseded' || generation !== rendererGeneration) return
       jobRecords.drop(jobKey, record => seen.has(record.jobId) && (record.state === 'done' || result.status === 'cancelled' || result.status === 'timedOut'))
     },
@@ -1168,9 +1172,13 @@ app.whenReady().then(async () => {
         if (anyway !== 0) throw new Error(`The connection was kept: BigQuery job ${failed.slice(0, 5).join(', ')} could not be cancelled.${notes.length ? ` ${notes.slice(0, 5).join(' ')}` : ''}`)
       }
       if (notes.length) await pageDialog((window, signal) => dialog.showMessageBox(window, { type: 'info', title: 'Delete connection', message: 'What became of the cancelled BigQuery jobs:', detail: [...notes.slice(0, 10), ...notes.length > 10 ? [`… and ${notes.length - 10} more`] : []].join('\n\n'), buttons: ['OK'], noLink: true, signal }), { response: 0, checkboxChecked: false }, true)
-      jobRecords.dropJobs(running.map(record => record.jobId))
     }
-    return library.remove(id)
+    // The records go only once the profile is gone: a failed remove keeps the profile that can still cancel them.
+    const removed = await library.remove(id)
+    if (running.length) jobRecords.dropJobs(running.map(record => record.jobId))
+    // Open handles stop naming the deleted profile: their later jobs are recorded under whichever profile connects them next.
+    for (const [connectionId, profileId] of [...connectionProfiles]) if (profileId === id) connectionProfiles.delete(connectionId)
+    return removed
   })
   handle('varia:connections-environment', value => library.setEnvironment(value))
   handle('varia:bigquery-cost-prompt', value => library.setBigQueryCostPrompt(value))
@@ -1326,7 +1334,7 @@ app.whenReady().then(async () => {
       const queryId = method === 'query.execute' || method === 'query.attach' ? (validated as RpcMethods['query.execute' | 'query.attach']['params']).queryId : remote?.queryId
       // A BigQuery request's job key: its query.job events become job records under it, before they are forwarded.
       const jobKey = queryId === undefined ? undefined : (validated as { jobKey?: string }).jobKey
-      const jobs = jobKey === undefined ? undefined : jobRecorder(queryId!, jobKey, profileOf((validated as { connectionId?: string }).connectionId ?? ''), (validated as { connectionId?: string }).connectionId)
+      const jobs = jobKey === undefined ? undefined : jobRecorder(queryId!, jobKey, profileOf((validated as { connectionId?: string }).connectionId ?? ''), (validated as { connectionId?: string }).connectionId, method === 'query.attach')
       // An Object Explorer load, a script, an object action, an SSIS Catalog read or write, a session's Details or a connect
       // with a requestId is registered before it is sent, so its cancel channel can always find it.
       const cancellable = cancellableRequests(method, { explorer: explorerRequests, scripting: scriptingRequests, actions: actionRequests, ssis: ssisRequests, activity: activityRequests, connections: connectionRequests }, prepared.context?.requestId)
