@@ -435,8 +435,8 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const draft = rebaseAgentJobDraft(state.model, current, state.draft, new Set(keepServer))
     this.patch(id, { model: current, draft, stale: undefined, error: undefined, revision: state.revision + 1, edits: state.edits + 1, ...this.restartScheduleReads(id) })
     this.afterDraft(id)
-    // Picked schedules take their guards from the shared schedules as read now, as the job's own schedules just did.
-    this.ensureShared(id, true)
+    // Picked schedules take their guards from the shared schedules as read now, as the job's own schedules just did; Save waits for it.
+    if (this.ensureShared(id, true) && this.get(id)?.shared?.state === 'loading') this.patch(id, { rebasing: true })
   }
   /** Discard mine and reload: the job as read now. */
   reloadDiscard(id: string): void {
@@ -661,8 +661,9 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
       if (rebase && model && !error && draft) {
         const schedules = refreshPickedSchedules(draft.schedules, model.schedules, !model.truncated)
         if (schedules !== draft.schedules) {
-          gone = draft.schedules.length - schedules.length
           this.updateDraft(id, { schedules })
+          // Not applied when the document cannot be edited now: then nothing left, and nothing is said.
+          gone = this.get(id)?.draft !== draft ? draft.schedules.length - schedules.length : 0
           if (gone && !stale) this.patch(id, { notice: jobScheduleText.pickedGone(gone) })
         }
       }

@@ -768,7 +768,11 @@ describe("the job document's Schedules section", () => {
     expect(jobDocuments.get(id)?.stale).toBeDefined()
     setShared(schedulesModel({ schedules: [record(1), record(2, { name: 'Unused (theirs)', jobCount: 0, version: 6 })] }))
     jobDocuments.reloadKeep(id)
+    // Save waits for that read, so it does not send the old guard.
+    expect(jobDocuments.get(id)?.rebasing).toBe(true)
+    expect(jobDocuments.canSave(id)).toBe(false)
     await settled()
+    expect(jobDocuments.get(id)?.rebasing).toBeUndefined()
     expect(jobDocuments.get(id)!.draft!.schedules.find(entry => entry.id === 2)).toMatchObject({ base: { version: 6 }, fields: { name: 'Unused (theirs)' } })
     expect(await jobDocuments.save(id)).toBe(true)
     expect(executes()[1]).toMatchObject({ agentJob: { schedules: { attach: [{ id: 2, version: 6 }] } } })

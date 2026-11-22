@@ -269,6 +269,11 @@ internal static class AgentScheduleChecks
         check(job.Contains("EXEC @ReturnCode = msdb.dbo.sp_detach_schedule @job_name=N'Nightly load', \n\t\t@schedule_id=4, \n\t\t@delete_unused_schedule=1\n", StringComparison.Ordinal)
             && job.Contains("EXEC @ReturnCode = msdb.dbo.sp_add_jobschedule @job_name=N'Nightly load', \n\t\t@name=N'Night', \n\t\t@enabled=0, \n\t\t@freq_type=4,", StringComparison.Ordinal),
             "the job document's Script detaches and adds schedules by the job's name, with literal values");
+        var save = JobSave(new(Add: [new(Name: "Night", Enabled: false, Timing: Daily)]));
+        var renamed = ActionService.AgentJobDocumentScript(save with { AgentJob = save.AgentJob! with { Name = "Nightly 2" } }, Job);
+        check(renamed.Contains("sp_update_job @job_name=N'Nightly load'", StringComparison.Ordinal) && renamed.Contains("@new_name=N'Nightly 2'", StringComparison.Ordinal)
+            && renamed.Contains("EXEC @ReturnCode = msdb.dbo.sp_add_jobschedule @job_name=N'Nightly 2', ", StringComparison.Ordinal),
+            "a renamed job's Script adds its schedules under the new name, which is the one that resolves once sp_update_job ran");
     }
 
     private static void Describe(Action<bool, string> check)
