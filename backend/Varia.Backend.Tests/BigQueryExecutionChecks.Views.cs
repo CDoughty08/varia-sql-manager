@@ -53,6 +53,20 @@ internal static partial class BigQueryExecutionChecks
             && parameters[1].ParameterValue.ArrayValues.Select(value => value.Value).SequenceEqual(["4", "5"]) && parameters[2] is { Name: "p2", ParameterType.Type: "INT64", ParameterValue.Value: "2" }
             && parameters[3].ParameterValue.Value == "7",
             "a filter's values go as INT64 parameters naming the value list's rows, and Between's bounds in value order: " + string.Join(", ", parameters.Select(p => p.Name + "=" + (p.ParameterValue.Value ?? "[]"))));
+        // NaN equals nothing in SQL, yet a FLOAT64 value list holds it as one value (first in value order): matched apart.
+        parameters.Clear();
+        var floatFields = BigQueryColumnPlan.From(JsonSerializer.SerializeToElement(Schema(Field("f", "FLOAT"))))!.Fields;
+        var floatList = ViewList with { Column = 0 };
+        sql = BigQueryViewSql.View(BigQueryViewSql.Source(ViewTable), floatFields, [],
+            [new(RemoteFilterKind.In, 0, floatList, [1], false), new(RemoteFilterKind.NotIn, 0, floatList, [1], false), new(RemoteFilterKind.Between, 0, floatList, [4, 1], false)], parameters);
+        var nan = " OR IS_NAN(`f`) AND EXISTS(SELECT 1 FROM " + list + " WHERE IS_NAN(value) AND r IN UNNEST(@";
+        check(sql == "SELECT * FROM `varia-emulator`.`_anon0123`.`anon_result_1` WHERE "
+            + "(`f` IS NOT NULL AND (`f` IN (SELECT value FROM " + list + " WHERE value IS NOT NULL AND r IN UNNEST(@p0))" + nan + "p0))))"
+            + " AND (`f` IS NULL OR NOT (`f` IN (SELECT value FROM " + list + " WHERE value IS NOT NULL AND r IN UNNEST(@p1))" + nan + "p1))))"
+            + " AND (`f` IS NOT NULL AND (`f` BETWEEN (SELECT value FROM " + list + " WHERE r = @p2) AND (SELECT value FROM " + list + " WHERE r = @p3)"
+            + " OR IS_NAN((SELECT value FROM " + list + " WHERE r = @p4)) AND (IS_NAN(`f`) OR `f` <= (SELECT value FROM " + list + " WHERE r = @p5))))"
+            && parameters.Count == 6 && parameters[2].ParameterValue.Value == "1" && parameters[4].ParameterValue.Value == "1" && parameters[5].ParameterValue.Value == "4",
+            "a FLOAT64 filter keeps or drops NaN as the value list holds it, and a range from NaN starts there: " + sql);
         parameters.Clear();
         sql = BigQueryViewSql.Values(BigQueryViewSql.Source(ViewTable), ViewFields, 1, [new(RemoteFilterKind.In, 0, null, [], true)], [new(RemoteFilterKind.NotIn, 1, ViewList, [1], false)], parameters);
         check(sql == "SELECT value, n, ROW_NUMBER() OVER (ORDER BY value ASC NULLS FIRST) - 1 AS r, k FROM (SELECT `s` AS value, COUNT(*) AS n, COALESCE(LOGICAL_OR("

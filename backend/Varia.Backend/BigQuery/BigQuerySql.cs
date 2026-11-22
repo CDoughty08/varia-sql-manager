@@ -45,6 +45,12 @@ internal static partial class BigQuerySql
     /// a filter's values are encoded (BigQueryViewSql.Members), so another encoding replaces only it.</summary>
     public const string MembersFrom = "(SELECT value FROM ";
     public const string MembersWhere = " WHERE value IS NOT NULL AND r IN UNNEST(@";
+    /// <summary>NaN equals nothing, itself included, yet BigQuery groups it as one value: a FLOAT64 filter matches it apart.</summary>
+    public const string IsNan = "IS_NAN(";
+    public const string NanMembersFrom = " AND EXISTS(SELECT 1 FROM ";
+    public const string NanMembersWhere = " WHERE IS_NAN(value) AND r IN UNNEST(@";
+    public const string Not = "NOT ";
+    public const string AtMost = " <= ";
     public const string ValueAt = "(SELECT value FROM ";
     public const string RowIs = " WHERE r = @";
     public const string Parameter = "p";
@@ -58,7 +64,7 @@ internal static partial class BigQuerySql
 
     /// <summary>Every fragment above, for the lint.</summary>
     public static readonly IReadOnlyList<string> ViewFragments = [SelectAll, SourceOpen, SourceClose, Where, And, OrderBy, Comma, Ascending, Descending, IsNull, IsNotNull,
-        Open, Close, Or, NotIn, In, True, False, Between, MembersFrom, MembersWhere, ValueAt, RowIs, Parameter, ValuesHead, ValuesCount, ValuesFrom, ValuesTail, CapParameter];
+        Open, Close, Or, NotIn, In, True, False, Between, MembersFrom, MembersWhere, IsNan, NanMembersFrom, NanMembersWhere, Not, AtMost, ValueAt, RowIs, Parameter, ValuesHead, ValuesCount, ValuesFrom, ValuesTail, CapParameter];
 
     /// <summary>A BigQuery session id as Varia keeps it: an opaque token of URL-safe base64 characters. Anything else
     /// BigQuery answers is not kept, so it can never reach a statement or a log.</summary>

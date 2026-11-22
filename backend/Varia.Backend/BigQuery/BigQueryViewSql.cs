@@ -86,17 +86,31 @@ internal static class BigQueryViewSql
     static void Predicate(StringBuilder sql, IReadOnlyList<BigQueryField> fields, RemoteFilter filter, List<QueryParameter> parameters)
     {
         var column = Column(fields, filter.Column);
+        // NaN equals nothing in SQL, but BigQuery groups it as one value of the list, as memory does: FLOAT64 matches it apart.
+        var floats = fields[filter.Column].Kind == BigQueryKind.Float64;
         sql.Append(BigQuerySql.Open);
         switch (filter.Kind)
         {
             case RemoteFilterKind.Between:
             {
-                // Rows ascend in value order, so the lower row is the lower bound.
+                // Rows ascend in value order, so the lower row is the lower bound. NaN orders first, so only the lower bound
+                // can be NaN, and then the range is NaN and every value up to the upper bound.
                 var (low, high) = filter.Rows[0] <= filter.Rows[1] ? (filter.Rows[0], filter.Rows[1]) : (filter.Rows[1], filter.Rows[0]);
-                sql.Append(column).Append(BigQuerySql.IsNotNull).Append(BigQuerySql.And).Append(column).Append(BigQuerySql.Between);
+                sql.Append(column).Append(BigQuerySql.IsNotNull).Append(BigQuerySql.And);
+                if (floats) sql.Append(BigQuerySql.Open);
+                sql.Append(column).Append(BigQuerySql.Between);
                 ValueAt(sql, filter.List!, low, parameters);
                 sql.Append(BigQuerySql.And);
                 ValueAt(sql, filter.List!, high, parameters);
+                if (floats)
+                {
+                    sql.Append(BigQuerySql.Or).Append(BigQuerySql.IsNan);
+                    ValueAt(sql, filter.List!, low, parameters);
+                    sql.Append(BigQuerySql.Close).Append(BigQuerySql.And).Append(BigQuerySql.Open).Append(BigQuerySql.IsNan).Append(column).Append(BigQuerySql.Close)
+                        .Append(BigQuerySql.Or).Append(column).Append(BigQuerySql.AtMost);
+                    ValueAt(sql, filter.List!, high, parameters);
+                    sql.Append(BigQuerySql.Close).Append(BigQuerySql.Close);
+                }
                 break;
             }
             case RemoteFilterKind.In when filter.Rows.Length == 0:
@@ -107,22 +121,43 @@ internal static class BigQueryViewSql
                 break;
             case RemoteFilterKind.In:
                 // A value among the members, or NULL when it is kept too.
-                sql.Append(column).Append(BigQuerySql.IsNotNull).Append(BigQuerySql.And).Append(column).Append(BigQuerySql.In);
-                Members(sql, filter.List!, filter.Rows, parameters);
+                sql.Append(column).Append(BigQuerySql.IsNotNull).Append(BigQuerySql.And);
+                Member(sql, column, floats, filter.List!, filter.Rows, parameters);
                 if (filter.Nulls) sql.Append(BigQuerySql.Or).Append(column).Append(BigQuerySql.IsNull);
                 break;
             case RemoteFilterKind.NotIn:
                 // NOT IN over a NULL is NULL, so NULL is asked apart: dropped when Nulls says, else kept. Members are never NULL.
                 sql.Append(column).Append(filter.Nulls ? BigQuerySql.IsNotNull + BigQuerySql.And : BigQuerySql.IsNull + BigQuerySql.Or);
-                sql.Append(column).Append(BigQuerySql.NotIn);
-                Members(sql, filter.List!, filter.Rows, parameters);
+                if (floats)
+                {
+                    sql.Append(BigQuerySql.Not);
+                    Member(sql, column, floats, filter.List!, filter.Rows, parameters);
+                }
+                else
+                {
+                    sql.Append(column).Append(BigQuerySql.NotIn);
+                    Members(sql, filter.List!, filter.Rows, parameters);
+                }
                 break;
         }
         sql.Append(BigQuerySql.Close);
     }
 
-    /// <summary>The values at <paramref name="rows"/> of a value list: the only encoding of a filter's values.</summary>
-    static void Members(StringBuilder sql, RemoteValueList list, int[] rows, List<QueryParameter> parameters)
+    /// <summary>Whether a value that is not NULL is among the members; a FLOAT64 NaN is when the members hold NaN.</summary>
+    static void Member(StringBuilder sql, string column, bool floats, RemoteValueList list, int[] rows, List<QueryParameter> parameters)
+    {
+        if (floats) sql.Append(BigQuerySql.Open);
+        sql.Append(column).Append(BigQuerySql.In);
+        var name = Members(sql, list, rows, parameters);
+        if (!floats) return;
+        sql.Append(BigQuerySql.Or).Append(BigQuerySql.IsNan).Append(column).Append(BigQuerySql.Close)
+            .Append(BigQuerySql.NanMembersFrom).Append(Source(list.Table)).Append(BigQuerySql.NanMembersWhere).Append(name).Append(BigQuerySql.Close).Append(BigQuerySql.Close)
+            .Append(BigQuerySql.Close);
+    }
+
+    /// <summary>The values at <paramref name="rows"/> of a value list: the only encoding of a filter's values. Returns the
+    /// rows' parameter, which the NaN test names again.</summary>
+    static string Members(StringBuilder sql, RemoteValueList list, int[] rows, List<QueryParameter> parameters)
     {
         var name = BigQuerySql.Parameter + parameters.Count.ToString(System.Globalization.CultureInfo.InvariantCulture);
         parameters.Add(new QueryParameter
@@ -132,6 +167,7 @@ internal static class BigQueryViewSql
             ParameterValue = new QueryParameterValue { ArrayValues = [.. rows.Select(row => new QueryParameterValue { Value = row.ToString(System.Globalization.CultureInfo.InvariantCulture) })] }
         });
         sql.Append(BigQuerySql.MembersFrom).Append(Source(list.Table)).Append(BigQuerySql.MembersWhere).Append(name).Append(BigQuerySql.Close).Append(BigQuerySql.Close);
+        return name;
     }
 
     static void ValueAt(StringBuilder sql, RemoteValueList list, int row, List<QueryParameter> parameters)

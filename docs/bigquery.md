@@ -355,12 +355,14 @@ BigQuery" in their tooltips.
 - **Filters.** A checklist, Equals, Not equals, Between, NULL and not NULL apply in BigQuery. The values a filter names
   are the value list's rows, read from its table in BigQuery (so the estimate includes that small scan, and no value is
   sent), and the filter keeps the list for as long as it applies; once the list's table expires, the filter says to open
-  the column's filter again. A checklist keeps the ticked values
-  when the list is whole and they are no more than the others, and otherwise drops the unticked ones, as in memory.
+  the column's filter again. A checklist keeps the ticked values when the list is whole and they are no more than the
+  others, and otherwise drops the unticked ones, as in memory. In a FLOAT64 column NaN is one value, which a filter keeps
+  or drops like any other.
   Filters that name the grid's rows rather than values (Filter by Selection, duplicates, Keep Selected Rows) say they need
   the rows in memory.
 - **The view.** It is held under the source's budget, and windowed in its turn when it is large. It reads the whole result
-  table, so under Maximum rows a sort or filter can show rows the grid had not held, and a value list counts every row. A filter
+  table, so under Maximum rows a sort or filter can show rows the grid had not held (its answer keeps Maximum rows), and a
+  value list counts every row. A filter
   with no sort shows the rows in BigQuery's order, which need not be the query's own, and rows that tie on the sort keys
   come in any order; sort to fix one. A newer sort or filter
   replaces it (the old one is released once the grid shows the new one); Stop cancels the BigQuery job; closing the
