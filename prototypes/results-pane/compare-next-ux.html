@@ -159,6 +159,8 @@
   :is(.pop, .win) pre { margin: 0; font: 11px/15px var(--mono); background: var(--input); border: 1px solid var(--border); border-radius: 4px; padding: 6px 8px; max-height: 160px; overflow: auto; white-space: pre; }
   :is(.pop, .win) .err { color: var(--rem); display: flex; gap: 6px; align-items: flex-start; }
   :is(.pop, .win) .warnl { color: var(--warn); }
+  :is(.pop, .win) .infol { color: var(--muted); }
+  .sugg { border: 1px solid var(--border); border-radius: 4px; margin-top: 2px; } .sugg div { padding: 3px 8px; } .sugg div.on { background: color-mix(in srgb, var(--accent) 22%, transparent); } .sugg small { color: var(--muted); margin-left: 6px; }
   :is(.pop, .win) .acts { display: flex; gap: 6px; justify-content: flex-end; padding: 8px 12px 10px; border-top: 1px solid var(--border); position: sticky; bottom: 0; background: var(--menu); }
 
   /* side-by-side and diff tab */
@@ -249,7 +251,7 @@ const MARK = { added: '+', removed: '−', changed: '~', same: '' }
 const S = { scene: 'ignore', theme: 'dark', pane: 'wide', layout: 'entry', ignore: new Set(), ignoreDraft: null, ignoreMenu: true, ignoreFind: '', noteOff: false,
   cardOpen: { r: 1, c: 5, by: 'key' }, hover: null, tab: 'grid', sel: new Set([1, 3]), menuOpen: true, copied: false,
   scriptState: 'ready', script: { target: 'dbo.Orders', dir: 'toNew', del: true, upd: true, ins: true, cols: null, rows: 'all', tx: true, check: true, dest: 'query' },
-  search: 'Open', hitIndex: 1, matchMode: 'key', filtState: 'popover', filtChoice: 'shown', pivotState: 'ready' }
+  search: 'Open', hitIndex: 1, matchMode: 'key', filtState: 'popover', filtChoice: 'whole', pivotState: 'ready' }
 
 /* ---------- the diff, computed in the page ---------- */
 function model() {
@@ -323,7 +325,7 @@ function compBar(m, opts = {}) {
   const fold = narrow
     ? `<span style="position:relative"><button class="btn o" title="More results tools: Match Rows By…, Ignore Columns…, Changes Only, One Row per Entry, Exact Text, Swap Sides">⋯</button>${opts.ignoreMenu || ''}</span>`
     : `<span class="sides">${side(0, 'var(--rem)')}<button class="swap" title="Swap sides">⇄</button>${side(1, 'var(--add)')}</span>
-       <span class="sep"></span><button class="btn o" title="Match Rows By…">${S.matchMode === 'auto' ? (S.ignore.has(0) ? 'Automatic (whole rows)' : 'Automatic (id)') : '⚷ id'} ▾</button>${ignoreBtn}<button class="btn o">All rows ▾</button><button class="btn o">${S.layout === 'entry' ? 'One row' : 'Two rows'} ▾</button><label class="lbl"><input type="checkbox"> Exact text</label>`
+       <span class="sep"></span><button class="btn o" title="Match Rows By…">${S.matchMode === 'auto' ? (S.ignore.has(0) ? 'Automatic: whole rows' : 'Automatic: id') : '⚷ id'} ▾</button>${ignoreBtn}<button class="btn o">All rows ▾</button><button class="btn o">${S.layout === 'entry' ? 'One row' : 'Two rows'} ▾</button><label class="lbl"><input type="checkbox"> Exact text</label>`
   return `<div class="tb"><span class="title">⇄ Differences</span>${fold}<span class="sep"></span>${chips}<span class="lbl" title="Unchanged rows">${m.count('same')} unchanged</span>
     <span class="sep"></span><button class="btn o" title="Go to Previous Difference (Alt+Shift+F5)">↑</button><button class="btn o" title="Go to Next Difference (Alt+F5)">↓</button>${narrow ? '' : `<span class="lbl">${opts.position || units(m) + ' changes'}</span>`}
     ${narrow ? '' : `<span style="margin-left:auto;display:flex;gap:4px"><button class="btn" title="Column Profile">▤ Profile</button><button class="btn" title="Save Results As…">⤓ Save</button></span>`}</div>`
@@ -383,7 +385,7 @@ const announce = t => { $('#live').textContent = t }
 
 /* ---------- 1 Ignore columns ---------- */
 function sceneIgnore() {
-  stateSeg('Match', 'matchMode', [['key', 'Key columns: id'], ['auto', 'Automatic (chose id)']])
+  stateSeg('Match', 'matchMode', [['key', 'Key columns: id'], ['auto', 'Automatic: id']])
   const draft = S.ignoreDraft || new Set(S.ignore)
   const m = model(), auto = S.matchMode === 'auto'
   const list = COLS.map((c, i) => ({ c, i })).filter(({ c }) => c[0].includes(S.ignoreFind.toLowerCase()))
@@ -417,28 +419,28 @@ function cardHTML(m, r, c, by, rows, variant) {
   const { e, side } = rows[r] || {}
   if (!e || !e.a || !e.b || !(e.cells.includes(c) || e.soft.includes(c)) || S.ignore.has(c)) return ''
   const o = plain(e.a[c]), n = plain(e.b[c]), d = charDiff(o, n), sf = e.soft.includes(c)
-  const sum = sf ? 'Equal by collation (Latin1_General_CI_AS): differs only in trailing spaces.'
+  const sum = sf ? (variant === 'closed' ? `Equal by collation (case-insensitive). The old value is not kept (${RES[0]} is closed).` : 'Equal by collation (case-insensitive).')
     : `${d.hunks.length} edit${d.hunks.length > 1 ? 's' : ''}: ${d.hunks.slice(0, 2).map(([x, y]) => x && y ? `‘${esc(x)}’ became ‘${esc(y)}’` : x ? `‘${esc(x)}’ was removed` : `‘${esc(y)}’ was added`).join('; ')}.`
   const top = Math.min(24 + 21 * (r + 1) + 4, 330)
   return `<div class="card" id="card" role="dialog" aria-label="Change details: ${esc(COLS[c][0])}" tabindex="-1" style="top:${top}px;left:${Math.min(40 + COLS.slice(0, c).reduce((s, x) => s + x[2], 92), 9999)}px;${S.pane === 'narrow' ? 'left:8px;' : ''}">
     <header><b>${esc(COLS[c][0])}</b><small>${esc(COLS[c][1])} · ${sf ? 'equal by collation' : 'changed'} · row ${e.ai} in ${RES[0]} → row ${e.bi} in ${RES[1]}</small>${by === 'key' ? '<button class="x" id="cardX" title="Close (Escape)">✕</button>' : ''}</header>
-    <div class="sum">${variant === 'reading' ? 'Reading…' : variant === 'toodiff' ? 'Too many differences to mark: compare them in a tab.' : sum}</div>
+    <div class="sum">${variant === 'reading' ? 'Reading…' : variant === 'toodiff' ? `Too many differences to mark.${/char|xml|json/.test(COLS[c][1]) ? ' Compare them in a tab.' : ''}` : sum}</div>
     <div class="vals">${variant === 'reading' ? '<span class="k o">− Old</span><span class="v"><span class="progress" style="display:block;width:140px;margin-top:6px"><i></i></span></span><span class="k n">+ New</span><span class="v"></span>'
-      : `<span class="k o">− Old</span><span class="v">${variant === 'toodiff' ? esc(o) : variant === 'closed' ? `<span style="color:var(--muted);font-family:var(--ui)">The old value is not kept (${RES[0]} is closed).</span>` : d.o}</span><span class="k n">+ New</span><span class="v">${variant === 'toodiff' ? esc(n) : d.n}</span>`}</div>
+      : `<span class="k o">− Old</span><span class="v">${variant === 'toodiff' ? esc(o) : variant === 'closed' ? '<span style="color:var(--muted);font-family:var(--ui)">Not kept</span>' : d.o}</span><span class="k n">+ New</span><span class="v">${variant === 'toodiff' ? esc(n) : d.n}</span>`}</div>
     <footer><span>${variant === 'reading' ? '' : sf ? 'Equal by collation' : `${d.hunks.length} edit${d.hunks.length === 1 ? '' : 's'} · ${o.length} → ${n.length} characters`}</span><span>${by === 'key' ? 'Follows the active cell (Alt+F5)' : 'Ctrl+I opens it by key'}</span><span class="sp"></span>${/char|xml|json/.test(COLS[c][1]) ? '<button class="link" id="inTab">Compare Values in Tab</button>' : ''}</footer></div>`
 }
 function sceneKeyOnly(m, rows) {
   const ri = rows.findIndex(r => r.e.kind === 'added' && !r.e.poss); if (ri < 0) return ''
   return `<div class="card" id="card" role="dialog" aria-label="Change details: customer" style="top:${24 + 21 * (ri + 1) + 4}px;left:200px;width:min(340px,calc(100% - 16px))">
     <header><b>customer</b><small>nvarchar(64) · added row</small><button class="x" id="cardX" title="Close (Escape)">✕</button></header>
-    <div class="sum" style="padding-bottom:8px">Added row: only in ${RES[1]} (row ${rows[ri].e.bi}). There is no old value.</div></div>`
+    <div class="sum" style="padding-bottom:8px">Added row: only in ${RES[1]}.</div></div>`
 }
 function scenePossible(m, rows) {
   const ri = rows.findIndex(r => r.e.kind === 'removed' && r.e.poss); if (ri < 0) return ''
-  const e = rows[ri].e, p = e.poss, diffs = COLS.map((c, i) => i).filter(i => e.a[i] !== p.b[i] && !S.ignore.has(i))
+  const e = rows[ri].e, p = e.poss, cmpCols = COLS.map((c, i) => i).filter(i => i !== 0 && !S.ignore.has(i)), diffs = cmpCols.filter(i => e.a[i] !== p.b[i])
   return `<div class="card" role="dialog" aria-label="Possible match" style="top:${Math.min(24 + 21 * (ri + 1) + 4, 380)}px;left:40px;width:min(440px,calc(100% - 16px))">
     <header><b>? Possible match</b><small>removed row ${e.ai} in ${RES[0]}</small></header>
-    <div class="sum">${(() => { const cmp = COLS.filter((_, i) => !S.ignore.has(i)).length; return `Looks like row ${p.bi} in ${RES[1]}: ${cmp - diffs.length} of ${cmp} compared columns equal. Counts and colours are unchanged.` })()}</div>
+    <div class="sum">Looks like row ${p.bi} in ${RES[1]}: ${cmpCols.length - diffs.length} of ${cmpCols.length} compared columns equal. Counts and colours are unchanged.</div>
     <div class="vals" style="grid-template-columns:90px 1fr">${diffs.map(i => { const d = charDiff(plain(e.a[i]), plain(p.b[i])); return `<span class="k">${esc(COLS[i][0])}</span><span class="v">${d.o} <span style="color:var(--muted)">→</span> ${d.n}</span>` }).join('')}</div>
     <footer><button class="link">Go to Possible Match</button></footer></div>`
 }
@@ -468,7 +470,7 @@ function sceneDetails() {
   const g = act ? gridHTML(m, { act }) : g0
   frame(tabs() + resultsBar() + compBar(m, { position: act ? posText(m, rows, act) : undefined }) + stdBody(g, 'rows matched by id', overlay))
   notes([
-    ['What to try', `<ul><li><b>Opened by key</b>: Ctrl+I on a changed cell. The card stays, follows the active cell, and Alt+F5 here steps to the next change with it. Escape closes it.</li><li><b>Hover</b>: rest the pointer on any changed cell, such as status, amount or note.</li><li>Row 1007's note differs only by a trailing space: it is underlined (soft), and hovering it says it is equal by collation.</li><li>Escape also closes a hover card. Opened by key, the live region says the summary: "Change details: note, 2 edits: …. Tab to read it, Escape to close."</li><li>The other states: reading, too different to mark, and a soft cell whose old input is closed.</li></ul>`, 'Build'],
+    ['What to try', `<ul><li><b>Opened by key</b>: Ctrl+I on a changed cell. The card stays, follows the active cell, and Alt+F5 here steps to the next change with it. Escape closes it.</li><li><b>Hover</b>: with the grid focused, rest the pointer on any changed cell, such as status, amount or note. With the focus elsewhere the grid keeps its own tooltip, since Escape could not reach the card.</li><li>Row 1007's note differs only by a trailing space: it is underlined (soft), and hovering it says it is equal by collation.</li><li>Escape also closes a hover card. Opened by key, the live region says the summary: "Change details: note, 2 edits: …. Tab to read it, Escape to close."</li><li>The other states: reading, too different to mark, and a soft cell whose old input is closed.</li></ul>`, 'Build'],
     ['What the card shows', `<ul><li>Whole old and new values, up to 4,000 characters each.</li><li>Changes are found word-first and then by character, so "9" → "10" reads as one edit. A "change" is what Alt+F5 steps to; an "edit" is a run of characters in the card.</li><li>Deleted text is struck through on red and inserted text is bold on green. In forced colours they are outlined instead.</li></ul>`],
     ['Screen readers', '<p>The cell name is unchanged ("note, changed from … to …"). Opened by key, the card is a non-modal dialog named "Change details: note" that does not take focus. The live region says its summary, and Tab moves into it. Hover never opens it for keyboard users.</p>']])
 }
@@ -485,7 +487,7 @@ function diffText(m, rowsIdx) {
   // Without key columns each line starts with its row's stored number in its own input.
   const keyless = S.matchMode === 'auto' && S.ignore.has(0)
   const line = (p, r, no) => p + (keyless ? no + '\t' : '') + cols.map(i => cell(r[i])).join('\t')
-  const out = [`--- ${RES[0]} (${NAMES[0]})`, `+++ ${RES[1]} (${NAMES[1]})`, `# rows matched by ${keyless ? 'whole rows' : 'id'}${ign.length ? '; ignored: ' + ign.join(', ') : ''}${keyless ? '; lines start with row numbers' : ''}`, '# ' + (keyless ? 'row\t' : '') + cols.map(i => COLS[i][0]).join('\t')]
+  const out = [`--- ${RES[0]}`, `+++ ${RES[1]}`, `# rows matched by ${keyless ? 'whole rows' : 'id'}${ign.length ? '; ignored: ' + ign.join(', ') : ''}${keyless ? '; lines start with row numbers' : ''}`, '# ' + (keyless ? 'row\t' : '') + cols.map(i => COLS[i][0]).join('\t')]
   const seen = new Set(); let last = -1
   rowsIdx.forEach(ri => { const { e } = g[ri]; if (seen.has(e)) return; seen.add(e)
     const at = m.entries.indexOf(e)
@@ -502,18 +504,18 @@ function sceneCopy() {
   const sel = S.copyState === 'all' ? new Set(all.map((r, i) => r.e.kind !== 'same' ? i : -1).filter(i => i >= 0)) : new Set(all.map((r, i) => (r.e.b || r.e.a)[0] === 1002 || (r.e.b || r.e.a)[0] === 1004 ? i : -1).filter(i => i >= 0))
   const g = gridHTML(m, { sel })
   const u = (t, k) => t.replace(k, `<u>${k}</u>`)
-  const menu = S.menuOpen ? `<div class="menu" role="menu" aria-label="Grid menu" style="top:110px;left:260px;min-width:250px">
+  const menu = S.menuOpen ? `<div class="menu" role="menu" aria-label="Grid menu" style="top:40px;left:${S.pane === 'narrow' ? 8 : 260}px;min-width:250px">
       <div class="mi" role="menuitem">${u('Copy', 'C')}<span class="acc">Ctrl+C</span></div><div class="mi" role="menuitem">Copy with ${u('Headers', 'H')}<span class="acc">Ctrl+Shift+C</span></div><div class="msep"></div>
       <div class="mi" role="menuitem">Filt${u('e', 'e')}r<span class="acc">›</span></div><div class="mi" role="menuitem">Hi${u('g', 'g')}hlight<span class="acc">›</span></div><div class="msep"></div>
       <div class="mi hot" role="menuitem" aria-haspopup="menu" aria-expanded="true">Compari${u('s', 's')}on<span class="acc">›</span></div><div class="msep"></div><div class="mi" role="menuitem">Sa${u('v', 'v')}e Results As…</div></div>
-    <div class="menu" role="menu" aria-label="Comparison" style="top:196px;left:514px;min-width:290px">
+    <div class="menu" role="menu" aria-label="Comparison" style="top:8px;left:${S.pane === 'narrow' ? 'calc(100% - 298px)' : '514px'};min-width:290px">
       <div class="mi" role="menuitem">Go to ${u('N', 'N')}ext Difference<span class="acc">Alt+F5</span></div><div class="mi" role="menuitem">Go to ${u('P', 'P')}revious Difference<span class="acc">Alt+Shift+F5</span></div><div class="mi off" role="menuitem" title="Unavailable: this row has no possible match">Go to Possible ${u('M', 'M')}atch</div><div class="msep"></div>
       <div class="mi" role="menuitem">Show Change ${u('D', 'D')}etails<span class="acc">Ctrl+I</span></div><div class="mi" role="menuitem">Compare ${u('V', 'V')}alues in Tab</div><div class="msep"></div>
       <div class="mi" role="menuitem">Match ${u('R', 'R')}ows By…</div><div class="mi" role="menuitem">${u('I', 'I')}gnore Columns…</div><div class="mi" role="menuitemcheckbox" aria-checked="false"><span style="width:14px"></span>Ignore ${u('T', 'T')}his Column</div><div class="msep"></div>
-      <div class="mi hot" role="menuitem" id="copyDiff">${u('C', 'C')}opy as Diff</div><div class="mi" role="menuitem">S${u('a', 'a')}ve as Diff…</div><div class="mi" role="menuitem">${u('S', 'S')}cript Differences as T-SQL…</div><div class="msep"></div>
+      <div class="mi hot" role="menuitem" id="copyDiff">${u('C', 'C')}opy as Diff</div><div class="mi" role="menuitem">Save ${u('as', 'a')} Diff…</div><div class="mi" role="menuitem">${u('S', 'S')}cript Differences as T-SQL…</div><div class="msep"></div>
       <div class="mi" role="menuitemcheckbox" aria-checked="false"><span style="width:14px"></span>Compare Rows as S${u('h', 'h')}own</div></div>` : ''
   S.copyCount = new Set([...sel].map(i => all[i].e)).size
-  frame(tabs() + resultsBar() + compBar(m) + stdBody(g, S.copied ? `<span style="color:var(--add)">Copied ${S.copyCount} rows as a diff</span>` : 'rows matched by id', menu))
+  frame(tabs() + resultsBar() + compBar(m) + stdBody(g, S.copied ? `<span style="color:var(--add)">Copied ${S.copyCount} row${S.copyCount === 1 ? '' : 's'} as a diff.</span>` : 'rows matched by id', menu))
   $('#extra').innerHTML = `<div class="clip"><b>Clipboard</b> <span class="lbl">(what Copy as Diff writes, CRLF on Windows; tabs shown as gaps)</span><pre>${esc(diffText(m, [...sel].sort((a, b) => a - b)))}</pre>
     <p class="lbl" style="max-width:1000px"><b>Save as Diff…</b> writes this text for every row the grid shows to a .txt file (Q1), whatever extension is chosen. In stored order under Changes only, a hidden run is <code>@@ 312 unchanged rows @@</code>. Elsewhere, copied rows that are not next to each other in the grid get <code>@@ rows not copied @@</code>. Values escape <code>\\</code>, tab, CR and LF, and the text NULL is written <code>\\NULL</code>.</p></div>`
   notes([['What to try', '<ul><li>The grid menu\'s new <b>Comparison</b> submenu (access key S) holds every comparison command with its own access keys. Click <b>Copy as Diff</b>: the text below is what reaches the clipboard.</li><li>A changed row is a − line and a + line in both layouts. Rows 2 and 4 are not next to each other, so a skip line separates them.</li><li>Switch to scene 1 and ignore updated_at, then come back: the column leaves the text and the header line names it (<code>ignored: updated_at</code>).</li><li>In scene 1, set Match to Automatic and ignore id: rows match by whole rows, so each line starts with its row number.</li><li>A changed row counts once in "Copied 2 rows as a diff", though it writes two lines.</li></ul>', 'Build'],
@@ -527,16 +529,18 @@ function lit(v, t) {
   if (t.startsWith('datetime2')) return `CAST('${v.replace(' ', 'T')}' AS datetime2(7))`
   return `N'${String(v).replace(/'/g, "''")}'`
 }
-function scriptText(m) {
-  const sc = S.script, cols = (sc.cols || COLS.map((_, i) => i)), tgt = sc.target.split('.').map(p => `[${p.replace(/]/g, ']]')}]`).join('.')
+const quoteTarget = t => t.trim() ? t.trim().split('.').map(p => `[${p.replace(/]/g, ']]')}]`).join('.') : ''
+function scriptText(m, target) {
+  const sc = S.script, cols = (sc.cols || COLS.map((_, i) => i)), tgt = quoteTarget(target) || '[schema].[table]'
   const toOld = sc.dir === 'toOld', from = toOld ? RES[1] : RES[0], to = toOld ? RES[0] : RES[1]
-  const out = [`-- Differences: ${RES[0]} → ${RES[1]}, rows matched by id`, `-- Makes the rows of ${tgt} (where ${from} came from) match ${to}. Generated by Varia on 2026-11-22 14:05.`, '-- Review it before you run it. Varia does not run it for you.', 'SET XACT_ABORT ON;']
+  const out = [`-- Differences: ${RES[0]} → ${RES[1]} (SQLQuery3.sql), rows matched by key columns: id`, `-- ${tgt} holds ${from}'s rows: this changes them to ${to}'s. Generated by Varia on 2026-11-22 14:05.`, '-- Review it before you run it. Varia does not run it for you.', 'SET XACT_ABORT ON;']
   if (sc.tx) out.push('BEGIN TRANSACTION;')
   const chk = k => sc.check ? [`IF @@ROWCOUNT <> 1 THROW 50000, N'Row id = ${k} was not found exactly once.', 1;`] : []
   const E = m.entries, gone = toOld ? 'added' : 'removed', come = toOld ? 'removed' : 'added'
   const oldOf = e => toOld ? e.b : e.a, newOf = e => toOld ? e.a : e.b
   if (sc.del) E.filter(e => e.kind === gone).forEach(e => { const r = e.a || e.b; out.push(`DELETE FROM ${tgt} WHERE [id] = ${r[0]};`, ...chk(r[0])) })
-  if (sc.upd) E.filter(e => e.kind === 'changed').forEach(e => { const set = e.cells.filter(c => cols.includes(c)).map(c => `[${COLS[c][0]}] = ${lit(newOf(e)[c], COLS[c][1])}`); if (set.length) out.push(`UPDATE ${tgt} SET ${set.join(', ')} WHERE [id] = ${oldOf(e)[0]};`, ...chk(oldOf(e)[0])) })
+  // An UPDATE SETs only changed, compared, ticked columns, never the identity column (id, here also the key).
+  if (sc.upd) E.filter(e => e.kind === 'changed').forEach(e => { const set = e.cells.filter(c => c !== 0 && cols.includes(c)).map(c => `[${COLS[c][0]}] = ${lit(newOf(e)[c], COLS[c][1])}`); if (set.length) out.push(`UPDATE ${tgt} SET ${set.join(', ')} WHERE [id] = ${oldOf(e)[0]};`, ...chk(oldOf(e)[0])) })
   if (sc.ins) {
     const identity = cols.includes(0)
     if (identity) out.push(`SET IDENTITY_INSERT ${tgt} ON;`)
@@ -547,45 +551,63 @@ function scriptText(m) {
   return out
 }
 function sceneScript() {
-  stateSeg('State', 'scriptState', [['ready', 'Ready'], ['generating', 'Generating'], ['nokey', 'Matched by row position'], ['trunc', 'Truncated value'], ['big', 'Too large'], ['closed', 'Comparison closed']])
-  const m = model(), g = gridHTML(m), sc = S.script, cols = sc.cols || COLS.map((_, i) => i), toOld = sc.dir === 'toOld'
+  stateSeg('State', 'scriptState', [['ready', 'Ready'], ['first', 'First time'], ['generating', 'Generating'], ['nokey', 'Not matched by key'], ['auto', 'Matched automatically'], ['dup', 'Repeated key'], ['trunc', 'Truncated value'], ['big', 'Too large'], ['closed', 'Comparison closed']])
+  const st = S.scriptState, first = st === 'first'
+  const m = model(), g = gridHTML(m), sc = S.script, target = first ? '' : sc.target, cols = sc.cols || COLS.map((_, i) => i), toOld = sc.dir === 'toOld'
   const n = k => m.count(k), dels = n(toOld ? 'added' : 'removed'), ins = n(toOld ? 'removed' : 'added')
+  const upds = m.entries.filter(e => e.kind === 'changed' && e.cells.some(c => c !== 0 && cols.includes(c))).length
+  const rowsN = k => `${k} row${k === 1 ? '' : 's'}`
+  const tgtq = quoteTarget(target), tname = tgtq || 'The target table'
+  const softN = m.entries.reduce((k, e) => k + e.soft.filter(c => cols.includes(c)).length, 0)
+  const keyBtn = '<button class="btn o">Choose key columns…</button>'
   const refusal = {
-    nokey: `Rows are matched by row position, so a statement could not find its row. Match rows by key columns to script differences.`,
-    trunc: `3 values in <b>note</b> were not kept in full, so the script would not be exact. Untick note, or choose rows without them.`,
-    big: `The script would be about 2,400,000 characters. A query window runs at most 1,000,000. Choose fewer rows.`,
-    closed: `The comparison was closed.`
-  }[S.scriptState]
-  const tgtq = sc.target.split('.').map(p => `[${p.replace(/]/g, ']]')}]`).join('.')
+    nokey: [`Rows are not matched by key columns, so a statement could not find its row. Choose key columns to script differences.`, keyBtn],
+    auto: [`Rows were matched automatically by id. Choose key columns to script differences.`, `<button class="btn p">Use id as key columns</button>${keyBtn}`],
+    dup: [`2 rows share a key, so a statement could change several rows.`, ''],
+    trunc: [`3 values in <b>note</b> were not kept in full, so the script would not be exact. Untick note, or choose rows without them.`, ''],
+    big: [`The script would be about 2,400,000 characters. Scripts are limited to 1,000,000 characters, the most a query window runs. Choose fewer rows.`, ''],
+    closed: [`The comparison was closed.`, '']
+  }[st]
+  const sugg = first ? `<div class="sugg" role="listbox" aria-label="Tables on this connection">${['dbo.Orders', 'dbo.OrdersArchive', 'sales.Orders'].map((t, i) => `<div role="option" aria-selected="${i === 0}"${i === 0 ? ' class="on"' : ''}>${t} <small>Search Objects</small></div>`).join('')}</div>` : ''
   const form = `
-    <div class="sec"><div class="h">Target table</div><input class="txt" id="tgt" value="${esc(sc.target)}" aria-label="Target table" spellcheck="false">
-      <div class="row2 warnl" style="font-size:11px">ⓘ Search Objects knows dbo.Orders on this connection, with all 6 columns. id is its identity column.</div></div>
+    <div class="sec"><div class="row2 infol">Rows matched by key columns: id</div></div>
+    <div class="sec"><div class="h">Target table</div><input class="txt" id="tgt" value="${esc(target)}" placeholder="schema.table" aria-label="Target table" spellcheck="false"${first ? ' role="combobox" aria-expanded="true" aria-autocomplete="list"' : ''}>${sugg}
+      ${first ? '' : `<div class="row2 infol" style="font-size:11px">ⓘ Search Objects knows ${esc(tgtq)} on this connection, with all 6 columns. id is its identity column.</div>`}</div>
     <div class="sec"><div class="h">Direction</div>
-      <label class="row2"><input type="radio" name="dir" data-dir="toNew"${toOld ? '' : ' checked'}> ${esc(tgtq)} holds ${RES[0]}'s rows: change them to ${RES[1]}'s</label>
-      <label class="row2"><input type="radio" name="dir" data-dir="toOld"${toOld ? ' checked' : ''}> ${esc(tgtq)} holds ${RES[1]}'s rows: change them to ${RES[0]}'s</label></div>
+      <label class="row2"><input type="radio" name="dir" data-dir="toNew"${toOld ? '' : ' checked'}> ${esc(tname)} holds ${RES[0]}'s rows: change them to ${RES[1]}'s</label>
+      <label class="row2"><input type="radio" name="dir" data-dir="toOld"${toOld ? ' checked' : ''}> ${esc(tname)} holds ${RES[1]}'s rows: change them to ${RES[0]}'s</label></div>
     <div class="sec"><div class="h">Statements</div>
       <label class="row2"><input type="checkbox" data-sc="del"${sc.del ? ' checked' : ''}> DELETE <small>(${dels})</small></label>
-      <label class="row2"><input type="checkbox" data-sc="upd"${sc.upd ? ' checked' : ''}> UPDATE <small>(${n('changed')}; only changed, compared columns)</small></label>
-      <label class="row2"><input type="checkbox" data-sc="ins"${sc.ins ? ' checked' : ''}> INSERT <small>(${ins})</small></label></div>
+      <label class="row2"><input type="checkbox" data-sc="upd"${sc.upd ? ' checked' : ''}> UPDATE <small>(${upds}; only changed, compared columns)</small></label>
+      <label class="row2"><input type="checkbox" data-sc="ins"${sc.ins ? ' checked' : ''}> INSERT <small>(${ins})</small></label>
+      ${sc.del ? '<div class="row2 infol" style="font-size:11px">ⓘ DELETEs fire the target\'s delete triggers and ON DELETE cascades.</div>' : ''}</div>
     <div class="sec"><div class="h">Columns</div><div class="cols">${COLS.map((c, i) => i === 0 ? `<label class="off"><input type="checkbox" checked disabled> ⚷ ${c[0]} <small>key</small></label>`
       : `<label><input type="checkbox" data-scol="${i}"${cols.includes(i) ? ' checked' : ''}> ${c[0]} <small>${S.ignore.has(i) ? 'ignored: INSERT only' : c[1]}</small></label>`).join('')}</div>
       <label class="row2"><input type="checkbox" checked> SET IDENTITY_INSERT <small>(id is the target's identity column)</small></label>
-      <div class="row2 warnl" style="font-size:11px">ⓘ 1 value differs only by collation (note, row 1007) and is not scripted. Turn on Exact text to include it.</div></div>
-    <div class="sec"><div class="h">Rows</div><label class="row2"><input type="radio" name="scr" checked> All differences <small>(${dels + n('changed') + ins})</small></label><label class="row2"><input type="radio" name="scr"> Rows shown <small>(${dels + n('changed') + ins}; chips and filters)</small></label><label class="row2" style="color:var(--muted)"><input type="radio" name="scr" disabled> Selected rows <small>(none selected)</small></label></div>
+      ${softN ? `<div class="row2 infol" style="font-size:11px">ⓘ ${softN} value${softN === 1 ? ' differs' : 's differ'} only by collation and ${softN === 1 ? 'is' : 'are'} not scripted. Turn on Exact text to include ${softN === 1 ? 'it' : 'them'}.</div>` : ''}</div>
+    <div class="sec"><div class="h">Rows</div><label class="row2"><input type="radio" name="scr" checked> All differences <small>(${dels + upds + ins})</small></label><label class="row2"><input type="radio" name="scr"> Rows in the grid (chips and filters) <small>(${dels + upds + ins})</small></label><label class="row2" style="color:var(--muted)"><input type="radio" name="scr" disabled> Selected rows <small>(none selected)</small></label></div>
     <div class="sec"><div class="h">Options</div><label class="row2"><input type="checkbox" data-sc="tx"${sc.tx ? ' checked' : ''}> Wrap in a transaction</label><label class="row2"><input type="checkbox" data-sc="check"${sc.check ? ' checked' : ''}> Check each statement changes one row</label>
       ${!sc.tx && sc.check ? '<div class="row2 warnl">⚠ Without a transaction, statements before a failed check stay applied.</div>' : ''}
       <div class="row2"><span>Destination</span><select class="txt" style="width:auto;font-family:var(--ui)" aria-label="Destination"><option>New Query Editor Window</option><option>Clipboard</option></select></div></div>
-    <div class="sec"><div class="h">Preview</div><pre aria-label="Script preview">${esc(scriptText(m).slice(0, 30).join('\n'))}</pre></div>`
-  const body = refusal ? `<div class="sec"><div class="err">${S.scriptState === 'closed' ? 'ⓘ' : '⚠'} <span>${refusal}</span></div>${S.scriptState === 'nokey' ? '<div class="row2" style="margin-top:6px"><button class="btn o">Choose key columns…</button></div>' : ''}</div>` + (S.scriptState === 'trunc' || S.scriptState === 'big' ? form : '') : form
-  const gen = S.scriptState === 'generating'
-  const win = `<div class="win" role="dialog" aria-label="Script Differences as T-SQL"><div class="titlebar">Script Differences as T-SQL<span class="lbl" style="font-weight:400">· ${RES[0]} → ${RES[1]}</span><button class="x" title="Close (Cancel)">✕</button></div>
+    <div class="sec"><div class="h">Preview</div><pre aria-label="Script preview">${esc(scriptText(m, target).slice(0, 30).join('\n'))}</pre></div>`
+  const body = refusal
+    ? `<div class="sec"><div class="${st === 'closed' ? 'row2 infol' : 'err'}">${st === 'closed' ? 'ⓘ' : '⚠'} <span>${refusal[0]}</span></div>${refusal[1] ? `<div class="row2" style="margin-top:6px">${refusal[1]}</div>` : ''}</div>` + (['dup', 'trunc', 'big', 'closed'].includes(st) ? form : '')
+    : form
+  const parts = [sc.del && dels && `deletes ${rowsN(dels)}`, sc.upd && upds && `updates ${rowsN(upds)}`, sc.ins && ins && `inserts ${rowsN(ins)}`].filter(Boolean)
+  const list = parts.length > 1 ? parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1] : parts[0] || ''
+  const summary = first ? 'Choose the target table.' : parts.length ? `${list[0].toUpperCase() + list.slice(1)} in ${esc(tgtq)}.` : 'No statements are ticked.'
+  const canScript = !refusal && !first && parts.length > 0
+  const gen = st === 'generating'
+  const win = `<div class="win" role="dialog" aria-label="Script Differences as T-SQL"><div class="titlebar">Script Differences as T-SQL<span class="lbl" style="font-weight:400">· ${RES[0]} → ${RES[1]} (SQLQuery3.sql)</span><button class="x" title="Close (Cancel)">✕</button></div>
     <div class="wbody">${body}</div>
-    <div class="acts">${gen ? '<span class="lbl" style="margin-right:auto;display:flex;gap:8px;align-items:center;flex:1">Writing statements… <span class="progress" style="flex:1"><i></i></span></span><button class="btn o">Cancel</button>' : `${refusal ? '' : `<span class="lbl" style="margin-right:auto;align-self:center">Deletes ${dels}, updates ${n('changed')} and inserts ${ins} rows in ${esc(tgtq)}.</span>`}<button class="btn o">Cancel</button><button class="btn p"${refusal ? ' disabled' : ''}>Script</button>`}</div></div>`
+    <div class="acts">${gen ? '<span class="lbl" style="margin-right:auto;display:flex;gap:8px;align-items:center;flex:1">Writing statements… <span class="progress" style="flex:1"><i></i></span></span><button class="btn o">Cancel</button>' : `${refusal && st !== 'closed' ? '' : `<span class="lbl" style="margin-right:auto;align-self:center" aria-live="polite">${summary}</span>`}<button class="btn o">Cancel</button><button class="btn p"${canScript ? '' : ' disabled'}>Script</button>`}</div></div>`
   frame(tabs() + resultsBar() + compBar(m) + stdBody(g, 'rows matched by id', win))
-  notes([['What to try', '<ul><li>It is an OS dialog window of its own, modeless, beside the grid (drawn here inside the frame). A stray click does not lose the form.</li><li>Untick statements or columns, or switch <b>Direction</b>, and watch the preview. The comparison is not swapped.</li><li>Turn off the transaction with the checks on: it warns.</li><li>Try the other states: generating with Cancel, refusals, and the comparison closed while the window is open. On BigQuery the command is unavailable, so the window never opens.</li><li>The target is drawn as the pair\'s remembered draft. The first time it is empty, with suggestions from Search Objects.</li></ul>', 'Build'],
-    ['Safety', '<ul><li>Varia does not run the script. It opens in a New Query Editor Window on the comparison\'s connection, as Script As does.</li><li>XACT_ABORT, a transaction and the row checks roll everything back if the target does not hold what the comparison saw.</li><li>A live test runs scripts over every type, in both directions, and expects no differences after.</li></ul>'],
-    ['Literals and columns', '<p>Each value is written from its column\'s type: exact decimals, round-trip floats, <code>N\'…\'</code> with doubled quotes, typed casts at the column\'s own precision (datetimeoffset included), and <code>0x…</code> binary. rowversion, computed columns, CLR types, sql_variant and vector start unticked, with the reason. Columns only one result has are named, since INSERTs leave them out.</p>']])
+  notes([['What to try', '<ul><li>It is an OS dialog window of its own, modeless, beside the grid (drawn here inside the frame). A stray click does not lose the form.</li><li>Untick statements or columns, or switch <b>Direction</b>, and watch the preview and the summary beside Script. The comparison is not swapped.</li><li>Turn off the transaction with the checks on: it warns.</li><li><b>First time</b>: the target is empty, with suggestions from Search Objects, and Script waits for it. After that the pair\'s draft is remembered.</li><li><b>Generating</b>: Cancel stops generating and keeps the window open with its draft. The next Cancel closes it.</li><li><b>Not matched by key</b> and <b>Matched automatically</b> are known when the window opens. <b>Choose key columns…</b> opens the Match menu in the main window, and the window stays open. <b>Use id as key columns</b> replaces the comparison with that match.</li><li><b>Repeated key</b>, <b>Truncated value</b> and <b>Too large</b> are found on Script. Script is available again once the form changes.</li><li>On BigQuery the command is unavailable, so the window never opens.</li></ul>', 'Build'],
+    ['After Script', '<ul><li>New Query Editor Window: the window closes, a query document opens on the comparison\'s connection without running, and the live region says "Script opened in a new query editor window: 14 statements."</li><li>Clipboard: the window closes and the live region says "Script copied to the clipboard: 14 statements." Focus returns to where it was.</li></ul>'],
+    ['Safety', '<ul><li>Varia does not run the script.</li><li>XACT_ABORT, a transaction and the row checks roll everything back if the target does not hold what the comparison saw.</li><li>A script is written only under key columns the user chose, never under a match Automatic chose.</li><li>A live test runs scripts over every type, in both directions, and expects no differences after.</li></ul>'],
+    ['Literals and columns', '<p>Each value is written from its column\'s type: exact decimals, round-trip floats, <code>N\'…\'</code> with doubled quotes, typed casts at the column\'s own precision (datetimeoffset included), and <code>0x…</code> binary. rowversion, computed columns, CLR types, sql_variant and vector start unticked, with the reason. An identity column is never SET. Columns only one result has are named, since INSERTs leave them out.</p>']])
 }
+
 
 /* ---------- 5 Search old values ---------- */
 function sceneSearch() {
@@ -630,7 +652,7 @@ function sceneFiltered() {
     frame(tabs() + resultsBar(undefined, { label: `⇄ ${RES[0]} (as shown) → ${RES[1]}`, title: `Differences: ${RES[0]} (as shown) → ${RES[1]}`, dot: stale })  + compBar(m, { filtered: [empty ? '0 of 5,000' : '120 of 5,000', ''] }) + caption + notice + stdBody(g, `rows matched by id · ${RES[0]} as shown`))
   }
   notes([['What to try', '<ul><li><b>Compare popover</b>: "Compare each result" appears only when an input is sorted or filtered, and is remembered per pair, as the match and ignored columns are.</li><li><b>Compared as shown</b>: a funnel and "120 of 5,000" on the − side, "(as shown)" in the name. Gutter numbers stay stored rows.</li><li><b>Out of date</b>: changing Result 1\'s filters marks the comparison, as Pivots are marked. Update rebuilds it over the inputs as shown now. While it is out of date, Layout, Rows and the other controls update it too, and say so.</li><li><b>Filters leave no rows</b>: every row of Result 3 shows as added, and the notice says why.</li></ul>', 'Build'],
-    ['Also', '<ul><li>One term throughout: "as shown" against "whole result". "Filtered" would leave out the sort, and "Rows" is the toolbar\'s All rows / Changes only.</li><li>The existing notice "Result 1 was sorted or filtered" gains <b>Compare rows as shown</b>. A memory refusal of All rows offers it too, when an input has filters.</li><li>Under Row position the sorted orders pair, so a sort alone earns "(as shown)". Under key matching the sort only orders the output.</li></ul>']])
+    ['Also', '<ul><li>One term throughout: "as shown" against "whole result". "Filtered" would leave out the sort, and "Rows" is the toolbar\'s All rows / Changes only.</li><li>The existing notice "Filters and sorts on the inputs were not applied: …" gains <b>Compare rows as shown</b>. A memory refusal of All rows offers it too, when an input has filters.</li><li>Under Row position the sorted orders pair, so a sort alone earns "(as shown)". Under key matching the sort only orders the output.</li></ul>']])
 }
 
 /* ---------- 2 Side by side (deferred) ---------- */
@@ -684,10 +706,10 @@ $('#app').addEventListener('click', e => {
   const t = e.target
   if (t.closest('#ignBtn')) { S.ignoreMenu = !S.ignoreMenu; S.ignoreDraft = null; return render() }
   if (t.closest('#ignCancel')) { S.ignoreMenu = false; S.ignoreDraft = null; return render() }
-  if (t.closest('#ignApply')) { S.ignore = new Set(S.ignoreDraft || S.ignore); S.ignoreDraft = null; S.ignoreMenu = false; S.noteOff = false; render(); const mm = model(); announce(`Comparison updated: ${mm.count('added')} added, ${mm.count('removed')} removed, ${mm.count('changed')} changed.`); return }
+  if (t.closest('#ignApply')) { S.ignore = new Set(S.ignoreDraft || S.ignore); S.ignoreDraft = null; S.ignoreMenu = false; S.noteOff = false; render(); const mm = model(); announce(`Comparison updated: matched by ${S.matchMode === 'auto' && S.ignore.has(0) ? 'whole rows' : 'id'}, ${mm.count('changed')} changed, ${mm.count('added')} added, ${mm.count('removed')} removed.`); return }
   if (t.closest('#cmpAll')) { S.ignore = new Set(); return render() }
   if (t.closest('#noteX')) { S.noteOff = true; return render() }
-  if (t.closest('#copyDiff')) { S.copied = true; S.menuOpen = false; render(); announce(`Copied ${S.copyCount} rows as a diff`); return }
+  if (t.closest('#copyDiff')) { S.copied = true; S.menuOpen = false; render(); announce(`Copied ${S.copyCount} row${S.copyCount === 1 ? '' : 's'} as a diff.`); return }
   if (t.closest('#cardX')) { S.detailState = 'hover'; S.hover = { r: -1, c: -1 }; return render() }
   if (t.closest('#inTab')) { S.detailState = 'tab'; return render() }
   if (t.closest('#sNext')) { S.hitIndex++; return render() }
