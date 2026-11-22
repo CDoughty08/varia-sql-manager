@@ -1,8 +1,8 @@
 // SQL Server Agent's Operators and notifications grid (AG-7, docs/sql-server-agent.md › Operators and notifications): alerts down, operators
 // across, each cell how the operator hears about the alert; the selected operator beside it with Open, Send test e-mail and Delete (with
 // Reassign to); the jobs that notify operators, read-only; and Add recommended alerts. Save sends one change per changed alert.
-import { useState } from 'react'
-import { notifyEmail, notifyPager, type AgentRecommendedSave } from '../../../shared/actions/agent-alert.ts'
+import { useState, type KeyboardEvent } from 'react'
+import { notifyEmail, notifyNetSend, notifyPager, type AgentRecommendedSave } from '../../../shared/actions/agent-alert.ts'
 import { agentOperatorText, cellText, operatorUses, withCell, type AgentNotifyMatrix, type AgentOperatorRecord, type AgentOperatorsModel } from '../../../shared/actions/agent-operator.ts'
 import { agentLimits } from '../../../shared/agent/catalog.ts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
@@ -15,8 +15,24 @@ import { agentObjectText, operatorsSections, type AgentObjectState, type Operato
 import { methodChoices } from './AlertDocument'
 
 type State = AgentObjectState<AgentOperatorsModel, AgentNotifyMatrix>
-/** A cell's next value as it is clicked: none, e-mail, e-mail and pager, pager, none. */
-export const nextMethods = (methods: number): number => methods === 0 ? notifyEmail : methods === notifyEmail ? notifyEmail | notifyPager : methods === (notifyEmail | notifyPager) ? notifyPager : 0
+/** A cell click cycles e-mail and pager (none, E, E and P, P) and keeps net send as it is, which only the alert document changes. */
+export const nextMethods = (methods: number): number => {
+  const paged = methods & (notifyEmail | notifyPager)
+  return (paged === 0 ? notifyEmail : paged === notifyEmail ? notifyEmail | notifyPager : paged === (notifyEmail | notifyPager) ? notifyPager : 0) | (methods & notifyNetSend)
+}
+/** The grid's one tab stop moves by arrow keys, Home and End (a row's first and last cell) and Ctrl+Home and Ctrl+End (the corners). */
+export function gridStep(key: string, ctrl: boolean, at: { readonly row: number; readonly column: number }, rows: number, columns: number): { row: number; column: number } | undefined {
+  const clamp = (value: number, size: number) => Math.max(0, Math.min(size - 1, value))
+  switch (key) {
+    case 'ArrowUp': return { row: clamp(at.row - 1, rows), column: at.column }
+    case 'ArrowDown': return { row: clamp(at.row + 1, rows), column: at.column }
+    case 'ArrowLeft': return { row: at.row, column: clamp(at.column - 1, columns) }
+    case 'ArrowRight': return { row: at.row, column: clamp(at.column + 1, columns) }
+    case 'Home': return ctrl ? { row: 0, column: 0 } : { row: at.row, column: 0 }
+    case 'End': return ctrl ? { row: rows - 1, column: columns - 1 } : { row: at.row, column: columns - 1 }
+    default: return undefined
+  }
+}
 const methodsWords = (methods: number) => methodChoices.filter(choice => methods & choice.bit).map(choice => choice.label).join(' and ') || 'not notified'
 
 function Grid({ state, model, draft, editable, service, selected, onSelect }: {
@@ -24,28 +40,40 @@ function Grid({ state, model, draft, editable, service, selected, onSelect }: {
   readonly selected?: string; readonly onSelect: (name: string) => void
 }) {
   const alerts = model.alerts
+  const [focus, setFocus] = useState({ row: 0, column: 0 })
   if (!alerts) return <p className="field-note">This login cannot read the server's alerts.</p>
   if (!model.operators.length) return <p className="field-note">The server has no operators yet. New Operator adds one.</p>
   const base = state.base
+  const rows = alerts.length, columns = model.operators.length
+  const stop = { row: Math.min(focus.row, Math.max(0, rows - 1)), column: Math.min(focus.column, Math.max(0, columns - 1)) }
+  const keyDown = (event: KeyboardEvent<HTMLTableSectionElement>) => {
+    if (event.altKey || event.metaKey || event.shiftKey) return
+    const next = gridStep(event.key, event.ctrlKey, stop, rows, columns)
+    if (!next) return
+    event.preventDefault()
+    setFocus(next)
+    event.currentTarget.querySelector<HTMLButtonElement>(`[data-cell="${next.row}:${next.column}"]`)?.focus()
+  }
   return <div className="agent-operators-grid-wrap">
     <table className="properties-table agent-operators-grid" aria-label="Operators and notifications">
       <thead><tr><th scope="col">Alert</th>{model.operators.map(operator => <th key={operator.id} scope="col" data-selected={operator.name === selected || undefined}>
         <button type="button" className="agent-operators-head" aria-pressed={operator.name === selected} onClick={() => onSelect(operator.name)}>{operator.name}{!operator.enabled && ' (disabled)'}</button>
       </th>)}</tr></thead>
-      <tbody>{alerts.length === 0 ? <tr><td colSpan={model.operators.length + 1} className="field-note">The server has no alerts. Add recommended alerts creates the usual set.</td></tr>
-        : alerts.map(alert => <tr key={alert.id} data-disabled={!alert.enabled || undefined}>
+      <tbody onKeyDown={keyDown}>{alerts.length === 0 ? <tr><td colSpan={model.operators.length + 1} className="field-note">The server has no alerts. Add recommended alerts creates the usual set.</td></tr>
+        : alerts.map((alert, row) => <tr key={alert.id} data-disabled={!alert.enabled || undefined}>
           <th scope="row">{alert.name}</th>
-          {model.operators.map(operator => {
+          {model.operators.map((operator, column) => {
             const methods = draft.get(alert.name)?.get(operator.name) ?? 0
             const changed = (base?.get(alert.name)?.get(operator.name) ?? 0) !== methods
             return <td key={operator.id} data-changed={changed || undefined} data-selected={operator.name === selected || undefined}>
-              <button type="button" className="agent-operators-cell" disabled={!editable} aria-label={`${alert.name}, ${operator.name}: ${methodsWords(methods)}`}
+              <button type="button" className="agent-operators-cell" disabled={!editable} data-cell={`${row}:${column}`} tabIndex={row === stop.row && column === stop.column ? 0 : -1}
+                onFocus={() => setFocus({ row, column })} aria-label={`${alert.name}, ${operator.name}: ${methodsWords(methods)}`}
                 onClick={() => service.updateDraft(state.id, matrix => withCell(matrix, alert.name, operator.name, nextMethods(methods)))}>{cellText(methods) || '·'}</button>
             </td>
           })}
         </tr>)}</tbody>
     </table>
-    <p className="field-note">Click a cell to cycle e-mail (E), e-mail and pager (EP), pager (P) and none.</p>
+    <p className="field-note">Click a cell (or press Enter or Space on it; the arrow keys move between cells) to cycle e-mail (E), e-mail and pager (EP), pager (P) and none.</p>
     {model.alertsTruncated && <p className="field-note">Only the first {agentLimits.alertRows} alerts are shown.</p>}
     {model.operatorsTruncated && <p className="field-note">Only the first {agentLimits.operatorRows} operators are shown.</p>}
   </div>
@@ -145,7 +173,7 @@ export default function OperatorsDocument({ documentId }: { documentId: string }
   const [chosen, setDialog] = useState<'delete' | 'recommended'>()
   const state = documents[documentId]
   // Add recommended alerts from the Alerts folder asks for its dialog once the grid has read the server.
-  const dialog = chosen ?? (state?.ask && state.model ? state.ask : undefined)
+  const dialog = chosen ?? (state?.ask && state.model?.sysadmin && state.model.alerts && !state.model.readOnly ? state.ask : undefined)
   if (!state) return <div className="agent-operators-document" />
   const { model, draft } = state
   const editable = operatorsDocuments.canEdit(state.id)

@@ -14,7 +14,7 @@ import { agentLimits } from '../src/shared/agent/catalog'
 import { commandDescriptor } from '../src/shared/commands/catalog'
 import type { ApiResult } from '../src/shared/contracts'
 import { agentObjectText } from '../src/renderer/src/agent/AlertOperatorDocumentService'
-import { nextMethods } from '../src/renderer/src/agent/OperatorsDocument'
+import { gridStep, nextMethods } from '../src/renderer/src/agent/OperatorsDocument'
 import { testBlocked, timeText, timeValue } from '../src/renderer/src/agent/OperatorDocument'
 import { deleteObjectDefinition } from '../src/renderer/src/dialogs/definitions'
 import { connectionInfo, readyBackend, workbenchFixture } from './fixtures/workbench'
@@ -155,6 +155,14 @@ describe("the operator document's and grid's shared rules", () => {
     expect(matrixChangeCount(model, base, draft)).toBe(2)
     expect(operatorUses(model, model.operators[0])).toEqual({ alerts: 1, jobs: 1 })
     expect([0, 1, 3, 2].map(nextMethods)).toEqual([1, 3, 2, 0])
+    // Net send stays as it is: only the alert document changes it.
+    expect([4, 5, 7, 6].map(nextMethods)).toEqual([5, 7, 6, 4])
+    // One tab stop: the arrows move it within the grid and stop at its edges; Home and End go to a row's ends, with Ctrl to the corners.
+    expect(gridStep('ArrowDown', false, { row: 0, column: 1 }, 3, 2)).toEqual({ row: 1, column: 1 })
+    expect(gridStep('ArrowRight', false, { row: 0, column: 1 }, 3, 2)).toEqual({ row: 0, column: 1 })
+    expect(gridStep('End', true, { row: 0, column: 0 }, 3, 2)).toEqual({ row: 2, column: 1 })
+    expect(gridStep('Home', false, { row: 2, column: 1 }, 3, 2)).toEqual({ row: 2, column: 0 })
+    expect(gridStep('a', false, { row: 0, column: 0 }, 3, 2)).toBeUndefined()
   })
   it('says why Send test e-mail is unavailable', () => {
     const model = operatorModel(), draft = initialAgentOperatorDraft(model)
@@ -234,7 +242,7 @@ describe('the alert and operator documents', () => {
     const { alertDocuments, documents, executes } = opened()
     const id = alertDocuments.openNew('c1', { jobId: '11111111-1111-1111-1111-111111111111', jobName: 'Nightly load' })
     await settled()
-    expect(documents.get(id)).toMatchObject({ name: 'New Alert', dirty: true })
+    expect(documents.get(id)).toMatchObject({ name: 'New Alert', dirty: false })
     expect(alertDocuments.canSave(id)).toBe(false)
     alertDocuments.updateDraft(id, draft => ({ ...draft, name: 'Sev 19', severity: 19 }))
     expect(await alertDocuments.save(id)).toBe(true)
@@ -252,7 +260,11 @@ describe('the alert and operator documents', () => {
     expect(await alertDocuments.save(id)).toBe(true)
     expect(alertDocuments.get(id)).toMatchObject({ unread: true, error: { message: expect.stringContaining(agentObjectText.savedUnread('alert')) } })
     expect(alertDocuments.canSave(id)).toBe(false)
+    // Edits wait for Reload too, so nothing already saved is counted or sent again.
+    alertDocuments.updateDraft(id, draft => ({ ...draft, delay: 30 }))
+    expect(alertDocuments.get(id)).toMatchObject({ changes: 0, draft: { delay: 60 } })
     expect(await alertDocuments.save(id)).toBe(false)
+    expect(alertDocuments.get(id)?.error?.message).toBe(agentObjectText.reloadFirst('alert'))
     expect(executes()).toHaveLength(1)
     alertDocuments.reload(id)
     await settled()
@@ -266,6 +278,20 @@ describe('the alert and operator documents', () => {
     operatorDocuments.updateDraft(id, draft => ({ ...draft, pager: 'p@example.test' }))
     expect(await operatorDocuments.save(id)).toBe(true)
     expect(api.describeObject.mock.calls.at(-1)?.[0].target).toEqual({ kind: 'agentOperator', name: ' ops' })
+  })
+  it('never sends a save again after the connection closed during it', async () => {
+    const fixture = opened()
+    const { alertDocuments, executes, api } = fixture
+    const id = alertDocuments.openNew('c1')
+    await settled()
+    alertDocuments.updateDraft(id, draft => ({ ...draft, name: 'Sev 19', severity: 19 }))
+    api.executeObjectAction.mockImplementationOnce(async () => { fixture.connections.remove('c1'); return { ok: true, value: { steps: [], messages: [], elapsedMs: 1 } } })
+    expect(await alertDocuments.save(id)).toBe(false)
+    expect(alertDocuments.get(id)).toMatchObject({ unread: true, error: { code: 'CONNECTION_LOST' } })
+    fixture.connect(connectionInfo('c1'))
+    expect(alertDocuments.canSave(id)).toBe(false)
+    expect(await alertDocuments.save(id)).toBe(false)
+    expect(executes()).toHaveLength(1)
   })
   it('keeps the draft and shows the refusal when Save is refused', async () => {
     const { alertDocuments, answers } = opened()

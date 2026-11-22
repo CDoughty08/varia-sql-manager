@@ -311,7 +311,7 @@ export const agentAlertText = {
   conditionPipe: 'An object, counter or instance cannot contain |.',
   messageTooLong: `The message holds at most ${agentLimits.alertMessageChars} characters.`,
   keywordTooLong: `"Message contains" holds at most ${agentLimits.alertKeywordChars} characters.`,
-  delayRange: 'The delay is 0 to 1,440 minutes.',
+  delayRange: 'The delay is 0 to 86,400 seconds (a day).',
   noResponse: 'This alert runs no job and notifies no one, so it only counts occurrences.',
   readOnly: 'Read-only. SQL Server Agent\'s roles may view alerts, not change them; only sysadmin can.',
   wmiReadOnly: 'WMI event alerts are shown read-only: When cannot be changed here yet; Then and Options can.',

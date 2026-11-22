@@ -3376,3 +3376,45 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .agent-history-delete-older { display: flex; gap: var(--varia-space-1); padding-left: var(--varia-space-5); }
 .agent-history-delete-older > input { width: 72px; }
 .agent-history-delete-note { margin: var(--varia-space-2) 0 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); }
+/* SQL Server Agent alerts and operators (AG-7): the alert document's When / Then / Options, its operator chips with E, P and N toggles, the
+   operator document, and the Operators and notifications grid with its side pane. A pressed toggle, a changed cell and the selected operator
+   column read from colour and weight, and from the system colours in forced colours. */
+.agent-alert-raise, .agent-alert-condition, .agent-alert-include, .agent-alert-count, .agent-operator-email, .agent-operator-days { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1) var(--varia-space-2); }
+.agent-alert-condition > .property-input { flex: 1 1 120px; min-width: 0; }
+.agent-alert-condition > select.property-input { flex: 0 0 auto; }
+.agent-alert-wmi { margin: 0; padding: var(--varia-space-2); white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--varia-font-mono); font-size: var(--varia-size-sm); border: 1px solid var(--varia-widget-border); border-radius: var(--varia-radius-sm); }
+.agent-alert-counter-values { display: flex; flex-direction: column; gap: var(--varia-space-1); margin-top: var(--varia-space-2); }
+.agent-alert-counter-values .properties-table { width: auto; }
+.agent-alert-chips { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); }
+.agent-alert-chip { display: inline-flex; align-items: center; gap: var(--varia-space-1); padding: var(--varia-space-0) var(--varia-space-0) var(--varia-space-0) var(--varia-space-2); border: 1px solid var(--varia-widget-border); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); }
+.agent-alert-chip[data-new] { border-style: dashed; }
+.agent-alert-method { min-width: 20px; padding: 0 var(--varia-space-1); font-size: var(--varia-size-xs); line-height: 16px; background: transparent; color: var(--varia-descriptionForeground); border: 1px solid transparent; }
+.agent-alert-method[aria-pressed="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); font-weight: 600; }
+.agent-alert-new-operator { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); margin-top: var(--varia-space-2); }
+.agent-alert-new-operator > .property-input { flex: 1 1 140px; min-width: 0; }
+.agent-alert-new-operator > .field-note { flex-basis: 100%; margin: 0; }
+.agent-operator-duty .properties-table, .agent-operator-notifications .properties-table { width: auto; }
+.agent-operator-jobs { margin: var(--varia-space-1) 0 0; padding-left: var(--varia-space-4); font-size: var(--varia-size-sm); }
+.agent-operators-body { display: flex; align-items: flex-start; gap: var(--varia-space-3); min-height: 0; }
+.agent-operators-grid-wrap { flex: 1 1 auto; min-width: 0; max-height: 60vh; overflow: auto; }
+.agent-operators-grid { width: auto; border-collapse: collapse; }
+.agent-operators-grid thead th { position: sticky; top: 0; z-index: 1; background: var(--varia-editor-background); }
+.agent-operators-grid td, .agent-operators-grid th { padding: 0; text-align: center; }
+.agent-operators-grid tbody th { padding: 0 var(--varia-space-2); text-align: left; white-space: nowrap; font-weight: normal; }
+.agent-operators-grid tr[data-disabled] th { color: var(--varia-descriptionForeground); }
+.agent-operators-head, .agent-operators-cell { width: 100%; min-width: 40px; padding: var(--varia-space-0) var(--varia-space-1); background: transparent; border: 1px solid transparent; color: inherit; }
+.agent-operators-cell { font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); }
+.agent-operators-cell:hover:not(:disabled), .agent-operators-head:hover { background: var(--varia-list-hoverBackground); }
+.agent-operators-grid [data-selected] { background: var(--varia-list-inactiveSelectionBackground); }
+.agent-operators-head[aria-pressed="true"] { font-weight: 600; }
+.agent-operators-grid td[data-changed] .agent-operators-cell { border-color: var(--varia-warningForeground); font-weight: 600; }
+.agent-operators-side { flex: 0 0 260px; display: flex; flex-direction: column; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-3); border-left: 1px solid var(--varia-panel-border); }
+.agent-operators-side-actions, .agent-operators-tools { display: flex; flex-wrap: wrap; gap: var(--varia-space-1); margin: 0; }
+.agent-operators-jobs { margin-top: var(--varia-space-3); }
+.agent-recommended-list { margin: var(--varia-space-2) 0; padding: 0; list-style: none; max-height: 240px; overflow: auto; }
+.agent-recommended-list > li { padding: var(--varia-space-0) 0; }
+.agent-operator-reassign, .object-dialog-reassign { display: flex; align-items: center; gap: var(--varia-space-2); margin-top: var(--varia-space-2); }
+@media (forced-colors: active) {
+  .agent-alert-method[aria-pressed="true"], .agent-operators-grid [data-selected] { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+  .agent-operators-grid td[data-changed] .agent-operators-cell { border-color: Highlight; }
+}

@@ -187,9 +187,9 @@ function OptionsSection({ state, model, draft, editable, problems, service }: Pr
     <PropertyField id={ids.message} label="Additional message" description="Sent with every notification." {...fieldText('message', problems)}>
       <textarea id={ids.message} className="property-input" rows={3} maxLength={agentLimits.alertMessageChars + 1} value={draft.message} disabled={!editable} onChange={event => update({ message: event.target.value })} />
     </PropertyField>
-    <PropertyField id={ids.delay} label="Delay between responses (minutes)" description={agentAlertText.delayHint} {...fieldText('delay', problems)}>
-      <input id={ids.delay} className="property-input" type="number" min={0} max={agentLimits.alertDelaySeconds / 60} step={1} value={Math.round(draft.delay / 60)} disabled={!editable}
-        onChange={event => update({ delay: Math.max(0, Math.round(Number(event.target.value) || 0)) * 60 })} />
+    <PropertyField id={ids.delay} label="Delay between responses (seconds)" description={agentAlertText.delayHint} {...fieldText('delay', problems)}>
+      <input id={ids.delay} className="property-input" type="number" min={0} max={agentLimits.alertDelaySeconds} step={1} value={draft.delay} disabled={!editable}
+        onChange={event => update({ delay: Math.max(0, Math.round(Number(event.target.value) || 0)) })} />
     </PropertyField>
     {model.alert && <PropertyField id={ids.count} label="Occurrence count" labelFor={false} description={draft.resetCount ? agentAlertText.resetPending : model.sysadmin ? 'How many times the alert has fired since its count was reset.' : agentAlertText.resetSysadmin} {...fieldText('count', problems)}>
       <span className="agent-alert-count">

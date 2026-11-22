@@ -111,6 +111,7 @@ export const agentObjectText = {
   lost: (noun: string) => `The connection closed while the ${noun} ${was(noun)} being saved, so whether ${noun.endsWith('s') ? 'they were' : 'it was'} saved is unknown. Reload to check.`,
   partly: (done: number, total: number) => `${done} of ${total} alerts were saved before one was refused; Save sends the rest.`,
   saveFirst: 'Save or reload the changes first.',
+  reloadFirst: (noun: string) => `Reload the ${noun} before saving again: whether the last save took is not known yet.`,
   recommendedDone: (count: number) => `${count} recommended alert${count === 1 ? ' was' : 's were'} created.`,
   deleted: (name: string) => `Operator ${name} was deleted.`
 } as const
@@ -233,7 +234,8 @@ export class AlertOperatorDocumentService<M, D> extends SnapshotStore<AgentObjec
 
   canEdit(id: string): boolean {
     const state = this.get(id)
-    return !!state?.model && state.draft !== undefined && state.phase === 'ready' && !this.spec.readOnly(state.model) && !state.busy
+    // Unread (saved, not read again): the draft is what was saved, so edits wait for Reload rather than count against the old read.
+    return !!state?.model && state.draft !== undefined && state.phase === 'ready' && !this.spec.readOnly(state.model) && !state.busy && !state.unread
   }
   updateDraft(id: string, update: (draft: D) => D): void {
     const state = this.get(id)
@@ -291,7 +293,8 @@ export class AlertOperatorDocumentService<M, D> extends SnapshotStore<AgentObjec
     const base = this.spec.initial(model)
     const draft = this.spec.exists(model) ? base : this.spec.initial(model, current.preset)
     this.patch(id, { phase: 'ready', model, base, draft, revision: current.revision + 1, changes: 0, unread: false, error: undefined, notice, script: { state: 'idle', message: noScriptNotice }, scriptRevision: undefined })
-    this.options.documents.setDirty(id, !this.spec.exists(model))
+    // New Alert and New Operator stay clean until their first edit, as New Job does, so closing an untouched one asks nothing.
+    this.options.documents.setDirty(id, false)
     this.schedulePreview(id, 0)
   }
 
@@ -319,7 +322,11 @@ export class AlertOperatorDocumentService<M, D> extends SnapshotStore<AgentObjec
     if (!state?.model || state.draft === undefined) return false
     if (this.spec.exists(state.model) && state.changes === 0) return true
     if (!this.live(id)) { this.patch(id, { error: fallback('CONNECTION_LOST', agentObjectText.disconnected(this.spec.noun)) }); return false }
-    if (!this.canSave(id)) return false
+    if (!this.canSave(id)) {
+      const blocker = state.unread ? agentObjectText.reloadFirst(this.spec.noun) : this.problems(id).find(problem => problem.severity === 'error')?.message
+      if (blocker) this.patch(id, { error: fallback('SQL_ERROR', blocker) })
+      return false
+    }
     const built = this.built(state)
     if (!built.length) return true
     const connectionId = this.connectionOf(id)!
@@ -330,7 +337,7 @@ export class AlertOperatorDocumentService<M, D> extends SnapshotStore<AgentObjec
       const result = await this.call(() => this.options.api.executeObjectAction({ ...request, connectionId, requestId } as ActionExecuteRequest))
       if (this.requests.get(id)?.id === requestId) this.requests.delete(id)
       if (this.disposed || !this.get(id) || entry?.dropped) return false
-      if (this.connectionOf(id) !== connectionId || !this.live(id)) { this.patch(id, { phase: 'ready', error: fallback('CONNECTION_LOST', agentObjectText.lost(this.spec.noun)) }); return false }
+      if (this.connectionOf(id) !== connectionId || !this.live(id)) { this.lostMidSave(id, done); return false }
       const value: ActionExecuteResult | undefined = result.ok ? result.value : undefined
       const failure = value?.error ?? (!result.ok ? fallback(result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST' ? 'CONNECTION_LOST' : 'SQL_ERROR', result.error) : undefined)
       if (failure) {
@@ -353,6 +360,14 @@ export class AlertOperatorDocumentService<M, D> extends SnapshotStore<AgentObjec
     this.options.documents.update(id, { name: this.spec.tabName(target) })
     await this.describe(id, created ? agentObjectText.created(this.spec.noun) : agentObjectText.saved(this.spec.noun))
     return true
+  }
+
+  /** The connection closed during a save: what it committed is unknown, so the draft waits for Reload (`unread`) and is never sent again as is. */
+  private lostMidSave(id: string, done: number): void {
+    const state = this.get(id)
+    if (!state) return
+    if (done > 0 && this.spec.committed && state.model && state.base !== undefined && state.draft !== undefined) this.patch(id, { base: this.spec.committed(state.model, state.base, state.draft, done) })
+    this.patch(id, { phase: 'ready', unread: true, error: fallback('CONNECTION_LOST', agentObjectText.lost(this.spec.noun)) })
   }
 
   // --- Side actions ----------------------------------------------------------------------------------------------------
@@ -549,7 +564,7 @@ export class AlertOperatorDocumentService<M, D> extends SnapshotStore<AgentObjec
       request.dropped = true
       this.requests.delete(state.id)
       this.cancel([request.id])
-      if (request.kind === 'save') this.patch(state.id, { phase: 'ready', error: fallback('CONNECTION_LOST', agentObjectText.lost(this.spec.noun)) })
+      if (request.kind === 'save') this.lostMidSave(state.id, 0)
       else this.patch(state.id, { phase: state.model ? 'ready' : 'loadFailed', error: fallback('CONNECTION_LOST', agentObjectText.disconnected(this.spec.noun)) })
     }
   }
