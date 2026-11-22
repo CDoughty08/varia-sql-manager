@@ -1,8 +1,8 @@
 # SQL Server Agent
 
 SQL Server Agent support is planned for 0.11.0 ([docs/agent-plan.md](agent-plan.md), UI in
-[docs/agent-ui-rethink.md](agent-ui-rethink.md)). Behind the release gate (below) Object Explorer shows the SQL Server Agent node, a job's Start Job at Step…, Stop
-Job, Enable, Disable, Rename and Delete, and the Agent node's Start, Stop, Restart and Properties; Search Objects finds jobs, alerts
+[docs/agent-ui-rethink.md](agent-ui-rethink.md)). Behind the release gate (below) Object Explorer shows the SQL Server Agent node, a job's New Job…, View History, Start Job at Step…, Stop
+Job, Enable, Disable, Rename, Delete and Properties, and the Agent node's Start, Stop, Restart and Properties; Search Objects finds jobs, alerts
 and operators, Script As scripts jobs, alerts, operators and proxies, Job Activity Monitor follows the jobs live, the
 Log File Viewer reads and deletes job history, and the job document edits a job's General, Notifications, Targets and Alerts or creates a job. Its Steps and Schedules sections arrive in
 later lanes, behind the same gate until 0.11.0.
