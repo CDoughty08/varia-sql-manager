@@ -422,6 +422,24 @@ describe('the step problems of what msdb already holds', () => {
     const deleted = model({ job: { ...openedModel.job!, version: 9 }, steps: [step(1, 'A', { onSuccessAction: 1, onFailAction: 2 })] })
     expect(rebaseAgentJobDraft(openedModel, deleted, mine).steps.steps[0]).toMatchObject({ onSuccess: 1, onFail: 2 })
   })
+  it("takes an untouched go-to of an edited step from the job's own copy, never from whichever step now holds the number", () => {
+    // Deleted elsewhere (msdb made A quit) and a new step added at the old number: A quits, not goes to the new step.
+    const two = [step(1, 'A', { onFailAction: 4, onFailStepId: 2 }), step(2, 'B')]
+    const openedTwo = model({ steps: two }), draftTwo = initialAgentJobDraft(openedTwo)
+    const mineTwo = { ...draftTwo, steps: { ...draftTwo.steps, steps: draftTwo.steps.steps.map(item => item.key === 's1' ? { ...item, command: 'mine' } : item) } }
+    const replaced = model({ job: { ...openedTwo.job!, version: 9 }, steps: [step(1, 'A', { onFailAction: 2 }), step(2, 'D drop all')] })
+    const quit = rebaseAgentJobDraft(openedTwo, replaced, mineTwo)
+    expect(quit.steps.steps[0]).toMatchObject({ onFail: 2 })
+    expect(agentJobSave(replaced, quit)!.steps).toEqual({ writes: [expect.objectContaining({ id: 1, command: 'mine', onFailAction: 2, onFailStepId: 0 })] })
+    // Renumbered and renamed elsewhere (B deleted, C now 2 as C2): A keeps going to it.
+    const three = [step(1, 'A', { onFailAction: 4, onFailStepId: 3 }), step(2, 'B'), step(3, 'C')]
+    const openedThree = model({ steps: three }), draftThree = initialAgentJobDraft(openedThree)
+    const mineThree = { ...draftThree, steps: { ...draftThree.steps, steps: draftThree.steps.steps.map(item => item.key === 's1' ? { ...item, command: 'mine' } : item) } }
+    const moved = model({ job: { ...openedThree.job!, version: 9 }, steps: [step(1, 'A', { onFailAction: 4, onFailStepId: 2 }), step(2, 'C2')] })
+    const followed = rebaseAgentJobDraft(openedThree, moved, mineThree)
+    expect(stepTargetShort(followed.steps, followed.steps.steps[0]!, 'fail')).toBe('Step 2')
+    expect(agentJobSave(moved, followed)!.steps).toEqual({ writes: [expect.objectContaining({ id: 1, command: 'mine', onFailAction: 4, onFailStepId: 2 })] })
+  })
   it('keeps a go-to past the last step over a reload, as msdb keeps it', () => {
     const openedModel = model(), draft = initialAgentJobDraft(openedModel)
     const mine = { ...draft, steps: { ...draft.steps, steps: draft.steps.steps.map(item => item.key === 's1' ? { ...item, command: 'mine' } : item) } }

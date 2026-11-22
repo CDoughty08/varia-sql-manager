@@ -522,7 +522,18 @@ export function rebaseSteps(opened: readonly AgentJobStepRecord[], current: read
       if (now) { steps.push({ ...stepDraftOf(now), key: step.key }); keyOfCurrent.set(now.id, step.key); fromServer.add(step.key) }
       continue
     }
-    if (now) { steps.push({ ...step, from: now.id }); keyOfCurrent.set(now.id, step.key) }
+    if (now) {
+      // A go-to the user left as read follows the job's own copy of the step, whose ids msdb kept right through renumbering, deletes
+      // (quit) and renames; `cur:<id>` names the job's current step id until the keys are final.
+      const server = stepDraftOf(now)
+      const follow = (which: 'onSuccess' | 'onFail', field: 'onSuccessTarget' | 'onFailTarget'): Partial<AgentStepDraft> => {
+        if (!before || step[which] !== before[which] || step[field] !== before[field]) return {}
+        const id = server[field] === undefined ? undefined : describedId(server[field]!)
+        return { [which]: server[which], [field]: id === undefined ? undefined : `cur:${id}` }
+      }
+      steps.push({ ...step, from: now.id, ...follow('onSuccess', 'onSuccessTarget'), ...follow('onFail', 'onFailTarget') })
+      keyOfCurrent.set(now.id, step.key)
+    }
     else { const { from: _from, ...rest } = step; steps.push(rest) }
   }
   // Each step another session added goes where the job has it: after the step before it there (first when none).
@@ -568,15 +579,16 @@ export function rebaseSteps(opened: readonly AgentJobStepRecord[], current: read
     const target = (code: StepAction, key: string | undefined, quit: StepAction): [StepAction, string | undefined] => {
       if (code !== 4 || !key) return [code, undefined]
       if (key.startsWith('dangling:')) return [4, `s${key.slice('dangling:'.length)}`]
+      if (key.startsWith('cur:')) {
+        const id = Number(key.slice('cur:'.length)), to = keyMap.get(keyOfCurrent.get(id) ?? '')
+        return to ? [4, to] : currentIds.has(id) ? [quit, undefined] : [4, `s${id}`]
+      }
       const to = keyMap.get(key)
       if (to) return [4, to]
       if (dangling(key)) return [4, key]
-      // The user's go-to names a step of the read that the job no longer has by name: renamed elsewhere when its id now holds a step the read
-      // did not have, so it goes there; deleted elsewhere otherwise, which msdb (sp_delete_jobstep) answers with quit with success on success
-      // and quit reporting failure on failure.
-      const id = describedId(key), now = id === undefined || serverKeys.has(step.key) ? undefined : current.find(item => item.id === id)
-      const renamed = now && !openedNames.has(foldName(now.name)) ? keyMap.get(keyOfCurrent.get(now.id) ?? '') : undefined
-      return renamed ? [4, renamed] : [quit, undefined]
+      // A go-to the user set to a step the job no longer has by name: quit as msdb's sp_delete_jobstep leaves one (with success on success,
+      // reporting failure on failure), rather than guess which step now holds its number.
+      return [quit, undefined]
     }
     const [onSuccess, onSuccessTarget] = target(step.onSuccess, step.onSuccessTarget, 1), [onFail, onFailTarget] = target(step.onFail, step.onFailTarget, 2)
     const { onSuccessTarget: _s, onFailTarget: _f, ...rest } = step
