@@ -53,6 +53,9 @@ export function dateOfDay(day: number): number {
 }
 /** hhmmss as seconds since midnight. */
 /** The end time msdb keeps: sp_verify_schedule stores an end of 00:00:00 as 23:59:59. */
+/** A name as msdb trims it: sp_add_schedule and sp_update_schedule use LTRIM(RTRIM()), which strip only spaces (a tab or no-break
+ *  space stays), so the renderer compares and sends names the same way. */
+export const msdbTrim = (name: string) => name.replace(/^ +| +$/g, '')
 export const effectiveEndTime = (time: number) => time === 0 ? 235959 : time
 export const secondsOf = (time: number) => Math.floor(time / 10_000) * 3600 + Math.floor(time / 100) % 100 * 60 + time % 100
 /** Seconds since midnight as hhmmss. */
@@ -328,7 +331,7 @@ export function scheduleProblems(fields: AgentScheduleFields, now?: AgentMoment,
     if (!Number.isInteger(value) || value < 1) error(field, scheduleText.interval(unit, most))
     else if (value > most) warn(field, scheduleText.beyondSsms(unit, most))
   }
-  if (!fields.name.trim()) error('name', scheduleText.nameRequired)
+  if (!msdbTrim(fields.name)) error('name', scheduleText.nameRequired)
   else if (fields.name.length > agentLimits.nameChars) error('name', scheduleText.nameTooLong)
   if (!validDate(fields.activeStartDate)) error('startDate', scheduleText.startDate)
   const recurringType = fields.freqType === freq.daily || fields.freqType === freq.weekly || fields.freqType === freq.monthly || fields.freqType === freq.relative

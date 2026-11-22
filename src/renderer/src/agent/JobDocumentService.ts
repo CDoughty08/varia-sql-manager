@@ -14,7 +14,7 @@ import { jobErrorField, type ActionError, type ActionExecuteResult, type ActionR
 import {
   jobScheduleText, momentOfText, ownsSchedule, refreshPickedSchedules, scheduleFieldsOf, scheduleKey, type AgentScheduleJob, type AgentScheduleRecord, type AgentSchedulesModel, type JobScheduleEntry
 } from '../../../shared/actions/agent-schedule.ts'
-import { defaultSchedule, type AgentMoment, type AgentScheduleFields } from '../../../shared/agent/schedule.ts'
+import { defaultSchedule, msdbTrim, type AgentMoment, type AgentScheduleFields } from '../../../shared/agent/schedule.ts'
 import { agentJobsSource, agentWatchedProbe, watchedGoneStatus, watchedSlot, type WatchedSample } from '../../../shared/agent/jobs.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import type { ObjectRef } from '../../../shared/explorer/refs.ts'
@@ -690,7 +690,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const draft = this.get(id)?.draft
     if (!draft || !this.canEdit(id)) return
     const key = `n:${this.newId()}`
-    this.setSchedules(id, [...draft.schedules, { key, fields: defaultSchedule(this.now(id).date, name.trim().slice(0, 128)) }], key)
+    this.setSchedules(id, [...draft.schedules, { key, fields: defaultSchedule(this.now(id).date, msdbTrim(name).slice(0, 128)) }], key)
     this.patch(id, { scheduleSearch: '' })
   }
   /** Attach a shared schedule: added to the job when it is saved, guarded by the version the pick read. */

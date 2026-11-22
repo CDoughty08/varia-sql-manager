@@ -206,6 +206,21 @@ describe("the job document's schedule saves", () => {
     // A name that differs only by spaces is no change, as the save would send none.
     const plain = initialJobSchedules([record(1)])
     expect(jobSchedulesValue([{ ...plain[0]!, fields: { ...plain[0]!.fields, name: `${plain[0]!.fields.name} ` } }])).toBe(jobSchedulesValue(plain))
+    // msdb trims only spaces (LTRIM/RTRIM): a stored name ending in a tab or no-break space is no change, and no save renames it.
+    for (const name of ['Nightly	', 'Nightly ', '　Nightly']) {
+      const odd = record(5, { name, owner: 'other' })
+      const kept = initialJobSchedules([odd])
+      expect(jobSchedulesSave([odd], [...kept, { key: 'n:1', fields: fields({ name: 'New' }) }])).toEqual({ add: [expect.objectContaining({ name: 'New' })] })
+      expect(scheduleDraftSave(odd, scheduleFieldsOf(odd))).toBeUndefined()
+      expect(jobScheduleProblems(kept, now, [odd])).toEqual([])
+    }
+    expect(scheduleDraftSave(record(5), { ...fields(), name: '  Spaced  ' })).toMatchObject({ op: 'update', name: 'Spaced' })
+    // Each kind within its limit can still pass the one save's total, which zod and C# refuse: a field problem, not an IPC refusal.
+    const own = record(1)
+    const picks: JobScheduleEntry[] = Array.from({ length: agentLimits.schedulesPerJob }, (_, at) => record(100 + at)).map(base => ({ key: `s:${base.id}`, id: base.id, attached: true, base, fields: { ...scheduleFieldsOf(base), activeStartTime: 10000 } }))
+    const removed: JobScheduleEntry = { ...initialJobSchedules([own])[0]!, remove: 'detach' }
+    expect(jobScheduleProblems([removed, ...picks], now, [own]).map(item => item.problem.message)).toEqual([jobScheduleText.tooManyChanges])
+    expect(jobScheduleProblems(picks, now, [own]).map(item => item.problem.message)).toEqual([])
     // One save removes at most schedulesPerJob of them, as zod and C# bound it.
     expect(jobScheduleProblems(many.map((entry, at) => at <= agentLimits.schedulesPerJob ? { ...entry, remove: 'detach' as const } : entry), now).map(item => item.problem.message)).toEqual([jobScheduleText.tooManyRemoved])
     expect(jobScheduleProblems(many.map((entry, at) => at < agentLimits.schedulesPerJob ? { ...entry, remove: 'detach' as const } : entry), now)).toEqual([])

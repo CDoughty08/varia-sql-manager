@@ -6,7 +6,7 @@
 import { z } from 'zod'
 import { agentLimits, type AgentPlatform } from '../agent/catalog.ts'
 import {
-  effectiveEndTime, freq, normalizedTiming, sameTiming, scheduleProblems, timingKeys, validDate, validTime, type AgentMoment, type AgentScheduleFields, type AgentScheduleTiming, type ScheduleProblem, type ScheduleServer
+  effectiveEndTime, freq, msdbTrim, normalizedTiming, sameTiming, scheduleProblems, timingKeys, validDate, validTime, type AgentMoment, type AgentScheduleFields, type AgentScheduleTiming, type ScheduleProblem, type ScheduleServer
 } from '../agent/schedule.ts'
 import { ident } from '../explorer/schema.ts'
 
@@ -83,7 +83,7 @@ export const initialJobSchedules = (schedules: readonly AgentScheduleRecord[] = 
 /** The entries as one comparable value (the draft's change detection). The name is trimmed, as the save sends it, so a name that
  *  differs only by spaces is no change (else Save would show a change and send nothing). */
 export const jobSchedulesValue = (entries: readonly JobScheduleEntry[]) =>
-  JSON.stringify(entries.map(entry => [entry.key, entry.id ?? null, entry.attached ?? false, entry.remove ?? '', entry.fields.name.trim(), entry.fields.enabled, ...timingKeys.map(key => normalizedTiming(entry.fields)[key])]))
+  JSON.stringify(entries.map(entry => [entry.key, entry.id ?? null, entry.attached ?? false, entry.remove ?? '', msdbTrim(entry.fields.name), entry.fields.enabled, ...timingKeys.map(key => normalizedTiming(entry.fields)[key])]))
 
 /** A schedule the save names with what its describe read: the guard checks both, else STALE. */
 export interface AgentScheduleGuard { readonly id: number; readonly version: number; readonly modified: string }
@@ -104,7 +104,7 @@ export interface AgentJobSchedulesSave {
 /** A record's changes as a save sends them: the name and enabled when they differ, and every timing field whenever one differs. */
 function scheduleValues(record: AgentScheduleFields, fields: AgentScheduleFields): AgentScheduleValues {
   return {
-    ...fields.name.trim() !== record.name ? { name: fields.name.trim() } : {},
+    ...msdbTrim(fields.name) !== record.name ? { name: msdbTrim(fields.name) } : {},
     ...fields.enabled !== record.enabled ? { enabled: fields.enabled } : {},
     ...!sameTiming(record, fields) ? { timing: timingOf(fields) } : {}
   }
@@ -121,7 +121,7 @@ export function jobSchedulesSave(records: readonly AgentScheduleRecord[], entrie
   const detach: AgentScheduleDetach[] = [], update: AgentScheduleUpdate[] = [], attach: AgentScheduleGuard[] = []
   const add: Required<Pick<AgentScheduleValues, 'name' | 'enabled' | 'timing'>>[] = []
   for (const entry of entries) {
-    if (entry.id === undefined) { if (!entry.remove) add.push({ name: entry.fields.name.trim(), enabled: entry.fields.enabled, timing: timingOf(entry.fields) }); continue }
+    if (entry.id === undefined) { if (!entry.remove) add.push({ name: msdbTrim(entry.fields.name), enabled: entry.fields.enabled, timing: timingOf(entry.fields) }); continue }
     const record = entry.attached ? entry.base : records.find(item => item.id === entry.id)
     if (!record) continue
     if (entry.remove) { if (!entry.attached) detach.push({ id: entry.id, deleteUnused: entry.remove === 'delete' }); continue }
@@ -160,6 +160,7 @@ export const jobScheduleText = {
   noMatch: 'No shared schedule matches.',
   tooMany: `Varia adds schedules to a job only while it holds at most ${agentLimits.schedulesPerJob}.`,
   tooManyUpdated: `One save changes at most ${agentLimits.schedulesPerJob} schedules: save, then change the rest.`,
+  tooManyChanges: `One save changes at most ${agentLimits.schedulesPerJob * 2} schedules counting removed, attached, changed and new ones: save, then change the rest.`,
   tooManyRemoved: `One save removes at most ${agentLimits.schedulesPerJob} schedules: save, then remove the rest.`,
   unguarded: 'This schedule\'s version could not be read, so it cannot be attached. Search again, or reload the job.',
   needsFix: 'needs a fix before Save',
@@ -180,7 +181,11 @@ export function jobScheduleProblems(entries: readonly JobScheduleEntry[], now?: 
   const kept = entries.filter(entry => !entry.remove)
   if (kept.length > agentLimits.schedulesPerJob && kept.some(entry => entry.id === undefined || entry.attached)) out.push({ problem: { field: 'name', severity: 'error', message: jobScheduleText.tooMany } })
   if (entries.filter(entry => entry.remove && entry.id !== undefined && !entry.attached).length > agentLimits.schedulesPerJob) out.push({ problem: { field: 'name', severity: 'error', message: jobScheduleText.tooManyRemoved } })
-  if ((jobSchedulesSave(records, entries)?.update?.length ?? 0) > agentLimits.schedulesPerJob) out.push({ problem: { field: 'name', severity: 'error', message: jobScheduleText.tooManyUpdated } })
+  const save = jobSchedulesSave(records, entries)
+  if ((save?.update?.length ?? 0) > agentLimits.schedulesPerJob) out.push({ problem: { field: 'name', severity: 'error', message: jobScheduleText.tooManyUpdated } })
+  // Each kind may sit within its own limit while all of them together pass the one save's limit, which main and the backend refuse.
+  const total = (save?.detach?.length ?? 0) + (save?.update?.length ?? 0) + (save?.attach?.length ?? 0) + (save?.add?.length ?? 0)
+  if (total > agentLimits.schedulesPerJob * 2) out.push({ problem: { field: 'name', severity: 'error', message: jobScheduleText.tooManyChanges } })
   for (const entry of kept) {
     if (entry.attached && (!entry.base || !guardOf(entry.base))) out.push({ key: entry.key, problem: { field: 'name', severity: 'error', message: jobScheduleText.unguarded } })
     // One of the job's own schedules as read is the server's business (made in T-SQL, perhaps by another login): only a change is checked.
@@ -339,7 +344,7 @@ export function scheduleSaveProblems(save: AgentScheduleSave): string[] {
 
 /** The Schedules document's editor: the save for a schedule's draft (undefined when it changes nothing), or New schedule's create. */
 export function scheduleDraftSave(record: AgentScheduleRecord | undefined, fields: AgentScheduleFields, jobs: readonly AgentScheduleJobChange[] = []): AgentScheduleSave | undefined {
-  if (!record) return { op: 'create', name: fields.name.trim(), enabled: fields.enabled, timing: timingOf(fields), ...jobs.length ? { jobs } : {} }
+  if (!record) return { op: 'create', name: msdbTrim(fields.name), enabled: fields.enabled, timing: timingOf(fields), ...jobs.length ? { jobs } : {} }
   const guard = guardOf(record)
   if (!guard) return undefined
   const values = scheduleValues(record, fields)
@@ -353,7 +358,7 @@ export function rebaseScheduleFields(base: AgentScheduleRecord, current: AgentSc
   const now = scheduleFieldsOf(current)
   return {
     ...sameTiming(base, fields) ? now : { ...now, ...timingOf(fields) },
-    name: fields.name.trim() !== base.name ? fields.name : now.name,
+    name: msdbTrim(fields.name) !== base.name ? fields.name : now.name,
     enabled: fields.enabled !== base.enabled ? fields.enabled : now.enabled
   }
 }
