@@ -7,6 +7,7 @@ import type { BigQueryLibraryView, BigQueryProfileInput, PickedKeyFile } from '.
 import type { BigQueryDryRunRequest, BigQueryDryRunResult } from './bigquery/dry-run'
 import type { ResultsRemoteQueryParams } from './bigquery/remote-view'
 import type { BigQueryPreviewTarget, BigQueryProperties, BigQueryPropertiesRequest } from './bigquery/objects'
+import type { CancelJobsResult, QueryAttachParams } from './bigquery/jobs'
 import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } from './theme/types'
 import type { CommandId, RendererRole } from './commands/catalog'
 import type { ContextMenuCommand, ContextMenuRequest, MenuState } from './commands/menus'
@@ -206,6 +207,8 @@ export interface QueryOptions {
   windowCacheMiB?: number
   /** BigQuery: Preview Rows of this table through tabledata.list (free, no job) instead of running `sql`, which is the SELECT the tab shows. SQL Server refuses it. */
   preview?: BigQueryPreviewTarget
+  /** BigQuery: the tab's job key (docs/bigquery.md, Re-attaching to jobs), which main ties the request's job records to. */
+  jobKey?: string
 }
 /** Tools › Options' result residence for BigQuery: decide by size, always in memory, or always windowed in BigQuery. */
 export type ResidenceSetting = 'automatic' | 'memory' | 'windowed'
@@ -289,7 +292,9 @@ export interface MessageEntry {
   /** Absolute source line for a submitted SQL batch error. Procedure-relative and non-SQL errors have no query location. */
   line?: number
 }
-export type QueryStatus = 'completed' | 'completedWithErrors' | 'failed' | 'cancelled' | 'timedOut'
+/** `detached`: a BigQuery job left running (Leave it running), which carries on in BigQuery; `superseded`: a later query.attach
+ *  took this attachment's job over. */
+export type QueryStatus = 'completed' | 'completedWithErrors' | 'failed' | 'cancelled' | 'timedOut' | 'detached' | 'superseded'
 /** The query.execute summary: the rows stay in the backend (ResultClient reads them). `completedAt` is the backend's
  *  local time with 7 fractional digits, for SSMS's "Completion time:" line. */
 export interface QueryResult {
@@ -338,7 +343,7 @@ export interface BigQueryJobSummary {
 }
 /** An idle session's open transaction as `query.session.state` read it: `checked` is false when its SET options (SHOWPLAN_*,
  *  NOEXEC, PARSEONLY or FMTONLY ON) kept the SELECT from returning @@TRANCOUNT, so it may hold one. */
-export interface SessionState { transactionCount: number; checked: boolean }
+export interface SessionState { transactionCount: number; checked: boolean; /** BigQuery: whether the session holds a job running or detached in BigQuery. */ job?: 'running' | 'none' }
 /** Orders each feature's memory reports. Results events and summaries share a sequence within a backend generation. */
 export interface MemoryOrder { generation: number; seq: number }
 /** One of the largest results a results.memory event names: its rows as read and what holds them now. `progress` (0 to
@@ -673,7 +678,8 @@ export interface RpcMethods {
   'connections.databases': { params: ProviderConnectionOptions; result: DatabaseInfo[] }
   'connections.discover': { params: { scope: 'local' | 'network' }; result: { servers: DiscoveredServer[]; warning?: string } }
   'connections.preview': { params: ConnectionOptions; result: { connectionString: string } }
-  'connections.disconnect': { params: { connectionId: string }; result: { disconnected: boolean } }
+  /** `failedAborts`: a BigQuery handle's idle sessions whose ABORT_SESSION failed (docs/bigquery.md, Re-attaching to jobs). */
+  'connections.disconnect': { params: { connectionId: string }; result: { disconnected: boolean; failedAborts?: number } }
   'bigquery.account': { params: BigQueryCredentialParams; result: BigQueryAccount }
   'bigquery.projects': { params: BigQueryCredentialParams & { pageToken?: string }; result: BigQueryProjectList }
   'bigquery.dryRun': { params: BigQueryDryRunRequest; result: BigQueryDryRunResult }
@@ -682,13 +688,16 @@ export interface RpcMethods {
   'databases.list': { params: { connectionId: string }; result: DatabaseInfo[] }
   'tables.columns': { params: { connectionId: string; database: string; schema: string; name: string }; result: TableColumns }
   'query.execute': { params: QueryOptions; result: QueryResult }
-  'query.cancel': { params: { queryId: string }; result: { cancelled: boolean } }
+  /** `detach` (BigQuery): Leave it running, so the request answers `detached` and its job holds the tab's session. */
+  'query.cancel': { params: { queryId: string; detach?: true }; result: { cancelled: boolean } }
+  /** Re-attaches a tab to a BigQuery job by its reference; its EVENTs and summary are a query's (docs/ipc.md). */
+  'query.attach': { params: QueryAttachParams; result: QueryResult }
   /** A query over a windowed BigQuery result (Load into memory); its EVENTs and summary are a query's. */
   'results.remoteQuery': { params: ResultsRemoteQueryParams; result: QueryResult }
   /** `transaction` ends the session's open transaction first; a failed commit leaves the session open.
    *  `abortOnRefusedCommit` (default true) lets a BigQuery commit refused on an unchecked session end the session anyway;
    *  the result's `note` says what became of a BigQuery commit or of the session's end. */
-  'query.session.close': { params: { sessionId: string; transaction?: SessionEnd; abortOnRefusedCommit?: boolean }; result: SessionCloseResult }
+  'query.session.close': { params: { sessionId: string; transaction?: SessionEnd; abortOnRefusedCommit?: boolean; keepJob?: true; cancelJob?: true }; result: SessionCloseResult }
   /** An idle session's @@TRANCOUNT, read before it ends; see SessionState. */
   'query.session.state': { params: { sessionId: string }; result: SessionState }
   /** The results whose grids are shown in any window now: the whole set each time, replacing the last (an advisory hint for
@@ -788,6 +797,10 @@ export interface ResultMemoryMethods {
 export interface BigQueryMainMethods {
   'bigquery.account': { params: BigQueryCredentialParams & { credential: BigQueryCredentialMaterial }; result: BigQueryAccount }
   'bigquery.projects': { params: BigQueryCredentialParams & { pageToken?: string; credential: BigQueryCredentialMaterial }; result: BigQueryProjectList }
+  /** Before every backend stop main makes: ends idle BigQuery sessions, keeping kept tabs' open transactions. */
+  'bigquery.endIdleSessions': { params: { keepJobKeys?: string[] }; result: { failedAborts: number } }
+  /** Cancels a saved profile's jobs without a connection handle, ending their sessions. */
+  'bigquery.cancelJobs': { params: BigQueryCredentialParams & { project: string; jobs: { jobId: string; location?: string }[]; credential: BigQueryCredentialMaterial }; result: CancelJobsResult }
 }
 /** Synthetic result shapes (backend SyntheticRows, the fake backend's shapes.mjs). */
 export type SyntheticShape = 'W1' | 'B1' | 'N1' | 'X1' | 'L1' | 'M1'
@@ -1015,7 +1028,10 @@ export interface VariaApi {
   onSettingsChanged(callback: (state: SettingsState) => void): () => void
   shortcuts: ShortcutsApi
   execute(options: QueryOptions): Promise<ApiResult<QueryResult>>
-  cancel(queryId: string): Promise<ApiResult<{ cancelled: boolean }>>
+  /** `detach` (BigQuery): Leave it running instead of cancelling, so the job carries on and holds the tab's session. */
+  cancel(queryId: string, options?: { detach?: true }): Promise<ApiResult<{ cancelled: boolean }>>
+  /** query.attach: re-attaches a tab to a BigQuery job (docs/bigquery.md, Re-attaching to jobs); `cancel(queryId)` stops it. */
+  attach(params: QueryAttachParams): Promise<ApiResult<QueryResult>>
   /** results.remoteQuery: Load into memory, a sort or filter, or a value list of a windowed BigQuery result this renderer owns; `cancel(queryId)` stops it. */
   remoteQuery(params: ResultsRemoteQueryParams): Promise<ApiResult<QueryResult>>
   /** Ends a query's session; `transaction` commits or rolls back its open transaction first. A commit that fails leaves

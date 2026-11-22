@@ -237,9 +237,11 @@ noted where it matters.
 | `connections.databases` | invoke; `cancelConnectionRequests` | unary | metadata | 45 s, + 180 s for Entra MFA. Sensitive. Failed open carries `details`. BigQuery: the project's datasets with `location?` ([BigQuery](bigquery.md#datasets)); main adds `credential`. |
 | `connections.discover` | invoke | unary | metadata | 45 s |
 | `connections.preview` | invoke | unary | metadata | 10 s. Sensitive. |
-| `connections.disconnect` | invoke | unary | control | 30 s; answered locally `{ disconnected: false }` for a lost connection or failed backend |
+| `connections.disconnect` | invoke | unary | control | 30 s; answered locally `{ disconnected: false }` for a lost connection or failed backend. A BigQuery handle ends its idle sessions and answers `failedAborts?` ([Re-attaching to jobs](bigquery.md#re-attaching-to-jobs)) |
 | `connections.identity` | invoke | unary | metadata | 10 s. Takes `{}` (**Integrated identity** below). |
 | `bigquery.account`, `bigquery.projects` | invoke | unary | control | 30 s, sensitive. BigQuery before connecting: `{ authentication, keyFile?, impersonateServiceAccount? }` (`.projects` adds `pageToken?` ≤ 1,024). Main adds `credential` (`{ source: 'file' \| 'adc' \| 'metadata' \| 'anonymous', json? ≤ 64 KiB }`), which the renderer never holds. Answers `{ kind, account ≤ 256, impersonated? }` and `{ projects: { id, friendlyName? ≤ 256 }[] ≤ 1,000, nextPageToken? }` ([BigQuery](bigquery.md#pre-connect-methods)). |
+| `bigquery.endIdleSessions` | main only | unary | control | 10 s (main gives up after 15 s). Before every backend stop main makes, except of a backend that is not responding: `{ keepJobKeys?: uuid[] ≤ 1,024 }`; ends every idle BigQuery session but a kept key's with an open or unknown transaction, and answers `{ failedAborts }` ([Re-attaching to jobs](bigquery.md#re-attaching-to-jobs)) |
+| `bigquery.cancelJobs` | main only | unary | control | 60 s, sensitive. A saved profile's jobs without a handle: the credential fields of `bigquery.account` plus `project` and `jobs: { jobId ≤ 1,024, location? ≤ 64 }[] ≤ 64`; cancels each, waits for DONE, lists its children and aborts its session, answering `{ jobs: { jobId, cancelled, note?, error? }[] }` |
 | `bigquery.dryRun` | invoke | unary | metadata | 30 s. A free dry run on a connected BigQuery handle: `{ connectionId, sql ≤ 1,000,000, dataset? ≤ 1,024 }`, or `{ connectionId, remote }` for a sort, filter or value list of a windowed result ([Remote results](#remote-results)). Answers `{ bytesProcessed, incomplete?: 'script' \| 'lowerBound' \| 'unknown' \| 'zeroBytes', statementType?, faked?, fallback? }`; a query BigQuery refuses is `SQL_ERROR` with its `[line:column]` ([BigQuery's Cost](bigquery.md#cost)) |
 | `databases.list` | invoke | unary | metadata | 45 s; for a BigQuery handle, the billing project's datasets |
 | `tables.columns` | invoke | unary | metadata | 45 s; the backend stops its own query after 30 s, answering with an envelope error (`TIMEOUT`, or `SQL_ERROR` when SqlClient reports the cancel), not a result `error` value. Tables and views, read through `QUOTENAME(@db) + '.sys.sp_executesql'` so no pooled connection stays in the database |
@@ -250,10 +252,11 @@ noted where it matters.
 | `plans.parse` | invoke | unary | metadata | 15 s; parses Showplan only, no SQL connection. Main compresses raw XML before the 4 MiB request bound ([Execution plan viewer](#execution-plan-viewer)) |
 | `plans.estimate` | invoke | unary | query | 35 s; 30 s acquisition budget (connection and compilation; a full gate of 2 answers `BUSY` at once); `mode: isolated \| session` (default isolated), two acquisitions, 64 documents / 2,097,152 XML characters in total; cancelled by `query.cancel(requestId)`; no query events or summary fields ([estimated plans](execution-plans.md#estimated-plans)) |
 | `query.execute` | invoke, events on the port | unary with EVENTs | query | none; backstop `timeoutSeconds + 30` s |
-| `query.cancel` | invoke | unary | control | 10 s |
+| `query.cancel` | invoke | unary | control | 10 s. `detach: true` (BigQuery) leaves the job running: the request answers status `detached` and the job holds the tab's session; SQL Server refuses it with `UNSUPPORTED_PROVIDER` |
+| `query.attach` | invoke, events on the port | unary with EVENTs | query | none; BigQuery only. Re-attaches a tab to a job by reference ([Re-attaching to jobs](bigquery.md#re-attaching-to-jobs)); events, summary, session map and stamping as `query.execute`'s; Stop is `query.cancel` |
 | `results.remoteQuery` | invoke, events on the port | unary with EVENTs | query | none; BigQuery only; Stop is `query.cancel` ([Remote results](#remote-results)) |
 | `query.session.close` | invoke | unary | control | 30 s, 60 s with `transaction: 'commit'` (a BigQuery close waits for a stopped job and ends the session within them); answered locally `{ closed: false }` for an ended generation or with no backend |
-| `query.session.state` | invoke | unary | control | 5 s; answered locally `SESSION_LOST` for an ended generation or with no backend |
+| `query.session.state` | invoke | unary | control | 5 s; answered locally `SESSION_LOST` for an ended generation or with no backend. BigQuery adds `job: 'running' \| 'none'` |
 | `results.visibility` | invoke (`ResultVisibilityService`) | unary | control | 10 s (note 1 below) |
 | `results.read` | port | stream | results | 60 s |
 | `results.close` | port | unary | control | 10 s |
@@ -711,7 +714,8 @@ only. `connections.connect`, `.databases` and `.preview` take an optional `provi
 absent means SQL Server, an unknown one is `INVALID_PARAMS`). `connections.connect` and `.disconnect` serve both engines:
 a `bigquery` connect opens a BigQuery handle ([BigQuery](bigquery.md)). `.databases` and `databases.list` serve both
 (BigQuery's datasets); `.preview` refuses `bigquery` with `UNSUPPORTED_PROVIDER`. `bigquery.account`,
-`bigquery.projects`, `bigquery.dryRun`, `bigquery.properties` and `results.remoteQuery` serve BigQuery alone (`Providers.BigQueryMethods`). Two main-only channels serve the Connect dialog:
+`bigquery.projects`, `bigquery.dryRun`, `bigquery.properties`, `bigquery.endIdleSessions`, `bigquery.cancelJobs`,
+`results.remoteQuery` and `query.attach` serve BigQuery alone (`Providers.BigQueryMethods`). Two main-only channels serve the Connect dialog:
 `varia:connections-pick-key-file` (main's file picker; answers an opaque reference and the file's name) and
 `varia:connections-confirm-source` (records a federation token file the user confirmed), and one serves the cost prompt:
 `varia:bigquery-cost-prompt` (`{ options, costPrompt }`, strict; sets only the saved entry's cost-prompt choice and answers
@@ -839,12 +843,16 @@ it then asks about: a kept session then sees `@@ROWCOUNT` 1, `@@ERROR` 0, and ot
 its most recent SQL (`DBCC INPUTBUFFER`, `sys.dm_exec_input_buffer`). A cancel does not roll
 back; an `XACT_ABORT`-doomed transaction ends by the batch's end (3998).
 
-**Ending a session.** `query.session.close { sessionId, transaction?, abortOnRefusedCommit? }` answers
+**Ending a session.** `query.session.close { sessionId, transaction?, abortOnRefusedCommit?, keepJob?, cancelJob? }` answers
 `{ closed, note? }`. `abortOnRefusedCommit` (default true) and `note` are BigQuery's ([BigQuery's
 Sessions](bigquery.md#sessions)): a commit refused on an unchecked session ends the session with a note unless quitting
 sent false; `note` is `{ code, message? (≤ 2,000 characters), jobId? }`, `code` one of `commitNotApplied`,
 `committedBeforeCancel`, `outcomeUnknown`, `abortFailed` and `sessionExpired`. A BigQuery commit or rollback close on a
-session whose job is still running or still being cancelled answers `JOB_RUNNING`, and the session stays. Main checks the
+session whose job is still running or still being cancelled answers `JOB_RUNNING`, and the session stays. `keepJob: true` and
+`cancelJob: true` are BigQuery's answers for a tab holding a job (never with `transaction` or each other, `INVALID_PARAMS`;
+SQL Server refuses them with `UNSUPPORTED_PROVIDER`): `keepJob` leaves the job and its session (`JOB_FINISHED` when the job
+finished meanwhile with its transaction open or unknown), `cancelJob` cancels the job, waits for DONE and ends the session; a
+plain close of a session holding a job leaves it too. Main checks the
 answer (`sessionCloseResultSchema`). For SQL Server: Without `transaction`, or with `'rollback'`, it
 cancels any running script and closes the session; SQL Server rolls back, unwaited. `'commit'` reads `@@TRANCOUNT`
 (if no row, or a plan, came back, it turns SHOWPLAN, `NOEXEC`, `PARSEONLY` and `FMTONLY` off, then reads again), then,
@@ -2360,8 +2368,9 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 `BackendState`: `starting`, `ready` (pid, runtime, platform), `unresponsive`, `restarting` (with the losses), `failed`
 (`crashLoop`, `spawn` or `incompatible`, with a message and Copy details), or `stopped`.
 
-- **Binding.** A request is bound to the current generation when made (the next one while a restart is pending) and
-  written only to it; if that generation ends first it fails `BACKEND_LOST`. Nothing is re-sent or re-run, and the
+- **Binding.** A request is bound to the current generation when made (the next one while a restart is pending; during
+  a restart's idle-session wait a session close or state read, and a Stop of a run the old generation holds, still go to
+  it: [Re-attaching to jobs](bigquery.md#re-attaching-to-jobs)) and written only to it; if that generation ends first it fails `BACKEND_LOST`. Nothing is re-sent or re-run, and the
   backend never retries commands (query sessions use `ConnectRetryCount = 0`).
 - **Ids never cross generations.** `ConnectionInfo` and result keys carry the generation; main refuses a lost
   connection's id (`CONNECTION_LOST`) before sending and answers its disconnect and session close locally.
@@ -2500,7 +2509,7 @@ configuration or ADC file Varia cannot use, naming the field and never the conte
 another account), `NOT_FOUND`, `BACKEND_ERROR` (Google's 5xx), `TIMEOUT`, and `CONNECTION_LOST` when Google cannot be
 reached. A query adds `LOCATION_MISMATCH` (its dataset is in another location; the text names both), `RESULT_TOO_LARGE`
 (over BigQuery's 10 GB result limit), `COST_CAP` (over the connection's maximum bytes billed, naming the cap) and
-`SQL_ERROR` (BigQuery's own text); Preview Rows (`query.execute` with a `preview` table) adds `ROW_ACCESS` (the table has row access policies, which tabledata.list cannot apply); a session close adds `JOB_RUNNING` (a job still runs in the session, which is kept); a query's failures are its summary's `error`, as SQL Server's are. [BigQuery's Errors](bigquery.md#errors) has each row's text and recovery.
+`SQL_ERROR` (BigQuery's own text); Preview Rows (`query.execute` with a `preview` table) adds `ROW_ACCESS` (the table has row access policies, which tabledata.list cannot apply); a session close adds `JOB_RUNNING` (a job still runs in the session, which is kept) and `JOB_FINISHED` (`keepJob` on a session whose job finished with its transaction open or unknown; the tab stays and its next close asks Commit or Roll Back); a query's failures are its summary's `error`, as SQL Server's are. [BigQuery's Errors](bigquery.md#errors) has each row's text and recovery.
 
 **Microsoft Entra** failures answer `AUTH_ENTRA` (Entra Integrated off Windows answers `AUTH_UNSUPPORTED` before
 opening). Connect and Load databases `details` are number 0, class 11, state 0 and the server, except AADSTS50126
@@ -2520,7 +2529,7 @@ terminal for live probes. Display login text is never identity proof.
 
 | Origin | Codes |
 | --- | --- |
-| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `AUTH_EXPIRED`, `AUTH_KEY_FILE`, `API_DISABLED`, `BILLING_DISABLED`, `QUOTA`, `LEGACY_SQL`, `PERMISSION_DENIED`, `LOCATION_MISMATCH`, `RESULT_TOO_LARGE`, `COST_CAP`, `ROW_ACCESS`, `JOB_RUNNING` (BigQuery; [Error codes](#error-codes-and-fixed-sentences)), `REMOTE_RESULT`, `REMOTE_EXPIRED` (windowed BigQuery results; [Remote results](#remote-results)), `UNSUPPORTED_PROVIDER` (a method for another engine's connection; [Providers](#providers)), `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN`, `BUDGET_STOPPED` (a pivot or diff of a query that stopped storing; [Pivots](#pivots)), `DIFF_KEY_TRUNCATED` (a `results.diff` key column holds a truncated value; [Result diffs](#result-diffs)), `DIFF_ROWS_TOO_LARGE` (an All rows `results.diff` whose stored rows do not fit; [Result diffs](#result-diffs)) |
+| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `AUTH_EXPIRED`, `AUTH_KEY_FILE`, `API_DISABLED`, `BILLING_DISABLED`, `QUOTA`, `LEGACY_SQL`, `PERMISSION_DENIED`, `LOCATION_MISMATCH`, `RESULT_TOO_LARGE`, `COST_CAP`, `ROW_ACCESS`, `JOB_RUNNING`, `JOB_FINISHED` (BigQuery; [Error codes](#error-codes-and-fixed-sentences)), `REMOTE_RESULT`, `REMOTE_EXPIRED` (windowed BigQuery results; [Remote results](#remote-results)), `UNSUPPORTED_PROVIDER` (a method for another engine's connection; [Providers](#providers)), `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN`, `BUDGET_STOPPED` (a pivot or diff of a query that stopped storing; [Pivots](#pivots)), `DIFF_KEY_TRUNCATED` (a `results.diff` key column holds a truncated value; [Result diffs](#result-diffs)), `DIFF_ROWS_TOO_LARGE` (an All rows `results.diff` whose stored rows do not fit; [Result diffs](#result-diffs)) |
 | GOAWAY | `PROTOCOL_ERROR`, `PROTOCOL_UNSUPPORTED`, `BACKEND_CRASH` |
 | Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `SESSION_LOST` (`query.session.state` of an ended generation or with no backend), `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads, scripting, object actions and SSIS requests), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs), `STALE` (a shortcuts save based on an older revision), `UNSUPPORTED_PROVIDER` (refused before sending), `DUPLICATE_REQUEST` and `NOT_FOUND` (live streams of the results port); an unknown backend code becomes `BACKEND_ERROR` |
 | Renderer | `PAGE_INVALID`, `RESULT_DECODER_FAILED` |
@@ -2529,6 +2538,7 @@ terminal for live probes. Display login text is never identity proof.
 | --- | --- |
 | `BACKEND_LOST` | "The SQL backend stopped before answering. The request was not retried." |
 | `BACKEND_LOST` (`results.remoteQuery`) | "The SQL backend stopped during a query over a BigQuery result (Load into memory, a sort, a filter or a value list). It was not re-run, and the result is gone with the backend." |
+| `BACKEND_LOST` (BigQuery `query.execute`, `query.attach`) | "The SQL backend stopped while this BigQuery query was running. A job still running carries on in BigQuery and is re-attached once the tab reconnects; a transaction open in its session stays open until the session ends." |
 | `BACKEND_LOST` (`query.execute`) | "The SQL backend stopped while this script was running. It was not re-run. Statements that finished before the failure may have taken effect; SQL Server rolls back the session's open transaction when it detects the closed connection." |
 | `BACKEND_LOST` (reload) | "The workbench was reloaded." |
 | `CONNECTION_LOST` | "This connection was lost when the SQL backend restarted. Reconnect to continue; its sessions, temporary tables, and open transactions are gone." |

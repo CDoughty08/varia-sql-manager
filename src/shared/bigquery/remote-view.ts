@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { limits } from '../ipc/wire/protocol'
+import { jobKeySchema } from './jobs'
 
 /**
  * results.remoteQuery's params (docs/ipc.md, docs/bigquery.md › Sort and filter in BigQuery): a query over a windowed
@@ -20,7 +21,8 @@ export type RemoteFilter =
   | { op: 'groups'; column: number; list: number; snapshotId: number }
 
 export type RemoteQueryKind =
-  | { kind: 'load' }
+  /** `jobKey`: the tab's job key, under which main records the load's job for re-attaching (docs/bigquery.md). */
+  | { kind: 'load'; jobKey?: string }
   | { kind: 'view'; sort?: RemoteSortKey[]; filters?: RemoteFilter[]; fallback?: boolean }
   | { kind: 'distinct'; column: number; filters?: RemoteFilter[]; kept?: RemoteFilter[]; fallback?: boolean }
 
@@ -61,7 +63,7 @@ const someClause = (value: { sort?: readonly unknown[]; filters?: readonly unkno
 const head = { queryId: z.uuid(), resultId, generation }
 
 export const resultsRemoteQuerySchema = z.discriminatedUnion('kind', [
-  z.object({ ...head, kind: z.literal('load') }).strict(),
+  z.object({ ...head, kind: z.literal('load'), jobKey: jobKeySchema.optional() }).strict(),
   z.object({ ...head, ...viewFields, fallback: z.boolean().optional() }).strict()
     .refine(someClause, 'A remote view takes a sort key or a filter.').refine(value => distinctKeys(value.sort ?? []), 'Each sort key must be a distinct column.'),
   z.object({ ...head, ...distinctFields, fallback: z.boolean().optional() }).strict()

@@ -135,10 +135,12 @@ const api: VariaApi = {
     }
   },
   execute: options => request('query.execute', options),
-  cancel: queryId => request('query.cancel', { queryId }),
+  cancel: (queryId, options) => request('query.cancel', { queryId, ...options?.detach ? { detach: true as const } : {} }),
+  attach: params => request('query.attach', params),
   remoteQuery: params => request('results.remoteQuery', params),
   closeQuerySession: (sessionId, options) => request('query.session.close', {
-    sessionId, ...options?.transaction ? { transaction: options.transaction } : {}, ...options?.abortOnRefusedCommit !== undefined ? { abortOnRefusedCommit: options.abortOnRefusedCommit } : {}
+    sessionId, ...options?.transaction ? { transaction: options.transaction } : {}, ...options?.abortOnRefusedCommit !== undefined ? { abortOnRefusedCommit: options.abortOnRefusedCommit } : {},
+    ...options?.keepJob ? { keepJob: true as const } : {}, ...options?.cancelJob ? { cancelJob: true as const } : {}
   }),
   querySessionState: sessionId => request('query.session.state', { sessionId }),
   setResultVisibility: params => request('results.visibility', params),
