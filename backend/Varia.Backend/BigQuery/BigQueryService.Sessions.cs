@@ -210,25 +210,27 @@ internal sealed partial class BigQueryService
         }
     }
 
-    /// <summary>Cancels a job once the re-attach identity check proves it is this account's (a Stop that came first). True when
-    /// BigQuery took the cancel or the job had finished; false when the check or the cancel failed (the job may run on). Bounded
-    /// to fit within a close's wait, which waits for the stopped attach.</summary>
-    internal async Task<bool> CancelOwnJobAsync(BigQueryConnection connection, string jobId, string? location, bool inserted)
+    /// <summary>Cancels a job once the re-attach identity check proves it is this account's (a Stop that came first). Own is the
+    /// checked job (null when the check failed, so the job was left alone); Cancelled says BigQuery took the cancel or the job
+    /// had finished. Bounded to fit within a close's wait, which waits for the stopped attach.</summary>
+    internal async Task<(Job? Own, bool Cancelled)> CancelOwnJobAsync(BigQueryConnection connection, string jobId, string? location, bool inserted)
     {
         using var lease = connection.Lease();
-        if (lease is null) return false;
+        if (lease is null) return (null, false);
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(stopping.Token);
+        limit.CancelAfter(OwnCancelLimit);
+        Job own;
+        try { own = await OwnJobAsync(connection, jobId, location, limit.Token, inserted); }
+        catch (Exception) { return (null, false); }
+        if (own.Status?.State == "DONE") return (own, true);
         try
         {
-            using var limit = CancellationTokenSource.CreateLinkedTokenSource(stopping.Token);
-            limit.CancelAfter(OwnCancelLimit);
-            var own = await OwnJobAsync(connection, jobId, location, limit.Token, inserted);
-            if (own.Status?.State == "DONE") return true;
             var request = connection.Client.Service.Jobs.Cancel(connection.Options.Project, jobId);
             request.Location = own.JobReference?.Location ?? location;
             await ReadAsync(t => request.ExecuteAsync(t), limit.Token);
-            return true;
+            return (own, true);
         }
-        catch (Exception) { return false; }
+        catch (Exception) { return (own, false); }
     }
     internal TimeSpan OwnCancelLimit { get; set; } = TimeSpan.FromSeconds(15);
 

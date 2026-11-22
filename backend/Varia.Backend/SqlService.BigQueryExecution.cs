@@ -170,8 +170,10 @@ internal sealed partial class SqlService
         // once, from the token and again where the run sees the cancellation: a cancel whose continuations run inline can
         // unwind the run and dispose the registration before its callback runs (callbacks run newest first).
         var stopAsked = 0;
-        // A Stop during a re-attach's identity check whose cancel could not be confirmed.
+        // A Stop during a re-attach's identity check: the check could not pass (unconfirmedCancel), or it passed and the cancel
+        // could not be confirmed (cancelFailed).
         var unconfirmedCancel = false;
+        var cancelFailed = false;
         void StopJob()
         {
             // Leave it running, or a later attach that took the job over: the job carries on in BigQuery.
@@ -253,6 +255,8 @@ internal sealed partial class SqlService
             session.ActiveCancelled = false;
             session.StopActive = running.Cancel;
             session.DetachActive = running.Detach;
+            // An earlier run's unconfirmed cancel was said by that run; only a close that stopped it names it again.
+            session.CancelUnconfirmed = null;
             if ((attach?.JobKey ?? args.JobKey) is { } jobKey) session.LastJobKey = jobKey;
             // This query now owns the tab, so the tab's earlier results are released before any new row is stored.
             budget = store.BeginQuery(args.SessionId);
@@ -286,6 +290,22 @@ internal sealed partial class SqlService
                 // The job already exists: after the identity check its session (when adopted) and state are taken over, and the
                 // poll below follows it as it would a job this request inserted.
                 Job own;
+                // The checked job's location and, when adopted, its session (with the record's transaction, decision 54).
+                void Adopt(Job checkedJob)
+                {
+                    location = KnownLocation(checkedJob.JobReference?.Location) ?? location;
+                    if (attach.AdoptSession && checkedJob.Statistics?.SessionInfo?.SessionId is { } jobSession && BigQuerySql.SessionId().IsMatch(jobSession))
+                    {
+                        if (session.Id is null && !bigQuery.UsedElsewhere(session, jobSession))
+                        {
+                            bigQuery.ForgetOthers(session, jobSession);
+                            session.Id = jobSession;
+                            session.Location = location;
+                            session.Transaction = attach.Transaction switch { "open" => BigQueryTransaction.Open, "unknown" => BigQueryTransaction.Unknown, _ => BigQueryTransaction.None };
+                        }
+                        sessionJob = session.Id == jobSession;
+                    }
+                }
                 // Stop before the identity check answers cancels the held job this attach follows, as the waiting path does.
                 using (following ? token.Register(() =>
                 {
@@ -300,10 +320,15 @@ internal sealed partial class SqlService
                     // A close that cancels the job waits for this (it waits for the queue), and hears when it failed.
                     catch (Exception) when (!following && token.IsCancellationRequested && !running.LeavesJob && bigQuery.Find(args.ConnectionId) == connection)
                     {
-                        if (!await bigQuery.CancelOwnJobAsync(connection, jobId, location, ours))
+                        var (checkedJob, ownCancelled) = await bigQuery.CancelOwnJobAsync(connection, jobId, location, ours);
+                        if (checkedJob is null) { session.CancelUnconfirmed = jobId; unconfirmedCancel = true; }
+                        else
                         {
-                            session.CancelUnconfirmed = jobId;
-                            unconfirmedCancel = true;
+                            // The job is this account's: its session is the tab's as after a check that passed, so a close asks
+                            // about a transaction it holds, and the stopped job holds the session until DONE.
+                            Adopt(checkedJob);
+                            if (checkedJob.Status?.State != "DONE") sent = created = true;
+                            if (!ownCancelled) { session.CancelUnconfirmed = jobId; cancelFailed = true; }
                         }
                         throw;
                     }
@@ -311,19 +336,8 @@ internal sealed partial class SqlService
                 sent = created = true;
                 // A Stop between the check and here found nothing sent to cancel: it is asked again now.
                 if (token.IsCancellationRequested && Interlocked.Exchange(ref stopAsked, 0) != 0) StopJob();
-                location = KnownLocation(own.JobReference?.Location) ?? location;
-                if (attach.AdoptSession && own.Statistics?.SessionInfo?.SessionId is { } jobSession && BigQuerySql.SessionId().IsMatch(jobSession))
-                {
-                    if (session.Id is null && !bigQuery.UsedElsewhere(session, jobSession))
-                    {
-                        // The adopted session's transaction starts from the job record's (decision 54), not from a listing.
-                        bigQuery.ForgetOthers(session, jobSession);
-                        session.Id = jobSession;
-                        session.Location = location;
-                        session.Transaction = attach.Transaction switch { "open" => BigQueryTransaction.Open, "unknown" => BigQueryTransaction.Unknown, _ => BigQueryTransaction.None };
-                    }
-                    sessionJob = session.Id == jobSession;
-                }
+                // The adopted session's transaction starts from the job record's (decision 54), not from a listing.
+                Adopt(own);
                 // Set before the tail is cleared, so a close in between still sees a job to leave running; only a job in the
                 // tab's own session holds it.
                 attachedDone = own.Status?.State == "DONE";
@@ -579,6 +593,8 @@ internal sealed partial class SqlService
                 messages.Add(sentence, MessageKind.Error);
                 if (unconfirmedCancel)
                     messages.Add("Varia could not confirm that BigQuery job " + JobName(project, location, jobId) + " was started by this account, so it was not cancelled; it may still be running. Check it in BigQuery's job history.");
+                else if (cancelFailed)
+                    messages.Add("Varia asked BigQuery to cancel job " + JobName(project, location, jobId) + " but could not confirm the request reached BigQuery; it may still be running. Check it in BigQuery's job history.");
                 else if (running.UserCancelled && !complete && sent)
                     messages.Add((created ? "Varia asked BigQuery to cancel job " : "If BigQuery received job ") + JobName(project, location, jobId)
                         + (created ? "" : ", Varia asked it to cancel the job") + ". Cancelling is best-effort: BigQuery may still bill work done before the job stopped.");

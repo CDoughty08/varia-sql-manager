@@ -433,9 +433,38 @@ internal static partial class BigQuerySessionChecks
         await harness.Call("query.cancel", new JsonObject { ["queryId"] = stopAttachArgs["queryId"]!.GetValue<string>() });
         var stoppedCheck = (await stopAttach.WaitAsync(TimeSpan.FromSeconds(30))).Result as QueryResult;
         bq.AlsoHang = null;
-        check(stopChecking.Task.IsCompleted && stoppedCheck is { Status: "cancelled" } && await Poll(() => bq.Cancels.Contains(stopJob)),
-            $"Stop during a restored tab's identity check cancels the job once it proves this account's: {stoppedCheck?.Status} cancels {string.Join(",", bq.Cancels)}");
+        check(stopChecking.Task.IsCompleted && stoppedCheck is { Status: "cancelled" } && await Poll(() => bq.Cancels.Contains(stopJob))
+            && Says(stoppedCheck, "Varia asked BigQuery to cancel job"),
+            $"Stop during a restored tab's identity check cancels the job once it proves this account's: {stoppedCheck?.Status} cancels {string.Join(",", bq.Cancels)} {Texts(stoppedCheck?.Messages ?? [])}");
         bq.Release(bq.Jobs[stopJob]);
+
+        // The same Stop on a tab adopting the job's session (its record says a transaction is open) takes the session over, as
+        // after a check that passed: a close then asks about the transaction.
+        string adoptJob;
+        using (var earlier = new Harness(bq))
+        {
+            await earlier.ConnectAsync(key);
+            var earlierTab = Tab();
+            await earlier.Execute(earlierTab, "SELECT 1");
+            (_, _, adoptJob) = await HeldAsync(earlier, earlierTab);
+        }
+        var adoptChecking = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        bq.AlsoHang = request =>
+        {
+            if (request.Method != "GET" || !request.Url.Contains("/jobs/" + adoptJob, StringComparison.Ordinal) || adoptChecking.Task.IsCompleted) return false;
+            adoptChecking.TrySetResult();
+            return true;
+        };
+        var adoptTab = Tab();
+        var adoptArgs = AttachArgs(harness, adoptTab, adoptJob, args => args["transaction"] = "open");
+        var adoptAttach = harness.Call("query.attach", adoptArgs);
+        await Task.WhenAny(adoptChecking.Task, adoptAttach).WaitAsync(TimeSpan.FromSeconds(30));
+        await harness.Call("query.cancel", new JsonObject { ["queryId"] = adoptArgs["queryId"]!.GetValue<string>() });
+        await adoptAttach.WaitAsync(TimeSpan.FromSeconds(30));
+        bq.AlsoHang = null;
+        var adoptedOpen = await Poll(() => harness.State(adoptTab).Result.State is { TransactionCount: 1 } or { Checked: false });
+        check(adoptedOpen && bq.Cancels.Contains(adoptJob), $"Stop during an adopting re-attach's check takes the job's session over: {(await harness.State(adoptTab)).State}");
+        await harness.Close(adoptTab, "rollback");
 
         // Cancel the job on a tab closed during that check, when the re-check cannot pass (no jobs.list): the job is left, and
         // the run and the close both say it may still be running, naming it.
@@ -466,6 +495,37 @@ internal static partial class BigQuerySessionChecks
             && !bq.Cancels.Contains(unsureJob) && Says(unsureRun, "so it was not cancelled; it may still be running"),
             $"Cancel the job during an identity check that cannot pass leaves the job and says so: {unsureClose.Code} {(unsureClose.Result as SessionCloseResult)?.Note} {Texts(unsureRun?.Messages ?? [])}");
         bq.Release(bq.Jobs[unsureJob]);
+
+        // A plain Stop with the same unconfirmed cancel: the run says so, and a later run's close does not name it again.
+        string staleJob;
+        using (var earlier = new Harness(bq))
+        {
+            await earlier.ConnectAsync(key);
+            var earlierTab = Tab();
+            await earlier.Execute(earlierTab, "SELECT 1");
+            (_, _, staleJob) = await HeldAsync(earlier, earlierTab);
+        }
+        var staleChecking = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        bq.AlsoHang = request =>
+        {
+            if (request.Method != "GET" || !request.Url.Contains("/jobs/" + staleJob, StringComparison.Ordinal) || staleChecking.Task.IsCompleted) return false;
+            staleChecking.TrySetResult();
+            return true;
+        };
+        bq.ListDenied = true;
+        var staleTab = Tab();
+        var staleArgs = AttachArgs(harness, staleTab, staleJob);
+        var staleAttach = harness.Call("query.attach", staleArgs);
+        await Task.WhenAny(staleChecking.Task, staleAttach).WaitAsync(TimeSpan.FromSeconds(30));
+        await harness.Call("query.cancel", new JsonObject { ["queryId"] = staleArgs["queryId"]!.GetValue<string>() });
+        var staleRun = (await staleAttach.WaitAsync(TimeSpan.FromSeconds(30))).Result as QueryResult;
+        bq.AlsoHang = null;
+        bq.ListDenied = false;
+        await harness.Execute(staleTab, "SELECT 1");
+        var staleClose = await harness.Close(staleTab);
+        check(Says(staleRun, "so it was not cancelled") && staleClose.Result is { Closed: true, Note: null },
+            $"an unconfirmed cancel is said once, not again at a later run's close: {Texts(staleRun?.Messages ?? [])} {staleClose.Result?.Note}");
+        bq.Release(bq.Jobs[staleJob]);
 
         // A rate limit answered as 403 during the identity check is QUOTA (the job kept), not another principal's job.
         var limitedTab = Tab();

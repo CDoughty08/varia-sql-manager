@@ -191,6 +191,9 @@ export class BackendSupervisor {
     if (local) return local.value as BackendMethods[M]['result']
     if (o.generation !== undefined && this.readyGeneration !== o.generation) throw new BackendError('RESULT_UNAVAILABLE', sentences.resultUnavailable)
     const connection = this.drainingFor(method, params) ?? this.connection ?? await this.upcoming()
+    // A request that waited out a restart (its idle-session wait) for a connection of the generation it ended: lost with it.
+    const named = idOf(params, 'connectionId')
+    if (named !== undefined && this.lost.has(named) && method !== 'connections.disconnect') throw new BackendError('CONNECTION_LOST', sentences.connectionLost)
     const sessionId = method === 'query.execute' || method === 'query.attach' || method === 'plans.estimate' && (params as BackendMethods['plans.estimate']['params']).mode === 'session'
       ? idOf(params, 'sessionId') : undefined
     if (sessionId !== undefined) {
