@@ -415,7 +415,7 @@ internal static partial class DiffChecks
         static ResultColumn[] Wide(string prefix) =>
             [.. Enumerable.Range(0, 4096).Select(i => new ResultColumn(i == 0 ? "shared" : prefix + i.ToString(CultureInfo.InvariantCulture), "nvarchar", "text"))];
         WireKind[] text = [.. Enumerable.Repeat(WireKind.Text, 4096)];
-        check(ResultDiffer.Pairs(Wide("left"), Wide("right"), text, text) is [(0, 0)], "wide results that share one name of 4,096 pair only that column");
+        check(ResultDiffer.Pairs(Wide("left"), Wide("right"), text, text) is [(0, 0)], "wide results that share one name of 4,096 pair only that column (correctness only, not speed)");
 
         // KeyOf joins each code point's key, which keys the whole name only if no key leaves its plane or is a surrogate.
         var planes = Enumerable.Range(0, 0x110000).Count(code => OrdinalNames.Key(code) is var key && key != code
@@ -443,9 +443,11 @@ internal static partial class DiffChecks
             }
             var (left, leftWires) = Side();
             var (right, rightWires) = Side();
-            var wired = random.Next(3) != 0;
-            var expected = Scan(left, right, wired ? leftWires : null, wired ? rightWires : null);
-            var actual = ResultDiffer.Pairs(left, right, wired ? leftWires : null, wired ? rightWires : null);
+            // Both wire lists, neither, or only one: the scan compared wires only when both were given.
+            var wires = random.Next(4);
+            WireKind[]? givenLeft = wires is 0 or 1 ? leftWires : null, givenRight = wires is 0 or 2 ? rightWires : null;
+            var expected = Scan(left, right, givenLeft, givenRight);
+            var actual = ResultDiffer.Pairs(left, right, givenLeft, givenRight);
             if (!expected.SequenceEqual(actual))
                 differences.Add("trial " + trial + ": [" + string.Join(" ", actual) + "], not [" + string.Join(" ", expected) + "]");
         }

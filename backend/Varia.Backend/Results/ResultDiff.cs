@@ -410,10 +410,14 @@ internal static class ResultDiffer
         if (mode == DiffMatchMode.Auto)
         {
             var rightCandidates = RowIdentity.Candidates(right.Columns, right.Wires).ToHashSet();
+            // Each first-result column's pair, looked up rather than searched for every candidate of a wide result.
+            var pairOf = new int[left.Columns.Count];
+            Array.Fill(pairOf, -1);
+            for (var p = 0; p < pairs.Length; p++) pairOf[pairs[p].Left] = p;
             var tried = 0;
             foreach (var candidate in RowIdentity.Candidates(left.Columns, left.Wires))
             {
-                var pair = Array.FindIndex(pairs, item => item.Left == candidate);
+                var pair = pairOf[candidate];
                 if (pair < 0 || !rightCandidates.Contains(pairs[pair].Right)) continue;
                 if (++tried > RowIdentity.MaxCandidates) break;
                 var (leftUnique, leftApproximate) = RowIdentity.Fill(leftHasher, leftPages, candidate, leftIds, stopEarly: true, token, rooms: leftRooms);

@@ -38,16 +38,24 @@ describe('Compare popover column pairing', () => {
   })
 
   it('keys two names alike exactly when sameName calls them the same', () => {
-    const parts = ['a', 'A', 'i', 'I', '\u0131', '\u0130', 's', 'S', '\u017F', 'k', 'K', '\u212A', '\u00E9', '\u00C9', '\u{10400}', '\u{10428}', '\uD800', '\uDC00', '\u03C3', '\u03A3', '\u03C2']
+    // Look-alikes grouped so a second name can be the first with each part swapped for one of its group, which sameName
+    // may or may not call the same (ı, İ and ſ keep their own keys); a lone surrogate beside another can form a pair.
+    const groups = [['a', 'A'], ['i', 'I', '\u0131', '\u0130'], ['s', 'S', '\u017F'], ['k', 'K', '\u212A'], ['\u00E9', '\u00C9'], ['\u{10400}', '\u{10428}'], ['\uD800', '\uDC00'], ['\u03C3', '\u03A3', '\u03C2'], ['\u00B5', '\u039C', '\u03BC']]
     let seed = 642
-    const next = (limit: number) => (seed = (seed * 1103515245 + 12345) % 2147483648) % limit
-    const name = () => Array.from({ length: next(4) }, () => parts[next(parts.length)]).join('')
+    // Park-Miller: the product stays below 2^53, so every draw is exact.
+    const next = (limit: number) => (seed = seed * 48271 % 2147483647) % limit
+    const pick = <T>(items: readonly T[]) => items[next(items.length)]
     const differences: string[] = []
+    let alike = 0
     for (let trial = 0; trial < 20000; trial++) {
-      const a = name(), b = name()
+      const chosen = Array.from({ length: next(5) }, () => pick(groups))
+      const a = chosen.map(pick).join('')
+      const b = next(2) ? chosen.map(pick).join('') : Array.from({ length: next(5) }, () => pick(pick(groups))).join('')
+      if (a !== b && sameName(a, b)) alike++
       if ((nameKey(a) === nameKey(b)) !== sameName(a, b)) differences.push(JSON.stringify([a, b]))
     }
     expect(differences.slice(0, 5)).toEqual([])
+    expect(alike).toBeGreaterThan(1000)
   })
 
   it('lists each side\'s columns left out, with the other side\'s type when a column of the same name did not pair', () => {
