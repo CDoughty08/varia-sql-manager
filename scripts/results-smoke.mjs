@@ -15,7 +15,7 @@ import {
   activeDocument, anyResultGrid, captionFits, comparisonTools, nameCut, namedResultGrid, resultFacts, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, explorerTree, gridCell, gridCellSelector, gridPart, jobNotice,
   jobProgress, kindIcon, localGrid, localGridFrame, operationAnnouncer, operationCancel, operationNotice, operationProgress, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
   outputPaneIds, outputPanel, outputToolbar, outputView, pane, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultsToolbarFit, resultToggle, statusBar,
-  pivotFacts, pivotPanel, pivotSource, profileCard, resultEntryKey, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark, dialogClosed, dialogWindow, pressToClose
+  pivotFacts, pivotPanel, pivotSource, profileCard, resultEntryKey, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark, connectDialogWindow, dialogClosed, dialogWindow, pressToClose, submitConnect
 } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -205,10 +205,10 @@ try {
   // Closing an unsaved query asks first; answer Don't Save.
   await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
   await toolbarButton(page, 'Connect').click()
-  await page.getByLabel('Server Name', { exact: true }).fill('server-a')
-  await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(page.getByRole('dialog')).toHaveCount(0)
+  const { window: firstConnectWin, dialog: firstConnectDialog } = await connectDialogWindow(application)
+  await firstConnectDialog.getByLabel('Server Name', { exact: true }).fill('server-a')
+  await firstConnectDialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
+  await submitConnect(firstConnectWin, firstConnectDialog)
   // The output pane gets most of the window: the editor above it shrinks to a few lines.
   await enlargeOutput(page)
 
@@ -3300,9 +3300,8 @@ try {
   await queryTabs().nth(1).click()
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   await lostServerRows(page).getByRole('button', { name: /^Reconnect/ }).click()
-  const connect = page.getByRole('dialog', { name: 'Connect', exact: true })
-  await connect.getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(connect).toHaveCount(0)
+  const { window: reconnectWin, dialog: connect } = await connectDialogWindow(application)
+  await submitConnect(reconnectWin, connect)
   await expect(server().locator('option:checked')).toHaveText(resultsServerLabel)
   await expect(server().locator('option:checked')).not.toBeDisabled()
   // Reconnect deliberately reveals and focuses Explorer on its next frame; wait for that before focusing the editor.
@@ -3352,10 +3351,10 @@ try {
   // the page never scrolls.
   const longServer = 'sqlprod-analytics-warehouse-cluster-01.' + 'reporting-'.repeat(10) + 'corp.contoso.com\\INSTANCE01,1433'
   await toolbarButton(page, 'Connect').click()
-  await page.getByLabel('Server Name', { exact: true }).fill(longServer)
-  await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(page.getByRole('dialog')).toHaveCount(0)
+  const { window: longWin, dialog: longDialog } = await connectDialogWindow(application)
+  await longDialog.getByLabel('Server Name', { exact: true }).fill(longServer)
+  await longDialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
+  await submitConnect(longWin, longDialog)
   await server().selectOption({ label: longServer })
   await run('-- varia-fake: sets=W1*10 memory=0.5')
   await expect(memoryUsage(page, 'results')).toHaveText('128 MB / 256 MB')
@@ -3435,7 +3434,7 @@ try {
       }
     })
     await expect(backendReady(page)).toBeVisible({ timeout: 30000 })
-    await connectLive(page, expect)
+    await connectLive(application, page, expect)
     await enlargeOutput(page)
     // The session opens with the first run, so the timed one below measures rows, not the login.
     await run('SELECT 1 AS warm;')

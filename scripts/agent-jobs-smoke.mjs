@@ -9,7 +9,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { chooseExplorerMenuItem, expandExplorerPath, explorerMenuItems, revealExplorerRow } from './fixtures/explorer-tree.mjs'
-import { documentFrame, documentTab, gridPart, gridTones, liveGrid, liveGridSelector, statusBar, toolbarButton } from './fixtures/ui.mjs'
+import { connectDialogWindow, documentFrame, documentTab, gridPart, gridTones, liveGrid, liveGridSelector, statusBar, submitConnect, toolbarButton } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -48,12 +48,10 @@ const bulkBar = () => frame().getByRole('toolbar', { name: 'Selected jobs', exac
 const jobCell = name => grid().locator(gridPart.row, { has: page.locator(gridPart.cell, { hasText: new RegExp(`^${name}$`) }) }).locator(gridPart.cell).nth(2)
 async function connect(server) {
   await toolbarButton(page, 'Connect').click()
-  const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
-  await expect(dialog.getByText('Loading saved connections…')).toHaveCount(0)
+  const { window, dialog } = await connectDialogWindow(app)
   await dialog.getByLabel('Server Name', { exact: true }).fill(server)
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(dialog).toHaveCount(0, { timeout: 30000 })
+  await submitConnect(window, dialog, { timeout: 30000 })
 }
 
 try {

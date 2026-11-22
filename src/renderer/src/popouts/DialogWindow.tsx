@@ -85,7 +85,9 @@ export function dialogWindowBounds(
 
 /** Remembers a resizable dialog window's size and, when finite integers are provided, its screen coordinates. */
 export function rememberDialogWindowBounds(kind: DialogWindowKind, bounds: { readonly x?: number; readonly y?: number; readonly width: number; readonly height: number }): void {
-  if (!dialogWindowKinds[kind].resizable) return
+  const limits = dialogWindowKinds[kind]
+  if (!limits.resizable) return
+  if (!Number.isFinite(bounds.width) || !Number.isFinite(bounds.height) || bounds.width < limits.minWidth || bounds.height < limits.minHeight) return
   const payload: { width: number; height: number; x?: number; y?: number } = { width: Math.round(bounds.width), height: Math.round(bounds.height) }
   if (typeof bounds.x === 'number' && Number.isFinite(bounds.x) && typeof bounds.y === 'number' && Number.isFinite(bounds.y)) {
     const x = Math.round(bounds.x), y = Math.round(bounds.y)

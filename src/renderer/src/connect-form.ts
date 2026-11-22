@@ -1,4 +1,5 @@
 import type { AdvancedConnectionOptions, ConnectionOptions } from '../../shared/contracts'
+import { showsIdentity } from '../../shared/auth'
 import { advancedDefaults } from '../../shared/connections'
 import { environmentTag } from '../../shared/environments'
 import { connectionPresets } from '../../shared/theme/connection-colors'
@@ -63,10 +64,13 @@ const intInRange = (value: string, min: number, max: number): number | undefined
   return Number.isSafeInteger(num) && num >= min && num <= max ? num : undefined
 }
 
+const cleanValue = (value: string, max: number) => value.replace(/[\x00-\x1f\x7f]/g, '').slice(0, max)
+
 /**
  * Parses standard semicolon-delimited SqlClient / ADO.NET / Azure SQL connection strings into structured `ConnectionOptions`
  * and `AdvancedConnectionOptions` patches. Passwords (`Password` / `PWD`) are never imported into drafts for safety;
- * `passwordOmitted` reports when a password key was skipped so the UI can remind the user.
+ * `passwordOmitted` reports when a password key was skipped so the UI can remind the user. Control characters are
+ * stripped and string fields are bounded to the connection schemas' limits.
  */
 export function parseConnectionString(raw: string): ParsedConnectionString {
   const patch: Partial<ConnectionOptions> = {}
@@ -76,16 +80,18 @@ export function parseConnectionString(raw: string): ParsedConnectionString {
     const key = rawKey.toLowerCase().replace(/\s+/g, '')
     if (!value) continue
     if (key === 'password' || key === 'pwd') { passwordOmitted = true; continue }
-    if (['server', 'datasource', 'addr', 'address'].includes(key)) { patch.server = value.replace(/^tcp:/i, ''); matchedCount++ }
-    else if (['initialcatalog', 'database'].includes(key)) { patch.database = value; matchedCount++ }
-    else if (['userid', 'uid', 'user'].includes(key)) { patch.username = value; patch.authentication ??= 'sql'; matchedCount++ }
-    else if (key === 'integratedsecurity' || key === 'trusted_connection') {
+    if (['server', 'datasource', 'addr', 'address'].includes(key)) { patch.server = cleanValue(value.replace(/^tcp:/i, ''), 256); matchedCount++ }
+    else if (['initialcatalog', 'database'].includes(key)) { patch.database = cleanValue(value, 128); matchedCount++ }
+    else if (['userid', 'uid', 'user'].includes(key)) { patch.username = cleanValue(value, 128); patch.authentication ??= 'sql'; matchedCount++ }
+    else if (key === 'integratedsecurity' || key === 'trusted_connection' || key === 'trustedconnection') {
       if (value.toLowerCase() === 'sspi' || boolValue(value) === true) { patch.authentication = 'windows'; matchedCount++ }
     } else if (key === 'authentication') {
       const mode = value.toLowerCase().replace(/\s+/g, '')
       if (mode === 'activedirectoryinteractive' || mode === 'entramfa') { patch.authentication = 'entraMfa'; matchedCount++ }
       else if (mode === 'activedirectoryintegrated') { patch.authentication = 'entraIntegrated'; matchedCount++ }
       else if (mode === 'activedirectorypassword') { patch.authentication = 'entraPassword'; matchedCount++ }
+      else if (mode === 'activedirectoryserviceprincipal') { patch.authentication = 'entraServicePrincipal'; matchedCount++ }
+      else if (mode === 'activedirectorymanagedidentity' || mode === 'activedirectorymsi') { patch.authentication = 'entraManagedIdentity'; matchedCount++ }
       else if (mode === 'activedirectorydefault') { patch.authentication = 'entraDefault'; matchedCount++ }
       else if (mode === 'sqlpassword') { patch.authentication = 'sql'; matchedCount++ }
     } else if (key === 'encrypt') {
@@ -96,11 +102,11 @@ export function parseConnectionString(raw: string): ParsedConnectionString {
     } else if (key === 'trustservercertificate') {
       const parsed = boolValue(value)
       if (parsed !== undefined) { patch.trustServerCertificate = parsed; matchedCount++ }
-    } else if (key === 'hostnameincertificate') { patch.hostNameInCertificate = value; matchedCount++ }
+    } else if (key === 'hostnameincertificate') { patch.hostNameInCertificate = cleanValue(value, 256); matchedCount++ }
     else if (key === 'commandtimeout') { const n = intInRange(value, 0, 86400); if (n !== undefined) { advancedPatch.commandTimeout = n; matchedCount++ } }
     else if (key === 'connecttimeout' || key === 'connectiontimeout') { const n = intInRange(value, 0, 3600); if (n !== undefined) { advancedPatch.connectTimeout = n; matchedCount++ } }
-    else if (key === 'applicationname' || key === 'app') { advancedPatch.applicationName = value.slice(0, 128); matchedCount++ }
-    else if (key === 'workstationid' || key === 'wsid') { advancedPatch.workstationId = value.slice(0, 128); matchedCount++ }
+    else if (key === 'applicationname' || key === 'app') { advancedPatch.applicationName = cleanValue(value, 128); matchedCount++ }
+    else if (key === 'workstationid' || key === 'wsid') { advancedPatch.workstationId = cleanValue(value, 128); matchedCount++ }
     else if (key === 'applicationintent') {
       if (value.toLowerCase() === 'readonly') { advancedPatch.applicationIntent = 'ReadOnly'; matchedCount++ }
       else if (value.toLowerCase() === 'readwrite') { advancedPatch.applicationIntent = 'ReadWrite'; matchedCount++ }
@@ -109,8 +115,9 @@ export function parseConnectionString(raw: string): ParsedConnectionString {
     else if (key === 'packetsize') { const n = intInRange(value, 512, 32767); if (n !== undefined) { advancedPatch.packetSize = n; matchedCount++ } }
     else if (key === 'connectretrycount') { const n = intInRange(value, 0, 255); if (n !== undefined) { advancedPatch.connectRetryCount = n; matchedCount++ } }
     else if (key === 'connectretryinterval') { const n = intInRange(value, 1, 60); if (n !== undefined) { advancedPatch.connectRetryInterval = n; matchedCount++ } }
-    else if (key === 'failoverpartner') { advancedPatch.failoverPartner = value.slice(0, 256); matchedCount++ }
+    else if (key === 'failoverpartner') { advancedPatch.failoverPartner = cleanValue(value, 256); matchedCount++ }
   }
+  if (patch.authentication && showsIdentity(patch.authentication)) delete patch.username
   return { patch, advancedPatch, matchedCount, passwordOmitted }
 }
 

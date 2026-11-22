@@ -7,7 +7,7 @@ Object Explorer's status chips leave BigQuery out until a later lane (docs/bigqu
 
 ## Connect dialog
 
-**Server type** (SQL Server or BigQuery) heads the Connection Properties. A new dialog opens on the type connected to
+**Server type** (SQL Server or BigQuery) sits above the details tabs on the right pane. A new dialog opens on the type connected to
 last (across both libraries; SQL Server when there is none). Switching keeps each type's fields, and the note under it
 offers **Undo** back to the previous type. Choosing a history row switches to its type. BigQuery has no Connection String
 tab, no Encrypt, TLS or SqlClient options and no Register server.
@@ -20,11 +20,11 @@ tab, no Encrypt, TLS or SqlClient options and no Register server.
 | Project | The billing project, typed or picked: the combo and **Browse** (in the sources pane) list `bigquery.projects`, up to 10 pages (10,000 projects). |
 | Location | Automatic (from the default dataset) or a BigQuery location. |
 | Default dataset | Typed or picked from the project's datasets (`connections.databases`, below), loaded when the box is focused or with its button; a dataset in another location is noted. |
-| Advanced… | A sub-dialog: Maximum bytes billed (MiB, GiB or TiB, binary), Impersonate service account, Extra projects (read-only projects Object Explorer and IntelliSense will list, at most 16, never the billing project), and Ask before running a query over the cost threshold (cleared by "Don't ask again"; Cost, below). |
+| Advanced tab | Inline properties with a modified-count badge: Maximum bytes billed (MiB, GiB or TiB, binary), Impersonate service account, Extra projects (read-only projects Object Explorer and IntelliSense will list, at most 16, never the billing project), and Ask before running a query over the cost threshold (cleared by "Don't ask again"; Cost, below). |
 
 **Test Connection** loads the datasets with the dialog's options (it proves sign-in and the project without creating a
 job); **Connect** opens the connection through main's connection owner like SQL Server's (receipts, reuse, the target's
-principal pin), with Custom Properties (name, colour, environment) and Auto reconnect as for SQL Server. Password fields
+principal pin), with Labels & Custom Properties (name, colour, environment) and Auto reconnect as for SQL Server. Password fields
 and Remember password do not exist for BigQuery: Varia keeps no BigQuery secret.
 
 A federation configuration whose `credential_source` is a file (decision 49): when it is picked, the dialog asks **Use

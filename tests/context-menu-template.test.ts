@@ -206,6 +206,33 @@ describe('context menu popups', () => {
     failing.close()
     expect(closed).toEqual([])
   })
+  it('pops up on a popout window using its bounds and zoom while sending command replies to main', async () => {
+    const { service, window: main, sent: mainSent } = popups('native', 1)
+    const popoutSent: unknown[][] = [], popoutShown: unknown[] = []
+    let buildZoom = 0
+    const popout: PopupWindow = {
+      isDestroyed: () => false,
+      getContentBounds: () => ({ width: 500, height: 400 }),
+      webContents: { getZoomFactor: () => 2, send: (...args: unknown[]) => { popoutSent.push(args) } }
+    }
+    const templates: MenuItemConstructorOptions[][] = []
+    const customService = new ContextMenuPopups<PopupWindow>({
+      style: 'native', platform: 'darwin', userCanAct: () => true,
+      build: template => {
+        templates.push(template)
+        return { popup: options => { buildZoom = options.window.webContents.getZoomFactor(); popoutShown.push(options) }, closePopup: () => {} }
+      }
+    })
+    const showing = customService.show(valid, popout, main)
+    expect(buildZoom).toBe(2)
+    expect(popoutShown[0]).toMatchObject({ window: popout, x: 200, y: 80 })
+    ;(find(templates[0], 'explorer.copyName')?.click as () => void)()
+    expect(popoutSent).toEqual([])
+    expect(mainSent).toEqual([['varia:context-menu-command', { token: 7, id: 'explorer.copyName' }]])
+    ;(popoutShown[0] as { callback: () => void }).callback()
+    await showing
+    void service
+  })
 })
 
 describe('menu style', () => {

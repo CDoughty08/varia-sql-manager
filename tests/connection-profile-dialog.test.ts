@@ -48,8 +48,8 @@ async function mount(initialAutoReconnect?: 'inherit' | 'on' | 'off', setup: {
   const theme = { ...workbench.theme, getSnapshot: () => workbench.theme.state, subscribe: () => () => {}, accent: (color?: string) => color }
   const renderer = { ...workbench, platform: 'win32', theme } as unknown as Workbench
   let key = 0
-  const reopen = async (preference = initialAutoReconnect) => {
-    await act(async () => root.render(createElement(WorkbenchProvider, { workbench: renderer, children: createElement(ConnectDialog, { key: ++key, initial: setup.initial ?? connectionDefaults('win32'), initialTargetId: setup.initialTargetId, initialAutoReconnect: preference, onConnected, onClose }) })))
+  const reopen = async (preference = initialAutoReconnect, extra: Partial<ComponentProps<typeof ConnectDialog>> = {}) => {
+    await act(async () => root.render(createElement(WorkbenchProvider, { workbench: renderer, children: createElement(ConnectDialog, { key: extra.raise !== undefined || extra.reconnectSeq !== undefined ? key : ++key, initial: extra.initial ?? setup.initial ?? connectionDefaults('win32'), initialTargetId: extra.initialTargetId ?? setup.initialTargetId, initialAutoReconnect: preference, onConnected, onClose, ...extra }) })))
   }
   cleanups.push(() => {
     act(() => root.unmount()); workbench.dispose(); host.remove()
@@ -853,6 +853,53 @@ describe('Connect v2 sidebar deduplication, filter clear and Undo', () => {
     await act(async () => view.button('Remove saved Staging Db').click())
     expect(choices()).toEqual(['Primary Prod'])
     await act(async () => view.button('Undo').click())
-    expect(view.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ saved: false, registered: false, favorite: false, options: recentOnly.options }))
+    expect(view.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ saved: true, registered: false, favorite: false, options: recentOnly.options }))
+  })
+  it('syncs open Connect dialog on explicit Reconnect without clobbering edits on plain raise, and clears typed passwords on connection string paste', async () => {
+    const view = await mount()
+    await pick(view, '#connect-server', 'in-progress-server')
+    await view.reopen(undefined, { raise: 2, reconnectSeq: 0, initial: { ...connectionDefaults('win32'), server: 'ignored-on-raise' } })
+    expect(view.host.querySelector<HTMLInputElement>('#connect-server')!.value).toBe('in-progress-server')
+    await view.reopen('off', { raise: 3, reconnectSeq: 1, initial: { ...connectionDefaults('win32'), server: 'reconnected-server', authentication: 'sql', username: 'reader' } })
+    expect(view.host.querySelector<HTMLInputElement>('#connect-server')!.value).toBe('reconnected-server')
+    await pick(view, '#connect-password', 'old-secret')
+    await act(async () => view.button('Connection String').click())
+    const pasteBox = view.host.querySelector<HTMLTextAreaElement>('#connect-paste-string')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(pasteBox, 'Server=other-server;User ID=new_reader;')
+      pasteBox.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => view.button('Parse & Fill Form').click())
+    await act(async () => view.button('Connection Properties').click())
+    expect(view.host.querySelector<HTMLInputElement>('#connect-server')!.value).toBe('other-server')
+    expect(view.host.querySelector<HTMLInputElement>('#connect-password')!.value).toBe('')
+  })
+  it('keeps focus on a row star button after favoriting moves that row from Recent Connections into Favorites', async () => {
+    const recent = { ...profile('Recent Move', 21, 'inherit'), favorite: false, lastConnected: '2026-11-11T10:00:00.000Z' }
+    const view = await mount(undefined, { profiles: [recent] })
+    const star = view.button('Favorite Recent Move')
+    star.focus()
+    expect(document.activeElement).toBe(star)
+    await act(async () => star.click())
+    const moved = view.button('Unfavorite Recent Move')
+    expect(document.activeElement).toBe(moved)
+  })
+  it('parks focus on the dialog and restores it to Remove favorite after Add favorite completes asynchronously', async () => {
+    const saved = { ...profile('Deferred Fav', 22, 'inherit'), favorite: false, saved: true }
+    const view = await mount(undefined, { profiles: [saved] })
+    await view.choose('Deferred Fav')
+    const favButton = view.button('Add favorite')
+    favButton.getClientRects = () => [{} as DOMRect] as unknown as DOMRectList
+    favButton.focus()
+    expect(document.activeElement).toBe(favButton)
+    const pending = deferred<Awaited<ReturnType<VariaApi['saveConnectionProfile']>>>()
+    view.saveConnectionProfile.mockImplementationOnce(() => pending.promise)
+    await act(async () => favButton.click())
+    const dialogEl = view.host.querySelector<HTMLElement>('[role="dialog"]')!
+    expect(favButton.disabled).toBe(true)
+    expect(document.activeElement).toBe(dialogEl)
+    const updated = { ...saved, favorite: true }
+    await act(async () => pending.resolve({ ok: true, value: { library: { version: 1, profiles: [updated] }, savedPasswords: [] } }))
+    expect(document.activeElement).toBe(view.button('Remove favorite'))
   })
 })

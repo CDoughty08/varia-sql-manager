@@ -258,4 +258,14 @@ describe('Connect dialog: BigQuery', () => {
     await view.click("Don't Save")
     expect(view.onClose).toHaveBeenCalledTimes(1)
   })
+
+  it('disables Connect when BigQuery Advanced validation fails and re-enables once fixed', async () => {
+    const view = await mount({ initial: { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' } })
+    await view.click('Advanced')
+    await view.set('#bq-max-bytes', '-5')
+    expect(view.button('Connect').disabled).toBe(true)
+    expect(view.button('Save').disabled).toBe(true)
+    await view.set('#bq-max-bytes', '100')
+    expect(view.button('Connect').disabled).toBe(false)
+  })
 })

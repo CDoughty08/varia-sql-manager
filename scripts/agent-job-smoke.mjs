@@ -7,7 +7,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { chooseExplorerMenuItem } from './fixtures/explorer-tree.mjs'
-import { documentFrame, documentState, documentTab, documentVerb, gridPart, liveGrid, quickInputRows, statusBar, toolbarButton } from './fixtures/ui.mjs'
+import { connectDialogWindow, documentFrame, documentState, documentTab, documentVerb, gridPart, liveGrid, quickInputRows, statusBar, submitConnect, toolbarButton } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -33,12 +33,10 @@ const calls = async method => parseCalls(await readFile(resolve(control, 'calls.
 const saves = async () => (await calls('actions.execute')).filter(call => call.action === 'agentJob')
 async function connect(server) {
   await toolbarButton(page, 'Connect').click()
-  const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
-  await expect(dialog.getByText('Loading saved connections…')).toHaveCount(0)
+  const { window, dialog } = await connectDialogWindow(app)
   await dialog.getByLabel('Server Name', { exact: true }).fill(server)
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(dialog).toHaveCount(0, { timeout: 30000 })
+  await submitConnect(window, dialog, { timeout: 30000 })
 }
 
 try {

@@ -84,8 +84,9 @@ describe('Connect dialog v2 form', () => {
     expect(valueOf('.environment-tag', 'flex')).toBe('none')
     expect(rules.filter(rule => rule.selector.includes('[data-place="list"]') && rule.declarations.some(declaration => declaration.property.startsWith('flex'))).map(rule => rule.selector)).toEqual(['.connect-sources-pane .environment-tag[data-place="list"][data-custom]'])
     expect(valueOf('.connect-form-scroll', 'overflow-y')).toBe('auto')
-    // The outcome sits above the footer, so Connect and Stop never move; together they keep at most 45% of the dialog.
-    expect(valueOf('.connect-actions', 'max-height')).toBe('45%')
+    // The outcome sits above the footer, so Connect and Stop never move; bounded against the viewport so an auto-sized track never collapses it.
+    expect(valueOf('.connect-actions', 'max-height')).toBeUndefined()
+    expect(valueOf('.connect-outcome', 'max-height')).toBe('min(260px, 35vh)')
     expect(valueOf('.connect-outcome', 'min-height')).toBe('0')
     expect(valueOf('.connect-outcome', 'overflow-y')).toBe('auto')
     // Stacked (a narrow or zoomed window, via class or viewport media query): one scroll, splitter hidden, actions across.
@@ -134,6 +135,15 @@ describe('Connect dialog v2 form', () => {
       server: 'az.database.windows.net',
       authentication: 'entraMfa'
     })
+    // Strips control chars, enforces schema max lengths, and drops conflicting username on integrated auth.
+    expect(parseConnectionString('Server=tcp:host\x00name\n;Database=' + 'd'.repeat(200) + ';User ID=attacker;Integrated Security=SSPI').patch).toEqual({
+      server: 'hostname',
+      database: 'd'.repeat(128),
+      authentication: 'windows'
+    })
+    expect(parseConnectionString('Server=srv;TrustedConnection=Yes').patch).toEqual({ server: 'srv', authentication: 'windows' })
+    expect(parseConnectionString('Server=srv;Authentication=Active Directory Service Principal').patch).toEqual({ server: 'srv', authentication: 'entraServicePrincipal' })
+    expect(parseConnectionString('Server=srv;Authentication=Active Directory Managed Identity').patch).toEqual({ server: 'srv', authentication: 'entraManagedIdentity' })
   })
   it('marks only a custom environment label as one that may give way', () => {
     const html = (environment: string) => renderToStaticMarkup(createElement(EnvironmentTag, { environment, place: 'list' }))

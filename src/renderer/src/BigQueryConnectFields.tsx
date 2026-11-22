@@ -182,13 +182,17 @@ export function BigQueryConnectFields({ options, keyFileName, locked, lists, onC
 
 const serviceAccountSchema = z.email().max(bigQueryLimits.serviceAccount)
 /** BigQuery's inline Advanced Properties tab panel: cost cap and prompt, impersonation, and extra read-only projects. */
-export function BigQueryAdvanced({ options, savedCostPrompt, projects, locked, onChange }: { options: BigQueryConnectionOptions; savedCostPrompt?: false; projects: readonly BigQueryProject[]; locked?: boolean; onChange(patch: Partial<Pick<BigQueryConnectionOptions, 'maximumBytesBilled' | 'costPrompt' | 'impersonateServiceAccount' | 'extraProjects'>>): void }) {
+export function BigQueryAdvanced({ options, savedCostPrompt, projects, locked, onInvalid, onChange }: { options: BigQueryConnectionOptions; savedCostPrompt?: false; projects: readonly BigQueryProject[]; locked?: boolean; onInvalid?: (error: string) => void; onChange(patch: Partial<Pick<BigQueryConnectionOptions, 'maximumBytesBilled' | 'costPrompt' | 'impersonateServiceAccount' | 'extraProjects'>>): void }) {
   const initialBytes = splitBytes(options.maximumBytesBilled)
   const [amount, setAmount] = useState(initialBytes.amount)
   const [unit, setUnit] = useState<ByteUnit>(initialBytes.unit)
   const [impersonate, setImpersonate] = useState(options.impersonateServiceAccount ?? '')
   const [adding, setAdding] = useState('')
   const [error, setError] = useState('')
+  const onInvalidRef = useRef(onInvalid)
+  onInvalidRef.current = onInvalid
+  useEffect(() => { onInvalidRef.current?.(error) }, [error])
+  useEffect(() => () => { onInvalidRef.current?.('') }, [])
   const asking = (options.costPrompt ?? savedCostPrompt) !== false
   const extra = options.extraProjects ?? []
 

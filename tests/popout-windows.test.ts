@@ -123,6 +123,26 @@ describe('PopoutWindows', () => {
     popouts.zoom(-1)
     expect(child.zoom()).toBe(-1)
   })
+  it('tracks the popout that most recently received trusted input and forgets it once expired or closed', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(1000)
+      const { popouts } = registry()
+      const first = fakeWindow(10), second = fakeWindow(11)
+      popouts.adopt(first.window); popouts.adopt(second.window)
+      expect(popouts.recent()).toBeUndefined()
+      first.emit('input-event', {}, { type: 'mouseMove' })
+      expect(popouts.recent()).toBeUndefined()
+      first.emit('input-event', {}, { type: 'mouseDown' })
+      expect(popouts.recent()?.window).toBe(first.window)
+      second.emit('input-event', {}, { type: 'keyDown' })
+      expect(popouts.recent()?.window).toBe(second.window)
+      second.emit('closed')
+      expect(popouts.recent()?.window).toBe(first.window)
+      vi.advanceTimersByTime(1001)
+      expect(popouts.recent()).toBeUndefined()
+    } finally { vi.useRealTimers() }
+  })
   it('raises a popout by the name the page opened it with, restoring it if minimized, without activating it', () => {
     const { popouts } = registry()
     const child = fakeWindow(3), other = fakeWindow(4), unnamed = fakeWindow(5)

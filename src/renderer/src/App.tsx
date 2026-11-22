@@ -89,6 +89,8 @@ export default function App() {
   const [explorerError, setExplorerError] = useState('')
   // 0 while Connect is closed; each open/reconnect request increments it, raising the existing window when open.
   const [showConnect, setShowConnect] = useState(0)
+  // Incremented only for explicit Reconnect / target-specific open requests so an open window loads that server.
+  const [connectExplicit, setConnectExplicit] = useState(0)
   // 0 while About is closed; each Help › About counts up, raising its window when it is already open.
   const [showAbout, setShowAbout] = useState(0)
   const [options, setOptions] = useState<ProviderConnectionOptions>(() => connectionDefaults(workbench.platform))
@@ -170,6 +172,7 @@ export default function App() {
       setPendingMonitor(false)
       setOptions(lost.options)
       setShowConnect(count => count + 1)
+      setConnectExplicit(count => count + 1)
     },
     editEnvironment: id => setEnvironmentFor(id),
     closePane: pane => workspaceRef.current?.close(pane),
@@ -210,6 +213,7 @@ export default function App() {
         setReconnecting(remembered?.targetId)
         if (remembered) setOptions(remembered.options)
         setPendingExecute(event.tabId); setPendingMonitor(false); setShowConnect(count => count + 1)
+        if (remembered) setConnectExplicit(count => count + 1)
       }
       if (event.type === 'activity.connectRequested') { setReconnecting(undefined); setPendingExecute(undefined); setPendingMonitor(true); setShowConnect(count => count + 1) }
       if (event.type === 'help.aboutRequested') setShowAbout(count => count + 1)
@@ -244,6 +248,7 @@ export default function App() {
       const info = finishConnectionDetails(workbench.connections, opened, choice)
       if (!info) { setExplorerError('This connection changed while reviewing its details. Select it again to reconnect.'); return }
       setShowConnect(0)
+      setConnectExplicit(0)
       setReconnecting(undefined)
       setPendingExecute(undefined)
       setPendingMonitor(false)
@@ -323,7 +328,7 @@ export default function App() {
       {!shell.queryStatusBar && queryStatus}<ScriptingStatus /><IndexStatus /><EditorStatus /><DiscardStatus /><MemoryIndicator /><UpdateStatus /><AgentJobStatus />
     </footer>
     {environmentFor && <EnvironmentDialog key={environmentFor} connectionId={environmentFor} onClose={() => setEnvironmentFor(undefined)} />}
-    {showConnect > 0 && <ConnectDialog initial={options} raise={showConnect} reviewOpen={!!detailsReview} review={detailsReview ? <ConnectionDetailsDialog current={detailsReview.current} selected={detailsReview.selected} server={workbench.connections.get(detailsReview.id)?.server ?? ''} database={workbench.connections.get(detailsReview.id)?.database ?? ''} account={workbench.connections.get(detailsReview.id)?.login} onChoose={choice => { void finishConnected(detailsReview, choice).catch(error => setExplorerError(errorText(error))) }} /> : undefined} initialTargetId={reconnecting && workbench.connectionTargets.get(workbench.connections.get(reconnecting)?.targetId ?? '') ? workbench.connections.get(reconnecting)?.targetId : undefined} initialAutoReconnect={reconnecting ? workbench.connections.details(reconnecting)?.autoReconnect : undefined} onConnected={connected} onClose={() => { detailsReview?.association?.abandon(true); setDetailsReview(undefined); setShowConnect(0); setReconnecting(undefined); setPendingExecute(undefined); setPendingMonitor(false) }} />}
+    {showConnect > 0 && <ConnectDialog initial={options} raise={showConnect} reconnectSeq={connectExplicit} reviewOpen={!!detailsReview} review={detailsReview ? <ConnectionDetailsDialog current={detailsReview.current} selected={detailsReview.selected} server={workbench.connections.get(detailsReview.id)?.server ?? ''} database={workbench.connections.get(detailsReview.id)?.database ?? ''} account={workbench.connections.get(detailsReview.id)?.login} onChoose={choice => { void finishConnected(detailsReview, choice).catch(error => setExplorerError(errorText(error))) }} /> : undefined} initialTargetId={reconnecting && workbench.connectionTargets.get(workbench.connections.get(reconnecting)?.targetId ?? '') ? workbench.connections.get(reconnecting)?.targetId : undefined} initialAutoReconnect={reconnecting ? workbench.connections.details(reconnecting)?.autoReconnect : undefined} onConnected={connected} onClose={() => { detailsReview?.association?.abandon(true); setDetailsReview(undefined); setShowConnect(0); setConnectExplicit(0); setReconnecting(undefined); setPendingExecute(undefined); setPendingMonitor(false) }} />}
     {showConnect === 0 && detailsReview && <ConnectionDetailsDialog current={detailsReview.current} selected={detailsReview.selected} server={workbench.connections.get(detailsReview.id)?.server ?? ''} database={workbench.connections.get(detailsReview.id)?.database ?? ''} account={workbench.connections.get(detailsReview.id)?.login} onChoose={choice => { void finishConnected(detailsReview, choice).catch(error => setExplorerError(errorText(error))) }} />}
     <DisconnectDialog service={workbench.disconnectPrompts} />
     {filterFolder !== undefined && <FilterDialog key={filterFolder} folderId={filterFolder} />}

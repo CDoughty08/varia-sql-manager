@@ -73,6 +73,11 @@ describe('dialog window sizes', () => {
     // Legacy size-only storage still restores size and centres cleanly.
     rememberDialogWindowSize('connect', { width: 920, height: 740 })
     expect(dialogWindowBounds('connect', main, screen)).toEqual({ ...centredBounds(main, { width: 920, height: 740 }), positioned: false })
+    // Zero/sub-minimum bounds (e.g. minimized or teardown snapshot) never overwrite valid saved bounds.
+    rememberDialogWindowBounds('connect', { x: 240, y: 120, width: 960, height: 760 })
+    rememberDialogWindowBounds('connect', { x: 0, y: 0, width: 0, height: 0 })
+    rememberDialogWindowBounds('connect', { x: 10, y: 10, width: 300, height: 200 })
+    expect(dialogWindowBounds('connect', main, screen)).toEqual({ x: 240, y: 120, width: 960, height: 760, positioned: true })
   })
   it('centre over the main window', () => {
     expect(centredBounds({ screenX: 100, screenY: 50, outerWidth: 1440, outerHeight: 960 }, { width: 940, height: 680 })).toEqual({ x: 350, y: 190, width: 940, height: 680 })
