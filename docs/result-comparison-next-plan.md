@@ -61,7 +61,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
 | Q5 | Scripts over 1,000,000 characters (a query window's execute limit): refuse them in C4, with Save to File (streamed, no cap) later? | **Yes.** C4 offers New Query Editor Window and Clipboard, both capped. Save to File follows with Q1's export path. |
 | Q6 | The character diff runs in a renderer worker over one cell's two texts. Record it as an exception to "rows are compared only in the backend"? | **Yes.** It never matches rows, compares cells for equality or computes identities: which cells differ always comes from the backend (the tone, the change index, `partnerOf`). The alternative is a backend method for a display-only job. |
 | Q7 | Change details on hover: on by default, with a setting? | **On, with `queryResults.compare.hoverDetails`** (default on). The key opens it either way. |
-| Q8 | Show Change Details key: Ctrl+I (⌘I on macOS), only in a comparison's grid or card? | **Yes.** VS Code's Show Hover is the chord Ctrl+K Ctrl+I, but Varia's two-part chords work only in editor text (Monaco dispatches them), so a grid key must be one keystroke. Ctrl+I is free in Varia's catalogue and keeps the "I" for information. ⌘I is already Properties in Object Explorer on macOS, so the two share it by focus, as ⌘I and Get Info do in Finder. Monaco binds both to Trigger Suggest in editor text, so `monacoShadowAllowlist` gains `ctrl+i` and its `cmd+i` reason names the grid too, and `focusSamples` (`src/shared/commands/conflicts.ts`) gains a comparison-card sample so `findConflicts` covers it. |
+| Q8 | Show Change Details key: Ctrl+I (⌘I on macOS), only in a comparison's grid or card? | **Yes.** VS Code's Show Hover is the chord Ctrl+K Ctrl+I, but Varia's two-part chords work only in editor text (Monaco dispatches them), so a grid key must be one keystroke. Ctrl+I is free in Varia's catalogue and keeps the "I" for information. ⌘I is already Properties in Object Explorer on macOS, so the two share it by focus, as ⌘I and Get Info do in Finder. Monaco binds both to Trigger Suggest in editor text, so `monacoShadowAllowlist` gains `ctrl+i` and its `cmd+i` reason names the grid too; the card's `focusSamples` entry is under § 3 + 7's catalogues. |
 | Q9 | A comparison of rows as shown going out of date: rebuild automatically like Pivots, or Update only? | **Update only.** A rebuild resets the comparison's sort, filters and scroll, which is more disruptive than a Pivot rebuild. |
 | Q10 | A global "always ignore columns named …" setting (dbForge's mask) with C2? | **No.** Ignored columns are remembered per pair. Revisit if people ask. |
 
@@ -84,9 +84,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   (remembered)").
 - **The Comparison submenu (N7).** `output.comparison`, declared in `src/shared/commands/menus.ts` like `output.filter`,
   is placed only in the grid menu (`output.context`, `when: outputGridComparison`) as **Comparison**, access key S. No
-  letter of "Comparison" is free there: S is Then Sort Descending's, assigned because it has no explicit key. So in a
-  comparison's grid menu Then Sort Descending goes keyless (a menu assigns keys over the items it shows, so it keeps S
-  in other grids), and `keylessItems['output.context']` gains it. It holds the comparison commands, with access keys of their own:
+  letter of "Comparison" is free there: S is Then Sort Descending's, assigned because it has no explicit key. A menu assigns keys over
+  the items it shows, so in a comparison's grid menu Then Sort Descending takes N, which Transpose leaves free there
+  (comparisons cannot be transposed), and it keeps S in other grids. The catalogue test checks keys without a menu's
+  `when`, so `keylessItems['output.context']` gains it. It holds the comparison commands, with access keys of their own:
   - Go to Next Difference (N), Go to Previous Difference (P), Go to Possible Match (M);
   - Show Change Details (D), Compare Values in Tab (V);
   - Match Rows By… (R), Ignore Columns… (I), Ignore This Column (T, a checkbox);
@@ -106,7 +107,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     Update Comparison. Go to Next and Previous Difference stay where the navigation work put them.
   - Toolbar buttons and the palette keep their own entries.
   - `tests/command-catalog.test.ts` (its `keylessItems` for both menus) and `results-smoke.mjs`'s grid-menu steps follow
-    the move.
+    the move. Each lane that adds to More results tools (C2 to C6) updates `results-toolbar-fold.test.ts`'s pinned
+    `output.tools` list.
 - **Engine-neutral.** Commands, context keys and settings declare both providers, except Script Differences (Q4).
   Result-naming methods are declared for both engines in `methods.ts` and checked in C#. New protocol members are optional
   fields of existing v2 shapes, and C4's one new method is offered through HELLO as every method is, so the protocol
@@ -425,8 +427,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       for both halves' stored positions, and reads them through the base handle.
   - A look-alike card reads the partner through `results.diffSeek { partnerOf }`. Its answer gains `differing?:
     number[]` (the pair indexes whose values differ, ascending, each below the pair count) and `compared?: number` (the
-    compared pairs other than the match's key columns). Today `LookAlikes` returns only the partners, and `DiffIndex` keeps only a partner per row, so the
-    build keeps more: as `LookAlikes` scores a pair it records which compared pairs' hashes differ, and `DiffIndex`
+    compared pairs other than the match's key columns). Today `LookAlikes` returns only the partners, and `DiffIndex`
+    keeps only a partner per row, so the build keeps more: as `LookAlikes` scores a pair it records which compared pairs' hashes differ, and `DiffIndex`
     stores that as a changed-pair bitset beside each partner (one bit a pair), charged in `BytesFor` with the partner.
     A seek still reads only the index, so architecture.md's change-index bullet gains "and each look-alike's differing
     pairs". The renderer compares no cells, so collation and soft equality stay the backend's. The answer's `hidden`
@@ -441,13 +443,21 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     (Q6).
 - **Card:** one React component in `GridShell`, outside the grid's pools, placed from a new `GridView.cellRect(row,
   column)`.
+  - It renders as a sibling of the grid root in `rg-frame`, not inside it. Everything inside `[data-result-grid]` sets
+    `outputGridFocus` (`core/contextkeys.ts`) and sends keys to `GridView.key` through the root's `onKeyDown`, so a card
+    inside it would turn Ctrl+C, Ctrl+A and Ctrl+F into grid commands and arrow keys into grid moves. It carries its
+    own marker attribute, which `focusFacts` and `noFocus` read for `comparisonDetailsFocus`, so in the card native copy
+    and selection work on its text.
+  - Its sizes and the hover delay are `metrics.ts` entries, and its marks are theme tokens with contrast pairs in both
+    themes (regenerate `theme-metrics` and the theme docs).
   - Escape with the focus in the grid reaches the card through `GridView`'s existing `onEscape` hook: `ResultGrid` closes
     an open card first, else cancels the tab's copy or save. Inside the card, Escape is the card's own `onKeyDown`, as
     in the Compare popover. Neither adds a key listener (`tests/keyboard-lint.test.ts`).
   - Hover comes from the grid's existing pointer handling through a debounced `onCellHover`, with no per-cell listeners.
   - The read waits for the hover delay and is cancelled on leave.
   - Marked text renders as spans in the card, which is not the grid, so the grid lint's nodeValue rule is untouched.
-  - `aria-details` is set on the active cell element while the card is open.
+  - `aria-details` goes through a `GridView` option applied in `paintCell`, since a pooled cell element set from React
+    would keep it when the pool reuses that element.
 - **Compare Values in Tab (C5b, N8):** one reused read-only document, "Compare Values".
   - A new document kind `valueDiff` hosts `monaco.editor.createDiffEditor`.
   - Each use replaces its two texts (each at most 2,097,152 characters, held in renderer memory) and brings it forward,
@@ -468,9 +478,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - context key `comparisonDetailsFocus`. Whether hover opens a card is read from the tone by the grid, not a context
     key, since the command itself works on any comparison cell;
   - setting `queryResults.compare.hoverDetails` (boolean, default on);
-  - `monacoShadowAllowlist` gains `ctrl+i`, and its `cmd+i` reason (today Object Explorer's Properties) names the grid
-    too: Monaco's Trigger Suggest keeps both in editor text. `focusSamples` gains a comparison-card sample, so
-    `findConflicts` covers the card. Regenerate the commands and settings docs.
+  - Q8's `monacoShadowAllowlist` entries, and a `focusSamples` entry for the card: `{ name: 'comparisonCard', keys: {
+    activePanel: 'output', resultsFocus: true, comparisonDetailsFocus: true } }`, with `outputGridFocus` false since
+    the card is outside the grid root. Regenerate the commands and settings docs.
 - **Tests:**
   - vitest:
     - the worker: word then character runs, bounds, abort, soft cells, NULL and empty, trailing spaces, context windows
@@ -569,9 +579,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - It maps view positions to stored rows. A changed entry's halves are adjacent stored rows (`changedOld` at s,
     `changedNew` at s + 1), so a sort that separates them still writes both lines once, at the first half met.
     - Through a sorted or filtered view of Two rows, that needs a bit per stored row (written already), and a selection
-      needs it too. It is reserved as working memory before writing, as a view's keys are, and refused with `TOO_LARGE`
-      when it does not fit. `tests/working-memory-lint.test.ts`'s expected reservations for the copy and export methods
-      change with it.
+      needs it too. `ResultJobs` reserves it as working memory before writing (`set.TryReserveWork`, as copy and export
+      reserve today), and refuses with `TOO_LARGE` when it does not fit. `tests/working-memory-lint.test.ts` reads only
+      `SqlService.cs`, so a `DiffChecks` refusal check on a low budget pins it.
   - It reads `mark`, the tone, the previous-value columns and, for a cut One row entry, the change index's changed-pair
     bitset.
   - It writes headers, prefixes and the skip lines.
@@ -649,6 +659,13 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       index ("Computed"), CLR types, sql_variant and vector ("Cannot be written as a literal"). Unscriptable wins over
       ignored: "row_ver (ignored): Not insertable".
     - A line names columns only one result has ("note2 is only in Result 1, so INSERTs leave it out").
+    - A data column without a name, or whose name the result repeats, starts unticked and locked ("No name", "Name
+      repeated"), since an INSERT could not name it.
+    - A line names pairs whose types differ ("amount is decimal(10,2) in Result 1 and decimal(12,2) in Result 3. Each
+      value is written as its own result's type."). Each value is formatted by its own input's column type. A diff's
+      data columns carry Result 3's types (`ResultDiffer.Columns`), and only One row's previous-value columns carry
+      Result 1's, so the diff set also records Result 1's column type per pair: a Two rows script then formats removed
+      values by it, even while Result 1 is closed.
     - Identity: when the index says a ticked column is the target's identity, **SET IDENTITY_INSERT** is offered, ticked.
       An identity column is never SET, since SQL Server refuses that: when one that is not a key changed, a line says
       "id is an identity column, so its changes are not scripted".
@@ -656,12 +673,18 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       line says so when there are any: "12 values differ only by collation and are not scripted. Turn on Exact text to
       include them."
   - **Rows:** All differences, Rows in the grid (chips and filters) or Selected rows, each with its count. Selected rows
-    is unavailable while nothing is selected. They are read when you press Script.
+    is unavailable while nothing is selected. The preview reads them as it shows, and Script reads them again.
   - **Options:** Wrap in a transaction (on), Check each statement changes one row (on; Q2). Turning off the transaction
     with the checks on warns "Without a transaction, statements before a failed check stay applied."
   - **Destination:** New Query Editor Window (default) or Clipboard.
   - A **preview** of the first 30 lines, a summary beside Script ("Deletes 2 rows, updates 5 rows and inserts 1 row in
     [dbo].[Orders].", with singulars), and **Script** and **Cancel**.
+    - The preview asks the backend for its 30 lines (`results.scriptDiff` with `maxLines`), 300 ms after the form last
+      changed, cancelling the request before. It refuses only what those lines need (a truncated or U+FFFD value among
+      them, or a refusal known on opening); the rest are found on Script.
+    - The counts and the summary are entries by kind in the chosen rows, read from the change index (cheap at any
+      size). An UPDATE whose changed columns are all unticked is skipped, so the counts said after Script, which are
+      the script's own, can be lower.
 - **The script:**
   - A header comment names the comparison, the match, the direction and the time, and says "Review it before you run
     it. Varia does not run it for you."
@@ -670,12 +693,14 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - One statement per row, keyed by the match's key columns, NULL-safe (`[k] IS NULL`).
     - An UPDATE SETs only changed, compared, ticked columns, never an identity column.
     - Each UPDATE and DELETE is followed by `IF @@ROWCOUNT <> 1 THROW 50000, N'Row id = 1002 was not found exactly
-      once.', 1;`, with the key text cut to 200 characters.
+      once.', 1;`, with the key text cut to 200 characters. THROW takes only a literal or a variable, so the key text
+      there is one plain literal: quotes doubled, and backslash, tab, CR, LF and other control characters written as
+      Copy as Diff writes them (`\\`, `\t`, `\r`, `\n`, `\u2028`), never as `NCHAR` joins.
   - `COMMIT TRANSACTION;`.
   - The New Query Editor Window opens on the comparison's connection, as Script As does, and does not run.
 - **Generating:** the dialog shows progress. Cancel then stops generating and keeps the window open with its draft; the
   next Cancel closes it. A failure shows its sentence in the dialog.
-- **Refused, with the reason in the dialog.** The first two are known when the dialog opens: the refusal is the
+- **Refused, with the reason in the dialog.** The first four are known when the dialog opens: the refusal is the
   window's description, read when it opens, and the focus starts on its first button. The rest are found on Script:
   the window's live region says the refusal, Script keeps the focus, marked unavailable (`aria-disabled`), and it is
   available again once the form changes. Each refusal says what to do:
@@ -683,6 +708,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     removed, and a script would insert or delete them. Compare whole results to script differences.", with **Compare
     whole results**. This holds even when both sides have the same filters, since a row that changes out of a filter
     shows as removed;
+  - a key column a WHERE clause cannot compare or write: "Rows are matched by notes, an xml column, which a statement
+    cannot use to find its row. Choose other key columns to script differences.", with **Choose key columns…**. That is
+    xml, text, ntext, image, json and CLR types (no `=`), and sql_variant and vector (no literal);
+  - a key column without a name, or whose name the result repeats: "Result 3 has 2 columns named id, so a statement
+    could not name its key. Give each column its own name in the query.";
   - rows not matched by key columns the user chose:
     - Row position, Whole rows, or Automatic that fell back to whole rows: "Rows are not matched by key columns, so a
       statement could not find its row. Choose key columns to script differences.", with **Choose key columns…**;
@@ -713,7 +743,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
 - **While it is open:**
   - A replace of the comparison refreshes the counts and keeps the draft.
   - The comparison closing (re-run, Close Results, backend loss) says "The comparison was closed." and disables Script.
-  - The draft (target, direction, columns, options) is remembered per pair in the tab.
+  - The draft (target, direction, columns, options) is remembered per pair in the tab, in the same 64-pair memory as
+    the match.
   - Invoked from another comparison, the open window switches to it, with that pair's draft; the first pair's draft stays
     remembered.
   - It works while an input is closed: the script reads only the comparison.
@@ -745,27 +776,32 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       and `supervisorResults` there, and a strict, bounded answer schema;
     - `SqlService.LaneOf`, and `Providers.BothMethods` with its `tests/validation.test.ts` mirror. C# answers
       `UNSUPPORTED_PROVIDER` for a BigQuery result;
-    - its `working-memory-lint` row (Budget below);
+    - its reservations (Budget below);
     - the fake backend, and `FakeHandle` in `tests/fixtures/results.ts`.
   - **Params:** `{ resultId, viewId?, rows?: ranges (as Copy's parts), target: { database?, schema, name } (each 1–128
-    characters, no NUL), direction: 'toNew' | 'toOld', columns: number[], statements: { delete, update, insert },
-    transaction, checkRows, identityInsert }`. `columns` holds distinct pair indexes, at most `limits.page.maxColumns`
-    in zod, each below the pair count (checked in C#).
+    characters, no NUL), direction: 'toNew' | 'toOld', columns: number[], identity?: number, statements: { delete,
+    update, insert }, transaction, checkRows, identityInsert, maxLines? }`. `columns` holds distinct pair indexes, at
+    most `limits.page.maxColumns` in zod, each below the pair count (checked in C#). `identity` is the pair the index
+    names as the target's identity column, one of `columns` (checked in both): only the renderer knows it, from Search
+    Objects. `DiffScript` leaves it out of every SET, and wraps the INSERTs in `SET IDENTITY_INSERT` when
+    `identityInsert` is on.
   - **Deadline and Cancel:** 120 s in `methodPolicies`, as the other result jobs. The dialog's Cancel cancels the request
     through the protocol's cancel, and the backend drops its chunks.
-  - **Answer:** `{ text (≤ 1,000,000 characters), deletes, updates, inserts }`. Past 1,000,000 characters, estimated first,
-    it answers `TOO_LARGE`, well inside the 16 MiB response limit. Other refusals are `INVALID_PARAMS` with the sentences
+  - **Preview:** `maxLines?: number` (1–30) answers only the first lines, with `complete: false` when there are more. It
+    reads only the rows those lines need, and skips the size estimate.
+  - **Answer:** `{ text (≤ 1,000,000 characters), deletes, updates, inserts, complete }`. Past 1,000,000 characters,
+    estimated first, it answers `TOO_LARGE`, well inside the 16 MiB response limit. Other refusals are `INVALID_PARAMS` with the sentences
     above. The backend itself refuses a comparison whose match is not a `columns` match, so Automatic's choice can never
     be scripted by accident (Use updated_at as key columns replaces the comparison with that `columns` match first), and
-    a comparison of rows as shown (C6's diff set records its views' use).
+    a comparison of rows as shown (the diff set records whether a side was read as shown).
 - **Backend `Results/DiffScript.cs`:** literals by the column's `dataType`, precision and scale:
 
   | Type | Literal |
   | --- | --- |
   | Integers; decimal, numeric, money, smallmoney | As stored; decimals exactly |
-  | float, real | Stored as G15 and G7 text: that text when it reads back as the value, else the exact value kept beside it (`CellLengths.TryExact`), written round-trip |
+  | float, real | Stored as G15 and G7 text: that text when it reads back as the value, else the exact value kept beside it (`CellLengths.TryExact`), written round-trip. Always with an exponent (`3.0000000000000004E-1`, `1E0`): without one, T-SQL reads the text as a numeric literal, whose conversion to float may not round correctly |
   | bit | 0 or 1 |
-  | char, varchar, text; nchar, nvarchar, ntext | `N'…'` with `''` escaping. A non-N literal is read in the database's default code page, so even char columns get `N'…'`, converted to the column's collation on assignment. CR, LF, other control characters except tab, U+0085, U+2028 and U+2029 are written as `NCHAR(n)` joins (`N'a' + NCHAR(13) + NCHAR(10) + N'b'`): the query window's model normalizes line breaks and the clipboard may convert them. A joined value over 4,000 characters starts with `CAST(N'…' AS nvarchar(max))`, since joining shorter strings stops at 4,000 |
+  | char, varchar, text; nchar, nvarchar, ntext | `N'…'` with `''` escaping. A non-N literal is read in the database's default code page, so even char columns get `N'…'`, converted to the column's collation on assignment. CR, LF, U+0085, U+2028, U+2029 and every other control character but tab are written as `NCHAR(n)` joins (`N'a' + NCHAR(13) + NCHAR(10) + N'b'`): the query window's model normalizes line breaks and the clipboard may convert them. A joined value over 4,000 characters starts with `CAST(N'…' AS nvarchar(max))`, since joining shorter strings stops at 4,000 |
   | date, time(n), datetime2(n), datetimeoffset(n) | ISO 8601 text in a `CAST('…' AS <type>)` of the column's own type and precision |
   | datetime, smalldatetime | `CAST('yyyy-MM-ddTHH:mm:ss.fff' AS <type>)`: the stored `yyyy-MM-dd HH:mm:ss` form depends on DATEFORMAT and language, the `T` form does not |
   | uniqueidentifier | Quoted |
@@ -780,10 +816,13 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
 - **Budget:** the text is built in 1 MiB chunks charged as working memory (2 bytes a character, at most 2 MB) and
   released after the answer. Rows are read through `RowAccess`, with no copies. Rows in the grid and Selected rows read
   through a view, so pairing a changed entry's halves takes the same bit per stored row as Copy as Diff, reserved
-  first. The method gets its row in `tests/working-memory-lint.test.ts`.
+  first. `SqlService`'s dispatch hands the job to `DiffScript`, as copy and export go to `ResultJobs`, so the
+  reservations live there and `DiffScriptChecks` refusal checks on a low budget pin them (the lint reads only
+  `SqlService.cs`).
 - **Renderer:**
   - The dialog is a `DialogWindow` of the new kind in `dialogWindowKinds` (`src/shared/popouts.ts`), which also widens
-    the `dialogWindowName` pattern (today `options|about`). popout-windows.md § Dialog windows gains the kind.
+    the `dialogWindowName` pattern (today `options|about`). popout-windows.md § Dialog windows gains the kind, and its
+    "At most four" becomes six (`maxWindows` is two per kind).
   - New Query Editor Window opens through the document service with the connection, as Script As's destination does.
   - Clipboard goes through the existing clipboard path.
   - The table suggestions read the Search Objects index, the single metadata source, and never query the server.
@@ -800,9 +839,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - a lone surrogate read through `PageBuilder`, and a `_UTF8` value SqlClient could not decode, each reaching the
       U+FFFD refusal;
     - a value with CR, LF, NUL and U+2028, and one over 4,000 characters with line breaks, written with `NCHAR` joins and
-      the `nvarchar(max)` cast.
+      the `nvarchar(max)` cast; a key with those characters in its THROW message;
+    - floats with 17 significant digits and none after the point, written with an exponent;
+    - key columns a WHERE cannot use, unnamed and repeated names, an identity pair never SET, pairs whose types differ.
   - A **live round trip** (`VARIA_TEST_SQL_SCRATCH`): two scratch tables with every type (multi-line and control-character
-    text included), compare their SELECTs, script,
+    text, and 17-digit floats, included), compare their SELECTs, script,
     run the script on the target, then compare again and expect no differences. Run it in both directions, and under a
     non-English language and DATEFORMAT. It is a new live `Suite(...)` with a `LiveGroups.Suites` entry, and its CI
     seconds go in docs/ci.md's table.
@@ -819,6 +860,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - Result column names may be aliases rather than table columns: the index warning and the checklist cover that.
   - A target char column whose collation lacks a character stores `?`, as any assignment would. The index does not know
     the target's collations, so the dialog cannot warn.
+  - Key values of char and varchar columns are written `N'…'`, so under a SQL_ collation each statement converts the
+    column and scans instead of seeking. Slow on a large target, never wrong. A later refinement can write `CAST(N'…' AS
+    varchar(n))` where the index knows the column.
 
 **Size L. Build (N2): lane C4.** GoogleSQL DML for BigQuery (typed literals, backticked paths, no row checks) is C4b,
 after Q4.
@@ -951,7 +995,8 @@ would leave out the sort, and "Rows" is already the toolbar's All rows / Changes
   - `ResultDiffer.Compare` and `UnifiedDiff.Write` walk sealed pages in stored order, split across threads, with
     packed-page rooms tuned for near-stored order.
   - Reading through a view's order over packed pages is search's `ByPages` problem: it needs the view's inverse (4 bytes
-    a row of the input, charged as working memory) and a `working-memory-lint` entry.
+    a row of the input), reserved where it is read, as `ResultSearcher.ByPages` reserves its own, and pinned the same
+    way, by a refusal check (`FusedReadChecks`'s pattern) rather than the lint.
   - The model's row numbers stay stored rows, so the gutter, identity and highlights are unchanged.
   - The diff set records its input result ids, as now, and whether either side was read as shown, which C4's refusal
     reads. It keeps no view.
@@ -970,10 +1015,11 @@ would leave out the sort, and "Rows" is already the toolbar's All rows / Changes
   - `DiffChecks`: view reads (filtered, sorted, Row position over view order, packed inputs through the inverse), stored
     row numbers, refusals, working memory counted.
   - vitest: the popover choice and counts, memory, `comparisonOutOfDate` (filters changed, same filters, sort only under
-    key and under Row position, Keep Selected Rows), Update dropping "(as shown)", other changes updating an out-of-date comparison and saying so.
-  - The fake backend reads views. A `results-smoke.mjs` step: filter an input, Compare rows as shown, change the filter, see Out of date,
-    Update.
-- **Risks:** packed-page reads in view order are the cost. Search's inverse and lint are the precedent.
+    key and under Row position, Keep Selected Rows), Update dropping "(as shown)", other changes updating an
+    out-of-date comparison and saying so.
+  - The fake backend reads views. A `results-smoke.mjs` step: filter an input, Compare rows as shown, change the filter,
+    see Out of date, Update.
+- **Risks:** packed-page reads in view order are the cost. Search's inverse and its refusal check are the precedent.
 
 **Size L** (backend about a week, renderer a few days). **Build: lane C6.**
 
@@ -1032,10 +1078,10 @@ When the last lane ships, this plan folds into the area docs and is deleted.
   also changes `diffSeek`'s answer across the results-path files, which C3, C4 and C6 append to as well.
 - C6 and C4 can be built in parallel after C2, but both append to the results-path files (contracts.ts,
   port-messages.ts, results-port.ts, worker-protocol.ts, worker-core.ts, `ResultClient.ts`, `SqlService.cs`,
-  `Contracts.cs`, the working-memory lint and the fake backend), so the second to land merges main first. Whichever
-  of them lands second also adds Script Differences' refusal of a comparison of rows as shown. C4 is listed
-  last because it is the largest and riskiest lane, waits on Connect in an OS window, and its "script back a bad UPDATE" job is
-  worth most once cross-run comparison (N5) lands.
+  `Contracts.cs` and the fake backend), so the second to land merges main first. Whichever of them lands second also
+  adds Script Differences' refusal of a comparison of rows as shown. C4 is listed last because it is the largest and
+  riskiest lane, waits on Connect in an OS window, and its "script back a bad UPDATE" job is worth most once cross-run
+  comparison (N5) lands.
 
 ## Coordination with in-flight work
 
