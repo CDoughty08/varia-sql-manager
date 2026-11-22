@@ -498,8 +498,8 @@ internal sealed partial class SqlService
             // Whatever a cancelled call threw, the run was stopped.
             if (token.IsCancellationRequested && running.LeavesJob)
             {
-                status = running.Detached ? "detached" : "superseded";
-                messages.Add(running.Detached
+                status = running.Superseded ? "superseded" : "detached";
+                messages.Add(!running.Superseded
                     ? "Varia stopped following BigQuery job " + JobName(project, location, jobId) + ", which keeps running in BigQuery"
                         + (session.Id is null ? "." : " and holds this tab's BigQuery session: the next Execute waits for it, and Stop cancels it.")
                     : "Another re-attach to BigQuery job " + JobName(project, location, jobId) + " took it over.");

@@ -146,7 +146,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         /// <summary>A later query.attach took this attachment's job over: the request ends with status superseded.</summary>
         public bool Superseded { get; private set; }
         /// <summary>Whether the job must be left alone as the request ends.</summary>
-        public bool LeavesJob => Detached || Superseded;
+        /// <summary>The backend is stopping: the job carries on in BigQuery for a later re-attach.</summary>
+        public bool Abandoned { get; private set; }
+        public bool LeavesJob => Detached || Superseded || Abandoned;
+        public void Abandon() => Abandoned = true;
         public void Detach() { Detached = true; TryCancel(Source); }
         public void Supersede() { Superseded = true; TryCancel(Source); }
         /// <summary>Completes when the request has ended (query.attach waits for an attachment it supersedes).</summary>
@@ -3350,6 +3353,11 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         }
     }
 
+    /// <summary>A stop never cancels a BigQuery job: each running BigQuery request leaves its job before shutdown cancels it.</summary>
+    public void BeginShutdown()
+    {
+        foreach (var query in queries.Values) if (query.Detachable) query.Abandon();
+    }
     public void CancelAll()
     {
         foreach (var query in queries.Values) query.Cancel();

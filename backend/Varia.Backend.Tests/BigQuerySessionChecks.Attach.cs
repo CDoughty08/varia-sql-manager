@@ -54,6 +54,20 @@ internal static partial class BigQuerySessionChecks
         check(detached.Code == "ok" && result is { Status: "detached", Error: null } && !bq.Cancels.Contains(jobId) && held.State is { Job: "running", Checked: false }
             && Says(result, "keeps running in BigQuery and holds this tab's BigQuery session"),
             $"query.cancel with detach ends the request detached, leaves the job running and the state says the session holds it: {detached.Code} {result?.Status} {held.State} {Texts(result?.Messages ?? [])}");
+        // A backend stop never cancels a BigQuery job: shutdown lets go of it before it cancels every request.
+        using (var stopping = new Harness(new Bq()))
+        {
+            await stopping.ConnectAsync(key);
+            var stopTab = Tab();
+            await stopping.Execute(stopTab, "SELECT 1");
+            var (_, stopRun, stopJob) = await HeldAsync(stopping, stopTab);
+            stopping.Service.BeginShutdown();
+            stopping.Service.CancelAll();
+            await stopRun.WaitAsync(TimeSpan.FromSeconds(30));
+            check(!stopping.Bq.Cancels.Contains(stopJob), $"a backend stop leaves a running BigQuery job running: cancels {string.Join(",", stopping.Bq.Cancels)}");
+            stopping.Bq.Release(stopping.Bq.Jobs[stopJob]);
+        }
+
         var keep = await harness.Call("query.session.close", new JsonObject { ["sessionId"] = tab, ["keepJob"] = true, ["cancelJob"] = true });
         var both = await harness.Call("query.session.close", new JsonObject { ["sessionId"] = tab, ["keepJob"] = true, ["transaction"] = "rollback" });
         check(keep.Code == "INVALID_PARAMS" && both.Code == "INVALID_PARAMS", $"a close is a job answer or a transaction answer, never both: {keep.Code} {both.Code}");
