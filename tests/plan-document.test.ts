@@ -91,3 +91,37 @@ it('keeps the XML caret independent of graph selection across a document tab rou
     expect(captured.viewer.mock.lastCall?.[0].xmlNavigation).toMatchObject({ statement: 0, operator: 0, nodeId: '0' })
   } finally { await act(async () => root.unmount()); host.remove() }
 })
+
+it('reads the XML once per revision across Go to XML and caret-to-graph navigation', async () => {
+  vi.useFakeTimers()
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  const host = document.createElement('div'), root = createRoot(host)
+  document.body.append(host)
+  const plan = (first: string, second: string) => `<ShowPlanXML xmlns="http://schemas.microsoft.com/sqlserver/2004/07/showplan"><StmtSimple><RelOp NodeId="${first}"><RelOp NodeId="${second}" /></RelOp></StmtSimple></ShowPlanXML>`
+  let text = plan('0', '1'), revision = 1, reads = 0, changed: (() => void) | undefined
+  let position = { lineNumber: 1, column: 1 }
+  const model = { getValue: () => { reads++; return text }, getVersionId: () => revision, getPositionAt: (offset: number) => ({ lineNumber: 1, column: offset + 1 }), getOffsetAt: (value: typeof position) => value.column - 1,
+    onDidChangeContent: (callback: () => void) => { changed = callback; return { dispose() {} } } }
+  const workbench = { documents: { getModel: () => model, isFilling: () => false, editorOf: () => ({ setSelection() {}, revealRangeInCenter() {}, focus() {}, getPosition: () => position, getSelection: () => undefined }) },
+    planPreparation: { takeXml: () => undefined, watchDocument() {} } } as unknown as Workbench
+  function Document() { const [source, setSource] = useState(false); return createElement(PlanDocument, { documentId: 'indexed', source, onSource: setSource }) }
+  const buttons = () => host.querySelectorAll<HTMLButtonElement>('button')
+  try {
+    await act(async () => root.render(createElement(WorkbenchProvider, { workbench, children: createElement(Document) })))
+    expect(reads).toBe(0)
+    await act(async () => captured.viewer.mock.lastCall?.[0].navigateXml({ statement: 0, operator: 1, nodeId: '1' }))
+    expect(reads).toBe(1)
+    position = { lineNumber: 1, column: text.indexOf('<RelOp NodeId="0"') + 2 }
+    await act(async () => buttons()[0].click())
+    expect(captured.viewer.mock.lastCall?.[0].xmlNavigation).toMatchObject({ statement: 0, operator: 0, nodeId: '0' })
+    expect(reads).toBe(1)
+    // An edit makes the next navigation read the new XML instead of reusing stale operator locations.
+    await act(async () => buttons()[1].click())
+    text = plan('5', '6'); revision++
+    await act(async () => { changed?.(); await vi.advanceTimersByTimeAsync(150) })
+    position = { lineNumber: 1, column: text.indexOf('<RelOp NodeId="6"') + 2 }
+    await act(async () => buttons()[0].click())
+    expect(captured.viewer.mock.lastCall?.[0].xmlNavigation).toMatchObject({ statement: 0, operator: 1, nodeId: '6' })
+    expect(reads).toBe(2)
+  } finally { await act(async () => root.unmount()); host.remove(); vi.useRealTimers() }
+})
