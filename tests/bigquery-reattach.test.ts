@@ -560,6 +560,25 @@ describe('the prompt beside a cost gate and held jobs', () => {
     // The next run on that connection waited for it: its summary settles the job.
     await f.queries.execute(f.tab.id); await settle()
     expect(f.queries.getSnapshot()[f.tab.id].jobs).toBeUndefined()
+    // A re-attach that failed at its identity check (no job reported) holds nothing in the session: a later run never
+    // settles it, and the tab still holds it to ask about.
+    const g = fixture()
+    g.queryApi.attach.mockResolvedValueOnce({ ok: true, value: output({ status: 'failed', error: { code: 'QUOTA', message: 'Rate limited.', batchNumber: 1, iteration: 1 } }) })
+    g.queries.restoreJobs(g.tab.id, [job('job_1')])
+    await settle(); await settle()
+    await g.queries.execute(g.tab.id); await settle()
+    expect(g.queries.getSnapshot()[g.tab.id].jobs?.map(item => item.jobId)).toEqual(['job_1'])
+    await expect(g.queries.holdsJob(g.tab.id)).resolves.toBe(true)
+  })
+  it("never lets go of a restored detached job this backend did not leave running when the session reports none", async () => {
+    const f = fixture()
+    f.queryApi.attach.mockResolvedValueOnce({ ok: true, value: output({ status: 'failed', error: { code: 'QUOTA', message: 'Rate limited.', batchNumber: 1, iteration: 1 } }) })
+    f.queries.restoreJobs(f.tab.id, [job('job_d', { detached: true })])
+    await settle(); await settle()
+    expect(f.queries.getSnapshot()[f.tab.id].jobs?.map(item => [item.jobId, !!item.detached])).toEqual([['job_d', true]])
+    // query.session.state answers job 'none' (the fixture's default): the job was never in this session.
+    await expect(f.queries.holdsJob(f.tab.id)).resolves.toBe(true)
+    expect(f.queries.getSnapshot()[f.tab.id].jobs?.map(item => item.jobId)).toEqual(['job_d'])
   })
   it('waits at a quit for Cancel the job carried out through main, and says whether it reported anything', async () => {
     const f = fixture({ connected: false }), cancel = deferred<ApiResult<RecordedJobsCancel>>()
@@ -579,7 +598,8 @@ describe('the prompt beside a cost gate and held jobs', () => {
   })
   it("settles a re-attach kept after a passing failure once a later run, which waited for it, completes (not one that failed)", async () => {
     const f = fixture()
-    f.queryApi.attach.mockResolvedValueOnce({ ok: true, value: output({ status: 'failed', error: { code: 'QUOTA', message: 'Rate limited.', batchNumber: 1, iteration: 1 } }) })
+    // The backend reported the job (its identity check passed, so it adopted the session), then the read failed.
+    f.queryApi.attach.mockImplementationOnce(async () => { f.job({ jobId: 'job_1', state: 'running' }); return { ok: true, value: output({ status: 'failed', error: { code: 'QUOTA', message: 'Rate limited.', batchNumber: 1, iteration: 1 } }) } })
     f.queries.restoreJobs(f.tab.id, [job('job_1')])
     await settle(); await settle()
     expect(f.queries.getSnapshot()[f.tab.id].jobs?.map(item => item.jobId)).toEqual(['job_1'])

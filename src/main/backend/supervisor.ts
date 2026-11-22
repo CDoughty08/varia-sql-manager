@@ -147,6 +147,8 @@ export class BackendSupervisor {
   get current(): BackendConnection | undefined { return this.connection }
   /** Connections that a restart would close. */
   connectionCount(): number { return this.live.size }
+  /** Whether the current backend holds this connection open. */
+  hasConnection(connectionId: string): boolean { return this.live.has(connectionId) }
   isLostConnection(id: string): boolean { return this.lost.has(id) }
   /** Whether a live connection is of `provider` (the crash and reload prompts' BigQuery wording). */
   hasProvider(provider: ProviderId): boolean { return [...this.providers.values()].includes(provider) }

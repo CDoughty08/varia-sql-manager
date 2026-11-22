@@ -645,7 +645,7 @@ with a running or detached job the box offers **Cancel the job**, **Leave it run
 | `switchLocation` (a dataset in another location, decision 18) | Unavailable while the tab's query runs, as Change Connection is. For a tab holding a detached job, the three choices with "Don't switch", honouring the remembered setting; an idle session with an open or possibly open transaction is asked in the second box |
 | `exit` | Kept tabs: not asked, jobs (running or detached) keep running and re-attach. Unkept tabs: the three choices, "Don't quit"; the box's detail lists each job id as text, since no tab or record will hold it afterwards |
 
-- **Mixed boxes.** When the box also lists SQL Server tabs, its existing buttons stay and the BigQuery choice is the
+- **Mixed boxes.** When the box also lists other executing queries (SQL Server, or a BigQuery run without a job such as Preview Rows), its existing buttons stay and the BigQuery choice is the
   box's checkbox, "Leave BigQuery jobs running" (its default from the setting). Proceeding cancels SQL Server queries
   as today, and BigQuery jobs per the checkbox.
 - **Contract.**
@@ -660,7 +660,7 @@ with a running or detached job the box offers **Cancel the job**, **Leave it run
     through it, called from `files.ts`, `targets.ts`, `disconnect.ts` and `disconnect-workbench.ts`.
   - `sessionActions` (`src/shared/sessions.ts`) gains `switchLocation` (BQ-3a-2), with its `phrases` entry ("switching
     the location") and its first-box button label "Don't switch"; main's strict `sessionPromptRequestSchema` accepts it.
-  - `SessionPlan` entries become `SessionEnd | 'leave' | 'cancelJob'`, and `endSession` passes them on. A tab holding a
+  - `SessionPlan` entries become `SessionEnd | 'leave' | 'cancelJob' | 'leaveCommit' | 'leaveRollback'` (the last two leave jobs held outside the session running and end it with the user's commit or rollback), and `endSession` passes them on. A tab holding a
     job gets a job answer only, since it is asked only in the first box.
   - `query.session.close` gains optional `keepJob: true`, which detaches the job and skips `ABORT_SESSION` (only while
     the backend still sees the job running; for a job that has finished it is a normal close that aborts, unless the

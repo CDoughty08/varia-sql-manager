@@ -325,7 +325,8 @@ In the workbench:
 - **Deleting a saved connection.** One whose jobs still run asks first: Cancel Jobs and Delete, or Keep Connection (the
   default). Varia cannot cancel them once the connection is gone. Jobs that cannot be cancelled (broken credentials, a
   job that finished long ago) ask again, with Delete Anyway leaving them to BigQuery's job history; so does a connection
-  whose job records cannot be read.
+  whose job records cannot be read. Jobs in tabs still connected through it are left to those tabs (deleting it
+  disconnects nothing), so their sessions stay as they are.
 - **Idle sessions whose end failed.** They are shown as a notification after Disconnect, Reload or a backend restart.
   Varia retries them the next time the connection reaches BigQuery.
 

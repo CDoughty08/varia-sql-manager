@@ -162,6 +162,12 @@ describe('BigQuery job prompts', () => {
     expect(runningJobPrompt({ name: 'a.sql', job: { elapsedMs: 0, estimateBytes: 2 ** 40 } }, false).detail).not.toContain('$')
     expect(sessionPrompt({ action: 'exit', tabs: [job('a.sql')] })!.buttons[2].label).toBe("Don't Quit")
     expect(sessionPrompt({ action: 'disconnect', tabs: [job('a.sql')] })!.buttons[2].label).toBe("Don't Disconnect")
+    // A server Disconnect warns that an unconfirmed cancel stops it, as its SQL Server box does; a close does not.
+    expect(sessionPrompt({ action: 'disconnect', tabs: [job('a.sql')] })!.detail).toContain('disconnect stops with every tab open')
+    expect(sessionPrompt({ action: 'close', tabs: [job('a.sql')] })!.detail).not.toContain('disconnect stops')
+    // The Close Results and location boxes allow for a remembered choice.
+    expect(runningJobPrompt({ name: 'a.sql', job: { elapsedMs: 0 } }).detail).toContain('(unless a choice is remembered)')
+    expect(sessionPrompt({ action: 'switchLocation', tabs: [{ name: 'q.sql', transactions: 0, running: false, provider: 'bigquery' }], location: { dataset: 'eu', from: 'US', to: 'EU' } })!.detail).toContain('handled as Remember my choice set it')
   })
   it('lists the job ids at a quit, and says a detached job was left running', () => {
     const quit = sessionPrompt({ action: 'exit', tabs: [job('a.sql', { jobIds: ['job_1'] }), { ...job('b.sql', { detached: true, jobIds: ['job_2'] }), running: false }] })!

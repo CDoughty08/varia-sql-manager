@@ -168,6 +168,10 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     expect(source).toContain("jobRecorder(queryId!, jobKey, profileOf(")
     // Deleting a connection lists ten job ids and counts the rest, in its first box and its failed-cancel box.
     expect(source).toContain('ids = listedIds(running.map(record => record.jobId))')
+    // Deleting a profile leaves the jobs of tabs still connected through it (running or left running) to those tabs.
+    expect(source).toContain("jobRecorder(queryId!, jobKey, profileOf((validated as { connectionId?: string }).connectionId ?? ''), (validated as { connectionId?: string }).connectionId)")
+    expect(source).toContain("record.state === 'running' && !record.auxiliary && !connectedTab(record.jobKey)")
+    expect(source).toMatch(/const connectedTab = \(jobKey: string\) => \{ const connectionId = jobKeyConnections\.get\(jobKey\); return connectionId !== undefined && backend\.hasConnection\(connectionId\) \}/)
     expect(source).toContain('detail: `${listedIds(failed)}')
     expect(source).toMatch(/function listedIds[^]*?… and \$\{jobIds\.length - 10\} more/)
     // A connection that runs a job moves to the end, so the 512 bound evicts idle handles, not a busy long-lived one.
@@ -189,7 +193,7 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     expect(source).toContain('if (value.disconnected) connectionProfiles.delete(connectionId)')
     expect(source).toContain("buttons: [one ? 'Cancel Job' : 'Cancel Jobs', 'Keep'], defaultId: 1, cancelId: 1")
     // Deleting a profile with running jobs asks, and keeps the profile when a cancel fails.
-    expect(source).toContain("const running = bigQuery ? jobRecords.forProfile(id).filter(record => record.state === 'running' && !record.auxiliary) : []")
+    expect(source).toContain("const running = bigQuery ? jobRecords.forProfile(id).filter(record => record.state === 'running' && !record.auxiliary && !connectedTab(record.jobKey)) : []")
     // A SQL Server delete reads no job records; Keep Connection after failed cancels still says what the others noted.
     expect(source).toContain('const unread = bigQuery && await jobRecords.load().then(() => false, () => true)')
     expect(source).toMatch(/could not be cancelled\.\$\{notes\.length \? ` \$\{notes\.slice\(0, 5\)\.join\(' '\)\}` : ''\}`\)/)

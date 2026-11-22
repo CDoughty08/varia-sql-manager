@@ -231,6 +231,8 @@ let quitKeepJobKeys: readonly string[] | undefined
 let pendingFailedAborts = 0
 // Each BigQuery connection's saved profile, so its jobs' records can be cancelled after a restart without a connection.
 const connectionProfiles = new Map<string, string>()
+// The connection each job key last ran on, so deleting a profile leaves the jobs of tabs still connected through it alone.
+const jobKeyConnections = new Map<string, string>()
 /** Up to ten job ids as a box's bullet list, counting the rest. */
 function listedIds(jobIds: readonly string[]): string {
   return [...jobIds.slice(0, 10).map(jobId => `• ${jobId}`), ...jobIds.length > 10 ? [`… and ${jobIds.length - 10} more`] : []].join('\n')
@@ -584,7 +586,11 @@ function requestClose(intent: CloseIntent): void {
  * finished jobs it read are dropped (their results are in the tab), and a stopped request's jobs too. A request that ends
  * without a summary (BACKEND_LOST) or left running (`detached`, `superseded`) keeps them for a re-attach.
  */
-function jobRecorder(queryId: string, jobKey: string, profileId?: string) {
+function jobRecorder(queryId: string, jobKey: string, profileId?: string, connectionId?: string) {
+  if (connectionId !== undefined) {
+    jobKeyConnections.delete(jobKey); jobKeyConnections.set(jobKey, connectionId)
+    while (jobKeyConnections.size > jobLimits.records) jobKeyConnections.delete(jobKeyConnections.keys().next().value!)
+  }
   const seen = new Set<string>()
   const entry = { jobKey, seen }
   requestJobKeys.set(queryId, entry)
@@ -1132,12 +1138,15 @@ app.whenReady().then(async () => {
       }), { response: 1, checkboxChecked: false }, true)
       if (response !== 0) throw new Error('The connection was kept: its BigQuery job records could not be read.')
     }
-    const running = bigQuery ? jobRecords.forProfile(id).filter(record => record.state === 'running' && !record.auxiliary) : []
+    // A job in a tab still connected through this profile is that tab's to stop: deleting the profile disconnects nothing,
+    // and cancelling it here would also end the tab's session.
+    const connectedTab = (jobKey: string) => { const connectionId = jobKeyConnections.get(jobKey); return connectionId !== undefined && backend.hasConnection(connectionId) }
+    const running = bigQuery ? jobRecords.forProfile(id).filter(record => record.state === 'running' && !record.auxiliary && !connectedTab(record.jobKey)) : []
     if (running.length) {
       const one = running.length === 1, ids = listedIds(running.map(record => record.jobId))
       const { response } = await pageDialog((window, signal) => dialog.showMessageBox(window, {
         type: 'warning', title: 'Delete connection', message: one ? 'A BigQuery job run on this connection is still running.' : `${running.length} BigQuery jobs run on this connection are still running.`,
-        detail: `${ids}\n\nOnce the connection is deleted, Varia cannot cancel ${one ? 'it' : 'them'}. Cancel ${one ? 'it' : 'them'} first, or keep the connection.`,
+        detail: `${ids}\n\nOnce the connection is deleted, Varia cannot cancel ${one ? 'it' : 'them'}. Cancel ${one ? 'it' : 'them'} first, or keep the connection. Jobs in tabs still connected through it are not affected.`,
         buttons: [one ? 'Cancel Job and Delete' : 'Cancel Jobs and Delete', 'Keep Connection'], defaultId: 1, cancelId: 1, noLink: true, signal
       }), { response: 1, checkboxChecked: false }, true)
       if (response !== 0) throw new Error('The connection was kept: its BigQuery jobs are still running.')
@@ -1315,7 +1324,7 @@ app.whenReady().then(async () => {
       const queryId = method === 'query.execute' || method === 'query.attach' ? (validated as RpcMethods['query.execute' | 'query.attach']['params']).queryId : remote?.queryId
       // A BigQuery request's job key: its query.job events become job records under it, before they are forwarded.
       const jobKey = queryId === undefined ? undefined : (validated as { jobKey?: string }).jobKey
-      const jobs = jobKey === undefined ? undefined : jobRecorder(queryId!, jobKey, profileOf((validated as { connectionId?: string }).connectionId ?? ''))
+      const jobs = jobKey === undefined ? undefined : jobRecorder(queryId!, jobKey, profileOf((validated as { connectionId?: string }).connectionId ?? ''), (validated as { connectionId?: string }).connectionId)
       // An Object Explorer load, a script, an object action, an SSIS Catalog read or write, a session's Details or a connect
       // with a requestId is registered before it is sent, so its cancel channel can always find it.
       const cancellable = cancellableRequests(method, { explorer: explorerRequests, scripting: scriptingRequests, actions: actionRequests, ssis: ssisRequests, activity: activityRequests, connections: connectionRequests }, prepared.context?.requestId)

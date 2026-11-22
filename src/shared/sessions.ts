@@ -172,6 +172,8 @@ const jobNote = (action: SessionAction, prices: boolean) => (tab: SessionTab) =>
     ...job.estimateBytes !== undefined ? [`estimated ${formatBytes(job.estimateBytes)}${prices ? ` · ${formatDollars(job.estimateBytes)}` : ''}`] : []]
   return ` (${parts.join(', ')})${action !== 'exit' ? '' : job.jobIds?.length ? `: ${job.jobIds.join(', ')}${job.moreJobIds ? ` and ${job.moreJobIds} more` : ''}` : ': no job id reported yet'}`
 }
+// A server Disconnect is strict: a cancel it cannot confirm keeps every tab open.
+const disconnectNote = 'If Varia cannot confirm a cancelled job stopped, the outcome may be unknown and disconnect stops with every tab open.'
 const leaveNote = 'Leave it running lets the job finish in BigQuery, where its job history lists it; Varia stops following it. If a transaction is open in its session, it stays open until the session ends, and other transactions that modify its tables fail meanwhile (reads, appends and DML outside transactions still run). The session ends after 24 hours idle, and its temporary tables are billed as storage until then.'
 /** A remembered answer (queryExecution.bigQuery.closeRunningJob) for a box that would ask only about BigQuery jobs. */
 export function rememberedJobAnswer({ action, tabs, location }: SessionPromptRequest, closeRunningJob: CloseRunningJob): SessionAnswer | undefined {
@@ -208,7 +210,7 @@ function jobPrompt(action: SessionAction, jobs: readonly SessionTab[], running: 
   return {
     title: one ? 'BigQuery job running' : 'BigQuery jobs running',
     message: one ? `${jobs[0].name} holds a BigQuery job that is still running.` : `${queries(jobs.length)} hold BigQuery jobs that are still running.`,
-    detail: [listed(jobs, jobNote(action, prices)), cancelNote, leaveNote, quitNote].filter(Boolean).join('\n\n'),
+    detail: [listed(jobs, jobNote(action, prices)), cancelNote, action === 'disconnect' ? disconnectNote : '', leaveNote, quitNote].filter(Boolean).join('\n\n'),
     defaultId: 2, cancelId: 2,
     buttons: [{ label: one ? 'Cancel the Job' : 'Cancel the Jobs', answer: 'proceed' }, { label: 'Leave It Running', answer: 'leave' }, { label: dont[action], answer: 'cancel' }],
     // A quit always asks (rememberedJobAnswer), so its box remembers nothing.
@@ -242,7 +244,7 @@ export function runningJobPrompt({ name, job }: RunningJobRequest, prices = true
     message: `The BigQuery job of ${name} is still running.`,
     detail: [`${name}${jobNote('close', prices)({ name, transactions: 0, running: true, provider: 'bigquery', job })}`,
       'Cancel the job stops it in BigQuery, as Stop does, and closes the results.',
-      "Leave it running closes the results and lets the job finish in BigQuery; Varia reads none of its rows. It still holds the tab's BigQuery session, which runs one query at a time, so the next Execute in this tab waits for it (Stop cancels it), and closing the tab asks about it again while it runs."].join('\n\n'),
+      "Leave it running closes the results and lets the job finish in BigQuery; Varia reads none of its rows. It still holds the tab's BigQuery session, which runs one query at a time, so the next Execute in this tab waits for it (Stop cancels it), and closing the tab asks about it again while it runs (unless a choice is remembered)."].join('\n\n'),
     defaultId: 2, cancelId: 2,
     buttons: [{ label: 'Cancel the Job', answer: 'proceed' }, { label: 'Leave It Running', answer: 'leave' }, { label: "Don't Close", answer: 'cancel' }],
     checkbox: { label: 'Remember my choice', checked: false, remembers: true }
@@ -255,7 +257,7 @@ function locationPrompt(tab: SessionTab, { dataset, from, to }: SessionLocationS
   return {
     title: `Switch this tab to ${to}?`,
     message: `${dataset} is in ${to}; the BigQuery session of ${tab.name} is in ${from}.`,
-    detail: `Switching ends the tab's session: its temp tables, variables and any open transaction are lost. If a BigQuery job still runs in it, the next box asks about the job, and leaving it running keeps that session open. The next Execute starts a session in ${to}.`,
+    detail: `Switching ends the tab's session: its temp tables, variables and any open transaction are lost. If a BigQuery job still runs in it, the job is asked about next (or handled as Remember my choice set it), and leaving it running keeps that session open. The next Execute starts a session in ${to}.`,
     defaultId: 0, cancelId: 1,
     buttons: [{ label: 'Switch', answer: 'proceed' }, { label: "Don't Switch", answer: 'cancel' }]
   }
