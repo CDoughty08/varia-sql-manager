@@ -280,6 +280,9 @@ internal static class AgentJobDocumentChecks
             && (int?)ValueOf(swapped, "@start_step_id") == 2 && swapped.Calls[^1] is { Procedure: "sp_update_job", Part: "the Start step" },
             "each step call binds its own indexed parameters: actions as tinyint, a proxy by id or the service account as @proxy_name '', flags and priority as given");
 
+        var emptied = ActionService.AgentJobSavePlan(Save(Changed(new(Steps: new(Deletes: [2, 1], StartStepId: 1)))), Job);
+        check(Order(emptied) == "D,D,S" && AgentSql.LintJobSave(emptied.Text).Count == 0 && (int?)ValueOf(emptied, "@start_step_id") == 1,
+            "deleting every step sets the Start step back to 1, which msdb's sp_delete_jobstep would leave past the last step: " + Order(emptied));
         var reordered = ActionService.AgentJobSavePlan(Save(Changed(new(Steps: new(Deletes: [3, 1], Temporary: [new(1, Temp(1))], Adds: [new(1, Temp(2))], Writes: [StepWrite(1), StepWrite(2)], StartStepId: 1)))), Job);
         check(Order(reordered) == "D,D,T,A,W,W,S" && AgentSql.LintJobSave(reordered.Text).Count == 0 && (int?)ValueOf(reordered, "@step_id_1") == 3 && (int?)ValueOf(reordered, "@step_id_2") == 1,
             "deletes go first from the highest id, then temporary names, inserts and whole contents; only steps change, so there is no sp_update_job of the job's own");

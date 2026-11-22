@@ -403,6 +403,29 @@ describe('the step problems of what msdb already holds', () => {
     expect(rebased.steps.steps[1]).toMatchObject({ onFail: 4, onFailTarget: 's7' })
     expect(agentJobSave(current, rebased)!.steps).toEqual({ writes: [expect.objectContaining({ id: 1, command: 'mine' })] })
   })
+  it('sets the Start step back to 1 when every step is deleted, which msdb would leave past the last step', () => {
+    let draft = opened()
+    for (const key of ['s1', 's2', 's3', 's4']) draft = deleteStep(draft, key)!.draft
+    const save = plan(draft, 2)!
+    expect(save).toEqual({ deletes: [4, 3, 2, 1], startStepId: 1 })
+    expect(agentStepsSaveProblems(save, false)).toEqual([])
+    expect(agentStepsSaveSchema.safeParse(save).success).toBe(true)
+  })
+  it('keeps a name msdb stored with a tab as it is, so editing another step writes only that step', () => {
+    const stored = [step(1, 'Load\t'), step(2, 'B'), step(3, 'C', { outputFileName: 'C:\out.txt' })]
+    const read = initialStepsDraft(stored, 1)
+    expect(agentStepProblems(read, { sysadmin: true, original: read }).filter(item => item.field === 'name')).toEqual([])
+    const edited = { ...read, steps: read.steps.map(item => item.key === 's2' ? { ...item, command: 'mine' } : item) }
+    guidAt = 0
+    expect(planAgentSteps(stored, edited, 1, guid)).toEqual({ writes: [expect.objectContaining({ id: 2, name: 'B', command: 'mine' })] })
+    const twins = initialStepsDraft([step(1, 'Load'), step(2, 'Load\t')], 1)
+    expect(agentStepProblems(twins, { sysadmin: true, original: twins }).filter(item => item.field === 'name')).toEqual([])
+  })
+  it('refuses a save that writes negative retries msdb stored', () => {
+    const draft = initialStepsDraft([step(1, 'One', { retryAttempts: -1 })], 1)
+    const edited = { ...draft, steps: [{ ...draft.steps[0]!, command: 'x' }] }
+    expect(agentStepProblems(edited, { sysadmin: true, original: draft }).map(item => item.message)).toContain(stepText.retriesPast)
+  })
   it('refuses a save with a success exit code past int32 or a NUL character', () => {
     const draft = initialStepsDraft([step(1, 'One')], 1)
     const past = { ...draft, steps: [{ ...draft.steps[0]!, cmdexecSuccessCode: 2_147_483_648 }] }

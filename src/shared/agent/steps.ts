@@ -81,6 +81,8 @@ export interface AgentStepsDraft { readonly steps: readonly AgentStepDraft[]; re
 const action = (value: number | undefined, fallback: StepAction): StepAction => stepActionCodes.includes(value as StepAction) ? value as StepAction : fallback
 const keyOf = (id: number) => `s${id}`
 /** The id a dangling or described key names (`s<id>`), else undefined. */
+/** A step name as msdb keeps it: its LTRIM and RTRIM strip spaces only, so a tab or a no-break space stays part of the name. */
+const msdbTrim = (text: string) => text.replace(/^ +| +$/g, '')
 const describedId = (key: string): number | undefined => /^s[1-9][0-9]*$/.test(key) ? Number(key.slice(1)) : undefined
 
 /** A described step as the draft holds it. */
@@ -279,7 +281,7 @@ export const stepText = {
   serverNeeded: 'An Analysis Services step needs the server it runs on.',
   exitCodePast: 'The success exit code is a whole number from -2,147,483,648 to 2,147,483,647.',
   nulCharacter: 'A step\'s name, command, output path, user, database or server cannot hold a NUL character.',
-  retriesPast: `Retry attempts and the retry interval are at most ${agentLimits.stepRetries.toLocaleString('en-US')} each.`,
+  retriesPast: `Retry attempts and the retry interval are each 0 to ${agentLimits.stepRetries.toLocaleString('en-US')}.`,
   parseOk: 'Commands completed successfully. (Parsed only; nothing ran.)',
   parseUnavailable: 'Parse is not available: the SQL backend is not running.'
 } as const
@@ -305,13 +307,13 @@ export function agentStepProblems(draft: AgentStepsDraft, context: AgentStepCont
   const problems: AgentStepProblem[] = []
   const names = new Map<string, number>()
   // Upper-cased, as the backend's OrdinalIgnoreCase compares names.
-  for (const step of draft.steps) names.set(step.name.trim().toUpperCase(), (names.get(step.name.trim().toUpperCase()) ?? 0) + 1)
+  for (const step of draft.steps) names.set(msdbTrim(step.name).toUpperCase(), (names.get(msdbTrim(step.name).toUpperCase()) ?? 0) + 1)
   const keys = new Set(draft.steps.map(step => step.key))
   const saved = !context.original || stepsValue(context.original) !== stepsValue(draft)
   let commandChars = 0
   for (const step of draft.steps) {
     const push = (field: AgentStepField, severity: 'error' | 'warning', message: string) => problems.push({ key: step.key, field, severity, message })
-    const name = step.name.trim()
+    const name = msdbTrim(step.name)
     if (!name) push('name', 'error', 'The step needs a name.')
     else if (name.length > agentLimits.nameChars) push('name', 'error', `A step name holds at most ${agentLimits.nameChars} characters.`)
     // What msdb already holds only blocks a save that writes the steps; until then it is a warning.
@@ -328,7 +330,7 @@ export function agentStepProblems(draft: AgentStepsDraft, context: AgentStepCont
     // Values msdb holds that a save cannot send back (the save's bounds, agentStepWriteSchema): only a save that writes the steps is refused.
     if (saved && (step.flags < 0 || step.flags > 114 || !stepRunPriorities.includes(step.osRunPriority))) push('type', 'error', stepText.unsavableOptions)
     if (saved && (!Number.isInteger(step.cmdexecSuccessCode) || step.cmdexecSuccessCode < -2_147_483_648 || step.cmdexecSuccessCode > 2_147_483_647)) push('type', 'error', stepText.exitCodePast)
-    if (saved && (step.retryAttempts > agentLimits.stepRetries || step.retryInterval > agentLimits.stepRetryMinutes)) push('output', 'error', stepText.retriesPast)
+    if (saved && (step.retryAttempts < 0 || step.retryInterval < 0 || step.retryAttempts > agentLimits.stepRetries || step.retryInterval > agentLimits.stepRetryMinutes)) push('output', 'error', stepText.retriesPast)
     if (step.truncated) push('command', saved ? 'error' : 'warning', saved ? stepText.truncatedSave : stepText.truncated)
     else if (saved && step.command.length > agentLimits.stepCommandChars) push('command', 'error', `A step's command holds at most ${agentLimits.stepCommandChars.toLocaleString('en-US')} characters.`)
     commandChars += step.command.length
@@ -403,7 +405,7 @@ function writeOf(draft: AgentStepsDraft, step: AgentStepDraft, id: number): Agen
   }
   const [onSuccessAction, onSuccessStepId] = resolve(step.onSuccess, step.onSuccessTarget), [onFailAction, onFailStepId] = resolve(step.onFail, step.onFailTarget)
   return {
-    id, name: step.name.trim(), subsystem: step.subsystem, command: step.command, databaseName: step.subsystem === 'CmdExec' ? '' : step.databaseName.trim(),
+    id, name: msdbTrim(step.name), subsystem: step.subsystem, command: step.command, databaseName: step.subsystem === 'CmdExec' ? '' : step.databaseName.trim(),
     databaseUserName: step.subsystem === 'TSQL' ? step.databaseUserName.trim() : '', onSuccessAction, onSuccessStepId,
     onFailAction, onFailStepId, retryAttempts: step.retryAttempts, retryInterval: step.retryInterval,
     outputFileName: step.outputFileName.trim(), flags: step.flags, cmdexecSuccessCode: step.cmdexecSuccessCode, proxyId: step.subsystem === 'TSQL' ? 0 : step.proxyId, server: step.server, osRunPriority: step.osRunPriority
@@ -430,7 +432,7 @@ export function planAgentSteps(described: readonly AgentJobStepRecord[] | undefi
   const kept = new Set(survivors.map(step => step.from!))
   const deletes = [...byId.keys()].filter(id => !kept.has(id)).sort((a, b) => b - a)
   const adds = draft.steps.map((step, at) => ({ step, at })).filter(({ step }) => step.from === undefined || !byId.has(step.from))
-  const structural = deletes.length > 0 || adds.length > 0 || draft.steps.some((step, at) => step.from !== undefined && (step.from !== at + 1 || step.name.trim() !== byId.get(step.from)?.name))
+  const structural = deletes.length > 0 || adds.length > 0 || draft.steps.some((step, at) => step.from !== undefined && (step.from !== at + 1 || msdbTrim(step.name) !== byId.get(step.from)?.name))
   if (!structural) {
     const changed = writes.filter((write, at) => {
       const was = original.steps.find(step => step.from === draft.steps[at]!.from)
@@ -445,7 +447,9 @@ export function planAgentSteps(described: readonly AgentJobStepRecord[] | undefi
     ...survivors.length ? { temporary: survivors.map((_, at) => ({ id: at + 1, name: temporaryStepPrefix + guid() })) } : {},
     ...adds.length ? { adds: adds.map(({ at }) => ({ id: at + 1, name: temporaryStepPrefix + guid() })) } : {},
     ...final ? { writes } : {},
-    ...final ? { startStepId: start || 1 } : {}
+    // With every step deleted the Start step goes back to 1: sp_delete_jobstep leaves start_step_id, and a later sp_update_job refuses one past
+    // the last step + 1 (14266).
+    ...final || startStepId !== 1 ? { startStepId: start || 1 } : {}
   }
 }
 
@@ -487,7 +491,7 @@ function stepContent(draft: AgentStepsDraft, step: AgentStepDraft, match: StepMa
   return JSON.stringify(Object.keys(fields).sort().map(field => [field, fields[field]]))
 }
 /** Names compare upper-cased, as msdb (and the backend's OrdinalIgnoreCase) treat step names. */
-const foldName = (name: string) => name.trim().toUpperCase()
+const foldName = (name: string) => msdbTrim(name).toUpperCase()
 
 /**
  * Reload and keep my changes, step by step. Steps match the job read now by name (unique within a job), not by number, since another session
@@ -664,7 +668,7 @@ export function agentStepsSaveProblems(save: AgentStepsSave, create: boolean): s
     if (write.onSuccessAction !== 4 && write.onSuccessStepId !== 0) problems.push(`Step ${write.id} names a target without going to it.`)
     if (write.onFailAction !== 4 && write.onFailStepId !== 0) problems.push(`Step ${write.id} names a target without going to it.`)
   }
-  if (save.startStepId !== undefined && save.startStepId > count) problems.push('The Start step is past the last step.')
+  if (save.startStepId !== undefined && save.startStepId > Math.max(count, 1)) problems.push('The Start step is past the last step.')
   if (writes.reduce((sum, write) => sum + write.command.length, 0) > agentLimits.stepCommandTotalChars) problems.push("The steps' commands are too long together.")
   return problems
 }

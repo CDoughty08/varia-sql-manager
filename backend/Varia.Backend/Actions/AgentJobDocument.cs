@@ -129,7 +129,8 @@ internal sealed partial class ActionService
         }
         else if (writes.Select(write => write.Id).Distinct().Count() != writes.Count) throw Invalid("a step is written twice.");
         if ((create || structural) && writes.Select(write => write.Name).Distinct(StringComparer.OrdinalIgnoreCase).Count() != writes.Count) throw Invalid("two steps have the same name.");
-        if (steps.StartStepId is { } first && (create || structural) && first > writes.Count) throw Invalid("the Start step is past the last step.");
+        // A job with no steps left takes Start step 1 (sp_verify_job's max_step_id + 1).
+        if (steps.StartStepId is { } first && (create || structural) && first > Math.Max(writes.Count, 1)) throw Invalid("the Start step is past the last step.");
         if (steps == new AgentStepsSaveDto()) throw Invalid("agentJob.steps changes nothing.");
     }
 
