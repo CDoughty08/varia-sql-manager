@@ -145,7 +145,7 @@ internal sealed partial class ActionService
         else if (row is not null) return (null, Error("NAME_IN_USE", "A database named " + display + " was created since the server was read. Refresh, then check the destination."));
         var exists = row is not null;
         if (row is not null && row.Bool("is_snapshot")) return (null, Error("NOT_SUPPORTED", "A database snapshot cannot be restored over."));
-        if (!exists && !canRestore) return (null, Error("PERMISSION_DENIED", "You do not have permission to create a database (CREATE ANY DATABASE), which restoring to a new database needs."));
+        if (!exists && !canRestore) return (null, Error("PERMISSION_DENIED", "Restoring to a new database requires CREATE DATABASE in master, CREATE ANY DATABASE on the server, or membership in dbcreator or sysadmin."));
         // SET SINGLE_USER is refused on a database that is not online (5069 on one a stopped restore left RESTORING), which has no
         // connections to close anyway.
         if (row is not null && options.CloseConnections && row.Int("state") != 0)

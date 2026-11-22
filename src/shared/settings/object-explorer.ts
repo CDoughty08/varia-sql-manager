@@ -67,5 +67,10 @@ export const objectExplorerSettings = [
     keywords: ['search', 'index', 'definitions', 'procedures', 'text'],
     description: 'Also keeps the text of procedures, functions, views and triggers you may VIEW DEFINITION of, so Search Objects can find text inside them (up to 1,000,000 characters of each, within the index’s 512 MiB). Applies to the next build.'
   },
+  {
+    key: 'objectExplorer.search.bigQueryExtraProjects', page: 'objectExplorer.commands', group: 'Search Objects', label: 'Index BigQuery extra projects’ schemas', type: 'boolean', default: false, varia: true,
+    keywords: ['search', 'index', 'bigquery', 'projects', 'columns', 'schemas'],
+    description: 'A BigQuery connection’s index reads every table’s columns and every view’s and routine’s text in its billing project, and only the names of datasets and objects in its extra projects. When True, the extra projects’ schemas and text are read as well (free metadata calls, one per table, view and routine). Applies to the next build.'
+  },
   ...scriptingSettingEntries()
 ] as const satisfies readonly SettingDef[]

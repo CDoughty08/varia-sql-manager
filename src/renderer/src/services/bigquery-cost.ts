@@ -2,6 +2,7 @@ import type * as Monaco from 'monaco-editor'
 import type { ApiResult, BigQueryConnectionOptions, ProviderConnectionOptions, VariaApi } from '../../../shared/contracts'
 import { connectionKey } from '../../../shared/connections'
 import { costPrompt, dryRunLimits, errorPosition, gibibytes, type BigQueryDryRunResult, type CostPrompt, type IncompleteReason } from '../../../shared/bigquery/dry-run'
+import type { RemoteDryRun } from '../../../shared/bigquery/remote-view'
 import type { SettingKey, SettingValue } from '../../../shared/settings/catalog'
 import { SnapshotStore } from '../core/store'
 import type { EventBus } from '../core/events'
@@ -14,6 +15,12 @@ import { isBigQueryConnection } from './connection-availability'
 export const dryRunMarkerOwner = 'varia.googlesql.dryRun'
 /** The editing pause before a diagnostics dry run (docs/bigquery-plan.md, IntelliSense from the index). */
 export const dryRunDebounceMs = 1000
+
+/** A remote estimate that failed: BigQuery's text, and its code (REMOTE_EXPIRED when the result's table is gone and its query
+ *  cannot run again). */
+export class RemoteEstimateError extends Error {
+  constructor(message: string, readonly code?: string) { super(message) }
+}
 
 /**
  * A BigQuery tab's estimate as the chip beside Execute shows it: being worked out, a dry run's figure (with why it may be
@@ -358,6 +365,21 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     const run = await this.prompts(connection, estimate, undefined, signal)
     const cap = this.cap(connection)
     return { run, ...cap !== undefined && connection.options.provider === 'bigquery' && connection.options.maximumBytesBilled === undefined ? { maximumBytesBilled: cap } : {} }
+  }
+
+  /**
+   * Before a sort, filter or value list of a windowed result runs a billed query on tab `tabId`'s connection (docs/bigquery.md,
+   * Sort and filter in BigQuery): its dry run (bigquery.dryRun of the remote request, free), then the same prompts as Execute.
+   * Resolves the estimate when it may run (its `fallback` says the original query runs again), or undefined when the user
+   * declined or the work was given up. A tab off BigQuery or a failed dry run rejects with why.
+   */
+  async beforeRemote(tabId: string, remote: RemoteDryRun, signal?: AbortSignal): Promise<BigQueryDryRunResult | undefined> {
+    const connection = this.connection(tabId)
+    if (!connection) throw new Error('The tab is no longer connected to BigQuery.')
+    const response = await this.deps.api.bigQueryDryRun({ connectionId: connection.id, remote })
+    if (!response.ok) throw new RemoteEstimateError(response.error, response.code)
+    if (signal?.aborted || this.disposed || this.connection(tabId)?.id !== connection.id) return undefined
+    return await this.prompts(connection, response.value, this.entries.get(tabId), signal) ? response.value : undefined
   }
 
   /** The prompts for an estimate, in turn (the threshold, then an incomplete estimate's warning); resolves whether to run. */

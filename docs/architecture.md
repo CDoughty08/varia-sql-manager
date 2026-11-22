@@ -200,7 +200,9 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
 - **SQL text transforms** (Toggle Brackets, Move Commas to Front/End: `editor/sql-transforms.ts`) work on tokens from
   `shared/sql/lexer.ts`, never regular expressions over the text, so strings, comments, variables and quoted names never
   change. They return offset edits applied as one undo step with selections mapped through them, refuse a model over
-  `textOpLimits.characters`, and are tested in `tests/sql-transforms.test.ts`.
+  `textOpLimits.characters`, and are tested in `tests/sql-transforms.test.ts`. They are SQL Server only, with a handler
+  `when` on the bound model's language too, since a command target (an Explorer node) could supply SQL Server's context
+  while the editor shows a GoogleSQL query.
 - **Peek's language service** serves query documents and Peek's read-only definition models (`peekModelContext`:
   connection, database and the model's UUID as document id), nothing else. A Peek model gets hover and Go To Definition
   only, never completion or diagnostics, from its first request; its `onWillDispose` ends it as closing a query does
@@ -226,10 +228,11 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   budget instead, and never a windowed result's). The residence is decided once, after the first page (`SqlService.DecideResidenceAsync`);
   a switch between memory and windowed (a misestimate, Load into memory) goes only through `ResultStore.Demote` and
   `ResultSetBuffer.Promote`, bumps the descriptor's `revision` and sends `resultSet.residence`, after which the renderer
-  drops every page and window of the older revision. Only `results.read` and `results.rowBytes` (cache only) read a
-  windowed result, and only `results.remoteQuery` loads it; every other reader of stored pages finds its set through
-  `SqlService.Stored`, and Copy and Save through `ResultJobs.Lease`, which answer `REMOTE_RESULT` before any work; a
-  switch after that check is refused where the hold is taken (`SealedSnapshot`, `AddView`, `AddSnapshot`, the lease,
+  drops every page and window of the older revision. Only `results.read`, `results.rowBytes` (cache only), and Copy and
+  Save read a windowed result, and only `results.remoteQuery` loads it; every other reader of stored pages finds its set through
+  `SqlService.Stored`, which answers `REMOTE_RESULT` before any work, while Copy and Save (`ResultJobs`, whose `Lease` holds
+  either kind) read a windowed set's rows through `RemoteResult.ReadPagesAsync` and its `IRemoteRows` export, never its pages; a
+  switch after that check is refused where the hold is taken (`SealedSnapshot`, `AddView`, `AddSnapshot`,
   `Released`); `Demote` marks the set windowed before it drops views and snapshots, so a hold finished meanwhile is refused
   or dropped, and searches and operations stop on any revision change, even one loaded back
   (`tests/result-page-access.test.ts`). The cache reserves each block's estimate before it fetches and any overrun after,
@@ -495,7 +498,9 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   `tests/fixtures/compare-pairing/cases.json`, read by `DiffChecks.cs` and `tests/compare-pairing.test.ts`: change both
   and add a case. Names compare through one table, `src/shared/ordinal-casing.ts`, in the backend (`OrdinalNames`), the
   renderer and the fake backend, never ICU casing (its Unicode version differs by platform); `DiffChecks.OrdinalCasing`
-  checks it against the runtime. Pivots and comparisons share the window's `DerivedJobs` (four at once, busy refusals
+  checks it against the runtime. All three pair by looking columns up under the name's key (`nameKey`,
+  `OrdinalNames.KeyOf`) and wire, never by scanning the other side per column, so results of thousands of columns pair in
+  linear time. Pivots and comparisons share the window's `DerivedJobs` (four at once, busy refusals
   retried), count each other's in-flight results against a run's 1,000 (`adding`; a change of a comparison is not
   counted). A run has one comparison per ordered pair (`pairId`, without Exact text); asked again with other options while
   its first run is in flight, the first run is given up. Its options (layout, Exact text, match, rows) are its state: a
@@ -609,7 +614,10 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
   fingerprint in `ResourceCatalog`. Object Explorer's search box and the Search Objects tab are one search
   (`SearchPanel`, `ObjectSearchService`), and the header's Search (Ctrl+Q) lists objects only from it (`quickSearch`);
   the tree has no filter of loaded rows. Regex runs only `NonBacktracking` with a match timeout; an unreadable database is
-  a skipped value. Never log names, definitions or search text.
+  a skipped value. Never log names, definitions or search text. A BigQuery connection's index (`ObjectSearchService.BigQuery`,
+  `BigQueryIndex.cs`) is the same per-connection index and budget, one read per dataset (`DatabaseIndex.Dataset`), built only
+  from free REST metadata calls (`IBigQueryIndexSource`, through the per-principal limiter) and never a job; DDL marks
+  datasets stale for the next `stale` build (`MarkStale`).
 - **Script As.** Verbs, titles, URN types and preflight ids live only in `src/shared/scripting/catalog.ts`, options only in
   `options.ts` (regenerate `docs/scripting.md` and embedded `Scripting/scripting-catalog.json`). Its own pool
   (`READ COMMITTED`, `LOCK_TIMEOUT 10000`, database context restored before pooling); SMO only through `ScriptPipeline`

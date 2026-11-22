@@ -14,6 +14,7 @@ import type { ExplorerNodeRef, ObjectRef } from '../src/shared/explorer/refs'
 import { fakeDocument, FakeElement } from './fixtures/elements'
 import * as windowTools from '../src/renderer/src/core/windows'
 import { keyAt } from './fixtures/entries'
+import { stackReveals } from '../src/renderer/src/grid/result-picker'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
@@ -892,6 +893,24 @@ describe('Query Output commands', () => {
     const bare = (place: number): CommandArgs => { const args = on('grid', { place }); return { ...args, target: { ...args.target as OutputTarget, bare: true } } }
     for (const id of ['output.pivot', 'output.compare', 'output.compareWithPrevious', 'output.compareWithPreviousExact', 'output.closeResult', 'output.closeResults'] as const) expect(commands.isEnabled(id, bare(1)), id).toBe(false)
     expect(commands.isEnabled('output.copy', bare(1))).toBe(commands.isEnabled('output.copy', on('grid', { place: 1 })))
+    // A comparison's toolbar controls, in More results tools and the palette: offered for a comparison only, and while one
+    // of its inputs is closed, unavailable with the reason (D10).
+    const changes = ['output.compareMatch', 'output.compareChangesOnly', 'output.compareOneRow', 'output.compareExactText', 'output.compareSwapSides'] as const
+    for (const id of [...changes, 'output.compareGoToOld', 'output.compareGoToNew'] as const) expect([0, 1, 2, 3, 4].map(place => commands.isEnabled(id, on('grid', { place }))), id).toEqual([false, false, false, false, true])
+    expect(await commands.execute('output.compareMatch', on('grid', { place: 4 }), 'menu')).toBe(true)
+    expect(compare.getSnapshot().matchMenu).toMatchObject({ tabId: tab.id, from: 'more' })
+    // Its grid is drawn first (the menu is its toolbar's): a collapsed or scrolled-away stacked one is opened to.
+    expect(stackReveals.take(tab.id)).toBe(compare.getSnapshot().matchMenu?.key)
+    compare.closeMatchMenu()
+    results.removeEntry(tab.id, key(0))
+    const at = results.getSnapshot()[tab.id].sets.findIndex(set => set.descriptor.kind === 'diff')
+    for (const id of [...changes, 'output.compareGoToOld'] as const) {
+      expect(commands.isEnabled(id, on('grid', { place: at })), id).toBe(false)
+      expect(commands.unavailableReason(id, on('grid', { place: at })), id).toBe('Result 1 is closed')
+    }
+    expect(commands.isEnabled('output.compareGoToNew', on('grid', { place: at }))).toBe(true)
+    expect(await commands.execute('output.compareMatch', on('grid', { place: at }), 'menu')).toBe(false)
+    expect(compare.getSnapshot().matchMenu).toBeUndefined()
   })
   it("Update Pivot is offered for a group's Pivot or Table while the Pivot is out of date, and builds it again from its own recipe", async () => {
     const { commands, results, resultClient, pivot, tab, on, key } = await ran('win32', { ...queryOutput, resultSets: [descriptor(1), descriptor(2, { index: 1 })] })

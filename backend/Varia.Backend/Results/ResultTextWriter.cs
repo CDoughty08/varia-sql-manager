@@ -339,9 +339,14 @@ internal sealed class ResultTextWriter
             case ValueKind.Number when typed && options.Format == TextFormat.Json && IsJsonNumber(value) && KeepsValue(value):
                 Write(value);
                 return;
-            case ValueKind.Bit when typed && options.Format == TextFormat.Json && value.Length == 1 && value[0] is (byte)'0' or (byte)'1':
-                Write(value[0] == '1' ? "true"u8 : "false"u8);
-                return;
+            case ValueKind.Bit when typed && options.Format == TextFormat.Json:
+                var bit = ColumnTypes.BooleanNumber(value);
+                if (bit.Length == 1 && bit[0] is (byte)'0' or (byte)'1')
+                {
+                    Write(bit[0] == '1' ? "true"u8 : "false"u8);
+                    return;
+                }
+                break;
         }
         switch (options.Format)
         {

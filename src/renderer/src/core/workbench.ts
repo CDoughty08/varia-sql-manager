@@ -33,6 +33,7 @@ import { BackendStateService } from '../services/backend'
 import { ResultClient } from '../results/ResultClient'
 import { ResultVisibilityService } from '../results/ResultVisibilityService'
 import { ResultsService } from '../results/ResultsService'
+import { RemoteViews } from '../results/remote-views'
 import { HighlightsService } from '../results/HighlightsService'
 import { CompareService } from '../results/CompareService'
 import { PivotService } from '../results/PivotService'
@@ -81,6 +82,7 @@ import { messagesContribution } from '../contributions/messages'
 import { highlightsContribution } from '../contributions/highlights'
 import { pivotContribution } from '../contributions/pivot'
 import { transposeContribution } from '../contributions/transpose'
+import { loadIntoMemoryContribution } from '../contributions/load-into-memory'
 import { plansContribution } from '../contributions/plans'
 import { compareContribution } from '../contributions/compare'
 import { scriptingContribution } from '../contributions/scripting'
@@ -115,6 +117,7 @@ import { SsisOperationsService } from '../ssis/SsisOperationsService'
 import { JobActivityService } from '../agent/JobActivityService'
 import { LogViewerService } from '../agent/LogViewerService'
 import { AgentJobStatusService } from '../agent/AgentJobStatusService'
+import { JobDocumentService } from '../agent/JobDocumentService'
 import { agentContribution } from '../contributions/agent'
 import { SearchDetailsService } from '../search/SearchDetailsService'
 import { ObjectSearchService } from '../search/ObjectSearchService'
@@ -277,6 +280,7 @@ export interface Workbench extends Disposable {
   readonly logViewer: LogViewerService
   /** The status bar's running Agent jobs this window started, followed while hidden (AG-3). */
   readonly agentJobs: AgentJobStatusService
+  readonly jobDocuments: JobDocumentService
   /** Search Objects: each connected server's object index (built in the backend) and the Search Objects tabs. */
   readonly objectSearch: ObjectSearchService
   /** The Search Objects tabs' details pane: the selected hit's properties and definition. */
@@ -358,7 +362,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     onBackendState: listener => api.onBackendState(listener), backendState: () => api.getBackendState(), onLayout: listener => panes.subscribe(listener), mainPage, mainWindow: window
   })
   const retainedPlans = new RetainedPlansService()
-  const results = new ResultsService({ client: resultClient, api, events, documents, retainedPlans, frame: callback => { frame(callback) }, sortText: () => settings.get('queryResults.grid.sortText'),
+  // Sorts, filters and value lists of results windowed in BigQuery, each after its estimate and the cost prompts (the cost
+  // service is built further down; the closure reads it when one runs).
+  const remoteViews = new RemoteViews({ api, client: resultClient, estimate: (tabId, remote, signal) => bigQueryCost.beforeRemote(tabId, remote, signal),
+    messages: (tabId, messages) => results.remoteMessages(tabId, messages) })
+  const results = new ResultsService({ client: resultClient, api, events, documents, retainedPlans, frame: callback => { frame(callback) }, sortText: () => settings.get('queryResults.grid.sortText'), memory: () => resultMemory.getSnapshot(),
+    remote: remoteViews,
     // Sorted grids follow Sort text by as it changes, from the toolbar, the palette or Options.
     onSortTextChange: listener => settings.subscribe(listener) })
   const highlights = new HighlightsService(results)
@@ -367,7 +376,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // Each counts the other's new results in flight against a run's 1,000.
   // A new comparison takes the layout setting; a change of one carries its highlights over (D15).
   const compare: CompareService = new CompareService(results, {
-    jobs: derivedJobs, adding: tabId => pivot.adding(tabId), layout: () => settings.get('queryResults.compare.layout'), carry: (tabId, key, o) => highlights.carry(tabId, key, o)
+    jobs: derivedJobs, adding: tabId => pivot.adding(tabId), layout: () => settings.get('queryResults.compare.layout'), rows: () => settings.get('queryResults.compare.rows'), carry: (tabId, key, o) => highlights.carry(tabId, key, o)
   })
   // A shown Pivot rebuilds by itself when its Table's filters change; what is shown depends on the results' layout.
   const pivot: PivotService = new PivotService(results, {
@@ -521,6 +530,14 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-ssis-operations="${CSS.escape(id)}"] [role="grid"]`)?.focus())
   })
   const agentJobs = new AgentJobStatusService({ api, live, connections })
+  // The SQL Server Agent job document (AG-6a): its first section's item in the list once loaded, or New Job's start panel.
+  const jobDocuments = new JobDocumentService({
+    api, documents, files, connections, live, targetIdOf,
+    focus: id => focusLater(() => {
+      const root = document.querySelector<HTMLElement>(`[data-agent-job="${CSS.escape(id)}"]`)
+      ;(root?.querySelector<HTMLElement>('[data-agent-job-focus]') ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]'))?.focus()
+    })
+  })
   const jobActivity = new JobActivityService({
     api, documents, panes, groups: editorGroups, live, connections, targetIdOf,
     started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt),
@@ -531,7 +548,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-history="${CSS.escape(id)}"] [role="grid"]`)?.focus())
   })
   const objectSearch = new ObjectSearchService({
-    api, documents, connections, settings, targetIdOf, agentEnabled: api.agentPreview,
+    api, documents, connections, settings, targetIdOf, events, agentEnabled: api.agentPreview,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-object-search="${CSS.escape(id)}"] [data-object-search-focus]`)?.focus())
   })
   const peekTabs = new PeekTabService({
@@ -581,6 +598,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     resultsSteppable: results.steppable,
     resultsTurned: results.turned,
     resultsComparing: results.comparing,
+    comparisonToggles: compare.toggles,
     scripting: scripting.running,
     bookmarks,
     inputMode,
@@ -718,6 +736,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     jobActivity,
     logViewer,
     agentJobs,
+    jobDocuments,
     objectSearch,
     searchDetails,
     theme,
@@ -774,6 +793,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       jobActivity.dispose()
       logViewer.dispose()
       agentJobs.dispose()
+      jobDocuments.dispose()
       // Before the live views: each monitor disposes its own; then the client, while the port is still there.
       activity.dispose()
       // Before the client: its views cancel their subscriptions while the port is still there.
@@ -846,6 +866,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     compareContribution(workbench),
     pivotContribution(workbench),
     transposeContribution(workbench),
+    loadIntoMemoryContribution(workbench),
     plansContribution(workbench, api),
     paletteContribution(workbench),
     themeContribution(workbench, api),

@@ -19,9 +19,10 @@ import type { ResultMemoryDetail } from '../src/shared/contracts'
 describe('BigQuery remote results', () => {
   const load = { queryId: crypto.randomUUID(), resultId: 7, generation: 1, kind: 'load' }
 
-  it('takes results.remoteQuery strictly: a query id, an owned result and its generation, and only the load kind', () => {
+  it('takes results.remoteQuery strictly: a query id, an owned result and its generation, and a load, view or distinct kind', () => {
     expect(validateRequest('results.remoteQuery', load)).toEqual(load)
-    for (const patch of [{ kind: 'view' }, { kind: 'sample' }, { queryId: 'not-a-uuid' }, { resultId: 0 }, { resultId: 2 ** 32 }, { resultId: 1.5 }, { generation: 0 }, { generation: 1.5 }, { generation: 2 ** 31 }, { extra: true }])
+    // A view takes a sort key or a filter; the other kinds are BQ-3c-3's.
+    for (const patch of [{ kind: 'view' }, { kind: 'view', sort: [] }, { kind: 'sample' }, { queryId: 'not-a-uuid' }, { resultId: 0 }, { resultId: 2 ** 32 }, { resultId: 1.5 }, { generation: 0 }, { generation: 1.5 }, { generation: 2 ** 31 }, { extra: true }])
       expect(() => validateRequest('results.remoteQuery', { ...load, ...patch }), JSON.stringify(patch)).toThrow('Invalid request')
     expect(() => validateRequest('results.remoteQuery', { queryId: load.queryId, resultId: 7, kind: 'load' })).toThrow('Invalid request')
   })
@@ -36,13 +37,15 @@ describe('BigQuery remote results', () => {
 
   it('checks the result is owned in its generation before sending a remote query (index.ts)', () => {
     const source = readFileSync(new URL('../src/main/index.ts', import.meta.url), 'utf8')
-    const owned = source.indexOf("if (remote && !results.owns(remote.generation, remote.resultId)) return failure(new BackendError('RESULT_UNAVAILABLE'")
+    const owned = source.indexOf("if (named && !remoteResultIds(named).every(id => results.owns(named.generation, id))) return failure(new BackendError('RESULT_UNAVAILABLE'")
     const sent = source.indexOf('result = await backend.request(method as RpcMethod')
     expect(owned).toBeGreaterThan(0)
     expect(owned).toBeLessThan(sent)
     // Its events and summary go the way query.execute's do, pinned to the generation named.
     expect(source).toContain("const queryId = method === 'query.execute' || method === 'query.attach' ? (validated as RpcMethods['query.execute' | 'query.attach']['params']).queryId : remote?.queryId")
-    expect(source).toContain('remote ? { generation: remote.generation }')
+    expect(source).toContain('named ? { generation: named.generation }')
+    // A remote estimate (bigquery.dryRun's `remote`) names results the same way.
+    expect(source).toContain("const named = remote ?? remoteEstimate")
   })
 
   it('sends the residence settings only with BigQuery queries, within their bounds', () => {
@@ -74,6 +77,9 @@ describe('BigQuery remote results', () => {
   it('says in the caption that a result is windowed in BigQuery', () => {
     expect(rowsFact({ rowsAvailable: 5_000_000, state: 'complete', residence: 'remote' })).toBe('5,000,000 rows · windowed in BigQuery')
     expect(rowsFact({ rowsAvailable: 1, state: 'complete', residence: 'memory' })).toBe('1 row')
+    // A cache hit's destination table is an older one, which may expire sooner than a day after this run.
+    expect(rowsFact({ rowsAvailable: 5, state: 'complete', residence: 'remote' }, undefined, true)).toBe('5 rows · windowed in BigQuery · cached result: may expire early')
+    expect(rowsFact({ rowsAvailable: 5, state: 'complete', residence: 'memory' }, undefined, true)).toBe('5 rows')
     expect(rowsFact({ rowsAvailable: 2, state: 'open' })).toBe('2 rows')
   })
 
@@ -196,7 +202,7 @@ describe('the user-facing text about windowed results', () => {
     const remoteQuery = ipc.slice(start, ipc.indexOf('\n- ', start + 3))
     expect(remoteQuery).toMatch(/`RESULT_RELEASED`/)
     expect(bigquery.slice(bigquery.indexOf('- **Load into memory.**'), bigquery.indexOf('- **What waits.**'))).toMatch(/Closing the result stops the load/)
-    // No renderer command loads a windowed result yet: the docs must not tell the user to.
+    // While no renderer command loads a windowed result, the docs must not tell the user to (Load into memory now does).
     const renderer = join(__dirname, '..', 'src', 'renderer', 'src')
     const sources = (readdirSync(renderer, { recursive: true }) as string[]).filter(name => /\.tsx?$/.test(name))
     // A real call on a code line: a comment, or a wrapper's own declaration, does not turn the gate off.
@@ -213,7 +219,9 @@ describe('the user-facing text about windowed results', () => {
     // CHANGELOG names every feature a windowed result waits for, as the guide does.
     const changelog = readFileSync(join(__dirname, '..', 'CHANGELOG.md'), 'utf8')
     const entry = changelog.slice(changelog.indexOf('- **BigQuery results larger than memory:**'), changelog.indexOf('\n', changelog.indexOf('- **BigQuery results larger than memory:**')))
-    for (const feature of ['Sorting', 'filtering', 'searching', 'profiles', 'Pivot', 'Compare', 'Copy', 'Save']) expect(entry).toContain(feature)
+    for (const feature of ['Searching', 'profiles', 'Pivot', 'Compare', 'Copy', 'Save']) expect(entry).toContain(feature)
+    // Sorts and filters run in BigQuery (docs/bigquery.md, Sort and filter in BigQuery): no longer among what waits.
+    expect(entry).not.toMatch(/Sorting|filtering/)
     // docs/architecture.md states the invariant's exception, naming code that exists; the Results area doc says what a
     // windowed result refuses.
     const architecture = readFileSync(join(__dirname, '..', 'docs', 'architecture.md'), 'utf8')

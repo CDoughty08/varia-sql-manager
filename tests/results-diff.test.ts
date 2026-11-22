@@ -6,7 +6,7 @@ import { cellMarksOf, diffKinds, rowToneOf } from '../src/renderer/src/grid/Grid
 import { liveTones } from '../src/shared/live/catalog'
 import { cssRules } from './fixtures/css-rules'
 import { ResultError } from '../src/renderer/src/results/ResultClient'
-import { CompareService, compareText, matchedBy } from '../src/renderer/src/results/CompareService'
+import { CompareService, comparisonNotices, compareText, matchedBy } from '../src/renderer/src/results/CompareService'
 import { ResultsService, setKey } from '../src/renderer/src/results/ResultsService'
 import { descriptor, fakeResultClient, summaryOf, type FakeHandle } from './fixtures/results'
 import { manualTimers } from './fixtures/workbench'
@@ -76,16 +76,19 @@ describe('result diffs', () => {
     expect(compare.canCompare('t1', keyAt(results, 't1', 0))).toBe(false)
     await compare.compare('t1', keyAt(results, 't1', 1))
     await settle()
-    expect(first.diff).toHaveBeenCalledWith(second, { exact: false, layout: 'entry', signal: expect.any(AbortSignal), onProgress: expect.any(Function) })
+    expect(first.diff).toHaveBeenCalledWith(second, { exact: false, layout: 'entry', context: -1, signal: expect.any(AbortSignal), onProgress: expect.any(Function) })
     const sets = results.getSnapshot().t1.sets
     expect(sets).toHaveLength(3)
     expect(sets[2]).toMatchObject({ number: 3, label: 'Differences: Result 1 → Result 2', descriptor: { kind: 'diff', resultId: 901 } })
     expect(results.getSnapshot().t1.settled.get(setKey(sets[2].descriptor))).toEqual({ rows: 3, strip: true })
     const info = compare.getSnapshot().info.get(setKey(sets[2].descriptor))!
     expect(info).toMatchObject({ left: sets[0].key, right: sets[1].key, leftNumber: 1, rightNumber: 2, match: { mode: 'auto', columns: ['Id'] }, changed: 1, added: 1, removed: 0, same: 1 })
-    expect(compareText(info)).toBe('Result 1 → Result 2, rows matched by Id: 1 changed row, 1 added row, 0 removed rows, 1 unchanged. Filters and sorts on the inputs were not applied.')
+    expect(compareText(info)).toBe('Result 1 → Result 2, rows matched by Id: 1 changed row, 1 added row, 0 removed rows, 1 unchanged.')
     expect(compareText({ ...info, match: { mode: 'rows', columns: [] }, exact: true, soft: 2, leftOnly: ['Old'], rightOnly: ['New'] }))
-      .toBe('Result 1 → Result 2, whole rows matched, text compared exactly: 1 changed row, 1 added row, 0 removed rows, 1 unchanged. 2 values differ only by collation (case or trailing spaces), underlined. Not compared: Old (Result 1), New (Result 2). Filters and sorts on the inputs were not applied.')
+      .toBe('Result 1 → Result 2, whole rows matched, text compared exactly: 1 changed row, 1 added row, 0 removed rows, 1 unchanged.')
+    // What else a comparison says is on its notice strip.
+    expect(comparisonNotices({ ...info, match: { mode: 'rows', columns: [] }, soft: 2, leftOnly: ['Old'], rightOnly: ['New'], filtered: true }).map(notice => notice.text))
+      .toEqual(['Not compared: Old (Result 1), New (Result 2).', '2 values differ only by collation (case or trailing spaces), underlined.', 'Filters and sorts on the inputs were not applied: all their stored rows were compared, in their own order.'])
     // A diff is not compared again, nor is a set whose previous one is the diff.
     expect(compare.canCompare('t1', keyAt(results, 't1', 2))).toBe(false)
   })
@@ -101,14 +104,15 @@ describe('result diffs', () => {
     expect(compare.canCompare('t1', keyAt(results, 't1', 0))).toBe(false)
     await compare.compare('t1', keyAt(results, 't1', 1))
     await settle()
-    expect(second.diff).toHaveBeenCalledWith(third, { exact: false, layout: 'entry', signal: expect.any(AbortSignal), onProgress: expect.any(Function) })
+    expect(second.diff).toHaveBeenCalledWith(third, { exact: false, layout: 'entry', context: -1, signal: expect.any(AbortSignal), onProgress: expect.any(Function) })
     expect(sets()[2]).toMatchObject({ number: 4, label: 'Differences: Result 2 → Result 3', descriptor: { kind: 'diff', resultId: 902 } })
     const info = compare.getSnapshot().info.get(setKey(sets()[2].descriptor))!
     expect(info).toMatchObject({ left: two.key, right: three.key, leftNumber: 2, rightNumber: 3 })
-    expect(compareText(info)).toBe('Result 2 → Result 3, rows matched by Id: 1 changed row, 1 added row, 0 removed rows, 1 unchanged. Filters and sorts on the inputs were not applied.')
-    expect(compareText({ ...info, leftOnly: ['Old'], rightOnly: ['New'] })).toContain('Not compared: Old (Result 2), New (Result 3).')
+    expect(compareText(info)).toBe('Result 2 → Result 3, rows matched by Id: 1 changed row, 1 added row, 0 removed rows, 1 unchanged.')
+    expect(comparisonNotices({ ...info, leftOnly: ['Old'], rightOnly: ['New'] }).map(notice => notice.text)).toContain('Not compared: Old (Result 2), New (Result 3).')
     // A named result is called by its name, frozen when compared; one compared before names reads by its number.
-    expect(compareText({ ...info, leftName: 'Open orders', leftOnly: ['Old'], rightOnly: ['New'] })).toBe('Open orders → Result 3, rows matched by Id: 1 changed row, 1 added row, 0 removed rows, 1 unchanged. Not compared: Old (Open orders), New (Result 3). Filters and sorts on the inputs were not applied.')
+    expect(compareText({ ...info, leftName: 'Open orders' })).toBe('Open orders → Result 3, rows matched by Id: 1 changed row, 1 added row, 0 removed rows, 1 unchanged.')
+    expect(comparisonNotices({ ...info, leftName: 'Open orders', leftOnly: ['Old'], rightOnly: ['New'] }).map(notice => notice.text)).toContain('Not compared: Old (Open orders), New (Result 3).')
     expect(compareText({ ...info, leftName: 'Open orders' }, [{ name: 'Open orders' }, { name: 'Result 3', entry: three.key }])).toMatch(/^Open orders \(closed\) → Result 3, /)
     const { leftName: _left, rightName: _right, ...before } = info
     expect(compareText(before)).toMatch(/^Result 2 → Result 3, /)
@@ -267,8 +271,10 @@ describe('result diffs', () => {
   })
 
   it('says when values were compared by their stored prefix', () => {
-    const info = { left: 'e1', right: 'e2', leftNumber: 1, rightNumber: 2, match: { mode: 'auto' as const, columns: ['Id'] }, layout: 'unified' as const, pairs: 1, columnChanges: [], exact: false, same: 1, changed: 0, added: 0, removed: 0, soft: 0, leftOnly: [], rightOnly: [], approximate: true }
-    expect(compareText(info)).toBe('Result 1 → Result 2, rows matched by Id: 0 changed rows, 0 added rows, 0 removed rows, 1 unchanged. Long values were compared by the part these results keep, so a difference past it does not show. Filters and sorts on the inputs were not applied.')
+    const info = { left: 'e1', right: 'e2', leftNumber: 1, rightNumber: 2, match: { mode: 'auto' as const, columns: ['Id'] }, layout: 'unified' as const, pairs: 1, columnChanges: [], exact: false, same: 1, changed: 0, added: 0, removed: 0, soft: 0, leftOnly: [], rightOnly: [], approximate: true, repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, trailingHidden: 0, leftRows: 1, rightRows: 1 }
+    // The strip says what was compared; the notice strip says the rest.
+    expect(compareText(info)).toBe('Result 1 → Result 2, rows matched by Id: 0 changed rows, 0 added rows, 0 removed rows, 1 unchanged.')
+    expect(comparisonNotices(info).map(notice => notice.kind)).toEqual(['approximate', 'empty'])
   })
 
   it('reads a diff row\'s differing cells from its tone text', () => {

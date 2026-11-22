@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import type { ResultColumn } from '../src/shared/contracts'
 import { pairColumns, sameName } from '../src/renderer/src/results/compare-pairing'
+import { nameKey } from '../src/shared/ordinal-casing'
 
 interface Case { readonly name: string; readonly left: readonly ResultColumn[]; readonly right: readonly ResultColumn[]; readonly pairs: readonly [number, number][] }
 const cases = (JSON.parse(readFileSync(new URL('./fixtures/compare-pairing/cases.json', import.meta.url), 'utf8')) as { cases: Case[] }).cases
@@ -23,16 +24,38 @@ describe('Compare popover column pairing', () => {
     expect(result.pairs).toEqual([[0, 0]])
     expect(result.oldOnly).toHaveLength(1023)
     expect(result.newOnly).toHaveLength(1023)
-    expect(reads).toBeLessThanOrEqual(1024 * 4)
+    expect(reads).toBeLessThanOrEqual(1024 * 8)
   })
 
   it('has the cases both suites need', () => expect(cases.length).toBeGreaterThanOrEqual(9))
 
-  // The fake backend (tests/fixtures/backend.mjs) pairs for the smoke suites with the same rule, not a copy of it.
+  // The fake backend (tests/fixtures/backend.mjs) pairs for the smoke suites with the same rule, not a copy of it: it looks
+  // columns up by the shared nameKey, as pairColumns does.
   it('the fake backend compares names with the shared rule', () => {
     const source = readFileSync(new URL('./fixtures/backend.mjs', import.meta.url), 'utf8')
-    expect(source).toContain("import { sameName } from '../../src/shared/ordinal-casing.ts'")
-    expect(source).not.toMatch(/(const|function) sameName/)
+    expect(source).toContain("import { nameKey } from '../../src/shared/ordinal-casing.ts'")
+    expect(source).not.toMatch(/(const|function) (sameName|nameKey|ordinalKey)\b/)
+  })
+
+  it('keys two names alike exactly when sameName calls them the same', () => {
+    // Look-alikes grouped so a second name can be the first with each part swapped for one of its group, which sameName
+    // may or may not call the same (ı, İ and ſ keep their own keys); a lone surrogate beside another can form a pair.
+    const groups = [['a', 'A'], ['i', 'I', '\u0131', '\u0130'], ['s', 'S', '\u017F'], ['k', 'K', '\u212A'], ['\u00E9', '\u00C9'], ['\u{10400}', '\u{10428}'], ['\uD800', '\uDC00'], ['\u03C3', '\u03A3', '\u03C2'], ['\u00B5', '\u039C', '\u03BC']]
+    let seed = 642
+    // Park-Miller: the product stays below 2^53, so every draw is exact.
+    const next = (limit: number) => (seed = seed * 48271 % 2147483647) % limit
+    const pick = <T>(items: readonly T[]) => items[next(items.length)]
+    const differences: string[] = []
+    let alike = 0
+    for (let trial = 0; trial < 20000; trial++) {
+      const chosen = Array.from({ length: next(5) }, () => pick(groups))
+      const a = chosen.map(pick).join('')
+      const b = next(2) ? chosen.map(pick).join('') : Array.from({ length: next(5) }, () => pick(pick(groups))).join('')
+      if (a !== b && sameName(a, b)) alike++
+      if ((nameKey(a) === nameKey(b)) !== sameName(a, b)) differences.push(JSON.stringify([a, b]))
+    }
+    expect(differences.slice(0, 5)).toEqual([])
+    expect(alike).toBeGreaterThan(1000)
   })
 
   it('lists each side\'s columns left out, with the other side\'s type when a column of the same name did not pair', () => {

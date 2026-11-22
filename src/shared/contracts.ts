@@ -5,6 +5,7 @@ import type { ConnectionAuthentication, ConnectionFailureReason } from './connec
 import type { ConnectionBindingsChanged } from './connection-bindings'
 import type { BigQueryLibraryView, BigQueryProfileInput, PickedKeyFile } from './bigquery-connections'
 import type { BigQueryDryRunRequest, BigQueryDryRunResult } from './bigquery/dry-run'
+import type { ResultsRemoteQueryParams } from './bigquery/remote-view'
 import type { BigQueryPreviewTarget, BigQueryProperties, BigQueryPropertiesRequest } from './bigquery/objects'
 import type { CancelJobsResult, JobsWithoutTabReview, QueryAttachParams, RecordedJobsCancel } from './bigquery/jobs'
 import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } from './theme/types'
@@ -211,9 +212,8 @@ export interface QueryOptions {
 }
 /** Tools › Options' result residence for BigQuery: decide by size, always in memory, or always windowed in BigQuery. */
 export type ResidenceSetting = 'automatic' | 'memory' | 'windowed'
-/** results.remoteQuery (docs/ipc.md): a query over a windowed BigQuery result this renderer owns in `generation`, run like
- *  query.execute under its own `queryId` (query.cancel stops it). `load` reads the whole result into memory. */
-export interface ResultsRemoteQueryParams { queryId: string; resultId: number; generation: number; kind: 'load'; jobKey?: string }
+/** results.remoteQuery (docs/ipc.md): src/shared/bigquery/remote-view.ts. */
+export type { ResultsRemoteQueryParams } from './bigquery/remote-view'
 /** `text` cells carry their SSMS display text; `binary` cells are shown as 0x plus hexadecimal. */
 export type WireKind = 'text' | 'binary'
 export interface ResultColumn {
@@ -275,6 +275,9 @@ export interface ResultDescriptor {
   rowsTotal?: number
   /** Bumped by each switch between memory and windowed (resultSet.residence): pages read under an older revision are stale. */
   revision?: number
+  /** A windowed result's projected size in memory (its measured row cost times its rows): Load into memory is offered
+   *  only while it fits the result memory free at that point (docs/bigquery.md, Load into memory). */
+  projectedBytes?: number
 }
 /** Where a BigQuery result's rows live: `remote` is windowed in BigQuery. */
 export type ResultResidence = 'memory' | 'remote'
@@ -632,6 +635,8 @@ export interface ExplorerNode {
   readonly subtype?: NodeSubtype
   readonly status?: NodeStatus
   readonly created?: string
+  /** The immutable msdb identifier of a SQL Server Agent job. */
+  readonly jobId?: string
   readonly database?: DatabaseRuntime
   readonly connectDenied?: boolean
 }
@@ -1027,7 +1032,7 @@ export interface VariaApi {
   cancel(queryId: string, options?: { detach?: true }): Promise<ApiResult<{ cancelled: boolean }>>
   /** query.attach: re-attaches a tab to a BigQuery job (docs/bigquery.md, Re-attaching to jobs); `cancel(queryId)` stops it. */
   attach(params: QueryAttachParams): Promise<ApiResult<QueryResult>>
-  /** results.remoteQuery: Load into memory for a windowed BigQuery result this renderer owns; `cancel(queryId)` stops it. */
+  /** results.remoteQuery: Load into memory, a sort or filter, or a value list of a windowed BigQuery result this renderer owns; `cancel(queryId)` stops it. */
   remoteQuery(params: ResultsRemoteQueryParams): Promise<ApiResult<QueryResult>>
   /** Ends a query's session; `transaction` commits or rolls back its open transaction first. A commit that fails leaves
    *  the session open, with its transaction. The result's `note` says what became of a BigQuery commit or session end. */

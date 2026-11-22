@@ -40,7 +40,7 @@ export function fakeResultClient() {
       rowsRead: Math.max(handle.snapshot.rowsRead, value.rowsRead), rowsStored: Math.max(handle.snapshot.rowsStored, value.rowsStored), rowsAvailable: Math.max(handle.snapshot.rowsAvailable, value.rowsAvailable),
       bytesStored: value.bytesStored, truncatedCells: value.truncatedCells, state: handle.snapshot.state === 'released' || handle.snapshot.state === 'lost' ? handle.snapshot.state : final || value.state === 'complete' ? 'complete' : 'open',
       incomplete: value.incomplete, ...value.truncated ? { truncated: value.truncated } : {},
-      ...value.residence ? { residence: value.residence } : {}, ...(value.revision ?? handle.snapshot.revision) !== undefined ? { revision: value.revision ?? handle.snapshot.revision } : {}
+      ...value.residence ? { residence: value.residence } : {}, ...value.projectedBytes !== undefined ? { projectedBytes: value.projectedBytes } : {}, ...(value.revision ?? handle.snapshot.revision) !== undefined ? { revision: value.revision ?? handle.snapshot.revision } : {}
     }
   }
   const client = {

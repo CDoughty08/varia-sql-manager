@@ -34,11 +34,16 @@ internal static class SqlScript
         var blockLine = 0;
         var parens = 0;
         var parenDepth = 0;
+        char[] lineBuffer = [];
         for (var offset = 0; offset < sql.Length; lineNumber++)
         {
             var end = offset;
             while (end < sql.Length && sql[end] is not ('\r' or '\n')) end++;
-            var visible = new string(' ', end - offset).ToCharArray();
+            var width = end - offset;
+            if (width > lineBuffer.Length)
+                lineBuffer = new char[Math.Max(width, Math.Min(sql.Length, lineBuffer.Length * 2))];
+            var visible = lineBuffer.AsSpan(0, width);
+            visible.Fill(' ');
             // A line continuing a quoted token cannot be a standalone GO command.
             if (quote != Quote.None && visible.Length > 0) visible[0] = '\u0001';
             for (var i = 0; i < visible.Length; i++)
@@ -82,8 +87,8 @@ internal static class SqlScript
                     else if (c == ')' && parens > 0) parens--;
                 }
             }
-            var text = new string(visible);
-            var trimmed = text.AsSpan().Trim();
+            ReadOnlySpan<char> text = visible;
+            var trimmed = text.Trim();
             // A line that starts with "::" continues T-SQL (FROM ::fn_helpcollations(), geography ::Point); no SQLCMD command does.
             if (trimmed.StartsWith(":", StringComparison.Ordinal) && !trimmed.StartsWith("::", StringComparison.Ordinal) || trimmed.StartsWith("!!", StringComparison.Ordinal))
                 throw Invalid(lineNumber, "SQLCMD directives are not supported. No file includes, variable expansion, or shell commands are performed.");
@@ -122,7 +127,7 @@ internal static class SqlScript
             else if (!trimmed.IsEmpty)
             {
                 hasSql = true;
-                ObserveSourceScope(text.AsSpan());
+                ObserveSourceScope(text);
             }
             offset = end;
             if (offset < sql.Length && sql[offset] == '\r') offset++;

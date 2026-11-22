@@ -242,7 +242,7 @@ noted where it matters.
 | `bigquery.account`, `bigquery.projects` | invoke | unary | control | 30 s, sensitive. BigQuery before connecting: `{ authentication, keyFile?, impersonateServiceAccount? }` (`.projects` adds `pageToken?` ≤ 1,024). Main adds `credential` (`{ source: 'file' \| 'adc' \| 'metadata' \| 'anonymous', json? ≤ 64 KiB }`), which the renderer never holds. Answers `{ kind, account ≤ 256, impersonated? }` and `{ projects: { id, friendlyName? ≤ 256 }[] ≤ 1,000, nextPageToken? }` ([BigQuery](bigquery.md#pre-connect-methods)). |
 | `bigquery.endIdleSessions` | main only | unary | control | 10 s (main gives up after 15 s). Before every backend stop main makes, except of a backend that is not responding: `{ keepJobKeys?: uuid[] ≤ 1,024 }`; ends every idle BigQuery session but a kept key's with an open or unknown transaction, and answers `{ failedAborts }` ([Re-attaching to jobs](bigquery.md#re-attaching-to-jobs)) |
 | `bigquery.cancelJobs` | main only | unary | control | 60 s, sensitive. A saved profile's jobs without a handle: the credential fields of `bigquery.account` plus `project` and `jobs: { jobId ≤ 1,024, location? ≤ 64 }[] ≤ 64`; cancels each, waits for DONE, lists its children and aborts its session, answering `{ jobs: { jobId, cancelled, note?, error? }[] }` |
-| `bigquery.dryRun` | invoke | unary | metadata | 30 s. A free dry run on a connected BigQuery handle: `{ connectionId, sql ≤ 1,000,000, dataset? ≤ 1,024 }`. Answers `{ bytesProcessed, incomplete?: 'script' \| 'lowerBound' \| 'unknown' \| 'zeroBytes', statementType?, faked? }`; a query BigQuery refuses is `SQL_ERROR` with its `[line:column]` ([BigQuery's Cost](bigquery.md#cost)) |
+| `bigquery.dryRun` | invoke | unary | metadata | 30 s. A free dry run on a connected BigQuery handle: `{ connectionId, sql ≤ 1,000,000, dataset? ≤ 1,024 }`, or `{ connectionId, remote }` for a sort, filter or value list of a windowed result ([Remote results](#remote-results)). Answers `{ bytesProcessed, incomplete?: 'script' \| 'lowerBound' \| 'unknown' \| 'zeroBytes', statementType?, faked?, fallback? }`; a query BigQuery refuses is `SQL_ERROR` with its `[line:column]` ([BigQuery's Cost](bigquery.md#cost)) |
 | `databases.list` | invoke | unary | metadata | 45 s; for a BigQuery handle, the billing project's datasets |
 | `tables.columns` | invoke | unary | metadata | 45 s; the backend stops its own query after 30 s, answering with an envelope error (`TIMEOUT`, or `SQL_ERROR` when SqlClient reports the cancel), not a result `error` value. Tables and views, read through `QUOTENAME(@db) + '.sys.sp_executesql'` so no pooled connection stays in the database |
 | `language.status`, `language.close` | invoke | unary | control | 10 s |
@@ -278,7 +278,7 @@ noted where it matters.
 | `live.subscribe` | port | stream of credited EVENTs ([Live subscriptions](#live-subscriptions)) | live (no slot) | none, no backstop: only CANCEL, disconnect, shutdown, failure or its source ending ends it |
 | `live.update` | port | unary | control | 10 s |
 | `explorer.children` | invoke; `explorerCancel` | unary | explorer | 45 s, budget 40 s |
-| `explorer.index` | invoke; `explorerCancel` | unary with droppable `explorer.index.progress` EVENTs (relayed to the requesting window, ≤ 4/s) | explorer | none; 120 s budget per database ([Search Objects](object-search.md)) |
+| `explorer.index` | invoke; `explorerCancel` | unary with droppable `explorer.index.progress` EVENTs (relayed to the requesting window, ≤ 4/s) | explorer | none; 120 s budget per database, 30 s per BigQuery metadata call ([Search Objects](object-search.md)) |
 | `explorer.search` | invoke; `explorerCancel` | unary | explorer | 15 s; stops at 5 s and answers `partial` |
 | `explorer.peek` | invoke; `explorerCancel` | unary | explorer (Peek's slot per connection) | 30 s, budget 15 s from when it has the slot |
 | `explorer.peekDependencies` | as `explorer.peek` | unary | as `explorer.peek` | as `explorer.peek` |
@@ -400,8 +400,13 @@ and script use `LOCK_TIMEOUT 10000`. A lost backend answers `BACKEND_LOST` (unkn
   cannot open), `MEDIA` (unusable backup media), `BACKUP_MISMATCH`, `TAIL_LOG_NEEDED`, `RESTORE_SEQUENCE` (restore), `DATABASE_UNAVAILABLE`, `TIMEOUT`, `CONNECTION_LOST`, `SQL_ERROR`,
   `CANCELLED`, `AUTH_KERBEROS`, `AUTH_UNSUPPORTED`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `PASSWORD_POLICY` (the server's password policy
   refused a password), `AGENT_STOPPED` (SQL Server Agent is not running), `JOB_STATE` (a job not running when stopped, or
-  running when started), `SERVICE_UNREACHABLE` (the Service Control Manager on the server's machine could not be reached);
-  the last three are not retryable (docs/object-actions.md, docs/sql-server-agent.md).
+  running when started), `SERVICE_UNREACHABLE` (the Service Control Manager on the server's machine could not be reached),
+  `STALE` (a job document save whose job changed since its describe: the guard's 50011); these last four are not retryable
+  (docs/object-actions.md, docs/sql-server-agent.md). A job document refusal may carry `field` (`agentJobFields`), the field the
+  failing call changed.
+- `agentJob` (the job document): `dialog: 'agentJob'` describes a job (`target: { kind: 'agentJob', name }`) or New Job
+  (`target: { kind: 'agent' }`, with `jobs`); execute and script take `agentJob` (`AgentJobSave`, bounded in zod and C#) and,
+  for an existing job, `agentIdentity`.
 - `actions.execute` answers `{ steps: { status: done | failed | skipped | cancelled | rolledBack, title, message?,
   detail?, compensates?, progress? }[], messages: str[] (≤ 32 × 512), elapsedMs, error? }`; statements run in order and
   stop at the first failure; `rolledBack` marks a step undone by a later failure or Stop in its transaction. The
@@ -1117,7 +1122,8 @@ and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residen
 
 - `residence`: `memory` or `remote` (absent for SQL Server and for Preview Rows, which always reads into memory); `rowsTotal`: BigQuery's own total, which may pass
   `rowsAvailable` (at most 2,147,483,647 rows, the grid's 32-bit indexes; a Messages line says so);
-  `revision`: 0, bumped by every switch.
+  `revision`: 0, bumped by every switch; `projectedBytes` (windowed only): the result's projected size in memory, its
+  measured row cost times its rows, which the renderer offers Load into memory under.
 - **Choosing.** `query.execute` takes `residence` (`automatic`, the default; `memory`; `windowed`) and `windowCacheMiB`
   (16 – 4,096, default 64), BigQuery only: main (`optionsAllow`) and the backend refuse them for SQL Server. The backend
   decides after the first page, before `resultSet.opened`: memory when the rows arrived whole, under `memory`, or when
@@ -1145,7 +1151,8 @@ and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residen
   limit (`TOO_LARGE` when the global budget has no room, or when one block's rows outgrow the cache: the block stops
   being built there). A block being built and the `tabledata.list` page it is read from are working memory, charged
   when the block settles (bounded by the cache's size, a page's 64 MiB and the fetch lanes). A block's estimate the cache's own limit refuses (reads of the result hold it) stops a block
-  only read ahead, with nothing fetched; one a read waits for may pass the limit, up to twice it, as an overrun may. A
+  only read ahead, with nothing fetched; one a read waits for may pass the limit, up to twice it, as an overrun may. A read's own
+  blocks reserve in order, each once the one before it has (their fetches still overlap), so the room goes to the first rows. A
   block only read ahead never evicts one a viewer's last read covered, nor takes the room of a block a read waits for that has not reserved yet, nor evicts anything for room it could not reach even then (the cache's own limit or the global budget), and its own overrun stops it there too. An overrun the cache's limit refuses while another fetch of the result holds room stops read-ahead
   no read waits for and waits once for the rest; when the read's own blocks still do not fit together, the overrun passes
   the cache's limit, up to twice it (the global budget still refusing it; past that, `TOO_LARGE` names the window cache
@@ -1154,12 +1161,20 @@ and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residen
   fetch error); a rate limit past the read's wait answers with the rows sent, none included, without an error. The
   grid reads on from there, under the new revision after a switch. After a release it is `RESULT_RELEASED`.
 - **Refusals.** Every other reader of stored pages (`results.view`, distinct values, profiles, search, row identities,
-  diffs, pivots, Copy and Save) answers `REMOTE_RESULT` before any work, and so does one whose set switched to windowed
-  after that check: the page snapshot, a new view, a lease and an operation's release token refuse a windowed set as they
+  diffs, pivots) answers `REMOTE_RESULT` before any work, and so does one whose set switched to windowed
+  after that check: the page snapshot, a new view and an operation's release token refuse a windowed set as they
   take hold, a search or operation whose set switched (even one loaded back since) answers `REMOTE_RESULT`, and a copy
   the switch overtakes is refused rather than cut short. Both codes are in the shared `errorCodes` list. A 404 from `tabledata.list` (BigQuery's
   result table expired) answers `REMOTE_EXPIRED` when the read reaches an uncached block before it has sent any row; a read that sent cached rows first
   answers short with them.
+- **Copy and Save.** `results.copy` of a windowed result reads its rows block by block through the cache (under its own
+  viewer, so a grid's read-ahead is not disturbed) and stops with `TOO_LARGE` before sending text past `maxBytes`, or
+  before any read when the separators alone pass it; a `viewId` answers `VIEW_NOT_FOUND`. `results.export` streams every
+  row the query keeps from BigQuery (Storage Read, else `tabledata.list`) through `ResultTextWriter`, each page reserved
+  from the budget while it is written, never through the cache. Both answer `REMOTE_EXPIRED` for an expired table (Copy
+  only past the rows cached). Copy, and a transposed Save (which reads its rows through the cache), answer `RESULT_OPEN`
+  when the result starts loading into memory under them and `RESULT_RELEASED` after a release; a Save reads the table
+  itself, so it carries on through either (its lease holds the result).
 - **`results.remoteQuery { queryId: uuid, resultId, generation, kind: 'load' }`** runs a query over a windowed result
   like `query.execute`: unary with EVENTs, the same summary, stopped by `query.cancel(queryId)`. Main sends it only for a
   result its renderer owns in that generation (else `RESULT_UNAVAILABLE`) and pins the request to it; while the query
@@ -1171,6 +1186,25 @@ and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residen
   `RESULT_RELEASED`; one whose table expired fails with `REMOTE_EXPIRED`, as a read does. Only a windowed result loads (`INVALID_PARAMS` otherwise, as for a second load of one already
   loading; `BUDGET_STOPPED` once the budget has stopped). Main answers `RESULT_UNAVAILABLE` for a result its renderer no
   longer owns, so the backend's `RESULT_RELEASED` reaches only a close that raced past that check.
+- **`results.remoteQuery` kinds `view` and `distinct`** ([BigQuery's Sort and filter in BigQuery](bigquery.md#sort-and-filter-in-bigquery))
+  run a billed query over the windowed result's table and answer a derived result of its own (under the source's budget,
+  released with it, windowed when large), opened and closed by its EVENTs like any set. `view { sort?: [{ column,
+  descending }] ≤ 16, filters? ≤ 16 }` (at least one, sort keys distinct) sorts and filters; `distinct { column, filters?,
+  kept? }` lists the column's values (`value, n, r, k`: up to 100,000 by count, ranked `r` in value order) into a result
+  read whole as a value list: `results.distinct` on its column 0 answers its snapshot without grouping in memory, `kept`
+  ticking the values those filters keep (every one without). A filter is `{ op: 'in' | 'notIn', column, list?, rows ≤ 2,
+  nulls? }`, `{ op: 'between', column, list, rows: [low, high] }` or `{ op: 'groups', column, list, snapshotId }`: `list` is
+  a value list of that column of this result, and `rows` are its rows, which the backend names in BigQuery by rank (an
+  `INT64` array parameter; no value is sent). Main checks that its renderer owns the source and every list in that
+  generation. Refusals: a column BigQuery cannot order or group (`INVALID_PARAMS`), the query that made the result still
+  running (`BUSY`), a list that is not this column's or this result's or a row past it (`INVALID_PARAMS`), a list or
+  snapshot gone (`VIEW_NOT_FOUND`), the source's table or a list's table expired (`REMOTE_EXPIRED`). `fallback: true`
+  (emulator mode only, when the dry run answered `fallback`) runs the original query again around the view instead of
+  reading the expired table. A failure, Stop, the timeout or the source's release keeps nothing.
+- **`bigquery.dryRun { connectionId, remote }`** estimates a `view` or `distinct` request (`remote` holds `resultId`,
+  `generation` and the kind's fields, no query ID or fallback) with the query's parameters, on the result's own connection;
+  main checks ownership as for `results.remoteQuery`. It answers `fallback: true` when the source's table is gone and
+  emulator mode can run the original query again.
 
 ## Cell lengths and row sizes
 
@@ -2516,7 +2550,7 @@ terminal for live probes. Display login text is never identity proof.
 | Code | Sentence |
 | --- | --- |
 | `BACKEND_LOST` | "The SQL backend stopped before answering. The request was not retried." |
-| `BACKEND_LOST` (`results.remoteQuery`) | "The SQL backend stopped while a result was loading into memory. The load was not re-run, and the result is gone with the backend." |
+| `BACKEND_LOST` (`results.remoteQuery`) | "The SQL backend stopped during a query over a BigQuery result (Load into memory, a sort, a filter or a value list). It was not re-run, and the result is gone with the backend." |
 | `BACKEND_LOST` (BigQuery `query.execute`, `query.attach`) | "The SQL backend stopped while this BigQuery query was running. A job still running carries on in BigQuery and is re-attached once the tab reconnects; a transaction open in its session stays open until the session ends." |
 | `BACKEND_LOST` (`query.execute`) | "The SQL backend stopped while this script was running. It was not re-run. Statements that finished before the failure may have taken effect; SQL Server rolls back the session's open transaction when it detects the closed connection." |
 | `BACKEND_LOST` (reload) | "The workbench was reloaded." |

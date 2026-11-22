@@ -24,6 +24,24 @@ const day = 86_400_000
 const records = async () => (await readdir(folder).catch(() => [] as string[])).sort()
 
 describe('the AutoRecover store', () => {
+  it.each([true, false])('preserves the recovered buffer’s file baseline across a restart (known: %s)', async known => {
+    const path = join(directory, 'external.sql'), files = new SqlFileStore()
+    await writeFile(path, 'SELECT original')
+    const original = await files.read(path), baseline = files.sessionFile(original.id)!
+    const copy = query({ text: 'SELECT local_edits' })
+    await new RecoveryStore(folder).write({ ...copy, path, ...known ? { fileSha256: baseline.fileSha256 } : {} }, 1)
+    await writeFile(path, 'SELECT external_edits')
+    const restarted = new RecoveryStore(folder)
+    await restarted.list(1)
+    const record = await restarted.take(copy.id, 1)
+    expect(record.fileSha256).toBe(known ? baseline.fileSha256 : undefined)
+    const reopened = new SqlFileStore()
+    const file = await reopened.register(record.path!, record.kind, { baseSha256: record.fileSha256 })
+    expect(await reopened.changedOnDisk(file!.id)).toBe(true)
+    await writeFile(path, 'SELECT original')
+    expect(await reopened.changedOnDisk(file!.id)).toBe(!known)
+  })
+
   it('keeps a query, lists it for a later page or run without its text, and hands its text to whoever takes it', async () => {
     const store = new RecoveryStore(folder, { now: () => new Date('2026-10-19T09:00:00Z') })
     const kept = query({ server: 'sql01', database: 'Sales', text: 'SELECT secret FROM dbo.T' })

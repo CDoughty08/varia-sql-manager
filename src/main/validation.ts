@@ -3,6 +3,7 @@ import { planParseSchema, planDocumentSchema } from '../shared/plans'
 import { estimatedPlanRequestSchema, estimatedPlanResultSchema } from '../shared/estimated-plans'
 import type { RpcMethod } from '../shared/contracts'
 import { bigQueryDryRunRequestSchema, bigQueryDryRunResultSchema } from '../shared/bigquery/dry-run'
+import { resultsRemoteQuerySchema } from '../shared/bigquery/remote-view'
 import { bigQueryPreviewTargetSchema, bigQueryPropertiesRequestSchema, bigQueryPropertiesSchema } from '../shared/bigquery/objects'
 import { jobKeySchema, queryAttachParamsSchema } from '../shared/bigquery/jobs'
 import { bigQueryAccountSchema, bigQueryDatasetSchema, bigQueryCredentialParamsSchema, bigQueryProjectListSchema, bigQueryProjectsParamsSchema, connectionOptionsSchema, providerConnectionOptionsSchema } from '../shared/connections'
@@ -63,11 +64,11 @@ export const requestSchemas = {
   'query.cancel': z.object({ queryId: z.uuid(), detach: z.literal(true).optional() }).strict(),
   // A BigQuery job by its reference (docs/bigquery.md, Re-attaching to jobs); C# checks the bounds again.
   'query.attach': queryAttachParamsSchema.refine(params => params.maxRows <= limits.maxRows && params.maxResultSets >= limits.maxResultSets.min && params.maxResultSets <= limits.maxResultSets.max, 'Row limits are out of range.'),
-  // Only the load kind so far; main checks the renderer owns the result in that generation before sending it.
-  'results.remoteQuery': z.object({ queryId: z.uuid(), resultId: z.number().int().min(1).max(0xffffffff), generation: z.number().int().min(1).max(2 ** 31 - 1), kind: z.enum(['load']), jobKey: jobKeySchema.optional() }).strict(),
   // A tab holding a job gets a job answer (keepJob or cancelJob) only, never with a transaction.
   'query.session.close': z.object({ sessionId: z.uuid(), transaction: z.enum(['commit', 'rollback']).optional(), abortOnRefusedCommit: z.boolean().optional(), keepJob: z.literal(true).optional(), cancelJob: z.literal(true).optional() }).strict()
     .refine(params => !(params.keepJob && params.cancelJob) && !((params.keepJob || params.cancelJob) && params.transaction), 'A job is left running or cancelled, and its transaction is not asked about.'),
+  // Main checks the renderer owns the result, and every value list its filters name, in that generation before sending it.
+  'results.remoteQuery': resultsRemoteQuerySchema,
   'query.session.state': z.object({ sessionId: z.uuid() }).strict(),
   // Distinct, as C# checks (SqlService.SetVisibility); an empty set says no result is shown.
   'results.visibility': z.object({ source: z.uuid(), seq: z.number().int().min(1).max(2 ** 31 - 1), visible: z.array(z.number().int().min(1).max(0xffffffff)).max(limits.visibility.maxResults).refine(ids => new Set(ids).size === ids.length, 'Result ids must be distinct.') }).strict(),

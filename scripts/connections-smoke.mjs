@@ -708,6 +708,8 @@ try {
     await expect(dialog.getByText('Save checks this password with the server, then remembers it.', { exact: true })).toBeVisible()
     await dialog.getByRole('button', { name: 'Save', exact: true }).click()
     await expect(dialog.getByText('Checking the password with entra-wait…', { exact: true })).toBeVisible()
+    // Save is disabled while it checks; focus is already on Cancel, so the Escape below reaches the dialog.
+    await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()
     await page.keyboard.press('Escape')
     await expect(dialog.getByText('Save cancelled. Nothing was saved.', { exact: true })).toBeVisible()
     expect(JSON.parse(await readFile(join(profile, 'mssql-connections.json'), 'utf8')).profiles.some(item => item.options.server === 'entra-wait')).toBe(false)

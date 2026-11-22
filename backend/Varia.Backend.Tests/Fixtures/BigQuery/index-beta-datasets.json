@@ -1,0 +1,1 @@
+{"kind":"bigquery#datasetList","datasets":[{"kind":"bigquery#dataset","datasetReference":{"datasetId":"census","projectId":"varia-beta"},"location":"US"}]}

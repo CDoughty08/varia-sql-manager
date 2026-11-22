@@ -234,6 +234,27 @@ describe('AutoRecover in the workbench', () => {
     } finally { fixture.dispose() }
   })
 
+  it('adopts a waiting Open into the recovered file tab without replacing the recovered edits', async () => {
+    const fixture = workbenchFixture({ recovery: [entry('r1', 'orders.sql')] })
+    try {
+      const { recovery, api, documents, files } = fixture
+      const file = { id: crypto.randomUUID(), name: 'orders.sql', path: 'C:/orders.sql', encoding: 'utf8' as const, readOnly: false }
+      const started = deferred<void>(), finish = deferred<void>()
+      api.takeRecovery.mockImplementationOnce(async () => {
+        started.resolve()
+        await finish.promise
+        return { ok: true, value: { text: 'recovered edit', name: file.name, kind: 'sql', eol: 'lf', file } }
+      })
+      const recovering = recovery.recover(['r1'])
+      await started.promise
+      const opening = files.adopt({ files: [{ ...file, content: 'external bytes', eol: 'lf', mixedEol: false }], errors: [] })
+      finish.resolve()
+      await Promise.all([recovering, opening])
+      const owners = documents.getSnapshot().documents.filter(document => document.file?.id === file.id)
+      expect(owners).toHaveLength(1)
+      expect(documents.getModel(owners[0]!.id)?.getValue()).toBe('recovered edit')
+    } finally { fixture.dispose() }
+  })
   it('opens a copy once when Recover Selected runs again for a query it already opened', async () => {
     const fixture = workbenchFixture({ recovery: [entry('r1', 'a.sql')] })
     try {

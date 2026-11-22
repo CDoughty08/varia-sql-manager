@@ -117,6 +117,18 @@ describe('query documents', () => {
     expect(model(value.id).getValue()).toBe('<ShowPlanXML/>')
     expect(documents.savable(value.id)).toBe(true)
   })
+  it('keeps a recovered file dirty when its contents are empty or deleted after recovery', () => {
+    const { documents, model } = documentFixture()
+    const file = { id: 'registered', name: 'orders.sql', path: '/orders.sql', encoding: 'utf8' as const, readOnly: false }
+    const blank = documents.restore(file.name, '', 'sql', 'lf', file)
+    expect(blank).toMatchObject({ dirty: true, savedVersionId: null })
+    const edited = documents.restore(file.name, 'SELECT changed', 'sql', 'lf', file)
+    model(edited.id).edit('')
+    expect(documents.get(edited.id)?.dirty).toBe(true)
+    const untitled = documents.restore('SQLQuery1.sql', 'SELECT changed', 'sql', 'lf')
+    model(untitled.id).edit('')
+    expect(documents.get(untitled.id)?.dirty).toBe(false)
+  })
   it('marks edits dirty and clears the marker when undo returns to saved content', () => {
     const { documents, model } = documentFixture()
     const tab = documents.create('query.sql', 'SELECT 1', 'master')

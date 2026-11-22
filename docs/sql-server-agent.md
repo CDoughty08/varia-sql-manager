@@ -1,11 +1,11 @@
 # SQL Server Agent
 
 SQL Server Agent support is planned for 0.11.0 ([docs/agent-plan.md](agent-plan.md), UI in
-[docs/agent-ui-rethink.md](agent-ui-rethink.md)). Behind the release gate (below) Object Explorer shows the SQL Server Agent node, a job's Start Job at Step…, Stop
-Job, Enable, Disable, Rename and Delete, and the Agent node's Start, Stop, Restart and Properties; Search Objects finds jobs, alerts
-and operators, Script As scripts jobs, alerts, operators and proxies, Job Activity Monitor follows the jobs live, and the
-Log File Viewer reads and deletes job history. The job
-documents arrive in later lanes, behind the same gate until 0.11.0.
+[docs/agent-ui-rethink.md](agent-ui-rethink.md)). Behind the release gate (below) Object Explorer shows the SQL Server Agent node, a job's New Job…, View History, Start Job at Step…, Stop
+Job, Enable, Disable, Rename, Delete and Properties, and the Agent node's Start, Stop, Restart and Properties; Search Objects finds jobs, alerts
+and operators, Script As scripts jobs, alerts, operators and proxies, Job Activity Monitor follows the jobs live, the
+Log File Viewer reads and deletes job history, and the job document edits a job's General, Notifications, Targets and Alerts or creates a job. Its Steps and Schedules sections arrive in
+later lanes, behind the same gate until 0.11.0.
 
 ## How it works
 
@@ -36,9 +36,8 @@ documents arrive in later lanes, behind the same gate until 0.11.0.
   Disable (Enable on a disabled job), Rename and Delete. Start Job at Step… reads the job and its steps (`sp_help_jobstep`):
   a job with one step starts as the dialog opens, as SSMS's does, and one with more lists its steps, the first chosen.
   Stop Job, Disable, Enable and Rename run as status-bar jobs with Stop; Delete is Delete Object, which also deletes the
-  job's history and the schedules no other job uses. Each verb sends the job's creation time from the tree
-  (`agentIdentity`, sysjobs `date_created` to the second), and its one batch resolves the job by name and that time first,
-  so a job created since under the name is refused `NOT_FOUND` before msdb runs anything. The batches call only the msdb
+  job's history and the schedules no other job uses. Each verb sends the listed job's immutable msdb `job_id` and name. If another job has
+  taken the name, the batch returns `NOT_FOUND` before calling the procedure. The batches call only the msdb
   procedures listed below, with named arguments, and are checked by `AgentSql.LintExecutable`, an exact-shape allow list.
   msdb's procedures report failures by return code, so each batch raises its own error on a nonzero code. SQL Server
   Agent's 22022 is read again before it is reported: Agent XPs off is `AGENT_STOPPED` ("SQL Server Agent is not running"),
@@ -71,8 +70,31 @@ documents arrive in later lanes, behind the same gate until 0.11.0.
   Start, Stop, Enable and Disable act on the selected jobs (at most `startJobs`), one AG-2 request per job in turn with
   the job's identity from the list, and list one result line per job; Stop on that list sends no more. A login msdb
   refuses sees "No access to SQL Server Agent" with the roles that grant it; Agent stopped or Agent XPs off is a banner,
-  a note below the list says Status is msdb's last reading, and the list refreshes once Agent runs again. Opening a job
-  from the list waits for the job documents (AG-6a).
+  a note below the list says Status is msdb's last reading, and the list refreshes once Agent runs again. Double-click,
+  Enter or Open on the selected job opens its job document.
+- **Job document** (`agentJob`, object actions, docs/object-actions.md). One tab per job ("Job Properties - Nightly"), opened
+  from a job's node (Enter, double-click or Properties), from Job Activity Monitor, from Ctrl+Q's object search and from the
+  palette's SQL Server Agent: Open Job… (the job selected in Job Activity Monitor or Object Explorer, else a pick of the
+  server's jobs). The header shows the job's live state from `agent.jobs.watched` (running and its step, or idle with the last
+  outcome), Start with a step menu (Start once at step, which leaves the job's start step alone), Stop while it runs, Reload
+  and Save. Sections: **General** (name, owner, category, description, enabled; only sysadmin changes the owner),
+  **Notifications** (e-mail, page, net send, Windows event log and delete, each a level and an operator; whether Database Mail
+  can send, read through `sysmail_help_profile_sp` where the login may, and an operator's missing address or pager duty hours
+  as warnings), **Targets** (this server only; multi-server targets come later) and **Alerts** (the alerts that run the job;
+  Remove for sysadmin only, since msdb grants `sp_update_alert` to no Agent role; New Alert comes with the Alerts lane).
+  Another owner's job below sysadmin opens read-only with the reason. Edits mark the tab dirty, Save counts them ("Save · 2
+  changes"), closing asks to save, and Problems warn and only block what msdb would refuse (a missing name, owner or operator).
+  **Save** sends only what changed with the version and modified date the describe read, as one batch in one transaction:
+  the job is resolved by name and its immutable `job_id`, the STALE guard compares `version_number` and `date_modified` under `UPDLOCK, HOLDLOCK` (so no other save lands
+  before this one's) and THROWs 50011 when either moved, each removed alert is checked to still run this job before `sp_update_alert @job_id` detaches it
+  (the zero GUID), and every call checks its return code (50012 with the call's index), so nothing commits unless all of it
+  does. A refusal lands on the field the failing call changed (msdb's "does not exist" for an owner, operator or alert is a `SQL_ERROR` there, since `NOT_FOUND` means the job itself), the document keeps the edits, and `STALE`, or `NOT_FOUND` for a job no longer under the name it was read by (the compare finds a renamed job by its id; a job deleted and created again under the name is not compared, and Reload opens it), opens a field-by-field
+  compare of what the server and you changed, a field changed by both first with a choice each, offering Reload and keep my
+  changes or Discard mine and reload. The Script drawer shows SSMS's shape (`BEGIN TRANSACTION`, each call followed by
+  `GOTO QuitWithRollback`) by name with literal values. **New Job** (a Jobs folder's or job's menu, or the palette) opens a
+  start panel: Blank job, or Copy an existing job, which fills General and Notifications from the job picked ("Copy of …");
+  nothing is created until Create, which runs `sp_add_job` and `sp_add_jobserver` in one transaction. The save batches have
+  their own exact-shape lint, `AgentSql.LintJobSave`. Pager duty against the job's schedules comes with the Schedules lane.
 - **Log File Viewer** (`agent.history`, docs/live.md). Job › View History, the Agent node's and the Jobs folder's View
   History, Job Activity Monitor's View history (the selected jobs) and the palette's SQL Server Agent: View History open one
   document per connection ("Log File Viewer - server"), focused if open with its sources replaced. **Select logs** lists every
@@ -225,6 +247,15 @@ its step that runs as a proxy comes without the proxy and with the warning).
 the watched slots, the service probe and each refusal) and, in the Agent live suite, subscribes to all three probes on
 the scratch job. The `agent-jobs` smoke suite drives Job Activity Monitor against the fake backend's jobs: opening it,
 a view chip, Start on two jobs with the status bar following them, the Last run chevron and reopening it from its node.
+
+`AgentJobDocumentChecks` checks the job document's planner offline: the save lint and its near misses, each save's batch, the
+validation, the error mapping onto fields and the script's shape. In the Agent live suite, `AgentJobDocumentLiveChecks`
+describes the scratch job, saves it under the STALE guard and is refused STALE on an older version, fails a later call and
+checks nothing committed, renames it to a hostile name and back, runs the script back against msdb, detaches a scratch alert
+(Windows), and after the job verbs delete the job creates it again through New Job. The `agent-job` smoke suite opens jobs from
+Job Activity Monitor (double-click and Enter), saves an edit and a removed alert, loses a save to another session's (the fake
+backend's `job-save-race` control file) and saves after Reload and keep my changes, starts the job once at a step, and creates
+a job by copying another from New Job.
 
 `AgentHistoryChecks` checks the `agent.history` reader offline over a fake runner (the statements each source and window
 reads, grouping into runs with In progress, Unknown and Agent XPs off, the filters regrouping without SQL, truncation and each
@@ -441,6 +472,7 @@ each a parameter or one of the constants listed (`AgentSql.LintRead`):
 | `msdb.dbo.sp_help_jobs_in_schedule` | `@schedule_id` | Every Agent role (its own jobs for SQLAgentUserRole) |
 | `msdb.dbo.sp_enum_sqlagent_subsystems` | none | Every Agent role |
 | `msdb.dbo.sp_get_sqlagent_properties` | none | Every Agent role (AG-0: SQLAgentUserRole gets values); fails with 15281 while Agent XPs is off |
+| `msdb.dbo.sysmail_help_profile_sp` | none | sysadmin and DatabaseMailUserRole |
 
 And these master procedures, each in exactly this shape (`@p` is a parameter):
 
@@ -457,12 +489,12 @@ Writes (from AG-2) call only these, each followed by a return-code check:
 | --- | --- | --- |
 | `msdb.dbo.sp_start_job` | `@job_id`, `@step_name` | AG-2 |
 | `msdb.dbo.sp_stop_job` | `@job_id` | AG-2 |
-| `msdb.dbo.sp_update_job` | `@job_id`, `@enabled`, `@new_name` | AG-2 |
+| `msdb.dbo.sp_update_job` | `@job_id`, `@enabled`, `@new_name`, `@description`, `@category_name`, `@owner_login_name`, `@notify_level_eventlog`, `@notify_level_email`, `@notify_level_netsend`, `@notify_level_page`, `@notify_email_operator_name`, `@notify_netsend_operator_name`, `@notify_page_operator_name`, `@delete_level` | AG-2 |
 | `msdb.dbo.sp_delete_job` | `@job_id`, `@delete_history`, `@delete_unused_schedule` | AG-2 |
 | `msdb.dbo.sp_purge_jobhistory` | `@oldest_date`, `@job_id` | AG-8a |
-| `msdb.dbo.sp_add_job` | later lanes | AG-6a |
-| `msdb.dbo.sp_add_jobserver` | later lanes | AG-6a |
-| `msdb.dbo.sp_update_alert` | later lanes | AG-6a |
+| `msdb.dbo.sp_add_job` | `@job_name`, `@enabled`, `@description`, `@category_name`, `@owner_login_name`, `@notify_level_eventlog`, `@notify_level_email`, `@notify_level_netsend`, `@notify_level_page`, `@notify_email_operator_name`, `@notify_netsend_operator_name`, `@notify_page_operator_name`, `@delete_level`, `@job_id` | AG-6a |
+| `msdb.dbo.sp_add_jobserver` | `@job_id` | AG-6a |
+| `msdb.dbo.sp_update_alert` | `@name`, `@job_id` | AG-6a |
 | `msdb.dbo.sp_add_jobstep` | later lanes | AG-6b |
 | `msdb.dbo.sp_update_jobstep` | later lanes | AG-6b |
 | `msdb.dbo.sp_delete_jobstep` | later lanes | AG-6b |
@@ -499,6 +531,7 @@ msdb error numbers the actions map (AG-2 onward; reads map 15281 to `AGENT_DISAB
 | `14234` | `SQL_ERROR` | An argument is not valid (such as an owner login that does not exist). |
 | `14266` | `SQL_ERROR` | An argument is not one of its valid values (such as a schedule's frequency type). |
 | `14372` | `IN_USE` | A schedule is still used by a job. |
+| `14525` | `PERMISSION_DENIED` | Only sysadmin may change a job another login owns (the job document Save). |
 | `14392` | `PERMISSION_DENIED` | Only sysadmin and SQLAgentOperatorRole may purge the history of every job, or of a job the login does not own. |
 | `15281` | `AGENT_STOPPED` | Agent XPs is off (SQL Server Agent is stopped or disabled). |
 | `22022` | `JOB_STATE` | SQL Server Agent refused a start or stop; decided by a re-read, never by number. |
@@ -518,6 +551,9 @@ msdb error numbers the actions map (AG-2 onward; reads map 15281 to `AGENT_DISAB
 | `nameChars` | 128 | UTF-16 code units in an Agent object's name (sysname) |
 | `stepsPerJob` | 50 | Steps one job save may hold |
 | `schedulesPerJob` | 16 | Schedules one job save may hold |
+| `jobAlerts` | 32 | Alerts one job save may detach (the job document's Alerts section) |
+| `descriptionChars` | 512 | Characters of a job's description (`sysjobs.description`) |
+| `ownerLogins` | 1,000 | Logins the job document's owner picker lists (sysadmin; the owner can still be typed) |
 | `scheduleJobChanges` | 64 | Jobs one schedule save may attach or detach |
 | `lastRunRows` | 202 | History rows Job Activity Monitor's last run reads, newest first, before it cancels the rest |
 | `startJobs` | 100 | Jobs one Start, Stop, Enable or Disable from Job Activity Monitor may name |
@@ -534,4 +570,4 @@ msdb error numbers the actions map (AG-2 onward; reads map 15281 to `AGENT_DISAB
 | `historyAgeDays` | 400 | Whole days of age the purge's row estimate counts separately (older rows count together) |
 | `purgeCount` | 999 | The most days, weeks or months "Delete old history now" goes back (999 months stays inside `datetime`) |
 
-A job save makes at most 140 calls at these caps, below the 255 a THROW state can number.
+A job save makes at most 204 calls at these caps, below the 255 a THROW state can number.

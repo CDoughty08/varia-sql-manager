@@ -28,7 +28,8 @@ database management tools in one app, with SSMS's features and keys and a modern
 - **Authentication**: SQL Server, Windows (Kerberos on Linux and macOS) and Microsoft Entra ID.
 - **BigQuery (in progress)**: connect to Google BigQuery from the same Connect dialog (gcloud credentials, a service
   account key or identity federation), with saved connections, favourites and a dataset picker, running queries and scripts in
-  per-tab sessions, and tabs that re-attach to their running jobs after a restart ([BigQuery](docs/bigquery.md)).
+  per-tab sessions, and tabs that re-attach to their running jobs after a restart. Results too large for memory stay windowed in BigQuery,
+  read as you scroll, with Copy, streaming Save Results As and Load into memory ([BigQuery](docs/bigquery.md)).
 
 Varia supports SQL Server 2016 through 2025 and runs on Windows, Linux and macOS.
 

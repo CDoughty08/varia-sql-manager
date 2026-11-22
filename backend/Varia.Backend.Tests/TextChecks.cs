@@ -139,7 +139,12 @@ internal static class TextChecks
             {
                 var store = new ResultStore(1L << 30, 1L << 29);
                 var jobs = new ResultJobs(store);
-                var columns = item.GetProperty("columns").EnumerateArray().Select(column => new ResultColumn(column.GetProperty("name").GetString()!, column.GetProperty("dataType").GetString()!, column.GetProperty("wire").GetString()!)).ToList();
+                // A BigQuery column carries its sort kind, as BigQueryColumnPlan sets it; others take SQL Server's mapping of their type.
+                var columns = item.GetProperty("columns").EnumerateArray().Select(column =>
+                {
+                    var described = new ResultColumn(column.GetProperty("name").GetString()!, column.GetProperty("dataType").GetString()!, column.GetProperty("wire").GetString()!);
+                    return column.TryGetProperty("sortKind", out var kind) ? described with { SortKind = kind.GetString()! } : described;
+                }).ToList();
                 var rows = item.GetProperty("rows").EnumerateArray().Select(row => row.EnumerateArray().ToArray()).ToList();
                 var set = Build(store, columns, rows);
                 var name = item.GetProperty("name").GetString();

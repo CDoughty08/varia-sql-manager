@@ -26,7 +26,7 @@ internal interface IObjectSearchHost
 /// and searched in memory. Nothing reaches disk; a disconnect drops the connection's index. A database that cannot be read is
 /// skipped as a value, and the index keeps every other one.
 /// </summary>
-internal sealed class ObjectSearchService : IDisposable
+internal sealed partial class ObjectSearchService : IDisposable
 {
     private readonly IObjectSearchHost host;
     private readonly ConcurrentDictionary<string, State> states = new(StringComparer.Ordinal);
@@ -70,6 +70,16 @@ internal sealed class ObjectSearchService : IDisposable
         public DateTime? BuiltAt;
         /// <summary>What the editor's lookup needs of the builds: each database's last outcome, kept across builds.</summary>
         public readonly LookupLedger Ledger = new();
+        /// <summary>A BigQuery connection's index (ObjectSearchService.BigQuery): datasets in place of databases.</summary>
+        public bool BigQuery;
+        /// <summary>BigQuery's pass while building: names, then details.</summary>
+        public string? Phase;
+        /// <summary>BigQuery's projects indexed by name only (extra projects unless their details were asked for).</summary>
+        public List<string>? NamesOnly;
+        /// <summary>BigQuery datasets DDL changed since their last read, by project and dataset (under Gate): the next build re-reads them whole.</summary>
+        public readonly Dictionary<(string Project, string Dataset), long> Stale = [];
+        /// <summary>Numbers each stale mark (under Gate), so a build clears only the marks it saw before it read the dataset.</summary>
+        public long StaleMarks;
     }
 
     public ObjectSearchService(IObjectSearchHost host, ObjectIndexLimits? limits = null)
@@ -253,12 +263,15 @@ internal sealed class ObjectSearchService : IDisposable
         }
     }
 
-    public ObjectSearchResult Search(ObjectSearchArgs args, CancellationToken token)
+    /// <summary>explorer.search; <paramref name="bigQuery"/> for a BigQuery handle, whose search narrows by Project and Dataset (never
+    /// Database) and whose connection SqlService has already checked.</summary>
+    public ObjectSearchResult Search(ObjectSearchArgs args, CancellationToken token, bool bigQuery = false)
     {
         var query = Validate(args);
+        if (bigQuery ? args.Database is not null : args.Project is not null || args.Dataset is not null) throw Invalid(bigQuery ? "database." : "project.");
         token.ThrowIfCancellationRequested();
-        host.Profile(args.ConnectionId);
-        if (!states.TryGetValue(args.ConnectionId, out var state)) return new([], 0, false, 0, new("none", 0, 0, 0, 0, 0, [], true));
+        if (!bigQuery) host.Profile(args.ConnectionId);
+        if (!states.TryGetValue(args.ConnectionId, out var state)) return new([], 0, false, 0, new("none", 0, 0, 0, 0, 0, [], true, Provider: bigQuery ? Providers.BigQuery : null));
         var status = Status(state);
         var (matcher, problem) = SearchMatcher.Create(query.Text, query.CaseSensitive, query.WholeWord, query.Regex, Limits.MatchTimeout);
         if (matcher is null) return new([], 0, false, 0, status, problem);
@@ -283,7 +296,8 @@ internal sealed class ObjectSearchService : IDisposable
     {
         if (!states.TryGetValue(connectionId, out var state)) return null;
         lock (state.Gate)
-            return new IndexLookup(state.Index, budget, state.Building, state.Ledger.Snapshot(), Changed);
+            // The editor's lookup reads SQL Server's catalog shape; a BigQuery index has its own reader (BQ-6b).
+            return state.BigQuery ? null : new IndexLookup(state.Index, budget, state.Building, state.Ledger.Snapshot(), Changed);
     }
 
     /// <summary>The index a connection holds, or null (the checks read it).</summary>
@@ -317,13 +331,16 @@ internal sealed class ObjectSearchService : IDisposable
         if (args.Limit is < 1 or > MaxLimit) throw Invalid("limit.");
         if (args.Match is not (null or "exact" or "fuzzy") || (args.Match == "fuzzy" && args.Regex == true)) throw Invalid("match.");
         if (args.Database is { } database && !ExplorerRefs.Ident(database)) throw Invalid("database.");
+        if (args.Project is { } project && !Varia.Backend.BigQuery.BqNames.IsProject(project)) throw Invalid("project.");
+        if (args.Dataset is { } dataset && (!Varia.Backend.BigQuery.BqNames.IsDataset(dataset) || args.Project is null)) throw Invalid("dataset.");
         HashSet<string>? kinds = null;
         if (args.Kinds is { } list)
         {
-            if (list.Count is < 1 or > MaxKinds || list.Any(kind => Array.IndexOf(Kinds, kind) < 0)) throw Invalid("kinds.");
+            if (list.Count is < 1 or > MaxKinds || list.Any(kind => Array.IndexOf(Kinds, kind) < 0 && Array.IndexOf(BigQueryKinds, kind) < 0)) throw Invalid("kinds.");
             kinds = list.ToHashSet(StringComparer.Ordinal);
         }
-        return new(args.Text, args.CaseSensitive ?? false, args.WholeWord ?? false, args.Regex ?? false, scope != "definitions", scope != "names", kinds, args.Database, args.Limit ?? DefaultLimit, args.Match == "fuzzy");
+        return new(args.Text, args.CaseSensitive ?? false, args.WholeWord ?? false, args.Regex ?? false, scope != "definitions", scope != "names", kinds, args.Database, args.Limit ?? DefaultLimit, args.Match == "fuzzy",
+            args.Project, args.Dataset);
     }
 
     private static RequestException Invalid(string what) => new("INVALID_PARAMS", "Invalid object search request: " + what);
@@ -332,10 +349,22 @@ internal sealed class ObjectSearchService : IDisposable
     {
         var databases = state.Index.Databases;
         lock (state.Gate)
+        {
+            if (state.BigQuery)
+            {
+                // Datasets: those this build lists while it runs, else those the index holds and those it skipped.
+                var held = databases.Count(value => value.Dataset is not null);
+                var skipped = state.Skipped.ToList();
+                return new(state.Building ? "building" : state.Built || held > 0 ? "ready" : "none",
+                    state.Building ? state.Databases : held + skipped.Count(skip => skip.Database.Length > 0 && skip.Code is not ChildrenLeftOut && !databases.Any(value => value.Database == skip.Project && value.Dataset == skip.Database)),
+                    state.Building ? state.Indexed : held, state.Index.Objects, databases.Sum(value => value.Modules), databases.Sum(value => value.Cut), skipped, state.Definitions,
+                    state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture), Providers.BigQuery, state.Building ? state.Phase : null, state.NamesOnly is { Count: > 0 } names ? names : null);
+            }
             return new(state.Building ? "building" : state.Built ? "ready" : databases.Count > 0 ? "ready" : "none", state.Databases, state.Building ? state.Indexed : databases.Count,
                 state.Index.Objects, databases.Sum(value => value.Modules) + (state.Index.Resource?.Modules ?? 0) + (state.Index.Server?.Modules ?? 0),
                 databases.Sum(value => value.Cut) + (state.Index.Resource?.Cut ?? 0) + (state.Index.Server?.Cut ?? 0), state.Skipped.ToList(), state.Definitions,
                 state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture));
+        }
     }
 
     /// <summary>Reads each database, at most <paramref name="degree"/> at once (each read still waits for one of the index's

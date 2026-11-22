@@ -70,7 +70,7 @@ describe('object action catalogue', () => {
     expect([states('database'), states('database', 'system'), states('database', 'snapshot')]).toEqual(['- enabled enabled enabled - - -', '- disabled disabled enabled - - -', '- disabled enabled enabled - - -'])
     // A login's Properties (D2c) opens Login Properties, a database's the Database Properties document, a table's Table Properties, and the
     // SQL Server Agent node's SQL Server Agent Properties (AG-8a).
-    expect(nodeKinds.filter(kind => actionOffered(kind, 'properties'))).toEqual(['login', 'database', 'table', 'agent'])
+    expect(nodeKinds.filter(kind => actionOffered(kind, 'properties'))).toEqual(['login', 'database', 'table', 'agent', 'agentJob'])
     expect([actionDialog('agent', 'properties'), kindDialogActionSpecs.agentProperties]).toEqual(['agentProperties', { title: 'SQL Server Agent Properties', dialog: 'agentProperties', kind: 'agent', verb: 'properties', engines: ['box', 'managedInstance'] }])
     // Tasks › Detach…, Take Offline, Bring Online and Restore › Database…: user databases only; greyed on SQL Server's own (as SSMS for
     // Detach and the state changes; critic A19 for a restore, which takes T-SQL there), absent on a snapshot, which cannot be restored over.
@@ -207,7 +207,7 @@ describe('object action catalogue', () => {
   })
   it('declares Delete Object and Database Properties with SSMS\'s titles, pages and Script button wording', () => {
     expect(dialogIds).toEqual(['deleteObject', 'databaseProperties', 'newDatabase', 'attachDatabase', 'newLogin', 'takeOffline', 'bringOnline', 'detachDatabase', 'unlockLogin', 'loginProperties', 'tableProperties',
-      'startJobAtStep', 'startAgent', 'stopAgent', 'restartAgent', 'agentProperties'])
+      'startJobAtStep', 'startAgent', 'stopAgent', 'restartAgent', 'agentProperties', 'agentJob'])
     // SSMS's SQL Server Agent Properties (AG-8a) stays a modal dialog, with General and History.
     expect(dialogSpecs.agentProperties).toEqual({ title: 'SQL Server Agent Properties', surface: 'modal', titleFormat: 'plain', size: 'large', action: 'agentProperties',
       pages: [{ id: 'general', title: 'General', icon: 'settings-gear' }, { id: 'history', title: 'History', icon: 'history' }] })
@@ -254,8 +254,8 @@ describe('object action catalogue', () => {
     expectTypeOf<ActionCommandId>().toEqualTypeOf<'explorer.selectTopRows' | 'explorer.rename' | 'explorer.delete' | 'explorer.properties' | 'explorer.attachDatabase' | 'explorer.takeOffline' | 'explorer.bringOnline' | 'explorer.detachDatabase' | 'explorer.restoreDatabase' | 'explorer.tasks.restoreDatabase'
       | 'explorer.restoreFiles' | 'explorer.tasks.restoreFiles' | 'explorer.disable' | 'explorer.enable' | 'explorer.unlock' | 'explorer.startJob' | 'explorer.stopJob' | 'explorer.startAgent' | 'explorer.stopAgent' | 'explorer.restartAgent'>()
     expectTypeOf<ModalDialogId>().toEqualTypeOf<'deleteObject' | 'attachDatabase' | 'newLogin' | 'takeOffline' | 'bringOnline' | 'detachDatabase' | 'unlockLogin' | 'loginProperties' | 'startJobAtStep' | 'startAgent' | 'stopAgent' | 'restartAgent' | 'agentProperties'>()
-    expectTypeOf<PageId>().toEqualTypeOf<'general' | 'files' | 'filegroups' | 'options' | 'serverRoles' | 'userMapping' | 'securables' | 'status' | 'permissions' | 'changeTracking' | 'storage' | 'securityPredicates' | 'extendedProperties' | 'history'>()
-    expect(pageIds).toEqual(['general', 'files', 'filegroups', 'options', 'serverRoles', 'userMapping', 'securables', 'status', 'permissions', 'changeTracking', 'storage', 'securityPredicates', 'extendedProperties', 'history'])
+    expectTypeOf<PageId>().toEqualTypeOf<'general' | 'files' | 'filegroups' | 'options' | 'serverRoles' | 'userMapping' | 'securables' | 'status' | 'permissions' | 'changeTracking' | 'storage' | 'securityPredicates' | 'extendedProperties' | 'history' | 'steps' | 'schedules' | 'notifications' | 'targets' | 'alerts'>()
+    expect(pageIds).toEqual(['general', 'files', 'filegroups', 'options', 'serverRoles', 'userMapping', 'securables', 'status', 'permissions', 'changeTracking', 'storage', 'securityPredicates', 'extendedProperties', 'history', 'steps', 'schedules', 'notifications', 'targets', 'alerts'])
     for (const dialog of dialogIds) for (const page of dialogSpecs[dialog].pages) {
       expect(isIconId(page.icon), `${dialog}: ${page.id}`).toBe(true)
       expect(pageIds, dialog).toContain(page.id)
@@ -493,7 +493,7 @@ describe('object action catalogue', () => {
     // A scripted action always fits a query window, so Script Action to New Query Window can always run it.
     expect(actionLimits.scriptChars).toBeLessThanOrEqual(maxScriptCharacters)
     expect(actionErrorCodes.filter(code => !actionErrorRetryable[code])).toEqual(['NOT_FOUND', 'NOT_SUPPORTED', 'UNSUPPORTED_PROVIDER', 'DEPENDENTS', 'NAME_IN_USE', 'PATH_NOT_FOUND', 'MEDIA', 'BACKUP_MISMATCH',
-      'TAIL_LOG_NEEDED', 'RESTORE_SEQUENCE', 'AUTH_IDENTITY', 'AGENT_STOPPED', 'JOB_STATE', 'SERVICE_UNREACHABLE'])
+      'TAIL_LOG_NEEDED', 'RESTORE_SEQUENCE', 'AUTH_IDENTITY', 'AGENT_STOPPED', 'JOB_STATE', 'SERVICE_UNREACHABLE', 'STALE'])
     // The server file picker: a path fits sys.master_files.physical_name, and main's 15 s deadline outlasts the backend's budget.
     expect([actionLimits.serverPath, actionLimits.browseEntries, actionLimits.browseMs]).toEqual([260, 2_000, 10_000])
     expect(actionLimits.browseMs).toBeLessThan(serverFilesDeadlineMs)
