@@ -163,7 +163,8 @@ describe('BigQuery job prompts', () => {
     expect(sessionPrompt({ action: 'exit', tabs: [job('a.sql')] })!.buttons[2].label).toBe("Don't Quit")
     expect(sessionPrompt({ action: 'disconnect', tabs: [job('a.sql')] })!.buttons[2].label).toBe("Don't Disconnect")
     // A server Disconnect warns that an unconfirmed cancel stops it, as its SQL Server box does; a close does not.
-    expect(sessionPrompt({ action: 'disconnect', tabs: [job('a.sql')] })!.detail).toContain('disconnect stops with every tab open')
+    expect(sessionPrompt({ action: 'disconnect', tabs: [job('a.sql')] })!.detail).toContain('the disconnect goes on and says the outcome is unknown')
+    expect(sessionPrompt({ action: 'disconnect', tabs: [job('a.sql')] })!.detail).not.toContain('disconnect stops with every tab open')
     expect(sessionPrompt({ action: 'close', tabs: [job('a.sql')] })!.detail).not.toContain('disconnect stops')
     // The Close Results and location boxes allow for a remembered choice.
     expect(runningJobPrompt({ name: 'a.sql', job: { elapsedMs: 0 } }).detail).toContain('(unless a choice is remembered)')
@@ -222,7 +223,8 @@ describe('BigQuery job prompts', () => {
     // A quit names a job whose id has not arrived yet; the mixed box names its checkbox, not a button it lacks.
     expect(sessionPrompt({ action: 'exit', tabs: [job('a.sql')] })!.detail).toContain('• a.sql (running 12 minutes): no job id reported yet')
     expect(sessionPrompt({ action: 'close', tabs: [running('s.sql'), job('b.sql')] })!.detail).not.toContain('Leave it running lets')
-    expect(sessionPrompt({ action: 'disconnect', tabs: [running('s.sql'), job('b.sql')] })!.detail).toContain('disconnect stops with every tab open')
+    expect(sessionPrompt({ action: 'disconnect', tabs: [running('s.sql'), job('b.sql')] })!.detail).toContain("If a query's completion cannot be confirmed, the outcome may be unknown and disconnect stops with every tab open")
+    expect(sessionPrompt({ action: 'disconnect', tabs: [running('s.sql'), job('b.sql')] })!.detail).toContain('the disconnect goes on and says the outcome is unknown')
   })
   it('accepts a job only on a BigQuery query, bounded', () => {
     expect(sessionPromptRequestSchema.safeParse({ action: 'close', tabs: [{ ...job('a.sql'), running: false }] }).success).toBe(true)

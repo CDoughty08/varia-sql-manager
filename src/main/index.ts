@@ -589,6 +589,8 @@ function requestClose(intent: CloseIntent): void {
  * finished jobs it read are dropped (their results are in the tab), and a stopped request's jobs too. A request that ends
  * without a summary (BACKEND_LOST) or left running (`detached`, `superseded`) keeps them for a re-attach.
  */
+/** Failures after which the backend keeps a re-attached job as its session's held job (polled until DONE). */
+const heldThroughFailure: ReadonlySet<string> = new Set(['CONNECTION_LOST', 'QUOTA', 'TIMEOUT', 'AUTH_EXPIRED', 'PERMISSION_DENIED', 'SESSION_BUSY'])
 function jobRecorder(queryId: string, jobKey: string, profileId?: string, connectionId?: string, attach = false) {
   const seen = new Set<string>()
   const entry = { jobKey, seen }
@@ -608,8 +610,9 @@ function jobRecorder(queryId: string, jobKey: string, profileId?: string, connec
     summary(result: QueryResult): void {
       // Leave it running on Close Results: marked from the answer itself, which may arrive before query.cancel's does.
       if (result.status === 'detached') { jobRecords.markDetached(jobKey, seen); return }
-      // A re-attach that failed after its job was reported may not hold it in the session: a profile delete asks about it.
-      if (attach && result.status === 'failed') for (const jobId of seen) if (jobConnections.get(jobId) === connectionId) jobConnections.delete(jobId)
+      // A re-attach that failed after its job was reported for a reason the backend keeps the job held through (a network or
+      // passing failure) still has it in the tab's session; otherwise the session may not hold it: a profile delete asks.
+      if (attach && result.status === 'failed' && !heldThroughFailure.has(result.error?.code ?? '')) for (const jobId of seen) if (jobConnections.get(jobId) === connectionId) jobConnections.delete(jobId)
       if (result.status === 'superseded' || generation !== rendererGeneration) return
       jobRecords.drop(jobKey, record => seen.has(record.jobId) && (record.state === 'done' || result.status === 'cancelled' || result.status === 'timedOut'))
     },

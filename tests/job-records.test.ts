@@ -202,7 +202,8 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     expect(source).toMatch(/const removed = await library\.remove\(id\)\s+if \(running\.length\) jobRecords\.dropJobs/)
     expect(source).toContain('for (const [connectionId, profileId] of [...connectionProfiles]) if (profileId === id) connectionProfiles.delete(connectionId)')
     expect(source).toContain('if (kept !== undefined && matching.some(item => item.id === kept)) return')
-    expect(source).toContain("if (attach && result.status === 'failed') for (const jobId of seen) if (jobConnections.get(jobId) === connectionId) jobConnections.delete(jobId)")
+    expect(source).toContain("if (attach && result.status === 'failed' && !heldThroughFailure.has(result.error?.code ?? '')) for (const jobId of seen) if (jobConnections.get(jobId) === connectionId) jobConnections.delete(jobId)")
+    expect(source).toMatch(/heldThroughFailure: ReadonlySet<string> = new Set\(\['CONNECTION_LOST', 'QUOTA'/)
     // Deleting a connection lists ten job ids and counts the rest, in its first box and its failed-cancel box.
     expect(source).toContain('ids = listedIds(running.map(record => record.jobId))')
     // Deleting a profile leaves the jobs of tabs still connected through it (running or left running) to those tabs.
@@ -250,6 +251,7 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     // The review runs only after a restore that worked.
     const workbench = await readFile(join(__dirname, '..', 'src', 'renderer', 'src', 'core', 'workbench.ts'), 'utf8')
     expect(workbench).toContain('if (restored) void queries.reviewJobsWithoutTab(api)')
+    expect(workbench).toContain('.then(opened => opened >= 0, () => false).then(restored => {')
     // What the cancels noted is said before the connection goes.
     expect(source).toContain("const notes = cancelNotesText('BigQuery', cancel.jobs)")
     // Credentials are the saved profile's, per project, at most jobLimits.cancel per call.

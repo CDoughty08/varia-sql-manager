@@ -172,8 +172,8 @@ const jobNote = (action: SessionAction, prices: boolean) => (tab: SessionTab) =>
     ...job.estimateBytes !== undefined ? [`estimated ${formatBytes(job.estimateBytes)}${prices ? ` · ${formatDollars(job.estimateBytes)}` : ''}`] : []]
   return ` (${parts.join(', ')})${action !== 'exit' ? '' : job.jobIds?.length ? `: ${job.jobIds.join(', ')}${job.moreJobIds ? ` and ${job.moreJobIds} more` : ''}` : ': no job id reported yet'}`
 }
-// A server Disconnect is strict: a cancel it cannot confirm keeps every tab open.
-const disconnectNote = 'If Varia cannot confirm a cancelled job stopped, the outcome may be unknown and disconnect stops with every tab open.'
+// A job's cancel goes through its session's end, which reports an unconfirmed stop as a note rather than failing.
+const disconnectNote = 'If Varia cannot confirm a cancelled job stopped, the disconnect goes on and says the outcome is unknown.'
 const leaveNote = 'Leave it running lets the job finish in BigQuery, where its job history lists it; Varia stops following it. If a transaction is open in its session, it stays open until the session ends, and other transactions that modify its tables fail meanwhile (reads, appends and DML outside transactions still run). The session ends after 24 hours idle, and its temporary tables are billed as storage until then.'
 /** A remembered answer (queryExecution.bigQuery.closeRunningJob) for a box that would ask only about BigQuery jobs. */
 export function rememberedJobAnswer({ action, tabs, location }: SessionPromptRequest, closeRunningJob: CloseRunningJob): SessionAnswer | undefined {
@@ -197,7 +197,7 @@ function jobPrompt(action: SessionAction, jobs: readonly SessionTab[], running: 
     return {
       title: 'Query executing', message: executing ? `${queries(all.length)} are still executing.` : `${queries(all.length)} are still executing or hold running BigQuery jobs.`,
       detail: [listed(all, tab => tab.job ? jobNote(action, prices)(tab) : ''), action === 'disconnect'
-        ? 'Cancel them and disconnect the server? Cancellation does not undo work already committed. If completion cannot be confirmed, the outcome may be unknown and disconnect stops with every tab open.'
+        ? `Cancel them and disconnect the server? Cancellation does not undo work already committed. If a query's completion cannot be confirmed, the outcome may be unknown and disconnect stops with every tab open. ${disconnectNote}`
         : `Cancel them and close ${closes(action)}? Anything they left uncommitted is rolled back.`,
       `With "Leave BigQuery jobs running" checked, the BigQuery jobs carry on instead. ${leaveNote.replace(/^Leave it running lets the job/, 'Each job can then')}`, quitNote].filter(Boolean).join('\n\n'),
       defaultId: 1, cancelId: 1,

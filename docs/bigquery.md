@@ -330,7 +330,8 @@ In the workbench:
   whose job records cannot be read. Jobs in tabs still connected through it are left to those tabs (deleting it
   disconnects nothing), so their sessions stay as they are.
 - **Idle sessions whose end failed.** They are shown as a notification after Disconnect, Reload or a backend restart.
-  Varia retries them the next time the connection reaches BigQuery.
+  Only those from Disconnect are retried, the next time the connection reaches BigQuery; a Reload or restart ends the
+  backend that held them.
 
 Jobs that cannot be cancelled without a connection (one from an unsaved connection, or one whose saved connection was
 deleted) are listed by id, to cancel in BigQuery's job history.

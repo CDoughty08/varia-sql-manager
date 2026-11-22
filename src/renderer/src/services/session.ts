@@ -112,13 +112,15 @@ export interface SessionRestoreOptions {
  * a tab (one a second instance handed over first) is not opened twice. Resolves with how many tabs it opened; a failure
  * goes to the file banner, and files that are gone are named there as a warning.
  */
+/** How many tabs the restore reopened, or -1 when it failed. */
 export async function restoreSession({ api, documents, files, groups, connectionTargets, resumeRecovery, restoredJobs, otherwise }: SessionRestoreOptions): Promise<number> {
   if (!api.hotExit) return 0
-  let opened = 0
+  let opened = 0, failed = false
   await files.later(async () => {
-    try { await restore() } finally { if (!opened) otherwise?.() }
+    try { await restore() } catch (error) { failed = true; throw error } finally { if (!opened) otherwise?.() }
   })
-  return opened
+  // -1: the restore failed (shown in the file banner), so the tabs it would reopen may still come back from previous.json.
+  return failed ? -1 : opened
   async function restore(): Promise<void> {
     let restored: RestoredSession
     try { restored = unwrap(await api.takeSession()) } catch (error) { throw new Error(`The queries open when Varia SQL Manager last closed could not be reopened: ${error instanceof Error ? error.message : 'The operation failed.'}`) }

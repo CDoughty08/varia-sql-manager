@@ -105,6 +105,23 @@ describe('BigQuery job references', () => {
   })
 })
 
+describe('a run after Leave it running', () => {
+  it('keeps the detached job through a run that failed (perhaps waiting for it), and settles it after one that completed', async () => {
+    const f = fixture(), pending = deferred<ApiResult<QueryResult>>()
+    f.queryApi.execute.mockReturnValueOnce(pending.promise)
+    const run = f.queries.execute(f.tab.id)
+    await settle()
+    f.job({ jobId: 'job_1', location: 'US', state: 'running' })
+    pending.resolve({ ok: true, value: output({ status: 'detached' }) })
+    await run; await settle()
+    f.queryApi.execute.mockResolvedValueOnce({ ok: true, value: output({ status: 'failed', error: { code: 'QUOTA', message: 'Rate limited.', batchNumber: 1, iteration: 1 } }) })
+    await f.queries.execute(f.tab.id); await settle()
+    expect(f.queries.getSnapshot()[f.tab.id].jobs?.map(item => item.jobId)).toEqual(['job_1'])
+    await f.queries.execute(f.tab.id); await settle()
+    expect(f.queries.getSnapshot()[f.tab.id].jobs).toBeUndefined()
+  })
+})
+
 describe('re-attaching restored tabs', () => {
   it("re-attaches a connected tab's newest job, adopting its session with the record's transaction, and never an older one over its results", async () => {
     const f = fixture()

@@ -399,7 +399,8 @@ describe('hot exit', () => {
     const { documents, files } = fixture()
     const welcome = vi.fn()
     const failing = { hotExit: true, takeSession: vi.fn<VariaApi['takeSession']>(async () => ({ ok: false, error: 'Access is denied.' })), finishSessionRestore: vi.fn<VariaApi['finishSessionRestore']>() }
-    expect(await restoreSession({ api: failing, documents, files, otherwise: welcome })).toBe(0)
+    // -1: the workbench then leaves the jobs without a tab unreviewed (their tabs may come back from previous.json).
+    expect(await restoreSession({ api: failing, documents, files, otherwise: welcome })).toBe(-1)
     expect(welcome).toHaveBeenCalledOnce()
     const reopening = { ...failing, takeSession: vi.fn<VariaApi['takeSession']>(async () => ({ ok: true, value: { activeIndex: 0, problems: [], documents: [{ name: 'SQLQuery7.sql', kind: 'sql' as const, eol: 'lf' as const, dirty: true, text: 'SELECT 7' }] } })) }
     expect(await restoreSession({ api: reopening, documents, files, otherwise: welcome })).toBe(1)
@@ -408,7 +409,7 @@ describe('hot exit', () => {
   it('reports a session that could not be read in the file banner', async () => {
     const { documents, files } = fixture()
     const api = { hotExit: true, takeSession: vi.fn<VariaApi['takeSession']>(async () => ({ ok: false, error: 'Access is denied.' })), finishSessionRestore: vi.fn<VariaApi['finishSessionRestore']>() }
-    expect(await restoreSession({ api, documents, files })).toBe(0)
+    expect(await restoreSession({ api, documents, files })).toBe(-1)
     expect(files.getSnapshot().error).toBe('The queries open when Varia SQL Manager last closed could not be reopened: Access is denied.')
   })
   it('does not infer a legacy query target or database from a matching server name', async () => {

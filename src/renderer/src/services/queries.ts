@@ -665,10 +665,11 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const settledBy = lostInSummary || preview ? undefined : summary
     let jobs = forgotten ? [] : heldAfter(attach, held, [...reported.values()], settledBy, lostCode)
     // A run's summary settles only the detached jobs this backend's session left running (it waited behind those); a
-    // restored detached job it never held (its re-attach failed) is still the tab's.
+    // restored detached job it never held (its re-attach failed) is still the tab's. A failed run may have failed waiting
+    // for them, so it settles none.
     if (!forgotten && settledBy && !attach && settledBy.status !== 'superseded' && settledBy.status !== 'detached' && held?.length) {
       const here = this.detachedHere.get(tabId)
-      const kept = held.filter(job => job.detached && !here?.has(this.attachKey(job, connection)) && !jobs.includes(job))
+      const kept = held.filter(job => job.detached && (settledBy.status === 'failed' || !here?.has(this.attachKey(job, connection))) && !jobs.includes(job))
       if (kept.length) jobs = held.filter(job => jobs.includes(job) || kept.includes(job))
     }
     // A failed run may have failed waiting for them: only a run that got past them settles them.
