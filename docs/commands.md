@@ -752,7 +752,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `0_new` | **N**ew Job… | `agent.newJob` | `((explorerNode == 'folder' && explorerFolder == 'agentJobs') \|\| explorerNode == 'agentJob') && !explorerServerLost` |
 | `0_new` | **N**ew Login… | `explorer.newLogin` | `((explorerNode == 'folder' && explorerFolder == 'logins') \|\| explorerNode == 'login') && !explorerServerLost && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance')` |
 | `0_new` | **N**ew Operator… | `agent.newOperator` | `((explorerNode == 'folder' && explorerFolder == 'agentOperators') \|\| explorerNode == 'agentOperator') && !explorerServerLost` |
-| `0_new` | Add **R**ecommended Alerts… | `agent.addRecommendedAlerts` | `explorerNode == 'folder' && explorerFolder == 'agentAlerts' && !explorerServerLost` |
+| `0_new` | Add **R**ecommended Alerts… | `agent.addRecommendedAlerts` | `explorerNode == 'folder' && explorerFolder == 'agentAlerts' && agentRole == 'sysadmin' && !explorerServerLost` |
 | `0_new` | **A**ttach… | `explorer.attachDatabase` | `explorerActionAttach != '' && explorerNode == 'folder'` |
 | `0_new` | Crea**t**e Catalog… | `explorer.createCatalog` | `explorerNode == 'folder' && explorerFolder == 'integrationServicesCatalogs' && !explorerServerLost` |
 | `0_new` | **O**perators and Notifications… | `agent.operators` | `explorerNode == 'folder' && (explorerFolder == 'agentOperators' \|\| explorerFolder == 'agentAlerts') && !explorerServerLost` |

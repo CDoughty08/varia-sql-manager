@@ -269,8 +269,6 @@ export function operatorUses(model: Pick<AgentOperatorsModel, 'notifications' | 
 
 // --- Send test e-mail ----------------------------------------------------------------------------------------------------
 
-export const testMailSubject = 'Varia test e-mail from SQL Server Agent'
-export const testMailBody = 'This is a test message sent from Varia SQL Manager through SQL Server Agent\'s Database Mail profile. No action is needed.'
 export interface NotifyOperatorRequest {
   readonly action: 'notifyOperator'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef
   readonly agentObjectId: number

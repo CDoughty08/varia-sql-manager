@@ -112,6 +112,12 @@ describe("the alert document's shared rules", () => {
 })
 
 describe("the operator document's and grid's shared rules", () => {
+  it('blocks an out-of-range delay only when the draft changes it', () => {
+    const model = alertModel({ alert: alertRecord({ delay: 172800 }) })
+    const draft = initialAgentAlertDraft(model)
+    expect(agentAlertProblems(model, { ...draft, enabled: false }).some(problem => problem.field === 'delay')).toBe(false)
+    expect(agentAlertProblems(model, { ...draft, delay: 172801 }).some(problem => problem.field === 'delay' && problem.severity === 'error')).toBe(true)
+  })
   it('counts spaces around a name as no rename, since msdb would refuse renaming to the name it has', () => {
     const alert = initialAgentAlertDraft(alertModel())
     expect(agentAlertChangeCount(alert, { ...alert, name: `${alert.name} ` })).toBe(0)
@@ -278,6 +284,14 @@ describe('the alert and operator documents', () => {
     operatorDocuments.updateDraft(id, draft => ({ ...draft, pager: 'p@example.test' }))
     expect(await operatorDocuments.save(id)).toBe(true)
     expect(api.describeObject.mock.calls.at(-1)?.[0].target).toEqual({ kind: 'agentOperator', name: ' ops' })
+  })
+  it('says a side action whose connection closed may have run', async () => {
+    const { operatorsDocuments, answers } = opened()
+    const id = operatorsDocuments.open('c1', { kind: 'agent' })
+    await settled()
+    answers.push({ ok: false, code: 'CONNECTION_LOST', error: 'closed' } as never)
+    expect(await operatorsDocuments.deleteOperator(id, { id: 9, name: 'DBA' })).toBe(false)
+    expect(operatorsDocuments.get(id)?.error).toMatchObject({ code: 'CONNECTION_LOST', message: agentObjectText.lostAction })
   })
   it('never sends a save again after the connection closed during it', async () => {
     const fixture = opened()

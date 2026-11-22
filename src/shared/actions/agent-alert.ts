@@ -15,8 +15,6 @@ import { mailProblem, pagerDuty, type AgentJobMail, type AgentJobOperator } from
 export const notifyEmail = 1
 export const notifyPager = 2
 export const notifyNetSend = 4
-export const notifyMethodLabel = (methods: number): string =>
-  [methods & notifyEmail ? 'e-mail' : '', methods & notifyPager ? 'pager' : '', methods & notifyNetSend ? 'net send' : ''].filter(Boolean).join(', ') || 'nothing'
 
 export type AgentAlertKind = 'event' | 'performance' | 'wmi'
 /** sp_help_alert's type: 1 a SQL Server event, 2 a performance condition, 4 a WMI event. */
@@ -298,6 +296,8 @@ export function agentAlertSaveProblems(save: AgentAlertSave, create: boolean): s
 export interface AgentAlertProblem { readonly field: AgentAlertField; readonly severity: 'error' | 'warning'; readonly message: string }
 
 export const agentAlertText = {
+  platformAlerts: 'SQL Server Agent alerts need SQL Server on Windows; this server has none.',
+  readAlertsDenied: "This login cannot read the server's alerts.",
   tooManyChanges: `One save changes at most ${agentLimits.notificationChanges} notifications. Save some, then the rest.`,
   nameRequired: 'The alert needs a name.',
   messageRequired: 'Type the error number the alert raises on.',
@@ -316,7 +316,6 @@ export const agentAlertText = {
   readOnly: 'Read-only. SQL Server Agent\'s roles may view alerts, not change them; only sysadmin can.',
   wmiReadOnly: 'WMI event alerts are shown read-only: When cannot be changed here yet; Then and Options can.',
   kindFixed: 'An alert keeps its type: to change it, create a new alert.',
-  kindClosed: (kind: string) => `${kind}s are not available on this server's platform.`,
   newOperatorName: 'The new operator needs a name.',
   newOperatorTaken: (name: string) => `${name} is already an operator on this server.`,
   newOperatorEmail: (name: string) => `${name} is notified by e-mail but has no e-mail address.`,
@@ -326,8 +325,6 @@ export const agentAlertText = {
   resetSysadmin: 'Only sysadmin can reset the count.',
   countersTyped: 'This login cannot read the server\'s performance counters (VIEW SERVER STATE), so type the object, counter and instance.',
   countersHint: 'From sys.dm_os_performance_counters, so you can pick a threshold against real numbers.',
-  denied: (part: string) => `Not saved: permission denied on ${part}. Nothing was changed; your changes are kept.`,
-  newJobForAlert: 'New job for this alert (opens a job tab)',
   delayHint: 'So a burst of the same error sends one message, not hundreds.'
 } as const
 
@@ -354,7 +351,7 @@ export function agentAlertProblems(model: AgentAlertDocumentModel, draft: AgentA
     else if ([draft.object, draft.counter, draft.instance].some(pipe)) error('when', agentAlertText.conditionPipe)
     else if (conditionOf(draft).length > agentLimits.conditionChars) error('when', agentAlertText.conditionTooLong)
   }
-  if (!Number.isInteger(draft.delay) || draft.delay < 0 || draft.delay > agentLimits.alertDelaySeconds) error('delay', agentAlertText.delayRange)
+  if (draft.delay !== initialAgentAlertDraft(model).delay && (!Number.isInteger(draft.delay) || draft.delay < 0 || draft.delay > agentLimits.alertDelaySeconds)) error('delay', agentAlertText.delayRange)
   if (draft.message.length > agentLimits.alertMessageChars) error('message', agentAlertText.messageTooLong)
   const known = model.operators
   for (const added of draft.newOperators) {
@@ -499,7 +496,7 @@ export function agentAlertCommandEntries(): { readonly [K in AgentAlertCommandId
     'agent.addRecommendedAlerts': {
       title: 'Add Recommended Alerts…', category: 'SQL Server Agent', icon: 'check', keywords: ['agent', 'alert', 'severity', 'corruption', 'practice', 'recommended', 'sqlserveragent'],
       precondition: connected, unavailableHint: connectFirst,
-      menus: [{ menu: 'explorer.context', group: '0_new', order: 2, mnemonic: 'r', when: "explorerNode == 'folder' && explorerFolder == 'agentAlerts' && !explorerServerLost" }]
+      menus: [{ menu: 'explorer.context', group: '0_new', order: 2, mnemonic: 'r', when: "explorerNode == 'folder' && explorerFolder == 'agentAlerts' && agentRole == 'sysadmin' && !explorerServerLost" }]
     },
     'agentAlert.save': {
       title: 'Save Alert', category: 'SQL Server Agent', icon: 'save', keywords: ['agent', 'alert', 'apply', 'ok', 'update'],

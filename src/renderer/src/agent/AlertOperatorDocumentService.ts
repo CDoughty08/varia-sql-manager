@@ -111,6 +111,7 @@ export const agentObjectText = {
   lost: (noun: string) => `The connection closed while the ${noun} ${was(noun)} being saved, so whether ${noun.endsWith('s') ? 'they were' : 'it was'} saved is unknown. Reload to check.`,
   partly: (done: number, total: number) => `${done} of ${total} alerts were saved before one was refused; Save sends the rest.`,
   saveFirst: 'Save or reload the changes first.',
+  lostAction: 'The connection closed while it ran, so whether it took is unknown. Reload to check.',
   reloadFirst: (noun: string) => `Reload the ${noun} before saving again: whether the last save took is not known yet.`,
   recommendedDone: (count: number) => `${count} recommended alert${count === 1 ? ' was' : 's were'} created.`,
   deleted: (name: string) => `Operator ${name} was deleted.`
@@ -381,7 +382,9 @@ export class AlertOperatorDocumentService<M, D> extends SnapshotStore<AgentObjec
     this.patch(id, { busy, error: undefined, notice: undefined })
     const result = await this.call(() => this.options.api.executeObjectAction({ ...request, connectionId, requestId: this.newId() } as ActionExecuteRequest))
     if (this.disposed || !this.get(id)) return false
-    const failure = !result.ok ? fallback('SQL_ERROR', result.error) : result.value.error
+    // A side action whose connection closed may have run: say so as a save's loss does, not as a refusal.
+    const lost = !result.ok && (result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST')
+    const failure = !result.ok ? fallback(lost ? 'CONNECTION_LOST' : 'SQL_ERROR', lost ? agentObjectText.lostAction : result.error) : result.value.error
     this.patch(id, { busy: undefined, ...failure ? { error: failure } : {} })
     if (failure) return false
     // A draft with changes (only Send test e-mail runs beside them) keeps them; the read waits for Reload.

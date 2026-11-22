@@ -3404,7 +3404,8 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .agent-operators-grid tr[data-disabled] th { color: var(--varia-descriptionForeground); }
 .agent-operators-head, .agent-operators-cell { width: 100%; min-width: 40px; padding: var(--varia-space-0) var(--varia-space-1); background: transparent; border: 1px solid transparent; color: inherit; }
 .agent-operators-cell { font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); }
-.agent-operators-cell:hover:not(:disabled), .agent-operators-head:hover { background: var(--varia-list-hoverBackground); }
+.agent-operators-cell[aria-disabled="true"] { cursor: default; }
+.agent-operators-cell:hover:not([aria-disabled="true"]), .agent-operators-head:hover { background: var(--varia-list-hoverBackground); }
 .agent-operators-grid [data-selected] { background: var(--varia-list-inactiveSelectionBackground); }
 .agent-operators-head[aria-pressed="true"] { font-weight: 600; }
 .agent-operators-grid td[data-changed] .agent-operators-cell { border-color: var(--varia-warningForeground); font-weight: 600; }

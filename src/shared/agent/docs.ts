@@ -57,7 +57,6 @@ const limitNotes: { readonly [L in AgentLimit]: string } = {
   counterRows: 'Performance counters the alert document\'s pickers list',
   counterInstances: 'Instances one counter\'s current values list',
   recommendedAlerts: 'Alerts one Add recommended alerts creates',
-  testMailChars: 'Characters of Send test e-mail\'s subject and body',
   alertRows: 'Alerts the Operators and notifications grid reads',
   operatorRows: 'Operators one listing reads'
 }

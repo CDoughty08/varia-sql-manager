@@ -1,8 +1,8 @@
 // SQL Server Agent's Operators and notifications grid (AG-7, docs/sql-server-agent.md › Operators and notifications): alerts down, operators
 // across, each cell how the operator hears about the alert; the selected operator beside it with Open, Send test e-mail and Delete (with
 // Reassign to); the jobs that notify operators, read-only; and Add recommended alerts. Save sends one change per changed alert.
-import { useState, type KeyboardEvent } from 'react'
-import { notifyEmail, notifyNetSend, notifyPager, type AgentRecommendedSave } from '../../../shared/actions/agent-alert.ts'
+import { useEffect, useState, type KeyboardEvent } from 'react'
+import { agentAlertText, notifyEmail, notifyNetSend, notifyPager, type AgentRecommendedSave } from '../../../shared/actions/agent-alert.ts'
 import { agentOperatorText, cellText, operatorUses, withCell, type AgentNotifyMatrix, type AgentOperatorRecord, type AgentOperatorsModel } from '../../../shared/actions/agent-operator.ts'
 import { agentLimits } from '../../../shared/agent/catalog.ts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
@@ -33,6 +33,10 @@ export function gridStep(key: string, ctrl: boolean, at: { readonly row: number;
     default: return undefined
   }
 }
+/** Runs an open, reporting a failure (a lost connection) in the command banner rather than throwing from the click. */
+const reported = (commands: { reportError: (message: string) => void }, run: () => unknown, fallback: string) => {
+  try { run() } catch (error) { commands.reportError(error instanceof Error ? error.message : fallback) }
+}
 const methodsWords = (methods: number) => methodChoices.filter(choice => methods & choice.bit).map(choice => choice.label).join(' and ') || 'not notified'
 
 function Grid({ state, model, draft, editable, service, selected, onSelect }: {
@@ -41,7 +45,7 @@ function Grid({ state, model, draft, editable, service, selected, onSelect }: {
 }) {
   const alerts = model.alerts
   const [focus, setFocus] = useState({ row: 0, column: 0 })
-  if (!alerts) return <p className="field-note">This login cannot read the server's alerts.</p>
+  if (!alerts) return <p className="field-note">{model.platform === 'windows' ? agentAlertText.readAlertsDenied : agentAlertText.platformAlerts}</p>
   if (!model.operators.length) return <p className="field-note">The server has no operators yet. New Operator adds one.</p>
   const base = state.base
   const rows = alerts.length, columns = model.operators.length
@@ -66,9 +70,9 @@ function Grid({ state, model, draft, editable, service, selected, onSelect }: {
             const methods = draft.get(alert.name)?.get(operator.name) ?? 0
             const changed = (base?.get(alert.name)?.get(operator.name) ?? 0) !== methods
             return <td key={operator.id} data-changed={changed || undefined} data-selected={operator.name === selected || undefined}>
-              <button type="button" className="agent-operators-cell" disabled={!editable} data-cell={`${row}:${column}`} tabIndex={row === stop.row && column === stop.column ? 0 : -1}
+              <button type="button" className="agent-operators-cell" aria-disabled={!editable || undefined} data-cell={`${row}:${column}`} tabIndex={row === stop.row && column === stop.column ? 0 : -1}
                 onFocus={() => setFocus({ row, column })} aria-label={`${alert.name}, ${operator.name}: ${methodsWords(methods)}`}
-                onClick={() => service.updateDraft(state.id, matrix => withCell(matrix, alert.name, operator.name, nextMethods(methods)))}>{cellText(methods) || '·'}</button>
+                onClick={() => { if (editable) service.updateDraft(state.id, matrix => withCell(matrix, alert.name, operator.name, nextMethods(methods))) }}>{cellText(methods) || '·'}</button>
             </td>
           })}
         </tr>)}</tbody>
@@ -80,7 +84,7 @@ function Grid({ state, model, draft, editable, service, selected, onSelect }: {
 }
 
 function SidePane({ state, model, operator, service, onDelete }: { readonly state: State; readonly model: AgentOperatorsModel; readonly operator: AgentOperatorRecord; readonly service: OperatorsDocumentService; readonly onDelete: () => void }) {
-  const { operatorDocuments, documents } = useWorkbench()
+  const { operatorDocuments, documents, commands } = useWorkbench()
   const uses = operatorUses(model, operator)
   const testBlocked = !model.sysadmin ? agentOperatorText.testSysadmin : !operator.email ? agentOperatorText.testNeedsEmail : model.mail.checked && !model.mail.agentProfile ? agentOperatorText.testNeedsProfile : undefined
   const connectionId = documents.get(state.id)?.connectionId
@@ -93,7 +97,7 @@ function SidePane({ state, model, operator, service, onDelete }: { readonly stat
       <dt>Notified by</dt><dd>{uses.alerts + uses.jobs ? agentOperatorText.deleteUses(uses.alerts, uses.jobs) : agentOperatorText.deleteUnused}</dd>
     </dl>
     <p className="agent-operators-side-actions">
-      <button type="button" disabled={!connectionId} onClick={() => { if (connectionId) operatorDocuments.open(connectionId, { kind: 'agentOperator', name: operator.name }) }}><Icon name="go-to-file" />Open</button>
+      <button type="button" disabled={!connectionId} onClick={() => { if (connectionId) reported(commands, () => operatorDocuments.open(connectionId, { kind: 'agentOperator', name: operator.name }), 'The operator could not be opened.') }}><Icon name="go-to-file" />Open</button>
       <button type="button" title={testBlocked} disabled={!!testBlocked || !service.canReload(state.id)} onClick={() => void service.sendTest(state.id, operator)}><Icon name="agent-operator" />Send test e-mail</button>
       {model.sysadmin && <button type="button" className="danger" disabled={!service.canReload(state.id) || state.changes > 0} title={state.changes > 0 ? agentObjectText.saveFirst : undefined} onClick={onDelete}><Icon name="trash" />Delete…</button>}
     </p>
@@ -150,7 +154,7 @@ function AddRecommended({ state, model, service, onClose }: { readonly state: St
 }
 
 function JobsTable({ state, model }: { readonly state: State; readonly model: AgentOperatorsModel }) {
-  const { jobDocuments, documents } = useWorkbench()
+  const { jobDocuments, documents, commands } = useWorkbench()
   const connectionId = documents.get(state.id)?.connectionId
   const jobs = (model.jobs ?? []).filter(job => job.email || job.page || job.netSend)
   if (!jobs.length) return null
@@ -159,7 +163,7 @@ function JobsTable({ state, model }: { readonly state: State; readonly model: Ag
     <table className="properties-table">
       <thead><tr><th scope="col">Job</th><th scope="col">E-mail</th><th scope="col">Page</th><th scope="col"><span className="visually-hidden">Open</span></th></tr></thead>
       <tbody>{jobs.map(job => <tr key={job.id}><th scope="row">{job.name}</th><td>{job.email || '—'}</td><td>{job.page || '—'}</td>
-        <td><button type="button" aria-label={`Open ${job.name}`} disabled={!connectionId} onClick={() => { if (connectionId) jobDocuments.openJob(connectionId, job.name) }}>Open job</button></td>
+        <td><button type="button" aria-label={`Open ${job.name}`} disabled={!connectionId} onClick={() => { if (connectionId) reported(commands, () => jobDocuments.openJob(connectionId, job.name), 'The job could not be opened.') }}>Open job</button></td>
       </tr>)}</tbody>
     </table>
     <p className="field-note">A job's notifications are changed in its own document.</p>
@@ -173,7 +177,13 @@ export default function OperatorsDocument({ documentId }: { documentId: string }
   const [chosen, setDialog] = useState<'delete' | 'recommended'>()
   const state = documents[documentId]
   // Add recommended alerts from the Alerts folder asks for its dialog once the grid has read the server.
-  const dialog = chosen ?? (state?.ask && state.model?.sysadmin && state.model.alerts && !state.model.readOnly ? state.ask : undefined)
+  const askable = !!state?.model?.sysadmin && !!state.model.alerts && !state.model.readOnly
+  const dialog = chosen ?? (state?.ask && askable ? state.ask : undefined)
+  useEffect(() => {
+    if (!state?.ask || !state.model || askable) return
+    operatorsDocuments.setAsk(state.id, undefined)
+    commands.reportError(state.model.readOnly ?? (state.model.platform === 'windows' ? agentAlertText.readAlertsDenied : agentAlertText.platformAlerts))
+  }, [state?.ask, state?.model, state?.id, askable, operatorsDocuments, commands])
   if (!state) return <div className="agent-operators-document" />
   const { model, draft } = state
   const editable = operatorsDocuments.canEdit(state.id)

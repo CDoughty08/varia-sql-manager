@@ -1,6 +1,6 @@
 // The SQL Server Agent operator document (AG-7, docs/sql-server-agent.md › Operators): General (name, addresses, Send test e-mail), Pager
 // duty, and the alerts that notify it. AlertOperatorDocumentService keeps every state; this only draws it.
-import { notifyEmail, notifyPager } from '../../../shared/actions/agent-alert.ts'
+import { agentAlertText, notifyEmail, notifyPager } from '../../../shared/actions/agent-alert.ts'
 import type { AgentDutyHours } from '../../../shared/actions/agent-job.ts'
 import { agentOperatorText, type AgentOperatorDocumentModel, type AgentOperatorDraft, type AgentOperatorField, type AgentOperatorProblem } from '../../../shared/actions/agent-operator.ts'
 import { agentLimits } from '../../../shared/agent/catalog.ts'
@@ -114,7 +114,7 @@ function NotificationsSection({ state, model, draft, editable, problems, service
   }))
   const jobs = (model.jobs ?? []).filter(job => model.operator && (job.email === model.operator.name || job.page === model.operator.name || job.netSend === model.operator.name))
   return <div className="agent-operator-notifications">
-    {!alerts ? <p className="field-note">This login cannot read the server's alerts.</p> : alerts.length === 0 ? <p className="field-note">The server has no alerts.</p>
+    {!alerts ? <p className="field-note">{model.platform === 'windows' ? agentAlertText.readAlertsDenied : agentAlertText.platformAlerts}</p> : alerts.length === 0 ? <p className="field-note">The server has no alerts.</p>
       : <table className="properties-table" aria-label="Alerts that notify this operator">
         <thead><tr><th scope="col">Alert</th>{methodChoices.slice(0, 2).map(choice => <th key={choice.bit} scope="col">{choice.label}</th>)}</tr></thead>
         <tbody>{alerts.map(alert => <tr key={alert.id} data-disabled={!alert.enabled || undefined}>
