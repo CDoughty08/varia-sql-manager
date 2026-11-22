@@ -696,13 +696,15 @@ export class GridView {
     this.landing = settle && tone === undefined ? { row, selection, settle } : undefined
   }
   /**
-   * A comparison row's tone once its tile is read (a landing's row, whose tile the landing's scroll fetches), so a quick
-   * repeat steps within the row it landed on. Undefined when it cannot come: the active cell left the row, the tile's read
-   * failed, the grid went, or the move was given up.
+   * A comparison row's tone once its tile is read, so a quick repeat steps within the row it landed on. Only a landing still
+   * waiting for its row's tone (whose scroll brings the row's tile in) is waited for, and only while the grid is drawn.
+   * Undefined at once otherwise, or later when it cannot come: the landing settled elsewhere or the active cell left the
+   * row, the tile's read failed, the pane hid, the grid went, or the move was given up.
    */
   toneWhenRead(row: number, signal: AbortSignal): Promise<string | null | undefined> {
     const tone = this.diffTone(row)
     if (tone !== undefined || this.disposed || !this.diff || signal.aborted) return Promise.resolve(tone)
+    if (this.landing?.row !== row || this.scroller.clientWidth <= 0 || this.scroller.clientHeight <= 0) return Promise.resolve(undefined)
     return new Promise(resolve => {
       const waiter = { row, resolve: (value: string | null | undefined) => { signal.removeEventListener('abort', abort); resolve(value) } }
       const abort = () => { this.toneWaiters = this.toneWaiters.filter(item => item !== waiter); waiter.resolve(undefined) }
@@ -716,7 +718,7 @@ export class GridView {
     const diff = this.diff, active = this.diffActive()
     this.toneWaiters = this.toneWaiters.filter(waiter => {
       const tone = this.diffTone(waiter.row)
-      const gone = !diff || active?.row !== waiter.row || this.data.failed(tileKey(Math.floor(waiter.row / this.tiles.rows), Math.floor(diff.tone / this.tiles.columns)))
+      const gone = !diff || active?.row !== waiter.row || this.landing?.row !== waiter.row || this.data.failed(tileKey(Math.floor(waiter.row / this.tiles.rows), Math.floor(diff.tone / this.tiles.columns)))
       if (tone === undefined && !gone) return true
       waiter.resolve(tone)
       return false
@@ -1680,8 +1682,11 @@ export class GridView {
     this.viewportWidth = this.scroller.clientWidth
     this.viewportHeight = this.scroller.clientHeight
     const width = this.viewportWidth, height = this.viewportHeight
-    // A hidden pane (Ctrl+R) or a background tab has no size: nothing to paint until it is shown.
-    if (width <= 0 || height <= 0) return
+    // A hidden pane (Ctrl+R) or a background tab has no size: nothing to paint until it is shown, and no tile to wait for.
+    if (width <= 0 || height <= 0) {
+      for (const waiter of this.toneWaiters.splice(0)) waiter.resolve(undefined)
+      return
+    }
     // The overview strip sits between the header and the horizontal scroll bar, left of the vertical one (read here, with
     // the other offsets; written after the paint).
     const bars = this.overview ? { right: Math.max(0, this.scroller.offsetWidth - width), bottom: Math.max(0, this.scroller.offsetHeight - height) } : undefined

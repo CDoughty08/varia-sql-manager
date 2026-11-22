@@ -188,6 +188,21 @@ describe('moving between a comparison\'s differences', () => {
     expect(view.said()).toBe('Change 4 of 9')
   })
 
+  it('runs Go to Possible Match after the moves queued before it, never dropping it', async () => {
+    const view = await fixture()
+    view.setActive({ row: 2, column: 0, whole: false, tone: 'removed poss=3' })
+    let release: (value: ResultsDiffSeekResult) => void = () => {}
+    view.seek.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    const move = view.compare.navigate('t1', view.entry.key, 'next')
+    view.seek.mockResolvedValueOnce({ row: 8, column: 0, index: 4, total: 9, rows: 12 })
+    const partner = view.compare.goToPossibleMatch('t1', view.entry.key, { row: 2 })
+    await vi.waitFor(() => expect(view.seek).toHaveBeenCalledTimes(1))
+    release({ row: 5, column: 0, index: 2, total: 9, rows: 12 })
+    await Promise.all([move, partner])
+    expect(view.land.mock.calls.map(call => call[0])).toEqual([5, 8])
+    expect(view.seek).toHaveBeenLastCalledWith({ partnerOf: 2 }, expect.any(AbortSignal))
+  })
+
   it('says why a move failed, unless the comparison went', async () => {
     const view = await fixture()
     view.seek.mockRejectedValueOnce(new Error('The backend stopped.'))

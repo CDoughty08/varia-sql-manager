@@ -875,10 +875,14 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
    */
   navigate(tabId: string, key: EntryKey, direction: 'next' | 'previous', o: { readonly focus?: boolean } = {}): Promise<void> {
     // A held key queues at most a few moves; past that, presses wait for the moves already queued.
+    return this.enqueue(key, () => this.move(tabId, key, direction, o), true)
+  }
+  /** Runs a comparison's moves (and Go to Possible Match) one after another; `capped` drops one past maxQueuedMoves. */
+  private enqueue(key: EntryKey, run: () => Promise<void>, capped: boolean): Promise<void> {
     const queued = this.moves.get(key)
-    if (queued && queued.waiting >= maxQueuedMoves) return queued.done
-    // move() never rejects (its failures are said), and the chain catches anyway so one failure cannot stop those queued behind.
-    const done = (queued?.done ?? Promise.resolve()).then(() => this.move(tabId, key, direction, o)).catch(() => {})
+    if (capped && queued && queued.waiting >= maxQueuedMoves) return queued.done
+    // A run never rejects (its failures are said), and the chain catches anyway so one failure cannot stop those queued behind.
+    const done = (queued?.done ?? Promise.resolve()).then(run).catch(() => {})
     this.moves.set(key, { done, waiting: (queued?.waiting ?? 0) + 1 })
     void done.finally(() => {
       const now = this.moves.get(key)
@@ -932,7 +936,11 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
    * Go to Possible Match: selects the row a removed or added row looks like (D5), from results.diffSeek's change index, and
    * scrolls to it; `row` is a menu's row, else the active one. A partner a filter hides is said in the live region.
    */
-  async goToPossibleMatch(tabId: string, key: EntryKey, o: { readonly row?: number; readonly focus?: boolean } = {}): Promise<void> {
+  goToPossibleMatch(tabId: string, key: EntryKey, o: { readonly row?: number; readonly focus?: boolean } = {}): Promise<void> {
+    // After any move queued before it (never dropped): asked for a row, it goes there once they have landed.
+    return this.enqueue(key, () => this.partnerMove(tabId, key, o), false)
+  }
+  private async partnerMove(tabId: string, key: EntryKey, o: { readonly row?: number; readonly focus?: boolean }): Promise<void> {
     const target = this.diffTarget(tabId, key)
     if (!target) return
     const { entry, grid, handle, abort } = target, row = o.row ?? grid.active()?.row

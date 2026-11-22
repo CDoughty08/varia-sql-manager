@@ -278,10 +278,15 @@ describe('a comparison\'s grid', () => {
       await fresh.frame()
       expect(fresh.view.diffTone(390)).toBeUndefined()
       expect(fresh.view.diffTone(300)).toBeUndefined()
+      // An active row no landing waits for (scrolled away, its tile not read) is not waited for: nothing would fetch it.
+      fresh.state.selection = { entry: 'e1', active: { row: 300, column: 1 }, blocks: [{ kind: 'cells', anchor: { row: 300, column: 1 }, focus: { row: 300, column: 1 } }] }
+      expect(await fresh.view.toneWhenRead(300, new AbortController().signal)).toBeUndefined()
       const abort = new AbortController()
+      fresh.view.landDiff(390, { column: 1, whole: false }, () => ({ column: 1, whole: false }), false)
       const given = fresh.view.toneWhenRead(390, abort.signal)
       abort.abort()
       expect(await given).toBeUndefined()
+      fresh.view.landDiff(300, { column: 1, whole: false }, () => ({ column: 1, whole: false }), false)
       const disposed = fresh.view.toneWhenRead(300, new AbortController().signal)
       fresh.view.dispose()
       expect(await disposed).toBeUndefined()

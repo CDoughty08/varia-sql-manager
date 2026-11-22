@@ -321,10 +321,11 @@ buttons are unavailable and say why.
 Above each comparison's grid: its title, its sides (each a link to that result, − old then + new) with **⇄ Swap sides**
 between them, **Match**, **Rows**, **Layout** (One row, Two rows), **Exact text**, the chips, **Previous difference**
 and **Next difference** with the position ([Moving between differences](#moving-between-differences)), **Profile** (the
-Column Profile of the comparison) and **Save Results As**. In a narrow pane they fold away in that order from Exact text (the
-chips first shrink to their sign and count) into More results tools, which holds Match Rows By…, Changes Only, One Row
-per Entry, Exact Text, Swap Sides, Go to Old Result, Go to New Result and Save Results As while a comparison has the
-focus. Match, Rows, Layout, Exact text and Swap sides each change that comparison in place: the same result
+Column Profile of the comparison) and **Save Results As**. In a narrow pane the chips first shrink to their sign and count
+and the position hides; then Exact text, Layout, Rows, Match, the sides, Profile and Save fold away in that order into
+More results tools (the title, chips and arrows stay), which holds Match Rows By…, Changes Only, One Row per Entry,
+Exact Text, Swap Sides, Go to Old Result, Go to New Result, Save Results As and Go to Next and Previous Difference while
+a comparison has the focus. Match, Rows, Layout, Exact text and Swap sides each change that comparison in place: the same result
 tab, number and place, renamed when its sides or Exact text change, keeping its column widths (by column name across a
 swap, as are the key columns it matched by) and its highlights, which follow their rows; its sort, filters and scroll
 reset. Swap onto a pair the run already has the other way round goes to that comparison instead. A change shows its

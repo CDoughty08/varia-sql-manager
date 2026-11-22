@@ -3055,6 +3055,9 @@ try {
   await diffTools.getByRole('button', { name: 'Swap sides', exact: true }).click()
   await expect(second).toBeFocused()
   await expect(page.getByText('Differences: Result 1 → Result 2', { exact: true })).toBeVisible()
+  // The comparison toolbar folds Exact text, Layout, Rows and Match into ⋯ when narrow (a CI runner's window can be), so
+  // the window is wide enough for them until 14i is done.
+  await resize(1440, 800)
   // Result 3's Exact text replaces it in place, renamed for it.
   await diffTools.getByRole('button', { name: 'Exact text', exact: true }).click()
   await expect(diffTools.getByRole('button', { name: 'Exact text', exact: true })).toHaveAttribute('aria-pressed', 'true')
@@ -3168,6 +3171,7 @@ try {
   await expect(picker).toHaveCount(0)
   await expect(grid('Result 4')).toBeFocused()
   await expect(comparisonTools(page, 'Result 4').getByRole('button', { name: 'Match rows by key columns: high' })).toHaveText('high')
+  await resize(...fullSize)
   console.log('Results checks: a comparison Changes only leaves its unchanged rows out and names them after the dashed rule, a chip shows only its kind, the match menu matches by row position and by a key column from the keyboard, the live region says each change, and the pair remembers its key column.')
 
   // 15. Panes and tabs: F6 goes to the results and back; Ctrl+R hides and shows them keeping scroll, selection and a
