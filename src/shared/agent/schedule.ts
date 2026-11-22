@@ -3,7 +3,7 @@
 // the problems msdb's sp_verify_schedule would refuse, the next runs in server time, and the free-slot check against other jobs' usual
 // durations. Pure and erasable TypeScript: no React, no I/O. Times are the server's local wall clock, as msdb stores them; nothing
 // here converts time zones.
-import { agentLimits, relativeDays, relativeIntervals, weekDays } from './catalog.ts'
+import { agentGateOpen, agentLimits, relativeDays, relativeIntervals, weekDays, type AgentPlatform } from './catalog.ts'
 
 /** A schedule's frequency, exactly as sysschedules stores it (sp_add_schedule's and sp_update_schedule's arguments). */
 export interface AgentScheduleTiming {
@@ -310,7 +310,15 @@ export const scheduleText = {
  * What sp_verify_schedule would refuse (errors; Save cannot send them) and what would surprise (warnings; a one-time schedule in the
  * past is saved, as msdb does). `now` is the server's wall clock, when known.
  */
-export function scheduleProblems(fields: AgentScheduleFields, now?: AgentMoment): ScheduleProblem[] {
+/** What the server says about idle schedules: its platform (Managed Instance refuses them, 41914) and, read by sysadmin only, whether
+ *  Agent has an idle CPU condition (without one an idle schedule never starts a job). */
+export interface ScheduleServer {
+  readonly platform?: AgentPlatform
+  readonly idleDefined?: boolean
+}
+/** Whether a platform offers the CPU-idle frequency. */
+export const idleOffered = (platform: AgentPlatform | undefined) => !platform || agentGateOpen('cpuIdleSchedules', platform)
+export function scheduleProblems(fields: AgentScheduleFields, now?: AgentMoment, server?: ScheduleServer): ScheduleProblem[] {
   const problems: ScheduleProblem[] = []
   const error = (field: ScheduleField, message: string) => problems.push({ field, severity: 'error', message })
   const warn = (field: ScheduleField, message: string) => problems.push({ field, severity: 'warning', message })
@@ -356,6 +364,10 @@ export function scheduleProblems(fields: AgentScheduleFields, now?: AgentMoment)
     warn('startDate', scheduleText.oneTimePast)
   }
   if (!(Object.values(freq) as number[]).includes(fields.freqType)) error('frequency', `Frequency type ${fields.freqType} is not one SQL Server Agent knows.`)
+  if (fields.freqType === freq.idle) {
+    if (!idleOffered(server?.platform)) error('frequency', scheduleText.idleUnavailable)
+    else if (server?.idleDefined === false) warn('frequency', scheduleText.idleWarning)
+  }
   return problems
 }
 export const scheduleSavable = (problems: readonly ScheduleProblem[]) => !problems.some(problem => problem.severity === 'error')
@@ -517,12 +529,13 @@ export function median(values: readonly number[]): number | undefined {
  */
 export function freeSlotCheck(schedule: AgentScheduleTiming & { readonly enabled?: boolean }, now: AgentMoment, usualSeconds: number | undefined, others: readonly ScheduledJob[], count = 5): FreeSlotResult {
   const runs = nextRuns({ ...schedule, enabled: true }, now, count)
-  const mine = usualSeconds ?? unmeasuredSeconds
+  // A run measured at 0 seconds still occupies its start second, so two runs starting together always clash.
+  const mine = Math.max(1, usualSeconds ?? unmeasuredSeconds)
   const clashes: FreeSlotClash[] = []
   if (!runs.length) return { runs, usualSeconds: mine, measured: usualSeconds !== undefined, clashes }
   for (const job of others) {
     if (!job.enabled) continue
-    const theirs = job.usualSeconds ?? unmeasuredSeconds
+    const theirs = Math.max(1, job.usualSeconds ?? unmeasuredSeconds)
     for (const run of runs) {
       // Each run asks only for a start that overlaps it, (a - theirs, b): one run per schedule, so even an every-second schedule over
       // many days of runs stays cheap and never runs out of runs before the window ends.
@@ -536,8 +549,8 @@ export function freeSlotCheck(schedule: AgentScheduleTiming & { readonly enabled
 }
 /** The free-slot check in words: "Nothing else is scheduled during this job's usual 16 minutes." or the first clash. */
 export function freeSlotText(result: FreeSlotResult): string {
-  const minutes = Math.max(1, Math.round(result.usualSeconds / 60))
-  const span = result.measured ? `this job's usual ${plural(minutes, 'minute')}` : 'the first minute of each run (this job has no successful run to measure)'
+  const usual = result.usualSeconds < 60 ? plural(result.usualSeconds, 'second') : plural(Math.round(result.usualSeconds / 60), 'minute')
+  const span = result.measured ? `this job's usual ${usual}` : 'the first minute of each run (this job has no successful run to measure)'
   if (!result.runs.length) return 'No upcoming run to check.'
   if (!result.clashes.length) return `Nothing else is scheduled during ${span}.`
   const first = result.clashes[0]

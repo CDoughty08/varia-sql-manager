@@ -10,7 +10,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { chooseExplorerMenuItem } from './fixtures/explorer-tree.mjs'
-import { documentFrame, documentState, documentTab, documentVerb, gridPart, liveGrid, quickInputRows, statusBar, toolbarButton } from './fixtures/ui.mjs'
+import { closeDocumentButton, documentFrame, documentState, documentTab, documentVerb, gridPart, liveGrid, quickInputRows, statusBar, toolbarButton } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -139,10 +139,12 @@ try {
   await expect(page.getByRole('status').filter({ hasText: 'Saved Quarter close.' })).toBeVisible()
   expect((await scheduleSaves()).at(-1)).toMatchObject({ agentSchedule: { op: 'update', schedule: { id: 2 }, name: 'Quarter close' } })
   await page.screenshot({ path: 'artifacts/agent-schedules-dark.png' })
-  // The Agent node's New › Schedule… opens the same document with a new schedule; Create adds it.
+  // With every change saved the tab closes at once, and New › Schedule… opens it again on a new schedule; Create adds it.
+  await closeDocumentButton(page, 'Schedules').click()
+  await expect(documentTab(page, 'Schedules')).toHaveCount(0)
   await chooseExplorerMenuItem(page, ['server-a', 'SQL Server Agent'], ['New', 'Schedule…'])
   const created = page.getByRole('region', { name: 'New schedule', exact: true })
-  // New schedule puts the caret in its Name, not in the filter.
+  // New schedule puts the caret in its Name, not in the filter, once the first read draws it.
   await expect(created.getByLabel('Name', { exact: true })).toBeFocused()
   await created.getByLabel('Name', { exact: true }).fill('Ad hoc')
   await created.getByRole('button', { name: 'Create', exact: true }).click()

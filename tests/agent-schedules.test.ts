@@ -111,6 +111,20 @@ describe('schedule encoding, sentences and runs', () => {
     expect(freeSlotCheck(fields(), now, 60, [busy]).clashes.map(item => formatRun(item.mine))).toEqual(runs(fields()))
     // A run that starts exactly as this one ends, or ends exactly as it starts, is no clash.
     expect(freeSlotCheck(fields(), now, 60, [{ name: 'Edge', enabled: true, usualSeconds: 60, schedules: [fields({ activeStartTime: 23100 }), fields({ activeStartTime: 22900 })] }]).clashes).toEqual([])
+    // Runs measured at 0 seconds that start in the same second still clash, and the text names seconds.
+    const instant = freeSlotCheck(fields(), now, 0, [{ name: 'Ping', enabled: true, usualSeconds: 0, schedules: [fields()] }])
+    expect(instant.clashes).toHaveLength(5)
+    expect(freeSlotText(freeSlotCheck(fields(), now, 0, []))).toBe("Nothing else is scheduled during this job's usual 1 second.")
+    expect(freeSlotText(freeSlotCheck(fields(), now, 42, []))).toBe("Nothing else is scheduled during this job's usual 42 seconds.")
+  })
+  it('refuses a CPU-idle schedule on Managed Instance, and warns where no idle condition is set', () => {
+    const idle = fields({ freqType: freq.idle, freqInterval: 0, freqSubdayType: 0, freqSubdayInterval: 0 })
+    expect(scheduleSavable(scheduleProblems(idle, now, { platform: 'managedInstance' }))).toBe(false)
+    expect(scheduleProblems(idle, now, { platform: 'managedInstance' })).toContainEqual(expect.objectContaining({ field: 'frequency', message: scheduleText.idleUnavailable }))
+    expect(scheduleProblems(idle, now, { platform: 'windows', idleDefined: false })).toEqual([expect.objectContaining({ severity: 'warning', message: scheduleText.idleWarning })])
+    expect(scheduleProblems(idle, now, { platform: 'linux', idleDefined: true })).toEqual([])
+    expect(jobScheduleProblems(initialJobSchedules([]).concat([{ ...initialJobSchedules([record(9)])[0]!, id: undefined, key: 'new-1', fields: { ...idle, name: 'Idle' } }]), now, [], { platform: 'managedInstance' })
+      .map(item => item.problem.message)).toContain(scheduleText.idleUnavailable)
   })
   it("warns past SSMS's limits that msdb does not have, and refuses an end date before the start for every type", () => {
     for (const timing of [fields({ freqInterval: 365 }), fields({ freqSubdayType: subday.hours, freqSubdayInterval: 48, activeEndTime: 235959 }), fields({ freqType: freq.weekly, freqInterval: 2, freqRecurrenceFactor: 150 })]) {
@@ -295,7 +309,8 @@ describe('the Schedules document', () => {
     expect(schedules.draftJobs(id).map(job => job.name)).toEqual(['Backup'])
     expect(schedules.changes(id)).toBe(3)
     expect(documents.get(id)?.dirty).toBe(true)
-    expect(schedules.canClose(id)).toBeDefined()
+    // Unsaved drafts close through Save / Don't Save (the tab is dirty), not a refusal.
+    expect(schedules.canClose(id)).toBeUndefined()
     setModel(schedulesModel({ schedules: [record(1, { name: 'Nightly', version: 4 })] }))
     expect(await schedules.save(id)).toBe(true)
     expect(executes()[0]).toMatchObject({
@@ -448,6 +463,45 @@ describe('the Schedules document', () => {
     expect(schedules.get(id)?.drafts['1']).toBeUndefined()
     schedules.toggleJob(id, jobA.id, true)
     expect(schedules.get(id)?.drafts['1']?.jobs).toEqual([{ jobId: jobA.id, version: 4, attach: true }])
+  })
+  it("saves every changed draft for File › Save and the close prompt, refuses to close only mid-save, and drops an older schedules read", async () => {
+    const { schedules, executes, answers, api, documents } = schedulesWorkbench()
+    const id = schedules.open('c1')
+    await settled()
+    schedules.select(id, '1')
+    schedules.update(id, { ...schedules.draft(id)!.fields, name: 'One' })
+    schedules.select(id, '2')
+    schedules.update(id, { ...schedules.draft(id)!.fields, name: 'Two' })
+    schedules.select(id, '3')
+    let answer: (value: ApiResult<ActionExecuteResult>) => void = () => {}
+    api.executeObjectAction.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    const saving = schedules.save(id)
+    await settled()
+    expect(schedules.canClose(id)).toBeDefined()
+    answer({ ok: true, value: { steps: [], messages: [], elapsedMs: 1 } })
+    expect(await saving).toBe(true)
+    expect(executes()).toMatchObject([{ agentSchedule: { schedule: { id: 1 }, name: 'One' } }, { agentSchedule: { schedule: { id: 2 }, name: 'Two' } }])
+    expect(documents.get(id)?.dirty).toBe(false)
+    expect(schedules.canClose(id)).toBeUndefined()
+    // A refusal stops the run on the draft it refused, selected so its error shows.
+    schedules.select(id, '1')
+    schedules.update(id, { ...schedules.draft(id)!.fields, name: 'Uno' })
+    schedules.select(id, '2')
+    schedules.update(id, { ...schedules.draft(id)!.fields, name: 'Dos' })
+    answers.push({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'SQL_ERROR', message: 'Refused.', retryable: false } } })
+    expect(await schedules.save(id)).toBe(false)
+    expect(executes()).toHaveLength(3)
+    expect(schedules.get(id)?.selected).toBe('2')
+    // A Refresh that answers after a later read (here the read after an Enabled toggle) is dropped.
+    schedules.discard(id)
+    let late: (value: ApiResult<ActionDescribeResult>) => void = () => {}
+    api.describeObject.mockImplementationOnce(() => new Promise(resolve => { late = resolve }))
+    schedules.refresh(id)
+    await schedules.setEnabled(id, 2, false)
+    await settled()
+    late({ ok: true, value: { agentSchedules: schedulesModel({ schedules: [record(1, { name: 'Stale' })] }), elapsedMs: 1 } })
+    await settled()
+    expect(schedules.get(id)?.model?.schedules.map(item => item.name)).not.toContain('Stale')
   })
   it("moves a draft's guard with its own Enabled toggle, not with someone else's change", async () => {
     const { schedules, setModel, executes } = schedulesWorkbench()

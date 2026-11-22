@@ -133,7 +133,7 @@ function EntryEditor(props: Props & { readonly entry: JobScheduleEntry; readonly
   const changeable = service.canChangeSchedule(state.id, record)
   const others = record ? otherJobs(state, model, record.id) : undefined
   const sharedCount = record ? record.jobCount - (entry.attached ? 0 : 1) : 0
-  const problems = scheduleProblems(entry.fields, now)
+  const problems = scheduleProblems(entry.fields, now, { platform: model.platform, idleDefined: state.shared?.model?.idleDefined })
   const readOnly = !changeable ? record?.owner ? jobScheduleText.readOnly(record.owner) : jobScheduleText.unknownOwner : undefined
   const aside = record && (sharedCount > 0 || readOnly) ? <section aria-label="Also used by">
     <h4>Also used by <span className="field-note">{sharedCount} {sharedCount === 1 ? 'job' : 'jobs'}</span></h4>
@@ -144,7 +144,7 @@ function EntryEditor(props: Props & { readonly entry: JobScheduleEntry; readonly
   </section> : undefined
   return <div className="agent-schedule-entry">
     <ScheduleEditor idPrefix={`agent-schedule-${state.id}-${entry.key.replace(/[^\w-]/g, '_')}`} fields={entry.fields} base={record ? scheduleFieldsOf(record) : undefined}
-      disabled={!editable || !changeable} problems={problems} now={now} freeSlot={freeSlot(state, model, entry, now)} aside={aside}
+      disabled={!editable || !changeable} problems={problems} now={now} freeSlot={freeSlot(state, model, entry, now)} aside={aside} platform={model.platform}
       onChange={fields => service.updateSchedule(state.id, entry.key, fields)} />
     <p><button type="button" disabled={!editable} onClick={() => service.removeSchedule(state.id, entry.key)}><Icon name="trash" />Remove from this job</button></p>
   </div>
@@ -167,7 +167,7 @@ export default function JobSchedules(props: Props) {
   const usable = (sharedState?.model?.schedules ?? []).filter(item => !onJob.has(item.id) && (model.sysadmin || ownsSchedule(item, model.login)))
   const matches = search.trim() ? usable.filter(item => scheduleMatches(item, search)) : []
   const picked = selected?.startsWith('pick:') ? usable.find(item => item.id === Number(selected.slice(5))) ?? sharedState?.model?.schedules.find(item => item.id === Number(selected.slice(5))) : undefined
-  const listProblems = jobScheduleProblems(draft.schedules, undefined, model.schedules).filter(item => !item.key)
+  const listProblems = jobScheduleProblems(draft.schedules, undefined, model.schedules, { platform: model.platform }).filter(item => !item.key)
   const searchId = `agent-schedule-search-${state.id}`
   return <div className="agent-schedules">
     <div className="agent-schedule-list">

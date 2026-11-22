@@ -99,10 +99,10 @@ Schedules document manages the shared schedules. The job document's Steps sectio
   `src/shared/actions/agent-schedule.ts` for the saves). The job document's **Schedules** section lists the job's schedules, each
   with its short "when" and whether other jobs share it, and edits the selected one in place with SSMS's own fields (Occurs,
   Daily frequency, Duration; an ending time of 00:00 is 23:59:59, as msdb stores it; past SSMS's own limits, such as every 365 days, which msdb accepts, the editor warns instead of refusing, and a job's schedule as read is checked only once it is changed), preset chips that only fill those fields ("Every day at…", "Weekdays at…", "Weekly on…", "Every N
-  minutes", "Monthly on day…", and under More… agent start, CPU idle and one time), SSMS's sentence, the next five runs in server
+  minutes", "Monthly on day…", and under More… agent start, CPU idle and one time; Managed Instance offers no CPU idle and refuses a schedule set to it, and an idle schedule warns where Agent has no idle CPU condition), SSMS's sentence, the next five runs in server
   time (the describe reads the server's clock; disabled, agent-start and idle schedules say why they have none) and, for
   sysadmin, a **free-slot check**: this schedule's next runs, each lasting the job's usual duration (the median of its last 10
-  successful runs from `sp_help_jobhistory`, or a minute when it has none), against the runs of every other enabled job's
+  successful runs from `sp_help_jobhistory`, or a minute when it has none; a run is at least a second, so two starting together clash), against the runs of every other enabled job's
   schedules lasting theirs. A schedule shared with other jobs names them and says a change moves them too, with **Copy for this
   job only** (detach the shared one as read, add a copy that keeps the edits); one the login neither owns nor may change
   (below sysadmin) is read-only with Copy. **Add** searches the shared schedules by name or by when they run ("night", "every
@@ -122,7 +122,7 @@ Schedules document manages the shared schedules. The job document's Steps sectio
   beside it the selected schedule's editor (the same one as the job document's), the jobs that use it with Detach and Attach a
   job (only jobs the login owns, or any for sysadmin, as msdb allows), and Save. Edits are kept per schedule until saved, each guarded by the schedule as its edit began, so neither Refresh nor
   the read after another save lets it pass over someone else's change; a STALE save reads again and shows their change with the
-  user's on top, for the user to save again. The tab asks before closing with unsaved ones. The grid's **Enabled** box saves at once. New schedule and Duplicate edit a draft that
+  user's on top, for the user to save again. Closing the tab with unsaved ones asks Save / Don't Save; Save (and File › Save) saves each changed schedule in turn and stops at the first refused. Only a save under way stops the close. The grid's **Enabled** box saves at once. New schedule and Duplicate edit a draft that
   Create adds; Delete asks inline and never forces, so msdb refuses one a job uses (`IN_USE`, 14372), saying how many jobs.
   Every change is the `agentSchedule` object action on the Agent node with `op` `create` (`sp_add_schedule` with the new id as
   an OUTPUT local, then guarded `sp_attach_schedule`s), `update` (the guard, `sp_update_schedule` with what changed, then guarded

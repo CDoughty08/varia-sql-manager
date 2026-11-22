@@ -6,7 +6,7 @@
 import { z } from 'zod'
 import { agentLimits, type AgentPlatform } from '../agent/catalog.ts'
 import {
-  effectiveEndTime, freq, normalizedTiming, sameTiming, scheduleProblems, timingKeys, validDate, validTime, type AgentMoment, type AgentScheduleFields, type AgentScheduleTiming, type ScheduleProblem
+  effectiveEndTime, freq, normalizedTiming, sameTiming, scheduleProblems, timingKeys, validDate, validTime, type AgentMoment, type AgentScheduleFields, type AgentScheduleTiming, type ScheduleProblem, type ScheduleServer
 } from '../agent/schedule.ts'
 import { ident } from '../explorer/schema.ts'
 
@@ -169,7 +169,7 @@ export const jobScheduleText = {
 
 /** The schedule entries' problems, by entry key: errors stop Save. A job may already hold more than agentLimits.schedulesPerJob (msdb
  *  sets no limit); only adding one past it is refused. A picked schedule without the version its guard names cannot be attached. */
-export function jobScheduleProblems(entries: readonly JobScheduleEntry[], now?: AgentMoment, records: readonly AgentScheduleRecord[] = []): { readonly key?: string; readonly problem: ScheduleProblem }[] {
+export function jobScheduleProblems(entries: readonly JobScheduleEntry[], now?: AgentMoment, records: readonly AgentScheduleRecord[] = [], server?: ScheduleServer): { readonly key?: string; readonly problem: ScheduleProblem }[] {
   const out: { key?: string; problem: ScheduleProblem }[] = []
   const kept = entries.filter(entry => !entry.remove)
   if (kept.length > agentLimits.schedulesPerJob && kept.some(entry => entry.id === undefined || entry.attached)) out.push({ problem: { field: 'name', severity: 'error', message: jobScheduleText.tooMany } })
@@ -179,7 +179,7 @@ export function jobScheduleProblems(entries: readonly JobScheduleEntry[], now?: 
     // One of the job's own schedules as read is the server's business (made in T-SQL, perhaps by another login): only a change is checked.
     const read = !entry.attached && entry.id !== undefined ? records.find(record => record.id === entry.id) : undefined
     if (read && !Object.keys(scheduleValues(read, entry.fields)).length) continue
-    for (const problem of scheduleProblems(entry.fields, now)) out.push({ key: entry.key, problem })
+    for (const problem of scheduleProblems(entry.fields, now, server)) out.push({ key: entry.key, problem })
   }
   return out
 }

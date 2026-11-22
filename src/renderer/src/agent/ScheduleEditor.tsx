@@ -2,9 +2,9 @@
 // document share: SSMS's own fields (Frequency, Daily frequency, Duration) with presets that only fill them, SSMS's sentence, the next five
 // runs in server time and, where the caller has one, the free-slot check. Pure drawing: every change goes back through onChange as whole
 // fields, and problems come from scheduleProblems.
-import { agentLimits, frequencyTypes, relativeDays, relativeIntervals, weekDays } from '../../../shared/agent/catalog.ts'
+import { agentLimits, frequencyTypes, relativeDays, relativeIntervals, weekDays, type AgentPlatform } from '../../../shared/agent/catalog.ts'
 import {
-  endOfDay, formatDate, formatRun, formatTime, freq, matchingPreset, nextRuns, noEndDate, noRunsReason, parseDate, parseTime, schedulePresets, scheduleSentence, subday, withFrequency,
+  endOfDay, formatDate, formatRun, formatTime, freq, idleOffered, matchingPreset, nextRuns, noEndDate, noRunsReason, parseDate, parseTime, schedulePresets, scheduleSentence, subday, withFrequency,
   type AgentMoment, type AgentScheduleFields, type ScheduleField, type ScheduleProblem
 } from '../../../shared/agent/schedule.ts'
 import Icon from '../Icon'
@@ -28,6 +28,8 @@ export interface ScheduleEditorProps {
   readonly freeSlot?: string
   /** Shown under the next runs (Also used by, Copy for this job only). */
   readonly aside?: React.ReactNode
+  /** The server's platform: Managed Instance offers no CPU-idle frequency or preset (a schedule already idle still shows it). */
+  readonly platform?: AgentPlatform
 }
 
 const recurringTypes: readonly number[] = [freq.daily, freq.weekly, freq.monthly, freq.relative]
@@ -45,7 +47,9 @@ function textOf(problems: readonly ScheduleProblem[], ...fields: ScheduleField[]
   return { ...error ? { error } : {}, ...warnings.length ? { note: warnings.join(' ') } : {} }
 }
 
-export default function ScheduleEditor({ idPrefix, fields, base, onChange, disabled, problems, now, freeSlot, aside }: ScheduleEditorProps) {
+export default function ScheduleEditor({ idPrefix, fields, base, onChange, disabled, problems, now, freeSlot, aside, platform }: ScheduleEditorProps) {
+  const idle = idleOffered(platform) || fields.freqType === freq.idle
+  const presets = schedulePresets.filter(preset => idleOffered(platform) || preset.id !== 'idle')
   const id = (key: string) => `${idPrefix}-${key}`
   const set = (patch: Partial<AgentScheduleFields>) => onChange({ ...fields, ...patch })
   const changed = (...keys: (keyof AgentScheduleFields)[]) => !!base && keys.some(key => base[key] !== fields[key])
@@ -71,13 +75,13 @@ export default function ScheduleEditor({ idPrefix, fields, base, onChange, disab
       <PropertyField id={id('presets')} labelFor={false} label="Start from" description="A preset fills the fields below; it is not stored.">
         <span className="agent-schedule-presets">
           <ChipGroup label="Presets">
-            {schedulePresets.filter(preset => !preset.more).map(preset =>
+            {presets.filter(preset => !preset.more).map(preset =>
               <Chip key={preset.id} label={preset.label} pressed={chosen === preset.id} disabled={disabled} onToggle={() => onChange(preset.apply(fields, now.date))} />)}
           </ChipGroup>
           <select className="property-input" aria-label="More presets" value="" disabled={disabled}
-            onChange={event => { const preset = schedulePresets.find(item => item.id === event.target.value); if (preset) onChange(preset.apply(fields, now.date)) }}>
+            onChange={event => { const preset = presets.find(item => item.id === event.target.value); if (preset) onChange(preset.apply(fields, now.date)) }}>
             <option value="">More…</option>
-            {schedulePresets.filter(preset => preset.more).map(preset => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
+            {presets.filter(preset => preset.more).map(preset => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
           </select>
         </span>
       </PropertyField>
@@ -85,7 +89,7 @@ export default function ScheduleEditor({ idPrefix, fields, base, onChange, disab
         <span className="agent-schedule-row">
           <select id={id('type')} className="property-input" value={fields.freqType} disabled={disabled} {...fieldAria(id('type'), frequency)}
             onChange={event => onChange(withFrequency(fields, Number(event.target.value), now.date))}>
-            {frequencyTypes.map(type => <option key={type.code} value={type.code}>{type.label}</option>)}
+            {frequencyTypes.filter(type => idle || type.code !== freq.idle).map(type => <option key={type.code} value={type.code}>{type.label}</option>)}
           </select>
           {fields.freqType === freq.daily && <>
             <span>every</span>

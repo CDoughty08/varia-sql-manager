@@ -12,7 +12,7 @@ import {
 } from '../../../shared/actions/agent-schedule.ts'
 import type { ActionError, ActionExecuteResult } from '../../../shared/actions/schema.ts'
 import { agentLimits } from '../../../shared/agent/catalog.ts'
-import { defaultSchedule, scheduleMatches, scheduleProblems, scheduleSavable, type AgentMoment, type AgentScheduleFields } from '../../../shared/agent/schedule.ts'
+import { defaultSchedule, scheduleMatches, scheduleProblems, scheduleSavable, type AgentMoment, type AgentScheduleFields, type ScheduleServer } from '../../../shared/agent/schedule.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
@@ -115,6 +115,8 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
   private readonly requests = new Map<string, Set<string>>()
   /** Bumped by each read of the schedules, which forgets their jobs: a jobs read from before it is dropped. */
   private readonly generations = new Map<string, number>()
+  /** Each document's latest schedules read: an older one that answers later is dropped. */
+  private readonly reads = new Map<string, number>()
   private readonly targetBindings: CustomDocumentTargets
   private disposed = false
 
@@ -161,9 +163,12 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
   private async describe(id: string, notice?: string, select?: string): Promise<void> {
     const connectionId = this.connectionOf(id)
     if (!this.get(id) || !connectionId) return
+    // Only the latest read lands: one started before a later one (a Refresh and then a toggle's read) is dropped.
+    const read = (this.reads.get(id) ?? 0) + 1
+    this.reads.set(id, read)
     const result = await this.request(id, requestId => this.options.api.describeObject({ connectionId, requestId, dialog: 'agentSchedules', target: { kind: 'agent' } }))
     const current = this.get(id)
-    if (!current || !result) return
+    if (!current || !result || this.reads.get(id) !== read) return
     const model = result.ok && !result.value.error ? result.value.agentSchedules : undefined
     if (!model) {
       const error = !result.ok ? fallback('SQL_ERROR', result.error) : result.value.error ?? fallback('SQL_ERROR', schedulesText.readFailed)
@@ -176,6 +181,8 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
     this.generations.set(id, (this.generations.get(id) ?? 0) + 1)
     this.patch(id, { phase: 'ready', model, drafts, selected, scheduleJobs: undefined, error: undefined, notice, revision: current.revision + 1 })
     this.dirtyChanged(id)
+    // Opened on a new schedule: its Name is drawn only once the first read is in, so the caret goes there now.
+    if (!current.model && selected === newScheduleKey) this.options.focus?.(id, 'name')
     if (selected && selected !== newScheduleKey) this.ensureScheduleJobs(id, Number(selected))
   }
   /** One schedule's jobs, where the read has no links (below sysadmin): read once per schedule and read. */
@@ -202,6 +209,11 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
     if (moment) return moment
     const date = new Date()
     return { date: date.getFullYear() * 10_000 + (date.getMonth() + 1) * 100 + date.getDate(), time: date.getHours() * 10_000 + date.getMinutes() * 100 + date.getSeconds() }
+  }
+  /** What the schedules read says about idle schedules: the platform and whether an idle CPU condition is set. */
+  server(id: string): ScheduleServer {
+    const model = this.get(id)?.model
+    return model ? { platform: model.platform, ...model.idleDefined !== undefined ? { idleDefined: model.idleDefined } : {} } : {}
   }
   record(id: string, key: string | undefined): AgentScheduleRecord | undefined {
     if (!key || key === newScheduleKey) return undefined
@@ -272,7 +284,7 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
     const state = this.get(id), save = this.pendingSave(id), draft = this.draft(id)
     if (!state || !save || !draft || state.busy || !this.live(id) || state.phase !== 'ready') return false
     if (save.op !== 'create' && this.readOnly(id, this.record(id, state.selected))) return false
-    return scheduleSavable(scheduleProblems(draft.fields, this.now(id))) && scheduleSaveProblems(save).length === 0
+    return scheduleSavable(scheduleProblems(draft.fields, this.now(id), this.server(id))) && scheduleSaveProblems(save).length === 0
   }
   canDelete(id: string): boolean {
     const state = this.get(id), record = this.record(id, state?.selected)
@@ -280,13 +292,14 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
   }
   isDirty(id: string): boolean {
     const state = this.get(id)
-    if (!state) return false
-    return Object.keys(state.drafts).some(key => {
-      const draft = state.drafts[key]!
-      if (key === newScheduleKey) return true
-      const record = this.record(id, key)
-      return !!record && !!scheduleDraftSave(draft.base ?? record, draft.fields, draft.jobs)
-    })
+    return !!state && Object.keys(state.drafts).some(key => this.draftChanged(id, key))
+  }
+  private draftChanged(id: string, key: string): boolean {
+    const draft = this.get(id)?.drafts[key]
+    if (!draft) return false
+    if (key === newScheduleKey) return true
+    const record = this.record(id, key)
+    return !!record && !!scheduleDraftSave(draft.base ?? record, draft.fields, draft.jobs)
   }
 
   // --- Editing ---------------------------------------------------------------------------------------------------------
@@ -341,8 +354,23 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
 
   // --- Saving ----------------------------------------------------------------------------------------------------------
 
-  /** Save: the selected schedule's draft as one guarded `agentSchedule` action, then the schedules read again. */
+  /** File › Save and the close prompt's Save: every changed draft in turn, the selected one first, each selected while it saves so
+   *  a refusal shows on it. Stops at the first that does not save. */
   async save(id: string): Promise<boolean> {
+    const tried = new Set<string>()
+    for (;;) {
+      const state = this.get(id)
+      if (!state) return false
+      const key = state.selected && !tried.has(state.selected) && this.draftChanged(id, state.selected) ? state.selected
+        : Object.keys(state.drafts).find(item => !tried.has(item) && this.draftChanged(id, item))
+      if (!key) return true
+      tried.add(key)
+      this.select(id, key)
+      if (!await this.saveSelected(id)) return false
+    }
+  }
+  /** The Save button: the selected schedule's draft as one guarded `agentSchedule` action, then the schedules read again. */
+  async saveSelected(id: string): Promise<boolean> {
     const state = this.get(id), save = this.pendingSave(id)
     if (!state || !save) return true
     if (!this.canSave(id)) return false
@@ -434,7 +462,8 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
 
   // --- CustomDocumentProvider ------------------------------------------------------------------------------------------
 
-  canClose(id: string): string | undefined { return this.isDirty(id) ? 'The Schedules document has unsaved schedule changes.' : undefined }
+  /** Unsaved drafts close through Save / Don't Save (the document is dirty); only a save under way refuses. */
+  canClose(id: string): string | undefined { return this.get(id)?.busy ? 'The Schedules document is saving. Wait for the save to finish.' : undefined }
   revision(id: string): number { return this.get(id)?.revision ?? 0 }
   /** The tab's focus: a new schedule's Name, else the filter. */
   focus(id: string): void { this.options.focus?.(id, this.get(id)?.selected === newScheduleKey ? 'name' : undefined) }
@@ -445,6 +474,7 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
     this.cancel([...this.requests.get(id) ?? []])
     this.requests.delete(id)
     this.generations.delete(id)
+    this.reads.delete(id)
     this.targetBindings.forget(id)
     this.publish({ documents: Object.fromEntries(Object.entries(this.getSnapshot().documents).filter(([key]) => key !== id)) })
   }

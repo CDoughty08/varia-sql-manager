@@ -34,13 +34,13 @@ function Detail({ state, service }: { readonly state: SchedulesState; readonly s
     <div className="agent-schedules-detail-head">
       <h3>{key === newScheduleKey ? 'New schedule' : record?.name}{record?.owner && <span className="field-note"> · owner {record.owner}</span>}</h3>
       <button type="button" disabled={!state.drafts[key] || busy} onClick={() => service.discard(state.id)}>Discard</button>
-      <button type="button" className="primary" disabled={!service.canSave(state.id)} onClick={() => { void service.save(state.id) }}>
+      <button type="button" className="primary" disabled={!service.canSave(state.id)} onClick={() => { void service.saveSelected(state.id) }}>
         <Icon name="save" />{state.busy === 'saving' ? 'Saving…' : key === newScheduleKey ? 'Create' : changes ? `Save · ${changes} ${changes === 1 ? 'change' : 'changes'}` : 'Save'}
       </button>
     </div>
     {readOnly && <p className="field-note" role="note"><Icon name="lock" />{readOnly}</p>}
     <ScheduleEditor idPrefix={idPrefix} fields={draft.fields} {...record ? { base: scheduleFieldsOf(record) } : {}} disabled={!!readOnly || busy}
-      problems={scheduleProblems(draft.fields, now)} now={now} onChange={fields => service.update(state.id, fields)}
+      problems={scheduleProblems(draft.fields, now, service.server(state.id))} now={now} platform={state.model?.platform} onChange={fields => service.update(state.id, fields)}
       aside={<section aria-label="Jobs using it">
         <h4>Jobs using it <span className="field-note">{jobs.length}</span></h4>
         {jobs.length ? <ul className="agent-schedule-jobs">{jobs.map(job => {
