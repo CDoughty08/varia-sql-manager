@@ -277,3 +277,45 @@ describe('a windowed grid in the results service', () => {
     expect(f.service.applyColumnFilter('t1', f.key, 0, { kind: 'notNull' })).toBe(true)
   })
 })
+
+describe('a windowed grid going away', () => {
+  it('closes its views built in BigQuery when the results or the tab close, as the backend frees only the source', async () => {
+    for (const close of ['results', 'tab'] as const) {
+      const f = serviceFixture()
+      f.service.cycleSort('t1', f.key, 0)
+      await vi.waitFor(() => expect(f.service.sortOf('t1', f.key)?.view).toBeDefined())
+      const derived = f.client.open(descriptor(50, { columns }))
+      if (close === 'results') f.service.closeResults('t1')
+      else f.service.release('t1')
+      expect(derived.close, close).toHaveBeenCalled()
+    }
+  })
+  it('drops a query\'s lines that answer after the tab closed, opening no run', () => {
+    const f = serviceFixture()
+    f.service.remoteMessages('t1', [{ text: 'BigQuery job p:US.job_1.', kind: 'info' }])
+    expect(f.tab().messages.at(-1)?.text).toBe('BigQuery job p:US.job_1.')
+    f.service.release('t1')
+    f.service.remoteMessages('t1', [{ text: 'The sort or filter was cancelled.', kind: 'info' }])
+    expect(f.service.getSnapshot().t1).toBeUndefined()
+  })
+  it('takes a BigQuery value list only while the result is windowed, and a list of its rows only while in memory', () => {
+    const client = fakeResultClient(), timers = manualTimers()
+    const api = { copyResults: vi.fn<VariaApi['copyResults']>(), saveResults: vi.fn<VariaApi['saveResults']>(), cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(), onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {}) }
+    const service = new ResultsService({ client, api, events: new EventBus(), frame: callback => callback(), timers: timers.timers })
+    service.begin('t1', 'q1')
+    const memory = descriptor(1, { columns })
+    client.emit('q1', { type: 'resultSet.opened', descriptor: memory })
+    service.finish('t1', 'q1', { summary: summaryOf([memory]) })
+    const key = service.getSnapshot().t1!.sets[0].key
+    service.registerGrid('t1', key, { selectAll: () => {}, repaint: () => {}, fitColumn: () => {}, filterColumn: () => {} })
+    // Loaded into memory while the funnel held a BigQuery list: its rows are the list's, not the result's.
+    expect(service.applyColumnFilter('t1', key, 2, { kind: 'equals', row: 1, list: list(1) })).toBe(false)
+    const f = serviceFixture()
+    expect(f.service.applyColumnFilter('t1', f.key, 2, { kind: 'equals', row: 1, list: { ...list(1), source: undefined, resultId: 1 } })).toBe(false)
+  })
+  it('treats a type this build does not know as one BigQuery cannot order, as the backend does', () => {
+    expect(remoteOrderable({ dataType: 'FUTURE_TYPE' })).toBe(false)
+    expect(remoteOrderable({ dataType: 'STRINGS' })).toBe(false)
+    expect(remoteOrderable({ dataType: 'INT64' })).toBe(true)
+  })
+})

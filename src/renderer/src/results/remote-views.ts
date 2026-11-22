@@ -14,10 +14,10 @@ import { ResultError, type DistinctList, type ResultClient, type ResultHandle, t
 export const remoteFilterRefusal = 'This filter names rows of the grid, which a result windowed in BigQuery does not hold. Filter by a column\'s values instead, or Load into memory.'
 export const remoteSelectionText = 'Filters by selection, duplicates and Keep Selected Rows need the rows in memory. Filter by a column\'s values instead, or Load into memory.'
 
-/** Whether BigQuery can order and group a column of this type (BigQueryViewSql.Orderable in C#): not ARRAY, STRUCT,
- *  GEOGRAPHY, JSON, RANGE or INTERVAL. */
+/** Whether BigQuery can order and group a column of this type, the same list as BigQueryViewSql.Orderable in C#: not
+ *  ARRAY, STRUCT, GEOGRAPHY, JSON, RANGE, INTERVAL or a type this build does not know. */
 export function remoteOrderable(column: Pick<ResultColumn, 'dataType'>): boolean {
-  return !/^(ARRAY|STRUCT|GEOGRAPHY|JSON|RANGE|INTERVAL)\b/i.test(column.dataType.trim())
+  return /^(INT64|FLOAT64|NUMERIC|BIGNUMERIC|BOOL|STRING|BYTES|DATE|TIME|DATETIME|TIMESTAMP)(?![\w<])/i.test(column.dataType.trim())
 }
 
 /** Why a column cannot be sorted or listed in BigQuery. */

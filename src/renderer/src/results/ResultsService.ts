@@ -743,6 +743,13 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    * refused close): after the run's own lines, which a running run's summary does not replace; a tab with no run gets a
    * messages-only view. The strip opens for an error line, as for a run's.
    */
+  /** A query over a windowed result's lines (its job, rows, cost): after the run's, only while the tab's run is there, so an
+   *  answer that came after the tab closed opens nothing. */
+  remoteMessages(tabId: string, messages: readonly MessageEntry[]): void {
+    if (!this.runs.has(tabId)) return
+    for (const message of messages) this.addMessage(tabId, message.text, message.kind === 'error' ? 'error' : 'info')
+  }
+
   addMessage(tabId: string, text: string, kind: 'info' | 'error' = 'info'): void {
     if (this.disposed) return
     const entry: MessageEntry = { text: text.slice(0, wire.messages.characters), kind }
@@ -1365,7 +1372,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     }
     // A list of the grid's own result, or a BigQuery value list of it (whose own small result holds the values).
     const list = 'list' in condition ? condition.list : undefined
-    if (list && (list.column !== column || list.generation !== set.handle.key.generation || (list.source ? list.source.resultId : list.resultId) !== set.handle.key.resultId)) return false
+    // A BigQuery value list fits only a windowed result, a list of its rows only one in memory: the result may have switched
+    // while the funnel was open.
+    if (list && (list.column !== column || list.generation !== set.handle.key.generation || (list.source ? list.source.resultId : list.resultId) !== set.handle.key.resultId
+      || !!list.source !== isRemoteHandle(set.handle))) return false
     // A windowed result's filter names values by a value list's rows.
     if (isRemoteHandle(set.handle) && 'rows' in filter && filter.rows.length > 0 && !list?.source) return false
     const name = columnName(set.descriptor.columns, column)
@@ -2073,9 +2083,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       const key = entry.key
       run.sorting.get(key)?.abort()
       run.sorting.delete(key)
-      // Releasing the result closes its views.
-      run.held.delete(key)
+      // Releasing the result closes its views, but not one built in BigQuery: a result of its own, closed here.
       const sort = run.sorts.get(key)
+      for (const view of new Set([...run.held.get(key)?.views ?? [], ...sort?.view ? [sort.view] : []])) if (isRemoteView(view)) void view.close()
+      run.held.delete(key)
       if (sort) {
         for (const list of new Set([...sort.filters, ...sort.applied].flatMap(item => item.list ? [item.list] : []))) void list.close()
         sorts ??= new Map(run.sorts)

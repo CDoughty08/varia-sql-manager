@@ -362,7 +362,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // Sorts, filters and value lists of results windowed in BigQuery, each after its estimate and the cost prompts (the cost
   // service is built further down; the closure reads it when one runs).
   const remoteViews = new RemoteViews({ api, client: resultClient, estimate: (tabId, remote, signal) => bigQueryCost.beforeRemote(tabId, remote, signal),
-    messages: (tabId, messages) => { for (const message of messages) results.addMessage(tabId, message.text, message.kind === 'error' ? 'error' : 'info') } })
+    messages: (tabId, messages) => results.remoteMessages(tabId, messages) })
   const results = new ResultsService({ client: resultClient, api, events, documents, retainedPlans, frame: callback => { frame(callback) }, sortText: () => settings.get('queryResults.grid.sortText'),
     remote: remoteViews,
     // Sorted grids follow Sort text by as it changes, from the toolbar, the palette or Options.

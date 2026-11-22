@@ -357,7 +357,8 @@ BigQuery" in their tooltips.
   when the list is whole and they are no more than the others, and otherwise drops the unticked ones, as in memory.
   Filters that name the grid's rows rather than values (Filter by Selection, duplicates, Keep Selected Rows) say they need
   the rows in memory.
-- **The view.** It is held under the source's budget, and windowed in its turn when it is large. A newer sort or filter
+- **The view.** It is held under the source's budget, and windowed in its turn when it is large. It reads the whole result
+  table, so under Maximum rows a sort or filter can show rows the grid had not held, and a value list counts every row. A newer sort or filter
   replaces it (the old one is released once the grid shows the new one); Stop cancels the BigQuery job; closing the
   results or the tab releases both. BigQuery's resource errors on a large sort suggest filtering first.
 - **An expired table.** Once the source's temporary table has expired, a sort or filter answers `REMOTE_EXPIRED`, and a
