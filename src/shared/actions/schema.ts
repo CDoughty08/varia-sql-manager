@@ -1,6 +1,7 @@
 // Strict zod schemas for object actions, and the shapes of their results. Main validates every request with them before
 // the backend re-checks it against the catalogue and the subtype it derives itself in the action's own connection.
 import { z } from 'zod'
+import { deleteJobHistoryRequestSchema, type DeleteJobHistoryRequest } from '../agent/history.ts'
 import { backendConnectionBindingChangeSchema } from '../connection-binding-receipts.ts'
 import { boundedRecord } from '../zod-bounds.ts'
 import { kindSpecs } from '../explorer/catalog.ts'
@@ -183,7 +184,7 @@ export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | 
   | LoginStateRequest | UnlockRequest | LoginPropertiesRequest | TablePropertiesRequest | StartJobRequest | StopJobRequest | AgentPropertiesRequest | AgentJobRequest
 /** actions.script and actions.execute also take a restore and a file restore, whose requests have shapes of their own (restore-schema.ts). */
 export type ActionScriptRequest = ActionRequest | RestoreRequest | RestoreFilesRequest
-export type ActionExecuteRequest = ActionRequest | RestoreRequest | RestoreFilesRequest | AgentServiceRequest
+export type ActionExecuteRequest = ActionRequest | RestoreRequest | RestoreFilesRequest | AgentServiceRequest | DeleteJobHistoryRequest
 export type { RestoreFilesRequest, RestoreRequest } from './restore-schema.ts'
 export type { AgentPropertiesRequest } from './agent-properties.ts'
 export interface ActionCancelRequest { readonly requestIds: readonly string[] }
@@ -858,7 +859,9 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
  *  the secrets each needs and no others: New Login's password exactly for a SQL Server login (blank only with the password policy on, which
  *  lets the server decide), and none for a Windows login; and a login's Delete must name the login Delete Object read (`loginIdentity`),
  *  which binds DROP LOGIN and every DROP USER to that principal (Script runs nothing and may leave it out). C# Validate refuses the same. */
-export const actionExecuteRequestSchema = z.union([actionRequestSchema, restoreRequestSchema, restoreFilesRequestSchema, agentServiceRequestSchema]).superRefine((request, context) => {
+export const actionExecuteRequestSchema = z.union([actionRequestSchema, restoreRequestSchema, restoreFilesRequestSchema, agentServiceRequestSchema, deleteJobHistoryRequestSchema]).superRefine((request, context) => {
+  // The Log File Viewer's Delete History (AG-5a) checks itself (agentHistoryDeleteSchema).
+  if (request.action === 'deleteJobHistory') return
   if (request.action === 'delete' && request.target.kind === 'login' && request.loginIdentity === undefined) issue(context, 'loginIdentity', "A login's Delete needs the identity of the login it read.")
   // Every job verb names the job it read (AG-2's identity guard); Script runs nothing and may leave it out.
   if (request.target.kind === 'agentJob' && (request as { agentIdentity?: AgentIdentity }).agentIdentity === undefined) issue(context, 'agentIdentity', "A job's verb needs the identity of the job it read.")

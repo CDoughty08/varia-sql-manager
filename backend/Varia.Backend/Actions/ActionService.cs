@@ -299,6 +299,8 @@ internal sealed partial class ActionService : IDisposable
         if (args.Secrets is { } secrets) { Secret(secrets.Password, "password"); Secret(secrets.OldPassword, "oldPassword"); }
         // The job document's Save (AG-6a) validates itself, before the job verbs, which take every other action on a job.
         if (ValidateAgentJob(args, script) is { } jobTarget) return jobTarget;
+        // The Log File Viewer's Delete History (AG-5a) is no catalogue action and validates itself.
+        if (ValidateAgentHistory(args, script) is { } historyTarget) return historyTarget;
         // SQL Server Agent's job verbs and service control (AG-2) validate themselves.
         if (ValidateAgent(args, script) is { } agentTarget) return agentTarget;
         // SQL Server Agent Properties (AG-8a) validates itself too.
@@ -526,6 +528,7 @@ internal sealed partial class ActionService : IDisposable
             return Task.FromResult(new ActionExecuteResult([], [], 0, Error("NOT_SUPPORTED", ManagedInstanceCloseNote)));
         if (NewLoginEngineRefusal(args) is { } refused) return Task.FromResult(new ActionExecuteResult([], [], 0, refused));
         if (AgentServiceActions.Contains(args.Action)) return ExecuteAgentServiceAsync(args, token);
+        if (args.Action == DeleteJobHistoryAction) return ExecuteAgentHistoryAsync(args, token);
         // Managed Instance refuses sp_set_sqlagent_properties (41905): refused before any connection opens, as the dialog opens read-only there.
         if (args.Action == "agentProperties" && AgentPropertiesRefusal(args) is { } agentRefused) return Task.FromResult(new ActionExecuteResult([], [], 0, agentRefused));
         var progress = new ActionProgress(catalog.IsLong(args.Action) ? events : null, Options.ProgressInterval);

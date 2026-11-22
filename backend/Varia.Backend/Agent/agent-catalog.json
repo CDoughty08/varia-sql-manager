@@ -85,7 +85,7 @@
     {"arguments":["@job_id"],"database":"msdb","lane":"AG-2","name":"sp_stop_job"},
     {"arguments":["@job_id","@enabled","@new_name","@description","@category_name","@owner_login_name","@notify_level_eventlog","@notify_level_email","@notify_level_netsend","@notify_level_page","@notify_email_operator_name","@notify_netsend_operator_name","@notify_page_operator_name","@delete_level"],"database":"msdb","lane":"AG-2","name":"sp_update_job"},
     {"arguments":["@job_id","@delete_history","@delete_unused_schedule"],"database":"msdb","lane":"AG-2","name":"sp_delete_job"},
-    {"arguments":["@oldest_date"],"database":"msdb","lane":"AG-8a","name":"sp_purge_jobhistory"},
+    {"arguments":["@oldest_date","@job_id"],"database":"msdb","lane":"AG-8a","name":"sp_purge_jobhistory"},
     {"arguments":["@job_name","@enabled","@description","@category_name","@owner_login_name","@notify_level_eventlog","@notify_level_email","@notify_level_netsend","@notify_level_page","@notify_email_operator_name","@notify_netsend_operator_name","@notify_page_operator_name","@delete_level","@job_id"],"database":"msdb","lane":"AG-6a","name":"sp_add_job"},
     {"arguments":["@job_id"],"database":"msdb","lane":"AG-6a","name":"sp_add_jobserver"},
     {"arguments":["@name","@job_id"],"database":"msdb","lane":"AG-6a","name":"sp_update_alert"},

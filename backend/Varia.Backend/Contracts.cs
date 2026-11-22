@@ -44,7 +44,7 @@ internal sealed record TableArgs(string ConnectionId, string Database, string Sc
 /// (the connection's when left out), which SQL Server refuses.</summary>
 internal sealed record QueryArgs(string ConnectionId, string SessionId, string? Database, string Sql, string QueryId, int MaxRows, int TimeoutSeconds, int StartLine = 1, int MaxResultSets = 10,
     bool StopOnError = false, bool IncludeActualPlan = false, bool IncludeClientStatistics = false, bool IncludeLivePlan = false, bool DiscardResults = false, string? Dataset = null,
-    long? MaximumBytesBilled = null, bool? Prices = null, int StartColumn = 1, BigQuery.BigQueryPreviewTarget? Preview = null);
+    long? MaximumBytesBilled = null, bool? Prices = null, int StartColumn = 1, string? Residence = null, int? WindowCacheMiB = null, BigQuery.BigQueryPreviewTarget? Preview = null);
 /// <summary>query.session.close: Transaction "commit" commits the session's open transaction first; "rollback" is a plain close,
 /// since SQL Server rolls back what a closed session left open. AbortOnRefusedCommit (default true) lets a BigQuery commit
 /// refused on an unchecked session fall through to ending the session (docs/bigquery.md, Sessions); SQL Server ignores it,
@@ -79,7 +79,8 @@ internal sealed record ResultCollation(int Lcid, int SortId, int CodePage, bool 
 /// backend generation before the renderer sees it. Name is the query's own name for the set, from a #Name="…" marker comment
 /// (ResultNames.cs): 1 to ResultNames.MaxChars characters, none of the refused ones; null (left out) when it has none.</summary>
 internal sealed record ResultDescriptor(uint ResultId, int Index, int BatchNumber, int Iteration, string Kind, IReadOnlyList<ResultColumn> Columns,
-    long RowsRead, long RowsStored, long RowsAvailable, long BytesStored, long TruncatedCells, string State, string? Truncated, bool Incomplete, string? Name = null);
+    long RowsRead, long RowsStored, long RowsAvailable, long BytesStored, long TruncatedCells, string State, string? Truncated, bool Incomplete, string? Name = null,
+    string? Residence = null, long? RowsTotal = null, int? Revision = null);
 internal sealed record ColumnInfo(string Name, string DataType);
 internal sealed record TableColumnsResult(List<ColumnInfo> Columns, bool Truncated);
 internal sealed record QueryFailure(string Code, string Message, int BatchNumber, int Iteration);
@@ -99,7 +100,7 @@ internal sealed record ResultsMemoryEvent(long UsedBytes, long GlobalBytes, long
 /// decompressed pages kept for reads. Largest names at most <see cref="Results.ResultStore.MaxLargest"/> results, largest
 /// as read first.</summary>
 internal sealed record ResultMemoryDetail(long LogicalBytes, long StoredBytes, long CompressedBytes, long PackedLogicalBytes, long CacheBytes,
-    IReadOnlyList<ResultMemoryEntry> Largest, ResultCodecCounters Codec, ManagedHeap Heap);
+    IReadOnlyList<ResultMemoryEntry> Largest, ResultCodecCounters Codec, ManagedHeap Heap, long WindowCacheBytes = 0);
 /// <summary>State is "raw", "partial" (a pass stopped part way), "packed" or "unpacking"; Progress (0 to 100) only while unpacking. Live is true for a live
 /// view's table, which no Results tab names; left out otherwise.</summary>
 internal sealed record ResultMemoryEntry(uint ResultId, long LogicalBytes, long StoredBytes, string State, int? Progress = null, bool? Live = null);
@@ -150,8 +151,12 @@ internal sealed record SessionStateArgs(string SessionId);
 /// then 0 and the session may hold a transaction.</summary>
 internal sealed record SessionState(int TransactionCount, bool Checked);
 /// <summary>results.read: ViewId reads through a view of the result (results.view), FirstRow then counting view positions.</summary>
-internal sealed record ResultsReadArgs(uint ResultId, long FirstRow, int MaxRows, uint? ViewId = null);
+/// <summary>Viewer (1 to 2^31 - 1) names the grid, popout or Transpose reading, so a windowed result reads ahead for each apart.</summary>
+internal sealed record ResultsReadArgs(uint ResultId, long FirstRow, int MaxRows, uint? ViewId = null, uint? Viewer = null);
 internal sealed record ResultsReadResult(long NextRow, long RowsAvailable, bool Complete, int Pages, int Rows);
+/// <summary>results.remoteQuery: a query over a windowed BigQuery result (docs/ipc.md). QueryId is its own, for query.cancel;
+/// Generation is the source result's, which main checks before sending; Kind is "load" (Load into memory) for now.</summary>
+internal sealed record RemoteQueryArgs(string QueryId, uint ResultId, int Generation, string Kind);
 internal sealed record ResultsCloseArgs(uint[] ResultIds);
 internal sealed record ResultsCloseResult(int Closed, long UsedBytes);
 /// <summary>results.visibility: the results whose grids are shown in any window now, at most ResultVisibility.MaxResults
@@ -584,7 +589,7 @@ internal sealed record ActionArgs(string Action, string ConnectionId, string Req
     bool? DropConnections = null, RestoreFilesOptionsDto? RestoreFiles = null, List<UserMappingDto>? Mappings = null, bool? UpdateStatistics = null, bool? DetachOffline = null, LoginIdentityDto? LoginIdentity = null,
     bool? DropMappedUsers = null, string? Mode = null, LoginChangesDto? LoginChanges = null, List<PermissionDto>? Permissions = null, TableChangesDto? TableChanges = null,
     AgentIdentityDto? AgentIdentity = null, string? StepName = null, bool? DeleteUnusedSchedule = null,
-    AgentPropertiesChangesDto? AgentProperties = null, AgentHistoryPurgeDto? AgentPurge = null, AgentJobSaveDto? AgentJob = null);
+    AgentPropertiesChangesDto? AgentProperties = null, AgentHistoryPurgeDto? AgentPurge = null, AgentHistoryDeleteDto? AgentHistory = null, AgentJobSaveDto? AgentJob = null);
 /// <summary>The job document's Save (AG-6a, src/shared/actions/agent-job.ts AgentJobSave). An existing job's carries the Version and Modified
 /// (yyyy-MM-ddTHH:mm:ss.fff) its describe read, which the STALE guard compares, and only what changed; New Job's (target the Agent node) every
 /// field it sets and no version. A notification goes as its level (0 to 3) and operator together, the operator '' exactly with level 0.
@@ -600,6 +605,13 @@ internal sealed record AgentPropertiesChangesDto(bool? SqlserverRestart = null, 
 /// weeks or months (Unit 1, 2 or 3) before the server's clock, which the batch computes.</summary>
 /// <summary>Before: the cut-off the confirmation showed (server time, yyyy-MM-ddTHH:mm:ss), which the purge never deletes past.</summary>
 internal sealed record AgentHistoryPurgeDto(int Count, int Unit, string? Before = null);
+/// <summary>The Log File Viewer's Delete History (AG-5a, src/shared/agent/history.ts agentHistoryDeleteSchema): the checked jobs by id (1 to
+/// agentLimits.historyJobs, each once), and either All (true) or OlderThan, a cut-off as Agent Properties' purge takes it.</summary>
+internal sealed record AgentHistoryDeleteDto(List<string>? Jobs, bool? All = null, AgentHistoryPurgeDto? OlderThan = null);
+/// <summary>agent.historyMessage (AG-5a): one job history row's whole message, by its job and instance_id.</summary>
+internal sealed record AgentHistoryMessageArgs(string ConnectionId, string RequestId, string JobId, int InstanceId);
+/// <summary>The row's message (null when the row has none), or why it could not be read.</summary>
+internal sealed record AgentHistoryMessageResult(string? Message, long ElapsedMs, ActionError? Error = null);
 /// <summary>A SQL Server Agent job's verbs (AG-2: startJob, stopJob, a job's disable, enable, rename and delete) name the job they act on by
 /// its sysjobs date_created to the second (yyyy-MM-ddTHH:mm:ss), as the tree lists it; the batch refuses a job that has taken the name since.
 /// startJob may name a StepName (sysname); a job's delete may set DeleteUnusedSchedule. startAgent, stopAgent and restartAgent take only the

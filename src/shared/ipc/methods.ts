@@ -93,6 +93,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // The script's own timeout ends it inside the backend (status timedOut); main only guards against a lost answer.
   'query.execute': { kind: 'unary', lane: 'query', deadlineMs: 0, backstopMs: params => params.timeoutSeconds === 0 ? 0 : (params.timeoutSeconds + 30) * 1000, ...both },
   'query.cancel': { ...control, ...both },
+  // Load into memory runs like a query, as long as BigQuery takes; Stop is query.cancel.
+  'results.remoteQuery': { kind: 'unary', lane: 'query', deadlineMs: 0, backstopMs: () => 0, providers: ['bigquery'] },
   // A commit first waits for SQL Server's log flush; a rollback is bounded inside the backend (closing the session rolls back too).
   // A commit covers a queued COMMIT and the session's end inside the backend's budgets; every other close (decision 54)
   // allows one BigQuery ABORT_SESSION job and its poll. The deadline cannot see the provider.
@@ -178,6 +180,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // SQL Server Agent's capability read: one small batch in msdb on the Object Explorer pool, on its own slot per connection (as
   // Peek, never queued behind the tree's paging). Its own 10 s budget starts once it holds that slot and ends as a TIMEOUT value (unless msdb already refused the login: then the profile with no role). SQL Server only (no `providers`), so a BigQuery handle gets UNSUPPORTED_PROVIDER.
   'agent.profile': { kind: 'unary', lane: 'explorer', deadlineMs: 15_000 },
+  // The Log File Viewer's whole message: the action service's read gates and DescribeBudget (TIMEOUT as a value) inside this deadline.
+  'agent.historyMessage': { kind: 'unary', lane: 'metadata', deadlineMs: 45_000 },
   // Help › Clear Entra ID Token Cache: empties memory only, at once.
   'entra.cache.clear': control,
   // No deadline and no backstop: only CANCEL, a disconnect, a loss or the source ending ends it.
@@ -223,7 +227,7 @@ export function optionsAllow(method: BackendMethod, provider: ProviderId | undef
   if (method !== 'query.execute' || provider === undefined || typeof params !== 'object' || params === null) return true
   const options = params as Partial<BackendMethods['query.execute']['params']>
   if (provider === 'bigquery') return !options.stopOnError && !options.includeActualPlan && !options.includeLivePlan && !options.includeClientStatistics
-  return options.dataset === undefined && options.maximumBytesBilled === undefined && options.prices === undefined && options.preview === undefined
+  return options.dataset === undefined && options.maximumBytesBilled === undefined && options.prices === undefined && options.preview === undefined && options.residence === undefined && options.windowCacheMiB === undefined
 }
 
 /** The header deadline and main's backstop for one request, in ms (0 = none). */

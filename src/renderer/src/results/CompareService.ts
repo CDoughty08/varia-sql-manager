@@ -108,10 +108,11 @@ const sameOptions = (a: CompareOptions, b: CompareOptions) => a.exact === b.exac
 /** The refusal of a comparison a run has no room for (plan: Concurrency and limits, the 1,000 rule). */
 export const compareFullText = `This query's results already hold ${formatCount(resultLimits.sets)} results, comparisons and pivots included, the most a run keeps. Close some results to compare these.`
 
-/** A group's Table of rows that has every row: the only results a comparison reads (never a Pivot, a comparison, a plan set
- *  or a live result). */
+/** A group's Table of rows that has every row in memory: the only results a comparison reads (never a Pivot, a comparison, a
+ *  plan set, a live result or a result windowed in BigQuery, which the backend would refuse). */
 export function comparableTable(tab: TabResults | undefined, entry: ResultSetEntry | undefined): entry is ResultSetEntry {
-  return !!tab && entry !== undefined && entry.descriptor.kind === 'rows' && slotOf(tab, entry.key)?.view === 'table' && entry.handle.getSnapshot().state === 'complete'
+  const snapshot = entry?.handle.getSnapshot()
+  return !!tab && entry !== undefined && entry.descriptor.kind === 'rows' && slotOf(tab, entry.key)?.view === 'table' && snapshot?.state === 'complete' && snapshot.residence !== 'remote'
 }
 
 /** What a tab's popover was last set to: per group (by number) the target's group and the way round, and exact text for all. */

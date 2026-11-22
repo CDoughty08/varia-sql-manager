@@ -431,8 +431,9 @@ export const writeProcedures: readonly WriteProcedure[] = [
   { name: 'sp_update_job', lane: 'AG-2', database: 'msdb', arguments: ['@job_id', '@enabled', '@new_name', '@description', '@category_name', '@owner_login_name', '@notify_level_eventlog', '@notify_level_email',
     '@notify_level_netsend', '@notify_level_page', '@notify_email_operator_name', '@notify_netsend_operator_name', '@notify_page_operator_name', '@delete_level'] },
   { name: 'sp_delete_job', lane: 'AG-2', database: 'msdb', arguments: ['@job_id', '@delete_history', '@delete_unused_schedule'] },
-  // Agent Properties' server-wide purge (AG-8a) passes only @oldest_date; Delete History (AG-5a) adds @job_id with its own template.
-  { name: 'sp_purge_jobhistory', lane: 'AG-8a', database: 'msdb', arguments: ['@oldest_date'] },
+  // Agent Properties' server-wide purge (AG-8a) passes only @oldest_date (its lint refuses @job_id); Delete History (AG-5a) passes @job_id,
+  // and @oldest_date for "older than", with its own template and lint (AgentSql.LintHistoryDelete).
+  { name: 'sp_purge_jobhistory', lane: 'AG-8a', database: 'msdb', arguments: ['@oldest_date', '@job_id'] },
   // New Job: @job_id is the OUTPUT the batch's later calls use; sp_add_jobserver's server defaults to the local one.
   { name: 'sp_add_job', lane: 'AG-6a', database: 'msdb', arguments: ['@job_name', '@enabled', '@description', '@category_name', '@owner_login_name', '@notify_level_eventlog', '@notify_level_email',
     '@notify_level_netsend', '@notify_level_page', '@notify_email_operator_name', '@notify_netsend_operator_name', '@notify_page_operator_name', '@delete_level', '@job_id'] },

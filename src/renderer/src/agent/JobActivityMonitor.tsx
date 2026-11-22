@@ -163,6 +163,8 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
             onClick={() => void workbench.commands.execute('agent.openJob', { tabId: documentId }, 'toolbar')}>Open</button>
           <button type="button" className="agent-chevron" aria-expanded={expandedHere} disabled={!one} title={one ? 'Show the last run of the selected job below the list' : 'Select one job to see its last run'}
             onClick={() => service.toggleExpanded(documentId, one)}><Icon name={expandedHere ? 'chevron-down' : 'chevron-right'} />Last run</button>
+          <button type="button" disabled={!selected.length || state.overCap} title={selected.length ? 'Open the Log File Viewer with the selected jobs checked' : 'Select one or more jobs to view their history'}
+            onClick={() => void workbench.commands.execute('agent.viewHistory', { tabId: documentId }, 'toolbar')}><Icon name="history" />View history</button>
         </div>
         <div className="agent-jobs-grid" onDoubleClick={event => {
           // Only on a job's row (GridView's own hit test): a header's border fits its column, and the area below the rows is no job.

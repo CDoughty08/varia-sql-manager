@@ -5,9 +5,9 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { sqlTypeLabel } from '../grid/measure'
 import Icon from '../Icon'
 import { aggregateFits, columnGroupLimit, emptyDraft, fitDraft, isNumericColumn, pivotAggregates, pivotColumns, pivotFacts, valueLabel, type PivotDraft } from './pivot'
-import { pivotable } from './PivotService'
+import { pivotable, windowedPivotText } from './PivotService'
 import { entryName, entryOf, pivotName, type TabResults } from './ResultsService'
-import { formatCount } from './status'
+import { formatCount, resultRows } from './status'
 
 const nameOf = (column: ResultColumn | undefined) => column?.name || '(No column name)'
 
@@ -56,7 +56,7 @@ export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResu
   const can = !!entry && pivot.canPivot(tabId, entry.key)
   // The Pivot a build replaces, by its own title (fixed when it was made), as its tab and close button say it.
   const shown = entryOf(tab.sets, state.pivot), built = shown ? entryName(shown) : pivotName(state.sourceName ?? (entry ? entryName(entry) : ''))
-  const facts = entry ? pivotFacts(entry.handle.getSnapshot().rowsStored, sort?.view?.rows) : ''
+  const facts = entry ? pivotFacts(resultRows(entry.handle.getSnapshot()), sort?.view?.rows) : ''
   // Busy is the draft's controls only: the foot's live notes (waiting, the backend busy) are announced while it builds.
   const waiting = state.queued === 'place' ? 'Waiting for other pivots and comparisons to finish: four build at once.' : state.queued === 'busy' ? 'The backend is busy, so the pivot is asked again in a moment.' : undefined
   return <aside className="profile-panel pivot-panel" aria-label="Pivot">
@@ -120,7 +120,7 @@ export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResu
     <div className="pivot-foot">
       {state.error && <div className="profile-note error" role="status">{state.error}</div>}
       {!entry ? <div className="profile-note">{state.sourceName ? `${state.sourceName} is not among these results.` : 'None of these results can be pivoted.'}</div>
-        : !pivotable(entry) && !state.running ? <div className="profile-note">{entry.handle.getSnapshot().state === 'complete' ? 'This result cannot be pivoted.' : 'Pivot this result after it finishes loading.'}</div> : null}
+        : !pivotable(entry) && !state.running ? <div className="profile-note">{entry.handle.getSnapshot().residence === 'remote' ? windowedPivotText : entry.handle.getSnapshot().state === 'complete' ? 'This result cannot be pivoted.' : 'Pivot this result after it finishes loading.'}</div> : null}
       {entry && pivotable(entry) && sorting && !state.running && <div className="profile-note">Pivot after the grid finishes sorting and filtering.</div>}
       {/* Mounted while the builder is, so a note added to it is announced. */}
       <div role="status">{waiting && <div className="profile-note">{waiting}</div>}</div>

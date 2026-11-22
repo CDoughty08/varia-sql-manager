@@ -365,17 +365,31 @@ try {
   await page.evaluate(() => window.__variaGrid.setScrollCap())
 
   // 4. Stacked sets: equal heights; a splitter by mouse and keys; Tab order; a thousand one-row sets.
+  const fullSize = await page.evaluate(() => [innerWidth, innerHeight])
+  const resize = async (width, height) => {
+    await application.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setContentSize(...size), [width, height])
+    await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([width, height])
+  }
   const heights = () => page.locator(part.resultItem).evaluateAll(items => items.map(item => item.getBoundingClientRect().height))
   await run('-- varia-fake: sets=N1*50,N1*50,N1*50,N1*50,N1*50')
   await expect(page.locator(part.resultItem)).toHaveCount(5)
   await expect(page.locator('[data-result-grid]')).toHaveCount(5)
   const five = await heights()
   expect(Math.max(...five) - Math.min(...five)).toBeLessThanOrEqual(1)
+  // The splitter moves 30 px by mouse, so both grids need that much above their floor. A stack's height follows the window,
+  // which a small display clamps: at the 700 px minimum the two grids are each a few pixels above it. So the steps run at
+  // that size, the sash giving the stack the room, and the stack gets its height back after.
+  const stackHeight = () => page.locator(part.resultStack).evaluate(stack => stack.clientHeight)
+  const unsized = await stackHeight()
+  await resize(1024, 700)
   await run('-- varia-fake: sets=N1*50,N1*50')
   await expect(page.locator('[data-result-grid]')).toHaveCount(2)
   const splitter = resultSplitters(page).first()
   const difference = async () => { const [first, second] = await heights(); return Math.round(first - second) }
-  expect(Math.abs(await difference())).toBeLessThanOrEqual(1)
+  await expect.poll(async () => Math.abs(await difference())).toBeLessThanOrEqual(1)
+  const roomy = 2 * (Number(await splitter.getAttribute('aria-valuemin')) + 40) + (await splitter.boundingBox()).height
+  if (await stackHeight() < roomy) expect(await sizeResultStack(page, roomy)).toBeGreaterThanOrEqual(roomy - 1)
+  await expect.poll(async () => Math.abs(await difference())).toBeLessThanOrEqual(1)
   const split = await splitter.boundingBox()
   await page.mouse.move(split.x + 40, split.y + split.height / 2)
   await page.mouse.down()
@@ -423,6 +437,8 @@ try {
   await expect(resultClose(page, 'Result 2')).toBeFocused()
   await page.keyboard.press('Tab')
   await expect(grid('Result 2')).toBeFocused()
+  await resize(...fullSize)
+  await sizeResultStack(page, unsized)
   await measured('a thousand stacked sets', async () => {
     await run('-- varia-fake: sets=M1*1000')
     await expect(outputTab(/^Results/)).toContainText('1000')
@@ -696,11 +712,6 @@ try {
 
   // 4c. At the default split of a 1280x800 window the Messages strip yields to the results: an error does not open it over
   // the grids, its line shows the error's message, and a data row stays in view. Opened by hand, it shows the error.
-  const fullSize = await page.evaluate(() => [innerWidth, innerHeight])
-  const resize = async (width, height) => {
-    await application.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setContentSize(...size), [width, height])
-    await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([width, height])
-  }
   await resize(1280, 800)
   await application.evaluate(({ Menu }) => Menu.getApplicationMenu().getMenuItemById('layout.reset').click())
   /** Whether an element lies inside the output view, and how many of a grid's data rows show whole in the stack. */

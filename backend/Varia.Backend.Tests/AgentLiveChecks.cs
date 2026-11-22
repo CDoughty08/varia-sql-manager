@@ -211,6 +211,8 @@ internal static class AgentLiveChecks
             await AgentPropertiesLiveChecks.RunAsync(check, service, info, json, scratch, id, connection, sql);
             // The job document (AG-6a): save, STALE, rollback, hostile name, script and alert detach, while the job exists.
             await AgentJobDocumentLiveChecks.RunAsync(check, service, info, json, scratch, job, id, sql);
+            // The Log File Viewer (AG-5a) reads the run, then Delete History deletes it with a second scratch job's (none).
+            await AgentHistoryLiveChecks.RunAsync(check, service, info, json, job, id, sql);
             // AG-2's job verbs end with Delete, so the finally below finds nothing left to drop.
             await AgentActionLiveChecks.JobVerbsAsync(check, service, info, json, job, id, sql);
             // New Job's save reuses the deleted job's name, so a dead run's job is still swept as stale.

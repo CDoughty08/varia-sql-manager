@@ -353,6 +353,7 @@ explorer.context, for a login
   Re&fresh  F5  -+++
 explorer.context, for the SQL Server Agent node
   &Job Activity Monitor  -+++
+  View &History  -+++
   ---
   &Start  -+++
   S&top  -+++
@@ -363,6 +364,8 @@ explorer.context, for the SQL Server Agent node
   &Properties  -+++
 explorer.context, for a SQL Server Agent job
   &New Job…  -+++
+  ---
+  View &History  -+++
   ---
   S&tart Job at Step…  -+++
   Stop &Job  -+++

@@ -20,7 +20,8 @@ export type SearchMode = 'values' | 'columns'
 /**
  * One tab's search. `total` counts the matches (values) or matching columns (columns) over every grid, `current` is the
  * active one's place among them (-1 for none). `partial`: a grid was still loading, so more rows may match; `approximate`:
- * a truncated value was searched by its stored prefix. `reveal` changes when the active match should scroll into view
+ * a truncated value was searched by its stored prefix; `skipped`: a windowed BigQuery result was not searched (its rows
+ * are not in memory) while others were, so the count leaves its matches out. `reveal` changes when the active match should scroll into view
  * (`revealEntry` is its grid's entry; `revealSelect`: the grid also makes it its active cell, for a step taken from a
  * grid); `focus` when the search box should take the focus. `marks` and `revealEntry` are by entry key, and name only
  * entries the run still has. `announcement` is what the box's live region says: the count once it
@@ -36,6 +37,7 @@ export interface TabSearch {
   readonly columns: number
   readonly partial: boolean
   readonly approximate: boolean
+  readonly skipped?: boolean
   readonly error?: string
   readonly marks: ReadonlyMap<EntryKey, GridMarks>
   readonly reveal: number
@@ -66,6 +68,8 @@ interface TabState {
   mode: SearchMode
   status: TabSearch['status']
   error?: string
+  /** A windowed result answered REMOTE_RESULT while others were searched. */
+  skipped?: boolean
   current: number
   grids: GridRun[]
   /** Columns mode: each grid's matching columns, by entry key. */
@@ -221,6 +225,7 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
     tab.grids = []
     tab.names = new Map()
     tab.error = undefined
+    tab.skipped = false
     tab.status = tab.text ? 'searching' : 'idle'
     // A new search empties the live region, so a count it settles on is said even when it is the last search's.
     tab.announcement = ''
@@ -300,6 +305,7 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
       return grid && grid.complete && grid.handle === target.handle && grid.signature === target.signature ? grid : undefined
     }
     const grids: GridRun[] = []
+    let skipped = false
     const end = (failure: string | undefined) => {
       tab.abort = undefined
       if (!fresh) tab.current = this.placeIn(tab, grids)
@@ -308,6 +314,7 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
       if (!fresh && tab.reveal !== steps && tab.current >= 0) this.reveal(tab, tab.revealSelect)
       tab.status = failure && grids.length === 0 ? 'failed' : 'done'
       tab.error = failure && grids.length === 0 ? failure : undefined
+      tab.skipped = skipped && grids.length > 0
       this.publishTab(tabId, tab)
       // A kept place may be outside the runs the searches returned.
       if (tab.current >= 0) void this.ensureRun(tabId, tab)
@@ -318,7 +325,7 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
       end(undefined)
       return
     }
-    if (fresh) { tab.grids = grids; tab.current = -1 }
+    if (fresh) { tab.grids = grids; tab.current = -1; tab.skipped = false }
     tab.status = 'searching'
     const abort = tab.abort = new AbortController()
     this.publishTab(tabId, tab)
@@ -334,6 +341,7 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
           grids.push(this.gridRun(target, found))
         } catch (error) {
           if (abort.signal.aborted || isAbort(error)) return
+          if (error instanceof ResultError && error.code === 'REMOTE_RESULT') skipped = true
           // A released or lost result has nothing to find; any other failure is said once the others are searched.
           failure ??= error instanceof Error ? error.message : searchFailed
           continue
@@ -483,7 +491,7 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
     }
     tab.published = {
       text: tab.text, mode: tab.mode, status: tab.status, total: this.total(tab), current: tab.current, columns: tab.columnCount, partial, approximate,
-      ...tab.error ? { error: tab.error } : {}, marks, reveal: tab.reveal, ...revealEntry === undefined ? {} : { revealEntry }, revealSelect: tab.revealSelect, focus: tab.focus,
+      ...tab.error ? { error: tab.error } : {}, ...tab.skipped && tab.mode === 'values' ? { skipped: true } : {}, marks, reveal: tab.reveal, ...revealEntry === undefined ? {} : { revealEntry }, revealSelect: tab.revealSelect, focus: tab.focus,
       announcement: tab.announcement
     }
     this.announce(tabId, tab, tab.published)
@@ -542,7 +550,15 @@ export function searchBoxKeyAction(event: Pick<KeyboardEvent, 'key' | 'shiftKey'
 
 /** What the live region says for a search: its count and what it counts ("2 of 8 matches"), the failure, or nothing while it
  *  runs or the box is empty. */
-export function searchAnnouncement(search: Pick<TabSearch, 'text' | 'mode' | 'status' | 'total' | 'current' | 'columns' | 'partial' | 'error'>, format: (n: number) => string): string {
+export function searchAnnouncement(search: Pick<TabSearch, 'text' | 'mode' | 'status' | 'total' | 'current' | 'columns' | 'partial' | 'error' | 'skipped'>, format: (n: number) => string): string {
+  const said = searchAnnouncementOf(search, format)
+  return said && search.skipped ? `${said}. ${skippedText}` : said
+}
+
+/** Said after the count when a windowed BigQuery result could not be searched. */
+export const skippedText = 'A result windowed in BigQuery was not searched'
+
+function searchAnnouncementOf(search: Pick<TabSearch, 'text' | 'mode' | 'status' | 'total' | 'current' | 'columns' | 'partial' | 'error'>, format: (n: number) => string): string {
   if (!search.text || search.status === 'searching') return ''
   if (search.status === 'failed') return search.error ? `Search failed: ${search.error}` : 'Search failed'
   if (search.mode === 'columns') return `${format(search.total)} of ${format(search.columns)} columns`
@@ -555,7 +571,8 @@ export function searchCount(search: TabSearch, format: (n: number) => string): s
   if (!search.text) return ''
   if (search.mode === 'columns') return `${format(search.total)} of ${format(search.columns)} columns`
   if (search.status === 'failed') return 'Search failed'
-  if (search.total === 0) return search.status === 'searching' ? 'Searching…' : 'No matches'
-  const more = search.partial || search.status === 'searching' ? '+' : ''
+  // A windowed result left unsearched may hold matches: "No matches+" says the count is not the whole story.
+  if (search.total === 0) return search.status === 'searching' ? 'Searching…' : search.skipped ? 'No matches+' : 'No matches'
+  const more = search.partial || search.skipped || search.status === 'searching' ? '+' : ''
   return `${search.current >= 0 ? format(search.current + 1) : '–'} of ${format(search.total)}${more}`
 }

@@ -7,7 +7,7 @@ namespace Varia.Backend.BigQuery;
 
 /// <summary>
 /// The display text of BigQuery's date, time, interval, range and decimal values, written from their numbers (Arrow) or
-/// rebuilt from BigQuery's text (REST), so both readers write byte-identical cells (docs/bigquery.md, Types and display).
+/// rebuilt from BigQuery's text (REST), so both readers write byte-identical cells (docs/bigquery.md, Types).
 /// DATE is <c>2026-11-15</c>; TIME <c>09:30:00.5</c> and DATETIME <c>2026-11-15T09:30:00.5</c>, with the fraction's trailing
 /// zeros left out; TIMESTAMP <c>2026-11-15 09:30:00.000000 UTC</c>; INTERVAL BigQuery's canonical <c>Y-M D H:M:S[.F]</c>;
 /// RANGE <c>[start, end)</c> with <c>UNBOUNDED</c>. Text a reader does not recognise is shown as BigQuery wrote it.

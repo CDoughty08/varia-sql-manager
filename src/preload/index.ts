@@ -111,6 +111,7 @@ const api: VariaApi = {
   executeSsis: params => request('ssis.execute', params),
   catalogSetupSsis: params => request('ssis.catalogSetup', params),
   agentProfile: params => request('agent.profile', params),
+  agentHistoryMessage: params => request('agent.historyMessage', params),
   cancelSsis: requestIds => ipcRenderer.invoke('varia:ssis-cancel', { requestIds }),
   activityDetails: params => request('activity.details', params),
   activityKill: params => request('activity.kill', params),
@@ -135,6 +136,7 @@ const api: VariaApi = {
   },
   execute: options => request('query.execute', options),
   cancel: queryId => request('query.cancel', { queryId }),
+  remoteQuery: params => request('results.remoteQuery', params),
   closeQuerySession: (sessionId, options) => request('query.session.close', {
     sessionId, ...options?.transaction ? { transaction: options.transaction } : {}, ...options?.abortOnRefusedCommit !== undefined ? { abortOnRefusedCommit: options.abortOnRefusedCommit } : {}
   }),

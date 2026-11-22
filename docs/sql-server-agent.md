@@ -3,8 +3,8 @@
 SQL Server Agent support is planned for 0.11.0 ([docs/agent-plan.md](agent-plan.md), UI in
 [docs/agent-ui-rethink.md](agent-ui-rethink.md)). Behind the release gate (below) Object Explorer shows the SQL Server Agent node, a job's Start Job at Step…, Stop
 Job, Enable, Disable, Rename and Delete, and the Agent node's Start, Stop, Restart and Properties; Search Objects finds jobs, alerts
-and operators, Script As scripts jobs, alerts, operators and proxies, Job Activity Monitor follows the jobs live, and the job
-document edits a job's General, Notifications, Targets and Alerts or creates a job. Its Steps and Schedules sections arrive in
+and operators, Script As scripts jobs, alerts, operators and proxies, Job Activity Monitor follows the jobs live, the
+Log File Viewer reads and deletes job history, and the job document edits a job's General, Notifications, Targets and Alerts or creates a job. Its Steps and Schedules sections arrive in
 later lanes, behind the same gate until 0.11.0.
 
 ## How it works
@@ -96,6 +96,31 @@ later lanes, behind the same gate until 0.11.0.
   start panel: Blank job, or Copy an existing job, which fills General and Notifications from the job picked ("Copy of …");
   nothing is created until Create, which runs `sp_add_job` and `sp_add_jobserver` in one transaction. The save batches have
   their own exact-shape lint, `AgentSql.LintJobSave`. Pager duty against the job's schedules comes with the Schedules lane.
+- **Log File Viewer** (`agent.history`, docs/live.md). Job › View History, the Agent node's and the Jobs folder's View
+  History, Job Activity Monitor's View history (the selected jobs) and the palette's SQL Server Agent: View History open one
+  document per connection ("Log File Viewer - server"), focused if open with its sources replaced. **Select logs** lists every
+  job the login may see, with All jobs; at most `historyJobs` may be checked unless all are. The runs grid (newest first) reads
+  `sp_help_jobhistory` with `@mode = N'FULL'`, which every Agent role may call, for each checked job by its id (a multi-server job, which msdb answers by id with its target servers, from the every-job read) or for all, with
+  `@start_run_date` for the window (24 h, Last 7 days, 30 days, All; the server's clock, read in the same sample), at most
+  `historyRows` rows (once the rows read reach it, checked jobs not yet read are left out, and the note says how many; a checked job deleted since is skipped); a read that stops there says it was truncated, and a note gives the server's history caps. The backend
+  groups rows into runs by each job's outcome rows: the steps after one outcome row and up to the next belong to the next
+  run. Steps with no outcome row read In progress when the job is running and started at or before them, Unknown (Agent stopped
+  or restarted during the run) otherwise, or In progress or unknown when the Agent XPs option is 0 and the service is not read
+  as stopped (the Unknown and In progress filters keep those). The read starts a day before the window, which keeps runs by
+  their start, so a run Agent never finished stays Unknown in any window; a run that started before the read (one longer than
+  about a day) has its outcome row outside it, so its later steps read Unknown too, with a message that says so and that a wider
+  window reads it; steps of a run that spans a daylight-saving fall-back
+  can read as an Unknown run, as msdb stores local times. The Outcome, Message contains and Step filters regroup the last read in backend memory, without SQL; only the
+  sources and the window read msdb again. Selecting a run shows its steps (outcome row first) and the selected row's message in
+  **Message details** with Copy; the grids cut messages at `gridMessageChars`, so the details pane reads the whole message
+  with `agent.historyMessage` (`sysjobhistory` by instance in msdb, or, when msdb refuses that table, the job's
+  `sp_help_jobhistory` rows). **Delete History…** deletes the checked jobs' history, all of it or only rows older than a number
+  of days, weeks or months counted back from the server's clock, after a confirmation naming the jobs. It is the `deleteJobHistory` object action: one
+  batch calls `sp_purge_jobhistory` once per job with `@job_id` (and `@oldest_date` from the server's own clock for "older than")
+  in one transaction, checked by its own exact-shape lint (`AgentSql.LintHistoryDelete`), and reports msdb's messages. Below
+  sysadmin and SQLAgentOperatorRole it is offered only with EXECUTE on `sp_purge_jobhistory`, and msdb lets such a login delete only
+  its own jobs' history; msdb's 14392 is `PERMISSION_DENIED` and Agent XPs off `AGENT_STOPPED`. Agent stopped is the same banner as Job Activity
+  Monitor's. The viewer's source list is a list of logs, so the Agent error logs (AG-5b) join it as more sources.
 - **Status bar.** A job Start started from Job Activity Monitor is followed in the status bar ("Nightly: running step 1
   of 3", then its outcome and start in server time) with Stop and Dismiss, and +N for more; at most `watchedJobs` per
   connection are followed, and as many ended items are kept (the oldest goes). Each connection has one view of `agent.jobs.watched` and `agent.jobs.service` with
@@ -232,6 +257,14 @@ checks nothing committed, renames it to a hostile name and back, runs the script
 Job Activity Monitor (double-click and Enter), saves an edit and a removed alert, loses a save to another session's (the fake
 backend's `job-save-race` control file) and saves after Reload and keep my changes, starts the job once at a step, and creates
 a job by copying another from New Job.
+
+`AgentHistoryChecks` checks the `agent.history` reader offline over a fake runner (the statements each source and window
+reads, grouping into runs with In progress, Unknown and Agent XPs off, the filters regrouping without SQL, truncation and each
+refusal), Delete History's validation and lint with near misses, and `agent.historyMessage`'s fallback. In the Agent live suite
+with `VARIA_TEST_SQL_SCRATCH=1`, `AgentHistoryLiveChecks` reads the scratch job's run and its steps through `live.subscribe`,
+reads a message, and runs Delete History on it and a second scratch job (older than 30 days keeps the run, all deletes it).
+The `agent-jobs` smoke suite opens the Log File Viewer from Job Activity Monitor and drives All jobs, the Failed outcome, a
+run's steps and message, and Delete History.
 
 The service verbs have offline checks through the `IServiceControl` fake (every refusal, the waits, a partial restart and
 the platform gates) and a live suite of their own, `AgentService` (`VARIA_TEST_SQL_AGENT_SERVICE=1`), which really stops,
@@ -459,7 +492,7 @@ Writes (from AG-2) call only these, each followed by a return-code check:
 | `msdb.dbo.sp_stop_job` | `@job_id` | AG-2 |
 | `msdb.dbo.sp_update_job` | `@job_id`, `@enabled`, `@new_name`, `@description`, `@category_name`, `@owner_login_name`, `@notify_level_eventlog`, `@notify_level_email`, `@notify_level_netsend`, `@notify_level_page`, `@notify_email_operator_name`, `@notify_netsend_operator_name`, `@notify_page_operator_name`, `@delete_level` | AG-2 |
 | `msdb.dbo.sp_delete_job` | `@job_id`, `@delete_history`, `@delete_unused_schedule` | AG-2 |
-| `msdb.dbo.sp_purge_jobhistory` | `@oldest_date` | AG-8a |
+| `msdb.dbo.sp_purge_jobhistory` | `@oldest_date`, `@job_id` | AG-8a |
 | `msdb.dbo.sp_add_job` | `@job_name`, `@enabled`, `@description`, `@category_name`, `@owner_login_name`, `@notify_level_eventlog`, `@notify_level_email`, `@notify_level_netsend`, `@notify_level_page`, `@notify_email_operator_name`, `@notify_netsend_operator_name`, `@notify_page_operator_name`, `@delete_level`, `@job_id` | AG-6a |
 | `msdb.dbo.sp_add_jobserver` | `@job_id` | AG-6a |
 | `msdb.dbo.sp_update_alert` | `@name`, `@job_id` | AG-6a |

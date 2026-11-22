@@ -113,6 +113,7 @@ import { NewDatabaseService } from '../new-database/NewDatabaseService'
 import { RestoreService } from '../restore/RestoreService'
 import { SsisOperationsService } from '../ssis/SsisOperationsService'
 import { JobActivityService } from '../agent/JobActivityService'
+import { LogViewerService } from '../agent/LogViewerService'
 import { AgentJobStatusService } from '../agent/AgentJobStatusService'
 import { JobDocumentService } from '../agent/JobDocumentService'
 import { agentContribution } from '../contributions/agent'
@@ -274,6 +275,7 @@ export interface Workbench extends Disposable {
   readonly operations: SsisOperationsService
   /** SQL Server Agent's Job Activity Monitors (AG-3): one per connection, each a live view of its jobs. */
   readonly jobActivity: JobActivityService
+  readonly logViewer: LogViewerService
   /** The status bar's running Agent jobs this window started, followed while hidden (AG-3). */
   readonly agentJobs: AgentJobStatusService
   readonly jobDocuments: JobDocumentService
@@ -524,6 +526,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt),
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-jobs="${CSS.escape(id)}"] [role="grid"]`)?.focus())
   })
+  const logViewer = new LogViewerService({
+    api, documents, panes, groups: editorGroups, live, connections, targetIdOf,
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-history="${CSS.escape(id)}"] [role="grid"]`)?.focus())
+  })
   const objectSearch = new ObjectSearchService({
     api, documents, connections, settings, targetIdOf, agentEnabled: api.agentPreview,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-object-search="${CSS.escape(id)}"] [data-object-search-focus]`)?.focus())
@@ -710,6 +716,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     activity,
     operations,
     jobActivity,
+    logViewer,
     agentJobs,
     jobDocuments,
     objectSearch,
@@ -764,6 +771,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       objectSearch.dispose()
       operations.dispose()
       jobActivity.dispose()
+      logViewer.dispose()
       agentJobs.dispose()
       jobDocuments.dispose()
       // Before the live views: each monitor disposes its own; then the client, while the port is still there.

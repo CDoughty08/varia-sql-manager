@@ -209,6 +209,120 @@ describe('ResultClient', () => {
     expect(memory).toHaveBeenLastCalledWith({ usedBytes: 0, globalBytes: 0, generation: 0, seq: 0 })
   })
 
+  it('starts a result again under a new revision: its pages and windows go, and the grid reads its rows again', async () => {
+    const { client, worker, handOver, serve } = fixture()
+    handOver()
+    await client.ready()
+    worker().toWorker({ t: 'backend', generation: 1, status: 'ready' })
+    const opened = descriptor({ residence: 'memory', revision: 0, rowsTotal: 10, truncated: 'queryBudget' })
+    worker().toWorker({ t: 'query', queryId: 'query-1', event: { type: 'resultSet.opened', descriptor: opened } })
+    await settle()
+    const handle = client.open(opened)
+    const first = handle.getWindow(0, 4)
+    await settle()
+    serve()
+    expect((await first).count).toBe(4)
+    // A sort view of the result, which the switch below ends with the old pages.
+    const sorting = handle.sort([{ column: 0, descending: true, mode: 'value' }])
+    await settle()
+    const viewRequest = worker().fromWorker.findLast(item => item.t === 'view')!
+    worker().toWorker({ t: 'end', rid: viewRequest.rid, ok: true, result: { viewId: 2, rows: 10, baseRows: 10, complete: true, approximate: false } })
+    const view = await sorting
+    expect(view.getSnapshot().state).toBe('complete')
+    worker().fromWorker.splice(0)
+    // The read is cached: asking again reads nothing.
+    await handle.getWindow(0, 4)
+    expect(worker().fromWorker.filter(request => request.t === 'read')).toHaveLength(0)
+    // Switched to windowed (a misestimate): the counters start from the new descriptor, and the old pages go.
+    const windowed = descriptor({ residence: 'remote', revision: 1, rowsTotal: 10, rowsStored: 0, bytesStored: 0, state: 'complete' })
+    worker().toWorker({ t: 'query', queryId: 'query-1', event: { type: 'resultSet.residence', descriptor: windowed } })
+    await settle()
+    expect(handle.getSnapshot()).toMatchObject({ residence: 'remote', revision: 1, rowsTotal: 10, rowsStored: 0, rowsAvailable: 10, state: 'complete' })
+    expect(handle.getSnapshot().truncated).toBeUndefined()
+    expect(view.getSnapshot().state).toBe('released')
+    expect(client.trackedViews).toBe(0)
+    expect(worker().received.filter(message => message.type === 'revise')).toEqual([{ type: 'revise', key: { generation: 1, resultId: 3 } }])
+    const again = handle.getWindow(0, 4, { viewer: 5 })
+    await settle()
+    const reads = worker().fromWorker.filter(request => request.t === 'read')
+    expect(reads).toEqual([expect.objectContaining({ resultId: 3, firstRow: 0, viewer: 5 })])
+    serve()
+    expect((await again).count).toBe(4)
+    // A window the worker answers from the old revision's rows while the switch is on its way is neither kept nor shown.
+    const revisions = descriptor({ residence: 'remote', revision: 1, rowsTotal: 10, rowsStored: 0, bytesStored: 0, state: 'complete' })
+    const late = handle.getWindow(0, 3)
+    worker().toWorker({ t: 'query', queryId: 'query-1', event: { type: 'resultSet.residence', descriptor: { ...revisions, revision: 2, residence: 'memory', rowsStored: 0 } } })
+    const stale = await late
+    await settle()
+    expect(handle.getSnapshot().revision).toBe(2)
+    expect(stale.count).toBe(0)
+    expect(handle.peekWindow(0, 3)).toBeUndefined()
+    // A descriptor of an older revision changes nothing.
+    worker().toWorker({ t: 'query', queryId: 'query-1', event: { type: 'resultSet.closed', descriptor: { ...opened, revision: 0, rowsStored: 10 } } })
+    await settle()
+    expect(handle.getSnapshot()).toMatchObject({ residence: 'memory', revision: 2, rowsStored: 0 })
+  })
+
+  it('revises a result whose summary arrives before its residence event', async () => {
+    const { client, worker, handOver, serve } = fixture()
+    handOver()
+    await client.ready()
+    worker().toWorker({ t: 'backend', generation: 1, status: 'ready' })
+    const opened = descriptor({ residence: 'memory', revision: 0, rowsTotal: 10 })
+    worker().toWorker({ t: 'query', queryId: 'query-1', event: { type: 'resultSet.opened', descriptor: opened } })
+    await settle()
+    const handle = client.open(opened)
+    const first = handle.getWindow(0, 4)
+    await settle()
+    serve()
+    expect((await first).count).toBe(4)
+    worker().fromWorker.splice(0)
+    const windowed = descriptor({ residence: 'remote', revision: 1, rowsTotal: 10, rowsStored: 0, bytesStored: 0, state: 'complete' })
+    client.applySummary({ resultSets: [windowed] } as QueryResult)
+    await settle()
+    expect(worker().received.filter(message => message.type === 'revise')).toEqual([{ type: 'revise', key: { generation: 1, resultId: 3 } }])
+    expect(handle.peekWindow(0, 4)).toBeUndefined()
+    expect(handle.getSnapshot()).toMatchObject({ residence: 'remote', revision: 1, state: 'complete' })
+    // The event that follows changes nothing more, and nor does a progress tick sent before the switch.
+    worker().toWorker({ t: 'query', queryId: 'query-1', event: { type: 'resultSet.residence', descriptor: windowed } })
+    worker().toWorker({ t: 'query', queryId: 'query-1', event: { type: 'progress', completedBatches: 0, totalBatches: 1, batchNumber: 1, iteration: 1, results: [{ resultId: 3, rowsRead: 8, rowsStored: 8, rowsAvailable: 8, bytesStored: 900, truncated: 'queryBudget' }] } })
+    await settle()
+    expect(worker().received.filter(message => message.type === 'revise')).toHaveLength(1)
+    expect(handle.getSnapshot()).toMatchObject({ residence: 'remote', revision: 1, rowsStored: 0, bytesStored: 0 })
+    expect(handle.getSnapshot().truncated).toBeUndefined()
+    // A load (a newer revision) counts its progress again.
+    worker().toWorker({ t: 'query', queryId: 'query-2', event: { type: 'resultSet.residence', descriptor: { ...windowed, revision: 2, residence: 'memory', state: 'open' } } })
+    worker().toWorker({ t: 'query', queryId: 'query-2', event: { type: 'progress', completedBatches: 0, totalBatches: 1, batchNumber: 1, iteration: 1, results: [{ resultId: 3, rowsRead: 5, rowsStored: 5, rowsAvailable: 5, bytesStored: 500 }] } })
+    await settle()
+    expect(handle.getSnapshot()).toMatchObject({ residence: 'memory', revision: 2, rowsStored: 5, state: 'open' })
+  })
+
+  it('does not keep a view whose sort was answered after its result switched residence', async () => {
+    const { client, worker, handOver } = fixture()
+    handOver()
+    await client.ready()
+    worker().toWorker({ t: 'backend', generation: 1, status: 'ready' })
+    const opened = descriptor({ residence: 'memory', revision: 0, rowsTotal: 10, state: 'open' })
+    worker().toWorker({ t: 'query', queryId: 'query-1', event: { type: 'resultSet.opened', descriptor: opened } })
+    await settle()
+    const handle = client.open(opened)
+    const sorting = handle.sort([{ column: 0, descending: true, mode: 'value' }])
+    await settle()
+    const viewRequest = worker().fromWorker.findLast(item => item.t === 'view')!
+    // The backend's switch drops the result's views, and its event can be written before the sort's answer.
+    worker().toWorker({ t: 'query', queryId: 'query-1', event: { type: 'resultSet.residence', descriptor: descriptor({ residence: 'remote', revision: 1, rowsTotal: 10, rowsStored: 0, bytesStored: 0, state: 'open' }) } })
+    await settle()
+    worker().toWorker({ t: 'end', rid: viewRequest.rid, ok: true, result: { viewId: 2, rows: 10, baseRows: 10, complete: true, approximate: false } })
+    const view = await sorting
+    expect(view.getSnapshot().state).toBe('released')
+    expect(client.trackedViews).toBe(0)
+    // The backend is asked to close it (harmless if the switch dropped it), and nothing reads its rows.
+    await settle()
+    expect(worker().received.filter(message => message.type === 'viewClose').map(message => message.type === 'viewClose' && message.viewIds)).toEqual([[2]])
+    await expect(view.getWindow(0, 4)).rejects.toMatchObject({ code: 'RESULT_RELEASED' })
+    expect(worker().fromWorker.filter(request => request.t === 'read')).toEqual([])
+  })
+
   it('leaves memory to the backend\'s events after a close, and reports none once a new backend replaces the old one', async () => {
     const { client, worker, handOver } = fixture()
     handOver()
@@ -273,6 +387,23 @@ describe('ResultClient', () => {
     expect(handles[2].getSnapshot().state).toBe('lost')
     client.open(descriptor({ resultId: 6 }))
     expect(client.trackedResults).toBe(0)
+  })
+
+  it('leaves a released result released when its residence event arrives late', async () => {
+    const { client, worker, handOver } = fixture()
+    handOver()
+    await client.ready()
+    worker().toWorker({ t: 'backend', generation: 1, status: 'ready' })
+    const handle = client.open(descriptor({ resultId: 3 }))
+    const closing = client.release([handle.key])
+    await settle()
+    worker().toWorker({ t: 'end', rid: worker().fromWorker.find(request => request.t === 'close')!.rid, ok: true, result: { closed: 1, usedBytes: 0 } })
+    await closing
+    expect(client.trackedResults).toBe(0)
+    worker().toWorker({ t: 'query', queryId: 'query-1', event: { type: 'resultSet.residence', descriptor: { ...descriptor({ resultId: 3 }), revision: 1, residence: 'remote', rowsStored: 0 } } })
+    await settle()
+    expect(client.trackedResults).toBe(0)
+    expect(handle.getSnapshot().state).toBe('released')
   })
 
   it('identifies the rows of a result, reads and finds identities by view position, and refuses bad arguments in the page', async () => {
