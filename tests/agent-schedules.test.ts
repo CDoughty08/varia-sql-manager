@@ -784,6 +784,15 @@ describe("the job document's Schedules section", () => {
     jobDocuments.attachSchedule(id, record(8))
     expect(jobDocuments.get(id)!.draft!.schedules).toHaveLength(3)
   })
+  it("lets sysadmin remove a job's schedule whose version the capped versions read left out", async () => {
+    const { jobDocuments } = jobWorkbench({ ...job, schedules: [record(7, { version: undefined, modified: undefined })] })
+    const id = jobDocuments.openJob('c1', 'ETL')
+    await settled()
+    const entry = jobDocuments.get(id)!.draft!.schedules[0]!
+    expect(jobDocuments.canDetachSchedule(id, entry)).toBe(true)
+    jobDocuments.removeSchedule(id, entry.key)
+    expect(jobDocuments.get(id)!.draft!.schedules[0]?.remove).toBe('detach')
+  })
   it('drops a shared read that answers after a save started the reads over', async () => {
     const { jobDocuments, api } = jobWorkbench()
     const id = jobDocuments.openJob('c1', 'ETL')

@@ -711,10 +711,12 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     this.updateDraft(id, { schedules: draft.schedules.map(entry => entry.key === key ? { ...entry, fields } : entry) })
   }
   /** Remove: the job's own schedule is marked (detach by default) with Undo until Save; a new or picked one simply goes. */
-  /** Whether an entry can leave the job: a new or picked one always; one of the job's own only when its version was read, since msdb's
-   *  sp_detach_schedule finds the schedule through sysschedules_localserver_view, which hides another login's below SQLAgentReaderRole. */
+  /** Whether an entry can leave the job: a new or picked one always; one of the job's own for sysadmin (who sees every schedule, and
+   *  sp_detach_schedule has no version guard, so a versions read cut short at its row cap does not matter), else only when its version
+   *  was read, since msdb's sp_detach_schedule finds the schedule through sysschedules_localserver_view, which hides another login's
+   *  below SQLAgentReaderRole. */
   canDetachSchedule(id: string, entry: JobScheduleEntry): boolean {
-    if (entry.id === undefined || entry.attached) return true
+    if (entry.id === undefined || entry.attached || this.get(id)?.model?.sysadmin) return true
     const record = this.scheduleRecord(id, entry)
     return record?.version !== undefined && !!record.modified
   }
