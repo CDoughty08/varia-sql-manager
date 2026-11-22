@@ -14,13 +14,20 @@ internal enum BigQueryTransaction { None, Open, Unknown }
 /// <summary>A session job that had not reached DONE when its request ended: one Varia cancelled (Stop, the execution
 /// timeout), or one cut off by a network failure, which the session still holds. The session runs nothing else until it
 /// is DONE and its children are read. <c>Created</c> says BigQuery answered that the job exists; one it never confirmed
-/// (an insert cut off in flight) and that jobs.get does not find ran nothing, and no longer holds the session.</summary>
+/// (an insert cut off in flight) and that jobs.get does not find ran nothing, and no longer holds the session. A tail Varia
+/// did not cancel (a detached job, one cut off by the network) is polled in the background until it is DONE
+/// (<c>Finished</c>), so query.session.state can answer whether the session still holds a job without a request.</summary>
 internal sealed class BigQueryTail(string jobId, string? location, bool cancelled, bool created = true)
 {
     public string JobId { get; } = jobId;
     public string? Location { get; } = location;
     public bool Cancelled { get; set; } = cancelled;
     public bool Created { get; } = created;
+    private volatile bool finished;
+    /// <summary>The background poll saw the job DONE (or found an unconfirmed insert never created it).</summary>
+    public bool Finished { get => finished; set => finished = value; }
+    /// <summary>Whether the session holds this job: running in BigQuery, and not cancelled by Varia.</summary>
+    public bool Holds => !Cancelled && !Finished;
 }
 
 /// <summary>One finished or running child of a script job, as jobs.list reports it (statement type and status only).</summary>
@@ -44,7 +51,14 @@ internal sealed class BigQueryTabSession(string tabId, BigQueryConnection connec
     /// <summary>The execution holding the queue, and whether Varia stopped it; Stop issues its jobs.cancel.</summary>
     public Action? StopActive { get; set; }
     public bool ActiveCancelled { get; set; }
+    /// <summary>Leave it running for the execution holding the queue: it ends with status detached, and its job stays the
+    /// session's tail (docs/bigquery.md, Re-attaching to jobs).</summary>
+    public Action? DetachActive { get; set; }
     public bool Active => StopActive is not null;
+    /// <summary>The job key of the tab's last execution or attach, so bigquery.endIdleSessions can keep a kept tab's session.</summary>
+    public string? LastJobKey { get; set; }
+    /// <summary>Whether the session holds a job: one running in it that Varia has not cancelled, or a detached one.</summary>
+    public bool HoldsJob => Active && !ActiveCancelled || Tail is { Holds: true };
 }
 
 /// <summary>What a close found when it settled the session's last job.</summary>
@@ -87,16 +101,30 @@ internal sealed partial class BigQueryService
         sessions.AddOrUpdate(tabId, _ => new BigQueryTabSession(tabId, connection), (_, existing) => existing.Connection == connection ? existing : new BigQueryTabSession(tabId, connection));
 
     internal BigQueryTabSession? FindSession(string tabId) => sessions.GetValueOrDefault(tabId);
+
+    /// <summary>A tab adopting BigQuery session <paramref name="sessionId"/> takes it from any other tab that held it (a
+    /// re-attach from another tab): that tab's session leaves the map unended, so closing it never aborts the adopted one.</summary>
+    internal void ForgetOthers(BigQueryTabSession adopting, string sessionId)
+    {
+        foreach (var item in sessions.Where(item => item.Value != adopting && item.Value.Id == sessionId)) Forget(item.Value);
+    }
     internal bool OwnsSession(string tabId) => sessions.ContainsKey(tabId);
 
     /// <summary>Removes the tab's session from the map if it is still this one: any close that answers ok does, so the next
     /// state read answers SESSION_CLOSED and the next execution starts a new session.</summary>
     internal void Forget(BigQueryTabSession session) => ((ICollection<KeyValuePair<string, BigQueryTabSession>>)sessions).Remove(new(session.TabId, session));
 
-    /// <summary>A Disconnect drops the handle's sessions from the map; ending idle ones there is lane BQ-3d's.</summary>
-    void ForgetSessions(BigQueryConnection connection)
+    /// <summary>A Disconnect drops the handle's sessions from the map and answers the idle ones BigQuery made, which it then
+    /// ends; a session holding a running or detached job is left to BigQuery.</summary>
+    List<BigQueryTabSession> ForgetSessions(BigQueryConnection connection)
     {
-        foreach (var item in sessions.Where(item => item.Value.Connection == connection)) Forget(item.Value);
+        var idle = new List<BigQueryTabSession>();
+        foreach (var item in sessions.Where(item => item.Value.Connection == connection))
+        {
+            Forget(item.Value);
+            if (!item.Value.HoldsJob && item.Value.Id is not null) idle.Add(item.Value);
+        }
+        return idle;
     }
 
     /// <summary>The transaction after one statement: BEGIN opens it, a successful COMMIT or ROLLBACK closes it, and any
@@ -372,12 +400,14 @@ internal sealed partial class BigQueryService
     {
         if (!sessions.TryGetValue(tabId, out var session)) throw new RequestException("SESSION_CLOSED", "This query has no open BigQuery session.");
         if (session.Active && !session.ActiveCancelled) throw new RequestException("SESSION_BUSY", "A query is running in this tab.");
-        if (session.Tail is not null || session.Active) return new SessionState(0, false);
+        // job: a detached job (or one held after a network failure) the background poll has not yet seen DONE.
+        var job = session.Tail is { Holds: true } ? "running" : "none";
+        if (session.Tail is not null || session.Active) return new SessionState(0, false, job);
         return session.Transaction switch
         {
-            BigQueryTransaction.Open => new SessionState(1, true),
-            BigQueryTransaction.Unknown => new SessionState(0, false),
-            _ => new SessionState(0, true)
+            BigQueryTransaction.Open => new SessionState(1, true, job),
+            BigQueryTransaction.Unknown => new SessionState(0, false, job),
+            _ => new SessionState(0, true, job)
         };
     }
 
@@ -389,16 +419,24 @@ internal sealed partial class BigQueryService
     /// races it. Any close that answers ok removes the session from the map; the note says what became of a commit or of
     /// the session's end.
     /// </summary>
-    internal async Task<SessionCloseResult> CloseAsync(string tabId, string? transaction, bool abortOnRefusedCommit, CancellationToken token)
+    internal async Task<SessionCloseResult> CloseAsync(string tabId, string? transaction, bool abortOnRefusedCommit, CancellationToken token, bool keepJob = false, bool cancelJob = false)
     {
         if (!sessions.TryGetValue(tabId, out var session)) return new SessionCloseResult(false);
         var commit = transaction == "commit";
         var connection = session.Connection;
         if (session.Active && !session.ActiveCancelled)
         {
-            if (transaction is not null) throw JobRunning(commit);
-            // A plain close stops the tab's execution, as SQL Server's does; the stopped job is then waited for below.
-            session.StopActive?.Invoke();
+            // Cancel the job stops the tab's execution; the stopped job is then waited for below.
+            if (cancelJob) session.StopActive?.Invoke();
+            else if (transaction is not null) throw JobRunning(commit);
+            else
+            {
+                // The safety net: a plain close or Leave it running never aborts a session holding a job. The execution ends
+                // detached, and its job carries on in BigQuery with the session.
+                session.DetachActive?.Invoke();
+                Forget(session);
+                return new SessionCloseResult(true);
+            }
         }
         var waitLimit = commit ? CommitWaitLimit : CloseWaitLimit;
         using var wait = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -430,7 +468,13 @@ internal sealed partial class BigQueryService
                     }
                     catch (GoogleApiException error) when (!tail.Created && error.HttpStatusCode == HttpStatusCode.NotFound) { finished = true; }
                     catch (Exception) when (!token.IsCancellationRequested) { }
-                    if (!finished)
+                    if (!finished && cancelJob)
+                    {
+                        // Cancel the job: the held job is cancelled, then waited for and settled as a stopped one.
+                        tail.Cancelled = true;
+                        CancelJob(connection, connection.Options.Project, tail.JobId, tail.Location);
+                    }
+                    else if (!finished)
                     {
                         if (transaction is not null) throw JobRunning(commit);
                         Forget(session);
@@ -449,6 +493,10 @@ internal sealed partial class BigQueryService
                 }
                 if (settled.Committed) note = Note("committedBeforeCancel", jobId: tail.JobId);
             }
+            // Leave it running on a job that finished meanwhile is a normal close, unless the job left a transaction open (or
+            // possibly open): that is never rolled back unasked, so the close is refused and the next close asks.
+            if (keepJob && transaction is null && note is null && session.Id is not null && session.Transaction != BigQueryTransaction.None)
+                throw new RequestException("JOB_FINISHED", "The BigQuery job finished before it could be left running, and its session may hold an open transaction. The query stays open; close it again to commit or roll back.");
             if (commit && session.Transaction != BigQueryTransaction.None && session.Id is not null)
             {
                 // A stopped script's commit (note) is stated by whatever the commit itself comes to.
@@ -484,7 +532,9 @@ internal sealed partial class BigQueryService
         if (session.Id is not { } id) return new SessionCloseResult(true, note);
         var tracked = session.Transaction != BigQueryTransaction.None;
         var (ended, expired, error) = await AbortAsync(session.Connection, id, session.Location, token);
-        // A failed end outranks the note it carried, whose fact leads its message, since the session then stays open.
+        // A failed end outranks the note it carried, whose fact leads its message, since the session then stays open; it is
+        // retried once the next time a handle reaches BigQuery.
+        if (!ended) RememberFailedAbort(session.Connection, id, session.Location);
         if (!ended) return new SessionCloseResult(true, Note("abortFailed", note is null ? error : Prior(note) + " " + error, note?.JobId));
         if (expired && tracked && note is null) return new SessionCloseResult(true, Note("sessionExpired"));
         return new SessionCloseResult(true, note);

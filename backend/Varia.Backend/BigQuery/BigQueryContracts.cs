@@ -138,3 +138,50 @@ internal sealed record BigQueryFactGroup(string Title, List<BigQueryFact> Facts)
 /// <summary>Type: tables.get's type in words ("table", "snapshot", "view"…). Groups: Table, Storage, Layout, History, in that
 /// order, each left out when it has no facts.</summary>
 internal sealed record BigQueryProperties(string Name, string Type, List<BigQueryFactGroup> Groups, long ElapsedMs);
+
+/// <summary>
+/// query.attach (docs/bigquery.md, Re-attaching to jobs): re-attaches the tab <c>SessionId</c> to a job a previous run (or
+/// backend) started, by its id, location and project. AdoptSession takes over the BigQuery session the job ran in, starting
+/// its transaction state from <c>Transaction</c> (the job record's, decision 54); Detached only holds the session's queue
+/// until the job is DONE and reads no results. JobKey is the tab's job key, which main ties the job's record to.
+/// </summary>
+internal sealed record BigQueryAttachArgs(string ConnectionId, string SessionId, string QueryId, string JobKey, string JobId, string Project, string? Location = null,
+    int MaxRows = 0, int MaxResultSets = 10, bool AdoptSession = false, string? Transaction = null, bool Detached = false, string? Residence = null,
+    int? WindowCacheMiB = null, bool? Prices = null);
+
+/// <summary>bigquery.endIdleSessions (main only, before every backend stop main makes): KeepJobKeys are the job keys of
+/// tabs kept at quit, whose idle sessions with an open or unknown transaction are left for the next start.</summary>
+internal sealed record BigQueryEndIdleArgs(IReadOnlyList<string>? KeepJobKeys = null);
+internal sealed record BigQueryEndIdleResult(int FailedAborts);
+
+/// <summary>One job bigquery.cancelJobs cancels: its id and location (its project is the call's).</summary>
+internal sealed record BigQueryJobReference(string JobId, string? Location = null);
+
+/// <summary>bigquery.cancelJobs (main only, sensitive): cancels jobs of a saved profile with no connection handle, signed
+/// in with the credential material main resolved, and ends each job's session (docs/bigquery.md, Cancelling without a
+/// connection).</summary>
+internal sealed record BigQueryCancelJobsArgs(string Authentication, string Project, IReadOnlyList<BigQueryJobReference> Jobs, string? KeyFile = null,
+    string? ImpersonateServiceAccount = null, BigQueryCredentialMaterial? Credential = null);
+
+/// <summary>What became of one job: Cancelled says jobs.cancel was accepted (or the job had already finished); Note is
+/// committedBeforeCancel or outcomeUnknown, as a cancelJob close reports them; Error, BigQuery's refusal.</summary>
+internal sealed record BigQueryCancelledJob(string JobId, bool Cancelled,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] SessionCloseNote? Note = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Error = null);
+internal sealed record BigQueryCancelJobsResult(IReadOnlyList<BigQueryCancelledJob> Jobs);
+
+/// <summary>The bounds zod sets on job references and keys (jobLimits in src/shared/bigquery/jobs.ts).</summary>
+internal static partial class BigQueryJobLimits
+{
+    public const int JobId = 1024;
+    /// <summary>Job keys bigquery.endIdleSessions and session.cancelRestoredJobs take, and jobs bigquery.cancelJobs cancels.</summary>
+    public const int Keys = 1024;
+    public const int Jobs = 64;
+
+    // BigQuery's job ids: letters, digits, dashes and underscores, at most 1,024 characters.
+    [GeneratedRegex(@"^[A-Za-z0-9_-]{1,1024}\z")]
+    public static partial Regex JobIdPattern();
+
+    public static bool IsJobId(string? value) => value is { Length: > 0 and <= JobId } && JobIdPattern().IsMatch(value);
+    public static bool IsLocation(string? value) => value is null || value is { Length: > 0 and <= BigQueryLimits.Location } && BigQueryLimits.LocationId().IsMatch(value);
+}

@@ -44,12 +44,15 @@ internal sealed record TableArgs(string ConnectionId, string Database, string Sc
 /// (the connection's when left out), which SQL Server refuses.</summary>
 internal sealed record QueryArgs(string ConnectionId, string SessionId, string? Database, string Sql, string QueryId, int MaxRows, int TimeoutSeconds, int StartLine = 1, int MaxResultSets = 10,
     bool StopOnError = false, bool IncludeActualPlan = false, bool IncludeClientStatistics = false, bool IncludeLivePlan = false, bool DiscardResults = false, string? Dataset = null,
-    long? MaximumBytesBilled = null, bool? Prices = null, int StartColumn = 1, string? Residence = null, int? WindowCacheMiB = null, BigQuery.BigQueryPreviewTarget? Preview = null);
+    long? MaximumBytesBilled = null, bool? Prices = null, int StartColumn = 1, string? Residence = null, int? WindowCacheMiB = null, BigQuery.BigQueryPreviewTarget? Preview = null,
+    string? JobKey = null);
 /// <summary>query.session.close: Transaction "commit" commits the session's open transaction first; "rollback" is a plain close,
 /// since SQL Server rolls back what a closed session left open. AbortOnRefusedCommit (default true) lets a BigQuery commit
 /// refused on an unchecked session fall through to ending the session (docs/bigquery.md, Sessions); SQL Server ignores it,
 /// since its failed commit keeps the session either way.</summary>
-internal sealed record SessionArgs(string SessionId, string? Transaction = null, bool? AbortOnRefusedCommit = null);
+/// KeepJob (Leave it running) detaches a BigQuery job still running and leaves its session; CancelJob (Cancel the job) cancels
+/// it, waits for its DONE and ends the session (docs/bigquery.md, Re-attaching to jobs). SQL Server refuses both.
+internal sealed record SessionArgs(string SessionId, string? Transaction = null, bool? AbortOnRefusedCommit = null, bool? KeepJob = null, bool? CancelJob = null);
 /// <summary>query.session.close's answer: Closed says a session was ended; Note, a BigQuery close's fixed code (with
 /// BigQuery's message or the job id it names), tells what became of a commit or of the session's end.</summary>
 internal sealed record SessionCloseResult(bool Closed, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] SessionCloseNote? Note = null);
@@ -57,7 +60,11 @@ internal sealed record SessionCloseResult(bool Closed, [property: JsonIgnore(Con
 /// turns each into text).</summary>
 internal sealed record SessionCloseNote(string Code, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Message = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? JobId = null);
-internal sealed record CancelArgs(string QueryId);
+/// <summary>query.cancel. Detach (BigQuery only) ends the request with status detached and leaves its job running in
+/// BigQuery, holding the tab's session (Close Results' Leave it running).</summary>
+internal sealed record CancelArgs(string QueryId, bool? Detach = null);
+/// <summary>connections.disconnect's answer: FailedAborts counts the idle BigQuery sessions whose ABORT_SESSION failed.</summary>
+internal sealed record DisconnectResult(bool Disconnected, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? FailedAborts = null);
 /// <summary>A database, or for BigQuery a dataset with its location (absent when BigQuery names none).</summary>
 internal sealed record DatabaseInfo(string Name, bool IsSystem, bool IsSnapshot, string? Location = null);
 /// <summary>A result column as the grid sees it: wire is "text" (SSMS display text) or "binary"; role marks documents
@@ -149,14 +156,15 @@ internal sealed record SessionStateArgs(string SessionId);
 /// <summary>query.session.state: an idle session's @@TRANCOUNT, read on demand before it ends. Checked is false when the
 /// session's SET options (SHOWPLAN_*, NOEXEC, PARSEONLY, FMTONLY) kept the SELECT from returning it; TransactionCount is
 /// then 0 and the session may hold a transaction.</summary>
-internal sealed record SessionState(int TransactionCount, bool Checked);
+/// <summary>Job (BigQuery only): "running" while the tab's session holds a job running or detached in BigQuery, else "none".</summary>
+internal sealed record SessionState(int TransactionCount, bool Checked, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Job = null);
 /// <summary>results.read: ViewId reads through a view of the result (results.view), FirstRow then counting view positions.</summary>
 /// <summary>Viewer (1 to 2^31 - 1) names the grid, popout or Transpose reading, so a windowed result reads ahead for each apart.</summary>
 internal sealed record ResultsReadArgs(uint ResultId, long FirstRow, int MaxRows, uint? ViewId = null, uint? Viewer = null);
 internal sealed record ResultsReadResult(long NextRow, long RowsAvailable, bool Complete, int Pages, int Rows);
 /// <summary>results.remoteQuery: a query over a windowed BigQuery result (docs/ipc.md). QueryId is its own, for query.cancel;
 /// Generation is the source result's, which main checks before sending; Kind is "load" (Load into memory) for now.</summary>
-internal sealed record RemoteQueryArgs(string QueryId, uint ResultId, int Generation, string Kind);
+internal sealed record RemoteQueryArgs(string QueryId, uint ResultId, int Generation, string Kind, string? JobKey = null);
 internal sealed record ResultsCloseArgs(uint[] ResultIds);
 internal sealed record ResultsCloseResult(int Closed, long UsedBytes);
 /// <summary>results.visibility: the results whose grids are shown in any window now, at most ResultVisibility.MaxResults

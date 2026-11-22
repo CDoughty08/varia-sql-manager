@@ -270,13 +270,27 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
 
     static string? KindOf(string authentication) => authentication switch { "serviceAccountKey" => "serviceAccount", "externalAccount" => "externalAccount", _ => null };
 
-    /// <summary>Removes a handle and disposes its client. Results stay readable after a disconnect, as SQL Server's do.</summary>
+    /// <summary>Removes a handle and disposes its client, ending nothing in BigQuery (an unsent connect, the backend's stop).
+    /// Results stay readable after a disconnect, as SQL Server's do.</summary>
     public bool Disconnect(string connectionId)
     {
         if (!connections.TryRemove(connectionId, out var connection)) return false;
         ForgetSessions(connection);
         connection.Dispose();
         return true;
+    }
+
+    /// <summary>connections.disconnect for a BigQuery handle (docs/bigquery.md, Re-attaching to jobs): removes it, ends its idle
+    /// sessions (ABORT_SESSION, in parallel, through a lease on the client) and leaves those holding a running or detached
+    /// job. FailedAborts counts the ends that failed, each kept for one retry.</summary>
+    public async Task<DisconnectResult> DisconnectAsync(string connectionId, CancellationToken token)
+    {
+        if (!connections.TryRemove(connectionId, out var connection)) return new(false);
+        var lease = connection.Lease();
+        var idle = ForgetSessions(connection);
+        connection.Dispose();
+        if (lease is null) return new(true);
+        using (lease) return new(true, idle.Count == 0 ? null : await EndSessionsAsync(idle, token));
     }
 
     /// <summary>bigquery.account: the account line before connecting.</summary>
