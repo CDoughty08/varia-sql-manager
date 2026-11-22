@@ -193,7 +193,8 @@ the reads held when it is made:
   (`.Sales` also finds names starting `Sales`, such as `dbo.SalesOrders`); `AppData.dbo.Orders` finds that table in
   AppData only; `PartialSchema*.Orders` finds `Orders` in every schema starting `PartialSchema`. Only the
   schema-qualified part is marked. A regex with a dot matches `schema.name` as it is.
-- **Match Whole Word.** No identifier character (letter, digit, `_`, `@`, `#`, `$`) on either side.
+- **Match Whole Word.** No identifier character (letter, digit, `_`, `@`, `#`, `$`) on either side. A regex may stretch
+  to the word's end to get there (`Order.*?Id` finds `OrderIdArchiveId`).
 - **Use Regular Expression.** .NET's `NonBacktracking` engine (linear time). Lookarounds and backreferences are refused
   with a message.
 - **Scope.** All (names and definitions), Names or Definitions.
