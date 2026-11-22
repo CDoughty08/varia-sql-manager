@@ -47,7 +47,9 @@ describe('server engines', () => {
     expect(json.actions.filter(row => isKindDialogAction(row.action as DialogAction))).toMatchObject([{ action: 'loginProperties', class: 'dialog', kind: 'login', verb: 'properties', engines: ['box', 'managedInstance'] },
       { action: 'tableProperties', class: 'dialog', kind: 'table', verb: 'properties', engines: ['box', 'managedInstance'] },
       // SQL Server Agent Properties (AG-8a) opens on the Agent node, read-only on Managed Instance.
-      { action: 'agentProperties', class: 'dialog', kind: 'agent', verb: 'properties', engines: ['box', 'managedInstance'] }])
+      { action: 'agentProperties', class: 'dialog', kind: 'agent', verb: 'properties', engines: ['box', 'managedInstance'] },
+      // The job document (AG-6a) is what a job's Properties opens.
+      { action: 'agentJob', class: 'dialog', kind: 'agentJob', verb: 'properties', engines: ['box', 'managedInstance'] }])
     expect(json.limits.cleanupMs).toBe(10_000)
     expect(designerEngines).toEqual(['box', 'managedInstance'])
     expect(JSON.parse(designerCatalogJson()).engines).toEqual(['box', 'managedInstance'])

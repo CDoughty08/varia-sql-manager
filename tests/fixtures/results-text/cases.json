@@ -99,6 +99,26 @@
       ]
     },
     {
+      "name": "BigQuery typing by sort kind: BOOL as a boolean (false and true, NULL as null), INT64 and FLOAT64 as numbers; text keeps BOOL's words",
+      "columns": [
+        {"name": "flag", "dataType": "BOOL", "wire": "text", "sortKind": "boolean"},
+        {"name": "n", "dataType": "INT64", "wire": "text", "sortKind": "integer"},
+        {"name": "x", "dataType": "FLOAT64", "wire": "text", "sortKind": "float"}
+      ],
+      "rows": [
+        ["false", "1", "0.5"],
+        ["true", "-2", "1E+20"],
+        [null, null, null]
+      ],
+      "copy": [
+        {"name": "words as shown", "headers": true, "eol": "lf", "parts": [{"rows": [[0, 9007199254740991]], "columns": [[0, 2]]}], "expected": "flag\tn\tx\nfalse\t1\t0.5\ntrue\t-2\t1E+20\nNULL\tNULL\tNULL", "rows": 3, "truncatedCells": 0}
+      ],
+      "save": [
+        {"format": "json", "headers": true, "nullText": "NULL", "rows": 3, "truncatedCells": 0, "expected": "[\n{\"flag\":false,\"n\":1,\"x\":0.5},\n{\"flag\":true,\"n\":-2,\"x\":1E+20},\n{\"flag\":null,\"n\":null,\"x\":null}\n]\n"},
+        {"format": "csv", "headers": true, "nullText": "empty", "rows": 3, "truncatedCells": 0, "expected": "\ufeffflag,n,x\r\nfalse,1,0.5\r\ntrue,-2,1E+20\r\n,,\r\n"}
+      ]
+    },
+    {
       "name": "a result with no rows",
       "columns": [
         {"name": "a", "dataType": "int", "wire": "text"},

@@ -1,6 +1,6 @@
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import { cycleSortKeys, sortKeysBy, type SortDirection } from '../grid/sort-keys'
-import type { DiffKindName, MessageEntry, QueryEvent, QueryResult, QueryStatus, ResolvedGroupsFilter, ResolvedViewFilter, ResultColumn, ResultDescriptor, ResultsJobProgress, VariaApi, ViewFilter, ViewSortKey, ViewSortMode } from '../../../shared/contracts'
+import type { DiffKindName, MessageEntry, QueryEvent, QueryResult, QueryStatus, ResolvedGroupsFilter, ResolvedViewFilter, ResultColumn, ResultDescriptor, ResultsJobProgress, ResultsRemoteQueryParams, VariaApi, ViewFilter, ViewSortKey, ViewSortMode } from '../../../shared/contracts'
 import type { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
@@ -20,6 +20,8 @@ import { orderPlanEntries } from '../plans/sources'
 import { ResultOperations, type OperationTicket } from './operations'
 import { nameMeetsOthers, sameFileName, saveName, type SaveSubject } from './save-names'
 import { isHiddenColumn, visibleColumnCount } from '../grid/hidden-columns'
+import { isRemoteHandle, isRemoteView, RemoteDeclined, remoteStop, remoteOrderable, remoteSelectionText, unorderableText, type RemoteViews } from './remote-views'
+import type { MemoryUsage } from './memory'
 
 export type RunStatus = 'running' | QueryStatus | 'lost' | 'closed'
 /**
@@ -322,6 +324,8 @@ export interface TabResults {
   readonly discard?: true
   /** A view made only to show Messages lines written outside any execution (`addMessage`): no run summary is drawn. */
   readonly messagesOnly?: true
+  /** Windowed BigQuery results loading into memory, by entry key, and whether Stop was asked. */
+  readonly loads?: ReadonlyMap<EntryKey, { readonly stopping: boolean }>
 }
 /** One grid's view, outside React and never in a snapshot: it survives tab switches, Ctrl+R and unmounting. */
 export interface GridViewState {
@@ -430,7 +434,11 @@ interface Run {
   /** Lines written outside the execution (`addMessage`), after its own; the summary does not replace them. */
   notes: MessageEntry[]
   messagesOnly?: true
+  /** Loads into memory running (results.remoteQuery), by entry key. Replaced, never changed in place: snapshots share it. */
+  loads: ReadonlyMap<EntryKey, RunningLoad>
 }
+/** A Load into memory: its own query id (query.cancel stops it) and the subscription to its events. */
+interface RunningLoad { readonly queryId: string; readonly subscription: Disposable; readonly stopping: boolean }
 /** `handle` and `done`: a save's result, and when it ends (a rebuilt Pivot releases the old one only after its saves). */
 interface RunningJob { job: ResultJob; readonly tabId: string; timer?: unknown; handle?: ResultSetEntry['handle']; done?: Promise<void> }
 
@@ -443,9 +451,8 @@ const unavailable = 'These results are no longer available because the SQL backe
 const closedResults = 'These results were closed. Execute the query again to see them.'
 const stillLoading = 'Save the results after this result set finishes loading.'
 const stillSorting = 'Save the results after they are sorted.'
-// Said before the file dialog, as the backend would refuse the save after it (REMOTE_RESULT).
-const windowedSave = 'Could not save the results: This result is windowed in BigQuery: its rows are not in memory, so it cannot be saved yet.'
-const windowedCopy = 'Could not copy the results: This result is windowed in BigQuery: its rows are not in memory, so they cannot be copied yet.'
+const remoteUnavailable = 'This result is windowed in BigQuery, and this window cannot query BigQuery. Load it into memory first.'
+const loadWhileRunning = 'Load the result into memory once its query has finished.'
 // A view built while rows still arrived whose rebuild from every row was cancelled: nothing builds it again by itself.
 const partialView = 'The grid is sorted or filtered over only the rows that had arrived. Sort or filter it again to include every row, then save.'
 const saveCancelled = 'Saving was cancelled. The file was not written.'
@@ -453,6 +460,11 @@ const saveCancelled = 'Saving was cancelled. The file was not written.'
 const saveSentences: ReadonlySet<string> = new Set<ErrorCode>(['EXPORT_FAILED', 'JOB_BUSY', 'RESULT_OPEN', 'RESULT_UNAVAILABLE', 'RESULT_NOT_FOUND'])
 const sameMessages = (a: readonly MessageEntry[], b: readonly MessageEntry[]) => a.length === b.length && a.every((entry, index) => entry.text === b[index].text && entry.kind === b[index].kind)
 const runStatus = (summary: QueryResult): RunStatus => summary.status
+/** What Copy and Save read: the result, or its view by id. A sort or filter in BigQuery is a result of its own (viewId 0),
+ *  which they read as itself. */
+const jobSource = (handle: ResultHandle, view: ResultView | undefined): { generation: number; resultId: number; viewId?: number } =>
+  isRemoteView(view) ? { generation: view.key.generation, resultId: view.key.resultId }
+    : { generation: handle.key.generation, resultId: handle.key.resultId, ...view ? { viewId: view.viewId } : {} }
 /** How many sets a run made with Discard results after execution read and did not keep. */
 const discardedSets = (run: Pick<Run, 'discard' | 'summary'>): number => run.discard ? run.summary?.discardedResultSets ?? 0 : 0
 /** " 3 values were truncated." after a copy or save that wrote values the backend stored cut; '' otherwise. */
@@ -489,14 +501,24 @@ function valueBase(column: ResultColumn, kind: TextDocument['kind']): string {
  * frame; the summary is authoritative when the run ends. Results are released when the tab runs again, closes, or the
  * user closes them; changing the connection or database keeps them, as SSMS does.
  */
+/** Whether a windowed result's projected size fits the result memory free now. With no projection or no report yet
+ *  (globalBytes 0) nothing is held back: the load itself switches back to windowed if the rows do not fit. */
+export function fitsFreeMemory(projected: number | undefined, memory: Pick<MemoryUsage, 'usedBytes' | 'globalBytes'> | undefined): boolean {
+  if (projected === undefined || !memory || memory.globalBytes <= 0) return true
+  return projected <= Math.max(0, memory.globalBytes - memory.usedBytes)
+}
+
 export class ResultsService extends SnapshotStore<Readonly<Record<string, TabResults>>> implements Disposable {
   private readonly client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary' | 'release' | 'onGeneration'>
   private readonly events: EventBus
-  private readonly api: Pick<VariaApi, 'copyResults' | 'saveResults' | 'cancelResultsJob' | 'onResultsJob'>
+  private readonly api: Pick<VariaApi, 'copyResults' | 'saveResults' | 'cancelResultsJob' | 'onResultsJob'> & Partial<Pick<VariaApi, 'remoteQuery' | 'cancel'>>
   private readonly documents: Pick<DocumentService, 'openText'> | undefined
   private readonly retainedPlans?: RetainedPlansService
+  /** Sort, filter and value lists of results windowed in BigQuery (remote-views.ts); without it they are refused. */
+  private readonly remote?: RemoteViews
   /** How text columns sort (queryResults.grid.sortText). */
   private readonly sortText: () => ViewSortMode
+  private readonly memory?: () => Pick<MemoryUsage, 'usedBytes' | 'globalBytes'>
   /** The last number each value tab name used (XML_F52E2B61-…3.xml), for the window's lifetime. */
   private readonly valueNumbers = new Map<string, number>()
   private readonly frame: (callback: () => void) => void
@@ -559,9 +581,13 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   private minted = 0
 
   constructor(o: {
-    client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary' | 'release' | 'onGeneration'>; api: Pick<VariaApi, 'copyResults' | 'saveResults' | 'cancelResultsJob' | 'onResultsJob'>; events: EventBus
+    client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary' | 'release' | 'onGeneration'>; api: Pick<VariaApi, 'copyResults' | 'saveResults' | 'cancelResultsJob' | 'onResultsJob'> & Partial<Pick<VariaApi, 'remoteQuery' | 'cancel'>>; events: EventBus
     documents?: Pick<DocumentService, 'openText'>; frame?: (callback: () => void) => void; timers?: Timers; now?: () => number; newId?: () => string; retainedPlans?: RetainedPlansService
     sortText?: () => ViewSortMode
+    remote?: RemoteViews
+    /** Result memory's latest report (MemoryUsageService): Load into memory is offered only while a windowed result's
+     *  projection fits the room it has free. Without it (or before a report) nothing is held back. */
+    memory?: () => Pick<MemoryUsage, 'usedBytes' | 'globalBytes'>
     /** Calls the listener when settings change; sorted grids sort again when the text mode did. Returns the unsubscribe. */
     onSortTextChange?: (listener: () => void) => () => void
   }) {
@@ -571,7 +597,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.api = o.api
     this.documents = o.documents
     this.retainedPlans = o.retainedPlans
+    this.remote = o.remote
     this.sortText = o.sortText ?? (() => 'value')
+    this.memory = o.memory
     let sortText = this.sortText()
     if (o.onSortTextChange) this.subscriptions.push(o.onSortTextChange(() => { const next = this.sortText(); if (next !== sortText) { sortText = next; this.resort() } }))
     this.frame = o.frame ?? (callback => requestFrame(callback))
@@ -606,7 +634,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       tabId, bare: o.bare === true, slots: new Map(), selected: new Set(), ...refocus === undefined ? {} : { refocus },
       queryId, startedAt: this.now(), status: 'running', sets: [], planSets: [], setKeys: new Set(), entries: new Map(), numbered: 0, compared: 0, setsPublished: false, rowsRead: new Map(), messages: [], notices: [], messagesTruncated: false,
       completedBatches: 0, totalBatches: 0, view: 'messages', manualView: false, strip: this.stripChoices.get(tabId) === true, stripManual: false,
-      settled: new Map(), settledPublished: false, jobs: this.savesOf(tabId), announcement: '', announced: 0, jobNotice: '', sorts: new Map(), sorting: new Map(), held: new Map(), emptied: false, discard: o.discard === true, notes: []
+      settled: new Map(), settledPublished: false, jobs: this.savesOf(tabId), announcement: '', announced: 0, jobNotice: '', sorts: new Map(), sorting: new Map(), held: new Map(), emptied: false, discard: o.discard === true, notes: [], loads: new Map()
     }
     run.subscription = this.client.onQueryEvent(queryId, event => {
       if (event.type === 'session.opened') {
@@ -737,6 +765,13 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    * refused close): after the run's own lines, which a running run's summary does not replace; a tab with no run gets a
    * messages-only view. The strip opens for an error line, as for a run's.
    */
+  /** A query over a windowed result's lines (its job, rows, cost): after the run's, only while the tab's run is there, so an
+   *  answer that came after the tab closed opens nothing. */
+  remoteMessages(tabId: string, messages: readonly MessageEntry[]): void {
+    if (!this.runs.has(tabId)) return
+    for (const message of messages) this.addMessage(tabId, message.text, message.kind === 'error' ? 'error' : 'info')
+  }
+
   addMessage(tabId: string, text: string, kind: 'info' | 'error' = 'info'): void {
     if (this.disposed) return
     const entry: MessageEntry = { text: text.slice(0, wire.messages.characters), kind }
@@ -755,6 +790,101 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (!run.manualView && !run.sets.length) run.view = 'messages'
     this.openStripFor(run, [entry])
     this.publishNow(tabId)
+  }
+
+  /**
+   * Load into memory (results.remoteQuery `load`): a windowed BigQuery result of a finished run reads its rows into result
+   * memory under a new revision, its grid keeping its rows and place meanwhile. Its events are its own query's, followed
+   * here after the run ended (a run's own stop once it finishes); the summary settles it, loaded or windowed again, and its
+   * messages join the run's. Returns why it cannot start, or undefined.
+   */
+  async loadIntoMemory(tabId: string, key: EntryKey): Promise<string | undefined> {
+    const run = this.runs.get(tabId), set = run?.entries.get(key)
+    if (!run || !set || !this.api.remoteQuery || this.disposed) return undefined
+    const snapshot = set.handle.getSnapshot()
+    if (snapshot.state === 'lost' || snapshot.state === 'released') return snapshot.state === 'lost' ? unavailable : closedResults
+    if (snapshot.residence !== 'remote' || run.loads.has(key)) return undefined
+    if (run.status === 'running' || snapshot.state !== 'complete') return loadWhileRunning
+    const queryId = this.newId()
+    const subscription = this.client.onQueryEvent(queryId, event => this.loadEvent(tabId, run, key, event))
+    const load: RunningLoad = { queryId, subscription, stopping: false }
+    run.loads = new Map(run.loads).set(key, load)
+    this.publishNow(tabId)
+    // The strip's count is no live region (it changes every tick): the start is said once here.
+    this.announce(tabId, 'Loading into memory…')
+    const { generation, resultId } = set.descriptor
+    let refusal: string | undefined
+    try {
+      const params: ResultsRemoteQueryParams = { queryId, generation, resultId, kind: 'load' }
+      const answer = await this.api.remoteQuery(params)
+      // The run replaced, or this result closed (Close Results, its caption's close), stopped the load: the user's own
+      // close is not reported as its failure.
+      if (this.runs.get(tabId) !== run || run.entries.get(key) !== set || this.disposed) return undefined
+      if (answer.ok) this.loaded(tabId, run, answer.value)
+      else refusal = `Could not load the result into memory: ${answer.error}`
+    } catch (error) {
+      refusal = `Could not load the result into memory: ${error instanceof Error ? error.message : String(error)}`
+    } finally {
+      subscription.dispose()
+      if (run.loads.get(key)?.queryId === queryId) { const loads = new Map(run.loads); loads.delete(key); run.loads = loads }
+      if (this.runs.get(tabId) === run) this.schedule(tabId)
+    }
+    if (refusal && this.runs.get(tabId) === run && run.entries.get(key) === set) {
+      this.addMessage(tabId, refusal, 'error')
+      this.announce(tabId, refusal)
+    }
+    return undefined
+  }
+
+  /** Whether Load into memory can start for this entry: a windowed BigQuery result whose run has finished, not loading,
+   *  whose projected size fits the result memory free now (docs/bigquery.md, Load into memory). */
+  canLoadIntoMemory(tabId: string, key: EntryKey): boolean { return this.loadState(tabId, key) === 'ready' }
+  /** Whether the one thing keeping Load into memory back is the room: the result's projection does not fit the memory free. */
+  loadNeedsRoom(tabId: string, key: EntryKey): boolean { return this.loadState(tabId, key) === 'room' }
+  private loadState(tabId: string, key: EntryKey): 'ready' | 'room' | undefined {
+    const run = this.runs.get(tabId), set = run?.entries.get(key)
+    if (!run || !set || !this.api.remoteQuery || run.status === 'running' || run.loads.has(key)) return undefined
+    const snapshot = set.handle.getSnapshot()
+    if (snapshot.residence !== 'remote' || snapshot.state !== 'complete') return undefined
+    return fitsFreeMemory(snapshot.projectedBytes, this.memory?.()) ? 'ready' : 'room'
+  }
+
+  /** Stops a Load into memory (query.cancel with its own id): the result stays windowed, whole. */
+  stopLoad(tabId: string, key: EntryKey): void {
+    const run = this.runs.get(tabId), load = run?.loads.get(key)
+    if (!run || !load || load.stopping || !this.api.cancel) return
+    run.loads = new Map(run.loads).set(key, { ...load, stopping: true })
+    this.schedule(tabId)
+    this.announce(tabId, 'Stopping the load: the result stays windowed in BigQuery.')
+    void this.api.cancel(load.queryId).catch(() => {})
+  }
+
+  /** A load's events: its residence switches (loading, or windowed again), and its set settling. Its messages come with
+   *  its summary. */
+  private loadEvent(tabId: string, run: Run, key: EntryKey, event: QueryEvent): void {
+    if (this.runs.get(tabId) !== run || !run.loads.has(key) || this.disposed) return
+    if (event.type === 'resultSet.residence') this.switched(tabId, run, event.descriptor)
+    else if (event.type === 'resultSet.opened' || event.type === 'resultSet.closed') this.settle(run, event.descriptor)
+    else return
+    this.schedule(tabId)
+  }
+
+  /** A load's summary: a switch it carried that its event has not (the event may come after), the set settled, its
+   *  messages added after the run's, and what happened said. */
+  private loaded(tabId: string, run: Run, summary: QueryResult): void {
+    for (const descriptor of summary.resultSets) {
+      const entry = run.sets.find(set => set.descriptor.resultId === descriptor.resultId && set.descriptor.generation === descriptor.generation)
+      if (!entry) continue
+      const revised = (descriptor.revision ?? 0) > (entry.handle.getSnapshot().revision ?? 0)
+      this.client.applySummary({ ...summary, resultSets: [descriptor], planSets: [] })
+      if (revised) this.switched(tabId, run, descriptor, false)
+      this.settle(run, descriptor)
+    }
+    const lines = summary.messages.map(entry => ({ ...entry, text: entry.text.slice(0, wire.messages.characters) }))
+    run.notes = [...run.notes, ...lines].slice(-resultLimits.messages)
+    this.openStripFor(run, lines.filter(entry => entry.kind === 'error'))
+    const said = lines.at(-1)?.text
+    if (said) this.announce(tabId, said)
   }
 
   /** Close Results: the memory is freed now; Messages stay. Not for a bare run (Peek's rows go with their card or tab). */
@@ -1019,8 +1149,6 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (!run || !set || !selection) return undefined
     const state = set.handle.getSnapshot().state
     if (state === 'lost' || state === 'released') return state === 'lost' ? unavailable : closedResults
-    // Refused before it cancels the copy running (another grid's, perhaps): the backend would refuse it anyway.
-    if (set.handle.getSnapshot().residence === 'remote') return windowedCopy
     // A grid drawn transposed copies as drawn: the selection it shows, written turned.
     const turned = transposedView(this.views.get(tabId)?.grids.get(set.key), set.descriptor)
     const parts = (turned ? transposedCopyPlan : copyPlan)(selection, set.descriptor.columns.length)
@@ -1035,7 +1163,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     let result
     // The view the selection's rows are positions in (a sort just built is not it until the grid has swapped to it).
     const view = this.drawnView(run, set.key)
-    try { result = await this.api.copyResults({ jobId, generation: set.handle.key.generation, resultId: set.handle.key.resultId, headers, parts, ...view ? { viewId: view.viewId } : {}, ...turned ? { transposed: true, ...turned } : {} }) }
+    try { result = await this.api.copyResults({ jobId, ...jobSource(set.handle, view), headers, parts, ...turned ? { transposed: true, ...turned } : {} }) }
     finally { this.endJob(running) }
     if (result.ok) {
       const { rows, partial, truncatedCells, capped } = result.value
@@ -1060,9 +1188,6 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (!run || !set) return undefined
     const snapshot = set.handle.getSnapshot()
     if (snapshot.state === 'lost' || snapshot.state === 'released') return snapshot.state === 'lost' ? unavailable : closedResults
-    // The snapshot, not the opening descriptor: a set switches residence after it opened (resultSet.residence). Before the
-    // loading check: waiting would not help.
-    if (snapshot.residence === 'remote') return windowedSave
     if (snapshot.state !== 'complete') return stillLoading
     const sort = run.sorts.get(set.key)
     // The file follows the grid's order, which a running sort or filter is about to change: Save waits for it.
@@ -1074,14 +1199,14 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const turned = transposedView(this.views.get(tabId)?.grids.get(set.key), set.descriptor)
     let saved!: () => void
     const done = new Promise<void>(resolve => { saved = resolve })
-    const running: RunningJob = { tabId, handle: set.handle, done, job: { jobId, kind: 'save', entry: set.key, label: this.jobLabel(run, set), rowsDone: 0, rowsTotal: turned ? set.descriptor.columns.length : snapshot.rowsAvailable, startedAt: this.now(), visible: false, ...turned ? { columns: true } : {} } }
+    const running: RunningJob = { tabId, handle: set.handle, done, job: { jobId, kind: 'save', entry: set.key, label: this.jobLabel(run, set), rowsDone: 0, rowsTotal: turned ? set.descriptor.columns.length : isRemoteView(sort?.view) ? sort.view.rows : snapshot.rowsAvailable, startedAt: this.now(), visible: false, ...turned ? { columns: true } : {} } }
     this.saves.set(jobId, running)
     this.clearJobNotice(tabId)
     run.jobs = [...run.jobs, running.job]
     this.schedule(tabId)
     let result
     const suggested = saveName(baseName, this.saveSubject(run, set, !!turned))
-    try { result = await this.api.saveResults({ jobId, generation: set.handle.key.generation, resultId: set.handle.key.resultId, suggestedName: suggested.name, ...suggested.suffix ? { suggestedSuffix: suggested.suffix } : {}, ...sort?.view ? { viewId: sort.view.viewId } : {}, ...turned ? { transposed: true, ...turned } : {} }) }
+    try { result = await this.api.saveResults({ jobId, ...jobSource(set.handle, sort?.view), suggestedName: suggested.name, ...suggested.suffix ? { suggestedSuffix: suggested.suffix } : {}, ...turned ? { transposed: true, ...turned } : {} }) }
     finally { this.endJob(running); saved() }
     if (this.disposed) return undefined
     if (result.ok) {
@@ -1173,7 +1298,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    */
   sortBy(tabId: string, key: EntryKey, column: number, direction: SortDirection, add = false): void {
     const run = this.runs.get(tabId), set = this.entry(run, key)
-    if (!run || !set || column < 0 || column >= set.descriptor.columns.length || this.heldOff(tabId, set.key)) return
+    if (!run || !set || column < 0 || column >= set.descriptor.columns.length || this.heldOff(tabId, set.key) || this.unorderable(tabId, set, column, direction !== 'none')) return
     this.applySort(tabId, run, set.key, sortKeysBy(run.sorts.get(set.key)?.keys ?? [], column, direction, add, wire.views.maxKeys, (descending): ViewSortKey => ({ column, descending, mode: 'value' })))
   }
 
@@ -1181,8 +1306,23 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    *  the sort. With `add`, the column changes in place among the keys (a new one goes last); without, it becomes the only key. */
   cycleSort(tabId: string, key: EntryKey, column: number, add = false): void {
     const run = this.runs.get(tabId), set = this.entry(run, key)
-    if (!run || !set || column < 0 || column >= set.descriptor.columns.length || this.heldOff(tabId, set.key)) return
+    if (!run || !set || column < 0 || column >= set.descriptor.columns.length || this.heldOff(tabId, set.key) || this.unorderable(tabId, set, column, true)) return
     this.applySort(tabId, run, set.key, cycleSortKeys(run.sorts.get(set.key)?.keys ?? [], column, add, wire.views.maxKeys, (descending): ViewSortKey => ({ column, descending, mode: 'value' })))
+  }
+
+  /** Whether a column of a grid can be sorted by and filtered by value: a windowed BigQuery result's only when BigQuery can
+   *  order its type (its header's sort button and funnel say why not). */
+  canOrderColumn(tabId: string, key: EntryKey, column: number): boolean {
+    const set = this.entry(this.runs.get(tabId), key), item = set?.descriptor.columns[column]
+    return !!item && (!isRemoteHandle(set!.handle) || remoteOrderable(item))
+  }
+
+  /** A windowed result's column BigQuery cannot order, said in the toolbar when `say`. */
+  private unorderable(tabId: string, set: ResultSetEntry, column: number, say: boolean): boolean {
+    const item = set.descriptor.columns[column]
+    if (!item || !isRemoteHandle(set.handle) || remoteOrderable(item)) return false
+    if (say) this.notify(tabId, unorderableText(item))
+    return say
   }
 
   clearSort(tabId: string, key: EntryKey): void {
@@ -1199,6 +1339,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    */
   filterSelection(tabId: string, key: EntryKey, kind: SelectionFilter): boolean {
     const run = this.runs.get(tabId), set = this.entry(run, key), target = this.filterTarget(tabId, key, kind)
+    if (set && this.needsRows(tabId, set)) return false
     if (!run || !set || !target || this.heldOff(tabId, set.key)) return false
     const index = set.key
     const items = target.columns.map(({ column, ranges }): GridFilter => {
@@ -1213,12 +1354,20 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     return this.addFilter(tabId, run, index, (run.sorts.get(index)?.filters ?? []).filter(other => !same(other)), items)
   }
 
+  /** A windowed BigQuery result has no rows here for a filter that names rows: the toolbar says so. */
+  private needsRows(tabId: string, set: ResultSetEntry): boolean {
+    if (!isRemoteHandle(set.handle)) return false
+    this.notify(tabId, remoteSelectionText)
+    return true
+  }
+
   /** Whether `filterSelection` can filter the grid's selection that way. */
   canFilterSelection(tabId: string, key: EntryKey, kind: SelectionFilter): boolean { return !!this.filterTarget(tabId, key, kind) }
 
   /** Keeps a grid's rows whose values in the selected columns (every column with `allColumns`) repeat, each group together. */
   filterDuplicates(tabId: string, key: EntryKey, allColumns = false): boolean {
     const run = this.runs.get(tabId), set = this.entry(run, key), columns = this.duplicateColumns(tabId, key, allColumns)
+    if (set && this.needsRows(tabId, set)) return false
     if (!run || !set || !columns || this.heldOff(tabId, set.key)) return false
     const index = set.key
     const names = set.descriptor.columns
@@ -1235,6 +1384,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    */
   keepSelectedRows(tabId: string, key: EntryKey, kept?: () => void): boolean {
     const run = this.runs.get(tabId), set = this.entry(run, key), target = this.keepTarget(tabId, key)
+    if (set && this.needsRows(tabId, set)) return false
     if (!run || !set || !target || this.heldOff(tabId, set.key)) return false
     const maxRows = wire.transpose.maxRows, maxRanges = wire.views.maxFilterRanges
     if (target.rows > maxRows || target.ranges.length > maxRanges) {
@@ -1257,6 +1407,23 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** Whether the grid has rows selected to keep (more than the filter takes still runs the command, which then says so). */
   canKeepSelectedRows(tabId: string, key: EntryKey): boolean { return !!this.keepTarget(tabId, key) }
 
+  /**
+   * A comparison's chips (D11): its kind filter keeps exactly `kinds`, read from the change index, before its other
+   * filters; none removes it. Its sort keys and other filters stay. False when nothing was applied (not a comparison, or
+   * a sort or filter of it still being built).
+   */
+  setKindFilter(tabId: string, key: EntryKey, kinds: readonly DiffKindName[]): boolean {
+    const run = this.runs.get(tabId), set = this.entry(run, key)
+    if (!run || !set || set.descriptor.kind !== 'diff' || !this.filterable(set) || this.heldOff(tabId, set.key)) return false
+    const filters = run.sorts.get(set.key)?.filters ?? [], others = filters.filter(item => item.filter.op !== 'kind')
+    if (kinds.length === 0) {
+      if (others.length !== filters.length) this.applyView(tabId, run, set.key, run.sorts.get(set.key)?.keys ?? [], others, 'filter')
+      return true
+    }
+    const filter: ViewFilter = { op: 'kind', kinds: [...kinds] }
+    return this.addFilter(tabId, run, set.key, others, { filter, label: kindLabel(kinds), named: true }, 0)
+  }
+
   /** Adds a filter after the grid's others, or at `at` among them (where the one it replaces stood, since filters apply in
    *  order and a duplicates filter after it counts only the rows it keeps); a grid that has as many as a view takes says
    *  so and keeps them. */
@@ -1273,7 +1440,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** Whether a grid's column can open the funnel's popover: a result's own column (not a hidden one) on a mounted grid. */
   canFilterColumn(tabId: string, key: EntryKey, column: number): boolean {
     const set = this.entry(this.runs.get(tabId), key)
-    return !!set && this.filterable(set) && Number.isInteger(column) && column >= 0 && column < set.descriptor.columns.length && !isHiddenColumn(set.descriptor.columns[column])
+    return !!set && this.filterable(set) && Number.isInteger(column) && column >= 0 && column < set.descriptor.columns.length && !isHiddenColumn(set.descriptor.columns[column]) && this.canOrderColumn(tabId, set.key, column)
       && !!this.controllers.get(set.key)?.filterColumn
   }
 
@@ -1295,6 +1462,17 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (this.heldOff(tabId, set.key) || sort?.sorting) throw new Error('The results are still being sorted or filtered. Try again when they are shown.')
     const filters = sort?.filters ?? [], others = filters.filter(item => { const own = columnFilterKind(item.filter, column); return own === undefined || own === 'between' })
     const signal = o.signal ? { signal: o.signal } : {}
+    if (isRemoteHandle(set.handle)) {
+      // A query in BigQuery under the other filters, its values ticked by every filter when the column has one of its own.
+      if (!this.remote) throw new Error(remoteUnavailable)
+      if (!this.canOrderColumn(tabId, set.key, column)) throw new Error(unorderableText(set.descriptor.columns[column]))
+      try {
+        return await this.remote.values(tabId, set.handle, column, others, others.length === filters.length ? undefined : filters, o.signal)
+      } catch (error) {
+        if (error instanceof RemoteDeclined) throw new Error('The value list was not loaded.')
+        throw error
+      }
+    }
     if (others.length === filters.length) return (sort?.view ?? set.handle).distinct(column, signal)
     const base = others.length > 0 ? await set.handle.sort([], { filters: others.map(item => item.filter), ...signal }) : undefined
     try {
@@ -1321,10 +1499,17 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       this.notify(tabId, `Could not filter the results: a filter holds at most ${formatCount(wire.views.maxFilterValues)} values.`)
       return false
     }
-    if (condition.kind === 'list' && (condition.list.column !== column || set.handle.key.resultId !== condition.list.resultId || set.handle.key.generation !== condition.list.generation)) return false
+    // A list of the grid's own result, or a BigQuery value list of it (whose own small result holds the values).
+    const list = 'list' in condition ? condition.list : undefined
+    // A BigQuery value list fits only a windowed result, a list of its rows only one in memory: the result may have switched
+    // while the funnel was open.
+    if (list && (list.column !== column || list.generation !== set.handle.key.generation || (list.source ? list.source.resultId : list.resultId) !== set.handle.key.resultId
+      || !!list.source !== isRemoteHandle(set.handle))) return false
+    // A windowed result's filter names values by a value list's rows.
+    if (isRemoteHandle(set.handle) && 'rows' in filter && filter.rows.length > 0 && !list?.source) return false
     const name = columnName(set.descriptor.columns, column)
     const item: GridFilter = condition.kind === 'null' || condition.kind === 'notNull' ? { filter, label: `${name} is ${condition.kind === 'null' ? '' : 'not '}NULL`, named: true }
-      : { filter, label: `${name}: filtering…`, ...condition.kind === 'list' ? { list: condition.list } : {} }
+      : { filter, label: `${name}: filtering…`, ...list ? { list } : {} }
     // In the place of the first filter it replaces: before it, every filter is one of the others.
     const replaced = filters.findIndex(item => !others.includes(item))
     return this.addFilter(tabId, run, index, others, item, replaced < 0 ? others.length : replaced)
@@ -1348,7 +1533,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   resort(): void {
     for (const [tabId, run] of this.runs) for (const [index, sort] of run.sorts) {
       const columns = run.entries.get(index)?.descriptor.columns
-      if (columns && sort.keys.some(key => columns[key.column] && lengthSortable(columns[key.column]))) this.applySort(tabId, run, index, sort.keys)
+      // BigQuery orders text one way: its views do not depend on the mode, and sorting again would bill a query.
+      const handle = run.entries.get(index)?.handle
+      if (columns && !(handle && isRemoteHandle(handle)) && sort.keys.some(key => columns[key.column] && lengthSortable(columns[key.column]))) this.applySort(tabId, run, index, sort.keys)
     }
   }
 
@@ -1659,6 +1846,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (entry) {
       run.sorting.get(entry.key)?.abort()
       run.sorting.delete(entry.key)
+      // A view built in BigQuery is a result of its own, which the backend kept: it is closed with them.
+      for (const view of run.held.get(entry.key)?.views ?? []) if (isRemoteView(view)) void view.close()
       run.held.delete(entry.key)
     }
     if (entry && sort) {
@@ -1822,14 +2011,19 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       // nothing builds again (refreshSorts skipped it while this ran): the notice says so, as Save Results As does.
       const partial = !!current?.view && current.stale && set.handle.getSnapshot().state === 'complete'
       ticket?.end(partial ? { cancelled: `${action === 'sort' ? 'Sort' : 'Filter'} cancelled. The grid kept the view of the rows that had arrived; sort or filter again to include every row.` } : 'cancelled')
-      controller.abort()
+      controller.abort(remoteStop)
       this.keepLastView(tabId, run, index, set)
     }
     ticket = this.operations.begin(tabId, { kind: action, target: distinctName(set, run.sets), entry: index, column: action === 'sort' ? sort[0]?.column : changedColumn(current?.applied ?? [], filters), cancel })
     controller.signal.addEventListener('abort', () => ticket?.end('dropped'), { once: true })
     // No `replaces`: the old view stays readable until the grid has swapped to the new one, and a sort given up after the
     // backend built it cannot take the shown view with it.
-    set.handle.sort(sort, { ...filters.length ? { filters: filters.map(item => item.filter) } : {}, signal: controller.signal, onProgress: (phase, percent) => ticket?.progress(phase, percent) }).then(view => {
+    // A windowed BigQuery result sorts and filters in BigQuery: a billed query after its estimate and the cost prompts,
+    // whose answer is a result of its own shown as the view.
+    const building = isRemoteHandle(set.handle)
+      ? this.remote ? this.remote.view(tabId, set.handle, sort, filters, controller.signal) : Promise.reject(new Error(remoteUnavailable))
+      : set.handle.sort(sort, { ...filters.length ? { filters: filters.map(item => item.filter) } : {}, signal: controller.signal, onProgress: (phase, percent) => ticket?.progress(phase, percent) })
+    building.then(view => {
       if (run.sorting.get(index) !== controller || this.runs.get(tabId) !== run) { ticket?.end('dropped'); void view.close(); return }
       run.sorting.delete(index)
       ticket?.end('done')
@@ -1849,6 +2043,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       if (run.sorting.get(index) !== controller || this.runs.get(tabId) !== run) return
       run.sorting.delete(index)
       this.keepLastView(tabId, run, index, set)
+      // A declined cost prompt ran nothing: the grid keeps what it showed, and nothing needs saying.
+      if (error instanceof RemoteDeclined) return
       const reason = error instanceof Error ? error.message : 'The rows could not be sorted.'
       this.notify(tabId, (action === 'filter' ? 'Could not filter the results: ' : 'Could not sort the results: ') + reason)
     })
@@ -1871,7 +2067,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    */
   private filterTarget(tabId: string, key: EntryKey, kind: SelectionFilter): { columns: { column: number; ranges: [number, number][] }[]; viewId?: number } | undefined {
     const run = this.runs.get(tabId), set = this.entry(run, key), selection = set && this.selection(tabId, set.key)
-    if (!run || !set || !selection || !this.filterable(set)) return undefined
+    if (!run || !set || !selection || !this.filterable(set) || isRemoteHandle(set.handle)) return undefined
     const shown = run.held.get(set.key)?.shown as ResultView | undefined
     const rows = (shown ?? set.handle).getSnapshot().rowsAvailable, names = set.descriptor.columns, count = names.length
     if (kind === 'notNull') return selection.active.column < count ? { columns: [{ column: selection.active.column, ranges: [] }] } : undefined
@@ -1894,7 +2090,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** The rows a grid's selection covers, as merged ranges of positions in the view the grid shows, and how many they are. */
   private keepTarget(tabId: string, key: EntryKey): { ranges: [number, number][]; rows: number; viewId?: number } | undefined {
     const run = this.runs.get(tabId), set = this.entry(run, key), selection = set && this.selection(tabId, set.key)
-    if (!run || !set || !selection || !this.filterable(set)) return undefined
+    if (!run || !set || !selection || !this.filterable(set) || isRemoteHandle(set.handle)) return undefined
     const shown = run.held.get(set.key)?.shown as ResultView | undefined
     const blocks = resolveBlocks(selection, (shown ?? set.handle).getSnapshot().rowsAvailable, set.descriptor.columns.length)
     const ranges = mergeRanges(blocks.map((block): [number, number] => [block.top, block.bottom - block.top + 1]))
@@ -1904,7 +2100,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
 
   private duplicateColumns(tabId: string, key: EntryKey, allColumns: boolean): number[] | undefined {
     const run = this.runs.get(tabId), set = this.entry(run, key)
-    if (!run || !set || !this.filterable(set)) return undefined
+    if (!run || !set || !this.filterable(set) || isRemoteHandle(set.handle)) return undefined
     const columns = set.descriptor.columns.length
     // A hidden column (a tone, a diff's suffix) is not one of the rows' values.
     const shownColumns = set.descriptor.columns.flatMap((item, column) => isHiddenColumn(item) ? [] : [column])
@@ -1934,6 +2130,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       if (filter.op === 'kind') return { ...item, label: filterLabel(filter, columns), named: true }
       // Its words are its rows' count, known once the view resolved its cells.
       if (filter.op === 'keepRows') return 'rows' in filter ? { ...item, label: filterLabel(filter, columns), named: true } : item
+      if (filter.op === 'groups' && item.list?.source) return { ...item, label: await remoteGroupsLabel(item.list, filter.column, columns), named: true }
       if (filter.op === 'groups') {
         if (!('keep' in filter)) return item
         const resolved = filter as ResolvedGroupsFilter
@@ -1942,7 +2139,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       }
       if (!('rows' in filter)) return item
       const wanted = filter.op === 'between' ? filter.rows : filter.rows.length === 1 && !filter.nulls ? filter.rows : []
-      const texts = await Promise.all(wanted.map(row => valueText(set.handle, row, filter.column)))
+      // A BigQuery value list's rows are rows of its own result, whose first column holds the values.
+      const values = item.list?.source?.values
+      const texts = await Promise.all(wanted.map(row => values ? valueText(values, row, 0) : valueText(set.handle, row, filter.column)))
       const label = filterLabel(filter as ResolvedViewFilter, columns, texts)
       // A value that could not be read is read again the next time the view is built.
       return texts.every(text => text !== undefined) ? { ...item, filter, label, named: true } : { ...item, filter, label }
@@ -2013,9 +2212,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       const key = entry.key
       run.sorting.get(key)?.abort()
       run.sorting.delete(key)
-      // Releasing the result closes its views.
-      run.held.delete(key)
+      // Releasing the result closes its views, but not one built in BigQuery: a result of its own, closed here.
       const sort = run.sorts.get(key)
+      for (const view of new Set([...run.held.get(key)?.views ?? [], ...sort?.view ? [sort.view] : []])) if (isRemoteView(view)) void view.close()
+      run.held.delete(key)
       if (sort) {
         for (const list of new Set([...sort.filters, ...sort.applied].flatMap(item => item.list ? [item.list] : []))) void list.close()
         sorts ??= new Map(run.sorts)
@@ -2097,6 +2297,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const run = this.runs.get(tabId)
     if (!run) return
     run.subscription?.dispose()
+    // A load ends with its result, which the backend stops on release: its events concern no one now.
+    for (const load of run.loads.values()) load.subscription.dispose()
     this.drop(tabId, run, run.sets, run.planSets)
     this.runs.delete(tabId)
     this.operations.forget(tabId)
@@ -2190,7 +2392,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       ...run.summary ? { summary: run.summary } : {}, ...run.error ? { error: run.error } : {}, view: run.view, manualView: run.manualView, strip: run.strip, stripChosen: run.stripManual, settled: run.settled,
       ...run.endedAt !== undefined ? { endedAt: run.endedAt } : {}, ...run.closedFrom ? { closedFrom: run.closedFrom } : {}, jobs: run.jobs, announcement: run.announcement, announced: run.announced,
       jobNotice: run.jobNotice, sorts: run.sorts, numbered: run.numbered, ...run.emptied ? { emptied: true as const } : {}, ...run.discard ? { discard: true as const } : {},
-      ...run.messagesOnly ? { messagesOnly: true as const } : {}
+      ...run.messagesOnly ? { messagesOnly: true as const } : {}, ...run.loads.size ? { loads: run.loads } : {}
     }
   }
 
@@ -2312,6 +2514,16 @@ async function valueText(handle: ResultHandle, row: number, column: number): Pro
     const text = window.text[0].replace(/\s+/g, ' ')
     return `'${text.length > 24 ? text.slice(0, 24) + '…' : text}'`
   } catch { return undefined }
+}
+
+/** A BigQuery value list's filter words, from its ticks as the backend applies them (DistinctSnapshot.Freeze): it keeps the
+ *  ticked values when the list is whole and they are no more than the others, else drops the others. */
+async function remoteGroupsLabel(list: DistinctList, column: number, columns: readonly ResultColumn[]): Promise<string> {
+  const ticks = await list.read({ order: 'value', offset: 0, count: 1 })
+  const distinct = list.summary.distinct, hasNull = list.summary.nulls > 0, cleared = distinct - ticks.checked
+  const keep = list.summary.complete && ticks.checked <= cleared
+  const nulls = hasNull && (keep ? ticks.nullsChecked : !ticks.nullsChecked)
+  return filterLabel({ op: 'groups', column, snapshotId: list.snapshotId, keep, values: keep ? ticks.checked : cleared, nulls, digest: '' }, columns)
 }
 
 /** A resolved filter's words, with the texts of its rows' values where it names them (one value, or Between's two). */

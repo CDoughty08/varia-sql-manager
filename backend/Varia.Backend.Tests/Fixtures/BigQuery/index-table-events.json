@@ -1,0 +1,1 @@
+{"kind":"bigquery#table","tableReference":{"projectId":"varia-alpha","datasetId":"sales","tableId":"events_20260103"},"type":"TABLE","creationTime":"1767398400000","lastModifiedTime":"1767398400000","schema":{"fields":[{"name":"event_name","type":"STRING","maxLength":"64"},{"name":"items","type":"RECORD","mode":"REPEATED","fields":[{"name":"sku","type":"STRING"}]}]}}

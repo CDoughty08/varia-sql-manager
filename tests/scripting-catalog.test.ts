@@ -63,7 +63,8 @@ const b3: readonly (readonly [NodeKind, readonly (NodeSubtype | '')[] | '*', rea
     ['agentJob', 'Job'], ['agentAlert', 'Alert'], ['agentOperator', 'Operator'], ['agentProxy', 'Proxy']
   ] as const).map(([kind, title]) => [kind, '*', undefined, title, createDrop] as const),
   // BigQuery (BQ-5): CREATE from INFORMATION_SCHEMA, DROP and SELECT templates, and a table's DML; a snapshot's rows cannot change.
-  ['bqTable', [''], undefined, 'Table', '✓––✓–✓✓✓✓––'],
+  // A clone is a writable table of its own.
+  ['bqTable', ['', 'clone'], undefined, 'Table', '✓––✓–✓✓✓✓––'],
   ['bqTable', ['snapshot'], undefined, 'Table Snapshot', '✓––✓–✓○○○––'],
   ['bqView', '*', undefined, 'View', '✓––✓–✓–––––'],
   ['bqMaterializedView', '*', undefined, 'Materialized View', '✓––✓–✓–––––'],

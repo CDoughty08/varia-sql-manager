@@ -229,6 +229,23 @@ describe('ResultsSearchService', () => {
     expect(searches.at(-1)!.text).toBe('z')
   })
 
+  it('searches again when a sort in BigQuery replaces another, though every such view has viewId 0', async () => {
+    const { service, searches, set, show, answerAll, sorts } = fixture()
+    const sets = [set(0, ['a'], [[1, 0]])]
+    show(sets)
+    service.setText('t1', 'x', true)
+    await answerAll()
+    const remote = (resultId: number) => ({ key: { generation: 1, resultId }, viewId: 0, remote: true, search: sets[0].handle.search }) as unknown as NonNullable<GridSort['view']>
+    sorts.set(0, { keys: [], filters: [], applied: [], view: remote(50), sorting: false, approximate: false, stale: false })
+    show(sets)
+    expect(searches).toHaveLength(1)
+    await answerAll()
+    // The next sort's answer is another result: its rows are other rows.
+    sorts.set(0, { keys: [], filters: [], applied: [], view: remote(51), sorting: false, approximate: false, stale: false })
+    show(sets)
+    expect(searches).toHaveLength(1)
+  })
+
   it('searches again only the grid that changed, and moves the active match off a closed grid to the next one', async () => {
     const { service, searches, set, show, answerAll, search, sorts } = fixture()
     const one = set(0, ['a'], [[1, 0], [2, 0]]), two = set(1, ['a'], [[5, 0]]), three = set(2, ['a'], [[7, 0], [8, 0]])

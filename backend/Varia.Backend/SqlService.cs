@@ -540,7 +540,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "connections.disconnect" => await DisconnectAsync(Read<ConnectionArgs>(parameters, json)),
         "bigquery.account" => await bigQuery.AccountAsync(Read<BigQueryCredentialArgs>(parameters, json), Token(context)),
         "bigquery.projects" => await bigQuery.ProjectsAsync(Read<BigQueryProjectsArgs>(parameters, json), Token(context)),
-        "bigquery.dryRun" => await bigQuery.DryRunQueryAsync(Read<BigQueryDryRunArgs>(parameters, json), Token(context)),
+        "bigquery.dryRun" => await BigQueryDryRunAsync(Read<BigQueryDryRunArgs>(parameters, json), Token(context)),
         "bigquery.properties" => await bigQuery.PropertiesAsync(Read<BigQueryPropertiesArgs>(parameters, json), Token(context)),
         "language.status" => GetLanguageStatus(parameters, json),
         "language.complete" => await language.CompleteAsync(Read<LanguageRequest>(parameters, json), Token(context)),
@@ -592,8 +592,11 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "explorer.dependencies" => await explorer.DependenciesAsync(Read<DependenciesArgs>(parameters, json), Token(context)),
         "explorer.peekDefinition" => await explorer.PeekDefinitionAsync(Read<PeekDefinitionArgs>(parameters, json), Token(context)),
         // The build reports how far it got as droppable explorer.index.progress EVENTs on the request.
-        "explorer.index" => await search.IndexAsync(Read<ObjectIndexArgs>(parameters, json), Token(context), context is null ? null : value => context.SendEvent(value, droppable: true)),
-        "explorer.search" => search.Search(Read<ObjectSearchArgs>(parameters, json), Token(context)),
+        "explorer.index" => Read<ObjectIndexArgs>(parameters, json) is var indexArgs && bigQuery.Owns(indexArgs.ConnectionId)
+            ? await search.IndexBigQueryAsync(indexArgs, bigQuery, Token(context), context is null ? null : value => context.SendEvent(value, droppable: true))
+            : await search.IndexAsync(SqlServerIndexArgs(indexArgs), Token(context), context is null ? null : value => context.SendEvent(value, droppable: true)),
+        "explorer.search" => Read<ObjectSearchArgs>(parameters, json) is var searchArgs && bigQuery.Owns(searchArgs.ConnectionId)
+            ? search.Search(searchArgs, Token(context), bigQuery: true) : search.Search(searchArgs, Token(context)),
         "scripting.script" => Read<ScriptArgs>(parameters, json) is var scriptArgs && bigQuery.Owns(scriptArgs.ConnectionId)
             ? await bigQuery.ScriptAsync(scriptArgs, scripting.Validate(scriptArgs, Providers.BigQuery).Target, scriptArgs.Verb, Token(context)) : await scripting.ScriptAsync(scriptArgs, Token(context)),
         "actions.describe" => await actions.DescribeAsync(Read<ActionDescribeArgs>(parameters, json), Token(context)),
@@ -613,6 +616,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         SynthesizeMethod when hooks => Synthesize(Read<SynthesizeArgs>(parameters, json), Token(context)),
         _ => throw new RequestException("METHOD_NOT_FOUND", "Unsupported backend method.")
     };
+
+    /// <summary>explorer.index for SQL Server: BigQuery's refresh options are refused.</summary>
+    private static ObjectIndexArgs SqlServerIndexArgs(ObjectIndexArgs args) => args.ExtraDetails is null && args.Scope is null && args.Stale is null ? args
+        : throw new RequestException("INVALID_PARAMS", "Invalid object index request: extraDetails, scope and stale are BigQuery's.");
 
     private static T Read<T>(JsonElement value, JsonSerializerOptions json) => value.Deserialize<T>(json)
         ?? throw new RequestException("INVALID_PARAMS", "Parameters are required.");
@@ -880,7 +887,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             // Its running queries end as cancelled before the client they read through is disposed (a job left running was
             // detached first); its idle sessions end, and those holding a detached job are left to BigQuery.
             foreach (var query in queries.Values.Where(query => query.ConnectionId == args.ConnectionId)) query.Cancel();
-            return await bigQuery.DisconnectAsync(args.ConnectionId, CancellationToken.None);
+            var disconnected = await bigQuery.DisconnectAsync(args.ConnectionId, CancellationToken.None);
+            search.Forget(args.ConnectionId);
+            ReportIndexMemory();
+            return disconnected;
         }
         bool removed;
         string? connectionString;
@@ -2265,6 +2275,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (args.ResultId == 0 || args.ViewId == 0 || args.KeptViewId == 0)
             throw new RequestException("INVALID_PARAMS", "Distinct values need a result, a column and views of that result.");
         var set = Stored(store.Find(args.ResultId) ?? throw Unavailable(args.ResultId));
+        // A BigQuery value list is already grouped (SqlService.BigQueryViews.cs).
+        if (set.ValueList is { } valueList) return ValueListSnapshot(set, valueList, args);
         if (!Shown(set, args.Column))
             throw new RequestException("INVALID_PARAMS", "The column is not one of the result's.");
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;

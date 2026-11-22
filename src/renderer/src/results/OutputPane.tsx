@@ -17,6 +17,7 @@ import EmptyState from '../kit/EmptyState'
 import ColumnProfilePanel, { profiledEntry, profileTarget, type ProfileTarget } from './ColumnProfilePanel'
 import PivotPanel from './PivotPanel'
 import ComparePopover from './ComparePopover'
+import CompareNotice from './CompareNotice'
 import MessagesView from './MessagesView'
 import ResultsToolbar from './ResultsToolbar'
 import OperationStrip from './OperationStrip'
@@ -345,6 +346,8 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
       {leader && jobs.map(job => { const text = jobText(job); return <div key={job.jobId} className="job-strip"><span>{text.what}</span>{' '}<span className="job-done">{text.done}</span><button onClick={() => results.cancelJob(job.jobId)}>Cancel</button></div> })}
       {/* The live region announces it; this is the visible copy. */}
       {leader && tab?.jobNotice && <div className="job-strip job-notice">{tab.jobNotice}</div>}
+      {/* A first comparison All rows could not fit, said here once its popover has gone; a later notice leaves it. */}
+      {leader && <CompareNotice tabId={tabId} />}
       {/* Sorts, filters and the other operations over whole results: their strip, notice and live region. */}
       {leader && <OperationStrip tabId={tabId} />}
       <PaneMenuButton pane={pane} />

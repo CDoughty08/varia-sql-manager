@@ -2,8 +2,8 @@
 
 Varia connects to Google BigQuery beside SQL Server. This page describes how it works now: the Connect dialog, saved
 connections, sign-in, identity pins, connect and disconnect, the pre-connect methods, execution, Object Explorer, errors,
-emulator mode and testing. Search Objects and Object Explorer's status chips leave BigQuery out until later lanes
-(docs/bigquery-plan.md).
+emulator mode and testing. Search Objects indexes BigQuery connections too ([Search Objects › BigQuery](object-search.md#bigquery));
+Object Explorer's status chips leave BigQuery out until a later lane (docs/bigquery-plan.md).
 
 ## Connect dialog
 
@@ -197,6 +197,8 @@ and leaves out SQL Server's options whatever the tab and Tools › Options hold.
   may still bill work done before the job stopped); the execution timeout does the same. A tab runs one query at a time
   (`SESSION_BUSY`).
 
+In-memory BOOL columns order false before true when they sort, filter between values, pivot (groups, Min and Max) and profile. Saving as JSON writes Boolean values; CSV and tab-delimited text keep the displayed words.
+
 ### Scripts
 
 A multi-statement script runs as one parent job whose statements are child jobs. Between polls (every 2 s) the backend
@@ -358,20 +360,83 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
   deadline), then the grid shows the rows it has and asks again, waiting longer each time; rows that still do not come
   after a few tries show Retry (a screen reader hears their cells as not loaded); a block only read ahead stops where the cache is full, never evicting the rows on screen,
   and read-ahead counts blocks at the widest their rows have come out.
-- **Load into memory.** No command runs it yet: the backend's `results.remoteQuery` kind `load` reads the whole table into memory under the budget (REST, or
-  Storage Read when it qualifies; a script statement's rows always through REST, which keeps their order), so the in-memory features work on it. A refusal part way, a failure or Stop leaves the
-  result windowed, whole, with an empty cache that reads its rows from BigQuery again (Messages says whether it did not fit
-  or the computer was low on memory); a load after BigQuery's temporary
-  result table expired fails with `REMOTE_EXPIRED`. A second load of a result already loading is refused, and so is a load while another result of the same query loads (they share its budget). Closing the result stops the load,
-  which then says the result was closed. Reads under way when it starts
-  answer with the rows they have, and the grid reads again from memory.
-- **What waits.** Filters, sorts, search, profiles, distinct values, pivots, row identities, comparisons, Copy and Save
-  of a windowed result answer "This result is windowed in BigQuery" (`REMOTE_RESULT`) for now; a request whose result switches to windowed while it runs gets the same answer, and a grid's sort and
-  filters are removed when its result switches (the screen reader hears so). The grid does not offer them where it can tell
-  first: Save Results As refuses before its file dialog (even while the result still loads), Copy before it stops the copy
-  running, a transposed grid's strip does not suggest filtering, the Pivot builder says the result cannot be pivoted yet, the
-  Compare popover leaves it out, and Search skips it. A destination table lasts
-  about 24 hours: once it has expired, a read answers with the cached rows from the start of its window, and one that starts on rows not cached answers `REMOTE_EXPIRED`.
+- **Load into memory.** A windowed result of a finished run offers Load into memory on its grid's strip and in the results
+  toolbar's ⋯ menu (Load Result into Memory in the palette) while its projection (the descriptor's `projectedBytes`, its
+  measured row cost times its rows) fits the result memory free at that point; otherwise the strip says it is too large to
+  load now and to close other results to make room. It runs `results.remoteQuery` kind `load`, which reads the whole
+  table into memory under the budget (REST, or Storage Read when it qualifies; a script statement's rows always through
+  REST, which keeps their order), so the in-memory features work on it. While it runs the strip counts the rows read and
+  offers Stop, and the grid keeps the rows it showed and its place, drawing those not yet read as loading. A refusal part
+  way, a failure or Stop leaves the result windowed, whole, with an empty cache that reads its rows from BigQuery again
+  (Messages says whether it did not fit or the computer was low on memory); a load after BigQuery's temporary
+  result table expired fails with `REMOTE_EXPIRED`. A second load of a result already loading is refused, and so is a load while
+  another result of the same query loads (they share its budget) or while its query still runs.
+  Closing the result stops the load, which then says the result was closed. Reads under way when it starts answer with the rows they have, and the
+  grid reads again from memory.
+- **Copy.** Copy of a windowed result reads the selected rows through its block cache (blocks not cached are fetched,
+  outside the grid's read-ahead) and writes them through `ResultTextWriter` within the usual Copy limit: a selection
+  whose text passes it is refused, before anything reaches the clipboard, with a pointer to Save Results As; one whose
+  separators alone pass it is refused before any read. A transposed Copy reads its rows the same way. A sort or filter run
+  in BigQuery is a result of its own, which Copy reads as itself. Rows already cached copy after the table expired; others
+  answer `REMOTE_EXPIRED`. A result that starts loading into memory under a Copy refuses it (try again once loaded), and
+  one released under it says so.
+- **Save.** Save Results As streams every row the query keeps (Maximum rows honoured) from BigQuery to the file, never
+  through the block cache or the store: through Storage Read when it qualifies (each stream in turn, a transient stream
+  fault resumed at its offset without repeating rows), else `tabledata.list` pages, each page reserved from the result
+  budget while it is written. It has the usual progress and Cancel, so the rows touch disk only in the file the user chose
+  (written to a temporary file and renamed). A transposed Save reads its rows as Copy does, holding them in result memory (at most 128 MB). An expired table answers
+  `REMOTE_EXPIRED` and leaves no file. Save reads the table itself, so it carries on through a load or Close Results. A sort or filter run in BigQuery saves as its own result.
+- **Expiry.** A destination table lasts about 24 hours: once it has expired, a read answers with the cached rows from the
+  start of its window, and one that starts on rows not cached answers `REMOTE_EXPIRED`. The grid keeps the rows it has, and
+  its strip says BigQuery no longer keeps the result and offers Re-run…, which runs the tab's query again through Execute
+  (the editor's text, or its selection, with the estimate and cost prompt); a grid shown while another tab is active
+  does not offer it. A cache hit's destination table is an older one, which may expire sooner, so a
+  windowed cache hit's caption adds "cached result: may expire early".
+- **What waits.** Search, profiles, pivots, row identities and comparisons of a windowed result (its sorts, filters and
+  value lists run in BigQuery, below) answer "This result is windowed in BigQuery" (`REMOTE_RESULT`) for now; a request whose result switches to
+  windowed while it runs gets the same answer, and a grid's sort and filters are removed when its result switches (the
+  screen reader hears so). The grid does not offer them where it can tell first: a transposed grid's strip does not
+  suggest filtering, the Pivot builder says the result cannot be pivoted yet, the Compare popover leaves it out, and Search
+  skips it.
+
+### Sort and filter in BigQuery
+
+A windowed result's grid sorts and filters in BigQuery: each sort, filter or value list is a query over the result's
+temporary table, so it is billed, and its answer is a result of its own that the grid shows in place of the source
+(`SqlService.BigQueryViews.cs`, `BigQueryViewSql.cs`, `src/renderer/src/results/remote-views.ts`; the protocol is
+`results.remoteQuery`'s `view` and `distinct` kinds in docs/ipc.md). The header's sort buttons and funnels say "in
+BigQuery" in their tooltips.
+
+- **Estimate first.** Before each one, `bigquery.dryRun` estimates it (free) and the cost prompts of Cost › Before Execute
+  apply as they do to Execute: above the threshold, or an incomplete estimate. A declined prompt runs nothing and the
+  grid keeps what it showed; a failed estimate says why in the toolbar and runs nothing. The query's job, rows and cost
+  go to Messages.
+- **Sort.** Up to 16 keys, ascending with NULLs first and descending with NULLs last, as the in-memory sort orders them.
+  BigQuery cannot order ARRAY, STRUCT, GEOGRAPHY, JSON, RANGE or INTERVAL columns: their sort button says so and refuses,
+  and they have no funnel.
+- **Value lists.** A funnel lists the column's values with BigQuery's `GROUP BY`, over the rows the grid's other filters keep,
+  most frequent first, up to 100,000 values (past that the list is cut, and a checklist over it drops only the values it
+  unticks). The list is a small result in memory, read whole, with the snapshot the checklist ticks; when the column has a filter of its own,
+  each value starts ticked when the grid's filters keep it.
+- **Filters.** A checklist, Equals, Not equals, Between, NULL and not NULL apply in BigQuery. The values a filter names
+  are the value list's rows, read from its table in BigQuery (so the estimate includes that small scan, and no value is
+  sent), and the filter keeps the list for as long as it applies; once the list's table expires, the filter says to open
+  the column's filter again. A checklist keeps the ticked values when the list is whole and they are no more than the
+  others, and otherwise drops the unticked ones, as in memory. In a FLOAT64 column NaN is one value, which a filter keeps
+  or drops like any other.
+  Filters that name the grid's rows rather than values (Filter by Selection, duplicates, Keep Selected Rows) say they need
+  the rows in memory.
+- **The view.** It is held under the source's budget, and windowed in its turn when it is large. It reads the whole result
+  table, so under Maximum rows a sort or filter can show rows the grid had not held (its answer keeps Maximum rows), and a
+  value list counts every row. A filter
+  with no sort shows the rows in BigQuery's order, which need not be the query's own, and rows that tie on the sort keys
+  come in any order; sort to fix one. A newer sort or filter
+  replaces it (the old one is released once the grid shows the new one); Stop cancels the BigQuery job; closing the
+  results or the tab releases both. BigQuery's resource errors on a large sort suggest filtering first.
+- **An expired table.** Once the source's temporary table has expired, a sort or filter answers `REMOTE_EXPIRED`, and a
+  value list that has expired answers the same when a filter names it. In emulator mode, where jobs run outside the
+  tab's session, the estimate notices the table is gone and the original query runs again with the sort or filter
+  around it, when the query has no parameters and nothing in it can change between runs; Messages says so.
 
 ### Cost
 
@@ -479,6 +544,9 @@ Properties on a table-like object opens a read-only document tab from one `table
 physical size), Layout (partitioning, partition filter, clustering, column count) and History (created, last modified,
 expires, snapshot time), in UTC and binary units. Empty facts are left out and values are clipped at 2,000 characters.
 
+Refresh on a project or dataset node also re-reads it in the Search Objects index, on a node below a dataset that dataset,
+and on the connection's node the whole index ([Search Objects › BigQuery](object-search.md#bigquery)).
+
 ## Errors
 
 | Code | When | Text and recovery |
@@ -500,7 +568,7 @@ expires, snapshot time), in UTC and binary units. Empty facts are left out and v
 | `RESULT_TOO_LARGE` | `responseTooLarge` | Over BigQuery's 10 GB result limit: filter or aggregate |
 | `COST_CAP` | `bytesBilledLimitExceeded` | Names the cap the job carried (the connection's own, else Options') and Google's figure, in bytes alone under Bytes only; raise the cap or read less |
 | `CANCELLED` | `stopped` | The job was cancelled |
-| `REMOTE_RESULT` | Sort, filter, search, profiles, distinct values, pivots, row identities, comparisons, Copy or Save of a windowed result | "This result is windowed in BigQuery: its rows are not in memory, so this is not available for it yet." |
+| `REMOTE_RESULT` | Sort, filter, search, profiles, distinct values, pivots, row identities or comparisons of a windowed result | "This result is windowed in BigQuery: its rows are not in memory, so this is not available for it yet." |
 | `REMOTE_EXPIRED` | Rows of a windowed result not cached, or a load into memory, once BigQuery's temporary result table expired (about 24 hours) | "BigQuery no longer has this result…": run the query again |
 | `BUSY` | A load (`results.remoteQuery`) while the query that made the result still runs, or while another result of that query loads | Refused until that query or load has finished |
 | `ROW_ACCESS` | Preview Rows on a table with row access policies | Use Script As › SELECT to query it (billed) |
@@ -537,7 +605,8 @@ and TIME columns, writes BYTES base64-encoded twice and exits on ARRAY columns; 
   the row limit and budget, resume from an offset, failures, Stop, and a local proxy that must receive the channel's
   CONNECT. Its Residence part covers the decision and both settings, the block cache (sizes, LRU, budget, lanes,
   read-ahead per viewer, a jump, waits, expiry, rate limits), every reader's `REMOTE_RESULT`, the switch to windowed on
-  a misestimate through REST and Arrow, and Load into memory with its refusal and Stop. `tests/bigquery-remote-results.test.ts`,
+  a misestimate through REST and Arrow, Load into memory with its refusal and Stop, and Copy and Save (the Copy limit,
+  transposed rows across blocks, expiry, release, Save through Storage Read and REST with Maximum rows and a resumed stream). `tests/bigquery-remote-results.test.ts`,
   `tests/results-port.test.ts` and `tests/result-client.test.ts` cover main's and the renderer's side.
   `tests/bigquery-credentials.test.ts`, `tests/bigquery-connection-store.test.ts` and
   `tests/bigquery-connection-open.test.ts` cover main's side; `tests/bigquery-connect-form.test.ts`,

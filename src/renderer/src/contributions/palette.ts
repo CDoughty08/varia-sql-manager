@@ -1,5 +1,5 @@
 import { commandDescriptor, commandIds, isCommandId, type CommandId } from '../../../shared/commands/catalog'
-import type { ObjectSearchHit } from '../../../shared/explorer/search.ts'
+import { searchHitLabel, type ObjectSearchHit } from '../../../shared/explorer/search.ts'
 import { commandTitle } from '../../../shared/settings/catalog'
 import { onUnexpectedError } from '../core/errors'
 import type { Disposable } from '../core/types'
@@ -24,7 +24,13 @@ const recentLimit = 10
  */
 const keepsQuickInput: ReadonlySet<CommandId> = new Set(['workbench.showCommands', 'workbench.quickOpen', 'workbench.search', 'edit.undo', 'edit.redo', 'edit.selectAll', 'edit.delete'])
 type Picker = Omit<QuickPickOptions<QuickPickItem>, 'value' | 'prefix' | 'anchor' | 'onDidChangeValue' | 'onDidHide'>
-export type PaletteWorkbench = Pick<Workbench, 'commands' | 'keybindings' | 'quickInput' | 'documents' | 'connections' | 'events'> & Partial<Pick<Workbench, 'settings' | 'explorer' | 'objectSearch' | 'targets'>>
+/** A found object's row: its name as Search Objects shows it (a BigQuery one without its dataset) with the match marked, and its
+ *  server and database (or project and dataset). */
+export function objectRow(hit: ObjectSearchHit, server: string): { label: string; description: string; ranges?: [number, number][] } {
+  const shown = searchHitLabel(hit), where = hit.object.project === undefined ? [hit.object.database] : [hit.object.project, hit.object.dataset]
+  return { label: shown.text, description: [server, ...where].filter(Boolean).join(' › '), ...shown.range ? { ranges: [[shown.range[0], shown.range[0] + shown.range[1]]] } : {} }
+}
+export type PaletteWorkbench = Pick<Workbench, 'commands' | 'keybindings' | 'quickInput' | 'documents' | 'connections' | 'events'> & Partial<Pick<Workbench, 'settings' | 'explorer' | 'objectSearch' | 'targets' | 'jobDocuments'>>
 /** What no prefix searches: open queries (Go to Query), or open queries, commands and the servers' objects (Search). */
 type Scope = 'queries' | 'search'
 /** The groups Search lists, in this order. */
@@ -103,7 +109,7 @@ export function paletteContribution(workbench: PaletteWorkbench, history = new C
       shown = document
       wasIndexing = indexing
       // With the last server gone the box is back to queries and commands, as it is before one connects.
-      if (!document?.text.trim() || !connections.liveSqlServer().length) { found = { text: '', hits: new Map() }; said = undefined; quickInput.setAnswer({ items: [] }); return }
+      if (!document?.text.trim() || !connections.live().length) { found = { text: '', hits: new Map() }; said = undefined; quickInput.setAnswer({ items: [] }); return }
       // Only hits that answer the text as it is now: the answer to the text before is not offered while the new one is on
       // its way, or Enter would reveal an object the text no longer names.
       const current = document.asked?.text === document.text
@@ -114,10 +120,7 @@ export function paletteContribution(workbench: PaletteWorkbench, history = new C
         const id = 'object:' + serverHitKey(group.connectionId, hit)
         if (hits.has(id)) continue
         hits.set(id, { connectionId: group.connectionId, hit })
-        items.push({
-          id, label: hit.label, description: [group.label, hit.object.database].filter(Boolean).join(' › '), icon: hitIcon(hit), group: searchGroups.objects,
-          ...hit.range ? { ranges: [[hit.range[0], hit.range[0] + hit.range[1]]] } : {}
-        })
+        items.push({ id, ...objectRow(hit, group.label), icon: hitIcon(hit), group: searchGroups.objects })
       }
       const total = current ? document.result?.total ?? 0 : 0
       items.push({ id: seeAllId, label: seeAllObjects, icon: 'search', group: searchGroups.objects, description: total > hits.size ? `Showing ${count(hits.size)} of ${count(total)} objects` : 'Names and definitions, with filters' })
@@ -141,13 +144,18 @@ export function paletteContribution(workbench: PaletteWorkbench, history = new C
   }
   /** Reveal in Object Explorer, as a Search Objects hit's: the tree loads and expands its way to the object, and takes focus as F8 gives it. */
   const revealObject = (connectionId: string, hit: ObjectSearchHit) => {
-    const { objectSearch, explorer } = workbench
+    const { objectSearch, explorer, jobDocuments } = workbench
+    // A job opens its document (AG-6a): Search lists jobs only behind SQL Server Agent's release gate.
+    if (hit.object.kind === 'agentJob' && hit.object.name !== undefined && jobDocuments) {
+      try { jobDocuments.openJob(connectionId, hit.object.name) } catch (error) { commands.reportError(error instanceof Error ? error.message : 'The job could not be opened.') }
+      return
+    }
     if (!objectSearch || !explorer) return
     void commands.execute('window.explorer', undefined, 'palette')
     void objectSearch.reveal(explorer, connectionId, hit).then(outcome => { if (!outcome.ok && !outcome.cancelled) commands.reportError(outcome.message) }, onUnexpectedError)
   }
   const openSearchObjects = (text: string) => {
-    const live = connections.liveSqlServer()
+    const live = connections.live()
     // With Fuzzy Match, as the rows were found, so the tab has every hit they were the first of.
     try { workbench.objectSearch?.open(live.length > 1 ? undefined : live[0]?.id, text, live.length > 1, undefined, true) }
     catch (error) { commands.reportError(error instanceof Error ? error.message : 'Search Objects could not open.') }

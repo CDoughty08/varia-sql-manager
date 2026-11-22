@@ -31,5 +31,7 @@ export const backendDescriptorSchema = z.object({
   name: z.string().min(1).max(resultNameChars).refine(value => !refusedResultNameChars.test(value) && value.trim() === value).optional(),
   // A BigQuery result's residence (docs/bigquery.md, Residence): its rows in memory or windowed in BigQuery, BigQuery's own
   // total, and the revision each switch between them bumps.
-  residence: z.enum(['memory', 'remote']).optional(), rowsTotal: count.optional(), revision: z.number().int().min(0).max(0x7fffffff).optional()
+  residence: z.enum(['memory', 'remote']).optional(), rowsTotal: count.optional(), revision: z.number().int().min(0).max(0x7fffffff).optional(),
+  // A windowed result's projected size in memory, which Load into memory is offered under.
+  projectedBytes: count.optional()
 }).strict()

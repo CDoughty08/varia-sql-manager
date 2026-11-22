@@ -403,13 +403,14 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
         await DryRunAsync(client, project, location, ProbeSql, null, token);
 
     /// <summary>A dry run (free): the bytes a query would process. Emulator mode answers a faked estimate.</summary>
-    internal async Task<BigQueryEstimate> EstimateAsync(BigQueryConnection connection, string sql, CancellationToken token, string? dataset = null)
+    internal async Task<BigQueryEstimate> EstimateAsync(BigQueryConnection connection, string sql, CancellationToken token, string? dataset = null,
+        IList<QueryParameter>? parameters = null, string? location = null)
     {
         if (environment.Emulator) return new(0, Faked: true);
         if (BigQueryErrors.IsLegacySql(sql)) throw new RequestException("LEGACY_SQL", BigQueryErrors.LegacySql);
         Exception failure;
         // Connecting already proved bigquery.jobs.create, so a 403 here is about what the query reads: Google's text stays.
-        try { return Estimate(await DryRunAsync(connection.Client, connection.Options.Project, connection.Location, sql, dataset, token)); }
+        try { return Estimate(await DryRunAsync(connection.Client, connection.Options.Project, location ?? connection.Location, sql, dataset, token, parameters)); }
         catch (Exception error) { failure = BigQueryErrors.Map(error, connection.Options.Project, token: token); }
         if (failure is not RequestException { Code: "NOT_FOUND" } missing) throw failure;
         // A dataset in another location is told apart as Execute tells it; a table or dataset that does not exist is the
@@ -461,7 +462,7 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
         or "CREATE_TABLE_FUNCTION" or "CREATE_PROCEDURE" or "CREATE_ROW_ACCESS_POLICY" or "TRUNCATE_TABLE" or "CREATE_SNAPSHOT_TABLE"
         or "LOAD_DATA" or "CREATE_SEARCH_INDEX" or "CREATE_VECTOR_INDEX");
 
-    static async Task<Job> DryRunAsync(BigQueryClient client, string project, string? location, string sql, string? dataset, CancellationToken token)
+    static async Task<Job> DryRunAsync(BigQueryClient client, string project, string? location, string sql, string? dataset, CancellationToken token, IList<QueryParameter>? parameters = null)
     {
         var job = new Job
         {
@@ -472,6 +473,7 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
                 Query = new JobConfigurationQuery
                 {
                     Query = sql, UseLegacySql = false,
+                    QueryParameters = parameters, ParameterMode = parameters is null ? null : "NAMED",
                     DefaultDataset = dataset is null ? null : new DatasetReference { ProjectId = project, DatasetId = dataset }
                 }
             }

@@ -18,7 +18,7 @@ internal static class Providers
         "results.visibility", "results.read", "results.close", "results.setMemoryLimit", "results.rowBytes", "results.view", "results.viewClose",
         "results.identify", "results.rowIds", "results.findRows", "results.diff", "results.search", "results.profile", "results.pivot",
         "results.distinct", "results.distinctRead", "results.distinctTick", "results.distinctClose", "results.copy", "results.export",
-        "results.diffSeek", "explorer.children", "scripting.script"];
+        "results.diffSeek", "explorer.children", "explorer.index", "explorer.search", "scripting.script"];
 
     /// <summary>Methods only BigQuery serves. Those without a connection handle (the pre-connect bigquery.account and
     /// bigquery.projects, and results.remoteQuery, which names a windowed result) are BigQuery's by declaration, with

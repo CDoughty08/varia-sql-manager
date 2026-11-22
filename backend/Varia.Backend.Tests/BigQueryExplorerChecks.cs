@@ -165,6 +165,19 @@ internal static class BigQueryExplorerChecks
         Error = new Google.Apis.Requests.RequestError { Code = status, Message = "refused", Errors = [new Google.Apis.Requests.SingleError { Reason = reason, Message = "refused" }] }
     };
 
+    // tables.get selects table columns with selectedFields, so any caller asking for a complete schema must leave it unset.
+    static BigQueryFake.Reply TableSchema(BigQueryFake.Request request, string fixture)
+    {
+        var reply = BigQueryFake.Fixture(fixture);
+        var selected = System.Web.HttpUtility.ParseQueryString(request.Uri.Query)["selectedFields"];
+        if (selected is null) return reply;
+        var table = JsonNode.Parse(reply.Body)!.AsObject();
+        var fields = table["schema"]!["fields"]!.AsArray();
+        var names = selected.Split(',').ToHashSet(StringComparer.Ordinal);
+        table["schema"]!["fields"] = new JsonArray(fields.Where(field => names.Contains(field!["name"]!.GetValue<string>())).Select(field => field!.DeepClone()).ToArray());
+        return reply with { Body = table.ToJsonString() };
+    }
+
     sealed class Harness : IDisposable
     {
         public BigQueryFake Fake { get; }
@@ -175,8 +188,8 @@ internal static class BigQueryExplorerChecks
         {
             Fake = BigQueryFake.Google()
                 .On("GET", Base + "/datasets/sales/tables", BigQueryFake.Fixture("tables"))
-                .On("GET", Sales + "/tables/orders", BigQueryFake.Fixture("table-orders"))
-                .On("GET", Sales + "/tables/preview", BigQueryFake.Fixture("table-preview"))
+                .On("GET", Sales + "/tables/orders", request => TableSchema(request, "table-orders"))
+                .On("GET", Sales + "/tables/preview", request => TableSchema(request, "table-preview"))
                 .On("GET", Sales + "/tables/preview/data", BigQueryFake.Fixture("tabledata"))
                 .On("GET", Sales + "/routines", BigQueryFake.Fixture("routines"))
                 .On("GET", Sales + "/routines/refresh_totals", BigQueryFake.Fixture("routine-procedure"))
@@ -320,7 +333,7 @@ internal static class BigQueryExplorerChecks
         var orders = Object("bqTable", "orders")["object"]!.AsObject();
         var select = await harness.Script("select", (JsonObject)orders.DeepClone());
         check(select is { Code: "ok", Result: { Error: null, Database: "sales", Commands: 0 } } && select.Result.Text!.Contains("  `address`\nFROM", StringComparison.Ordinal) && !select.Result.Text.Contains("bad", StringComparison.Ordinal)
-            && harness.Fake.To(Sales + "/tables/orders").Last().Uri.Query.Contains("selectedFields=schema", StringComparison.Ordinal),
+            && System.Web.HttpUtility.ParseQueryString(harness.Fake.To(Sales + "/tables/orders").Last().Uri.Query)["fields"] == "schema,type",
             "Script As › SELECT reads tables.get's schema and runs in the dataset: " + select.Result?.Text);
         var drop = await harness.Script("drop", (JsonObject)Object("bqRoutine", "refresh_totals")["object"]!.DeepClone());
         check(drop.Result?.Text == "DROP PROCEDURE IF EXISTS `varia-alpha`.`sales`.`refresh_totals`;", "a routine's DROP reads its type from routines.get: " + drop.Result?.Text);
@@ -469,7 +482,8 @@ internal static class BigQueryExplorerChecks
         var (code, result, message) = await harness.Call("query.execute", Query("preview"));
         var preview = result as QueryResult;
         var read = harness.Fake.To(Sales + "/tables/preview/data").Single();
-        check(code == "ok" && preview is { Status: "completed", Database: "sales" } && preview.ResultSets.Single().RowsStored == 3 && harness.Fake.To(BigQueryFake.Jobs).Count() == jobsBefore
+        check(code == "ok" && preview is { Status: "completed", Database: "sales" } && preview.ResultSets is [{ RowsStored: 3, Columns: [{ Name: "id" }, { Name: "customer" }] } set]
+            && LiveResultChecks.RowsOf(harness.Service.Results, set) is [["1", "ada"], ["2", null], ["3", "grace"]] && harness.Fake.To(BigQueryFake.Jobs).Count() == jobsBefore
             && read.Uri.Query.Contains("maxResults=1000", StringComparison.Ordinal) && read.Uri.Query.Contains("formatOptions.useInt64Timestamp=true", StringComparison.Ordinal)
             && preview.Messages.Any(item => item.Text.Contains("tabledata.list", StringComparison.Ordinal)),
             $"Preview Rows reads tabledata.list into a result and runs no job: {code} {message} {preview?.Status} {preview?.ResultSets.FirstOrDefault()?.RowsStored}");

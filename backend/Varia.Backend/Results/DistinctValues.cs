@@ -424,7 +424,7 @@ internal static partial class ViewSorter
 
     /// <summary>The groups, most frequent first: a group's place in value order breaks count ties, so equal counts stay in it.
     /// Sorted on the threads the gate has free (that order is total, so it is the one a single sort gives).</summary>
-    private static int[] ByCount(int[] counts)
+    internal static int[] ByCount(int[] counts)
     {
         var ranked = new int[counts.Length];
         for (var i = 0; i < ranked.Length; i++) ranked[i] = i;

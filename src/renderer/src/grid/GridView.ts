@@ -7,7 +7,7 @@ import { gesturesFor } from '../core/gestures'
 import { observeResize, windowOf, windows } from '../core/windows'
 import { typeScale } from '../../../shared/theme/metrics'
 import { monoFontFamily, uiFontFamily } from '../fonts'
-import type { ResultHandle, RowWindow } from '../results/ResultClient'
+import type { ResultHandle, ResultSnapshot, RowWindow } from '../results/ResultClient'
 import type { GridViewState } from '../results/ResultsService'
 import { formatCount, plural } from '../results/status'
 import { FLAG_ERROR, FLAG_NULL, FLAG_TRUNCATED } from '../results/worker-protocol'
@@ -33,6 +33,11 @@ import { diffSuffixOf, visibleColumnCount, type DiffSuffix } from './hidden-colu
 import { displayText } from '../../../shared/ipc/wire/cells'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 
+/** The rows a grid draws: those available, and while a load into memory is open, the rows it showed before it. */
+export function drawnRowCount(snapshot: ResultSnapshot): number {
+  return Math.max(snapshot.rowsAvailable, snapshot.state === 'open' ? snapshot.rowsExpected ?? 0 : 0)
+}
+
 // A cell's look is one of 4,096 class strings, picked by these bits.
 // HIT, CUR and DIM are search in results' marks (marks.ts): a matched cell, the active match, a column the search leaves out.
 // CHG and SOFT mark a diff's differing cell (results.diff): a value that changed, and one equal only by collation.
@@ -42,6 +47,8 @@ const classes = Array.from({ length: 4096 }, (_, bits) => 'rg-c' + (bits & NULL 
   + (bits & HIT ? ' is-hit' : '') + (bits & CUR ? ' is-cur' : '') + (bits & DIM ? ' is-dim' : '') + (bits & CHG ? ' is-chg' : '') + (bits & SOFT ? ' is-soft' : ''))
 /** A header's search mark: 0 none, 1 matched, 2 the active match, 3 dimmed. */
 const headerMarks = ['', 'hit', 'cur', 'dim'] as const
+/** A comparison's header cues by bits (1 has changes, 2 key column): what a screen reader hears, and the tooltip's line. */
+const headerCues = ['', 'Has changes', 'Key column', 'Key column, has changes'] as const
 const truncatedAt: Record<string, string> = { binary: '32,766 bytes', document: '2,097,152 characters', text: '65,535 characters' }
 // A row's look is one class string too: odd or even, and its tone (none, one of liveTones, or a diff's kind: an unchanged
 // row, a changed entry in one row, an added or removed row, or a changed entry's old or new half); the row number's likewise.
@@ -98,7 +105,10 @@ interface SortButton { readonly el: HTMLSpanElement; readonly glyph: HTMLSpanEle
 /** A sort or filter building the grid's view: the column whose sort button shows its ring, and its percentage (none while
  *  the backend has no total). */
 export interface GridBusy { readonly column?: number; readonly percent?: number }
-interface FunnelButton { readonly el: HTMLSpanElement; readonly glyph: HTMLSpanElement; on: boolean }
+interface FunnelButton { readonly el: HTMLSpanElement; readonly glyph: HTMLSpanElement; on: boolean; note?: string }
+/** What a header's sort button and funnel add to their tooltips: where they work (a windowed BigQuery result's, " in BigQuery"),
+ *  and the columns whose sort is refused, with why. */
+export interface HeaderNotes { readonly where: string; readonly refused: ReadonlyMap<number, string> }
 /** A transposed grid's row mark is a name cell: it holds a column's name where a row number goes, with the type, sort
  *  button and funnel a header has. `look` is the class string it shows now (selected, unnamed, filterable, its search mark). */
 interface NameParts { readonly type?: Text; readonly sort?: SortButton; readonly funnel?: FunnelButton; look?: string }
@@ -115,6 +125,8 @@ interface HeaderSlot {
   /** Transposed, where a header stands for a row: the text it shows ("Row 3", or the header column's value once read),
    *  the row's highlight (as RowSlot's) and its row-size bar. */
   label: string; highlight: number; size: string
+  /** A comparison's column cue it shows: 0 none, else its changes (1) and key (2) bits (headerCues). */
+  cue: number
 }
 /** A sorted column as its header shows it: its place among the sort's keys and its direction. */
 export interface HeaderSortKey { readonly column: number; readonly descending: boolean }
@@ -122,7 +134,8 @@ interface Drag { readonly pointerId: number; readonly x0: number; readonly y0: n
 /** A column border being dragged: the width follows the pointer once a frame, and Escape puts `width0` back. */
 interface Resize { readonly pointerId: number; readonly column: number; readonly x0: number; readonly width0: number; readonly wasUserSized: boolean; x: number; applied: number }
 /** What the React shell shows under the grid: a failed tile read, or a grid that stopped after repeated failures. */
-export interface GridStatus { readonly tileError?: string; readonly renderError?: boolean }
+/** `expired`: a tile read failed with REMOTE_EXPIRED (BigQuery no longer keeps the windowed result), so Retry cannot help. */
+export interface GridStatus { readonly tileError?: string; readonly renderError?: boolean; readonly expired?: boolean }
 /** What a frame showed: the first and last rows in the body, the rows available, and whether the view is at the end. */
 export interface GridViewport { readonly firstRow: number; readonly lastRow: number; readonly rows: number; readonly atEnd: boolean }
 
@@ -191,6 +204,8 @@ export interface GridViewOptions {
   /** A one-row comparison's pairs that have changed cells (its answer's `columnChanges`): only their widths make room for
    *  the previous value beside the new one. */
   readonly diffChanged?: readonly boolean[]
+  /** A comparison's key columns (per visible column), marked ⚷ in their headers. */
+  readonly diffKeys?: readonly boolean[]
   /** The columns the grid is sorted by, in order; their headers show it. */
   readonly sort?: readonly HeaderSortKey[]
   /** A header's sort button was clicked (`add`: grid.addSortKey's modifier was held); without it headers have none. */
@@ -267,6 +282,8 @@ export class GridView {
   private readonly columns: number
   private readonly tone: number
   private readonly diff: DiffSuffix | undefined
+  /** A comparison's hidden runs of unchanged rows as drawn (setDiffGaps). */
+  private gaps: { readonly shown: boolean; readonly trailing: number } = { shown: false, trailing: 0 }
   /** Rows a live revision lists as departed: muted, whatever their tone column says. */
   private muted: ReadonlySet<number> = new Set()
   /** Highlighted rows (setHighlights); only those of the handle shown are drawn. */
@@ -307,6 +324,7 @@ export class GridView {
   private busy: GridBusy | undefined
   private filtered: ReadonlySet<number>
   private filterable: ReadonlySet<number> | undefined
+  private notes: HeaderNotes | undefined
   /** The row-size bar's sizes for the handle shown, while the bar is on. */
   private sizes: RowSizes | undefined
   private rowHeader = 0
@@ -512,7 +530,13 @@ export class GridView {
     this.schedule()
   }
   /** `headerColumn` (a transposed grid's): a column, or null for none; absent leaves it as it is. */
-  update(o: { resultCount: number; showTypes?: boolean; whitespace?: WhitespaceMode; sort?: readonly HeaderSortKey[]; rowSize?: boolean; filtered?: ReadonlySet<number>; filterable?: ReadonlySet<number>; headerColumn?: number | null; busy?: GridBusy | null }): void {
+  update(o: { resultCount: number; showTypes?: boolean; whitespace?: WhitespaceMode; sort?: readonly HeaderSortKey[]; rowSize?: boolean; filtered?: ReadonlySet<number>; filterable?: ReadonlySet<number> | null; headerColumn?: number | null; busy?: GridBusy | null; notes?: HeaderNotes | null }): void {
+    if (o.notes !== undefined && (o.notes ?? undefined) !== this.notes) {
+      this.notes = o.notes ?? undefined
+      // Every sort button and funnel paints its tooltip again.
+      for (const header of this.headerSlots) { if (header.sort) header.sort.state = '0000'; if (header.funnel) header.funnel.note = '0000' }
+      this.schedule()
+    }
     if (o.busy !== undefined && (o.busy?.column !== this.busy?.column || o.busy?.percent !== this.busy?.percent)) { this.busy = o.busy ?? undefined; this.schedule() }
     if (this.rotated && o.headerColumn !== undefined && this.validHeaderColumn(o.headerColumn) !== this.headerColumn) {
       // Its tile is read with the rows from the next frame on, and each header shows its value once read.
@@ -520,8 +544,9 @@ export class GridView {
       this.schedule()
     }
     if (o.filtered && !sameSet(o.filtered, this.filtered)) { this.filtered = o.filtered; this.schedule() }
-    if (o.filterable && (!this.filterable || !sameSet(o.filterable, this.filterable))) {
-      this.filterable = o.filterable
+    // null: every column has a funnel again (a windowed result loaded into memory).
+    if (o.filterable !== undefined && (o.filterable === null ? this.filterable !== undefined : !this.filterable || !sameSet(o.filterable, this.filterable))) {
+      this.filterable = o.filterable ?? undefined
       // Each header shows or hides its funnel again (a transposed grid's name cells do each frame).
       for (const header of this.headerSlots) header.column = -1
       this.schedule()
@@ -605,6 +630,16 @@ export class GridView {
 
   /** The grid's highlighted rows, one set per handle it may show (its result's and a sorted view's): it draws the set of the
    *  handle it shows, now and after a swap. */
+  /** A comparison in Changes only: whether its hidden runs of unchanged rows are drawn (no sort or filter applied), and the
+   *  run hidden after its last row. Each run is a dashed rule, its count in the row header's name and tooltip. */
+  setDiffGaps(o: { readonly shown: boolean; readonly trailing: number }): void {
+    if (o.shown === this.gaps.shown && o.trailing === this.gaps.trailing) return
+    this.gaps = { shown: o.shown, trailing: o.trailing }
+    for (const slot of this.rowSlots) slot.gutterKey = '\0'
+    this.pinSlot.gutterKey = '\0'
+    this.schedule()
+  }
+
   setHighlights(sets: readonly RowHighlights[]): void {
     this.highlightSets = sets
     const shown = sets.find(set => set.handle === this.handle)
@@ -704,7 +739,7 @@ export class GridView {
     this.scroller.replaceChildren()
   }
 
-  private rows(): number { return this.handle.getSnapshot().rowsAvailable }
+  private rows(): number { return drawnRowCount(this.handle.getSnapshot()) }
   /** Runs `callback` once the results port has had time to make room, unless the grid is disposed first. */
   private later(callback: () => void): void {
     if (this.disposed) return
@@ -837,7 +872,7 @@ export class GridView {
   }
 
   private setStatus(status: GridStatus): void {
-    if (status.tileError === this.status.tileError && status.renderError === this.status.renderError) return
+    if (status.tileError === this.status.tileError && status.renderError === this.status.renderError && status.expired === this.status.expired) return
     this.status = status
     this.o.onStatus(status)
   }
@@ -1252,7 +1287,8 @@ export class GridView {
   /** A column's tooltip: its whole name, its type and whether it takes NULL. */
   private headerTitle(column: number): string {
     const info = this.descriptor.columns[column]
-    return `${columnTitle(info.name)} (${this.types[column]}, ${info.nullable ? 'null' : 'not null'})`
+    const cue = this.diff ? headerCues[(this.o.diffChanged?.[column] ? 1 : 0) | (this.o.diffKeys?.[column] ? 2 : 0)] : ''
+    return `${columnTitle(info.name)} (${this.types[column]}, ${info.nullable ? 'null' : 'not null'})${cue ? '\n' + cue : ''}`
   }
   /** A transposed header's tooltip: the row it stands for, and the header column's value when that is what it shows. */
   private rowTitle(row: number, label: string): string {
@@ -1404,7 +1440,7 @@ export class GridView {
         const funnel = this.o.onFilter && !this.rotated ? this.funnelButton(el) : undefined
         if (funnel) el.classList.add('fb')
         this.head.append(el)
-        const header: HeaderSlot = { el, text, type, column: -1, sel: false, mark: 0, shown: false, left: Number.NaN, width: -1, label: '', highlight: 0, size: '', ...sort ? { sort } : {}, ...funnel ? { funnel } : {} }
+        const header: HeaderSlot = { el, text, type, column: -1, sel: false, mark: 0, shown: false, left: Number.NaN, width: -1, label: '', highlight: 0, size: '', cue: 0, ...sort ? { sort } : {}, ...funnel ? { funnel } : {} }
         this.slots.set(el, { header })
         this.headerSlots.push(header)
       }
@@ -1529,7 +1565,8 @@ export class GridView {
     // A hidden pane (Ctrl+R) or a background tab has no size: nothing to paint until it is shown.
     if (width <= 0 || height <= 0) return
     const state = this.o.state, snapshot = this.handle.getSnapshot()
-    const rows = snapshot.rowsAvailable
+    // A result loading into memory keeps drawing the rows it showed (loading past those read): reads stop at those available.
+    const rows = drawnRowCount(snapshot), available = snapshot.rowsAvailable
     // What is drawn: the rows and columns themselves, or turned. A transposed grid's columns grow as rows arrive.
     const drawnRows = this.drawnRows(rows), drawnColumns = this.drawnColumns(rows)
     if (this.uniform && this.uniform.count !== drawnColumns) this.uniform.setCount(drawnColumns)
@@ -1632,14 +1669,14 @@ export class GridView {
       // read is one across them.
       const view = this.sourceRange(range)
       const moved = this.rotated ? range.firstColumn - this.lastFirstColumn : offsets.topRow - this.lastTopRow
-      const again = this.data.ensure(view, rows, moved, Math.max(1, this.rotated ? range.lastColumn - range.firstColumn + 1 : bodyRows), state.selection?.active)
+      const again = this.data.ensure(view, available, moved, Math.max(1, this.rotated ? range.lastColumn - range.firstColumn + 1 : bodyRows), state.selection?.active)
       if (again) this.schedule()
       if (!this.rotated || view.lastRow >= view.firstRow) this.sizes?.ensure(view.firstRow, view.lastRow)
     }
     this.lastTopRow = offsets.topRow
     this.lastFirstColumn = range.firstColumn
-    const tileError = this.data.error
-    if (tileError !== this.status.tileError) this.setStatus({ ...this.status, tileError })
+    const tileError = this.data.error, expired = tileError !== undefined && this.data.expired ? true : undefined
+    if (tileError !== this.status.tileError || expired !== this.status.expired) this.setStatus({ ...this.status, tileError, expired })
     const visibleColumns = headerRange.lastColumn - headerRange.firstColumn + 1
     if (this.pools(bodyRows + 1 + 2 * overscan.rows, Math.max(1, visibleColumns))) columnsMoved = true
     this.paint(range, headerRange, drawnRows, drawnColumns, rebased, columnsMoved)
@@ -1948,10 +1985,18 @@ export class GridView {
     const diff = this.diff!, mark = this.hiddenText(row, diff.mark, tile), left = this.hiddenText(row, diff.leftRow, tile), right = this.hiddenText(row, diff.rightRow, tile)
     const tone = diff.tone < 0 ? null : this.hiddenText(row, diff.tone, tile)
     const loaded = mark !== undefined && left !== undefined && right !== undefined && tone !== undefined
-    const key = loaded ? `${mark}|${left}|${right}|${tone}` : ''
+    // The run hidden after the last row is drawn on that row; setDiffGaps clears the keys when the gaps change.
+    const trailing = this.gaps.trailing > 0 && row === this.rows() - 1 ? this.gaps.trailing : 0
+    const key = loaded ? `${mark}|${left}|${right}|${tone}|${trailing}` : ''
     if (key === slot.gutterKey) return
     slot.gutterKey = key
-    const gutter = loaded ? diffGutter(mark, left, right, this.o.diffSides, tone) : undefined
+    const gutter = loaded ? diffGutter(mark, left, right, this.o.diffSides, tone, { shown: this.gaps.shown, trailing }) : undefined
+    // Changes only: a dashed rule over the row after a hidden run, and under the last row before a trailing one.
+    const gap = [gutter?.above ? 'above' : '', gutter?.below ? 'below' : ''].filter(Boolean).join(' ')
+    for (const el of slot.mark ? [slot.el, slot.mark.el] : [slot.el]) {
+      if (gap) el.dataset.gap = gap
+      else delete el.dataset.gap
+    }
     // The pinned active row has no drawn number, only its header, which still names the row.
     if (slot.mark?.diffMark) { slot.mark.diffMark.nodeValue = gutter?.mark ?? ''; slot.mark.text.nodeValue = gutter?.number ?? '' }
     if (slot.mark?.diffFlag) slot.mark.diffFlag.nodeValue = gutter?.flag ?? ''
@@ -2126,6 +2171,17 @@ export class GridView {
         if (mark) header.el.classList.add(headerMarks[mark])
         header.mark = mark
       }
+      // A comparison (never transposed) underlines and dots its columns with changes, the cue for changes off-screen, and
+      // marks its key columns ⚷ (CSS); a transposed header's description is its highlight's.
+      const cue = this.diff ? (this.o.diffChanged?.[column] ? 1 : 0) | (this.o.diffKeys?.[column] ? 2 : 0) : 0
+      if (cue !== header.cue) {
+        header.cue = cue
+        header.el.classList.toggle('chg', (cue & 1) !== 0)
+        header.el.classList.toggle('key', (cue & 2) !== 0)
+        if (cue) header.el.setAttribute('aria-description', headerCues[cue])
+        else header.el.removeAttribute('aria-description')
+        if (this.hovered === header.el) header.el.title = this.headerTitle(column)
+      }
       if (header.sort) this.paintSort(header.el, header.sort, column)
       if (header.funnel) this.paintFunnel(header.funnel, column)
     }
@@ -2135,11 +2191,13 @@ export class GridView {
   /** A column's funnel, filled while the column has a filter. */
   private paintFunnel(funnel: FunnelButton, column: number): void {
     const on = this.filtered.has(column)
-    if (on === funnel.on) return
+    const note = this.notes?.where ?? ''
+    if (on === funnel.on && note === (funnel.note ?? '')) return
+    funnel.note = note
     funnel.on = on
     funnel.el.classList.toggle('on', on)
     funnel.glyph.className = codiconClass(on ? 'filter-filled' : 'filter')
-    funnel.el.title = on ? 'Filter column values (filtered)' : 'Filter column values'
+    funnel.el.title = `Filter column values${note}${on ? ' (filtered)' : ''}`
   }
 
   /** Whether a column's header has a funnel. */
@@ -2163,7 +2221,7 @@ export class GridView {
    *  while its header is hovered. */
   private paintSort(target: HTMLElement, sort: SortButton, column: number): void {
     const key = this.sortKeys.get(column), busy = this.busy?.column === column ? this.busy : undefined
-    const state = (key ? `${key.at}:${key.descending ? 1 : 0}:${this.sortKeys.size}` : '') + (busy ? `|${busy.percent ?? '-'}` : '')
+    const state = (key ? `${key.at}:${key.descending ? 1 : 0}:${this.sortKeys.size}` : '') + (busy ? `|${busy.percent ?? '-'}` : '') + (this.notes ? `|${this.notes.where}|${this.notes.refused.get(column) ?? ''}` : '')
     if (state === sort.state) return
     sort.state = state
     sort.el.classList.toggle('on', !!key)
@@ -2173,7 +2231,8 @@ export class GridView {
     sort.busy.nodeValue = busy?.percent !== undefined ? `${busy.percent}%` : ''
     sort.glyph.className = codiconClass(key?.descending ? 'arrow-down' : 'arrow-up')
     sort.order.nodeValue = key && this.sortKeys.size > 1 ? String(key.at + 1) : ''
-    sort.el.title = !key ? 'Sort ascending' : key.descending ? 'Clear sort' : 'Sort descending'
+    const refused = this.notes?.refused.get(column)
+    sort.el.title = refused ?? (!key ? 'Sort ascending' : key.descending ? 'Clear sort' : 'Sort descending') + (this.notes?.where ?? '')
     if (key && key.at === 0) target.setAttribute('aria-sort', key.descending ? 'descending' : 'ascending')
     else target.removeAttribute('aria-sort')
   }

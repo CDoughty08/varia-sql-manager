@@ -10,7 +10,8 @@ queries are data in `src/shared/scripting/catalog.ts`; the backend embeds the sa
 ## Verbs
 
 DDL verbs run SMO's Scripter with the listed flag (every other verb flag is off); DML and EXECUTE verbs are SSMS's
-templates, built from one catalog query. EXECUTE To names its return code `@RC`, or `@RC1`, `@RC2` and on when a
+templates, built from one catalog query. SELECT To always includes a scalar function's schema, which SQL Server
+requires in an expression. EXECUTE To names its return code `@RC`, or `@RC1`, `@RC2` and on when a
 parameter has, or under some collation could have, that name (a name built to clash with every one leaves it out). A verb a kind does not support is shown greyed (○) or not offered (–).
 
 | Verb | Submenu | Mnemonic | Group | Produced by |
@@ -108,7 +109,7 @@ CREATE, S = SELECT, I = INSERT, U = UPDATE, Del = DELETE, E = EXECUTE, Mod = Mod
 | `agentAlert` | — | Script Alert as | ✓ | – | – | ✓ | ✓ | – | – | – | – | – | – | `Alert` | `agentObject` |
 | `agentOperator` | — | Script Operator as | ✓ | – | – | ✓ | ✓ | – | – | – | – | – | – | `Operator` | `agentObject` |
 | `agentProxy` | — | Script Proxy as | ✓ | – | – | ✓ | ✓ | – | – | – | – | – | – | `ProxyAccount` | `agentObject` |
-| `bqTable` | none | Script Table as | ✓ | – | – | ✓ | – | ✓ | ✓ | ✓ | ✓ | – | – | `BigQuery` | `bigquery` |
+| `bqTable` | none, `clone` | Script Table as | ✓ | – | – | ✓ | – | ✓ | ✓ | ✓ | ✓ | – | – | `BigQuery` | `bigquery` |
 | `bqTable` | `snapshot` | Script Table Snapshot as | ✓ | – | – | ✓ | – | ✓ | ○ | ○ | ○ | – | – | `BigQuery` | `bigquery` |
 | `bqView` | — | Script View as | ✓ | – | – | ✓ | – | ✓ | – | – | – | – | – | `BigQuery` | `bigquery` |
 | `bqMaterializedView` | — | Script Materialized View as | ✓ | – | – | ✓ | – | ✓ | – | – | – | – | – | `BigQuery` | `bigquery` |

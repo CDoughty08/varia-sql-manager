@@ -35,7 +35,10 @@ describe('result page access', () => {
   })
   it('stores pages only through ResultSetBuffer, and builds set-less pages only for a view read and the compression benchmark', () => {
     // The compression benchmark (run by hand) builds set-less pages from bytes it unpacked itself: its own, as a view's are.
-    expect(lines(/new StoredPage\(/, [accessor, 'backend/Varia.Backend/Results/ResultViews.cs', 'backend/Varia.Backend.Tests/PageCompressionBench.cs'])).toEqual([])
+    // A transposed Copy or Save of a windowed result (ResultJobs) holds the cache's pages it read for the one job, set-less.
+    expect(lines(/new StoredPage\(/, [accessor, 'backend/Varia.Backend/Results/ResultViews.cs', 'backend/Varia.Backend.Tests/PageCompressionBench.cs', 'backend/Varia.Backend/Results/ResultJobs.cs'])).toEqual([])
+    const jobsSource = readFileSync('backend/Varia.Backend/Results/ResultJobs.cs', 'utf8')
+    expect([...jobsSource.matchAll(/new StoredPage\(([^;]*)\);/g)].map(match => match[1])).toEqual(['page.FirstRow, page.Rows, page.Body, page.Lengths)'])
     const bench = readFileSync('backend/Varia.Backend.Tests/PageCompressionBench.cs', 'utf8')
     expect([...bench.matchAll(/new StoredPage\(([^;]*)\);/g)].map(match => match[1].split(',').length)).toEqual([4, 4])
     const views = readFileSync('backend/Varia.Backend/Results/ResultViews.cs', 'utf8')
@@ -73,10 +76,15 @@ describe('result page access', () => {
       'SqlService.cs: var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);',
       // A comparison being replaced is a diff the backend built in memory, never windowed.
       'SqlService.cs: var replaced = store.Find(replacedId) ?? throw Unavailable(replacedId);',
-      // Copy and Save find their set through ResultJobs.Lease, which refuses a windowed one (pinned below).
+      // Copy and Save find their set through ResultJobs.Lease and route a windowed one to its block cache or its remote
+      // table (pinned below).
       'Results/ResultJobs.cs: var set = store.Find(resultId);',
-      // Load into memory is the one request that wants the windowed result.
-      'SqlService.BigQueryResidence.cs: var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);'
+      // Load into memory, a sort, filter or value list in BigQuery and their estimates want the windowed result itself.
+      'SqlService.BigQueryResidence.cs: var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);',
+      'SqlService.BigQueryViews.cs: var set = store.Find(resultId) ?? throw Unavailable(resultId);',
+      'SqlService.BigQueryViews.cs: var set = store.Find(remote.ResultId) ?? throw Unavailable(remote.ResultId);',
+      // A remote filter reads only the value list's table reference (ValueList), never its pages.
+      'SqlService.BigQueryViews.cs: var held = store.Find(id) ?? throw ValueListClosed();'
     ].sort())
     // Nor does a reader reach a set around Find: no listing of the store's sets, and no store under another name.
     // A store held under a name the Find scan does not know: an alias, or a parameter, field or property of type ResultStore.
@@ -128,11 +136,13 @@ describe('result page access', () => {
     const service2 = readFileSync('backend/Varia.Backend/SqlService.cs', 'utf8')
     expect(service2).toMatch(/if \(set\.Remote is \{ \} remote\) return args\.ViewId is null \? await ReadRemoteAsync\(args, set, remote, context\) : throw RemoteRefused\(\);/)
     expect(service2).toMatch(/if \(set\.Remote is \{ \} remote\) return args\.ViewId is null \? new ResultsRowBytesResult\(args\.FirstRow, remote\.RowBytes\(args\.FirstRow, args\.Count\), remote\.Rows, \[\]\) : throw RemoteRefused\(\);/)
-    // Copy and Save lease the set first; the lease refuses a windowed one, before and after it is taken (a switch between
-    // the check and the lease), and a copy the switch overtakes is refused rather than cut short.
+    // Copy and Save lease the set first, either residence. A windowed one is read through its block cache (Copy) or its
+    // remote table (Save), never through stored pages; an in-memory copy the switch to windowed overtakes is refused rather
+    // than cut short, and a windowed one a load overtakes is refused once the cache is disposed.
     const jobs = readFileSync('backend/Varia.Backend/Results/ResultJobs.cs', 'utf8')
-    expect(jobs).toMatch(/var set = store\.Find\(resultId\);\n\s*\/\/[^\n]*\n\s*if \(set is \{ IsRemote: true \}\) throw SqlService\.RemoteRefused\(\);/)
-    expect(jobs).toMatch(/if \(set is not null && set\.TryLease\(\)\)\n\s*\{\n\s*\/\/[^\n]*\n\s*if \(!set\.IsRemote\) return set;\n\s*set\.ReleaseLease\(\);\n\s*throw SqlService\.RemoteRefused\(\);/)
+    expect(jobs).toMatch(/if \(remote is null\) await WriteRowsAsync\(source, writer, plan\.Columns, first, last, Drain, context\.Token\);\n\s*else await ReadRemoteAsync\(remote,/)
+    expect(jobs).toMatch(/var export = remote is null \|\| args\.Transposed \? null : remote\.Export \?\? throw SqlService\.RemoteRefused\(\);/)
+    expect(jobs).toMatch(/if \(next <= row && remote\.Disposed\)/)
     expect(jobs).toMatch(/if \(pages\.Count == 0\) \{ if \(set\.IsRemote\) throw SqlService\.RemoteRefused\(\); yield break; \}/)
     // A switch between a reader's check and its hold: the snapshot, a view and an operation's release token refuse it under
     // the locks Demote takes (BigQueryExecutionChecks.Residence.cs drives each).
@@ -169,7 +179,7 @@ describe('result page access', () => {
     const remoteCode = remoteSource.split('\n').filter(line => !/^\s*\/\//.test(line)).join('\n')
     expect(remoteCode).not.toMatch(/\bnew\s+(?:[\w.]+\.)?RemoteResult\s*[({]/)
     expect(remoteCode.match(/\bnew\s*\(\s*store\b/g)).toHaveLength(1)
-    expect(remoteCode).toMatch(/RemoteFetch fetch, object\? source = null\) => new\(store, resultId, wires, rows, capped, rowBytes, cacheLimit, connectionLane, fetch\) \{ Source = source \};/)
+    expect(remoteCode).toMatch(/RemoteFetch fetch, object\? source = null, IRemoteRows\? export = null\) => new\(store, resultId, wires, rows, capped, rowBytes, cacheLimit, connectionLane, fetch\) \{ Source = source, Export = export \};/)
     expect(remoteCode.match(/\bRemoteFetch\b/g)).toHaveLength(4)
     const bypass = remoteCode.replace('    private RemoteResult(ResultStore store,', '    internal static object Make(ResultStore s, RemoteFetch f) => new RemoteResult(s, 0, [], 0, false, 1, 0, new(1), f);\n    private RemoteResult(ResultStore store,')
     expect(bypass.match(/\bRemoteFetch\b/g)).toHaveLength(5)

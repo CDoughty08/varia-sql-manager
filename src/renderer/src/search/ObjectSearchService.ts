@@ -1,7 +1,8 @@
 import type { VariaApi } from '../../../shared/contracts'
 import { belowSchema, folderSpecs, kindSpecs, type FolderId } from '../../../shared/explorer/catalog.ts'
 import type { ExplorerNodeRef, ObjectRef } from '../../../shared/explorer/refs.ts'
-import { objectSearchLimits, type ObjectIndexProgress, type ObjectIndexStatus, type ObjectSearchHit, type ObjectSearchResult, type SearchScope, type SearchType, agentSearchKinds, searchKinds, searchTypeKinds } from '../../../shared/explorer/search.ts'
+import { objectSearchLimits, type BigQueryIndexScope, type ObjectIndexProgress, type ObjectIndexStatus, type ObjectSearchHit, type ObjectSearchResult, type SearchScope, type SearchType, agentSearchKinds, providerSearchKinds, searchTypeKinds } from '../../../shared/explorer/search.ts'
+import type { WorkbenchEvent } from '../core/types'
 import type { SettingKey, SettingValue } from '../../../shared/settings/catalog'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
@@ -22,6 +23,8 @@ export interface IndexEntry {
   readonly done: number
   readonly total: number
   readonly objects: number
+  /** A BigQuery build's pass: names, then details. */
+  readonly phase?: 'names' | 'details'
   readonly status?: ObjectIndexStatus
   readonly error?: string
 }
@@ -102,7 +105,15 @@ export interface ObjectSearchOptions extends CustomDocumentTargetOptions {
   readonly newId?: () => string
   /** The Agent release gate: SQL Server Agent's kinds are searched only while it is on. */
   readonly agentEnabled?: boolean
+  /** The workbench's events: a BigQuery query whose DDL may have changed objects re-reads the datasets it marked (`stale`). */
+  readonly events?: { subscribe(listener: (event: WorkbenchEvent) => void): Disposable }
 }
+/** A BigQuery refresh: one project or dataset re-read whole (Object Explorer's Refresh), the datasets DDL marked, or everything
+ *  (Refresh on the server's node). */
+export type BigQueryRefresh = { readonly scope: BigQueryIndexScope } | { readonly stale: true } | { readonly full: true }
+/** Statement types whose job may have changed what a BigQuery index lists (SqlService.ChangesObjects), and a script, whose
+ *  statements may have. */
+export const bigQueryChangesObjects = (statement: string | undefined): boolean => !!statement && (/^(CREATE|DROP|ALTER|UNDROP)_/.test(statement) || statement === 'SCRIPT')
 
 export const searchTitle = 'Search Objects'
 /** The search Object Explorer's box runs: the same search as a tab's, on the server of the explorer's selection. */
@@ -130,6 +141,26 @@ function serverChain(folder: FolderId): ExplorerNodeRef[] {
   const owner: ObjectRef = { kind: singleton.kind }
   return [{ type: 'object', object: owner }, ...folderChain(owner, folder)]
 }
+/**
+ * Where a BigQuery hit is in Object Explorer: its project (listed below the server), its dataset, the dataset's folder, and the
+ * object; a column below its table's (the folder the hit names its parent's), the table's Columns folder, and each record column
+ * above it (address, then address.city).
+ */
+function bigQueryRevealPaths(hit: ObjectSearchHit): RevealPath[] {
+  const object = hit.object, project = object.project!
+  const steps: ExplorerNodeRef[] = [{ type: 'object', object: { kind: 'bqProject', name: project } }]
+  if (object.kind === 'bqDataset' || object.dataset === undefined) return [[...steps, { type: 'object', object }]]
+  const dataset: ObjectRef = { kind: 'bqDataset', project, name: object.dataset }
+  steps.push({ type: 'object', object: dataset })
+  if (object.kind !== 'bqColumn' || object.table === undefined) return hit.folder ? [[...steps, ...folderChain(dataset, hit.folder), { type: 'object', object }]] : []
+  const parentFolder = hit.parentFolder
+  const tableKind = parentFolder ? folderSpecs[parentFolder].rows?.[0] : undefined
+  if (!parentFolder || !tableKind || !hit.folder) return []
+  const table: ObjectRef = { kind: tableKind, project, dataset: object.dataset, name: object.table }
+  const parts = (object.name ?? '').split('.'), records: ExplorerNodeRef[] = []
+  for (let at = 1; at < parts.length; at++) records.push({ type: 'object', object: { kind: 'bqColumn', project, dataset: object.dataset, table: object.table, name: parts.slice(0, at).join('.') } })
+  return [[...steps, ...folderChain(dataset, parentFolder), { type: 'object', object: table }, ...folderChain(table, hit.folder), ...records, { type: 'object', object }]]
+}
 /** Reveal's answer for a hit whose kind this build does not know. */
 export const unknownKindReveal = 'This version of Varia cannot show that kind of object in Object Explorer.'
 const systemDatabases = new Set(['master', 'model', 'msdb'])
@@ -151,8 +182,12 @@ export function revealPaths(hit: ObjectSearchHit, grouped = false): RevealPath[]
   const server: ObjectRef = { kind: 'server' }
   // A kind this build does not know (a newer backend's) has no place in this build's tree.
   if (!Object.hasOwn(kindSpecs, hit.object.kind)) return []
+  if (hit.object.project !== undefined) return bigQueryRevealPaths(hit)
+  // Only a BigQuery dataset is listed in no folder.
+  if (!hit.folder) return []
+  const folder = hit.folder
   const scope = kindSpecs[hit.object.kind].scope
-  if (scope === 'serverObject' || scope === 'database') return [[...serverChain(hit.folder), { type: 'object', object: hit.object }]]
+  if (scope === 'serverObject' || scope === 'database') return [[...serverChain(folder), { type: 'object', object: hit.object }]]
   const name = hit.object.database ?? ''
   const database: ObjectRef = { kind: 'database', name }
   /** The folders down to `folder` below the database, or below the schema row when grouped and the folder moved there. */
@@ -164,12 +199,12 @@ export function revealPaths(hit: ObjectSearchHit, grouped = false): RevealPath[]
   const parent = hit.object.parent
   const owner: ObjectRef | undefined = parent && { kind: parent.kind, database: name, schema: parent.schema, name: parent.name }
   // Below a parent: the parent's node, then the folders down to the hit's.
-  const belowOwner: ExplorerNodeRef[] = owner ? [{ type: 'object', object: owner }, ...folderChain(owner, hit.folder)] : []
+  const belowOwner: ExplorerNodeRef[] = owner ? [{ type: 'object', object: owner }, ...folderChain(owner, folder)] : []
   const belows: ExplorerNodeRef[][] = hit.via
     ? [[...listing(hit.via.folder, hit.via.schema), { type: 'object', object: { kind: 'table', database: name, schema: hit.via.schema, name: hit.via.name } }, ...belowOwner]]
     : parent
       ? (hit.parentFolder ? [hit.parentFolder] : parentFolders[parent.kind]).map(folder => [...listing(folder, parent.schema), ...belowOwner])
-      : [listing(hit.folder, hit.object.schema)]
+      : [listing(folder, hit.object.schema)]
   const under = (folder: FolderId): RevealPath[] => belows.map(below => [...folderChain(server, folder), { type: 'object', object: database }, ...below, { type: 'object', object: hit.object }])
   return systemDatabases.has(name.toLowerCase()) ? [...under('systemDatabases'), ...under('databases')] : [...under('databases'), ...under('systemDatabases')]
 }
@@ -207,10 +242,11 @@ export function hitServer(document: SearchDocumentState, index: number): string 
 export function mergeAnswers(answers: readonly ServerAnswer[]): ObjectSearchResult | undefined {
   const results = answers.flatMap(answer => answer.result ? [answer.result] : [])
   if (!results.length) return undefined
-  const problems = results.flatMap(result => result.problem ? [result.problem] : [])
+  const asked = results.filter(result => !unasked.has(result))
+  const problems = asked.flatMap(result => result.problem ? [result.problem] : [])
   return {
     hits: results.flatMap(result => result.hits), total: results.reduce((sum, result) => sum + result.total, 0), partial: results.some(result => result.partial),
-    elapsedMs: Math.max(...results.map(result => result.elapsedMs)), index: results[0]!.index, ...problems.length === results.length ? { problem: problems[0]! } : {}
+    elapsedMs: Math.max(...results.map(result => result.elapsedMs)), index: results[0]!.index, ...asked.length && problems.length === asked.length ? { problem: problems[0]! } : {}
   }
 }
 
@@ -247,9 +283,16 @@ interface Fanout {
   readonly settle: () => void
 }
 const emptyQuery: SearchQueryState = { text: '', caseSensitive: false, wholeWord: false, regex: false, fuzzy: false, scope: 'all', types: [] }
-/** A connected SQL Server: Search Objects indexes and searches SQL Server's catalogs only, so a BigQuery connection is never
- *  indexed on connect nor joins an All servers search. */
-const live = (connection: LiveConnection | undefined): connection is LiveConnection => isLiveConnection(connection) && !isBigQueryConnection(connection)
+/** A connected server Search Objects indexes: SQL Server's catalogs, or BigQuery's projects through its REST API. */
+const live = (connection: LiveConnection | undefined): connection is LiveConnection => isLiveConnection(connection)
+/** An index response with no hits, for a server none of a search's chosen types apply to (Models on a SQL Server). */
+const noHits = (index: ObjectIndexStatus | undefined): ObjectSearchResult => {
+  const result = { hits: [], total: 0, partial: false, elapsedMs: 0, index: index ?? { state: 'none' as const, databases: 0, indexed: 0, objects: 0, modules: 0, cut: 0, skipped: [], definitions: true } }
+  unasked.add(result)
+  return result
+}
+/** The no-hits answers made up for servers that were not asked: they say nothing about whether the query itself is valid. */
+const unasked = new WeakSet<ObjectSearchResult>()
 
 /**
  * Search Objects: builds each connected server's object index in the backend (explorer.index: names, and module definitions
@@ -274,6 +317,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   private readonly targetBindings: CustomDocumentTargets
   private disposed = false
   private paneFocusTaken = 0
+  /** BigQuery refreshes asked while a build ran, by connection: each runs once the build ends, so none cancels another. */
+  private readonly refreshes = new Map<string, BigQueryRefresh[]>()
 
   constructor(private readonly o: ObjectSearchOptions) {
     super({ indexes: {}, documents: {}, paneFocus: 0 })
@@ -286,33 +331,83 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     this.registrations.push({ dispose: unsubscribe }, { dispose: unlisten })
     const unlistenDocuments = o.documents.subscribe?.(() => this.syncDocuments())
     if (unlistenDocuments) this.registrations.push({ dispose: unlistenDocuments })
+    if (o.events) this.registrations.push(o.events.subscribe(event => { if (event.type === 'query.finished') this.queryFinished(event.tabId, event.summary?.job?.statementType, event.error !== undefined) }))
     this.sync()
   }
 
-  /** Builds (or rebuilds) a connection's index; a build already running is superseded and answers CANCELLED. */
-  build(connectionId: string): void {
-    if (this.disposed || !live(this.o.connections.get(connectionId))) return
+  /**
+   * Builds (or rebuilds) a connection's index; a build already running is superseded and answers CANCELLED. A BigQuery index
+   * also reads the extra projects' details when Options says to; `refresh` re-reads part of it instead (refreshBigQuery).
+   */
+  build(connectionId: string, refresh?: BigQueryRefresh): void {
+    const connection = this.o.connections.get(connectionId)
+    if (this.disposed || !live(connection)) return
+    const bigQuery = isBigQueryConnection(connection)
+    const partial = refresh && !('full' in refresh) ? refresh : undefined
+    if (!partial) this.refreshes.delete(connectionId)
     const requestId = this.newId()
     const previous = this.getSnapshot().indexes[connectionId]
     this.putIndex({ connectionId, requestId, done: 0, total: 0, objects: previous?.status?.objects ?? 0, ...previous?.status ? { status: previous.status } : {} })
-    void this.o.api.explorerIndex({ connectionId, requestId, definitions: this.o.settings.get('objectExplorer.search.definitions') }).then(result => {
+    void this.o.api.explorerIndex({
+      connectionId, requestId, definitions: this.o.settings.get('objectExplorer.search.definitions'),
+      ...bigQuery ? { extraDetails: this.o.settings.get('objectExplorer.search.bigQueryExtraProjects') } : {}, ...bigQuery && partial ? partial : {}
+    }).then(result => {
       const entry = this.getSnapshot().indexes[connectionId]
       if (this.disposed || entry?.requestId !== requestId) return
       if (result.ok) {
         this.putIndex({ connectionId, done: result.value.status.databases, total: result.value.status.databases, objects: result.value.status.objects, status: result.value.status })
         this.refresh(connectionId)
-      } else this.putIndex({ connectionId, done: entry.done, total: entry.total, objects: entry.objects, ...entry.status ? { status: entry.status } : {}, ...result.code === 'CANCELLED' ? {} : { error: result.error } })
+      } else {
+        // A refresh that fails leaves the index it refreshed as it was, still searchable: only a whole build's failure is the index's.
+        const failed = result.code !== 'CANCELLED' && !(partial && entry.status && entry.status.state !== 'none')
+        this.putIndex({ connectionId, done: entry.done, total: entry.total, objects: entry.objects, ...entry.status ? { status: entry.status } : {}, ...failed ? { error: result.error } : {} })
+        // Stop (or a disconnect) ends the refreshes waiting behind the build too, and so does a whole build's failure, whose error
+        // they would otherwise hide.
+        if (result.code === 'CANCELLED' || failed) this.refreshes.delete(connectionId)
+      }
+      this.nextRefresh(connectionId)
     }, onUnexpectedError)
+  }
+
+  /**
+   * Re-reads part of a BigQuery connection's index: a project or dataset whole (Object Explorer's Refresh on it), or the datasets
+   * DDL from a query tab marked (`stale`). A connection with no index yet builds nothing (its first build reads everything); one
+   * whose build is running re-reads once that build ends, so the refresh never cancels it.
+   */
+  refreshBigQuery(connectionId: string, refresh: BigQueryRefresh): void {
+    const connection = this.o.connections.get(connectionId)
+    if (this.disposed || !live(connection) || !isBigQueryConnection(connection)) return
+    const entry = this.getSnapshot().indexes[connectionId]
+    if (entry?.requestId) {
+      const queued = this.refreshes.get(connectionId) ?? []
+      if (!queued.some(item => JSON.stringify(item) === JSON.stringify(refresh))) this.refreshes.set(connectionId, [...queued, refresh])
+      return
+    }
+    // After a whole build failed, only another whole build clears its error: a partial one would hide it.
+    if (entry?.error && !('full' in refresh)) return
+    if (entry?.status && entry.status.state !== 'none') this.build(connectionId, refresh)
+  }
+
+  /** Object Explorer's Refresh on a BigQuery node: its project, or its dataset (a node below one re-reads that dataset); the
+   *  server's node re-reads every project. Other nodes leave the index as it is. */
+  refreshNode(connectionId: string, ref: ExplorerNodeRef): void {
+    const object = ref.type === 'object' ? ref.object : ref.owner
+    if (object.kind === 'server') { this.refreshBigQuery(connectionId, { full: true }); return }
+    if (object.kind === 'bqProject' && object.name) this.refreshBigQuery(connectionId, { scope: { project: object.name } })
+    else if (object.kind === 'bqDataset' && object.project && object.name) this.refreshBigQuery(connectionId, { scope: { project: object.project, dataset: object.name } })
+    else if (object.project && object.dataset) this.refreshBigQuery(connectionId, { scope: { project: object.project, dataset: object.dataset } })
   }
 
   /** Stops a running build: what it read so far stays searchable. */
   stopBuild(connectionId: string): void {
+    this.refreshes.delete(connectionId)
     const requestId = this.getSnapshot().indexes[connectionId]?.requestId
     if (requestId) void this.o.api.explorerCancel([requestId]).catch(onUnexpectedError)
   }
 
   /** Stops every running build (the status bar's Stop). */
   stopAll(): void {
+    this.refreshes.clear()
     const ids = Object.values(this.getSnapshot().indexes).flatMap(entry => entry.requestId ? [entry.requestId] : [])
     if (ids.length) void this.o.api.explorerCancel(ids).catch(onUnexpectedError)
   }
@@ -561,14 +656,37 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
       ...document.database !== undefined ? { database: document.database } : {}, ...document.limit !== undefined ? { limit: document.limit } : {} }
   }
 
+  /** Sends one server's search: only the kinds its engine holds (none chosen for it answers no hits without asking), and a
+   *  database scope only to SQL Server. */
   private ask(connectionId: string, requestId: string, asked: SearchQueryState) {
+    const connection = this.o.connections.get(connectionId)
+    const bigQuery = !!connection && isBigQueryConnection(connection)
     const typed = searchTypeKinds(asked.types)
-    const kinds = this.o.agentEnabled ? typed : (typed ?? searchKinds).filter(kind => !(agentSearchKinds as readonly string[]).includes(kind))
+    const own = typed && providerSearchKinds(bigQuery ? 'bigquery' : 'sqlserver', typed)
+    if (own && !own.length) return Promise.resolve({ ok: true as const, value: noHits(this.getSnapshot().indexes[connectionId]?.status) })
+    const kinds = bigQuery || this.o.agentEnabled ? own : (own ?? providerSearchKinds('sqlserver')).filter(kind => !(agentSearchKinds as readonly string[]).includes(kind))
     return this.o.api.explorerSearch({
       connectionId, requestId, text: asked.text, caseSensitive: asked.caseSensitive, wholeWord: asked.wholeWord, regex: asked.regex, in: asked.scope, ...kinds ? { kinds } : {},
-      ...asked.fuzzy && !asked.regex ? { match: 'fuzzy' as const } : {}, ...asked.database !== undefined ? { database: asked.database } : {},
+      ...asked.fuzzy && !asked.regex ? { match: 'fuzzy' as const } : {}, ...asked.database !== undefined && !bigQuery ? { database: asked.database } : {},
       ...asked.limit !== undefined ? { limit: asked.limit } : {}
     })
+  }
+
+  /** A BigQuery query tab's run ended: DDL in it (or a script, which may hold some) marked datasets the backend re-reads now. A run
+   *  that failed reports no statement type, but DDL before the failure may have run: the stale-only build reads whatever was
+   *  marked, and nothing when nothing was. */
+  private queryFinished(tabId: string, statement: string | undefined, failed: boolean): void {
+    if (!failed && !bigQueryChangesObjects(statement)) return
+    const connectionId = this.o.documents.get(tabId)?.connectionId
+    if (connectionId) this.refreshBigQuery(connectionId, { stale: true })
+  }
+
+  /** Runs the next BigQuery refresh asked while a build ran. */
+  private nextRefresh(connectionId: string): void {
+    const queued = this.refreshes.get(connectionId)
+    const next = queued?.shift()
+    if (!queued?.length) this.refreshes.delete(connectionId)
+    if (next) this.refreshBigQuery(connectionId, next)
   }
 
   /**
@@ -741,6 +859,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const ids = new Set(connections.filter(live).map(connection => connection.id))
     const { indexes } = this.getSnapshot()
     const gone = Object.keys(indexes).filter(id => !ids.has(id))
+    for (const id of [...this.refreshes.keys()]) if (!ids.has(id)) this.refreshes.delete(id)
     if (gone.length) {
       const kept = { ...indexes }
       for (const id of gone) delete kept[id]
@@ -775,7 +894,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   private progress(progress: ObjectIndexProgress): void {
     const entry = Object.values(this.getSnapshot().indexes).find(value => value.requestId === progress.requestId)
     if (!entry) return
-    this.putIndex({ ...entry, done: progress.done, total: progress.total, objects: progress.objects })
+    this.putIndex({ ...entry, done: progress.done, total: progress.total, objects: progress.objects, ...progress.phase ? { phase: progress.phase } : {} })
   }
 
   private putIndex(entry: IndexEntry): void {

@@ -35,11 +35,14 @@ internal static partial class RestoreSql
         + "bf.file_size AS file_size, bf.file_number AS file_id, bf.is_present AS is_present FROM msdb.dbo.backupfile AS bf JOIN msdb.dbo.backupset AS bs ON bs.backup_set_id = bf.backup_set_id "
         + "WHERE bs.backup_set_uuid = @set ORDER BY bf.file_number;";
 
-    /// <summary>The default folders, whether the login may restore (Learn: CREATE ANY DATABASE, or sysadmin and dbcreator), and whether it sees sessions.
+    private const string CanCreateDatabase = "HAS_PERMS_BY_NAME(N'master', N'DATABASE', N'CREATE DATABASE') = 1 OR "
+        + "HAS_PERMS_BY_NAME(NULL, NULL, N'CREATE ANY DATABASE') = 1 OR IS_SRVROLEMEMBER(N'dbcreator') = 1 OR IS_SRVROLEMEMBER(N'sysadmin') = 1";
+
+    /// <summary>The default folders and whether the login can create a restore destination.
     /// SQL Server 2016 and 2017 have no InstanceDefaultBackupPath (2019 added it), so their backup folder is the data folder.</summary>
     public const string Facts = "SELECT CONVERT(nvarchar(260), SERVERPROPERTY('InstanceDefaultDataPath')) AS data_path, CONVERT(nvarchar(260), SERVERPROPERTY('InstanceDefaultLogPath')) AS log_path, "
         + "COALESCE(CONVERT(nvarchar(260), SERVERPROPERTY('InstanceDefaultBackupPath')), CONVERT(nvarchar(260), SERVERPROPERTY('InstanceDefaultDataPath'))) AS backup_path, "
-        + "CONVERT(bit, CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'CREATE ANY DATABASE') = 1 OR IS_SRVROLEMEMBER(N'dbcreator') = 1 OR IS_SRVROLEMEMBER(N'sysadmin') = 1 THEN 1 ELSE 0 END) AS can_restore;";
+        + "CONVERT(bit, CASE WHEN " + CanCreateDatabase + " THEN 1 ELSE 0 END) AS can_restore;";
 
     /// <summary>The databases a restore can overwrite (Learn: all but master and tempdb; snapshots cannot be restored over), with
     /// their sessions where VIEW SERVER STATE shows them, and their backup family (a database of the same name from elsewhere is another).</summary>
@@ -57,7 +60,7 @@ internal static partial class RestoreSql
         + "CONVERT(bit, CASE WHEN d.source_database_id IS NULL THEN 0 ELSE 1 END) AS is_snapshot, rs.family_guid AS family_guid, rs.last_log_backup_lsn AS last_log_backup_lsn "
         + "FROM sys.databases AS d LEFT JOIN sys.database_recovery_status AS rs ON rs.database_id = d.database_id WHERE d.name = @db;\n"
         + "SELECT TOP (@take) d.database_id AS database_id FROM sys.databases AS d ORDER BY d.database_id;\n"
-        + "SELECT CONVERT(bit, CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'CREATE ANY DATABASE') = 1 OR IS_SRVROLEMEMBER(N'dbcreator') = 1 OR IS_SRVROLEMEMBER(N'sysadmin') = 1 THEN 1 ELSE 0 END) AS can_restore, "
+        + "SELECT CONVERT(bit, CASE WHEN " + CanCreateDatabase + " THEN 1 ELSE 0 END) AS can_restore, "
         + "CONVERT(bit, ISNULL(IS_SRVROLEMEMBER(N'sysadmin'), 0)) AS sysadmin, (SELECT COUNT(*) FROM sys.system_objects AS o WHERE o.name = N'dm_os_file_exists') AS file_views;";
 
     /// <summary>Which of the paths in @paths (a JSON array) exist as files, by their index in it (SQL Server 2017 on).</summary>
@@ -152,7 +155,7 @@ internal static partial class RestoreSql
 
     private static readonly HashSet<string> Literals =
     [
-        "'InstanceDefaultDataPath'", "'InstanceDefaultLogPath'", "'InstanceDefaultBackupPath'", "N'CREATE ANY DATABASE'", "N'dbcreator'", "N'sysadmin'", "N'VIEW SERVER STATE'", "N'dm_os_file_exists'"
+        "'InstanceDefaultDataPath'", "'InstanceDefaultLogPath'", "'InstanceDefaultBackupPath'", "N'master'", "N'DATABASE'", "N'CREATE DATABASE'", "N'CREATE ANY DATABASE'", "N'dbcreator'", "N'sysadmin'", "N'VIEW SERVER STATE'", "N'dm_os_file_exists'"
     ];
     [GeneratedRegex(@"N?'(?:[^']|'')*'")]
     private static partial Regex LiteralPattern();

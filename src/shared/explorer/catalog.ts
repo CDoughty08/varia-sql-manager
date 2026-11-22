@@ -87,7 +87,7 @@ export const folderIds = [
 export type FolderId = typeof folderIds[number]
 
 export const nodeSubtypes = [
-  'system', 'snapshot',
+  'system', 'snapshot', 'clone',
   'systemVersioned', 'history', 'updatableLedger', 'appendOnlyLedger', 'ledgerHistory', 'graphNode', 'graphEdge', 'fileTable', 'external', 'droppedLedger',
   'ledger',
   'sql', 'clr', 'extended', 'replicationFilter',
@@ -533,7 +533,7 @@ const kindData: { readonly [K in NodeKind]: KindData } = {
     maxName: 1024, scriptable: false, insert: 'bqPath'
   },
   bqTable: {
-    providers: bq, title: 'Table', scope: 'bqObject', icon: 'table', subtypes: ['snapshot'], subtypeIcons: { snapshot: 'device-camera' }, folders: ['bqColumns'], maxName: 1024, insert: 'bqPath'
+    providers: bq, title: 'Table', scope: 'bqObject', icon: 'table', subtypes: ['snapshot', 'clone'], subtypeIcons: { snapshot: 'device-camera' }, folders: ['bqColumns'], maxName: 1024, insert: 'bqPath'
   },
   bqView: { providers: bq, title: 'View', scope: 'bqObject', icon: 'view', folders: ['bqColumns'], maxName: 1024, insert: 'bqPath' },
   bqMaterializedView: { providers: bq, title: 'Materialized View', scope: 'bqObject', icon: 'layers', folders: ['bqColumns'], maxName: 1024, insert: 'bqPath' },

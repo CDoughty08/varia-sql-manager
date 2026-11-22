@@ -68,7 +68,7 @@ internal static class RestoreRunLiveChecks
             + silent.Error?.Code + " " + string.Join(", ", silent.Steps.Select(step => step.Title + " " + step.Status)));
     }
 
-    public static async Task RunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json, Func<string, string, Task<SqlRun>> sql,
+    public static async Task RunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, Func<string, ConnectOptions> live, JsonSerializerOptions json, Func<string, string, Task<SqlRun>> sql,
         ScratchDatabase scratch, IReadOnlyList<BackupSetDto> sets, IReadOnlyList<RestoreMoveDto> relocated)
     {
         var restore = ActionsCatalog.Current.Restore;
@@ -103,6 +103,35 @@ internal static class RestoreRunLiveChecks
             + string.Join(", ", result.Steps.Select(step => step.Title + " " + step.Status + (step.Compensates == true ? " (c)" : "") + (step.Message is { } note ? " [" + note + "]" : "")))
             + (result.Restored is { Absent: true } gone ? " | absent" + (gone.FilesLeft is { } kept ? ", left " + string.Join(", ", kept) : "") : result.Restored is { } now ? " | " + now.State + "/" + now.UserAccess : "");
         scratch.Adopt(target);
+
+        // A SQL login whose only right is CREATE DATABASE in master (Learn's RESTORE permission for a new database) is refused
+        // before the grant and restores after it, through the run's own preflight and statements.
+        if ((await sql("SELECT CONVERT(nvarchar(1), SERVERPROPERTY('IsIntegratedSecurityOnly'));", "master")).Scalar == "0")
+        {
+            static string B(string value) => "[" + value.Replace("]", "]]", StringComparison.Ordinal) + "]";
+            var login = scratch.OwnLogin("rc");
+            var password = ScratchDatabase.Throwaway();
+            var loginMade = await sql("CREATE LOGIN " + B(login) + " WITH PASSWORD = " + Q(password) + ", CHECK_POLICY = OFF, DEFAULT_DATABASE = [master]; CREATE USER " + B(login) + " FOR LOGIN " + B(login) + ";", "master");
+            if (loginMade.Status != "completed") throw new InvalidOperationException("Restore setup failed: " + loginMade.Error);
+            var connected = (ConnectionInfo)await service.DispatchAsync("connections.connect",
+                JsonSerializer.SerializeToElement(live("master") with { Authentication = "sql", Username = login, Password = password }, json), json);
+            try
+            {
+                ActionArgs Mine(RestoreOptionsDto options) => new("restore", connected.Id, Guid.NewGuid().ToString(), new ObjectRefDto("database", Name: target), Restore: options);
+                var full = new List<RestorePlanSetDto> { Planned("full") };
+                var denied = await service.Actions.ExecuteAsync(Mine(Options(full, relocated)), CancellationToken.None, _ => { });
+                var granted = await sql("GRANT CREATE DATABASE TO " + B(login) + ";", "master");
+                var allowed = await service.Actions.ExecuteAsync(Mine(Options(full, relocated)), CancellationToken.None, _ => { });
+                check(denied is { Error.Code: "PERMISSION_DENIED", Steps: [] } && granted.Status == "completed" && allowed is { Error: null, Restored: { State: 0 } }
+                    && allowed.Steps.Select(step => step.Status).SequenceEqual(["done"]) && await Rows(target) == "1",
+                    "a login with CREATE DATABASE in master as its only right restores to a new database, which the run refuses before the grant: " + Show(denied) + " | " + Show(allowed));
+            }
+            finally
+            {
+                await service.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(connected.Id), json), json);
+                await sql("IF DB_ID(" + Q(target) + ") IS NOT NULL DROP DATABASE " + B(target) + "; IF DATABASE_PRINCIPAL_ID(" + Q(login) + ") IS NOT NULL DROP USER " + B(login) + ";", "master");
+            }
+        }
 
         // A new database through the wire: its steps in order, done, with their files as details, the progress the long action
         // sends, and the database online with the backup's rows.

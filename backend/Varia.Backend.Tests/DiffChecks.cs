@@ -27,6 +27,7 @@ internal static partial class DiffChecks
         CellMemory(check);
         WireMismatch(check);
         SharedPairing(check);
+        LinearPairing(check);
         OrdinalCasing(check);
         Rules(check);
         Tones(check);
@@ -386,6 +387,71 @@ internal static partial class DiffChecks
             if (pairs != expected) differences.Add((string)item["name"]! + " gave [" + pairs + "], not [" + expected + "]");
         }
         check(cases.Count >= 9 && differences.Count == 0, "ResultDiffer.Pairs gives each pairing case in tests/fixtures/compare-pairing: " + string.Join("; ", differences));
+    }
+
+    /// <summary>ResultDiffer.Pairs queues the second result's columns by name key and wire: wide results that share few names
+    /// pair without a scan per column, and every pairing is the one the first-unused-match scan it replaced gives.</summary>
+    private static void LinearPairing(Action<bool, string> check)
+    {
+        static (int, int)[] Scan(IReadOnlyList<ResultColumn> left, IReadOnlyList<ResultColumn> right, IReadOnlyList<WireKind>? leftWires, IReadOnlyList<WireKind>? rightWires)
+        {
+            var used = new bool[right.Count];
+            var pairs = new List<(int, int)>();
+            for (var l = 0; l < left.Count; l++)
+            {
+                if (ResultTextWriter.Hidden(left[l])) continue;
+                for (var r = 0; r < right.Count; r++)
+                {
+                    if (used[r] || ResultTextWriter.Hidden(right[r]) || !OrdinalNames.Same(left[l].Name, right[r].Name)) continue;
+                    if (leftWires is not null && rightWires is not null && leftWires[l] != rightWires[r]) continue;
+                    used[r] = true;
+                    pairs.Add((l, r));
+                    break;
+                }
+            }
+            return [.. pairs];
+        }
+
+        static ResultColumn[] Wide(string prefix) =>
+            [.. Enumerable.Range(0, 4096).Select(i => new ResultColumn(i == 0 ? "shared" : prefix + i.ToString(CultureInfo.InvariantCulture), "nvarchar", "text"))];
+        WireKind[] text = [.. Enumerable.Repeat(WireKind.Text, 4096)];
+        check(ResultDiffer.Pairs(Wide("left"), Wide("right"), text, text) is [(0, 0)], "wide results that share one name of 4,096 pair only that column (correctness only, not speed)");
+
+        // KeyOf joins each code point's key, which keys the whole name only if no key leaves its plane or is a surrogate.
+        var planes = Enumerable.Range(0, 0x110000).Count(code => OrdinalNames.Key(code) is var key && key != code
+            && ((code > 0xFFFF) != (key > 0xFFFF) || code is >= 0xD800 and <= 0xDFFF || key is >= 0xD800 and <= 0xDFFF));
+        check(planes == 0, "the casing table keeps each code point in its plane and away from surrogates (" + planes + " do not)");
+
+        string[] parts = ["a", "A", "i", "I", "ı", "İ", "s", "S", "ſ", "k", "K", "K", "é", "É", "\U00010400", "\U00010428", "\uD800", "\uDC00", "σ", "Σ", "ς"];
+        string?[] roles = [null, null, null, null, "tone", "old", "mark"];
+        var random = new Random(642);
+        var differences = new List<string>();
+        for (var trial = 0; trial < 20_000 && differences.Count < 5; trial++)
+        {
+            (ResultColumn[] Columns, WireKind[] Wires) Side()
+            {
+                var count = random.Next(0, 12);
+                var columns = new ResultColumn[count];
+                var wires = new WireKind[count];
+                for (var i = 0; i < count; i++)
+                {
+                    var name = string.Concat(Enumerable.Range(0, random.Next(0, 3)).Select(_ => parts[random.Next(parts.Length)]));
+                    wires[i] = random.Next(4) == 0 ? WireKind.Binary : WireKind.Text;
+                    columns[i] = new ResultColumn(name, "nvarchar", wires[i] == WireKind.Binary ? "binary" : "text", Role: roles[random.Next(roles.Length)]);
+                }
+                return (columns, wires);
+            }
+            var (left, leftWires) = Side();
+            var (right, rightWires) = Side();
+            // Both wire lists, neither, or only one: the scan compared wires only when both were given.
+            var wires = random.Next(4);
+            WireKind[]? givenLeft = wires is 0 or 1 ? leftWires : null, givenRight = wires is 0 or 2 ? rightWires : null;
+            var expected = Scan(left, right, givenLeft, givenRight);
+            var actual = ResultDiffer.Pairs(left, right, givenLeft, givenRight);
+            if (!expected.SequenceEqual(actual))
+                differences.Add("trial " + trial + ": [" + string.Join(" ", actual) + "], not [" + string.Join(" ", expected) + "]");
+        }
+        check(differences.Count == 0, "ResultDiffer.Pairs pairs 20,000 random column lists as the scan it replaced does: " + string.Join("; ", differences));
     }
 
     /// <summary>
