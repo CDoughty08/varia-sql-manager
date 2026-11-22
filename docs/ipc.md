@@ -293,6 +293,7 @@ noted where it matters.
 | `activity.details` | invoke; `cancelActivity` (closing Details) | unary | live (live gates) | 15 s, budget 10 s |
 | `activity.kill` | invoke | unary | actions (own gates) | 30 s, budget 25 s, answered with the outcomes of the sessions tried. Never re-sent |
 | `agent.profile` | invoke | unary: one login's SQL Server Agent facts ([SQL Server Agent](sql-server-agent.md)); SQL Server only | explorer, on its own slot per connection (never behind the tree's paging) | 15 s, budget 10 s from when it has the slot (`agentLimits.profileMs`). Main checks the answer (`agentProfileResultSchema`) |
+| `agent.historyMessage` | invoke | unary: one job history row's whole message for the Log File Viewer ([SQL Server Agent](sql-server-agent.md)); SQL Server only | metadata (the actions path, read-only) | 45 s, budget 40 s (the describe budget). The answer's message is at most `historyMessageChars`; a row deleted since is `NOT_FOUND` |
 | `entra.cache.clear` | main only (`varia:entra-cache-clear`, after its confirmation) | unary | control | 10 s. Takes `{}` (unknown members refused); answers `{ cleared: true }` |
 | `results.setMemoryLimit` | main only (`ResultMemoryLimit`, `src/main/backend/result-memory.ts`) | unary | control | 10 s (note 3 below) |
 | `debug.results.synthesize` | `__variaTest` and tests only | unary | metadata | 120 s; only with `VARIA_BACKEND_TEST_HOOKS=1` |
@@ -396,8 +397,13 @@ and script use `LOCK_TIMEOUT 10000`. A lost backend answers `BACKEND_LOST` (unkn
   cannot open), `MEDIA` (unusable backup media), `BACKUP_MISMATCH`, `TAIL_LOG_NEEDED`, `RESTORE_SEQUENCE` (restore), `DATABASE_UNAVAILABLE`, `TIMEOUT`, `CONNECTION_LOST`, `SQL_ERROR`,
   `CANCELLED`, `AUTH_KERBEROS`, `AUTH_UNSUPPORTED`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `PASSWORD_POLICY` (the server's password policy
   refused a password), `AGENT_STOPPED` (SQL Server Agent is not running), `JOB_STATE` (a job not running when stopped, or
-  running when started), `SERVICE_UNREACHABLE` (the Service Control Manager on the server's machine could not be reached);
-  the last three are not retryable (docs/object-actions.md, docs/sql-server-agent.md).
+  running when started), `SERVICE_UNREACHABLE` (the Service Control Manager on the server's machine could not be reached),
+  `STALE` (a job document save whose job changed since its describe: the guard's 50011); these last four are not retryable
+  (docs/object-actions.md, docs/sql-server-agent.md). A job document refusal may carry `field` (`agentJobFields`), the field the
+  failing call changed.
+- `agentJob` (the job document): `dialog: 'agentJob'` describes a job (`target: { kind: 'agentJob', name }`) or New Job
+  (`target: { kind: 'agent' }`, with `jobs`); execute and script take `agentJob` (`AgentJobSave`, bounded in zod and C#) and,
+  for an existing job, `agentIdentity`.
 - `actions.execute` answers `{ steps: { status: done | failed | skipped | cancelled | rolledBack, title, message?,
   detail?, compensates?, progress? }[], messages: str[] (≤ 32 × 512), elapsedMs, error? }`; statements run in order and
   stop at the first failure; `rolledBack` marks a step undone by a later failure or Stop in its transaction. The
@@ -1123,7 +1129,8 @@ and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residen
   limit (`TOO_LARGE` when the global budget has no room, or when one block's rows outgrow the cache: the block stops
   being built there). A block being built and the `tabledata.list` page it is read from are working memory, charged
   when the block settles (bounded by the cache's size, a page's 64 MiB and the fetch lanes). A block's estimate the cache's own limit refuses (reads of the result hold it) stops a block
-  only read ahead, with nothing fetched; one a read waits for may pass the limit, up to twice it, as an overrun may. A
+  only read ahead, with nothing fetched; one a read waits for may pass the limit, up to twice it, as an overrun may. A read's own
+  blocks reserve in order, each once the one before it has (their fetches still overlap), so the room goes to the first rows. A
   block only read ahead never evicts one a viewer's last read covered, nor takes the room of a block a read waits for that has not reserved yet, nor evicts anything for room it could not reach even then (the cache's own limit or the global budget), and its own overrun stops it there too. An overrun the cache's limit refuses while another fetch of the result holds room stops read-ahead
   no read waits for and waits once for the rest; when the read's own blocks still do not fit together, the overrun passes
   the cache's limit, up to twice it (the global budget still refusing it; past that, `TOO_LARGE` names the window cache

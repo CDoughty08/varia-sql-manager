@@ -5,6 +5,7 @@
 // reads decoded pages (src/shared/ipc/wire/pages.ts) and works on UTF-8 bytes, as the C# writer does. Plain erasable
 // TypeScript, so Node runs it unbuilt.
 import type { ColumnView, PageView, WireKind } from '../ipc/wire/pages.ts'
+import { sortKindOf, type SortKind } from './sort-kind.ts'
 
 export const MAX_SAFE = Number.MAX_SAFE_INTEGER
 export const NO_COLUMN_NAME = '(No column name)'
@@ -17,7 +18,7 @@ const bytes = (text: string): Uint8Array => encoder.encode(text)
 const literals = new Map<string, Uint8Array>()
 /** A literal's bytes, encoded once: quotes, separators and escapes are written per cell, some per byte. */
 const literal = (text: string): Uint8Array => { let encoded = literals.get(text); if (!encoded) literals.set(text, encoded = encoder.encode(text)); return encoded }
-const numberTypes = new Set(['tinyint', 'smallint', 'int', 'bigint', 'decimal', 'numeric', 'money', 'smallmoney', 'real', 'float'])
+const numberKinds = new Set<SortKind>(['integer', 'decimal', 'float'])
 const jsonNumber = /^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$/
 // A JSON number keeps its digits through a double (how most readers parse one) at 15 significant digits or fewer.
 const keepsValue = (text: string) => text.split(/[eE]/)[0].replace(/[-.]/g, '').replace(/^0+/, '').replace(/0+$/, '').length <= 15
@@ -35,12 +36,12 @@ export interface TextOptions {
   readonly clipboard?: boolean
 }
 /** A column as the writer needs it: its name, its SQL type (numbers and bits are typed in JSON) and how its cells travel. */
-export interface TextColumn { readonly name: string; readonly dataType: string; readonly wire: WireKind; readonly role?: string }
+export interface TextColumn { readonly name: string; readonly dataType: string; readonly wire: WireKind; readonly role?: string; readonly sortKind?: SortKind }
 /** Inclusive [first, last] ranges of rows and of columns. */
 export interface TextPart { readonly rows: readonly (readonly [number, number])[]; readonly columns: readonly (readonly [number, number])[] }
 export interface ResolvedPart { readonly rows: readonly (readonly [number, number])[]; readonly columns: readonly number[] }
-/** A decoded page holding a row, with where it starts. */
-export type PageAt = (row: number) => PageView
+/** The decoded page containing a row. Row-wise writers also supply the end of the range and its selected columns. */
+export type PageAt = (row: number, last?: number, selected?: readonly number[]) => PageView
 
 /** Copy: tab-separated, NULL as NULL, the platform's end of line between lines and none after the last, NUL as a space. */
 export const copyOptions = (headers: boolean, crlf: boolean): TextOptions => ({ format: 'tsv', headers, nullAsEmpty: false, crlf, trailingEol: false, bom: false, clipboard: true })
@@ -87,8 +88,8 @@ export class ChunkedBytes {
 type CellKind = 'binary' | 'bit' | 'number' | 'text'
 function kind(column: TextColumn): CellKind {
   if (column.wire === 'binary') return 'binary'
-  const type = column.dataType.split('(')[0].trim().toLowerCase()
-  return type === 'bit' ? 'bit' : numberTypes.has(type) ? 'number' : 'text'
+  const sort = sortKindOf(column)
+  return sort === 'boolean' ? 'bit' : numberKinds.has(sort) ? 'number' : 'text'
 }
 
 /** `name`, or with _2, _3 and so on when it is already used. */
@@ -331,7 +332,10 @@ export class TextWriter {
         if (json && value.length <= 64 && jsonNumber.test(String.fromCharCode(...value)) && keepsValue(String.fromCharCode(...value))) { this.out.write(value); return }
         break
       case 'bit':
-        if (json && value.length === 1 && (value[0] === 48 || value[0] === 49)) { this.out.write(literal(value[0] === 49 ? 'true' : 'false')); return }
+        if (json) {
+          if (value.length === 1 && (value[0] === 48 || value[0] === 49)) { this.out.write(literal(value[0] === 49 ? 'true' : 'false')); return }
+          if (value.length === 4 && String.fromCharCode(...value) === 'true' || value.length === 5 && String.fromCharCode(...value) === 'false') { this.out.write(value); return }
+        }
         break
     }
     if (this.options.format === 'tsv') tsvText(this.out, value, this.options.clipboard)
@@ -360,7 +364,7 @@ export function resolvePart(part: unknown, columnCount: number, available: numbe
  */
 export async function writeRows(writer: TextWriter, pageAt: PageAt, selected: readonly number[], first: number, last: number, afterPage: () => Promise<void> = async () => {}): Promise<void> {
   for (let row = first; row <= last;) {
-    const page = pageAt(row)
+    const page = pageAt(row, last, selected)
     const end = Math.min(last, page.firstRow + page.rowCount - 1)
     for (let r = row; r <= end; r++) writer.row(page, r - page.firstRow, selected)
     row = end + 1

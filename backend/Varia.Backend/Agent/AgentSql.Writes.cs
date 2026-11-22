@@ -3,12 +3,12 @@ using System.Text.RegularExpressions;
 
 namespace Varia.Backend.Agent;
 
-/// <summary>One msdb write a job verb runs (AG-2): its batch text and the parameters it binds besides @name and @created.</summary>
+/// <summary>One msdb write a job verb runs (AG-2): its batch text and the parameters it binds besides @name and @expected_job_id.</summary>
 internal sealed record AgentWrite(string Id, string Procedure, string Text, IReadOnlyList<AgentParameter> Parameters);
 
 /// <summary>SQL Server Agent's writes (docs/agent-plan.md › SQL rules) and the reads the job verbs and the service dialogs make outside
 /// <see cref="AgentReader"/>. Every write is one batch of exactly this shape: <see cref="Resolve"/> finds the job by name and the
-/// date_created the tree listed (the identity guard: 50010 when another job has taken the name since), one
+/// job_id the tree listed (the identity guard: 50010 when another job has taken the name since), one
 /// <c>EXEC @rc = msdb.dbo.&lt;procedure&gt; @arg = @arg, …;</c> of a procedure and arguments the catalogue lists
 /// (<see cref="AgentCatalog.WriteArguments"/>), then <see cref="Check"/>: msdb's procedures fail with RAISERROR and a return code of 1,
 /// leaving @@ERROR 0 and no TRY to catch (AG-0), so the batch THROWs 50012 itself. <see cref="LintExecutable"/> admits nothing else:
@@ -21,7 +21,7 @@ internal static partial class AgentSql
     public const string RefusedMessage = "SQL Server Agent did not make the change.";
 
     internal const string Resolve = "DECLARE @job_id uniqueidentifier, @rc int;\n"
-        + "SELECT @job_id = j.job_id FROM msdb.dbo.sysjobs_view AS j WHERE j.name = @name AND CONVERT(char(19), j.date_created, 126) = @created;\n"
+        + "SELECT @job_id = j.job_id FROM msdb.dbo.sysjobs_view AS j WHERE j.name = @name AND j.job_id = @expected_job_id;\n"
         + "IF @job_id IS NULL THROW 50010, N'" + ChangedMessage + "', 1;\n";
     internal const string Check = "\nIF @@ERROR <> 0 OR @rc <> 0 THROW 50012, N'" + RefusedMessage + "', 1;";
 
@@ -39,7 +39,7 @@ internal static partial class AgentSql
 
     public static IReadOnlyList<AgentWrite> Writes { get; } = [StartJob, StartJobAtStep, StopJob, SetEnabled, RenameJob, DeleteJob];
 
-    /// <summary>A job by name, for Delete Object and Start Job at Step: its date_created as the identity guard compares it, whether it is
+    /// <summary>A job by name, for Delete Object, Start Job at Step and the job document: its immutable job id, its date_created to the second (shown, not compared), whether it is
     /// enabled, and its owner where the login may see that principal. sysjobs_view filters by role itself.</summary>
     public const string JobByName = "SELECT j.job_id, j.name, CONVERT(char(19), j.date_created, 126) AS created, j.enabled, own.name AS owner\n"
         + "FROM msdb.dbo.sysjobs_view AS j LEFT JOIN sys.server_principals AS own ON own.sid = j.owner_sid\nWHERE j.name = @name;";
@@ -66,9 +66,11 @@ internal static partial class AgentSql
         var match = WriteCall().Match(call);
         if (!match.Success) { problems.Add("is not one msdb call in the write shape"); return problems; }
         var procedure = match.Groups["proc"].Value;
+        if (SaveOnly.Contains(procedure)) { problems.Add("EXECs " + procedure + ", which only a job save calls"); return problems; }
         if (!catalog.WriteArguments.TryGetValue(procedure, out var allowed)) { problems.Add("EXECs " + procedure + ", which is not an Agent write procedure"); return problems; }
         var seen = new HashSet<string>(StringComparer.Ordinal) { "@job_id" };
-        if (!allowed.Contains("@job_id")) problems.Add("passes @job_id to " + procedure);
+        // sp_purge_jobhistory lists @job_id for Delete History, whose batch has its own lint (LintHistoryDelete); a job verb never purges.
+        if (!allowed.Contains("@job_id") || procedure == "sp_purge_jobhistory") problems.Add("passes @job_id to " + procedure);
         for (var i = 0; i < match.Groups["arg"].Captures.Count; i++)
         {
             var argument = match.Groups["arg"].Captures[i].Value;
@@ -85,7 +87,7 @@ internal static partial class AgentSql
         foreach (var write in Writes)
         {
             var problems = LintExecutable(write.Text);
-            // Every parameter it declares is used, and it binds only @name, @created and its own.
+            // Every parameter it declares is used, and it binds only @name, @expected_job_id and its own.
             var used = Variable().Matches(Literal().Replace(write.Text, "''")).Select(match => match.Value).ToHashSet(StringComparer.Ordinal);
             foreach (var parameter in write.Parameters) if (!used.Contains(parameter.Name)) problems.Add("declares the unused " + parameter.Name);
             yield return ("write " + write.Id, problems);
@@ -94,5 +96,9 @@ internal static partial class AgentSql
         yield return ("service host", LintRead(ServiceHost, null));
         // SQL Server Agent Properties' server-scope writes and reads (AG-8a, AgentSql.Properties.cs).
         foreach (var item in LintServerWrites()) yield return item;
+        // The job document's saves (AG-6a, AgentSql.JobDocument.cs).
+        foreach (var item in LintJobSaves()) yield return item;
+        // Delete History's batches (AG-5a, AgentSql.History.cs).
+        foreach (var item in LintHistoryWrites()) yield return item;
     }
 }

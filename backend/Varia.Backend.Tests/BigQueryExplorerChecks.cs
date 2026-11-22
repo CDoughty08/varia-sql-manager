@@ -337,6 +337,9 @@ internal static class BigQueryExplorerChecks
             "Script As › SELECT reads tables.get's schema and runs in the dataset: " + select.Result?.Text);
         var drop = await harness.Script("drop", (JsonObject)Object("bqRoutine", "refresh_totals")["object"]!.DeepClone());
         check(drop.Result?.Text == "DROP PROCEDURE IF EXISTS `varia-alpha`.`sales`.`refresh_totals`;", "a routine's DROP reads its type from routines.get: " + drop.Result?.Text);
+        harness.Fake.On("GET", Sales + "/routines/total", new BigQueryFake.Reply(200, """{"routineType":"AGGREGATE_FUNCTION"}"""));
+        var aggregate = await harness.Script("drop", (JsonObject)Object("bqRoutine", "total")["object"]!.DeepClone());
+        check(aggregate.Result?.Text == "DROP FUNCTION IF EXISTS `varia-alpha`.`sales`.`total`;", "an aggregate routine uses DROP FUNCTION: " + aggregate.Result?.Text);
         var jobsBefore = harness.Fake.To(BigQueryFake.Jobs).Count();
         var estimate = await harness.Script("create", (JsonObject)orders.DeepClone(), estimateOnly: true);
         var dryRun = harness.Fake.To(BigQueryFake.Jobs).Skip(jobsBefore).Select(request => JsonNode.Parse(request.Body)!).ToArray();

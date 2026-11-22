@@ -174,7 +174,6 @@ internal sealed partial class BigQueryService
         {
             "PROCEDURE" => "DROP PROCEDURE IF EXISTS ",
             "TABLE_VALUED_FUNCTION" => "DROP TABLE FUNCTION IF EXISTS ",
-            "AGGREGATE_FUNCTION" => "DROP AGGREGATE FUNCTION IF EXISTS ",
             _ => "DROP FUNCTION IF EXISTS "
         };
         return statement + BqNames.RoutinePath(project, dataset, name) + ";";

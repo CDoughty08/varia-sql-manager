@@ -234,3 +234,11 @@ export function sameName(a: string, b: string): boolean {
   }
   return true
 }
+
+/** A name with each code point replaced by its key: two names are sameName exactly when their keys are equal (every key
+ *  stays in its code point's plane and is never a surrogate), so pairing can look columns up by it instead of scanning. */
+export function nameKey(name: string): string {
+  let key = ''
+  for (const point of name) key += String.fromCodePoint(ordinalKey(point.codePointAt(0)!))
+  return key
+}

@@ -45,6 +45,7 @@ const monacoShadowAllowlist: Readonly<Record<string, string>> = {
   'alt+up': "Move Up on a server in Object Explorer's tree only (explorerFocus && !textInputFocus): the tree is outside the editor, so Monaco's hover scrolling and input history keep Alt+Up in editor text",
   'ctrl+shift+alt+pagedown': "Next Result View outside text (!textInputFocus): Monaco's column selection by page (Windows only) keeps the key in editor text and inputs",
   'ctrl+shift+alt+pageup': "Previous Result View outside text (!textInputFocus), likewise",
+  'enter': "Open Job in Job Activity Monitor's jobs grid only (activeDocumentIsJobActivity && outputGridFocus): the grid is outside the editor, so Monaco's Enter keeps it in editor text and its widgets",
   'shift+escape': "Close Activity Monitor (activityMonitorFocus), SSMS's key: the monitor is outside the editor, so Monaco's Shift+Escape (closing a widget, leaving a snippet) keeps it in editor text"
 }
 

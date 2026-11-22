@@ -76,3 +76,23 @@ export function profileStrip(list: ProfileList, total: number, peeking: boolean)
   if (!list.only) return undefined
   return count === 0 ? 'No columns selected' : `${formatCount(count)} of ${formatCount(total)} ${total === 1 ? 'column' : 'columns'}`
 }
+
+/** A comparison column's card: its changed and collation-only cells, the rows added and removed, and the rest the same. */
+export interface ColumnChangeCounts { readonly changed: number; readonly soft: number; readonly added: number; readonly removed: number; readonly same: number }
+/** A comparison's counts for one of its pairs (`columnChanges`, whose index is the pair's and its visible column's): an entry
+ *  whose cell in it neither changed nor differs only by collation is the same there. */
+export function columnChangeCounts(info: { readonly same: number; readonly changed: number; readonly added: number; readonly removed: number; readonly columnChanges: readonly { readonly changed: number; readonly soft: number }[] }, column: number): ColumnChangeCounts {
+  const { changed = 0, soft = 0 } = info.columnChanges[column] ?? {}
+  return { changed, soft, added: info.added, removed: info.removed, same: Math.max(0, info.same + info.changed - changed - soft) }
+}
+/** "3 changed · 1 added · 0 removed · 12 same", with the collation-only cells after the changed ones when there are any. */
+export function columnChangeText(counts: ColumnChangeCounts): string {
+  return [`${formatCount(counts.changed)} changed`, counts.soft > 0 ? `${formatCount(counts.soft)} ${counts.soft === 1 ? 'differs' : 'differ'} only by collation` : '',
+    `${formatCount(counts.added)} added`, `${formatCount(counts.removed)} removed`, `${formatCount(counts.same)} same`].filter(Boolean).join(' · ')
+}
+/** The kinds a comparison card's bar stacks, in order, each as its share (percent) of the column's entries. */
+export function columnChangeShares(counts: ColumnChangeCounts): { readonly kind: keyof ColumnChangeCounts; readonly share: number }[] {
+  const kinds = ['changed', 'soft', 'added', 'removed', 'same'] as const
+  const total = kinds.reduce((sum, kind) => sum + counts[kind], 0)
+  return total > 0 ? kinds.filter(kind => counts[kind] > 0).map(kind => ({ kind, share: counts[kind] / total * 100 })) : []
+}

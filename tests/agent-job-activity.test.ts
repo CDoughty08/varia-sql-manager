@@ -30,11 +30,11 @@ const row = (id: string, name: string, status = 'Idle', lastRun = '2026-11-15 02
 class FakeGrid extends SnapshotStore<LiveGridSnapshot> {
   clear() { this.publish({ newRows: 0, following: true, lost: false } as LiveGridSnapshot) }
   select(rows: string[][], blocks: { top: number; bottom: number }[] = [{ top: 0, bottom: rows.length - 1 }]) {
-    const columns = 14
+    const columns = 13
     const handle = {
       getWindow: async (first: number, count: number) => {
         const slice = rows.slice(first, first + count)
-        return { first, count: slice.length, colStart: 0, colEnd: columns, text: slice.flat(), flags: new Uint8Array(slice.length * columns) }
+        return { first, count: slice.length, colStart: 0, colEnd: columns, text: slice.flatMap(row => row.slice(0, columns)), flags: new Uint8Array(slice.length * columns) }
       }
     }
     this.publish({
@@ -317,7 +317,7 @@ describe('Job Activity Monitor', () => {
     clock.mockRestore()
     expect(agentJobs.getSnapshot().jobs[0].watchedAt).toBe(42)
     expect(api.executeObjectAction.mock.calls.map(([request]) => request)).toEqual([
-      expect.objectContaining({ action: 'startJob', connectionId: 'c1', target: { kind: 'agentJob', name: 'Nightly' }, agentIdentity: { created: '2026-01-02T03:04:05' } }),
+      expect.objectContaining({ action: 'startJob', connectionId: 'c1', target: { kind: 'agentJob', name: 'Nightly' }, agentIdentity: { jobId: nightly } }),
       expect.objectContaining({ action: 'startJob', connectionId: 'c1', target: { kind: 'agentJob', name: 'Backup' } })
     ])
     expect(api.executeObjectAction.mock.calls[0][0]).not.toHaveProperty('stepName')
@@ -361,13 +361,13 @@ describe("The status bar's running job", () => {
     const { agentJobs, handles, connections } = monitor()
     const views = handles().length
     connections.markLostBefore(2)
-    agentJobs.watch('c1', { id: nightly, name: 'Nightly', created: '2026-01-02T03:04:05', lastRun: '' })
+    agentJobs.watch('c1', { id: nightly, name: 'Nightly', lastRun: '' })
     expect(agentJobs.getSnapshot().jobs.map(entry => entry.phase)).toEqual([{ phase: 'unknown', reason: 'gone' }])
     expect(handles().length).toBe(views)
   })
   it('follows a started job in a status-only view of the watched and service probes, to its outcome, then frees the slot', async () => {
     const { agentJobs, handles } = monitor()
-    agentJobs.watch('c1', { id: nightly, name: 'Nightly', created: '2026-01-02T03:04:05', lastRun: '2026-11-15 02:30:00' })
+    agentJobs.watch('c1', { id: nightly, name: 'Nightly', lastRun: '2026-11-15 02:30:00' })
     const view = handles().at(-1)!
     expect(view.spec).toMatchObject({ source: 'agent.jobs', args: { watch: [nightly] }, whileHidden: 'statusOnly', probes: [{ probe: 'agent.jobs.watched' }, { probe: 'agent.jobs.service' }] })
     const empty = Array.from({ length: 12 }, () => null)
@@ -386,7 +386,7 @@ describe("The status bar's running job", () => {
     const empty = Array.from({ length: 12 }, () => null)
     const ids = Array.from({ length: 6 }, (_, at) => `3333333${at}-3333-3333-3333-333333333333`)
     for (const id of ids) {
-      agentJobs.watch('c1', { id, name: id, created: '2026-01-02T03:04:05', lastRun: '2026-11-15 02:30:00' })
+      agentJobs.watch('c1', { id, name: id, lastRun: '2026-11-15 02:30:00' })
       handles().at(-1)!.deliver({ type: 'live.tick', seq: 1, sampledAt: 1, samples: [{ probe: 'agent.jobs.watched', costMs: 1, effectiveIntervalMs: 5000, metrics: [4, null, 3, null, 1, 20261115140000, ...empty] }] })
       await settled()
     }
@@ -397,10 +397,10 @@ describe("The status bar's running job", () => {
   })
   it('says the outcome is unknown when Agent stops mid-run, and Stop sends AG-2\'s Stop Job', async () => {
     const { agentJobs, handles, api } = monitor()
-    agentJobs.watch('c1', { id: nightly, name: 'Nightly', created: '2026-01-02T03:04:05', lastRun: '' })
+    agentJobs.watch('c1', { id: nightly, name: 'Nightly', lastRun: '' })
     const key = agentJobs.getSnapshot().jobs[0].key
     await agentJobs.stop(key)
-    expect(api.executeObjectAction).toHaveBeenCalledWith(expect.objectContaining({ action: 'stopJob', connectionId: 'c1', target: { kind: 'agentJob', name: 'Nightly' }, agentIdentity: { created: '2026-01-02T03:04:05' } }))
+    expect(api.executeObjectAction).toHaveBeenCalledWith(expect.objectContaining({ action: 'stopJob', connectionId: 'c1', target: { kind: 'agentJob', name: 'Nightly' }, agentIdentity: { jobId: nightly } }))
     // Seen running first, so Agent stopping is mid-run.
     handles().at(-1)!.deliver({ type: 'live.tick', seq: 1, sampledAt: 1, samples: [{ probe: 'agent.jobs.watched', costMs: 1, effectiveIntervalMs: 5000, metrics: [1, 1, 3, 20261115140000, null, null, ...Array.from({ length: 12 }, () => null), 20261115140005] }] })
     expect(agentJobs.getSnapshot().jobs[0].phase).toMatchObject({ phase: 'running', step: 1, steps: 3 })
@@ -421,7 +421,7 @@ describe("The status bar's running job", () => {
     expect(agentJobs.getSnapshot()).toMatchObject({ jobs: [{ phase: { phase: 'unknown', reason: 'agentStopped' } }], agent: {} })
     // With Agent read running since, a later follow opens no service-only view again.
     const views = handles().length
-    agentJobs.watch('c1', { id: backup, name: 'Backup', created: '2026-01-03T03:04:05', lastRun: '' })
+    agentJobs.watch('c1', { id: backup, name: 'Backup', lastRun: '' })
     agentJobs.dismiss(agentJobs.getSnapshot().jobs[0].key)
     expect(handles().length).toBe(views + 1)
     expect(handles().at(-1)!.disposed).toBe(true)
@@ -433,7 +433,7 @@ describe("The status bar's running job", () => {
     const clock = vi.spyOn(performance, 'now').mockReturnValue(1_000_000)
     cleanups.push(() => clock.mockRestore())
     const { agentJobs, handles } = monitor()
-    agentJobs.watch('c1', { id: nightly, name: 'Nightly', created: '2026-01-02T03:04:05', lastRun: '2026-11-15 02:30:00' })
+    agentJobs.watch('c1', { id: nightly, name: 'Nightly', lastRun: '2026-11-15 02:30:00' })
     const view = handles().at(-1)!
     const slots = (status: number, lastOutcome: number, lastRun: number) => [status, null, 3, null, lastOutcome, lastRun, ...Array.from({ length: 12 }, () => null), 20261115140000]
     view.deliver({ type: 'live.tick', seq: 1, sampledAt: 1, samples: [{ probe: 'agent.jobs.watched', costMs: 1, effectiveIntervalMs: 5000, metrics: slots(4, 0, 20261115135930) }] })
@@ -443,7 +443,7 @@ describe("The status bar's running job", () => {
   })
   it("a view that ends on its own (BUSY at the server's limit) leaves its jobs' outcome unknown and frees the slots", async () => {
     const { agentJobs, handles } = monitor()
-    agentJobs.watch('c1', { id: nightly, name: 'Nightly', created: '2026-01-02T03:04:05', lastRun: '' })
+    agentJobs.watch('c1', { id: nightly, name: 'Nightly', lastRun: '' })
     const view = handles().at(-1)!
     view.set({ status: 'ended', ended: { ended: 'failed', code: 'BUSY', message: 'Too many live views.', ticks: 0, elapsedMs: 1 } } as never)
     await settled()

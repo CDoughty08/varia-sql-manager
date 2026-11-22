@@ -117,6 +117,20 @@ describe('the restore planner', () => {
   const gapSet = (id: string, type: BackupSetRow['type'], first: number, last: number, minute: number, base = 10) =>
     row(id, id, type, 1, String(first), String(last), type === 'log' ? String(last) : String(first), type === 'full' ? '0' : String(base), at(minute).slice(11), [`C:\B\${id}.bak`])
   const plannable = (sets: readonly BackupSetRow[], point: string) => planRestore(sets, { stopAt: point }).ids.length > 0
+  it('checks the history limit without repeatedly walking an unreachable log chain', () => {
+    let reads = 0
+    const logs = Array.from({ length: restoreLimits.historySets - 1 }, (_, i) => {
+      const log = gapSet(String(i), 'log', i + 100, i + 101, i + 1)
+      return { ...log, get lastLsn() { reads++; return log.lastLsn } }
+    })
+    expect(planRestore(logs).problem).toBe(restoreMessages.noFullBackup)
+    const base = gapSet('base', 'full', 10, 20, 0)
+    expect(planRestore([base, ...logs]).ids).toEqual(['base'])
+    // At most one candidate continues each log. Reading LSNs across the whole history at every hop is quadratic.
+    expect(reads).toBeLessThan(logs.length * 100)
+    const connected = { ...base, lastLsn: '100' }
+    expect(planRestore([connected, ...logs]).ids).toEqual(['base', ...logs.map(log => log.id)])
+  })
   it('covers no log that a missing log cuts off from the full backup', () => {
     const sets = [gapSet('full', 'full', 10, 20, 60), gapSet('l2', 'log', 30, 40, 180), gapSet('l3', 'log', 40, 50, 240)]
     expect(logCoverage(sets)).toEqual([])

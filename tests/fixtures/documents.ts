@@ -73,6 +73,7 @@ export class TestModel {
     this.step(value)
     return null
   }
+  getOffsetAt({ lineNumber, column }: IPosition): number { return this.offset(lineNumber, column) }
   getPositionAt(offset: number): { lineNumber: number; column: number } {
     const before = this.getValue().slice(0, offset).split('\n')
     return { lineNumber: before.length, column: before.at(-1)!.length + 1 }

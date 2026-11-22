@@ -112,8 +112,8 @@ export const jobActionMessages = {
   disabled: (label: string) => `Disabled the job ${label}.`,
   stoppedUnknown: (verb: 'disable' | 'enable' | 'stopJob') => `The ${verb === 'stopJob' ? 'stop' : verb} was stopped, but SQL Server did not confirm it in time, so whether it completed is unknown. Refresh Object Explorer to check.`,
   unavailable: { disable: 'Select an enabled job in Object Explorer.', enable: 'Select a disabled job in Object Explorer.', stopJob: 'Select a job in Object Explorer.' },
-  /** The tree's row carries the job's creation time, which the backend checks before it changes the job; a row without it is refused. */
-  unidentified: 'Refresh Object Explorer: this job row does not say when the job was created.'
+  /** The tree's row carries the job's ID, which the backend checks before it changes the job; a row without it is refused. */
+  unidentified: 'Refresh Object Explorer: this row did not include the job ID.'
 } as const
 const verbTitle = { rename: 'Rename', disable: 'Disable', enable: 'Enable', stopJob: 'Stop Job' } as const satisfies { readonly [V in StateVerb]: string }
 const isLoginSubtype = (subtype: string | undefined): subtype is LoginSubtype => (loginSubtypes as readonly string[]).includes(subtype ?? '')
@@ -243,7 +243,7 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
     const badName = object.kind === 'login' && isLoginSubtype(node.subtype) ? loginNameRefusal(node.subtype, text) : undefined
     if (badName) return this.refuseName(loginMessages[badName])
     this.cancelRename()
-    if (object.kind === 'agentJob' && !node.created) { this.options.report.error(jobActionMessages.unidentified); return true }
+    if (object.kind === 'agentJob' && !node.jobId) { this.options.report.error(jobActionMessages.unidentified); return true }
     if (this.disposed || !this.isLive(node.connectionId)) return true
     const characters = [...displayText(text)]
     const newName = characters.length > maxNewName ? characters.slice(0, maxNewName - 1).join('') + '…' : characters.join('')
@@ -259,7 +259,7 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
         if (!plan || !this.running(requestId)) return undefined
         this.setJobStep(requestId, plan.closeConnections ? renameMessages.closing : plan.facts.sessions !== 0 ? renameMessages.waiting : undefined)
       }
-      return this.options.api.executeObjectAction({ action: 'rename', connectionId: node.connectionId, requestId, target: object, newName: text, ...plan ? { closeConnections: plan.closeConnections, identity: plan.identity } : {}, ...object.kind === 'agentJob' && node.created ? { agentIdentity: { created: node.created } } : {} })
+      return this.options.api.executeObjectAction({ action: 'rename', connectionId: node.connectionId, requestId, target: object, newName: text, ...plan ? { closeConnections: plan.closeConnections, identity: plan.identity } : {}, ...object.kind === 'agentJob' && node.jobId ? { agentIdentity: { jobId: node.jobId } } : {} })
     })
     if (!outcome) return true
     const { result, thrown, dropped, stopped } = outcome
@@ -332,7 +332,7 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
   }
 
   /**
-   * A SQL Server Agent job's Stop, Disable or Enable (AG-2): one status-bar job with Stop that sends the job's creation time from the
+   * A SQL Server Agent job's Stop, Disable or Enable (AG-2): one status-bar job with Stop that sends the job's ID from the
    * tree, so the backend refuses a job that has since been replaced under the name. Disable and Enable reconcile the Jobs folder, so
    * the row's badge follows; each says what it did. SQL Server Agent's own refusals (the job not running, Agent stopped) come back
    * from the backend in Varia's words.
@@ -340,11 +340,11 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
   async changeJobState(node: ExplorerMenuNode, verb: 'disable' | 'enable' | 'stopJob'): Promise<void> {
     const object = objectOf(node)
     if (!this.canRun(verb, node) || object?.kind !== 'agentJob' || object.name === undefined) throw new Error(jobActionMessages.unavailable[verb])
-    if (!node.created) { this.options.report.error(jobActionMessages.unidentified); return }
+    if (!node.jobId) { this.options.report.error(jobActionMessages.unidentified); return }
     const running = this.jobs.get(node.id)
     if (running) { this.options.report.error(renameMessages.running(running.label, running.verb)); return }
     const folder = verb === 'stopJob' ? undefined : this.options.explorer.listingFolderOf(node.id)
-    const agentIdentity = { created: node.created }
+    const agentIdentity = { jobId: node.jobId }
     const outcome = await this.runStateJob(node, verb, undefined, requestId => this.options.api.executeObjectAction(verb === 'stopJob'
       ? { action: 'stopJob', connectionId: node.connectionId, requestId, target: object, agentIdentity }
       : { action: verb, connectionId: node.connectionId, requestId, target: object, agentIdentity }))

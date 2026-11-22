@@ -180,6 +180,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // SQL Server Agent's capability read: one small batch in msdb on the Object Explorer pool, on its own slot per connection (as
   // Peek, never queued behind the tree's paging). Its own 10 s budget starts once it holds that slot and ends as a TIMEOUT value (unless msdb already refused the login: then the profile with no role). SQL Server only (no `providers`), so a BigQuery handle gets UNSUPPORTED_PROVIDER.
   'agent.profile': { kind: 'unary', lane: 'explorer', deadlineMs: 15_000 },
+  // The Log File Viewer's whole message: the action service's read gates and DescribeBudget (TIMEOUT as a value) inside this deadline.
+  'agent.historyMessage': { kind: 'unary', lane: 'metadata', deadlineMs: 45_000 },
   // Help › Clear Entra ID Token Cache: empties memory only, at once.
   'entra.cache.clear': control,
   // No deadline and no backstop: only CANCEL, a disconnect, a loss or the source ending ends it.

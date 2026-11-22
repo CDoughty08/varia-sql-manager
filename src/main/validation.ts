@@ -16,6 +16,7 @@ import { actionDescribeSchema, actionExecuteRequestSchema, actionExecuteResultSc
 import { ssisCatalogSetupSchema, ssisDescribeSchema, ssisExecuteSchema } from '../shared/ssis/schema.ts'
 import { activityDetailsRequestSchema, activityKillRequestSchema } from '../shared/activity/schema.ts'
 import { agentProfileResultSchema, agentProfileSchema } from '../shared/agent/profile.ts'
+import { agentHistoryMessageResultSchema, agentHistoryMessageSchema } from '../shared/agent/history.ts'
 import { languageCloseSchema, languageRequestSchema, languageCompletionsSchema, languageHoverSchema, languageStatusSchema, languageRefreshRequestSchema, languageRefreshResultSchema, languageDiagnosticResultSchema, languageDefinitionSchema } from '../shared/language-service'
 
 // Identifiers are used verbatim by the backend, so they are never trimmed here (a database may be named ' x').
@@ -81,7 +82,8 @@ export const requestSchemas = {
   'ssis.catalogSetup': ssisCatalogSetupSchema,
   'activity.details': activityDetailsRequestSchema,
   'activity.kill': activityKillRequestSchema,
-  'agent.profile': agentProfileSchema
+  'agent.profile': agentProfileSchema,
+  'agent.historyMessage': agentHistoryMessageSchema
 } satisfies Record<RpcMethod, z.ZodType>
 
 /** Databases, or BigQuery's datasets with their locations (BigQueryService.ListDatasetsAsync bounds them the same). */
@@ -118,7 +120,8 @@ export const resultSchemas: Partial<Record<RpcMethod, z.ZodType>> = {
   'connections.identity': z.object({ principal: principal.optional() }).strict(),
   // Steps carry SQL Server's text and names: bounded here as in C# (ActionSteps.Bound).
   'actions.execute': actionExecuteResultSchema,
-  'agent.profile': agentProfileResultSchema
+  'agent.profile': agentProfileResultSchema,
+  'agent.historyMessage': agentHistoryMessageResultSchema
 }
 
 export function validateResult(method: RpcMethod, value: unknown): unknown {

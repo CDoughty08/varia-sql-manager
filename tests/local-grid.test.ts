@@ -39,6 +39,23 @@ describe('local tables', () => {
     expect(heavy.truncatedRows).toBe(2000 - heavy.rows.length)
   })
 
+  it('reads only the selected source cells across overlapping and disjoint parts of a sorted table', async () => {
+    const columns = Array.from({ length: 64 }, (_, i) => ({ name: 'C' + i }))
+    const reads: string[] = []
+    const rows = Array.from({ length: 512 }, (_, row) => columns.map((_, col) => row + ',' + col))
+    const watched = rows.map(row => new Proxy(row, { get(target, key) {
+      const value = Reflect.get(target, key)
+      if (typeof key === 'string' && /^\d+$/.test(key)) reads.push(value)
+      return value
+    } }))
+    const order = rows.map((_, row) => rows.length - row - 1)
+    const copied = await localCopyText({ columns, rows: watched }, [
+      { rows: [[2, 2]], columns: [[35, 35]] }, { rows: [[2, 2]], columns: [[35, 35]] }, { rows: [[5, 5]], columns: [[0, 0]] }
+    ], { headers: false, crlf: false, order })
+    expect(reads).toEqual(['509,35', '506,0'])
+    expect(copied).toEqual({ text: '509,35\n509,35\n506,0', rows: 3 })
+  })
+
   it('copy the text a results grid copies: the page they build is the page a result would have', async () => {
     const built = localPage(table)
     const encoded = decodePage(encodePage({ resultId: 1, firstRow: 0, columns: textColumns(table.columns), rows: table.rows.map(row => [...row]) }), textColumns(table.columns))

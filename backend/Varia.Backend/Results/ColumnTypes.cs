@@ -38,6 +38,10 @@ internal static class ColumnTypes
         _ => Other
     };
 
+    /// <summary>A Boolean's numeric key: SQL Server stores 0/1, BigQuery stores false/true.</summary>
+    public static ReadOnlySpan<byte> BooleanNumber(ReadOnlySpan<byte> cell) =>
+        cell.SequenceEqual("false"u8) ? "0"u8 : cell.SequenceEqual("true"u8) ? "1"u8 : cell;
+
     /// <summary>Exact numerics: integers, decimals and bit, which sort and hash by numeric value.</summary>
     public static bool IsExact(ResultColumn column) => column.SortKind is Integer or Decimal or Boolean;
 

@@ -6,6 +6,8 @@ import { designerCommandEntries } from '../designer/catalog.ts'
 import { scriptCommandEntries, scriptUnavailableHint } from '../scripting/catalog.ts'
 import { operationsCommandEntries } from '../ssis/operations.ts'
 import { jobActivityCommandEntries } from '../agent/jobs.ts'
+import { agentJobCommandEntries } from '../actions/agent-job.ts'
+import { logViewerCommandEntries } from '../agent/history.ts'
 import type { IconId } from '../icons.ts'
 import { ssisCommandEntries } from '../ssis/catalog.ts'
 import { bothProviders, providerAllows, providersOf, type ProviderContext, type ProviderId } from '../providers.ts'
@@ -486,6 +488,9 @@ export const commandCatalog = {
   ...operationsCommandEntries(),
   // SQL Server Agent's Job Activity Monitor (AG-3): the monitor and its verbs, generated from src/shared/agent/jobs.ts.
   ...jobActivityCommandEntries(),
+  // The SQL Server Agent job document (AG-6a): Open Job, New Job and the document's verbs, from src/shared/actions/agent-job.ts.
+  ...agentJobCommandEntries(),
+  ...logViewerCommandEntries(),
   // Script as › <verb> To › <destination>: 30 commands generated from src/shared/scripting/catalog.ts, which keep the
   // table menu's explorer.scriptCreateTo* ids. Each acts on its menu's node, else the selection.
   ...scriptCommandEntries(),
@@ -831,18 +836,18 @@ export const commandCatalog = {
   // (src/renderer/src/editor/sql-transforms.ts). Ctrl+[ is free in the query editor: Monaco's indent and outdent lines
   // actions are not loaded, and Tab and Shift+Tab indent.
   'edit.toggleBrackets': {
-    title: 'Toggle Brackets', category: 'Edit', keywords: ['brackets', 'quote', 'quotename', 'identifiers', 'names', 'delimit', 'square'], providers: both,
-    precondition: 'activeDocumentIsQuery', unavailableHint: openFirst,
+    title: 'Toggle Brackets', category: 'Edit', keywords: ['brackets', 'quote', 'quotename', 'identifiers', 'names', 'delimit', 'square'],
+    precondition: 'activeDocumentIsQuery', unavailableHint: 'Open a SQL Server query first.',
     keybindings: [{ key: 'mod+[', when: 'editorTextFocus' }],
     menus: [{ menu: 'edit.advanced', group: '5_sql', order: 1, mnemonic: 'b' }, { menu: 'editor.context', group: '3_format', order: 1, mnemonic: 'b' }]
   },
   'edit.commasToFront': {
-    title: 'Move Commas to Front', category: 'Edit', keywords: ['commas', 'leading', 'select', 'list', 'format', 'style'], providers: both,
+    title: 'Move Commas to Front', category: 'Edit', keywords: ['commas', 'leading', 'select', 'list', 'format', 'style'],
     precondition: 'activeDocumentIsQuery', unavailableHint: openFirst,
     menus: [{ menu: 'edit.advanced', group: '5_sql', order: 2, mnemonic: 'f' }, { menu: 'editor.context', group: '3_format', order: 2, mnemonic: 'm' }]
   },
   'edit.commasToEnd': {
-    title: 'Move Commas to End', category: 'Edit', keywords: ['commas', 'trailing', 'select', 'list', 'format', 'style'], providers: both,
+    title: 'Move Commas to End', category: 'Edit', keywords: ['commas', 'trailing', 'select', 'list', 'format', 'style'],
     precondition: 'activeDocumentIsQuery', unavailableHint: openFirst,
     menus: [{ menu: 'edit.advanced', group: '5_sql', order: 3, mnemonic: 'e' }, { menu: 'editor.context', group: '3_format', order: 3, mnemonic: 'v' }]
   },
@@ -1022,7 +1027,7 @@ export const commandCatalog = {
   // The grid the menu was opened for, else the focused grid, else the grid that last had focus (the only one, often).
   'output.saveResultsAs': {
     title: 'Save Results As…', category: 'Query', icon: 'save-as', keywords: ['export', 'csv', 'json', 'tab', 'grid'], providers: both, methods: ['results.export'],
-    keybindings: [{ key: 'mod+s', when: 'outputGridFocus' }], menus: [{ menu: 'output.context', group: '3_save', order: 1, mnemonic: 'v', when: "outputView == 'grid' || outputView == 'live'" }]
+    keybindings: [{ key: 'mod+s', when: 'outputGridFocus' }], menus: [{ menu: 'output.context', group: '3_save', order: 1, mnemonic: 'v', when: "outputView == 'grid' || outputView == 'live'" }, { menu: 'output.tools', group: '5_compare', order: 9, mnemonic: 'v', when: 'resultsGridComparison' }]
   },
   // Frees the active query's results in the backend; Messages stay.
   'output.closeResults': {
@@ -1230,6 +1235,37 @@ export const commandCatalog = {
   },
   'output.compareWithPreviousExact': {
     title: 'Compare with Previous Result (Exact Text)', category: 'Query', icon: 'git-compare', keywords: ['diff', 'compare', 'difference', 'case', 'collation', 'exact', 'grid'], providers: both, methods: ['results.diff']
+  },
+  // The focused comparison's toolbar controls, in More results tools (where they go when a narrow pane folds them away)
+  // and the palette. Each that runs the comparison again changes it in place (CompareService.replace), and while one of its
+  // inputs is closed it is unavailable and says which (D10). Match Rows By opens the match menu beside the More button.
+  'output.compareMatch': {
+    title: 'Match Rows By…', category: 'Query', icon: 'key', keywords: ['compare', 'diff', 'match', 'key', 'keys', 'columns', 'composite', 'position', 'pair', 'rows'], providers: both, methods: ['results.diff'],
+    menus: [{ menu: 'output.tools', group: '5_compare', order: 1, mnemonic: 'm', when: 'resultsGridComparison' }]
+  },
+  'output.compareChangesOnly': {
+    title: 'Changes Only', category: 'Query', icon: 'filter', keywords: ['compare', 'diff', 'changes', 'only', 'rows', 'unchanged', 'hide', 'context', 'all'], toggled: 'comparisonChangesOnly', providers: both, methods: ['results.diff'],
+    menus: [{ menu: 'output.tools', group: '5_compare', order: 2, mnemonic: 'e', when: 'resultsGridComparison' }]
+  },
+  'output.compareOneRow': {
+    title: 'One Row per Entry', category: 'Query', icon: 'git-compare', keywords: ['compare', 'diff', 'one', 'row', 'entry', 'unified', 'two', 'rows'], toggled: 'comparisonOneRow', providers: both, methods: ['results.diff'],
+    menus: [{ menu: 'output.tools', group: '5_compare', order: 3, mnemonic: 'n', when: 'resultsGridComparison' }]
+  },
+  'output.compareExactText': {
+    title: 'Exact Text', category: 'Query', icon: 'case-sensitive', keywords: ['compare', 'diff', 'exact', 'case', 'collation', 'trailing', 'spaces', 'text'], toggled: 'comparisonExactText', providers: both, methods: ['results.diff'],
+    menus: [{ menu: 'output.tools', group: '5_compare', order: 4, mnemonic: 'x', when: 'resultsGridComparison' }]
+  },
+  'output.compareSwapSides': {
+    title: 'Swap Sides', category: 'Query', icon: 'arrow-swap', keywords: ['compare', 'diff', 'swap', 'sides', 'old', 'new', 'reverse'], providers: both, methods: ['results.diff'],
+    menus: [{ menu: 'output.tools', group: '5_compare', order: 5, mnemonic: 'a', when: 'resultsGridComparison' }]
+  },
+  'output.compareGoToOld': {
+    title: 'Go to Old Result', category: 'Query', icon: 'arrow-left', keywords: ['compare', 'diff', 'old', 'side', 'input', 'result', 'go'], providers: both,
+    menus: [{ menu: 'output.tools', group: '5_compare', order: 6, mnemonic: 'd', when: 'resultsGridComparison' }]
+  },
+  'output.compareGoToNew': {
+    title: 'Go to New Result', category: 'Query', icon: 'arrow-right', keywords: ['compare', 'diff', 'new', 'side', 'input', 'result', 'go'], providers: both,
+    menus: [{ menu: 'output.tools', group: '5_compare', order: 7, mnemonic: 'u', when: 'resultsGridComparison' }]
   },
   // The results toolbar's Profile and Row size toggles (queryResults.grid.columnProfile, queryResults.grid.rowSize).
   'output.toggleColumnProfile': {

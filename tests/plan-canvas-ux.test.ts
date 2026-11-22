@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { PlanNode } from '../src/shared/plans'
 import { operatorIcon, revealAncestors, rowFlow, visibleOperators } from '../src/renderer/src/plans/presentation'
-import { locateXml, targetAtXmlOffset, xmlLocations } from '../src/renderer/src/plans/navigation'
+import { documentXmlLocations, locateXml, targetAtXmlOffset, xmlLocations } from '../src/renderer/src/plans/navigation'
 import { layoutPlans } from '../src/renderer/src/plans/layout'
 import { card } from '../src/renderer/src/plans/geometry'
 import { svgIcons } from '../src/shared/icons'
@@ -60,20 +60,34 @@ describe('accurate source navigation', () => {
       { statement: 1 }, { statement: 1, operator: 0, nodeId: '0' }, { statement: 0, operator: 2, nodeId: '2' },
       { statement: 2 }, { statement: 2, operator: 0, nodeId: '0' }
     ])
-    const target = { statement: 2, operator: 0, nodeId: '0' }, location = locateXml(xml, target)!
+    const target = { statement: 2, operator: 0, nodeId: '0' }, location = locateXml(xmlLocations(xml), target)!
     expect(xml.slice(location.start, location.openEnd)).toBe('<p:RelOp NodeId="0"/>')
-    expect(targetAtXmlOffset(xml, location.start + 5)).toEqual(target)
-    expect(locateXml(xml, { ...target, nodeId: '1' })).toBeUndefined()
-    expect(targetAtXmlOffset(xml, 0)).toBeUndefined()
+    expect(targetAtXmlOffset(xmlLocations(xml), location.start + 5)).toEqual(target)
+    expect(locateXml(xmlLocations(xml), { ...target, nodeId: '1' })).toBeUndefined()
+    expect(targetAtXmlOffset(xmlLocations(xml), 0)).toBeUndefined()
+  })
+  it('reuses one lazy XML index across navigation and switches to edited operator locations immediately', () => {
+    let revision = 1, reads = 0
+    const xml = () => `<ShowPlanXML xmlns="${ns}"><StmtSimple><RelOp NodeId="${revision}"/></StmtSimple></ShowPlanXML>`
+    const locations = documentXmlLocations({ getVersionId: () => revision, getValue: () => { reads++; return xml() } })
+    expect(reads).toBe(0)
+    const target = { statement: 0, operator: 0, nodeId: '1' }
+    const first = locateXml(locations(), target)!
+    expect(targetAtXmlOffset(locations(), first.start)).toEqual(target)
+    expect(reads).toBe(1)
+    revision++
+    expect(locateXml(locations(), target)).toBeUndefined()
+    expect(targetAtXmlOffset(locations(), first.start)?.nodeId).toBe('2')
+    expect(reads).toBe(2)
   })
   it('bounds a navigation scan of incomplete edited XML and accepts quoted angle brackets', () => {
     expect(xmlLocations('<broken attr="' + '<broken'.repeat(100_000))).toEqual([])
     const quoted = `<ShowPlanXML xmlns="${ns}"><StmtSimple StatementText="x > y"><RelOp NodeId="1" /></StmtSimple></ShowPlanXML>`
-    expect(locateXml(quoted, { statement: 0, operator: 0, nodeId: '1' })).toBeDefined()
+    expect(locateXml(xmlLocations(quoted), { statement: 0, operator: 0, nodeId: '1' })).toBeDefined()
   })
   it('does not confuse SQL literals with namespace or NodeId attributes', () => {
     const text = `<ShowPlanXML xmlns="${ns.replace('http', '&#104;ttp')}"><StmtSimple StatementText="SELECT ' xmlns='foreign' NodeId='9' '"><RelOp Other=" NodeId='8'" NodeId="&#48;" /></StmtSimple><StmtSimple><RelOp NodeId="0" /></StmtSimple></ShowPlanXML>`
-    const location = locateXml(text, { statement: 0, operator: 0, nodeId: '0' })!
+    const location = locateXml(xmlLocations(text), { statement: 0, operator: 0, nodeId: '0' })!
     expect(text.slice(location.start, location.openEnd)).toContain('NodeId="&#48;"')
     expect(xmlLocations(text).map(location => location.target.statement)).toEqual([0, 0, 1, 1])
   })
