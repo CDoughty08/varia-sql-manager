@@ -10,7 +10,7 @@ import {
   agentJobChangeCount, agentJobCompare, agentJobFieldSection, agentJobProblems, agentJobSavable, agentJobSave, agentJobTabName, changedAgentJobFields, copiedAgentJobDraft,
   initialAgentJobDraft, rebaseAgentJobDraft, type AgentJobCompareRow, type AgentJobDocumentModel, type AgentJobDraft, type AgentJobField, type AgentJobProblem, type AgentJobSection
 } from '../../../shared/actions/agent-job.ts'
-import type { ActionError, ActionExecuteResult, ActionRequest } from '../../../shared/actions/schema.ts'
+import { jobErrorField, type ActionError, type ActionExecuteResult, type ActionRequest } from '../../../shared/actions/schema.ts'
 import { agentJobsSource, agentWatchedProbe, watchedGoneStatus, watchedSlot, type WatchedSample } from '../../../shared/agent/jobs.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import type { ObjectRef } from '../../../shared/explorer/refs.ts'
@@ -212,7 +212,8 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const state = this.get(id)
     if (!state?.draft || !this.canEdit(id)) return
     const draft = { ...state.draft, ...patch }
-    const fieldError = state.error?.field && changedAgentJobFields(state.draft, draft).includes(state.error.field)
+    const errorField = jobErrorField(state.error)
+    const fieldError = errorField && changedAgentJobFields(state.draft, draft).includes(errorField)
     this.patch(id, { draft, revision: state.revision + 1, edits: state.edits + 1, notice: undefined, ...fieldError ? { error: undefined } : {} })
     this.afterDraft(id)
   }
@@ -231,7 +232,8 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   problemSections(id: string): Set<AgentJobSection> {
     const state = this.get(id)
     const sections = new Set(this.problems(id).map(problem => agentJobFieldSection[problem.field]))
-    if (state?.error?.field) sections.add(agentJobFieldSection[state.error.field])
+    const errorField = jobErrorField(state?.error)
+    if (errorField) sections.add(agentJobFieldSection[errorField])
     return sections
   }
   setFrame(id: string, frame: FrameState): void {

@@ -230,11 +230,13 @@ refused, or whose request never left the machine, holds nothing; nor does one cu
   `{ transactionCount: 1, checked: true }`, unknown or a stopped job not yet DONE is `checked: false`, and a running query
   answers `SESSION_BUSY`.
 - **Closing.** Close, Change Connection, Disconnect and quitting ask Commit or Roll Back for an open or unchecked
-  transaction as they do for SQL Server, with BigQuery's own "not checked" note. Commit runs `COMMIT TRANSACTION` in the
+  transaction as they do for SQL Server, with BigQuery's own "not checked" note; a tab holding a job is asked about the
+  job instead ([Re-attaching to jobs](#re-attaching-to-jobs)). Commit runs `COMMIT TRANSACTION` in the
   session; every close then ends the session with `CALL BQ.ABORT_SESSION(@session_id)` outside it, which rolls back
-  what is still open. A close never aborts a session while one of its jobs runs: a commit or rollback answers
-  `JOB_RUNNING` and the tab stays (a plain close stops the query first, as SQL Server's does). A job Varia stopped is
-  waited for (20 s, 25 s for a commit) so the abort never races it.
+  what is still open. A close never aborts a session while one of its jobs runs or is left running: a commit or rollback
+  answers `JOB_RUNNING` and the tab stays, and a plain close leaves the job and its session (the workbench cancels the
+  job first when you choose Cancel the job). A job Varia stopped is waited for (20 s, 25 s for a commit) so the
+  abort never races it.
 - **Commit outcomes.** A commit BigQuery refuses keeps the tab on a session known to be in a transaction. On an unchecked
   session the refusal may only mean nothing was open, so the session is ended with the note `commitNotApplied`, except at
   quit, where the window stays open. A refusal BigQuery may lift (`backendError`, `rateLimitExceeded`) keeps the tab, and
@@ -255,6 +257,91 @@ refused, or whose request never left the machine, holds nothing; nor does one cu
   in a new one (the refused job ran nothing), and Messages says its temp tables, variables and any open transaction are
   gone. Closing an expired session succeeds at once, with `sessionExpired` when a transaction was tracked; a commit
   answers `SESSION_LOST`, saying nothing was committed.
+
+### Re-attaching to jobs
+
+Stopping or restarting the backend never cancels a BigQuery job; only Stop and a close that asks to cancel the job do. A
+Stop pressed while a restart waits for idle sessions to end reaches the backend being ended, if that backend holds the run. The backend and main:
+
+- **Job keys and records.** A BigQuery request may carry its tab's `jobKey` (a uuid). Main records each request's
+  top-level job from its `query.job` event in `WorkbenchSession/jobs.json`: job id, project, location, state, whether it
+  is left running (an auxiliary flag is reserved and always false), and the session's transaction state as it started. No SQL text and no secrets. The file
+  has a strict schema, holds 64 records per key and 1,024 in all (the oldest finished go first; running jobs' records go
+  only past 1,024 of them, newest first), is written atomically on every change and quarantined when unreadable, and
+  records expire 24 hours after main first recorded their job. A finished job's records go once its summary reached the tab, and so do a stopped or timed-out request's; a job still running when the
+  backend was lost, or left running, keeps its record. A job re-attached under another key moves to it. A re-attach its identity check refused (`AUTH_IDENTITY` before the job was reported) drops that
+  job's record, which would otherwise come back at every restore.
+- **`query.attach`** re-attaches a tab to a job by reference (`jobId`, `project`, `location?`), as a query: it first checks
+  that the connection's principal created the job (`jobs.get`, then a free `jobs.list` over its creation time must name
+  it; `AUTH_IDENTITY` otherwise, and the job is left alone). The listing needs `bigquery.jobs.list` (BigQuery User has
+  it, Job User does not): without it a re-attach answers `PERMISSION_DENIED` naming the permission and leaves the job
+  running, except to a job the tab's session inserted in this backend. A running job shows "Re-attached to BigQuery job … started N
+  ago" and Stop cancels it (a Stop during the identity check cancels it once the check passes; when the check or the
+  cancel fails, the run says the job may still be running, and so does the closing tab's note when the re-attach adopts
+  the job's session; Leave it running during the check leaves the job alone); a finished one reads its result table (free) by the usual residence rule; a script's children
+  are listed again. `adoptSession` takes over the session the job ran in, with the record's transaction state. Results
+  gone answer `REMOTE_EXPIRED`. `detached` only holds the session's queue until the job is DONE and reads no results. One
+  attachment per job: a second `query.attach` takes over and the first answers `superseded`.
+- **Leave it running.** `query.cancel` with `detach` makes a running request answer `detached`; the job holds the tab's
+  session, the backend polls it with backoff until DONE (`query.session.state` answers `job: 'running'` meanwhile), and the
+  next Execute waits for it. A network failure mid-job holds the job the same way, as does any other failure of the run
+  while its job still runs (a rate-limited poll, say): the tab keeps it, Messages says so, and closing the tab asks.
+- **Idle sessions end with their connection.** A session holding no running or left-running job is ended
+  (`ABORT_SESSION`) on Disconnect (`connections.disconnect` answers `failedAborts`) and before every backend stop main makes but
+  one of a backend that is not responding (`bigquery.endIdleSessions`, 10 s), which leaves a kept tab's finished-job session with an open or unknown transaction
+  (`keepJobKeys`). A session close or state read during that wait, and a Stop of a run it holds, still reach the old backend,
+  which ends once the wait does (a close still waiting for its job then fails as the backend's loss). A failed abort on Disconnect is retried once the next time a handle reaches BigQuery; one before a stop or restart is not (that backend ends).
+- **`bigquery.cancelJobs`** (main only) cancels a saved profile's jobs without a connection handle, waits for DONE, and ends
+  their sessions, answering `committedBeforeCancel`, `outcomeUnknown` or `abortFailed` per job.
+- The restart, reload and crash prompts say BigQuery jobs carry on and re-attach.
+
+In the workbench:
+
+- **Tabs keep their jobs.** A BigQuery tab gets a job key at its first run and keeps it through hot exit and
+  AutoRecover. A restored or recovered tab gets its running and finished jobs back from the records. Once it is
+  connected (reconnecting by itself, or connected to BigQuery with Connect or Change Connection, which then does not ask
+  about its jobs) it re-attaches to the newest, adopting its session. Older finished jobs are dropped, and older running ones stay
+  with the tab, which asks about them on close, without re-attaching (an attach would replace the newest's results).
+  While it is not connected, Messages says the job carries on. A finished job's reference only waits for its results:
+  the prompt does not ask about it. A job cut off by a lost backend or network stays with the tab and re-attaches on the
+  next connection, as does a running job whose re-attach failed for a passing reason (quota, a timeout, an expired
+  sign-in, a busy session, a permission) or that ran in another project (kept for a connection to that project); another
+  principal's job, one Stop cancelled or one whose results are gone is dropped. Each job is tried once per connection.
+- **The prompt.** Closing a tab, Change Connection, Disconnect, a location switch or quitting asks about a tab that
+  holds a job it runs, follows or left running, naming how long it ran and its estimate (with dollars unless Show cost as
+  is Bytes only): Cancel the job, Leave it running, or Don't close (the default). It never
+  asks about that tab's transaction: Cancel the job rolls it back, and Leave it running keeps it open in the session.
+  When the tab's jobs run outside its session (restored ones not re-attached) and the session itself may hold a
+  transaction, Leave it running is followed by the Commit or Roll Back box for that session.
+  "Remember my choice" sets `queryExecution.bigQuery.closeRunningJob` (Ask, Cancel the job, Leave it running), which
+  then answers without asking, except at a quit. Beside other executing queries (SQL Server, or a BigQuery run without a
+  job such as Preview Rows) the box keeps their buttons, and the BigQuery choice is its "Leave BigQuery jobs running"
+  checkbox. Cancel the job waits for the job to stop, then ends the session; a commit before the cancel, an unknown
+  outcome or a session that could not be ended is shown in the tab's Messages, or as a notification once the tab is
+  gone. A tab not connected has its jobs cancelled through its saved connection's credentials
+  (`session.cancelRestoredJobs`). Leave it running drops the tab's records and shows the job ids with Copy Job IDs.
+  Close All and Disconnect All keep tabs that hold jobs open without asking.
+- **Quitting Varia leaves jobs running.** Kept tabs that hold a job are not asked about, their records stay, and their
+  sessions stay open while a transaction may be open. Tabs that will not be restored are always asked, even with a
+  remembered choice, and the box lists their job ids (up to 8 per tab with a count of the rest, for the first 10 tabs, job tabs listed first).
+- **Close Results while a job runs.** It is available once a BigQuery job has started and asks the same three choices (Don't Close is
+  the default), or follows the remembered choice. Cancel the job stops it as Stop does. Leave it running sends
+  `query.cancel` with `detach`: the results close, the job keeps the tab's session, the next Execute waits for it (Stop
+  cancels it), and closing the tab asks about it again while it runs.
+- **Jobs without a tab.** After a start whose tabs were restored (or with nothing to restore), running jobs whose tab is
+  gone (a crash, or an AutoRecover copy discarded, then asked at the next start) are asked about once: Cancel Jobs or
+  Keep (the default). Jobs an AutoRecover copy may still reopen are left for it. Finished ones are dropped silently.
+- **Deleting a saved connection.** One whose jobs still run asks first: Cancel Jobs and Delete, or Keep Connection (the
+  default). Varia cannot cancel them once the connection is gone. Jobs that cannot be cancelled (broken credentials, a
+  job that finished long ago) ask again, with Delete Anyway leaving them to BigQuery's job history; so does a connection
+  whose job records cannot be read. Jobs in tabs still connected through it are left to those tabs (deleting it
+  disconnects nothing), so their sessions stay as they are.
+- **Idle sessions whose end failed.** They are shown as a notification after Disconnect, Reload or a backend restart.
+  Only those from Disconnect are retried, the next time the connection reaches BigQuery; a Reload or restart ends the
+  backend that held them.
+
+Jobs that cannot be cancelled without a connection (one from an unsaved connection, or one whose saved connection was
+deleted) are listed by id, to cancel in BigQuery's job history.
 
 ### Storage Read
 
@@ -337,8 +424,8 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
 - **Copy.** Copy of a windowed result reads the selected rows through its block cache (blocks not cached are fetched,
   outside the grid's read-ahead) and writes them through `ResultTextWriter` within the usual Copy limit: a selection
   whose text passes it is refused, before anything reaches the clipboard, with a pointer to Save Results As; one whose
-  separators alone pass it is refused before any read. A transposed Copy reads its rows the same way. A sorted or filtered
-  view of a windowed result is not copied yet (`VIEW_NOT_FOUND`). Rows already cached copy after the table expired; others
+  separators alone pass it is refused before any read. A transposed Copy reads its rows the same way. A sort or filter run
+  in BigQuery is a result of its own, which Copy reads as itself. Rows already cached copy after the table expired; others
   answer `REMOTE_EXPIRED`. A result that starts loading into memory under a Copy refuses it (try again once loaded), and
   one released under it says so.
 - **Save.** Save Results As streams every row the query keeps (Maximum rows honoured) from BigQuery to the file, never
@@ -346,19 +433,58 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
   fault resumed at its offset without repeating rows), else `tabledata.list` pages, each page reserved from the result
   budget while it is written. It has the usual progress and Cancel, so the rows touch disk only in the file the user chose
   (written to a temporary file and renamed). A transposed Save reads its rows as Copy does, holding them in result memory (at most 128 MB). An expired table answers
-  `REMOTE_EXPIRED` and leaves no file. Save reads the table itself, so it carries on through a load or Close Results. A sorted or filtered view's Save waits for windowed sort and filter.
+  `REMOTE_EXPIRED` and leaves no file. Save reads the table itself, so it carries on through a load or Close Results. A sort or filter run in BigQuery saves as its own result.
 - **Expiry.** A destination table lasts about 24 hours: once it has expired, a read answers with the cached rows from the
   start of its window, and one that starts on rows not cached answers `REMOTE_EXPIRED`. The grid keeps the rows it has, and
   its strip says BigQuery no longer keeps the result and offers Re-run…, which runs the tab's query again through Execute
   (the editor's text, or its selection, with the estimate and cost prompt); a grid shown while another tab is active
   does not offer it. A cache hit's destination table is an older one, which may expire sooner, so a
   windowed cache hit's caption adds "cached result: may expire early".
-- **What waits.** Filters, sorts, search, profiles, distinct values, pivots, row identities and comparisons of a windowed
-  result answer "This result is windowed in BigQuery" (`REMOTE_RESULT`) for now; a request whose result switches to
+- **What waits.** Search, profiles, pivots, row identities and comparisons of a windowed result (its sorts, filters and
+  value lists run in BigQuery, below) answer "This result is windowed in BigQuery" (`REMOTE_RESULT`) for now; a request whose result switches to
   windowed while it runs gets the same answer, and a grid's sort and filters are removed when its result switches (the
   screen reader hears so). The grid does not offer them where it can tell first: a transposed grid's strip does not
   suggest filtering, the Pivot builder says the result cannot be pivoted yet, the Compare popover leaves it out, and Search
   skips it.
+
+### Sort and filter in BigQuery
+
+A windowed result's grid sorts and filters in BigQuery: each sort, filter or value list is a query over the result's
+temporary table, so it is billed, and its answer is a result of its own that the grid shows in place of the source
+(`SqlService.BigQueryViews.cs`, `BigQueryViewSql.cs`, `src/renderer/src/results/remote-views.ts`; the protocol is
+`results.remoteQuery`'s `view` and `distinct` kinds in docs/ipc.md). The header's sort buttons and funnels say "in
+BigQuery" in their tooltips.
+
+- **Estimate first.** Before each one, `bigquery.dryRun` estimates it (free) and the cost prompts of Cost › Before Execute
+  apply as they do to Execute: above the threshold, or an incomplete estimate. A declined prompt runs nothing and the
+  grid keeps what it showed; a failed estimate says why in the toolbar and runs nothing. The query's job, rows and cost
+  go to Messages.
+- **Sort.** Up to 16 keys, ascending with NULLs first and descending with NULLs last, as the in-memory sort orders them.
+  BigQuery cannot order ARRAY, STRUCT, GEOGRAPHY, JSON, RANGE or INTERVAL columns: their sort button says so and refuses,
+  and they have no funnel.
+- **Value lists.** A funnel lists the column's values with BigQuery's `GROUP BY`, over the rows the grid's other filters keep,
+  most frequent first, up to 100,000 values (past that the list is cut, and a checklist over it drops only the values it
+  unticks). The list is a small result in memory, read whole, with the snapshot the checklist ticks; when the column has a filter of its own,
+  each value starts ticked when the grid's filters keep it.
+- **Filters.** A checklist, Equals, Not equals, Between, NULL and not NULL apply in BigQuery. The values a filter names
+  are the value list's rows, read from its table in BigQuery (so the estimate includes that small scan, and no value is
+  sent), and the filter keeps the list for as long as it applies; once the list's table expires, the filter says to open
+  the column's filter again. A checklist keeps the ticked values when the list is whole and they are no more than the
+  others, and otherwise drops the unticked ones, as in memory. In a FLOAT64 column NaN is one value, which a filter keeps
+  or drops like any other.
+  Filters that name the grid's rows rather than values (Filter by Selection, duplicates, Keep Selected Rows) say they need
+  the rows in memory.
+- **The view.** It is held under the source's budget, and windowed in its turn when it is large. It reads the whole result
+  table, so under Maximum rows a sort or filter can show rows the grid had not held (its answer keeps Maximum rows), and a
+  value list counts every row. A filter
+  with no sort shows the rows in BigQuery's order, which need not be the query's own, and rows that tie on the sort keys
+  come in any order; sort to fix one. A newer sort or filter
+  replaces it (the old one is released once the grid shows the new one); Stop cancels the BigQuery job; closing the
+  results or the tab releases both. BigQuery's resource errors on a large sort suggest filtering first.
+- **An expired table.** Once the source's temporary table has expired, a sort or filter answers `REMOTE_EXPIRED`, and a
+  value list that has expired answers the same when a filter names it. In emulator mode, where jobs run outside the
+  tab's session, the estimate notices the table is gone and the original query runs again with the sort or filter
+  around it, when the query has no parameters and nothing in it can change between runs; Messages says so.
 
 ### Cost
 

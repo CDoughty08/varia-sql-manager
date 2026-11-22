@@ -3419,3 +3419,28 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
   .agent-alert-method[aria-pressed="true"], .agent-operators-grid [data-selected] { forced-color-adjust: none; background: Highlight; color: HighlightText; }
   .agent-operators-grid td[data-changed] .agent-operators-cell { border-color: Highlight; }
 }
+/* The proxy and Credential documents (AG-8b): the credential picker with its New credential button, the inline new credential, the subsystem
+   checks in two columns, principal chips with the add field, and Used by's proxies with their steps beneath. */
+.agent-proxy-credential, .agent-proxy-add { display: flex; align-items: center; gap: var(--varia-space-2); min-width: 0; }
+.agent-proxy-credential > select, .agent-proxy-add > input { flex: 1; min-width: 0; }
+.agent-proxy-new-credential { display: flex; flex-direction: column; gap: var(--varia-space-2); margin: var(--varia-space-2) 0; padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); }
+.agent-proxy-sub-head { display: flex; align-items: center; gap: var(--varia-space-1); margin: 0; font-size: var(--varia-size-sm); color: var(--varia-descriptionForeground); }
+.agent-proxy-sub-head strong { color: var(--varia-foreground); }
+.agent-proxy-new-credential .link-button { margin-left: auto; padding: 0; border: 0; background: none; color: var(--varia-list-highlightForeground); font: inherit; text-decoration: underline; cursor: pointer; }
+.agent-proxy-description { resize: vertical; min-height: 48px; font: inherit; }
+.agent-proxy-checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--varia-space-1) var(--varia-space-3); margin: 0; padding: 0; border: 0; }
+.agent-proxy-checks label { display: inline-flex; align-items: center; gap: var(--varia-space-1); font-size: var(--varia-size-sm); }
+.agent-proxy-checks label[data-changed] { color: var(--varia-list-highlightForeground); }
+.agent-proxy-principals, .agent-proxy-subsystems, .credential-used-by { display: flex; flex-direction: column; gap: var(--varia-space-2); }
+.agent-proxy-principals .field-note, .agent-proxy-subsystems .field-note, .credential-used-by .field-note { margin: 0; }
+.agent-proxy-chips { display: flex; flex-wrap: wrap; gap: var(--varia-space-1); margin: 0; padding: 0; list-style: none; }
+.agent-proxy-chip { display: inline-flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-control); padding: 0 var(--varia-space-1) 0 var(--varia-space-2); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); }
+.agent-proxy-chip[data-changed] { border-color: var(--varia-list-highlightForeground); }
+.agent-proxy-chip > button { padding: 0 var(--varia-space-0); }
+.credential-uses, .credential-uses ul { display: flex; flex-direction: column; gap: var(--varia-space-1); margin: 0; padding: 0; list-style: none; font-size: var(--varia-size-sm); }
+.credential-uses li > span, .credential-uses ul li { display: inline-flex; align-items: center; gap: var(--varia-space-1); }
+.credential-uses ul { padding-left: var(--varia-space-5); }
+@media (forced-colors: active) {
+  .agent-proxy-new-credential .link-button { color: LinkText; }
+  .agent-proxy-chip[data-changed], .agent-proxy-checks label[data-changed] { outline: 1px solid Highlight; }
+}

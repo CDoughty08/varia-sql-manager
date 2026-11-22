@@ -39,6 +39,8 @@ import JobDocument from '../agent/JobDocument'
 import AlertDocument from '../agent/AlertDocument'
 import OperatorDocument from '../agent/OperatorDocument'
 import OperatorsDocument from '../agent/OperatorsDocument'
+import ProxyDocument from '../agent/ProxyDocument'
+import CredentialDocument from '../agent/CredentialDocument'
 import LogFileViewer from '../agent/LogFileViewer'
 import ObjectSearch from '../search/ObjectSearch'
 import PeekTab from '../explorer/PeekTab'
@@ -156,6 +158,8 @@ function DocumentPanel({ api }: IDockviewPanelProps) {
     {kind === 'agentAlert' && <AlertDocument documentId={id} />}
     {kind === 'agentOperator' && <OperatorDocument documentId={id} />}
     {kind === 'agentOperators' && <OperatorsDocument documentId={id} />}
+    {kind === 'agentProxy' && <ProxyDocument documentId={id} />}
+    {kind === 'credential' && <CredentialDocument documentId={id} />}
     {kind === 'agentLogViewer' && <LogFileViewer documentId={id} />}
     {kind === 'restoreDatabase' && <RestoreDatabase documentId={id} />}
   </div>

@@ -9,6 +9,7 @@ import { jobActivityCommandEntries } from '../agent/jobs.ts'
 import { agentJobCommandEntries } from '../actions/agent-job.ts'
 import { agentAlertCommandEntries } from '../actions/agent-alert.ts'
 import { agentOperatorCommandEntries } from '../actions/agent-operator.ts'
+import { agentProxyCommandEntries } from '../actions/agent-proxy.ts'
 import { logViewerCommandEntries } from '../agent/history.ts'
 import type { IconId } from '../icons.ts'
 import { ssisCommandEntries } from '../ssis/catalog.ts'
@@ -495,6 +496,8 @@ export const commandCatalog = {
   // The alert and operator documents and the Operators and notifications grid (AG-7): from src/shared/actions/agent-alert.ts and agent-operator.ts.
   ...agentAlertCommandEntries(),
   ...agentOperatorCommandEntries(),
+  // The SQL Server Agent proxy and credential documents (AG-8b), from src/shared/actions/agent-proxy.ts.
+  ...agentProxyCommandEntries(),
   ...logViewerCommandEntries(),
   // Script as › <verb> To › <destination>: 30 commands generated from src/shared/scripting/catalog.ts, which keep the
   // table menu's explorer.scriptCreateTo* ids. Each acts on its menu's node, else the selection.
@@ -1040,7 +1043,7 @@ export const commandCatalog = {
   // Frees the active query's results in the backend; Messages stay.
   'output.closeResults': {
     title: 'Close Results', category: 'Query', icon: 'close', keywords: ['free', 'memory', 'release', 'clear'], precondition: '!documentBusy', providers: both, methods: ['results.close'],
-    unavailableHint: 'There are no results to close, or the query is still running.',
+    unavailableHint: 'There are no results to close, or the query is still running (for BigQuery, until its job has started).',
     menus: [{ menu: 'output.context', group: 'z_close', order: 2, mnemonic: 'l', when: "outputView != 'live' && !outputGridBare" }, { menu: 'output.tools', group: 'z_close', order: 1, mnemonic: 'l' }]
   },
   // Closes the view the grid shows (ResultsService.removeEntry): a Table closes its group, its Pivot with it; a Pivot or a

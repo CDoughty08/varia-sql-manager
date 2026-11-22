@@ -98,6 +98,22 @@ describe('a query document\'s provider and language (docs/bigquery-plan.md, BQ-4
     documents.dispose()
   })
 
+  it("keeps a BigQuery tab's job key through hot exit and AutoRecover, and gives none to SQL Server tabs", () => {
+    const { documents } = fixture()
+    const key = '6f2b8f84-2b7c-4b55-9c55-9d6f8c2a1b10'
+    const bq = documents.create('bq.sql', 'SELECT 1', 'sales', 'bq'), sql = documents.create('sql.sql', 'SELECT 1', 'master', 'sql')
+    documents.update(bq.id, { jobKey: key })
+    documents.update(sql.id, { jobKey: key })
+    const { session } = keptSession(documents, id => id === 'bq' ? 'analytics-proj' : 'sql01')
+    expect(session.documents[0]).toMatchObject({ provider: 'bigquery', jobKey: key })
+    expect(session.documents[1]).not.toHaveProperty('jobKey')
+    expect(documents.reopen({ name: 'r.sql', kind: 'sql', eol: 'lf', dirty: true, text: 'SELECT 2', provider: 'bigquery', jobKey: key }).jobKey).toBe(key)
+    expect(documents.restore('k.sql', 'SELECT 4', 'sql', 'lf', undefined, 'bigquery', key).jobKey).toBe(key)
+    // A value opened from the results is no query: it has no jobs.
+    expect(documents.restore('v.xml', '<a/>', 'xml', 'lf', undefined, undefined, key).jobKey).toBeUndefined()
+    documents.dispose()
+  })
+
   it('clears every owner\'s markers before changing a model\'s language', () => {
     const calls: string[] = []
     const model = { uri: { toString: () => 'varia-sql://query/1' } } as never

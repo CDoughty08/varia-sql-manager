@@ -1,7 +1,7 @@
 import type { editor } from 'monaco-editor'
 import type { DocumentKind, LineEnding, RestoredDocument, VariaApi } from '../../../shared/contracts'
 import { cleanTabName } from '../../../shared/files/session'
-import { bigQueryCommitTimeout, type SessionCloseNote, type SessionEnd } from '../../../shared/sessions'
+import { bigQueryCommitTimeout, type SessionCloseNote, type SessionEnd, type SessionPlanEntry } from '../../../shared/sessions'
 import type { SettingsValues } from '../../../shared/settings/catalog'
 import type { ProviderId } from '../../../shared/providers'
 import { afterClose, documentInfo, isCustomKind, isQueryDocument, queryLanguages, type CustomDocumentKind, type QueryDocument } from '../documents'
@@ -36,7 +36,7 @@ export interface TextDocument { readonly name: string; readonly text: string; re
 export interface DocumentSnapshot { readonly documents: readonly QueryDocument[]; readonly activeId: string; readonly busy: boolean }
 export const closedQueryLimits = { count: 20, characters: 4_000_000 } as const
 interface ClosedQuery { readonly name: string; readonly baseName?: string; readonly text: string; readonly database: string; readonly lastServer?: string; readonly provider?: ProviderId; readonly eol: LineEnding; readonly viewState?: editor.ICodeEditorViewState }
-type DocumentPatch = Partial<Pick<QueryDocument, 'name' | 'connectionId' | 'targetId' | 'attachWanted' | 'database' | 'file' | 'sessionNotice' | 'lastServer' | 'includeActualPlan' | 'includeLivePlan' | 'includeClientStatistics'>>
+type DocumentPatch = Partial<Pick<QueryDocument, 'name' | 'connectionId' | 'targetId' | 'attachWanted' | 'database' | 'file' | 'sessionNotice' | 'lastServer' | 'includeActualPlan' | 'includeLivePlan' | 'includeClientStatistics' | 'jobKey'>>
 type DocumentApi = Pick<VariaApi, 'saveSqlFile' | 'closeQuerySession'>
 /**
  * What a document without text in the editor (a table designer) needs from its owner: Save (true when it saved), why it
@@ -321,9 +321,9 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
    * Opens a query AutoRecover kept: its text, unsaved, with no connection, its line ending, and its original file when
    * main registered it again. A large value has no bracket matching or colours, as `openText` opens it.
    */
-  restore(name: string, text: string, kind: DocumentKind, eol: LineEnding, file?: QueryDocument['file'], provider?: ProviderId): QueryDocument {
+  restore(name: string, text: string, kind: DocumentKind, eol: LineEnding, file?: QueryDocument['file'], provider?: ProviderId, jobKey?: string): QueryDocument {
     const value = kind === 'sql' ? undefined : kind
-    return this.add(name, text, value || provider === 'bigquery' ? '' : 'master', undefined, true, file, value, !!value && text.length > gridLimits.documentBracketChars, eol, provider ? { provider } : {})
+    return this.add(name, text, value || provider === 'bigquery' ? '' : 'master', undefined, true, file, value, !!value && text.length > gridLimits.documentBracketChars, eol, { ...provider ? { provider } : {}, ...!value && jobKey ? { jobKey } : {} })
   }
   /**
    * Opens a value from the results as a text document: no connection, not dirty, in its language. A long text opens
@@ -345,13 +345,13 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     const kind = o.kind === 'sql' ? undefined : o.kind
     const number = /^SQLQuery(\d+)\.sql$/i.exec(o.baseName ?? o.name)?.[1]
     if (number && Number(number) < 1_000_000) this.queryCounter = Math.max(this.queryCounter, Number(number))
-    const extra = { ...o.baseName ? { baseName: o.baseName } : {}, ...!kind && o.server ? { lastServer: o.server } : {}, ...o.provider ? { provider: o.provider } : {}, ...!kind && o.targetId ? { targetId: o.targetId, attachWanted: o.attachWanted ?? false, sessionNotice: 'restarted' as const } : {}, ...o.pinned ? { pinned: true } : {} }
+    const extra = { ...o.baseName ? { baseName: o.baseName } : {}, ...!kind && o.server ? { lastServer: o.server } : {}, ...o.provider ? { provider: o.provider } : {}, ...!kind && o.jobKey ? { jobKey: o.jobKey } : {}, ...!kind && o.targetId ? { targetId: o.targetId, attachWanted: o.attachWanted ?? false, sessionNotice: 'restarted' as const } : {}, ...o.pinned ? { pinned: true } : {} }
     return this.add(o.name, o.text, kind ? '' : o.database ?? (o.provider === 'bigquery' ? '' : 'master'), undefined, o.dirty, o.file, kind, !!kind && o.text.length > gridLimits.documentBracketChars, o.eol, extra)
   }
   /** Whether a large value is still being appended to the document: its text is not all there yet. */
   isFilling(id: string): boolean { return !!this.entries.get(id)?.fill }
   private add(name: string, text: string, database: string, connectionId: string | undefined, unsaved: boolean, file: QueryDocument['file'], kind?: Exclude<DocumentKind, 'sql'>, plain = false, eol?: LineEnding,
-    extra: Pick<QueryDocument, 'baseName' | 'lastServer' | 'pinned' | 'targetId' | 'attachWanted' | 'sessionNotice' | 'provider'> = {}, viewState?: editor.ICodeEditorViewState): QueryDocument {
+    extra: Pick<QueryDocument, 'baseName' | 'lastServer' | 'pinned' | 'targetId' | 'attachWanted' | 'sessionNotice' | 'provider' | 'jobKey'> = {}, viewState?: editor.ICodeEditorViewState): QueryDocument {
     if (this.disposed) throw new Error('The document service is disposed.')
     const id = crypto.randomUUID()
     // A query opened on a connection takes its engine; one without keeps the engine it was given. SQL Server is the
@@ -576,9 +576,13 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
    * A BigQuery close refused with JOB_RUNNING also leaves a Messages line in the query, saying the answer was not carried
    * out; a BigQuery commit cut off by main's deadline says its outcome is unknown.
    */
-  async endSession(id: string, transaction?: SessionEnd, options: { readonly abortOnRefusedCommit?: boolean } = {}): Promise<SessionCloseNote | undefined> {
-    const params = { ...transaction ? { transaction } : {}, ...options.abortOnRefusedCommit === undefined ? {} : { abortOnRefusedCommit: options.abortOnRefusedCommit } }
+  async endSession(id: string, entry?: SessionPlanEntry, options: { readonly abortOnRefusedCommit?: boolean } = {}): Promise<SessionCloseNote | undefined> {
+    // A BigQuery job is left running (keepJob: the session is not aborted) or cancelled and waited for (cancelJob).
+    const transaction: SessionEnd | undefined = entry === 'commit' || entry === 'leaveCommit' ? 'commit' : entry === 'rollback' || entry === 'leaveRollback' ? 'rollback' : undefined
+    const params = { ...transaction ? { transaction } : {}, ...entry === 'leave' ? { keepJob: true as const } : entry === 'cancelJob' ? { cancelJob: true as const } : {},
+      ...options.abortOnRefusedCommit === undefined ? {} : { abortOnRefusedCommit: options.abortOnRefusedCommit } }
     const result = Object.keys(params).length ? await this.api.closeQuerySession(id, params) : await this.api.closeQuerySession(id)
+    if (result.ok) this.sessionHooks?.ended?.(id, entry)
     if (result.ok || result.code === 'SESSION_LOST') this.events.emit({ type: 'session.ended', tabId: id })
     if (!result.ok) {
       if (result.code === 'JOB_RUNNING') this.sessionHooks?.message(id, result.error, 'error')
@@ -589,10 +593,14 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   }
   /** What ending a BigQuery session needs from the rest of the workbench: a Messages line for a query that stays, and
    *  whether a query is on BigQuery. Set once the workbench is built. */
-  sessionHooks?: { readonly message: (id: string, text: string, kind?: 'info' | 'error') => void; readonly bigQuery: (id: string) => boolean; readonly note?: (id: string, note: SessionCloseNote) => void }
+  sessionHooks?: {
+    readonly message: (id: string, text: string, kind?: 'info' | 'error') => void; readonly bigQuery: (id: string) => boolean; readonly note?: (id: string, note: SessionCloseNote) => void
+    /** The session ended as planned: a BigQuery job left running is reported with its id (QueryService.sessionClosed). */
+    readonly ended?: (id: string, entry: SessionPlanEntry | undefined) => void
+  }
   // The caller holds runTask and has confirmed dirty state, open transactions (`transaction`) and running queries.
   /** Resolves to the BigQuery close's note, for the caller to show once the query has closed. */
-  async close(id: string, transaction?: SessionEnd, options: { readonly abortOnRefusedCommit?: boolean } = {}): Promise<SessionCloseNote | undefined> {
+  async close(id: string, transaction?: SessionPlanEntry, options: { readonly abortOnRefusedCommit?: boolean } = {}): Promise<SessionCloseNote | undefined> {
     if (this.customs.has(id)) { this.closeCustom(id); return }
     const entry = this.entries.get(id)
     if (!entry) return

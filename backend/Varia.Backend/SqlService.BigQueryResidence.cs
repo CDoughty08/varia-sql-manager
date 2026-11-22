@@ -289,15 +289,16 @@ internal sealed partial class SqlService
     internal Action? LoadRegistering { get; set; }
 
     /// <summary>
-    /// results.remoteQuery (docs/ipc.md): a query over a windowed result's rows, run like query.execute (unary with EVENTs,
-    /// its own queryId for query.cancel). Only the load kind exists so far: Load into memory reads the destination table into
+    /// results.remoteQuery, kind load (docs/ipc.md): a query over a windowed result's rows, run like query.execute (unary with EVENTs,
+    /// its own queryId for query.cancel). Load into memory reads the destination table into
     /// the same result, which switches to memory under a new revision (resultSet.residence), then completes (resultSet.closed).
     /// A refusal part way switches it back to windowed, as an Automatic query's read would, and so does Stop: the result stays
     /// whole either way. The answer is a query summary.
     /// </summary>
-    private async Task<QueryResult> RemoteQueryAsync(RemoteQueryArgs args, RequestContext? context)
+    private async Task<QueryResult> RemoteLoadAsync(RemoteQueryArgs args, RequestContext? context)
     {
-        if (!Guid.TryParse(args.QueryId, out _) || args.ResultId == 0 || args.Kind != "load")
+        if (!Guid.TryParse(args.QueryId, out _) || args.ResultId == 0 || args.Kind != "load" || args.Sort is not null || args.Filters is not null || args.Column is not null || args.Kept is not null || args.Fallback is not null
+            || args.JobKey is not null && !BigQueryLimits.Uuid().IsMatch(args.JobKey))
             throw new RequestException("INVALID_PARAMS", "A remote query needs its query ID, a result and a kind (load).");
         var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
         if (set.Remote is not { Source: BigQueryWindow window } remote) throw new RequestException("INVALID_PARAMS", "Only a windowed BigQuery result can be loaded into memory.");

@@ -156,7 +156,7 @@ describe('dry-run diagnostics', () => {
     // The first answer is for older text: dropped, and the newer text is dry-run next.
     expect(f.service.getSnapshot().get(f.tab.id)).toEqual({ phase: 'checking' })
     expect(f.api.bigQueryDryRun).toHaveBeenCalledTimes(2)
-    expect(f.api.bigQueryDryRun.mock.calls[1][0].sql).toBe('SELECT 2 AS b')
+    expect(f.api.bigQueryDryRun.mock.calls[1][0]).toMatchObject({ sql: 'SELECT 2 AS b' })
     f.pending[1].resolve(estimate(7))
     await f.settle()
     expect(f.service.getSnapshot().get(f.tab.id)).toEqual({ phase: 'estimate', bytes: 7 })

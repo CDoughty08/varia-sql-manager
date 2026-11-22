@@ -81,11 +81,12 @@ describe('table designer catalogue', () => {
       expect(context.map(entry => entry.id)).toEqual(['tableDesigner.setPrimaryKey', 'tableDesigner.removePrimaryKey', 'tableDesigner.insertColumn', 'tableDesigner.deleteColumn', 'tableDesigner.generateChangeScript', 'tableDesigner.properties'])
       // Set and Remove Primary Key share Y, one shown at a time, as SSMS's one item toggles.
       expect(new Set(context.filter(entry => !entry.when).map(entry => entry.mnemonic)).size).toBe(context.filter(entry => !entry.when).length)
-      // Security › New holds Login… (D2a); each item shows only on its own folder.
+      // Security › New holds Login… (D2a), and the SQL Server Agent node's Proxy… (AG-8b); each item shows only on its own node.
       expect(buildMenuModel('explorer.new', platform).map(entry => entry.kind === 'command' ? [entry.id, entry.title, entry.mnemonic] : [])).toEqual([
         // The SQL Server Agent node's New › Job…, Alert… and Operator… (AG-7).
         ['agent.newJobOnAgent', 'Job…', 'j'], ['agent.newAlertOnAgent', 'Alert…', 'a'], ['agent.newOperatorOnAgent', 'Operator…', 'o'], [],
-        ['explorer.newLoginOnSecurity', 'Login…', 'l'], [], ['explorer.newTable', 'Table…', 't']])
+        ['explorer.newLoginOnSecurity', 'Login…', 'l'], [], ['explorer.newTable', 'Table…', 't'], [], ['agent.newProxyOnAgent', 'Proxy…', 'p']])
+      expect(commandDescriptor('agent.newProxyOnAgent').menus?.find(placement => placement.menu === 'explorer.new')?.when).toBe("explorerNode == 'agent' && explorerServerEngine == 'box'")
       expect((['explorer.newLoginOnSecurity', 'explorer.newTable'] as const).map(id => commandDescriptor(id).menus?.find(placement => placement.menu === 'explorer.new')?.when))
         .toEqual(["explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' || explorerServerEngine == 'managedInstance')", "explorerFolder == 'tables'"])
     }

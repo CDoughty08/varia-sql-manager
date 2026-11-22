@@ -23,7 +23,8 @@ internal static class Providers
     /// <summary>Methods only BigQuery serves. Those without a connection handle (the pre-connect bigquery.account and
     /// bigquery.projects, and results.remoteQuery, which names a windowed result) are BigQuery's by declaration, with
     /// nothing to resolve; bigquery.dryRun names its handle, and a SQL Server handle is refused.</summary>
-    internal static readonly string[] BigQueryMethods = ["bigquery.account", "bigquery.projects", "bigquery.dryRun", "bigquery.properties", "results.remoteQuery"];
+    internal static readonly string[] BigQueryMethods = ["bigquery.account", "bigquery.projects", "bigquery.dryRun", "bigquery.properties", "results.remoteQuery", "query.attach",
+        "bigquery.endIdleSessions", "bigquery.cancelJobs"];
     private static readonly string[] BigQueryOnly = [BigQuery];
 
     /// <summary>The methods whose provider is their parameters' <c>provider</c> (absent: SQL Server): they open a connection.</summary>

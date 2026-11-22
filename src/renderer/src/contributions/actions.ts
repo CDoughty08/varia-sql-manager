@@ -17,7 +17,7 @@ import { actionDialog, isModalDialog } from '../../../shared/actions/catalog'
  * and Restore Files and Filegroups… on the Databases folder or as a database's Tasks › Restore › Database… and Files and
  * Filegroups….
  */
-export function actionsContribution({ commands, explorer, actions, dialogs, properties, tableProperties, newDatabase, restore, documents, ssisCatalog, connections, jobDocuments, alertDocuments, operatorDocuments }: Pick<Workbench, 'commands' | 'explorer' | 'actions' | 'dialogs' | 'properties' | 'tableProperties' | 'newDatabase' | 'restore' | 'documents' | 'ssisCatalog' | 'connections' | 'jobDocuments' | 'alertDocuments' | 'operatorDocuments'>, options: { readonly agentEnabled?: boolean } = {}): Disposable {
+export function actionsContribution({ commands, explorer, actions, dialogs, properties, tableProperties, newDatabase, restore, documents, ssisCatalog, connections, jobDocuments, alertDocuments, operatorDocuments, proxyDocuments, credentialDocuments }: Pick<Workbench, 'commands' | 'explorer' | 'actions' | 'dialogs' | 'properties' | 'tableProperties' | 'newDatabase' | 'restore' | 'documents' | 'ssisCatalog' | 'connections' | 'jobDocuments' | 'alertDocuments' | 'operatorDocuments' | 'proxyDocuments' | 'credentialDocuments'>, options: { readonly agentEnabled?: boolean } = {}): Disposable {
   // The verbs act on the document whose header runs them (`tabId`), else the active one.
   const propertiesOf = (args?: CommandArgs): string | undefined => { const id = args?.tabId ?? documents.getSnapshot().activeId; return properties.get(id) ? id : undefined }
   const on = (when: (id: string) => boolean, run: (id: string) => unknown) => ({
@@ -117,7 +117,13 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
       run: args => { const node = nodeOf(args); if (node) dialogs.open('deleteObject', node, listedJob(node)) }
     }),
     commands.register('explorer.properties', {
-      when: args => actions.canRun('properties', nodeOf(args)) && !dialogs.current,
+      when: args => {
+        const node = nodeOf(args)
+        if (!actions.canRun('properties', node) || dialogs.current) return false
+        // The job, proxy and credential documents are behind SQL Server Agent's release gate.
+        const dialog = node?.ref.type === 'object' ? actionDialog(node.ref.object.kind, 'properties') : undefined
+        return !!options.agentEnabled || (dialog !== 'agentJob' && dialog !== 'agentProxy' && dialog !== 'credential')
+      },
       run: args => {
         const node = nodeOf(args)
         if (!node) return
@@ -135,6 +141,13 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
           if (!options.agentEnabled || node.ref.type !== 'object' || node.ref.object.name === undefined) return
           const service = dialog === 'agentAlert' ? alertDocuments : operatorDocuments
           try { service.open(node.connectionId, { kind: dialog, name: node.ref.object.name }) } catch (error) { commands.reportError(error instanceof Error ? error.message : 'The document could not be opened.'); return }
+        }
+        // A proxy's and a credential's Properties are their documents (AG-8b), behind the same gate.
+        else if (dialog === 'agentProxy' || dialog === 'credential') {
+          if (!options.agentEnabled || node.ref.type !== 'object' || node.ref.object.name === undefined) return
+          const name = node.ref.object.name
+          try { if (dialog === 'agentProxy') proxyDocuments.openProxy(node.connectionId, name); else credentialDocuments.openCredential(node.connectionId, name) }
+          catch (error) { commands.reportError(error instanceof Error ? error.message : 'The document could not be opened.'); return }
         }
         else properties.open(node)
         // The menu returned focus to the tree; the document's section list mounts on a later frame.

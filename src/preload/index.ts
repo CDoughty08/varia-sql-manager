@@ -136,10 +136,12 @@ const api: VariaApi = {
     }
   },
   execute: options => request('query.execute', options),
-  cancel: queryId => request('query.cancel', { queryId }),
+  cancel: (queryId, options) => request('query.cancel', { queryId, ...options?.detach ? { detach: true as const } : {} }),
+  attach: params => request('query.attach', params),
   remoteQuery: params => request('results.remoteQuery', params),
   closeQuerySession: (sessionId, options) => request('query.session.close', {
-    sessionId, ...options?.transaction ? { transaction: options.transaction } : {}, ...options?.abortOnRefusedCommit !== undefined ? { abortOnRefusedCommit: options.abortOnRefusedCommit } : {}
+    sessionId, ...options?.transaction ? { transaction: options.transaction } : {}, ...options?.abortOnRefusedCommit !== undefined ? { abortOnRefusedCommit: options.abortOnRefusedCommit } : {},
+    ...options?.keepJob ? { keepJob: true as const } : {}, ...options?.cancelJob ? { cancelJob: true as const } : {}
   }),
   querySessionState: sessionId => request('query.session.state', { sessionId }),
   setResultVisibility: params => request('results.visibility', params),
@@ -192,12 +194,22 @@ const api: VariaApi = {
   keepSession: session => ipcRenderer.invoke('varia:session-write', session),
   takeSession: () => ipcRenderer.invoke('varia:session-take'),
   finishSessionRestore: generation => ipcRenderer.invoke('varia:session-restored', generation),
+  dropJobRecords: jobKey => ipcRenderer.invoke('varia:job-records-drop', jobKey),
+  keepJobsAtQuit: jobKeys => ipcRenderer.invoke('varia:quit-keep-jobs', jobKeys),
+  cancelRestoredJobs: jobKeys => ipcRenderer.invoke('varia:jobs-cancel-restored', jobKeys),
+  reviewJobsWithoutTab: openJobKeys => ipcRenderer.invoke('varia:jobs-without-tab', openJobKeys),
+  onFailedAborts: listener => {
+    const handler = (_event: Electron.IpcRendererEvent, count: unknown) => { if (typeof count === 'number' && Number.isSafeInteger(count) && count > 0) listener(count) }
+    ipcRenderer.on('varia:failed-aborts', handler)
+    return () => { ipcRenderer.removeListener('varia:failed-aborts', handler) }
+  },
   writeClipboardText: text => { clipboardWrites++; return ipcRenderer.invoke('varia:clipboard-write', text) },
   clipboardWrites: () => clipboardWrites,
   raisePopout: name => ipcRenderer.invoke('varia:popout-raise', name),
   confirmClose: name => ipcRenderer.invoke('varia:confirm-close', name),
   confirmOpenConnections: () => ipcRenderer.invoke('varia:confirm-open-connections'),
   confirmSessions: request => ipcRenderer.invoke('varia:confirm-sessions', request),
+  confirmRunningJob: request => ipcRenderer.invoke('varia:confirm-running-job', request),
   confirmAction: request => ipcRenderer.invoke('varia:confirm-action', request),
   setLongRuns: state => ipcRenderer.invoke('varia:long-runs', state),
   closeWindow: () => ipcRenderer.invoke('varia:close-window'),

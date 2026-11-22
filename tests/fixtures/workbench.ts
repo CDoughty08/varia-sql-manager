@@ -96,6 +96,9 @@ import { JobDocumentService } from '../../src/renderer/src/agent/JobDocumentServ
 import { AlertOperatorDocumentService, alertSpec, operatorSpec, operatorsSpec } from '../../src/renderer/src/agent/AlertOperatorDocumentService'
 import { agentContribution } from '../../src/renderer/src/contributions/agent'
 import { agentObjectsContribution } from '../../src/renderer/src/contributions/agent-objects'
+import { ProxyDocumentService } from '../../src/renderer/src/agent/ProxyDocumentService'
+import { CredentialDocumentService } from '../../src/renderer/src/agent/CredentialDocumentService'
+import { agentProxyContribution } from '../../src/renderer/src/contributions/agent-proxy'
 import { ObjectSearchService } from '../../src/renderer/src/search/ObjectSearchService'
 import { fakeLive } from './live-handle'
 import { settingsContribution } from '../../src/renderer/src/contributions/settings'
@@ -404,7 +407,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const recentFiles = new RecentFilesService(api)
   // AutoRecover's timer runs only when a test advances it.
   const recoveryTimers = manualTimers()
-  const recovery = new RecoveryService({ api, documents, files, settings, warn: message => commands.reportWarning(message), timers: recoveryTimers.timers, server: id => connections.get(id)?.server })
+  const recovery = new RecoveryService({ api, documents, files, settings, warn: message => commands.reportWarning(message), timers: recoveryTimers.timers, server: id => connections.get(id)?.server,
+    restoredJobs: (tabId, jobs) => queries.restoreJobs(tabId, jobs) })
   const resultSelection = new ResultSelectionService(results)
   const targets = new TargetService(documents, queries, connections, files, connectionTargets)
   const targetIdOf = (connectionId: string) => targets.targetForConnection(connectionId)
@@ -454,6 +458,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const alertDocuments = new AlertOperatorDocumentService(alertSpec, agentObjectOptions)
   const operatorDocuments = new AlertOperatorDocumentService(operatorSpec, agentObjectOptions)
   const operatorsDocuments = new AlertOperatorDocumentService(operatorsSpec, agentObjectOptions)
+  const proxyDocuments = new ProxyDocumentService({ api, documents, files, connections, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) })
+  const credentialDocuments = new CredentialDocumentService({ api, documents, files, connections, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) })
   const logViewer = new LogViewerService({ api, documents, panes, live, connections, targetIdOf })
   const objectSearch = new ObjectSearchService({ api, documents, connections, settings, targetIdOf })
   const inputMode = new InputModeService(fakeInputMode())
@@ -592,6 +598,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     alertDocuments,
     operatorDocuments,
     operatorsDocuments,
+    proxyDocuments,
+    credentialDocuments,
     objectSearch
   }
   const contributions = [
@@ -625,6 +633,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     activityContribution(workbench),
     agentContribution(workbench, { agentEnabled: api.agentPreview }),
     agentObjectsContribution(workbench, { agentEnabled: api.agentPreview }),
+    agentProxyContribution(workbench, { agentEnabled: api.agentPreview }),
     searchContribution(workbench, api),
     settingsContribution(workbench),
     notificationsContribution(workbench)
@@ -649,6 +658,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     alertDocuments.dispose()
     operatorDocuments.dispose()
     operatorsDocuments.dispose()
+    proxyDocuments.dispose()
+    credentialDocuments.dispose()
     recovery.dispose()
     menus.dispose()
     quickInput.dispose()
@@ -747,6 +758,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     alertDocuments,
     operatorDocuments,
     operatorsDocuments,
+    proxyDocuments,
+    credentialDocuments,
     logViewer,
     agentJobs,
     objectSearch,

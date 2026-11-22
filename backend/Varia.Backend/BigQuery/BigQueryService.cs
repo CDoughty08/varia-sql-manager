@@ -270,13 +270,27 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
 
     static string? KindOf(string authentication) => authentication switch { "serviceAccountKey" => "serviceAccount", "externalAccount" => "externalAccount", _ => null };
 
-    /// <summary>Removes a handle and disposes its client. Results stay readable after a disconnect, as SQL Server's do.</summary>
+    /// <summary>Removes a handle and disposes its client, ending nothing in BigQuery (an unsent connect, the backend's stop).
+    /// Results stay readable after a disconnect, as SQL Server's do.</summary>
     public bool Disconnect(string connectionId)
     {
         if (!connections.TryRemove(connectionId, out var connection)) return false;
         ForgetSessions(connection);
         connection.Dispose();
         return true;
+    }
+
+    /// <summary>connections.disconnect for a BigQuery handle (docs/bigquery.md, Re-attaching to jobs): removes it, ends its idle
+    /// sessions (ABORT_SESSION, in parallel, through a lease on the client) and leaves those holding a running or detached
+    /// job. FailedAborts counts the ends that failed, each kept for one retry.</summary>
+    public async Task<DisconnectResult> DisconnectAsync(string connectionId, CancellationToken token)
+    {
+        if (!connections.TryRemove(connectionId, out var connection)) return new(false);
+        var lease = connection.Lease();
+        var idle = ForgetSessions(connection);
+        connection.Dispose();
+        if (lease is null) return new(true);
+        using (lease) return new(true, idle.Count == 0 ? null : await EndSessionsAsync(idle, token));
     }
 
     /// <summary>bigquery.account: the account line before connecting.</summary>
@@ -389,13 +403,14 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
         await DryRunAsync(client, project, location, ProbeSql, null, token);
 
     /// <summary>A dry run (free): the bytes a query would process. Emulator mode answers a faked estimate.</summary>
-    internal async Task<BigQueryEstimate> EstimateAsync(BigQueryConnection connection, string sql, CancellationToken token, string? dataset = null)
+    internal async Task<BigQueryEstimate> EstimateAsync(BigQueryConnection connection, string sql, CancellationToken token, string? dataset = null,
+        IList<QueryParameter>? parameters = null, string? location = null)
     {
         if (environment.Emulator) return new(0, Faked: true);
         if (BigQueryErrors.IsLegacySql(sql)) throw new RequestException("LEGACY_SQL", BigQueryErrors.LegacySql);
         Exception failure;
         // Connecting already proved bigquery.jobs.create, so a 403 here is about what the query reads: Google's text stays.
-        try { return Estimate(await DryRunAsync(connection.Client, connection.Options.Project, connection.Location, sql, dataset, token)); }
+        try { return Estimate(await DryRunAsync(connection.Client, connection.Options.Project, location ?? connection.Location, sql, dataset, token, parameters)); }
         catch (Exception error) { failure = BigQueryErrors.Map(error, connection.Options.Project, token: token); }
         if (failure is not RequestException { Code: "NOT_FOUND" } missing) throw failure;
         // A dataset in another location is told apart as Execute tells it; a table or dataset that does not exist is the
@@ -447,7 +462,7 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
         or "CREATE_TABLE_FUNCTION" or "CREATE_PROCEDURE" or "CREATE_ROW_ACCESS_POLICY" or "TRUNCATE_TABLE" or "CREATE_SNAPSHOT_TABLE"
         or "LOAD_DATA" or "CREATE_SEARCH_INDEX" or "CREATE_VECTOR_INDEX");
 
-    static async Task<Job> DryRunAsync(BigQueryClient client, string project, string? location, string sql, string? dataset, CancellationToken token)
+    static async Task<Job> DryRunAsync(BigQueryClient client, string project, string? location, string sql, string? dataset, CancellationToken token, IList<QueryParameter>? parameters = null)
     {
         var job = new Job
         {
@@ -458,6 +473,7 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
                 Query = new JobConfigurationQuery
                 {
                     Query = sql, UseLegacySql = false,
+                    QueryParameters = parameters, ParameterMode = parameters is null ? null : "NAMED",
                     DefaultDataset = dataset is null ? null : new DatasetReference { ProjectId = project, DatasetId = dataset }
                 }
             }

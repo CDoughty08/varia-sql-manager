@@ -34,7 +34,7 @@ const baseName = (name: string) => name.replace(/\.[^.]*$/, '') || 'Results'
  * view's grid (view `live`) is the same grid with a live source, and a local grid (LocalGrid: a Peek list, a Properties
  * table) the same grid over rows the renderer holds: the commands either takes act through its `LiveOutput`.
  */
-export function outputContribution({ commands, results, menuTargets, documents, settings, resultsSearch, panes }: Pick<Workbench, 'commands' | 'results' | 'menuTargets' | 'documents' | 'settings' | 'resultsSearch' | 'panes'>, api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
+export function outputContribution({ commands, results, queries, menuTargets, documents, settings, resultsSearch, panes }: Pick<Workbench, 'commands' | 'results' | 'queries' | 'menuTargets' | 'documents' | 'settings' | 'resultsSearch' | 'panes'>, api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
   // The setting changes once main has saved it, so a second toggle meanwhile toggles the layout still being saved: two quick
   // presses cancel out, as SettingsService.toggle's do.
   let layoutTarget: 'stacked' | 'tabs' | undefined
@@ -318,10 +318,15 @@ export function outputContribution({ commands, results, menuTargets, documents, 
       }
     }),
     commands.register('output.closeResults', {
-      when: args => { const tabId = closeTab(args); return !!tabId && !!results.context.getSnapshot()[tabId] && results.getSnapshot()[tabId]?.status !== 'running' },
+      // A BigQuery job that runs asks first (docs/bigquery.md, Close Results while a job runs); other runs keep it disabled.
+      when: args => { const tabId = closeTab(args); return !!tabId && !!results.context.getSnapshot()[tabId] && (results.getSnapshot()[tabId]?.status !== 'running' || queries.canCloseRunningJob(tabId)) },
       run: args => {
         const tabId = closeTab(args)
         if (!tabId) return
+        if (results.getSnapshot()[tabId]?.status === 'running') {
+          void queries.closeRunningJob(tabId).then(closed => { if (closed && results.getSnapshot()[tabId]?.status !== 'running') results.closeResults(tabId) })
+          return
+        }
         // The grid and its tools unmount. Leave focus on the surviving Results tab in their own window; closing another
         // query's contextual results leaves focus in the current query alone.
         const active = windows.activeElement(), panel = active?.closest('.output-panel')

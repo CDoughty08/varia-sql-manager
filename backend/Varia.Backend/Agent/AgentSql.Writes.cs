@@ -102,5 +102,7 @@ internal static partial class AgentSql
         foreach (var item in LintHistoryWrites()) yield return item;
         // Alerts and operators (AG-7, AgentSql.Objects.cs).
         foreach (var item in LintObjectWrites()) yield return item;
+        // The proxy document's Save, Rename and Delete (AG-8b, AgentSql.Proxy.cs).
+        foreach (var item in LintProxySaves()) yield return item;
     }
 }

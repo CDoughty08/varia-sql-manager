@@ -31,6 +31,10 @@ import { agentPropertiesProblems, agentPropertiesRequestSchema, type AgentProper
 import { agentJobFields, agentJobSaveProblems, agentJobSaveSchema, type AgentJobDocumentModel, type AgentJobField, type AgentJobSave } from './agent-job.ts'
 import { addRecommendedAlertsRequestSchema, agentAlertSaveProblems, agentAlertSaveSchema, type AddRecommendedAlertsRequest, type AgentAlertDocumentModel, type AgentAlertSave } from './agent-alert.ts'
 import { agentOperatorSaveProblems, agentOperatorSaveSchema, notifyOperatorRequestSchema, type AgentOperatorDocumentModel, type AgentOperatorSave, type AgentOperatorsModel, type NotifyOperatorRequest } from './agent-operator.ts'
+import {
+  agentProxyFields, agentProxySaveProblems, agentProxySaveSchema, agentProxySaveSendsSecret, credentialFields, credentialSaveProblems, credentialSaveSchema, credentialSecretsSchema, proxyIdSchema,
+  type AgentProxyDocumentModel, type AgentProxyField, type AgentProxySave, type CredentialDocumentModel, type CredentialField, type CredentialSave
+} from './agent-proxy.ts'
 import { extendedPropertyOps, lockEscalationTokens, tableLimits, tableStatements, type TableChanges, type TablePropertiesModel } from './tables.ts'
 
 /** What actions.describe describes: an object dialog (PR17's catalogue), an inline action's facts (a database's rename, a login's
@@ -59,6 +63,8 @@ export interface ActionDescribeRequest {
 export interface RenameRequest {
   readonly action: 'rename'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly newName: string; readonly closeConnections?: boolean
   readonly identity?: DatabaseIdentity; readonly agentIdentity?: AgentIdentity
+  /** A proxy's (AG-8b): the proxy_id it is known by, when the caller read it (Rename from the tree names the proxy by name alone). */
+  readonly proxyId?: number
 }
 /**
  * An Agent job's immutable sysjobs job_id from its row or describe. The write checks both ID and name.
@@ -82,6 +88,8 @@ export interface DeleteRequest {
   readonly agentIdentity?: AgentIdentity; readonly deleteUnusedSchedule?: boolean
   /** An alert's or operator's (AG-7): the id Delete Object read (sysalerts.id, sysoperators.id), and for an operator the operator its notifications move to. */
   readonly agentObjectId?: number; readonly reassignTo?: string
+  /** A proxy's (AG-8b): the proxy Delete Object read, so a proxy that took the name since is refused. */
+  readonly proxyId?: number
 }
 /** Database Properties' changes, only what differs from the describe: options and scoped configurations by key, as tokens. */
 export interface DatabaseChanges {
@@ -192,10 +200,23 @@ export interface AgentOperatorRequest {
   readonly action: 'agentOperator'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly agentObjectId?: number
   readonly agentOperator: AgentOperatorSave
 }
+/** The proxy document's Save (AG-8b, agent-proxy.ts): an existing proxy's changes under its id (`proxyId`), or New Proxy on the SQL Server
+ *  Agent node (target `{ kind: 'agent' }`). A credential it creates first sends its secret in `secrets` (actions.execute only). */
+export interface AgentProxyRequest {
+  readonly action: 'agentProxy'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly proxyId?: number
+  readonly agentProxy: AgentProxySave; readonly secrets?: { readonly secret: string }
+}
+/** The credential document's Save (AG-8b): CREATE CREDENTIAL on the server (target `{ kind: 'server' }`), or an existing credential's ALTER
+ *  under the STALE guard. actions.execute always carries the secret; Script never does and writes <secret>. */
+export interface CredentialRequest {
+  readonly action: 'credential'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef
+  readonly credential: CredentialSave; readonly secrets?: { readonly secret: string }
+}
 /** One action: actions.script returns its script, actions.execute runs it. */
 export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest | CreateDatabaseRequest | AttachRequest | CreateLoginRequest | TakeOfflineRequest | BringOnlineRequest | DetachRequest
   | LoginStateRequest | UnlockRequest | LoginPropertiesRequest | TablePropertiesRequest | StartJobRequest | StopJobRequest | AgentPropertiesRequest | AgentJobRequest
   | AgentAlertRequest | AgentOperatorRequest
+  | AgentProxyRequest | CredentialRequest
 /** actions.script and actions.execute also take a restore and a file restore, whose requests have shapes of their own (restore-schema.ts). */
 export type ActionScriptRequest = ActionRequest | RestoreRequest | RestoreFilesRequest | AddRecommendedAlertsRequest
 export type ActionExecuteRequest = ActionRequest | RestoreRequest | RestoreFilesRequest | AgentServiceRequest | DeleteJobHistoryRequest | AddRecommendedAlertsRequest | NotifyOperatorRequest
@@ -203,9 +224,13 @@ export type { RestoreFilesRequest, RestoreRequest } from './restore-schema.ts'
 export type { AgentPropertiesRequest } from './agent-properties.ts'
 export interface ActionCancelRequest { readonly requestIds: readonly string[] }
 
-/** `column`: the table designer's column (index in the design) a refusal is about, such as a name used twice. `field`: the job document's
- *  field a refused save is about (agent-job.ts), where the error lands. */
-export interface ActionError { readonly code: ActionErrorCode; readonly message: string; readonly retryable: boolean; readonly column?: number; readonly field?: AgentJobField }
+/** `column`: the table designer's column (index in the design) a refusal is about, such as a name used twice. `field`: the job, proxy or
+ *  credential document's field a refused save is about (agent-job.ts, agent-proxy.ts), where the error lands. */
+export type ActionErrorField = AgentJobField | AgentProxyField | CredentialField
+export const actionErrorFields = [...new Set<ActionErrorField>([...agentJobFields, ...agentProxyFields, ...credentialFields])] as readonly ActionErrorField[]
+export interface ActionError { readonly code: ActionErrorCode; readonly message: string; readonly retryable: boolean; readonly column?: number; readonly field?: ActionErrorField }
+/** The job document's field a refusal lands on, if it names one of the job's. */
+export const jobErrorField = (error: ActionError | undefined): AgentJobField | undefined => (agentJobFields as readonly string[]).includes(error?.field ?? '') ? error!.field as AgentJobField : undefined
 /** Something that stops or affects the DROP; `blocking` ones make it fail until they are dealt with. */
 export interface ActionWarning { readonly text: string; readonly blocking: boolean }
 /** The Delete Object dialog's row: SSMS's Object Name, Object Type and Owner, and what it found in the way. */
@@ -240,6 +265,8 @@ export interface DeleteTarget {
   readonly agentObjectId?: number
   /** An operator (AG-7): the other operators its notifications can move to, and how many alerts and jobs notify it. */
   readonly reassignChoices?: readonly string[]; readonly notifiedBy?: { readonly alerts: number; readonly jobs: number }
+  /** A SQL Server Agent proxy (AG-8b): the proxy it read, which the Delete request names. */
+  readonly proxyId?: number
 }
 /** A session in a database that Delete Object lists; program and host are clipped to `actionLimits.blockerChars`. */
 export interface DatabaseBlocker {
@@ -421,6 +448,10 @@ export interface ActionDescribeResult {
   readonly agentOperatorDocument?: AgentOperatorDocumentModel
   /** agentOperators (AG-7, the Agent node): the Operators and notifications grid. */
   readonly agentOperators?: AgentOperatorsModel
+  /** agentProxy (AG-8b): the proxy document's model (agent-proxy.ts); without a proxy for New Proxy. */
+  readonly agentProxyDocument?: AgentProxyDocumentModel
+  /** credential (AG-8b): the credential document's model; without a credential for New Credential. */
+  readonly credentialDocument?: CredentialDocumentModel
 }
 /** One step of a job, as sp_help_jobstep lists it. */
 export interface AgentJobStepFact { readonly id: number; readonly name: string }
@@ -608,6 +639,14 @@ export const actionDescribeSchema = z.object({
       case 'agentOperators':
         if (!(request.target.kind === 'agent' && Object.keys(request.target).length === 1)) issue(context, 'target', 'Operators and notifications describe the SQL Server Agent node.')
         break
+      // The proxy document describes a proxy, or the SQL Server Agent node for New Proxy (AG-8b).
+      case 'agentProxy':
+        if (!(request.target.kind === 'agent' && Object.keys(request.target).length === 1)) for (const message of dialogTargetProblems(request.target, 'agentProxy', 'agentProxy')) issue(context, 'target', message)
+        break
+      // The credential document describes a credential, or the server for New Credential (AG-8b).
+      case 'credential':
+        if (!(request.target.kind === 'server' && Object.keys(request.target).length === 1)) for (const message of dialogTargetProblems(request.target, 'credential', 'credential')) issue(context, 'target', message)
+        break
       default: {
         // A server action's document describes the server it makes something on.
         const action = dialogSpecs[request.dialog].action
@@ -637,12 +676,14 @@ const identitySchema = z.object({ id: z.number().int().min(1).max(2_147_483_647)
 // One schema per action, one per line, so later actions append cleanly.
 // sysjobs.job_id is a SQL uniqueidentifier.
 export const agentIdentitySchema = z.object({ jobId: z.guid() }).strict() satisfies z.ZodType<AgentIdentity>
-const renameSchema = z.object({ action: z.literal('rename'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, newName: ident, closeConnections: z.boolean().optional(), identity: identitySchema.optional(), agentIdentity: agentIdentitySchema.optional() }).strict()
+const renameSchema = z.object({ action: z.literal('rename'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, newName: ident, closeConnections: z.boolean().optional(), identity: identitySchema.optional(), agentIdentity: agentIdentitySchema.optional(),
+  proxyId: proxyIdSchema.optional() }).strict()
 const loginIdentitySchema = z.object({ sid: z.string().max(loginLimits.sidHex).regex(/^[0-9A-F]{2,172}$/), created: identitySchema.shape.created }).strict()
 const deleteSchema = z.object({
   action: z.literal('delete'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), deleteHistory: z.boolean(),
   dropMappedUsers: z.boolean().optional(), loginIdentity: loginIdentitySchema.optional(), identity: identitySchema.optional(), agentIdentity: agentIdentitySchema.optional(),
-  deleteUnusedSchedule: z.boolean().optional(), agentObjectId: z.number().int().min(1).max(2_147_483_647).optional(), reassignTo: ident.optional()
+  deleteUnusedSchedule: z.boolean().optional(), agentObjectId: z.number().int().min(1).max(2_147_483_647).optional(), reassignTo: ident.optional(),
+  proxyId: proxyIdSchema.optional()
 }).strict()
 const loginStateSchema = z.object({ action: z.enum(['disable', 'enable']), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, loginIdentity: loginIdentitySchema.optional(), agentIdentity: agentIdentitySchema.optional() }).strict()
 // A step name: sysjobsteps.step_name is sysname.
@@ -653,6 +694,12 @@ const agentJobRequestSchema = z.object({ action: z.literal('agentJob'), connecti
 const agentObjectIdSchema = z.number().int().min(1).max(2_147_483_647)
 const agentAlertRequestSchema = z.object({ action: z.literal('agentAlert'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, agentObjectId: agentObjectIdSchema.optional(), agentAlert: agentAlertSaveSchema }).strict()
 const agentOperatorRequestSchema = z.object({ action: z.literal('agentOperator'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, agentObjectId: agentObjectIdSchema.optional(), agentOperator: agentOperatorSaveSchema }).strict()
+const agentProxyRequestSchema = z.object({
+  action: z.literal('agentProxy'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, proxyId: proxyIdSchema.optional(), agentProxy: agentProxySaveSchema, secrets: credentialSecretsSchema.optional()
+}).strict()
+const credentialRequestSchema = z.object({
+  action: z.literal('credential'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, credential: credentialSaveSchema, secrets: credentialSecretsSchema.optional()
+}).strict()
 export const agentServiceRequestSchema = z.object({
   action: z.enum(['startAgent', 'stopAgent', 'restartAgent']), connectionId: z.uuid(), requestId: z.uuid(), target: z.object({ kind: z.literal('agent') }).strict()
 }).strict() satisfies z.ZodType<AgentServiceRequest>
@@ -843,7 +890,9 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
   agentPropertiesRequestSchema,
   agentJobRequestSchema,
   agentAlertRequestSchema,
-  agentOperatorRequestSchema
+  agentOperatorRequestSchema,
+  agentProxyRequestSchema,
+  credentialRequestSchema
 ]).superRefine((request, context) => {
   // A job's identity goes only with a job's verb.
   if ('agentIdentity' in request && request.agentIdentity !== undefined && request.target.kind !== 'agentJob') issue(context, 'agentIdentity', 'Only a SQL Server Agent job has an Agent identity.')
@@ -854,7 +903,12 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
   // New Alert and New Operator (AG-7) are their documents' Save on the SQL Server Agent node, with no id.
   const newAgentObject = (request.action === 'agentAlert' || request.action === 'agentOperator') && request.target.kind === 'agent' && Object.keys(request.target).length === 1
   if ((request.action === 'agentAlert' || request.action === 'agentOperator') && newAgentObject && request.agentObjectId !== undefined) issue(context, 'agentObjectId', 'A new alert or operator has no id.')
-  if (request.action !== 'createTable' && request.action !== 'createDatabase' && !isCreateAction(request.action) && !newJob && !newAgentObject) for (const message of dialogTargetProblems(request.target, request.action)) issue(context, 'target', message)
+  // New Proxy is the proxy document's Save on the SQL Server Agent node, New Credential the credential document's on the server (AG-8b).
+  const newProxy = request.action === 'agentProxy' && request.target.kind === 'agent' && Object.keys(request.target).length === 1
+  const newCredential = request.action === 'credential' && request.target.kind === 'server' && Object.keys(request.target).length === 1
+  // A proxy's id goes only with a proxy's actions.
+  if ('proxyId' in request && request.proxyId !== undefined && request.target.kind !== 'agentProxy') issue(context, 'proxyId', 'Only a SQL Server Agent proxy has a proxy id.')
+  if (request.action !== 'createTable' && request.action !== 'createDatabase' && !isCreateAction(request.action) && !newJob && !newAgentObject && !newProxy && !newCredential) for (const message of dialogTargetProblems(request.target, request.action)) issue(context, 'target', message)
   switch (request.action) {
     case 'createDatabase':
       for (const problem of newDatabaseProblems(request.target.name, request.design)) issue(context, problem.field === 'name' ? 'target' : 'design', problem.message)
@@ -903,6 +957,12 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
     case 'agentOperator':
       for (const problem of agentOperatorSaveProblems(request.agentOperator, newAgentObject)) issue(context, 'agentOperator', problem)
       break
+    case 'agentProxy':
+      for (const problem of agentProxySaveProblems(request.agentProxy, newProxy)) issue(context, 'agentProxy', problem)
+      break
+    case 'credential':
+      for (const problem of credentialSaveProblems(request.credential, newCredential)) issue(context, 'credential', problem)
+      break
   }
 }) satisfies z.ZodType<ActionRequest>
 /** actions.execute: the same requests, a restore (critic A17: it runs from D1f, with the menu items that open it), or a file restore (D1g), with
@@ -918,6 +978,11 @@ export const actionExecuteRequestSchema = z.union([actionRequestSchema, restoreR
   if (request.action === 'delete' && request.target.kind === 'login' && request.loginIdentity === undefined) issue(context, 'loginIdentity', "A login's Delete needs the identity of the login it read.")
   // Every job verb names the job it read (AG-2's identity guard); Script runs nothing and may leave it out.
   if (request.target.kind === 'agentJob' && (request as { agentIdentity?: AgentIdentity }).agentIdentity === undefined) issue(context, 'agentIdentity', "A job's verb needs the identity of the job it read.")
+  // A proxy's Save and Delete name the proxy they read (AG-8b); Rename from the tree knows only the name, which the batch resolves.
+  if (request.target.kind === 'agentProxy' && (request.action === 'agentProxy' || request.action === 'delete') && (request as { proxyId?: number }).proxyId === undefined) issue(context, 'proxyId', "A proxy's save and delete need the id of the proxy they read.")
+  // The secret goes exactly with a credential it creates or alters, and only on actions.execute.
+  if (request.action === 'agentProxy') { if ((request.secrets !== undefined) !== agentProxySaveSendsSecret(request.agentProxy)) issue(context, 'secrets', 'The secret goes exactly with a new credential.'); return }
+  if (request.action === 'credential') { if (request.secrets === undefined) issue(context, 'secrets', 'A credential is saved with its secret.'); return }
   if (request.action === 'loginProperties') {
     // A new password exactly when the changes set one, never blank (blank keeps the current one); the old one exactly with Specify old password.
     const password = request.loginChanges.password
@@ -942,7 +1007,7 @@ export const actionStepSchema = z.object({
   detail: z.string().max(loginLimits.stepDetail).optional(), compensates: z.boolean().optional(), progress: z.number().int().min(0).max(100).optional()
 }).strict() satisfies z.ZodType<ActionStep>
 const actionErrorSchema = z.object({ code: z.enum(actionErrorCodes), message: z.string().max(actionLimits.messageChars), retryable: z.boolean(), column: z.number().int().min(0).max(designerLimits.columns - 1).optional(),
-  field: z.enum(agentJobFields).optional() }).strict() satisfies z.ZodType<ActionError>
+  field: z.enum(actionErrorFields as [ActionErrorField, ...ActionErrorField[]]).optional() }).strict() satisfies z.ZodType<ActionError>
 const fileRefSchema = z.object({
   fileId: z.number().int().min(1).max(32_767), name: z.string().max(128), type: z.enum(['rows', 'log', 'filestream']), path: z.string().max(actionLimits.filePath)
 }).strict() satisfies z.ZodType<DatabaseFileRef>

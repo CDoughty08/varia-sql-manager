@@ -81,6 +81,8 @@ export const contextKeys = {
   activeDocumentIsAgentAlert: { type: 'boolean', scope: 'state', description: 'The active document is a SQL Server Agent alert (Alert Properties, or New Alert).' },
   activeDocumentIsAgentOperator: { type: 'boolean', scope: 'state', description: 'The active document is a SQL Server Agent operator (Operator Properties, or New Operator).' },
   activeDocumentIsAgentOperators: { type: 'boolean', scope: 'state', description: "The active document is SQL Server Agent's Operators and notifications grid." },
+  activeDocumentIsAgentProxy: { type: 'boolean', scope: 'state', description: 'The active document is a SQL Server Agent proxy (Proxy Account Properties, or New Proxy).' },
+  activeDocumentIsCredential: { type: 'boolean', scope: 'state', description: 'The active document is a credential (Credential Properties, or New Credential).' },
   activeDocumentIsLogViewer: { type: 'boolean', scope: 'state', description: "The active document is SQL Server Agent's Log File Viewer (job history)." },
   ssisOperationStoppable: { type: 'boolean', scope: 'state', description: 'The operation selected in the active Integration Services Operations document is an execution or validation that is running or pending, and no stop of it is on its way.' },
   ssisOperationsPaused: { type: 'boolean', scope: 'state', description: 'The active Integration Services Operations document is paused (Pause): it reads nothing until resumed.' },

@@ -219,6 +219,8 @@ internal static class AgentLiveChecks
             await AgentJobDocumentLiveChecks.CreateAsync(check, service, info, json, job, sql);
             // Alerts and operators (AG-7): scratch operators and a scratch alert, saved, renamed, reassigned and deleted; no e-mail is sent.
             await AgentObjectLiveChecks.RunAsync(check, service, info, json, scratch, sql);
+            // Proxies and credentials (AG-8b) on their own scratch proxy and credential.
+            await AgentProxyLiveChecks.RunAsync(check, service, info, json, scratch, sql);
         }
         finally { await sql("EXEC msdb.dbo.sp_delete_job @job_id = '" + id.ToString("D") + "', @delete_history = 1, @delete_unused_schedule = 1;", "msdb"); }
     }
