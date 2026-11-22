@@ -111,6 +111,7 @@ export const agentObjectText = {
   lost: (noun: string) => `The connection closed while the ${noun} ${was(noun)} being saved, so whether ${noun.endsWith('s') ? 'they were' : 'it was'} saved is unknown. Reload to check.`,
   partly: (done: number, total: number) => `${done} of ${total} alerts were saved before one was refused; Save sends the rest.`,
   saveFirst: 'Save or reload the changes first.',
+  actionUnread: (noun: string) => `Done, but the ${noun} could not be read again:`,
   lostAction: 'The connection closed while it ran, so whether it took is unknown. Reload to check.',
   reloadFirst: (noun: string) => `Reload the ${noun} before saving again: whether the last save took is not known yet.`,
   recommendedDone: (count: number) => `${count} recommended alert${count === 1 ? ' was' : 's were'} created.`,
@@ -276,7 +277,7 @@ export class AlertOperatorDocumentService<M, D> extends SnapshotStore<AgentObjec
     this.patch(id, { phase: 'loading', error: undefined, notice: undefined })
     void this.describe(id)
   }
-  private async describe(id: string, notice?: string): Promise<void> {
+  private async describe(id: string, notice?: string, after: 'save' | 'action' = 'save'): Promise<void> {
     const state = this.get(id), connectionId = this.connectionOf(id)
     if (!state || !connectionId) return
     const requestId = this.begin(id, 'describe')
@@ -288,7 +289,7 @@ export class AlertOperatorDocumentService<M, D> extends SnapshotStore<AgentObjec
     if (!current) return
     if (failure || !model) {
       const shown = failure ?? fallback('NOT_FOUND', agentObjectText.readFailed(this.spec.noun))
-      this.patch(id, { phase: current.model ? 'ready' : 'loadFailed', error: notice ? { ...shown, message: `${agentObjectText.savedUnread(this.spec.noun)} ${shown.message}` } : shown })
+      this.patch(id, { phase: current.model ? 'ready' : 'loadFailed', error: notice ? { ...shown, message: `${after === 'save' ? agentObjectText.savedUnread(this.spec.noun) : agentObjectText.actionUnread(this.spec.noun)} ${shown.message}` } : shown })
       return
     }
     const base = this.spec.initial(model)
@@ -341,6 +342,8 @@ export class AlertOperatorDocumentService<M, D> extends SnapshotStore<AgentObjec
       if (this.connectionOf(id) !== connectionId || !this.live(id)) { this.lostMidSave(id, done); return false }
       const value: ActionExecuteResult | undefined = result.ok ? result.value : undefined
       const failure = value?.error ?? (!result.ok ? fallback(result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST' ? 'CONNECTION_LOST' : 'SQL_ERROR', result.error) : undefined)
+      // The backend's CONNECTION_LOST (and IPC's lost replies) mean the outcome is unknown, as when the connection is seen closing here.
+      if (failure?.code === 'CONNECTION_LOST') { this.lostMidSave(id, done); return false }
       if (failure) {
         const message = done > 0 ? `${failure.message} ${agentObjectText.partly(done, built.length)}` : failure.message
         const latest = this.get(id)!
@@ -388,7 +391,7 @@ export class AlertOperatorDocumentService<M, D> extends SnapshotStore<AgentObjec
     this.patch(id, { busy: undefined, ...failure ? { error: failure } : {} })
     if (failure) return false
     // A draft with changes (only Send test e-mail runs beside them) keeps them; the read waits for Reload.
-    if (this.get(id)!.changes === 0) { this.patch(id, { phase: 'loading' }); await this.describe(id, done) }
+    if (this.get(id)!.changes === 0) { this.patch(id, { phase: 'loading' }); await this.describe(id, done, 'action') }
     else this.patch(id, { notice: done })
     return true
   }

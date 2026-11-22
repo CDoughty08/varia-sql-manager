@@ -370,7 +370,6 @@ export const agentLimits = {
   counterInstances: 500,
   /** Alerts one Add recommended alerts creates (each an sp_add_alert and an sp_add_notification). */
   recommendedAlerts: 16,
-  /** Characters of Send test e-mail's subject and body. */
   /** Alerts the Operators and notifications grid and an operator's Notifications list (sp_help_alert); more set `truncated`. */
   alertRows: 1_000,
   /** Operators one listing reads (sp_help_operator); more set `truncated`. */

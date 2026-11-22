@@ -3385,7 +3385,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .agent-alert-wmi { margin: 0; padding: var(--varia-space-2); white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--varia-font-mono); font-size: var(--varia-size-sm); border: 1px solid var(--varia-widget-border); border-radius: var(--varia-radius-sm); }
 .agent-alert-counter-values { display: flex; flex-direction: column; gap: var(--varia-space-1); margin-top: var(--varia-space-2); }
 .agent-alert-counter-values .properties-table { width: auto; }
-.agent-alert-chips { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); }
+.agent-alert-chips, .agent-alert-chip-list { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); }
 .agent-alert-chip { display: inline-flex; align-items: center; gap: var(--varia-space-1); padding: var(--varia-space-0) var(--varia-space-0) var(--varia-space-0) var(--varia-space-2); border: 1px solid var(--varia-widget-border); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); }
 .agent-alert-chip[data-new] { border-style: dashed; }
 .agent-alert-method { min-width: 20px; padding: 0 var(--varia-space-1); font-size: var(--varia-size-xs); line-height: 16px; background: transparent; color: var(--varia-descriptionForeground); border: 1px solid transparent; }

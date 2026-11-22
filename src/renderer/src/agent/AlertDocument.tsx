@@ -144,8 +144,8 @@ function ThenSection({ state, model, draft, editable, problems, service }: Props
       </select>
     </PropertyField>
     <PropertyField id={ids.notify} label="Notify operators" labelFor={false} {...notify}>
-      <div className="agent-alert-chips" role="list" aria-label="Operators notified">
-        {draft.notify.map(entry => {
+      <div className="agent-alert-chips">
+        <span className="agent-alert-chip-list" role="list" aria-label="Operators notified">{draft.notify.map(entry => {
           const pending = draft.newOperators.some(item => item.name === entry.operator)
           return <span key={entry.operator} className="agent-alert-chip" role="listitem" data-new={pending || undefined}>
             <Icon name="agent-operator" /><span>{entry.operator}{pending && ' (new)'}</span>
@@ -153,7 +153,7 @@ function ThenSection({ state, model, draft, editable, problems, service }: Props
               disabled={!editable} onClick={() => setMethods(entry.operator, entry.methods ^ choice.bit)}>{choice.short}</button>)}
             <button type="button" aria-label={`Remove ${entry.operator}`} disabled={!editable} onClick={() => setMethods(entry.operator, 0)}><Icon name="close" /></button>
           </span>
-        })}
+        })}</span>
         {offered.length > 0 && <select className="property-input" aria-label="Add an operator" value="" disabled={!editable || draft.notify.length >= agentLimits.notificationChanges}
           onChange={event => { if (event.target.value) update({ notify: [...draft.notify, { operator: event.target.value, methods: notifyEmail }] }) }}>
           <option value="">Add an operator…</option>

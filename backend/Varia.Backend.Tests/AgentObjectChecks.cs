@@ -226,7 +226,7 @@ internal static class AgentObjectChecks
         check(service.ObjectSaveError(Exception((50010, 1, AgentSql.ObjectChangedMessage)), batch, null) is { Code: "NOT_FOUND" }, "the identity guard's 50010 is NOT_FOUND");
         check(service.ObjectSaveError(Exception((15281, 1, "Agent XPs")), batch, null) is { Code: "AGENT_STOPPED" }, "15281 is AGENT_STOPPED");
         var taken = service.ObjectSaveError(Exception((14261, 1, "The specified @name ('Taken') already exists."), (50012, 1, AgentSql.RefusedMessage)), batch, null);
-        check(taken is { Code: "NAME_IN_USE" } && taken.Message.StartsWith("Saving creating operator 'Taken' was refused", StringComparison.Ordinal), "a refused inline operator says which one: " + taken.Message);
+        check(taken is { Code: "NAME_IN_USE" } && taken.Message.StartsWith("Creating operator 'Taken' was refused", StringComparison.Ordinal), "a refused inline operator says which one: " + taken.Message);
         var missing = service.ObjectSaveError(Exception((14262, 3, "The specified @operator_name ('Taken') does not exist."), (50012, 3, AgentSql.RefusedMessage)), batch, null);
         check(missing is { Code: "SQL_ERROR", Retryable: false } && missing.Message.Contains("notification of 'Taken' by 'New'", StringComparison.Ordinal), "a refused notification names its operator and alert, and msdb's missing name is not NOT_FOUND");
         var denied = service.ObjectSaveError(Exception((229, 1, "The EXECUTE permission was denied on the object 'sp_add_alert'.")), batch, null);

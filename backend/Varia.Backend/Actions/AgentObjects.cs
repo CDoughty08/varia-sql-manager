@@ -21,6 +21,7 @@ internal sealed partial class ActionService
     internal const string NotifyOperatorAction = "notifyOperator";
     internal const string AlertsUnsupportedMessage = "SQL Server Agent alerts are not available on Linux or Azure SQL Managed Instance.";
     internal const string AlertReadOnlyMessage = "Read-only. SQL Server Agent's roles may view alerts, not change them; only sysadmin can.";
+    internal const string NotificationsUnreadMessage = "Read-only. The notifications could not be read; Reload to try again.";
     internal const string NotificationsTruncatedMessage = "Read-only. The server has more notifications than Varia reads at once; change them in each alert or operator.";
     internal const string OperatorReadOnlyMessage = "Read-only. SQL Server Agent's roles may view operators, not change them; only sysadmin can.";
     internal const string NoAgentProfileMessage = "SQL Server Agent has no Database Mail profile, so it cannot send e-mail. Set one in SQL Server Agent Properties › Alert System.";
@@ -402,7 +403,7 @@ internal sealed partial class ActionService
             counters = [.. counterRows.Rows.Select(row => new AgentCounterDto(TextOf(counterRows.Value(row, "object_name")), TextOf(counterRows.Value(row, "counter_name"))))];
             countersTruncated = counterRows.Truncated;
         }
-        return new(null, 0, AgentAlertDocument: new(alert, login, sysadmin, platform!, notifications, databases, mail, sysadmin ? null : AlertReadOnlyMessage, operators?.Select(OperatorChoice).ToList(),
+        return new(null, 0, AgentAlertDocument: new(alert, login, sysadmin, platform!, notifications, databases, mail, !sysadmin ? AlertReadOnlyMessage : id is not null && !Read(AgentSql.AlertNotifications, out _) ? NotificationsUnreadMessage : null, operators?.Select(OperatorChoice).ToList(),
             jobs, counters, countersTruncated ? true : null, messageText));
     }
 
@@ -442,7 +443,7 @@ internal sealed partial class ActionService
         var notifications = alerts is not null && id is not null && Read(AgentSql.OperatorNotifications, out var notified) ? NotificationList(notified).Where(row => row.OperatorId == id).ToList() : [];
         List<AgentJobNotifyRowDto>? jobs = record is not null && Read(AgentSql.JobNotifications, out var jobRows)
             ? [.. JobNotifyList(jobRows).Where(job => job.Email == record.Name || job.Page == record.Name || job.NetSend == record.Name)] : null;
-        return new(null, 0, AgentOperatorDocument: new(record, login, sysadmin, platform!, notifications, mail, sysadmin ? null : OperatorReadOnlyMessage, alerts, alertsTruncated ? true : null, jobs));
+        return new(null, 0, AgentOperatorDocument: new(record, login, sysadmin, platform!, notifications, mail, !sysadmin ? OperatorReadOnlyMessage : alerts is not null && id is not null && !Read(AgentSql.OperatorNotifications, out _) ? NotificationsUnreadMessage : null, alerts, alertsTruncated ? true : null, jobs));
     }
 
     /// <summary>The Operators and notifications grid's describe: every operator, alert, notification and notifying job the login may read.</summary>
@@ -468,7 +469,7 @@ internal sealed partial class ActionService
         var notificationsTruncated = alerts is not null && results.TryGetValue(AgentSql.Notifications.Id, out var all) && all.Truncated;
         List<AgentJobNotifyRowDto>? jobs = Read(AgentSql.JobNotifications, out var jobRows) ? JobNotifyList(jobRows) : null;
         // A grid missing some notifications would re-add one msdb already has, so past the cap it only shows them.
-        var readOnly = !sysadmin ? OperatorReadOnlyMessage : notificationsTruncated ? NotificationsTruncatedMessage : null;
+        var readOnly = !sysadmin ? OperatorReadOnlyMessage : alerts is not null && !Read(AgentSql.Notifications, out _) ? NotificationsUnreadMessage : notificationsTruncated ? NotificationsTruncatedMessage : null;
         return new(null, 0, AgentOperators: new(login, sysadmin, platform!, operators, notifications, mail, readOnly, operatorRows.Truncated ? true : null,
             alerts, alertsTruncated ? true : null, jobs));
     }
@@ -590,16 +591,16 @@ internal sealed partial class ActionService
         string Named(string argument) => call.Arguments.FirstOrDefault(item => item.Argument == argument).Value as string ?? "";
         var part = call.Procedure switch
         {
-            "sp_add_operator" => "creating operator '" + Named("@name") + "'",
-            "sp_add_alert" => "creating alert '" + Named("@name") + "'",
-            "sp_update_alert" => "the alert's settings",
-            "sp_update_operator" => "the operator's settings",
-            "sp_delete_alert" => "deleting the alert",
-            "sp_delete_operator" => "deleting the operator",
-            "sp_notify_operator" => "the test e-mail",
-            _ => "the notification of '" + Named("@operator_name") + "' by '" + Named("@alert_name") + "'"
+            "sp_add_operator" => "Creating operator '" + Named("@name") + "'",
+            "sp_add_alert" => "Creating alert '" + Named("@name") + "'",
+            "sp_update_alert" => "Saving the alert's settings",
+            "sp_update_operator" => "Saving the operator's settings",
+            "sp_delete_alert" => "Deleting the alert",
+            "sp_delete_operator" => "Deleting the operator",
+            "sp_notify_operator" => "The test e-mail",
+            _ => "Saving the notification of '" + Named("@operator_name") + "' by '" + Named("@alert_name") + "'"
         };
-        return ActionErrors.Create(catalog, mapped.Code, "Saving " + part + " was refused: " + (text.Length > 0 ? text : AgentSql.RefusedMessage)) with { Retryable = mapped.Retryable };
+        return ActionErrors.Create(catalog, mapped.Code, part + " was refused: " + (text.Length > 0 ? text : AgentSql.RefusedMessage)) with { Retryable = mapped.Retryable };
     }
 
     private Task<ActionExecuteResult> ExecuteAgentObjectRequestAsync(ActionArgs args, ObjectRefDto target, CancellationToken token)
