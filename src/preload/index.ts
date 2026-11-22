@@ -193,12 +193,22 @@ const api: VariaApi = {
   keepSession: session => ipcRenderer.invoke('varia:session-write', session),
   takeSession: () => ipcRenderer.invoke('varia:session-take'),
   finishSessionRestore: generation => ipcRenderer.invoke('varia:session-restored', generation),
+  dropJobRecords: jobKey => ipcRenderer.invoke('varia:job-records-drop', jobKey),
+  keepJobsAtQuit: jobKeys => ipcRenderer.invoke('varia:quit-keep-jobs', jobKeys),
+  cancelRestoredJobs: jobKeys => ipcRenderer.invoke('varia:jobs-cancel-restored', jobKeys),
+  reviewJobsWithoutTab: openJobKeys => ipcRenderer.invoke('varia:jobs-without-tab', openJobKeys),
+  onFailedAborts: listener => {
+    const handler = (_event: Electron.IpcRendererEvent, count: unknown) => { if (typeof count === 'number' && Number.isSafeInteger(count) && count > 0) listener(count) }
+    ipcRenderer.on('varia:failed-aborts', handler)
+    return () => { ipcRenderer.removeListener('varia:failed-aborts', handler) }
+  },
   writeClipboardText: text => { clipboardWrites++; return ipcRenderer.invoke('varia:clipboard-write', text) },
   clipboardWrites: () => clipboardWrites,
   raisePopout: name => ipcRenderer.invoke('varia:popout-raise', name),
   confirmClose: name => ipcRenderer.invoke('varia:confirm-close', name),
   confirmOpenConnections: () => ipcRenderer.invoke('varia:confirm-open-connections'),
   confirmSessions: request => ipcRenderer.invoke('varia:confirm-sessions', request),
+  confirmRunningJob: request => ipcRenderer.invoke('varia:confirm-running-job', request),
   confirmAction: request => ipcRenderer.invoke('varia:confirm-action', request),
   setLongRuns: state => ipcRenderer.invoke('varia:long-runs', state),
   closeWindow: () => ipcRenderer.invoke('varia:close-window'),

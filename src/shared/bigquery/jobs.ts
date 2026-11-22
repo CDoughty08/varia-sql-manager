@@ -49,6 +49,13 @@ export const jobRecordSchema = z.object({
   transaction: jobTransactionSchema
 }).strict()
 export type JobRecord = z.infer<typeof jobRecordSchema>
+/** A tab's job as a restore hands it back (hot exit or AutoRecover): its record without the key or profile, newest last.
+ *  Auxiliary jobs are left out, since a sort or filter outlives no tab state. */
+export type RestoredJob = Pick<JobRecord, 'jobId' | 'project' | 'location' | 'state' | 'transaction' | 'detached' | 'createdAt'>
+export function restoredJobs(records: readonly JobRecord[]): RestoredJob[] {
+  return records.filter(record => !record.auxiliary).sort((a, b) => a.createdAt - b.createdAt)
+    .map(({ jobId, project, location, state, transaction, detached, createdAt }) => ({ jobId, project, ...location ? { location } : {}, state, transaction, ...detached ? { detached } : {}, createdAt }))
+}
 export const jobRecordsFileSchema = z.object({ version: z.literal(1), records: z.array(jobRecordSchema).max(jobLimits.records) }).strict()
 export type JobRecordsFile = z.infer<typeof jobRecordsFileSchema>
 
@@ -63,3 +70,9 @@ export const cancelJobsResultSchema = z.object({
   jobs: z.array(z.object({ jobId: jobIdSchema, cancelled: z.boolean(), note: noteSchema.optional(), error: z.string().max(16_385).optional() }).strict()).max(jobLimits.cancel)
 }).strict()
 export type CancelJobsResult = z.infer<typeof cancelJobsResultSchema>
+/** Cancelling jobs from their records (session.cancelRestoredJobs, the records dialog, deleting a profile): each job's
+ *  outcome, and the jobs whose profile cannot cancel without a connection (an ad-hoc connection, a key file picked for one
+ *  run), listed by id for BigQuery's job history. */
+export interface RecordedJobsCancel { readonly jobs: CancelJobsResult['jobs']; readonly uncancellable: readonly string[] }
+/** The records dialog's outcome: what was asked about, and what Cancel Jobs did. */
+export interface JobsWithoutTabReview { readonly answer: 'cancel' | 'keep'; readonly jobIds: readonly string[]; readonly cancel?: RecordedJobsCancel }

@@ -129,10 +129,12 @@ export class JobRecordStore {
 
   /** From the start of quit: drops for these keys wait (`releaseHolds`). */
   holdDrops(keys: Iterable<string>): void { this.held = new Set([...keys].slice(0, jobLimits.keys)) }
-  /** A quit stopped or abandoned: the drops it held are applied. */
-  releaseHolds(): void {
+  /** A quit stopped or abandoned: the drops it held are applied. A close that went through (macOS keeps the app running)
+   *  discards them instead (`apply` false): its kept tabs reopen in the next window and need their records. */
+  releaseHolds(apply = true): void {
     this.held = new Set()
-    for (const drop of this.deferred.splice(0)) drop()
+    const deferred = this.deferred.splice(0)
+    if (apply) for (const drop of deferred) drop()
   }
 
   /** Waits for the writes so far (quit, tests). */
@@ -172,4 +174,29 @@ export class JobRecordStore {
       await writeJsonAtomic(this.path, snapshot, jobRecordsMaxBytes, 'The BigQuery job records are too large.', { mode: 0o600 })
     }).catch(error => { this.options.onWriteError?.(error) })
   }
+}
+
+/**
+ * The running records deleting saved profile `profileId` asks about. A job the backend reported on a connection it still
+ * holds, opened through that same profile, is the connected tab's to stop: deleting the profile disconnects nothing, and
+ * cancelling it here would also end that tab's session. Any other record (a reference a tab only holds, a job run through
+ * another profile's connection) can be cancelled only while the profile exists.
+ */
+/** Notes a reported job's connection, within `limit`: jobs no record names go first, so a long job still recorded keeps
+ * its connection however many short ones follow it. */
+export function noteJobConnection(connections: Map<string, string>, jobId: string, connectionId: string, recorded: () => Iterable<string>, limit: number): void {
+  connections.delete(jobId); connections.set(jobId, connectionId)
+  if (connections.size <= limit) return
+  const live = new Set(recorded())
+  for (const id of connections.keys()) if (!live.has(id) && id !== jobId) connections.delete(id)
+  while (connections.size > limit) connections.delete(connections.keys().next().value!)
+}
+
+export function profileDeleteJobs(records: readonly JobRecord[], profileId: string, connectionOf: (jobId: string) => string | undefined,
+  live: (connectionId: string) => boolean, profileOfConnection: (connectionId: string) => string | undefined): JobRecord[] {
+  return records.filter(record => {
+    if (record.profileId !== profileId || record.state !== 'running' || record.auxiliary) return false
+    const connectionId = connectionOf(record.jobId)
+    return connectionId === undefined || !live(connectionId) || profileOfConnection(connectionId) !== profileId
+  })
 }

@@ -404,7 +404,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const recentFiles = new RecentFilesService(api)
   // AutoRecover's timer runs only when a test advances it.
   const recoveryTimers = manualTimers()
-  const recovery = new RecoveryService({ api, documents, files, settings, warn: message => commands.reportWarning(message), timers: recoveryTimers.timers, server: id => connections.get(id)?.server })
+  const recovery = new RecoveryService({ api, documents, files, settings, warn: message => commands.reportWarning(message), timers: recoveryTimers.timers, server: id => connections.get(id)?.server,
+    restoredJobs: (tabId, jobs) => queries.restoreJobs(tabId, jobs) })
   const resultSelection = new ResultSelectionService(results)
   const targets = new TargetService(documents, queries, connections, files, connectionTargets)
   const targetIdOf = (connectionId: string) => targets.targetForConnection(connectionId)

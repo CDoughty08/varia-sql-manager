@@ -7,7 +7,7 @@ import type { BigQueryLibraryView, BigQueryProfileInput, PickedKeyFile } from '.
 import type { BigQueryDryRunRequest, BigQueryDryRunResult } from './bigquery/dry-run'
 import type { ResultsRemoteQueryParams } from './bigquery/remote-view'
 import type { BigQueryPreviewTarget, BigQueryProperties, BigQueryPropertiesRequest } from './bigquery/objects'
-import type { CancelJobsResult, QueryAttachParams } from './bigquery/jobs'
+import type { CancelJobsResult, JobsWithoutTabReview, QueryAttachParams, RecordedJobsCancel } from './bigquery/jobs'
 import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } from './theme/types'
 import type { CommandId, RendererRole } from './commands/catalog'
 import type { ContextMenuCommand, ContextMenuRequest, MenuState } from './commands/menus'
@@ -29,7 +29,7 @@ import type { SsisCatalogSetupRequest, SsisCatalogSetupResult, SsisDescribeReque
 import type { AgentProfileRequest, AgentProfileResult } from './agent/profile.ts'
 import type { AgentHistoryMessageRequest, AgentHistoryMessageResult } from './agent/history.ts'
 import type { SettingsLoad, SettingsPatch, SettingsState } from './settings/schema'
-import type { SessionAnswer, SessionCloseOptions, SessionCloseResult, SessionEnd, SessionPromptRequest } from './sessions.ts'
+import type { RunningJobRequest, SessionAnswer, SessionCloseOptions, SessionCloseResult, SessionEnd, SessionPromptRequest } from './sessions.ts'
 import type { RecentFile } from './files/recent'
 import type { UpdateState } from './updates'
 import type { ProductLink } from './product'
@@ -953,7 +953,7 @@ export interface VariaApi {
   pickKeyFile(authentication: 'serviceAccountKey' | 'externalAccount'): Promise<ApiResult<PickedKeyFile | null>>
   /** Decision 49: the user confirmed the token file a picked federation configuration reads. */
   confirmFederationSource(keyFile: string, source: string): Promise<ApiResult<void>>
-  disconnect(connectionId: string): Promise<ApiResult<{ disconnected: boolean }>>
+  disconnect(connectionId: string): Promise<ApiResult<RpcMethods['connections.disconnect']['result']>>
   /** BigQuery before connecting: the account the credential signs in as, and a page of the projects it can see. */
   bigQueryAccount(params: BigQueryCredentialParams): Promise<ApiResult<BigQueryAccount>>
   bigQueryProjects(params: BigQueryCredentialParams & { pageToken?: string }): Promise<ApiResult<BigQueryProjectList>>
@@ -1102,6 +1102,22 @@ export interface VariaApi {
   /** The tabs the last close kept, opened again; files that are gone are named in `problems`. */
   takeSession(): Promise<ApiResult<RestoredSession>>
   finishSessionRestore(generation: number): Promise<ApiResult<void>>
+  /** Drops the BigQuery job records kept under a tab's job key (docs/bigquery.md, Re-attaching to jobs): its tab closed, or
+   *  its job was left running or cancelled, so no tab will re-attach to them. */
+  dropJobRecords(jobKey: string): Promise<ApiResult<void>>
+  /** From the start of a quit: the job keys of the BigQuery tabs it keeps, whose records stay (drops wait) and whose idle
+   *  sessions with an open or unknown transaction bigquery.endIdleSessions leaves for the next start. A cancelled quit
+   *  (closeWindowCancelled) ends this. */
+  keepJobsAtQuit(jobKeys: readonly string[]): Promise<ApiResult<void>>
+  /** Idle BigQuery sessions whose ABORT_SESSION failed while main ended them before a Reload or backend restart
+   *  (bigquery.endIdleSessions); the backend retries them once the connection next reaches BigQuery. */
+  onFailedAborts(listener: (count: number) => void): () => void
+  /** session.cancelRestoredJobs: cancels the running jobs recorded under these tabs' job keys through their saved profiles,
+   *  without a connection (a restored tab that did not reconnect); main finds the records itself. */
+  cancelRestoredJobs(jobKeys: readonly string[]): Promise<ApiResult<RecordedJobsCancel>>
+  /** After a restore: asks once about running jobs recorded under no open tab's key (Cancel Jobs or Keep), in main's box;
+   *  null when there are none. Finished jobs without a tab are dropped. */
+  reviewJobsWithoutTab(openJobKeys: readonly string[]): Promise<ApiResult<JobsWithoutTabReview | null>>
   /** Writes text to the clipboard through main, which works while the window is unfocused; there is no read. */
   /** At most `maxClipboardText` characters: main refuses a longer text. */
   writeClipboardText(text: string): Promise<ApiResult<void>>
@@ -1116,6 +1132,9 @@ export interface VariaApi {
   /** Asks, in main's message box, what to do with the open transactions and running queries of sessions that are about
    *  to end (src/shared/sessions.ts composes the prompt). */
   confirmSessions(request: SessionPromptRequest): Promise<ApiResult<SessionAnswer>>
+  /** Close Results while a BigQuery job runs: `proceed` (Cancel the job), `leave` (Leave it running) or `cancel` (Don't
+   *  Close), asked in main's box unless queryExecution.bigQuery.closeRunningJob remembers a choice. */
+  confirmRunningJob(request: RunningJobRequest): Promise<ApiResult<SessionAnswer>>
   /** An object action's confirmation (src/shared/actions/prompts.ts) in main's message box: the chosen button's answer. */
   confirmAction(request: ActionPromptRequest): Promise<ApiResult<ActionPromptAnswer>>
   /** The page's long runs (src/shared/long-runs.ts), all of them, whenever they change: main's reload prompt names them. */
