@@ -410,6 +410,18 @@ describe('the step problems of what msdb already holds', () => {
     expect(withSubsystem(draft.steps[0]!, 'PowerShell').outputFileName).toBe('C:\out.txt')
     expect(withSubsystem({ ...olap.steps[0]!, server: 'olap01' }, 'TSQL').server).toBe('')
   })
+  it("keeps an edited step's go-to on a step renamed elsewhere, and answers one deleted elsewhere as msdb does", () => {
+    const opened = [step(1, 'A', { onSuccessAction: 4, onSuccessStepId: 2, onFailAction: 4, onFailStepId: 2 }), step(2, 'B')]
+    const openedModel = model({ steps: opened }), draft = initialAgentJobDraft(openedModel)
+    const mine = { ...draft, steps: { ...draft.steps, steps: draft.steps.steps.map(item => item.key === 's1' ? { ...item, command: 'mine' } : item) } }
+    const renamed = model({ job: { ...openedModel.job!, version: 9 }, steps: [opened[0]!, step(2, 'C')] })
+    const kept = rebaseAgentJobDraft(openedModel, renamed, mine)
+    expect(stepTargetShort(kept.steps, kept.steps.steps[0]!, 'success')).toBe('Step 2')
+    expect(kept.steps.steps.map(item => item.name)).toEqual(['A', 'C'])
+    expect(agentJobSave(renamed, kept)!.steps).toEqual({ writes: [expect.objectContaining({ id: 1, command: 'mine', onSuccessAction: 4, onSuccessStepId: 2, onFailAction: 4, onFailStepId: 2 })] })
+    const deleted = model({ job: { ...openedModel.job!, version: 9 }, steps: [step(1, 'A', { onSuccessAction: 1, onFailAction: 2 })] })
+    expect(rebaseAgentJobDraft(openedModel, deleted, mine).steps.steps[0]).toMatchObject({ onSuccess: 1, onFail: 2 })
+  })
   it('keeps a go-to past the last step over a reload, as msdb keeps it', () => {
     const openedModel = model(), draft = initialAgentJobDraft(openedModel)
     const mine = { ...draft, steps: { ...draft.steps, steps: draft.steps.steps.map(item => item.key === 's1' ? { ...item, command: 'mine' } : item) } }
@@ -435,6 +447,13 @@ describe('the step problems of what msdb already holds', () => {
     expect(planAgentSteps(stored, edited, 1, guid)).toEqual({ writes: [expect.objectContaining({ id: 2, name: 'B', command: 'mine' })] })
     const twins = initialStepsDraft([step(1, 'Load'), step(2, 'Load\t')], 1)
     expect(agentStepProblems(twins, { sysadmin: true, original: twins }).filter(item => item.field === 'name')).toEqual([])
+  })
+  it('refuses an output file or table log on a step type msdb refuses them for', () => {
+    const draft = initialStepsDraft([step(1, 'One', { subsystem: 'Snapshot', databaseName: '' })], 1)
+    const output = { ...draft, steps: [{ ...draft.steps[0]!, outputFileName: 'C:\out.txt' }] }
+    expect(agentStepProblems(output, { sysadmin: true, original: draft }).map(item => item.message)).toContain(stepText.outputUnsupported)
+    const table = { ...draft, steps: [{ ...draft.steps[0]!, flags: 8 }] }
+    expect(agentStepProblems(table, { sysadmin: true, original: draft }).map(item => item.message)).toContain(stepText.outputUnsupported)
   })
   it('refuses a save that writes negative retries msdb stored', () => {
     const draft = initialStepsDraft([step(1, 'One', { retryAttempts: -1 })], 1)

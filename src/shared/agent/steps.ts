@@ -278,6 +278,7 @@ export const stepText = {
   stepsTruncated: `This job has more than ${agentLimits.stepsPerJob} steps. Varia lists the first ${agentLimits.stepsPerJob} and does not change its steps; edit them in SSMS.`,
   targetPast: `It goes to a step past step ${agentLimits.stepsPerJob}, which a save from here cannot write: choose where it goes.`,
   unsavableOptions: 'This step has flags or a run priority Varia does not edit, so the steps cannot be saved from here. Edit them in SSMS.',
+  outputUnsupported: 'This step type cannot write an output file or log to a table.',
   serverNeeded: 'An Analysis Services step needs the server it runs on.',
   exitCodePast: 'The success exit code is a whole number from -2,147,483,648 to 2,147,483,647.',
   nulCharacter: 'A step\'s name, command, output path, user, database or server cannot hold a NUL character.',
@@ -336,6 +337,7 @@ export function agentStepProblems(draft: AgentStepsDraft, context: AgentStepCont
     commandChars += step.command.length
     if (serverSubsystems.has(step.subsystem) && saved && !step.server.trim()) push('server', 'error', stepText.serverNeeded)
     else if (step.server.length > agentLimits.nameChars) push('server', 'error', `A server name holds at most ${agentLimits.nameChars} characters.`)
+    if (saved && !tableLogSubsystems.has(step.subsystem) && (step.outputFileName.trim() || (step.flags & (stepFlags.logToTable | stepFlags.logToTableAppend)))) push('output', 'error', stepText.outputUnsupported)
     if (step.outputFileName.length > agentLimits.stepOutputChars) push('output', 'error', `An output file path holds at most ${agentLimits.stepOutputChars} characters.`)
     if (step.outputFileName.trim() && !context.sysadmin) push('output', 'warning', stepText.outputSysadmin)
     if (step.databaseUserName.trim() && step.subsystem === 'TSQL' && !context.sysadmin) push('runAsUser', 'warning', stepText.runAsUserSysadmin)
@@ -563,13 +565,20 @@ export function rebaseSteps(opened: readonly AgentJobStepRecord[], current: read
   const rekeyed = fresh.map(step => {
     // A dangling go-to (to no step of either read, or for the server's steps of the job now) is kept as it is; one to a step not kept quits.
     const dangling = (key: string) => { const id = describedId(key); return id !== undefined && !currentIds.has(id) && !openedIds.has(id) && !serverKeys.has(step.key) }
-    const target = (code: StepAction, key: string | undefined): [StepAction, string | undefined] => {
+    const target = (code: StepAction, key: string | undefined, quit: StepAction): [StepAction, string | undefined] => {
       if (code !== 4 || !key) return [code, undefined]
       if (key.startsWith('dangling:')) return [4, `s${key.slice('dangling:'.length)}`]
       const to = keyMap.get(key)
-      return to ? [4, to] : dangling(key) ? [4, key] : [2, undefined]
+      if (to) return [4, to]
+      if (dangling(key)) return [4, key]
+      // The user's go-to names a step of the read that the job no longer has by name: renamed elsewhere when its id now holds a step the read
+      // did not have, so it goes there; deleted elsewhere otherwise, which msdb (sp_delete_jobstep) answers with quit with success on success
+      // and quit reporting failure on failure.
+      const id = describedId(key), now = id === undefined || serverKeys.has(step.key) ? undefined : current.find(item => item.id === id)
+      const renamed = now && !openedNames.has(foldName(now.name)) ? keyMap.get(keyOfCurrent.get(now.id) ?? '') : undefined
+      return renamed ? [4, renamed] : [quit, undefined]
     }
-    const [onSuccess, onSuccessTarget] = target(step.onSuccess, step.onSuccessTarget), [onFail, onFailTarget] = target(step.onFail, step.onFailTarget)
+    const [onSuccess, onSuccessTarget] = target(step.onSuccess, step.onSuccessTarget, 1), [onFail, onFailTarget] = target(step.onFail, step.onFailTarget, 2)
     const { onSuccessTarget: _s, onFailTarget: _f, ...rest } = step
     return { ...rest, onSuccess, onFail, ...onSuccessTarget ? { onSuccessTarget } : {}, ...onFailTarget ? { onFailTarget } : {} } as AgentStepDraft
   })

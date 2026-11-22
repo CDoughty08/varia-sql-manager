@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, type DragEvent } from 'react'
 import type { editor } from 'monaco-editor'
 import { agentLimits, stepActions } from '../../../shared/agent/catalog.ts'
 import {
-  serverSubsystems, stepFlagChoices, stepFlagsWith, stepOptionsSummary, stepTargetShort, stepText, stepTypeLabel, stepTypeShort, type AgentStepDraft, type AgentStepField,
+  serverSubsystems, stepFlagChoices, stepOutputSubsystems, stepFlagsWith, stepOptionsSummary, stepTargetShort, stepText, stepTypeLabel, stepTypeShort, type AgentStepDraft, type AgentStepField,
   type AgentStepProblem, type StepAction
 } from '../../../shared/agent/steps.ts'
 import {
@@ -173,7 +173,7 @@ function MoreOptions({ step, model, editable, problems, update, id }: { readonly
           <span>minutes</span>
         </span>
       </div>
-      <div className="agent-step-row">
+      {stepOutputSubsystems.has(step.subsystem) && <><div className="agent-step-row">
         <label htmlFor={`${id}-output`}>Output file</label>
         <div>
           <span className="agent-step-inline">
@@ -190,7 +190,8 @@ function MoreOptions({ step, model, editable, problems, update, id }: { readonly
           <label><input type="checkbox" checked={choices.logToTable} disabled={!editable} onChange={event => flags({ logToTable: event.target.checked, ...event.target.checked ? {} : { appendTable: false } })} />Log to table</label>
           <label><input type="checkbox" checked={choices.appendTable} disabled={!editable || !choices.logToTable} onChange={event => flags({ appendTable: event.target.checked })} />Append output to existing entry in table</label>
         </span>
-      </div>
+      </div></>}
+      {!stepOutputSubsystems.has(step.subsystem) && output.error && <FieldMessages text={output} id={`${id}-output`} />}
       <div className="agent-step-row">
         <span>Step output</span>
         <label><input type="checkbox" checked={choices.includeOutput} disabled={!editable} onChange={event => flags({ includeOutput: event.target.checked })} />Include step output in history</label>
