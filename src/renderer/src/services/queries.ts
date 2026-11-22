@@ -219,7 +219,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   }
   /**
    * Re-attaches each tab holding jobs it does not follow, once its BigQuery connection is live and it runs nothing: the
-   * newest job first, which opens its results; older ones then only hold the session's queue. Each job is tried once per
+   * newest job, which opens its results; older ones stay as references (finished ones are dropped). Each job is tried once per
    * connection generation, so a failed re-attach waits for the next connect. The workbench calls this when connections
    * or tabs change; a run that keeps jobs calls it as it ends.
    */
@@ -236,9 +236,19 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       const tried = this.attachTried.get(tabId) ?? new Map<string, number>()
       const job = [...state.jobs].reverse().find(candidate => !tried.has(this.attachKey(candidate, connection)))
       if (!job) continue
-      // Only the newest job opens its results: one older than a job tried on this connection only holds the queue.
+      // Only the newest job is re-attached: an attach releases the tab's results, so an older one would replace the newest's.
+      // Older finished jobs are dropped; older running ones (in another session, since a session runs one job at a time)
+      // stay with the tab as references its prompt asks about, cancelled from their records (session.cancelRestoredJobs).
       const generation = `@${connection.id}:${connection.generation}`
-      const follow = ![...tried].some(([key, createdAt]) => key.endsWith(generation) && createdAt > job.createdAt)
+      if ([...tried].some(([key, createdAt]) => key.endsWith(generation) && createdAt > job.createdAt)) {
+        const older = state.jobs.filter(candidate => !tried.has(this.attachKey(candidate, connection)))
+        for (const candidate of older) tried.set(this.attachKey(candidate, connection), candidate.createdAt)
+        this.attachTried.set(tabId, tried)
+        const kept = state.jobs.filter(candidate => !older.includes(candidate) || candidate.state === 'running')
+        if (kept.length !== state.jobs.length) { const { jobs: _jobs, ...rest } = state; this.update(tabId, kept.length ? { ...rest, jobs: kept } : rest) }
+        continue
+      }
+      const follow = true
       tried.set(this.attachKey(job, connection), job.createdAt)
       this.attachTried.set(tabId, tried)
       this.executionVersions.set(tabId, (this.executionVersions.get(tabId) ?? 0) + 1)
@@ -266,10 +276,13 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     if (state?.jobs) { const { jobs: _jobs, ...rest } = state; this.update(tabId, rest) }
     const key = this.documents.get(tabId)?.jobKey ?? this.jobKeys.get(tabId)
     const name = this.documents.get(tabId)?.name ?? 'A query'
-    // Jobs the tab holds without running them (a restored tab not connected, or not yet re-attached): the backend's session
-    // knows none of them, so main cancels them from their records first. A job it already cancelled reports so again.
-    if (entry === 'cancelJob' && !running && state?.jobs?.length && key && this.api.cancelRestoredJobs) {
-      void this.cancelRestored(name, key)
+    // Jobs the tab holds without running them (a restored tab not connected, or an older job not re-attached): the
+    // backend's session knows none of them, so main cancels them from their records first. A job left running on a
+    // connected tab is the session's own, which the backend cancels with the session; so is the running request's.
+    const connected = this.connected(tabId)
+    const targets = (state?.jobs ?? []).filter(job => job.jobId !== state?.running?.jobId && (!connected || !job.detached)).map(job => job.jobId)
+    if (entry === 'cancelJob' && targets.length && key && this.api.cancelRestoredJobs) {
+      void this.cancelRestored(name, key, targets)
       return
     }
     if (key) void this.api.dropJobRecords?.(key).catch(() => {})
@@ -279,11 +292,12 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     }
   }
   /** Cancels a tab's recorded jobs through main, then forgets its records; what could not be cancelled is shown by id. */
-  private async cancelRestored(name: string, key: string): Promise<void> {
+  private async cancelRestored(name: string, key: string, targets: readonly string[]): Promise<void> {
     let failed: string[]
     try {
       const response = await this.api.cancelRestoredJobs!([key])
-      failed = response.ok ? [...response.value.uncancellable, ...response.value.jobs.filter(job => !job.cancelled).map(job => job.jobId)] : []
+      // Main cancels every running record under the key; only the jobs the backend did not cancel itself are reported.
+      failed = response.ok ? [...response.value.uncancellable, ...response.value.jobs.filter(job => !job.cancelled).map(job => job.jobId)].filter(id => targets.includes(id)) : []
       if (!response.ok) this.notify?.(`${name}: its BigQuery jobs could not be cancelled. ${response.error}`)
     } catch { failed = [] }
     await this.api.dropJobRecords?.(key).catch(() => {})
@@ -311,7 +325,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const document = this.documents.get(id), connection = document?.connectionId ? this.getConnection(document.connectionId) : undefined
     if (!isQueryDocument(document) || (connection ? connection.providerId !== 'bigquery' : document?.provider !== 'bigquery')) return false
     const state = this.getSnapshot()[id]
-    if (state?.running && state.running.kind !== 'estimate') return true
+    // A run still in its estimate or cost prompt sent nothing: the prompt stops it like any query.
+    if (state?.running && state.running.kind !== 'estimate' && this.gated.get(id)?.queryId !== state.running.queryId) return true
     const jobs = state?.jobs ?? []
     if (!jobs.length) return false
     if (jobs.some(job => !job.detached) || !this.connected(id)) return true

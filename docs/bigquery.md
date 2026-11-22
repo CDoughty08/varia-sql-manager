@@ -289,7 +289,8 @@ In the workbench:
 
 - **Tabs keep their jobs.** A BigQuery tab gets a job key at its first run and keeps it through hot exit and AutoRecover.
   A restored or recovered tab gets its running and finished jobs back from the records. Once it is connected it re-attaches
-  to the newest, adopting its session, and to older running ones only to hold the session's queue. While it is not connected,
+  to the newest, adopting its session. Older finished jobs are dropped, and older running ones stay with the tab, which
+  asks about them on close, without re-attaching (an attach would replace the newest's results). While it is not connected,
   Messages says the job carries on. A job cut off by a lost backend or network stays with the tab and re-attaches on the
   next connection. Each job is tried once per connection.
 - **The prompt.** Closing a tab, Change Connection, Disconnect, a location switch or quitting asks about a tab that holds

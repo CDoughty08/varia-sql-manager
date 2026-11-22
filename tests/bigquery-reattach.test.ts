@@ -105,16 +105,22 @@ describe('BigQuery job references', () => {
 })
 
 describe('re-attaching restored tabs', () => {
-  it("re-attaches a connected tab's newest job, adopting its session with the record's transaction, and the older one only to hold the queue", async () => {
+  it("re-attaches a connected tab's newest job, adopting its session with the record's transaction, and never an older one over its results", async () => {
     const f = fixture()
     f.documents.update(f.tab.id, { jobKey: '6f2b8f84-2b7c-4b55-9c55-9d6f8c2a1b10' })
-    f.queries.restoreJobs(f.tab.id, [job('job_old', { createdAt: 1 }), job('job_new', { createdAt: 2, transaction: 'open' })])
-    await settle(); await settle()
-    expect(f.queryApi.attach).toHaveBeenCalledTimes(2)
+    f.queries.restoreJobs(f.tab.id, [job('job_done', { createdAt: 0, state: 'done' }), job('job_old', { createdAt: 1 }), job('job_new', { createdAt: 2, transaction: 'open' })])
+    await settle(); await settle(); await settle()
+    expect(f.queryApi.attach).toHaveBeenCalledTimes(1)
     expect(f.queryApi.attach.mock.calls[0][0]).toMatchObject({ connectionId: 'bq-a', sessionId: f.tab.id, jobKey: '6f2b8f84-2b7c-4b55-9c55-9d6f8c2a1b10', jobId: 'job_new', project: 'example-project', location: 'US', adoptSession: true, transaction: 'open' })
     expect(f.queryApi.attach.mock.calls[0][0]).not.toHaveProperty('detached')
-    expect(f.queryApi.attach.mock.calls[1][0]).toMatchObject({ jobId: 'job_old', detached: true })
-    expect(f.queries.getSnapshot()[f.tab.id].jobs).toBeUndefined()
+    // An attach releases the tab's results: the newest job's stay. The older finished job is dropped; the older running
+    // one stays with the tab for its prompt, and is not tried again on this connection.
+    expect(f.results.begin).toHaveBeenCalledTimes(1)
+    expect(f.queries.getSnapshot()[f.tab.id].jobs).toEqual([job('job_old', { createdAt: 1 })])
+    f.queries.reattach()
+    await settle()
+    expect(f.queryApi.attach).toHaveBeenCalledTimes(1)
+    await expect(f.queries.holdsJob(f.tab.id)).resolves.toBe(true)
     expect(f.results.addMessage).not.toHaveBeenCalled()
   })
   it('says a restored running job carries on while the tab is not connected, then re-attaches once it is, once per connection', async () => {
@@ -348,6 +354,46 @@ describe('restored jobs cancelled from their records', () => {
     f.queries.sessionClosed(f.tab.id, 'cancelJob')
     expect(cancelRestoredJobs).not.toHaveBeenCalled()
     pending.resolve({ ok: true, value: output({ status: 'cancelled' }) })
+  })
+})
+
+describe('the prompt beside a cost gate and held jobs', () => {
+  it('stops a run still in its cost prompt instead of asking about a job it never sent', async () => {
+    const f = fixture(), gate = deferred<boolean>()
+    f.queries.setCostGate(() => gate.promise)
+    void f.queries.execute(f.tab.id)
+    await settle()
+    expect(f.queries.isRunning(f.tab.id)).toBe(true)
+    await expect(f.queries.holdsJob(f.tab.id)).resolves.toBe(false)
+    gate.resolve(false)
+  })
+  it("cancels from records only the jobs the backend does not know: never a connected tab's job left running, nor the running request's", async () => {
+    const f = fixture(), cancelRestoredJobs = vi.fn<VariaApi['cancelRestoredJobs']>(async () => ({ ok: true, value: { jobs: [{ jobId: 'job_2', cancelled: false, error: 'x' }, { jobId: 'job_old', cancelled: true }], uncancellable: [] } }))
+    const notifyJobs = vi.fn()
+    Object.assign(f.queryApi, { cancelRestoredJobs, dropJobRecords: vi.fn(async () => ({ ok: true, value: undefined })) })
+    f.queries.notifyJobs = notifyJobs
+    f.documents.update(f.tab.id, { jobKey: '6f2b8f84-2b7c-4b55-9c55-9d6f8c2a1b10' })
+    // Left running by Close Results, on a connected tab: the backend's session cancels it.
+    const pending = deferred<ApiResult<QueryResult>>()
+    f.queryApi.execute.mockReturnValueOnce(pending.promise)
+    const run = f.queries.execute(f.tab.id)
+    await settle()
+    f.job({ jobId: 'job_1', state: 'running' })
+    pending.resolve({ ok: true, value: output({ status: 'detached' }) })
+    await run
+    f.queries.sessionClosed(f.tab.id, 'cancelJob')
+    expect(cancelRestoredJobs).not.toHaveBeenCalled()
+    // A re-attach running beside an older running job: the older one is cancelled from its record, and only its outcome shown.
+    const attach = deferred<ApiResult<QueryResult>>()
+    f.queryApi.attach.mockReturnValueOnce(attach.promise)
+    f.queries.restoreJobs(f.tab.id, [job('job_old', { createdAt: 1 }), job('job_2', { createdAt: 9000 })])
+    await settle()
+    expect(f.queries.getSnapshot()[f.tab.id].running).toMatchObject({ kind: 'attach', jobId: 'job_2' })
+    f.queries.sessionClosed(f.tab.id, 'cancelJob')
+    await settle(); await settle()
+    expect(cancelRestoredJobs).toHaveBeenCalledTimes(1)
+    expect(notifyJobs).not.toHaveBeenCalled()
+    attach.resolve({ ok: true, value: output({ status: 'cancelled' }) })
   })
 })
 
