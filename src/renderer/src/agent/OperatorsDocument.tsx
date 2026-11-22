@@ -24,6 +24,10 @@ export const nextMethods = (methods: number): number => {
 /** Why Delete… waits: unsaved changes, or a grid read-only because its notifications are partial or unread, where the dialog's count of uses could say nothing notifies an operator that something does. */
 export const deleteBlocked = (changes: number, model: Pick<AgentOperatorsModel, 'readOnly'>): string | undefined => changes > 0 ? agentObjectText.saveFirst : model.readOnly
 
+/** The grid body's note without alert rows; the operator headers still show, so any operator can be selected, opened, tested or deleted. */
+export const alertsNote = (model: Pick<AgentOperatorsModel, 'alerts' | 'platform'>): string =>
+  model.alerts ? 'The server has no alerts. Add recommended alerts creates the usual set.' : model.platform === 'windows' ? agentAlertText.readAlertsDenied : agentAlertText.platformAlerts
+
 export function gridStep(key: string, ctrl: boolean, at: { readonly row: number; readonly column: number }, rows: number, columns: number): { row: number; column: number } | undefined {
   const clamp = (value: number, size: number) => Math.max(0, Math.min(size - 1, value))
   switch (key) {
@@ -46,9 +50,8 @@ function Grid({ state, model, draft, editable, service, selected, onSelect }: {
   readonly state: State; readonly model: AgentOperatorsModel; readonly draft: AgentNotifyMatrix; readonly editable: boolean; readonly service: OperatorsDocumentService
   readonly selected?: string; readonly onSelect: (name: string) => void
 }) {
-  const alerts = model.alerts
+  const alerts = model.alerts ?? []
   const [focus, setFocus] = useState({ row: 0, column: 0 })
-  if (!alerts) return <p className="field-note">{model.platform === 'windows' ? agentAlertText.readAlertsDenied : agentAlertText.platformAlerts}</p>
   if (!model.operators.length) return <p className="field-note">The server has no operators yet. New Operator adds one.</p>
   const base = state.base
   const rows = alerts.length, columns = model.operators.length
@@ -66,7 +69,7 @@ function Grid({ state, model, draft, editable, service, selected, onSelect }: {
       <thead><tr><th scope="col">Alert</th>{model.operators.map(operator => <th key={operator.id} scope="col" data-selected={operator.name === selected || undefined}>
         <button type="button" className="agent-operators-head" aria-pressed={operator.name === selected} onClick={() => onSelect(operator.name)}>{operator.name}{!operator.enabled && ' (disabled)'}</button>
       </th>)}</tr></thead>
-      <tbody onKeyDown={keyDown}>{alerts.length === 0 ? <tr><td colSpan={model.operators.length + 1} className="field-note">The server has no alerts. Add recommended alerts creates the usual set.</td></tr>
+      <tbody onKeyDown={keyDown}>{alerts.length === 0 ? <tr><td colSpan={model.operators.length + 1} className="field-note">{alertsNote(model)}</td></tr>
         : alerts.map((alert, row) => <tr key={alert.id} data-disabled={!alert.enabled || undefined}>
           <th scope="row">{alert.name}</th>
           {model.operators.map((operator, column) => {

@@ -15,7 +15,7 @@ import { agentLimits } from '../src/shared/agent/catalog'
 import { commandDescriptor } from '../src/shared/commands/catalog'
 import type { ApiResult } from '../src/shared/contracts'
 import { agentObjectText } from '../src/renderer/src/agent/AlertOperatorDocumentService'
-import { deleteBlocked, gridStep, nextMethods } from '../src/renderer/src/agent/OperatorsDocument'
+import { alertsNote, deleteBlocked, gridStep, nextMethods } from '../src/renderer/src/agent/OperatorsDocument'
 import { testBlocked, timeText, timeValue } from '../src/renderer/src/agent/OperatorDocument'
 import { deleteObjectDefinition } from '../src/renderer/src/dialogs/definitions'
 import { connectionInfo, readyBackend, workbenchFixture } from './fixtures/workbench'
@@ -184,6 +184,9 @@ describe("the operator document's and grid's shared rules", () => {
     // One tab stop: the arrows move it within the grid and stop at its edges; Home and End go to a row's ends, with Ctrl to the corners.
     expect(gridStep('ArrowDown', false, { row: 0, column: 1 }, 3, 2)).toEqual({ row: 1, column: 1 })
     expect(deleteBlocked(0, gridModel())).toBeUndefined()
+    expect(alertsNote(gridModel({ alerts: [] }))).toContain('no alerts')
+    expect(alertsNote(gridModel({ alerts: undefined, platform: 'linux' }))).toBe(agentAlertText.platformAlerts)
+    expect(readFileSync('src/renderer/src/agent/OperatorsDocument.tsx', 'utf8')).toContain('const alerts = model.alerts ?? []')
     expect(deleteBlocked(1, gridModel())).toBe(agentObjectText.saveFirst)
     expect(deleteBlocked(0, gridModel({ readOnly: 'partial' }))).toBe('partial')
     expect(readFileSync('src/renderer/src/agent/AlertDocument.tsx', 'utf8')).toContain('id={ids.includeIn} role="group" aria-labelledby={`${ids.includeIn}-label`}')
