@@ -561,7 +561,8 @@ internal sealed partial class SqlService
                     // An Automatic read switches to windowed instead (docs/bigquery.md, Residence: Misestimate).
                     if (window is not null && SwitchesOn(set, refusal) && SwitchToWindowed(set, window, events, messages!, refusal)) return;
                     set.Skip(refusal);
-                    budget.Stop(refusal);
+                    // A derived set (a view or value list in BigQuery) stops only itself: its source keeps its budget.
+                    if (!set.Derived) budget.Stop(refusal);
                     storing = false;
                 }
                 try

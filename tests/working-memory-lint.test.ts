@@ -123,9 +123,10 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   expect(uses(/\busing\b[^;{}()]*\bRemoteResult\s*;/g)).toEqual([])
   // (Bare names throughout: a method group or a space before the parenthesis is a call all the same.)
   // A job's results are read where a query's own rows are (its first page, a script's statements, its pages under the
-  // budget) and by Load into memory (RemoteQueryAsync): nowhere else reads a windowed result's rows around the cache.
-  expect(uses(/\bQueryResultsAsync\b/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'BigQuery/BigQueryService.Script.cs', ...Array(3).fill('SqlService.BigQueryExecution.cs'), 'SqlService.BigQueryResidence.cs'])
-  const load = residence.indexOf('private async Task<QueryResult> RemoteQueryAsync(')
+  // budget), by Load into memory (RemoteLoadAsync) and by a sort, filter or value list's own job (RemoteDerivedAsync, the
+  // new result's rows, never the windowed one's): nowhere else reads a windowed result's rows around the cache.
+  expect(uses(/\bQueryResultsAsync\b/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'BigQuery/BigQueryService.Script.cs', ...Array(3).fill('SqlService.BigQueryExecution.cs'), 'SqlService.BigQueryResidence.cs', 'SqlService.BigQueryViews.cs'])
+  const load = residence.indexOf('private async Task<QueryResult> RemoteLoadAsync(')
   expect(load).toBeGreaterThan(0)
   expect(residence.indexOf('bigQuery.QueryResultsAsync(')).toBeGreaterThan(load)
   expect(residence.indexOf('bigQuery.QueryResultsAsync(')).toBeLessThan(residence.indexOf('\n    }\n', load))
@@ -149,7 +150,8 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   // between can leave its first page charged with no owner.
   expect(residence).toMatch(/remote\.Seed\(seed\);\n\s*if \(!store\.Demote\(set, remote, total, bump: false\)\) return null;/)
   expect(count(residence, /\bremote\.Seed\(/g)).toBe(1)
-  // Storage Read reads a query's own rows under the budget and Load into memory's: never a windowed result's rows around
+  // Storage Read reads a query's own rows under the budget, Load into memory's and a sort or filter's new result's
+  // (RemoteDerivedAsync): never a windowed result's rows around
   // the cache, except Save Results As (SqlService.BigQueryExport.cs), which streams them to the file, each batch charged as
   // working memory while it is written and kept nowhere.
   expect(uses(/\bOpenReadSessionAsync\(/g).sort()).toEqual(['BigQuery/BigQueryService.Storage.cs', 'SqlService.BigQueryExport.cs', 'SqlService.BigQueryStorageRead.cs'])
@@ -157,8 +159,8 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   expect(count(exporting, /\bReserveExport\(set, /g)).toBe(3)
   expect(count(exporting, /\bset\.ReturnWork\(/g)).toBe(2)
   expect(exporting).not.toMatch(/\bstore\.|\bSeed\(|\bResultSetBuffer\.\w+\(|\.Demote\(|\.Promote\(/)
-  expect(uses(/\bBigQueryStorageSessionAsync\(/g).sort()).toEqual(['SqlService.BigQueryExecution.cs', 'SqlService.BigQueryResidence.cs', 'SqlService.BigQueryStorageRead.cs'])
-  expect(uses(/\bReadBigQueryArrowAsync\(/g).sort()).toEqual(['SqlService.BigQueryExecution.cs', 'SqlService.BigQueryResidence.cs', 'SqlService.BigQueryStorageRead.cs'])
+  expect(uses(/\bBigQueryStorageSessionAsync\(/g).sort()).toEqual(['SqlService.BigQueryExecution.cs', 'SqlService.BigQueryResidence.cs', 'SqlService.BigQueryStorageRead.cs', 'SqlService.BigQueryViews.cs'])
+  expect(uses(/\bReadBigQueryArrowAsync\(/g).sort()).toEqual(['SqlService.BigQueryExecution.cs', 'SqlService.BigQueryResidence.cs', 'SqlService.BigQueryStorageRead.cs', 'SqlService.BigQueryViews.cs'])
   for (const reader of ['BigQueryStorageSessionAsync(', 'ReadBigQueryArrowAsync(']) {
     const at = residence.indexOf(reader)
     expect(at).toBeGreaterThan(load)
@@ -206,11 +208,14 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   expect(count(tableRowsBody, /\bSendRawAsync\(service, request, t\)/g)).toBe(1)
   expect(count(jobs.slice(jobs.indexOf('async Task<BigQueryPage> ResultsPageAsync('), jobs.indexOf('internal Task<BigQueryPage> TableRowsAsync(')), /\bSendRawAsync\(service, request, token\)/g)).toBe(1)
   // ...and Save Results As, which writes a windowed result's pages to the file as they come (SqlService.BigQueryExport.cs).
-  expect(uses(/\bTableRowsAsync\b/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'SqlService.BigQueryExport.cs', 'SqlService.BigQueryResidence.cs'])
+  expect(uses(/\bTableRowsAsync\b/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'SqlService.BigQueryExport.cs', 'SqlService.BigQueryResidence.cs', 'SqlService.BigQueryViews.cs'])
   expect(count(exporting, /\bbigQuery\.TableRowsAsync\(/g)).toBe(1)
   // ...and one Storage Read session, read stream by stream: the allowlists name the file, these pin its calls.
   expect(count(exporting, /\bOpenReadSessionAsync\(/g)).toBe(1)
   expect(count(exporting, /\bReadRowsAsync\(/g)).toBe(1)
+  // ...and a remote estimate's probe of whether the table still exists (TableGoneAsync): one row, disposed unread.
+  const views = files.find(({ file }) => file === 'SqlService.BigQueryViews.cs')!.code
+  expect(views).toMatch(/using var page = await bigQuery\.TableRowsAsync\(connection, table, 0, 1, null, token\);\n\s*return false;/)
   const delegate = residence.slice(residence.indexOf('private RemoteFetch BigQueryFetch('))
   expect(delegate.slice(0, delegate.indexOf('\n    };')).includes('bigQuery.TableRowsAsync(')).toBe(true)
   // Each page it reads is written into the block's writer and disposed there: none is kept for a later block, and the

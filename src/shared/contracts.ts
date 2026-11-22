@@ -5,6 +5,7 @@ import type { ConnectionAuthentication, ConnectionFailureReason } from './connec
 import type { ConnectionBindingsChanged } from './connection-bindings'
 import type { BigQueryLibraryView, BigQueryProfileInput, PickedKeyFile } from './bigquery-connections'
 import type { BigQueryDryRunRequest, BigQueryDryRunResult } from './bigquery/dry-run'
+import type { ResultsRemoteQueryParams } from './bigquery/remote-view'
 import type { BigQueryPreviewTarget, BigQueryProperties, BigQueryPropertiesRequest } from './bigquery/objects'
 import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } from './theme/types'
 import type { CommandId, RendererRole } from './commands/catalog'
@@ -209,9 +210,8 @@ export interface QueryOptions {
 }
 /** Tools › Options' result residence for BigQuery: decide by size, always in memory, or always windowed in BigQuery. */
 export type ResidenceSetting = 'automatic' | 'memory' | 'windowed'
-/** results.remoteQuery (docs/ipc.md): a query over a windowed BigQuery result this renderer owns in `generation`, run like
- *  query.execute under its own `queryId` (query.cancel stops it). `load` reads the whole result into memory. */
-export interface ResultsRemoteQueryParams { queryId: string; resultId: number; generation: number; kind: 'load' }
+/** results.remoteQuery (docs/ipc.md): src/shared/bigquery/remote-view.ts. */
+export type { ResultsRemoteQueryParams } from './bigquery/remote-view'
 /** `text` cells carry their SSMS display text; `binary` cells are shown as 0x plus hexadecimal. */
 export type WireKind = 'text' | 'binary'
 export interface ResultColumn {
@@ -1020,7 +1020,7 @@ export interface VariaApi {
   shortcuts: ShortcutsApi
   execute(options: QueryOptions): Promise<ApiResult<QueryResult>>
   cancel(queryId: string): Promise<ApiResult<{ cancelled: boolean }>>
-  /** results.remoteQuery: Load into memory for a windowed BigQuery result this renderer owns; `cancel(queryId)` stops it. */
+  /** results.remoteQuery: Load into memory, a sort or filter, or a value list of a windowed BigQuery result this renderer owns; `cancel(queryId)` stops it. */
   remoteQuery(params: ResultsRemoteQueryParams): Promise<ApiResult<QueryResult>>
   /** Ends a query's session; `transaction` commits or rolls back its open transaction first. A commit that fails leaves
    *  the session open, with its transaction. The result's `note` says what became of a BigQuery commit or session end. */

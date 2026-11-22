@@ -12,6 +12,7 @@ import { ResultError, type ResultHandle } from './ResultClient'
 import { setKey, type EntryKey, type ResultsService, type TabResults } from './ResultsService'
 import { formatCount } from './status'
 import { isHiddenColumn } from '../grid/hidden-columns'
+import { isRemoteView } from './remote-views'
 
 export type { GridMarks }
 
@@ -240,7 +241,7 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
     if (!results) return []
     return results.sets.map(set => {
       const view = this.results.sortOf(tabId, set.key)?.view
-      return { key: set.key, handle: view ?? set.handle, signature: `${setKey(set.descriptor)}#${view?.viewId ?? ''}${results.settled.has(setKey(set.descriptor)) ? '' : '+'}` }
+      return { key: set.key, handle: view ?? set.handle, signature: `${setKey(set.descriptor)}#${view ? isRemoteView(view) ? 'r' + view.key.resultId : view.viewId : ''}${results.settled.has(setKey(set.descriptor)) ? '' : '+'}` }
     })
   }
 

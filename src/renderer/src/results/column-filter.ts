@@ -10,8 +10,9 @@ import { formatCount } from './status'
  */
 export type ColumnCondition =
   | { readonly kind: 'list'; readonly list: DistinctList }
-  | { readonly kind: 'equals' | 'notEquals'; readonly row: number }
-  | { readonly kind: 'between'; readonly rows: readonly [number, number] }
+  // `list`: a BigQuery value list (DistinctList.source), whose rows these are; the grid's filter keeps it.
+  | { readonly kind: 'equals' | 'notEquals'; readonly row: number; readonly list?: DistinctList }
+  | { readonly kind: 'between'; readonly rows: readonly [number, number]; readonly list?: DistinctList }
   | { readonly kind: 'null' | 'notNull' }
   | { readonly kind: 'all' | 'clear' }
 
