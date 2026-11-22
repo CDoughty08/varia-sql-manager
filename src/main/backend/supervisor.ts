@@ -305,7 +305,7 @@ export class BackendSupervisor {
 
   /**
    * bigquery.endIdleSessions before every stop main makes (quit, Reload, the renderer-crash restart, Restart Backend), when
-   * the generation holds a BigQuery handle: within its 10 s deadline, so a stop never waits longer. Failures count as none;
+   * the generation holds a BigQuery handle: within its 10 s deadline (main gives up after its 15 s backstop), so a stop never waits longer. Failures count as none;
    * the backend's jobs carry on either way (docs/bigquery.md, Re-attaching to jobs).
    */
   private endIdleSessions(connection: BackendConnection): number | Promise<number> {

@@ -375,6 +375,26 @@ internal static partial class BigQuerySessionChecks
             $"closing a tab that follows another session's job leaves the job running: {foreignClose.Code} {foreignAnswer?.Status} cancels {string.Join(",", bq.Cancels)}");
         bq.Release(bq.Jobs[holderJob]);
 
+        // Without bigquery.jobs.list (the Job User role): a re-attach to the tab's own held job needs no listing (this backend
+        // inserted it), and one from another tab is PERMISSION_DENIED naming the permission, the job left running.
+        var listTab = Tab();
+        await harness.Execute(listTab, "SELECT 1");
+        var (listArgs, listRun, listJob) = await HeldAsync(harness, listTab);
+        await harness.Call("query.cancel", new JsonObject { ["queryId"] = listArgs["queryId"]!.GetValue<string>(), ["detach"] = true });
+        await listRun.WaitAsync(TimeSpan.FromSeconds(30));
+        bq.Jobs[listJob].Hold = true;
+        bq.ListDenied = true;
+        var deniedAttach = (await harness.Call("query.attach", AttachArgs(harness, Tab(), listJob, args => args["adoptSession"] = false))).Result as QueryResult;
+        bq.Polling = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var listAttach = harness.Call("query.attach", AttachArgs(harness, listTab, listJob));
+        await Task.WhenAny(bq.Polling.Task, listAttach).WaitAsync(TimeSpan.FromSeconds(30));
+        bq.Release(bq.Jobs[listJob]);
+        var listAnswer = (await listAttach.WaitAsync(TimeSpan.FromSeconds(30))).Result as QueryResult;
+        bq.ListDenied = false;
+        check(deniedAttach is { Status: "failed", Error.Code: "PERMISSION_DENIED" } && deniedAttach.Error.Message.Contains("bigquery.jobs.list", StringComparison.Ordinal)
+            && listAnswer is { Status: "completed" } && !bq.Cancels.Contains(listJob),
+            $"without jobs.list a tab re-attaches to its own held job, and another tab's re-attach names the permission: {deniedAttach?.Status} {deniedAttach?.Error?.Code} {listAnswer?.Status} {Texts(listAnswer?.Messages ?? [])}");
+
         // A re-attach from a tab with no session, to a job whose session another tab still holds, does not adopt that session,
         // nor take it over when the job finishes: closing the attaching tab never ends the other tab's session.
         var keeperTab = Tab();

@@ -269,7 +269,9 @@ backend side of re-attaching:
   backend was lost, or left running, keeps its record. A job re-attached under another key moves to it.
 - **`query.attach`** re-attaches a tab to a job by reference (`jobId`, `project`, `location?`), as a query: it first checks
   that the connection's principal created the job (`jobs.get`, then a free `jobs.list` over its creation time must name
-  it; `AUTH_IDENTITY` otherwise, and the job is left alone). A running job shows "Re-attached to BigQuery job … started N
+  it; `AUTH_IDENTITY` otherwise, and the job is left alone). The listing needs `bigquery.jobs.list` (BigQuery User has
+  it, Job User does not): without it a re-attach answers `PERMISSION_DENIED` naming the permission and leaves the job
+  running, except to the tab's own held job, which this backend inserted. A running job shows "Re-attached to BigQuery job … started N
   ago" and Stop cancels it; a finished one reads its result table (free) by the usual residence rule; a script's children
   are listed again. `adoptSession` takes over the session the job ran in, with the record's transaction state. Results
   gone answer `REMOTE_EXPIRED`. `detached` only holds the session's queue until the job is DONE and reads no results. One

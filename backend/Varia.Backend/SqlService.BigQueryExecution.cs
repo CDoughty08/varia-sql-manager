@@ -291,7 +291,7 @@ internal sealed partial class SqlService
                     followed.Cancelled = true;
                     bigQuery.CancelJob(connection, project, followed.JobId, followed.Location);
                 }) : default)
-                    own = await bigQuery.OwnJobAsync(connection, jobId, location, token);
+                    own = await bigQuery.OwnJobAsync(connection, jobId, location, token, inserted: following);
                 sent = created = true;
                 location = KnownLocation(own.JobReference?.Location) ?? location;
                 if (attach.AdoptSession && own.Statistics?.SessionInfo?.SessionId is { } jobSession && BigQuerySql.SessionId().IsMatch(jobSession))
