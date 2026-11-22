@@ -87,11 +87,12 @@ a later lane, behind the same gate until 0.11.0.
   steps rather than numbering them. Delete acts at once and its banner names the steps that went to the deleted one and now quit
   reporting failure (as SSMS does), with Undo putting all of it back. The editor shows the step's name and type, then the
   type's fields: T-SQL in a Monaco editor that completes against the step's database, with **Parse** (`language.parse`,
-  ScriptDom's parser in the backend, nothing runs) and **Open in query window** (a new query tab on the job's connection and the
+  ScriptDom's parser in the backend on a large-stack thread, nothing runs; text nested more than 128 parentheses deep is
+  reported too deep to parse) and **Open in query window** (a new query tab on the job's connection and the
   step's database); PowerShell and CmdExec in their own editors, with Run as (the SQL Server Agent service account or a
   proxy granted to the step's type, `sp_help_proxy @subsystem_name`) and CmdExec's success exit code; SSIS on one scroll, with
   the package picked inline from SSISDB's folders, projects and packages (or SQL Server and file system sources), its
-  parameters, environment, 32-bit runtime and logging. On success and On failure choose next step, quit with success, quit
+  parameters, environment, 32-bit runtime and logging; Analysis Services Command and Query with the Server they run on. On success and On failure choose next step, quit with success, quit
   with failure or go to a named step; More options (retries, output file and its append, log to table, history output)
   stays folded with a one-line summary. Problems block only what msdb refuses (a missing name or command, a go-to past the
   last step, a proxy not granted to the type) and warn on the rest. The describe reads at most 50 steps and each command up to

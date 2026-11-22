@@ -74,6 +74,7 @@ internal static class AgentJobDocumentLiveChecks
             "the job document's script has SSMS's transaction shape and, run back against msdb, makes the change: " + string.Join(" | ", runs.Select(run => run.Status + " " + run.Error)));
 
         await AlertAsync(check, scratch, job, id, sql, Describe, Save);
+        await NonSysadminStepAsync(check, scratch, sql);
     }
 
     /// <summary>Remove on an alert that runs the job detaches it (the alert stays, running no job), where the platform has alerts.</summary>
@@ -97,6 +98,30 @@ internal static class AgentJobDocumentLiveChecks
     }
 
     /// <summary>New Job's save (target the Agent node) creates the job with what it sets, in one transaction; the New Job describe lists it after.</summary>
+    /// <summary>New Job's step write as a SQLAgentUserRole login: the exact arguments the save sends (WriteStep, add), inside a transaction rolled
+    /// back, so nothing is left. msdb refuses a non-sysadmin any non-NULL @database_user_name (14583).</summary>
+    private static async Task NonSysadminStepAsync(Action<bool, string> check, ScratchDatabase scratch, Func<string, string, Task<SqlRun>> sql)
+    {
+        static string Bracket(string value) => "[" + value.Replace("]", "]]", StringComparison.Ordinal) + "]";
+        static string Literal(object? value) => value switch { null => "NULL", string text => Quote(text), _ => Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture)! };
+        var login = scratch.OwnLogin("agstep");
+        var made = await sql("CREATE LOGIN " + Bracket(login) + " WITH PASSWORD = " + Quote(ScratchDatabase.Throwaway()) + ", CHECK_POLICY = OFF;", "master");
+        try
+        {
+            var mapped = await sql("CREATE USER " + Bracket(login) + " FOR LOGIN " + Bracket(login) + ";\nALTER ROLE SQLAgentUserRole ADD MEMBER " + Bracket(login) + ";", "msdb");
+            var write = new AgentStepWriteDto(1, "One", "TSQL", "SELECT 1;", "master", "", 1, 0, 2, 0, 0, 0, "", 0, 0, 0, "", 0);
+            var call = AgentSql.WriteStep(1, new AgentParameter("@job_id", System.Data.SqlDbType.UniqueIdentifier), write, add: true);
+            var arguments = string.Join(", ", call.Arguments.Where(argument => argument.Name != "@job_id").Select(argument => argument.Name + " = " + Literal(argument.Value)));
+            var run = await sql("EXECUTE AS LOGIN = " + Quote(login) + ";\nBEGIN TRANSACTION;\nDECLARE @id uniqueidentifier;\nEXEC msdb.dbo.sp_add_job @job_name = " + Quote(scratch.AgentObject("job") + "_ns")
+                + ", @job_id = @id OUTPUT;\nEXEC msdb.dbo.sp_add_jobstep @job_id = @id, " + arguments + ";\nDECLARE @refused int = 0;\nBEGIN TRY EXEC msdb.dbo.sp_add_jobstep @job_id = @id, @step_name = N'Two', @database_user_name = N''; END TRY BEGIN CATCH SET @refused = ERROR_NUMBER(); END CATCH;\nREVERT;\n"
+                + "SELECT CONCAT(COUNT(*), ':', @refused) FROM msdb.dbo.sysjobsteps WHERE job_id = @id;\nROLLBACK TRANSACTION;", "msdb");
+            // The N'' a sp_update_jobstep would send is refused (14583), so the check tells NULL from N''.
+            check(made.Status == "completed" && mapped.Status == "completed" && run.Error is null && run.Scalar == "1:14583",
+                "a SQLAgentUserRole login adds New Job's step with the arguments the save sends (empty optional strings as NULL): " + made.Error + mapped.Error + run.Error + " " + run.Scalar);
+        }
+        finally { await sql("IF USER_ID(" + Quote(login) + ") IS NOT NULL DROP USER " + Bracket(login) + ";", "msdb"); }
+    }
+
     public static async Task CreateAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json, string job, Func<string, string, Task<SqlRun>> sql)
     {
         async Task<T> Call<T>(string method, object args) => (T)await service.DispatchAsync(method, JsonSerializer.SerializeToElement(args, json), json);

@@ -215,6 +215,8 @@ internal sealed partial class ActionService
             // Commands are nvarchar(max): each is bounded by stepCommandChars and all of them by stepCommandTotalChars, so the describe stays
             // far below the response limit; a cut command is marked, and the document never writes it back.
             var commandRoom = catalogue.Limit("stepCommandTotalChars");
+            // msdb compares subsystems case-insensitively and stores them as a script spelled them (N'CMDEXEC'): the document uses the catalogue's id.
+            string Subsystem(string stored) => catalogue.SubsystemLabels.Keys.FirstOrDefault(id => string.Equals(id, stored, StringComparison.OrdinalIgnoreCase)) ?? stored;
             steps = [.. stepRows.Rows.Select(item =>
             {
                 object? Value(string column) => stepRows.Value(item, column);
@@ -222,7 +224,7 @@ internal sealed partial class ActionService
                 var room = (int)Math.Max(0, Math.Min(catalogue.Limit("stepCommandChars"), commandRoom));
                 var command = whole.Length > room ? whole[..room] : whole;
                 commandRoom -= command.Length;
-                return new AgentJobStepRowDto(IntOf(Value("step_id")), TextOf(Value("step_name")), TextOf(Value("subsystem")), command, IntOf(Value("flags")),
+                return new AgentJobStepRowDto(IntOf(Value("step_id")), TextOf(Value("step_name")), Subsystem(TextOf(Value("subsystem"))), command, IntOf(Value("flags")),
                     IntOf(Value("cmdexec_success_code")), IntOf(Value("on_success_action"), 1), IntOf(Value("on_success_step_id")), IntOf(Value("on_fail_action"), 2), IntOf(Value("on_fail_step_id")),
                     TextOf(Value("server")), TextOf(Value("database_name")), TextOf(Value("database_user_name")), IntOf(Value("retry_attempts")), IntOf(Value("retry_interval")),
                     IntOf(Value("os_run_priority")), TextOf(Value("output_file_name")), IntOf(Value("proxy_id")), command.Length < whole.Length ? true : null);

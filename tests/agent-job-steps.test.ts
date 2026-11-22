@@ -379,6 +379,29 @@ describe('the step problems of what msdb already holds', () => {
     const edited = { ...draft, steps: draft.steps.map(item => item.key === 's1' ? { ...item, command: 'x' } : item) }
     expect(agentStepProblems(edited, context(draft)).filter(item => item.field === 'name').map(item => item.severity)).toEqual(['error', 'error', 'error'])
   })
+  it('reads a subsystem msdb stored in another case as the catalogue spells it, keeping a T-SQL step\'s Run as user', () => {
+    const read = initialStepsDraft([step(1, 'A', { subsystem: 'tsql', databaseUserName: 'etl_user', flags: 4 }), step(2, 'B', { subsystem: 'CMDEXEC', databaseName: '' })], 1)
+    expect(read.steps.map(item => item.subsystem)).toEqual(['TSQL', 'CmdExec'])
+    const save = planAgentSteps([step(1, 'A', { subsystem: 'tsql', databaseUserName: 'etl_user', flags: 4 }), step(2, 'B', { subsystem: 'CMDEXEC', databaseName: '' })], moveStep(read, 's2', 0), 1, guid)!
+    expect(save.writes?.map(write => [write.name, write.subsystem, write.databaseUserName])).toEqual([['B', 'CmdExec', ''], ['A', 'TSQL', 'etl_user']])
+    expect(agentStepsSaveSchema.safeParse(save).success).toBe(true)
+  })
+  it('asks an Analysis Services step for its server, and drops an output file a type cannot write', () => {
+    const draft = initialStepsDraft([step(1, 'One', { outputFileName: 'C:\out.txt' })], 1)
+    const olap = { ...draft, steps: [withSubsystem(draft.steps[0]!, 'ANALYSISQUERY')] }
+    expect(agentStepProblems(olap, context(draft)).find(item => item.field === 'server')?.message).toBe(stepText.serverNeeded)
+    expect(agentStepProblems({ ...olap, steps: [{ ...olap.steps[0]!, server: 'olap01' }] }, context(draft)).filter(item => item.field === 'server')).toEqual([])
+    expect(withSubsystem(draft.steps[0]!, 'Snapshot').outputFileName).toBe('')
+    expect(withSubsystem(draft.steps[0]!, 'PowerShell').outputFileName).toBe('C:\out.txt')
+  })
+  it('keeps a go-to past the last step over a reload, as msdb keeps it', () => {
+    const openedModel = model(), draft = initialAgentJobDraft(openedModel)
+    const mine = { ...draft, steps: { ...draft.steps, steps: draft.steps.steps.map(item => item.key === 's1' ? { ...item, command: 'mine' } : item) } }
+    const current = model({ job: { ...openedModel.job!, version: 9 }, steps: [described[0]!, step(2, 'Rebuild', { onFailAction: 4, onFailStepId: 7 }), described[2]!, described[3]!] })
+    const rebased = rebaseAgentJobDraft(openedModel, current, mine)
+    expect(rebased.steps.steps[1]).toMatchObject({ onFail: 4, onFailTarget: 's7' })
+    expect(agentJobSave(current, rebased)!.steps).toEqual({ writes: [expect.objectContaining({ id: 1, command: 'mine' })] })
+  })
   it('refuses a save with a success exit code past int32 or a NUL character', () => {
     const draft = initialStepsDraft([step(1, 'One')], 1)
     const past = { ...draft, steps: [{ ...draft.steps[0]!, cmdexecSuccessCode: 2_147_483_648 }] }

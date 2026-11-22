@@ -590,7 +590,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "activity.kill" => await sessionActions.KillAsync(Read<ActivityKillArgs>(parameters, json), Token(context)),
         "agent.profile" => await explorer.AgentProfileAsync(Read<AgentProfileArgs>(parameters, json), Token(context)),
         "agent.historyMessage" => await actions.HistoryMessageAsync(Read<AgentHistoryMessageArgs>(parameters, json), Token(context)),
-        "language.parse" => StepParser.Parse(Read<LanguageParseArgs>(parameters, json), Token(context)),
+        "language.parse" => await StepParser.ParseAsync(Read<LanguageParseArgs>(parameters, json), Token(context)),
         SynthesizeMethod when hooks => Synthesize(Read<SynthesizeArgs>(parameters, json), Token(context)),
         _ => throw new RequestException("METHOD_NOT_FOUND", "Unsupported backend method.")
     };

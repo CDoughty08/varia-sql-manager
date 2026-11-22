@@ -22,7 +22,7 @@ export interface AgentJobStepRecord {
   readonly onSuccessStepId?: number
   readonly onFailAction?: number
   readonly onFailStepId?: number
-  /** Not modelled (a remote server for old subsystems); passed back as read. */
+  /** The Analysis Services types' server (their Server field); other types pass it back as read. */
   readonly server?: string
   readonly databaseName?: string
   readonly databaseUserName?: string
@@ -84,10 +84,12 @@ const keyOf = (id: number) => `s${id}`
 const describedId = (key: string): number | undefined => /^s[1-9][0-9]*$/.test(key) ? Number(key.slice(1)) : undefined
 
 /** A described step as the draft holds it. */
+/** msdb stores a subsystem as a script spelled it (N'CMDEXEC'; it compares them case-insensitively): the catalogue's id, else as stored. */
+const subsystemId = (stored: string) => subsystems.find(entry => entry.id.toLowerCase() === stored.toLowerCase())?.id ?? stored
 export function stepDraftOf(step: AgentJobStepRecord): AgentStepDraft {
   const onSuccess = action(step.onSuccessAction, 1), onFail = action(step.onFailAction, 2)
   return {
-    key: keyOf(step.id), from: step.id, name: step.name, subsystem: step.subsystem, command: step.command ?? '', databaseName: step.databaseName ?? '', databaseUserName: step.databaseUserName ?? '',
+    key: keyOf(step.id), from: step.id, name: step.name, subsystem: subsystemId(step.subsystem), command: step.command ?? '', databaseName: step.databaseName ?? '', databaseUserName: step.databaseUserName ?? '',
     onSuccess, ...onSuccess === 4 && step.onSuccessStepId ? { onSuccessTarget: keyOf(step.onSuccessStepId) } : {},
     onFail, ...onFail === 4 && step.onFailStepId ? { onFailTarget: keyOf(step.onFailStepId) } : {},
     retryAttempts: step.retryAttempts ?? 0, retryInterval: step.retryInterval ?? 0, outputFileName: step.outputFileName ?? '', flags: step.flags ?? 0,
@@ -185,7 +187,9 @@ export function withSubsystem(step: AgentStepDraft, subsystem: string): AgentSte
   else if (step.subsystem !== 'TSQL' && tsql && (flags & includeAllOutput)) flags = (flags & ~includeAllOutput) | stepFlags.includeStepOutputInHistory
   if (subsystem !== 'CmdExec') flags &= ~cmdExecAbortEvent
   if (!tableLogSubsystems.has(subsystem)) flags &= ~(stepFlags.logToTable | stepFlags.logToTableAppend)
-  return { ...step, subsystem, flags, databaseName: tsql ? step.databaseName || 'master' : subsystem === 'CmdExec' ? '' : step.databaseName, databaseUserName: tsql ? step.databaseUserName : '', proxyId: tsql ? 0 : step.proxyId }
+  // msdb refuses an output file on a type that cannot log to one (14545).
+  return { ...step, subsystem, flags, databaseName: tsql ? step.databaseName || 'master' : subsystem === 'CmdExec' ? '' : step.databaseName, databaseUserName: tsql ? step.databaseUserName : '', proxyId: tsql ? 0 : step.proxyId,
+    outputFileName: tableLogSubsystems.has(subsystem) ? step.outputFileName : '' }
 }
 
 // --- Flags (docs/agent-plan.md › Step dialog Advanced) ----------------------------------------------------------------------
@@ -195,6 +199,8 @@ const includeAllOutput = 32
 /** CmdExec's abort event bit, carried as read; msdb refuses it on any other type. */
 const cmdExecAbortEvent = 64
 /** The types msdb lets log to a table or an output file. */
+/** The Analysis Services types, which run against the server their step names (msdb refuses one without, 14262). */
+export const serverSubsystems: ReadonlySet<string> = new Set(['ANALYSISQUERY', 'ANALYSISCOMMAND'])
 const tableLogSubsystems = new Set(['TSQL', 'CmdExec', 'ANALYSISQUERY', 'ANALYSISCOMMAND', 'SSIS', 'PowerShell'])
 export const stepOutputSubsystems: ReadonlySet<string> = tableLogSubsystems
 /** The More options checkboxes as `flags` holds them. */
@@ -270,6 +276,7 @@ export const stepText = {
   stepsTruncated: `This job has more than ${agentLimits.stepsPerJob} steps. Varia lists the first ${agentLimits.stepsPerJob} and does not change its steps; edit them in SSMS.`,
   targetPast: `It goes to a step past step ${agentLimits.stepsPerJob}, which a save from here cannot write: choose where it goes.`,
   unsavableOptions: 'This step has flags or a run priority Varia does not edit, so the steps cannot be saved from here. Edit them in SSMS.',
+  serverNeeded: 'An Analysis Services step needs the server it runs on.',
   exitCodePast: 'The success exit code is a whole number from -2,147,483,648 to 2,147,483,647.',
   nulCharacter: 'A step\'s name, command, output path, user, database or server cannot hold a NUL character.',
   retriesPast: `Retry attempts and the retry interval are at most ${agentLimits.stepRetries.toLocaleString('en-US')} each.`,
@@ -280,7 +287,7 @@ const listed = (numbers: readonly number[]) => numbers.length < 2 ? numbers.join
 
 // --- Problems: on the step, its field, the Steps tab and the header; only what msdb would refuse outright is an error -------
 
-export type AgentStepField = 'name' | 'type' | 'command' | 'database' | 'runAs' | 'onSuccess' | 'onFail' | 'output' | 'runAsUser' | 'package'
+export type AgentStepField = 'name' | 'type' | 'command' | 'database' | 'runAs' | 'onSuccess' | 'onFail' | 'output' | 'runAsUser' | 'package' | 'server'
 export interface AgentStepProblem { readonly key: string; readonly field: AgentStepField; readonly severity: 'error' | 'warning'; readonly message: string }
 export interface AgentStepContext {
   readonly sysadmin: boolean
@@ -325,6 +332,8 @@ export function agentStepProblems(draft: AgentStepsDraft, context: AgentStepCont
     if (step.truncated) push('command', saved ? 'error' : 'warning', saved ? stepText.truncatedSave : stepText.truncated)
     else if (saved && step.command.length > agentLimits.stepCommandChars) push('command', 'error', `A step's command holds at most ${agentLimits.stepCommandChars.toLocaleString('en-US')} characters.`)
     commandChars += step.command.length
+    if (serverSubsystems.has(step.subsystem) && saved && !step.server.trim()) push('server', 'error', stepText.serverNeeded)
+    else if (step.server.length > agentLimits.nameChars) push('server', 'error', `A server name holds at most ${agentLimits.nameChars} characters.`)
     if (step.outputFileName.length > agentLimits.stepOutputChars) push('output', 'error', `An output file path holds at most ${agentLimits.stepOutputChars} characters.`)
     if (step.outputFileName.trim() && !context.sysadmin) push('output', 'warning', stepText.outputSysadmin)
     if (step.databaseUserName.trim() && step.subsystem === 'TSQL' && !context.sysadmin) push('runAsUser', 'warning', stepText.runAsUserSysadmin)
@@ -497,6 +506,7 @@ export function rebaseSteps(opened: readonly AgentJobStepRecord[], current: read
   const openedNames = new Set(opened.map(step => foldName(step.name)))
   const keyOfCurrent = new Map<number, string>()
   const fromServer = new Set<string>()
+  const currentIds = new Set(current.map(step => step.id)), openedIds = new Set(opened.map(step => step.id))
   const steps: AgentStepDraft[] = []
   for (const step of draft.steps) {
     if (step.from === undefined) { steps.push(step); continue }
@@ -520,7 +530,8 @@ export function rebaseSteps(opened: readonly AgentJobStepRecord[], current: read
   // The server's steps name their go-tos by the job's current ids (`s<id>` from stepDraftOf): map them to the draft's keys.
   const targeted = steps.map(step => {
     if (!fromServer.has(step.key)) return step
-    const target = (key: string | undefined) => { const id = key === undefined ? undefined : describedId(key); return id === undefined ? undefined : keyOfCurrent.get(id) ?? `missing:${id}` }
+    // A go-to past the job's last step is msdb's to keep (warning 14236): marked here, it ends as `s<id>`, as a fresh read has it.
+    const target = (key: string | undefined) => { const id = key === undefined ? undefined : describedId(key); return id === undefined ? undefined : keyOfCurrent.get(id) ?? (currentIds.has(id) ? `missing:${id}` : `dangling:${id}`) }
     return { ...step, ...step.onSuccessTarget ? { onSuccessTarget: target(step.onSuccessTarget) } : {}, ...step.onFailTarget ? { onFailTarget: target(step.onFailTarget) } : {} }
   })
   // The job's order unless the user reordered the steps both reads have; the user's new steps then follow the step before them in the draft.
@@ -538,16 +549,21 @@ export function rebaseSteps(opened: readonly AgentJobStepRecord[], current: read
   // Keyed like a fresh read: `s<current id>`, and `n<k>` for new steps (an old `s<id>` key of a step that became new is renamed).
   const keyMap = new Map<string, string>()
   const fresh: AgentStepDraft[] = []
+  const serverKeys = new Set<string>()
   for (const step of ordered) {
     const key = step.from !== undefined ? `s${step.from}` : /^n[0-9]+$/.test(step.key) && !keyMap.has(step.key) ? step.key : newStepKey([...fresh, ...ordered.filter(item => /^n[0-9]+$/.test(item.key))])
     keyMap.set(step.key, key)
+    if (fromServer.has(step.key)) serverKeys.add(key)
     fresh.push({ ...step, key })
   }
   const rekeyed = fresh.map(step => {
+    // A dangling go-to (to no step of either read, or for the server's steps of the job now) is kept as it is; one to a step not kept quits.
+    const dangling = (key: string) => { const id = describedId(key); return id !== undefined && !currentIds.has(id) && !openedIds.has(id) && !serverKeys.has(step.key) }
     const target = (code: StepAction, key: string | undefined): [StepAction, string | undefined] => {
       if (code !== 4 || !key) return [code, undefined]
+      if (key.startsWith('dangling:')) return [4, `s${key.slice('dangling:'.length)}`]
       const to = keyMap.get(key)
-      return to ? [4, to] : [2, undefined]
+      return to ? [4, to] : dangling(key) ? [4, key] : [2, undefined]
     }
     const [onSuccess, onSuccessTarget] = target(step.onSuccess, step.onSuccessTarget), [onFail, onFailTarget] = target(step.onFail, step.onFailTarget)
     const { onSuccessTarget: _s, onFailTarget: _f, ...rest } = step

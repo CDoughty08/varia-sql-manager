@@ -363,14 +363,19 @@ internal static class AgentJobDocumentChecks
     /// <summary>language.parse: ScriptDom alone, batches split on GO, errors with their position and number, and the text bounded.</summary>
     private static void Parse(Action<bool, string> check)
     {
-        var clean = StepParser.Parse(new LanguageParseArgs("SELECT 1;\nGO\nEXEC dbo.Load @day = 1;"), CancellationToken.None);
+        static LanguageParseResult Run(string text) => StepParser.ParseAsync(new LanguageParseArgs(text), CancellationToken.None).GetAwaiter().GetResult();
+        var clean = Run("SELECT 1;\nGO\nEXEC dbo.Load @day = 1;");
         check(clean.Errors.Count == 0 && !clean.Truncated, "Parse finds no error in T-SQL batches split on GO");
-        var wrong = StepParser.Parse(new LanguageParseArgs("SELECT 1;\nSELEC 2"), CancellationToken.None);
+        var deep = Run("SELECT " + new string('(', 40_000) + "1" + new string(')', 40_000));
+        check(deep.Errors is [{ Line: 1, Number: 0 } refusal] && refusal.Message.Contains("too deep", StringComparison.Ordinal), "Parse refuses nesting deeper than SQL Server accepts instead of overflowing the stack");
+        var chain = Run("SELECT 1" + string.Concat(Enumerable.Repeat(" + 1", 40_000)));
+        check(chain.Errors.Count == 0, "Parse takes a long operator chain on its large-stack thread");
+        var wrong = Run("SELECT 1;\nSELEC 2");
         check(wrong.Errors.Count >= 1 && wrong.Errors[0] is { Line: 2, Number: > 0 } first && first.Message.Contains("SELEC", StringComparison.Ordinal) && first.Message.Length <= StepParser.MessageChars,
             "Parse reports a syntax error with its line, number and message");
         var limit = (int)AgentCatalog.Current.Limit("parseChars");
         var refused = false;
-        try { StepParser.Parse(new LanguageParseArgs(new string(' ', limit + 1)), CancellationToken.None); }
+        try { Run(new string(' ', limit + 1)); }
         catch (RequestException error) { refused = error.Code == "INVALID_PARAMS"; }
         check(refused, "Parse refuses a text over the catalogue's parseChars");
     }

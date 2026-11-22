@@ -126,13 +126,16 @@ internal static partial class AgentSql
         new("sp_add_jobstep", [JobOf(jobId), Indexed(index, "@step_id", SqlDbType.Int, 0, stepId), Indexed(index, "@step_name", SqlDbType.NVarChar, 128, name)],
             Part: "new step " + stepId.ToString(CultureInfo.InvariantCulture));
     /// <summary>Planner step (4): a step's whole content into its final id: sp_update_jobstep, or New Job's sp_add_jobstep (<paramref name="add"/>).</summary>
+    /// <remarks>sp_add_jobstep refuses a non-sysadmin any non-NULL @database_user_name (14583) before it turns N'' into NULL, so New Job sends an
+    /// empty optional string as NULL; sp_update_jobstep reads NULL as "keep", so it is sent N'' to clear.</remarks>
     public static AgentSaveCall WriteStep(int index, AgentParameter jobId, AgentStepWriteDto write, bool add)
     {
+        object? Optional(string text) => add && text.Length == 0 ? null : text;
         object?[] values = [write.Id, write.Name, write.Subsystem, write.Command, write.CmdexecSuccessCode, (byte)write.OnSuccessAction, write.OnSuccessStepId, (byte)write.OnFailAction,
-            write.OnFailStepId, write.Server, write.DatabaseName, write.DatabaseUserName, write.RetryAttempts, write.RetryInterval, write.OsRunPriority, write.OutputFileName, write.Flags];
+            write.OnFailStepId, Optional(write.Server), write.DatabaseName, Optional(write.DatabaseUserName), write.RetryAttempts, write.RetryInterval, write.OsRunPriority, Optional(write.OutputFileName), write.Flags];
         var arguments = new List<AgentSaveArgument> { JobOf(jobId) };
         arguments.AddRange(StepWriteArguments.Select((entry, at) => Indexed(index, entry.Argument, entry.Type, entry.Size, values[at])));
-        arguments.Add(write.ProxyId > 0 ? Indexed(index, "@proxy_id", SqlDbType.Int, 0, write.ProxyId) : Indexed(index, "@proxy_name", SqlDbType.NVarChar, 128, ""));
+        arguments.Add(write.ProxyId > 0 ? Indexed(index, "@proxy_id", SqlDbType.Int, 0, write.ProxyId) : Indexed(index, "@proxy_name", SqlDbType.NVarChar, 128, Optional("")));
         var id = write.Id.ToString(CultureInfo.InvariantCulture);
         return new(add ? "sp_add_jobstep" : "sp_update_jobstep", arguments, Part: "step " + id);
     }

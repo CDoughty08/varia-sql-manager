@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, type DragEvent } from 'react'
 import type { editor } from 'monaco-editor'
 import { agentLimits, stepActions } from '../../../shared/agent/catalog.ts'
 import {
-  stepFlagChoices, stepFlagsWith, stepOptionsSummary, stepTargetShort, stepText, stepTypeLabel, stepTypeShort, type AgentStepDraft, type AgentStepField,
+  serverSubsystems, stepFlagChoices, stepFlagsWith, stepOptionsSummary, stepTargetShort, stepText, stepTypeLabel, stepTypeShort, type AgentStepDraft, type AgentStepField,
   type AgentStepProblem, type StepAction
 } from '../../../shared/agent/steps.ts'
 import {
@@ -320,7 +320,7 @@ function StepEditor(props: StepsProps & { readonly step: AgentStepDraft; readonl
   if (decided !== `${step.key} ${step.subsystem}`) { setDecided(`${step.key} ${step.subsystem}`); setSsisText(ssisAsText()) }
   const types = model.subsystems?.length ? model.subsystems : [...mainTypes]
   const more = types.filter(type => !(mainTypes as readonly string[]).includes(type))
-  const name = problemText(problems, step.key, 'name'), command = problemText(problems, step.key, 'command')
+  const name = problemText(problems, step.key, 'name'), command = problemText(problems, step.key, 'command'), server = problemText(problems, step.key, 'server')
   const proxy = step.proxyId ? model.proxies?.find(item => item.id === step.proxyId) : undefined
   const account = proxy ? proxy.identity ?? proxy.name : 'the SQL Server Agent service account'
   const parse = state.parse?.key === step.key ? state.parse : undefined
@@ -387,6 +387,12 @@ function StepEditor(props: StepsProps & { readonly step: AgentStepDraft; readonl
         : step.subsystem === 'PowerShell' ? stepText.powerShellHelp(state.server, account) : step.subsystem === 'CmdExec' ? stepText.cmdExecHelp(state.server, account) : ''}</p>
     </div>}
     <div className="agent-step-grid">
+      {serverSubsystems.has(step.subsystem) && <div className="agent-step-row">
+        <label htmlFor={`${id}-olap-server`}>Server</label>
+        <input id={`${id}-olap-server`} className="property-input" type="text" maxLength={128} spellCheck={false} value={step.server} disabled={!editable}
+          aria-invalid={server.error ? true : undefined} onChange={event => update({ server: event.target.value })} />
+        <FieldMessages text={server} id={`${id}-olap-server`} />
+      </div>}
       {step.subsystem === 'CmdExec' && <div className="agent-step-row">
         <label htmlFor={`${id}-exit`}>Success exit code</label>
         <span className="agent-step-inline">
