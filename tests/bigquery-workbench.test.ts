@@ -35,7 +35,8 @@ describe('BigQuery connections in the workbench (BQ-2)', () => {
       expect(value.documents.getModel(query.id)?.getValue()).toBe(sql)
       // A SQL Server query keeps both commands, with no reason to grey them.
       const tsql = value.documents.restore('commas-tsql.sql', 'SELECT a,\n  b\nFROM t', 'sql', 'lf')
-      expect(value.documents.getSnapshot().activeId).toBe(tsql.id)
+      expect(value.documents.boundEditor?.getModel()).toBe(value.documents.getModel(tsql.id))
+      expect(value.documents.boundEditor?.getModel()?.getLanguageId()).toBe('sql')
       for (const id of ['edit.commasToFront', 'edit.commasToEnd'] as const) {
         expect(value.commands.isEnabled(id), id).toBe(true)
         expect(value.commands.unavailableReason(id), id).toBeUndefined()
