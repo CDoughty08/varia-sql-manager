@@ -448,8 +448,8 @@ export const loginPropertiesDefinition: ObjectDialogDefinition<LoginPropertiesMo
   initialFocus: loginPropertiesFocus
 }
 
-/** The dialogs this module defines: New Database and Table Properties are documents with services of their own (src/renderer/src/new-database, src/renderer/src/properties/TablePropertiesService.ts). */
-export type DefinedDialogId = Exclude<DialogId, 'newDatabase' | 'tableProperties'>
+/** The dialogs this module defines: New Database, Table Properties and the Agent job document are documents with services of their own (src/renderer/src/new-database, src/renderer/src/properties/TablePropertiesService.ts, src/renderer/src/agent/JobDocumentService.ts). */
+export type DefinedDialogId = Exclude<DialogId, 'newDatabase' | 'tableProperties' | 'agentJob'>
 export interface DialogModels {
   readonly deleteObject: DeleteTarget; readonly databaseProperties: DatabasePropertiesModel; readonly attachDatabase: AttachServerFacts; readonly newLogin: NewLoginModel
   readonly takeOffline: DatabaseStateModel; readonly bringOnline: DatabaseStateModel; readonly detachDatabase: DatabaseStateModel; readonly unlockLogin: UnlockModel

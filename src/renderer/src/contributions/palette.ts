@@ -24,7 +24,7 @@ const recentLimit = 10
  */
 const keepsQuickInput: ReadonlySet<CommandId> = new Set(['workbench.showCommands', 'workbench.quickOpen', 'workbench.search', 'edit.undo', 'edit.redo', 'edit.selectAll', 'edit.delete'])
 type Picker = Omit<QuickPickOptions<QuickPickItem>, 'value' | 'prefix' | 'anchor' | 'onDidChangeValue' | 'onDidHide'>
-export type PaletteWorkbench = Pick<Workbench, 'commands' | 'keybindings' | 'quickInput' | 'documents' | 'connections' | 'events'> & Partial<Pick<Workbench, 'settings' | 'explorer' | 'objectSearch' | 'targets'>>
+export type PaletteWorkbench = Pick<Workbench, 'commands' | 'keybindings' | 'quickInput' | 'documents' | 'connections' | 'events'> & Partial<Pick<Workbench, 'settings' | 'explorer' | 'objectSearch' | 'targets' | 'jobDocuments'>>
 /** What no prefix searches: open queries (Go to Query), or open queries, commands and the servers' objects (Search). */
 type Scope = 'queries' | 'search'
 /** The groups Search lists, in this order. */
@@ -141,7 +141,12 @@ export function paletteContribution(workbench: PaletteWorkbench, history = new C
   }
   /** Reveal in Object Explorer, as a Search Objects hit's: the tree loads and expands its way to the object, and takes focus as F8 gives it. */
   const revealObject = (connectionId: string, hit: ObjectSearchHit) => {
-    const { objectSearch, explorer } = workbench
+    const { objectSearch, explorer, jobDocuments } = workbench
+    // A job opens its document (AG-6a): Search lists jobs only behind SQL Server Agent's release gate.
+    if (hit.object.kind === 'agentJob' && hit.object.name !== undefined && jobDocuments) {
+      try { jobDocuments.openJob(connectionId, hit.object.name) } catch (error) { commands.reportError(error instanceof Error ? error.message : 'The job could not be opened.') }
+      return
+    }
     if (!objectSearch || !explorer) return
     void commands.execute('window.explorer', undefined, 'palette')
     void objectSearch.reveal(explorer, connectionId, hit).then(outcome => { if (!outcome.ok && !outcome.cancelled) commands.reportError(outcome.message) }, onUnexpectedError)

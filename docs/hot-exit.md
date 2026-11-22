@@ -31,7 +31,7 @@ default. While off, pinned tabs still reopen, and a close asks about unsaved cha
 - The editor groups of the kept tabs (docs/editor-groups.md, *Persistence*): splits, sizes, floating groups, each group's
   shown tab and requested pinned and unpinned stack heights. A single docked group is kept when its stack heights differ
   from the default one row.
-- Untitled or unsaved tabs keep their text and unsaved state. A clean tab with a file keeps only the path and rereads it
+- Untitled or unsaved tabs keep their text and unsaved state. A file-backed query recovered after deleting all its text still needs saving. A clean tab with a file keeps only the path and rereads it
   (a missing file is named in a notice). An unsaved tab whose file is gone reopens with its text, without the file.
 - A kept buffer with a file carries the disk fingerprint it was based on; with external-change detection on, saving asks
   before replacing newer disk contents. Kept buffers without a fingerprint also ask before replacing an existing file.

@@ -36,6 +36,10 @@ const variablesIn = (text: string) => [...text.matchAll(/var\((--varia-[A-Za-z0-
 const keyByVariable = new Map(colorKeys.map(key => [cssVariable(key), key]))
 
 describe('theme tokens in the renderer', () => {
+  it('holds no control characters, which a CSS escape that lost its backslash (a glyph in content) leaves', () => {
+    expect(stylesheet).not.toMatch(/[\u0000-\u0008\u000e-\u001f]/)
+  })
+
   it('keeps color literals out of styles.css and renderer code', () => {
     const found: string[] = []
     for (const { selector, property, value } of declarations) {

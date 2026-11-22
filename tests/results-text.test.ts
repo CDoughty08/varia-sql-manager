@@ -3,10 +3,11 @@ import { readFileSync } from 'node:fs'
 import { decodePage, encodePage, type PageCell, type PageView, type WireKind } from '../src/shared/ipc/wire/pages'
 import { copyText, exportText, resolvePart, validTurn, MAX_SAFE, MAX_TRANSPOSED_ROWS } from '../src/shared/results/text-writer'
 import { limits } from '../src/shared/ipc/wire/protocol'
+import type { SortKind } from '../src/shared/results/sort-kind'
 
 // The same goldens the C# ResultTextWriter is checked against (Varia.Backend.Tests/TextChecks.cs), so the TypeScript
 // writer (local tables and the fake backend) writes Copy and Save Results As text byte for byte as the real one does.
-interface Column { name: string; dataType: string; wire: WireKind }
+interface Column { name: string; dataType: string; wire: WireKind; sortKind?: SortKind }
 type FixtureCell = string | null | { error: true } | { text: string; truncated: true } | { hex: string; truncated?: true }
 interface Turned { transposed?: true; headerColumn?: number; capped?: number }
 interface CopyCase extends Turned { name: string; headers: boolean; eol: 'crlf' | 'lf'; parts: { rows: number[][]; columns: number[][] }[]; expected: string; rows: number; truncatedCells: number }

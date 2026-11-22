@@ -80,6 +80,7 @@ internal static partial class AgentSql
         var match = ServerCall().Match(body[..^Check.Length]);
         if (!match.Success) { problems.Add("is not one msdb call in the server write shape"); return problems; }
         var procedure = match.Groups["proc"].Value;
+        if (SaveOnly.Contains(procedure)) { problems.Add("EXECs " + procedure + ", which only a job save calls"); return problems; }
         if (!catalog.WriteArguments.TryGetValue(procedure, out var allowed)) { problems.Add("EXECs " + procedure + ", which is not an Agent write procedure"); return problems; }
         if (purge != (procedure == "sp_purge_jobhistory")) problems.Add(purge ? "computes a cut-off for " + procedure : "purges history without the guarded cut-off");
         var seen = new HashSet<string>(StringComparer.Ordinal);
