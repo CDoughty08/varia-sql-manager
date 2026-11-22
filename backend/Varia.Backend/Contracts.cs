@@ -60,6 +60,7 @@ internal sealed record SessionCloseNote(string Code, [property: JsonIgnore(Condi
 internal sealed record CancelArgs(string QueryId);
 /// <summary>A database, or for BigQuery a dataset with its location (absent when BigQuery names none).</summary>
 internal sealed record DatabaseInfo(string Name, bool IsSystem, bool IsSnapshot, string? Location = null);
+internal enum BigQueryDecimalKind { None, Numeric, BigNumeric }
 /// <summary>A result column as the grid sees it: wire is "text" (SSMS display text) or "binary"; role marks documents
 /// (xml, json, plan), CLR UDTs and vectors, which are data, and the hidden columns (ResultTextWriter.Hidden): a row's tone
 /// and a diff's suffix (old, mark, leftRow, rightRow). Of is the pair a diff's previous-value column (role old) belongs to.
@@ -69,6 +70,8 @@ internal sealed record ResultColumn(string Name, string DataType, string Wire, s
     ResultCollation? Collation = null, int? Of = null)
 {
     public string SortKind { get; init; } = Results.ColumnTypes.SortKindOf(DataType);
+    // A local pivot needs the provider's aggregate range even when both providers call a column NUMERIC.
+    internal BigQueryDecimalKind BigQueryDecimal { get; init; }
 }
 /// <summary>A char, varchar, text, nchar, nvarchar or ntext column's collation as SqlClient read it from the result's
 /// metadata (SqlClientCollation): its Windows locale id, SQL sort id (non-zero for SQL_ collations), the code page SqlClient
