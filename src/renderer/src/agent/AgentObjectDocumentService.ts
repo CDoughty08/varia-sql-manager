@@ -280,14 +280,16 @@ export abstract class AgentObjectDocumentService<Model, Draft, Field extends str
     // The proxy's principal grants and revokes run after its transaction commits (msdb's principal check dooms one): when that step is
     // refused, the rest was saved, so the document reads the object again and keeps the refusal. Otherwise a refusal rolled everything back,
     // so the object is as it was read and the draft (and typed secret) stay.
-    if (value?.error && value.steps.some(step => step.status === 'done')) {
+    if (value?.error && this.partlySaved(value)) {
       const target = this.savedTarget(state, built)
       this.emptySlot(id)
       this.patch(id, { phase: 'loading', target, changes: 0 })
       this.options.documents.setDirty(id, false)
       this.options.documents.update(id, { name: this.tabName(target) })
       await this.describe(id)
-      this.patch(id, { error: { ...value.error, message: `${this.text.partlySaved} ${value.error.message}` } })
+      // A failed re-read keeps its own words too: the document then shows the model read before the save.
+      const reread = this.get(id)?.error
+      this.patch(id, { error: { ...value.error, message: `${this.text.partlySaved} ${value.error.message}${reread ? ` ${this.text.savedUnread} ${reread.message}` : ''}` } })
       return false
     }
     if (value?.error) { this.patch(id, { phase: 'ready', error: value.error }); return false }
@@ -295,6 +297,8 @@ export abstract class AgentObjectDocumentService<Model, Draft, Field extends str
     this.patch(id, { phase: 'ready', error: lost ? fallback('CONNECTION_LOST', !result.ok && result.code === 'BACKEND_LOST' ? this.text.backendLost : this.text.lost) : fallback('SQL_ERROR', result.ok ? this.text.unsaved : result.error) })
     return false
   }
+  /** Whether a refused save changed the object all the same, so the document reads it again: by default when a step was done. */
+  protected partlySaved(result: ActionExecuteResult): boolean { return result.steps.some(step => step.status === 'done') }
   /** Empties a document's password fields (a credential that will not be sent after all). */
   protected forgetSecret(id: string): void {
     this.emptySlot(id)

@@ -132,6 +132,8 @@ export interface AgentProxySave {
 }
 
 /** The save the draft asks for: undefined when an existing proxy's draft changes nothing. */
+/** The title of a proxy save's second step (the backend's ActionService.ProxyPrincipalsStep): its principal grants and revokes, without a transaction. */
+export const proxyPrincipalsStep = 'Grant and revoke principals'
 export function agentProxySave(model: AgentProxyDocumentModel, draft: AgentProxyDraft): AgentProxySave | undefined {
   const proxy = model.proxy
   const base = initialAgentProxyDraft(model)

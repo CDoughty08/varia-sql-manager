@@ -2,10 +2,10 @@
 // existing or created in place), Subsystems, Principals and References. AgentObjectDocumentService keeps the tab, the describe, the Script
 // drawer and Save; this says what a proxy's model, draft, problems and request are.
 import {
-  agentProxyChangeCount, agentProxyProblems, agentProxySave, agentProxySaveSendsSecret, agentProxyTabName, agentProxyText, changedAgentProxyFields, initialAgentProxyDraft,
+  agentProxyChangeCount, agentProxyProblems, proxyPrincipalsStep, agentProxySave, agentProxySaveSendsSecret, agentProxyTabName, agentProxyText, changedAgentProxyFields, initialAgentProxyDraft,
   type AgentProxyDocumentModel, type AgentProxyDraft, type AgentProxyField, type ProxyPrincipal
 } from '../../../shared/actions/agent-proxy.ts'
-import type { ActionDescribeResult } from '../../../shared/actions/schema.ts'
+import type { ActionDescribeResult, ActionExecuteResult } from '../../../shared/actions/schema.ts'
 import type { ObjectRef } from '../../../shared/explorer/refs.ts'
 import { AgentObjectDocumentService, type AgentObjectDocumentServiceOptions, type AgentObjectDocumentState, type AgentObjectDocumentText, type AgentObjectSave } from './AgentObjectDocumentService'
 
@@ -96,4 +96,6 @@ export class ProxyDocumentService extends AgentObjectDocumentService<AgentProxyD
   }
   protected savedNotice(created: boolean, secret: boolean): string { return secret ? agentProxyText.savedSecret : created ? agentProxyText.created : agentProxyText.saved }
   protected readOnly(): string | undefined { return undefined }
+  /** The principals' batch runs without a transaction, so a refused grant or revoke leaves the ones before it made, even with no step done. */
+  protected override partlySaved(result: ActionExecuteResult): boolean { return super.partlySaved(result) || result.steps.some(step => step.status === 'failed' && step.title === proxyPrincipalsStep) }
 }

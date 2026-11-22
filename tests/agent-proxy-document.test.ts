@@ -1,7 +1,8 @@
+import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   agentProxyChangeCount, agentProxyProblems, agentProxySave, agentProxySaveProblems, agentProxySaveSchema, agentProxyText, credentialProblems, credentialSave, credentialSaveSchema, credentialSecretsSchema,
-  credentialText, initialAgentProxyDraft, initialCredentialDraft, savable, type AgentProxyDocumentModel, type CredentialDocumentModel
+  credentialText, initialAgentProxyDraft, initialCredentialDraft, proxyPrincipalsStep, savable, type AgentProxyDocumentModel, type CredentialDocumentModel
 } from '../src/shared/actions/agent-proxy'
 import { actionExecuteResultSchema, type ActionDescribeResult, type ActionExecuteResult, type ActionRequest, type ActionScriptRequest } from '../src/shared/actions/schema'
 import { agentLimits } from '../src/shared/agent/catalog'
@@ -181,6 +182,25 @@ describe('the proxy document', () => {
     expect(api.describeObject.mock.calls.length).toBe(reads + 1)
     expect(proxyDocuments.get(id)).toMatchObject({ phase: 'ready', changes: 0, model: { proxy: { description: 'Mine' } }, error: { field: 'principals' } })
     expect(proxyDocuments.get(id)?.error?.message.startsWith('The proxy was saved, but not every principal change:')).toBe(true)
+    // A principals-only save: its one step runs without a transaction, so the grants before a refused one stay made, and the proxy is read again.
+    proxyDocuments.addPrincipal(id, { name: 'securityadmin', kind: 'serverRole' })
+    proxyDocuments.addPrincipal(id, { name: 'SQLAgentOperatorRole', kind: 'msdbRole' })
+    setProxy(proxyModel({ proxy: { ...proxyModel().proxy!, description: 'Mine', principals: [...proxyModel().proxy!.principals, { name: 'securityadmin', kind: 'serverRole' }] } }))
+    answers.push({ ok: true, value: { steps: [{ status: 'failed', title: proxyPrincipalsStep }], messages: [], elapsedMs: 1,
+      error: { code: 'SQL_ERROR', message: "Granting 'SQLAgentOperatorRole' the proxy was refused: no.", retryable: false, field: 'principals' } } })
+    expect(await proxyDocuments.save(id)).toBe(false)
+    expect(api.describeObject.mock.calls.length).toBe(reads + 2)
+    expect(proxyDocuments.get(id)).toMatchObject({ phase: 'ready', changes: 0, model: { proxy: { principals: [{ name: 'CONTOSO\\etl' }, { name: 'securityadmin' }] } }, error: { field: 'principals' } })
+    // A re-read that fails after a partial save says so too, beside the refusal.
+    proxyDocuments.addPrincipal(id, { name: 'SQLAgentOperatorRole', kind: 'msdbRole' })
+    api.describeObject.mockImplementationOnce(async () => ({ ok: false, error: 'The connection dropped.' }))
+    answers.push({ ok: true, value: { steps: [{ status: 'failed', title: proxyPrincipalsStep }], messages: [], elapsedMs: 1,
+      error: { code: 'SQL_ERROR', message: 'Refused.', retryable: false, field: 'principals' } } })
+    expect(await proxyDocuments.save(id)).toBe(false)
+    expect(proxyDocuments.get(id)?.error?.message).toBe('The proxy was saved, but not every principal change: Refused. The proxy was saved, but reading it again failed. The connection dropped.')
+  })
+  it("names the principals' step as the backend does", () => {
+    expect(readFileSync('backend/Varia.Backend/Actions/AgentProxyDocument.cs', 'utf8')).toContain(`ProxyPrincipalsStep = "${proxyPrincipalsStep}"`)
   })
 })
 
