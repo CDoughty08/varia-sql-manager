@@ -15,6 +15,7 @@ import { BigQueryAdvanced, BigQueryConnectFields, accountText, useBigQueryLists 
 import { bigQueryCredentialReady, bigQueryDefaults, bigQueryFormOptions, bigQueryReady, bigQueryRowDetail, bigQueryRowText, lastServerType, savedCostPrompt, serverTypeLabels, switchServerType, undoServerType, withAuthentication, withoutCostPrompt, type ServerTypeState, bigQueryFormShape } from './bigquery-connect-form'
 import { connectionPickerColor, connectionPresets } from '../../shared/theme/connection-colors'
 import Icon from './Icon'
+import DialogFooter from './kit/DialogFooter'
 import InlineError, { type ErrorAction } from './kit/InlineError'
 import { connectFix } from './connect-fix'
 import { advancedSummary, customSummary, listStep, rowTitle } from './connect-form'
@@ -137,7 +138,13 @@ function AdvancedProperties({ value, onSave, onClose }: { value: Partial<Advance
       })}</div></fieldset>)}
       <p className="field-note" id="advanced-timeout-note">Leave the command timeout empty to use Tools › Options › Query Execution › SQL Server › General. Timeout 0 means no timeout. Query tabs require an explicit reconnect after a lost session; automatic connection recovery retries apply to metadata connections.</p>
     </div>
-    <div className="connection-footer"><button className="ui-button" data-control-variant="secondary" type="button" onClick={() => { edited.current.clear(); setPrevious({}); setDraft({ ...advancedDefaults, commandTimeout: '' as unknown as number }) }}>Reset</button><span /><button className="ui-button primary" type="submit">OK</button><button className="ui-button" data-control-variant="secondary" type="button" onClick={onClose}>Cancel</button></div>
+    <DialogFooter
+      leading={<button className="ui-button" data-control-variant="secondary" type="button" onClick={() => { edited.current.clear(); setPrevious({}); setDraft({ ...advancedDefaults, commandTimeout: '' as unknown as number }) }}>Reset</button>}
+      trailing={<>
+        <button className="ui-button primary" type="submit">OK</button>
+        <button className="ui-button" data-control-variant="secondary" type="button" onClick={onClose}>Cancel</button>
+      </>}
+    />
   </form></div>
 }
 
@@ -1101,7 +1108,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
             {shownFailure?.details && <FailureDetails details={shownFailure.details} />}
           </div>}
         </div>}
-        <div className="connection-footer">
+        <DialogFooter wrap>
           <div>
             <button className="ui-button" data-control-variant="secondary" type="button" disabled={locked} onClick={reset}>Reset</button>
             <button className="ui-button" data-control-variant="secondary" type="button" data-reserve-label={testConnectionLabel} title={testing ? undefined : 'Sign in with these settings without saving them or opening a session'} disabled={testing ? false : locked || !loaded || !ready} onClick={() => { if (testing) stopTest(); else if (isBigQuery) void testBigQuery(); else void testConnection() }}><span>{testing ? 'Stop' : testConnectionLabel}</span></button>
@@ -1111,7 +1118,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
             <button ref={connectButton} className="ui-button primary" type="submit" data-reserve-label={pendingConnectLabel ?? connectLabel} data-reserve-busy-label={connectingLabel} disabled={locked || !loaded || !ready}><span>{busy ? connectingLabel : connectLabel}</span></button>
             <button ref={stopButton} className="ui-button" data-control-variant="secondary" type="button" data-reserve-label={cancelLabel} disabled={saving} onClick={busy ? stop : testing ? stopTest : requestClose}><span>{busy ? 'Stop' : cancelLabel}</span></button>
           </div>
-        </div>
+        </DialogFooter>
       </div>
     </form></div>
     {confirmClose && <SubDialog title={confirmClose.target ? `Save changes to ${confirmClose.target.options.displayName || confirmClose.target.options.server}?` : confirmClose.bigQueryTarget ? `Save changes to ${confirmClose.bigQueryTarget.options.displayName || confirmClose.bigQueryTarget.options.project}?` : isBigQuery ? `Save ${bigQuery.displayName || bigQuery.project} to History?` : `Save ${options.displayName || options.server} to History?`} okLabel="Save" alternative={{ label: "Don't Save", run: () => { const type = confirmClose.type; setConfirmClose(undefined); closeRest(type) } }}

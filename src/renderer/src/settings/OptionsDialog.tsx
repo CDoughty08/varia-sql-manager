@@ -9,6 +9,7 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
 import Switch from '../kit/Switch'
 import Segmented from '../kit/Segmented'
+import DialogFooter from '../kit/DialogFooter'
 import { followPointerDrag } from '../kit/pointer-drag'
 import DialogWindow, { closesDialogWindow, DialogHeading } from '../popouts/DialogWindow'
 import { trapFocus } from '../trap-focus'
@@ -688,23 +689,24 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
       {described.text && <p>{described.text}</p>}
     </div>}
     {error && <p className="connect-error options-error" role="alert">{error}</p>}
-    {confirmClose && <div className="options-dirty-confirm" role="alert">
-      <span>You have {totalPending} unsaved {totalPending === 1 ? 'change' : 'changes'}. Discard changes?</span>
-      <div className="options-dirty-actions">
-        <button type="button" className="ui-button" data-control-variant="secondary" autoFocus onClick={dismissConfirmClose}>Keep Editing</button>
-        <button type="button" className="ui-button primary" onClick={finishClose}>Discard Changes</button>
-      </div>
-    </div>}
-    <div className="connection-footer">
-      {!showingUnified && form.page.layout !== 'shortcuts' && <button type="button" className="ui-button" data-control-variant="secondary" onClick={() => {
+    <DialogFooter
+      leading={!showingUnified && form.page.layout !== 'shortcuts' ? <button type="button" className="ui-button" data-control-variant="secondary" onClick={() => {
         setDraft(current => resetPage(current, page, platform))
         if (page === 'environment.general' && themeState) previewThemePreference(defaultThemePreference)
         setErrors(new Map()); setError(''); setAppliedNotice(false); setConfirmClose(false)
-      }}>Reset Page</button>}
-      <span className={'options-staged' + (appliedNotice && !totalPending ? ' is-saved' : '')}>{pendingSummary && <>{totalPending > 0 && <span className="shortcuts-dot" aria-hidden="true" />}{pendingSummary}</>}</span>
-      <button type="button" className="ui-button" data-control-variant="secondary" disabled={saving || totalPending === 0} onClick={() => void commit(true)}>Apply</button>
-      <button className="ui-button primary" type="submit" disabled={saving}>OK</button>
-      <button className="ui-button" data-control-variant="secondary" type="button" disabled={saving} onClick={requestClose}>Cancel</button>
-    </div>
+      }}>Reset Page</button> : undefined}
+      status={<span className={'options-staged' + (appliedNotice && !totalPending ? ' is-saved' : '')}>{pendingSummary && <>{totalPending > 0 && <span className="shortcuts-dot" aria-hidden="true" />}{pendingSummary}</>}</span>}
+      trailing={<>
+        <button type="button" className="ui-button" data-control-variant="secondary" disabled={saving || totalPending === 0} onClick={() => void commit(true)}>Apply</button>
+        <button className="ui-button primary" type="submit" disabled={saving}>OK</button>
+        <button className="ui-button" data-control-variant="secondary" type="button" disabled={saving} onClick={requestClose}>Cancel</button>
+      </>}
+      confirm={confirmClose ? {
+        message: `You have ${totalPending} unsaved ${totalPending === 1 ? 'change' : 'changes'}. Discard changes?`,
+        disabled: saving,
+        onKeep: dismissConfirmClose,
+        onDiscard: finishClose
+      } : undefined}
+    />
   </form></DialogWindow>
 }

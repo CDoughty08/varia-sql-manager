@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode } from 're
 import { createPortal } from 'react-dom'
 import { trapFocus } from '../trap-focus'
 import { focusToReturn, returnFocusTo } from '../core/focus'
+import DialogFooter from '../kit/DialogFooter'
 
 export interface SubDialogProps {
   readonly title: string
@@ -67,11 +68,13 @@ export default function SubDialog({ title, okLabel = 'OK', cancelLabel = 'Cancel
     onSubmit={event => { event.preventDefault(); event.stopPropagation(); if (!okDisabled) onOk() }} onKeyDown={keyDown}>
     <div className="connection-heading"><h2 id={titleId}>{title}</h2></div>
     <div className="sub-dialog-body">{children}</div>
-    <div className="connection-footer">
-      <span className="sub-dialog-status">{status}</span>
-      <button className={destructive ? 'danger' : 'primary'} type="submit" disabled={okDisabled}>{okLabel}</button>
-      {alternative && <button type="button" onClick={alternative.run}>{alternative.label}</button>}
-      <button type="button" ref={cancel} onClick={onCancel}>{cancelLabel}</button>
-    </div>
+    <DialogFooter
+      status={<span className="sub-dialog-status">{status}</span>}
+      trailing={<>
+        <button className={destructive ? 'danger' : 'primary'} type="submit" disabled={okDisabled}>{okLabel}</button>
+        {alternative && <button type="button" onClick={alternative.run}>{alternative.label}</button>}
+        <button type="button" ref={cancel} onClick={onCancel}>{cancelLabel}</button>
+      </>}
+    />
   </form></div>, document.body)
 }

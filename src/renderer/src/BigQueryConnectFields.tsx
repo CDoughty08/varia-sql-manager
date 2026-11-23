@@ -5,6 +5,7 @@ import { bigQueryAuthenticationLabels, bigQueryKeyFileLabels } from '../../share
 import { bigQueryLimits } from '../../shared/connections'
 import { z } from 'zod'
 import Icon from './Icon'
+import DialogFooter from './kit/DialogFooter'
 import { trapFocus } from './trap-focus'
 import { advancedCostPrompt, bigQueryCredentialReady, bigQueryFormOptions, bigQueryReady, byteUnits, joinBytes, mergeProjects, parseExtraProjects, projectError, splitBytes, type ByteUnit } from './bigquery-connect-form'
 
@@ -231,6 +232,12 @@ export function BigQueryAdvanced({ options, savedCostPrompt, projects, onSave, o
       </div></fieldset>
       {error && <p className="field-note" role="alert" data-tone="warning">{error}</p>}
     </div>
-    <div className="connection-footer"><button className="ui-button" data-control-variant="secondary" type="button" onClick={() => { setAmount(''); setUnit('GiB'); setCostPrompt(true); setImpersonate(''); setExtra([]); setAdding(''); setError('') }}>Reset</button><span /><button className="ui-button primary" type="submit">OK</button><button className="ui-button" data-control-variant="secondary" type="button" onClick={onClose}>Cancel</button></div>
+    <DialogFooter
+      leading={<button className="ui-button" data-control-variant="secondary" type="button" onClick={() => { setAmount(''); setUnit('GiB'); setCostPrompt(true); setImpersonate(''); setExtra([]); setAdding(''); setError('') }}>Reset</button>}
+      trailing={<>
+        <button className="ui-button primary" type="submit">OK</button>
+        <button className="ui-button" data-control-variant="secondary" type="button" onClick={onClose}>Cancel</button>
+      </>}
+    />
   </form></div>
 }

@@ -238,9 +238,14 @@ try {
   await options.keyboard.press('Escape')
   await expect(search()).toHaveValue('')
   await expect(dialog()).toBeVisible()
-  // Connections has a pending change from step 1: Escape opens the inline discard confirmation.
+  // Connections has a pending change from step 1: Escape opens the inline discard confirmation in place of OK/Cancel.
   await options.keyboard.press('Escape')
-  await dialog().getByRole('button', { name: 'Keep Editing', exact: true }).click()
+  const keepEditing = dialog().getByRole('button', { name: 'Keep Editing', exact: true })
+  await expect(keepEditing).toBeFocused()
+  await expect(dialog().getByRole('button', { name: 'OK', exact: true })).toHaveCount(0)
+  await expect(dialog().getByRole('button', { name: 'Apply', exact: true })).toHaveCount(0)
+  await keepEditing.click()
+  await expect(dialog().getByRole('button', { name: 'OK', exact: true })).toBeVisible()
   await expect(dialog()).toBeVisible()
   await options.keyboard.press('Escape')
   await clickToClose(dialog().getByRole('button', { name: 'Discard Changes', exact: true }))
