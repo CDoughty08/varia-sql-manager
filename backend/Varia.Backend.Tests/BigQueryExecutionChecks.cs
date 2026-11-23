@@ -66,6 +66,8 @@ internal static partial class BigQueryExecutionChecks
         /// <summary>The job's destination table (configuration.query.destinationTable), and what tables.get says of it.</summary>
         public JsonObject? Destination;
         public long? TableBytes;
+        /// <summary>tables.get's type (TABLE, VIEW, ...); none, as the emulator, when null.</summary>
+        public string? TableType;
         public readonly ConcurrentQueue<string> InsertedIds = new();
         public readonly ConcurrentQueue<JsonNode> InsertBodies = new();
         public readonly ConcurrentQueue<Uri> Reads = new();
@@ -161,7 +163,9 @@ internal static partial class BigQueryExecutionChecks
         {
             var table = new JsonObject { ["kind"] = "bigquery#table", ["tableReference"] = Destination?.DeepClone(), ["numRows"] = Rows.Count.ToString(System.Globalization.CultureInfo.InvariantCulture) };
             if (TableBytes is { } bytes) table["numBytes"] = bytes.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            return Destination is null ? BigQueryFake.Fixture("error-not-found", 404) : new(200, table.ToJsonString());
+            if (TableType is not null) table["type"] = TableType;
+            // An expired table is gone from tables.get as from tabledata.list.
+            return Destination is null || TableDataStatus == 404 ? BigQueryFake.Fixture("error-not-found", 404) : new(200, table.ToJsonString());
         }
 
         JsonObject Job(string id, string state, JsonNode? error, JsonNode? statistics)

@@ -68,6 +68,33 @@ internal sealed partial class SqlService
         return (query.Query, own ?? plan.Dataset, job.Statistics?.SessionInfo?.SessionId is { Length: > 0 });
     }
 
+    /// <summary>
+    /// The table a random sample reads, through tables.get (free), held to TABLESAMPLE's limitations
+    /// (https://cloud.google.com/bigquery/docs/table-sampling#limitations): the statement names it once and samples no subquery,
+    /// table-valued function, UNNEST or IN subquery (BigQueryViewSql.Sample's fixed shape), and it must be a table, not a view
+    /// or materialized view (a query's destination always is; checked rather than assumed). A table with row-level security
+    /// is refused by BigQuery itself at the estimate, before any job. Gone answers REMOTE_EXPIRED: TABLESAMPLE has no fallback.
+    /// </summary>
+    private async Task<Table> SampleTableAsync(BigQueryConnection connection, TableReference reference, CancellationToken token)
+    {
+        Table table;
+        try { table = await bigQuery.TableAsync(connection, reference, token); }
+        catch (Exception error) when (!token.IsCancellationRequested && NotFound(error)) { throw Expired(); }
+        // The emulator names no type.
+        if (table.Type is not (null or "TABLE"))
+            throw new RequestException("INVALID_PARAMS", "BigQuery samples only tables, and this result is read from a " + (table.Type == "VIEW" ? "view" : table.Type == "MATERIALIZED_VIEW" ? "materialized view" : "non-table") + ". Load its first rows instead.");
+        return table;
+    }
+
+    /// <summary>BigQuery keeps a table under about 1 GB as one block, which TABLESAMPLE reads whole.</summary>
+    internal const long SampleBlockBytes = 1L << 30;
+
+    /// <summary>What a random sample of a table of one block is, in Messages: its rows are the table's, cut at LIMIT.</summary>
+    internal static string OneBlock(Table table) =>
+        table.NumBytes is { } bytes && bytes < SampleBlockBytes
+            ? " The result's table is under about 1 GB, which BigQuery usually keeps as one block: TABLESAMPLE read all of it, so these are the rows BigQuery returned first, not a random pick."
+            : "";
+
     /// <summary>What a rerun of a job that ran in a session cannot carry over, in Messages.</summary>
     internal const string RerunOutsideSession = "The statement ran again outside the tab's session: session settings such as @@dataset_id, temp tables and the changes of a transaction that was open do not carry over, so its rows may differ.";
 
@@ -78,11 +105,11 @@ internal sealed partial class SqlService
     private static string SampleSentence(ResultSetBuffer sample, long total) =>
         "The sample holds " + sample.Describe().RowsStored.ToString("N0", CultureInfo.InvariantCulture) + " of " + total.ToString("N0", CultureInfo.InvariantCulture) + " rows.";
 
-    /// <summary>Why a random sample holds fewer rows than asked, when BigQuery's pick did: it takes whole blocks, so a small
-    /// table's sample may hold far fewer rows, or none.</summary>
+    /// <summary>Why a random sample holds fewer rows than asked, when BigQuery's pick did: it takes whole blocks of varying
+    /// size, so a sample holds about its share of rows (a table of one block is read whole).</summary>
     internal static string ShortSample(long picked, int asked, long total) =>
         picked >= Math.Min(asked, total) ? "" : picked == 0
-            ? " BigQuery's pick held no rows: TABLESAMPLE takes whole blocks, and a small table may have only one. Load the first rows instead, or ask for more."
+            ? " BigQuery's pick held no rows. Load the first rows instead, or ask for more."
             : " BigQuery's pick held fewer rows than asked: TABLESAMPLE takes whole blocks, so a sample holds about its share of the table, not an exact count.";
 
     /// <summary>What a remote query does, as the start of a sentence ("Sort or filter it once the query has finished").</summary>

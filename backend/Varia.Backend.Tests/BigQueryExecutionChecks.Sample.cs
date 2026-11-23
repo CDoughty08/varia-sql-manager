@@ -119,6 +119,29 @@ internal static partial class BigQueryExecutionChecks
             $"a random sample runs TABLESAMPLE over the result table outside any session, into memory: {code} {message} {result?.Status} {set?.Residence} {set?.RowsStored} {InsertedSql(harness)} {string.Join(",", parameters)}");
         check(Says(result, "The sample holds 200 of 3,000 rows. BigQuery's pick held fewer rows than asked") && Says(result, "BigQuery job ") && result?.Job is not null,
             "a random sample names its job and what it holds in Messages: " + Texts(result?.Messages ?? []));
+        check(!Says(result, "under about 1 GB"), "a random sample of a table of unknown size says nothing of blocks: " + Texts(result?.Messages ?? []));
+        // TABLESAMPLE's limitations: a table under about 1 GB is one block, read whole, so its sample is no random pick.
+        harness.Jobs.TableBytes = 64L << 20;
+        var (_, small, _, _) = await Run(harness, "results.remoteQuery", Sample(id, 1000, "random"));
+        harness.Jobs.TableBytes = 4L << 30;
+        var (_, large, _, _) = await Run(harness, "results.remoteQuery", Sample(id, 1000, "random"));
+        harness.Jobs.TableBytes = null;
+        check(small?.Status == "completed" && Says(small, "under about 1 GB, which BigQuery usually keeps as one block") && large?.Status == "completed" && !Says(large, "under about 1 GB"),
+            $"a random sample of a table under about 1 GB says it read the table whole: {small?.Status} {Texts(small?.Messages ?? [])} | {large?.Status}");
+        // Nor does it sample a view or a materialized view: refused at the estimate and the run, before any job.
+        var before = harness.Jobs.InsertedIds.Count;
+        harness.Jobs.TableType = "VIEW";
+        var (viewDry, _, viewDryMessage) = await harness.Call("bigquery.dryRun", RemoteDryRun(harness, Sample(id, 1000, "random")));
+        var (_, view, _, _) = await Run(harness, "results.remoteQuery", Sample(id, 1000, "random"));
+        harness.Jobs.TableType = "MATERIALIZED_VIEW";
+        var (_, materialized, _, _) = await Run(harness, "results.remoteQuery", Sample(id, 1000, "random"));
+        harness.Jobs.TableType = "TABLE";
+        var (_, table, _, _) = await Run(harness, "results.remoteQuery", Sample(id, 1000, "random"));
+        harness.Jobs.TableType = null;
+        check(viewDry == "INVALID_PARAMS" && viewDryMessage.Contains("samples only tables", StringComparison.Ordinal) && view is { Status: "failed", Error.Code: "INVALID_PARAMS" }
+            && materialized is { Status: "failed", Error.Code: "INVALID_PARAMS" } && materialized.Error.Message.Contains("materialized view", StringComparison.Ordinal)
+            && harness.Jobs.InsertedIds.Count == before + 1 && table?.Status == "completed",
+            $"a random sample reads only a table, never a view, before any job: {viewDry} {viewDryMessage} {view?.Error?.Code} {materialized?.Error?.Message} {harness.Jobs.InsertedIds.Count - before} {table?.Status}");
         // Once the table has expired the estimate says so, and the run answers REMOTE_EXPIRED: TABLESAMPLE has no fallback.
         harness.Jobs.TableDataStatus = 404;
         var (goneDry, _, goneDryMessage) = await harness.Call("bigquery.dryRun", RemoteDryRun(harness, Sample(id, 1000, "random")));

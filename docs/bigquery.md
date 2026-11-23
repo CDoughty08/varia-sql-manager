@@ -506,11 +506,18 @@ them, and its note says what the sample costs and the result memory it needs (`L
 - **First rows (free).** `tabledata.list` reads the first rows of the result table, as the grid's blocks are read: no job
   runs and nothing is billed, so there is no estimate or prompt, and the query's timeout does not apply (Stop does).
 - **Random sample.** `SELECT * FROM` the result table `TABLESAMPLE SYSTEM (@percent PERCENT) LIMIT @rows`, the percent
-  being the rows' share of the table with 10% to spare (BigQuery picks whole blocks, so a sample holds about that share,
-  and up to the rows asked; a small table may be one block, picked whole or not at all, and Messages says when the
-  sample holds fewer rows than asked). BigQuery bills only the blocks it reads: the dialog shows the dry run's estimate as the
-  rows or method change, and Load goes through Cost › Before Execute's prompts as a sort does. Its job runs outside the
-  tab's session and its rows and cost go to Messages.
+  being the rows' share of the table with 10% to spare. BigQuery picks whole blocks of varying size, so a sample holds
+  about that share, up to the rows asked, and Messages says when it holds fewer. A table under about 1 GB is usually one
+  block, which TABLESAMPLE reads whole: its sample is the rows BigQuery returns first, not a random pick, and Messages
+  says so. BigQuery bills only the blocks it reads and never caches a TABLESAMPLE query: the dialog shows the dry run's
+  estimate as the rows or method change, and Load goes through Cost › Before Execute's prompts as a sort does. Its job
+  runs outside the tab's session and its rows and cost go to Messages. TABLESAMPLE is in Preview at Google.
+- **TABLESAMPLE's limitations** ([Google's list](https://cloud.google.com/bigquery/docs/table-sampling#limitations)).
+  The statement's fixed shape names the table once and samples no view, subquery, table-valued function, `UNNEST` or
+  `IN` subquery. `tables.get` (free) checks the result's table is a table, not a view or materialized view
+  (`INVALID_PARAMS`), before the estimate and again before the job. A table with row-level security (only a re-attached
+  job's own destination could have one) is refused by BigQuery at the estimate, so no job runs. A partitioned or
+  clustered destination samples with more bias, as Google notes.
 - **The result.** A new result in memory beside its source, named for what it holds ("Sample: 1,000,000 of 52,341,118
   rows"), held under the source's budget: a refusal part way keeps the rows read and says so, and never stops the
   source. The in-memory features work on it, and the name carries to what is built from it (a pivot, a comparison, a

@@ -184,10 +184,10 @@ internal sealed partial class SqlService
             // A rerun reads what its statement reads, not the result table, so whether that expired does not matter.
             if (plan.FromJob) (sql, dataset, _) = await StatementAsync(plan, token);
         }
+        // TABLESAMPLE reads a table, never a subquery: a sample of an expired result has nothing to fall back to.
+        else if (plan.Kind == "sample") await SampleTableAsync(connection, window.Table, token);
         else if (await TableGoneAsync(connection, window.Table, token))
         {
-            // TABLESAMPLE reads a table, never a subquery: a sample of an expired result has nothing to fall back to.
-            if (plan.Kind == "sample") throw Expired();
             plan = PlanRemote(remote.ResultId, remote.Kind, remote.Sort, remote.Filters, remote.Column, remote.Kept, true);
             sql = plan.Sql;
             dataset = window.Args.Dataset ?? connection.Options.Dataset;
@@ -296,6 +296,8 @@ internal sealed partial class SqlService
             else
             {
                 if (plan.Fallback) messages.Add("BigQuery no longer has the result's temporary table, so the original query runs again with the sort or filter around it.");
+                // A random sample's table is checked against TABLESAMPLE's limitations (free) before anything is billed.
+                var sampled = sample ? await SampleTableAsync(connection, window.Table, token) : null;
                 // A rerun's statement is read from its job (free) before anything is billed.
                 if (plan.FromJob)
                 {
@@ -384,7 +386,7 @@ internal sealed partial class SqlService
                     // The source released while the last rows came: nothing owns the new result (the catch releases it).
                     if (set.IsReleased) throw Unavailable(args.ResultId);
                     events.Closed(derived);
-                    messages.Add(distinct ? "The column's values were listed in BigQuery." : sample ? SampleSentence(derived, window.TotalRows) + ShortSample(total, plan.SampleRows, window.TotalRows)
+                    messages.Add(distinct ? "The column's values were listed in BigQuery." : sample ? SampleSentence(derived, window.TotalRows) + ShortSample(total, plan.SampleRows, window.TotalRows) + OneBlock(sampled!)
                         : total == 1 ? "(1 row affected)" : "(" + total.ToString(CultureInfo.InvariantCulture) + " rows affected)");
                 }
                 finally { page?.Dispose(); }
