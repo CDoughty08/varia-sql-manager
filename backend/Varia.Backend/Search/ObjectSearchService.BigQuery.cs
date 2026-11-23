@@ -49,7 +49,7 @@ internal sealed partial class ObjectSearchService
         var bulk = args.Bulk;
         if (bulk is not null && (scope is not null || staleOnly || bulk.Locations is not { Count: > 0 and <= BigQueryBulkSql.MaxLocations }
             || bulk.Locations.Any(item => item is null || !detailed.Contains(item.Project) || !BqNames.IsLocation(item.Location))
-            || bulk.MaximumBytesBilled is < 1 or > BigQueryLimits.MaxSafeInteger)) throw Invalid("bulk.");
+            || bulk.MaximumBytesBilled is < 1 or > BigQueryLimits.MaxSafeInteger || bulk.BudgetBytes is not (>= 1 and <= BigQueryLimits.MaxSafeInteger))) throw Invalid("bulk.");
         var definitions = args.Definitions ?? true;
         var state = states.GetOrAdd(args.ConnectionId, _ => new State(pool, resources));
         using var source2 = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -260,6 +260,8 @@ internal sealed partial class ObjectSearchService
                 var bulkFailed = 0;
                 (string Code, string Message)? bulkError = null;
                 var asked = new HashSet<(string, string)>();
+                // What the cost prompts showed: the jobs of every location together bill no more.
+                var budget = new BigQueryBulkBudget(bulk.BudgetBytes!.Value);
                 foreach (var (project, location) in bulk.Locations.Select(item => (item.Project, item.Location)))
                 {
                     // Location ids are case-insensitive: one spelled twice is read once.
@@ -270,7 +272,7 @@ internal sealed partial class ObjectSearchService
                     var names = inLocation.ToDictionary(key => key.Item2, key => pending.TryGetValue(key, out var value) ? value.Read.Select(at => value.Listed[at].Name).ToHashSet(StringComparer.Ordinal) : [], StringComparer.Ordinal);
                     try
                     {
-                        await foreach (var rows in source.BulkAsync(args.ConnectionId, project, location, definitions, bulk.MaximumBytesBilled,
+                        await foreach (var rows in source.BulkAsync(args.ConnectionId, project, location, definitions, bulk.MaximumBytesBilled, budget,
                             (dataset, name) => names.TryGetValue(dataset, out var set) && set.Contains(name), stop).WithCancellation(stop))
                             if (inLocation.Remove((project, rows.Dataset)) && pending.TryRemove((project, rows.Dataset), out var value))
                                 await DetailAsync((project, rows.Dataset), value, rows, stop);

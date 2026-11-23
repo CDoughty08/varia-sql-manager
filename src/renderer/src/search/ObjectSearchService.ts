@@ -410,15 +410,14 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     try {
       const estimated = await this.o.api.bigQueryIndexEstimate!({ connectionId, definitions, ...extraDetails ? { extraDetails } : {} }).catch(() => undefined)
       if (ended()) return 'stopped'
-      if (!estimated?.ok || !estimated.value.locations.length) return undefined
+      // The estimate is the build's budget: the backend runs a location's jobs one at a time, each capped so that together they
+      // never bill more than what the prompts showed (a location the rest cannot cover is read with the free calls).
+      const budgetBytes = estimated?.ok ? Math.ceil(estimated.value.estimate.bytesProcessed) : 0
+      if (!estimated?.ok || !estimated.value.locations.length || !(budgetBytes >= 1 && budgetBytes <= Number.MAX_SAFE_INTEGER)) return undefined
       const answer = await this.o.billedGate!(connectionId, estimated.value.estimate, controller.signal)
       if (ended()) return 'stopped'
       if (!answer.run) return undefined
-      // Without a cap of the connection's or Options', each job is capped at the whole estimate: an estimate that proves low fails
-      // its location's jobs at no charge (its datasets are read with the free calls) instead of billing more than was shown.
-      const estimate = Math.ceil(estimated.value.estimate.bytesProcessed)
-      const cap = answer.maximumBytesBilled ?? (estimate >= 1 && estimate <= Number.MAX_SAFE_INTEGER ? estimate : undefined)
-      return { locations: estimated.value.locations, ...cap !== undefined ? { maximumBytesBilled: cap } : {} }
+      return { locations: estimated.value.locations, budgetBytes, ...answer.maximumBytesBilled !== undefined ? { maximumBytesBilled: answer.maximumBytesBilled } : {} }
     } finally { this.estimating.delete(requestId) }
   }
 

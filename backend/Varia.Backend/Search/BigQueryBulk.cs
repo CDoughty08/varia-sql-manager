@@ -48,6 +48,10 @@ internal static class BigQueryBulkSql
         ? [(Columns(project, location), 3), (Views(project, location), 1), (Routines(project, location), 1)]
         : [(Columns(project, location), 3)];
 
+    /// <summary>What a finished job billed at most: its bytes processed rounded up to whole MiB, at least its floor.</summary>
+    public static long BilledAfter(long? processed, int views) =>
+        Math.Max(views * FloorBytes, processed is > 0 and { } bytes ? (bytes + (1L << 20) - 1) / (1L << 20) * (1L << 20) : 0);
+
     /// <summary>A query's billed bytes as the estimate counts them: the dry run's figure, never below the floor of the views it reads.</summary>
     public static long Billed(long dryRun, int views) => Math.Max(dryRun, views * FloorBytes);
 }
@@ -61,6 +65,13 @@ internal sealed class BigQueryBulkTable(string? type)
     public string? Type { get; } = type;
     public List<BigQueryBulkField> Fields { get; } = [];
     public bool Cut { get; set; }
+}
+
+/// <summary>What is left of the estimate the cost prompts showed, shared by a build's locations: each job is capped at it, and a job
+/// whose floor it no longer covers is not started.</summary>
+internal sealed class BigQueryBulkBudget(long bytes)
+{
+    public long Remaining { get; set; } = bytes;
 }
 
 /// <summary>What the bulk queries returned for one dataset: tables by name, view text by name and routine bodies by name (both empty
@@ -117,7 +128,7 @@ internal static partial class BigQueryBulk
     {
         if (rows.Over) return null;
         if (entry.Kind == "bqRoutine")
-            return !definitions ? new(null, null, null, []) : rows.Routines.TryGetValue(entry.Name, out var body) ? new(null, null, body, []) : null;
+            return !definitions ? new(null, null, null, [], Bulk: true) : rows.Routines.TryGetValue(entry.Name, out var body) ? new(null, null, body, [], Bulk: true) : null;
         if (entry.Kind == "bqModel" || !rows.Tables.TryGetValue(entry.Name, out var table)) return null;
         string? text = null;
         if (entry.Kind is "bqView" or "bqMaterializedView" && definitions && !rows.Views.TryGetValue(entry.Name, out text)) return null;
@@ -150,7 +161,7 @@ internal static partial class BigQueryBulk
         }
         Walk(table.Fields.Where(field => !field.Path.Contains('.')).OrderBy(field => field.Ordinal).Select(field => (field.Path, field.Type, field.Nullable)), null, 1);
         var subtype = table.Type switch { "CLONE" => "clone", "SNAPSHOT" => "snapshot", _ => null };
-        return new(subtype, null, definition, columns, ColumnsCut: cut);
+        return new(subtype, null, definition, columns, ColumnsCut: cut, Bulk: true);
     }
 
     /// <summary>

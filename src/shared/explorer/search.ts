@@ -171,8 +171,8 @@ export interface BigQueryIndexScope { readonly project: string; readonly dataset
 /** A project's location (US, EU, us-central1, …), whose region-scoped INFORMATION_SCHEMA the billed bulk path reads. */
 export interface BigQueryIndexLocation { readonly project: string; readonly location: string }
 /** The billed bulk path (docs/object-search.md, Bulk index): the locations bigquery.indexEstimate answered and the cost prompts
- *  let run, and the cap every job carries (a connection's own wins). */
-export interface BigQueryBulkIndex { readonly locations: readonly BigQueryIndexLocation[]; readonly maximumBytesBilled?: number }
+ *  let run, the cap every job carries (a connection's own wins), and the estimate shown, which the build's jobs together never bill more than. */
+export interface BigQueryBulkIndex { readonly locations: readonly BigQueryIndexLocation[]; readonly maximumBytesBilled?: number; readonly budgetBytes: number }
 /** bigquery.indexEstimate: what a full build's bulk path would bill, for the cost prompts. */
 export interface BigQueryIndexEstimateRequest { readonly connectionId: string; readonly definitions?: boolean; readonly extraDetails?: boolean }
 /** The locations to read (at most 64; `cut` when there were more) and their queries' estimate, each query at least 10 MiB per view. */
@@ -353,7 +353,8 @@ export const objectIndexParamsSchema = z.object({
   connectionId: z.uuid(), requestId: z.uuid(), definitions: z.boolean().optional(), extraDetails: z.boolean().optional(),
   scope: z.object({ project: bigQueryName('project'), dataset: bigQueryName('dataset').optional() }).strict().optional(), stale: z.literal(true).optional(),
   bulk: z.object({
-    locations: z.array(bigQueryIndexLocationSchema).min(1).max(bigQueryBulkLocations), maximumBytesBilled: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional()
+    locations: z.array(bigQueryIndexLocationSchema).min(1).max(bigQueryBulkLocations), maximumBytesBilled: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
+    budgetBytes: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)
   }).strict().optional()
 }).strict().refine(value => !(value.scope && value.stale), 'A refresh is scoped or stale-only, not both.')
   .refine(value => !(value.bulk && (value.scope || value.stale)), 'The bulk path reads a full build only.') satisfies z.ZodType<ObjectIndexParams>

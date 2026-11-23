@@ -569,6 +569,15 @@ internal static class BigQueryExplorerChecks
         check(withDescriptions?.Columns?[1].Description == "Who placed it." && withDescriptions.Columns[5].Description is { Length: BigQueryService.MaxColumnText } bounded && bounded.EndsWith('…')
             && withDescriptions.Columns[0].Description is null,
             "bigquery.properties carries column descriptions, bounded at 1,024 characters");
+        // 1000 long columns with long descriptions pass the response's character budget: the list is cut there, and says so.
+        var wide = new Table
+        {
+            Schema = new TableSchema { Fields = [.. Enumerable.Range(0, BigQueryService.MaxColumnFacts).Select(at => new TableFieldSchema { Name = "c" + at.ToString("D4", System.Globalization.CultureInfo.InvariantCulture) + new string('x', 290), Type = "STRING", Description = new string('d', 1024) })] }
+        };
+        var (wideColumns, wideCut) = BigQueryService.ColumnFacts(wide);
+        check(wideColumns is { Count: > 0 and < BigQueryService.MaxColumnFacts } && wideCut == true
+            && wideColumns.Sum(column => column.Name.Length + column.Type.Length + (column.Description?.Length ?? 0)) <= BigQueryService.MaxColumnChars,
+            $"the column facts stop at their character budget and say they were cut ({wideColumns?.Count} kept)");
         harness.Fake.On("GET", Sales + "/tables/daily", BigQueryFake.Fixture("index-view-daily"));
         var view = (await harness.Call("bigquery.properties", Args("bqView", "daily"))).Result as BigQueryProperties;
         check(view is { Type: "view", Definition: { } query } && query.StartsWith("SELECT DATE(placed)", StringComparison.Ordinal) && view.Columns?.Count == 2,

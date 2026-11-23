@@ -19,6 +19,9 @@ internal sealed partial class BigQueryService
     public const int MaxColumnFacts = 1000;
     /// <summary>The longest column type text or description returned.</summary>
     public const int MaxColumnText = 1024;
+    /// <summary>Characters of paths, types and descriptions returned in all, which keeps the response well under the frame limit
+    /// (1000 deep paths with long descriptions would not be).</summary>
+    public const int MaxColumnChars = 1_000_000;
     static readonly string[] PropertyKinds = ["bqTable", "bqView", "bqMaterializedView", "bqExternalTable", "bqRoutine"];
 
     public async Task<BigQueryProperties> PropertiesAsync(BigQueryPropertiesArgs args, CancellationToken token)
@@ -60,8 +63,16 @@ internal sealed partial class BigQueryService
         var columns = detail.Columns;
         if (columns.Count == 0) return (null, null);
         static string Bound(string text) => text.Length <= MaxColumnText ? text : text[..(MaxColumnText - 1)] + "…";
-        var kept = columns.Take(MaxColumnFacts).Select(column => new BigQueryColumnFact(column.Path, Bound(column.Type), column.Description is { Length: > 0 } description ? Bound(description) : null)).ToList();
-        return (kept, columns.Count > MaxColumnFacts || detail.ColumnsCut ? true : null);
+        var kept = new List<BigQueryColumnFact>();
+        long chars = 0;
+        foreach (var column in columns.Take(MaxColumnFacts))
+        {
+            var fact = new BigQueryColumnFact(column.Path, Bound(column.Type), column.Description is { Length: > 0 } description ? Bound(description) : null);
+            chars += fact.Name.Length + fact.Type.Length + (fact.Description?.Length ?? 0);
+            if (chars > MaxColumnChars) break;
+            kept.Add(fact);
+        }
+        return (kept, kept.Count < columns.Count || detail.ColumnsCut ? true : null);
     }
 
     /// <summary>A routine's facts: Routine (full name, type, language, signature, description) and History.</summary>

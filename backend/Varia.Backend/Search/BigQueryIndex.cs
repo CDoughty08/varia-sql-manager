@@ -15,7 +15,8 @@ internal interface IBigQueryIndexSource
     Task<Routine> RoutineAsync(string connectionId, string project, string dataset, string routine, CancellationToken token);
     /// <summary>The billed bulk path's rows for one project's location (<see cref="BigQueryBulkSql"/>), a dataset at a time in name order,
     /// under the cap. Leaving early cancels its jobs; a failed job throws as a job's failure does.</summary>
-    IAsyncEnumerable<BigQueryBulkDataset> BulkAsync(string connectionId, string project, string location, bool definitions, long? cap, Func<string, string, bool> wanted, CancellationToken token);
+    IAsyncEnumerable<BigQueryBulkDataset> BulkAsync(string connectionId, string project, string location, bool definitions, long? cap, BigQueryBulkBudget budget,
+        Func<string, string, bool> wanted, CancellationToken token);
     /// <summary>A failed read as a RequestException with BigQuery's code and a sentence that names no object.</summary>
     Exception Map(Exception error, string project, string permission, CancellationToken token);
 }
@@ -49,8 +50,9 @@ internal sealed record BigQueryEntry(string Kind, string Folder, string? Subtype
 internal sealed record BigQueryColumn(string Path, bool Record, string Type, bool Nullable, string? Description);
 
 /// <summary>What pass 2 read of an object: a clone's subtype, its last change, its view or routine text, columns, size and layout.</summary>
+/// <c>Bulk</c>: read by the billed bulk path, which has no size, layout, signature or last change, so no later build reuses it.
 internal sealed record BigQueryDetail(string? Subtype, long? Modified, string? Definition, IReadOnlyList<BigQueryColumn> Columns, long? Rows = null, long? Bytes = null,
-    string? Partitioning = null, string? Clustering = null, string? Signature = null, bool ColumnsCut = false, bool DefinitionCut = false);
+    string? Partitioning = null, string? Clustering = null, string? Signature = null, bool ColumnsCut = false, bool DefinitionCut = false, bool Bulk = false);
 
 /// <summary>An object's facts beside its entry: when it was created (what a refresh compares), whether pass 2 read it, and what it read.</summary>
 /// <c>Whole</c>: the read kept all pass 2 gave (its text was not left out for the names' reserve), so a later build may reuse it.
@@ -173,6 +175,8 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
                     shards[at] = group;
                 }
                 if (detail is null) continue;
+                // A bulk read lacks facts pass 2 keeps: the next build reads the object again rather than reuse it.
+                if (detail.Bulk) facts[at] = facts[at] with { Whole = false };
                 if (definitions && detail.Definition is { Length: > 0 } text && !Definition(at, text, detail.DefinitionCut)) facts[at] = facts[at] with { Whole = false };
                 if (detail.ColumnsCut) cut++;
                 if (!children) continue;

@@ -87,13 +87,20 @@ internal sealed partial class BigQueryService : IBigQueryIndexSource
         for (var page = 0; ; page++)
         {
             if (page == BigQueryIndexLimits.ListPages) { cut = true; break; }
-            var list = await IndexCallAsync(connection, t =>
+            ListRoutinesResponse list;
+            try
             {
-                var call = connection.Client.Service.Routines.List(project, dataset);
-                call.MaxResults = ExplorerPageMax;
-                call.PageToken = pageToken;
-                return call.ExecuteAsync(t);
-            }, token);
+                list = await IndexCallAsync(connection, t =>
+                {
+                    var call = connection.Client.Service.Routines.List(project, dataset);
+                    call.MaxResults = ExplorerPageMax;
+                    call.PageToken = pageToken;
+                    return call.ExecuteAsync(t);
+                }, token);
+            }
+            // The emulator (unpackaged test builds only) has no routines.list: it answers 500 "unsupported", and its datasets have no
+            // routines, so its index lists none rather than skipping every dataset.
+            catch (Google.GoogleApiException error) when (environment.Emulator && page == 0 && error.Message.Contains("unsupported bigquery.routines.list", StringComparison.Ordinal)) { break; }
             routines.AddRange(list.Routines ?? []);
             pageToken = list.NextPageToken is { Length: > 0 and <= BigQueryLimits.PageToken } next ? next : null;
             if (pageToken is null) break;

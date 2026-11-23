@@ -75,7 +75,7 @@ describe('BigQuery bulk index path (renderer)', () => {
     expect(gates[0]).toMatchObject({ connectionId: 'bq', estimate: estimate.estimate })
     gates[0].answer({ run: true, maximumBytesBilled: 2 ** 30 })
     await settle()
-    expect(index).toEqual([{ connectionId: 'bq', requestId: 'req1', definitions: true, extraDetails: true, bulk: { locations: estimate.locations, maximumBytesBilled: 2 ** 30 } }])
+    expect(index).toEqual([{ connectionId: 'bq', requestId: 'req1', definitions: true, extraDetails: true, bulk: { locations: estimate.locations, budgetBytes: estimate.estimate.bytesProcessed, maximumBytesBilled: 2 ** 30 } }])
     expect(service.getSnapshot().indexes.bq.phase).toBeUndefined()
     pending[0]({ ok: true, value: { status: status({ bulk: { locations: 1, failed: 0 } }), elapsedMs: 9 } })
     await settle()
@@ -89,7 +89,7 @@ describe('BigQuery bulk index path (renderer)', () => {
     declined.gates[0].answer({ run: false })
     await settle()
     expect(declined.index).toEqual([{ connectionId: 'bq', requestId: 'req1', definitions: true, extraDetails: false }])
-    for (const failure of [{ ok: false as const, error: 'Timed out.', code: 'TIMEOUT' as const }, { ok: true as const, value: { ...estimate, locations: [] } }, 'throw' as const]) {
+    for (const failure of [{ ok: false as const, error: 'Timed out.', code: 'TIMEOUT' as const }, { ok: true as const, value: { ...estimate, locations: [] } }, { ok: true as const, value: { ...estimate, estimate: { ...estimate.estimate, bytesProcessed: 0 } } }, 'throw' as const]) {
       const failed = harness({ bulk: true, estimate: failure })
       failed.connections.set([bigQuery('bq')])
       await settle()
@@ -119,13 +119,13 @@ describe('BigQuery bulk index path (renderer)', () => {
     expect(index.map(call => call.requestId)).toEqual(['req3'])
   })
 
-  it('caps each job at the estimate without a cap of its own, stops an older running build, and closes the prompt on a disconnect', async () => {
+  it('sends the estimate as the build budget and no cap of its own without one, stops an older running build, and closes the prompt on a disconnect', async () => {
     const { service, api, index, gates, connections, pending } = harness({ bulk: true })
     connections.set([bigQuery('bq')])
     await settle()
     gates[0].answer({ run: true })
     await settle()
-    expect(index[0]?.bulk).toEqual({ locations: estimate.locations, maximumBytesBilled: estimate.estimate.bytesProcessed })
+    expect(index[0]?.bulk).toEqual({ locations: estimate.locations, budgetBytes: estimate.estimate.bytesProcessed })
     // Rebuild while a build runs: the running one is stopped at once, since the new one is sent only after its prompt.
     service.build('bq')
     await settle()
@@ -197,12 +197,15 @@ describe('BigQuery bulk index contracts', () => {
   it('accepts bulk only on a full build, with valid locations and at most 64 of them', () => {
     const base = { connectionId: crypto.randomUUID(), requestId: crypto.randomUUID() }
     const locations = [{ project: 'varia-alpha', location: 'us-east1' }]
-    expect(objectIndexParamsSchema.safeParse({ ...base, bulk: { locations, maximumBytesBilled: 2 ** 30 } }).success).toBe(true)
-    expect(objectIndexParamsSchema.safeParse({ ...base, bulk: { locations }, scope: { project: 'varia-alpha' } }).success).toBe(false)
-    expect(objectIndexParamsSchema.safeParse({ ...base, bulk: { locations }, stale: true }).success).toBe(false)
-    expect(objectIndexParamsSchema.safeParse({ ...base, bulk: { locations: [] } }).success).toBe(false)
-    expect(objectIndexParamsSchema.safeParse({ ...base, bulk: { locations: [{ project: 'varia-alpha', location: 'us`; --' }] } }).success).toBe(false)
-    expect(objectIndexParamsSchema.safeParse({ ...base, bulk: { locations: Array.from({ length: bigQueryBulkLocations + 1 }, () => locations[0]) } }).success).toBe(false)
+    expect(objectIndexParamsSchema.safeParse({ ...base, bulk: { locations, budgetBytes: 1, maximumBytesBilled: 2 ** 30 } }).success).toBe(true)
+    // The budget is required: the backend never runs bulk jobs without the estimate the prompts showed.
+    expect(objectIndexParamsSchema.safeParse({ ...base, bulk: { locations } }).success).toBe(false)
+    expect(objectIndexParamsSchema.safeParse({ ...base, bulk: { locations, budgetBytes: 0 } }).success).toBe(false)
+    expect(objectIndexParamsSchema.safeParse({ ...base, bulk: { locations, budgetBytes: 1 }, scope: { project: 'varia-alpha' } }).success).toBe(false)
+    expect(objectIndexParamsSchema.safeParse({ ...base, bulk: { locations, budgetBytes: 1 }, stale: true }).success).toBe(false)
+    expect(objectIndexParamsSchema.safeParse({ ...base, bulk: { locations: [], budgetBytes: 1 } }).success).toBe(false)
+    expect(objectIndexParamsSchema.safeParse({ ...base, bulk: { locations: [{ project: 'varia-alpha', location: 'us`; --' }], budgetBytes: 1 } }).success).toBe(false)
+    expect(objectIndexParamsSchema.safeParse({ ...base, bulk: { locations: Array.from({ length: bigQueryBulkLocations + 1 }, () => locations[0]), budgetBytes: 1 } }).success).toBe(false)
     const result = resultSchemas['bigquery.indexEstimate']!
     expect(result.safeParse(estimate).success).toBe(true)
     expect(result.safeParse({ ...estimate, locations: [{ project: 'varia-alpha', location: 'US', extra: 1 }] }).success).toBe(false)

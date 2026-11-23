@@ -10,12 +10,14 @@ namespace Varia.Backend.BigQuery;
 /// The index's billed bulk path (docs/object-search.md, BigQuery, Bulk index): region-scoped INFORMATION_SCHEMA queries
 /// (<see cref="BigQueryBulkSql"/>) in place of pass 2's per-object calls, opt-in (textEditor.googleSql.bulkIndex). bigquery.indexEstimate
 /// lists the projects' dataset locations and dry-runs each location's queries (free); the renderer shows the cost prompts and only then
-/// sends explorer.index with those locations and the cap. Each job has Varia's own id, the location, the cap and no cache; leaving a
-/// read early cancels its jobs.
+/// sends explorer.index with those locations, the cap and the estimate as the build's budget. A location's jobs run one at a time, each
+/// with Varia's own id, the location, no cache and a cap that leaves the later jobs their floors inside what is left of the budget, so
+/// the build never bills more than the estimate shown; leaving a read early cancels its jobs.
 /// </summary>
 internal sealed partial class BigQueryService
 {
-    /// <summary>One location's queries' own time limit, every page included, inside the build; past it the location falls back to the free calls.</summary>
+    /// <summary>One location's queries' own time limit, every page included and the build's filing of each dataset not, inside the build;
+    /// past it the location falls back to the free calls.</summary>
     internal TimeSpan BulkLimit { get; set; } = TimeSpan.FromMinutes(5);
     /// <summary>The estimate's own time limit inside its 120 s deadline.</summary>
     internal TimeSpan BulkEstimateLimit { get; set; } = TimeSpan.FromSeconds(110);
@@ -93,25 +95,44 @@ internal sealed partial class BigQueryService
     };
 
     async IAsyncEnumerable<BigQueryBulkDataset> IBigQueryIndexSource.BulkAsync(string connectionId, string project, string location, bool definitions, long? cap,
-        Func<string, string, bool> wanted, [EnumeratorCancellation] CancellationToken token)
+        BigQueryBulkBudget budget, Func<string, string, bool> wanted, [EnumeratorCancellation] CancellationToken token)
     {
         var connection = Connection(connectionId);
-        var billed = connection.Options.MaximumBytesBilled ?? cap;
-        using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
-        budget.CancelAfter(BulkLimit);
-        var stop = budget.Token;
+        var limit = connection.Options.MaximumBytesBilled ?? cap;
+        var queries = BigQueryBulkSql.Queries(project, location, definitions);
+        // A location the budget cannot give every job its floor is not started: its datasets get the free calls.
+        var floors = queries.Sum(query => query.Views * BigQueryBulkSql.FloorBytes);
+        if (budget.Remaining < floors)
+            throw new RequestException("COST_CAP", "What is left of the estimate does not cover this location's INFORMATION_SCHEMA queries.");
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(BulkLimit);
+        var stop = deadline.Token;
+        // Time spent waiting on BigQuery; it pauses while the build files a dataset's rows.
+        var waited = Stopwatch.StartNew();
         var references = new List<JobReference>();
         var cursors = new List<BulkCursor>();
         var finished = false;
         try
         {
-            foreach (var (sql, _) in BigQueryBulkSql.Queries(project, location, definitions))
+            for (var index = 0; index < queries.Count; index++)
             {
+                var (sql, read) = queries[index];
+                floors -= read * BigQueryBulkSql.FloorBytes;
+                // The job may bill what is left but the later jobs' floors; a lower cap of the connection's or the prompt's wins.
+                var room = budget.Remaining - floors;
+                var billed = limit is { } own ? Math.Min(own, room) : room;
+                if (billed < read * BigQueryBulkSql.FloorBytes)
+                    throw new RequestException("COST_CAP", "The maximum bytes billed is below the INFORMATION_SCHEMA floor of " + BigQueryCost.Bytes(read * BigQueryBulkSql.FloorBytes) + ".");
                 var request = BulkJob(connection, sql, location, billed);
                 references.Add(request.JobReference);
                 var job = await InsertJobAsync(connection, request, null, stop);
                 if (BigQueryJobException.Of(job) is { } refused) throw BigQueryErrors.Job(refused.Result, refused.Errors, project, billed);
-                cursors.Add(new BulkCursor(this, connection, job.JobReference ?? request.JobReference, location, billed, project, stop));
+                var cursor = new BulkCursor(this, connection, job.JobReference ?? request.JobReference, location, billed, project, stop);
+                cursors.Add(cursor);
+                // The next job starts only once this one finished: a failed column job bills nothing more, and what it billed (its
+                // bytes processed rounded up to whole MiB, at least its floor; its cap when BigQuery does not say) leaves the budget.
+                var processed = await cursor.StartAsync();
+                budget.Remaining -= processed is { } bytes ? Math.Min(billed, BigQueryBulkSql.BilledAfter(bytes, read)) : billed;
             }
             var columns = cursors[0];
             var views = cursors.ElementAtOrDefault(1);
@@ -137,9 +158,13 @@ internal sealed partial class BigQueryService
                 if (views is not null) await views.TakeAsync(next, row => { if (BulkCursor.Cell(row, 1) is { } name && wanted(next, name) && BulkCursor.Cell(row, 2) is { } text) rows.AddText(rows.Views, name, text); });
                 if (routines is not null) await routines.TakeAsync(next, row => { if (BulkCursor.Cell(row, 1) is { } name && wanted(next, name) && BulkCursor.Cell(row, 2) is { } text) rows.AddText(rows.Routines, name, text); });
                 // The time limit is BigQuery's: it stops while the build files the dataset's rows (and reads what they lack).
-                budget.CancelAfter(Timeout.InfiniteTimeSpan);
+                waited.Stop();
+                deadline.CancelAfter(Timeout.InfiniteTimeSpan);
                 yield return rows;
-                budget.CancelAfter(BulkLimit);
+                waited.Start();
+                var left = BulkLimit - waited.Elapsed;
+                if (left <= TimeSpan.Zero) deadline.Cancel();
+                else deadline.CancelAfter(left);
             }
             finished = true;
         }
@@ -198,6 +223,13 @@ internal sealed partial class BigQueryService
                 }
             }
             catch (BigQueryJobException failed) { throw BigQueryErrors.Job(failed.Result, failed.Errors, project, cap); }
+        }
+
+        /// <summary>Waits for the job to finish and keeps its first page; the bytes it processed, if BigQuery says.</summary>
+        public async Task<long?> StartAsync()
+        {
+            page ??= await ReadAsync(null);
+            return long.TryParse(page.Text("totalBytesProcessed"), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var bytes) ? bytes : null;
         }
 
         public async Task<string?> DatasetAsync() => await PeekAsync() is { } row ? Cell(row, 0) : null;

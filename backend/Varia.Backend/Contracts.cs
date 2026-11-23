@@ -449,8 +449,9 @@ internal sealed record ObjectIndexArgs(string ConnectionId, string RequestId, bo
     BigQueryBulkArgs? Bulk = null);
 /// <summary>A BigQuery refresh's scope: a project, or one of its datasets.</summary>
 internal sealed record BigQueryIndexScope(string Project, string? Dataset = null);
-/// <summary>The bulk path's locations, as bigquery.indexEstimate answered them, and the cap every job carries (a connection's own wins).</summary>
-internal sealed record BigQueryBulkArgs(List<BigQueryIndexLocation> Locations, long? MaximumBytesBilled = null);
+/// <summary>The bulk path's locations, as bigquery.indexEstimate answered them; the cap every job carries (a connection's own wins); and
+/// the estimate the cost prompts showed (BudgetBytes), which the build's jobs together never bill more than.</summary>
+internal sealed record BigQueryBulkArgs(List<BigQueryIndexLocation> Locations, long? MaximumBytesBilled = null, long? BudgetBytes = null);
 /// <summary>A project's location (US, EU, us-central1, …), whose region-scoped INFORMATION_SCHEMA the bulk path reads.</summary>
 internal sealed record BigQueryIndexLocation(string Project, string Location);
 /// <summary>bigquery.indexEstimate: what a full build's bulk path would bill, for the cost prompts: Definitions and ExtraDetails as the

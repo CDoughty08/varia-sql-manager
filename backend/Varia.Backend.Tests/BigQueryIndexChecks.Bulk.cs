@@ -89,6 +89,10 @@ internal static partial class BigQueryIndexChecks
         public ConcurrentQueue<(string Sql, string? Location, long? Cap, bool? Cache)> Created { get; } = new();
         public ConcurrentQueue<(string Sql, string? Location)> DryRuns { get; } = new();
         public long DryRunBytes { get; set; }
+        /// <summary>What each job's first page says it processed; null leaves it out.</summary>
+        public string? Processed { get; set; } = "1048577";
+        /// <summary>Inserts and result reads in order ("insert columns", "read columns"…).</summary>
+        public ConcurrentQueue<string> Events { get; } = new();
         public int Cancels;
 
         static JsonArray Row(params string?[] cells) => new([.. cells.Select(cell => (JsonNode)new JsonObject { ["v"] = cell is null ? null : JsonValue.Create(cell) })]);
@@ -154,6 +158,7 @@ internal static partial class BigQueryIndexChecks
                 }
                 var id = body["jobReference"]!["jobId"]!.GetValue<string>();
                 Kinds[id] = sql.Contains("COLUMN_FIELD_PATHS", StringComparison.Ordinal) ? "columns" : sql.Contains("INFORMATION_SCHEMA.VIEWS", StringComparison.Ordinal) ? "views" : "routines";
+                Events.Enqueue("insert " + Kinds[id]);
                 Created.Enqueue((sql, location, long.TryParse(body["configuration"]?["query"]?["maximumBytesBilled"]?.ToString(), out var cap) ? cap : null,
                     body["configuration"]?["query"]?["useQueryCache"]?.GetValue<bool>()));
                 return new(200, "{\"jobReference\":{\"projectId\":\"varia-alpha\",\"jobId\":\"" + id + "\",\"location\":\"" + location + "\"},\"status\":{\"state\":\"RUNNING\"}}");
@@ -161,6 +166,7 @@ internal static partial class BigQueryIndexChecks
             fake.On("GET", @"https://bigquery\.googleapis\.com/bigquery/v2/projects/varia-alpha/queries/[^/]+", request =>
             {
                 var id = request.Url[(request.Url.LastIndexOf('/') + 1)..];
+                Events.Enqueue("read " + Kinds.GetValueOrDefault(id));
                 var rows = Kinds.GetValueOrDefault(id) switch { "columns" => ColumnRows(), "views" => ViewRows(), _ => RoutineRows() };
                 var second = request.Uri.Query.Contains("pageToken=p2", StringComparison.Ordinal);
                 // The column query's first page ends inside orders' rows; the others have one page.
@@ -171,6 +177,7 @@ internal static partial class BigQueryIndexChecks
                     ["jobComplete"] = true, ["totalRows"] = rows.Count.ToString(System.Globalization.CultureInfo.InvariantCulture), ["rows"] = new JsonArray([.. page.Select(cells => (JsonNode)F(cells))])
                 };
                 if (!second && split < rows.Count) answer["pageToken"] = "p2";
+                if (!second && Processed is { } processed) answer["totalBytesProcessed"] = processed;
                 return new(200, answer.ToJsonString());
             });
             fake.On("POST", @"https://bigquery\.googleapis\.com/bigquery/v2/projects/varia-alpha/jobs/[^/]+/cancel", _ => { Interlocked.Increment(ref Cancels); return new(200, "{}"); });
@@ -222,18 +229,25 @@ internal static partial class BigQueryIndexChecks
         check(bare is BigQueryIndexEstimateResult { Locations: [_, _, { Project: "varia-beta", Location: "US" }], Estimate.BytesProcessed: 3L << 30 } && jobs.DryRuns.Count == 9 && jobs.Created.IsEmpty,
             "without definitions only the column query is estimated, a dry run above the floor counts as itself, and extraDetails adds the extra project's locations");
 
-        // The build: the US location's queries run once each, billed under the cap, never cached; us-east1 holds nothing to read and bills nothing.
+        // The build: the US location's queries run once each, one at a time, never cached, each capped so the three together bill no
+        // more than the budget (the estimate shown): 100 MiB less the other jobs' floors (30, 10 and 10 MiB), or what they billed once
+        // they finished (1 MiB processed bills the floor). us-east1 holds nothing to read and bills nothing.
         var built = await harness.Index(more => more["bulk"] = new JsonObject
         {
             ["locations"] = new JsonArray(new JsonObject { ["project"] = "varia-alpha", ["location"] = "US" }, new JsonObject { ["project"] = "varia-alpha", ["location"] = "us-east1" },
                 new JsonObject { ["project"] = "varia-alpha", ["location"] = "us" }),
-            ["maximumBytesBilled"] = 1L << 30
+            ["maximumBytesBilled"] = 1L << 30, ["budgetBytes"] = 100L << 20
         });
         var bulk = Entries(harness.Service, harness.ConnectionId, "varia-alpha", "sales");
         var created = jobs.Created.ToList();
-        check(created.Count == 3 && created.All(job => job.Location == "US" && job.Cap == 1L << 30 && job.Cache == false) && built.Status.Bulk is { Locations: 1, Failed: 0 } && jobs.Cancels == 0,
-            "the build runs the US location's three queries once, in the US, under the cap and uncached, none for a location with nothing to read, and cancels nothing it finished: "
+        check(created.Count == 3 && created.All(job => job.Location == "US" && job.Cache == false) && created.Select(job => job.Cap).SequenceEqual(new long?[] { 80L << 20, 60L << 20, 60L << 20 })
+            && built.Status.Bulk is { Locations: 1, Failed: 0 } && jobs.Cancels == 0,
+            "the build runs the US location's three queries once, in the US, uncached, each capped inside the budget, none for a location with nothing to read, and cancels nothing it finished: "
             + string.Join(", ", created.Select(job => job.Location + " " + job.Cap)));
+        var events = jobs.Events.Distinct().ToList();
+        check(events.IndexOf("read columns") is >= 0 and var columnsRead && columnsRead < events.IndexOf("insert views") && events.IndexOf("read views") < events.IndexOf("insert routines")
+            && events.IndexOf("insert views") < events.IndexOf("read views"),
+            "each job starts only after the one before finished: " + string.Join(", ", events));
         check(rest.Count > 60 && rest.Any(entry => entry.StartsWith("bqColumn||orders|address.geo.lat|FLOAT64|", StringComparison.Ordinal)) && rest.Any(entry => entry.Contains("Order total in dollars.", StringComparison.Ordinal))
             && rest.Any(entry => entry.StartsWith("bqTable|clone|", StringComparison.Ordinal)) && rest.Any(entry => entry.Contains("GROUP BY day", StringComparison.Ordinal)),
             $"the REST read compared holds columns, descriptions, a clone and view text ({rest.Count} entries)");
@@ -242,8 +256,43 @@ internal static partial class BigQueryIndexChecks
         var called = harness.Fake.Seen.Where(request => request.Method == "GET" && (request.Url.StartsWith(prefix + "/tables/", StringComparison.Ordinal) || request.Url.StartsWith(prefix + "/routines/", StringComparison.Ordinal)))
             .Select(request => request.Url[(request.Url.LastIndexOf('/') + 1)..]).Order(StringComparer.Ordinal).ToList();
         check(called is ["refresh_totals", "totals"], "only what the bulk rows lack goes to the free calls (a materialized view, a routine without a body): " + string.Join(", ", called));
+        var tablesBefore = harness.Fake.Seen.Count(request => request.Method == "GET" && request.Url.StartsWith(prefix + "/tables/", StringComparison.Ordinal));
         var plain = await harness.Index();
         check(jobs.Created.Count == 3 && jobs.DryRuns.Count == 9 && plain.Status.Bulk is null, "a build that names no bulk locations runs no job and no dry run, and its status has no bulk read");
+        // Bulk rows lack pass 2's size, layout and last change: the next free build reads those objects again rather than keep them.
+        var again = harness.Fake.Seen.Count(request => request.Method == "GET" && request.Url.StartsWith(prefix + "/tables/", StringComparison.Ordinal)) - tablesBefore;
+        check(again > 5 && Entries(harness.Service, harness.ConnectionId, "varia-alpha", "sales").SequenceEqual(rest),
+            $"a free build after a bulk one reads the bulk-read objects again and fills pass 2's entries ({again} tables.get)");
+
+        // A budget below a location's floors starts no job; a cap below a job's floor neither: the free calls read its datasets.
+        foreach (var (budgetBytes, cap) in new[] { ((50L << 20) - 1, (long?)null), (1L << 30, (long?)(20L << 20)) })
+        {
+            using var poor = new Harness();
+            var poorJobs = new BulkJobs();
+            poorJobs.Route(poor.Fake);
+            await poor.ConnectAsync(key);
+            var shortOf = await poor.Index(more =>
+            {
+                var request = Bulk();
+                request["budgetBytes"] = budgetBytes;
+                if (cap is { } bytes) request["maximumBytesBilled"] = bytes;
+                more["bulk"] = request;
+            });
+            check(poorJobs.Created.IsEmpty && shortOf.Status.Bulk is { Locations: 0, Failed: 1, Code: "COST_CAP" } && Entries(poor.Service, poor.ConnectionId, "varia-alpha", "sales").SequenceEqual(rest),
+                $"a budget of {budgetBytes} B or a cap of {cap} B below the floors starts no job and falls back to the free calls ({shortOf.Status.Bulk?.Code}, {poorJobs.Created.Count} jobs)");
+        }
+        // A job whose first page does not say what it processed counts as its whole cap: the later jobs get only their floors.
+        using (var silent = new Harness())
+        {
+            var silentJobs = new BulkJobs { Processed = null };
+            silentJobs.Route(silent.Fake);
+            await silent.ConnectAsync(key);
+            var request = Bulk();
+            request["budgetBytes"] = 100L << 20;
+            await silent.Index(more => more["bulk"] = request);
+            check(silentJobs.Created.Select(job => job.Cap).SequenceEqual(new long?[] { 80L << 20, 10L << 20, 10L << 20 }),
+                "an unknown bill counts as the job's cap: " + string.Join(", ", silentJobs.Created.Select(job => job.Cap)));
+        }
 
         // Refused: bulk with a scope, stale, an unknown project, a hostile location, too many locations; and SQL Server refuses bulk.
         async Task<string> Refused(Action<JsonObject> more)
@@ -253,7 +302,7 @@ internal static partial class BigQueryIndexChecks
             return (await harness.Call("explorer.index", args)).Code;
         }
         static JsonObject Bulk(string project = "varia-alpha", string location = "US", int count = 1) =>
-            new() { ["locations"] = new JsonArray([.. Enumerable.Range(0, count).Select(_ => (JsonNode)new JsonObject { ["project"] = project, ["location"] = location })]) };
+            new() { ["locations"] = new JsonArray([.. Enumerable.Range(0, count).Select(_ => (JsonNode)new JsonObject { ["project"] = project, ["location"] = location })]), ["budgetBytes"] = 1L << 30 };
         var codes = new[]
         {
             await Refused(more => { more["bulk"] = Bulk(); more["scope"] = new JsonObject { ["project"] = "varia-alpha" }; }),
@@ -261,12 +310,15 @@ internal static partial class BigQueryIndexChecks
             await Refused(more => more["bulk"] = Bulk(project: "varia-beta")),
             await Refused(more => more["bulk"] = Bulk(location: "us`; --")),
             await Refused(more => more["bulk"] = Bulk(count: BigQueryBulkSql.MaxLocations + 1)),
-            await Refused(more => more["bulk"] = new JsonObject { ["locations"] = new JsonArray() })
+            await Refused(more => more["bulk"] = new JsonObject { ["locations"] = new JsonArray(), ["budgetBytes"] = 1L << 30 }),
+            await Refused(more => { var request = Bulk(); request.Remove("budgetBytes"); more["bulk"] = request; }),
+            await Refused(more => { var request = Bulk(); request["budgetBytes"] = 0; more["bulk"] = request; })
         };
         check(codes.All(value => value == "INVALID_PARAMS") && jobs.Created.Count == 3,
-            "bulk is refused with a scope or stale, for a project the build does not detail, a hostile location, too many or no locations: " + string.Join(",", codes));
+            "bulk is refused with a scope or stale, for a project the build does not detail, a hostile location, too many or no locations, or without a budget: " + string.Join(",", codes));
 
-        // A location whose job fails falls back to the free calls for its datasets and says why; a failed or stopped read cancels its jobs.
+        // A location whose job fails falls back to the free calls for its datasets and says why; a failed or stopped read cancels its
+        // jobs, and a failed column job starts no other.
         using var failing = new Harness();
         var failingJobs = new BulkJobs();
         failingJobs.Route(failing.Fake);
@@ -276,8 +328,8 @@ internal static partial class BigQueryIndexChecks
         await failing.ConnectAsync(key);
         var fellBack = await failing.Index(more => more["bulk"] = Bulk());
         check(fellBack.Status.Bulk is { Locations: 0, Failed: 1, Code: "PERMISSION_DENIED" } && Entries(failing.Service, failing.ConnectionId, "varia-alpha", "sales").SequenceEqual(rest)
-            && failingJobs.Cancels == 3 && fellBack.Status.Skipped.Count == 0,
-            $"a refused bulk read falls back to the free calls, fills the same entries, cancels its jobs and is reported once ({fellBack.Status.Bulk?.Code}, {failingJobs.Cancels} cancels)");
+            && failingJobs.Created.Count == 1 && failingJobs.Cancels == 1 && fellBack.Status.Skipped.Count == 0,
+            $"a refused bulk read falls back to the free calls, fills the same entries, starts no further job, cancels its own and is reported once ({fellBack.Status.Bulk?.Code}, {failingJobs.Created.Count} jobs, {failingJobs.Cancels} cancels)");
         check(harness.Fake.Unmatched.IsEmpty && failing.Fake.Unmatched.IsEmpty,
             "every bulk request had a route: " + string.Join(", ", harness.Fake.Unmatched.Concat(failing.Fake.Unmatched).Select(request => request.Method + " " + request.Url)));
     }
