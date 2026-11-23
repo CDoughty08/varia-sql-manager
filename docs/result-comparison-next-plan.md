@@ -817,16 +817,20 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       since Disconnect with Keep Tabs keeps the document's database (connections-explorer.md), and a document a
       reconnect reattaches counts again, while one disconnected through its own command is not reattached and does not.
       A line under the field always names the server and the database the script will change ("In Sales_Test on
-      SQLDEV01, SQLQuery3.sql's database"). The dialog keeps that resolution, as the draft does, so changing the
-      document's database while the dialog is open never moves the target or its facts: the line then says so ("In
-      Sales_Test on SQLDEV01. SQLQuery3.sql's database is now Sales_Dev."), the live region says it, and the window says
-      it again when activated. Once the document has moved to another connection, a two-part name takes the sentence
-      "SQLQuery3.sql is now on another connection. Name the database too, such as Sales_Test.dbo.Orders.", since the
-      script opens on the comparison's connection, and the line under the field names only the server ("On SQLDEV01, the
-      comparison's connection.") until a database is named. A three-part name picks another. Suggestions are three-part
-      (`Sales_Test.dbo.Orders`), so two databases with the same schema on one server are told apart. The script writes
-      three-part names everywhere, so it changes that database whatever the query window's database is when it runs, and
-      its header names the server and the database.
+      SQLDEV01, SQLQuery3.sql's database"). The dialog keeps that resolution, as the draft does: when the document's
+      database or connection changes while the dialog is open, the field is rewritten in three parts
+      (`Sales_Test.dbo.Orders`), as the draft shows it, so the target and its facts never move and a later edit cannot
+      resolve it again unseen, and the line says so ("In Sales_Test on SQLDEV01. SQLQuery3.sql's database is now
+      Sales_Dev."), the live region says it, and the window says it again when activated. A two-part name typed while
+      the document is on another connection takes the sentence "SQLQuery3.sql is now on another connection. Name the
+      database too, such as Sales_Test.dbo.Orders." (one typed while the document has no connection, disconnected
+      through its own command, "SQLQuery3.sql has no connection. Name the database too, such as
+      Sales_Test.dbo.Orders."), since the script opens on the comparison's connection, and the line under the field
+      names only the server ("On SQLDEV01, the comparison's connection.") until a database is named. A three-part name
+      picks another, and the line names it ("In Sales_Dev on SQLDEV01, not SQLQuery3.sql's database."). Suggestions are
+      three-part (`Sales_Test.dbo.Orders`), so two databases with the same schema on one server are told apart. The
+      script writes three-part names everywhere, so it changes that database whatever the query window's database is
+      when it runs, and its header names the server and the database.
     - When the index knows the table it says so ("Search Objects knows [Sales_Test].[dbo].[Orders] on this connection: 8
       columns, all 6 compared columns among them. id is its identity column."). It knows the table whenever the index
       holds a read of that database with its columns, whatever else that read left out (definitions, cut definitions,
@@ -862,13 +866,15 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
 
       The dialog asks `explorer.scriptTarget` again when that connection reconnects or its index build finishes (the
       progress `ObjectSearchService` follows), so the facts appear without retyping. Its first request goes out on
-      opening, with empty text, so the first time's suggestions show before anything is typed. Script waits while the
-      lookup for the target it would send is pending: it is unavailable, described "Checking the target table…", which
-      pressing it says, so a suggestion picked with Enter and Enter pressed again never scripts with the last name's
-      facts. The renderer sends facts (`identity`, `indexReasons`, SET IDENTITY_INSERT) only from an answer whose
-      `table` is the target it sends. A lookup that fails (its deadline, a backend error) leaves no facts: "Search
-      Objects did not answer, so the target's columns cannot be checked and SET IDENTITY_INSERT is not offered.", with
-      Script available.
+      opening with the draft's target as `text` and `table` (the first time, empty text and no `table`, so the
+      suggestions show before anything is typed), and Script shows "Checking the target table…" until it answers; so
+      does each opening again, after Choose key columns… or for another comparison, so a remembered target never scripts
+      without its facts. Script waits while the lookup for the target it would send is pending: it is unavailable,
+      described "Checking the target table…", which pressing it says, so a suggestion picked with Enter and Enter
+      pressed again never scripts with the last name's facts. The renderer sends facts (`identity`, `indexReasons`, SET
+      IDENTITY_INSERT) only from an answer whose `table` is the target it sends. A lookup that fails (its deadline, a
+      backend error) leaves no facts: "Search Objects did not answer, so the target's columns cannot be checked and SET
+      IDENTITY_INSERT is not offered.", with **Try again** beside it, which asks again, and Script available.
   - **Direction**, naming the target as resolved ("The target table" before one is chosen):
     - "[Sales_Test].[dbo].[Orders] holds Result 1's rows: change them to Result 3's";
     - "[Sales_Test].[dbo].[Orders] holds Result 3's rows: change them to Result 1's".
@@ -1015,18 +1021,20 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     stops them with the wrong direction, where they change nothing, or on a row changed since the comparison, which they
     overwrite." While DELETE is ticked and some chosen DELETEs have ticked, compared columns that Q11 all leaves out
     (the answer's `uncheckedDeletes`), a line gives that sentence too: "3 DELETEs check only their keys, since their
-    other ticked columns cannot be compared (note: xml), so nothing stops them on a row changed since the comparison."
-    These lines, and the header's parts for them, show only while the checks and their statement are on. Turning off the
-    transaction warns "Without a transaction, statements before a failure stay applied.", since a failed check, a key
-    violation or a trigger's error all leave earlier statements in place. Turning off the checks warns "Without the
-    checks, a statement runs even when its row is missing, repeated, changed or already there, and nothing says so."
+    other ticked columns cannot be compared (note: xml), so nothing stops them on a row changed since the comparison, or
+    on a same-keyed row of another copy of the table." These lines, and the header's parts for them, show only while the
+    checks and their statement are on. Turning off the transaction warns "Without a transaction, statements before a
+    failure stay applied.", since a failed check, a key violation or a trigger's error all leave earlier statements in
+    place. Turning off the checks warns "Without the checks, a statement runs even when its row is missing, repeated,
+    changed or already there, and nothing says so."
   - **Destination:** New Query Editor Window (default) or Clipboard. While the comparison's connection is not open, New
     Query Editor Window is unavailable, with its reason as the destination's description ("SQLDEV01 is not connected, so
     a query window cannot open on it. Choose Clipboard, or reconnect."), and while it is chosen Script is unavailable,
     its description and the summary the destination's sentence, which pressing it says, as an unusable target name's
     sentence is; the choice is not changed for the user. A connection lost while the script is written for a New Query
-    Editor Window fails as a generation failure does, with the destination's sentence beside Script, the window open
-    with its draft and Script available, so Clipboard can be chosen.
+    Editor Window ends the generation: the window shows the not-connected state with its draft, New Query Editor Window
+    unavailable, and Script, which keeps the focus, unavailable with the destination's sentence as its description,
+    which the live region says.
   - A **preview** of the first 30 lines (headed "Preview: first 30 lines" while the script is longer), a summary beside
     Script ("Deletes 2 rows, updates 5 rows and inserts 1 row in [Sales_Test].[dbo].[Orders] to match Result 3.", with
     singulars, naming only ticked statements and leaving out zero counts), and **Script** and **Cancel**. While an
@@ -1053,9 +1061,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       is not a refusal. On opening, its sentence replaces "Reading the comparison…", with **Try again**, which takes the
       focus, is described by the sentence, which the live region says, and sends the request again. Later, the preview
       reads "-- No preview: " and the sentence, with Try again under it; the counts show nothing until an answer brings
-      them, the summary reads "The preview could not be read.", and Script stays available, since its own run says any
-      failure. A backend loss is not such a failure: it releases the comparison, so the closed state shows instead, on
-      opening and later.
+      them, the summary reads "The preview could not be read." unless a reason in the summary's order (Keyboard and
+      screen readers) holds, and Script stays available only while none does, since its own run says any failure. A
+      backend loss is not such a failure: it releases the comparison, so the closed state shows instead, on opening and
+      later.
     - The counts and the summary are entries by kind in the chosen rows. All differences reads the diff's own counts.
       Rows in the grid and Selected rows are counted by the backend in a pass over the chosen rows, after one that marks
       them (so a look-alike's partner can be found among them), reserving the bit per stored row as Copy as Diff does;
@@ -1129,14 +1138,14 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   the summary, with the refusal's button if it has one, so a form scrolled to Options still shows why; the window's live
   region says the refusal, and Script, which keeps the focus when it was pressed, is marked unavailable
   (`aria-disabled`). It is available again on any change the preview follows: the form, or the comparison's sort,
-  filters, chips, selection or a replace. When a refusal clears, after its own button or a replace, the dialog's focused
-  element becomes Target table (the window is activated only when Choose key columns… opens it again) and the live
-  region says the shipped sentence ("Comparison updated: matched by order_no, …"); a replace that fails says its
-  sentence in the dialog and keeps the refusal and its focus. While a replace the dialog started runs (its own button's,
-  or one applied in the Match menu Choose key columns… opened), the refusal reads "Updating the comparison…" with
-  progress, which becomes the window's description and the live region says, and its buttons are unavailable
-  (`aria-disabled`, so the pressed one keeps the focus); Cancel cancels the replace first, and the next Cancel closes
-  the dialog. When several apply, the first in this list shows. Each refusal says what to do:
+  filters, chips, selection or a replace. When a refusal that replaced the form clears, after its own button or a
+  replace, the dialog's focused element becomes Target table (the window is activated only when Choose key columns…
+  opens it again) and the live region says the shipped sentence ("Comparison updated: matched by order_no, …"); a
+  replace that fails says its sentence in the dialog and keeps the refusal and its focus. While a replace the dialog
+  started runs (its own button's, or one applied in the Match menu Choose key columns… opened), the refusal reads
+  "Updating the comparison…" with progress, which becomes the window's description and the live region says, and its
+  buttons are unavailable (`aria-disabled`, so the pressed one keeps the focus); Cancel cancels the replace first, and
+  the next Cancel closes the dialog. When several apply, the first in this list shows. Each refusal says what to do:
   - a comparison of rows as shown (§ 6): "Result 1 is compared as shown, so rows its filters hide show as added or
     removed, and a script would insert or delete them. Compare whole results to script differences. To script only
     some rows, filter the comparison itself.", with **Compare whole results** ("Result 1 and Result 3 are compared as
@@ -1236,16 +1245,17 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     unavailable (`aria-disabled`).
   - The draft (target and its server, direction, statement ticks, columns, destination) is remembered per pair in the
     tab as it changes, so it is kept however the window closes, in the same 64-pair memory as the match. It keeps the
-    target as resolved and shows it in three parts, so a later run never moves it to another database; when that is not
-    the query document's current database, the line under the field says so ("In Sales_Test on SQLDEV01. SQLQuery3.sql's
-    database is now Sales_Dev."). The draft records the server too, and a target remembered from a comparison on another
-    server says so as a warning, since its draft carries over to a server that may be production ("⚠ In Sales_Test on
-    SQLPROD02. The last target was on SQLDEV01."). It keeps unticked columns by name, as ignored columns are. The memory
-    follows a swap to the swapped pair, so Swap inverts the remembered direction, and the target still holds the same
-    result's rows. Result names repeat across runs ("Result 1"), so the draft also records the pair's column names, and
-    when the pair's columns are not those, another query has taken the names: the dialog starts as the first time (no
-    target or direction, DELETE unticked), with a line by Target table ("Result 1 and Result 3 have other columns than
-    last time, so the last target was not reused.").
+    target as resolved and shows it in three parts, so a later run never moves it to another database. The draft records
+    the document's database when the name was resolved, and when the document's database has changed since, the line
+    under the field says so ("In Sales_Test on SQLDEV01. SQLQuery3.sql's database is now Sales_Dev."). The draft records
+    the server too, and a target remembered from a comparison on another server says so as a warning, since its draft
+    carries over to a server that may be production ("⚠ In Sales_Test on SQLPROD02. The last target was on SQLDEV01.").
+    It keeps unticked columns by name, as ignored columns are. The memory follows a swap to the swapped pair, so Swap
+    inverts the remembered direction, and the target still holds the same result's rows. Result names repeat across runs
+    ("Result 1"), so the draft also records the pair's column names, and when the pair's columns are not those, another
+    query has taken the names: the dialog starts as the first time (no target or direction, DELETE unticked), with a
+    line by Target table ("Result 1 and Result 3 have other columns than last time, so the last target was not
+    reused.").
   - Wrap in a transaction, the row checks and SET IDENTITY_INSERT are not in the draft: they start on (SET
     IDENTITY_INSERT whenever it is offered) each time the dialog opens, as Rows starts at Rows in the grid, so a
     choice made for one script never carries over unseen to a later one, whose lines would sit below the fold. The
@@ -1260,20 +1270,26 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   the column lines the column list's, each Options warning its checkbox's, the name's sentence Target table's). Script
   is always in the Tab order: unavailable, it is `aria-disabled`, not disabled, its description is the summary or, while
   one shows, the refusal, and pressing it (or Enter, as the default button) says that sentence in the live region.
-  Script with a target name it cannot use puts the name's sentence in the summary and says it. Until the first preview
-  answer arrives, the window shows only the first line and "Reading the comparison…" with progress, the two its
-  description, Script unavailable and Cancel, with the focus on Cancel, so a refusal that answer brings never takes the
-  focus from a field being typed in. The answer then shows the form or the refusal, and the focus moves to Target table,
-  or to a refusal's first button, or stays on Cancel when a refusal has none or its buttons are unavailable (an input
-  closed); the live region says a refusal.
+  Script with a target name it cannot use puts the name's sentence in the summary and says it. When several reasons
+  hold, the summary and Script's description give the first of: the comparison closed, a refusal, "Choose the target
+  table.", the name's sentence, "Choose a direction.", "Checking the target table…", the destination's sentence, "No
+  statements are ticked.", then the no-rows sentences ("The chosen rows have no differences to script.", "The ticked
+  statements change no rows."); Script is unavailable while any of them holds. Until the first preview answer arrives,
+  the window shows only the first line and "Reading the comparison…" with progress, the two its description, Script
+  unavailable and Cancel, with the focus on Cancel, so a refusal that answer brings never takes the focus from a field
+  being typed in. The answer then shows the form or the refusal, and the focus moves to Target table, or to a refusal's
+  first button, or stays on Cancel when a refusal has none or its buttons are unavailable (an input closed); the live
+  region says a refusal.
   - When the focused control goes away, the focus moves to a fixed place and the live region says the line that replaced
     it: from Rebuild Search Index or Build index when the build ends, to Target table; from a later Try again when an
-    answer arrives, to the preview; from a refusal's button beside Script when a change the preview follows clears the
-    refusal, to Script.
-  - Enter on a button presses that button. In the columns' search field it moves to the first match in the list. In the
-    target box, while the suggestion list is open, it picks the highlighted suggestion, or with none highlighted closes
-    the list and keeps the typed name; it never presses Script while the list is open. Elsewhere it presses Script, the
-    default button.
+    answer arrives, to the preview; from a footer refusal's button when the refusal clears (a change the preview
+    follows, or a replace), to Script, and a focus already on Script stays there; from any other control that goes away
+    (SET IDENTITY_INSERT or Rebuild Search Index when the connection drops, a failed lookup's Try again), to Target
+    table.
+  - Enter on a button presses that button. In the columns' search field it moves to the first match in the list, and
+    with no match does nothing. In the target box, while the suggestion list is open, it picks the highlighted
+    suggestion, or with none highlighted closes the list and keeps the typed name; it never presses Script while the
+    list is open. Elsewhere it presses Script, the default button.
   - Escape closes an open suggestion list first, and in the columns' search field clears text it holds first. Otherwise
     it is Cancel, with Cancel's two steps while generating (stop, then close). The close button, Alt+F4 and ⌘W close at
     once; while generating they cancel the request first, so no query window opens and the clipboard is left as it was.
@@ -1447,18 +1463,18 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     identity, computed, generated, hasDefault }[], columnsCut?, pairs: (number | null)[] }, state?, held? }`. `holds`
     counts the compared names (those not in `ignored`, and not empty) a table holds, and only a suggestion from a read
     with its columns has it; `state` and `held` describe the database of the sent `table` and come only with one, since
-    the opening request and a suggestion-only request send none. `pairs` gives, for each sent name, the index of the
-    table's column it names, or null when the table lacks it, compared as `Objects()` compares names (the database's
-    case, and the dotted I of Turkish and Azeri collations), since a case-sensitive database's [ID] is not its [id] and
-    the renderer knows no collation; the dialog reads every fact for a pair through it (identity, computed, generated,
-    the type, and a column the table lacks). Suggestions are at most limit tables whose name holds the typed text's last
-    part, found as Search Objects' literal search finds a name (`SearchMatcher`, without case) by a scan of each held
-    read's tables, since `IndexLookup.Objects()` finds only exact names; a schema or database part typed must equal that
-    part, compared as `Objects()` compares, and empty text lists every table by rank. They are ranked with those holding
-    every compared column first, then by `holds`, those without `holds` last, the renderer putting the query document's
-    current database first among equals, then by name, leaving out history tables (subtypes `history` and
-    `ledgerHistory`), since an INSERT into one fails (Msg 13559). `table` answers the sent `table` when the index holds
-    it, so two databases that both hold `dbo.Orders` are told apart, with at most 4,096 columns (`columnsCut` past
+    the first time's opening request and a suggestion-only request send none. `pairs` gives, for each sent name, the
+    index of the table's column it names, or null when the table lacks it, compared as `Objects()` compares names (the
+    database's case, and the dotted I of Turkish and Azeri collations), since a case-sensitive database's [ID] is not
+    its [id] and the renderer knows no collation; the dialog reads every fact for a pair through it (identity, computed,
+    generated, the type, and a column the table lacks). Suggestions are at most limit tables whose name holds the typed
+    text's last part, found as Search Objects' literal search finds a name (`SearchMatcher`, without case) by a scan of
+    each held read's tables, since `IndexLookup.Objects()` finds only exact names; a schema or database part typed must
+    equal that part, compared as `Objects()` compares, and empty text lists every table by rank. They are ranked with
+    those holding every compared column first, then by `holds`, those without `holds` last, the renderer putting the
+    query document's current database first among equals, then by name, leaving out history tables (subtypes `history`
+    and `ledgerHistory`), since an INSERT into one fails (Msg 13559). `table` answers the sent `table` when the index
+    holds it, so two databases that both hold `dbo.Orders` are told apart, with at most 4,096 columns (`columnsCut` past
     that). `state` is that database's state from `Database()` (ready, partial, building, skipped or absent), and `held`
     says whether the index holds a read of it with its columns (`LookupDatabase.Held` set, `LookupGaps.ChildrenLeftOut`
     clear and the held read not `FailedPart`, since a read that failed part way, kept when nothing was held before, can
@@ -1602,10 +1618,15 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     ("Checking the target table…") and facts sent only from the answer for the sent target, a failed lookup's sentence,
     a two-part name resolved to a disconnected document's kept database, Script's destination sentence while
     disconnected, a connection lost while generating, the focus after Rebuild Search Index, a later Try again and a
-    footer refusal's button go away, Enter and Escape in the columns' search field, a two-part target in a database
-    beside another holding the same table, the key-column form of the truncation and U+FFFD refusals, closing while
-    generating opening nothing, Enter in Target table with nothing highlighted, the window over a popped-out Results
-    pane, a cancelled generation giving way to a closed or refused state, and the Clipboard announcement.
+    footer refusal's button go away, Enter and Escape in the columns' search field (Enter with no match doing nothing),
+    the field rewritten in three parts when the document's database or connection changes, the no-connection sentence,
+    the three-part line for another database, the opening request carrying the draft's target with Script checking until
+    it answers, a failed lookup's Try again, the summary's order with a failed preview leaving Script unavailable while
+    a reason holds, the not-connected state after a connection lost while generating, the focus staying on Script when a
+    footer refusal clears and falling back to Target table, a two-part target in a database beside another holding the
+    same table, the key-column form of the truncation and U+FFFD refusals, closing while generating opening nothing,
+    Enter in Target table with nothing highlighted, the window over a popped-out Results pane, a cancelled generation
+    giving way to a closed or refused state, and the Clipboard announcement.
   - Smoke: open the dialog window by role, script to a New Query Editor Window, and find `BEGIN TRANSACTION` in the
     focused editor. A frameless OS window can behave differently on Linux, so run it through `npm run test:smoke:wsl`
     before pushing.
