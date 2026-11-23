@@ -23,7 +23,8 @@ export const languageLookupRequestSchema = z.object({
 }).strict()
 export type LanguageLookupRequest = z.infer<typeof languageLookupRequestSchema>
 
-/** ready: read whole; partial: names without some details (columns left out, a project read by name only, details that failed);
+/** ready: read whole; partial: names without some details (columns left out, a dataset of a project read by name only, details
+ *  that failed) or a project's list that may be short (a listing or a dataset's read failed);
  *  building: a build has not reached it yet; skipped: its last read failed; absent: the index holds no such container. */
 export const languageLookupStates = ['ready', 'partial', 'building', 'skipped', 'absent'] as const
 export type LanguageLookupState = typeof languageLookupStates[number]

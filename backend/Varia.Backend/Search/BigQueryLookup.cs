@@ -49,7 +49,8 @@ internal sealed class BigQueryLookup
     public string? Project(string name) => Resolve(Projects, name);
 
     /// <summary>The state of a project as a whole: Absent when the connection has no such project, Skipped when its datasets could
-    /// not be listed, Building while a build that has read none of it runs, otherwise Ready.</summary>
+    /// not be listed and none was read, Partial when its list may be short (a listing or a dataset's read failed), Building while a
+    /// build that has read none of it runs, otherwise Ready.</summary>
     public LookupState ProjectState(string project)
     {
         if (Project(project) is not { } known) return LookupState.Absent;
@@ -59,6 +60,8 @@ internal sealed class BigQueryLookup
         if (reads.TryGetValue(known, out var held))
             return listing || skips.Any(skip => skip.Project == known && skip.Database != "" && !held.ContainsKey(skip.Database)) ? LookupState.Partial : LookupState.Ready;
         if (listing) return LookupState.Skipped;
+        // Listed, but every dataset's read failed (or was refused for the budget): none answers.
+        if (skips.Any(skip => skip.Project == known && skip.Database != "")) return LookupState.Partial;
         return building ? LookupState.Building : Index == "none" ? LookupState.Absent : LookupState.Ready;
     }
 
@@ -107,26 +110,44 @@ internal sealed class BigQueryLookup
         var exact = named.Where(at => table.Name(at) == name).ToList();
         var at = exact.Count > 0 ? exact[0] : named.Count == 1 ? named[0] : -1;
         if (at >= 0) return new(dataset.Project, table, at, read);
-        LookupObject? group = null;
-        foreach (var entry in Objects(dataset))
-        {
-            if (Shards(entry) is not { } shards || !Shard(shards, name)) continue;
-            // A wildcard that could mean more than one group means none of them.
-            if (group is not null) return null;
-            group = entry;
-        }
-        return group;
+        var entries = Objects(dataset).ToList();
+        var pick = PickShardGroup(name, [.. entries.Select(entry => (entry.Name, Shards(entry)))]);
+        return pick >= 0 ? entries[pick] : null;
     }
 
-    /// <summary>Whether a written name is a wildcard over a shard group's tables (<c>events_*</c>, <c>events_2026*</c>, <c>ev*</c>) or
-    /// one of its shards within the group's range. Table names tell case apart, so the prefix compares exactly.</summary>
+    /// <summary>Which shard group a written name means, by its index among <paramref name="entries"/> (a dataset's objects, each
+    /// with its group or null), or -1. A group the name covers whole (<c>events_*</c> over <c>events_YYYYMMDD</c>) wins over groups
+    /// the stem only begins (<c>events_intraday_</c>); among the latter, or beside a plain table the stem also begins, the wildcard
+    /// could mean either, so it means none.</summary>
+    internal static int PickShardGroup(string name, IReadOnlyList<(string Name, BigQueryShardsDto? Shards)> entries)
+    {
+        int whole = -1, begun = -1, wholes = 0, begins = 0;
+        var stem = name.EndsWith('*') ? name[..^1] : null;
+        for (var index = 0; index < entries.Count; index++)
+        {
+            var (entryName, shards) = entries[index];
+            if (shards is null)
+            {
+                if (stem is not null && entryName.StartsWith(stem, StringComparison.Ordinal)) begins++;
+                continue;
+            }
+            if (Shard(shards, name)) { whole = index; wholes++; }
+            else if (stem is not null && shards.Prefix.Length > stem.Length && shards.Prefix.StartsWith(stem, StringComparison.Ordinal)) { begun = index; begins++; }
+        }
+        if (wholes > 0) return wholes == 1 ? whole : -1;
+        return begins == 1 ? begun : -1;
+    }
+
+    /// <summary>Whether a written name covers a shard group whole: a wildcard of its prefix and up to 8 digits within the group's range
+    /// (<c>events_*</c>, <c>events_2026*</c>), or one of its shards within the range. Table names tell case apart, so the prefix
+    /// compares exactly.</summary>
     private static bool Shard(BigQueryShardsDto shards, string name)
     {
         var prefix = shards.Prefix;
         if (name.EndsWith('*'))
         {
             var stem = name[..^1];
-            if (!stem.StartsWith(prefix, StringComparison.Ordinal)) return prefix.StartsWith(stem, StringComparison.Ordinal);
+            if (!stem.StartsWith(prefix, StringComparison.Ordinal)) return false;
             var digits = stem[prefix.Length..];
             return digits.Length <= 8 && digits.All(char.IsAsciiDigit)
                 && string.CompareOrdinal(digits, shards.Last[..digits.Length]) <= 0 && string.CompareOrdinal(digits, shards.First[..digits.Length]) >= 0;

@@ -42,13 +42,16 @@ export async function completeFromIndex(read: CompletionRead, dialect: Completio
       let resolver = new ScopeResolver(scope, dialect, lookup)
       await resolver.load()
       let field = await resolver.field(site.qualifier)
-      // A table wider than its share of the answer: ask again for the names that start with what is typed.
-      if (field?.columns.truncated && field.columns.object && word.typed) {
-        resolver = new ScopeResolver(scope, dialect, lookup, [...field.path, word.typed].join('.'))
+      // A table wider than its share of the answer may hold the field past what came back (or, written without an alias, the
+      // column itself): ask again for the names that start with what is written.
+      const cutShort = resolver.cutShort()
+      const prefix = [...field ? field.path : site.qualifier, word.typed].join('.')
+      if (cutShort.size && prefix && (!field || (field.columns.truncated && field.columns.object))) {
+        resolver = new ScopeResolver(scope, dialect, lookup, { prefix, paths: cutShort })
         await resolver.load()
         field = await resolver.field(site.qualifier) ?? field
       }
-      incomplete ||= resolver.failed || resolver.cut
+      incomplete ||= resolver.failed || resolver.cut || (!field && resolver.cutShort().size > 0)
       if (field) {
         incomplete ||= field.columns.truncated
         for (const column of childrenOf(field.columns.columns, field.path)) add(columnItem(column, field.path.length, insert))
@@ -66,11 +69,12 @@ export async function completeFromIndex(read: CompletionRead, dialect: Completio
     case 'expression': {
       let resolver = new ScopeResolver(scope, dialect, lookup)
       await resolver.load()
-      let given = await Promise.all(scope.sources.map(source => resolver.columns(source)))
-      if (word.typed && given.some(columns => columns.truncated && columns.object)) {
-        resolver = new ScopeResolver(scope, dialect, lookup, word.typed)
+      let given = await resolver.all(scope.sources)
+      const cutShort = resolver.cutShort()
+      if (word.typed && cutShort.size) {
+        resolver = new ScopeResolver(scope, dialect, lookup, { prefix: word.typed, paths: cutShort })
         await resolver.load()
-        given = await Promise.all(scope.sources.map(source => resolver.columns(source)))
+        given = await resolver.all(scope.sources)
       }
       incomplete ||= resolver.failed || resolver.cut
       // Sources that read the same object share its columns: each is listed once, under the nearest.

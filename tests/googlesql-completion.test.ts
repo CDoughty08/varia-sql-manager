@@ -37,7 +37,8 @@ const index: Record<string, Record<string, Record<string, FakeObject>>> = {
   },
   'varia-beta': { census: { people: { kind: 'bqTable', columns: [{ name: 'name', type: 'STRING' }] } } },
   // A table wider than one answer's share.
-  'varia-wide': { lab: { wide: { kind: 'bqTable', columns: Array.from({ length: 2500 }, (_, index) => ({ name: `c${String(index).padStart(4, '0')}`, type: 'INT64' })) } } }
+  'varia-wide': { lab: { wide: { kind: 'bqTable', columns: [...Array.from({ length: 2500 }, (_, index) => ({ name: `c${String(index).padStart(4, '0')}`, type: 'INT64' })),
+    { name: 'zrec', type: 'STRUCT', record: true }, { name: 'zrec.alpha', type: 'STRING' }, { name: 'zrec.beta', type: 'STRING' }] } } }
 }
 const keeps = (request: LanguageLookupPath, name: string) => request.exact ? name.toLowerCase() === request.prefix!.toLowerCase() : name.toLowerCase().startsWith((request.prefix ?? '').toLowerCase())
 function answer(request: LanguageLookupPath): LanguageLookupAnswer {
@@ -282,6 +283,21 @@ describe('completion from the index', () => {
     expect(log.at(-1)?.[0]).toMatchObject({ path: ['varia-wide', 'lab', 'wide'], prefix: 'c24' })
     const member = await complete('SELECT w.c249| FROM `varia-wide.lab.wide` w')
     expect(member.labels('column')).toContain('c2499')
+    // A STRUCT past the share, with or without an alias, with or without a typed field.
+    expect((await complete('SELECT zrec.| FROM `varia-wide.lab.wide`')).labels()).toEqual(['alpha', 'beta'])
+    expect((await complete('SELECT zrec.a| FROM `varia-wide.lab.wide`')).labels()).toEqual(['alpha'])
+    expect((await complete('SELECT w.zrec.| FROM `varia-wide.lab.wide` w')).labels()).toEqual(['alpha', 'beta'])
+    // Only the table cut short is asked again by prefix: the other keeps its whole list (the editor filters it).
+    const both: LanguageLookupPath[][] = []
+    const joined = await complete('SELECT id| FROM `varia-wide.lab.wide` w JOIN sales.orders o ON TRUE', fakeLookup(both))
+    expect(joined.labels('column')).toEqual(expect.arrayContaining(['customer', 'placed']))
+    expect(both.at(-1)?.find(request => request.path.at(-1) === 'orders')?.prefix).toBeUndefined()
+    expect(both.at(-1)?.find(request => request.path.at(-1) === 'wide')?.prefix).toBe('id')
+  })
+
+  it('lists an UNNEST alias\'s element fields beside the table it reads', async () => {
+    expect((await complete('SELECT | FROM sales.orders o, UNNEST(o.items) AS it')).labels('column')).toEqual(expect.arrayContaining(['customer', 'sku', 'qty']))
+    expect((await complete('WITH r AS (SELECT * FROM sales.orders) SELECT | FROM r, UNNEST(r.items) AS it')).labels('column')).toEqual(expect.arrayContaining(['sku', 'qty']))
   })
 
   it('never sends a path segment the lookup would refuse, so the other sources still answer', async () => {
@@ -289,7 +305,7 @@ describe('completion from the index', () => {
     const list = await complete('SELECT | FROM sales.orders o JOIN `varia-alpha.sales.` x ON TRUE', fakeLookup(log))
     expect(list.labels('column')).toContain('customer')
     expect(log.flat().every(request => request.path.every(segment => segment.length > 0))).toBe(true)
-    expect((await complete('SELECT * FROM `varia-alpha..|')).items.filter(item => item.kind !== 'cte')).toEqual([])
+    expect((await complete('SELECT * FROM `varia-alpha..|', fakeLookup(log))).items.filter(item => item.kind !== 'cte')).toEqual([])
     expect(log.flat().every(request => languageLookupRequestSchema.safeParse({ connectionId: '8f2d5e1a-3c4b-4d6e-9f0a-1b2c3d4e5f60', requests: [request] }).success)).toBe(true)
   })
 
@@ -353,6 +369,7 @@ describe('hover from the index', () => {
   it('shows a function\'s signatures, and nothing for an unknown name', async () => {
     expect((await hover('SELECT COU|NT(*) FROM sales.orders'))?.markdown).toContain('**COUNT**')
     expect(await hover('SELECT nob|ody FROM sales.orders')).toBeUndefined()
+    expect((await hover('WITH abc AS (SELECT * FROM sales.daily) SELECT * FROM a|bc'))?.markdown).toContain('- day')
   })
 
   it('escapes every Markdown character in names', () => {

@@ -59,6 +59,8 @@ export async function hoverFromIndex(read: HoverRead, dialect: CompletionDialect
     if (at !== parts.length - 1) return
     const cte = parts.length === 1 ? resolver.cte(parts[0]) : undefined
     if (cte) {
+      // Its `*` reads objects: ask for them first.
+      await resolver.load()
       const columns = (await resolver.columns({ kind: 'cte', name: parts[0], cte: parts[0] })).columns
       return { span, markdown: [`**${escapeMarkdown(parts[0])}** · WITH query`, '', ...childrenOf(columns, []).slice(0, hoverColumns).map(column => `- ${escapeMarkdown(column.path)}`)].join('\n') }
     }

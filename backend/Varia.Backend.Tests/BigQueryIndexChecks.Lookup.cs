@@ -68,7 +68,7 @@ internal static partial class BigQueryIndexChecks
             && objects.Items.Any(item => item.Kind == "bqModel") && objects.Items.All(item => item.Kind != "bqDataset" && item.Kind != "bqColumn"),
             "a dataset's objects come back with kinds, subtypes, a routine's signature and a sharded group as its newest shard, without the dataset entry or columns: " + Items(objects));
         check(top.Answers[3] is { State: "partial" } && top.Answers[4] is { State: "absent", Path: ["nope"], Items.Count: 0 },
-            $"a project read by name only is partial, and an unknown project absent: {top.Answers[3].State} {top.Answers[4].State}");
+            $"a dataset of a project read by name only is partial, and an unknown project absent: {top.Answers[3].State} {top.Answers[4].State}");
 
         var orders = (await Lookup(PathRequest("varia-alpha", "sales", "orders"))).Answers[0];
         check(orders.Object is { Name: "orders", Kind: "bqTable", Detailed: true, Rows: 1234567, Bytes: 5368709120, Partitioning: "DAY on placed", Clustering: "customer, region" },
@@ -103,6 +103,16 @@ internal static partial class BigQueryIndexChecks
         check(With(new ObjectIndexSkip("", "PERMISSION_DENIED", "x", Project: "varia-alpha")).ProjectState("varia-alpha") == LookupState.Partial
             && With(new ObjectIndexSkip("hidden", "TIMEOUT", "x", Project: "varia-alpha")).ProjectState("varia-alpha") == LookupState.Partial && With().ProjectState("varia-alpha") == LookupState.Ready,
             "a project whose listing failed after earlier reads, or with a dataset it never read, is partial");
+        var unread = new BigQueryLookup("varia-alpha", ["varia-beta"], [.. held.Where(read => read.Database != "varia-beta")], ["varia-beta"],
+            [new ObjectIndexSkip("census", "PERMISSION_DENIED", "x", Project: "varia-beta")], building: false, built: true, new IndexBudget(1 << 20));
+        check(unread.ProjectState("varia-beta") == LookupState.Partial && unread.Dataset("varia-beta", "census").State == LookupState.Skipped,
+            "a project listed but with no dataset read, because the reads failed, is partial");
+        static BigQueryShardsDto Group(string prefix) => new(prefix, 2, "20260101", "20260102");
+        (string, BigQueryShardsDto?)[] ga4 = [("events_20260102", Group("events_")), ("events_intraday_20260102", Group("events_intraday_")), ("orders", null)];
+        check(BigQueryLookup.PickShardGroup("events_*", ga4) == 0 && BigQueryLookup.PickShardGroup("events_intraday_*", ga4) == 1 && BigQueryLookup.PickShardGroup("events_i*", ga4) == 1
+            && BigQueryLookup.PickShardGroup("ev*", ga4) == -1 && BigQueryLookup.PickShardGroup("events_20260102", ga4) == 0
+            && BigQueryLookup.PickShardGroup("e*", [("events_20260102", Group("events_")), ("employees", null)]) == -1 && BigQueryLookup.PickShardGroup("o*", ga4) == -1,
+            "a wildcard means the group it covers whole before groups it only begins, and none when it begins a plain table or two groups");
         check(With(new ObjectIndexSkip("SALES", "PERMISSION_DENIED", "x", Project: "varia-alpha")).Dataset("varia-alpha", "SALES") is { State: LookupState.Skipped, Dataset: "SALES" },
             "a skip spelled exactly as asked wins over a held dataset that differs from it only in case");
         var events = With().Dataset("varia-alpha", "sales");

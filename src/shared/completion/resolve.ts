@@ -26,11 +26,11 @@ export function childrenOf(columns: readonly ScopeColumn[], parent: readonly str
   })
 }
 
-/** The column at a field path, case ignored. */
 /** How many WITH queries or subqueries deep a `*` is followed for columns: past it a source gives none (a long chain of WITH
  *  queries, each reading the last through `*`, would otherwise recurse once per query). */
 export const resolverLimits = { starHops: 64 } as const
 
+/** The column at a field path, case ignored. */
 export function columnAt(columns: readonly ScopeColumn[], path: readonly string[]): ScopeColumn | undefined {
   const wanted = path.join('.')
   return columns.find(column => sameName(column.path, wanted))
@@ -68,8 +68,9 @@ export class ScopeResolver {
   /** Objects past the request cap went unasked, so the scope's columns are not all here. */
   cut = false
 
-  /** `prefix` narrows every object's columns to those starting with it: a second ask when the first was cut short. */
-  constructor(private readonly scope: QueryScope, private readonly dialect: CompletionDialect, lookup: IndexLookup, private readonly prefix?: string) {
+  /** `narrow` asks again, for the objects at `paths` only, the columns that start with `prefix`: a second ask when the first answer
+   *  for them was cut short. The other objects are asked as before (the cache answers them). */
+  constructor(private readonly scope: QueryScope, private readonly dialect: CompletionDialect, lookup: IndexLookup, private readonly narrow?: { readonly prefix: string; readonly paths: ReadonlySet<string> }) {
     this.lookup = boundedLookup(lookup)
     for (const cte of scope.ctes) if (!this.ctes.has(cte.name.toLowerCase())) this.ctes.set(cte.name.toLowerCase(), cte.shape)
   }
@@ -100,7 +101,7 @@ export class ScopeResolver {
     const objects = [...paths.values()].slice(0, languageLookupLimits.requests - extra.length)
     this.cut = objects.length < paths.size
     const share = Math.max(1, Math.min(languageLookupLimits.items, Math.floor((languageLookupLimits.totalItems - extra.reduce((sum, request) => sum + (request.limit ?? languageLookupLimits.defaultItems), 0)) / Math.max(1, objects.length))))
-    const wanted: LanguageLookupPath[] = objects.map(path => ({ path, limit: share, ...this.prefix ? { prefix: this.prefix } : {}, ...details ? { details } : {} }))
+    const wanted: LanguageLookupPath[] = objects.map(path => ({ path, limit: share, ...this.narrow?.paths.has(key(path)) ? { prefix: this.narrow.prefix } : {}, ...details ? { details } : {} }))
     const requests = [...extra, ...wanted]
     if (!requests.length) return []
     const answers = await this.lookup(requests)
@@ -110,6 +111,19 @@ export class ScopeResolver {
   }
 
   cte(name: string): QueryShape | undefined { return this.ctes.get(name.toLowerCase()) }
+
+  /** The objects (by the path asked) whose answer held fewer columns than the index has. */
+  cutShort(): ReadonlySet<string> {
+    return new Set([...this.answers].filter(([, answer]) => answer.truncated && answer.object).map(([path]) => path))
+  }
+
+  /** Every source's columns, read one after another: a source read while another is still being read would meet it in `reading`
+   *  and get no columns (UNNEST(o.items) beside o). */
+  async all(sources: readonly ScopeSource[]): Promise<SourceColumns[]> {
+    const given: SourceColumns[] = []
+    for (const source of sources) given.push(await this.columns(source))
+    return given
+  }
 
   /** A source's columns: the index's for an object, the select list's (with `*` expanded) for a WITH query or subquery. The grammar
    *  has already said which names are WITH queries (kind cte); an object is always the index's. */
@@ -176,7 +190,9 @@ export class ScopeResolver {
       const columns = await this.columns(source)
       if (seen.has(columns)) continue
       seen.add(columns)
-      if (columnAt(columns.columns, [parts[0]])) return { source, path: [...parts], columns }
+      // A narrowed answer holds a STRUCT's fields (zrec.a) without the STRUCT itself.
+      const below = parts[0].toLowerCase() + '.'
+      if (columnAt(columns.columns, [parts[0]]) || columns.columns.some(column => column.path.toLowerCase().startsWith(below))) return { source, path: [...parts], columns }
     }
   }
 }
