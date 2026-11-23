@@ -166,7 +166,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     name "Ignore columns: server_time, row_ver" ("Ignore columns" when none are);
   - **Ignore Columns…** in the Comparison submenu and the palette ("Ignore Columns in Comparison…");
   - **Ignore This Column**, a checkbox in the Comparison submenu of the grid menu opened on that column's header or a cell
-    (not shown when the menu is opened on the gutter)
+    (not shown when the menu is opened on the gutter, by the new target key `outputGridOnColumn`)
     (`comparisonColumnIgnored`). It is unavailable, with the reason as its hint, on a key column under Key columns ("Rows
     are matched by this column, so it cannot be ignored.") and on the last compared column ("Compare at least one
     column.").
@@ -254,6 +254,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - commands `output.compareIgnoreColumns` (toolbar, the submenu, More results tools' `5_compare`, palette) and
     `output.compareIgnoreColumn` (the submenu, `toggled: comparisonColumnIgnored`). C2 also declares the submenu, moves
     the three shipped items into it and adds Match Rows By… to it;
+  - the menu target key `outputGridOnColumn` (`src/shared/commands/context-keys.ts` and `targetKeys` in
+    `menus/targets.ts`), true when the grid menu opened on a header or cell, Ignore This Column's `when`;
   - context keys `comparisonColumnIgnored` and `comparisonColumnIgnorable`. `toggled` and `precondition` take only
     static and state keys (`catalog.ts`, checked by `tests/command-catalog.test.ts`), so both are state keys, as the
     navigation work's `comparisonRowHasPartner` is: `core/contextkeys.ts` computes them for the focused grid's active
@@ -413,7 +415,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - deleted text is struck through on a red tint, inserted text bold on a green tint (outlined in forced colours);
     - runs are found word-first, then by character, so a changed word reads as one edit;
     - NULL shows as italic NULL, an empty string as "(empty)", trailing spaces (only) as dots;
-    - a soft cell says how its collation compares, built from the flags the result carries (`ResultCollation` has no
+    - a soft cell says how its collation compares, built from Result 1's flags, under which the diff decides soft
+      equality (`ResultDiff` hashes Result 3's columns by the first result's collation), not the comparison column's,
+      which are Result 3's; `CompareService` keeps the old input's flags per pair at build, so they hold after Result 1
+      closes (`ResultCollation` has no
       name), and always adds trailing spaces, which SQL Server's padding ignores under every collation: "Equal by
       collation: case-insensitive, trailing spaces ignored", "accent-insensitive", "width-insensitive" and
       "kana-insensitive" joining as they apply, or "Equal by collation: trailing spaces ignored" for a case-sensitive
@@ -654,8 +659,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       needs it too. `ResultJobs` reserves it as working memory before writing (`set.TryReserveWork`, as copy and export
       reserve today), and refuses with `TOO_LARGE` when it does not fit. `tests/working-memory-lint.test.ts` reads only
       `SqlService.cs`, so a `DiffChecks` refusal check on a low budget pins it.
-  - It reads `mark`, the tone, the previous-value columns and, for a cut One row entry, the change index's changed-pair
-    bitset.
+  - It reads `mark`, the tone, the previous-value columns and, for a cut entry, the change index's changed-pair bitset,
+    which its one-unchanged-line rule needs. The change index keeps a cut row's full changed-pair list only in One row
+    (`keepsList: cut`), so C3 keeps it on a cut Two rows entry's new half too, charged by `CutBytes` as now, and
+    `DiffIndex`'s summary and architecture.md's change-index bullet say both layouts.
   - It writes headers, prefixes and the skip lines.
   - The copy estimates (`EstimateCopyRows`, `EstimateCopyCells`, `EstimateHeader`, `ResultJobs.EstimateCopy`) count both
     lines of an entry and escapes.
@@ -670,7 +677,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
 - **Tests:**
   - shared goldens for both writers:
     - both layouts give the same changed cells, sorted Two rows halves are paired;
-    - gap and skip lines, cut rows;
+    - gap and skip lines, cut rows in both layouts, a cut Two rows entry's full changed-pair list kept;
     - NULL against the text `NULL`, escapes;
     - ignored columns, forced key columns, row-number prefixes without keys, CRLF and LF;
     - the header from the diff set's recorded match and ignored pairs, and side names holding a line break, escaped;
@@ -753,7 +760,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     replace such rows." and "…so a row whose key changed is deleted and not inserted under its new key. Tick INSERT to
     replace such rows."
   - **Columns:** the data columns.
-    - Key columns are ticked and locked. Ignored columns are ticked, for INSERT only. While UPDATE is ticked, a line
+    - Key columns are ticked and locked. A key column INSERT cannot write (rowversion or timestamp, or computed per
+      the index) leaves INSERT unavailable, with the reason ("row_ver is a key column and Not insertable, so rows cannot
+      be inserted."). Ignored columns are ticked, for INSERT only. While UPDATE is ticked, a line
       says what ignoring costs, since the summary's "to match Result 3" would otherwise hide it: "updated_at is ignored:
       UPDATEs leave its changes out, and rows that differ only in it get no statement. Stop ignoring it to include
       them." ("updated_at and memo are ignored: … their changes … only in them …").
@@ -903,7 +912,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     for a lone surrogate (`PageBuilder.AppendText`) and for bytes a `_UTF8` collation could not decode (`CellLengths`),
     and a genuine U+FFFD cannot be told apart from either, so the script would write U+FFFD over the original. A rare
     genuine U+FFFD is refused too: the cost of never writing a wrong value. The live round trip cannot catch this,
-    since both sides store U+FFFD and compare equal, so an offline check does;
+    since both sides store U+FFFD and compare equal, so an offline check does. A subnormal float (Literals below)
+    takes the same refusal ("1 value in ratio cannot be written exactly."), so an INSERT or SET never writes 0 in its
+    place;
   - no differences in the chosen rows: "The chosen rows have no differences to script.";
   - every UPDATE skipped because its changes are all in unticked columns, with no other statement left: "None of the
     ticked columns changed in the chosen rows. Tick a changed column.";
@@ -997,7 +1008,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   | Type | Literal |
   | --- | --- |
   | Integers; decimal, numeric, money, smallmoney | As stored; decimals exactly |
-  | float, real | Stored as G15 and G7 text: that text when it reads back as the value, else the exact value kept beside it (`CellLengths.TryExact`), written round-trip. Always with an exponent (`3.0000000000000004E-1`, `1E0`): without one, T-SQL reads the text as a numeric literal, whose conversion to float may not round correctly. A real is written as its value widened to double, in that double's round-trip text (0.1 as `1.0000000149011612E-1`): a literal is a float, and comparing it with a real column widens the real, so the shorter `1E-1` would find no row as a key or in Q11's guard, while the widened value is exact both compared and assigned, with no decimal → double → real double rounding |
+  | float, real | Stored as G15 and G7 text: that text when it reads back as the value, else the exact value kept beside it (`PageLengths.TryExact`, in CellLengths.cs), written round-trip. Always with an exponent (`3.0000000000000004E-1`, `1E0`): without one, T-SQL reads the text as a numeric literal, whose conversion to float may not round correctly. A real is written as its value widened to double, in that double's round-trip text (0.1 as `1.0000000149011612E-1`): a literal is a float, and comparing it with a real column widens the real, so the shorter `1E-1` would find no row as a key or in Q11's guard, while the widened value is exact both compared and assigned, with no decimal → double → real double rounding. A non-zero float smaller in magnitude than 2.2250738585072014E-308 (subnormal: SQL Server stores one that arithmetic produces, but reads its literal as 0) is refused as a value that cannot be written exactly; a real widened to double is never subnormal |
   | bit | 0 or 1 |
   | char, varchar, text; nchar, nvarchar, ntext | `N'…'` with `''` escaping. A non-N literal is read in the database's default code page, so even char columns get `N'…'`, converted to the column's collation on assignment. CR, LF, U+0085, U+2028, U+2029 and every other control character but tab are written as `NCHAR(n)` joins (`N'a' + NCHAR(13) + NCHAR(10) + N'b'`): the query window's model normalizes line breaks and the clipboard may convert them. A joined value over 4,000 characters starts with `CAST(N'…' AS nvarchar(max))`, since joining shorter strings stops at 4,000. A value that would need more than 64 joins (pretty-printed JSON or XML, a long multi-line note) is written instead as one exact term, `CAST(0x<its UTF-16LE bytes> AS nvarchar(max))`: a chain of thousands of `+` terms risks SQL Server's nesting and expression limits (errors 191, 8631, 8632), which would fail the statement and roll the script back. The size estimate counts its 4 hex digits a code unit |
   | date, time(n), datetime2(n), datetimeoffset(n) | ISO 8601 text in a `CAST('…' AS <type>)` of the column's own type and precision |
@@ -1012,11 +1023,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       one (`ColumnTypes.HoldsExact(set.Columns[p])`), so a Result 1 float paired with a Result 3 decimal keeps only its
       G15 text in removed rows and `changedOld` halves. `Row` tests the source column instead (Result 1's on that
       side), as `Previous` already does.
-    - Cut lists in both layouts. A cut tone lists only the first changed cells, and the change index keeps a cut row's
-      full changed-pair list only in One row (`keepsList: cut`); Two rows' halves keep none. C4 keeps it on a cut Two
-      rows entry's new half too, charged by `CutBytes` as now, and `DiffScript` takes an entry's changed pairs (its SET
-      columns and Q11's) from that list whenever the tone was cut. `DiffIndex`'s summary and architecture.md's
-      change-index bullet say both layouts.
+    - A cut tone lists only the first changed cells, so `DiffScript` takes an entry's changed pairs (its SET columns
+      and Q11's) from the change index's full list whenever the tone was cut, which C3 keeps in both layouts (§ 4a).
     - Two more records on the diff set, written in `DiffWritten` beside the match C3 records: Result 1's column type
       per pair (Columns above), and whether the inputs were BigQuery results (`residence` set), for the refusal.
   - Names are bracket-quoted by the existing shared `ScriptFormatter.Quote`, unchanged: it has many callers (Script As,
@@ -1063,16 +1071,17 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - names with line breaks in every header line, written escaped, names with a backslash or a quote written as they
       are, and target parts with control characters refused;
     - identity with SET IDENTITY_INSERT on and off, and off refused for an identity key;
-    - floats with 17 significant digits and none after the point, written with an exponent;
+    - floats with 17 significant digits and none after the point, written with an exponent; a subnormal float
+      refused, and a subnormal real written widened;
     - key columns a WHERE cannot use, unnamed and repeated names, an identity pair never SET, pairs whose types differ.
   - A **live round trip** (`VARIA_TEST_SQL_SCRATCH`): two scratch tables with every type (multi-line and
-    control-character text, a value with 10,000 line breaks, an xml value stored with style 1, 17-digit floats and a
-    real key column, included), compare their SELECTs, script, run the script on the target, then compare again and
-    expect no differences. Run it in both directions, and under a non-English language and DATEFORMAT. Then run a script
-    of the wrong direction, once whole and once with only INSERT ticked, and one whose deleted row was changed after the
-    comparison, and expect the check's THROW, with the target unchanged and, in the same session, an ordinary INSERT
-    into the identity table succeeding (IDENTITY_INSERT was turned off). It is a new live `Suite(...)` with a
-    `LiveGroups.Suites` entry, and its CI seconds go in docs/ci.md's table.
+    control-character text, a value with 10,000 line breaks, an xml value stored with style 1, 17-digit floats, a
+    subnormal real and a real key column, included), compare their SELECTs, script, run the script on the target, then
+    compare again and expect no differences. Run it in both directions, and under a non-English language and DATEFORMAT.
+    Then run a script of the wrong direction, once whole and once with only INSERT ticked, and one whose deleted row was
+    changed after the comparison, and expect the check's THROW, with the target unchanged and, in the same session, an
+    ordinary INSERT into the identity table succeeding (IDENTITY_INSERT was turned off). It is a new live `Suite(...)`
+    with a `LiveGroups.Suites` entry, and its CI seconds go in docs/ci.md's table.
   - vitest for the dialog: states, counts per direction, locked and unticked columns, warnings, the comparison replaced
     or closed while open, switching to another comparison, Enter and Escape in the suggestion list and on buttons, the
     draft memory, multipart target names, the Automatic and as-shown refusals and their buttons, the closed-input form
@@ -1242,7 +1251,7 @@ would leave out the sort, and "Rows" is already the toolbar's All rows / Changes
     as shown, with its rows shown and its rows, which C4's refusal and Copy as Diff's header read. It keeps no view.
     If C3 has landed, C6 also writes Copy as Diff's as-shown header lines (§ 4a).
 - **Renderer:**
-  - `CompareService` passes the inputs' current view ids (`run.sorts`), through `worker-core.ts`'s member-by-member
+  - `CompareService` passes the inputs' current view ids (`TabResults.sorts`), through `worker-core.ts`'s member-by-member
     rebuild as every results-path step. It keeps `inputs: 'whole' | 'shown'` in the
     options and the pair memory, and records each input's resolved filters and sort keys at build.
   - Staleness is a pure `comparisonOutOfDate`, beside `pivotOutOfDate` (ResultsService). It compares the recorded filters
