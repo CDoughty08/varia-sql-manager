@@ -392,13 +392,14 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
 
 - **Opening the card:**
   - **By mouse**, it opens after 500 ms, on a changed or soft cell or on a gutter's **?** flag, while the focus is in
-    that comparison's grid or its card. It closes when the pointer leaves the cell and card (unless it was clicked
-    into, when it stays until the focus leaves, so a selection dragged past its edge survives), when the focus leaves
-    the grid and card, or on Escape (WCAG 1.4.13),
-    which closes the card before it cancels a copy or save. Escape is reserved for closing widgets, so it is not a
-    catalogue key, and it reaches the card only through the focused grid: a card that opened while the focus was
-    elsewhere could not be dismissed without moving the pointer. With the focus elsewhere, the grid's own tooltip shows,
-    as today. Over that cell the card replaces the tooltip and repeats its truncation sentence.
+    that comparison's grid or its card. It closes when the pointer leaves the cell and card (unless it was clicked into,
+    when it stays until the focus leaves, so a selection dragged past its edge survives), when the focus leaves the grid
+    and card, when a grid menu opens or a right press lands, when the grid's view swaps (Interactions below), or on
+    Escape (WCAG 1.4.13), which closes the card before it cancels a copy or save. Escape is reserved for closing
+    widgets, so it is not a catalogue key, and it reaches the card only through the focused grid: a card that opened
+    while the focus was elsewhere could not be dismissed without moving the pointer. With the focus elsewhere, the
+    grid's own tooltip shows, as today. Over that cell the card replaces the tooltip and repeats its truncation
+    sentence.
   - **By key**, **Show Change Details** (Ctrl+I, ⌘I on macOS; Q8), the Comparison submenu or the palette opens it on the
     active cell. From the palette or More results tools, where the focus is elsewhere, it first shows the pane and
     focuses the comparison's grid on that cell, so Escape and Tab reach the card. From the grid menu it opens on the
@@ -441,8 +442,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - A move never strands the focus: the footer keeps **Compare Values in Tab** on every card (unavailable, with its
     hint, where it does not apply), and when a move removes the focused control (Go to Possible Match, which only
     look-alike cards have), the focus moves to the card's body.
-  - Follow mode ends on Escape, on focus leaving the grid and card, or on a replace of the comparison, and the card
-    closes with it: a card left open would go stale, and Escape could no longer reach it.
+  - Follow mode ends on Escape, on focus leaving the grid and card, when a grid menu opens or a right press lands (the
+    native macOS menu leaves the focus in the page), when a swap leaves no rows, or on a replace of the comparison
+    (Interactions below), and the card closes with it: a card left open would go stale, and Escape could no longer reach
+    it.
   - While a card opened by key shows, hover opens none. Ctrl+I always opens a card by key for the active cell: any card
     not opened by key (a hover card, on the active cell or another, or one the grid menu opened on another cell) is
     replaced by one,
@@ -522,19 +525,21 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - One row: the card is on the cell. Two rows: either half's cell, showing both halves.
   - A chip or a funnel filter takes the focus out of the grid, so it ends follow mode and closes the card as any focus
     leaving does. Opening any grid menu closes the card too, on every platform: the workbench's own menus take the
-    focus, and the native menu on macOS, which leaves the focus in the page, closes it the same way (`MenuService` tells
-    the card when it opens a menu for the grid). So a right press never moves a following card, and a card the grid menu
-    opens never meets one opened by key. A swap of the grid's view while the focus stays in the grid happens under the
-    card: a header's sort button (`GridView` prevents its pointerdown), Clear Filters on Ctrl+Shift+L, or a user's own
-    shortcut for a sort or filter command, and the grid keeps its active cell by position (`ResultGrid` swaps with an
-    identity row map), so another row can sit there now. A card opened by key then describes the cell now at the active
-    position, and when that changes what it describes, the live region says its name and summary as on opening, without
-    the Tab hint ("Change details: note, 2 edits: '9' became '10', and 1 more."), after the operation's own sentence,
-    since the active cell keeps its id, so `aria-activedescendant` does not change and some screen readers do not read
-    the cell's new name. A hover card, or a grid-menu card on another cell, closes. A swap that leaves no rows closes
-    the card too, the focus moving to the grid when it was in the card. `ResultGrid` tells the card after `view.swap`
-    (`GridView` gains `onSwap`), since a swap with an identity map fires no selection event and the active row's number
-    may not change. Rows, like any replace, closes it. Highlights and search hits stay in the grid.
+    focus, and the native menu on macOS, which leaves the focus in the page, closes it the same way (a new `MenuService`
+    notification, Technical sketch). A right press ends follow mode before it moves the active cell
+    (`GridView.pointerDown` tells the card on a `'secondary'` press, Ctrl+click on macOS included, before `select`), so
+    a following card never moves to a cell the user only opened a menu on, and a card the grid menu opens never meets
+    one opened by key. A swap of the grid's view while the focus stays in the grid happens under the card: a header's
+    sort button (`GridView` prevents its pointerdown), Clear Filters on Ctrl+Shift+L, or a user's own shortcut for a
+    sort or filter command, and the grid keeps its active cell by position (`ResultGrid` swaps with an identity row
+    map), so another row can sit there now. A card opened by key then describes the cell now at the active position, and
+    when that changes what it describes, the live region says its name and summary as on opening, without the Tab hint
+    ("Change details: note, 2 edits: '9' became '10', and 1 more."), after the operation's own sentence, since the
+    active cell keeps its id, so `aria-activedescendant` does not change and some screen readers do not read the cell's
+    new name. A hover card, or a grid-menu card on another cell, closes. A swap that leaves no rows closes the card too,
+    the focus moving to the grid when it was in the card. `ResultGrid` tells the card after `view.swap` (`GridView`
+    gains `onSwap`), since a swap with an identity map fires no selection event and the active row's number may not
+    change. Rows, like any replace, closes it. Highlights and search hits stay in the grid.
   - Exact text off: soft cells open as "equal by collation".
 
 ### Technical sketch
@@ -602,6 +607,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - Escape with the focus in the grid reaches the card through `GridView`'s existing `onEscape` hook: `ResultGrid` closes
     an open card first, else cancels the tab's copy or save. Inside the card, Escape is the card's own `onKeyDown`, as
     in the Compare popover. Neither adds a key listener (`tests/keyboard-lint.test.ts`).
+  - Opening a grid menu closes the card through a new `MenuService` notification, fired in `openFor` for an output grid
+    target on both the custom and the native path (`menuFor` publishes only a target's mark, and the output grid's has
+    none); a secondary press tells the card through `GridView` first, since the press moves the active cell before
+    `contextmenu` arrives.
   - Hover comes from the grid's existing pointer handling through a debounced `onCellHover`, with no per-cell listeners.
   - The read waits for the hover delay and is cancelled on leave.
   - Marked text renders as spans in the card, which is not the grid, so the grid lint's nodeValue rule is untouched.
@@ -649,9 +658,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - a header sort, Clear Filters (Ctrl+Shift+L) and Exclude Selected Values on a user's own shortcut (moving the
       card's row away, and leaving no rows) while a card opened by key shows (it then describes the cell now at the
       active position and says its name and summary when what it describes changes), a chip click closing it as the
-      focus leaves the grid, opening the grid menu closing it on every platform (the native macOS menu through a fake
-      presenter, since CI runs no macOS path), a swap that leaves no rows closing it, and a hover card and a grid-menu
-      card on another cell closing on a sort;
+      focus leaves the grid, opening the grid menu closing it on every platform (the native macOS menu through `style:
+      'native'` with a fake main API, as `native-menu.test.ts` does, since the smoke suites run no macOS path), a right
+      press outside the selection closing a following card before the active cell moves, a swap that leaves no rows
+      closing it, and a hover card and a grid-menu card on another cell closing on a sort;
     - `grid-view.test.ts`: an identity swap fires `onSwap` but not `onSelection`, so a card test fed a fake cannot miss
       a missing wire.
   - `DiffChecks`: `partnerOf` answers `differing` and `compared`, skipping ignored pairs; `BytesFor` charges the bitsets
@@ -1159,32 +1169,33 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     selection change: it chooses the rows now at those positions, and the Rows line gives that cause ("The grid was
     sorted, so Selected rows now holds 1 difference (id = 1009)."). A chip or filter that moves the selection under
     Selected rows gives its own ("The grid's filters changed, so Selected rows now holds …"). The dialog tells them
-    apart by comparing the sort keys and filters of the view its last request read (`ResultView.keys`, each with its
-    Sort Text By mode, so a re-sort by another mode reads as a sort, and `ResultView.filters`; none for the base result)
-    with those of the view now shown (`results.sortOf` holds a build's requested keys while it runs, so it cannot tell).
-    One build can carry both, since a filter applied while a sort builds restarts it with both: "The grid was sorted and
-    its filters changed, so Selected rows now holds …". After a failed preview the dialog cannot tell whether the
-    entries changed, so these read "The grid was sorted, so Selected rows may now hold other rows." (and likewise for
-    the others), and a selection made in the grid reads "Selected rows may now hold other rows.", since a click may
-    leave them as they were. A change is found from each answer's count and fingerprint for the option (`differences`
-    and `differencesKey`, Technical sketch), so a filter moved to other rows of the same count is found too. In Two rows
-    an entry is chosen when either of its halves is. The preview reads them as it shows, and Script reads them again.
-    After a change that can alter what it writes, Script waits until the preview for it answers, as it waits for a
-    lookup: unavailable, described "Reading the comparison…", which pressing it says, so it writes only what the form's
-    counts and warnings describe. Those changes are any change in the form that the request carries (not the columns'
-    search text or Destination), from the moment it is made (the 300 ms wait included), a change in the target's facts
-    the request carries (a lookup's answer, a disconnect dropping them, a reconnect or finished build bringing them
-    back), which sends the preview again, and in the comparison a replace, chips or filters under Rows in the grid, and
-    the selection, or a sort, chip or filter that moves it, under Selected rows, the cases a generation is cancelled
-    for. A sort or a click in the grid while Selected rows is not chosen, or a chip or filter under All differences,
-    sends a preview for the other options' counts but does not make Script wait; its answer updates the counts and the
-    summary's "All differences includes …" sentence as any answer does, and a failed one hides them, as the
-    failed-preview rule says. A failed preview ends the wait, and Script is available then, as the failed-preview rule
-    says. As a safety net, Script's answer carries the same `differences` and `differencesKey`: when the chosen option's
-    differ from the latest preview answer's, when that answer succeeded, the script is not used, the changed line shows
-    ("…was not written." alone, since Script waits again for the preview the renderer asks at once), and the Rows line
-    takes the new count. While the latest preview has failed there is no answer to check against, and Script writes, its
-    header naming the rows and carrying the warnings.
+    apart by comparing the sort keys and filters of the view its last request read (`ResultView.keys`, with each key's
+    Sort Text By mode counted only on a column that mode orders, as `resort()` decides, so a re-sort by another mode
+    reads as a sort and a mode stamped on an int key does not; and `ResultView.filters`; none for the base result) with
+    those of the view now shown (`results.sortOf` holds a build's requested keys while it runs, so it cannot tell).
+    Filtering waits while a sort builds (`heldOff`), and the dialog sends a request on every swap, so two views it
+    compares differ in one of the two. After a failed preview the dialog cannot tell whether the entries changed, so
+    these read "The grid was sorted, so Selected rows may now hold other rows." and "The grid's filters changed, so
+    Selected rows may now hold other rows.", and a selection made in the grid reads "Selected rows may now hold other
+    rows.", since a click may leave them as they were. A change is found from each answer's count and fingerprint for
+    the option (`differences` and `differencesKey`, Technical sketch), so a filter moved to other rows of the same count
+    is found too. In Two rows an entry is chosen when either of its halves is. The preview reads them as it shows, and
+    Script reads them again. After a change that can alter what it writes, Script waits until the preview for it
+    answers, as it waits for a lookup: unavailable, described "Reading the comparison…", which pressing it says, so it
+    writes only what the form's counts and warnings describe. Those changes are any change in the form that the request
+    carries (not the columns' search text or Destination), from the moment it is made (the 300 ms wait included), a
+    change in the target's facts the request carries (a lookup's answer, a disconnect dropping them, a reconnect or
+    finished build bringing them back), which sends the preview again, and in the comparison a replace, chips or filters
+    under Rows in the grid, and the selection, or a sort, chip or filter that moves it, under Selected rows, the cases a
+    generation is cancelled for. A sort or a click in the grid while Selected rows is not chosen, or a chip or filter
+    under All differences, sends a preview for the other options' counts but does not make Script wait; its answer
+    updates the counts and the summary's "All differences includes …" sentence as any answer does, and a failed one
+    hides them, as the failed-preview rule says. A failed preview ends the wait, and Script is available then, as the
+    failed-preview rule says. As a safety net, Script's answer carries the same `differences` and `differencesKey`: when
+    the chosen option's differ from the latest preview answer's, when that answer succeeded, the script is not used, the
+    changed line shows ("…was not written." alone, since Script waits again for the preview the renderer asks at once),
+    and the Rows line takes the new count. While the latest preview has failed there is no answer to check against, and
+    Script writes, its header naming the rows and carrying the warnings.
   - **Options:** Wrap in a transaction (on), Check each statement changes one row (on; Q2), with the line "UPDATEs also
     check that the row still holds the values they change from, DELETEs the values the comparison saw, and INSERTs that
     the row is not there yet." (Q11). While UPDATE is ticked and some chosen UPDATEs change only columns the check
@@ -1462,14 +1473,16 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     selection event raised inside the swap (a filter clamping the selection fires `onSelection` before `viewShown`) is
     folded into the swap's preview, and the preview goes out after the grid's next draw, so a first-cell selection made
     as it draws (`onFirstCell`, when a swap brings rows back to a grid a filter had left with none) is folded in too: no
-    request pairs the old view with the new selection or the new view with none, and Script waits once. A sort or filter
+    request pairs the old view with the new selection or the new view with none, and Script waits once. Script waits
+    ("Reading the comparison…") from the selection event or the swap's notification; only the request waits for the
+    draw, so a grid whose window does not draw (minimized or covered) never leaves Script unmarked. A sort or filter
     build that is cancelled or fails keeps the last view and swaps nothing, so it sends no preview: the wait for a grid
-    change starts with the preview sent on its swap. An input closing while the comparison stays sends the preview
-    again, as a replace does (Script does not wait for it, since the script reads only the comparison), so a refusal's
-    closed-input sentence (from the backend) replaces its open form; the live region says it, and the focus stays on its
-    button, now unavailable. The key-column-unknown line takes its closed-input form at once, and a refusal found on
-    Script clears, with Script available at once, so the next Script brings its closed-input form ("Choose rows without
-    a repeated key.").
+    change starts with its swap. An input closing while the comparison stays sends the preview again, as a replace does
+    (Script does not wait for it, since the script reads only the comparison), so a refusal's closed-input sentence
+    (from the backend) replaces its open form; the live region says it, and the focus stays on its button, now
+    unavailable. The key-column-unknown line takes its closed-input form at once, and a refusal found on Script clears,
+    with Script available at once, so the next Script brings its closed-input form ("Choose rows without a repeated
+    key.").
   - A replace resets the selection and every filter but the chips, and can turn off a chip (shipped). When that changes
     the rows the chosen option holds, the Rows line says so with its cause and the new count, and the dialog's live
     region adds it after the shipped sentence: "The comparison's filters were removed, so Rows in the grid now holds 31
@@ -1482,8 +1495,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     the line always matches the option's count, and the replay says it as it stands. A change in the dialog's form
     (another Rows option included), Script or a switch to another comparison clears it; a click, sort or chip in the
     grid that leaves the chosen entries as they were (a sort while Selected rows is not chosen) does not. After a failed
-    preview it drops its count ("The comparison's filters were removed, so Rows in the grid changed."; "Rows in the grid
-    changed."; under Selected rows the "may now hold other rows" forms above), so a widened Rows is never silent.
+    preview it drops its count and hedges, since a change may have touched only unchanged rows ("The comparison's
+    filters were removed, so Rows in the grid may now hold other rows."; "Rows in the grid may now hold other rows.";
+    under Selected rows the forms above), so a widened Rows is never silent.
   - A screen reader does not read a live region in a window in the background, so of what the dialog's live region said
     while its window was in the background, each of these lines that changed then is said again when the window is
     activated, as it stands at activation, in the order they last changed: the Rows line, a refusal in the footer (a
@@ -2011,24 +2025,25 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     filter under Selected rows saying its cause, a swap with no selection event sending a preview with the new view's
     id, a clamped filter sending the clamped rows once, Clear Filters after a filter that left no rows sending one
     preview with the first cell and the filters' cause, a sort cancelled while a request ran not making a later filter
-    read as a sort, a filter applied while a sort builds giving both causes, a refusal found on Script cleared by a
-    lookup's answer, `viewShown` notifying only after the shown view has moved (`results-service.test.ts`), another
-    comparison invoking the window during a replace leaving it running and dropping a reopen's pending preview, a
-    lookup's answer and a disconnect sending the preview again and making Script wait, the columns' search text and
-    Destination sending none, the remembered-direction line read on either Direction radio and the Rows line on the Rows
-    options, Escape cancelling a running replace before closing, Script's answer differing from the latest preview's,
-    when it succeeded, `differences` or `differencesKey` writing nothing and showing the changed line without "Script
-    again", Script writing unchecked while the latest preview has failed, an input closing while open sending the
-    preview again, saying the closed-input sentence with the focus kept on the unavailable button and clearing a refusal
-    found on Script, a reopening during a replace from any Choose key columns… showing "Updating the comparison…" with
-    the focus on Cancel and its opening preview sent when the replace ends, however it ends (a failure said first; the
-    focus then on a refusal that replaced the form's first button, else Target table, and kept on Cancel when Cancel
-    ended the replace), a preview value refusal counting rows past the 30 lines, a refusal the preview found kept
-    through a grid click until an answer no longer brings it and said again only when its sentence changes, a two-part
-    target in a database beside another holding the same table, the key-column form of the truncation and U+FFFD
-    refusals, closing while generating opening nothing, Enter in Target table with nothing highlighted, the window over
-    a popped-out Results pane, a cancelled generation giving way to a closed or refused state, and the Clipboard
-    announcement.
+    read as a sort, a mode change under an int sort followed by a filter reading as a filter, with a failing fake
+    preview the four hedged forms (a sort, a filter and a click under Selected rows, a chip under Rows in the grid), a
+    refusal found on Script cleared by a lookup's answer, `viewShown` notifying only after the shown view has moved
+    (`results-service.test.ts`), another comparison invoking the window during a replace leaving it running and dropping
+    a reopen's pending preview, a lookup's answer and a disconnect sending the preview again and making Script wait, the
+    columns' search text and Destination sending none, the remembered-direction line read on either Direction radio and
+    the Rows line on the Rows options, Escape cancelling a running replace before closing, Script's answer differing
+    from the latest preview's, when it succeeded, `differences` or `differencesKey` writing nothing and showing the
+    changed line without "Script again", Script writing unchecked while the latest preview has failed, an input closing
+    while open sending the preview again, saying the closed-input sentence with the focus kept on the unavailable button
+    and clearing a refusal found on Script, a reopening during a replace from any Choose key columns… showing "Updating
+    the comparison…" with the focus on Cancel and its opening preview sent when the replace ends, however it ends (a
+    failure said first; the focus then on a refusal that replaced the form's first button, else Target table, and kept
+    on Cancel when Cancel ended the replace), a preview value refusal counting rows past the 30 lines, a refusal the
+    preview found kept through a grid click until an answer no longer brings it and said again only when its sentence
+    changes, a two-part target in a database beside another holding the same table, the key-column form of the
+    truncation and U+FFFD refusals, closing while generating opening nothing, Enter in Target table with nothing
+    highlighted, the window over a popped-out Results pane, a cancelled generation giving way to a closed or refused
+    state, and the Clipboard announcement.
   - Smoke: open the dialog window by role, script to a New Query Editor Window, and find `BEGIN TRANSACTION` in the
     focused editor. A frameless OS window can behave differently on Linux, so run it through `npm run test:smoke:wsl`
     before pushing.
