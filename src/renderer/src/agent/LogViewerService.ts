@@ -186,9 +186,10 @@ export class LogViewerService extends SnapshotStore<LogViewerSnapshot> implement
     if (existing) {
       this.options.documents.activate(existing.id)
       if (where.recycle) {
-        // Recycle keeps the viewer's sources (it may be cancelled), and checks Current only when no log is checked.
-        if (!existing.logs.length) { this.patch(existing.id, { logs: [0] }); this.syncErrorLog(existing.id) }
+        // Recycle keeps the viewer's sources (it may be cancelled), and checks Current only when no log is checked and its confirmation
+        // opened: a refused Recycle (below sysadmin, Managed Instance) leaves the sources alone and only says why.
         this.askRecycle(existing.id)
+        if (this.get(existing.id)?.recycle && !this.get(existing.id)?.logs.length) { this.patch(existing.id, { logs: [0] }); this.syncErrorLog(existing.id) }
         return existing.id
       }
       this.setFilters(existing.id, { checked, run: undefined }, { pendingJob: where.jobName, note: undefined, ...where.errorLog !== undefined ? { logs: [where.errorLog], entry: undefined } : {} })

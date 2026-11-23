@@ -166,7 +166,7 @@ describe("the Log File Viewer's Agent error logs", () => {
     expect(logViewer.canRecycle(id)).toBe(false)
   })
   it('unchecks a log View Agent Log checked once the role reads below sysadmin, which Select logs gives no checkbox to undo', async () => {
-    const { logViewer, api, errorLog } = viewer()
+    const { logViewer, api, errorLog, handles } = viewer()
     api.agentProfile.mockResolvedValue(operator)
     const id = logViewer.open('c1', { errorLog: 0 })
     expect(errorLog()!.disposed).toBe(false)
@@ -174,6 +174,13 @@ describe("the Log File Viewer's Agent error logs", () => {
     expect(logViewer.get(id)?.logs).toEqual([])
     expect(logViewer.get(id)?.note).toContain('sysadmin')
     expect(errorLog()!.disposed).toBe(true)
+    // Recycle on the open viewer is refused for this login: it says why and checks no log.
+    const views = handles().length
+    logViewer.open('c1', { errorLog: 0, recycle: true })
+    expect(logViewer.get(id)).toMatchObject({ logs: [] })
+    expect(logViewer.get(id)).not.toHaveProperty('recycle')
+    expect(logViewer.get(id)?.note).toContain('sysadmin')
+    expect(handles().length).toBe(views)
   })
   it('keeps a failed list with its reason, and reads it again on Retry', async () => {
     const { logViewer, api } = viewer()

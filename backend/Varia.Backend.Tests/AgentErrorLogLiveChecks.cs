@@ -51,7 +51,7 @@ internal static class AgentErrorLogLiveChecks
         var archived = after.Logs.FirstOrDefault(log => log.Archive == 1);
         // Agent may write to the old Current between the listing and Recycle, so its archive is at least the size listed.
         check(recycled.Error is null && recycled.Steps is [{ Status: "done", Title: ActionService.RecycleStep }] && moved && fresh is { Count: > 0 }
-            && (!before.Archives || (archived is not null && archived.Bytes >= oldCurrent?.Bytes)),
+            && (!before.Archives || (archived is not null && (oldCurrent?.Bytes is null || archived.Bytes >= oldCurrent.Bytes))),
             "Recycle starts a new Current with Agent's 412 line, and the old Current is Archive #1 at least its listed size: "
             + string.Join(", ", recycled.Steps.Select(step => step.Status + ":" + step.Title)) + " " + recycled.Error?.Code + " moved " + moved + " " + fresh?.Count + " " + archived?.Bytes + "/" + oldCurrent?.Bytes);
     }
