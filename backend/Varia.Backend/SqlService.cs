@@ -3413,6 +3413,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         actions.Dispose();
         ssis.Dispose();
         ssisActions.Dispose();
+        // Disposal is a stop too, so it never cancels a BigQuery job, also without the host's BeginShutdown first: a request
+        // cancelled while still holding its job would send a jobs.cancel that races the client's disposal below.
+        BeginShutdown();
         CancelAll();
         bigQuery.Dispose();
         foreach (var session in sessions.Values) session.Close();

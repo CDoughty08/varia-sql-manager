@@ -63,7 +63,7 @@ internal static partial class BigQueryIndexChecks
                 .On("GET", Beta + "/datasets/[^/]+/(routines|models)", BigQueryFake.Fixture("index-empty"))
                 .On("GET", Beta + "/datasets/census/tables", BigQueryFake.Fixture("index-beta-tables"))
                 .On("GET", Beta + "/datasets/census/tables/[^/]+", BigQueryFake.Fixture("table-orders"));
-            Service = new SqlService(bigQuery: new BigQueryEnvironment(null, Fake.Factory, new SubjectTokens([])));
+            Service = new SqlService(CheckStores.Unprobed(), bigQuery: new BigQueryEnvironment(null, Fake.Factory, new SubjectTokens([])));
             Service.BigQuery.RetryDelay = TimeSpan.FromMilliseconds(1);
         }
 

@@ -125,10 +125,10 @@ internal sealed record BigQueryJobSummary(string Project, string JobId, string? 
 /// whose query is estimated (docs/bigquery.md, Sort and filter in BigQuery).</summary>
 internal sealed record BigQueryDryRunArgs(string ConnectionId, string? Sql = null, string? Dataset = null, RemoteDryRunArgs? Remote = null);
 
-/// <summary>A results.remoteQuery request (view or distinct) to estimate, without its query ID; the answer says whether running
-/// it would fall back to the original query (BigQueryDryRunResult.Fallback).</summary>
+/// <summary>A results.remoteQuery request (view, distinct, sample or rerun) to estimate, without its query ID; the answer says
+/// whether running it would fall back to the original query (BigQueryDryRunResult.Fallback).</summary>
 internal sealed record RemoteDryRunArgs(uint ResultId, int Generation, string Kind, RemoteSortArgs[]? Sort = null, RemoteFilterArgs[]? Filters = null,
-    int? Column = null, RemoteFilterArgs[]? Kept = null);
+    int? Column = null, RemoteFilterArgs[]? Kept = null, int? Rows = null, string? Method = null);
 
 /// <summary>bigquery.dryRun's answer: the bytes the query would process, why the figure may be low, the statement type, and
 /// whether emulator mode faked it; for a remote request, Fallback when its result table expired, so the figure is the original

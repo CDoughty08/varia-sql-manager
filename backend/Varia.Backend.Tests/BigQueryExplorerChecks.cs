@@ -194,7 +194,7 @@ internal static class BigQueryExplorerChecks
                 .On("GET", Sales + "/routines", BigQueryFake.Fixture("routines"))
                 .On("GET", Sales + "/routines/refresh_totals", BigQueryFake.Fixture("routine-procedure"))
                 .On("GET", Sales + "/models", BigQueryFake.Fixture("models"));
-            Service = new SqlService(store, bigQuery: new BigQueryEnvironment(null, Fake.Factory, new SubjectTokens([])));
+            Service = new SqlService(store ?? CheckStores.Unprobed(), bigQuery: new BigQueryEnvironment(null, Fake.Factory, new SubjectTokens([])));
             Service.BigQuery.RetryDelay = TimeSpan.FromMilliseconds(1);
         }
 

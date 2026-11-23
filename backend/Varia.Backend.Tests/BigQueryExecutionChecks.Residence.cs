@@ -184,7 +184,9 @@ internal static partial class BigQueryExecutionChecks
             {
                 if (Gate is { } gate && (Holds?.Invoke(first) ?? true))
                 {
-                    try { await gate.Task.WaitAsync(token); }
+                    // An open gate does not look at the token: a fetch stopped before it got here (its thread preempted
+                    // between its lanes and the gate) still throws, as a real fetch would.
+                    try { await gate.Task.WaitAsync(token); token.ThrowIfCancellationRequested(); }
                     catch (OperationCanceledException) { Interlocked.Increment(ref Cancelled); throw; }
                 }
                 if (Expire) throw new RemoteExpiredException();
@@ -421,6 +423,26 @@ internal static partial class BigQueryExecutionChecks
             var cached = jumped.CachedBlocks();
             check(!cached.Contains(40) && cached.Contains(300),
                 $"a viewerless jump after a cancelled viewerless read stops that read's fetch: {string.Join(",", cached)} cancelled {held.Cancelled}");
+        }
+        // A fetch stopped after it took its lanes, which reaches the gate only once it has opened (its thread preempted
+        // meanwhile, as on a loaded machine), honours its cancelled token like a real fetch: nothing is cached.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var held = new Blocks { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously), Before = first => first == 40 * 256 ? release.Task : Task.CompletedTask };
+            using var jumped = Remote(store, held);
+            using var stopJump = new CancellationTokenSource();
+            var first = jumped.ReadAsync(40 * 256, 10, 0, _ => ValueTask.CompletedTask, TimeSpan.FromSeconds(15), stopJump.Token);
+            var entered = SpinWait.SpinUntil(() => held.Calls.Any(call => call.First == 40 * 256), 15_000);
+            stopJump.Cancel();
+            try { await first; } catch (OperationCanceledException) { }
+            await ReadRemote(jumped, 300 * 256, 10, viewer: 0, waitMs: 50);
+            held.Gate.SetResult();
+            release.SetResult();
+            SpinWait.SpinUntil(() => jumped.FetchingBlocks() == 0, 15_000);
+            var cached = jumped.CachedBlocks();
+            check(entered && !cached.Contains(40) && cached.Contains(300),
+                $"a fetch stopped before it reaches an open gate writes nothing: {string.Join(",", cached)} entered {entered}");
         }
 
         // Once the table has expired, a read of cached rows lists no read-ahead blocks it can never fetch.
@@ -2041,7 +2063,8 @@ internal static partial class BigQueryExecutionChecks
             string outcome;
             try { await ReadRemote(remote, 0, 10); outcome = "ok"; }
             catch (RequestException error) { outcome = error.Code; }
-            SpinWait.SpinUntil(() => store.WindowCacheBytes == 0, 5000);
+            // The read-ahead blocks may still be building (and later refused) on a starved machine: wait for them to settle.
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0 && store.WindowCacheBytes == 0, 15_000);
             check(outcome == "TOO_LARGE" && remote.BlockRows == RemoteResult.MaxBlockRows && blocks.Written < remote.BlockRows && store.WindowCacheBytes == 0,
                 $"a block of rows far wider than estimated stops at the cache's limit and is refused: {outcome} {blocks.Written} of {remote.BlockRows} {store.WindowCacheBytes}");
         }

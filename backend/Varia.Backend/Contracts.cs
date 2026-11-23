@@ -171,9 +171,11 @@ internal sealed record ResultsReadResult(long NextRow, long RowsAvailable, bool 
 /// Generation is the source result's, which main checks before sending. Kind "load" (Load into memory) takes nothing more;
 /// "view" (a sort or filter) takes 0 to 16 Sort keys and 0 to 16 Filters, at least one of either; "distinct" (a value list)
 /// takes the Column, the other columns' Filters and, optionally, the Kept filters whose rows tick its values. JobKey (load only)
-/// records its job for re-attaching. Fallback runs the original query again when its result table expired (BigQueryViewSql.CanFallBack).</summary>
+/// records its job for re-attaching. Fallback runs the original query again when its result table expired (BigQueryViewSql.CanFallBack).
+/// "sample" (Load sample) takes Rows (1 to BigQueryViewSql.MaxSampleRows) and Method: "first" reads the first rows (tabledata.list,
+/// free), "random" runs a TABLESAMPLE SYSTEM query. "rerun" takes nothing more: it runs the result's own statement again.</summary>
 internal sealed record RemoteQueryArgs(string QueryId, uint ResultId, int Generation, string Kind, RemoteSortArgs[]? Sort = null, RemoteFilterArgs[]? Filters = null,
-    int? Column = null, RemoteFilterArgs[]? Kept = null, bool? Fallback = null, string? JobKey = null);
+    int? Column = null, RemoteFilterArgs[]? Kept = null, bool? Fallback = null, string? JobKey = null, int? Rows = null, string? Method = null);
 /// <summary>One sort key of a remote view: a column of the windowed result, ascending (NULL first) or descending (NULL last).</summary>
 internal sealed record RemoteSortArgs(int Column, bool Descending);
 /// <summary>One filter of a remote view or value list (results.view's ViewFilter, its values in a value list): Op "in" or

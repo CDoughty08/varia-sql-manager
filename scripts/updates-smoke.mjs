@@ -80,6 +80,15 @@ try {
   if (!installedNotes) throw new Error('The running version has no bundled release record.')
   await expect(about).toContainText(`Version ${currentVersion}`)
   await expect(about.getByRole('button', { name: 'Done', exact: true })).toBeFocused()
+  const aboutFooter = await aboutWindow.evaluate(() => {
+    const box = document.querySelector('[role="dialog"]').getBoundingClientRect()
+    const done = [...document.querySelectorAll('[role="dialog"] button')].find(item => item.textContent?.trim() === 'Done')?.getBoundingClientRect()
+    return { compatMode: document.compatMode, dialogBottomGap: innerHeight - box.bottom, rightGap: done ? innerWidth - done.right : null, bottomGap: done ? innerHeight - done.bottom : null }
+  })
+  expect(aboutFooter.compatMode).toBe('CSS1Compat')
+  expect(Math.abs(aboutFooter.dialogBottomGap)).toBeLessThan(1)
+  expect(Math.abs(aboutFooter.rightGap - 8)).toBeLessThan(1)
+  expect(Math.abs(aboutFooter.bottomGap - 8)).toBeLessThan(1)
   // Tab wraps inside the dialog (to the title bar's close button; macOS has its traffic lights instead), and Shift+Tab comes back to Done.
   await aboutWindow.keyboard.press('Tab')
   if (process.platform === 'darwin') await expect(about.getByRole('button', { name: 'Done', exact: true })).not.toBeFocused()

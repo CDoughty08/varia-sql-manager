@@ -66,6 +66,39 @@ internal static class BigQueryViewSql
         return sql.ToString();
     }
 
+    /// <summary>The most rows Load sample takes (src/shared/bigquery/remote-view.ts checks the same).</summary>
+    public const int MaxSampleRows = 10_000_000;
+
+    /// <summary>How much more of the table a random sample asks for than the rows it keeps: TABLESAMPLE SYSTEM picks whole
+    /// blocks, each with the percent's chance, so it returns about that share of the rows, not exactly.</summary>
+    public const double SampleHeadroom = 1.1;
+
+    /// <summary>The percent of <paramref name="total"/> rows a random sample of <paramref name="rows"/> asks for: the rows'
+    /// share with <see cref="SampleHeadroom"/>, rounded up to a millionth, from a millionth to 100.</summary>
+    public static double SamplePercent(long rows, long total)
+    {
+        if (total <= 0 || rows >= total) return 100;
+        var percent = Math.Ceiling(rows * 100.0 * SampleHeadroom / total * 1_000_000) / 1_000_000;
+        return Math.Clamp(percent, 0.000001, 100);
+    }
+
+    /// <summary>A random sample of the result table: <c>SELECT * FROM table TABLESAMPLE SYSTEM (@percent PERCENT) LIMIT @rows</c>.
+    /// TABLESAMPLE reads a table, never a subquery, so a sample has no fallback to the original query.</summary>
+    public static string Sample(TableReference table, long rows, long total, List<QueryParameter> parameters)
+    {
+        parameters.Add(new QueryParameter
+        {
+            Name = BigQuerySql.SamplePercentParameter, ParameterType = new QueryParameterType { Type = "FLOAT64" },
+            ParameterValue = new QueryParameterValue { Value = SamplePercent(rows, total).ToString("0.######", System.Globalization.CultureInfo.InvariantCulture) }
+        });
+        parameters.Add(new QueryParameter
+        {
+            Name = BigQuerySql.SampleRowsParameter, ParameterType = new QueryParameterType { Type = "INT64" },
+            ParameterValue = new QueryParameterValue { Value = rows.ToString(System.Globalization.CultureInfo.InvariantCulture) }
+        });
+        return BigQuerySql.SelectAll + Source(table) + BigQuerySql.SampleOpen + BigQuerySql.SamplePercentParameter + BigQuerySql.SampleLimit + BigQuerySql.SampleRowsParameter;
+    }
+
     static void Where(StringBuilder sql, IReadOnlyList<BigQueryField> fields, IReadOnlyList<RemoteFilter> filters, List<QueryParameter> parameters)
     {
         if (filters.Count == 0) return;

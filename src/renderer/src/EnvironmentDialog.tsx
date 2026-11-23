@@ -3,6 +3,7 @@ import { environmentPreset, environmentPresets, maxEnvironmentLength } from '../
 import { useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import EnvironmentTag from './EnvironmentTag'
 import Icon from './Icon'
+import DialogFooter from './kit/DialogFooter'
 import { applyEnvironment, parseEnvironment } from './services/environments'
 import { trapFocus } from './trap-focus'
 import { focusToReturn, returnFocusTo } from './core/focus'
@@ -91,6 +92,9 @@ export default function EnvironmentDialog({ connectionId, onClose }: { readonly 
       <p className="field-note">{connection?.lifecycle ? 'Shown on this connection and its attached query badges. Saved profiles keep their own environment.' : 'Saved with this connection in Varia on this computer.'} Production shows a red PROD tag on the server, its query tabs and the status bars, beside the connection colour.</p>
       {error && <p className="connect-error" role="alert">{error}</p>}
     </div>
-    <div className="connection-footer"><span /><button className="primary" type="submit" disabled={busy || !connection || !parsed.ok}>OK</button><button type="button" disabled={busy} onClick={close}>Cancel</button></div>
+    <DialogFooter trailing={<>
+      <button className="primary" type="submit" disabled={busy || !connection || !parsed.ok}>OK</button>
+      <button type="button" disabled={busy} onClick={close}>Cancel</button>
+    </>} />
   </form></div>
 }
