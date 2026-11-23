@@ -347,7 +347,7 @@ export const agentJobText = {
   newBlank: 'Blank job',
   newBlankHint: 'Name it, then save; steps and schedules come with their own sections.',
   newCopy: 'Copy an existing job…',
-  newCopyHint: 'Pick a job; its General and Notifications fill this new job. Nothing is created until Save.',
+  newCopyHint: 'Pick a job; a new job like it opens with Changes from source first. Nothing is created until Save.',
   newHint: 'Nothing is created until Save, and everything stays editable.'
 } as const
 
@@ -497,18 +497,6 @@ export function rebaseAgentJobDraft(opened: AgentJobDocumentModel, current: Agen
     }
   }
   return next
-}
-
-/** New Job's "Copy an existing job": the copied job's General and Notifications as a new job's draft, named "Copy of …" (cut to fit). */
-export function copiedAgentJobDraft(source: AgentJobDocumentModel, login: string, sysadmin: boolean): AgentJobDraft {
-  const from = initialAgentJobDraft(source)
-  const name = `Copy of ${from.name}`.slice(0, agentLimits.nameChars)
-  // Create from… shares the source's schedules (the owner's 2026-11-18 decision) where the login can attach them: msdb asks only for the
-  // job's owner, so any schedule whose version was read (the view lists it to the login) is shared; others are copied as new.
-  const schedules = (source.schedules ?? []).map((record, index): JobScheduleEntry => record.version !== undefined && !!record.modified
-    ? { key: `s:${record.id}`, id: record.id, attached: true, base: record, fields: from.schedules[index]?.fields ?? record }
-    : { key: `n:copy:${record.id}`, fields: from.schedules[index]?.fields ?? record })
-  return { ...from, name, owner: sysadmin ? from.owner : login, removeAlerts: [], steps: { steps: [] }, schedules }
 }
 
 // --- Commands ----------------------------------------------------------------------------------------------------------

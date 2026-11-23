@@ -11,13 +11,16 @@ import { jobErrorField } from '../../../shared/actions/schema.ts'
 import { agentLimits, notifyLevels } from '../../../shared/agent/catalog.ts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
-import DocumentFrame, { type FrameSection, type Verb } from '../kit/DocumentFrame'
+import DocumentFrame, { sectionDomId, type FrameSection, type Verb } from '../kit/DocumentFrame'
+import { selectSection } from '../kit/document-frame'
+import { createFromText } from '../../../shared/agent/create-from.ts'
+import JobCopyChanges, { CopyCompare } from './JobCopyChanges'
 import InlineError from '../kit/InlineError'
 import PropertyField, { FieldHints, FieldHintStrip, fieldAria } from '../kit/PropertyField'
 import Skeleton from '../kit/Skeleton'
 import StatusPill from '../kit/StatusPill'
 import Switch from '../kit/Switch'
-import { jobSections, type JobDocumentService, type JobDocumentState } from './JobDocumentService'
+import { jobCopySection, jobSections, type JobDocumentService, type JobDocumentState } from './JobDocumentService'
 import JobSchedules from './JobSchedules'
 import JobSteps from './JobSteps'
 
@@ -285,6 +288,17 @@ export default function JobDocument({ documentId }: { documentId: string }) {
   // Alerts shows where the platform has them and the login may read them; New Job says to save first.
   const shown = jobSections.filter(section => section.id !== 'alerts' || !model?.job || model.alerts !== undefined)
   const sections: FrameSection[] = shown.map(section => ({ id: section.id, title: section.title, problem: problemSections.has(section.id), content: content(section.id) }))
+  // Create Job Like This (AG-6e): Changes from source leads the sections, and its links go to Steps or Schedules.
+  const frameId = `agent-job-${state.id}`
+  const goTo = (section: 'steps' | 'schedules', key?: string) => {
+    if (key) jobDocuments.selectStep(state.id, key)
+    jobDocuments.setFrame(state.id, selectSection(state.frame, sections, section))
+    document.getElementById(sectionDomId(frameId, section))?.scrollIntoView({ block: 'start' })
+  }
+  if (state.source && model && draft) sections.unshift({
+    id: jobCopySection, title: createFromText.section, problem: problemSections.has('general') || problems.some(problem => problem.field === 'steps' && problem.severity === 'error'),
+    content: <JobCopyChanges state={state} model={model} draft={draft} editable={editable} problems={problems} service={jobDocuments} goTo={goTo} />
+  })
   const name = model?.job?.name ?? (draft?.name || 'New Job')
   const recovery = state.phase === 'loadFailed' || state.error?.code === 'NOT_FOUND' ? [{ label: 'Reload', run: () => jobDocuments.reload(state.id) }] : []
   const banner = <>
@@ -293,9 +307,12 @@ export default function JobDocument({ documentId }: { documentId: string }) {
       : state.error && !state.error.field && <InlineError message={state.error.message} code={state.error.code} context={`Job ${name} on ${state.server}`} actions={recovery} />}
     {jobErrorField(state.error) && !state.stale && <p className="property-field-error" role="alert"><Icon name="error" />{`Not saved: ${agentJobFieldLabels[jobErrorField(state.error)!]}. Nothing was changed; your changes are kept.`}</p>}
     {!state.error && state.notice && <p className="document-status" role="status"><Icon name="pass" />{state.notice}</p>}
+    {state.source && <div className="agent-copy-banner" role="note"><Icon name="copy" /><span>{createFromText.banner(state.source.base.name)}</span>
+      <button type="button" className="link-button" aria-expanded={!!state.compareOpen} onClick={() => jobDocuments.toggleCompare(state.id)}>{state.compareOpen ? createFromText.compareHide : createFromText.compare}</button></div>}
+    {state.source && state.compareOpen && <CopyCompare state={state} service={jobDocuments} />}
     {model?.readOnly && <p className="document-status"><Icon name="lock" />{model.job ? agentJobText.readOnly(model.job.owner) : model.readOnly}</p>}
   </>
-  const header = { title: name, subtitle: model?.job || state.phase !== 'choosing' ? 'Job Properties' : 'New Job', crumbs: [{ label: state.server, title: state.login ? `${state.server} (${state.login})` : state.server }, { label: 'SQL Server Agent' }, { label: 'Jobs' }] }
+  const header = { title: name, subtitle: state.source ? `New Job like ${state.source.base.name}` : model?.job || state.phase !== 'choosing' ? 'Job Properties' : 'New Job', crumbs: [{ label: state.server, title: state.login ? `${state.server} (${state.login})` : state.server }, { label: 'SQL Server Agent' }, { label: 'Jobs' }] }
   if (state.phase === 'choosing') return <DocumentFrame id={`agent-job-${state.id}`} {...header} banner={banner} attributes={{ 'data-agent-job': state.id }}>
     <StartPanel state={state} service={jobDocuments} />
   </DocumentFrame>

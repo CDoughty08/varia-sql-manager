@@ -7,7 +7,7 @@
 import { actionLimits, dialogSpecs } from '../../../shared/actions/catalog.ts'
 import { noScriptNotice } from '../../../shared/actions/database.ts'
 import {
-  agentJobChangeCount, agentJobCompare, agentJobFieldSection, agentJobProblems, agentJobSavable, agentJobSave, agentJobTabName, changedAgentJobFields, copiedAgentJobDraft,
+  agentJobChangeCount, agentJobCompare, agentJobFieldSection, agentJobProblems, agentJobSavable, agentJobSave, agentJobTabName, changedAgentJobFields,
   initialAgentJobDraft, rebaseAgentJobDraft, type AgentJobCompareRow, type AgentJobDocumentModel, type AgentJobDraft, type AgentJobField, type AgentJobProblem, type AgentJobSection
 } from '../../../shared/actions/agent-job.ts'
 import { jobErrorField, type ActionError, type ActionExecuteResult, type ActionRequest } from '../../../shared/actions/schema.ts'
@@ -37,6 +37,10 @@ import { addStep, agentStepProblems, deleteStep, initialStepsDraft, moveStep, ne
 import { parseSsisCommand, ssisParameterRows, ssisProblems } from '../../../shared/agent/ssis-step.ts'
 import type { LanguageParseError } from '../../../shared/agent/parse.ts'
 import type { SsisPackageModel, SsisProjectModel } from '../../../shared/ssis/schema.ts'
+import {
+  applyReplace, createFromCompare, createFromDraft, createFromLimits, createFromProblems, createFromText, jobCopySource, replaceMatches, withCopyScheduleChoice,
+  type CopyCompareRow, type CopyScheduleChoice, type JobCopySource, type ReplaceMatch
+} from '../../../shared/agent/create-from.ts'
 
 export type JobDocumentPhase = 'loading' | 'loadFailed' | 'choosing' | 'ready' | 'saving'
 /** The header's live state from the watched probe: running (with its step), idle, or a job msdb no longer has. */
@@ -88,6 +92,20 @@ export interface JobDocumentState {
   readonly parse?: JobStepParse
   /** The SSIS step's catalog picker: SSISDB's folders, each folder's projects, and the project and package the selected step runs. */
   readonly ssis?: JobSsisPicker
+  /** Create Job Like This (AG-6e): the job this New Job copies, which Changes from source and Compare with source measure from. */
+  readonly source?: JobCopySource
+  /** The job Create Job Like This opened this tab to copy, until New Job's describe lands and the copy is read. */
+  readonly like?: string
+  /** Replace across the copy: the texts, and the preview of the draft revision it was made on with the matches chosen. */
+  readonly replace?: JobReplace
+  /** Compare with source is open. */
+  readonly compareOpen?: true
+}
+export interface JobReplace {
+  readonly find: string
+  readonly with: string
+  readonly matchCase: boolean
+  readonly preview?: { readonly revision: number; readonly matches: readonly ReplaceMatch[]; readonly more: boolean; readonly chosen: readonly string[] }
 }
 export interface JobStepParse { readonly key: string; readonly running: boolean; readonly errors?: readonly LanguageParseError[]; readonly truncated?: boolean; readonly failure?: string }
 export interface JobSsisPicker {
@@ -142,6 +160,8 @@ export const jobSections: readonly { readonly id: AgentJobSection; readonly titl
   { id: 'general', title: 'General' }, { id: 'steps', title: 'Steps' }, { id: 'schedules', title: 'Schedules' }, { id: 'notifications', title: 'Notifications' }, { id: 'targets', title: 'Targets' },
   { id: 'alerts', title: 'Alerts' }
 ]
+/** Create Job Like This's first section (AG-6e): it leads the job's sections while the document is a copy. */
+export const jobCopySection = 'changes'
 const fallback = (code: ActionError['code'], message: string): ActionError => ({ code, message, retryable: code !== 'STALE' && code !== 'NOT_FOUND' })
 
 /** The header's state out of a watched slot. */
@@ -191,18 +211,20 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   }
   /** New Job: a tab with the start panel (Blank, or Copy an existing job); nothing is created until Save. */
   newJob(connectionId: string): string { return this.create(this.connection(connectionId), { kind: 'agent' }) }
+  /** Create Job Like This (AG-6e): New Job's tab, filled from `name`'s describe once New Job's own lands, with Changes from source first. */
+  createLike(connectionId: string, name: string): string { return this.create(this.connection(connectionId), { kind: 'agent' }, name) }
   private connection(connectionId: string): LiveConnection {
     if (this.disposed) throw new Error('The job document is not available.')
     const connection = this.options.connections.getSnapshot().find(item => item.id === connectionId && !item.lost && (!item.lifecycle || item.lifecycle.state === 'connected'))
     if (!connection) throw new Error('Connect to the server first.')
     return connection
   }
-  private create(connection: LiveConnection, target: ObjectRef): string {
+  private create(connection: LiveConnection, target: ObjectRef, like?: string): string {
     const document = this.options.documents.openCustom('agentJob', agentJobTabName(target.kind === 'agentJob' ? target.name : undefined), connection.id, 'msdb')
     this.targetBindings.bind(document.id, connection.id)
     this.put({
       id: document.id, target, server: connection.displayName || connection.server, ...connection.login ? { login: connection.login } : {}, phase: 'loading', revision: 0, edits: 0, changes: 0,
-      frame: initialFrameState(jobSections), script: { state: 'idle', message: noScriptNotice }
+      frame: initialFrameState(jobSections), script: { state: 'idle', message: noScriptNotice }, ...like ? { like, copying: like } : {}
     })
     void this.describe(document.id)
     return document.id
@@ -249,8 +271,10 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
       this.patch(id, { copying: undefined, error: { ...shown, message: `${jobDocumentText.copyFailed} ${shown.message}` } })
       return
     }
-    const draft = copiedAgentJobDraft(source, current.model.login, current.model.sysadmin)
-    this.patch(id, { phase: 'ready', copying: undefined, draft, revision: current.revision + 1, edits: current.edits + 1 })
+    const draft = createFromDraft(source, current.model.login, current.model.sysadmin)
+    // Changes from source comes first and is where the copy opens (AG-6e).
+    this.patch(id, { phase: 'ready', copying: undefined, draft, revision: current.revision + 1, edits: current.edits + 1, source: jobCopySource(source), replace: undefined, compareOpen: undefined,
+      frame: { ...current.frame, section: jobCopySection } })
     this.afterDraft(id)
   }
 
@@ -278,7 +302,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   }
   problems(id: string): AgentJobProblem[] {
     const state = this.get(id)
-    return state?.model && state.draft ? agentJobProblems(state.model, state.draft, this.ssisProblems(state)) : []
+    return state?.model && state.draft ? [...agentJobProblems(state.model, state.draft, this.ssisProblems(state)), ...state.source ? createFromProblems(state.source) : []] : []
   }
   /** The steps' problems by step and field, as the Steps section shows them (the header counts them through problems()). */
   stepProblems(id: string): AgentStepProblem[] {
@@ -500,18 +524,22 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     if (!current) return
     if (failure || !model) {
       const shown = failure ?? fallback('NOT_FOUND', jobDocumentText.readFailed)
-      this.patch(id, { phase: current.model ? 'ready' : 'loadFailed', error: notice ? { ...shown, message: `${jobDocumentText.savedUnread} ${shown.message}` } : shown })
+      this.patch(id, { phase: current.model ? 'ready' : 'loadFailed', ...current.like ? { like: undefined, copying: undefined } : {}, error: notice ? { ...shown, message: `${jobDocumentText.savedUnread} ${shown.message}` } : shown })
       return
     }
     const create = !model.job
+    const like = create ? current.like : undefined
     this.patch(id, {
       phase: create ? 'choosing' : 'ready', model, draft: create ? undefined : initialAgentJobDraft(model), revision: current.revision + 1, changes: 0, error: undefined, stale: undefined,
       notice, script: { state: 'idle', message: noScriptNotice }, scriptRevision: undefined, deletion: undefined, parse: undefined,
       step: this.stepFollowing(current, model.steps.map(step => ({ key: `s${step.id}`, name: step.name }))),
       // The shared schedules and their jobs are read again when the section next asks: a save may have changed them.
-      ...this.restartScheduleReads(id), scheduleSelected: undefined
+      ...this.restartScheduleReads(id), scheduleSelected: undefined,
+      // A read starts the document over: a copy's source and its Replace and Compare go with the draft (AG-6e).
+      source: undefined, replace: undefined, compareOpen: undefined, like: undefined
     })
     this.options.documents.setDirty(id, false)
+    if (like) void this.startCopy(id, like)
     if (model.job) this.follow(id, model.job.jobId)
     this.schedulePreview(id, 0)
   }
@@ -977,6 +1005,68 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     this.setSchedules(id, [...rest, copy], copy.key)
   }
 
+  // --- Create Job Like This (AG-6e): Changes from source, Replace across the copy, Compare with source ------------------------
+
+  /** Replace across the copy's texts; a change drops the preview, which belongs to the texts it was made with. */
+  setReplace(id: string, patch: Partial<Pick<JobReplace, 'find' | 'with' | 'matchCase'>>): void {
+    const state = this.get(id)
+    if (!state?.source) return
+    const replace = { find: '', with: '', matchCase: false, ...state.replace, ...patch }
+    this.patch(id, { replace: { find: replace.find.slice(0, createFromLimits.replaceChars), with: replace.with.slice(0, createFromLimits.replaceChars), matchCase: replace.matchCase } })
+  }
+  /** Preview: every match of the find text across the copy, each chosen until unticked. Nothing changes until Replace. */
+  previewReplace(id: string): void {
+    const state = this.get(id)
+    if (!state?.source || !state.draft || !state.replace?.find || !this.canEdit(id)) return
+    const { matches, more } = replaceMatches(state.draft, state.replace.find, { matchCase: state.replace.matchCase })
+    this.patch(id, { replace: { ...state.replace, preview: { revision: state.revision, matches, more, chosen: matches.map(match => match.id) } }, notice: undefined })
+  }
+  toggleReplaceMatch(id: string, matchId: string): void {
+    const state = this.get(id), preview = state?.replace?.preview
+    if (!state?.replace || !preview || !preview.matches.some(match => match.id === matchId)) return
+    const chosen = preview.chosen.includes(matchId) ? preview.chosen.filter(item => item !== matchId) : [...preview.chosen, matchId]
+    this.patch(id, { replace: { ...state.replace, preview: { ...preview, chosen } } })
+  }
+  /** Whether the preview still matches the copy (no edit since it was made). */
+  replacePreviewCurrent(id: string): boolean {
+    const state = this.get(id)
+    return !!state?.replace?.preview && state.replace.preview.revision === state.revision
+  }
+  /** Replace: the chosen matches, applied to the copy as it was previewed; an edit since asks for a new preview instead. */
+  applyReplace(id: string): void {
+    const state = this.get(id), replace = state?.replace, preview = replace?.preview
+    if (!state?.draft || !replace || !preview || !this.canEdit(id)) return
+    if (!this.replacePreviewCurrent(id)) { this.patch(id, { replace: { find: replace.find, with: replace.with, matchCase: replace.matchCase }, notice: createFromText.replaceStale }); return }
+    const draft = applyReplace(state.draft, replace.find, replace.with, new Set(preview.chosen), { matchCase: replace.matchCase })
+    const count = preview.chosen.length
+    this.patch(id, { replace: { find: replace.find, with: replace.with, matchCase: replace.matchCase } })
+    if (draft !== state.draft) this.updateDraft(id, { name: draft.name, steps: draft.steps, schedules: draft.schedules })
+    this.patch(id, { notice: createFromText.applied(count) })
+  }
+  /** A source schedule's Share, Copy or Leave out. */
+  setCopySchedule(id: string, scheduleId: number, choice: CopyScheduleChoice): void {
+    const state = this.get(id), records = state?.source?.model.schedules ?? []
+    const record = records.find(item => item.id === scheduleId)
+    if (!state?.draft || !record || !this.canEdit(id)) return
+    const schedules = withCopyScheduleChoice(state.draft.schedules, records, record, choice)
+    if (schedules !== state.draft.schedules) this.updateDraft(id, { schedules })
+  }
+  /** Sysadmin keeps the source's owner (msdb lets only sysadmin give a job to another login). */
+  keepSourceOwner(id: string): void {
+    const state = this.get(id)
+    if (!state?.source || !state.model?.sysadmin) return
+    this.updateDraft(id, { owner: state.source.base.owner })
+  }
+  toggleCompare(id: string): void {
+    const state = this.get(id)
+    if (state?.source) this.patch(id, { compareOpen: state.compareOpen ? undefined : true })
+  }
+  /** Compare with source: every difference between the copy and the job it copies. */
+  compareRows(id: string): CopyCompareRow[] {
+    const state = this.get(id)
+    return state?.source && state.draft ? createFromCompare(state.source, state.draft, state.model?.proxies ?? state.source.model.proxies ?? []) : []
+  }
+
   // --- Internals -----------------------------------------------------------------------------------------------------
 
   private show(id: string): void { if (this.options.documents.getSnapshot().activeId !== id) this.options.documents.activate(id) }
@@ -1025,7 +1115,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
       this.requests.delete(state.id)
       this.cancel([request.id])
       if (request.kind === 'save') this.patch(state.id, { phase: 'ready', error: fallback('CONNECTION_LOST', jobDocumentText.lost) })
-      else this.patch(state.id, { phase: state.model ? state.draft ? 'ready' : 'choosing' : 'loadFailed', copying: undefined, error: fallback('CONNECTION_LOST', jobDocumentText.disconnected) })
+      else this.patch(state.id, { phase: state.model ? state.draft ? 'ready' : 'choosing' : 'loadFailed', copying: undefined, like: undefined, error: fallback('CONNECTION_LOST', jobDocumentText.disconnected) })
     }
   }
   private cancel(ids: readonly string[]): void {
