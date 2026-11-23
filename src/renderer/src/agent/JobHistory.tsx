@@ -100,7 +100,7 @@ function RunDetail({ state, model, run, service }: { readonly state: JobDocument
       <dt>Started</dt><dd>{run.started || '—'} (server time)</dd>
       <dt>Duration</dt><dd>{run.duration || (runIsInProgress(run) ? 'In progress' : '—')}{usual !== undefined && ` · usual ${durationText(usual)}`}</dd>
       {by && <><dt>Invoked by</dt><dd>{by}</dd></>}
-      <dt>Outcome</dt><dd data-tone={run.tone || undefined}>{outcomeRow?.message ?? run.message ?? run.outcome}</dd>
+      <dt>Outcome</dt><dd data-tone={run.tone || undefined}>{outcomeRow?.message || run.message || run.outcome}</dd>
     </dl>
     {view.stepsFor === historyRunKeyText(run.key) ? steps.length > 0 && <table className="properties-table agent-history-steps" aria-label="Steps of the selected run">
       <thead><tr><th scope="col">Step</th><th scope="col">Outcome</th><th scope="col">Duration</th><th scope="col">Retries</th><th scope="col">Details</th></tr></thead>

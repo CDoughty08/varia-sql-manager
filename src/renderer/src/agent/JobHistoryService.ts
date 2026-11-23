@@ -90,7 +90,8 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
   attach(id: string, jobId: string): void {
     const live = this.options.live, job = jobId.toLowerCase()
     if (!live || this.disposed || this.views.get(id)?.jobId === job) return
-    this.views.get(id)?.stop()
+    // Another job (a re-created one): its view and what it read go, so nothing of the old job shows while this one waits for a connection.
+    if (this.views.has(id)) { this.views.get(id)!.stop(); this.views.delete(id); this.reads.delete(id); this.put(id, fresh(job)) }
     const connectionId = this.options.connectionOf(id)
     if (!connectionId) { this.pending.set(id, job); return }
     this.pending.delete(id)
@@ -99,7 +100,7 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
       key: 'agent-job-history:' + id, visible: () => this.options.visible(id), connectionId: () => this.options.connectionOf(id), closed: () => ended,
       subscribe: listener => this.options.subscribe(listener)
     }
-    this.put(id, { jobId: job, failedOnly: false, runs: [], more: false, spark: [], loaded: false, pinned: false, steps: [] })
+    this.put(id, fresh(job))
     const handle = live.open({ connectionId, source: agentHistorySource, args: jobHistoryArgs(job), probes: [{ probe: agentHistoryProbe, intervalMs: historySpec.intervalMs.default }] }, owner)
     const ticks = handle.onTick(({ tick }) => {
       if (tick.samples.some(sample => sample.probe === agentHistoryProbe)) void this.read(id).catch(onUnexpectedError)
@@ -151,8 +152,10 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
   async copyMessage(id: string): Promise<void> {
     const text = this.messageText(id)
     if (text === undefined || !this.options.api.writeClipboardText) return
+    const step = this.get(id)?.step
     const result = await this.options.api.writeClipboardText(text)
-    if (this.get(id)) this.patch(id, { notice: result.ok ? jobHistoryText.copied : result.error })
+    // Said under the message copied only: not under another step or run picked meanwhile.
+    if (this.get(id) && this.get(id)!.step === step && this.get(id)!.message !== undefined) this.patch(id, { notice: result.ok ? jobHistoryText.copied : result.error })
   }
 
   /** An SSIS step's execution: its catalog messages in a new query window, in SSISDB (not run). */
@@ -209,7 +212,8 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     // Follow the newest run (the running one while the job runs) unless the person picked one that is still listed.
     const keep = state.pinned && listed(state.selected)
     const selected = keep ? state.selected : runs[0]?.key
-    const changed = !sameRun(selected, state.selected)
+    // No run before and none now is no change (else an empty history would ask for a new sample after every sample).
+    const changed = selected || state.selected ? !sameRun(selected, state.selected) : false
     const stepsFor = state.selected ? historyRunKeyText(state.selected) : undefined
     // The rows are the selected run's only when they hold its key row: a sample taken before a change of run lists the run before.
     const ownRows = !changed && !!state.selected && steps.some(step => step.instance === state.selected!.instance)
@@ -252,6 +256,7 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
   }
 }
 
+const fresh = (jobId: string): JobHistoryState => ({ jobId, failedOnly: false, runs: [], more: false, spark: [], loaded: false, pinned: false, steps: [] })
 /** The first `limit` rows of a table as cell texts, with how many it has. */
 async function cells(table: LiveTable | undefined, index: number, limit: number): Promise<{ readonly rows: readonly ((column: string) => string)[]; readonly total: number }> {
   if (!table) return { rows: [], total: 0 }
