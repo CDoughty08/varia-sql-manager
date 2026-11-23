@@ -12,7 +12,7 @@ import { connectionPrincipalIdSchema } from './connection-principal'
 import { limits } from '../shared/ipc/wire/protocol'
 import { localTableLimits } from '../shared/results/local-table'
 import { dependenciesParamsSchema, explorerChildrenParamsSchema, peekDefinitionParamsSchema, peekDependenciesParamsSchema, peekParamsSchema } from '../shared/explorer/schema.ts'
-import { objectIndexParamsSchema, objectSearchParamsSchema } from '../shared/explorer/search.ts'
+import { bigQueryIndexEstimateRequestSchema, bigQueryIndexEstimateResultSchema, objectIndexParamsSchema, objectSearchParamsSchema } from '../shared/explorer/search.ts'
 import { scriptRequestSchema } from '../shared/scripting/schema.ts'
 import { actionDescribeSchema, actionExecuteRequestSchema, actionExecuteResultSchema, actionScriptRequestSchema } from '../shared/actions/schema.ts'
 import { ssisCatalogSetupSchema, ssisDescribeSchema, ssisExecuteSchema } from '../shared/ssis/schema.ts'
@@ -53,6 +53,7 @@ export const requestSchemas = {
   'bigquery.projects': bigQueryProjectsParamsSchema,
   'bigquery.dryRun': bigQueryDryRunRequestSchema,
   'bigquery.properties': bigQueryPropertiesRequestSchema,
+  'bigquery.indexEstimate': bigQueryIndexEstimateRequestSchema,
   'connections.identity': z.object({}).strict(),
   'databases.list': z.object({ connectionId }).strict(),
   'tables.columns': z.object({ connectionId, database, schema: name, name }).strict(),
@@ -118,6 +119,7 @@ export const resultSchemas: Partial<Record<RpcMethod, z.ZodType>> = {
   'bigquery.projects': bigQueryProjectListSchema,
   'bigquery.dryRun': bigQueryDryRunResultSchema,
   'bigquery.properties': bigQueryPropertiesSchema,
+  'bigquery.indexEstimate': bigQueryIndexEstimateResultSchema,
   'connections.databases': databaseListSchema,
   'databases.list': databaseListSchema,
   'language.status': languageStatusSchema,

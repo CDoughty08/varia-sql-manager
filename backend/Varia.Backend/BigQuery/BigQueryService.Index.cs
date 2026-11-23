@@ -39,6 +39,7 @@ internal sealed partial class BigQueryService : IBigQueryIndexSource
     {
         var connection = Connection(connectionId);
         var names = new List<string>();
+        var locations = new Dictionary<string, string>(StringComparer.Ordinal);
         string? pageToken = null;
         for (var page = 0; page < BigQueryIndexLimits.ListPages; page++)
         {
@@ -50,11 +51,15 @@ internal sealed partial class BigQueryService : IBigQueryIndexSource
                 return call.ExecuteAsync(t);
             }, token);
             foreach (var dataset in list.Datasets ?? [])
-                if (dataset.DatasetReference?.DatasetId is { } name && BqNames.IsDataset(name)) names.Add(name);
+                if (dataset.DatasetReference?.DatasetId is { } name && BqNames.IsDataset(name))
+                {
+                    names.Add(name);
+                    if (BqNames.IsLocation(dataset.Location)) locations[name] = dataset.Location;
+                }
             pageToken = list.NextPageToken is { Length: > 0 and <= BigQueryLimits.PageToken } next ? next : null;
-            if (pageToken is null) return new(names, false);
+            if (pageToken is null) return new(names, false, locations);
         }
-        return new(names, true);
+        return new(names, true, locations);
     }
 
     async Task<BigQueryListing> IBigQueryIndexSource.ObjectsAsync(string connectionId, string project, string dataset, CancellationToken token)
@@ -83,13 +88,20 @@ internal sealed partial class BigQueryService : IBigQueryIndexSource
         for (var page = 0; ; page++)
         {
             if (page == BigQueryIndexLimits.ListPages) { cut = true; break; }
-            var list = await IndexCallAsync(connection, t =>
+            ListRoutinesResponse list;
+            try
             {
-                var call = connection.Client.Service.Routines.List(project, dataset);
-                call.MaxResults = ExplorerPageMax;
-                call.PageToken = pageToken;
-                return call.ExecuteAsync(t);
-            }, token);
+                list = await IndexCallAsync(connection, t =>
+                {
+                    var call = connection.Client.Service.Routines.List(project, dataset);
+                    call.MaxResults = ExplorerPageMax;
+                    call.PageToken = pageToken;
+                    return call.ExecuteAsync(t);
+                }, token);
+            }
+            // The emulator (unpackaged test builds only) has no routines.list: it answers 500 "unsupported", and its datasets have no
+            // routines, so its index lists none rather than skipping every dataset.
+            catch (Google.GoogleApiException error) when (environment.Emulator && page == 0 && error.Message.Contains("unsupported bigquery.routines.list", StringComparison.Ordinal)) { break; }
             routines.AddRange(list.Routines ?? []);
             pageToken = list.NextPageToken is { Length: > 0 and <= BigQueryLimits.PageToken } next ? next : null;
             if (pageToken is null) break;
