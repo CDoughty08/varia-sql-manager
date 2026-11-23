@@ -185,8 +185,13 @@ export class LogViewerService extends SnapshotStore<LogViewerSnapshot> implement
     const existing = Object.values(this.getSnapshot().documents).find(state => state.connectionId === connectionId)
     if (existing) {
       this.options.documents.activate(existing.id)
+      if (where.recycle) {
+        // Recycle keeps the viewer's sources (it may be cancelled), and checks Current only when no log is checked.
+        if (!existing.logs.length) { this.patch(existing.id, { logs: [0] }); this.syncErrorLog(existing.id) }
+        this.askRecycle(existing.id)
+        return existing.id
+      }
       this.setFilters(existing.id, { checked, run: undefined }, { pendingJob: where.jobName, note: undefined, ...where.errorLog !== undefined ? { logs: [where.errorLog], entry: undefined } : {} })
-      if (where.recycle) this.askRecycle(existing.id)
       return existing.id
     }
     const label = connection.displayName || connection.server
@@ -548,6 +553,25 @@ export class LogViewerService extends SnapshotStore<LogViewerSnapshot> implement
 
   /** The checked error logs' live view, while one is checked. */
   errorLogHandle(id: string): LiveHandle | undefined { return this.errorHandles.get(id)?.handle }
+  /** Why the error log view has no rows to show: its probe failing, stopped by a terminal error (which ends its one-probe subscription), or
+   *  the view ended failed. Retry (refresh) restarts it. */
+  errorLogFailure(id: string): { readonly code?: string; readonly message: string } | undefined {
+    const snapshot = this.errorHandles.get(id)?.handle.getSnapshot()
+    if (!snapshot) return undefined
+    const probe = snapshot.probes[agentErrorLogProbe]
+    if (probe?.error && probe.state !== 'fresh' && probe.state !== 'limited') return { code: probe.error.code, message: probe.error.message }
+    if (snapshot.status === 'ended' && (snapshot.ended ? snapshot.ended.ended === 'failed' : !!snapshot.error)) {
+      const code = snapshot.ended?.code ?? snapshot.error?.code
+      return { ...code ? { code } : {}, message: snapshot.ended?.message ?? snapshot.error?.message ?? logViewerText.failed }
+    }
+    return undefined
+  }
+  /** Unchecks every error log (Select logs' way out when the logs cannot be listed). */
+  clearLogs(id: string): void {
+    if (!this.get(id)?.logs.length) return
+    this.patch(id, { logs: [], entry: undefined })
+    this.syncErrorLog(id)
+  }
   /** Why Select logs lists no error logs, or undefined when it does. */
   errorLogsUnavailable(id: string): string | undefined { return errorLogsUnavailable(this.role(id)) }
 
@@ -648,7 +672,7 @@ export class LogViewerService extends SnapshotStore<LogViewerSnapshot> implement
   }
   canRecycle(id: string): boolean { return this.recycleUnavailable(id) === undefined }
 
-  /** Opens Recycle's confirmation (Cancel is its default). While the role is still being read it opens, and OK waits for it. */
+  /** Opens Recycle's confirmation (Cancel is its default). While the role is still being read it opens with OK disabled until the role is known. */
   askRecycle(id: string): void {
     const state = this.get(id)
     if (!state || state.recycle) return

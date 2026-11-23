@@ -92,11 +92,16 @@ describe("the Agent error logs' shared rules", () => {
       expect(commandDescriptor(id).precondition).toBe(entries[id].precondition)
       expect(entries[id].precondition).toContain('agentEnabled')
       const when = compileWhen(commandDescriptor(id).menus![0].when!)
-      const on = (keys: Record<string, unknown>) => evaluateWhen(when, { explorerServerLost: false, ...keys } as never)
+      const on = (keys: Record<string, unknown>) => evaluateWhen(when, { explorerServerLost: false, explorerServerEngine: 'box', ...keys } as never)
       expect(on({ explorerNode: 'agentErrorLog' }) && on({ explorerNode: 'folder', explorerFolder: 'agentErrorLogs' })).toBe(true)
       expect(on({ explorerNode: 'agent' }) || on({ explorerNode: 'folder', explorerFolder: 'agentJobs' }) || on({ explorerNode: 'agentErrorLog', explorerServerLost: true })).toBe(false)
     }
     expect(commandDescriptor('agent.recycleErrorLog').menus![0].title).toBe('Recycle')
+    // Managed Instance manages its log itself: Recycle is not on its menu, View Agent Log is.
+    const engine = (id: 'agent.viewAgentLog' | 'agent.recycleErrorLog', explorerServerEngine: string) =>
+      evaluateWhen(compileWhen(commandDescriptor(id).menus![0].when!), { explorerServerLost: false, explorerNode: 'agentErrorLog', explorerServerEngine } as never)
+    expect(engine('agent.recycleErrorLog', 'box') && engine('agent.viewAgentLog', 'managedInstance')).toBe(true)
+    expect(engine('agent.recycleErrorLog', 'managedInstance')).toBe(false)
   })
 })
 
@@ -129,6 +134,27 @@ describe("the Log File Viewer's Agent error logs", () => {
     expect(logViewer.open('c1', { errorLog: 2 })).toBe(id)
     expect(errorLog()!.disposed).toBe(false)
     expect(errorLog()!.spec.args).toMatchObject({ logs: [2] })
+  })
+  it("says why the log view stopped, a terminal error included, and keeps the viewer's jobs when Recycle opens on it", async () => {
+    const { logViewer, api, errorLog } = viewer()
+    api.agentProfile.mockResolvedValue(sysadmin)
+    const nightly = '11111111-1111-1111-1111-111111111111'
+    const id = logViewer.open('c1', { jobs: [nightly] })
+    await settled()
+    expect(logViewer.errorLogHandle(id)).toBeUndefined()
+    // Recycle from Object Explorer on the open viewer: the checked job stays, Current is checked as no log was, and it asks.
+    logViewer.open('c1', { errorLog: 0, recycle: true })
+    expect(logViewer.get(id)).toMatchObject({ checked: [nightly], logs: [0], recycle: { running: false } })
+    logViewer.cancelRecycle(id)
+    expect(logViewer.errorLogFailure(id)).toBeUndefined()
+    // A terminal error stops the only probe (the backend then ends the subscription): the probe reads paused with its error.
+    errorLog()!.set({ probes: { 'agent.errorLog.read': { state: 'paused', error: { code: 'NOT_SUPPORTED', message: 'This server has no Agent error log.' } } as never } })
+    expect(logViewer.errorLogFailure(id)).toEqual({ code: 'NOT_SUPPORTED', message: 'This server has no Agent error log.' })
+    errorLog()!.set({ status: 'ended', probes: {}, ended: { ended: 'failed', code: 'PERMISSION_DENIED', message: 'Refused.' } as never })
+    expect(logViewer.errorLogFailure(id)).toEqual({ code: 'PERMISSION_DENIED', message: 'Refused.' })
+    const refreshes = errorLog()!.refreshes
+    logViewer.refresh(id)
+    expect(errorLog()!.refreshes).toBe(refreshes + 1)
   })
   it('lists no error logs for a login that is not sysadmin', async () => {
     const { logViewer, api } = viewer()
@@ -198,7 +224,7 @@ describe("the Log File Viewer's Agent error logs", () => {
     const { logViewer, api } = viewer()
     api.agentProfile.mockResolvedValue(operator)
     const id = logViewer.open('c1', { errorLog: 0, recycle: true })
-    // The role is still being read: the confirmation opens, and OK waits for it.
+    // The role is still being read: the confirmation opens (its OK disabled until the role is known), and OK still checks it.
     expect(logViewer.get(id)?.recycle).toEqual({ running: false })
     await settled()
     await logViewer.confirmRecycle(id)
@@ -214,7 +240,7 @@ describe("the Log File Viewer's Agent error logs", () => {
 describe("Recycle's confirmation", () => {
   it('is an alert whose Cancel takes focus, so Enter recycles nothing', async () => {
     const confirmRecycle = vi.fn(), cancelRecycle = vi.fn()
-    const workbench = { logViewer: { confirmRecycle, cancelRecycle } } as unknown as Workbench
+    const workbench = { logViewer: { confirmRecycle, cancelRecycle, role: () => 'sysadmin' } } as unknown as Workbench
     const host = document.createElement('div')
     document.body.append(host)
     const root = createRoot(host)
@@ -225,6 +251,11 @@ describe("Recycle's confirmation", () => {
     expect(dialog.getAttribute('aria-describedby')).toBeTruthy()
     expect(document.getElementById(dialog.getAttribute('aria-describedby')!)?.textContent).toBe(recycleText.question)
     expect(document.activeElement?.textContent).toBe('Cancel')
+    // While the role is read, OK waits disabled.
+    const unknown = { ...workbench.logViewer, role: () => 'unknown' }
+    await act(async () => root.render(createElement(WorkbenchProvider, { workbench: { logViewer: unknown } as unknown as Workbench, children: createElement(RecycleDialog, { documentId: 'v1', state }) })))
+    expect([...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')].find(button => button.textContent === 'Recycle')!.disabled).toBe(true)
+    await act(async () => root.render(createElement(WorkbenchProvider, { workbench, children: createElement(RecycleDialog, { documentId: 'v1', state }) })))
     await act(async () => { document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })) })
     await act(async () => { dialog.querySelector('input, p')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })) })
     expect(confirmRecycle).not.toHaveBeenCalled()

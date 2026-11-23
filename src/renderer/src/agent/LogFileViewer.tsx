@@ -85,7 +85,14 @@ function Sources({ documentId, state }: { readonly documentId: string; readonly 
 /** Select logs' SQL Server Agent group (AG-5b): sysadmin's alone, as SSMS shows the Error Logs folder. */
 function ErrorLogSources({ documentId, state }: { readonly documentId: string; readonly state: LogViewerState }) {
   const service = useWorkbench().logViewer
-  if (service.errorLogsUnavailable(documentId)) return null
+  const unavailable = service.errorLogsUnavailable(documentId)
+  // The role could not be read: logs View Agent Log checked stay checked, so say so and offer Retry and a way to uncheck them.
+  if (unavailable && state.profile.status === 'failed' && state.logs.length) return <>
+    <h3>SQL Server Agent</h3>
+    <InlineError role="status" message="The SQL Server Agent error logs could not be listed: this login's role could not be read."
+      actions={[{ label: 'Retry', run: () => service.refresh(documentId) }, { label: 'Uncheck the logs', run: () => service.clearLogs(documentId) }]} />
+  </>
+  if (unavailable) return null
   const list = state.errorLogs
   return <>
     <h3>SQL Server Agent</h3>
@@ -109,7 +116,7 @@ export function RecycleDialog({ documentId, state }: { readonly documentId: stri
   const recycle = state.recycle
   if (!recycle) return null
   const textId = `agent-history-${documentId}-recycle-text`
-  return <SubDialog title={recycleText.title} okLabel={recycle.running ? 'Recycling…' : 'Recycle'} okDisabled={recycle.running} destructive alert describedBy={textId}
+  return <SubDialog title={recycleText.title} okLabel={recycle.running ? 'Recycling…' : 'Recycle'} okDisabled={recycle.running || service.role(documentId) === 'unknown'} destructive alert describedBy={textId}
     onOk={() => void service.confirmRecycle(documentId)} onCancel={() => service.cancelRecycle(documentId)}
     status={recycle.error && <span role="alert">{recycle.error.message}</span>}>
     <p id={textId}>{recycleText.question}</p>
@@ -121,16 +128,16 @@ export function RecycleDialog({ documentId, state }: { readonly documentId: stri
 function ErrorLogPane({ documentId, state }: { readonly documentId: string; readonly state: LogViewerState }) {
   const service = useWorkbench().logViewer
   const handle = service.errorLogHandle(documentId)
-  const live = useSyncExternalStore(handle?.subscribe ?? noSubscribe, handle?.getSnapshot ?? noLiveSnapshot, handle?.getSnapshot ?? noLiveSnapshot)
+  // Redraws on every snapshot: the failure, the table and its truncation all read from the handle.
+  useSyncExternalStore(handle?.subscribe ?? noSubscribe, handle?.getSnapshot ?? noLiveSnapshot, handle?.getSnapshot ?? noLiveSnapshot)
   const [copied, setCopied] = useState(false)
   useEffect(() => setCopied(false), [state.entry?.key])
   if (!handle) return null
-  const probe = live.probes[agentErrorLogProbe]
   const table = handle.table(agentErrorLogProbe, 0)
   const rows = table?.descriptor.rowsAvailable
   // Managed Instance's reader takes no sort argument, so a capped read keeps its oldest rows (the probe's errorLogOldestFirst status).
   const oldestFirst = state.profile.status === 'ready' && state.profile.profile.platform === 'managedInstance'
-  const failed = probe?.error && (probe.state === 'failing' || probe.state === 'stale' || probe.state === 'unavailable') ? probe.error : undefined
+  const failed = service.errorLogFailure(documentId)
   const entry = state.entry
   const copy = () => { if (entry) void window.varia.writeClipboardText(entry.message).then(result => setCopied(result.ok), () => setCopied(false)) }
   return <section className="agent-history-errorlog" aria-label="SQL Server Agent error log">

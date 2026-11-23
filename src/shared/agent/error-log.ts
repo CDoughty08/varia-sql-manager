@@ -48,7 +48,7 @@ export const agentErrorLogsResultSchema = z.object({
   error: z.object({ code: z.enum(actionErrorCodes), message: z.string().max(actionLimits.messageChars), retryable: z.boolean() }).strict().optional()
 }).strict() satisfies z.ZodType<AgentErrorLogsResult>
 
-/** A log's name as Object Explorer lists it (SSMS's): "Current - 2026-11-22 14:31", "Archive #1 - …". */
+/** A log's name in Select logs, as SSMS names it: "Current - 2026-11-22 14:31", "Archive #1 - …" (the date in server time). */
 export const errorLogName = (archive: number): string => archive === 0 ? 'Current' : `Archive #${archive}`
 export const errorLogLabel = (log: AgentErrorLog): string => errorLogName(log.archive) + (log.date ? ` - ${log.date.slice(0, 16).replace('T', ' ')}` : '')
 
@@ -110,7 +110,8 @@ export function errorLogCommandEntries(): { readonly [K in ErrorLogCommandId]: E
     'agent.recycleErrorLog': {
       title: 'Recycle Agent Error Log…', category: 'SQL Server Agent', icon: 'refresh', keywords: ['agent', 'error', 'log', 'errorlog', 'recycle', 'cycle', 'new', 'archive'],
       precondition: 'agentEnabled && backendReady && hasConnection', unavailableHint: 'Connect to a SQL Server as sysadmin first.',
-      menus: [{ menu: 'explorer.context', group: '1_monitor', order: 4, title: 'Recycle', mnemonic: 'y', when: onErrorLogs }]
+      // Managed Instance manages its log itself: Recycle is offered on SQL Server (box) alone.
+      menus: [{ menu: 'explorer.context', group: '1_monitor', order: 4, title: 'Recycle', mnemonic: 'y', when: `${onErrorLogs} && explorerServerEngine == 'box'` }]
     }
   }
 }

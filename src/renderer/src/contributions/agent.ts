@@ -47,7 +47,6 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
     const archive = node?.kind === 'agentErrorLog' && node.ref.type === 'object' ? Number(node.ref.object.name) : 0
     return Number.isInteger(archive) && archive >= 0 ? archive : 0
   }
-  const onErrorLogs = (args?: CommandArgs): boolean => { const node = explorerNodeOf(args); return !!node && (node.kind === 'agentErrorLog' || (node.kind === 'folder' && node.folder === 'agentErrorLogs')) }
   const monitorOf = (args?: CommandArgs): string | undefined => { const id = args?.tabId ?? documents.getSnapshot().activeId; return jobActivity.get(id) ? id : undefined }
   // The job document (AG-6a): Open Job and New Job on a server picked as Job Activity Monitor's is, and the document's verbs on the
   // job document whose header runs them, else the active one.
@@ -120,7 +119,7 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
     commands.register('agent.recycleErrorLog', {
       when: args => {
         const node = explorerNodeOf(args)
-        if (node) return !node.lost && connections.isLiveSqlServer(node.connectionId)
+        if (node) return !node.lost && node.engine === 'box' && connections.isLiveSqlServer(node.connectionId)
         const id = viewerOf(args)
         return id ? logViewer.canRecycle(id) : connections.liveSqlServer().length > 0
       },
@@ -128,7 +127,7 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
       run: args => {
         const id = explorerNodeOf(args) ? undefined : viewerOf(args)
         if (id) return logViewer.askRecycle(id)
-        withServer(args, 'Recycle Agent Error Log', connectionId => openHistory(connectionId, { errorLog: onErrorLogs(args) ? errorLogOf(args) : 0, recycle: true }))
+        withServer(args, 'Recycle Agent Error Log', connectionId => openHistory(connectionId, { errorLog: 0, recycle: true }))
       }
     }),
     commands.register('agent.refreshHistory', {
