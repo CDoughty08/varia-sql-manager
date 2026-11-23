@@ -453,6 +453,7 @@ export abstract class AgentObjectDocumentService<Model, Draft, Field extends str
   coalesceTarget(id: string, fromTargetId: string, toTargetId: string): boolean { return this.targetBindings.coalesceTarget(id, fromTargetId, toTargetId) }
   closed(id: string): void {
     this.targetBindings.forget(id)
+    this.rereadOn.delete(id)
     this.slot.clear(id)
     const request = this.requests.get(id), preview = this.previews.get(id)
     this.cancel([request?.id, preview].filter((value): value is string => !!value))

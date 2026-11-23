@@ -151,7 +151,8 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
   private async keepAgent(tabId: string): Promise<void> {
     const { documents } = this.options, document = documents.get(tabId)
     const state = documents.keepCustom(tabId)
-    if (!document || !isKeptAgentKind(document.kind) || state === undefined) return
+    // A document with no durable target could never connect again once recovered, so it is not copied.
+    if (!document || !isKeptAgentKind(document.kind) || state === undefined || !document.targetId) return
     const current = this.kept.get(tabId), targetId = document.targetId
     if (current?.state === state && current.targetId === targetId) return
     const kept: Kept = current ?? { id: this.options.newId?.() ?? crypto.randomUUID() }

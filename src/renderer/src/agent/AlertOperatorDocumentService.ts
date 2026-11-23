@@ -583,6 +583,7 @@ export class AlertOperatorDocumentService<M, D> extends SnapshotStore<AgentObjec
   coalesceTarget(id: string, fromTargetId: string, toTargetId: string): boolean { return this.targetBindings.coalesceTarget(id, fromTargetId, toTargetId) }
   closed(id: string): void {
     this.targetBindings.forget(id)
+    this.rereadOn.delete(id)
     const request = this.requests.get(id), preview = this.previews.get(id)
     this.cancel([request?.id, preview].filter((value): value is string => !!value))
     this.requests.delete(id)

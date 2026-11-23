@@ -336,6 +336,13 @@ describe('AutoRecover for SQL Server Agent documents', () => {
     f.jobDocuments.updateDraft(id, { description: 'Loads the warehouse' })
     await settled()
     expect(f.api.discardRecovery).toHaveBeenCalledWith([writes()[0].id])
+    // One with no saved connection target could never connect once recovered, so it is not copied.
+    const loose = f.jobDocuments.openJob(uuid(50), 'Weekly load')
+    await settled()
+    f.documents.update(loose, { targetId: undefined })
+    f.jobDocuments.updateDraft(loose, { description: 'Loose' })
+    await f.recovery.flush()
+    expect(writes().filter(write => write.name === 'Job Properties - Weekly load')).toHaveLength(0)
   })
   it('recovers an Agent document\'s copy on its target behind the gate, and offers none while the gate is off', async () => {
     const { state } = await keptJob()
