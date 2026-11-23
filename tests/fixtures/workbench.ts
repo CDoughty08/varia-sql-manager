@@ -404,7 +404,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const recentFiles = new RecentFilesService(api)
   // AutoRecover's timer runs only when a test advances it.
   const recoveryTimers = manualTimers()
-  const recovery = new RecoveryService({ api, documents, files, settings, warn: message => commands.reportWarning(message), timers: recoveryTimers.timers, server: id => connections.get(id)?.server })
+  const recovery = new RecoveryService({ api, documents, files, settings, warn: message => commands.reportWarning(message), timers: recoveryTimers.timers, server: id => connections.get(id)?.server,
+    restoredJobs: (tabId, jobs) => queries.restoreJobs(tabId, jobs) })
   const resultSelection = new ResultSelectionService(results)
   const targets = new TargetService(documents, queries, connections, files, connectionTargets)
   const targetIdOf = (connectionId: string) => targets.targetForConnection(connectionId)
@@ -449,7 +450,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const operations = new SsisOperationsService({ api, documents, panes, live, connections, settings, targetIdOf })
   const agentJobs = new AgentJobStatusService({ api, live, connections })
   const jobActivity = new JobActivityService({ api, documents, panes, live, connections, targetIdOf, started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt) })
-  const jobDocuments = new JobDocumentService({ api, documents, files, connections, live, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) })
+  const jobDocuments = new JobDocumentService({ api, documents, files, connections, live, targetIdOf, openQuery: (sql, name, connectionId, database) => { documents.newQuery(sql, name, connectionId, database) }, ...(options.timers ? { timers: options.timers } : {}) })
   const proxyDocuments = new ProxyDocumentService({ api, documents, files, connections, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) })
   const credentialDocuments = new CredentialDocumentService({ api, documents, files, connections, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) })
   const logViewer = new LogViewerService({ api, documents, panes, live, connections, targetIdOf })

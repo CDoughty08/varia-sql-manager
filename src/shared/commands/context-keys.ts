@@ -238,7 +238,8 @@ export const contextKeys = {
   outputGridComparison: { type: 'boolean', scope: 'target', menu: 'output.context', description: "The menu is for a comparison's results grid." },
   comparisonExactText: { type: 'boolean', scope: 'state', description: "That comparison compares text exactly: values that differ only by case or trailing spaces count as changed (its Exact text toggle)." },
   comparisonOneRow: { type: 'boolean', scope: 'state', description: "That comparison shows one row per entry (its Layout is One row)." },
-  comparisonChangesOnly: { type: 'boolean', scope: 'state', description: "That comparison shows only its changed, added and removed rows (its Rows choice is Changes only)." }
+  comparisonChangesOnly: { type: 'boolean', scope: 'state', description: "That comparison shows only its changed, added and removed rows (its Rows choice is Changes only)." },
+  comparisonRowHasPartner: { type: 'boolean', scope: 'state', description: "That comparison's active row is a removed or added row with a possible match (? in its row header), so Go to Possible Match can select it; false until the row's change marker has loaded. In a results grid's own menu, the row it was opened on." }
 } as const satisfies Record<string, ContextKeyDeclaration>
 
 type Declarations = typeof contextKeys

@@ -223,6 +223,25 @@ describe('hot exit', () => {
     expect(kept).toEqual([{ activeIndex: -1, documents: [expect.objectContaining({ name: 'SQLQuery2.sql', text: 'SELECT 1' })] }])
     expect(api.closeWindow).toHaveBeenCalledTimes(1)
   })
+  it('stays open after Cancel the job went through main and reported something, and waits for it before closing', async () => {
+    const { documents, api, files, queries } = fixture()
+    documents.create('SQLQuery2.sql', '', 'master')
+    let said = true
+    Object.assign(queries, { restoredCancelsSettled: vi.fn(async () => said) })
+    await files.closeWindow(async () => {})
+    expect(files.getSnapshot().error).toContain('stayed open so you can read what became of the cancelled BigQuery jobs')
+    expect(api.closeWindow).not.toHaveBeenCalled()
+    // The quit waits for cancels still under way before it closes.
+    let settled!: (value: boolean) => void
+    Object.assign(queries, { restoredCancelsSettled: vi.fn(() => new Promise<boolean>(resolve => { settled = resolve })) })
+    const closing = files.closeWindow(async () => {})
+    await new Promise(resolve => { setTimeout(resolve, 0) })
+    expect(api.closeWindow).not.toHaveBeenCalled()
+    said = false
+    settled(said)
+    await closing
+    expect(api.closeWindow).toHaveBeenCalledTimes(1)
+  })
   it('closes without asking about unsaved queries, keeping them, and still asks about open transactions', async () => {
     const { documents, model, api, files, kept, queries } = fixture()
     const tab = documents.create('SQLQuery2.sql', '', 'master')
@@ -380,7 +399,8 @@ describe('hot exit', () => {
     const { documents, files } = fixture()
     const welcome = vi.fn()
     const failing = { hotExit: true, takeSession: vi.fn<VariaApi['takeSession']>(async () => ({ ok: false, error: 'Access is denied.' })), finishSessionRestore: vi.fn<VariaApi['finishSessionRestore']>() }
-    expect(await restoreSession({ api: failing, documents, files, otherwise: welcome })).toBe(0)
+    // -1: the workbench then leaves the jobs without a tab unreviewed (their tabs may come back from previous.json).
+    expect(await restoreSession({ api: failing, documents, files, otherwise: welcome })).toBe(-1)
     expect(welcome).toHaveBeenCalledOnce()
     const reopening = { ...failing, takeSession: vi.fn<VariaApi['takeSession']>(async () => ({ ok: true, value: { activeIndex: 0, problems: [], documents: [{ name: 'SQLQuery7.sql', kind: 'sql' as const, eol: 'lf' as const, dirty: true, text: 'SELECT 7' }] } })) }
     expect(await restoreSession({ api: reopening, documents, files, otherwise: welcome })).toBe(1)
@@ -389,7 +409,7 @@ describe('hot exit', () => {
   it('reports a session that could not be read in the file banner', async () => {
     const { documents, files } = fixture()
     const api = { hotExit: true, takeSession: vi.fn<VariaApi['takeSession']>(async () => ({ ok: false, error: 'Access is denied.' })), finishSessionRestore: vi.fn<VariaApi['finishSessionRestore']>() }
-    expect(await restoreSession({ api, documents, files })).toBe(0)
+    expect(await restoreSession({ api, documents, files })).toBe(-1)
     expect(files.getSnapshot().error).toBe('The queries open when Varia SQL Manager last closed could not be reopened: Access is denied.')
   })
   it('does not infer a legacy query target or database from a matching server name', async () => {
@@ -402,5 +422,44 @@ describe('hot exit', () => {
     const other = documents.reopen({ name: 'SQLQuery3.sql', kind: 'sql', eol: 'lf', dirty: true, text: 'SELECT 1', server: 'sql01', database: 'Sales' })
     targets.update(other.id, { connectionId: 'b', database: 'master' })
     expect(documents.get(other.id)).toMatchObject({ connectionId: 'b', database: 'master' })
+  })
+})
+
+describe('quitting with BigQuery jobs', () => {
+  it("leaves a kept BigQuery tab's running job out of the prompt and its session alone, and tells main the kept tabs' job keys first", async () => {
+    const f = fixture(), key = '6f2b8f84-2b7c-4b55-9c55-9d6f8c2a1b10', order: string[] = []
+    const keepJobsAtQuit = vi.fn<VariaApi['keepJobsAtQuit']>(async () => { order.push('keep'); return { ok: true, value: undefined } })
+    Object.assign(f.api, { keepJobsAtQuit })
+    const bq = f.documents.restore('bq.sql', 'SELECT 1', 'sql', 'lf', undefined, 'bigquery', key), other = f.documents.create('other.sql', 'SELECT 2', 'master')
+    Object.assign(f.queries, { holdsJob: vi.fn(async (id: string) => id === bq.id) })
+    f.queries.confirmSessions.mockImplementation(async () => { order.push('ask'); return new Map() })
+    await f.files.closeWindow(async () => {})
+    expect(keepJobsAtQuit).toHaveBeenCalledExactlyOnceWith([key])
+    expect(f.queries.confirmSessions).toHaveBeenCalledExactlyOnceWith('exit', [other.id])
+    expect(order).toEqual(['keep', 'ask'])
+    expect(f.api.closeWindow).toHaveBeenCalled()
+  })
+  it('asks about an unkept BigQuery tab, and keeps nothing for main when no BigQuery tab is kept', async () => {
+    const f = fixture({ hotExit: false }), keepJobsAtQuit = vi.fn<VariaApi['keepJobsAtQuit']>(async () => ({ ok: true, value: undefined }))
+    Object.assign(f.api, { keepJobsAtQuit })
+    const bq = f.documents.restore('bq.sql', 'SELECT 1', 'sql', 'lf', undefined, 'bigquery', '6f2b8f84-2b7c-4b55-9c55-9d6f8c2a1b10')
+    Object.assign(f.queries, { holdsJob: vi.fn(async () => true) })
+    await f.files.closeWindow(async () => {})
+    expect(keepJobsAtQuit).not.toHaveBeenCalled()
+    expect(f.queries.confirmSessions).toHaveBeenCalledExactlyOnceWith('exit', [bq.id])
+  })
+})
+
+describe('Close All with BigQuery jobs', () => {
+  it('keeps a tab holding a job open and unasked, as it keeps a running query', async () => {
+    const f = fixture()
+    const bq = f.documents.restore('bq.sql', 'SELECT 1', 'sql', 'lf', undefined, 'bigquery'), other = f.documents.create('other.sql', 'SELECT 2', 'master')
+    const holdsJob = vi.fn(async (id: string) => id === bq.id)
+    Object.assign(f.queries, { holdsJob })
+    await f.files.closeMany([bq.id, other.id])
+    expect(f.queries.confirmSessions).toHaveBeenCalledExactlyOnceWith('closeAll', [other.id])
+    expect(f.documents.get(bq.id)).toBeDefined()
+    expect(f.documents.get(other.id)).toBeUndefined()
+    expect(f.files.getSnapshot().error).toBe('1 query is still running and stayed open.')
   })
 })

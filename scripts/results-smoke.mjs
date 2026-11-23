@@ -2939,6 +2939,55 @@ try {
   await outputMenu.getByRole('menuitem', { name: 'Highlight', exact: true }).click()
   await page.getByRole('menu', { name: 'Highlight', exact: true }).getByRole('menuitem', { name: 'Clear All Highlights', exact: true }).click()
   await expect(diff.locator(gridPart.highlightedRow)).toHaveCount(0)
+  // Moving between differences: Alt+F5 and Alt+Shift+F5 in the grid step through its change units (the changed price on
+  // the + half, the removed row, the added row), wrapping round; the live region and the toolbar say "Change n of 3", and
+  // an added or removed row is selected whole. The toolbar's buttons and the grid's menu do the same. The overview strip
+  // marks where the changes are while the grid shows all of the comparison's rows; under a chip the counts are the view's.
+  const nav = diffTools.getByRole('group', { name: 'Differences', exact: true }), spoken = diffTools.getByRole('status')
+  const activeAt = (row, column) => expect(cell(row, column, diff).and(diff.locator(gridPart.activeCell))).toHaveCount(1)
+  await expect(nav).toContainText('3 changes')
+  await cell(0, 0, diff).click()
+  await page.keyboard.press('Alt+F5')
+  await expect(spoken).toContainText('Change 1 of 3')
+  await activeAt(1, 2)
+  await page.keyboard.press('Alt+F5')
+  await expect(spoken).toContainText('Change 2 of 3')
+  await activeAt(3, 0)
+  await expect(diff.locator(`[aria-rowindex="5"] ${gridPart.selectedCell}`)).toHaveCount(3)
+  await page.keyboard.press('Alt+F5')
+  await expect(spoken).toContainText('Change 3 of 3')
+  await activeAt(5, 0)
+  await page.keyboard.press('Alt+F5')
+  await expect(spoken).toContainText('Change 1 of 3')
+  await activeAt(1, 2)
+  await expect(nav).toContainText('Change 1 of 3')
+  await page.keyboard.press('Alt+Shift+F5')
+  await expect(spoken).toContainText('Change 3 of 3')
+  await activeAt(5, 0)
+  await nav.getByRole('button', { name: 'Previous difference', exact: true }).click()
+  await expect(spoken).toContainText('Change 2 of 3')
+  await activeAt(3, 0)
+  await cell(2, 0, diff).click()
+  await cell(2, 0, diff).click({ button: 'right' })
+  await expect(outputMenu.getByRole('menuitem', { name: 'Go to Possible Match', exact: true })).toHaveAttribute('aria-disabled', 'true')
+  await outputMenu.getByRole('menuitem', { name: 'Go to Next Difference', exact: true }).click()
+  await activeAt(3, 0)
+  await expect(diff).toBeFocused()
+  const overview = diff.locator(gridPart.overview)
+  await expect(overview).toBeVisible()
+  await expect(overview).toHaveAttribute('aria-hidden', 'true')
+  await expect(overview.locator(gridPart.overviewMark)).toHaveCount(3)
+  await diffTools.getByRole('button', { name: '1 added', exact: true }).click()
+  await expect(diff.getByRole('rowheader')).toHaveCount(1)
+  await expect(overview).toBeHidden()
+  await cell(0, 0, diff).click()
+  await page.keyboard.press('Alt+F5')
+  await expect(spoken).toContainText('Change 1 of 1 shown')
+  await expect(nav).toContainText('Change 1 of 1 shown')
+  await diffTools.getByRole('button', { name: '1 added', exact: true }).click()
+  await expect(diff.getByRole('rowheader')).toHaveCount(6)
+  await expect(overview).toBeVisible()
+  console.log('Results checks: Alt+F5 and Alt+Shift+F5, the comparison toolbar and the grid menu step through its differences, wrapping, saying "Change n of m" (of those shown under a chip); the overview strip marks them over the comparison\'s own rows.')
   console.log('Results checks: Compare with Previous Result adds a diff of the two results one row per entry, a changed value drawn old struck through then new; Two rows replaces it in place, aligned by their key, with changed, soft, added and removed rows marked, its marker and row numbers in the gutter rather than columns; highlights, search matches and the selection lie over its colours without hiding them.')
 
   // 14g. The Compare popover: on Result 1's grid it offers the other Table, Result 2 (never the comparison), as the old
@@ -3006,6 +3055,9 @@ try {
   await diffTools.getByRole('button', { name: 'Swap sides', exact: true }).click()
   await expect(second).toBeFocused()
   await expect(page.getByText('Differences: Result 1 → Result 2', { exact: true })).toBeVisible()
+  // The comparison toolbar folds Exact text, Layout, Rows and Match into ⋯ when narrow (a CI runner's window can be), so
+  // the window is wide enough for them until 14i is done.
+  await resize(1440, 800)
   // Result 3's Exact text replaces it in place, renamed for it.
   await diffTools.getByRole('button', { name: 'Exact text', exact: true }).click()
   await expect(diffTools.getByRole('button', { name: 'Exact text', exact: true })).toHaveAttribute('aria-pressed', 'true')
@@ -3092,6 +3144,19 @@ try {
   await expect(matchMenu).toHaveCount(0)
   await expect(wholeTools.getByRole('button', { name: 'Match rows by key columns: high' })).toHaveText('high')
   await expect(wholeTools.getByRole('status')).toContainText('Comparison updated: matched by high')
+  // Go to Possible Match: matched by high, the removed row (high 8) looks like the added offline row, its key changed (? in
+  // both row headers); the grid's menu on one selects the other, whole, and gives the grid the focus.
+  const rowOf = async header => Number(await header.evaluate(element => element.closest('[aria-rowindex]').getAttribute('aria-rowindex'))) - 2
+  const lookAlike = whole.getByRole('rowheader', { name: /^Removed.*possible match with row/ }), partner = whole.getByRole('rowheader', { name: /^Added.*possible match with row/ })
+  await expect(lookAlike).toHaveCount(1)
+  await expect(partner).toHaveCount(1)
+  const [from, to] = [await rowOf(lookAlike), await rowOf(partner)]
+  await cell(from, 0, whole).click()
+  await cell(from, 0, whole).click({ button: 'right' })
+  await outputMenu.getByRole('menuitem', { name: 'Go to Possible Match', exact: true }).click()
+  await expect(cell(to, 0, whole).and(whole.locator(gridPart.activeCell))).toHaveCount(1)
+  await expect(whole.locator(`[aria-rowindex="${to + 2}"] ${gridPart.selectedCell}`)).toHaveCount(2)
+  await expect(whole).toBeFocused()
   // Closed and compared again, the pair matches by its remembered key column, and the popover says so. The click first
   // settles the grid's focus, which would otherwise close the menu the right-click opens.
   await cell(0, 0, whole).click()
@@ -3106,6 +3171,7 @@ try {
   await expect(picker).toHaveCount(0)
   await expect(grid('Result 4')).toBeFocused()
   await expect(comparisonTools(page, 'Result 4').getByRole('button', { name: 'Match rows by key columns: high' })).toHaveText('high')
+  await resize(...fullSize)
   console.log('Results checks: a comparison Changes only leaves its unchanged rows out and names them after the dashed rule, a chip shows only its kind, the match menu matches by row position and by a key column from the keyboard, the live region says each change, and the pair remembers its key column.')
 
   // 15. Panes and tabs: F6 goes to the results and back; Ctrl+R hides and shows them keeping scroll, selection and a

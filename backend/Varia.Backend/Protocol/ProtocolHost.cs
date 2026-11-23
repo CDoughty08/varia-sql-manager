@@ -21,6 +21,9 @@ internal interface IRequestDispatcher : IDisposable
     (long GlobalBytes, long QueryBytes) ResultBudget { get; }
     Task<object> DispatchAsync(string method, JsonElement parameters, JsonSerializerOptions json, RequestContext? context);
     void CancelAll();
+    /// <summary>On shutdown, before any request is cancelled: work that must outlive the backend lets go of it (SqlService: a
+    /// BigQuery job is never cancelled by a stop, docs/bigquery.md, Re-attaching to jobs).</summary>
+    void BeginShutdown() { }
     /// <summary>On shutdown, after CancelAll: waits, within the dispatcher's own bound, for work that must not end half done
     /// (SqlService: a Create Catalog past its restore, which then finishes or removes what it created).</summary>
     void DrainCommitted() { }
@@ -437,6 +440,7 @@ internal sealed class ProtocolHost
     private int Shutdown()
     {
         if (Volatile.Read(ref exitCode) >= 0) return exitCode;
+        try { dispatcher?.BeginShutdown(); } catch (Exception) { /* Best effort while exiting. */ }
         foreach (var context in contexts.Values) context.Cancel(CancelReason.Shutdown, offThread: true);
         try { dispatcher?.CancelAll(); } catch (Exception) { /* Best effort while exiting. */ }
         try { Task.WaitAll([.. work.Keys], options.DrainTimeout); } catch (AggregateException) { }

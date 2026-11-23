@@ -44,12 +44,15 @@ internal sealed record TableArgs(string ConnectionId, string Database, string Sc
 /// (the connection's when left out), which SQL Server refuses.</summary>
 internal sealed record QueryArgs(string ConnectionId, string SessionId, string? Database, string Sql, string QueryId, int MaxRows, int TimeoutSeconds, int StartLine = 1, int MaxResultSets = 10,
     bool StopOnError = false, bool IncludeActualPlan = false, bool IncludeClientStatistics = false, bool IncludeLivePlan = false, bool DiscardResults = false, string? Dataset = null,
-    long? MaximumBytesBilled = null, bool? Prices = null, int StartColumn = 1, string? Residence = null, int? WindowCacheMiB = null, BigQuery.BigQueryPreviewTarget? Preview = null);
+    long? MaximumBytesBilled = null, bool? Prices = null, int StartColumn = 1, string? Residence = null, int? WindowCacheMiB = null, BigQuery.BigQueryPreviewTarget? Preview = null,
+    string? JobKey = null);
 /// <summary>query.session.close: Transaction "commit" commits the session's open transaction first; "rollback" is a plain close,
 /// since SQL Server rolls back what a closed session left open. AbortOnRefusedCommit (default true) lets a BigQuery commit
 /// refused on an unchecked session fall through to ending the session (docs/bigquery.md, Sessions); SQL Server ignores it,
 /// since its failed commit keeps the session either way.</summary>
-internal sealed record SessionArgs(string SessionId, string? Transaction = null, bool? AbortOnRefusedCommit = null);
+/// KeepJob (Leave it running) detaches a BigQuery job still running and leaves its session; CancelJob (Cancel the job) cancels
+/// it, waits for its DONE and ends the session (docs/bigquery.md, Re-attaching to jobs). SQL Server refuses both.
+internal sealed record SessionArgs(string SessionId, string? Transaction = null, bool? AbortOnRefusedCommit = null, bool? KeepJob = null, bool? CancelJob = null);
 /// <summary>query.session.close's answer: Closed says a session was ended; Note, a BigQuery close's fixed code (with
 /// BigQuery's message or the job id it names), tells what became of a commit or of the session's end.</summary>
 internal sealed record SessionCloseResult(bool Closed, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] SessionCloseNote? Note = null);
@@ -57,7 +60,11 @@ internal sealed record SessionCloseResult(bool Closed, [property: JsonIgnore(Con
 /// turns each into text).</summary>
 internal sealed record SessionCloseNote(string Code, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Message = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? JobId = null);
-internal sealed record CancelArgs(string QueryId);
+/// <summary>query.cancel. Detach (BigQuery only) ends the request with status detached and leaves its job running in
+/// BigQuery, holding the tab's session (Close Results' Leave it running).</summary>
+internal sealed record CancelArgs(string QueryId, bool? Detach = null);
+/// <summary>connections.disconnect's answer: FailedAborts counts the idle BigQuery sessions whose ABORT_SESSION failed.</summary>
+internal sealed record DisconnectResult(bool Disconnected, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? FailedAborts = null);
 /// <summary>A database, or for BigQuery a dataset with its location (absent when BigQuery names none).</summary>
 internal sealed record DatabaseInfo(string Name, bool IsSystem, bool IsSnapshot, string? Location = null);
 internal enum BigQueryDecimalKind { None, Numeric, BigNumeric }
@@ -154,7 +161,8 @@ internal sealed record SessionStateArgs(string SessionId);
 /// <summary>query.session.state: an idle session's @@TRANCOUNT, read on demand before it ends. Checked is false when the
 /// session's SET options (SHOWPLAN_*, NOEXEC, PARSEONLY, FMTONLY) kept the SELECT from returning it; TransactionCount is
 /// then 0 and the session may hold a transaction.</summary>
-internal sealed record SessionState(int TransactionCount, bool Checked);
+/// <summary>Job (BigQuery only): "running" while the tab's session holds a job running or detached in BigQuery, else "none".</summary>
+internal sealed record SessionState(int TransactionCount, bool Checked, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Job = null);
 /// <summary>results.read: ViewId reads through a view of the result (results.view), FirstRow then counting view positions.</summary>
 /// <summary>Viewer (1 to 2^31 - 1) names the grid, popout or Transpose reading, so a windowed result reads ahead for each apart.</summary>
 internal sealed record ResultsReadArgs(uint ResultId, long FirstRow, int MaxRows, uint? ViewId = null, uint? Viewer = null);
@@ -162,10 +170,10 @@ internal sealed record ResultsReadResult(long NextRow, long RowsAvailable, bool 
 /// <summary>results.remoteQuery: a query over a windowed BigQuery result (docs/ipc.md). QueryId is its own, for query.cancel;
 /// Generation is the source result's, which main checks before sending. Kind "load" (Load into memory) takes nothing more;
 /// "view" (a sort or filter) takes 0 to 16 Sort keys and 0 to 16 Filters, at least one of either; "distinct" (a value list)
-/// takes the Column, the other columns' Filters and, optionally, the Kept filters whose rows tick its values. Fallback runs
-/// the original query again when its result table expired (BigQueryViewSql.CanFallBack).</summary>
+/// takes the Column, the other columns' Filters and, optionally, the Kept filters whose rows tick its values. JobKey (load only)
+/// records its job for re-attaching. Fallback runs the original query again when its result table expired (BigQueryViewSql.CanFallBack).</summary>
 internal sealed record RemoteQueryArgs(string QueryId, uint ResultId, int Generation, string Kind, RemoteSortArgs[]? Sort = null, RemoteFilterArgs[]? Filters = null,
-    int? Column = null, RemoteFilterArgs[]? Kept = null, bool? Fallback = null);
+    int? Column = null, RemoteFilterArgs[]? Kept = null, bool? Fallback = null, string? JobKey = null);
 /// <summary>One sort key of a remote view: a column of the windowed result, ascending (NULL first) or descending (NULL last).</summary>
 internal sealed record RemoteSortArgs(int Column, bool Descending);
 /// <summary>One filter of a remote view or value list (results.view's ViewFilter, its values in a value list): Op "in" or
@@ -635,8 +643,21 @@ internal sealed record CredentialSaveDto(string Identity, int? Id = null, string
 /// RemoveAlerts (at most agentLimits.jobAlerts) detaches alerts from the job, each guarded by its id still running this job.</summary>
 internal sealed record AgentJobSaveDto(int? Version = null, string? Modified = null, string? Name = null, bool? Enabled = null, string? Description = null, string? Category = null,
     string? Owner = null, int? EmailLevel = null, string? EmailOperator = null, int? PageLevel = null, string? PageOperator = null, int? NetSendLevel = null, string? NetSendOperator = null,
-    int? EventLogLevel = null, int? DeleteLevel = null, List<AgentAlertRefDto>? RemoveAlerts = null);
+    int? EventLogLevel = null, int? DeleteLevel = null, List<AgentAlertRefDto>? RemoveAlerts = null, AgentStepsSaveDto? Steps = null);
 internal sealed record AgentAlertRefDto(int Id, string Name);
+/// <summary>The steps' save (AG-6b, src/shared/agent/steps.ts AgentStepsSave), in the order the batch calls it: Deletes (described ids, highest
+/// first), Temporary (every surviving step's temporary name at its id after the deletes), Adds (new steps at their final ids, ascending, under
+/// temporary names), Writes (each step's whole content into its final id; New Job's are its sp_add_jobstep calls, ids 1..n), StartStepId.</summary>
+internal sealed record AgentStepsSaveDto(List<int>? Deletes = null, List<AgentStepNameDto>? Temporary = null, List<AgentStepNameDto>? Adds = null, List<AgentStepWriteDto>? Writes = null,
+    int? StartStepId = null);
+internal sealed record AgentStepNameDto(int Id, string Name);
+/// <summary>language.parse (AG-6b, src/shared/agent/parse.ts): the job step editor's Parse of one T-SQL text.</summary>
+internal sealed record LanguageParseArgs(string Text);
+internal sealed record LanguageParseError(int Line, int Column, int Number, string Message);
+internal sealed record LanguageParseResult(IReadOnlyList<LanguageParseError> Errors, bool Truncated);
+/// <summary>One step's whole content (src/shared/agent/steps.ts AgentStepWrite): strings '' for none, ProxyId 0 for the service account.</summary>
+internal sealed record AgentStepWriteDto(int Id, string Name, string Subsystem, string Command, string DatabaseName, string DatabaseUserName, int OnSuccessAction, int OnSuccessStepId,
+    int OnFailAction, int OnFailStepId, int RetryAttempts, int RetryInterval, string OutputFileName, int Flags, int CmdexecSuccessCode, int ProxyId, string Server, int OsRunPriority);
 /// <summary>SQL Server Agent Properties' changes (AG-8a, src/shared/actions/agent-properties.ts): only the settings that differ, each an
 /// sp_set_sqlagent_properties argument; HistoryMaxRows -1 is no limit (and takes no rows per job), else 2 to agentLimits.historyMaxRows.</summary>
 internal sealed record AgentPropertiesChangesDto(bool? SqlserverRestart = null, bool? MonitorAutostart = null, int? HistoryMaxRows = null, int? HistoryMaxRowsPerJob = null);
@@ -839,11 +860,17 @@ internal sealed record CredentialStepDto(string Job, int StepId, string Step);
 /// platform without alerts).</summary>
 internal sealed record AgentJobDocumentDto(AgentJobRecordDto? Job, string Login, bool Sysadmin, string Platform, List<string> Categories, List<AgentJobStepRowDto> Steps, bool AlertsEditable,
     AgentJobMailDto Mail, string? ReadOnly = null, List<AgentJobOperatorDto>? Operators = null, List<string>? Owners = null, List<AgentJobAlertDto>? Alerts = null,
-    List<string>? Jobs = null, List<string>? JobIds = null);
+    List<string>? Jobs = null, List<string>? JobIds = null, List<string>? Subsystems = null, List<AgentJobProxyDto>? Proxies = null, List<string>? Databases = null,
+    bool? StepsTruncated = null);
+/// <summary>A proxy the step editor's Run as offers (AG-6b): the step types sp_help_proxy @subsystem_name lists it for.</summary>
+internal sealed record AgentJobProxyDto(int Id, string Name, bool Enabled, List<string> Subsystems, string? Identity = null);
 internal sealed record AgentJobRecordDto(string JobId, string Name, bool Enabled, string Description, string Category, string Owner, int EmailLevel, string EmailOperator, int PageLevel,
     string PageOperator, int NetSendLevel, string NetSendOperator, int EventLogLevel, int DeleteLevel, string Created, string Modified, int Version, int StartStepId,
     string? LastRun = null, int? LastOutcome = null);
-internal sealed record AgentJobStepRowDto(int Id, string Name, string Subsystem);
+/// <summary>A step as sp_help_jobstep reads it: AG-6a's id, name and type, and AG-6b's whole content.</summary>
+internal sealed record AgentJobStepRowDto(int Id, string Name, string Subsystem, string? Command = null, int? Flags = null, int? CmdexecSuccessCode = null, int? OnSuccessAction = null,
+    int? OnSuccessStepId = null, int? OnFailAction = null, int? OnFailStepId = null, string? Server = null, string? DatabaseName = null, string? DatabaseUserName = null,
+    int? RetryAttempts = null, int? RetryInterval = null, int? OsRunPriority = null, string? OutputFileName = null, int? ProxyId = null, bool? CommandTruncated = null);
 internal sealed record AgentDutyHoursDto(int Start, int End);
 internal sealed record AgentJobOperatorDto(string Name, bool Enabled, bool Email, bool Pager, bool NetSend, int PagerDays, AgentDutyHoursDto Weekday, AgentDutyHoursDto Saturday, AgentDutyHoursDto Sunday);
 internal sealed record AgentJobAlertDto(int Id, string Name, bool Enabled, int Severity, int MessageId);

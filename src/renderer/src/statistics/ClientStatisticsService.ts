@@ -53,7 +53,7 @@ export function metricAverage(runs: readonly StatisticsRun[], value: (sample: Cl
 }
 
 /** A run's status as the pane and the Previous column's name say it. */
-export const statisticsStatusWords: Record<StatisticsRun['status'], string> = { completed: 'completed', completedWithErrors: 'completed with errors', failed: 'failed', cancelled: 'cancelled', timedOut: 'timed out', running: 'running', unavailable: 'unavailable' }
+export const statisticsStatusWords: Record<StatisticsRun['status'], string> = { completed: 'completed', completedWithErrors: 'completed with errors', failed: 'failed', cancelled: 'cancelled', timedOut: 'timed out', detached: 'left running', superseded: 're-attached elsewhere', running: 'running', unavailable: 'unavailable' }
 const number = (value: number | undefined) => value === undefined ? 'Unavailable' : value.toLocaleString(undefined, { maximumFractionDigits: 2 })
 /** The report's rows, in the provider's order, then the backend's wall time. */
 const measurements: readonly { readonly label: string; readonly definition: string; readonly value: (sample: ClientStatisticsSample) => number | undefined }[] = [

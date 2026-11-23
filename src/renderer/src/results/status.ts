@@ -37,7 +37,9 @@ export type StatusKind = 'running' | QueryStatus | 'lost' | 'closed'
  *  'failed' one an error stopped. The output pane's status line and the query status bar start with it. */
 export const statusLeads: Readonly<Record<Exclude<StatusKind, 'lost'>, string>> = {
   running: 'Executing query…', completed: 'Query executed successfully.', completedWithErrors: 'Query completed with errors.', failed: 'Query failed.',
-  cancelled: 'Query was cancelled.', timedOut: 'Query timed out.', closed: 'Query executed successfully.'
+  cancelled: 'Query was cancelled.', timedOut: 'Query timed out.', closed: 'Query executed successfully.',
+  // BigQuery (docs/bigquery.md, Re-attaching to jobs): Leave it running, and a later re-attach taking the job over.
+  detached: 'Query left running in BigQuery.', superseded: 'Query was re-attached elsewhere.'
 }
 /** The status line: "Executing query… · 00:00:03 · 1,234 rows", with " · 2/3 batches" when the script has several. */
 export function statusSentence(o: { status: StatusKind; elapsedMs: number; rows: number; completedBatches: number; totalBatches: number }): string {
@@ -65,12 +67,12 @@ export function timeOfDay(completedAt: string | undefined): string {
 }
 
 const outcomes: Readonly<Record<Exclude<StatusKind, 'lost' | 'closed'>, string>> = {
-  running: 'Executing', completed: 'Completed', completedWithErrors: 'Completed with errors', failed: 'Failed', cancelled: 'Cancelled', timedOut: 'Timed out'
+  running: 'Executing', completed: 'Completed', completedWithErrors: 'Completed with errors', failed: 'Failed', cancelled: 'Cancelled', timedOut: 'Timed out', detached: 'Left running', superseded: 'Re-attached elsewhere'
 }
 export type RunTone = 'running' | 'success' | 'warning' | 'error'
 export type RunIcon = 'loading' | 'pass' | 'warning' | 'error' | 'debug-stop' | 'watch'
 const tones: Readonly<Record<Exclude<StatusKind, 'lost' | 'closed'>, readonly [RunTone, RunIcon]>> = {
-  running: ['running', 'loading'], completed: ['success', 'pass'], completedWithErrors: ['warning', 'warning'], failed: ['error', 'error'], cancelled: ['warning', 'debug-stop'], timedOut: ['error', 'watch']
+  running: ['running', 'loading'], completed: ['success', 'pass'], completedWithErrors: ['warning', 'warning'], failed: ['error', 'error'], cancelled: ['warning', 'debug-stop'], timedOut: ['error', 'watch'], detached: ['warning', 'watch'], superseded: ['warning', 'debug-stop']
 }
 /** The results head's one run summary: an outcome, its facts, and SSMS's sentence for the tooltip and screen readers. */
 export interface RunSummary { readonly tone: RunTone; readonly icon: RunIcon; readonly outcome: string; readonly facts: readonly string[]; readonly sentence: string }

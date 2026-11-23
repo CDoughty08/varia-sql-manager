@@ -28,7 +28,7 @@ describe('results toolbar in a narrow pane', () => {
         'output.toggleResultsTabs', 'output.goToResult', '-', 'output.pivot', 'output.compare', 'output.transpose', 'output.transposeChooseHeaders', 'output.loadIntoMemory', '-',
         'output.toggleColumnProfile', 'output.toggleProfileSelectedColumns', 'output.toggleRowSize', '-', 'output.showSpaces', 'output.showAllWhitespace', 'output.sortTextByChars', 'output.sortTextByBytes', '-',
         // A comparison's toolbar controls, shown while the focused grid is a comparison.
-        'output.compareMatch', 'output.compareChangesOnly', 'output.compareOneRow', 'output.compareExactText', 'output.compareSwapSides', 'output.compareGoToOld', 'output.compareGoToNew', 'output.saveResultsAs', '-', 'output.closeResults'
+        'output.compareMatch', 'output.compareChangesOnly', 'output.compareOneRow', 'output.compareExactText', 'output.compareSwapSides', 'output.compareGoToOld', 'output.compareGoToNew', 'output.saveResultsAs', 'output.compareNextDifference', 'output.comparePreviousDifference', '-', 'output.closeResults'
       ])
     }
   })

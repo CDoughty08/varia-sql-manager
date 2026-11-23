@@ -7,6 +7,7 @@ import { sessionLimits, type SessionWrite } from '../shared/files/session'
 import { editorGroupsLayoutSchema, layoutViews, remapEditorGroups } from '../shared/editor-groups'
 import { connectionWorkspaceSchema } from '../shared/connection-targets'
 import { providerIds } from '../shared/providers'
+import { jobKeySchema } from '../shared/bigquery/jobs'
 import { workspaceSealSchema, type WorkspaceSeal } from './connection-workspace-seal'
 import { quarantine, readJsonFile, replaceFile, writeBytesAtomic } from './json-file'
 import { fileKinds, maxDocumentCharacters } from './sql-files'
@@ -18,8 +19,9 @@ const database = z.string().max(sessionLimits.databaseChars)
 const dataset = z.string().max(sessionLimits.datasetChars)
 const legacyFields = { name, baseName: name.optional(), kind: z.enum(documentKinds), eol: z.enum(['crlf', 'lf']), dirty: z.boolean(), pinned: z.boolean().optional(), server: server.optional(), database: database.min(1).optional(), text: z.string().max(maxDocumentCharacters).optional() }
 const fields = { ...legacyFields, database: database.optional(), targetId: z.uuid().optional(), attachWanted: z.boolean().optional() }
-/** Version 3: the tab's provider, and a BigQuery tab's dataset at BigQuery's length (SQL Server's 128 characters otherwise). */
-const providerFields = { ...fields, provider: z.enum(providerIds).optional(), database: dataset.optional() }
+/** Version 3: the tab's provider, a BigQuery tab's dataset at BigQuery's length (SQL Server's 128 characters otherwise), and
+ *  its job key (docs/bigquery.md, Re-attaching to jobs). */
+const providerFields = { ...fields, provider: z.enum(providerIds).optional(), database: dataset.optional(), jobKey: jobKeySchema.optional() }
 const databaseFits = (document: { provider?: string; database?: string }) => document.provider === 'bigquery' || (document.database ?? '').length <= sessionLimits.databaseChars
 const associated = (document: { kind: string; targetId?: string; attachWanted?: boolean; database?: string }) => document.targetId
   ? document.kind === 'sql' && document.attachWanted !== undefined && document.database !== undefined
@@ -79,8 +81,8 @@ export type SessionInput = Omit<SessionWrite, 'documents'> & { readonly document
 /** Why a write was refused at the cap; a fixed sentence, as the banner shows it. */
 export const sessionCapMessage = 'The open queries are too large to keep for the next start (64 MB in all).'
 const posix = process.platform !== 'win32'
-/** What a quarantine of either file leaves (`json-file.ts`'s `quarantine`), and a write a crash interrupted (`writeBytesAtomic`'s temporary file). */
-const leftover = /^((session|previous)\.json\.invalid-[0-9a-f-]{36}\.json|\.varia-[0-9a-f-]{36}\.tmp)$/i
+/** What a quarantine of either file (or of jobs.json, `job-records.ts`) leaves (`json-file.ts`'s `quarantine`), and a write a crash interrupted (`writeBytesAtomic`'s temporary file). */
+const leftover = /^((session|previous|jobs)\.json\.invalid-[0-9a-f-]{36}\.json|\.varia-[0-9a-f-]{36}\.tmp)$/i
 const dayMs = 86_400_000
 
 export interface SessionStoreOptions {
@@ -111,7 +113,7 @@ export function encodeSession(session: SessionInput, options: SessionStoreOption
       } : {},
       ...document.server ? { server: document.server } : {}, ...document.database !== undefined ? { database: document.database } : {},
       ...document.targetId ? { targetId: document.targetId, attachWanted: document.attachWanted } : {},
-      ...document.provider ? { provider: document.provider } : {},
+      ...document.provider ? { provider: document.provider } : {}, ...document.jobKey ? { jobKey: document.jobKey } : {},
       ...document.text !== undefined ? { text: document.text } : {}
     })),
     ...groups ? { groups } : {}, ...session.workspace ? { workspace: session.workspace, ...session.seal ? { seal: session.seal } : {} } : {}

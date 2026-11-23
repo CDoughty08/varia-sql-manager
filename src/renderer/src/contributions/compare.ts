@@ -5,7 +5,7 @@ import { focusResultGrid } from '../grid/ResultGrid'
 import { stackReveals } from '../grid/result-picker'
 import { outputOf } from '../menus/targets'
 import { compareSources, fallbackText, type CompareChange } from '../results/CompareService'
-import { slotOf } from '../results/ResultsService'
+import { setKey, slotOf } from '../results/ResultsService'
 import { focusedOutput } from './output'
 
 /**
@@ -66,6 +66,17 @@ export function compareContribution({ commands, compare, results, documents, men
       }
     }
   }
+  // Moving between differences reads the comparison, so it stays available while an input is closed; a comparison with no
+  // change has nowhere to go.
+  const unitsOf = (target: NonNullable<ReturnType<typeof comparisonOf>>) => compare.getSnapshot().info.get(setKey(target.slot.entry.descriptor))?.units ?? 0
+  const navigation = (direction: 'next' | 'previous') => ({
+    when: (args?: CommandArgs) => { const target = comparisonOf(args); return !!target && unitsOf(target) > 0 },
+    unavailable: (args?: CommandArgs) => { const target = comparisonOf(args); return target && unitsOf(target) === 0 ? 'No differences' : undefined },
+    run: async (args?: CommandArgs) => {
+      const target = comparisonOf(args)
+      if (target && unitsOf(target) > 0) await compare.navigate(target.tabId, target.key, direction, { focus: true })
+    }
+  })
   const command = (exact: boolean) => ({
     when: (args?: CommandArgs) => !!previousOf(args),
     run: async (args?: CommandArgs) => { const target = previousOf(args); if (target) await compare.compare(target.tabId, target.key, { exact }) }
@@ -107,7 +118,18 @@ export function compareContribution({ commands, compare, results, documents, men
     commands.register('output.compareExactText', change(state => ({ exact: !state.exact }))),
     commands.register('output.compareSwapSides', change(() => ({ swap: true }))),
     commands.register('output.compareGoToOld', goTo(0)),
-    commands.register('output.compareGoToNew', goTo(1))
+    commands.register('output.compareGoToNew', goTo(1)),
+    commands.register('output.compareNextDifference', navigation('next')),
+    commands.register('output.comparePreviousDifference', navigation('previous')),
+    // The menu's row, else the active one; a partner only the chips hide is known at once, others when the backend answers.
+    commands.register('output.compareGoToPossibleMatch', {
+      when: args => { const target = comparisonOf(args); return !!target && compare.partnerUnavailable(target.tabId, target.key, outputOf(args)?.row) === undefined },
+      unavailable: args => { const target = comparisonOf(args); return target ? compare.partnerUnavailable(target.tabId, target.key, outputOf(args)?.row) : undefined },
+      run: async args => {
+        const target = comparisonOf(args), row = outputOf(args)?.row
+        if (target) await compare.goToPossibleMatch(target.tabId, target.key, { ...row === undefined ? {} : { row }, focus: true })
+      }
+    })
   ]
   return { dispose: () => { for (const registration of registrations) registration.dispose() } }
 }

@@ -442,7 +442,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
     const context = this.context(id)
     if (!context) return
     this.contexts.set(id, context.key)
-    return { model, key: context.key, epoch: this.backendEpoch + (this.epochs.get(id) ?? 0), peek: !document, request: {
+    return { model, key: context.key, epoch: this.backendEpoch + (this.epochs.get(id) ?? 0), peek: !document && !peekModelContext(model)?.editable, request: {
       documentId: id, version: model.getVersionId(), text: model.getValue(), context: context.context,
       position: { line: position.lineNumber - 1, character: position.column - 1 }
     } }

@@ -4,6 +4,7 @@ import { z } from 'zod'
 import type { BackendMethod, BackendMethods, BackendResultDescriptor, BackendState, LossReason, LostSummary, QueryEvent, ResultDescriptor } from '../../shared/contracts'
 import { deadlineFor, methodAllows, optionsAllow, requestProvider } from '../../shared/ipc/methods'
 import type { ProviderId } from '../../shared/providers'
+import { endIdleResultSchema, jobLimits } from '../../shared/bigquery/jobs'
 import { jobProgressSchema, operationProgressSchema, queryEventSchema, queryResultSchema, sessionCloseResultSchema, type JobProgressEvent, type OperationProgressEvent } from '../../shared/ipc/port-messages'
 import { actionProgressEventSchema, type ActionProgressEvent } from '../../shared/actions/schema.ts'
 import { objectIndexProgressEventSchema, type ObjectIndexProgressEvent } from '../../shared/explorer/search.ts'
@@ -41,6 +42,11 @@ export interface SupervisorDeps extends ConnectionDeps {
   before?: Promise<unknown>
   /** Added to the spawn environment at every launch: what the user may have changed since the last one. */
   environment?: () => Record<string, string>
+  /** BigQuery (docs/bigquery.md, Re-attaching to jobs): the job keys of tabs kept at quit, whose finished jobs' sessions
+   *  with an open or unknown transaction bigquery.endIdleSessions leaves for the next start. */
+  keepJobKeys?: () => readonly string[] | undefined
+  /** How many idle BigQuery sessions' ABORT_SESSION failed before a restart (shown as a notification); a stop's go unshown. */
+  onFailedAborts?: (count: number) => void
 }
 export interface RequestOptions extends Pick<SendOptions, 'stream' | 'credit'> {
   /** Query events, validated and stamped with the generation; an invalid one fails the request (STREAM_PROTOCOL). */
@@ -65,7 +71,7 @@ export interface RequestOptions extends Pick<SendOptions, 'stream' | 'credit'> {
 }
 
 const connectResultSchema = z.object({ id: z.string().min(1).max(128) }).loose()
-const idOf = (params: unknown, key: 'connectionId' | 'sessionId'): string | undefined => {
+const idOf = (params: unknown, key: 'connectionId' | 'sessionId' | 'queryId'): string | undefined => {
   const value = params !== null && typeof params === 'object' ? (params as Record<string, unknown>)[key] : undefined
   return typeof value === 'string' ? value : undefined
 }
@@ -95,11 +101,15 @@ export class BackendSupervisor {
   private readonly waiting: Waiter[] = []
   /** Connection ids by generation; a loss moves them to `lost`, which is bounded and oldest-first. */
   private readonly live = new Map<string, number>()
+  // The previous generation while a restart ends its idle BigQuery sessions (endingIdle).
+  private draining?: BackendConnection
   /** Each live connection's provider, from the options its connect sent (absent: SQL Server). */
   private readonly providers = new Map<string, ProviderId>()
   private readonly lost = new Set<string>()
   /** Query session ids by the generation their last script ran on. */
   private readonly sessions = new Map<string, number>()
+  /** The generation each query run (execute, attach, Load into memory) was sent to, newest last: where a Stop during a restart's wait goes. */
+  private readonly queries = new Map<string, number>()
   private connection: BackendConnection | undefined
   /** Closes of generations that a restart replaced; stop() waits for them too, so none outlives the app. */
   private readonly retiring = new Set<Promise<void>>()
@@ -108,6 +118,8 @@ export class BackendSupervisor {
   private started = false
   private closing = false
   private stopping: Promise<void> | undefined
+  /** A restart waiting for bigquery.endIdleSessions before it launches the next generation. */
+  private endingIdle: Promise<void> | undefined
   private restartTimer: unknown
   /** Unexpected losses since the counters were last reset, and when each happened (for the breaker). */
   private attempts = 0
@@ -139,7 +151,11 @@ export class BackendSupervisor {
   get current(): BackendConnection | undefined { return this.connection }
   /** Connections that a restart would close. */
   connectionCount(): number { return this.live.size }
+  /** Whether the current backend holds this connection open. */
+  hasConnection(connectionId: string): boolean { return this.live.has(connectionId) }
   isLostConnection(id: string): boolean { return this.lost.has(id) }
+  /** Whether a live connection is of `provider` (the crash and reload prompts' BigQuery wording). */
+  hasProvider(provider: ProviderId): boolean { return [...this.providers.values()].includes(provider) }
 
   onState(listener: (state: BackendState) => void): () => void {
     this.listeners.add(listener)
@@ -176,13 +192,22 @@ export class BackendSupervisor {
     const local = this.answerLocally(method, params)
     if (local) return local.value as BackendMethods[M]['result']
     if (o.generation !== undefined && this.readyGeneration !== o.generation) throw new BackendError('RESULT_UNAVAILABLE', sentences.resultUnavailable)
-    const connection = this.connection ?? await this.upcoming()
-    const sessionId = method === 'query.execute' || method === 'plans.estimate' && (params as BackendMethods['plans.estimate']['params']).mode === 'session'
+    const connection = this.drainingFor(method, params) ?? this.connection ?? await this.upcoming()
+    // A request that waited out a restart (its idle-session wait) for a connection of the generation it ended: lost with it.
+    const named = idOf(params, 'connectionId')
+    if (named !== undefined && this.lost.has(named) && method !== 'connections.disconnect') throw new BackendError('CONNECTION_LOST', sentences.connectionLost)
+    const sessionId = method === 'query.execute' || method === 'query.attach' || method === 'plans.estimate' && (params as BackendMethods['plans.estimate']['params']).mode === 'session'
       ? idOf(params, 'sessionId') : undefined
     if (sessionId !== undefined) {
       this.sessions.delete(sessionId)
       this.sessions.set(sessionId, connection.generation)
       if (this.sessions.size > maxSessions) this.sessions.delete(this.sessions.keys().next().value!)
+    }
+    const queryId = method === 'query.execute' || method === 'query.attach' || method === 'results.remoteQuery' ? idOf(params, 'queryId') : undefined
+    if (queryId !== undefined) {
+      this.queries.delete(queryId)
+      this.queries.set(queryId, connection.generation)
+      if (this.queries.size > maxSessions) this.queries.delete(this.queries.keys().next().value!)
     }
     const { onEvent, onProgress, onLive, onActionProgress, onIndexProgress, onOperationProgress } = o
     let nextSeq = 0
@@ -216,17 +241,27 @@ export class BackendSupervisor {
       })
     })
     if (sent.id) o.onSent?.(sent.id, connection.generation)
-    const result = await sent.done
+    let result
+    try { result = await sent.done } catch (error) {
+      // A lost backend never cancels a BigQuery job: the run's tab hears that, not SQL Server's rollback.
+      if (error instanceof BackendError && error.code === 'BACKEND_LOST' && provider === 'bigquery' && (method === 'query.execute' || method === 'query.attach')) throw new BackendError('BACKEND_LOST', sentences.lostBigQuery)
+      throw error
+    }
     return this.registered(method, params, result, connection) as BackendMethods[M]['result']
   }
 
   /** More credit for a results.read stream of `generation`, if that generation is still current. */
   credit(generation: number, id: number, bytes: number): void {
-    if (this.connection?.generation === generation) this.connection.credit(id, bytes)
+    this.of(generation)?.credit(id, bytes)
   }
 
   cancel(generation: number, id: number, reason: CancelReason): void {
-    if (this.connection?.generation === generation) this.connection.cancel(id, reason)
+    this.of(generation)?.cancel(id, reason)
+  }
+
+  /** The connection of `generation`: the current one, or the one a restart is ending idle sessions in. */
+  private of(generation: number): BackendConnection | undefined {
+    return this.connection?.generation === generation ? this.connection : this.draining?.generation === generation ? this.draining : undefined
   }
 
   /** Ends the current generation (its sessions end with it) and starts the next one at once. A manual restart also
@@ -237,11 +272,30 @@ export class BackendSupervisor {
     // Nothing has launched yet: the launch to come is the restart, with the settings as they are when it is made.
     if (this.awaitingFirst) return
     if (reason === 'reload' && this.snapshot.status === 'failed') return
+    // Before the join: a Restart Backend that joins a pending Reload still resets the breaker.
     if (reason === 'manual') { this.attempts = 0; this.losses = [] }
+    if (this.endingIdle) return this.endingIdle
     this.clock.clearTimeout(this.restartTimer)
     const previous = this.connection
     this.connection = undefined
     this.stopWatchdog()
+    // Idle BigQuery sessions end before the backend that holds their ids does; requests meanwhile wait for the next one,
+    // and a stop meanwhile waits for this restart's close (retiring).
+    const ending = previous ? this.endIdleSessions(previous) : 0
+    if (typeof ending !== 'number' && previous) {
+      let finished!: () => void
+      const marker = new Promise<void>(resolve => { finished = resolve })
+      this.retiring.add(marker)
+      // Another restart meanwhile (a Reload during Restart Backend) joins this one rather than launching a second backend.
+      this.endingIdle = marker
+      // Its sessions are still open meanwhile: a close (Cancel the job, a commit) reaches them rather than being answered here.
+      this.draining = previous
+      try {
+        const failedAborts = await ending
+        if (failedAborts > 0) this.deps.onFailedAborts?.(failedAborts)
+        if (this.closing) { await previous.close(undefined, new BackendError('BACKEND_UNAVAILABLE', sentences.closing)); return }
+      } finally { this.retiring.delete(marker); this.endingIdle = undefined; this.draining = undefined; finished() }
+    }
     if (previous) this.setState({ status: 'restarting', generation: previous.generation, lost: this.retire(previous, reason), retryInMs: 0 })
     this.launch()
     if (!previous) return
@@ -258,6 +312,8 @@ export class BackendSupervisor {
   private async stopNow(): Promise<void> {
     const previous = this.connection
     this.closing = true
+    // Before the stop's own bound (stdin end, then kill): idle BigQuery sessions would otherwise stay open for 24 hours.
+    if (previous) await this.endIdleSessions(previous)
     this.connection = undefined
     this.clock.clearTimeout(this.restartTimer)
     // A stop while the first launch waits leaves nothing behind it: no timer to keep the process, no launch to come.
@@ -270,6 +326,38 @@ export class BackendSupervisor {
     await Promise.all([previous?.close(undefined, error), ...this.retiring])
   }
 
+  /**
+   * bigquery.endIdleSessions before every stop main makes (quit, Reload, the renderer-crash restart, Restart Backend), when
+   * the generation holds a BigQuery handle: within its 10 s deadline (main gives up after its 15 s backstop), so a stop never waits longer. Failures count as none;
+   * the backend's jobs carry on either way (docs/bigquery.md, Re-attaching to jobs).
+   */
+  private endIdleSessions(connection: BackendConnection): number | Promise<number> {
+    // A hung backend (Restart is what unresponsive offers) would only spend the deadline.
+    if (!connection.isReady || connection.lost || this.snapshot.status === 'unresponsive') return 0
+    if (![...this.live].some(([id, generation]) => generation === connection.generation && this.providers.get(id) === 'bigquery')) return 0
+    return this.sendEndIdle(connection)
+  }
+  private async sendEndIdle(connection: BackendConnection): Promise<number> {
+    const keys = this.deps.keepJobKeys?.()?.slice(0, jobLimits.keys)
+    const params = keys?.length ? { keepJobKeys: [...keys] } : {}
+    try {
+      const result = endIdleResultSchema.safeParse(await connection.send('bigquery.endIdleSessions', params, deadlineFor('bigquery.endIdleSessions', params)).done)
+      return result.success ? result.data.failedAborts : 0
+    } catch { return 0 }
+  }
+
+  /** The generation a restart is ending idle sessions in, for a session close or state read of one of its own sessions. */
+  private drainingFor(method: BackendMethod, params: unknown): BackendConnection | undefined {
+    // Stop or Leave it running meanwhile reaches a run the generation being ended holds; one queued for the next waits for it.
+    if (this.draining && method === 'query.cancel') {
+      const queryId = idOf(params, 'queryId')
+      return queryId !== undefined && this.queries.get(queryId) === this.draining.generation ? this.draining : undefined
+    }
+    if (!this.draining || (method !== 'query.session.close' && method !== 'query.session.state')) return undefined
+    const sessionId = idOf(params, 'sessionId')
+    return sessionId !== undefined && this.sessions.get(sessionId) === this.draining.generation ? this.draining : undefined
+  }
+
   /** Requests that need no backend: cleanup of what a lost generation held, and refusals. */
   private answerLocally(method: BackendMethod, params: unknown): { value: unknown } | undefined {
     const unavailable = this.closing || this.snapshot.status === 'failed'
@@ -278,6 +366,7 @@ export class BackendSupervisor {
     if (method === 'query.session.close' || method === 'query.session.state') {
       const sessionId = idOf(params, 'sessionId')
       const generation = sessionId === undefined ? undefined : this.sessions.get(sessionId)
+      if (!unavailable && generation !== undefined && generation === this.draining?.generation) return undefined
       if (unavailable || (generation !== undefined && generation !== (this.connection?.generation ?? this.generation + 1))) {
         // The session ended with its generation; reading its state would only start a backend to say so.
         if (method === 'query.session.state') throw new BackendError('SESSION_LOST', sentences.sessionEnded)
@@ -308,8 +397,8 @@ export class BackendSupervisor {
       return { ...parsed.data, generation: connection.generation }
     }
     // The summary's descriptors name results this generation holds, and its budget's seq counts in this generation; main
-    // stamps the generation on both. A remote query (Load into memory) answers a query's summary.
-    if (method === 'query.execute' || method === 'results.remoteQuery') {
+    // stamps the generation on both. A remote query (Load into memory) and a re-attached BigQuery job answer a query's summary.
+    if (method === 'query.execute' || method === 'results.remoteQuery' || method === 'query.attach') {
       const parsed = queryResultSchema.safeParse(result)
       if (!parsed.success) throw new BackendError('BACKEND_ERROR', sentences.invalid)
       const { planSets, resultSets, budget, ...summary } = parsed.data

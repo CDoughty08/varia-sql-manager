@@ -405,9 +405,13 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values, retainedPlans)
   // A BigQuery close's note shows in the query's Messages while it stays, else as a notification (docs/bigquery.md, Sessions).
   queries.notify = text => { notifications.notify({ severity: 'warning', message: text }) }
+  // A BigQuery job left running is no tab's any more: its id can be copied to find it in BigQuery's job history.
+  queries.notifyJobs = (text, jobIds) => { notifications.notify({ severity: 'info', message: text, actions: [{ label: jobIds.length === 1 ? 'Copy Job ID' : 'Copy Job IDs', run: () => { void api.writeClipboardText(jobIds.join('\n')) } }] }) }
+  const failedAbortsSubscription = api.onFailedAborts?.(count => { queries.failedAborts(count, false) })
   documents.sessionHooks = {
     message: (id, text, kind) => { queries.addSessionMessage(id, text, kind) },
     note: (id, note) => { queries.sessionNote(id, note) },
+    ended: (id, entry) => { queries.sessionClosed(id, entry) },
     bigQuery: id => { const connectionId = documents.get(id)?.connectionId; return !!connectionId && connections.get(connectionId)?.providerId === 'bigquery' }
   }
   const costPrompts = new CostPromptService()
@@ -415,6 +419,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   let costChoiceChanged = () => {}
   const bigQueryCost = new BigQueryCostService({ api, documents, connections, settings, events, monaco, ask: (request, signal, stillAsks, onAnswer) => costPrompts.ask(request, signal, stillAsks, onAnswer), optOut: costOptOut(api, () => costChoiceChanged()) })
   costChoiceChanged = () => bigQueryCost.optOutChanged()
+  queries.estimateOf = (id, sql) => bigQueryCost.estimateFor(id, sql)
   queries.setCostGate((tabId, sql, origin, signal) => bigQueryCost.beforeExecute(tabId, sql, origin, signal))
   const queryPlans = new QueryPlansService(live, documents, queries, panes, results)
   const planPreparation = new PlanPreparationCache()
@@ -437,8 +442,13 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const recentFiles = new RecentFilesService(api)
   const recovery = new RecoveryService({
     api, documents, files, settings, warn: message => commands.reportWarning(message),
-    server: id => { const connection = connections.get(id); return connection ? connection.displayName || connection.server : undefined }
+    server: id => { const connection = connections.get(id); return connection ? connection.displayName || connection.server : undefined },
+    restoredJobs: (tabId, jobs) => queries.restoreJobs(tabId, jobs)
   })
+  // A tab holding BigQuery jobs it does not follow re-attaches once its connection is live (docs/bigquery.md, Re-attaching to jobs).
+  let reattachQueued = false
+  const reattachSoon = () => { if (reattachQueued) return; reattachQueued = true; queueMicrotask(() => { reattachQueued = false; queries.reattach() }) }
+  const reattachSubscriptions = [connections.subscribe(reattachSoon), documents.subscribe(reattachSoon)]
   const resultSelection = new ResultSelectionService(results)
   const targets = new TargetService(documents, queries, connections, files, connectionTargets, (connectionId, dataset) => databaseList.get(connectionId).find(entry => entry.name === dataset)?.location)
   const serverDrop = new ServerDropService({ documents, queries, targets, connections })
@@ -529,6 +539,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // The SQL Server Agent job document (AG-6a): its first section's item in the list once loaded, or New Job's start panel.
   const jobDocuments = new JobDocumentService({
     api, documents, files, connections, live, targetIdOf,
+    openQuery: (sql, name, connectionId, database) => { documents.newQuery(sql, name, connectionId, database) },
     focus: id => focusLater(() => {
       const root = document.querySelector<HTMLElement>(`[data-agent-job="${CSS.escape(id)}"]`)
       ;(root?.querySelector<HTMLElement>('[data-agent-job-focus]') ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]'))?.focus()
@@ -763,6 +774,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       disconnectPrompts.dispose()
       // Before the documents close: a page that unloads leaves its AutoRecover copies to be offered.
       recovery.dispose()
+      reattachSubscriptions.forEach(unsubscribe => unsubscribe())
+      failedAbortsSubscription?.()
       // Hiding the quick input first aborts its loads and ends any theme preview before the services they use go away.
       listeners.forEach(listener => listener.dispose()); menus.dispose(); quickInput.dispose(); menuState.dispose(); keybindings.dispose()
       contributions.forEach(contribution => contribution.dispose())
@@ -906,8 +919,14 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // The tabs the last close kept (hot exit), else the welcome query; what an earlier run or page left unsaved is offered
   // once the workbench is up.
   const welcome = () => { if (!disposed) documents.create('SQLQuery1.sql', welcomeQueryText, 'master') }
-  if (api.hotExit) void restoreSession({ api, documents, files, groups: editorGroups, connectionTargets, resumeRecovery: (tabId, id) => recovery.resume(tabId, id), otherwise: welcome })
-    .catch(() => {}).then(() => { connectionRestored(); if (!disposed) void recovery.start() })
-  else { welcome(); connectionRestored(); void recovery.start() }
+  if (api.hotExit) void restoreSession({ api, documents, files, groups: editorGroups, connectionTargets, resumeRecovery: (tabId, id) => recovery.resume(tabId, id), restoredJobs: (tabId, jobs) => queries.restoreJobs(tabId, jobs), otherwise: welcome })
+    .then(opened => opened >= 0, () => false).then(restored => {
+      connectionRestored()
+      if (disposed) return
+      void recovery.start()
+      // A session that could not be restored may still reopen its tabs (previous.json): their jobs are not asked about.
+      if (restored) void queries.reviewJobsWithoutTab(api)
+    })
+  else { welcome(); connectionRestored(); void recovery.start(); void queries.reviewJobsWithoutTab(api) }
   return workbench
 }

@@ -1,3 +1,4 @@
+using System.Data;
 using Microsoft.Data.SqlClient;
 using Varia.Backend.Live;
 
@@ -114,7 +115,7 @@ internal sealed class AgentReader(AgentCatalog? catalog = null)
         command.CommandText = (prologue ?? "") + statement.Text;
         foreach (var parameter in statement.Parameters)
             command.Parameters.Add(new SqlParameter(parameter.Name, parameter.Type) { Value = arguments[parameter.Name] ?? DBNull.Value, Size = parameter.Size });
-        await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
+        await using var reader = await command.ExecuteReaderAsync(statement.TextChars is null ? CommandBehavior.Default : CommandBehavior.SequentialAccess, token).ConfigureAwait(false);
         // No result set at all is a server that does not offer the read (SQL Server 2022 on Linux answers xp_enumerrorlogs 2
         // with none), not another shape.
         if (reader.FieldCount == 0) throw new AgentShapeException("NOT_SUPPORTED", MissingMessage);
@@ -144,10 +145,29 @@ internal sealed class AgentReader(AgentCatalog? catalog = null)
                 break;
             }
             var row = new object?[ordinals.Length];
-            for (var at = 0; at < ordinals.Length; at++) row[at] = reader.IsDBNull(ordinals[at]) ? null : reader.GetValue(ordinals[at]);
+            if (statement.TextChars is not { } chars)
+                for (var at = 0; at < ordinals.Length; at++) row[at] = reader.IsDBNull(ordinals[at]) ? null : reader.GetValue(ordinals[at]);
+            else
+                // Sequential access reads each field once, in field order; a text field keeps at most chars + 1 characters.
+                foreach (var at in Enumerable.Range(0, ordinals.Length).OrderBy(at => ordinals[at]))
+                    row[at] = reader.IsDBNull(ordinals[at]) ? null : reader.GetFieldType(ordinals[at]) == typeof(string) ? await ReadTextAsync(reader, ordinals[at], chars + 1, token).ConfigureAwait(false) : reader.GetValue(ordinals[at]);
             rows.Add(row);
         }
         return new(statement.Columns, rows, truncated);
+    }
+
+    private static async Task<string> ReadTextAsync(SqlDataReader reader, int ordinal, int limit, CancellationToken token)
+    {
+        using var text = reader.GetTextReader(ordinal);
+        var buffer = new char[Math.Min(limit, 8_192)];
+        var kept = new System.Text.StringBuilder();
+        while (kept.Length < limit)
+        {
+            var read = await text.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length, limit - kept.Length)), token).ConfigureAwait(false);
+            if (read == 0) break;
+            kept.Append(buffer, 0, read);
+        }
+        return kept.ToString();
     }
 
     /// <summary>Best effort, as elsewhere: a cancel that fails leaves the reader to drain, and the read's result stands.</summary>
