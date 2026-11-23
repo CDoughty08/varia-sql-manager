@@ -127,8 +127,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
 - **Every protocol change follows the results path.**
   - Results requests travel renderer → results worker (`worker-protocol.ts`, `ResultClient.ts`, and `worker-core.ts`,
     which rebuilds each port request member by member) → the strict port schema (`src/shared/ipc/port-messages.ts`) →
-    main's `results-port.ts`, which checks `ResultsPortHost.owns` and copies the request member by member → C#
-    (`Contracts.cs`, `SqlService`).
+    main's `src/main/backend/results-port.ts`, which checks `ResultsPortHost.owns` and copies the request member by
+    member → C# (`Contracts.cs`, `SqlService`).
   - Answers come back through a strict answer schema in `port-messages.ts`.
   - Copy and Save are main-only jobs (`varia:results-copy`, `varia:results-save`, `src/main/validation.ts`); main's
     `results-jobs.ts` builds their backend params.
@@ -698,8 +698,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     `changedNew` at s + 1), so a sort that separates them still writes both lines once, at the first half met.
     - Through a sorted or filtered view of Two rows, that needs a bit per stored row (written already), and a selection
       needs it too. `ResultJobs` reserves it as working memory before writing (`set.TryReserveWork`, as copy and export
-      reserve today), and refuses with `TOO_LARGE` when it does not fit. `tests/working-memory-lint.test.ts` reads only
-      `SqlService.cs`, so a `DiffChecks` refusal check on a low budget pins it.
+      reserve today), and refuses with `TOO_LARGE` when it does not fit. `tests/working-memory-lint.test.ts`'s
+      reservation checks read only `SqlService.cs`, so a `DiffChecks` refusal check on a low budget pins it.
   - It reads `mark`, the tone, the previous-value columns and, for a cut entry, the change index's changed-pair bitset,
     which its one-unchanged-line rule needs. The change index keeps a cut row's full changed-pair list only in One row
     (`keepsList: cut`), so C3 keeps it on a cut Two rows entry's new half too, charged by `CutBytes` as now, and
@@ -1118,23 +1118,23 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       neither says so once an input is closed;
     - its reservations (Budget below);
     - the fake backend, and `FakeHandle` in `tests/fixtures/results.ts`.
-  - **Params:** `{ resultId, viewId?, rows?: ranges (as Copy's parts), target?: { database, schema, name } (each 1–128
-    characters, no control characters, U+2028 or U+2029; the renderer resolves a two-part name to the query document's
-    database, so it always has three parts), names: { left, right, document, server } (each 1–260 characters, for the
-    header, which escapes each one's control characters), direction?: 'toNew' | 'toOld', columns: number[], identity?:
-    number, statements: { delete, update, insert }, transaction, checkRows, identityInsert, rowsChoice: 'all' | 'grid' |
-    'selected' (the rows the script takes, and the header's words), maxLines? }`. Whatever Rows chooses, the renderer
-    sends `rows` (the selection) and, while the grid has one, `viewId`, so every answer counts every Rows option.
-    `columns` holds distinct pair indexes, at most `limits.page.maxColumns` in zod, each below the pair count (checked
-    in C#). `identity` is the pair the index names as the target's identity column, one of `columns` (checked in both):
-    only the renderer knows it, from Search Objects. `DiffScript` leaves it out of every SET. With `identityInsert` on
-    it wraps the INSERTs in `SET IDENTITY_INSERT`; with it off it leaves the identity column out of the INSERTs, and
-    refuses (`INVALID_PARAMS`) when that column is a key; `identityInsert` on without `identity` is `INVALID_PARAMS` in
-    both zod and C#. Script (no `maxLines`) requires `target` and `direction` (`INVALID_PARAMS` in both); a preview may
-    leave either out, as the dialog's request on opening does before the form has them. Its answer has empty `text` and
-    carries any of the four refusals known on opening (`asShown`, `keyType`, `keyName`, `notColumns`), `differences`,
-    `updates` and `softValues`, and, only with a `direction`, which decides them, `deletes`, `inserts` and the
-    look-alike counts.
+  - **Params:** `{ resultId, viewId?, rows: ranges (as Copy's parts; at least one, since the selection always holds the
+    active cell's row), target?: { database, schema, name } (each 1–128 characters, no control characters, U+2028 or
+    U+2029; the renderer resolves a two-part name to the query document's database, so it always has three parts),
+    names: { left, right, document, server } (each 1–260 characters, for the header, which escapes each one's control
+    characters), direction?: 'toNew' | 'toOld', columns: number[], identity?: number, statements: { delete, update,
+    insert }, transaction, checkRows, identityInsert, rowsChoice: 'all' | 'grid' | 'selected' (the rows the script
+    takes, and the header's words), maxLines? }`. Whatever Rows chooses, the renderer sends `rows` (the selection) and,
+    while the grid has one, `viewId`, so every answer counts every Rows option. `columns` holds distinct pair indexes,
+    at most `limits.page.maxColumns` in zod, each below the pair count (checked in C#). `identity` is the pair the index
+    names as the target's identity column, one of `columns` (checked in both): only the renderer knows it, from Search
+    Objects. `DiffScript` leaves it out of every SET. With `identityInsert` on it wraps the INSERTs in `SET
+    IDENTITY_INSERT`; with it off it leaves the identity column out of the INSERTs, and refuses (`INVALID_PARAMS`) when
+    that column is a key; `identityInsert` on without `identity` is `INVALID_PARAMS` in both zod and C#. Script (no
+    `maxLines`) requires `target` and `direction` (`INVALID_PARAMS` in both); a preview may leave either out, as the
+    dialog's request on opening does before the form has them. Its answer has empty `text` and carries any of the four
+    refusals known on opening (`asShown`, `keyType`, `keyName`, `notColumns`), `differences`, `updates` and
+    `softValues`, and, only with a `direction`, which decides them, `deletes`, `inserts` and the look-alike counts.
   - **Deadline and Cancel:** 120 s in `methodPolicies`, as the other result jobs. The dialog's Cancel cancels the request
     through the protocol's cancel, and the backend drops its chunks.
   - **Preview:** `maxLines?: number` (1–30) answers only the first lines, with `complete: false` when there are more,
@@ -1194,9 +1194,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     offline lint pins that `DiffScript` output never reaches a `SqlCommand`, as ScriptPipeline never executes DDL.
 - **Budget:** the text is built in 1 MiB chunks charged as working memory (2 bytes a character, at most 2 MB) and
   released after the answer. Rows are read through `RowAccess`, with no copies. Rows in the grid and Selected rows read
-  through a view, so pairing a changed entry's halves takes the same bit per stored row as Copy as Diff, reserved
-  first. `SqlService`'s dispatch hands the job to `DiffScript`, as copy and export go to `ResultJobs`, so the
-  reservations live there and `DiffScriptChecks` refusal checks on a low budget pin them (the lint reads only
+  through a view, so pairing a changed entry's halves takes the same bit per stored row as Copy as Diff, reserved first.
+  `SqlService`'s dispatch hands the job to `DiffScript`, as copy and export go to `ResultJobs`, so the reservations live
+  there and `DiffScriptChecks` refusal checks on a low budget pin them (the lint's reservation checks read only
   `SqlService.cs`).
 - **Renderer:**
   - The dialog is a `DialogWindow` of the new kind in `dialogWindowKinds` (`src/shared/popouts.ts`), which also widens
@@ -1459,6 +1459,12 @@ would leave out the sort, and "Rows" is already the toolbar's All rows / Changes
   - Context keys: `comparisonAsShown` (a side read as shown, as the comparison recorded at build),
     `comparisonOutOfDate`, and `comparisonInputsShowable` (an input has filters or, under Row position, a sort), Compare
     Rows as Shown's `precondition` while unticked; all three are state keys, as `precondition` and `toggled` require.
+    `core/contextkeys.ts` computes them for the focused comparison from `resultsComparing`'s record, which gains
+    `asShown`, `outOfDate` and `showable` beside `inputsOpen`. A grid menu can open on a comparison that is not the
+    focused one (a stacked Grid layout), so, as for `comparisonInputsOpen`, `ResultGrid` marks the view element
+    (`data-comparison-shown`, `data-comparison-out-of-date`, `data-comparison-showable`, beside
+    `data-comparison-inputs`), `outputTarget` (`menus/targets.ts`) reads them onto the output target, and `argsFor` adds
+    the three keys for a diff grid.
 - **Catalogues:** commands `output.compareAsShown` ("Compare Rows as Shown", `toggled: comparisonAsShown`) and
   `output.compareUpdate` ("Update Comparison", `when: comparisonAsShown`), in the submenu, More results tools'
   `6_compareactions` and the palette. No setting (Q9).
@@ -1468,7 +1474,8 @@ would leave out the sort, and "Rows" is already the toolbar's All rows / Changes
   - vitest: the popover choice and counts, memory, `comparisonOutOfDate` (filters changed, same filters, sort only under
     key and under Row position, Keep Selected Rows), Update dropping "(as shown)", other changes updating an out-of-date
     comparison and saying so, and a build with nothing to apply recorded whole, its choice Whole result, so a later
-    Layout after a filter still reads whole results.
+    Layout after a filter still reads whole results; the grid menu on a comparison that is not the focused one, its
+    Compare Rows as Shown tick and Update Comparison following that comparison's state.
   - The fake backend reads views. A `results-smoke.mjs` step: filter an input, Compare rows as shown, change the filter,
     see Out of date, Update.
   - Whichever of C3 and C6 lands second: a shared golden for both writers with one side read as shown ("(as shown)" in
