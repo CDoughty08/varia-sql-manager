@@ -27,6 +27,10 @@ export function childrenOf(columns: readonly ScopeColumn[], parent: readonly str
 }
 
 /** The column at a field path, case ignored. */
+/** How many WITH queries or subqueries deep a `*` is followed for columns: past it a source gives none (a long chain of WITH
+ *  queries, each reading the last through `*`, would otherwise recurse once per query). */
+export const resolverLimits = { starHops: 64 } as const
+
 export function columnAt(columns: readonly ScopeColumn[], path: readonly string[]): ScopeColumn | undefined {
   const wanted = path.join('.')
   return columns.find(column => sameName(column.path, wanted))
@@ -36,30 +40,41 @@ export function columnAt(columns: readonly ScopeColumn[], path: readonly string[
 export class ScopeResolver {
   private readonly answers = new Map<string, LanguageLookupAnswer>()
   private readonly cache = new Map<ScopeSource, Promise<SourceColumns>>()
+  private readonly ctes = new Map<string, QueryShape>()
   /** Sources being read: one met again while it is read (a WITH query that reads itself) gives no columns. */
   private readonly reading = new Set<ScopeSource>()
   failed = false
 
-  constructor(private readonly scope: QueryScope, private readonly dialect: CompletionDialect, private readonly lookup: IndexLookup) {}
+  constructor(private readonly scope: QueryScope, private readonly dialect: CompletionDialect, private readonly lookup: IndexLookup) {
+    for (const cte of scope.ctes) if (!this.ctes.has(cte.name.toLowerCase())) this.ctes.set(cte.name.toLowerCase(), cte.shape)
+  }
 
   /** Asks the index for every object source in reach (and the objects WITH queries and subqueries read through `*`), plus `extra`,
    *  whose answers it returns; `details` adds columns' descriptions (hover). */
   async load(extra: readonly LanguageLookupPath[] = [], details = false): Promise<readonly LanguageLookupAnswer[]> {
-    const paths = new Map<string, LanguageLookupPath>()
+    const paths = new Map<string, string[]>()
     const seen = new Set<ScopeSource | QueryShape>()
-    const visit = (source: ScopeSource) => {
-      if (seen.has(source)) return
-      seen.add(source)
-      if (source.kind === 'object') {
-        const path = this.dialect.objectPath(source.parts)
-        if (path) paths.set(key(path), { path: [...path], limit: languageLookupLimits.items, ...details ? { details } : {} })
-      } else if (source.kind === 'cte' || source.kind === 'derived') {
-        const shape = source.kind === 'cte' ? this.cte(source.cte) : source.shape
-        if (shape && !seen.has(shape)) { seen.add(shape); shape.stars.forEach(visit) }
+    // Breadth first without recursion, within the star budget columns() keeps to.
+    let level: ScopeSource[] = [...this.scope.sources]
+    for (let hop = 0; level.length && hop <= resolverLimits.starHops; hop++) {
+      const next: ScopeSource[] = []
+      for (const source of level) {
+        if (seen.has(source)) continue
+        seen.add(source)
+        if (source.kind === 'object') {
+          const path = this.dialect.objectPath(source.parts)
+          if (path && !paths.has(key(path))) paths.set(key(path), [...path])
+        } else if (source.kind === 'cte' || source.kind === 'derived') {
+          const shape = source.kind === 'cte' ? this.cte(source.cte) : source.shape
+          if (shape && !seen.has(shape)) { seen.add(shape); next.push(...shape.stars) }
+        }
       }
+      level = next
     }
-    this.scope.sources.forEach(visit)
-    const wanted = [...paths.values()].slice(0, languageLookupLimits.requests - extra.length)
+    // Each object gets its share of the answer's total, so a later one is not left with nothing.
+    const objects = [...paths.values()].slice(0, languageLookupLimits.requests - extra.length)
+    const share = Math.max(1, Math.min(languageLookupLimits.items, Math.floor((languageLookupLimits.totalItems - extra.reduce((sum, request) => sum + (request.limit ?? languageLookupLimits.defaultItems), 0)) / Math.max(1, objects.length))))
+    const wanted: LanguageLookupPath[] = objects.map(path => ({ path, limit: share, ...details ? { details } : {} }))
     const requests = [...extra, ...wanted]
     if (!requests.length) return []
     const answers = await this.lookup(requests)
@@ -68,22 +83,24 @@ export class ScopeResolver {
     return answers.slice(0, extra.length)
   }
 
-  cte(name: string): QueryShape | undefined { return this.scope.ctes.find(cte => sameName(cte.name, name))?.shape }
+  cte(name: string): QueryShape | undefined { return this.ctes.get(name.toLowerCase()) }
 
   /** A source's columns: the index's for an object, the select list's (with `*` expanded) for a WITH query or subquery. The grammar
    *  has already said which names are WITH queries (kind cte); an object is always the index's. */
-  columns(source: ScopeSource): Promise<SourceColumns> {
+  columns(source: ScopeSource, hops = 0): Promise<SourceColumns> {
     if (this.reading.has(source)) return Promise.resolve({ columns: [], truncated: false })
     let found = this.cache.get(source)
     if (!found) {
+      // Past the budget nothing is kept, so a nearer reader of the same source still gets its columns.
+      if (hops > resolverLimits.starHops) return Promise.resolve({ columns: [], truncated: true })
       this.reading.add(source)
-      found = this.read(source).finally(() => this.reading.delete(source))
+      found = this.read(source, hops).finally(() => this.reading.delete(source))
       this.cache.set(source, found)
     }
     return found
   }
 
-  private async read(source: ScopeSource): Promise<SourceColumns> {
+  private async read(source: ScopeSource, hops: number): Promise<SourceColumns> {
     switch (source.kind) {
       case 'object': {
         const path = this.dialect.objectPath(source.parts)
@@ -92,8 +109,8 @@ export class ScopeResolver {
         return { path: answer.path, object: answer.object, truncated: answer.truncated,
           columns: answer.items.map(item => ({ path: item.name, type: item.type, nullable: item.nullable, description: item.description })) }
       }
-      case 'cte': { const shape = this.cte(source.cte); return shape ? this.shape(shape) : { columns: [], truncated: false } }
-      case 'derived': return this.shape(source.shape)
+      case 'cte': { const shape = this.cte(source.cte); return shape ? this.shape(shape, hops) : { columns: [], truncated: false } }
+      case 'derived': return this.shape(source.shape, hops)
       case 'unnest': {
         const field = await this.field(source.path)
         if (!field) return { columns: [], truncated: false }
@@ -104,11 +121,11 @@ export class ScopeResolver {
   }
 
   /** A select list's columns: its named ones, then every column its `*` sources give (their top level and below). */
-  private async shape(shape: QueryShape): Promise<SourceColumns> {
+  private async shape(shape: QueryShape, hops: number): Promise<SourceColumns> {
     const columns: ScopeColumn[] = shape.columns.map(path => ({ path }))
     let truncated = false
     for (const star of shape.stars) {
-      const given = await this.columns(star)
+      const given = await this.columns(star, hops + 1)
       truncated ||= given.truncated
       for (const column of given.columns) if (!columns.some(known => sameName(known.path, column.path))) columns.push(column)
     }

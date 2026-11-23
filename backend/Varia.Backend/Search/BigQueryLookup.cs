@@ -72,7 +72,9 @@ internal sealed class BigQueryLookup
         var known = Project(project);
         if (known is null) return new(project, dataset, LookupState.Absent, null, null);
         reads.TryGetValue(known, out var datasets);
-        var name = datasets is null ? dataset : Resolve(datasets.Keys, dataset) ?? dataset;
+        // A skip spelled exactly as asked wins over a held dataset differing from it only in case.
+        var exactSkip = datasets?.ContainsKey(dataset) != true && skips.Any(item => item.Project == known && item.Database == dataset);
+        var name = datasets is null || exactSkip ? dataset : Resolve(datasets.Keys, dataset) ?? dataset;
         var read = datasets?.GetValueOrDefault(name);
         var own = skips.LastOrDefault(item => item.Project == known && item.Database == name)
             ?? (read is null ? skips.LastOrDefault(item => item.Project == known && item.Database != "" && string.Equals(item.Database, name, StringComparison.OrdinalIgnoreCase)) : null);
@@ -92,7 +94,9 @@ internal sealed class BigQueryLookup
             if (table.Parent(at) < 0 && table.Kind(at) != "bqDataset") yield return new(dataset.Project, table, at, read);
     }
 
-    /// <summary>The object named <paramref name="name"/>: exact, else the one that differs only in case.</summary>
+    /// <summary>The object named <paramref name="name"/>: exact, else the one that differs only in case; else, for a wildcard
+    /// (<c>events_*</c>, <c>events_2026*</c>) or one shard of a date-sharded group (<c>events_20260101</c>), the group's entry (its
+    /// newest shard), whose columns stand for the group's.</summary>
     public LookupObject? Object(BigQueryLookupDataset dataset, string name)
     {
         if (dataset.Held is not { } read) return null;
@@ -100,7 +104,21 @@ internal sealed class BigQueryLookup
         var named = (read.Lookup(budget, arraysBuilt) is { } lookup ? lookup.Named(name) : TableLookup.ScanNamed(table, name)).Where(at => table.Kind(at) != "bqDataset").ToList();
         var exact = named.Where(at => table.Name(at) == name).ToList();
         var at = exact.Count > 0 ? exact[0] : named.Count == 1 ? named[0] : -1;
-        return at < 0 ? null : new(dataset.Project, table, at, read);
+        if (at >= 0) return new(dataset.Project, table, at, read);
+        foreach (var entry in Objects(dataset))
+            if (Shards(entry) is { } shards && Shard(shards.Prefix, name)) return entry;
+        return null;
+    }
+
+    /// <summary>Whether a written name is a wildcard over a shard group's tables or one of its shards (case ignored).</summary>
+    private static bool Shard(string prefix, string name)
+    {
+        if (name.EndsWith('*'))
+        {
+            var stem = name[..^1];
+            return stem.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? stem[prefix.Length..].All(char.IsAsciiDigit) : prefix.StartsWith(stem, StringComparison.OrdinalIgnoreCase);
+        }
+        return name.Length == prefix.Length + 8 && name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && name[prefix.Length..].All(char.IsAsciiDigit);
     }
 
     /// <summary>A table's columns and nested fields by path (address, address.city), depth first in schema order, with their types.</summary>

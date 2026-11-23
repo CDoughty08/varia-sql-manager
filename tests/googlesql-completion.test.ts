@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { completeFromIndex } from '../src/shared/completion/complete'
 import { escapeMarkdown, hoverFromIndex } from '../src/shared/completion/hover'
@@ -156,6 +157,47 @@ describe('GoogleSQL scope reader', () => {
     const shadow = read('WITH orders AS (SELECT * FROM orders), daily AS (SELECT | FROM daily) SELECT 1')
     expect(names(shadow.scope.sources)).toEqual(['daily=daily'])
     expect(shadow.scope.ctes.map(cte => cte.name)).toEqual(['orders'])
+    // Inside its own body, `orders` is the table it shadows.
+    const own = read('WITH orders AS (SELECT | FROM orders) SELECT * FROM orders')
+    expect(names(own.scope.sources)).toEqual(['orders=orders'])
+    expect(own.scope.ctes).toEqual([])
+  })
+
+  it('reads the implicit array join of an earlier item, and an INSERT target only in its column list', () => {
+    const implicit = read('SELECT it.| FROM sales.orders o, o.items AS it')
+    expect(names(implicit.scope.sources)).toEqual(['o=sales.orders', 'it:unnest'])
+    expect(names(read('INSERT INTO sales.daily (day) SELECT | FROM sales.orders').scope.sources)).toEqual(['orders=sales.orders'])
+    expect(names(read('INSERT INTO sales.daily (|) SELECT 1').scope.sources)).toEqual(['daily=sales.daily'])
+  })
+
+  it('completes and hovers a dashed project written without backticks where a table goes, and nowhere else', () => {
+    const typing = read('SELECT * FROM my-pr|')
+    expect(typing.site).toEqual({ kind: 'object', qualifier: [] })
+    expect(typing.word).toMatchObject({ start: 'SELECT * FROM '.length, typed: 'my-pr' })
+    expect(read('SELECT * FROM my-proj-|').word.typed).toBe('my-proj-')
+    expect(read('SELECT price-disc| FROM t').site).toEqual({ kind: 'expression' })
+    const { text, offset } = at('SELECT * FROM my-proj.sales.ord|ers')
+    expect(readGoogleSqlHover(text, offset)).toMatchObject({ parts: ['my-proj', 'sales', 'orders'], at: 2, object: true })
+    const onProject = at('SELECT * FROM my-pr|oj.sales.orders')
+    expect(readGoogleSqlHover(onProject.text, onProject.offset)).toMatchObject({ parts: ['my-proj', 'sales', 'orders'], at: 0, object: true })
+    const subtraction = at('SELECT price-di|sc FROM t')
+    expect(readGoogleSqlHover(subtraction.text, subtraction.offset)).toMatchObject({ parts: ['disc'], object: false })
+  })
+
+  it('reads text with many FROMs and long WITH chains without slowing down or overflowing', async () => {
+    const started = performance.now()
+    const froms = 'SELECT 1 ' + 'FROM a '.repeat(30000)
+    readGoogleSqlCompletion(froms, froms.length)
+    expect(performance.now() - started).toBeLessThan(2000)
+    const chain = Array.from({ length: 3000 }, (_, index) => `a${index} AS (SELECT * FROM ${index ? `a${index - 1}` : 'sales.orders'})`)
+    const text = `WITH ${chain.join(', ')} SELECT  FROM a2999`
+    const offset = text.indexOf('SELECT  FROM') + 'SELECT '.length
+    const list = await completeFromIndex(readGoogleSqlCompletion(text, offset), dialect, fakeLookup())
+    expect(list.items.length).toBeGreaterThan(0)
+    const near = Array.from({ length: 3 }, (_, index) => `a${index} AS (SELECT * FROM ${index ? `a${index - 1}` : 'sales.orders'})`)
+    const short = `WITH ${near.join(', ')} SELECT  FROM a2`
+    const columns = await completeFromIndex(readGoogleSqlCompletion(short, short.indexOf('  FROM') + 1), dialect, fakeLookup())
+    expect(columns.items.filter(item => item.kind === 'column').map(item => item.label)).toContain('customer')
   })
 
   it('reads deeply nested subqueries in bounded time and without overflowing', () => {
@@ -360,5 +402,13 @@ describe('language.lookup contract', () => {
     expect(languageLookupResultSchema.safeParse({ index: 'ready', answers: [{ state: 'ready', path: [], items: [item], truncated: false }] }).success).toBe(true)
     const many = Array.from({ length: 3 }, () => ({ state: 'ready', path: [], items: Array.from({ length: languageLookupLimits.items }, () => item), truncated: true }))
     expect(languageLookupResultSchema.safeParse({ index: 'ready', answers: many }).success).toBe(false)
+  })
+
+  it('keeps its limits in step with the backend’s EditorLookupLimits', () => {
+    const source = readFileSync('backend/Varia.Backend/Search/EditorLookup.cs', 'utf8')
+    const declared = /class EditorLookupLimits\s*\{\s*public const int ([^;]+);/.exec(source)![1]
+    const limits = Object.fromEntries(declared.split(',').map(entry => entry.split('=').map(part => part.trim())).map(([name, value]) => [name, Number(value)]))
+    expect(limits).toEqual({ Requests: languageLookupLimits.requests, Segments: languageLookupLimits.segments, SegmentChars: languageLookupLimits.segmentChars,
+      PrefixChars: languageLookupLimits.prefixChars, Items: languageLookupLimits.items, DefaultItems: languageLookupLimits.defaultItems, TotalItems: languageLookupLimits.totalItems })
   })
 })

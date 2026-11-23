@@ -3,7 +3,7 @@
 // keywords; a dotted name lists an alias's columns or a STRUCT's fields. Nothing here knows an engine.
 import { languageLookupLimits, type LanguageLookupPath } from '../language-lookup'
 import type { CompletionDialect, CompletionItem, CompletionKind, CompletionList, CompletionRead, DialectFunction, IndexLookup } from './model'
-import { ScopeResolver, childrenOf, sameName, sourceNamed, type ScopeColumn } from './resolve'
+import { ScopeResolver, childrenOf, sameName, type ScopeColumn } from './resolve'
 
 /** Groups order the list ahead of the editor's fuzzy score among equals: what the scope gives first, the dialect's words last. */
 const group: Readonly<Record<CompletionKind, string>> = { column: '1', field: '1', alias: '2', cte: '2', table: '3', view: '3', routine: '4', model: '4', container: '5', function: '6', keyword: '7' }
@@ -66,7 +66,8 @@ export async function completeFromIndex(read: CompletionRead, dialect: Completio
         incomplete ||= given.truncated
         for (const column of childrenOf(given.columns, [])) add({ ...columnItem(column, 0, insert, source.name), sortText: sortText('column', Math.min(rank, 99), column.path) })
       }
-      for (const source of scope.sources) if (source.name && sourceNamed(scope, source.name) === source) add({ label: source.name, kind: 'alias', insertText: insert(source.name), detail: aliasDetail(source), sortText: sortText('alias', 0, source.name) })
+      // The nearest source of a name is the one it means (add keeps the first of a label).
+      for (const source of scope.sources) if (source.name) add({ label: source.name, kind: 'alias', insertText: insert(source.name), detail: aliasDetail(source), sortText: sortText('alias', 0, source.name) })
       for (const entry of dialect.functions) if (!entry.name.includes('.')) add(functionItem(entry, entry.name))
       for (const keyword of dialect.keywords) add(keywordItem(keyword))
       break

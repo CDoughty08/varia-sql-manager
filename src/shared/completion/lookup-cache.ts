@@ -51,7 +51,9 @@ export class LookupCache {
       const answer = result.answers[next++]
       if (!answer) return undefined
       answers[index] = answer
-      if (result.index === 'ready' && answer.state !== 'building') this.keep(requests[index], answer, this.now())
+      // An answer the backend's total cut short of its own limit is not kept: asked alone, it would hold more.
+      const short = answer.truncated && answer.items.length < (requests[index].limit ?? languageLookupLimits.defaultItems)
+      if (result.index === 'ready' && answer.state !== 'building' && !short) this.keep(requests[index], answer, this.now())
     }
     return answers as LanguageLookupAnswer[]
   }

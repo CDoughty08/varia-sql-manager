@@ -90,6 +90,9 @@ internal static partial class BigQueryIndexChecks
         check(narrowed.Answers[4] is { Path: ["varia-alpha", "sales", "orders"], Object.Name: "orders" },
             "names that differ only in case resolve to the one the index holds, and the answer says how it spells them");
 
+        var shards = (await Lookup(PathRequest("varia-alpha", "sales", "events_*"), PathRequest("varia-alpha", "sales", "events_20260101"), PathRequest("varia-alpha", "sales", "events_2026*"))).Answers;
+        check(shards.All(answer => answer.Object?.Name == "events_20260103" && answer.Items.Count > 0),
+            "a wildcard or an older shard of a date-sharded group answers with the group's newest shard and its columns: " + string.Join(",", shards.Select(answer => answer.Object?.Name ?? "-")));
         var census = (await Lookup(PathRequest("varia-beta", "census", "population"))).Answers[0];
         check(census is { State: "partial", Object: { Detailed: false }, Items.Count: 0 }, "an object of a project read by name only has no details and no columns");
         var missing = (await Lookup(PathRequest("varia-alpha", "sales", "nothing"), PathRequest("varia-alpha", "nothing", "t"))).Answers;
@@ -104,7 +107,7 @@ internal static partial class BigQueryIndexChecks
         var longPrefix = await Refused(LookupArgs(id, new JsonObject { ["path"] = new JsonArray(), ["prefix"] = new string('x', EditorLookupLimits.PrefixChars + 1) }));
         var sqlServer = await Refused(LookupArgs(Guid.NewGuid().ToString(), PathRequest()));
         check(tooDeep == "INVALID_PARAMS" && tooMany == "INVALID_PARAMS" && exactWithout == "INVALID_PARAMS" && emptyPart == "INVALID_PARAMS" && longPrefix == "INVALID_PARAMS" && sqlServer == "UNSUPPORTED_PROVIDER",
-            $"the request is bounded (path depth, requests, prefix length, exact needs a prefix) and a SQL Server handle is refused: {tooDeep} {tooMany} {exactWithout} {emptyPart} {longPrefix} {sqlServer}");
+            $"the request is bounded (path depth, requests, prefix length, exact needs a prefix) and a handle BigQuery does not own is refused: {tooDeep} {tooMany} {exactWithout} {emptyPart} {longPrefix} {sqlServer}");
         var lane = harness.Service.LaneOf("language.lookup");
         check(lane == Varia.Backend.Protocol.RequestLane.Metadata, "language.lookup runs on the metadata lane: " + lane);
     }

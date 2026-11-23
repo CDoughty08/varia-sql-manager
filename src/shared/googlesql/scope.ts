@@ -125,7 +125,9 @@ class BlockReader {
   private readonly shapes = new Map<number, QueryShape>()
   private depth = 0
   /** For a WITH query's body (by its '('), the WITH names it cannot see: itself (unless RECURSIVE) and the ones after it. */
-  readonly hidden = new Map<number, readonly CteScope[]>()
+  readonly hidden = new Map<number, { readonly siblings: readonly CteScope[]; readonly from: number }>()
+  /** The WITH names read so far by lower-case name, the first of a name winning. */
+  private readonly named = new Map<string, CteScope>()
 
   constructor(private readonly statement: Statement, private readonly ctes: CteScope[]) {}
 
@@ -154,12 +156,14 @@ class BlockReader {
       // Read before its name is added: a WITH query sees only the ones before it (GoogleSQL's rule without RECURSIVE).
       const cte = { name: partsOf(name).join('.'), shape: this.shape(paren) }
       this.ctes.push(cte)
+      if (!this.named.has(cte.name.toLowerCase())) this.named.set(cte.name.toLowerCase(), cte)
       siblings.push({ cte, paren })
       at += 3
       if (!isPunct(this.toks[first[at]], ',')) break
       at++
     }
-    siblings.forEach(({ paren }, index) => this.hidden.set(paren, siblings.slice(recursive ? index + 1 : index).map(entry => entry.cte)))
+    const list = siblings.map(entry => entry.cte)
+    siblings.forEach(({ paren }, index) => this.hidden.set(paren, { siblings: list, from: recursive ? index + 1 : index }))
     return [first.slice(at), ...all.slice(1)]
   }
 
@@ -177,8 +181,9 @@ class BlockReader {
     } finally { this.depth-- }
   }
 
-  /** A segment's sources: the targets of DML, then its FROM (or MERGE's USING) items. */
-  sources(run: Run): ScopeSource[] {
+  /** A segment's sources: the targets of DML, then its FROM (or MERGE's USING) items. An INSERT's target counts only for a caret
+   *  in its column list (`caret`; its SELECT reads other tables). */
+  sources(run: Run, caret?: number): ScopeSource[] {
     const { toks } = this
     const out: ScopeSource[] = []
     const lead = toks[run[0]]
@@ -186,22 +191,30 @@ class BlockReader {
       let at = 1
       if (isWord(toks[run[at]], 'FROM', 'INTO')) at++
       const target = this.item(run, at, true)
-      if (target.source) out.push(target.source)
+      const list = run[target.next] ?? -1
+      const inList = isPunct(toks[list], '(') && caret !== undefined && toks[list].end <= caret
+        && (this.statement.match[list] >= toks.length || toks[this.statement.match[list]].start >= caret)
+      if (target.source && (!isWord(lead, 'INSERT') || inList)) out.push(target.source)
     }
     for (let at = 0; at < run.length; at++) {
       const token = toks[run[at]]
       const using = isWord(token, 'USING') && isWord(lead, 'MERGE')
       if (!isWord(token, 'FROM') && !using) continue
       if (isWord(lead, 'DELETE') && at <= 1) continue
-      for (let next = at + 1; next < run.length;) {
+      const items: ScopeSource[] = []
+      let next = at + 1
+      while (next < run.length) {
         const word = toks[run[next]]
-        if (word.kind === 'word' && fromEnd.has(word.upper)) break
+        if (word.kind === 'word' && (fromEnd.has(word.upper) || word.upper === 'FROM')) break
         if (isPunct(word, ',') || (word.kind === 'word' && joinWords.has(word.upper))) { next++; continue }
         const read = this.item(run, next)
-        if (read.source) out.push(read.source)
+        if (read.source) items.push(implicitUnnest(read.source, items))
         next = this.skipCondition(run, Math.max(read.next, next + 1))
         if (using) break
       }
+      out.push(...items)
+      // The scan goes on from where the items ended, so text with many FROMs is read once.
+      at = next - 1
     }
     return out
   }
@@ -211,7 +224,7 @@ class BlockReader {
     const { toks } = this
     while (at < run.length) {
       const token = toks[run[at]]
-      if (isPunct(token, ',') || (token.kind === 'word' && (joinWords.has(token.upper) || fromEnd.has(token.upper)))) return at
+      if (isPunct(token, ',') || (token.kind === 'word' && (joinWords.has(token.upper) || fromEnd.has(token.upper) || token.upper === 'FROM'))) return at
       at++
     }
     return at
@@ -275,7 +288,7 @@ class BlockReader {
     const select = run.findIndex(index => isWord(toks[index], 'SELECT'))
     if (select < 0) return { columns: [], stars: [] }
     // WITH names as far as they are known here: a WITH query's body is read before its own name and the later ones are added.
-    const sources = this.sources(run).map(source => resolveCte(source, this.ctes))
+    const sources = this.sources(run).map(source => resolveCte(source, name => this.named.get(name)))
     let at = select + 1
     if (isWord(toks[run[at]], 'AS') && isWord(toks[run[at + 1]], 'STRUCT', 'VALUE')) at += 2
     if (isWord(toks[run[at]], 'DISTINCT', 'ALL')) at++
@@ -307,6 +320,24 @@ class BlockReader {
     finish()
     return { columns, stars }
   }
+}
+
+/** `FROM orders o, o.items AS item`: a path that starts with an earlier item's name is that item's array, not a table. */
+function implicitUnnest(source: ScopeSource, earlier: readonly ScopeSource[]): ScopeSource {
+  if (source.kind !== 'object' || source.parts.length < 2) return source
+  const head = source.parts[0].toLowerCase()
+  return earlier.some(item => item.name?.toLowerCase() === head) ? { kind: 'unnest', name: source.name, path: source.parts } : source
+}
+
+/** Whether a token can be a piece of a dashed name (a word or a number). */
+const isPiece = (token: Tok | undefined): token is Tok => !!token && (token.kind === 'word' || token.kind === 'number')
+
+/** The first and last pieces of the dashed name (`my-proj-2`, no spaces) around piece `index` of the statement's tokens. */
+function dashedSpan(toks: readonly Tok[], index: number): [number, number] {
+  let lo = index, hi = index
+  while (isPunct(toks[lo - 1], '-') && toks[lo - 1].end === toks[lo].start && isPiece(toks[lo - 2]) && toks[lo - 2].end === toks[lo - 1].start) lo -= 2
+  while (isPunct(toks[hi + 1], '-') && toks[hi + 1].start === toks[hi].end && isPiece(toks[hi + 2]) && toks[hi + 2].start === toks[hi + 1].end) hi += 2
+  return [lo, hi]
 }
 
 /** A name at run position `at` with any dashed words joined on (`my-proj-2`, written without backticks in FROM). */
@@ -346,22 +377,28 @@ function scopeAt(statement: Statement, open: number, offset: number): QueryScope
   // Outer blocks first, so their WITH queries are known when an inner block's names are read.
   for (const block of [...blocks].reverse()) bodies.set(block, reader.body(block))
   // Inside a WITH query's body, the names it cannot see (itself and the later ones) are out of scope.
-  const hidden = new Set(blocks.flatMap(block => reader.hidden.get(block) ?? []))
+  const hidden = new Set<CteScope>()
+  for (const block of blocks) {
+    const entry = reader.hidden.get(block)
+    if (entry) for (let at = entry.from; at < entry.siblings.length; at++) hidden.add(entry.siblings[at])
+  }
   const visible = ctes.filter(cte => !hidden.has(cte))
+  const named = new Map<string, CteScope>()
+  for (const cte of visible) if (!named.has(cte.name.toLowerCase())) named.set(cte.name.toLowerCase(), cte)
   const sources: ScopeSource[] = []
   const end = (run: Run) => run.length ? statement.toks[run.at(-1)!].end : -1
   blocks.forEach((block, depth) => {
     const body = bodies.get(block)!
     const run = depth === 0 ? body.find(segment => segment.length && end(segment) >= offset) ?? body.at(-1) : body.find(segment => segment.includes(blocks[depth - 1]))
-    if (run) sources.push(...reader.sources(run).map(source => resolveCte(source, visible)))
+    if (run) sources.push(...reader.sources(run, offset).map(source => resolveCte(source, name => named.get(name))))
   })
   return { sources, ctes: visible }
 }
 
-/** A one-part name that is a WITH query refers to it. */
-function resolveCte(source: ScopeSource, ctes: readonly CteScope[]): ScopeSource {
+/** A one-part name that is a WITH query refers to it (`find` takes a lower-case name). */
+function resolveCte(source: ScopeSource, find: (name: string) => CteScope | undefined): ScopeSource {
   if (source.kind !== 'object' || source.parts.length !== 1) return source
-  const cte = ctes.find(entry => entry.name.toLowerCase() === source.parts[0].toLowerCase())
+  const cte = find(source.parts[0].toLowerCase())
   return cte ? { kind: 'cte', name: source.name, cte: cte.name, span: source.span } : source
 }
 
@@ -433,6 +470,20 @@ export function readGoogleSqlCompletion(text: string, offset: number): Completio
   let word = empty, next = toks.findIndex(token => token.start >= offset), qualifier: string[] = []
   if (next < 0) next = toks.length
   const current = toks.findIndex(token => token.start < offset && offset <= token.end)
+  // A dashed project typed without backticks where a table goes (FROM my-pro): the word starts at its first piece.
+  const at = current >= 0 && isPiece(toks[current]) ? current : -1
+  const leftOf = at >= 0 ? at : next
+  const startsAt = at >= 0 ? toks[at].start : offset
+  if (isPunct(toks[leftOf - 1], '-') && toks[leftOf - 1].end === startsAt && isPiece(toks[leftOf - 2]) && toks[leftOf - 2].end === toks[leftOf - 1].start) {
+    const [lo] = dashedSpan(toks, leftOf - 2)
+    const open = statement.parentAt(toks[lo].start)
+    const chain = chainBefore(statement, lo)
+    if (chain && placeOf(statement, chain.first, open) === 'object') {
+      const end = at >= 0 ? toks[dashedSpan(toks, at)[1]].end : offset
+      word = { start: toks[lo].start, end, typed: text.slice(toks[lo].start, offset), quoted: false }
+      return { site: { kind: 'object', qualifier: chain.parts }, scope: scopeAt(statement, open, offset), word }
+    }
+  }
   if (current >= 0) {
     const token = toks[current]
     if (token.kind === 'number' || token.kind === 'string' || token.kind === 'parameter' || token.kind === 'systemVariable') return none(empty)
@@ -470,15 +521,27 @@ export function readGoogleSqlHover(text: string, offset: number): HoverRead | un
   const statement = new Statement(text, offset)
   const { toks } = statement
   if (statement.inside && statement.inside.kind !== 'quotedIdentifier') return
-  const at = toks.findIndex(token => isName(token) && token.start <= offset && offset < token.end)
-  if (at < 0) return
-  let first = at, last = at
+  const under = toks.findIndex(token => (token.kind === 'word' || token.kind === 'number' || token.kind === 'quotedIdentifier') && token.start <= offset && offset < token.end)
+  if (under < 0) return
+  // A dashed project written without backticks in FROM (my-proj.sales.orders) is one part; elsewhere `a-b` is a subtraction.
+  const dashedFirst = (index: number) => isPiece(toks[index]) ? dashedSpan(toks, index)[0] : index
+  let at = under, first = under, last = under
+  let [lo, hi] = isPiece(toks[under]) ? dashedSpan(toks, under) : [under, under]
+  if (lo !== hi) { first = hi; last = hi }
   while (isPunct(toks[first - 1], '.') && isName(toks[first - 2])) first -= 2
   while (isPunct(toks[last + 1], '.') && isName(toks[last + 2])) last += 2
+  lo = dashedFirst(first)
+  const dashedObject = lo < first && placeOf(statement, lo, statement.parentAt(toks[lo].start)) === 'object'
+  if (!dashedObject) {
+    if (!isName(toks[under])) return
+    at = first = last = under
+    while (isPunct(toks[first - 1], '.') && isName(toks[first - 2])) first -= 2
+    while (isPunct(toks[last + 1], '.') && isName(toks[last + 2])) last += 2
+  } else if (under < first) at = first
   const parts: string[] = []
   let index = 0
   for (let token = first; token <= last; token += 2) {
-    const own = partsOf(toks[token])
+    const own = token === first && dashedObject ? [text.slice(toks[lo].start, toks[first].end)] : partsOf(toks[token])
     if (token === at) {
       if (toks[token].kind === 'quotedIdentifier') {
         // The part of a dotted quoted path the caret is on.
@@ -488,6 +551,7 @@ export function readGoogleSqlHover(text: string, offset: number): HoverRead | un
     }
     parts.push(...own)
   }
+  if (dashedObject) first = lo
   const open = statement.parentAt(toks[first].start)
   const place = placeOf(statement, first, open)
   // A name followed by '(' is a call: a function, not a column.

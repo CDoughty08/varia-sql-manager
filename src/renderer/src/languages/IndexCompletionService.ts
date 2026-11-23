@@ -122,7 +122,8 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
     const kept = cache
     return async requests => {
       const answers = await kept.lookup(requests, documentId)
-      if (kept.index && this.getSnapshot().indexes.get(key) !== kept.index) {
+      // A connection reconcile() dropped while this lookup ran is not brought back.
+      if (kept.index && this.caches.get(key) === kept && this.getSnapshot().indexes.get(key) !== kept.index) {
         const indexes = new Map(this.getSnapshot().indexes).set(key, kept.index)
         this.publish({ ...this.getSnapshot(), indexes })
       }

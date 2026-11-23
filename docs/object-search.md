@@ -129,9 +129,11 @@ A BigQuery connection's index answers through `LookupBigQuery` instead (`BigQuer
 `language.lookup` ([Completion from the index](language-services.md#completion-from-the-index)): the connection's
 projects (billing first, extra projects marked when read by name only), a project's datasets, a dataset's objects (a
 sharded group as its newest shard, a routine with its signature) and an object's facts and columns by field path in
-schema order. Projects, datasets and objects match exactly, else the one name that differs only in case. A dataset's state
-is `Ready`, `Partial` (children left out, its project read by name only, or its details skipped), `Building`, `Skipped`
-or `Absent`.
+schema order. Projects, datasets and objects match exactly, else the one name that differs only in case; a wildcard
+(`events_*`) or an older shard of a date-sharded group answers with the group's newest shard. A dataset's state is `Ready`,
+`Partial` (children left out, its project read by name only, its details skipped, or a later read failed with an earlier
+one kept), `Building`, `Skipped` or `Absent`; a project whose dataset listing failed after earlier reads is `Partial`.
+States come from the build's skip list, which keeps the latest 256 skips.
 
 ### Failures and skipped databases
 

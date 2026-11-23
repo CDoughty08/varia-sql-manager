@@ -99,7 +99,8 @@ internal static class EditorLookup
                 if (owner is not { } entry)
                     return new(State(dataset.State), dataset.Held is null ? [.. path] : [dataset.Project, dataset.Dataset], [], false, Skip: dataset.Skip?.Code);
                 var facts = BigQueryLookup.Facts(entry);
-                var shown = new LanguageLookupObject(entry.Name, entry.Kind, entry.Subtype, facts?.Detailed == true, facts?.Rows, facts?.Bytes, facts?.Partitioning, facts?.Clustering,
+                // Columns the budget left out make the object's details incomplete, whatever its facts say.
+                var shown = new LanguageLookupObject(entry.Name, entry.Kind, entry.Subtype, facts?.Detailed == true && dataset.Held?.ChildrenLeftOut != true, facts?.Rows, facts?.Bytes, facts?.Partitioning, facts?.Clustering,
                     facts?.Signature, BigQueryLookup.Shards(entry), facts?.ColumnsCut == true ? true : null, entry.Table.Modified(entry.At));
                 var details = request.Details == true;
                 var columns = lookup.Columns(entry).Where(column => Keeps(column.Name));

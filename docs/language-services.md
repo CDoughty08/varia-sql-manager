@@ -128,12 +128,12 @@ index ([object-search.md](object-search.md#bigquery)) in the backend's memory th
 - **Objects.** After `FROM`, `JOIN`, a comma in `FROM` (after a join condition too), `UPDATE`, `INTO`, `TABLE`, `MERGE` and `USING`: the statement's
   `WITH` names, the default dataset's objects, the billing project's datasets and the projects. `x.` lists a project's
   datasets or the billing project's dataset `x`'s objects; `x.y.` that dataset's objects. A date-sharded group is one
-  item with its range.
+  item with its range, and a wildcard (`events_*`) or one of its shards reads the newest shard's columns.
 - **Expressions.** The columns of every source in scope, the scope's aliases, functions and keywords. `alias.` lists that
   source's columns, `alias.record.` a STRUCT's fields, `NET.` (and the other namespaces) their functions, and `SAFE.` any
   function. After `CAST(… AS`, types and keywords.
 - **Scope.** `FROM` and `JOIN` items with or without `AS` (after `FOR SYSTEM_TIME AS OF` and `TABLESAMPLE` too), dashed
-  projects written without backticks, comma joins, `UNNEST(…) AS x`, subqueries (by their select
+  projects written without backticks, comma joins, `UNNEST(…) AS x` and an earlier item's array (`FROM orders o, o.items`), subqueries (by their select
   list's names and stars), `WITH` queries (each sees only the ones before it, so one may read the table it shadows), set operations and outer queries' sources.
   An unqualified table is in the tab's default dataset of the connection's billing project.
 - **Names** are inserted as GoogleSQL takes them: bare when plain and not reserved, else in backticks.
@@ -146,7 +146,8 @@ index ([object-search.md](object-search.md#bigquery)) in the backend's memory th
   building, unbuilt, unreachable or the tab is disconnected (keywords and functions only).
 - **Limits.** `language.lookup` takes 16 paths a request and answers 500 items a path by default (2,000 at most, 4,000
   in all); the renderer keeps answers per connection for 15 seconds (256 at most) and sends at most 4 lookups at once.
-  Documents over 250,000 characters get none, and subqueries nested more than 64 deep give no columns.
+  Documents over 250,000 characters get none, and subqueries nested (or `WITH` queries chained through `*`) more than 64
+  deep give no columns. An `INSERT`'s target lends its columns only to its column list.
 
 ## Source builds and packaging
 
