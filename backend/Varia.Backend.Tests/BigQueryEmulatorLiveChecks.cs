@@ -30,7 +30,7 @@ internal static class BigQueryEmulatorLiveChecks
         var environment = BigQueryEnvironment.FromEnvironment();
         if (environment.Endpoint is null) throw new InvalidOperationException("Set VARIA_TEST_BIGQUERY_ENDPOINT to the emulator's address, such as http://localhost:9050.");
         await ReadyAsync(environment.Endpoint);
-        using var service = new SqlService(bigQuery: environment);
+        using var service = new SqlService(CheckStores.Unprobed(), bigQuery: environment);
         async Task<(string Code, JsonElement Result, string Message)> Call(string method, JsonNode parameters)
         {
             using var document = JsonDocument.Parse(parameters.ToJsonString());
@@ -270,8 +270,8 @@ internal static class BigQueryEmulatorLiveChecks
             Console.WriteLine("emulator: Storage Read checks skipped: VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT is not set.");
             return;
         }
-        using var rest = new SqlService(bigQuery: environment with { StorageEndpoint = null });
-        using var arrow = new SqlService(bigQuery: environment);
+        using var rest = new SqlService(CheckStores.Unprobed(), bigQuery: environment with { StorageEndpoint = null });
+        using var arrow = new SqlService(CheckStores.Unprobed(), bigQuery: environment);
         arrow.BigQuery.StorageReadMinBytes = 0;
         async Task<string> Connect(SqlService service)
         {
