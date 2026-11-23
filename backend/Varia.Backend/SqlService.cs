@@ -40,7 +40,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "ssis.describe", "ssis.execute", "ssis.catalogSetup",
         "bigquery.account", "bigquery.projects", "bigquery.dryRun", "bigquery.properties", "agent.profile", "agent.historyMessage", "results.remoteQuery",
         "query.attach", "bigquery.endIdleSessions", "bigquery.cancelJobs",
-        "results.diffSeek", "language.parse"
+        "results.diffSeek", "language.parse", "language.lookup"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
     public const string SynthesizeMethod = "debug.results.synthesize";
@@ -614,9 +614,19 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "agent.profile" => await explorer.AgentProfileAsync(Read<AgentProfileArgs>(parameters, json), Token(context)),
         "agent.historyMessage" => await actions.HistoryMessageAsync(Read<AgentHistoryMessageArgs>(parameters, json), Token(context)),
         "language.parse" => await StepParser.ParseAsync(Read<LanguageParseArgs>(parameters, json), Token(context)),
+        "language.lookup" => LookupIndex(Read<LanguageLookupArgs>(parameters, json)),
         SynthesizeMethod when hooks => Synthesize(Read<SynthesizeArgs>(parameters, json), Token(context)),
         _ => throw new RequestException("METHOD_NOT_FOUND", "Unsupported backend method.")
     };
+
+    /// <summary>language.lookup: the editor's completion and hover read a BigQuery connection's index in process, from one snapshot
+    /// (CheckProvider has refused any other engine's handle, so the connection is BigQuery's, or gone: NOT_CONNECTED).</summary>
+    private LanguageLookupResult LookupIndex(LanguageLookupArgs args)
+    {
+        EditorLookup.Validate(args);
+        var (billing, extras) = ((IBigQueryIndexSource)bigQuery).Projects(args.ConnectionId);
+        return EditorLookup.Answer(search.LookupBigQuery(args.ConnectionId, billing, extras), args);
+    }
 
     /// <summary>explorer.index for SQL Server: BigQuery's refresh options are refused.</summary>
     private static ObjectIndexArgs SqlServerIndexArgs(ObjectIndexArgs args) => args.ExtraDetails is null && args.Scope is null && args.Stale is null ? args

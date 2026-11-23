@@ -26,6 +26,15 @@ internal sealed partial class ObjectSearchService
             if (state.BigQuery) state.Stale[(project, dataset)] = ++state.StaleMarks;
     }
 
+    /// <summary>The editor's lookup into a BigQuery connection's index (<see cref="BigQueryLookup"/>): a snapshot of its build's state
+    /// and the reads held now. A connection with no index yet still answers its projects (<paramref name="billing"/> first).</summary>
+    internal BigQueryLookup LookupBigQuery(string connectionId, string billing, IReadOnlyList<string> extras)
+    {
+        if (!states.TryGetValue(connectionId, out var state) || !state.BigQuery) return new(billing, extras, [], null, [], false, false, budget, Changed);
+        lock (state.Gate)
+            return new(billing, extras, state.Index.Databases, state.NamesOnly, state.Skipped.ToList(), state.Building, state.Built, budget, Changed);
+    }
+
     /// <summary>The datasets marked stale on a connection (the checks read it).</summary>
     internal IReadOnlyCollection<(string Project, string Dataset)> StaleOf(string connectionId)
     {

@@ -1065,7 +1065,7 @@ Shipped: docs/object-search.md's [BigQuery](object-search.md#bigquery) section d
 sharded groups, extra projects by name unless `objectExplorer.search.bigQueryExtraProjects`, refresh by scope and after DDL)
 and how Search Objects searches it. BQ-6b reads the same index: a table's columns are child entries named by field path with
 their types in `ObjectDetails`, views' and routines' text are definitions, and `ObjectSearchService.Lookup` still answers
-null for a BigQuery connection until BQ-6b gives it a reader.
+null for a BigQuery connection: BQ-6b reads it through `LookupBigQuery` and `language.lookup`.
 
 Still to do, outside BQ-6a:
 
@@ -1075,6 +1075,9 @@ Still to do, outside BQ-6a:
   it shows now, and a New Query action on a result.
 
 ### IntelliSense from the index (BQ-6b)
+
+Shipped: docs/language-services.md's [Completion from the index](language-services.md#completion-from-the-index) and
+docs/object-search.md's Editor lookup describe it. The plan as agreed:
 
 - Completion is Varia's own, from the index, with no language server: keywords and functions (signature help comes from BQ-4's catalogue), then
   projects, datasets, tables and columns. A light GoogleSQL scope reader resolves `FROM`/`JOIN` aliases and `WITH` names
@@ -1251,7 +1254,7 @@ error codes in their enums; tab, AutoRecover and target records; method `provide
 | **BQ-5** Object Explorer | Catalogue kinds and scope fields; REST listers and shared rate limiter; Preview Rows; Script As; Properties facts | M | BQ-3a (Preview Rows reads through its converter), BQ-7 (Script As CREATE is billed); AG-1 first or rebase | generated Explorer and Script As docs |
 | **BQ-6a** Search Objects index | Two-pass REST index (sharded groups, extra projects by name, refresh triggers); index DTO scope and column types; Search Objects scope, kinds, searches, actions, All servers (shipped; the billed bulk path is BQ-6a-2, and details-pane facts remain, below) | M–L | BQ-1, BQ-5 | |
 | **BQ-6a-2** Billed bulk index | `INFORMATION_SCHEMA` in place of pass 2 behind BQ-7's dry-run estimate and prompt, off by default; fills the same index entries | S–M | BQ-6a, BQ-7 | |
-| **BQ-6b** IntelliSense | Completion from the index with alias scope; hover | L | BQ-4, BQ-6a, and the index's column metadata from the editor plan | |
+| **BQ-6b** IntelliSense | Completion from the index with alias scope; hover (shipped) | L | BQ-4, BQ-6a, and the index's column metadata from the editor plan | language-services.md, object-search.md, ipc.md |
 | **BQ-9** Job history | `bigquery` live scope and REST runner; `bigquery.jobs` source, args schema and `idleIntervalMs`; `bigquery.jobs.get` and `bigquery.jobs.cancel`; Job History document with `LiveGrid`, scope toggle, filters, script grouping, details pane; Cancel job, Open results, Re-attach, Open SQL, Re-run, Copy job id and console link; entry points in Explorer, palette and the Messages job id link; Show in Job History in the records-without-a-tab dialog | M | BQ-3d (Open results and Re-attach), BQ-5 (Explorer menus), BQ-7 (Re-run's cost rules) | live catalogue docs regenerated, README |
 | **BQ-8** Live checks and docs | Real-project opt-in suite and fixture refresh; windowed smoke; Getting Started guide and sample (`src/shared/help/catalog.ts`); final docs pass | M | lands alongside each lane; final pass last | README, testing.md, help |
 

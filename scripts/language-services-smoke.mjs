@@ -16,8 +16,8 @@ const watchdog = setTimeout(() => { console.error('Language-service suite exceed
 const calls = async () => parseCalls(await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => ''))
 const languageCalls = async method => (await calls()).filter(call => call.method === method)
 const text = scope => editorText(scope).then(value => value.replaceAll('\u00a0', ' '))
-async function launch() {
-  const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control }
+async function launch(extra = {}) {
+  const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control, ...extra }
   delete env.ELECTRON_RUN_AS_NODE
   application = await electron.launch({ args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 })
   page = await application.firstWindow()
@@ -103,6 +103,27 @@ async function moveEditor(name, action) {
   await documentTab(page, name).focus()
   await page.keyboard.press('Shift+F10')
   await page.getByRole('menu', { name: 'Query tab', exact: true }).getByRole('menuitem', { name: action, exact: true }).click()
+}
+/** Puts the caret after the first `count` characters of the editor's first line. */
+async function caretAt(count) {
+  await page.keyboard.press(`${mod}+Home`)
+  for (let index = 0; index < count; index++) await page.keyboard.press('ArrowRight')
+}
+/** A BigQuery connection through the Connect dialog in emulator mode, which the fake backend answers (project varia-fake). */
+async function connectBigQuery() {
+  await toolbarButton(page, 'Connect').click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByLabel('Server type', { exact: true }).selectOption('bigquery')
+  await expect(dialog.getByText(/^Emulator account /)).toBeVisible()
+  await dialog.getByLabel('Project', { exact: true }).fill('varia-fake')
+  await dialog.getByRole('button', { name: 'Load datasets', exact: true }).click()
+  await expect.poll(() => dialog.getByLabel('Default dataset', { exact: true }).evaluate(input => [...input.list?.options ?? []].map(option => option.value))).toContain('sales')
+  await dialog.getByLabel('Default dataset', { exact: true }).fill('sales')
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  await toolbarButton(page, 'New query').click()
+  await expect(queryServer(page)).toContainText('varia-fake')
+  return queryServer(page).inputValue()
 }
 async function connect(server) {
   await toolbarButton(page, 'Connect').click()
@@ -429,6 +450,46 @@ try {
   await page.keyboard.press('Escape')
   await page.keyboard.press(`${mod}+r`)
   console.log('Language checks: hover and suggestions remain inside the viewport beside a last-line caret at the bottom edge.')
+  expect(failures).toEqual([])
+  await close()
+
+  // A BigQuery tab completes from the connection's Search Objects index (language.lookup), never the SQL language service.
+  await launch({ VARIA_TEST_BIGQUERY_ENDPOINT: 'http://127.0.0.1:9/' })
+  const bigQueryId = await connectBigQuery()
+  await expect(page.getByLabel('SQL IntelliSense', { exact: true })).toHaveText('IntelliSense')
+  await setText(page, page, 'SELECT * FROM ord')
+  await page.keyboard.press('Control+Space')
+  await expect(suggestionOption(page, 'orders')).toBeVisible()
+  await page.keyboard.press('Tab')
+  await expect.poll(() => text(page)).toBe('SELECT * FROM orders')
+  await expect(page.getByLabel('SQL IntelliSense', { exact: true })).toHaveAttribute('title', /Search Objects index/)
+  // An alias's columns, then a STRUCT's fields, through the scope reader.
+  await setText(page, page, 'SELECT o.cu FROM orders AS o')
+  await caretAt('SELECT o.cu'.length)
+  await page.keyboard.press('Control+Space')
+  await expect(suggestionOption(page, 'customer')).toBeVisible()
+  await page.keyboard.press('Tab')
+  await expect.poll(() => text(page)).toBe('SELECT o.customer FROM orders AS o')
+  await setText(page, page, 'SELECT o.address. FROM orders AS o')
+  await caretAt('SELECT o.address.'.length)
+  await page.keyboard.press('Control+Space')
+  await expect(suggestionOption(page, 'city')).toBeVisible()
+  await page.keyboard.press('Escape')
+  // Hover on a table: its schema summary from the index.
+  await setText(page, page, 'SELECT * FROM orders')
+  await caretAt('SELECT * FROM ord'.length)
+  await page.keyboard.press(`${mod}+K`)
+  await page.keyboard.press(`${mod}+I`)
+  const summary = editorHover(page, '1,200 rows')
+  await expect(summary).toBeVisible()
+  await expect(summary).toContainText('Partitioned by DAY on placed')
+  await expect(summary).toContainText('customer')
+  await page.keyboard.press('Escape')
+  const lookups = await languageCalls('language.lookup')
+  expect(lookups.length).toBeGreaterThan(0)
+  expect(lookups.every(call => call.params.connectionId === bigQueryId)).toBe(true)
+  expect((await languageCalls('language.complete')).filter(call => call.params.context.connectionId === bigQueryId)).toEqual([])
+  console.log('Language checks: a BigQuery tab completes tables, alias columns and STRUCT fields and hovers a table from the index.')
   expect(failures).toEqual([])
   await close()
   console.log('Language-service suite passed.')

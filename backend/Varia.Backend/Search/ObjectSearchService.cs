@@ -296,7 +296,7 @@ internal sealed partial class ObjectSearchService : IDisposable
     {
         if (!states.TryGetValue(connectionId, out var state)) return null;
         lock (state.Gate)
-            // The editor's lookup reads SQL Server's catalog shape; a BigQuery index has its own reader (BQ-6b).
+            // The editor's lookup reads SQL Server's catalog shape; a BigQuery index answers through LookupBigQuery.
             return state.BigQuery ? null : new IndexLookup(state.Index, budget, state.Building, state.Ledger.Snapshot(), Changed);
     }
 

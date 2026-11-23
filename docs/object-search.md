@@ -125,6 +125,14 @@ the reads held when it is made:
 - A lookup is a snapshot: make one per request. One kept across a rebuild or a disconnect keeps the reads it holds alive
   outside the memory budget.
 
+A BigQuery connection's index answers through `LookupBigQuery` instead (`BigQueryLookup`), which the editor reaches over
+`language.lookup` ([Completion from the index](language-services.md#completion-from-the-index)): the connection's
+projects (billing first, extra projects marked when read by name only), a project's datasets, a dataset's objects (a
+sharded group as its newest shard, a routine with its signature) and an object's facts and columns by field path in
+schema order. Projects, datasets and objects match exactly, else the one name that differs only in case. A dataset's state
+is `Ready`, `Partial` (children left out, its project read by name only, or its details skipped), `Building`, `Skipped`
+or `Absent`.
+
 ### Failures and skipped databases
 
 - A failing statement (a catalog view the login may not read, or an edition lacks) lists the server or database as

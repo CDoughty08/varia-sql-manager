@@ -1,5 +1,6 @@
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import { SqlLanguageService } from '../languages/SqlLanguageService'
+import { IndexCompletionService } from '../languages/IndexCompletionService'
 import { SqlDiagnosticsService } from '../languages/SqlDiagnosticsService'
 import { BigQueryCostService, costOptOut } from '../services/bigquery-cost'
 import { CostPromptService } from '../services/bigquery-cost-prompt'
@@ -164,6 +165,8 @@ export interface Workbench extends Disposable {
   readonly documents: DocumentService
   readonly sqlLanguage: SqlLanguageService
   readonly sqlDiagnostics: SqlDiagnosticsService
+  /** BigQuery tabs' completion and hover from the Search Objects index (docs/language-services.md, Completion from the index). */
+  readonly indexCompletion: IndexCompletionService
   /** BigQuery tabs' estimates, dry-run diagnostics and cost prompts (docs/bigquery.md, Cost). */
   readonly bigQueryCost: BigQueryCostService
   readonly costPrompts: CostPromptService
@@ -565,6 +568,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     api, documents, connections, settings, targetIdOf, events, agentEnabled: api.agentPreview,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-object-search="${CSS.escape(id)}"] [data-object-search-focus]`)?.focus())
   })
+  // BigQuery tabs' completion and hover, from the Search Objects index; the first lookup that finds none starts it as a search would.
+  const indexCompletion = new IndexCompletionService(monaco, api, documents, connections, { ensureIndex: id => objectSearch.ensureIndex(id) })
   const peekTabs = new PeekTabService({
     peek, documents, connections, targetIdOf,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-peek-tab="${CSS.escape(id)}"] [role="tab"][aria-selected="true"]`)?.focus())
@@ -680,6 +685,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     documents,
     sqlLanguage,
     sqlDiagnostics,
+    indexCompletion,
     bigQueryCost,
     costPrompts,
     queries,
@@ -833,6 +839,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       bigQueryCost.dispose()
       costPrompts.dispose()
       sqlLanguage.dispose()
+      indexCompletion.dispose()
       documents.dispose()
       backend.dispose()
       explorer.dispose()

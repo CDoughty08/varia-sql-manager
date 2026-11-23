@@ -805,8 +805,9 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
    * Builds a server's index when it has none and none is building, while Options › Index objects when a server connects is
    * on (a server that connected while it was off, say). With it off the user chose not to have builds start on their own,
    * so opening or pointing a search at a server builds nothing: the search says the server has no index and offers to build it.
+   * BigQuery's completion calls it too, the first time it finds a connection with no index.
    */
-  private ensureIndex(connectionId: string): void {
+  ensureIndex(connectionId: string): void {
     if (!this.o.settings.get('objectExplorer.search.indexOnConnect')) return
     const entry = this.getSnapshot().indexes[connectionId]
     if (!entry?.status && !entry?.requestId) this.build(connectionId)
