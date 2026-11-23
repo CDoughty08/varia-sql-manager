@@ -65,11 +65,11 @@ Each window is a full citizen (`core/windows.ts`, `workbench.attachWindow`):
 
 ## Dialog windows
 
-Tools › Options and Help › About open in OS windows of their own (`src/renderer/src/popouts/DialogWindow.tsx`), so they
+Connect, Tools › Options and Help › About open in OS windows of their own (`src/renderer/src/popouts/DialogWindow.tsx`), so they
 can move off the main window, onto another display.
 
 - **Same trust model.** Each is a same-origin `about:blank` child named `varia-dialog-<kind>-<uuid>`, where the kind is
-  `options` or `about` (`dialogWindowKinds` in `src/shared/popouts.ts`), with exact bounds at least the kind's minimum
+  `connect`, `options` or `about` (`dialogWindowKinds` in `src/shared/popouts.ts`), with exact bounds at least the kind's minimum
   size on a display (`dialogRequest`). It gets the popouts' explicit preferences (no preload, sandboxed, isolated, no
   Node, no test arguments), denies popups and navigation, has no IPC of its own and closes with the page. At most four
   are open at once (two of a kind while one closes), and they do not count against the popout limit.
@@ -82,10 +82,13 @@ can move off the main window, onto another display.
   has closed in the last half second (`PopoutWindows.settled`, `settledNativeTheme`); popouts benefit too.
 - **Modeless.** The workbench keeps working in the main window while a dialog window is open. Keys pressed in the
   dialog window are the dialog's: `modalOpen` (`core/modal.ts`) holds the workbench's keys there and not in the main
-  window. Tools › Options… while Options is open brings its window forward on the page asked for.
-- **Size.** Options opens at 960 × 700, at least 640 × 440, and can be resized; the size it was left at is kept in
-  `localStorage` (`varia.dialogWindow.options`), a cache with no IPC, as the palette's history is, and reopens within the
-  screen. About has a fixed size. A window opens centred on the main window.
+  window. File › Connect or Tools › Options… while that dialog is open brings its window forward.
+- **Size and position.** Connect opens at 900 × 730 (at least 640 × 480) with a resizable connection-list rail
+  (`varia.connect.railWidth`), Options opens at 960 × 700 (at least 640 × 440), and both can be resized; the bounds they
+  were left at (`x`, `y`, `width`, `height`) are kept in `localStorage` (`varia.dialogWindow.<kind>`), a cache with no IPC,
+  as the palette's history is. A stored size that would exceed the current screen falls back to the kind's default size,
+  and an off-screen position falls back to centering on the main window. About has a fixed size and opens centred on
+  the main window.
 - **Closing.** The window's close button, Alt+F4 or ⌘W is the dialog's Cancel (while OK is saving, Options moves over
   the main window until the save finishes); closing the dialog closes its window
   and gives focus back to where it was, in the main window or the popout it opened from (or to a dialog opened over the
@@ -97,7 +100,7 @@ can move off the main window, onto another display.
 - **Fallback.** Where main refuses the window (no display under the main window, or at the window limits), or the page runs without windows
   (unit tests), the dialog shows over the main window as before, with its own close button.
 
-Other dialogs (Connect, object dialogs, properties) still show over the main window; they can move to dialog windows
+Other dialogs (object dialogs, properties) still show over the main window; they can move to dialog windows
 by adding a kind to `dialogWindowKinds` and wrapping their dialog in `DialogWindow`.
 
 ## Layout

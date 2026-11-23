@@ -23,10 +23,11 @@ export const popoutLimits = {
  */
 export const dialogWindowKinds = {
   options: { title: 'Options', width: 960, height: 700, minWidth: 640, minHeight: 440, resizable: true },
-  about: { title: 'About Varia SQL Manager', width: 520, height: 460, minWidth: 420, minHeight: 320, resizable: false }
+  about: { title: 'About Varia SQL Manager', width: 520, height: 460, minWidth: 420, minHeight: 320, resizable: false },
+  connect: { title: 'Connect', width: 900, height: 730, minWidth: 640, minHeight: 480, resizable: true }
 } as const satisfies Record<string, { readonly title: string; readonly width: number; readonly height: number; readonly minWidth: number; readonly minHeight: number; readonly resizable: boolean }>
 export type DialogWindowKind = keyof typeof dialogWindowKinds
-export const dialogWindowName = /^varia-dialog-(options|about)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+export const dialogWindowName = /^varia-dialog-(options|about|connect)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 /** The kind a dialog window's name says, or undefined when it is not one. */
 export const dialogWindowKind = (name: string): DialogWindowKind | undefined => dialogWindowName.test(name) ? name.split('-')[2] as DialogWindowKind : undefined
 export const dialogLimits = {

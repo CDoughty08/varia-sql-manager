@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
-import { backendReady, closeDocumentButton, documentCrumbs, documentFactValues, documentFrame, documentHeader, documentBanner, documentStaleBadge, documentState, documentSubtitle, documentTab, documentTabs, frameSection, gridCell, gridPart, localGrid, localGridFrame, menuItemNames, part, quickInputRows, sectionColumn, sectionList, selectOpenDocument, toolbarButton } from './fixtures/ui.mjs'
+import { backendReady, closeDocumentButton, connectDialogWindow, documentCrumbs, documentFactValues, documentFrame, documentHeader, documentBanner, documentStaleBadge, documentState, documentSubtitle, documentTab, documentTabs, frameSection, gridCell, gridPart, localGrid, localGridFrame, menuItemNames, part, quickInputRows, sectionColumn, sectionList, selectOpenDocument, submitConnect, toolbarButton } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 // The SSIS Catalog's properties documents against the fake backend (tests/fixtures/backend.mjs, workbench mode), through
@@ -49,11 +49,10 @@ const objectMenu = () => page.getByRole('menu', { name: 'Object Explorer', exact
 
 async function connect(server) {
   await toolbarButton(page, 'Connect').click()
-  const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
+  const { window: connectWin, dialog } = await connectDialogWindow(application)
   await dialog.getByLabel('Server Name', { exact: true }).fill(server)
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(dialog).toHaveCount(0)
+  await submitConnect(connectWin, dialog)
   await expect(await explorerRow(page, server)).toBeVisible()
 }
 /** The row's menu: its items' labels, and a click on one. */

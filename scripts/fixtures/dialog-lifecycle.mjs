@@ -10,7 +10,7 @@ import { join, resolve } from 'node:path'
 import { electron, expect, within } from './smoke.mjs'
 import { actionsStubData, installActionsStub } from './actions-stub.mjs'
 import { expandExplorerPath, explorerRow, revealExplorerRow } from './explorer-tree.mjs'
-import { anyResultGrid, backendReady, editorTextbox, errorBanner, gridCell, lostServerRows, outputStatus, queryServer, toolbarButton } from './ui.mjs'
+import { anyResultGrid, backendReady, connectDialogWindow, editorTextbox, errorBanner, gridCell, lostServerRows, outputStatus, queryServer, submitConnect, toolbarButton } from './ui.mjs'
 import { completeLines, parseCalls } from './call-log.mjs'
 
 const createScript = 'CREATE TABLE dbo.Orders (Id int);'
@@ -128,13 +128,12 @@ async function launch(launchOptions, name) {
   return { application, child, page, profile, control, errors, cleanup }
 }
 
-async function connect(page) {
+async function connect(application, page) {
   await toolbarButton(page, 'Connect').click()
-  const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
+  const { window, dialog } = await connectDialogWindow(application)
   await dialog.getByLabel('Server Name', { exact: true }).fill('server-a')
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(dialog).toHaveCount(0)
+  await submitConnect(window, dialog)
 }
 
 /** Results on server-a with Save Grid Results open over them, and a Script As File… whose save dialog waits behind it
@@ -166,7 +165,7 @@ export async function dialogLifecycle(launchOptions) {
     const { application, page, profile, control, errors } = run
     const scriptFile = join(profile, 'from-crashed-page.sql')
     await mockDialogs(application, scriptFile)
-    await connect(page)
+    await connect(application, page)
     // A double-click on Restart (or the command twice) asks once and starts one backend; the count is taken when the
     // prompt's turn comes.
     const spawns = async () => completeLines(await readFile(join(control, 'spawns.jsonl'), 'utf8')).filter(Boolean).length
@@ -183,11 +182,10 @@ export async function dialogLifecycle(launchOptions) {
     await expect(offline).not.toHaveAttribute('aria-expanded')
     const retainedRoot = await offline.getAttribute('id')
     await offline.getByRole('button', { name: 'Reconnect server-a', exact: true }).click()
-    const reconnect = page.getByRole('dialog', { name: 'Connect', exact: true })
+    const { window: reconnectWin, dialog: reconnect } = await connectDialogWindow(application)
     await expect(reconnect.getByLabel('Authentication', { exact: true })).toHaveValue('windows')
     await expect(reconnect.getByLabel('Password', { exact: true })).toHaveCount(0)
-    await reconnect.getByRole('button', { name: 'Connect', exact: true }).click()
-    await expect(reconnect).toHaveCount(0)
+    await submitConnect(reconnectWin, reconnect)
     await expect(await explorerRow(page, 'server-a')).toHaveAttribute('id', retainedRoot)
     expect(await executions()).toBe(queriesBeforeRestart)
     await holdSaveWithScriptWaiting(application, page)
@@ -250,7 +248,7 @@ export async function dialogLifecycle(launchOptions) {
     const { application, child, page, profile, errors } = run
     const scriptFile = join(profile, 'dbo.Orders.sql')
     await mockDialogs(application, join(profile, 'reload.sql'))
-    await connect(page)
+    await connect(application, page)
     // With a server connected, a reload asks first: Cancel keeps the page, and Reload (answered at once) reloads it.
     const reload = () => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.reload())
     const marked = () => page.evaluate(() => window.variaBeforeReload === true).catch(() => false)
@@ -266,7 +264,7 @@ export async function dialogLifecycle(launchOptions) {
     await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
     await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
     await mockDialogs(application, scriptFile)
-    await connect(page)
+    await connect(application, page)
     await holdSaveWithScriptWaiting(application, page)
     await application.evaluate(({ BrowserWindow }) => { const window = BrowserWindow.getAllWindows()[0]; window.emit('unresponsive'); window.close(); window.emit('responsive') })
     let exited = false
@@ -321,7 +319,7 @@ export async function longRunRefusals(launchOptions) {
     const { application, page, profile, errors } = run
     await mockDialogs(application, join(profile, 'long-run'))
     await application.evaluate(installActionsStub, actionsStubData())
-    await connect(page)
+    await connect(application, page)
     const catalogs = ['server-a', 'Integration Services Catalogs']
     const createDialog = page.getByRole('dialog', { name: 'Create Catalog', exact: true })
     // The tree may still be loading below the server, moving the row, so the right-click repeats until the folder's menu opens.

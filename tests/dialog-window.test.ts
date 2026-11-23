@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, createElement, StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import DialogWindow, { centredBounds, closesDialogWindow, DialogHeading, dialogWindowSize, rememberDialogWindowSize } from '../src/renderer/src/popouts/DialogWindow'
+import DialogWindow, { centredBounds, closesDialogWindow, DialogHeading, dialogWindowBounds, dialogWindowSize, rememberDialogWindowBounds, rememberDialogWindowSize } from '../src/renderer/src/popouts/DialogWindow'
 import { preparePopoutDocument } from '../src/renderer/src/popouts/popout-document'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
@@ -50,9 +50,12 @@ describe('dialog window sizes', () => {
   it('open at the kind\'s default, or the size the user left a resizable one, within its minimum and the screen', () => {
     const { width, height, minWidth, minHeight } = dialogWindowKinds.options
     expect(dialogWindowSize('options', screen, null)).toEqual({ width, height })
+    expect(dialogWindowSize('connect', screen, null)).toEqual({ width: 900, height: 730 })
+    expect(dialogWindowKinds.connect).toMatchObject({ width: 900, height: 730, minWidth: 640, minHeight: 480, resizable: true })
     expect(dialogWindowSize('options', screen, JSON.stringify({ width: 1200, height: 800 }))).toEqual({ width: 1200, height: 800 })
     expect(dialogWindowSize('options', screen, JSON.stringify({ width: 10, height: 10 }))).toEqual({ width: minWidth, height: minHeight })
-    expect(dialogWindowSize('options', { width: 1024, height: 700 }, JSON.stringify({ width: 4000, height: 4000 }))).toEqual({ width: 992, height: 668 })
+    // An oversized stored size resets safely to the kind's default (fitted to the screen), rather than expanding full screen.
+    expect(dialogWindowSize('options', { width: 1024, height: 700 }, JSON.stringify({ width: 4000, height: 4000 }))).toEqual({ width: 960, height: 668 })
     for (const damaged of ['{', '"x"', JSON.stringify({ width: 'wide', height: 700 }), JSON.stringify({ width: 1.5, height: 700 })]) expect(dialogWindowSize('options', screen, damaged)).toEqual({ width, height })
     // About cannot be resized, so a stored size never applies to it.
     expect(dialogWindowSize('about', screen, JSON.stringify({ width: 900, height: 900 }))).toEqual({ width: dialogWindowKinds.about.width, height: dialogWindowKinds.about.height })
@@ -60,6 +63,22 @@ describe('dialog window sizes', () => {
     expect(dialogWindowSize('options', screen)).toEqual({ width: 1100, height: 721 })
     rememberDialogWindowSize('about', { width: 900, height: 900 })
     expect(localStorage.getItem('varia.dialogWindow.about')).toBeNull()
+  })
+  it('restore saved bounds when they fit the current screen and re-centre when oversized or missing coordinates', () => {
+    const main = { screenX: 100, screenY: 50, outerWidth: 1440, outerHeight: 960 }
+    rememberDialogWindowBounds('connect', { x: 240, y: 120, width: 960, height: 760 })
+    expect(dialogWindowBounds('connect', main, screen)).toEqual({ x: 240, y: 120, width: 960, height: 760, positioned: true })
+    // Oversized stored bounds fall back to centred default size.
+    rememberDialogWindowBounds('connect', { x: 50, y: 50, width: 3200, height: 2000 })
+    expect(dialogWindowBounds('connect', main, { width: 1366, height: 768 })).toEqual({ ...centredBounds(main, { width: 900, height: 730 }), positioned: false })
+    // Legacy size-only storage still restores size and centres cleanly.
+    rememberDialogWindowSize('connect', { width: 920, height: 740 })
+    expect(dialogWindowBounds('connect', main, screen)).toEqual({ ...centredBounds(main, { width: 920, height: 740 }), positioned: false })
+    // Zero/sub-minimum bounds (e.g. minimized or teardown snapshot) never overwrite valid saved bounds.
+    rememberDialogWindowBounds('connect', { x: 240, y: 120, width: 960, height: 760 })
+    rememberDialogWindowBounds('connect', { x: 0, y: 0, width: 0, height: 0 })
+    rememberDialogWindowBounds('connect', { x: 10, y: 10, width: 300, height: 200 })
+    expect(dialogWindowBounds('connect', main, screen)).toEqual({ x: 240, y: 120, width: 960, height: 760, positioned: true })
   })
   it('centre over the main window', () => {
     expect(centredBounds({ screenX: 100, screenY: 50, outerWidth: 1440, outerHeight: 960 }, { width: 940, height: 680 })).toEqual({ x: 350, y: 190, width: 940, height: 680 })

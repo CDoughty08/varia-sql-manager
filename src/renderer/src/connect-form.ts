@@ -1,7 +1,238 @@
-import type { AdvancedConnectionOptions, ConnectionOptions } from '../../shared/contracts'
+import type { AdvancedConnectionOptions, ConnectionOptions, ProviderConnectionOptions } from '../../shared/contracts'
+import type { ConnectionDetails } from '../../shared/connection-targets'
+import { showsIdentity } from '../../shared/auth'
 import { advancedDefaults } from '../../shared/connections'
 import { environmentTag } from '../../shared/environments'
 import { connectionPresets } from '../../shared/theme/connection-colors'
+
+/**
+ * A request sent to an already-open modeless Connect window (Reconnect, F5 on a query tab, or Activity Monitor).
+ * App commits the request's pending state only when ConnectDialog accepts it via `onAcceptRequest`, so a busy connect
+ * never runs another tab's query against the wrong server and unsaved edits are never dropped without asking.
+ */
+export interface ConnectIncomingRequest {
+  readonly seq: number
+  readonly kind: 'reconnect' | 'execute' | 'monitor'
+  readonly reconnecting?: string
+  readonly targetId?: string
+  readonly options?: ProviderConnectionOptions
+  readonly autoReconnect?: ConnectionDetails['autoReconnect']
+  readonly pendingExecute?: string
+  readonly pendingMonitor?: boolean
+}
+export interface ConnectRequestTrigger {
+  readonly kind: 'open' | 'reconnect' | 'execute' | 'monitor'
+  readonly reconnecting?: string
+  readonly targetId?: string
+  readonly options?: ProviderConnectionOptions
+  readonly autoReconnect?: ConnectionDetails['autoReconnect']
+  readonly pendingExecute?: string
+}
+export type ConnectRequestPlan =
+  | { readonly action: 'open'; readonly reconnecting?: string; readonly options?: ProviderConnectionOptions; readonly pendingExecute?: string; readonly pendingMonitor: boolean }
+  | { readonly action: 'raise'; readonly ignoredKind?: ConnectIncomingRequest['kind'] }
+  | { readonly action: 'incoming'; readonly request: ConnectIncomingRequest }
+
+/** Status notice shown when an incoming request arrives while Connect is busy or awaiting confirmation. */
+export function busyRequestNotice(kind: ConnectIncomingRequest['kind']): string {
+  switch (kind) {
+    case 'execute': return 'Connect is busy. Finish or stop the current action, then run the query again.'
+    case 'monitor': return 'Connect is busy. Finish or stop the current action, then open Activity Monitor again.'
+    case 'reconnect': return 'Connect is busy. Finish or stop the current action, then select Reconnect again.'
+  }
+}
+
+/**
+ * Next reconnect target when an open Connect dialog accepts an incoming request: requests that carry no server details
+ * (Activity Monitor, or F5 on an unconnected query tab) keep the current Reconnect target so the shown server still
+ * reconnects its lost Object Explorer entry.
+ */
+export function nextConnectReconnecting(current: string | undefined, request: Pick<ConnectIncomingRequest, 'options' | 'reconnecting'>): string | undefined {
+  return request.options ? request.reconnecting : current
+}
+
+/**
+ * Decides how App handles a Connect / Reconnect / F5 / Activity Monitor trigger given whether Connect is already open
+ * and whether a details-review dialog is active. Plain Connect on an already-open window only raises it so any active
+ * reconnect target or pending execute stays intact; other triggers become incoming requests that ConnectDialog accepts
+ * only when idle and after confirming unsaved edits (or raise with a busy notice during a details review).
+ */
+export function planConnectRequest(open: boolean, reviewOpen: boolean, seq: number, trigger: ConnectRequestTrigger): ConnectRequestPlan {
+  if (!open) {
+    return {
+      action: 'open',
+      reconnecting: trigger.reconnecting,
+      options: trigger.options,
+      pendingExecute: trigger.pendingExecute,
+      pendingMonitor: trigger.kind === 'monitor'
+    }
+  }
+  if (trigger.kind === 'open') return { action: 'raise' }
+  if (reviewOpen) return { action: 'raise', ignoredKind: trigger.kind }
+  return {
+    action: 'incoming',
+    request: {
+      seq,
+      kind: trigger.kind,
+      reconnecting: trigger.reconnecting,
+      targetId: trigger.targetId,
+      options: trigger.options,
+      autoReconnect: trigger.autoReconnect,
+      pendingExecute: trigger.pendingExecute,
+      pendingMonitor: trigger.kind === 'monitor'
+    }
+  }
+}
+
+/** Limits for Connect's resizable saved-connections rail; shared between CSS/layout and tests. */
+export const connectRailLimits = { defaultWidth: 320, minWidth: 220, maxWidth: 480, minFormWidth: 420, stackBelow: 720 } as const
+
+export interface SqlAdvancedNumericRule {
+  readonly key: keyof AdvancedConnectionOptions
+  readonly label: string
+  readonly min: number
+  readonly max: number
+  readonly optional?: boolean
+}
+/** Validation rules for SQL Server Advanced numeric fields, matching `advancedConnectionSchema`. */
+export const sqlAdvancedNumericRules: Readonly<Partial<Record<keyof AdvancedConnectionOptions, SqlAdvancedNumericRule>>> = {
+  commandTimeout: { key: 'commandTimeout', label: 'Command timeout (seconds)', min: 0, max: 86400, optional: true },
+  connectTimeout: { key: 'connectTimeout', label: 'Connect timeout (seconds)', min: 0, max: 3600 },
+  packetSize: { key: 'packetSize', label: 'Packet size', min: 512, max: 32767 },
+  connectRetryCount: { key: 'connectRetryCount', label: 'Connect retry count', min: 0, max: 255 },
+  connectRetryInterval: { key: 'connectRetryInterval', label: 'Connect retry interval (seconds)', min: 1, max: 60 }
+}
+/** Validates a raw numeric Advanced input before it can enter `options.advanced`. */
+export function validateSqlAdvancedNumber(key: keyof AdvancedConnectionOptions, raw: string, badInput = false): { ok: true; value: number | undefined } | { ok: false; error: string } {
+  const rule = sqlAdvancedNumericRules[key]
+  if (!rule) return { ok: true, value: undefined }
+  if (badInput) return { ok: false, error: `${rule.label} must be a whole number between ${rule.min} and ${rule.max}.` }
+  const text = raw.trim()
+  if (!text) {
+    if (rule.optional) return { ok: true, value: undefined }
+    return { ok: false, error: `${rule.label} is required (${rule.min}–${rule.max}).` }
+  }
+  if (!/^-?\d+$/.test(text)) return { ok: false, error: `${rule.label} must be a whole number between ${rule.min} and ${rule.max}.` }
+  const num = Number(text)
+  if (!Number.isSafeInteger(num) || num < rule.min || num > rule.max) {
+    return { ok: false, error: `${rule.label} must be between ${rule.min} and ${rule.max}.` }
+  }
+  return { ok: true, value: num }
+}
+
+/**
+ * Clamps or safely restores the Connect rail width for a given dialog width so the form pane keeps at least
+ * `minFormWidth`. Invalid values or restored widths that would squeeze a narrower window fall back to `defaultWidth`
+ * (fitted to the safe maximum).
+ */
+export function clampConnectRailWidth(wanted: number | undefined, dialogWidth: number): number {
+  const { defaultWidth, minWidth, maxWidth, minFormWidth } = connectRailLimits
+  const safeMax = Math.max(minWidth, Math.min(maxWidth, Math.round(dialogWidth) - minFormWidth))
+  const fallback = Math.max(minWidth, Math.min(defaultWidth, safeMax))
+  if (typeof wanted !== 'number' || !Number.isFinite(wanted) || wanted <= 0 || wanted > dialogWidth - minFormWidth) return fallback
+  return Math.max(minWidth, Math.min(Math.round(wanted), safeMax))
+}
+
+export interface ParsedConnectionString {
+  readonly patch: Partial<ConnectionOptions>
+  readonly advancedPatch: Partial<AdvancedConnectionOptions>
+  readonly matchedCount: number
+  readonly passwordOmitted: boolean
+}
+
+function splitPairs(raw: string): [string, string][] {
+  const pairs: [string, string][] = []
+  let current = '', quote: '"' | "'" | null = null
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i]
+    if (quote) {
+      if (ch === quote && raw[i + 1] === quote) { current += quote; i++ }
+      else if (ch === quote) quote = null
+      else current += ch
+      continue
+    }
+    if ((ch === '"' || ch === "'") && current.includes('=')) { quote = ch; continue }
+    if (ch === ';') {
+      const eq = current.indexOf('=')
+      if (eq > 0) pairs.push([current.slice(0, eq).trim(), current.slice(eq + 1).trim()])
+      current = ''
+      continue
+    }
+    current += ch
+  }
+  const eq = current.indexOf('=')
+  if (eq > 0) pairs.push([current.slice(0, eq).trim(), current.slice(eq + 1).trim()])
+  return pairs
+}
+
+const boolValue = (value: string): boolean | undefined => {
+  const lower = value.toLowerCase()
+  if (lower === 'true' || lower === 'yes' || lower === '1') return true
+  if (lower === 'false' || lower === 'no' || lower === '0') return false
+  return undefined
+}
+const intInRange = (value: string, min: number, max: number): number | undefined => {
+  if (!/^-?\d+$/.test(value)) return undefined
+  const num = Number(value)
+  return Number.isSafeInteger(num) && num >= min && num <= max ? num : undefined
+}
+
+const cleanValue = (value: string, max: number) => value.replace(/[\x00-\x1f\x7f]/g, '').slice(0, max)
+
+/**
+ * Parses standard semicolon-delimited SqlClient / ADO.NET / Azure SQL connection strings into structured `ConnectionOptions`
+ * and `AdvancedConnectionOptions` patches. Passwords (`Password` / `PWD`) are never imported into drafts for safety;
+ * `passwordOmitted` reports when a password key was skipped so the UI can remind the user. Control characters are
+ * stripped and string fields are bounded to the connection schemas' limits.
+ */
+export function parseConnectionString(raw: string): ParsedConnectionString {
+  const patch: Partial<ConnectionOptions> = {}
+  const advancedPatch: Partial<AdvancedConnectionOptions> = {}
+  let matchedCount = 0, passwordOmitted = false
+  for (const [rawKey, value] of splitPairs(raw)) {
+    const key = rawKey.toLowerCase().replace(/\s+/g, '')
+    if (!value) continue
+    if (key === 'password' || key === 'pwd') { passwordOmitted = true; continue }
+    if (['server', 'datasource', 'addr', 'address'].includes(key)) { patch.server = cleanValue(value.replace(/^tcp:/i, ''), 256); matchedCount++ }
+    else if (['initialcatalog', 'database'].includes(key)) { patch.database = cleanValue(value, 128); matchedCount++ }
+    else if (['userid', 'uid', 'user'].includes(key)) { patch.username = cleanValue(value, 128); patch.authentication ??= 'sql'; matchedCount++ }
+    else if (key === 'integratedsecurity' || key === 'trusted_connection' || key === 'trustedconnection') {
+      if (value.toLowerCase() === 'sspi' || boolValue(value) === true) { patch.authentication = 'windows'; matchedCount++ }
+    } else if (key === 'authentication') {
+      const mode = value.toLowerCase().replace(/\s+/g, '')
+      if (mode === 'activedirectoryinteractive' || mode === 'entramfa') { patch.authentication = 'entraMfa'; matchedCount++ }
+      else if (mode === 'activedirectoryintegrated') { patch.authentication = 'entraIntegrated'; matchedCount++ }
+      else if (mode === 'activedirectorypassword') { patch.authentication = 'entraPassword'; matchedCount++ }
+      else if (mode === 'activedirectoryserviceprincipal') { patch.authentication = 'entraServicePrincipal'; matchedCount++ }
+      else if (mode === 'activedirectorymanagedidentity' || mode === 'activedirectorymsi') { patch.authentication = 'entraManagedIdentity'; matchedCount++ }
+      else if (mode === 'activedirectorydefault') { patch.authentication = 'entraDefault'; matchedCount++ }
+      else if (mode === 'sqlpassword') { patch.authentication = 'sql'; matchedCount++ }
+    } else if (key === 'encrypt') {
+      const lower = value.toLowerCase()
+      if (lower === 'strict') { patch.encrypt = 'strict'; matchedCount++ }
+      else if (boolValue(lower) === false || lower === 'optional') { patch.encrypt = 'optional'; matchedCount++ }
+      else if (boolValue(lower) === true || lower === 'mandatory') { patch.encrypt = 'mandatory'; matchedCount++ }
+    } else if (key === 'trustservercertificate') {
+      const parsed = boolValue(value)
+      if (parsed !== undefined) { patch.trustServerCertificate = parsed; matchedCount++ }
+    } else if (key === 'hostnameincertificate') { patch.hostNameInCertificate = cleanValue(value, 256); matchedCount++ }
+    else if (key === 'commandtimeout') { const n = intInRange(value, 0, 86400); if (n !== undefined) { advancedPatch.commandTimeout = n; matchedCount++ } }
+    else if (key === 'connecttimeout' || key === 'connectiontimeout') { const n = intInRange(value, 0, 3600); if (n !== undefined) { advancedPatch.connectTimeout = n; matchedCount++ } }
+    else if (key === 'applicationname' || key === 'app') { advancedPatch.applicationName = cleanValue(value, 128); matchedCount++ }
+    else if (key === 'workstationid' || key === 'wsid') { advancedPatch.workstationId = cleanValue(value, 128); matchedCount++ }
+    else if (key === 'applicationintent') {
+      if (value.toLowerCase() === 'readonly') { advancedPatch.applicationIntent = 'ReadOnly'; matchedCount++ }
+      else if (value.toLowerCase() === 'readwrite') { advancedPatch.applicationIntent = 'ReadWrite'; matchedCount++ }
+    } else if (key === 'multisubnetfailover') { const b = boolValue(value); if (b !== undefined) { advancedPatch.multiSubnetFailover = b; matchedCount++ } }
+    else if (key === 'multipleactiveresultsets') { const b = boolValue(value); if (b !== undefined) { advancedPatch.multipleActiveResultSets = b; matchedCount++ } }
+    else if (key === 'packetsize') { const n = intInRange(value, 512, 32767); if (n !== undefined) { advancedPatch.packetSize = n; matchedCount++ } }
+    else if (key === 'connectretrycount') { const n = intInRange(value, 0, 255); if (n !== undefined) { advancedPatch.connectRetryCount = n; matchedCount++ } }
+    else if (key === 'connectretryinterval') { const n = intInRange(value, 1, 60); if (n !== undefined) { advancedPatch.connectRetryInterval = n; matchedCount++ } }
+    else if (key === 'failoverpartner') { advancedPatch.failoverPartner = cleanValue(value, 256); matchedCount++ }
+  }
+  if (patch.authentication && showsIdentity(patch.authentication)) delete patch.username
+  return { patch, advancedPatch, matchedCount, passwordOmitted }
+}
 
 /**
  * How many Advanced Properties the connection sets: those that differ from their defaults, and a stored command timeout,
@@ -11,7 +242,7 @@ import { connectionPresets } from '../../shared/theme/connection-colors'
 export function advancedCount(advanced: Partial<AdvancedConnectionOptions> | undefined): number {
   return advanced ? Object.entries(advanced).filter(([key, value]) => value !== undefined && (key === 'commandTimeout' || value !== advancedDefaults[key as keyof AdvancedConnectionOptions])).length : 0
 }
-/** What the Advanced… button says beside it while its dialog is closed: nothing, or how many properties are set. */
+/** What the Advanced tab's accessible summary says: nothing, or how many properties are set. */
 export function advancedSummary(advanced: Partial<AdvancedConnectionOptions> | undefined): string {
   const count = advancedCount(advanced)
   return count === 0 ? '' : count === 1 ? '1 property set' : `${count} properties set`
@@ -23,7 +254,7 @@ export function colorName(stored: string | undefined): string | undefined {
   return connectionPresets.find(preset => preset.stored === stored.toLowerCase())?.label ?? 'Custom'
 }
 /**
- * The collapsed Custom Properties' summary, so a name, colour or environment that is set stays in view: the parts for
+ * The Labels & Custom Properties summary, so a name, colour or environment that is set stays in view: the parts for
  * the row, and one sentence for screen readers. A Custom environment still being typed ('') counts as unset.
  */
 export function customSummary(options: Pick<ConnectionOptions, 'displayName' | 'color' | 'environment'>): { readonly name?: string; readonly color?: string; readonly environment?: string; readonly text: string } {
@@ -51,5 +282,5 @@ export function listStep(current: number, count: number, key: string, modified =
 }
 /** A saved connection row's tooltip: its name first, which the narrow list often cuts short, then server and database. */
 export function rowTitle(options: Pick<ConnectionOptions, 'displayName' | 'server' | 'database'>): string {
-  return [options.displayName, `${options.server} · ${options.database || '<default>'}`].filter(Boolean).join('\n')
+  return [options.displayName, [options.server, options.database].filter(Boolean).join(' · ')].filter(Boolean).join('\n')
 }

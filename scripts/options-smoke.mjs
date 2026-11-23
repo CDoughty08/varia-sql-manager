@@ -3,8 +3,8 @@ import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
-  backendReady, dialogClosed, dialogWindow, documentTabSlots, editorText as editorTextOf, menubar, movePane, optionsControls, optionsDescription, optionsForm, optionsHeading, optionsNotes, optionsSection, pane, dockPopoutBack, popoutTabs, queryServer, resultGrid,
-  shortcutsInspector, shortcutsRow, shortcutsSearch, shortcutsSheet, shortcutsTable, toolbarButton, warningBanner as warningBannerOf, expectEditorShown, pressToClose, clickToClose
+  backendReady, connectDialogWindow, dialogClosed, dialogWindow, documentTabSlots, editorText as editorTextOf, menubar, movePane, optionsControls, optionsDescription, optionsForm, optionsHeading, optionsNotes, optionsSection, pane, dockPopoutBack, popoutTabs, queryServer, resultGrid,
+  shortcutsInspector, shortcutsRow, shortcutsSearch, shortcutsSheet, shortcutsTable, submitConnect, toolbarButton, warningBanner as warningBannerOf, expectEditorShown, pressToClose, clickToClose
 } from './fixtures/ui.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
@@ -326,10 +326,10 @@ try {
   await expect.poll(() => page.locator('.monaco-editor .view-line').count()).toBeGreaterThan(1)
   // F5 on a connected query sends Options' time-out and stop-on-error.
   await toolbarButton(page, 'Connect').click()
-  await page.getByLabel('Server Name', { exact: true }).fill('server-a')
-  await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(page.getByRole('dialog')).toHaveCount(0)
+  const { window: connectWin, dialog: connectDialog } = await connectDialogWindow(application)
+  await connectDialog.getByLabel('Server Name', { exact: true }).fill('server-a')
+  await connectDialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
+  await submitConnect(connectWin, connectDialog)
   // Connect closes before it binds the query to the new connection (App's finishConnected), and F5 on a query with none
   // asks to connect instead of running: wait for the query's server.
   await expect(queryServer(page)).not.toHaveValue('')
@@ -589,10 +589,10 @@ try {
     await opens(page, () => editor().focus(), 'Shift+F9', 1)
     // A popout routes keys through the same rules: Shift+F9 in the Results window opens a query in the main window.
     await toolbarButton(page, 'Connect').click()
-    await page.getByLabel('Server Name', { exact: true }).fill('server-a')
-    await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
-    await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
-    await expect(page.getByRole('dialog')).toHaveCount(0)
+    const { window: popoutConnectWin, dialog: popoutConnectDialog } = await connectDialogWindow(application)
+    await popoutConnectDialog.getByLabel('Server Name', { exact: true }).fill('server-a')
+    await popoutConnectDialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
+    await submitConnect(popoutConnectWin, popoutConnectDialog)
     await editor().focus()
     await page.keyboard.press('Control+A')
     await page.keyboard.insertText('SELECT 1')

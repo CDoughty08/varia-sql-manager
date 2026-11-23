@@ -183,7 +183,9 @@ export const part = {
   queryStatusEnvironment: '.query-status-environment',
   statusEnvironment: '.status-environment',
   // Dialogs
+  dialogWindowRoot: '.dialog-window-root',
   connectionChoice: '.connection-choice',
+  connectTabBadge: '.connect-tab-badge',
   /** The Connect dialog's failure: its InlineError and the Error details under it. */
   connectFailure: '.connect-failure',
   // Connect v2's layout, for the probes that measure it: the two panes, the form's own scroll, and at its bottom the
@@ -989,12 +991,27 @@ export async function dialogWindow(application, name, timeout = 15000) {
   }, { timeout }).toBe(true)
   return found
 }
-/** Presses `key` in a dialog's view where it closes the dialog: its window may close on the key going down, before the key comes up. */
-export const pressToClose = (view, key) => view.keyboard.press(key).catch(error => { if (!view.isClosed()) throw error })
+/** Presses `key` in a dialog's view or target locator where it closes the dialog: its window may close on the key going down, before the key comes up. */
+export const pressToClose = (target, key) => ('keyboard' in target
+  ? target.keyboard.press(key).catch(error => { if (!target.isClosed()) throw error })
+  : target.press(key).catch(error => { if (!target.page().isClosed()) throw error }))
 /** Clicks `target`, a button that closes its dialog window: the window may close before Playwright finishes the click. */
 export const clickToClose = target => target.click().catch(error => { if (!target.page().isClosed()) throw error })
 /** Waits until the dialog window `view` has closed or, where the dialog showed over the main window, the dialog named `name` is gone. */
-export const dialogClosed = (view, name) => expect.poll(async () => view.isClosed() || (!view.url().startsWith('about:') && !(await view.getByRole('dialog', named(name)).count().catch(() => 0)))).toBe(true)
+export const dialogClosed = (view, name, options) => expect.poll(async () => view.isClosed() || (!view.url().startsWith('about:') && !(await view.getByRole('dialog', named(name)).count().catch(() => 0))), options).toBe(true)
+/** Waits for the Connect dialog's OS window (or overlay fallback) and returns `{ window, dialog }` after connections finish loading. */
+export async function connectDialogWindow(application, timeout = 15000) {
+  const window = await dialogWindow(application, 'Connect', timeout)
+  const dialog = window.getByRole('dialog', { name: 'Connect', exact: true })
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByText('Loading saved connections…')).toHaveCount(0)
+  return { window, dialog }
+}
+/** Submits Connect inside its dialog window and waits for that window (or overlay) to close. */
+export async function submitConnect(window, dialog, options) {
+  await clickToClose(dialog.getByRole('button', { name: 'Connect', exact: true }))
+  await dialogClosed(window, 'Connect', options)
+}
 /** An Options form page's sections (role group, named by their headings) and the fields and lists of its control column. */
 export const optionsSection = (dialog, name) => optionsForm(dialog).getByRole('group', named(name))
 export const optionsControls = dialog => optionsForm(dialog).locator('input[type="number"], select, input[role="switch"]')
