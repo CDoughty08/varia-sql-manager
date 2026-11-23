@@ -73,7 +73,7 @@ describe('DialogWindow', () => {
     const [, name, features] = view.open.mock.calls[0] as [string, string, string]
     expect(name).toMatch(dialogWindowName)
     expect(name.startsWith('varia-dialog-options-')).toBe(true)
-    expect(features).toMatch(/^left=-?\d+,top=-?\d+,width=940,height=680$/)
+    expect(features).toMatch(/^left=-?\d+,top=-?\d+,width=960,height=700$/)
     expect(view.attachWindow).toHaveBeenCalledWith(view.fake.child)
     const doc = view.fake.child.document
     expect(view.host.querySelector('[role="dialog"]')).toBeNull()

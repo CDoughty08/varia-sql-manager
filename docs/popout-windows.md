@@ -83,7 +83,7 @@ can move off the main window, onto another display.
 - **Modeless.** The workbench keeps working in the main window while a dialog window is open. Keys pressed in the
   dialog window are the dialog's: `modalOpen` (`core/modal.ts`) holds the workbench's keys there and not in the main
   window. Tools › Options… while Options is open brings its window forward on the page asked for.
-- **Size.** Options opens at 940 × 680, at least 640 × 440, and can be resized; the size it was left at is kept in
+- **Size.** Options opens at 960 × 700, at least 640 × 440, and can be resized; the size it was left at is kept in
   `localStorage` (`varia.dialogWindow.options`), a cache with no IPC, as the palette's history is, and reopens within the
   screen. About has a fixed size. A window opens centred on the main window.
 - **Closing.** The window's close button, Alt+F4 or ⌘W is the dialog's Cancel (while OK is saving, Options moves over
