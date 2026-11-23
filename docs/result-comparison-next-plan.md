@@ -463,10 +463,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   **Go to Possible Match**. Ignored columns are not counted, nor are the match's key columns, which always differ on a
   look-alike. Its summary, for the live region, is "removed row, looks like row 9 in Result 3: 4 of 5 compared columns
   equal". Which values differ comes from the backend, which judged the look-alike. A partner hidden by the comparison's
-  filters or chips is still described, with navigation's sentence "The possible match is hidden by a filter."
-  (`partnerHiddenText`) in place of Go to Possible Match. Go to Possible Match in the card moves the active cell to the
-  partner, as the command does, and returns the focus to the grid; a following card then describes the partner and says
-  follow mode's combined message, and any other card closes. The gutter's own tooltip stays everywhere else.
+  filters or chips is still described, with navigation's sentence (`partnerHiddenText`, "The possible match is hidden by
+  a filter", which the card ends with a period) in place of Go to Possible Match. Go to Possible Match in the card moves
+  the active cell to the partner, as the command does, and returns the focus to the grid; a following card then
+  describes the partner and says follow mode's combined message, and any other card closes. The gutter's own tooltip
+  stays everywhere else.
 - **Opened by key elsewhere,** the card says what there is:
   - an added row: "Added row: only in Result 3."; a removed row: "Removed row: only in Result 1."; these cards, and a
     cut row's, describe the whole row, so they are named for it ("Change details: added row", "Change details: removed
@@ -771,12 +772,12 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
 
 - **Where:** **Script Differences as T-SQL…** in the Comparison submenu, More results tools and the palette. It opens an
   **OS dialog window** (N6): kind `scriptDiff`, titled "Script Differences as T-SQL" (main sets the kind's static title,
-  `dialogWindowKinds`), 640 × 600 by default, at least 520 × 440, size remembered as Options' is, modeless. One is open
-  at a time, as Options is. It opens at its remembered bounds, else centred over the window that holds the comparison's
-  Results pane (the main window, or a popout on another display), as dialog windows open after Connect in an OS window
-  (`dialogWindowBounds`), and stays a child of the main window, as every dialog window is: parented to a popout, it
-  would close when the panel docks back. A popout clicked meanwhile can cover it; Script Differences as T-SQL… brings it
-  forward.
+  `dialogWindowKinds`), 640 × 600 by default, at least 520 × 440, its size remembered as Options' is, modeless. One is
+  open at a time, as Options is. It opens at its remembered position (`dialogWindowBounds`, after Connect in an OS
+  window) while that lies on the display of the window that holds the comparison's Results pane, else centred over that
+  window (the main window, or a popout on another display), and stays a child of the main window, as every dialog window
+  is: parented to a popout, it would close when the panel docks back. A popout clicked meanwhile can cover it; Script
+  Differences as T-SQL… brings it forward.
 - **The form:**
   - A first line names the comparison and how rows are matched: "Result 1 → Result 3 (SQLQuery3.sql), rows matched by
     key columns: id", and changes when another comparison invokes the dialog. A script is written only under Key
@@ -908,18 +909,20 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     Selected rows are the grid's selection, which always holds at least the active cell's row. The dialog follows it
     live, so the option names the keys of the chosen entries that differ while there are at most three ("Selected rows
     (1: id = 1002)", "(2: id = 1002; id = 1004)", the answer's `selectedKeys`, joined with "; " since a composite key
-    holds commas), the header's rows line names them too, and while Selected rows is chosen, a selection changed while
-    the window was in the background is said when it is activated: "Selected rows now holds id = 1009." ("…now holds 12
-    differences." past three): a click in the grid to look at a cell never changes the script unnoticed. In Two rows an
-    entry is chosen when either of its halves is. The preview reads them as it shows, and Script reads them again.
+    holds commas), the header's rows line names them too, and while Selected rows is chosen, a selection change says
+    "Selected rows now holds 1 difference (id = 1009)." ("…now holds 12 differences." past three, "…now holds no
+    differences." for none), the form the replace sentences take: a click in the grid to look at a cell never changes
+    the script unnoticed. In Two rows an entry is chosen when either of its halves is. The preview reads them as it
+    shows, and Script reads them again.
   - **Options:** Wrap in a transaction (on), Check each statement changes one row (on; Q2), with the line "UPDATEs also
     check that the row still holds the values they change from, DELETEs the values the comparison saw, and INSERTs that
     the row is not there yet." (Q11). While some chosen UPDATEs change only columns the check cannot compare (the
-    answer's `uncheckedUpdates`), a line under it says so: "2 UPDATEs change only columns the checks cannot compare
-    (note: xml), so with the wrong direction they would run without stopping and change nothing." Turning off the
-    transaction warns "Without a transaction, statements before a failure stay applied.", since a failed check, a key
-    violation or a trigger's error all leave earlier statements in place. Turning off the checks warns "Without the
-    checks, a statement runs even when its row is missing, repeated, changed or already there, and nothing says so."
+    answer's `uncheckedUpdates`), a line under it gives the answer's sentence: "2 UPDATEs change only columns the checks
+    cannot compare (note: xml; code: values not all ASCII under its SQL_ collation), so with the wrong direction they
+    would run without stopping and change nothing." Turning off the transaction warns "Without a transaction, statements
+    before a failure stay applied.", since a failed check, a key violation or a trigger's error all leave earlier
+    statements in place. Turning off the checks warns "Without the checks, a statement runs even when its row is
+    missing, repeated, changed or already there, and nothing says so."
   - **Destination:** New Query Editor Window (default) or Clipboard.
   - A **preview** of the first 30 lines (headed "Preview: first 30 lines" while the script is longer), a summary beside
     Script ("Deletes 2 rows, updates 5 rows and inserts 1 row in [Sales_Test].[dbo].[Orders] to match Result 3.", with
@@ -995,15 +998,17 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     window's session, failing its next ordinary INSERT into the table and any other table's `SET IDENTITY_INSERT …
     ON`.
   - The New Query Editor Window opens on the comparison's connection, as Script As does, and does not run.
-- **Generating:** the dialog shows progress. Cancel then stops generating and keeps the window open with its draft; the
-  next Cancel closes it. A failure shows its sentence in the dialog. If the chosen rows change while it generates (a
-  replace, chips or filters under Rows in the grid, the selection under Selected rows, or another comparison invoking
-  the window; a sort changes no statement, so it does not), the generation is cancelled and a line above the summary
-  says "The comparison changed, so the script was not written. Script again to write it.", the two Script's description,
-  so the refreshed summary and its "N of M differences" stay in sight; the live region says the line after the shipped
-  sentence and any Rows sentence; when the change closed the comparison or brought a refusal, it shows that state
-  instead, and when another comparison invoked the window it says "The script for Result 1 → Result 3 was not written."
-  before the new pair's form.
+- **Generating:** the dialog shows progress, and the form is read-only (its controls `aria-disabled`), so the script
+  written is always the form shown; Script keeps the focus, unavailable, and Cancel is the only action. Cancel stops
+  generating and keeps the window open with its draft; the next Cancel closes it. A failure shows its sentence in the
+  footer in place of the summary, as a refusal found on Script does, with the focus kept on Script and the sentence said
+  in the live region. If the chosen rows change while it generates (a replace, chips or filters under Rows in the grid,
+  the selection under Selected rows, or another comparison invoking the window; a sort changes no statement, so it does
+  not), the generation is cancelled and a line above the summary says "The comparison changed, so the script was not
+  written. Script again to write it.", the two Script's description, so the refreshed summary and its "N of M
+  differences" stay in sight; the live region says the line after the shipped sentence and any Rows sentence; when the
+  change closed the comparison or brought a refusal, it shows that state instead, and when another comparison invoked
+  the window it says "The script for Result 1 → Result 3 was not written." before the new pair's form.
 - **Refused, with the reason in the dialog.** The first four are known when the dialog opens (its first preview request,
   sent before the form has a target or direction, answers them): the refusal replaces the form below its first line (the
   comparison and its match, so a refusal never hides which comparison it is about), the two become the window's
@@ -1055,10 +1060,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       dialog is a child window, always above the main one and opened over the window that holds the pane, so it would
       cover the menu, and a dialog window cannot be hidden (`DialogWindow` only opens, focuses and closes one). When the
       menu closes on Apply, Cancel or Escape, the renderer opens the dialog again from the draft, at its remembered
-      bounds, else centred over the window that holds the pane, as dialog windows open after Connect in an OS window
-      (`dialogWindowBounds`), with the focus, and the replace that follows refreshes it. When it closes otherwise (a
-      press outside, F6, the pane hiding, the comparison closing), the dialog stays closed rather than take the focus
-      back, and Script Differences as T-SQL… opens it again from the draft;
+      position while that lies on the pane's display, else centred over the window that holds the pane (Where above),
+      with the focus, and the replace that follows refreshes it. When it closes otherwise (a press outside, F6, the pane
+      hiding, the comparison closing), the dialog stays closed rather than take the focus back, and Script Differences
+      as T-SQL… opens it again from the draft;
     - with an input closed, rows cannot be matched again, so the buttons are unavailable and the sentence's last part
       becomes "…, and Result 1 is closed, so rows cannot be matched again." It gives no further advice: running the
       query again would run every statement in it again, including the UPDATE the script was meant to repair. The
@@ -1086,8 +1091,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     columns.", with **Choose key columns…**;
   - no differences in the chosen rows: "The chosen rows have no differences to script.";
   - every UPDATE skipped because its changes are all in unticked columns, with no other statement left: "None of the
-    ticked columns changed in the chosen rows. Tick a changed column."; when the ticked identity column changed too, or
-    alone: "Only id, an identity column, changed in the chosen rows, and an identity column is never SET.";
+    ticked columns changed in the chosen rows. Tick a changed column."; when only the identity column changed: "Only id,
+    an identity column, changed in the chosen rows, and an identity column is never SET."; when unticked columns changed
+    too: "Of the ticked columns, only id changed, and an identity column is never SET. Tick a changed column.";
   - over 1,000,000 characters, a query window's execute limit: "The script would be about 2,400,000 characters. Scripts
     are limited to 1,000,000 characters, the most a query window runs. Choose fewer rows." (Q5).
 
@@ -1100,7 +1106,12 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     the rows the chosen option holds, a line by Rows says so with the new count, and the dialog's live region adds it
     after the shipped sentence: "The comparison's filters were removed, so Rows in the grid now holds 31 differences.";
     "A filter was turned off, so Rows in the grid now holds 31 differences."; "The selection was reset, so Selected rows
-    now holds 1 difference." A refusal's button never changes the rows unannounced.
+    now holds 1 difference." A refusal's button never changes the rows unannounced. With no difference left, a sentence
+    ends "now holds no differences."
+  - A screen reader does not read a live region in a window in the background, so whatever the dialog's live region
+    said while its window was in the background (a Rows sentence, the changed line, a refusal that arose) is said
+    again, in order, when the window is activated: a replace started from the main window never widens what Script
+    writes unheard.
   - The comparison closing (re-run, Close Results, backend loss) says "The comparison was closed." and makes Script
     unavailable (`aria-disabled`).
   - The draft (target and its server, direction, statement ticks, columns, destination) is remembered per pair in the
@@ -1197,30 +1208,34 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     values (one INSERT of a 2,097,152-character XML value is about 8.4 million characters as its hex term); the size
     refusal is Script's.
   - **Answer:** `{ text (≤ 1,000,000 characters), differences: { all, grid, selected }, deletes?, updates, inserts?,
-    lookAlikeDeletes?, lookAlikeInserts?, softValues, uncheckedUpdates, selectedKeys?, complete, refusal? }`.
-    `differences` is each Rows option's count of entries that are not `same`, which the options show beside their names
-    and the "N of M differences" sentences read (`grid` is `all` when no view is sent). `uncheckedUpdates` is the chosen
-    UPDATEs whose every SET column Q11 leaves out, so their WHERE checks only the keys, counted in the counts pass by
-    value, so a preview and Script agree: by type alone for a column Q11 always leaves out, and from the old value for
-    one whose type leaves it to the value (char or varchar under a SQL_ collation or with none recorded, a value marked
-    truncated, U+FFFD, a subnormal float), reading only those cells. `selectedKeys` holds the key text of Selected rows'
-    entries that differ (each as the row checks write it, `id = 1002`, cut at 60 characters) while there are at most
-    three. The look-alike counts are the chosen rows to delete and to insert that have a look-alike (`DiffIndex.Poss`),
-    and `softValues` the chosen rows' soft values in ticked columns, counted in the same pass as the counts and
-    `differences`, so the look-alike and Exact text lines describe the chosen rows, not the whole diff. A refusal is an
-    answer, not an error, with empty `text`: `refusal: { kind, sentence }`, `kind` one of `asShown`, `keyType`,
-    `keyName`, `notColumns`, `repeatedKey`, `truncated`, `unwritable`, `keyCollation`, `noDifferences`, `noTickedChange`
-    and `tooLarge`, and the sentence at most 1,000 characters, both bounded in the answer schema. Every refusal's
-    sentence, closed-input forms included, is the backend's (naming at most three columns, then "and 2 more", each cut
-    at 60 characters, so it stays within its 1,000), which holds the counts, names and sample values and knows when an
-    input's result was released; the dialog chooses only the refusal's buttons and their availability, by `kind`, and
-    never parses the sentence. Past 1,000,000 characters, estimated first, it refuses with `tooLarge`, well inside the
-    16 MiB response limit. In a preview the counts are the chosen rows' entries by kind; after Script they are the
-    script's own statements, which can be lower (Counts above). The backend itself refuses a comparison whose match is
-    not a `columns` match, so Automatic's choice can never be scripted by accident (Use order_no as key columns replaces
-    the comparison with that `columns` match first), and a comparison of rows as shown. Both read the diff set's records
-    (C3's match and C6's as-shown flags), and the WHERE clauses take the recorded key pairs, so the params carry no key
-    columns.
+    lookAlikeDeletes?, lookAlikeInserts?, softValues, uncheckedUpdates?: { count, sentence }, selectedKeys?, complete,
+    refusal? }`. `differences` is each Rows option's count of entries that are not `same`, which the options show beside
+    their names and the "N of M differences" sentences read (`grid` is `all` when no view is sent). `uncheckedUpdates`
+    is the chosen UPDATEs whose every SET column Q11 leaves out, so their WHERE checks only the keys, counted in the
+    counts pass by value, so a preview and Script agree: by type alone for a column Q11 always leaves out, and from the
+    old value for one whose type leaves it to the value (char or varchar under a SQL_ collation or with none recorded, a
+    value marked truncated, U+FFFD, a subnormal float), reading only those cells. Its sentence is the backend's, as a
+    refusal's is, since only the backend knows the reasons: it names at most three columns, then "and 2 more", each cut
+    at 60 characters with its reason (the type, as "note: xml"; "id: int and varchar in the two results"; or by value,
+    "code: values not all ASCII under its SQL_ collation", "memo: values not kept in full", "note: values that cannot be
+    written exactly", "ratio: values too small to write exactly"), within 1,000 characters. `selectedKeys` holds the key
+    text of Selected rows' entries that differ (each as the row checks write it, `id = 1002`, cut at 60 characters)
+    while there are at most three. The look-alike counts are the chosen rows to delete and to insert that have a
+    look-alike (`DiffIndex.Poss`), and `softValues` the chosen rows' soft values in ticked columns, counted in the same
+    pass as the counts and `differences`, so the look-alike and Exact text lines describe the chosen rows, not the whole
+    diff. A refusal is an answer, not an error, with empty `text`: `refusal: { kind, sentence }`, `kind` one of
+    `asShown`, `keyType`, `keyName`, `notColumns`, `repeatedKey`, `truncated`, `unwritable`, `keyCollation`,
+    `noDifferences`, `noTickedChange` and `tooLarge`, and the sentence at most 1,000 characters, both bounded in the
+    answer schema. Every refusal's sentence, closed-input forms included, is the backend's (naming at most three
+    columns, then "and 2 more", each cut at 60 characters, so it stays within its 1,000), which holds the counts, names
+    and sample values and knows when an input's result was released; the dialog chooses only the refusal's buttons and
+    their availability, by `kind`, and never parses the sentence. Past 1,000,000 characters, estimated first, it refuses
+    with `tooLarge`, well inside the 16 MiB response limit. In a preview the counts are the chosen rows' entries by
+    kind; after Script they are the script's own statements, which can be lower (Counts above). The backend itself
+    refuses a comparison whose match is not a `columns` match, so Automatic's choice can never be scripted by accident
+    (Use order_no as key columns replaces the comparison with that `columns` match first), and a comparison of rows as
+    shown. Both read the diff set's records (C3's match and C6's as-shown flags), and the WHERE clauses take the
+    recorded key pairs, so the params carry no key columns.
 - **Backend `Results/DiffScript.cs`:** literals by the column's `dataType`, precision and scale:
 
   | Type | Literal |
@@ -1260,10 +1275,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   `SqlService.cs`).
 - **Renderer:**
   - The dialog is a `DialogWindow` of the new kind in `dialogWindowKinds` (`src/shared/popouts.ts`), which also widens
-    the `dialogWindowName` pattern (today `options|about`). `DialogWindow` takes the window to centre on when no
-    remembered bounds apply, the one holding the comparison's Results pane, where today it centres on the main window;
-    the window stays the main window's child. popout-windows.md § Dialog windows gains the kind and that rule, and its
-    "At most four" follows `maxWindows`, two per kind (eight once Connect's kind has landed too).
+    the `dialogWindowName` pattern (today `options|about`). `DialogWindow` takes the window to open over, keeping a
+    remembered position only on that window's display, the one holding the comparison's Results pane, where today it
+    centres on the main window; the window stays the main window's child. popout-windows.md § Dialog windows gains the
+    kind and that rule, and its "At most four" follows `maxWindows`, two per kind (eight once Connect's kind has landed
+    too).
   - New Query Editor Window opens through the document service with the connection, as Script As's destination does.
   - Clipboard goes through the existing clipboard path.
   - The table suggestions read the Search Objects index, the single metadata source, and never query the server.
@@ -1341,8 +1357,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     the header's left-out line, the preview's waiting and refused states, suggestions unhighlighted, the request on
     opening (no target or direction) filling the Rows counts and showing an opening refusal, the reading state before it
     with the focus on Cancel, a failed preview request on opening and later (a backend loss showing the closed state),
-    the changed line above the summary and a sort not cancelling a generation, the unticked line's DELETE clause, the
-    unchecked-UPDATEs line, Selected rows' keys and the activation sentence after a background selection change, the
+    the changed line above the summary and a sort not cancelling a generation, the form read-only while generating and a
+    failure beside Script, background live messages said again on activation, the remembered position kept only on the
+    pane's display, the unchecked line's backend sentence, both identity sentences, the unticked line's DELETE clause,
+    the unchecked-UPDATEs line, Selected rows' keys and the activation sentence after a background selection change, the
     key-name refusal's button, Enter in Target table with nothing highlighted, the window over a popped-out Results
     pane, a cancelled generation giving way to a closed or refused state, and the Clipboard announcement.
   - Smoke: open the dialog window by role, script to a New Query Editor Window, and find `BEGIN TRANSACTION` in the
