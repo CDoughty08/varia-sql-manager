@@ -3,6 +3,10 @@ import type { EditorGroupsLayout } from '../editor-groups'
 import type { ConnectionWorkspace } from '../connection-targets'
 import type { ProviderId } from '../providers'
 import type { RestoredJob } from '../bigquery/jobs'
+import type { KeptAgentKind } from '../agent/kept'
+
+/** What a kept tab is: a text document's kind, or a SQL Server Agent document whose `text` is its kept state (shared/agent/kept.ts). */
+export type KeptDocumentKind = DocumentKind | KeptAgentKind
 
 /**
  * Hot exit (Tools › Options › Environment › Documents › Restore open queries on startup), as VS Code has it: a normal
@@ -37,12 +41,13 @@ export function cleanTabName(value: string): string {
  * connected, as a legacy display hint. `targetId` is the exact durable association; `attachWanted` remembers whether
  * reconnecting that target should attach the query. Every associated query keeps its own database. `provider` is the
  * tab's engine (absent: SQL Server, as in every 0.9.0 record); a BigQuery tab's `database` is its dataset, and `jobKey` the
- * key its jobs are recorded under (docs/bigquery.md, Re-attaching to jobs), so the restored tab re-attaches to them.
+ * key its jobs are recorded under (docs/bigquery.md, Re-attaching to jobs), so the restored tab re-attaches to them. A SQL Server Agent
+ * document (AG-6g) keeps its state as `text`, with its connection target, and never a file, provider or job key.
  */
 export interface SessionDocumentWrite {
   readonly name: string
   readonly baseName?: string
-  readonly kind: DocumentKind
+  readonly kind: KeptDocumentKind
   readonly eol: LineEnding
   readonly dirty: boolean
   readonly pinned?: boolean
@@ -73,7 +78,7 @@ export interface ReloadPins { readonly session: SessionWrite; readonly recoveryI
 export interface RestoredDocument {
   readonly name: string
   readonly baseName?: string
-  readonly kind: DocumentKind
+  readonly kind: KeptDocumentKind
   readonly eol: LineEnding
   readonly dirty: boolean
   readonly pinned?: boolean
