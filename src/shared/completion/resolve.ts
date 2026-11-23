@@ -57,11 +57,12 @@ export function childrenOf(columns: readonly ScopeColumn[], parent: readonly str
 const work = 1_000_000
 
 /** starHops: how many WITH queries or subqueries deep a `*` is followed for columns: past it a source gives none (a long chain of
- *  WITH queries, each reading the last through `*`, would otherwise recurse once per query); unnestHops: how many UNNESTs deep a prefix is mapped; unnestDepth: how many UNNESTs, each reading the one before (UNNEST(u1.x) u2), are followed:
+ *  WITH queries, each reading the last through `*`, would otherwise recurse once per query); unnestHops: how many UNNESTs deep a prefix is mapped; readDepth: how many reads of any kind (a WITH query's
+ *  `*`, an UNNEST's array) are followed one inside another, which UNNESTs reset the star count of; unnestDepth: how many UNNESTs, each reading the one before (UNNEST(u1.x) u2), are followed:
  *  past it one gives no fields, as each would otherwise recurse once more; narrowPrefixes: prefixes per object in one second ask (each is a request);
  *  narrowUnnests: UNNEST sources whose element fields a second ask covers; fieldSources: sources a bare column name is looked for
  *  in (an UNNEST of a bare name reads them, and each may be an UNNEST of a bare name). */
-export const resolverLimits = { starHops: 64, unnestHops: 8, unnestDepth: 256, narrowPrefixes: 4, narrowUnnests: 16, fieldSources: 64, work } as const
+export const resolverLimits = { starHops: 64, unnestHops: 8, unnestDepth: 256, readDepth: 512, narrowPrefixes: 4, narrowUnnests: 16, fieldSources: 64, work } as const
 
 /** The column at a field path, case ignored. */
 export function columnAt(columns: readonly ScopeColumn[], path: readonly string[]): ScopeColumn | undefined {
@@ -117,8 +118,12 @@ export class ScopeResolver {
 
   /** Some read was cut by the work cap: what the reads gave is not all there is. */
   overBudget = false
-  /** UNNEST reads in progress, each inside the last. */
+  /** UNNEST reads, and reads of any kind, in progress, each inside the last. */
   private unnesting = 0
+  private depth = 0
+  /** The last bare-name search in field() passed over a source cut short (or stopped at fieldSources): not finding the name is
+   *  not final. */
+  private passedCut = false
   private readonly ctes = new Map<string, QueryShape>()
   /** Sources being read: one met again while it is read (a WITH query that reads itself) gives no columns. */
   private readonly reading = new Set<ScopeSource>()
@@ -223,10 +228,11 @@ export class ScopeResolver {
     if (this.reading.has(source)) return Promise.resolve(unread)
     const kept = this.cache.get(source)
     if (serves(kept, hops)) return kept.found
-    if (hops > resolverLimits.starHops) return Promise.resolve({ columns: [], truncated: true, budget: true })
+    if (hops > resolverLimits.starHops || this.depth >= resolverLimits.readDepth) return Promise.resolve({ columns: [], truncated: true, budget: true })
     this.reading.add(source)
     const entry: Kept = { hops, found: Promise.resolve(unread) }
-    entry.found = this.read(source, hops).then(given => {
+    this.depth++
+    entry.found = this.read(source, hops).finally(() => this.depth--).then(given => {
       if (given !== unread) entry.budget = given.budget === true
       else if (this.cache.get(source) === entry) this.cache.delete(source)
       return given
@@ -259,8 +265,8 @@ export class ScopeResolver {
         this.unnesting++
         let field: Awaited<ReturnType<ScopeResolver['field']>>
         try { field = await this.field(source.path, source) } finally { this.unnesting-- }
-        // Not found: it may lie past what a table cut short gave.
-        if (!field) return { columns: [], truncated: this.overBudget || this.cutShort().size > 0 }
+        // Not found: it may lie past what a table, or a source, cut short gave.
+        if (!field) return { columns: [], truncated: this.passedCut || this.overBudget || this.cutShort().size > 0 }
         this.spent += field.columns.columns.length
         const prefix = field.path.length
         return { truncated: field.columns.truncated, columns: childrenAndBelow(field.columns.columns, field.path).map(column => ({ ...column, path: column.path.split('.').slice(prefix).join('.') })) }
@@ -324,16 +330,22 @@ export class ScopeResolver {
     if (named) return { source: named, path: parts.slice(1), columns: await this.columns(named) }
     const seen = new Set<SourceColumns>()
     let looked = 0
+    let passed = false
     for (const source of this.scope.sources) {
       if (source === except) continue
-      if (looked++ >= resolverLimits.fieldSources) break
+      if (looked++ >= resolverLimits.fieldSources) { passed = true; break }
       const columns = await this.columns(source)
+      passed ||= columns.truncated
       if (seen.has(columns)) continue
       seen.add(columns)
       // By its top-level name: a narrowed answer holds a STRUCT's fields (zrec.a) without the STRUCT itself.
-      if (headsOf(columns).has(parts[0].toLowerCase())) return { source, path: [...parts], columns }
+      if (headsOf(columns).has(parts[0].toLowerCase())) { this.passedCut = false; return { source, path: [...parts], columns } }
     }
+    this.passedCut = passed
   }
+
+  /** Whether the last bare name field() looked for and did not find may lie in a source cut short. */
+  get missedCut(): boolean { return this.passedCut }
 }
 
 /** Every column at or below `parent`, excluding `parent` itself. */

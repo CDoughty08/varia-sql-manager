@@ -54,7 +54,7 @@ export async function completeFromIndex(read: CompletionRead, dialect: Completio
           field = await resolver.field(site.qualifier) ?? field
         }
       }
-      incomplete ||= resolver.failed || resolver.cut || resolver.overBudget || (!field && resolver.cutShort().size > 0)
+      incomplete ||= resolver.failed || resolver.cut || resolver.overBudget || (!field && (resolver.missedCut || resolver.cutShort().size > 0))
       if (field) {
         incomplete ||= field.columns.truncated
         for (const column of childrenOf(field.columns.columns, field.path)) add(columnItem(column, field.path.length, insert))

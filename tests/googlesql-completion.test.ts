@@ -377,6 +377,21 @@ describe('completion from the index', () => {
     expect(await hoverFromIndex(readGoogleSqlHover(text, 'SELECT u2999.'.length)!, dialect, fakeLookup())).toBeUndefined()
   })
 
+  it('bounds UNNESTs and stars nested together, and says a bare name past a cut source is not final', async () => {
+    const levels = Array.from({ length: 256 }, (_, index) => {
+      const k = index + 1
+      return [`a${k}_0 AS (SELECT * FROM UNNEST(c${k - 1}.items))`, ...[1, 2, 3].map(step => `a${k}_${step} AS (SELECT * FROM a${k}_${step - 1})`)].join(', ')
+    }).join(', ')
+    const froms = Array.from({ length: 256 }, (_, index) => `a${256 - index}_3 c${256 - index}`).join(', ')
+    const text = `WITH ${levels} SELECT | FROM ${froms}, sales.orders c0`
+    const list = await complete(text)
+    expect(list.incomplete).toBe(true)
+    const member = await complete(text.replace('SELECT | FROM', 'SELECT c256.| FROM'))
+    expect(member.incomplete).toBe(true)
+    const chain = Array.from({ length: 300 }, (_, index) => `, UNNEST(u${index + 1}.items) u${index}`).join('')
+    expect((await complete(`SELECT b.| FROM UNNEST(items) b${chain}, sales.orders u300`)).incomplete).toBe(true)
+  })
+
   it('says the list is not final when an UNNEST\'s prefix went unasked', async () => {
     const dropped = await complete('SELECT al| FROM `varia-wide.lab.wide` w, UNNEST(w.nope1) a, UNNEST(w.nope2) b, UNNEST(w.nope3) c, UNNEST(w.zrec) d')
     expect(dropped.incomplete).toBe(true)
