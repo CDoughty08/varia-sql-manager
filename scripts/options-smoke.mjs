@@ -222,7 +222,7 @@ try {
   await expect(optionsForm(dialog()).locator('mark')).toHaveText('time-out')
   await dialog().getByRole('button', { name: 'Query Execution › SQL Server › General ›', exact: true }).click()
   await expect(heading()).toHaveText('Query Execution › SQL Server › General')
-  await dialog().getByRole('button', { name: '← Back to all search results', exact: true }).click()
+  await dialog().getByRole('button', { name: 'Back to all search results', exact: true }).click()
   await expect(heading()).toHaveText('Search Results')
   // The key is the catalogue's options.focusSearch, a modal key: from a page's field it focuses the box and selects its
   // text, and Shift with it does nothing.

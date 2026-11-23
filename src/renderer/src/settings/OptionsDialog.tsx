@@ -663,7 +663,7 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
             </div>}
         </> : <>
           {(searchResult || modifiedOnly) && <div className="options-filter-bar">
-            <button type="button" className="options-back-link" onClick={() => setBrowseScope('all')}>← Back to all {searchResult ? 'search results' : 'modified settings'}</button>
+            <button type="button" className="options-back-link" onClick={() => setBrowseScope('all')}><Icon name="arrow-left" />Back to all {searchResult ? 'search results' : 'modified settings'}</button>
           </div>}
           <h3 className="options-heading">{ancestors && <span className="options-crumb">{ancestors}<span className="visually-hidden"> › </span></span>}<span className="options-title">{form.page.title}</span></h3>
           {form.page.layout === 'form' && form.page.description && <p className="options-note">{highlight(form.page.description)}</p>}
