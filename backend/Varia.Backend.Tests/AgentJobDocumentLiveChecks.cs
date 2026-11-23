@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Varia.Backend;
+using Varia.Backend.Agent;
 
 namespace Varia.Backend.Tests;
 
@@ -73,6 +74,7 @@ internal static class AgentJobDocumentLiveChecks
             "the job document's script has SSMS's transaction shape and, run back against msdb, makes the change: " + string.Join(" | ", runs.Select(run => run.Status + " " + run.Error)));
 
         await AlertAsync(check, scratch, job, id, sql, Describe, Save);
+        await NonSysadminStepAsync(check, scratch, sql);
     }
 
     /// <summary>Remove on an alert that runs the job detaches it (the alert stays, running no job), where the platform has alerts.</summary>
@@ -96,6 +98,30 @@ internal static class AgentJobDocumentLiveChecks
     }
 
     /// <summary>New Job's save (target the Agent node) creates the job with what it sets, in one transaction; the New Job describe lists it after.</summary>
+    /// <summary>New Job's step write as a SQLAgentUserRole login: the exact arguments the save sends (WriteStep, add), inside a transaction rolled
+    /// back, so nothing is left. msdb refuses a non-sysadmin any non-NULL @database_user_name (14583).</summary>
+    private static async Task NonSysadminStepAsync(Action<bool, string> check, ScratchDatabase scratch, Func<string, string, Task<SqlRun>> sql)
+    {
+        static string Bracket(string value) => "[" + value.Replace("]", "]]", StringComparison.Ordinal) + "]";
+        static string Literal(object? value) => value switch { null => "NULL", string text => Quote(text), _ => Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture)! };
+        var login = scratch.OwnLogin("agstep");
+        var made = await sql("CREATE LOGIN " + Bracket(login) + " WITH PASSWORD = " + Quote(ScratchDatabase.Throwaway()) + ", CHECK_POLICY = OFF;", "master");
+        try
+        {
+            var mapped = await sql("CREATE USER " + Bracket(login) + " FOR LOGIN " + Bracket(login) + ";\nALTER ROLE SQLAgentUserRole ADD MEMBER " + Bracket(login) + ";", "msdb");
+            var write = new AgentStepWriteDto(1, "One", "TSQL", "SELECT 1;", "master", "", 1, 0, 2, 0, 0, 0, "", 0, 0, 0, "", 0);
+            var call = AgentSql.WriteStep(1, new AgentParameter("@job_id", System.Data.SqlDbType.UniqueIdentifier), write, add: true);
+            var arguments = string.Join(", ", call.Arguments.Where(argument => argument.Name != "@job_id").Select(argument => argument.Name + " = " + Literal(argument.Value)));
+            var run = await sql("EXECUTE AS LOGIN = " + Quote(login) + ";\nBEGIN TRANSACTION;\nDECLARE @id uniqueidentifier;\nEXEC msdb.dbo.sp_add_job @job_name = " + Quote(scratch.AgentObject("job") + "_ns")
+                + ", @job_id = @id OUTPUT;\nEXEC msdb.dbo.sp_add_jobstep @job_id = @id, " + arguments + ";\nDECLARE @refused int = 0;\nBEGIN TRY EXEC msdb.dbo.sp_add_jobstep @job_id = @id, @step_name = N'Two', @database_user_name = N''; END TRY BEGIN CATCH SET @refused = ERROR_NUMBER(); END CATCH;\nREVERT;\n"
+                + "SELECT CONCAT(COUNT(*), ':', @refused) FROM msdb.dbo.sysjobsteps WHERE job_id = @id;\nROLLBACK TRANSACTION;", "msdb");
+            // The N'' a sp_update_jobstep would send is refused (14583), so the check tells NULL from N''.
+            check(made.Status == "completed" && mapped.Status == "completed" && run.Error is null && run.Scalar == "1:14583",
+                "a SQLAgentUserRole login adds New Job's step with the arguments the save sends (empty optional strings as NULL): " + made.Error + mapped.Error + run.Error + " " + run.Scalar);
+        }
+        finally { await sql("IF USER_ID(" + Quote(login) + ") IS NOT NULL DROP USER " + Bracket(login) + ";", "msdb"); }
+    }
+
     public static async Task CreateAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json, string job, Func<string, string, Task<SqlRun>> sql)
     {
         async Task<T> Call<T>(string method, object args) => (T)await service.DispatchAsync(method, JsonSerializer.SerializeToElement(args, json), json);
@@ -115,7 +141,63 @@ internal static class AgentJobDocumentLiveChecks
             var again = await Create();
             check(again.Error is { Field: "name" } && (await sql("SELECT CONVERT(nvarchar(9), COUNT(*)) FROM msdb.dbo.sysjobs WHERE name = " + Quote(job) + ";", "msdb")).Scalar == "1",
                 "New Job's save under a name in use is refused on the Name field and creates nothing: " + Said(again));
+            await StepsAsync(check, service, info, json, job, sql);
         }
         finally { await sql("IF EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name = " + Quote(job) + ") EXEC msdb.dbo.sp_delete_job @job_name = " + Quote(job) + ", @delete_history = 1, @delete_unused_schedule = 1;", "msdb"); }
+    }
+    /// <summary>Steps (AG-6b) on New Job's job: two steps added whole, swapped (each under a temporary name first, the go-to and the Start step
+    /// following) and one deleted with its referrer retargeted, each save in the planner's shape and read back from sysjobsteps.</summary>
+    private static async Task StepsAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json, string job, Func<string, string, Task<SqlRun>> sql)
+    {
+        async Task<T> Call<T>(string method, object args) => (T)await service.DispatchAsync(method, JsonSerializer.SerializeToElement(args, json), json);
+        async Task<AgentJobRecordDto?> Read() =>
+            (await Call<ActionDescribeResult>("actions.describe", new ActionDescribeArgs(info.Id, Guid.NewGuid().ToString(), "agentJob", new ObjectRefDto("agentJob", Name: job)))).AgentJobDocument?.Job;
+        async Task<ActionExecuteResult?> Save(AgentStepsSaveDto steps) => await Read() is { } held
+            ? await Call<ActionExecuteResult>("actions.execute", new ActionArgs("agentJob", info.Id, Guid.NewGuid().ToString(), new ObjectRefDto("agentJob", Name: job), AgentIdentity: new(held.JobId),
+                AgentJob: new AgentJobSaveDto(held.Version, held.Modified, Steps: steps)))
+            : null;
+        async Task<string> Rows() => string.Join("|", ((await sql("SELECT CONCAT(s.step_id, ':', s.step_name, ':', s.on_fail_action, '/', s.on_fail_step_id, ':', s.flags, ':', s.database_name, ':', j.start_step_id) "
+            + "FROM msdb.dbo.sysjobsteps AS s JOIN msdb.dbo.sysjobs AS j ON j.job_id = s.job_id WHERE j.name = " + Quote(job) + " ORDER BY s.step_id;", "msdb")).Sets.FirstOrDefault() ?? []).Select(row => row[0]));
+        static string Temp() => "__varia_step_" + Guid.NewGuid().ToString("N");
+        static AgentStepWriteDto Write(int id, string name, int onFail, int onFailStep, int flags) =>
+            new(id, name, "TSQL", "SELECT " + id + ";", "master", "", 3, 0, onFail, onFailStep, 0, 0, "", flags, 0, 0, "", 0);
+
+        var added = await Save(new(Adds: [new(1, Temp()), new(2, Temp())], Writes: [Write(1, "First", 4, 2, 8), Write(2, "Second", 2, 0, 0)], StartStepId: 1));
+        var addedRows = await Rows();
+        check(added?.Error is null && addedRows == "1:First:4/2:8:master:1|2:Second:2/0:0:master:1",
+            "a job document save adds two steps whole, a go-to and log-to-table flag included: " + (added is null ? "no job" : Said(added)) + " " + addedRows);
+        // The swap: both steps take temporary names, then each is written into the other's id; step 1's go-to and the Start step follow it.
+        var swapped = await Save(new(Temporary: [new(1, Temp()), new(2, Temp())], Writes: [Write(1, "Second", 2, 0, 0), Write(2, "First", 4, 1, 8)], StartStepId: 2));
+        var swappedRows = await Rows();
+        check(swapped?.Error is null && swappedRows == "1:Second:2/0:0:master:2|2:First:4/1:8:master:2",
+            "a job document save swaps two steps under temporary names, the go-to and the Start step following: " + (swapped is null ? "no job" : Said(swapped)) + " " + swappedRows);
+        // Delete step 1 ("Second"): First moves to id 1 and, having gone to it, quits reporting failure; it is the Start step.
+        var deleted = await Save(new(Deletes: [1], Temporary: [new(1, Temp())], Writes: [Write(1, "First", 2, 0, 8)], StartStepId: 1));
+        var deletedRows = await Rows();
+        check(deleted?.Error is null && deletedRows == "1:First:2/0:8:master:1",
+            "a job document save deletes a step, retargeting the step that went to it: " + (deleted is null ? "no job" : Said(deleted)) + " " + deletedRows);
+        // A step whose database is gone (sp_verify_jobstep refuses it, 14262): the draft's fix saves with an insert, since the temporary name's
+        // call sets neutral content instead of re-checking the stored step's.
+        await sql("UPDATE s SET database_name = N'VariaNoSuchDatabase' FROM msdb.dbo.sysjobsteps AS s JOIN msdb.dbo.sysjobs AS j ON j.job_id = s.job_id WHERE j.name = " + Quote(job) + " AND s.step_id = 1;", "msdb");
+        var fixedUp = await Save(new(Temporary: [new(1, Temp())], Adds: [new(1, Temp())], Writes: [Write(1, "Zero", 2, 0, 0), Write(2, "First", 2, 0, 8)], StartStepId: 2));
+        var fixedRows = await Rows();
+        check(fixedUp?.Error is null && fixedRows == "1:Zero:2/0:0:master:2|2:First:2/0:8:master:2",
+            "a job document save renumbers a step whose stored database is gone, writing the draft's fix: " + (fixedUp is null ? "no job" : Said(fixedUp)) + " " + fixedRows);
+        await Save(new(Deletes: [1], Temporary: [new(1, Temp())], Writes: [Write(1, "First", 2, 0, 8)], StartStepId: 1));
+
+        // A command longer than stepCommandChars (written outside Varia) is cut in the describe and marked, so the document never saves it back.
+        var limit = (int)AgentCatalog.Current.Limit("stepCommandChars");
+        await sql("UPDATE s SET command = REPLICATE(CONVERT(nvarchar(max), N'x'), " + (limit + 10) + ") FROM msdb.dbo.sysjobsteps AS s JOIN msdb.dbo.sysjobs AS j ON j.job_id = s.job_id WHERE j.name = " + Quote(job) + " AND s.step_id = 1;", "msdb");
+        var cut = (await Call<ActionDescribeResult>("actions.describe", new ActionDescribeArgs(info.Id, Guid.NewGuid().ToString(), "agentJob", new ObjectRefDto("agentJob", Name: job)))).AgentJobDocument?.Steps;
+        check(cut is [{ CommandTruncated: true } only] && only.Command?.Length == limit,
+            "the job document's describe cuts a step command over stepCommandChars and marks it: " + (cut is null ? "no steps" : string.Join(",", cut.Select(item => item.Command?.Length + "/" + item.CommandTruncated))));
+
+        // More steps than stepsPerJob: the describe lists the first ones and says so, and the document then leaves the steps alone.
+        var perJob = (int)AgentCatalog.Current.Limit("stepsPerJob");
+        await sql("DECLARE @id uniqueidentifier = (SELECT job_id FROM msdb.dbo.sysjobs WHERE name = " + Quote(job) + "), @at int = 2; "
+            + "WHILE @at <= " + (perJob + 1) + " BEGIN DECLARE @name sysname = CONCAT(N'More ', @at); EXEC msdb.dbo.sp_add_jobstep @job_id = @id, @step_id = @at, @step_name = @name, @subsystem = N'TSQL', @command = N'SELECT 1;'; SET @at += 1; END;", "msdb");
+        var many = (await Call<ActionDescribeResult>("actions.describe", new ActionDescribeArgs(info.Id, Guid.NewGuid().ToString(), "agentJob", new ObjectRefDto("agentJob", Name: job)))).AgentJobDocument;
+        check(many is { StepsTruncated: true } && many.Steps.Count == perJob,
+            "the job document's describe of a job with more than stepsPerJob steps lists that many and marks the rest: " + many?.Steps.Count + "/" + many?.StepsTruncated);
     }
 }

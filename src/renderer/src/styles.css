@@ -2619,6 +2619,62 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .agent-job-description { resize: vertical; min-height: 64px; font: inherit; }
 .agent-job-facts { display: grid; grid-template-columns: max-content 1fr; gap: var(--varia-space-1) var(--varia-space-3); margin: var(--varia-space-2) 0 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); }
 .agent-job-facts dd { margin: 0; }
+/* The job document's Steps (AG-6b): the steps list beside the selected step's editor. */
+.agent-job-steps { display: flex; flex-direction: column; gap: var(--varia-space-2); }
+.agent-step-banner { display: flex; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-3); font-size: var(--varia-size-sm); border-left: 2px solid var(--varia-warningForeground); background: var(--varia-list-hoverBackground); }
+.agent-step-banner-text { flex: 1; }
+.agent-step-body { display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); gap: var(--varia-space-4); align-items: start; }
+.agent-step-list { display: flex; flex-direction: column; gap: var(--varia-space-2); min-width: 0; }
+.agent-step-list [role="listbox"] { display: flex; flex-direction: column; gap: 1px; outline-offset: 2px; }
+.agent-step-item { display: grid; grid-template-columns: 2ch minmax(0, 1fr) auto; grid-template-areas: "no name tags" "no flow flow"; gap: var(--varia-space-0) var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-2); border-radius: var(--varia-radius-sm); cursor: default; border-top: 2px solid transparent; }
+.agent-step-item:hover { background: var(--varia-list-hoverBackground); }
+.agent-step-item[aria-selected="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); }
+.agent-step-item[data-drop-before], .agent-step-drop-end[data-drop-before] { border-top-color: var(--varia-focusBorder); }
+.agent-step-drop-end { min-height: var(--varia-space-3); border-top: 2px solid transparent; }
+.agent-step-no { grid-area: no; color: var(--varia-descriptionForeground); font-variant-numeric: tabular-nums; }
+.agent-step-name { grid-area: name; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-step-tags { grid-area: tags; display: inline-flex; gap: var(--varia-space-1); }
+.agent-step-flow { grid-area: flow; display: flex; flex-wrap: wrap; gap: var(--varia-space-0) var(--varia-space-2); font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
+.agent-step-ok { color: var(--varia-testing-iconPassed, var(--varia-descriptionForeground)); }
+.agent-step-bad { color: var(--varia-errorForeground); }
+.agent-step-tag { padding: 0 var(--varia-space-1); font-size: var(--varia-size-xs); border: 1px solid var(--varia-widget-border); border-radius: var(--varia-radius-sm); white-space: nowrap; margin-left: var(--varia-space-1); }
+.agent-step-tag[data-tone="accent"] { border-color: var(--varia-focusBorder); }
+.agent-step-tag[data-tone="warning"] { border-color: var(--varia-warningForeground); color: var(--varia-warningForeground); }
+.agent-step-tag[data-tone="error"] { border-color: var(--varia-errorForeground); color: var(--varia-errorForeground); }
+.agent-step-add { display: flex; gap: var(--varia-space-1); }
+.agent-step-add select { width: auto; }
+.agent-step-edit { display: flex; flex-direction: column; gap: var(--varia-space-3); min-width: 0; }
+.agent-step-tools { display: flex; flex-wrap: wrap; gap: var(--varia-space-1); }
+.agent-step-tools button.danger { color: var(--varia-errorForeground); }
+.agent-step-grid { display: flex; flex-direction: column; gap: var(--varia-space-2); }
+.agent-step-row { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: var(--varia-space-2); align-items: baseline; }
+.agent-step-row > div { min-width: 0; }
+.agent-step-row select.property-input, .agent-step-row > input.property-input { max-width: 420px; }
+.agent-step-inline { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); }
+.agent-step-inline label, .agent-step-row > label:has(input) { display: inline-flex; align-items: center; gap: var(--varia-space-1); }
+.agent-step-short { width: 8ch; }
+.agent-step-path { width: 420px; max-width: 100%; font-family: var(--varia-font-mono, monospace); }
+.agent-step-command { display: flex; flex-direction: column; gap: var(--varia-space-1); }
+.agent-step-command-head { display: flex; align-items: center; justify-content: space-between; gap: var(--varia-space-2); }
+.agent-step-editor { position: relative; height: 220px; border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); resize: vertical; overflow: hidden; min-height: 96px; }
+.agent-step-editor-host { position: absolute; inset: 0; }
+.agent-step-parse { font-size: var(--varia-size-sm); }
+.agent-step-parse p, .agent-step-parse li { display: flex; align-items: center; gap: var(--varia-space-1); margin: 0; }
+.agent-step-parse ul { margin: 0; padding: 0; list-style: none; }
+.agent-step-more { display: flex; flex-direction: column; gap: var(--varia-space-2); }
+.agent-step-fold { display: inline-flex; align-items: center; gap: var(--varia-space-1); align-self: flex-start; max-width: 100%; background: transparent; border-color: transparent; padding-left: 0; }
+.agent-step-summary { margin-left: var(--varia-space-2); color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-step-ssis { display: flex; flex-direction: column; gap: var(--varia-space-3); }
+.agent-step-sec h4 { margin: 0 0 var(--varia-space-2); font-size: var(--varia-size-sm); font-weight: 600; display: flex; gap: var(--varia-space-2); align-items: baseline; }
+.agent-step-ssis-pick { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(0, 1fr); gap: var(--varia-space-3); }
+.agent-step-ssis-tree { display: flex; flex-direction: column; gap: 1px; max-height: 260px; overflow: auto; }
+.agent-step-tree-row { display: flex; align-items: center; gap: var(--varia-space-1); width: 100%; text-align: left; background: transparent; border-color: transparent; }
+.agent-step-tree-row[data-selected] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); }
+.agent-step-tree-2 { padding-left: var(--varia-space-4); }
+.agent-step-tree-3 { padding-left: calc(var(--varia-space-4) * 2); }
+.agent-step-runs { margin: var(--varia-space-2) 0 0; font-size: var(--varia-size-sm); }
+.agent-step-ssis tr[data-default] th, .agent-step-ssis tr[data-default] td { color: var(--varia-descriptionForeground); }
+.agent-step-ssis tr[data-missing] { background: var(--varia-inputValidation-warningBackground, transparent); }
 @media (forced-colors: active) {
   .agent-tile[aria-pressed="true"] .tile { outline: 2px solid Highlight; outline-offset: -2px; }
 }

@@ -45,10 +45,16 @@ export interface SqlModelContext { readonly connectionId: string; readonly datab
  * What SqlLanguageService reads to serve a Peek model: its connection and database, and `documentId`, the model's own UUID
  * (its URI's), which names it to the language backend for as long as the model lives.
  */
-export interface PeekModelContext extends SqlModelContext { readonly documentId: string }
+export interface PeekModelContext extends SqlModelContext {
+  readonly documentId: string
+  /** An editable model outside a query document (a job step's command, AG-6b): it gets completion and diagnostics too. */
+  readonly editable?: boolean
+}
 const modelContexts = new WeakMap<object, PeekModelContext>()
 /** The context of a Peek model; undefined for any other model (a query document's are in DocumentService). */
 export const peekModelContext = (model: object): PeekModelContext | undefined => modelContexts.get(model)
+/** Serves `model` (a `varia-sql://` model of its own, such as a job step's command) under `context`, as a Peek model is served. */
+export const registerSqlModel = (model: object, context: PeekModelContext): void => { modelContexts.set(model, context) }
 
 /** The definition a Peek editor shows: `key` changes when the view shows another object or reads it again. */
 export interface PeekEditorText extends SqlModelContext { readonly key: string; readonly text: string }

@@ -2,9 +2,14 @@
 // the draft the document edits, what Save sends (one `agentJob` action: New Job's sp_add_job and sp_add_jobserver, or an existing job's
 // sp_update_job with only the changed arguments and a sp_update_alert per removed alert, in one transaction under the STALE guard), the
 // warnings it shows (never blocking), and the field-by-field compare a STALE refusal opens. Bounds are zod here and C# in
-// ActionService.ValidateAgentJob. Steps, Schedules and History are later lanes (AG-6b, AG-6c, AG-6d). No React here.
+// ActionService.ValidateAgentJob. Steps (AG-6b) are in ../agent/steps.ts and join the draft, the save and the compare here as the `steps`
+// field; Schedules and History are later lanes (AG-6c, AG-6d). No React here.
 import { z } from 'zod'
 import { agentGateOpen, agentLimits, notifyLevels, type AgentPlatform } from '../agent/catalog.ts'
+import {
+  agentStepChangeCountFrom, agentStepProblems, agentStepsSaveProblems, agentStepsSaveSchema, initialStepsDraft, planAgentSteps, rebaseSteps, stepsChangesText, stepsText, stepsValue,
+  type AgentJobProxy, type AgentJobStepRecord, type AgentStepsDraft, type AgentStepsSave
+} from '../agent/steps.ts'
 import { ident } from '../explorer/schema.ts'
 
 /** sp_help_job's notify and delete levels: 0 never, 1 on success, 2 on failure, 3 on completion. */
@@ -31,7 +36,8 @@ export interface AgentJobOperator {
 }
 /** An alert that runs this job (sp_help_alert, filtered by job_id). */
 export interface AgentJobAlert { readonly id: number; readonly name: string; readonly enabled: boolean; readonly severity: number; readonly messageId: number }
-export interface AgentJobStep { readonly id: number; readonly name: string; readonly subsystem: string }
+/** A step as the describe reads it: id, name and type (AG-6a), and its whole content (AG-6b, sp_help_jobstep). */
+export type AgentJobStep = AgentJobStepRecord
 /** The job as sp_help_job describes it. `created` is the identity (date_created to the second); `modified` (to the millisecond) and
  *  `version` are what the STALE guard compares. Dates are the server's local time, as msdb stores them. */
 export interface AgentJobRecord {
@@ -89,15 +95,23 @@ export interface AgentJobDocumentModel {
   readonly jobs?: readonly string[]
   /** New Job only: each listed job's id (sysjobs job_id), in `jobs`' order, so a document can find its job again after a rename elsewhere. */
   readonly jobIds?: readonly string[]
+  /** The step types this server's SQL Server Agent has (sp_enum_sqlagent_subsystems), within the platform's; absent when unread. */
+  readonly subsystems?: readonly string[]
+  /** The proxies Run as offers, with the types each is active for; absent where the platform has none or the login may read none. */
+  readonly proxies?: readonly AgentJobProxy[]
+  /** The job has more steps than agentLimits.stepsPerJob: the first ones are listed and Steps is read-only. */
+  readonly stepsTruncated?: boolean
+  /** The databases a T-SQL step's Database offers. */
+  readonly databases?: readonly string[]
 }
 
 /** The editable fields, as the document, the changes, the compare and the save's error mapping name them. */
-export const agentJobFields = ['name', 'owner', 'category', 'description', 'enabled', 'email', 'page', 'netSend', 'eventLog', 'delete', 'alerts'] as const
+export const agentJobFields = ['name', 'owner', 'category', 'description', 'enabled', 'email', 'page', 'netSend', 'eventLog', 'delete', 'alerts', 'steps'] as const
 export type AgentJobField = typeof agentJobFields[number]
-export type AgentJobSection = 'general' | 'notifications' | 'targets' | 'alerts'
+export type AgentJobSection = 'general' | 'notifications' | 'targets' | 'alerts' | 'steps'
 export const agentJobFieldSection: { readonly [F in AgentJobField]: AgentJobSection } = {
   name: 'general', owner: 'general', category: 'general', description: 'general', enabled: 'general',
-  email: 'notifications', page: 'notifications', netSend: 'notifications', eventLog: 'notifications', delete: 'notifications', alerts: 'alerts'
+  email: 'notifications', page: 'notifications', netSend: 'notifications', eventLog: 'notifications', delete: 'notifications', alerts: 'alerts', steps: 'steps'
 }
 
 export interface AgentJobDraft {
@@ -113,19 +127,22 @@ export interface AgentJobDraft {
   readonly deleteLevel: AgentNotifyLevel
   /** Alert ids Remove took off this job (saved with it). */
   readonly removeAlerts: readonly number[]
+  /** The steps in order and the Start step (AG-6b). */
+  readonly steps: AgentStepsDraft
 }
 
 /** The draft a describe opens with: the job as read, or New Job's blank (owner the login, SSMS's defaults). */
-export function initialAgentJobDraft(model: Pick<AgentJobDocumentModel, 'job' | 'login'>): AgentJobDraft {
+export function initialAgentJobDraft(model: Pick<AgentJobDocumentModel, 'job' | 'login'> & Partial<Pick<AgentJobDocumentModel, 'steps'>>): AgentJobDraft {
   const job = model.job
   if (!job) return {
     name: '', owner: model.login, category: uncategorizedCategory, description: '', enabled: true,
-    emailLevel: 0, emailOperator: '', pageLevel: 0, pageOperator: '', netSendLevel: 0, netSendOperator: '', eventLogLevel: 0, deleteLevel: 0, removeAlerts: []
+    emailLevel: 0, emailOperator: '', pageLevel: 0, pageOperator: '', netSendLevel: 0, netSendOperator: '', eventLogLevel: 0, deleteLevel: 0, removeAlerts: [], steps: { steps: [] }
   }
   return {
     name: job.name, owner: job.owner, category: job.category, description: job.description, enabled: job.enabled,
     emailLevel: job.emailLevel, emailOperator: job.emailOperator, pageLevel: job.pageLevel, pageOperator: job.pageOperator,
-    netSendLevel: job.netSendLevel, netSendOperator: job.netSendOperator, eventLogLevel: job.eventLogLevel, deleteLevel: job.deleteLevel, removeAlerts: []
+    netSendLevel: job.netSendLevel, netSendOperator: job.netSendOperator, eventLogLevel: job.eventLogLevel, deleteLevel: job.deleteLevel, removeAlerts: [],
+    steps: initialStepsDraft(model.steps ?? [], job.startStepId)
   }
 }
 
@@ -144,6 +161,7 @@ function fieldValue(draft: AgentJobDraft, field: AgentJobField): string {
     case 'eventLog': return String(draft.eventLogLevel)
     case 'delete': return String(draft.deleteLevel)
     case 'alerts': return [...draft.removeAlerts].sort((a, b) => a - b).join(',')
+    case 'steps': return stepsValue(draft.steps)
   }
 }
 
@@ -151,9 +169,10 @@ function fieldValue(draft: AgentJobDraft, field: AgentJobField): string {
 export function changedAgentJobFields(base: AgentJobDraft, draft: AgentJobDraft): AgentJobField[] {
   return agentJobFields.filter(field => fieldValue(base, field) !== fieldValue(draft, field))
 }
-/** "Save · n changes": each changed field, and each removed alert. */
+/** "Save · n changes": each changed field, each removed alert, and each step added, deleted, moved or edited (and the Start step). */
 export function agentJobChangeCount(base: AgentJobDraft, draft: AgentJobDraft): number {
-  return changedAgentJobFields(base, draft).reduce((count, field) => count + (field === 'alerts' ? draft.removeAlerts.length : 1), 0)
+  return changedAgentJobFields(base, draft).reduce((count, field) =>
+    count + (field === 'alerts' ? draft.removeAlerts.length : field === 'steps' ? Math.max(1, agentStepChangeCountFrom(base.steps, draft.steps)) : 1), 0)
 }
 
 // --- What Save sends ---------------------------------------------------------------------------------------------------
@@ -176,6 +195,8 @@ export interface AgentJobSave {
   readonly eventLogLevel?: AgentNotifyLevel
   readonly deleteLevel?: AgentNotifyLevel
   readonly removeAlerts?: readonly AgentAlertRef[]
+  /** The steps' save in the planner's order (AG-6b, ../agent/steps.ts planAgentSteps). */
+  readonly steps?: AgentStepsSave
 }
 
 /** The save the draft asks for: undefined when an existing job's draft changes nothing. */
@@ -203,6 +224,13 @@ export function agentJobSave(model: AgentJobDocumentModel, draft: AgentJobDraft)
         save.removeAlerts = draft.removeAlerts.flatMap(id => alerts.filter(alert => alert.id === id).map(alert => ({ id: alert.id, name: alert.name })))
         break
       }
+      case 'steps': {
+        // Never a plan over steps the describe did not read whole (the page is read-only then).
+        if (model.stepsTruncated) break
+        const steps = planAgentSteps(job ? model.steps : undefined, draft.steps, job?.startStepId)
+        if (steps) save.steps = steps
+        break
+      }
     }
   }
   return save
@@ -225,7 +253,8 @@ export const agentJobSaveSchema = z.object({
   netSendLevel: level.optional(), netSendOperator: operatorName.optional(),
   eventLogLevel: level.optional(),
   deleteLevel: level.optional(),
-  removeAlerts: z.array(z.object({ id: z.number().int().min(1).max(2_147_483_647), name: ident }).strict()).min(1).max(agentLimits.jobAlerts).optional()
+  removeAlerts: z.array(z.object({ id: z.number().int().min(1).max(2_147_483_647), name: ident }).strict()).min(1).max(agentLimits.jobAlerts).optional(),
+  steps: agentStepsSaveSchema.optional()
 }).strict() satisfies z.ZodType<AgentJobSave>
 
 /** Why a save cannot run whatever the server says (C#'s ValidateAgentJob refuses the same). `create`: New Job (target the Agent node, no
@@ -248,6 +277,7 @@ export function agentJobSaveProblems(save: AgentJobSave, create: boolean): strin
     else if (sent !== undefined && (sent === 0) !== (operator === '')) problems.push('A notification names an operator exactly when it is sent.')
   }
   if (save.removeAlerts && new Set(save.removeAlerts.map(alert => alert.id)).size !== save.removeAlerts.length) problems.push('An alert is removed twice.')
+  if (save.steps) problems.push(...agentStepsSaveProblems(save.steps, create))
   return problems
 }
 
@@ -265,7 +295,7 @@ export const agentJobText = {
   targetLocal: (server: string) => `This server (${server})`,
   targetLater: 'Multi-server targets (MSX/TSX) come later.',
   startStepElsewhere: 'Changed on Steps',
-  noSteps: 'This job has no steps yet, so it does nothing when it runs. Steps are added on the Steps section, coming in a later version; SSMS can add them meanwhile.',
+  noSteps: 'This job has no steps yet, so it does nothing when it runs. Add one on Steps.',
   mailOff: 'Database Mail is off on this server (Database Mail XPs), so e-mail notifications are not sent.',
   mailNoProfile: 'No Database Mail profile exists on this server, so e-mail notifications are not sent.',
   mailAgentProfile: 'SQL Server Agent has no Database Mail profile set (SQL Server Agent Properties › Alert System), so it sends no e-mail. Set one in SSMS, then restart SQL Server Agent.',
@@ -333,7 +363,7 @@ export function mailProblem(mail: AgentJobMail, platform: AgentPlatform): string
 
 /** The draft's problems: errors on a missing name, owner or operator or a too long description (Save cannot send those), and warnings on
  *  notifications that would not reach anyone. Nothing else blocks Save. */
-export function agentJobProblems(model: AgentJobDocumentModel, draft: AgentJobDraft): AgentJobProblem[] {
+export function agentJobProblems(model: AgentJobDocumentModel, draft: AgentJobDraft, ssis?: ReadonlyMap<string, readonly string[]>): AgentJobProblem[] {
   const problems: AgentJobProblem[] = []
   if (!draft.name.trim()) problems.push({ field: 'name', severity: 'error', message: agentJobText.nameRequired })
   if (!draft.owner.trim()) problems.push({ field: 'owner', severity: 'error', message: agentJobText.ownerRequired })
@@ -358,6 +388,12 @@ export function agentJobProblems(model: AgentJobDocumentModel, draft: AgentJobDr
   check('page', draft.pageLevel, draft.pageOperator)
   check('netSend', draft.netSendLevel, draft.netSendOperator)
   if (draft.emailLevel !== 0) { const mail = mailProblem(model.mail, model.platform); if (mail) problems.push({ field: 'email', severity: 'warning', message: mail }) }
+  // Each step's problem, named by its position, on the Steps section (which shows them on their fields).
+  // A job whose steps were not all read lists them read-only: its go-tos past them are not problems Varia can fix.
+  for (const problem of model.stepsTruncated ? [] : agentStepProblems(draft.steps, { sysadmin: model.sysadmin, ...model.proxies ? { proxies: model.proxies } : {}, ...ssis ? { ssis } : {}, ...model.job ? { original: initialStepsDraft(model.steps, model.job.startStepId) } : {} })) {
+    const at = draft.steps.steps.findIndex(step => step.key === problem.key)
+    problems.push({ field: 'steps', severity: problem.severity, message: at >= 0 ? `Step ${at + 1} '${draft.steps.steps[at]!.name}': ${problem.message}` : problem.message })
+  }
   return problems
 }
 /** Whether Save can send the draft: no error-level problem. */
@@ -373,7 +409,7 @@ export const gateClosedText = (title: string) => `${title} is not available on t
 
 export const agentJobFieldLabels: { readonly [F in AgentJobField]: string } = {
   name: 'Name', owner: 'Owner', category: 'Category', description: 'Description', enabled: 'Enabled', email: 'E-mail', page: 'Page', netSend: 'Net send',
-  eventLog: 'Windows event log', delete: 'Delete the job', alerts: 'Alerts'
+  eventLog: 'Windows event log', delete: 'Delete the job', alerts: 'Alerts', steps: 'Steps'
 }
 /** A field as the compare shows it. */
 export function agentJobFieldText(draft: AgentJobDraft, field: AgentJobField, alerts: readonly AgentJobAlert[] = []): string {
@@ -386,6 +422,7 @@ export function agentJobFieldText(draft: AgentJobDraft, field: AgentJobField, al
     case 'eventLog': return notifyLevelLabel(draft.eventLogLevel)
     case 'delete': return notifyLevelLabel(draft.deleteLevel)
     case 'alerts': return draft.removeAlerts.length ? `Remove ${draft.removeAlerts.map(id => alerts.find(alert => alert.id === id)?.name ?? `#${id}`).join(', ')}` : 'not changed'
+    case 'steps': return stepsText(draft.steps)
     default: return fieldValue(draft, field) || '(none)'
   }
 }
@@ -403,10 +440,12 @@ export function agentJobCompare(opened: AgentJobDocumentModel, current: AgentJob
   const base = initialAgentJobDraft(opened), server = initialAgentJobDraft(current)
   const mine = new Set(changedAgentJobFields(base, draft)), theirs = new Set(changedAgentJobFields(base, server))
   const alerts = [...(opened.alerts ?? []), ...(current.alerts ?? [])]
+  // Steps say what each side changed, by step, so two edits of the same names never read the same.
+  const text = (side: AgentJobDraft, field: AgentJobField) => field === 'steps' ? stepsChangesText(base.steps, side.steps, side === draft ? 'identity' : 'name') : agentJobFieldText(side, field, alerts)
   const rows = agentJobFields.filter(field => mine.has(field) || theirs.has(field)).map((field): AgentJobCompareRow => ({
     field,
-    ...(theirs.has(field) ? { server: agentJobFieldText(server, field, alerts) } : {}),
-    ...(mine.has(field) ? { yours: agentJobFieldText(draft, field, alerts) } : {}),
+    ...(theirs.has(field) ? { server: text(server, field) } : {}),
+    ...(mine.has(field) ? { yours: text(draft, field) } : {}),
     conflict: mine.has(field) && theirs.has(field) && fieldValue(server, field) !== fieldValue(draft, field)
   }))
   return [...rows.filter(row => row.conflict), ...rows.filter(row => !row.conflict)]
@@ -426,6 +465,8 @@ export function rebaseAgentJobDraft(opened: AgentJobDocumentModel, current: Agen
       case 'delete': next.deleteLevel = draft.deleteLevel; break
       case 'alerts': next.removeAlerts = draft.removeAlerts.filter(id => (current.alerts ?? []).some(alert => alert.id === id)); break
       case 'enabled': next.enabled = draft.enabled; break
+      // A job now past the steps the describe reads keeps the server's steps: the document cannot save them.
+      case 'steps': if (!current.stepsTruncated) next.steps = rebaseSteps(opened.steps, current.steps, draft.steps, opened.job?.startStepId, current.job?.startStepId); break
       default: next[field] = draft[field]
     }
   }
@@ -436,7 +477,7 @@ export function rebaseAgentJobDraft(opened: AgentJobDocumentModel, current: Agen
 export function copiedAgentJobDraft(source: AgentJobDocumentModel, login: string, sysadmin: boolean): AgentJobDraft {
   const from = initialAgentJobDraft(source)
   const name = `Copy of ${from.name}`.slice(0, agentLimits.nameChars)
-  return { ...from, name, owner: sysadmin ? from.owner : login, removeAlerts: [] }
+  return { ...from, name, owner: sysadmin ? from.owner : login, removeAlerts: [], steps: { steps: [] } }
 }
 
 // --- Commands ----------------------------------------------------------------------------------------------------------
