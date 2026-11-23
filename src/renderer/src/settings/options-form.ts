@@ -8,6 +8,29 @@ import { valueSchema, type SettingsPatch } from '../../../shared/settings/schema
 import type { GridRow } from './PropertyGrid'
 import type { ApiResult } from '../../../shared/contracts'
 import type { ShortcutFile } from '../../../shared/commands/shortcut-schema'
+import type { ThemePreference, ThemePreferencePatch } from '../../../shared/theme/types'
+
+export const optionsRailLimits = { minWidth: 180, maxWidth: 340, defaultWidth: 224 } as const
+const railStorageKey = 'varia.options.railWidth'
+const railStorage = (): Storage | undefined => { try { return globalThis.localStorage } catch { return undefined } }
+
+/** Bounds the navigation tree sidebar width safely against the current window width. */
+export function clampOptionsRailWidth(width: number, dialogWidth = 960): number {
+  const maxAllowed = Math.max(optionsRailLimits.minWidth, Math.min(optionsRailLimits.maxWidth, Math.round(dialogWidth * 0.42)))
+  if (!Number.isFinite(width)) return Math.min(optionsRailLimits.defaultWidth, maxAllowed)
+  return Math.max(optionsRailLimits.minWidth, Math.min(maxAllowed, Math.round(width)))
+}
+export function loadOptionsRailWidth(dialogWidth = 960): number {
+  try {
+    const raw = railStorage()?.getItem(railStorageKey)
+    if (!raw) return clampOptionsRailWidth(optionsRailLimits.defaultWidth, dialogWidth)
+    return clampOptionsRailWidth(Number(raw), dialogWidth)
+  } catch { return clampOptionsRailWidth(optionsRailLimits.defaultWidth, dialogWidth) }
+}
+export function saveOptionsRailWidth(width: number): void {
+  if (!Number.isFinite(width)) return
+  try { railStorage()?.setItem(railStorageKey, String(clampOptionsRailWidth(width, 1600))) } catch { /* Ignored when storage is unavailable. */ }
+}
 
 /** The dialog's edits across every page: typed values, or the text of an integer field that is not a whole number yet. */
 export type OptionsDraft = Readonly<Record<SettingKey, boolean | number | string>>
@@ -70,9 +93,9 @@ export function settingRow(def: SettingDef, draft: OptionsDraft): SettingRow {
     ...def.type === 'boolean' ? { choices: booleanChoices } : def.type === 'enum' ? { choices: def.values } : {}
   }
 }
-/** A setting's row in a property grid: booleans and enums are lists, integers number fields. */
+/** A setting's row in a property grid: booleans as switches, enums as lists, integers number fields. */
 export const settingGridRow = (row: SettingRow): GridRow => ({
-  key: row.key, label: row.def.label, description: row.def.description, control: row.def.type === 'integer' ? 'integer' : 'choice', value: row.value,
+  key: row.key, label: row.def.label, description: row.def.description, control: row.def.type === 'integer' ? 'integer' : row.def.type === 'boolean' ? 'boolean' : 'choice', value: row.value,
   ...row.choices ? { choices: row.choices } : {}, ...row.def.type === 'integer' ? { min: row.def.min, max: row.def.max } : {}, changed: row.changed, disabled: row.disabled
 })
 /**
@@ -100,11 +123,36 @@ export function setDraftValue(draft: OptionsDraft, key: SettingKey, text: string
   const trimmed = text.trim()
   return { ...draft, [key]: /^-?\d+$/.test(trimmed) && Number.isSafeInteger(Number(trimmed)) ? Number(trimmed) : text }
 }
-/** Reset to Defaults: the page's visible rows take their defaults, in the draft only. */
+/** Reset Page: the page's visible rows take their defaults, in the draft only. */
 export function resetPage(draft: OptionsDraft, pageId: string, platform: Platform, defs: readonly SettingDef[] = settingDefs): OptionsDraft {
   const next: Record<string, boolean | number | string> = { ...draft }
   for (const def of visibleSettings(platform, defs)) if (def.page === pageId) next[def.key] = def.default
   return next as OptionsDraft
+}
+/** Resets one setting in `draft` back to its catalogue default. */
+export function resetSetting(draft: OptionsDraft, key: SettingKey, defs: readonly SettingDef[] = settingDefs): OptionsDraft {
+  const def = defs.find(item => item.key === key)
+  if (!def || draft[key] === def.default) return draft
+  return { ...draft, [key]: def.default }
+}
+/** Visible settings whose current value in `draft` differs from their catalogue default. */
+export const customizedSettings = (draft: OptionsDraft, platform: Platform, defs: readonly SettingDef[] = settingDefs): SettingDef[] =>
+  visibleSettings(platform, defs).filter(def => draft[def.key as SettingKey] !== def.default)
+/** Count of settings whose draft value differs from `stored`. */
+export function pendingSettingsCount(stored: SettingsValues, draft: OptionsDraft): number {
+  let count = 0
+  for (const key of Object.keys(stored) as SettingKey[]) if (draft[key] !== stored[key]) count++
+  return count
+}
+export const themePreferenceChanged = (a: ThemePreference, b: ThemePreference): boolean =>
+  a.mode !== b.mode || a.darkTheme !== b.darkTheme || a.lightTheme !== b.lightTheme
+export function themePatchFrom(stored: ThemePreference, draft: ThemePreference): ThemePreferencePatch | undefined {
+  const patch: ThemePreferencePatch = {
+    ...draft.mode !== stored.mode ? { mode: draft.mode } : {},
+    ...draft.darkTheme !== stored.darkTheme ? { darkTheme: draft.darkTheme } : {},
+    ...draft.lightTheme !== stored.lightTheme ? { lightTheme: draft.lightTheme } : {}
+  }
+  return Object.keys(patch).length ? patch : undefined
 }
 
 export interface DraftError { readonly key: SettingKey; readonly page: string; readonly message: string }
@@ -145,27 +193,32 @@ export function followValues(draft: OptionsDraft, base: OptionsDraft, values: Op
   return next ? next as OptionsDraft : draft
 }
 
-/** What OK writes to, in order: settings first, then shortcuts (`SettingsService.update`, `ShortcutsService.save`). */
+/** What OK and Apply write to, in order: settings first, then theme, then shortcuts (`SettingsService.update`, theme, `ShortcutsService.save`). */
 export interface OptionsTargets {
   update(patch: SettingsPatch): Promise<void>
+  saveTheme?(patch: ThemePreferencePatch): Promise<void>
   saveShortcuts(file: ShortcutFile): Promise<ApiResult<{ readonly revision: number }>>
 }
 /** `stale`: another window saved shortcuts after the dialog's draft started, so main refused to overwrite them. */
-export type CommitResult = { readonly ok: true } | { readonly ok: false; readonly stage: 'settings' | 'shortcuts'; readonly message: string; readonly stale?: true }
+export type CommitResult = { readonly ok: true } | { readonly ok: false; readonly stage: 'settings' | 'theme' | 'shortcuts'; readonly message: string; readonly stale?: true }
 const failureText = (error: unknown, fallback: string) => error instanceof Error && error.message ? error.message : fallback
 /**
- * OK's two writes: the settings patch (when it has any), then the shortcuts draft (when it differs from main's file).
- * The first failure stops it and says what was saved, so the dialog stays open on the page that failed with its draft
- * kept, and OK can try again. `early`: the shortcuts draft was begun before the file loaded, so STALE offers no replace.
+ * OK / Apply writes: the settings patch (when it has any), then theme preferences (when changed), then the shortcuts
+ * draft (when it differs from main's file). The first failure stops it and says what was saved, so the dialog stays
+ * open on the page that failed with its draft kept. `early`: the shortcuts draft was begun before the file loaded.
  */
-export async function commitOptions(targets: OptionsTargets, patch: SettingsPatch, shortcuts: ShortcutFile | undefined, options: { readonly early?: boolean } = {}): Promise<CommitResult> {
+export async function commitOptions(targets: OptionsTargets, patch: SettingsPatch, shortcuts: ShortcutFile | undefined, options: { readonly early?: boolean; readonly themePatch?: ThemePreferencePatch } = {}): Promise<CommitResult> {
   const settingsChanged = Object.keys(patch).length > 0
   if (settingsChanged) {
     try { await targets.update(patch) } catch (error) { return { ok: false, stage: 'settings', message: failureText(error, 'The options could not be saved.') } }
   }
+  const themeChanged = !!options.themePatch && Object.keys(options.themePatch).length > 0
+  if (themeChanged && targets.saveTheme) {
+    try { await targets.saveTheme(options.themePatch!) } catch (error) { return { ok: false, stage: 'theme', message: failureText(error, 'The color theme could not be saved.') } }
+  }
   if (!shortcuts) return { ok: true }
   let reason: string
-  const saved = settingsChanged ? 'Your other settings were saved, but shortcuts were not' : 'Shortcuts were not saved'
+  const saved = settingsChanged || themeChanged ? 'Your other settings were saved, but shortcuts were not' : 'Shortcuts were not saved'
   try {
     const result = await targets.saveShortcuts(shortcuts)
     if (result.ok) return { ok: true }

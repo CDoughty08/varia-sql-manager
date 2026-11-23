@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
-  ancestorIds, draftFrom, firstPage, followValues, pageForm, patchFrom, resetPage, rowDisabled, rowNotes, setDraftValue, settingGridRow, treeRows, validateDraft, type OptionsDraft, type SettingRow
+  ancestorIds, clampOptionsRailWidth, commitOptions, customizedSettings, draftFrom, firstPage, followValues, pageForm, patchFrom, pendingSettingsCount, resetPage, resetSetting, rowDisabled, rowNotes, setDraftValue, settingGridRow, themePatchFrom, themePreferenceChanged, treeRows, validateDraft, type OptionsDraft, type SettingRow
 } from '../src/renderer/src/settings/options-form'
-import { highlightParts, normalizeQuery, searchPages } from '../src/renderer/src/settings/search'
+import { highlightParts, normalizeQuery, searchAllOptions, searchPages } from '../src/renderer/src/settings/search'
+import { defaultThemePreference } from '../src/shared/theme/format'
 import { scriptingOptionKeys } from '../src/shared/scripting/options'
 import { defaultSettings, settingDef, settingDefs, settingsLimits, type SettingDef, type SettingKey, type SettingsValues } from '../src/shared/settings/catalog'
 
@@ -182,17 +183,82 @@ describe('Options OK', () => {
 })
 
 describe('Options property grid rows', () => {
-  it('maps every setting row onto the shared property grid row, so Tools › Options renders as before', () => {
+  it('maps every setting row onto the shared property grid row, using switch controls for booleans', () => {
     const rows = pageForm('objectExplorer.scripting', draft, 'win32').groups.flatMap(group => group.rows)
     for (const item of rows) {
       expect(settingGridRow(item), item.key).toEqual({
-        key: item.key, label: item.def.label, description: item.def.description, control: item.def.type === 'integer' ? 'integer' : 'choice', value: item.value,
+        key: item.key, label: item.def.label, description: item.def.description, control: item.def.type === 'integer' ? 'integer' : item.def.type === 'boolean' ? 'boolean' : 'choice', value: item.value,
         ...item.choices ? { choices: item.choices } : {}, ...item.def.type === 'integer' ? { min: item.def.min, max: item.def.max } : {}, changed: item.changed, disabled: item.disabled
       })
     }
     const timeout = pageForm('queryExecution.sqlServer.general', set(draft, 'queryExecution.executionTimeout', '30'), 'win32').groups.flatMap(group => group.rows).find(item => item.key === 'queryExecution.executionTimeout')!
     expect(settingGridRow(timeout)).toMatchObject({ control: 'integer', value: '30', min: 0, changed: true, disabled: false })
+    expect(settingGridRow(row(draft, 'scriptUseDatabase'))).toMatchObject({ control: 'boolean', value: 'true', changed: false })
     expect(settingGridRow(row(draft, 'targetServerVersion'))).toMatchObject({ control: 'choice', changed: false })
     expect(settingGridRow(row(draft, 'targetServerVersion')).choices?.length).toBeGreaterThan(1)
+  })
+})
+
+describe('Options v2 search, reset, rail clamping and Apply/theme commit', () => {
+  it('searches all visible Options pages with grouped breadcrumbs, theme/shortcuts hits and platform filtering', () => {
+    expect(searchAllOptions('   ', 'win32')).toBeUndefined()
+    const timeout = searchAllOptions('time-out', 'win32')!
+    expect(timeout.pages.map(entry => entry.page.id)).toEqual(['queryExecution.sqlServer.general'])
+    expect(timeout.pages[0]?.path).toBe('Query Execution › SQL Server › General')
+    expect(timeout.totalMatches).toBeGreaterThan(0)
+    expect(timeout.shown).toEqual(new Set(['queryExecution', 'queryExecution.sqlServer', 'queryExecution.sqlServer.general']))
+
+    const theme = searchAllOptions('color theme', 'win32')!
+    expect(theme.pages.find(entry => entry.page.id === 'environment.general')?.matchTheme).toBe(true)
+    const keys = searchAllOptions('shortcut', 'win32')!
+    expect(keys.pages.find(entry => entry.page.id === 'environment.shortcuts')?.matchShortcuts).toBe(true)
+
+    const defs = [fixture({ key: 'fixture.mac', label: 'Unicorn option', platforms: ['darwin'] }), fixture({ key: 'fixture.hidden', label: 'Unicorn hidden', hidden: true })]
+    expect(searchAllOptions('unicorn', 'win32', defs)?.pages).toEqual([])
+    expect(searchAllOptions('unicorn', 'darwin', defs)?.pages).toHaveLength(1)
+  })
+
+  it('resets a single setting and tracks customized and pending counts', () => {
+    let next = set(draft, 'queryExecution.executionTimeout', '30')
+    next = set(next, 'textEditor.sql.wordWrap', 'true')
+    expect(customizedSettings(next, 'win32').map(def => def.key)).toEqual(['textEditor.sql.wordWrap', 'queryExecution.executionTimeout'])
+    expect(pendingSettingsCount(defaultSettings, next)).toBe(2)
+
+    const singleReset = resetSetting(next, 'queryExecution.executionTimeout')
+    expect(singleReset['queryExecution.executionTimeout']).toBe(defaultSettings['queryExecution.executionTimeout'])
+    expect(singleReset['textEditor.sql.wordWrap']).toBe(true)
+    expect(resetSetting(singleReset, 'queryExecution.executionTimeout')).toBe(singleReset)
+    expect(pendingSettingsCount(defaultSettings, singleReset)).toBe(1)
+  })
+
+  it('computes theme preference diffs and saves theme patches through commitOptions', async () => {
+    const edited = { ...defaultThemePreference, mode: 'light' as const }
+    expect(themePreferenceChanged(defaultThemePreference, edited)).toBe(true)
+    expect(themePatchFrom(defaultThemePreference, defaultThemePreference)).toBeUndefined()
+    expect(themePatchFrom(defaultThemePreference, edited)).toEqual({ mode: 'light' })
+
+    const calls: string[] = []
+    const ok = await commitOptions({
+      update: async () => { calls.push('update') },
+      saveTheme: async patch => { calls.push(`theme:${patch.mode}`) },
+      saveShortcuts: async () => ({ ok: true, value: { revision: 1 } })
+    }, { 'textEditor.sql.wordWrap': true }, undefined, { themePatch: { mode: 'light' } })
+    expect(ok).toEqual({ ok: true })
+    expect(calls).toEqual(['update', 'theme:light'])
+
+    const fail = await commitOptions({
+      update: async () => {},
+      saveTheme: async () => { throw new Error('disk full') },
+      saveShortcuts: async () => ({ ok: true, value: { revision: 1 } })
+    }, {}, undefined, { themePatch: { mode: 'light' } })
+    expect(fail).toEqual({ ok: false, stage: 'theme', message: 'disk full' })
+  })
+
+  it('clamps navigation rail widths within 180..340 px and 42% of the dialog width', () => {
+    expect(clampOptionsRailWidth(100, 960)).toBe(180)
+    expect(clampOptionsRailWidth(260, 960)).toBe(260)
+    expect(clampOptionsRailWidth(500, 960)).toBe(340)
+    expect(clampOptionsRailWidth(340, 640)).toBe(269)
+    expect(clampOptionsRailWidth(Number.NaN, 960)).toBe(224)
   })
 })

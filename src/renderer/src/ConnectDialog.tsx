@@ -17,6 +17,7 @@ import { bigQueryCredentialReady, bigQueryDefaults, bigQueryFormOptions, bigQuer
 import { connectionPickerColor, connectionPresets } from '../../shared/theme/connection-colors'
 import { dialogWindowKinds } from '../../shared/popouts'
 import Icon from './Icon'
+import DialogFooter from './kit/DialogFooter'
 import InlineError, { type ErrorAction } from './kit/InlineError'
 import { connectFix } from './connect-fix'
 import { advancedCount, advancedSummary, busyRequestNotice, clampConnectRailWidth, connectRailLimits, listStep, parseConnectionString, rowTitle, validateSqlAdvancedNumber, type ConnectIncomingRequest } from './connect-form'
@@ -1579,7 +1580,7 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
             {shownFailure?.details && <FailureDetails details={shownFailure.details} />}
           </div>}
         </div>}
-        <div className="connection-footer">
+        <DialogFooter wrap>
           <div>
             <ConnectFooterReset disabled={locked} onReset={reset} />
             <button className="ui-button" data-control-variant="secondary" type="button" data-reserve-label={testConnectionLabel} title={testing ? undefined : 'Sign in with these settings without saving them or opening a session'} disabled={testing ? false : locked || !loaded || !ready} onClick={() => { if (testing) stopTest(); else if (isBigQuery) void testBigQuery(); else void testConnection() }}><span>{testing ? 'Stop' : testConnectionLabel}</span></button>
@@ -1589,7 +1590,7 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
             <button ref={connectButton} className="ui-button primary" type="submit" data-reserve-label={pendingConnectLabel ?? connectLabel} data-reserve-busy-label={connectingLabel} disabled={locked || !loaded || !ready}><span>{busy ? connectingLabel : connectLabel}</span></button>
             <button ref={stopButton} className="ui-button" data-control-variant="secondary" type="button" data-reserve-label={cancelLabel} disabled={saving} onClick={busy ? stop : testing ? stopTest : requestClose}><span>{busy ? 'Stop' : cancelLabel}</span></button>
           </div>
-        </div>
+        </DialogFooter>
       </div>
     </form>
     {review}
