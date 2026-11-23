@@ -113,12 +113,13 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     Ignore Columns…, Show Change Details, Compare Values in Tab, Copy as Diff, Save as Diff…, Compare Rows as Shown and
     Update Comparison. Go to Next and Previous Difference stay where the navigation work put them.
   - Toolbar buttons and the palette keep their own entries.
-  - `tests/command-catalog.test.ts` (its `keylessItems` for both menus) and `results-smoke.mjs`'s grid-menu steps follow
-    the move. That test assigns keys without a menu's `when`, so `tests/menus-content.test.ts` gains a comparison
-    grid-menu sample (`fixtures/menus-context.*.txt`), pinning Comparison's S and Then Sort Descending's N, and a
-    comparison's More results tools: keyless means keyless in that static assignment, but menus assign keys at run time
-    among the items shown, and a comparison hides Choose Headers…, so there Show Change Details takes its H. Each lane
-    that adds to More results tools (C2 to C6) updates `results-toolbar-fold.test.ts`'s pinned `output.tools` list.
+  - `tests/command-catalog.test.ts` (its `keylessItems` for both menus) and `results-smoke.mjs`'s grid-menu steps (their
+    clicks, and the top-level Go to Possible Match's `aria-disabled` check) follow the move. That test assigns keys
+    without a menu's `when`, so `tests/menus-content.test.ts` gains a comparison grid-menu sample
+    (`fixtures/menus-context.*.txt`), pinning Comparison's S and Then Sort Descending's N, and a comparison's More
+    results tools: keyless means keyless in that static assignment, but menus assign keys at run time among the items
+    shown, and a comparison hides Choose Headers…, so there Show Change Details takes its H. Each lane that adds to More
+    results tools (C2 to C6) updates `results-toolbar-fold.test.ts`'s pinned `output.tools` list.
 - **Engine-neutral.** Commands, context keys and settings declare both providers, except Script Differences (Q4).
   Result-naming methods are declared for both engines in `methods.ts` and checked in C#. New protocol members are optional
   fields of existing v2 shapes, and C4's one new method is offered through HELLO as every method is, so the protocol
@@ -258,14 +259,19 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     the three shipped items into it and adds Match Rows By… to it;
   - the menu target key `outputGridOnColumn` (`src/shared/commands/context-keys.ts`, `targetKeys` in `menus/targets.ts`,
     and the pinned `keysOfScope('target')` list in `tests/command-catalog.test.ts`), true when the grid menu opened on a
-    header or cell, Ignore This Column's `when`;
+    header or cell, Ignore This Column's `when`. `targetFor` fills a missing column from the anchor cell for a gutter
+    click and for a keyboard menu alike, so `outputTarget` records on the target, before that fill, whether a header or
+    cell was clicked (`onColumn`), and a keyboard menu (Shift+F10, the Menu key) counts as on the active cell: the key
+    is true for a header, a cell or the keyboard, and false for the gutter;
   - context keys `comparisonColumnIgnored` and `comparisonColumnIgnorable`. `toggled` and `precondition` take only
     static and state keys (`catalog.ts`, checked by `tests/command-catalog.test.ts`), so both are state keys, as the
     navigation work's `comparisonRowHasPartner` is: `core/contextkeys.ts` computes them for the focused grid's active
-    cell, and in the grid menu `argsFor` (`menus/targets.ts`) overrides them with the column the menu opened on. The
-    second is Ignore This Column's `precondition`, true on a column already ignored so the checkbox can be unticked.
-    Its handler's `unavailable()` gives the reason for the case at hand
-    (the key column, the last compared column, or an input closed), so `unavailableHint` is only the fallback;
+    cell, and in the grid menu `argsFor` (`menus/targets.ts`) overrides them with the column the menu opened on.
+    `argsFor` reads only the target, so `GridView.targetOf` adds that column's ignored and ignorable facts to
+    `GridTarget`, as `partner` carries the row's partner for `comparisonRowHasPartner`. The second is Ignore This
+    Column's `precondition`, true on a column already ignored so the checkbox can be unticked. Its handler's
+    `unavailable()` gives the reason for the case at hand (the key column, the last compared column, or an input
+    closed), so `unavailableHint` is only the fallback;
   - icon `eye-closed` in `src/shared/icons.ts`.
 
   Regenerate the commands and icons docs. No setting.
@@ -281,7 +287,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - Save writes it.
   - vitest:
     - the checklist (`compare-ignore.test.ts`), Automatic's label, memory by name across a swap;
-    - the toggle's `when`, notice text and Dismiss;
+    - the toggle's `when`, notice text and Dismiss; `outputGridOnColumn` and the two state keys for gutter, header,
+      cell and keyboard menus;
     - sort keys and chips kept, and filters (a value filter, Keep Selected Rows) removed with "The comparison's filters
       were removed.", across Ignore and Stop ignoring, in the announcement's order; the lost-column notice and its
       plural;
@@ -969,10 +976,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       Match menu at the toolbar's Match button, or beside ⋯ when Match is folded (`MatchMenuFrom` gains `script`). The
       dialog is a child window, always above the main one, so it would cover the menu, and a dialog window cannot be
       hidden (`DialogWindow` only opens, focuses and closes one). When the menu closes on Apply, Cancel or Escape, the
-      renderer opens the dialog again from the draft, centred over the main window as every dialog window is (a child
-      of it, `centredBounds`), with the focus, and the replace that follows
-      refreshes it. When it closes otherwise (a press outside, F6, the pane hiding, the comparison closing), the dialog
-      stays closed rather than take the focus back, and Script Differences as T-SQL… opens it again from the draft;
+      renderer opens the dialog again from the draft, at its remembered bounds, else centred over the main window, as
+      dialog windows open after Connect in an OS window (`dialogWindowBounds`), with the focus, and the replace that
+      follows refreshes it. When it closes otherwise (a press outside, F6, the pane hiding, the comparison closing), the
+      dialog stays closed rather than take the focus back, and Script Differences as T-SQL… opens it again from the
+      draft;
     - with an input closed, rows cannot be matched again, so the buttons are unavailable and the sentence's last part
       becomes "…, and Result 1 is closed, so rows cannot be matched again. Run the query again to script differences."
       The xml-key refusal takes the same form, the repeated-key refusal keeps only "Choose rows without a repeated
@@ -1027,7 +1035,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     and Result 3 have other columns than last time, so the last target was not reused.").
   - Wrap in a transaction, the row checks and SET IDENTITY_INSERT are not in the draft: they start on (SET
     IDENTITY_INSERT whenever it is offered) each time the dialog opens, as Rows starts at Rows in the grid, so a
-    choice made for one script never carries over unseen to a later one, whose lines would sit below the fold.
+    choice made for one script never carries over unseen to a later one, whose lines would sit below the fold. The
+    Choose key columns… round trip is the same script, so its reopen keeps them as they were.
   - Invoked from another comparison, the open window switches to it, with that pair's draft, and is activated with
     the focus and description it has on opening; the first pair's draft stays remembered.
   - It works while an input is closed: the script reads only the comparison.
@@ -1089,7 +1098,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - **Preview:** `maxLines?: number` (1–30) answers only the first lines, with `complete: false` when there are more,
     and always the counts by kind for the chosen rows, even when it refuses (the refusal then comes back as the answer's
     `refusal`, not an error). It reads only the rows those lines need, and skips the size estimate. Each preview line is
-    cut at 2,000 characters with "…", so a preview answer stays within 60,000 characters whatever the values (one INSERT
+    cut at 2,000 characters with "…", so a preview answer stays near 60,000 characters whatever the values (one INSERT
     of a 2,097,152-character XML value is about 8.4 million characters as its hex term); the size refusal is Script's.
   - **Answer:** `{ text (≤ 1,000,000 characters), deletes, updates, inserts, lookAlikeDeletes, lookAlikeInserts,
     softValues, complete, refusal? }`. The look-alike counts are the chosen rows to delete and to insert that have a
@@ -1115,7 +1124,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   | Integers; decimal, numeric, money, smallmoney | As stored; decimals exactly |
   | float, real | Stored as G15 and G7 text: that text when it reads back as the value, else the exact value kept beside it (`PageLengths.TryExact`, in CellLengths.cs), written round-trip. Always with an exponent (`3.0000000000000004E-1`, `1E0`): without one, T-SQL reads the text as a numeric literal, whose conversion to float may not round correctly. A real is written as its value widened to double, in that double's round-trip text (0.1 as `1.0000000149011612E-1`): a literal is a float, and comparing it with a real column widens the real, so the shorter `1E-1` would find no row as a key or in Q11's guard, while the widened value is exact both compared and assigned, with no decimal → double → real double rounding. A non-zero float smaller in magnitude than 2.2250738585072014E-308 (subnormal: SQL Server stores one that arithmetic produces, but reads its literal as 0) is refused as a value that cannot be written exactly; a real widened to double is never subnormal |
   | bit | 0 or 1 |
-  | char, varchar, text; nchar, nvarchar, ntext | `N'…'` with `''` escaping. A non-N literal is read in the database's default code page, so even char columns get `N'…'`, converted to the column's collation on assignment. CR, LF, U+0085, U+2028, U+2029 and every other control character but tab are written as `NCHAR(n)` joins (`N'a' + NCHAR(13) + NCHAR(10) + N'b'`): the query window's model normalizes line breaks and the clipboard may convert them. A joined value over 4,000 characters starts with `CAST(N'…' AS nvarchar(max))`, since joining shorter strings stops at 4,000. A value that would need more than 64 joins (pretty-printed JSON or XML, a long multi-line note) is written instead as one exact term, `CAST(0x<its UTF-16LE bytes> AS nvarchar(max))`: a chain of thousands of `+` terms risks SQL Server's nesting and expression limits (errors 191, 8631, 8632), which would fail the statement and roll the script back. The size estimate counts its 4 hex digits a code unit. In a WHERE clause (keys, Q11's guard, the INSERT check) a char or varchar value that is all ASCII is written in a plain form instead, varchar end to end: `'…'`, its control characters joined with `CHAR(n)` (an `NCHAR` term would make the whole expression nvarchar again), a joined value over 8,000 characters started with `CAST('…' AS varchar(max))` (non-max varchar joins stop at 8,000), and past 64 joins `CAST(0x<its ASCII bytes> AS varchar(max))`: ASCII has the same bytes in every code page, and the comparison then follows the column's own collation, while under a SQL_ collation a varchar column compared with `N'…'` follows Unicode rules, so `N'ss'` also matches a stored 'ß'. A value that is not all ASCII from a column with a SQL_ collation (`ResultCollation.SortId` ≠ 0) cannot be matched exactly: as a key it is refused, and Q11's guard leaves it out. Under a Windows collation it is written `N'…'`, which compares by the same rules |
+  | char, varchar, text; nchar, nvarchar, ntext | `N'…'` with `''` escaping. A non-N literal is read in the database's default code page, so even char columns get `N'…'`, converted to the column's collation on assignment. CR, LF, U+0085, U+2028, U+2029 and every other control character but tab are written as `NCHAR(n)` joins (`N'a' + NCHAR(13) + NCHAR(10) + N'b'`): the query window's model normalizes line breaks and the clipboard may convert them. A joined value over 4,000 characters starts with `CAST(N'…' AS nvarchar(max))`, since joining shorter strings stops at 4,000. A value that would need more than 64 joins (pretty-printed JSON or XML, a long multi-line note) is written instead as one exact term, `CAST(0x<its UTF-16LE bytes> AS nvarchar(max))`: a chain of thousands of `+` terms risks SQL Server's nesting and expression limits (errors 191, 8631, 8632), which would fail the statement and roll the script back. The size estimate counts its 4 hex digits a code unit. In a WHERE clause (keys, Q11's guard, the INSERT check) a char or varchar value that is all ASCII is written in a plain form instead, varchar end to end: `'…'`, its control characters joined with `CHAR(n)` (an `NCHAR` term would make the whole expression nvarchar again), a joined value over 8,000 characters started with `CAST('…' AS varchar(max))` (non-max varchar joins stop at 8,000), and past 64 joins `CAST(0x<its ASCII bytes> AS varchar(max))`: ASCII has the same bytes in every code page, and the comparison then follows the column's own collation, while under a SQL_ collation a varchar column compared with `N'…'` follows Unicode rules, so `N'ss'` also matches a stored 'ß'. A value that is not all ASCII from a column with a SQL_ collation (`ResultCollation.SortId` ≠ 0), or with no recorded collation (`SqlClientCollation.Of` can answer none), cannot be matched exactly: as a key it is refused, and Q11's guard leaves it out. Under a Windows collation it is written `N'…'`, which compares by the same rules |
   | date, time(n), datetime2(n), datetimeoffset(n) | ISO 8601 text in a `CAST('…' AS <type>)` of the column's own type and precision |
   | datetime, smalldatetime | `CAST('yyyy-MM-ddTHH:mm:ss.fff' AS <type>)`: the stored `yyyy-MM-dd HH:mm:ss` form depends on DATEFORMAT and language, the `T` form does not |
   | uniqueidentifier | Quoted |
@@ -1186,6 +1195,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - identity with SET IDENTITY_INSERT on and off, and off refused for an identity key;
     - floats with 17 significant digits and none after the point, written with an exponent; a subnormal float
       refused, and a subnormal real written widened;
+    - a char key and guard with no recorded collation taking the SQL_ path;
     - char keys and guards: all-ASCII values written plain, with `CHAR` joins, the varchar(max) cast and the varchar hex
       term, never an nvarchar term; others refused (keys) or left out (guards) under a SQL_ collation and written `N'…'`
       under a Windows one;
@@ -1217,6 +1227,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - A wrong literal corrupts data when the user runs the script. Mitigations: the round-trip live test over every type,
     the row checks, the transaction, refusing truncated values, and never running it.
   - Result column names may be aliases rather than table columns: the index warning and the checklist cover that.
+  - varbinary keys that differ only by trailing zero bytes are two keys to the diff but one to SQL Server (`0x01 =
+    0x0100`); the row checks THROW, so it fails safely.
   - A target char column whose collation lacks a character stores `?`, as any assignment would. The index does not know
     the target's collations, so the dialog cannot warn.
   - All-ASCII char and varchar keys are written plain, so they seek. A key that is not all ASCII is refused under a SQL_
@@ -1485,13 +1497,13 @@ In flight as of 2026-11-22. After each merges, open comparison branches merge ma
   - New commands and keys are engine-neutral except C4 (Q4).
 - **Connect in an OS window** (branch `codex/connect-os-window`) reworks `DialogWindow`, `popouts.ts` and
   `popout-windows.ts`. C4's dialog kind follows it.
-- **SQL Server Agent** (docs/agent-plan.md, 0.11.0; lanes AG-6c and AG-7 are open, AG-6b has merged) does not touch the
+- **SQL Server Agent** (docs/agent-plan.md, 0.11.0; AG-7 is open, AG-6b and AG-6c have merged) does not touch the
   results pipeline, but shares files with the comparison lanes. Both sides only append to them:
   - menus and keys: the commands catalogue, `menus.ts`, `tests/command-catalog.test.ts`, `context-keys.ts` and
-    `core/contextkeys.ts` (AG-6c, AG-7), against C2's submenu and every lane's commands;
-  - documents: `documents.ts`, `EditorArea.tsx` and `services/files.ts` (AG-6c, AG-7), and `start.tsx` with
+    `core/contextkeys.ts` (AG-7), against C2's submenu and every lane's commands;
+  - documents: `documents.ts`, `EditorArea.tsx` and `services/files.ts` (AG-7), and `start.tsx` with
     `tests/fixtures/monaco-runtime.ts`'s reviewed imports, which AG-6b changed and C5b builds on;
-  - `icons.ts` (AG-6c), against C2's `eye-closed`;
+  - `icons.ts` (as AG-6c did), against C2's `eye-closed`;
   - the protocol files: the fake backend, contracts.ts, methods.ts, `SqlService.cs` and `Contracts.cs` (all three),
     against C1–C6;
   - settings, CHANGELOG, architecture.md and ipc.md.
