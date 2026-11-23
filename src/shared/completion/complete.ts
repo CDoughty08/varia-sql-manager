@@ -77,8 +77,10 @@ export async function completeFromIndex(read: CompletionRead, dialect: Completio
       if (word.typed && cutShort.size) {
         // The typed names, and an UNNEST's element fields that start with them (UNNEST(w.items) asks w's table for items.<typed>).
         const plan = new Map([...cutShort].map(path => [path, [word.typed]]))
-        const unnests = scope.sources.filter(source => source.kind === 'unnest').slice(0, resolverLimits.narrowUnnests)
-        for (const source of unnests) {
+        const unnests = scope.sources.filter(source => source.kind === 'unnest')
+        // Past the cap an UNNEST's fields go unasked: the list is not final.
+        incomplete ||= unnests.length > resolverLimits.narrowUnnests
+        for (const source of unnests.slice(0, resolverLimits.narrowUnnests)) {
           const { prefix, object } = await resolver.prefixThrough(source, [], word.typed)
           for (const [path, prefixes] of plan) if (prefix && (!object || object === path) && !prefixes.includes(prefix)) prefixes.push(prefix)
         }

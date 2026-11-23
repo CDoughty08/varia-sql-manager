@@ -331,7 +331,17 @@ describe('completion from the index', () => {
     const timed = performance.now()
     const bare = 'SELECT c24| FROM `varia-wide.lab.wide` w' + ', UNNEST(zrec) u'.repeat(11000)
     await complete(bare)
+    // A dbt-style diamond (each WITH query joins the two before it) past the star budget, and a deep one named thousands of times.
+    const diamond = 'WITH c0 AS (SELECT * FROM sales.orders), c1 AS (SELECT * FROM sales.orders), ' + Array.from({ length: 98 }, (_, index) => `c${index + 2} AS (SELECT * FROM c${index + 1} JOIN c${index} USING (id))`).join(', ') + ' SELECT | FROM c99'
+    expect((await complete(diamond)).labels('column')).toContain('customer')
+    const deep = 'WITH ' + Array.from({ length: 70 }, (_, index) => `c${index} AS (SELECT * FROM ${index ? `c${index - 1}` : 'sales.orders'})`).join(', ') + ' SELECT cu| FROM ' + Array.from({ length: 10000 }, (_, index) => `c69 x${index}`).join(', ')
+    await complete(deep)
     expect(performance.now() - timed).toBeLessThan(3000)
+  })
+
+  it('says the list is not final when an UNNEST\'s prefix went unasked', async () => {
+    const dropped = await complete('SELECT al| FROM `varia-wide.lab.wide` w, UNNEST(w.nope1) a, UNNEST(w.nope2) b, UNNEST(w.nope3) c, UNNEST(w.zrec) d')
+    expect(dropped.incomplete).toBe(true)
   })
 
   it('lists an UNNEST alias\'s element fields beside the table it reads', async () => {

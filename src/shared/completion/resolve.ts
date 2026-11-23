@@ -9,9 +9,17 @@ export interface ScopeColumn { readonly path: string; readonly type?: string; re
 /** A source's columns as far as they are known; `truncated` when the index holds more than came back. */
 export interface SourceColumns {
   readonly columns: readonly ScopeColumn[]; readonly truncated: boolean; readonly object?: LanguageLookupObject; readonly path?: readonly string[]
-  /** Cut by the star budget: no cache keeps it, so a nearer reader of the same source or select list still gets its columns. */
+  /** Cut by the star budget: kept only for readers as deep or deeper, so a nearer reader of the same source or select list reads
+   *  it again, with more of its columns. */
   readonly budget?: true
 }
+
+/** A source's or select list's columns as read `hops` stars deep; `budget` once known. */
+interface Kept { found: Promise<SourceColumns>; readonly hops: number; budget?: boolean }
+/** Whether a kept read serves a reader `hops` deep: any whole read, and one the budget cut for readers at least as deep (which it
+ *  would cut as much or more). Each item is read again at most once per smaller depth, so a WITH query met many times costs at
+ *  most starHops reads of it. */
+const serves = (kept: Kept | undefined, hops: number): kept is Kept => !!kept && (kept.budget !== true || hops >= kept.hops)
 
 /** Each column set's top-level names (address for address.city), lowercased: a bare name is looked for once per set, not per path. */
 const heads = new WeakMap<SourceColumns, ReadonlySet<string>>()
@@ -94,9 +102,9 @@ function merged(had: LanguageLookupAnswer, more: LanguageLookupAnswer): Language
 /** One lookup per completion or hover: the objects the scope reads, by path, each asked once. */
 export class ScopeResolver {
   private readonly answers = new Map<string, LanguageLookupAnswer>()
-  private readonly cache = new Map<ScopeSource, Promise<SourceColumns>>()
+  private readonly cache = new Map<ScopeSource, Kept>()
   /** A select list's columns, shared by every source that reads it (each name of a WITH query). */
-  private readonly shapes = new Map<QueryShape, Promise<SourceColumns>>()
+  private readonly shapes = new Map<QueryShape, Kept>()
   private readonly shaping = new Set<QueryShape>()
   /** The scope's sources by name (lowercased), nearest first. */
   private named?: Map<string, ScopeSource[]>
@@ -143,14 +151,17 @@ export class ScopeResolver {
     // unasked before any object does.
     const asks: { path: string[]; prefix?: string }[] = []
     const more: { path: string[]; prefix: string }[] = []
+    let dropped = false
     for (const path of paths.values()) {
-      const prefixes = this.narrow?.get(key(path))?.slice(0, resolverLimits.narrowPrefixes) ?? []
+      const all = this.narrow?.get(key(path)) ?? []
+      dropped ||= all.length > resolverLimits.narrowPrefixes
+      const prefixes = all.slice(0, resolverLimits.narrowPrefixes)
       asks.push(prefixes.length ? { path, prefix: prefixes[0] } : { path })
       for (const prefix of prefixes.slice(1)) more.push({ path, prefix })
     }
     asks.push(...more)
     const kept = asks.slice(0, Math.max(0, languageLookupLimits.requests - extra.length))
-    this.cut = kept.length < asks.length
+    this.cut = dropped || kept.length < asks.length
     // Each request gets its share of the answer's total, so a later one is not left with nothing.
     const share = Math.max(1, Math.min(languageLookupLimits.items, Math.floor((languageLookupLimits.totalItems - extra.reduce((sum, request) => sum + (request.limit ?? languageLookupLimits.defaultItems), 0)) / Math.max(1, kept.length))))
     const wanted: LanguageLookupPath[] = kept.map(ask => ({ path: ask.path, limit: share, ...ask.prefix !== undefined ? { prefix: ask.prefix } : {}, ...details ? { details } : {} }))
@@ -199,17 +210,18 @@ export class ScopeResolver {
    *  has already said which names are WITH queries (kind cte); an object is always the index's. */
   columns(source: ScopeSource, hops = 0): Promise<SourceColumns> {
     if (this.reading.has(source)) return Promise.resolve(unread)
-    let found = this.cache.get(source)
-    if (!found) {
-      if (hops > resolverLimits.starHops) return Promise.resolve({ columns: [], truncated: true, budget: true })
-      this.reading.add(source)
-      found = this.read(source, hops).then(given => {
-        if (given === unread || given.budget) this.cache.delete(source)
-        return given
-      }).finally(() => this.reading.delete(source))
-      this.cache.set(source, found)
-    }
-    return found
+    const kept = this.cache.get(source)
+    if (serves(kept, hops)) return kept.found
+    if (hops > resolverLimits.starHops) return Promise.resolve({ columns: [], truncated: true, budget: true })
+    this.reading.add(source)
+    const entry: Kept = { hops, found: Promise.resolve(unread) }
+    entry.found = this.read(source, hops).then(given => {
+      if (given !== unread) entry.budget = given.budget === true
+      else if (this.cache.get(source) === entry) this.cache.delete(source)
+      return given
+    }).finally(() => this.reading.delete(source))
+    this.cache.set(source, entry)
+    return entry.found
   }
 
   private async read(source: ScopeSource, hops: number): Promise<SourceColumns> {
@@ -242,16 +254,16 @@ export class ScopeResolver {
   /** A select list's columns, read once however many sources name it; one met again while it is read gives none. */
   private shape(shape: QueryShape, hops: number): Promise<SourceColumns> {
     if (this.shaping.has(shape)) return Promise.resolve(unread)
-    let found = this.shapes.get(shape)
-    if (!found) {
-      this.shaping.add(shape)
-      found = this.readShape(shape, hops).then(given => {
-        if (given.budget) this.shapes.delete(shape)
-        return given
-      }).finally(() => this.shaping.delete(shape))
-      this.shapes.set(shape, found)
-    }
-    return found
+    const kept = this.shapes.get(shape)
+    if (serves(kept, hops)) return kept.found
+    this.shaping.add(shape)
+    const entry: Kept = { hops, found: Promise.resolve(unread) }
+    entry.found = this.readShape(shape, hops).then(given => {
+      entry.budget = given.budget === true
+      return given
+    }).finally(() => this.shaping.delete(shape))
+    this.shapes.set(shape, entry)
+    return entry.found
   }
 
   /** A select list's columns: its named ones, then every column its `*` sources give (their top level and below). */
