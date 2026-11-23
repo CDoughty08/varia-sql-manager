@@ -6,7 +6,7 @@ import { connectLive } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import { checkLargeComparison } from './fixtures/plan-comparison.mjs'
-import { backendReady, documentTabs, gridCell, localGrid, outputView, planCanvas, planViewer, queryBarButton, quickInputActive } from './fixtures/ui.mjs'
+import { backendReady, connectDialogWindow, documentTabs, gridCell, localGrid, outputView, planCanvas, planViewer, queryBarButton, quickInputActive, submitConnect } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 let application, page
@@ -110,16 +110,15 @@ try {
     page.on('pageerror', error => errors.push(error.message))
     await expect(backendReady(page, live ? /\.NET \d+\./ : 'fake')).toBeVisible({ timeout: 30_000 })
     await resizeContent(application, page, 1024, 700)
-    if (live) await connectLive(page, expect)
+    if (live) await connectLive(application, page, expect)
     else {
       await page.getByRole('button', { name: 'Connect', exact: true }).first().click()
-      const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
+      const { window: connectWin, dialog } = await connectDialogWindow(application)
       await dialog.getByLabel('Server Name', { exact: true }).fill('retained-test')
       await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
       await dialog.getByLabel('Login', { exact: true }).fill('reader')
       await dialog.getByLabel('Password', { exact: true }).fill('unused')
-      await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
-      await expect(dialog).toHaveCount(0)
+      await submitConnect(connectWin, dialog)
     }
     await enlargeOutput(page)
     await queryBarButton(page, 'Include Actual Execution Plan').click()
