@@ -445,18 +445,34 @@ internal sealed record DependenciesResult(List<PeekDependency> Items, long Elaps
 /// same connection, Stop, or a disconnect ends it (CANCELLED), keeping what it read.</summary>
 /// <summary>BigQuery only (SQL Server refuses them): ExtraDetails reads the extra projects' schemas too (pass 2), Scope re-reads one
 /// project or dataset (Object Explorer's Refresh, re-reading every object in it), and Stale re-reads only the datasets DDL marked.</summary>
-internal sealed record ObjectIndexArgs(string ConnectionId, string RequestId, bool? Definitions = null, bool? ExtraDetails = null, BigQueryIndexScope? Scope = null, bool? Stale = null);
+/// <summary>Bulk: pass 2 reads these locations' details with the billed INFORMATION_SCHEMA queries (a full build only, after
+/// bigquery.indexEstimate and the cost prompts).</summary>
+internal sealed record ObjectIndexArgs(string ConnectionId, string RequestId, bool? Definitions = null, bool? ExtraDetails = null, BigQueryIndexScope? Scope = null, bool? Stale = null,
+    BigQueryBulkArgs? Bulk = null);
 /// <summary>A BigQuery refresh's scope: a project, or one of its datasets.</summary>
 internal sealed record BigQueryIndexScope(string Project, string? Dataset = null);
+/// <summary>The bulk path's locations, as bigquery.indexEstimate answered them; the cap every job carries (a connection's own wins); and
+/// the estimate the cost prompts showed (BudgetBytes), which the build's jobs together never bill more than.</summary>
+internal sealed record BigQueryBulkArgs(List<BigQueryIndexLocation> Locations, long? MaximumBytesBilled = null, long? BudgetBytes = null);
+/// <summary>A project's location (US, EU, us-central1, …), whose region-scoped INFORMATION_SCHEMA the bulk path reads.</summary>
+internal sealed record BigQueryIndexLocation(string Project, string Location);
+/// <summary>bigquery.indexEstimate: what a full build's bulk path would bill, for the cost prompts: Definitions and ExtraDetails as the
+/// build will send them.</summary>
+internal sealed record BigQueryIndexEstimateArgs(string ConnectionId, bool? Definitions = null, bool? ExtraDetails = null);
+/// <summary>The locations to read (datasets.list's, at most 64; Cut when there were more, whose datasets pass 2 reads with free calls)
+/// and their queries' estimate, each at least BigQuery's 10 MiB per view read. A location whose dry run failed is left out.</summary>
+internal sealed record BigQueryIndexEstimateResult(List<BigQueryIndexLocation> Locations, BigQuery.BigQueryDryRunResult Estimate, bool Cut, long ElapsedMs);
+/// <summary>The last full build's bulk path: the locations read billed, and the first failure of those that fell back to free calls.</summary>
+internal sealed record BigQueryBulkStatus(int Locations, int Failed = 0, string? Code = null, string? Message = null);
 /// <summary>A database the index could not read: its code (NO_DB_ACCESS, TIMEOUT, TOO_LARGE, CATALOG_ERROR) and a sentence.</summary>
 /// <summary>Agent: SQL Server Agent's objects were left out, not the database named (msdb, where they are read).</summary>
 /// <summary>Project: a BigQuery dataset's project (Database is the dataset, or empty when the project's listing failed).</summary>
 internal sealed record ObjectIndexSkip(string Database, string Code, string Message, bool? Agent = null, string? Project = null, bool? Details = null);
 /// <summary>The index as a search finds it. State: none (never built), building, or ready. BuiltAt: UTC, when the last build ended.</summary>
 /// <summary>BigQuery: Databases and Indexed count datasets; Phase is names (pass 1) or details (pass 2) while building; NamesOnly lists
-/// the projects indexed without schemas (extra projects, by default).</summary>
+/// the projects indexed without schemas (extra projects, by default); Bulk is the last full build's billed bulk path, when it ran.</summary>
 internal sealed record ObjectIndexStatus(string State, int Databases, int Indexed, int Objects, int Modules, int Cut, List<ObjectIndexSkip> Skipped, bool Definitions, string? BuiltAt = null,
-    string? Provider = null, string? Phase = null, List<string>? NamesOnly = null);
+    string? Provider = null, string? Phase = null, List<string>? NamesOnly = null, BigQueryBulkStatus? Bulk = null);
 internal sealed record ObjectIndexResult(ObjectIndexStatus Status, long ElapsedMs);
 /// <summary>explorer.search: In is names, definitions or all; Kinds and Database narrow it; Limit is at most 1000 hits; Match is
 /// exact (the default) or fuzzy, which adds approximate name matches and cannot go with Regex.</summary>
@@ -676,6 +692,28 @@ internal sealed record AgentStepsSaveDto(List<int>? Deletes = null, List<AgentSt
 internal sealed record AgentStepNameDto(int Id, string Name);
 /// <summary>language.parse (AG-6b, src/shared/agent/parse.ts): the job step editor's Parse of one T-SQL text.</summary>
 internal sealed record LanguageParseArgs(string Text);
+
+/// <summary>
+/// language.lookup (docs/object-search.md, Editor lookup): the editor's completion and hover read the Search Objects index by
+/// path, whatever the engine. A path names a container level by level: none for the connection's top level, then one segment per
+/// level below it. For BigQuery the levels are project, dataset and object: [] lists projects, [project] datasets,
+/// [project, dataset] objects, [project, dataset, object] the object's facts and its columns with nested fields by path. Prefix
+/// keeps the names that start with it (case ignored); Exact keeps the one name it resolves to; Details adds columns' descriptions.
+/// </summary>
+internal sealed record LanguageLookupArgs(string ConnectionId, List<LanguageLookupPath> Requests);
+internal sealed record LanguageLookupPath(List<string> Path, string? Prefix = null, bool? Exact = null, int? Limit = null, bool? Details = null);
+/// <summary>Index is none (never built), building or ready; one answer per request, in order.</summary>
+internal sealed record LanguageLookupResult(string Index, List<LanguageLookupAnswer> Answers);
+/// <summary>State is ready, partial, building, skipped or absent. Path is the request's as the index names it (case resolved) as far
+/// as it resolved. Object is the object a path to one names, when the index holds it. Truncated: more names matched than came back.</summary>
+internal sealed record LanguageLookupAnswer(string State, List<string> Path, List<LanguageLookupItem> Items, bool Truncated, LanguageLookupObject? Object = null, string? Skip = null);
+/// <summary>A name below the path: its kind and subtype as Object Explorer names them, a column's type and nullability, a routine's
+/// signature (Detail), a sharded group, and with Details a column's description.</summary>
+internal sealed record LanguageLookupItem(string Name, string Kind, string? Subtype = null, string? Type = null, bool? Nullable = null, string? Detail = null,
+    string? Description = null, BigQueryShardsDto? Shards = null);
+/// <summary>An object's facts: Detailed is false until the index has read its details (columns, size, layout).</summary>
+internal sealed record LanguageLookupObject(string Name, string Kind, string? Subtype, bool Detailed, long? Rows = null, long? Bytes = null, string? Partitioning = null,
+    string? Clustering = null, string? Signature = null, BigQueryShardsDto? Shards = null, bool? ColumnsCut = null, DateTime? Modified = null);
 internal sealed record LanguageParseError(int Line, int Column, int Number, string Message);
 internal sealed record LanguageParseResult(IReadOnlyList<LanguageParseError> Errors, bool Truncated);
 /// <summary>One step's whole content (src/shared/agent/steps.ts AgentStepWrite): strings '' for none, ProxyId 0 for the service account.</summary>

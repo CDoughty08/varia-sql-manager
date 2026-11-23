@@ -138,13 +138,19 @@ internal sealed record BigQueryDryRunResult(long BytesProcessed, string? Incompl
 /// <summary>query.execute's Preview Rows target (docs/bigquery.md, Preview Rows): the table whose first rows tabledata.list reads
 /// instead of running the query text, which is the SELECT the tab shows. BigQuery handles only.</summary>
 internal sealed record BigQueryPreviewTarget(string Project, string Dataset, string Table);
-/// <summary>bigquery.properties: a table-like object's facts from tables.get (docs/bigquery.md, Properties).</summary>
+/// <summary>bigquery.properties: a table-like object's facts from tables.get, or a routine's from routines.get (docs/bigquery.md,
+/// Properties; Search Objects' details pane asks for routines too).</summary>
 internal sealed record BigQueryPropertiesArgs(string ConnectionId, string RequestId, string Kind, string Project, string Dataset, string Name);
 internal sealed record BigQueryFact(string Label, string Value);
 internal sealed record BigQueryFactGroup(string Title, List<BigQueryFact> Facts);
-/// <summary>Type: tables.get's type in words ("table", "snapshot", "view"…). Groups: Table, Storage, Layout, History, in that
-/// order, each left out when it has no facts.</summary>
-internal sealed record BigQueryProperties(string Name, string Type, List<BigQueryFactGroup> Groups, long ElapsedMs);
+/// <summary>A column or nested field as the details pane lists it: its path, type text and description.</summary>
+internal sealed record BigQueryColumnFact(string Name, string Type, string? Description = null);
+/// <summary>Type: tables.get's type in words ("table", "snapshot", "view"…) or the routine's. Groups: Table, Storage, Layout, History
+/// (a routine's: Routine, History), in that order, each left out when it has no facts. Definition: a view's or materialized view's
+/// query, or a routine's body, cut at 1,000,000 characters (DefinitionCut). Columns: the first 1,000 columns and nested fields
+/// (ColumnsCut when there were more).</summary>
+internal sealed record BigQueryProperties(string Name, string Type, List<BigQueryFactGroup> Groups, long ElapsedMs, string? Definition = null, bool? DefinitionCut = null,
+    List<BigQueryColumnFact>? Columns = null, bool? ColumnsCut = null);
 
 /// <summary>
 /// query.attach (docs/bigquery.md, Re-attaching to jobs): re-attaches the tab <c>SessionId</c> to a job a previous run (or

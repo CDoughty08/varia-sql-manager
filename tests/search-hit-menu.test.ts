@@ -67,7 +67,7 @@ describe('a Search Objects result\'s context menu', () => {
     const object: ObjectRef = { kind: 'bqTable', project: 'varia-alpha', dataset: 'sales', name: 'orders' }
     const target = searchHitTarget(explorer, 'bq-a', 'search-1', 0, hitOf(object, { folder: 'bqTables', label: 'sales.orders' }), false)
     const menu = lines(menus.resolve('search.hit.context', target))
-    expect(menu.slice(0, 3)).toEqual(['Reveal in Object Explorer', '---', 'Preview Rows'])
+    expect(menu.slice(0, 4)).toEqual(['Reveal in Object Explorer', '---', 'New Query', 'Preview Rows'])
     expect(menu.some(line => line.startsWith('Script Table as >'))).toBe(true)
     // A view has no Preview Rows (tabledata.list reads tables only).
     const view = lines(menus.resolve('search.hit.context', searchHitTarget(explorer, 'bq-a', 'search-1', 0, hitOf({ ...object, kind: 'bqView' }, { folder: 'bqViews', label: 'sales.orders' }), false)))
@@ -78,6 +78,16 @@ describe('a Search Objects result\'s context menu', () => {
     expect(await commands.execute('search.copyQualifiedName', args, 'menu')).toBe(true)
     expect(vi.mocked(api.writeClipboardText).mock.calls.at(-1)).toEqual(['`varia-alpha.sales.orders`'])
     expect(commands.isEnabled('search.revealHit', args)).toBe(true)
+    // New Query opens a GoogleSQL query on the result's connection, in its dataset (the billing project's).
+    expect(commands.isEnabled('explorer.newQuery', args)).toBe(true)
+    expect(await commands.execute('explorer.newQuery', args, 'menu')).toBe(true)
+    const opened = fixture.documents.getSnapshot()
+    expect(opened.documents.find(document => document.id === opened.activeId)).toMatchObject({ connectionId: 'bq-a', database: 'sales' })
+    // Another project's object opens in the connection's own default.
+    const elsewhere = argsFor(searchHitTarget(explorer, 'bq-a', 'search-1', 0, hitOf({ ...object, project: 'varia-beta' }, { folder: 'bqTables', label: 'sales.orders' }), false))
+    expect(await commands.execute('explorer.newQuery', elsewhere, 'menu')).toBe(true)
+    const other = fixture.documents.getSnapshot()
+    expect(other.documents.find(document => document.id === other.activeId)).toMatchObject({ connectionId: 'bq-a', database: '' })
   })
 
   it('reads the result\'s keys in preconditions, and copies its names', async () => {
