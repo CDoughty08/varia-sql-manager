@@ -398,7 +398,7 @@ internal static class PeekLiveChecks
             + "CREATE UNIQUE INDEX [IX]]'表] ON " + s + ".[T]]'表] (Name DESC, Id) INCLUDE (Amount) WHERE Name IS NOT NULL WITH (FILLFACTOR = 80, PAD_INDEX = ON);\n"
             + "INSERT " + s + ".[T]]'表] (Id, Name, Amount) VALUES (1, N'a', 1.5), (2, N'b', NULL), (3, NULL, NULL);\nGO\n"
             + "CREATE TABLE " + s + ".[FkChild] (Id int NOT NULL PRIMARY KEY, ParentId int NULL CONSTRAINT [FK]]'表] FOREIGN KEY REFERENCES " + s + ".[T]]'表] (Id) ON DELETE CASCADE, "
-            + "Note nvarchar(20) NULL, CONSTRAINT [CK_Off] CHECK (Id > 0));\n"
+            + "Note nvarchar(20) NULL, CONSTRAINT [CK_Off] CHECK (Id > 0 AND (ParentId IS NULL OR ParentId > 0)));\n"
             + "ALTER TABLE " + s + ".[FkChild] NOCHECK CONSTRAINT [CK_Off];\nGO\n"
             + (major >= 15
                 ? "CREATE TABLE " + s + ".[GNode] (Id int NOT NULL) AS NODE;\nCREATE TABLE " + s + ".[GEdge] (CONSTRAINT [EC]]'表] CONNECTION (" + s + ".[GNode] TO " + s + ".[GNode]) ON DELETE CASCADE) AS EDGE;\nGO\n"
