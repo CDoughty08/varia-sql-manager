@@ -114,7 +114,7 @@ export interface AgentJobDocumentModel {
 /** The editable fields, as the document, the changes, the compare and the save's error mapping name them. */
 export const agentJobFields = ['name', 'owner', 'category', 'description', 'enabled', 'email', 'page', 'netSend', 'eventLog', 'delete', 'alerts', 'steps', 'schedules'] as const
 export type AgentJobField = typeof agentJobFields[number]
-export type AgentJobSection = 'general' | 'notifications' | 'targets' | 'alerts' | 'steps' | 'schedules'
+export type AgentJobSection = 'general' | 'notifications' | 'targets' | 'alerts' | 'steps' | 'schedules' | 'history'
 export const agentJobFieldSection: { readonly [F in AgentJobField]: AgentJobSection } = {
   name: 'general', owner: 'general', category: 'general', description: 'general', enabled: 'general',
   email: 'notifications', page: 'notifications', netSend: 'notifications', eventLog: 'notifications', delete: 'notifications', alerts: 'alerts', steps: 'steps', schedules: 'schedules'
@@ -327,7 +327,8 @@ export const agentJobText = {
   pagerDuty: (name: string, duty: string) => `${name}'s pager duty is ${duty}. A page outside those hours is not sent. A warning only; Save still works.`,
   operatorUnknown: (name: string) => `${name} is not an operator on this server.`,
   alertsReadOnly: 'Only sysadmin can change which alerts run a job: SQL Server Agent\'s roles may view alerts, not change them.',
-  alertsNewLater: 'New alerts for this job come with the Alerts lane; create one in SSMS meanwhile.',
+  alertsNew: 'New alert for this job…',
+  alertsNewHint: 'Opens New Alert with this job as its response; the alert is created when you save it.',
   alertsNewJob: 'Save the job first, then add alerts.',
   alertsNone: 'No alert runs this job.',
   stale: (count: number) => `Not saved: someone changed this job after you opened it. Your ${count} ${count === 1 ? 'change is' : 'changes are'} kept.`,
@@ -346,7 +347,7 @@ export const agentJobText = {
   newBlank: 'Blank job',
   newBlankHint: 'Name it, then save; steps and schedules come with their own sections.',
   newCopy: 'Copy an existing job…',
-  newCopyHint: 'Pick a job; its General and Notifications fill this new job. Nothing is created until Save.',
+  newCopyHint: 'Pick a job; a new job like it opens with Changes from source first. Nothing is created until Save.',
   newHint: 'Nothing is created until Save, and everything stays editable.'
 } as const
 
@@ -496,18 +497,6 @@ export function rebaseAgentJobDraft(opened: AgentJobDocumentModel, current: Agen
     }
   }
   return next
-}
-
-/** New Job's "Copy an existing job": the copied job's General and Notifications as a new job's draft, named "Copy of …" (cut to fit). */
-export function copiedAgentJobDraft(source: AgentJobDocumentModel, login: string, sysadmin: boolean): AgentJobDraft {
-  const from = initialAgentJobDraft(source)
-  const name = `Copy of ${from.name}`.slice(0, agentLimits.nameChars)
-  // Create from… shares the source's schedules (the owner's 2026-11-18 decision) where the login can attach them: msdb asks only for the
-  // job's owner, so any schedule whose version was read (the view lists it to the login) is shared; others are copied as new.
-  const schedules = (source.schedules ?? []).map((record, index): JobScheduleEntry => record.version !== undefined && !!record.modified
-    ? { key: `s:${record.id}`, id: record.id, attached: true, base: record, fields: from.schedules[index]?.fields ?? record }
-    : { key: `n:copy:${record.id}`, fields: from.schedules[index]?.fields ?? record })
-  return { ...from, name, owner: sysadmin ? from.owner : login, removeAlerts: [], steps: { steps: [] }, schedules }
 }
 
 // --- Commands ----------------------------------------------------------------------------------------------------------

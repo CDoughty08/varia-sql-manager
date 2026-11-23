@@ -77,6 +77,18 @@ internal static class GoogleSqlScanner
         return true;
     }
 
+    /// <summary>Whether <paramref name="sql"/> is one query (SELECT, WITH, FROM for pipe syntax, or one in parentheses) with no
+    /// statement after it: a rerun's text when the emulator names no statement type (docs/bigquery.md, Expiry).</summary>
+    public static bool IsSingleQuery(string sql)
+    {
+        var tokens = Tokens(sql);
+        var first = tokens.FindIndex(token => token.Kind != Kind.Open);
+        if (first < 0 || tokens[first].Kind != Kind.Word || !(Is(sql, tokens[first], "SELECT") || Is(sql, tokens[first], "WITH") || Is(sql, tokens[first], "FROM"))) return false;
+        for (var i = 0; i < tokens.Count; i++)
+            if (tokens[i].Kind == Kind.Semicolon && tokens.Skip(i + 1).Any(next => next.Kind != Kind.Semicolon)) return false;
+        return true;
+    }
+
     static bool Is(string sql, Token token, string word) => token.Length == word.Length && string.Compare(sql, token.Start, word, 0, word.Length, StringComparison.OrdinalIgnoreCase) == 0;
 
     /// <summary>Words and parentheses with their depth; strings, identifiers in backticks and comments are skipped, and

@@ -125,10 +125,10 @@ internal sealed record BigQueryJobSummary(string Project, string JobId, string? 
 /// whose query is estimated (docs/bigquery.md, Sort and filter in BigQuery).</summary>
 internal sealed record BigQueryDryRunArgs(string ConnectionId, string? Sql = null, string? Dataset = null, RemoteDryRunArgs? Remote = null);
 
-/// <summary>A results.remoteQuery request (view or distinct) to estimate, without its query ID; the answer says whether running
-/// it would fall back to the original query (BigQueryDryRunResult.Fallback).</summary>
+/// <summary>A results.remoteQuery request (view, distinct, sample or rerun) to estimate, without its query ID; the answer says
+/// whether running it would fall back to the original query (BigQueryDryRunResult.Fallback).</summary>
 internal sealed record RemoteDryRunArgs(uint ResultId, int Generation, string Kind, RemoteSortArgs[]? Sort = null, RemoteFilterArgs[]? Filters = null,
-    int? Column = null, RemoteFilterArgs[]? Kept = null);
+    int? Column = null, RemoteFilterArgs[]? Kept = null, int? Rows = null, string? Method = null);
 
 /// <summary>bigquery.dryRun's answer: the bytes the query would process, why the figure may be low, the statement type, and
 /// whether emulator mode faked it; for a remote request, Fallback when its result table expired, so the figure is the original
@@ -153,32 +153,42 @@ internal static class BigQueryPropertiesLimits
     public const int ColumnType = 64;
     public const int ColumnMode = 32;
     public const int ColumnDescription = 2000;
-    /// <summary>Seven field levels use all 16 MessagePack containers (0-based depth 15 in JsonBridge.FromJson) inside { result: { columns: [...] } }, leaving no headroom for a 7th-level fields array.</summary>
-    public const int ColumnDepth = 7;
-    public const int ColumnFields = 10_000;
-    /// <summary>Estimated UTF-8 byte budget for mapped schema fields so wide schemas with long descriptions truncate cleanly before the 16 MiB response limit.</summary>
-    public const int ColumnsTextBytes = 8 * 1024 * 1024;
+    /// <summary>Seven field levels use all 16 MessagePack containers (0-based depth 15 in JsonBridge.FromJson) inside { result: { schema: [...] } }, leaving no headroom for a 7th-level fields array.</summary>
+    public const int SchemaDepth = 7;
+    public const int SchemaFields = 10_000;
+    /// <summary>Estimated UTF-8 byte budget for mapped nested schema fields so combined definition + flat columns + nested schema stays well under the 16 MiB response limit.</summary>
+    public const int SchemaTextBytes = 6 * 1024 * 1024;
     public const int Labels = 64;
     public const int LabelKey = 128;
     public const int LabelValue = 256;
     public const int DefinitionChars = 1_000_000;
 }
 
-/// <summary>bigquery.properties: a table-like object's facts from tables.get (docs/bigquery.md, Properties).</summary>
+/// <summary>bigquery.properties: a table-like object's facts from tables.get, or a routine's from routines.get (docs/bigquery.md,
+/// Properties; Search Objects' details pane asks for routines too).</summary>
 internal sealed record BigQueryPropertiesArgs(string ConnectionId, string RequestId, string Kind, string Project, string Dataset, string Name);
 internal sealed record BigQueryFact(string Label, string Value);
 internal sealed record BigQueryFactGroup(string Title, List<BigQueryFact> Facts);
+/// <summary>A column or nested field as Search Objects' details pane lists it: its path, type text and description.</summary>
+internal sealed record BigQueryColumnFact(string Name, string Type, string? Description = null);
 internal sealed record BigQueryStorageInfo(long? Rows = null, long? LogicalBytes = null, long? LongTermLogicalBytes = null, long? PhysicalBytes = null);
 internal sealed record BigQueryLayoutInfo(string? Partitioning = null, bool? RequirePartitionFilter = null, List<string>? Clustering = null);
 internal sealed record BigQuerySchemaField(string Name, string Type, string? Mode = null, string? Description = null, List<BigQuerySchemaField>? Fields = null);
 internal sealed record BigQueryLabel(string Key, string Value);
-/// <summary>Type: tables.get's type in words ("table", "snapshot", "view"…). Groups: Table, Storage, Layout, History, in that
-/// order, each left out when it has no facts. Structured fields carry the same free tables.get metadata for the inspector UI.</summary>
+/// <summary>Type: tables.get's type in words ("table", "snapshot", "view"…) or the routine's. Groups: Table, Storage, Layout, History
+/// (a routine's: Routine, History), in that order, each left out when it has no facts. Definition: a view's or materialized view's
+/// query, or a routine's body, cut at 1,000,000 characters (DefinitionCut / DefinitionTruncated). Columns: the first 1,000 flattened
+/// columns and nested fields (ColumnsCut). Structured fields (Storage, Layout, Schema, Labels, identity/timestamps) carry rich
+/// free tables.get metadata for the inspector UI.</summary>
 internal sealed record BigQueryProperties(
     string Name,
     string Type,
     List<BigQueryFactGroup> Groups,
     long ElapsedMs,
+    string? Definition = null,
+    bool? DefinitionCut = null,
+    List<BigQueryColumnFact>? Columns = null,
+    bool? ColumnsCut = null,
     string? FullName = null,
     string? Location = null,
     string? Description = null,
@@ -189,10 +199,9 @@ internal sealed record BigQueryProperties(
     string? SnapshotTimeUtc = null,
     BigQueryStorageInfo? Storage = null,
     BigQueryLayoutInfo? Layout = null,
-    List<BigQuerySchemaField>? Columns = null,
-    bool? ColumnsTruncated = null,
+    List<BigQuerySchemaField>? Schema = null,
+    bool? SchemaTruncated = null,
     List<BigQueryLabel>? Labels = null,
-    string? Definition = null,
     bool? DefinitionTruncated = null);
 
 /// <summary>

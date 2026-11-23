@@ -171,9 +171,11 @@ internal sealed record ResultsReadResult(long NextRow, long RowsAvailable, bool 
 /// Generation is the source result's, which main checks before sending. Kind "load" (Load into memory) takes nothing more;
 /// "view" (a sort or filter) takes 0 to 16 Sort keys and 0 to 16 Filters, at least one of either; "distinct" (a value list)
 /// takes the Column, the other columns' Filters and, optionally, the Kept filters whose rows tick its values. JobKey (load only)
-/// records its job for re-attaching. Fallback runs the original query again when its result table expired (BigQueryViewSql.CanFallBack).</summary>
+/// records its job for re-attaching. Fallback runs the original query again when its result table expired (BigQueryViewSql.CanFallBack).
+/// "sample" (Load sample) takes Rows (1 to BigQueryViewSql.MaxSampleRows) and Method: "first" reads the first rows (tabledata.list,
+/// free), "random" runs a TABLESAMPLE SYSTEM query. "rerun" takes nothing more: it runs the result's own statement again.</summary>
 internal sealed record RemoteQueryArgs(string QueryId, uint ResultId, int Generation, string Kind, RemoteSortArgs[]? Sort = null, RemoteFilterArgs[]? Filters = null,
-    int? Column = null, RemoteFilterArgs[]? Kept = null, bool? Fallback = null, string? JobKey = null);
+    int? Column = null, RemoteFilterArgs[]? Kept = null, bool? Fallback = null, string? JobKey = null, int? Rows = null, string? Method = null);
 /// <summary>One sort key of a remote view: a column of the windowed result, ascending (NULL first) or descending (NULL last).</summary>
 internal sealed record RemoteSortArgs(int Column, bool Descending);
 /// <summary>One filter of a remote view or value list (results.view's ViewFilter, its values in a value list): Op "in" or
@@ -443,18 +445,34 @@ internal sealed record DependenciesResult(List<PeekDependency> Items, long Elaps
 /// same connection, Stop, or a disconnect ends it (CANCELLED), keeping what it read.</summary>
 /// <summary>BigQuery only (SQL Server refuses them): ExtraDetails reads the extra projects' schemas too (pass 2), Scope re-reads one
 /// project or dataset (Object Explorer's Refresh, re-reading every object in it), and Stale re-reads only the datasets DDL marked.</summary>
-internal sealed record ObjectIndexArgs(string ConnectionId, string RequestId, bool? Definitions = null, bool? ExtraDetails = null, BigQueryIndexScope? Scope = null, bool? Stale = null);
+/// <summary>Bulk: pass 2 reads these locations' details with the billed INFORMATION_SCHEMA queries (a full build only, after
+/// bigquery.indexEstimate and the cost prompts).</summary>
+internal sealed record ObjectIndexArgs(string ConnectionId, string RequestId, bool? Definitions = null, bool? ExtraDetails = null, BigQueryIndexScope? Scope = null, bool? Stale = null,
+    BigQueryBulkArgs? Bulk = null);
 /// <summary>A BigQuery refresh's scope: a project, or one of its datasets.</summary>
 internal sealed record BigQueryIndexScope(string Project, string? Dataset = null);
+/// <summary>The bulk path's locations, as bigquery.indexEstimate answered them; the cap every job carries (a connection's own wins); and
+/// the estimate the cost prompts showed (BudgetBytes), which the build's jobs together never bill more than.</summary>
+internal sealed record BigQueryBulkArgs(List<BigQueryIndexLocation> Locations, long? MaximumBytesBilled = null, long? BudgetBytes = null);
+/// <summary>A project's location (US, EU, us-central1, …), whose region-scoped INFORMATION_SCHEMA the bulk path reads.</summary>
+internal sealed record BigQueryIndexLocation(string Project, string Location);
+/// <summary>bigquery.indexEstimate: what a full build's bulk path would bill, for the cost prompts: Definitions and ExtraDetails as the
+/// build will send them.</summary>
+internal sealed record BigQueryIndexEstimateArgs(string ConnectionId, bool? Definitions = null, bool? ExtraDetails = null);
+/// <summary>The locations to read (datasets.list's, at most 64; Cut when there were more, whose datasets pass 2 reads with free calls)
+/// and their queries' estimate, each at least BigQuery's 10 MiB per view read. A location whose dry run failed is left out.</summary>
+internal sealed record BigQueryIndexEstimateResult(List<BigQueryIndexLocation> Locations, BigQuery.BigQueryDryRunResult Estimate, bool Cut, long ElapsedMs);
+/// <summary>The last full build's bulk path: the locations read billed, and the first failure of those that fell back to free calls.</summary>
+internal sealed record BigQueryBulkStatus(int Locations, int Failed = 0, string? Code = null, string? Message = null);
 /// <summary>A database the index could not read: its code (NO_DB_ACCESS, TIMEOUT, TOO_LARGE, CATALOG_ERROR) and a sentence.</summary>
 /// <summary>Agent: SQL Server Agent's objects were left out, not the database named (msdb, where they are read).</summary>
 /// <summary>Project: a BigQuery dataset's project (Database is the dataset, or empty when the project's listing failed).</summary>
 internal sealed record ObjectIndexSkip(string Database, string Code, string Message, bool? Agent = null, string? Project = null, bool? Details = null);
 /// <summary>The index as a search finds it. State: none (never built), building, or ready. BuiltAt: UTC, when the last build ended.</summary>
 /// <summary>BigQuery: Databases and Indexed count datasets; Phase is names (pass 1) or details (pass 2) while building; NamesOnly lists
-/// the projects indexed without schemas (extra projects, by default).</summary>
+/// the projects indexed without schemas (extra projects, by default); Bulk is the last full build's billed bulk path, when it ran.</summary>
 internal sealed record ObjectIndexStatus(string State, int Databases, int Indexed, int Objects, int Modules, int Cut, List<ObjectIndexSkip> Skipped, bool Definitions, string? BuiltAt = null,
-    string? Provider = null, string? Phase = null, List<string>? NamesOnly = null);
+    string? Provider = null, string? Phase = null, List<string>? NamesOnly = null, BigQueryBulkStatus? Bulk = null);
 internal sealed record ObjectIndexResult(ObjectIndexStatus Status, long ElapsedMs);
 /// <summary>explorer.search: In is names, definitions or all; Kinds and Database narrow it; Limit is at most 1000 hits; Match is
 /// exact (the default) or fuzzy, which adds approximate name matches and cannot go with Regex.</summary>
@@ -625,7 +643,27 @@ internal sealed record ActionArgs(string Action, string ConnectionId, string Req
     bool? DropMappedUsers = null, string? Mode = null, LoginChangesDto? LoginChanges = null, List<PermissionDto>? Permissions = null, TableChangesDto? TableChanges = null,
     AgentIdentityDto? AgentIdentity = null, string? StepName = null, bool? DeleteUnusedSchedule = null,
     AgentPropertiesChangesDto? AgentProperties = null, AgentHistoryPurgeDto? AgentPurge = null, AgentHistoryDeleteDto? AgentHistory = null, AgentJobSaveDto? AgentJob = null,
+    AgentAlertSaveDto? AgentAlert = null, AgentOperatorSaveDto? AgentOperator = null, AgentRecommendedDto? AgentRecommended = null, int? AgentObjectId = null, string? ReassignTo = null,
     AgentScheduleSaveDto? AgentSchedule = null, AgentProxySaveDto? AgentProxy = null, CredentialSaveDto? Credential = null, int? ProxyId = null);
+/// <summary>The alert document's Save (AG-7, src/shared/actions/agent-alert.ts AgentAlertSave): an existing alert's changed arguments, New Alert's every one
+/// it sets. NewOperators are created first and Notifications applied last, each one msdb call.</summary>
+internal sealed record AgentAlertSaveDto(string? Name = null, bool? Enabled = null, int? MessageId = null, int? Severity = null, string? Database = null, string? Keyword = null,
+    string? Condition = null, string? JobId = null, int? Delay = null, int? IncludeIn = null, string? Message = null, bool? ResetCount = null, List<AgentNewOperatorDto>? NewOperators = null,
+    List<AgentNotificationChangeDto>? Notifications = null);
+internal sealed record AgentNewOperatorDto(string Name, string? Email = null, string? Pager = null);
+/// <summary>One notification change: Name is the other side's (the operator in an alert's save, the alert in an operator's); Change add, update or delete.</summary>
+internal sealed record AgentNotificationChangeDto(string Name, int Methods, string Change);
+/// <summary>The operator document's Save (AG-7, agent-operator.ts AgentOperatorSave); pager duty goes as its days and six times together.</summary>
+internal sealed record AgentOperatorSaveDto(string? Name = null, bool? Enabled = null, string? Email = null, string? Pager = null, string? NetSend = null, int? PagerDays = null,
+    int? WeekdayStart = null, int? WeekdayEnd = null, int? SaturdayStart = null, int? SaturdayEnd = null, int? SundayStart = null, int? SundayEnd = null,
+    List<AgentNotificationChangeDto>? Notifications = null);
+/// <summary>Add recommended alerts (AG-7): the alerts to create, and one operator (with its methods) and one delay for all.</summary>
+internal sealed record AgentRecommendedDto(List<AgentRecommendedAlertDto>? Alerts = null, int Methods = 0, int Delay = 0, string? Operator = null);
+internal sealed record AgentRecommendedAlertDto(string Name, int MessageId, int Severity);
+/// <summary>agent.counterValues (AG-7): one performance counter's current values per instance.</summary>
+internal sealed record AgentCounterValuesArgs(string ConnectionId, string RequestId, string Object, string Counter);
+internal sealed record AgentCounterValueDto(string Instance, double Value);
+internal sealed record AgentCounterValuesResult(List<AgentCounterValueDto>? Values, long ElapsedMs, ActionError? Error = null, bool? Truncated = null, string? ReadAt = null);
 /// <summary>The proxy document's Save (AG-8b, src/shared/actions/agent-proxy.ts AgentProxySave): an existing proxy's changes (the request's
 /// ProxyId names it), or New Proxy's name and credential (an existing one, or NewCredential, created first in the same transaction, whose secret
 /// is the request's Secrets.Secret). Subsystems are syssubsystems ids; principals are granted by kind and revoked by name.</summary>
@@ -653,6 +691,28 @@ internal sealed record AgentStepsSaveDto(List<int>? Deletes = null, List<AgentSt
 internal sealed record AgentStepNameDto(int Id, string Name);
 /// <summary>language.parse (AG-6b, src/shared/agent/parse.ts): the job step editor's Parse of one T-SQL text.</summary>
 internal sealed record LanguageParseArgs(string Text);
+
+/// <summary>
+/// language.lookup (docs/object-search.md, Editor lookup): the editor's completion and hover read the Search Objects index by
+/// path, whatever the engine. A path names a container level by level: none for the connection's top level, then one segment per
+/// level below it. For BigQuery the levels are project, dataset and object: [] lists projects, [project] datasets,
+/// [project, dataset] objects, [project, dataset, object] the object's facts and its columns with nested fields by path. Prefix
+/// keeps the names that start with it (case ignored); Exact keeps the one name it resolves to; Details adds columns' descriptions.
+/// </summary>
+internal sealed record LanguageLookupArgs(string ConnectionId, List<LanguageLookupPath> Requests);
+internal sealed record LanguageLookupPath(List<string> Path, string? Prefix = null, bool? Exact = null, int? Limit = null, bool? Details = null);
+/// <summary>Index is none (never built), building or ready; one answer per request, in order.</summary>
+internal sealed record LanguageLookupResult(string Index, List<LanguageLookupAnswer> Answers);
+/// <summary>State is ready, partial, building, skipped or absent. Path is the request's as the index names it (case resolved) as far
+/// as it resolved. Object is the object a path to one names, when the index holds it. Truncated: more names matched than came back.</summary>
+internal sealed record LanguageLookupAnswer(string State, List<string> Path, List<LanguageLookupItem> Items, bool Truncated, LanguageLookupObject? Object = null, string? Skip = null);
+/// <summary>A name below the path: its kind and subtype as Object Explorer names them, a column's type and nullability, a routine's
+/// signature (Detail), a sharded group, and with Details a column's description.</summary>
+internal sealed record LanguageLookupItem(string Name, string Kind, string? Subtype = null, string? Type = null, bool? Nullable = null, string? Detail = null,
+    string? Description = null, BigQueryShardsDto? Shards = null);
+/// <summary>An object's facts: Detailed is false until the index has read its details (columns, size, layout).</summary>
+internal sealed record LanguageLookupObject(string Name, string Kind, string? Subtype, bool Detailed, long? Rows = null, long? Bytes = null, string? Partitioning = null,
+    string? Clustering = null, string? Signature = null, BigQueryShardsDto? Shards = null, bool? ColumnsCut = null, DateTime? Modified = null);
 internal sealed record LanguageParseError(int Line, int Column, int Number, string Message);
 internal sealed record LanguageParseResult(IReadOnlyList<LanguageParseError> Errors, bool Truncated);
 /// <summary>One step's whole content (src/shared/agent/steps.ts AgentStepWrite): strings '' for none, ProxyId 0 for the service account.</summary>
@@ -822,7 +882,9 @@ internal sealed record BlockerDto(int SessionId, string? Program, string? Host, 
 /// (D4c): Login, its facts with what it owns, and Mappings, the database users mapped to it.</summary>
 internal sealed record DeleteTargetDto(string Name, string Type, string? Owner, List<ActionWarningDto> Warnings, bool DependentsTruncated, bool? IsSnapshot = null, int? Sessions = null,
     int? WithTransaction = null, List<BlockerDto>? Blockers = null, bool? BlockersTruncated = null, string? CloseConnectionsNote = null, List<string>? TransactionTabs = null,
-    LoginFactsDto? Login = null, LoginMappingsDto? Mappings = null, DatabaseIdentityDto? Identity = null, AgentIdentityDto? AgentIdentity = null, int? ProxyId = null);
+    LoginFactsDto? Login = null, LoginMappingsDto? Mappings = null, DatabaseIdentityDto? Identity = null, AgentIdentityDto? AgentIdentity = null,
+    int? AgentObjectId = null, List<string>? ReassignChoices = null, AgentNotifiedByDto? NotifiedBy = null, int? ProxyId = null);
+internal sealed record AgentNotifiedByDto(int Alerts, int Jobs);
 /// <summary>Database Properties' General page; sizes in MB, dates as ISO 8601, a backup of "None" when msdb has no history.</summary>
 internal sealed record DatabaseGeneralDto(string Name, string Status, bool Standby, string? Owner, string Created, double SizeMb, double? SpaceAvailableMb = null, int? Users = null,
     string? LastBackup = null, string? LastLogBackup = null, string? Collation = null, double? MemoryAllocatedMb = null, double? MemoryUsedMb = null, int? Id = null);
@@ -860,7 +922,28 @@ internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long 
     RenameDatabaseDto? RenameDatabase = null, LoginFactsDto? Login = null, LoginLockFactsDto? Lock = null,
     LoginPropertiesDto? LoginProperties = null, EffectivePermissionsDto? EffectivePermissions = null, WindowsPrincipalDto? WindowsPrincipal = null,
     TablePropertiesDto? TableProperties = null, AgentJobFactsDto? AgentJob = null, AgentServiceFactsDto? AgentService = null, AgentPropertiesDto? AgentProperties = null,
-    AgentJobDocumentDto? AgentJobDocument = null, AgentSchedulesDto? AgentSchedules = null, AgentProxyDocumentDto? AgentProxyDocument = null, CredentialDocumentDto? CredentialDocument = null);
+    AgentJobDocumentDto? AgentJobDocument = null, AgentAlertDocumentDto? AgentAlertDocument = null, AgentOperatorDocumentDto? AgentOperatorDocument = null,
+    AgentOperatorsDto? AgentOperators = null, AgentSchedulesDto? AgentSchedules = null, AgentProxyDocumentDto? AgentProxyDocument = null, CredentialDocumentDto? CredentialDocument = null);
+/// <summary>The alert document's describe (AG-7, agent-alert.ts AgentAlertDocumentModel). Dates are yyyy-MM-ddTHH:mm:ss, server time.</summary>
+internal sealed record AgentAlertDocumentDto(AgentAlertRecordDto? Alert, string Login, bool Sysadmin, string Platform, List<AgentAlertNotifyDto> Notifications, List<string> Databases,
+    AgentJobMailDto Mail, string? ReadOnly = null, List<AgentJobOperatorDto>? Operators = null, List<AgentAlertJobDto>? Jobs = null, List<AgentCounterDto>? Counters = null,
+    bool? CountersTruncated = null, string? MessageText = null, bool? OperatorsTruncated = null);
+internal sealed record AgentAlertRecordDto(int Id, string Name, bool Enabled, string Kind, int MessageId, int Severity, string Database, string Keyword, string Condition, string WmiNamespace,
+    string WmiQuery, string JobId, string JobName, int Delay, int IncludeIn, string Message, int Occurrences, string? LastOccurred = null, string? LastResponse = null, string? CountReset = null);
+internal sealed record AgentAlertNotifyDto(string Operator, int Methods);
+internal sealed record AgentAlertJobDto(string Id, string Name);
+internal sealed record AgentCounterDto(string Object, string Counter);
+/// <summary>The operator document's describe (AG-7, agent-operator.ts AgentOperatorDocumentModel).</summary>
+internal sealed record AgentOperatorDocumentDto(AgentOperatorRecordDto? Operator, string Login, bool Sysadmin, string Platform, List<AgentNotificationRowDto> Notifications, AgentJobMailDto Mail,
+    string? ReadOnly = null, List<AgentAlertRowDto>? Alerts = null, bool? AlertsTruncated = null, List<AgentJobNotifyRowDto>? Jobs = null);
+internal sealed record AgentOperatorRecordDto(int Id, string Name, bool Enabled, string Email, string Pager, string NetSend, int PagerDays, AgentDutyHoursDto Weekday, AgentDutyHoursDto Saturday,
+    AgentDutyHoursDto Sunday, string? LastEmail = null, string? LastPager = null, string? LastNetSend = null);
+internal sealed record AgentAlertRowDto(int Id, string Name, bool Enabled, string Kind, int MessageId, int Severity);
+internal sealed record AgentNotificationRowDto(int AlertId, int OperatorId, int Methods);
+internal sealed record AgentJobNotifyRowDto(string Id, string Name, string Email, string Page, string NetSend);
+/// <summary>The Operators and notifications grid's describe (AG-7, agent-operator.ts AgentOperatorsModel).</summary>
+internal sealed record AgentOperatorsDto(string Login, bool Sysadmin, string Platform, List<AgentOperatorRecordDto> Operators, List<AgentNotificationRowDto> Notifications, AgentJobMailDto Mail,
+    string? ReadOnly = null, bool? OperatorsTruncated = null, List<AgentAlertRowDto>? Alerts = null, bool? AlertsTruncated = null, List<AgentJobNotifyRowDto>? Jobs = null);
 /// <summary>The proxy document's describe (AG-8b, src/shared/actions/agent-proxy.ts AgentProxyDocumentModel).</summary>
 internal sealed record AgentProxyDocumentDto(AgentProxyRecordDto? Proxy, string Platform, List<ProxySubsystemDto> Subsystems, List<ProxyCredentialDto> Credentials, bool CredentialsTruncated,
     bool CanCreateCredential, List<ProxyPrincipalDto> PrincipalChoices, List<ProxyReferenceDto>? References = null, bool? ReferencesTruncated = null,

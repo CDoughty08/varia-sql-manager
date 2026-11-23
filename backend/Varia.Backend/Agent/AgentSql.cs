@@ -144,6 +144,7 @@ internal static partial class AgentSql
     private static IReadOnlyList<AgentStatement>? all;
     public static IReadOnlyList<AgentStatement> All => all ??= [State, Jobs, Job, Activity, History, Subsystems, Properties, ErrorLogs, ErrorLog, ServiceState, JobSteps, AgentProperties, JobActivity, WatchedJob, Activities, ServerClock, LastRunHistory,
         HistoryAll, HistoryAllSince, HistorySince, HistoryMessage, JobDocument, JobDocumentSteps, JobCategories, Operators, Alerts, AgentMail, MailProfiles, JobDocumentFacts, OwnerLogins,
+        AlertDocument, AlertRows, OperatorRows, OperatorDocument, Notifications, AlertNotifications, OperatorNotifications, JobNotifications, AlertJobs, AlertDatabases, Counters, CounterValues, MessageText,
         JobStepDatabases, ..JobStepProxies, JobSchedules, Schedules, ScheduleVersions, ScheduleLinks, JobsInSchedule, JobDurations, IdleCondition];
 
     /// <summary>Whether a statement is one of <see cref="All"/>: the reader runs nothing else, so everything it runs was linted.</summary>

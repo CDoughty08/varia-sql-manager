@@ -9,7 +9,7 @@ import { resizeContent } from './fixtures/window-resize.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
-import { activeDocumentName, activeGroupEditorText, backendReady, documentTab, documentTabs, editorGroups, editorGroupTabs, editorTextbox, floatingEditorGroups, gridCell, menubar, outputStatus, pinDocumentButton, queryStatus, quickInputBox, quickInputRows, resultGrid, selectOpenDocument, tabNameBox, tabShelfRows, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocumentName, activeGroupEditorText, backendReady, connectDialogWindow, documentTab, documentTabs, editorGroups, editorGroupTabs, editorTextbox, floatingEditorGroups, gridCell, menubar, outputStatus, pinDocumentButton, queryStatus, quickInputBox, quickInputRows, resultGrid, selectOpenDocument, submitConnect, tabNameBox, tabShelfRows, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'hot-exit-profile-'))
@@ -381,13 +381,11 @@ try {
 
   // The value editor can save multibyte XML above the SQL file limit. A path-only pin must reopen it with its own limit.
   await toolbarButton(page, 'Connect').click()
-  const connect = page.getByRole('dialog', { name: 'Connect', exact: true })
-  await expect(connect.getByText('Loading saved connections…')).toHaveCount(0)
+  const { window: connectWin, dialog: connect } = await connectDialogWindow(application)
   await connect.getByLabel('Server Name', { exact: true }).fill('hot-exit-test')
   await connect.getByLabel('Authentication', { exact: true }).selectOption('windows')
   await connect.getByLabel('Trust server certificate', { exact: true }).check()
-  await connect.getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(connect).toHaveCount(0)
+  await submitConnect(connectWin, connect)
   await typeInNew('SELECT 1 -- FOR_XML_FIXTURE')
   await page.keyboard.press('F5')
   await expect(outputStatus(page)).toContainText(/^Completed/)

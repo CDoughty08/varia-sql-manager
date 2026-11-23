@@ -63,7 +63,7 @@ export async function gettingStartedSmoke(page, menu, application) {
     const optionsWindow = await dialogWindow(application, 'Options')
     const options = optionsWindow.getByRole('dialog', { name: 'Options', exact: true })
     await expect(options).toBeVisible()
-    await expect(options.getByRole('checkbox', { name: 'Include column headers when copying the results', exact: true })).toBeChecked()
+    await expect(options.getByRole('switch', { name: 'Include column headers when copying the results', exact: true })).toBeChecked()
     await clickToClose(options.getByRole('button', { name: 'Cancel', exact: true }))
     await dialogClosed(optionsWindow, 'Options')
     await results.getByRole('navigation', { name: 'Sections', exact: true }).getByRole('button', { name: 'Explore returned rows', exact: true }).click()

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { bigQueryFieldPathMax, bigQueryFieldText, bigQueryPath, isBigQueryFieldPath, isBigQueryName, quoteBigQuery } from '../src/shared/bigquery/names'
-import { bigQueryPreviewTargetSchema, bigQueryPropertiesLimits, bigQueryPropertiesRequestSchema, bigQueryPropertiesSchema, type BigQueryProperties, type BigQuerySchemaField } from '../src/shared/bigquery/objects'
+import { bigQueryMaxColumnFacts, bigQueryMaxDefinition, bigQueryPreviewTargetSchema, bigQueryPropertiesLimits, bigQueryPropertiesRequestSchema, bigQueryPropertiesSchema, type BigQueryProperties, type BigQuerySchemaField } from '../src/shared/bigquery/objects'
 import { decodeControl, encodeControl } from '../src/shared/ipc/wire/msgpack'
 import { validateRequest, validateResult } from '../src/main/validation'
 import { optionsAllow } from '../src/shared/ipc/methods'
@@ -50,14 +50,24 @@ describe('BigQuery Object Explorer requests', () => {
     expect(optionsAllow('query.execute', 'sqlserver', { preview })).toBe(false)
   })
 
-  it('validates bigquery.properties for table-like kinds only, and bounds its answer', () => {
+  it('validates bigquery.properties for table-like kinds and routines, and bounds its answer', () => {
     const request = { connectionId: uuid, requestId: uuid, kind: 'bqView', project: 'varia-alpha', dataset: 'sales', name: 'daily' }
     expect(() => validateRequest('bigquery.properties', request)).not.toThrow()
-    expect(bigQueryPropertiesRequestSchema.safeParse({ ...request, kind: 'bqRoutine' }).success).toBe(false)
+    expect(bigQueryPropertiesRequestSchema.safeParse({ ...request, kind: 'bqRoutine', name: 'to_cents' }).success).toBe(true)
+    // A routine name is checked by the routine rule (letters, digits and underscores), a table name by the table rule.
+    expect(bigQueryPropertiesRequestSchema.safeParse({ ...request, kind: 'bqRoutine', name: 'daily view' }).success).toBe(false)
+    expect(bigQueryPropertiesRequestSchema.safeParse({ ...request, name: 'daily view' }).success).toBe(true)
+    expect(bigQueryPropertiesRequestSchema.safeParse({ ...request, kind: 'bqModel' }).success).toBe(false)
     expect(bigQueryPropertiesRequestSchema.safeParse({ ...request, name: 'a\\b' }).success).toBe(false)
     const facts = { name: 'daily', type: 'view', elapsedMs: 3, groups: [{ title: 'Table', facts: [{ label: 'Type', value: 'view' }] }] }
     expect(bigQueryPropertiesSchema.safeParse(facts).success).toBe(true)
     expect(bigQueryPropertiesSchema.safeParse({ ...facts, groups: [{ title: 'Table', facts: [{ label: 'Description', value: 'x'.repeat(2001) }] }] }).success).toBe(false)
+    const detailed = { ...facts, definition: 'SELECT 1', columns: [{ name: 'day', type: 'DATE', description: 'The day.' }, { name: 'n', type: 'INT64' }] }
+    expect(bigQueryPropertiesSchema.safeParse(detailed).success).toBe(true)
+    expect(bigQueryPropertiesSchema.safeParse({ ...detailed, definition: 'x'.repeat(bigQueryMaxDefinition + 1) }).success).toBe(false)
+    expect(bigQueryPropertiesSchema.safeParse({ ...detailed, columns: Array.from({ length: bigQueryMaxColumnFacts + 1 }, (_, i) => ({ name: 'c' + i, type: 'INT64' })) }).success).toBe(false)
+    expect(bigQueryPropertiesSchema.safeParse({ ...detailed, columns: [{ name: 'day', type: 'DATE', description: 'x'.repeat(1025) }] }).success).toBe(false)
+    expect(bigQueryPropertiesSchema.safeParse({ ...detailed, columnsCut: false }).success).toBe(false)
   })
 
   it('accepts structured BigQuery properties through MessagePack and rejects over-limit or malformed payloads', () => {
@@ -78,41 +88,42 @@ describe('BigQuery Object Explorer requests', () => {
       modifiedUtc: '2023-11-15 22:13:20 UTC',
       storage: { rows: 1_234_567, logicalBytes: Number.MAX_SAFE_INTEGER, longTermLogicalBytes: 0, physicalBytes: 1_073_741_824 },
       layout: { partitioning: 'DAY on placed', requirePartitionFilter: true, clustering: ['customer', 'region'] },
-      columns: [
+      columns: [{ name: 'id', type: 'INT64', description: 'Primary identifier' }],
+      schema: [
         { name: 'id', type: 'INT64', mode: 'REQUIRED', description: 'Primary identifier' },
-        nest(bigQueryPropertiesLimits.columnDepth)
+        nest(bigQueryPropertiesLimits.schemaDepth)
       ],
-      columnsTruncated: false,
+      schemaTruncated: false,
       labels: [{ key: 'env', value: 'prod' }, { key: 'empty_ok', value: '' }],
       definition: 'SELECT 1',
       definitionTruncated: false
     }
     expect(bigQueryPropertiesSchema.safeParse(rich).success).toBe(true)
-    // A 7-level nested columns tree inside { result } must round-trip within protocol v2's 16-container depth limit.
+    // A 7-level nested schema tree inside { result } must round-trip within protocol v2's 16-container depth limit.
     const decoded = decodeControl(encodeControl({ result: rich })) as { result: unknown }
     expect(validateResult('bigquery.properties', decoded.result)).toEqual(rich)
 
-    // Depth over columnDepth (7), even with an empty fields array on level 7, is rejected.
-    expect(bigQueryPropertiesSchema.safeParse({ ...rich, columns: [nest(bigQueryPropertiesLimits.columnDepth + 1)] }).success).toBe(false)
+    // Depth over schemaDepth (7), even with an empty fields array on level 7, is rejected.
+    expect(bigQueryPropertiesSchema.safeParse({ ...rich, schema: [nest(bigQueryPropertiesLimits.schemaDepth + 1)] }).success).toBe(false)
     let level7EmptyFields: BigQuerySchemaField = { name: 'l7', type: 'STRUCT', fields: [] }
     for (let i = 6; i >= 1; i--) level7EmptyFields = { name: `l${i}`, type: 'STRUCT', fields: [level7EmptyFields] }
-    expect(bigQueryPropertiesSchema.safeParse({ ...rich, columns: [level7EmptyFields] }).success).toBe(false)
+    expect(bigQueryPropertiesSchema.safeParse({ ...rich, schema: [level7EmptyFields] }).success).toBe(false)
 
     // Total field count over 10,000 is rejected both flat and nested.
-    const flatTooMany = Array.from({ length: bigQueryPropertiesLimits.columnFields + 1 }, (_, i) => ({ name: `c${i}`, type: 'STRING' }))
-    expect(bigQueryPropertiesSchema.safeParse({ ...rich, columns: flatTooMany }).success).toBe(false)
+    const flatTooMany = Array.from({ length: bigQueryPropertiesLimits.schemaFields + 1 }, (_, i) => ({ name: `c${i}`, type: 'STRING' }))
+    expect(bigQueryPropertiesSchema.safeParse({ ...rich, schema: flatTooMany }).success).toBe(false)
     const nestedTooMany = Array.from({ length: 100 }, (_, i) => ({
       name: `s${i}`, type: 'STRUCT',
       fields: Array.from({ length: 100 }, (_, j) => ({ name: `f${j}`, type: 'INT64' }))
     }))
-    expect(bigQueryPropertiesSchema.safeParse({ ...rich, columns: nestedTooMany }).success).toBe(false)
+    expect(bigQueryPropertiesSchema.safeParse({ ...rich, schema: nestedTooMany }).success).toBe(false)
 
     // String length, array length, storage count and strictness bounds.
-    expect(bigQueryPropertiesSchema.safeParse({ ...rich, columns: [{ name: '', type: 'STRING' }] }).success).toBe(false)
-    expect(bigQueryPropertiesSchema.safeParse({ ...rich, columns: [{ name: 'a'.repeat(301), type: 'STRING' }] }).success).toBe(false)
-    expect(bigQueryPropertiesSchema.safeParse({ ...rich, columns: [{ name: 'a', type: 'T'.repeat(65) }] }).success).toBe(false)
-    expect(bigQueryPropertiesSchema.safeParse({ ...rich, columns: [{ name: 'a', type: 'STRING', mode: 'M'.repeat(33) }] }).success).toBe(false)
-    expect(bigQueryPropertiesSchema.safeParse({ ...rich, columns: [{ name: 'a', type: 'STRING', description: 'd'.repeat(2001) }] }).success).toBe(false)
+    expect(bigQueryPropertiesSchema.safeParse({ ...rich, schema: [{ name: '', type: 'STRING' }] }).success).toBe(false)
+    expect(bigQueryPropertiesSchema.safeParse({ ...rich, schema: [{ name: 'a'.repeat(301), type: 'STRING' }] }).success).toBe(false)
+    expect(bigQueryPropertiesSchema.safeParse({ ...rich, schema: [{ name: 'a', type: 'T'.repeat(65) }] }).success).toBe(false)
+    expect(bigQueryPropertiesSchema.safeParse({ ...rich, schema: [{ name: 'a', type: 'STRING', mode: 'M'.repeat(33) }] }).success).toBe(false)
+    expect(bigQueryPropertiesSchema.safeParse({ ...rich, schema: [{ name: 'a', type: 'STRING', description: 'd'.repeat(2001) }] }).success).toBe(false)
     expect(bigQueryPropertiesSchema.safeParse({ ...rich, labels: Array.from({ length: 65 }, (_, i) => ({ key: `k${i}`, value: 'v' })) }).success).toBe(false)
     expect(bigQueryPropertiesSchema.safeParse({ ...rich, labels: [{ key: '', value: 'v' }] }).success).toBe(false)
     expect(bigQueryPropertiesSchema.safeParse({ ...rich, labels: [{ key: 'k'.repeat(129), value: 'v' }] }).success).toBe(false)
@@ -126,6 +137,6 @@ describe('BigQuery Object Explorer requests', () => {
     expect(bigQueryPropertiesSchema.safeParse({ ...rich, storage: { rows: 1, extra: 2 } }).success).toBe(false)
     expect(bigQueryPropertiesSchema.safeParse({ ...rich, layout: { requirePartitionFilter: true, extra: 2 } }).success).toBe(false)
     expect(bigQueryPropertiesSchema.safeParse({ ...rich, labels: [{ key: 'a', value: 'b', extra: 1 }] }).success).toBe(false)
-    expect(bigQueryPropertiesSchema.safeParse({ ...rich, columns: [{ name: 'a', type: 'STRING', extra: 1 }] }).success).toBe(false)
+    expect(bigQueryPropertiesSchema.safeParse({ ...rich, schema: [{ name: 'a', type: 'STRING', extra: 1 }] }).success).toBe(false)
   })
 })

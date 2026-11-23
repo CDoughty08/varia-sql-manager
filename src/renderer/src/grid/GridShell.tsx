@@ -93,8 +93,8 @@ export interface GridShellProps {
    *  its start and end are announced instead. */
   readonly strip?: { readonly text: string; readonly error?: boolean; readonly action?: StripAction; readonly lead?: StripLead; readonly quiet?: boolean }
   /** A windowed BigQuery result whose rows BigQuery no longer keeps (a read answered REMOTE_EXPIRED): its strip says so and
-   *  offers this (Re-run) in place of Retry, which cannot help. */
-  readonly expired?: StripAction
+   *  offers this (Re-run) in place of Retry, which cannot help; while the re-run runs, `text` says so and the action stops it. */
+  readonly expired?: StripAction & { readonly text?: string }
   /** Drawn above the grid in its frame (a comparison's toolbar), outside the grid's own focus and keys. */
   readonly head?: ReactNode
   /** What the render error strip calls the grid's contents. */
@@ -219,7 +219,7 @@ export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mo
     {children}
     {gone && <div className="rg-overlay" role="status">{gone}</div>}
     {!gone && status.renderError ? <div className="rg-strip error" role="status">{failed} <button onClick={retry}>Retry</button></div>
-      : !gone && status.tileError && status.expired && expired ? <div className="rg-strip error has-action" role="status"><span className="rg-strip-text">{expiredText}</span>
+      : !gone && status.tileError && status.expired && expired ? <div className="rg-strip error has-action" role="status"><span className="rg-strip-text">{expired.text ?? expiredText}</span>
         <button type="button" className="rg-strip-action" title={expired.title} aria-keyshortcuts={expired.keys} onClick={expired.run}>{expired.icon && <Icon name={expired.icon} />}{expired.label}</button></div>
       : !gone && status.tileError ? <div className="rg-strip error" role="status">Some rows could not be loaded: {status.tileError} <button onClick={retry}>Retry</button></div>
         : strip ? <div className={(strip.error ? 'rg-strip error' : 'rg-strip') + (action ? ' has-action' : '')} role={strip.quiet ? undefined : 'status'} title={strip.text}>

@@ -22,6 +22,7 @@ internal static partial class BigQueryExecutionChecks
         await RemoteViewRefusalsAsync(check);
         await RemoteExpiryAsync(check);
         await RemoteViewStopsAsync(check);
+        await SamplesAsync(check);
     }
 
     static readonly IReadOnlyList<BigQueryField> ViewFields = BigQueryColumnPlan.From(JsonSerializer.SerializeToElement(Schema(Field("n", "INTEGER"), Field("s", "STRING"),

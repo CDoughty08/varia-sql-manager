@@ -47,6 +47,11 @@ internal static class AgentHistoryLiveChecks
                 && step[0] == "1" && step[1] == "Step 1",
                 "agent.history with the run selected reads its job outcome row first, then its step: " + string.Join(" / ", steps.Select(cells => string.Join(",", cells))));
 
+            // The job document's History (AG-6d): the same job with its usual durations, from its one succeeded run.
+            var usual = (await TablesAsync(service, info, json, new AgentHistoryLiveArgs([jobId], Usual: true))).GetValueOrDefault(3) ?? [];
+            check(usual.Count == 2 && usual[0][0] == "0" && usual[1][0] == "1" && usual.All(cells => cells[2] == "1" && long.TryParse(cells[1], out var seconds) && seconds >= 0),
+                "agent.history with args.usual reads the job's usual durations, for the job and its step, from its succeeded run: " + string.Join(" / ", usual.Select(cells => string.Join(",", cells))));
+
             var message = await Call<AgentHistoryMessageResult>("agent.historyMessage", new AgentHistoryMessageArgs(info.Id, Guid.NewGuid().ToString(), jobId, key));
             check(message is { Error: null, Message.Length: > 0 }, "agent.historyMessage reads the outcome row's whole message from msdb: " + message.Error?.Code);
 

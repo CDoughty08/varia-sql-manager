@@ -6,17 +6,28 @@ using Google.Apis.Bigquery.v2.Data;
 namespace Varia.Backend.BigQuery;
 
 /// <summary>
-/// Properties for BigQuery's table-like objects (docs/bigquery.md, Properties): one tables.get, free, returning both the
-/// legacy formatted fact groups and structured identity, storage, layout, schema, labels and free View/Materialized View SQL.
+/// Properties for BigQuery's table-like objects (docs/bigquery.md, Properties): one tables.get, free, returning formatted
+/// fact groups, Search Objects' flat column facts and definition, and structured identity, storage, layout, nested schema,
+/// labels and free View/Materialized View SQL. A routine, which Search Objects' details pane asks for, is one routines.get.
 /// </summary>
 internal sealed partial class BigQueryService
 {
     public const int MaxFactValue = BigQueryPropertiesLimits.FactValue;
-    static readonly string[] PropertyKinds = ["bqTable", "bqView", "bqMaterializedView", "bqExternalTable"];
+    /// <summary>The longest view text or routine body returned (the details pane shows this much: SearchDetails' shownChars).</summary>
+    public const int MaxDefinition = BigQueryPropertiesLimits.DefinitionChars;
+    /// <summary>Columns and nested fields returned at most in the flat details-pane list.</summary>
+    public const int MaxColumnFacts = 1000;
+    /// <summary>The longest flat column type text or description returned.</summary>
+    public const int MaxColumnText = 1024;
+    /// <summary>Characters of flat column paths, types and descriptions returned in all, keeping the response well under the frame limit.</summary>
+    public const int MaxColumnChars = 1_000_000;
+    static readonly string[] PropertyKinds = ["bqTable", "bqView", "bqMaterializedView", "bqExternalTable", "bqRoutine"];
 
     public async Task<BigQueryProperties> PropertiesAsync(BigQueryPropertiesArgs args, CancellationToken token)
     {
-        if (!Guid.TryParse(args.RequestId, out _) || !PropertyKinds.Contains(args.Kind) || !BqNames.IsProject(args.Project) || !BqNames.IsDataset(args.Dataset) || !BqNames.IsTable(args.Name))
+        var routine = args.Kind == "bqRoutine";
+        if (!Guid.TryParse(args.RequestId, out _) || !PropertyKinds.Contains(args.Kind) || !BqNames.IsProject(args.Project) || !BqNames.IsDataset(args.Dataset)
+            || !(routine ? BqNames.IsRoutine(args.Name) : BqNames.IsTable(args.Name)))
             throw new RequestException("INVALID_PARAMS", "The object is invalid.");
         var connection = Find(args.ConnectionId) ?? throw new RequestException("NOT_CONNECTED", "The connection is no longer open.");
         var watch = Stopwatch.StartNew();
@@ -24,10 +35,76 @@ internal sealed partial class BigQueryService
         budget.CancelAfter(PreConnectLimit);
         try
         {
+            var fullName = args.Project + "." + args.Dataset + "." + args.Name;
+            if (routine)
+            {
+                var found = await MetadataAsync(connection, t => connection.Client.Service.Routines.Get(args.Project, args.Dataset, args.Name).ExecuteAsync(t), budget.Token);
+                var (kind, facts) = RoutineFacts(found, fullName);
+                var (body, bodyCut) = Definition(found.DefinitionBody);
+                return new(
+                    Clip(args.Name, BigQueryPropertiesLimits.Name),
+                    kind,
+                    facts,
+                    Math.Clamp(watch.ElapsedMilliseconds, 0, BigQueryLimits.MaxSafeInteger),
+                    Definition: body,
+                    DefinitionCut: bodyCut,
+                    FullName: Clip(fullName, BigQueryPropertiesLimits.FullName),
+                    Description: string.IsNullOrEmpty(found.Description) ? null : Clip(found.Description, BigQueryPropertiesLimits.FactValue),
+                    CreatedUtc: Time(found.CreationTime),
+                    ModifiedUtc: Time(found.LastModifiedTime),
+                    DefinitionTruncated: bodyCut);
+            }
             var table = await MetadataAsync(connection, t => connection.Client.Service.Tables.Get(args.Project, args.Dataset, args.Name).ExecuteAsync(t), budget.Token);
-            return MapTable(table, args.Name, args.Project + "." + args.Dataset + "." + args.Name, watch.ElapsedMilliseconds);
+            return MapTable(table, args.Name, fullName, watch.ElapsedMilliseconds);
         }
-        catch (Exception error) when (error is not RequestException { Code: "INVALID_PARAMS" }) { throw BigQueryErrors.Map(error, args.Project, "bigquery.tables.get", token: token); }
+        catch (Exception error) when (error is not RequestException { Code: "INVALID_PARAMS" }) { throw BigQueryErrors.Map(error, args.Project, routine ? "bigquery.routines.get" : "bigquery.tables.get", token: token); }
+    }
+
+    static (string? Text, bool? Cut) Definition(string? text) => text is null ? (null, null) : text.Length <= MaxDefinition ? (text, null)
+        : (text[..(char.IsHighSurrogate(text[MaxDefinition - 1]) ? MaxDefinition - 1 : MaxDefinition)], true);
+
+    /// <summary>The columns and nested fields as the index flattens them (Search.BigQueryEntries.FromTable): path, type and description.</summary>
+    internal static (List<BigQueryColumnFact>? Columns, bool? Cut) ColumnFacts(Table table)
+    {
+        var detail = Search.BigQueryEntries.FromTable(table);
+        var columns = detail.Columns;
+        if (columns.Count == 0) return (null, null);
+        static string Bound(string text) => text.Length <= MaxColumnText ? text : text[..(char.IsHighSurrogate(text[MaxColumnText - 2]) ? MaxColumnText - 2 : MaxColumnText - 1)] + "…";
+        var kept = new List<BigQueryColumnFact>();
+        long chars = 0;
+        foreach (var column in columns.Take(MaxColumnFacts))
+        {
+            var fact = new BigQueryColumnFact(column.Path, Bound(column.Type), column.Description is { Length: > 0 } description ? Bound(description) : null);
+            chars += fact.Name.Length + fact.Type.Length + (fact.Description?.Length ?? 0);
+            if (chars > MaxColumnChars) break;
+            kept.Add(fact);
+        }
+        return (kept, kept.Count < columns.Count || detail.ColumnsCut ? true : null);
+    }
+
+    /// <summary>A routine's facts: Routine (full name, type, language, signature, description) and History.</summary>
+    internal static (string Type, List<BigQueryFactGroup> Groups) RoutineFacts(Routine routine, string fullName)
+    {
+        var type = routine.RoutineType switch
+        {
+            "PROCEDURE" => "procedure", "TABLE_VALUED_FUNCTION" => "table function", "AGGREGATE_FUNCTION" => "aggregate function", _ => "function"
+        };
+        var groups = new List<BigQueryFactGroup>();
+        void Group(string title, params (string Label, string? Value)[] facts)
+        {
+            var kept = facts.Where(fact => !string.IsNullOrEmpty(fact.Value)).Select(fact => new BigQueryFact(fact.Label, Clip(fact.Value!, MaxFactValue))).ToList();
+            if (kept.Count > 0) groups.Add(new(title, kept));
+        }
+        Group("Routine",
+            ("Full name", fullName),
+            ("Type", type),
+            ("Language", routine.Language is { Length: > 0 } language ? language.ToUpperInvariant() switch { "SQL" => "SQL", "JAVASCRIPT" => "JavaScript", "PYTHON" => "Python", "JAVA" => "Java", "SCALA" => "Scala", _ => language } : null),
+            ("Signature", Search.BigQueryEntries.FromRoutine(routine).Signature),
+            ("Description", routine.Description));
+        Group("History",
+            ("Created", Time(routine.CreationTime)),
+            ("Last modified", Time(routine.LastModifiedTime)));
+        return (type, groups);
     }
 
     internal static (string Type, List<BigQueryFactGroup> Groups) Facts(Table table, string fullName)
@@ -71,8 +148,9 @@ internal sealed partial class BigQueryService
         var expiresUtc = Time(table.ExpirationTime);
         var snapshotTimeUtc = SnapshotTime(table.SnapshotDefinition);
 
-        var (columns, columnsTruncated) = MapColumns(table.Schema?.Fields);
-        var (definition, definitionTruncated) = MapDefinition(table);
+        var (columns, columnsCut) = ColumnFacts(table);
+        var (schema, schemaTruncated) = MapSchema(table.Schema?.Fields);
+        var (definition, definitionCut) = MapDefinition(table);
 
         var groups = new List<BigQueryFactGroup>();
         void Group(string title, params (string Label, string? Value)[] facts)
@@ -108,6 +186,10 @@ internal sealed partial class BigQueryService
             type,
             groups,
             Math.Clamp(elapsedMs, 0, BigQueryLimits.MaxSafeInteger),
+            definition,
+            definitionCut,
+            columns,
+            columnsCut,
             clippedFullName,
             location,
             description,
@@ -118,11 +200,10 @@ internal sealed partial class BigQueryService
             snapshotTimeUtc,
             storage,
             layout,
-            columns,
-            columnsTruncated,
+            schema,
+            schemaTruncated,
             labels,
-            definition,
-            definitionTruncated);
+            definitionCut);
     }
 
     static string? FormatPartitioning(Table table)
@@ -165,7 +246,7 @@ internal sealed partial class BigQueryService
         return kept.Count > 0 ? kept : null;
     }
 
-    static (List<BigQuerySchemaField>? Columns, bool? Truncated) MapColumns(IList<TableFieldSchema>? fields)
+    static (List<BigQuerySchemaField>? Schema, bool? Truncated) MapSchema(IList<TableFieldSchema>? fields)
     {
         if (fields is not { Count: > 0 }) return (null, null);
         var total = 0;
@@ -173,18 +254,18 @@ internal sealed partial class BigQueryService
         var textBytes = 0;
         var truncated = false;
         var budgetExhausted = false;
-        const int MaxVisited = BigQueryPropertiesLimits.ColumnFields * 4;
+        const int MaxVisited = BigQueryPropertiesLimits.SchemaFields * 4;
 
         List<BigQuerySchemaField>? MapLevel(IList<TableFieldSchema>? source, int depth)
         {
             if (source is not { Count: > 0 } || budgetExhausted) return null;
-            var mapped = new List<BigQuerySchemaField>(Math.Min(source.Count, BigQueryPropertiesLimits.ColumnFields - total));
+            var mapped = new List<BigQuerySchemaField>(Math.Min(source.Count, BigQueryPropertiesLimits.SchemaFields - total));
             foreach (var field in source)
             {
                 if (budgetExhausted) break;
                 if (++visited > MaxVisited) { truncated = budgetExhausted = true; break; }
                 if (field is null || string.IsNullOrEmpty(field.Name)) continue;
-                if (total >= BigQueryPropertiesLimits.ColumnFields) { truncated = budgetExhausted = true; break; }
+                if (total >= BigQueryPropertiesLimits.SchemaFields) { truncated = budgetExhausted = true; break; }
 
                 var name = Clip(field.Name, BigQueryPropertiesLimits.ColumnName);
                 var type = FieldType(field);
@@ -193,7 +274,7 @@ internal sealed partial class BigQueryService
                 var fieldBytes = 64 + Encoding.UTF8.GetByteCount(name) + Encoding.UTF8.GetByteCount(type)
                     + (mode is null ? 0 : Encoding.UTF8.GetByteCount(mode))
                     + (description is null ? 0 : Encoding.UTF8.GetByteCount(description));
-                if (textBytes + fieldBytes > BigQueryPropertiesLimits.ColumnsTextBytes) { truncated = budgetExhausted = true; break; }
+                if (textBytes + fieldBytes > BigQueryPropertiesLimits.SchemaTextBytes) { truncated = budgetExhausted = true; break; }
 
                 total++;
                 textBytes += fieldBytes;
@@ -201,7 +282,7 @@ internal sealed partial class BigQueryService
                 List<BigQuerySchemaField>? children = null;
                 if (field.Fields is { Count: > 0 })
                 {
-                    if (depth >= BigQueryPropertiesLimits.ColumnDepth) truncated = true;
+                    if (depth >= BigQueryPropertiesLimits.SchemaDepth) truncated = true;
                     else children = MapLevel(field.Fields, depth + 1);
                 }
 

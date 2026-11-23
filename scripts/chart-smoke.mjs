@@ -10,7 +10,7 @@
 import { electron, expect, within } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { backendReady, chartLegend, chartSwatchLines, chartTable, chartTableCaption, chartTooltip, gridCell, gridCellSelector, gridPart, part, toolbarButton } from './fixtures/ui.mjs'
+import { backendReady, chartLegend, chartSwatchLines, chartTable, chartTableCaption, chartTooltip, connectDialogWindow, gridCell, gridCellSelector, gridPart, part, submitConnect, toolbarButton } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'chart-profile-'))
@@ -40,16 +40,14 @@ async function menu(id) {
   }, id)
 }
 async function connect() {
-  const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
-  if (!await dialog.isVisible()) await toolbarButton(page, 'Connect').click()
-  await expect(dialog.getByText('Loading saved connections…')).toHaveCount(0)
+  await toolbarButton(page, 'Connect').click()
+  const { window, dialog } = await connectDialogWindow(app)
   await dialog.getByLabel('Server Name', { exact: true }).fill('chart-server')
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
   await dialog.getByLabel('Login', { exact: true }).fill('reader')
   await dialog.getByLabel('Password', { exact: true }).fill('chart-smoke-password')
   await dialog.getByLabel('Trust server certificate', { exact: true }).check()
-  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(dialog).toHaveCount(0)
+  await submitConnect(window, dialog)
 }
 
 try {

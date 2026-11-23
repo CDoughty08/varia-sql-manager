@@ -12,13 +12,15 @@ import { connectionPrincipalIdSchema } from './connection-principal'
 import { limits } from '../shared/ipc/wire/protocol'
 import { localTableLimits } from '../shared/results/local-table'
 import { dependenciesParamsSchema, explorerChildrenParamsSchema, peekDefinitionParamsSchema, peekDependenciesParamsSchema, peekParamsSchema } from '../shared/explorer/schema.ts'
-import { objectIndexParamsSchema, objectSearchParamsSchema } from '../shared/explorer/search.ts'
+import { bigQueryIndexEstimateRequestSchema, bigQueryIndexEstimateResultSchema, objectIndexParamsSchema, objectSearchParamsSchema } from '../shared/explorer/search.ts'
+import { languageLookupRequestSchema, languageLookupResultSchema } from '../shared/language-lookup.ts'
 import { scriptRequestSchema } from '../shared/scripting/schema.ts'
 import { actionDescribeSchema, actionExecuteRequestSchema, actionExecuteResultSchema, actionScriptRequestSchema } from '../shared/actions/schema.ts'
 import { ssisCatalogSetupSchema, ssisDescribeSchema, ssisExecuteSchema } from '../shared/ssis/schema.ts'
 import { activityDetailsRequestSchema, activityKillRequestSchema } from '../shared/activity/schema.ts'
 import { agentProfileResultSchema, agentProfileSchema } from '../shared/agent/profile.ts'
 import { agentHistoryMessageResultSchema, agentHistoryMessageSchema } from '../shared/agent/history.ts'
+import { agentCounterValuesResultSchema, agentCounterValuesSchema } from '../shared/actions/agent-alert.ts'
 import { languageParseResultSchema, languageParseSchema } from '../shared/agent/parse.ts'
 import { languageCloseSchema, languageRequestSchema, languageCompletionsSchema, languageHoverSchema, languageStatusSchema, languageRefreshRequestSchema, languageRefreshResultSchema, languageDiagnosticResultSchema, languageDefinitionSchema } from '../shared/language-service'
 
@@ -51,6 +53,7 @@ export const requestSchemas = {
   'bigquery.projects': bigQueryProjectsParamsSchema,
   'bigquery.dryRun': bigQueryDryRunRequestSchema,
   'bigquery.properties': bigQueryPropertiesRequestSchema,
+  'bigquery.indexEstimate': bigQueryIndexEstimateRequestSchema,
   'connections.identity': z.object({}).strict(),
   'databases.list': z.object({ connectionId }).strict(),
   'tables.columns': z.object({ connectionId, database, schema: name, name }).strict(),
@@ -91,7 +94,9 @@ export const requestSchemas = {
   'activity.kill': activityKillRequestSchema,
   'agent.profile': agentProfileSchema,
   'agent.historyMessage': agentHistoryMessageSchema,
-  'language.parse': languageParseSchema
+  'agent.counterValues': agentCounterValuesSchema,
+  'language.parse': languageParseSchema,
+  'language.lookup': languageLookupRequestSchema
 } satisfies Record<RpcMethod, z.ZodType>
 
 /** Databases, or BigQuery's datasets with their locations (BigQueryService.ListDatasetsAsync bounds them the same). */
@@ -114,6 +119,7 @@ export const resultSchemas: Partial<Record<RpcMethod, z.ZodType>> = {
   'bigquery.projects': bigQueryProjectListSchema,
   'bigquery.dryRun': bigQueryDryRunResultSchema,
   'bigquery.properties': bigQueryPropertiesSchema,
+  'bigquery.indexEstimate': bigQueryIndexEstimateResultSchema,
   'connections.databases': databaseListSchema,
   'databases.list': databaseListSchema,
   'language.status': languageStatusSchema,
@@ -132,7 +138,9 @@ export const resultSchemas: Partial<Record<RpcMethod, z.ZodType>> = {
   'actions.execute': actionExecuteResultSchema,
   'agent.profile': agentProfileResultSchema,
   'agent.historyMessage': agentHistoryMessageResultSchema,
-  'language.parse': languageParseResultSchema
+  'agent.counterValues': agentCounterValuesResultSchema,
+  'language.parse': languageParseResultSchema,
+  'language.lookup': languageLookupResultSchema
 }
 
 export function validateResult(method: RpcMethod, value: unknown): unknown {

@@ -68,13 +68,13 @@ export class ContextMenuPopups<W extends PopupWindow> {
     rules?(): readonly ResolvedRule[]
   }) {}
 
-  async show(value: unknown, window: W): Promise<void> {
+  async show(value: unknown, window: W, reply: W = window): Promise<void> {
     if (this.options.style !== 'native') throw new Error('Native context menus are not in use.')
     if (!this.options.userCanAct()) throw new Error('A native context menu needs the focused window or a click, tap, or key press in it.')
     const request = contextMenuRequestSchema.parse(value)
     this.close()
     const menu = this.options.build(contextMenuTemplate(request, this.options.platform, id => {
-      if (!window.isDestroyed()) window.webContents.send('varia:context-menu-command', { token: request.token, id })
+      if (!reply.isDestroyed()) reply.webContents.send('varia:context-menu-command', { token: request.token, id })
     }, undefined, this.options.title, this.options.rules?.()))
     // Requests are in CSS pixels; the popup takes window pixels, inside the window.
     const bounds = window.getContentBounds(), zoom = window.webContents.getZoomFactor()
