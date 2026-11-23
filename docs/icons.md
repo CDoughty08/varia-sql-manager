@@ -9,7 +9,7 @@ half pixels, so they are sharp at 100 % zoom where the icon's box starts on a wh
 same name. Icons are sized with the `--varia-glyph-*` tokens ([metrics](themes/metrics.md)) and coloured
 with theme keys; Microsoft's SSMS icons are never used.
 
-## Varia's icons (29)
+## Varia's icons (30)
 
 | Id | Use |
 | --- | --- |
@@ -42,6 +42,7 @@ with theme keys; Microsoft's SSMS icons are never used.
 | `agent-activity` | SQL Server Agent: Job Activity Monitor. |
 | `agent-operator` | SQL Server Agent: operators (a person who is sent mail). |
 | `agent-proxy` | SQL Server Agent: proxies (an account a step runs as). |
+| `agent-schedule` | SQL Server Agent: schedules (a calendar page). |
 
 ## Codicons (128)
 
