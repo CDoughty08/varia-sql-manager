@@ -199,7 +199,7 @@ describe('Chromium sandbox guard', () => {
     // Every read or registration of a path in main: launch files, Recent Files and the Open dialog (openPath), a restored
     // session (reopenDocument, twice), and a recovered query. A new one needs its source checked against this rule.
     expect(main.match(/files\.(read|register)\(/g)).toHaveLength(4)
-    expect(main).toContain('const file = record.path && generation === rendererGeneration ? await files.register(record.path, record.kind, { baseSha256: record.fileSha256 }) : undefined')
+    expect(main).toContain('const file = record.path && !isKeptAgentKind(record.kind) && generation === rendererGeneration ? await files.register(record.path, record.kind, { baseSha256: record.fileSha256 }) : undefined')
     expect(main.match(/(?<!shell\.)\bopenPath\(/g)).toHaveLength(2)
     expect(main).toContain('open: openPath, describe: openFailure,')
     // Nothing else in main reads a document: the stores go through json-file.ts, and imports take a dialog's path.

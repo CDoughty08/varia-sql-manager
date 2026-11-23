@@ -19,7 +19,10 @@ import { SnapshotStore } from '../core/store'
 import type { Disposable, ExternalStore } from '../core/types'
 import type { LiveConnection } from '../services/connections'
 import { CustomDocumentTargets, type CustomDocumentTargetOptions } from '../services/custom-document-targets'
-import type { CustomDocumentProvider, DocumentService } from '../services/documents'
+import type { CustomDocumentProvider, DocumentService, KeptCustomDocument } from '../services/documents'
+import { decodeKeptState, encodeKeptState, keptAgentText } from '../../../shared/agent/kept.ts'
+import type { QueryDocument } from '../documents'
+import { liveConnectionOn } from './kept-documents'
 
 export type SchedulesView = 'all' | 'unused' | 'disabled'
 /** The key of the new schedule's draft (one at a time); a schedule's own draft is keyed by its id. */
@@ -47,12 +50,14 @@ export interface SchedulesState {
   readonly error?: ActionError
   readonly notice?: string
   readonly revision: number
+  /** Reopened by hot exit or AutoRecover (AG-6g) and not read since: the drafts keep the schedules they began from (their save guards). */
+  readonly restored?: true
 }
 export interface SchedulesSnapshot { readonly documents: Readonly<Record<string, SchedulesState>> }
 
 export interface SchedulesServiceOptions extends CustomDocumentTargetOptions {
   readonly api: Pick<VariaApi, 'describeObject' | 'executeObjectAction' | 'cancelObjectActions'>
-  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'setDirty' | 'activate' | 'getSnapshot'>
+  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'setDirty' | 'activate' | 'getSnapshot'> & Partial<Pick<DocumentService, 'openKeptCustom' | 'subscribe' | 'update'>>
   readonly connections: ExternalStore<readonly LiveConnection[]>
   /** Focus the document: its filter, or (`name`) the selected schedule's Name field, where New schedule puts the caret. */
   readonly focus?: (id: string, target?: 'name') => void
@@ -135,7 +140,9 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
     this.targetBindings = new CustomDocumentTargets(options)
     this.newId = options.newId ?? (() => crypto.randomUUID())
     this.registration = options.documents.registerProvider(this)
-    this.stopConnections = options.connections.subscribe(() => { try { this.connectionsChanged() } catch (failure) { onUnexpectedError(failure) } })
+    const changed = () => { try { this.connectionsChanged(); this.readRestored() } catch (failure) { onUnexpectedError(failure) } }
+    const stops = [options.connections.subscribe(changed), options.documents.subscribe?.(changed) ?? (() => {})]
+    this.stopConnections = () => stops.forEach(stop => stop())
   }
 
   get(id: string | undefined): SchedulesState | undefined { return id === undefined ? undefined : this.getSnapshot().documents[id] }
@@ -523,6 +530,57 @@ ${scheduleId}`, pending = this.jobReads.get(key)
     const lost = !result.ok && (result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST')
     this.patch(id, { error: lost ? fallback('CONNECTION_LOST', schedulesText.lost) : fallback('SQL_ERROR', !result.ok ? result.error : 'The schedule could not be saved.') })
     return false
+  }
+
+  // --- Hot exit and AutoRecover (AG-6g) --------------------------------------------------------------------------------
+
+  /** The document's unsaved drafts (each with the schedule it began from), the read they were made against, and the view. */
+  keep(id: string): string | undefined {
+    const state = this.get(id)
+    if (!state?.model || !this.isDirty(id)) return undefined
+    return encodeKeptState({ version: 1, kind: 'agentSchedules', target: { kind: 'agent' }, server: state.server, model: state.model, draft: state.drafts,
+      extra: { view: state.view, filter: state.filter, ...state.selected !== undefined ? { selected: state.selected } : {} } })
+  }
+  /** A kept Schedules document reopened disconnected on its target; Refresh-like, its drafts stay once it reads the schedules again. */
+  reopenKept(kept: KeptCustomDocument): QueryDocument {
+    if (this.disposed || !this.options.documents.openKeptCustom) throw new Error(keptAgentText.unreadable(kept.name))
+    const value = decodeKeptState(kept.state, 'agentSchedules')
+    const model = value?.model as unknown as AgentSchedulesModel | undefined
+    const drafts = value?.draft as Record<string, ScheduleDraft> | undefined
+    const shaped = !!model && Array.isArray(model.schedules) && !!drafts && typeof drafts === 'object' && !Array.isArray(drafts)
+      && Object.values(drafts).every(draft => !!draft && typeof draft === 'object' && !!draft.fields && typeof draft.fields === 'object' && Array.isArray(draft.jobs))
+    if (!value || !model || !drafts || !shaped) throw new Error(keptAgentText.unreadable(kept.name))
+    const extra = value.extra ?? {}
+    const view: SchedulesView = extra['view'] === 'unused' || extra['view'] === 'disabled' ? extra['view'] : 'all'
+    const filter = typeof extra['filter'] === 'string' ? extra['filter'].slice(0, 256) : ''
+    const selected = typeof extra['selected'] === 'string' && (extra['selected'] === newScheduleKey || extra['selected'] in drafts || model.schedules.some(record => String(record.id) === extra['selected'])) ? extra['selected'] : undefined
+    const document = this.options.documents.openKeptCustom('agentSchedules', agentSchedulesTabName, kept.database ?? 'msdb', kept.targetId)
+    if (kept.targetId) this.targetBindings.bindTarget(document.id, kept.targetId)
+    this.put({ id: document.id, server: value.server, phase: 'ready', model, view, filter, ...selected !== undefined ? { selected } : {}, drafts, revision: 1, restored: true,
+      error: fallback('CONNECTION_LOST', keptAgentText.restored('schedules', value.server)) })
+    this.options.documents.setDirty(document.id, true)
+    const live = liveConnectionOn(this.options.connections, this.options.targetIdOf, kept.targetId)
+    if (live) this.options.documents.update?.(document.id, { connectionId: live })
+    return document
+  }
+  attachesOnReconnect(id: string): boolean { return !!this.get(id)?.restored }
+  /** Reopened documents whose target is now connected read the schedules again; drafts of schedules still there stay. */
+  private readRestored(): void {
+    for (const state of Object.values(this.getSnapshot().documents)) {
+      if (!state.restored || !this.live(state.id) || this.requests.get(state.id)?.size) continue
+      const model = state.model, kept = Object.keys(state.drafts).filter(key => key !== newScheduleKey)
+      this.patch(state.id, { phase: 'loading', restored: undefined, error: undefined, notice: undefined })
+      void this.describe(state.id, keptAgentText.reread('schedules')).then(landed => {
+        const after = this.get(state.id)
+        if (!landed && after && after.model === model && !this.live(state.id)) this.patch(state.id, { restored: true, ...after.phase === 'loading' ? { phase: 'ready' as const } : {} })
+        else if (landed && after) {
+          // Drafts of schedules deleted on the server since are dropped by the read; the notice says so rather than claiming them restored.
+          const gone = kept.filter(key => !(key in after.drafts)).length
+          if (gone) this.patch(state.id, { notice: keptAgentText.schedulesGone(gone) })
+          this.dirtyChanged(state.id)
+        }
+      })
+    }
   }
 
   // --- CustomDocumentProvider ------------------------------------------------------------------------------------------

@@ -458,7 +458,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const recovery = new RecoveryService({
     api, documents, files, settings, warn: message => commands.reportWarning(message),
     server: id => { const connection = connections.get(id); return connection ? connection.displayName || connection.server : undefined },
-    restoredJobs: (tabId, jobs) => queries.restoreJobs(tabId, jobs)
+    restoredJobs: (tabId, jobs) => queries.restoreJobs(tabId, jobs), agentEnabled: api.agentPreview
   })
   // A tab holding BigQuery jobs it does not follow re-attaches once its connection is live (docs/bigquery.md, Re-attaching to jobs).
   let reattachQueued = false
@@ -964,7 +964,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // The tabs the last close kept (hot exit), else the welcome query; what an earlier run or page left unsaved is offered
   // once the workbench is up.
   const welcome = () => { if (!disposed) documents.create('SQLQuery1.sql', welcomeQueryText, 'master') }
-  if (api.hotExit) void restoreSession({ api, documents, files, groups: editorGroups, connectionTargets, resumeRecovery: (tabId, id) => recovery.resume(tabId, id), restoredJobs: (tabId, jobs) => queries.restoreJobs(tabId, jobs), otherwise: welcome })
+  if (api.hotExit) void restoreSession({ api, documents, files, groups: editorGroups, connectionTargets, resumeRecovery: (tabId, id) => recovery.resume(tabId, id), restoredJobs: (tabId, jobs) => queries.restoreJobs(tabId, jobs), otherwise: welcome, agentEnabled: api.agentPreview })
     .then(opened => opened >= 0, () => false).then(restored => {
       connectionRestored()
       if (disposed) return

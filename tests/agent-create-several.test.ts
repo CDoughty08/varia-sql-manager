@@ -281,7 +281,10 @@ describe('Create several: the document', () => {
     const { jobDocuments, documents } = opened()
     const id = jobDocuments.createLike('c1', 'ETL – Load warehouse')
     await settled()
+    expect(jobDocuments.keep(id)).toBeDefined()
     jobDocuments.createSeveral(id)
+    // Hot exit: the table's rows are not a job's draft, so it is not kept (its close asks).
+    expect(jobDocuments.keep(id)).toBeUndefined()
     jobDocuments.setSeveralCell(id, 'r1', 'name', 'ETL – Load HR')
     const editor = jobDocuments.openSeveralRow(id, 'r1')!
     expect(documents.get(editor)).toMatchObject({ name: 'Row 1 · ETL – Load HR', dirty: false })

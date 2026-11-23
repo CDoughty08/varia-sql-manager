@@ -1,6 +1,7 @@
 import type { editor } from 'monaco-editor'
 import type { DocumentKind, LineEnding, RestoredDocument, VariaApi } from '../../../shared/contracts'
-import { cleanTabName } from '../../../shared/files/session'
+import { cleanTabName, type KeptDocumentKind } from '../../../shared/files/session'
+import { isKeptAgentKind } from '../../../shared/agent/kept'
 import { bigQueryCommitTimeout, type SessionCloseNote, type SessionEnd, type SessionPlanEntry } from '../../../shared/sessions'
 import type { SettingsValues } from '../../../shared/settings/catalog'
 import type { ProviderId } from '../../../shared/providers'
@@ -59,7 +60,17 @@ export interface CustomDocumentProvider {
   canFollowTarget?(id: string, targetId: string): boolean
   /** Main proved these target identities equivalent; migrate only this provider's existing binding. */
   coalesceTarget?(id: string, fromTargetId: string, toTargetId: string): boolean
+  /** Hot exit and AutoRecover (AG-6g, a SQL Server Agent document): its unsaved state as bounded JSON with no secret in it, or undefined
+   *  when there is nothing it can keep (the tab is then asked about on close, as before hot exit). */
+  keep?(id: string): string | undefined
+  /** Reopens a kept state, disconnected, on its kept connection target (DocumentService.openKeptCustom). Throws when the state is unreadable. */
+  reopenKept?(kept: KeptCustomDocument): QueryDocument
+  /** A reopened document that has not read its object since: it follows its target when that reconnects on its own, as a query that
+   *  wants to attach does (TargetService.attachTarget). */
+  attachesOnReconnect?(id: string): boolean
 }
+/** A kept custom document as hot exit or AutoRecover give it back: its tab name, state, target and database. */
+export interface KeptCustomDocument { readonly name: string; readonly state: string; readonly targetId?: string; readonly database?: string }
 /** A model's indentation, from Tools › Options › Text Editor › Transact-SQL › Tabs. */
 export interface ModelOptions { readonly tabSize: number; readonly indentSize: number; readonly insertSpaces: boolean }
 /** Options from settings; `refreshOptions` applies them again after they change. */
@@ -172,6 +183,26 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     this.activate(document.id)
     return document
   }
+  /** A kept custom document reopened (AG-6g): active, unsaved, on its connection target with no live connection until that target connects. */
+  openKeptCustom(kind: CustomDocumentKind, name: string, database: string, targetId: string | undefined): QueryDocument {
+    if (this.disposed) throw new Error('The document service is disposed.')
+    if (!this.providers.has(kind)) throw new Error(`No ${kind} provider is registered.`)
+    const document: QueryDocument = { id: crypto.randomUUID(), name, database, ...targetId ? { targetId } : {}, dirty: true, savedVersionId: null, kind }
+    this.customs.set(document.id, kind)
+    this.changed({ ...this.getSnapshot(), documents: [...this.getSnapshot().documents, document] })
+    this.activate(document.id)
+    return document
+  }
+  /** What hot exit and AutoRecover keep of a custom document: its provider's state, if it keeps one. */
+  keepCustom(id: string): string | undefined { return this.provider(id)?.keep?.(id) }
+  /** Reopens a kept custom document through its kind's provider; throws when none keeps that kind or the state is unreadable. */
+  reopenKept(kind: CustomDocumentKind, kept: KeptCustomDocument): QueryDocument {
+    const provider = this.providers.get(kind)
+    if (!provider?.reopenKept) throw new Error(`${kept.name} could not be reopened.`)
+    return provider.reopenKept(kept)
+  }
+  /** Whether a reopened custom document follows its target's automatic reconnect. */
+  attachesOnReconnect(id: string): boolean { return this.provider(id)?.attachesOnReconnect?.(id) ?? false }
   /** A custom document's unsaved state, as its provider says. */
   setDirty(id: string, dirty: boolean): void { if (this.customs.has(id) && this.get(id)?.dirty !== dirty) this.replace(id, { dirty }) }
   /** What changes with every edit: the model's version for text, the provider's revision for a custom document. */
@@ -321,7 +352,9 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
    * Opens a query AutoRecover kept: its text, unsaved, with no connection, its line ending, and its original file when
    * main registered it again. A large value has no bracket matching or colours, as `openText` opens it.
    */
-  restore(name: string, text: string, kind: DocumentKind, eol: LineEnding, file?: QueryDocument['file'], provider?: ProviderId, jobKey?: string): QueryDocument {
+  restore(name: string, text: string, kind: KeptDocumentKind, eol: LineEnding, file?: QueryDocument['file'], provider?: ProviderId, jobKey?: string): QueryDocument {
+    // A SQL Server Agent document's copy is its state, which its service reopens (reopenKept), never as text.
+    if (isKeptAgentKind(kind)) throw new Error(`${name} could not be reopened.`)
     const value = kind === 'sql' ? undefined : kind
     return this.add(name, text, value || provider === 'bigquery' ? '' : 'master', undefined, true, file, value, !!value && text.length > gridLimits.documentBracketChars, eol, { ...provider ? { provider } : {}, ...!value && jobKey ? { jobKey } : {} })
   }
@@ -342,6 +375,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
    * with no connection; `lastServer` remembers its server. New queries are numbered after the reopened ones.
    */
   reopen(o: RestoredDocument): QueryDocument {
+    if (isKeptAgentKind(o.kind)) throw new Error(`${o.name} could not be reopened.`)
     const kind = o.kind === 'sql' ? undefined : o.kind
     const number = /^SQLQuery(\d+)\.sql$/i.exec(o.baseName ?? o.name)?.[1]
     if (number && Number(number) < 1_000_000) this.queryCounter = Math.max(this.queryCounter, Number(number))

@@ -38,6 +38,10 @@ import { addStep, agentStepProblems, deleteStep, initialStepsDraft, moveStep, ne
 import { parseSsisCommand, ssisParameterRows, ssisProblems } from '../../../shared/agent/ssis-step.ts'
 import type { LanguageParseError } from '../../../shared/agent/parse.ts'
 import type { SsisPackageModel, SsisProjectModel } from '../../../shared/ssis/schema.ts'
+import { decodeKeptState, encodeKeptState, keptAgentText, sameShape } from '../../../shared/agent/kept.ts'
+import type { KeptCustomDocument } from '../services/documents'
+import type { QueryDocument } from '../documents'
+import { liveConnectionOn } from './kept-documents'
 import {
   applyReplace, copiedScheduleKey, createFromCompare, createFromDraft, createFromLimits, createFromProblems, createFromText, jobCopySource, replaceMatches, withCopyScheduleChoice,
   type CopyCompareRow, type CopyScheduleChoice, type JobCopySource, type ReplaceMatch
@@ -101,6 +105,9 @@ export interface JobDocumentState {
   readonly parse?: JobStepParse
   /** The SSIS step's catalog picker: SSISDB's folders, each folder's projects, and the project and package the selected step runs. */
   readonly ssis?: JobSsisPicker
+  /** Reopened by hot exit or AutoRecover (AG-6g) and not read since: the model is the one the draft began from. Once its target connects,
+   *  the job is read again and the draft put on top (a job changed since opens the compare). */
+  readonly restored?: true
   /** Create Job Like This (AG-6e): the job this New Job copies, which Changes from source and Compare with source measure from. */
   readonly source?: JobCopySource
   /** The job Create Job Like This opened this tab to copy, until New Job's describe lands and the copy is read. */
@@ -159,7 +166,7 @@ export interface JobDocumentServiceOptions extends CustomDocumentTargetOptions {
     & Partial<Pick<VariaApi, 'languageParse' | 'describeSsis' | 'explorerChildren' | 'agentHistoryMessage'>>
   /** Steps' Open in query window (AG-6b): a new query tab on the job's connection, in the step's database. */
   readonly openQuery?: (sql: string, name: string, connectionId: string, database?: string) => void
-  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'setDirty' | 'activate' | 'getSnapshot' | 'subscribe' | 'close'> & DeliverScriptDeps['documents']
+  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'setDirty' | 'activate' | 'getSnapshot' | 'subscribe' | 'close'> & Partial<Pick<DocumentService, 'openKeptCustom'>> & DeliverScriptDeps['documents']
   readonly files: DeliverScriptDeps['files']
   readonly connections: ExternalStore<readonly LiveConnection[]>
   readonly live?: Pick<LiveService, 'open'>
@@ -233,7 +240,8 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     this.newId = options.newId ?? (() => crypto.randomUUID())
     this.timers = options.timers ?? browserTimers
     this.registration = options.documents.registerProvider(this)
-    this.unsubscribe = [options.connections.subscribe(() => { try { this.connectionsChanged() } catch (failure) { onUnexpectedError(failure) } })]
+    const changed = () => { try { this.connectionsChanged(); this.readRestored() } catch (failure) { onUnexpectedError(failure) } }
+    this.unsubscribe = [options.connections.subscribe(changed), options.documents.subscribe(changed)]
     // History (AG-6d): its view runs while the document shows with History open.
     this.history = new JobHistoryService({
       api: options.api, ...options.live ? { live: options.live } : {}, ...options.openQuery ? { openQuery: options.openQuery } : {}, newId: this.newId, connectionOf: id => this.live(id) ? this.connectionOf(id) : undefined,
@@ -558,7 +566,8 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     this.patch(id, { phase: 'loading', error: undefined, notice: undefined, stale: undefined })
     void this.describe(id)
   }
-  private async describe(id: string, notice?: string, followed = false): Promise<void> {
+  /** With `kept` (a reopened document's first read, AG-6g), the user's draft is put on the job as read now rather than replaced. */
+  private async describe(id: string, notice?: string, followed = false, kept?: { readonly model: AgentJobDocumentModel; readonly draft: AgentJobDraft }): Promise<void> {
     const state = this.get(id), connectionId = this.connectionOf(id)
     if (!state || !connectionId) return
     const requestId = this.begin(id, 'describe')
@@ -566,7 +575,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     if (!this.end(id, requestId)) return
     const failure = !result.ok ? fallback('SQL_ERROR', result.error) : result.value.error
     const model = result.ok ? result.value.agentJobDocument : undefined
-    if (failure?.code === 'NOT_FOUND' && !followed && await this.followRename(id)) return this.describe(id, notice, true)
+    if (failure?.code === 'NOT_FOUND' && !followed && await this.followRename(id)) return this.describe(id, notice, true, kept)
     const current = this.get(id)
     if (!current) return
     if (failure || !model) {
@@ -574,6 +583,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
       this.patch(id, { phase: current.model ? 'ready' : 'loadFailed', ...current.like ? { like: undefined, copying: undefined } : {}, error: notice ? { ...shown, message: `${jobDocumentText.savedUnread} ${shown.message}` } : shown })
       return
     }
+    if (kept) { this.restoreOn(id, kept, model); return }
     const create = !model.job
     const like = create ? current.like : undefined
     this.patch(id, {
@@ -866,6 +876,66 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   canClose(id: string): string | undefined {
     const state = this.get(id)
     return state?.phase === 'saving' ? jobDocumentText.saving : state?.several?.phase === 'creating' || state?.several?.enabling ? createSeveralText.busy : undefined
+  }
+
+  // --- Hot exit and AutoRecover (AG-6g) --------------------------------------------------------------------------------
+
+  /** The job's unsaved state: the target, the read the draft began from and the draft. Nothing without a draft (New Job's start panel). */
+  keep(id: string): string | undefined {
+    const state = this.get(id)
+    // A Create several table is not kept (its rows are not a job's draft): the close asks, as for other custom tabs.
+    if (!state?.model || !state.draft || state.several) return undefined
+    return encodeKeptState({ version: 1, kind: 'agentJob', target: state.target, server: state.server, ...state.login ? { login: state.login } : {}, model: state.model, draft: state.draft })
+  }
+  /** A kept job reopened disconnected on its target; it reads the job again once the target connects. */
+  reopenKept(kept: KeptCustomDocument): QueryDocument {
+    if (this.disposed) throw new Error('The job document is not available.')
+    const value = decodeKeptState(kept.state, 'agentJob')
+    const model = value?.model as unknown as AgentJobDocumentModel | undefined
+    const draft = value?.draft as AgentJobDraft | undefined
+    if (!value || !model || !draft || !Array.isArray(model.steps) || !sameShape(initialAgentJobDraft(model), draft) || !Array.isArray(draft.steps?.steps) || !Array.isArray(draft.schedules)) throw new Error(keptAgentText.unreadable(kept.name))
+    if (!this.options.documents.openKeptCustom) throw new Error(keptAgentText.unreadable(kept.name))
+    const document = this.options.documents.openKeptCustom('agentJob', agentJobTabName(value.target.kind === 'agentJob' ? value.target.name : undefined), kept.database ?? 'msdb', kept.targetId)
+    if (kept.targetId) this.targetBindings.bindTarget(document.id, kept.targetId)
+    this.put({
+      id: document.id, target: value.target, server: value.server, ...value.login ? { login: value.login } : {}, phase: 'ready', model, draft, revision: 1, edits: 0, changes: 0, restored: true,
+      error: fallback('CONNECTION_LOST', keptAgentText.restored('job', value.server)), frame: initialFrameState(jobSections), script: { state: 'idle', message: noScriptNotice }
+    })
+    this.afterDraft(document.id)
+    this.options.documents.setDirty(document.id, true)
+    const live = liveConnectionOn(this.options.connections, this.options.targetIdOf, kept.targetId)
+    if (live) this.options.documents.update(document.id, { connectionId: live })
+    return document
+  }
+  attachesOnReconnect(id: string): boolean { return !!this.get(id)?.restored }
+  /** Reopened documents whose target is now connected read their job again, keeping the draft. */
+  private readRestored(): void {
+    for (const state of Object.values(this.getSnapshot().documents)) {
+      if (!state.restored || !state.model || !state.draft || !this.live(state.id) || this.requests.has(state.id)) continue
+      const kept = { model: state.model, draft: state.draft }
+      this.patch(state.id, { phase: 'loading', restored: undefined, error: undefined, notice: undefined })
+      void this.describe(state.id, undefined, false, kept).finally(() => {
+        // A read the connection's loss dropped leaves the document as kept, to read again at the next connect; a read the server refused
+        // (the job is gone, say) shows its error over the kept draft.
+        const after = this.get(state.id)
+        if (after && after.model === kept.model && !after.stale && !this.live(state.id)) this.patch(state.id, { restored: true, ...after.phase === 'loading' ? { phase: 'ready' as const } : {} })
+      })
+    }
+  }
+  /** The kept draft on the job as read now: a job changed since opens the compare (Reload and keep my changes, or discard them). */
+  private restoreOn(id: string, kept: { readonly model: AgentJobDocumentModel; readonly draft: AgentJobDraft }, now: AgentJobDocumentModel): void {
+    const current = this.get(id)
+    if (!current) return
+    const opened = kept.model.job, read = now.job
+    const changed = !!opened && !!read && (opened.version !== read.version || opened.modified !== read.modified)
+    if (changed) {
+      this.patch(id, { phase: 'ready', model: kept.model, draft: kept.draft, stale: { current: now, rows: agentJobCompare(kept.model, now, kept.draft), keepServer: [] }, error: fallback('STALE', keptAgentText.jobChanged), revision: current.revision + 1 })
+    } else {
+      const draft = rebaseAgentJobDraft(kept.model, now, kept.draft)
+      this.patch(id, { phase: 'ready', model: now, draft, notice: keptAgentText.reread('job'), error: undefined, revision: current.revision + 1, step: this.stepFollowing(current, draft.steps.steps), ...this.restartScheduleReads(id) })
+    }
+    this.afterDraft(id)
+    if (now.job) this.follow(id, now.job.jobId)
   }
   revision(id: string): number { return this.get(id)?.edits ?? 0 }
   focus(id: string): void { this.options.focus?.(id) }
