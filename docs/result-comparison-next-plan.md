@@ -6,7 +6,7 @@ Status: draft for the owner. Nothing here is built. Mock: [prototypes/results-pa
 The comparison rework left eight features out of scope. This plan gives each a value proposition, a UX, a technical
 sketch and a recommendation. It builds on:
 - [results-tools.md § Comparisons](results-tools.md#comparisons) for shipped behaviour, including difference navigation
-  and the overview strip (the difference navigation work, branch `claude/compare-navigation`, which every lane waits for);
+  and the overview strip (the difference navigation work, now on main, which every lane builds on);
 - [ipc.md § Result diffs](ipc.md#result-diffs) for the stored shape and limits;
 - [architecture.md](architecture.md) for the invariants: the "Rows are compared only in the backend", Comparisons and
   Derived sets bullets.
@@ -681,9 +681,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     which its one-unchanged-line rule needs. The change index keeps a cut row's full changed-pair list only in One row
     (`keepsList: cut`), so C3 keeps it on a cut Two rows entry's new half too, charged by `CutBytes` as now, and
     `DiffIndex`'s summary and architecture.md's change-index bullet say both layouts.
-  - It writes headers, prefixes and the skip lines.
+  - It writes headers, prefixes and the skip lines. For Save through a view that chips or filters narrow, a first pass
+    counts the view's entries for the `# the comparison shows 12 of 40 differences` line (a Two rows entry once,
+    through the same reserved bit per stored row, cleared after), the second number being the diff's own count.
   - The copy estimates (`EstimateCopyRows`, `EstimateCopyCells`, `EstimateHeader`, `ResultJobs.EstimateCopy`) count both
-    lines of an entry and escapes.
+    lines of an entry and escapes, and `EstimateHeader` the shows line.
 - **The TypeScript twin** (`src/shared/results/text-writer.ts`) implements `diff` too, because the fake backend's copy
   and save use it. Local tables never ask for it.
   - First it catches up with C#: its `savedColumns` writes no `(old)` columns for a comparison, where C#'s
@@ -700,6 +702,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - ignored columns, forced key columns, row-number prefixes without keys, CRLF and LF;
     - the header from the diff set's recorded match and ignored pairs, and side names holding a line break, escaped;
     - a changed entry whose copied columns are unchanged, written as one unchanged line;
+    - a Save through a view narrowed by a chip, with its shows line, in both layouts;
   - the refusal on a non-comparison, and a `DiffChecks` case: a sorted Two rows copy on a low budget is refused, not
     cut;
   - `results-jobs`: Save as Diff to `orders.txt` writes diff, and leaves the remembered last format alone;
@@ -790,10 +793,13 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       UPDATEs leave its changes out, and rows that differ only in it get no statement. Stop ignoring it to include
       them." ("updated_at and memo are ignored: … their changes … only in them …"). While an input is closed, the
       comparison cannot be rebuilt, so this line and the Exact text line below drop their last sentence.
-    - Unscriptable columns start unticked with the reason: rowversion and timestamp ("Not insertable"), computed per the
-      index ("Computed"), CLR types and sql_variant ("Cannot be written as a literal"), and vector ("Not scripted":
-      it has a literal but no `=`, so it is left out until a lane writes and round-trips it). Unscriptable wins over
-      ignored: "row_ver (ignored): Not insertable".
+    - Unscriptable columns start unticked and locked, with the reason: rowversion and timestamp ("Not insertable"),
+      computed per the index ("Computed"), CLR types and sql_variant ("Cannot be written as a literal"), and vector
+      ("Not scripted": it has a literal but no `=`, so it is left out until a lane writes and round-trips it).
+      Unscriptable wins over ignored: "row_ver (ignored): Not insertable". The renderer is untrusted, so `DiffScript`
+      also refuses (`INVALID_PARAMS`) a `columns` pair either result's recorded type cannot write (CLR types,
+      sql_variant, vector, rowversion and timestamp); computed columns are known only to the index, and the transaction
+      rolls back an INSERT that names one.
     - A line names columns only one result has ("note2 is only in Result 1, so INSERTs leave it out").
     - While INSERT is ticked and the index knows the table, a line names its columns the result lacks: "INSERTs leave
       created_by and region out, so inserted rows get their defaults or NULL." (not columns the target fills itself:
@@ -812,7 +818,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       data columns carry Result 3's types (`UnifiedDiff.Columns`) whichever result a value came from, and only One
       row's previous-value columns carry Result 1's, so the diff set also records Result 1's column type per pair. Every
       Result 1 value is formatted by it, even while Result 1 is closed: removed rows in both layouts, Two rows'
-      `changedOld` halves (the values a toOld UPDATE SETs), and the WHERE keys taken from them.
+      `changedOld` halves (the values a toOld UPDATE SETs), and the WHERE keys taken from them. In a WHERE clause (keys,
+      Q11's guards, the INSERT check) a value is formatted by the column of the side the target holds, whichever input
+      it came from: Result 1's under `toNew` (One row keeps only Result 3's key values on a changed entry), Result 3's
+      under `toOld`. So the plain-varchar rule and the key-collation refusal (Literals below) test the collation the
+      target's column has.
     - Identity: when the index says a ticked column is the target's identity, **SET IDENTITY_INSERT** is offered, ticked.
       An identity column is never SET, since SQL Server refuses that: when one that is not a key changed, a line says
       "id is an identity column, so its changes are not scripted". With SET IDENTITY_INSERT unticked, INSERTs leave the
@@ -922,7 +932,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     shown only in its sorted order (Row position) never reaches it;
   - a key column a WHERE clause cannot compare or write: "Rows are matched by notes, an xml column, which a statement
     cannot use to find its row. Choose other key columns to script differences.", with **Choose key columns…**. That is
-    xml, text, ntext, image, json, vector and CLR types (no `=`), and sql_variant (no literal);
+    xml, text, ntext, image, json and vector (no `=`), and CLR types and sql_variant (no literal, as in Columns above);
   - a key column without a name, whose name the result repeats, or whose name holds a control character: "Result 3 has 2
     columns named id, so a statement could not name its key. Give each column its own name in the query.";
   - rows not matched by key columns the user chose:
@@ -1115,8 +1125,6 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - both directions, statement order, the row checks and their cut key text;
     - Two rows filtered by an old value, so only − halves are in the grid: the counts, the summary and the script agree;
     - a preview of a 2,097,152-character XML INSERT, cut to 2,000 characters a line; each refusal's `kind`;
-    - the comparison changing while the script generates cancels it with its sentence; the INSERT line for target
-      columns the result lacks;
     - Q11's old values in an UPDATE's WHERE: NULL, each type it leaves out, a truncated or U+FFFD value left out, a
       real key and guard compared exactly, both directions; the same in a DELETE's WHERE; the INSERT check with NULL
       and composite keys;
@@ -1141,21 +1149,26 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - char keys and guards: all-ASCII values written plain, with `CHAR` joins, the varchar(max) cast and the varchar hex
       term, never an nvarchar term; others refused (keys) or left out (guards) under a SQL_ collation and written `N'…'`
       under a Windows one;
-    - key columns a WHERE cannot use, unnamed and repeated names, an identity pair never SET, pairs whose types differ.
+    - key columns a WHERE cannot use, unnamed and repeated names, an identity pair never SET, pairs whose types differ;
+    - a `columns` pair of each unwritable type (CLR, sql_variant, vector, rowversion) refused as `INVALID_PARAMS`;
+    - WHERE values by the column of the side the target holds: a key from Result 3 under `toNew` against Result 1's
+      SQL_-collation varchar column refused when not all ASCII.
   - A **live round trip** (`VARIA_TEST_SQL_SCRATCH`): two scratch tables with every type (multi-line and
     control-character text, a value with 10,000 line breaks, an xml value stored with style 1, 17-digit floats, a
     subnormal real, a real key column, and a varchar key and guarded column under SQL_Latin1_General_CP1_CI_AS holding
     'ss' beside 'ß' and 'ss' + CR beside 'ß' + CR, only the 'ss' rows changed, included), compare their SELECTs, script,
     run the script on the target, then compare again and expect no differences. Run it in both directions, and under a
     non-English language and DATEFORMAT. Then run a script of the wrong direction, once whole and once with only INSERT
-    ticked, and one whose deleted row was changed after the comparison, and expect the check's THROW, with the target
-    unchanged and, in the same session, an ordinary INSERT into the identity table succeeding (IDENTITY_INSERT was
-    turned off). It is a new live `Suite(...)` with a `LiveGroups.Suites` entry, and its CI seconds go in docs/ci.md's
-    table.
+    ticked (with SET IDENTITY_INSERT, so its THROW comes inside the IDENTITY_INSERT body and exercises the CATCH), and
+    one whose deleted row was changed after the comparison, and expect the check's THROW, with the target unchanged and,
+    in the same session, an ordinary INSERT into the identity table succeeding (IDENTITY_INSERT was turned off). It is a
+    new live `Suite(...)` with a `LiveGroups.Suites` entry, and its CI seconds go in docs/ci.md's table.
   - vitest for the dialog: states, counts per direction, locked and unticked columns, warnings, the comparison replaced
     or closed while open, switching to another comparison, Enter and Escape in the suggestion list and on buttons, the
     draft memory, multipart target names, the Automatic and as-shown refusals and their buttons, the closed-input form
-    of the key refusals, refusals said in the live region, Cancel while generating, and the Clipboard announcement.
+    of the key refusals, refusals said in the live region, Cancel while generating, the comparison changing while it
+    generates, the INSERT line for target columns the result lacks, the refusal's buttons chosen by `kind`, and the
+    Clipboard announcement.
   - Smoke: open the dialog window by role, script to a New Query Editor Window, and find `BEGIN TRANSACTION` in the
     focused editor. A frameless OS window can behave differently on Linux, so run it through `npm run test:smoke:wsl`
     before pushing.
@@ -1385,7 +1398,8 @@ would leave out the sort, and "Rows" is already the toolbar's All rows / Changes
 
 Each lane runs `npm run check` and regenerates the catalogues it changes, in the same PR. It updates:
 - results-tools.md § Comparisons;
-- the architecture.md Comparisons and Rows bullets;
+- the architecture.md Comparisons and Rows bullets, including the diffs bullet's sentence that hidden columns are
+  never copied or searched, which C1 (search reads `old` columns) and C3 (Copy as Diff reads previous values) narrow;
 - ipc.md (Result diffs, Limits, the method table) where the protocol changes;
 - the results guide (`help/guides/results.tsx`, with live `CommandRef`s), or records why there is no guide impact;
 - CHANGELOG Unreleased.
@@ -1418,8 +1432,8 @@ When the last lane ships, this plan folds into the area docs and is deleted.
 
 In flight as of 2026-11-22. After each merges, open comparison branches merge main (merge commits, never rebase).
 
-- **Difference navigation** (branch `claude/compare-navigation`) ships Go to Next/Previous Difference, Go to Possible
-  Match, the overview strip and the `comparisonRowHasPartner` key that C2's keys copy. Every lane starts after it.
+- **Difference navigation** has merged: Go to Next/Previous Difference, Go to Possible Match, the overview strip and the
+  `comparisonRowHasPartner` key that C2's keys copy. Every lane starts from main.
 - **BigQuery** (docs/bigquery-plan.md, 0.10.0):
   - Remote views (BQ-3c) and job re-attach (BQ-3d-1, BQ-3d-2) have merged, so C1 and C6 build on the view plumbing, and
     the protocol, catalogue, document-registry and hot-exit files the comparison lanes append to already hold BQ-3d's
@@ -1430,12 +1444,12 @@ In flight as of 2026-11-22. After each merges, open comparison branches merge ma
   - New commands and keys are engine-neutral except C4 (Q4).
 - **Connect in an OS window** (branch `codex/connect-os-window`) reworks `DialogWindow`, `popouts.ts` and
   `popout-windows.ts`. C4's dialog kind follows it.
-- **SQL Server Agent** (docs/agent-plan.md, 0.11.0; lanes AG-6b, AG-6c and AG-7 are open) does not touch the results
-  pipeline, but shares files with the comparison lanes. Both sides only append to them:
+- **SQL Server Agent** (docs/agent-plan.md, 0.11.0; lanes AG-6c and AG-7 are open, AG-6b has merged) does not touch the
+  results pipeline, but shares files with the comparison lanes. Both sides only append to them:
   - menus and keys: the commands catalogue, `menus.ts`, `tests/command-catalog.test.ts`, `context-keys.ts` and
     `core/contextkeys.ts` (AG-6c, AG-7), against C2's submenu and every lane's commands;
   - documents: `documents.ts`, `EditorArea.tsx` and `services/files.ts` (AG-6c, AG-7), and `start.tsx` with
-    `tests/fixtures/monaco-runtime.ts`'s reviewed imports (AG-6b), against C5b;
+    `tests/fixtures/monaco-runtime.ts`'s reviewed imports, which AG-6b changed and C5b builds on;
   - `icons.ts` (AG-6c), against C2's `eye-closed`;
   - the protocol files: the fake backend, contracts.ts, methods.ts, `SqlService.cs` and `Contracts.cs` (all three),
     against C1–C6;
