@@ -528,8 +528,12 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
 - **No protocol change for the values themselves.** Values come through the results worker's whole-cell read
   (`ResultHandle.getCell`, as Open Value in New Tab uses), which gains a `maxChars` option on every step: the request
   `getCell` builds (`ResultClient.ts`), the worker's `cell` request (`worker-protocol.ts`), its dispatch in
-  `worker-core.ts`, and `cell()`, which cuts the text and reports it `truncated` (whose guard already skips formatting a
-  cut value), with a worker test that a 200,000-character value comes back cut at 100,001 with `truncated` set.
+  `worker-core.ts`, and `cell()`, which cuts the text through `cellSlice` and answers `cut` and the full length apart
+  from the stored `truncated` flag (which `cellText` would otherwise merge with the cut), carried through the worker's
+  cell answer and `CellValue`, so the card can say "Showing the first 4,000 of 150,000 characters" and still tell a long
+  XML value from one stored truncated at 2,097,152; a cut value skips formatting, as a truncated one does. A worker test
+  checks that a 200,000-character value comes back cut at 100,001 with `cut`, its length and `truncated` false, and a
+  stored-truncated one with `truncated`.
   - The card reads at most 100,001 characters a side; Compare Values in Tab reads whole values.
   - The **new value** is the data column at the grid's position.
   - The **old value** depends on the cell:
@@ -787,7 +791,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - the refusal on a non-comparison, and a `DiffChecks` case: a sorted Two rows copy on a low budget is refused, not
     cut; and a Two rows build with a cut entry on a low budget refused, since `Builder.Add` stores a cut row's list
     without checking it was reserved and the new half's list is C3's;
-  - `results-jobs`: Save as Diff to `orders.txt` writes diff, and leaves the remembered last format alone;
+  - `results-jobs`: Save as Diff to `orders.txt` writes diff, and leaves the remembered last format alone; a
+    `validation` case and a C# check refusing a diff copy or save with `names` missing or a 261-character name, and a
+    check that Copy's too-large sentence for `diff` ends "Use Save as Diff… instead." in main and in C#;
   - smoke: a clipboard read-back through the fake backend (needs an unlocked screen).
 - **Risks:** low for the format, which changes nothing existing. Bringing the TypeScript writer level touches the fake
   backend's comparison Save, which smoke reads.
@@ -1172,28 +1178,31 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       target and direction, and then 300 ms after the form last changed, cancelling the request before. Each answer
       brings the Rows options' counts. It refuses the value refusals (a truncated or unwritable value: U+FFFD, a
       subnormal float, a value outside the target side's code page; a key its collation cannot write exactly,
-      `keyCollation`) over every chosen row, counted and named in the counts pass, which already reads those cells for
-      `uncheckedUpdates`, so a sentence's count and rows are complete. It also refuses the four known on opening. The
-      value refusals need a direction, so none comes before one is chosen; the rest are found on Script. A preview line
-      over 2,000 characters (a long value's literal) ends in "…", the preview's only cut; the script holds it whole.
-      While it waits, the preview reads "-- Choose the target table and a direction to see the script." ("-- Choose a
-      direction to see the script.", "-- Choose the target table to see the script." while only the target is missing,
-      "-- Fix the target table's name to see the script." while its name cannot be used), and after a refused answer "--
-      No preview: the reason is beside Script." A request that fails instead (its deadline, or `TOO_LARGE` when the
-      count's working memory does not fit) is not a refusal. On opening, its sentence replaces "Reading the
-      comparison…", with **Try again**, which takes the focus, is described by the sentence, which the live region says,
-      and sends the request again. Pressed, on opening or later, Try again stays in place, unavailable (`aria-disabled`,
-      so it keeps the focus) while the request runs, the failure sentence gives way to "Reading the comparison…" (on
-      opening with its progress, later as the preview's text, "-- Reading the comparison…"), which the live region says,
-      and then what the answer brings shows and is said, the failure sentence again when it fails again. Later, the
-      preview reads "-- No preview: " and the sentence, with Try again under it; everything the form draws from an
-      answer hides until an answer brings it again (the Rows and statement counts, the look-alike and not-looked-for
-      lines, the line by Rows after a replace's count (Rows below), the unchecked-UPDATEs, unchecked-DELETEs and Exact
-      text lines, SET IDENTITY_INSERT and its line), so no line shows numbers from an answer that no longer matches the
-      form; the summary reads "The preview could not be read, so its counts and warnings are not shown." unless a reason
-      in the summary's order (Keyboard and screen readers) holds, and Script stays available only while none does, since
-      its own run says any failure and the script's header carries those warnings (The script below). A backend loss is
-      not such a failure: it releases the comparison, so the closed state shows instead, on opening and later.
+      `keyCollation`) over every chosen row, counted and named in the counts pass, which for them also reads each chosen
+      row's ticked SET and INSERT values from the source side and its keys (scanning text for U+FFFD, encoding it into
+      the target side's code page, checking floats), beyond the target-side cells `uncheckedUpdates` reads, so a
+      sentence's count and rows are complete. That is a full scan of the chosen rows per preview, All differences
+      included, cancelled when the next preview goes. It also refuses the four known on opening. The value refusals need
+      a direction, so none comes before one is chosen; the rest are found on Script. A preview line over 2,000
+      characters (a long value's literal) ends in "…", the preview's only cut; the script holds it whole. While it
+      waits, the preview reads "-- Choose the target table and a direction to see the script." ("-- Choose a direction
+      to see the script.", "-- Choose the target table to see the script." while only the target is missing, "-- Fix the
+      target table's name to see the script." while its name cannot be used), and after a refused answer "-- No preview:
+      the reason is beside Script." A request that fails instead (its deadline, or `TOO_LARGE` when the count's working
+      memory does not fit) is not a refusal. On opening, its sentence replaces "Reading the comparison…", with **Try
+      again**, which takes the focus, is described by the sentence, which the live region says, and sends the request
+      again. Pressed, on opening or later, Try again stays in place, unavailable (`aria-disabled`, so it keeps the
+      focus) while the request runs, the failure sentence gives way to "Reading the comparison…" (on opening with its
+      progress, later as the preview's text, "-- Reading the comparison…"), which the live region says, and then what
+      the answer brings shows and is said, the failure sentence again when it fails again. Later, the preview reads "--
+      No preview: " and the sentence, with Try again under it; everything the form draws from an answer hides until an
+      answer brings it again (the Rows and statement counts, the look-alike and not-looked-for lines, the line by Rows
+      after a replace's count (Rows below), the unchecked-UPDATEs, unchecked-DELETEs and Exact text lines, SET
+      IDENTITY_INSERT and its line), so no line shows numbers from an answer that no longer matches the form; the
+      summary reads "The preview could not be read, so its counts and warnings are not shown." unless a reason in the
+      summary's order (Keyboard and screen readers) holds, and Script stays available only while none does, since its
+      own run says any failure and the script's header carries those warnings (The script below). A backend loss is not
+      such a failure: it releases the comparison, so the closed state shows instead, on opening and later.
     - The counts and the summary are entries by kind in the chosen rows. All differences reads the diff's own counts.
       Rows in the grid and Selected rows are counted by the backend in a pass over the chosen rows, after one that marks
       them (so a look-alike's partner can be found among them), reserving the bit per stored row as Copy as Diff does;
