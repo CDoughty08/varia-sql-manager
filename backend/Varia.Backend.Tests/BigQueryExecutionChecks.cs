@@ -248,7 +248,7 @@ internal static partial class BigQueryExecutionChecks
             Jobs = jobs;
             Fake = jobs.Fake();
             var settings = new BigQueryEnvironment(new Uri("http://localhost:9050/"), Fake.Factory, new SubjectTokens([]), Storage: storage is null ? null : _ => storage);
-            Service = new SqlService(store: store, bigQuery: environment is null ? settings : environment(settings));
+            Service = new SqlService(store: store ?? CheckStores.Unprobed(), bigQuery: environment is null ? settings : environment(settings));
             Service.BigQuery.RetryDelay = TimeSpan.FromMilliseconds(1);
             Service.BigQuery.ChildPollMs = 50;
         }

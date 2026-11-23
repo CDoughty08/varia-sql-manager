@@ -252,6 +252,7 @@ npm run test:smoke:wsl -- --all
     a zero-allocation window is retried on a fresh thread before it fails.
   - Smoke suites and fixtures read a JSON-lines log (`calls.jsonl`) only through `parseCalls`/`completeLines`
     (`scripts/fixtures/call-log.mjs`): the fake backend appends asynchronously, so the last line can be half written.
-  - Checks never depend on the machine's memory load: build a `ResultStore` without a memory probe (or with a fake), and
+  - Checks never depend on the machine's memory load: build a `ResultStore` without a memory probe (or with a fake; a
+    hosted `SqlService` gets `CheckStores.Unprobed()`, never the default `ResultStore.FromSystem()`), and
     give a sidecar with test hooks `VARIA_RESULT_BUDGET_BYTES`, which turns the load check off; parallel lanes push a
     developer machine past the 90 % high-load threshold, where the real probe truncates every result.
