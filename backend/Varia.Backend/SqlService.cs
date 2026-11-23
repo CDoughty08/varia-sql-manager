@@ -38,7 +38,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
         "ssis.describe", "ssis.execute", "ssis.catalogSetup",
-        "bigquery.account", "bigquery.projects", "bigquery.dryRun", "bigquery.properties", "agent.profile", "agent.historyMessage", "results.remoteQuery",
+        "bigquery.account", "bigquery.projects", "bigquery.dryRun", "bigquery.properties", "agent.profile", "agent.historyMessage", "agent.counterValues", "results.remoteQuery",
         "query.attach", "bigquery.endIdleSessions", "bigquery.cancelJobs",
         "results.diffSeek", "language.parse"
     ];
@@ -613,6 +613,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "activity.kill" => await sessionActions.KillAsync(Read<ActivityKillArgs>(parameters, json), Token(context)),
         "agent.profile" => await explorer.AgentProfileAsync(Read<AgentProfileArgs>(parameters, json), Token(context)),
         "agent.historyMessage" => await actions.HistoryMessageAsync(Read<AgentHistoryMessageArgs>(parameters, json), Token(context)),
+        "agent.counterValues" => await actions.CounterValuesAsync(Read<AgentCounterValuesArgs>(parameters, json), Token(context)),
         "language.parse" => await StepParser.ParseAsync(Read<LanguageParseArgs>(parameters, json), Token(context)),
         SynthesizeMethod when hooks => Synthesize(Read<SynthesizeArgs>(parameters, json), Token(context)),
         _ => throw new RequestException("METHOD_NOT_FOUND", "Unsupported backend method.")
@@ -3411,6 +3412,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         actions.Dispose();
         ssis.Dispose();
         ssisActions.Dispose();
+        // Disposal is a stop too, so it never cancels a BigQuery job, also without the host's BeginShutdown first: a request
+        // cancelled while still holding its job would send a jobs.cancel that races the client's disposal below.
+        BeginShutdown();
         CancelAll();
         bigQuery.Dispose();
         foreach (var session in sessions.Values) session.Close();

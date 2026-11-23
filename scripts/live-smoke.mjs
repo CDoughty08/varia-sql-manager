@@ -11,7 +11,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { liveProbes } from '../src/shared/live/catalog.ts'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
-import { activeDocumentName, backendBanner, backendReady, documentTab, documentTabs, environmentPill, explorerLabel, explorerSublabel, explorerTree, part, queryStatus, statusBar, statusChips, toolbarButton } from './fixtures/ui.mjs'
+import { activeDocumentName, backendBanner, backendReady, clickToClose, connectDialogWindow, dialogClosed, documentTab, documentTabs, environmentPill, explorerLabel, explorerSublabel, explorerTree, part, queryStatus, statusBar, statusChips, submitConnect, toolbarButton } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -45,23 +45,15 @@ async function stays(id, ms = 600) {
   expect((await frames(id)).ticks).toBe(before)
 }
 async function connect(password = 'live-smoke-password', server = 'live-server', environment = undefined) {
-  const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
-  if (!await dialog.isVisible()) await toolbarButton(page, 'Connect').click()
-  await expect(dialog.getByText('Loading saved connections…')).toHaveCount(0)
+  await toolbarButton(page, 'Connect').click()
+  const { window, dialog } = await connectDialogWindow(app)
   await dialog.getByLabel('Server Name', { exact: true }).fill(server)
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
   await dialog.getByLabel('Login', { exact: true }).fill('reader')
   await dialog.getByLabel('Password', { exact: true }).fill(password)
   await dialog.getByLabel('Trust server certificate', { exact: true }).check()
-  if (environment) {
-    // Environment sits in Custom Properties, which starts collapsed.
-    const custom = dialog.getByRole('button', { name: 'Custom Properties', exact: true })
-    if (await custom.getAttribute('aria-expanded') !== 'true') await custom.click()
-    await expect(custom).toHaveAttribute('aria-expanded', 'true')
-    await dialog.getByLabel('Environment', { exact: true }).selectOption(environment)
-  }
-  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(dialog).toHaveCount(0)
+  if (environment) await dialog.getByLabel('Environment', { exact: true }).selectOption(environment)
+  await submitConnect(window, dialog)
 }
 
 try {
@@ -142,11 +134,11 @@ try {
   expect((await snapshot(id)).status).toBe('lost')
   const history = (await live('ring', id, 'debug.synthetic.metrics')).length
   await backendBanner(page).getByRole('button', { name: 'Reconnect…', exact: true }).click()
-  const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
+  const { window: reconnectWin, dialog } = await connectDialogWindow(app)
   await expect(dialog.getByLabel('Server Name', { exact: true })).toHaveValue('live-server')
   await dialog.getByLabel('Password', { exact: true }).fill('live-smoke-password')
-  await dialog.getByRole('button', { name: 'Update Credentials and Reconnect', exact: true }).click()
-  await expect(dialog).toHaveCount(0)
+  await clickToClose(dialog.getByRole('button', { name: 'Update Credentials and Reconnect', exact: true }))
+  await dialogClosed(reconnectWin, 'Connect')
   await expect.poll(async () => (await snapshot(id)).status, { timeout: 15000 }).toBe('live')
   const back = await snapshot(id)
   expect(back.connectionId).not.toBe(first.connectionId)

@@ -123,6 +123,26 @@ describe('PopoutWindows', () => {
     popouts.zoom(-1)
     expect(child.zoom()).toBe(-1)
   })
+  it('tracks the popout that most recently received trusted input and forgets it once expired or closed', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(1000)
+      const { popouts } = registry()
+      const first = fakeWindow(10), second = fakeWindow(11)
+      popouts.adopt(first.window); popouts.adopt(second.window)
+      expect(popouts.recent()).toBeUndefined()
+      first.emit('input-event', {}, { type: 'mouseMove' })
+      expect(popouts.recent()).toBeUndefined()
+      first.emit('input-event', {}, { type: 'mouseDown' })
+      expect(popouts.recent()?.window).toBe(first.window)
+      second.emit('input-event', {}, { type: 'keyDown' })
+      expect(popouts.recent()?.window).toBe(second.window)
+      second.emit('closed')
+      expect(popouts.recent()?.window).toBe(first.window)
+      vi.advanceTimersByTime(1001)
+      expect(popouts.recent()).toBeUndefined()
+    } finally { vi.useRealTimers() }
+  })
   it('raises a popout by the name the page opened it with, restoring it if minimized, without activating it', () => {
     const { popouts } = registry()
     const child = fakeWindow(3), other = fakeWindow(4), unnamed = fakeWindow(5)
@@ -219,9 +239,10 @@ describe('dialog windows', () => {
   }
   it('are only about:blank children named for a dialog kind, with exact bounds at least the kind\'s minimum', () => {
     expect(dialogRequest(dialog())).toEqual({ kind: 'options', bounds: { x: 200, y: 100, width: 940, height: 680 } })
+    expect(dialogRequest(dialog({ frameName: dialogName('connect'), features: 'left=100,top=80,width=900,height=730' }))).toEqual({ kind: 'connect', bounds: { x: 100, y: 80, width: 900, height: 730 } })
     expect(dialogRequest(dialog({ frameName: dialogName('about'), features: 'left=0,top=0,width=520,height=460' }))?.kind).toBe('about')
     for (const refused of [
-      dialog({ frameName: dialogName('connect') }), dialog({ frameName: 'varia-dialog-options-1' }), dialog({ frameName: name }), dialog({ url: 'https://example.com/' }),
+      dialog({ frameName: dialogName('unknown') }), dialog({ frameName: 'varia-dialog-options-1' }), dialog({ frameName: name }), dialog({ url: 'https://example.com/' }),
       dialog({ disposition: 'foreground-tab' }), dialog({ features: 'left=200,top=100,width=300,height=680' }), dialog({ features: 'left=200,top=100,width=940,height=99999' }),
       dialog({ features: 'width=940,height=680,left=200,top=100' })
     ]) expect(dialogRequest(refused)).toBeUndefined()
@@ -293,18 +314,20 @@ describe('dialog windows', () => {
   })
   it('are bounded: one may open while the last of its kind is still closing, but no more than the limit', () => {
     const popouts = registry().popouts
+    const kinds = Object.keys(dialogWindowKinds) as (keyof typeof dialogWindowKinds)[]
     for (let id = 0; id < dialogLimits.maxWindows; id++) {
-      const kind = id % 2 ? 'about' : 'options'
+      const kind = kinds[id % kinds.length]
       allowed(popouts.open(dialog({ frameName: dialogName(kind) }), base))
       popouts.adopt(fakeWindow(40 + id).window, dialogName(kind))
     }
-    expect(dialogLimits.maxWindows).toBe(Object.keys(dialogWindowKinds).length * 2)
+    expect(dialogLimits.maxWindows).toBe(kinds.length * 2)
     expect(popouts.open(dialog(), base)).toEqual({ action: 'deny' })
   })
   it('count dialog windows still being created against the limit, and apart from the popouts\'', () => {
     const popouts = registry().popouts
+    const kinds = Object.keys(dialogWindowKinds) as (keyof typeof dialogWindowKinds)[]
     // A page that asks again and again before any window arrives gets no more than the limit.
-    for (let id = 0; id < dialogLimits.maxWindows; id++) allowed(popouts.open(dialog({ frameName: dialogName(id % 2 ? 'about' : 'options') }), base))
+    for (let id = 0; id < dialogLimits.maxWindows; id++) allowed(popouts.open(dialog({ frameName: dialogName(kinds[id % kinds.length]) }), base))
     expect(popouts.open(dialog(), base)).toEqual({ action: 'deny' })
     // Popouts still have every slot of their own.
     allowed(popouts.open(request(), base))

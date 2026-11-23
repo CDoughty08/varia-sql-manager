@@ -4,6 +4,7 @@ import { displayText } from '../../../shared/explorer/refs.ts'
 import { maxIdentifierLength } from '../../../shared/sql/identifiers.ts'
 import { useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
+import DialogFooter from '../kit/DialogFooter'
 import { trapFocus } from '../trap-focus'
 import { dateOpLabels, draftFilter, filterDraft, isRange, textOpLabels, type FilterProblems, type FilterRow } from './filter-form'
 
@@ -76,9 +77,12 @@ export default function FilterDialog({ folderId }: { readonly folderId: number }
       <p className="field-note">Objects must match every property that has a value. Leave every value empty to remove the filter.</p>
       {(error || Object.keys(problems).length > 0) && <p className="connect-error" role="alert">{error || 'Correct the values marked above.'}</p>}
     </div>
-    <div className="connection-footer">
-      <button type="button" onClick={() => { setDraft(filterDraft()); setProblems({}); setError('') }}>Clear Filter</button><span />
-      <button className="primary" type="submit">OK</button><button type="button" onClick={() => close()}>Cancel</button>
-    </div>
+    <DialogFooter
+      leading={<button type="button" onClick={() => { setDraft(filterDraft()); setProblems({}); setError('') }}>Clear Filter</button>}
+      trailing={<>
+        <button className="primary" type="submit">OK</button>
+        <button type="button" onClick={() => close()}>Cancel</button>
+      </>}
+    />
   </form></div>
 }

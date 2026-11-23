@@ -118,10 +118,12 @@ import { JobActivityService } from '../agent/JobActivityService'
 import { LogViewerService } from '../agent/LogViewerService'
 import { AgentJobStatusService } from '../agent/AgentJobStatusService'
 import { JobDocumentService } from '../agent/JobDocumentService'
+import { AlertOperatorDocumentService, alertSpec, operatorSpec, operatorsSpec, type AlertDocumentService, type OperatorDocumentService, type OperatorsDocumentService } from '../agent/AlertOperatorDocumentService'
+import { agentContribution } from '../contributions/agent'
+import { agentObjectsContribution } from '../contributions/agent-objects'
 import { SchedulesService } from '../agent/SchedulesService'
 import { ProxyDocumentService } from '../agent/ProxyDocumentService'
 import { CredentialDocumentService } from '../agent/CredentialDocumentService'
-import { agentContribution } from '../contributions/agent'
 import { agentProxyContribution } from '../contributions/agent-proxy'
 import { SearchDetailsService } from '../search/SearchDetailsService'
 import { ObjectSearchService } from '../search/ObjectSearchService'
@@ -285,6 +287,10 @@ export interface Workbench extends Disposable {
   /** The status bar's running Agent jobs this window started, followed while hidden (AG-3). */
   readonly agentJobs: AgentJobStatusService
   readonly jobDocuments: JobDocumentService
+  /** The alert and operator documents and the Operators and notifications grid (AG-7). */
+  readonly alertDocuments: AlertDocumentService
+  readonly operatorDocuments: OperatorDocumentService
+  readonly operatorsDocuments: OperatorsDocumentService
   readonly schedules: SchedulesService
   /** The proxy and Credential documents (AG-8b). */
   readonly proxyDocuments: ProxyDocumentService
@@ -547,6 +553,14 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       ;(root?.querySelector<HTMLElement>('[data-agent-job-focus]') ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]'))?.focus()
     })
   })
+  // The alert and operator documents and the grid (AG-7): the first field of a new one, otherwise the section list.
+  const agentObjectFocus = (attribute: string) => (id: string) => focusLater(() => {
+    const root = document.querySelector<HTMLElement>(`[${attribute}="${CSS.escape(id)}"]`)
+    ;(root?.querySelector<HTMLElement>('[data-agent-object-focus]') ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]'))?.focus()
+  })
+  const alertDocuments = new AlertOperatorDocumentService(alertSpec, { api, documents, files, connections, targetIdOf, focus: agentObjectFocus('data-agent-alert') })
+  const operatorDocuments = new AlertOperatorDocumentService(operatorSpec, { api, documents, files, connections, targetIdOf, focus: agentObjectFocus('data-agent-operator') })
+  const operatorsDocuments = new AlertOperatorDocumentService(operatorsSpec, { api, documents, files, connections, targetIdOf, focus: agentObjectFocus('data-agent-operators') })
   // The Schedules document (AG-6c): Manage Schedules, and New › Schedule… with a new schedule in its editor.
   const schedules = new SchedulesService({
     api, documents, connections, targetIdOf,
@@ -758,6 +772,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     logViewer,
     agentJobs,
     jobDocuments,
+    alertDocuments,
+    operatorDocuments,
+    operatorsDocuments,
     schedules,
     proxyDocuments,
     credentialDocuments,
@@ -818,6 +835,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       logViewer.dispose()
       agentJobs.dispose()
       jobDocuments.dispose()
+      alertDocuments.dispose()
+      operatorDocuments.dispose()
+      operatorsDocuments.dispose()
       schedules.dispose()
       proxyDocuments.dispose()
       credentialDocuments.dispose()
@@ -906,6 +926,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     ssisContribution(workbench),
     activityContribution(workbench),
     agentContribution(workbench, { agentEnabled: api.agentPreview }),
+    agentObjectsContribution(workbench, { agentEnabled: api.agentPreview }),
     agentProxyContribution(workbench, { agentEnabled: api.agentPreview }),
     searchContribution(workbench, api),
     settingsContribution(workbench),

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { actionsStubData, designerScript, installActionsStub } from './fixtures/actions-stub.mjs'
-import { activeDocument, activeDocumentName, backendReady, closeDocumentButton, kindIcon, menuItemNames, openDocument, openDocuments, part, queryBar, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocument, activeDocumentName, backendReady, closeDocumentButton, connectDialogWindow, kindIcon, menuItemNames, openDocument, openDocuments, part, queryBar, submitConnect, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'table-designer-profile-'))
@@ -35,12 +35,10 @@ async function menu(id) {
 
 async function connect(server) {
   await toolbarButton(page, 'Connect').click()
-  const connectDialog = page.getByRole('dialog', { name: 'Connect', exact: true })
-  await expect(connectDialog.getByText('Loading saved connections…')).toHaveCount(0)
+  const { window: connectWin, dialog: connectDialog } = await connectDialogWindow(application)
   await connectDialog.getByLabel('Server Name', { exact: true }).fill(server)
   await connectDialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  await connectDialog.getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(connectDialog).toHaveCount(0, { timeout: 30000 })
+  await submitConnect(connectWin, connectDialog, { timeout: 30000 })
 }
 /** Right-click Tables › New › Table…: the designer opens as a tab, and its grid has focus. */
 async function newTable() {

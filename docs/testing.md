@@ -54,6 +54,10 @@ benchmarks only when a change can move them. CI runs everything on every PR.
 - A waiting run prints `Waiting for the machine lock (<tier>) for <run>, held by <run> (pid, worktree, since)`, a line a
   minute, then `Took the machine lock`. **Leave it running**: it continues when the holder finishes, and stopping it
   only loses its place. Agents run long commands in the background so a tool timeout does not kill a waiting run.
+  A newly created lock file whose metadata is still being written shows as `held by a starting run` briefly before
+  naming the holder. If a restricted sandbox or permission error persistently blocks accessing a lock file, the lock
+  fails with `Could not access machine lock file ...` instead of waiting forever; run outside the sandbox or set
+  `VARIA_LOCK=off`.
 - A waiting exclusive run goes ahead of shared runs that arrive after it, then waits for the shared runs already going.
   Each smoke suite takes the lock as it starts, so another session's check can run between two suites of `test:smoke`.
 - The shard runner takes each suite's lock before spawning it and starting its watchdog, so waiting does not spend the
@@ -248,6 +252,7 @@ npm run test:smoke:wsl -- --all
     a zero-allocation window is retried on a fresh thread before it fails.
   - Smoke suites and fixtures read a JSON-lines log (`calls.jsonl`) only through `parseCalls`/`completeLines`
     (`scripts/fixtures/call-log.mjs`): the fake backend appends asynchronously, so the last line can be half written.
-  - Checks never depend on the machine's memory load: build a `ResultStore` without a memory probe (or with a fake), and
+  - Checks never depend on the machine's memory load: build a `ResultStore` without a memory probe (or with a fake; a
+    hosted `SqlService` gets `CheckStores.Unprobed()`, never the default `ResultStore.FromSystem()`), and
     give a sidecar with test hooks `VARIA_RESULT_BUDGET_BYTES`, which turns the load check off; parallel lanes push a
     developer machine past the 90 % high-load threshold, where the real probe truncates every result.

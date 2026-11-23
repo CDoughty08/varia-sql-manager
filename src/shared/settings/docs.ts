@@ -35,8 +35,8 @@ const breadcrumb = (page: SettingPage) => pagePath(page.id).map(node => node.tit
 
 function pageSection(page: SettingPage): string {
   const defs = settingDefs.filter(def => def.page === page.id)
-  const intro = [page.description, page.provider === 'theme' ? 'Its first row is a note: Color theme: View › Theme (stored in `appearance.json`).' : '',
-    page.layout === 'propertyGrid' ? 'A property grid: True/False lists, values that differ from their default in bold.' : '',
+  const intro = [page.description, page.provider === 'theme' ? 'Includes Color theme mode cards (Dark, Light, Follow System) and the active palette selector, with live preview (stored in `appearance.json`).' : '',
+    page.layout === 'propertyGrid' ? 'A property grid: 1-click True/False switches, values that differ from their default in bold with per-row reset.' : '',
     page.layout === 'shortcuts' ? 'Not settings: a table of the shortcuts of every command above an inspector, with mouse gestures beside them. They are stored in `shortcuts.json`, not `settings.json` (docs/commands.md lists the defaults).' : ''].filter(Boolean).join(' ')
   // A sectioned page lists its sections, and its table leads with each row's section, in the order Options shows them.
   const sections = page.sections ?? []
@@ -85,8 +85,7 @@ from Microsoft's documentation, so Varia keeps its own.
 
 ${tree()}
 
-A node without a page id is a category: selecting it shows its first page. The search box (Ctrl+E, ⌘E on macOS) matches
-page titles, setting labels, descriptions and keywords.
+A node without a page id is a category: selecting it shows its first page. Drag the navigation splitter (or resize with keyboard arrows) to adjust the rail width. The search box (Ctrl+E, ⌘E on macOS) searches across every page into grouped **Search Results** with match highlighting, and **Modified** filters to customized rows with per-row reset. Use **Apply** to save without closing, **OK** to save and close, or **Reset Page** to restore the active page's defaults; closing with unsaved changes asks before discarding.
 
 ## Settings
 

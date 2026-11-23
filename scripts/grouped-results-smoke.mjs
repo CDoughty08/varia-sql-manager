@@ -11,8 +11,8 @@ import { join, resolve } from 'node:path'
 import { enlargeOutput, sizeOutput } from './fixtures/results-pane.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import {
-  anyResultGrid, backendReady, captionFits, searchPlaceholderFit, fitsAcross, moreResultsTools, movePane, nameCut, namedResultGrid, dockPopoutBack, popoutTabs, resultsToolbarFit, resultsToolsMenu, resultTabsFold, resultToggle, columnProfile, gridCell, messagesStrip, outputStatus, part, pivotPanel, pivotSource, quickInputActive, resultGrid, resultsOverflow, resultsPicker, resultsPickerFilter,
-  paneMenuButton, resultsPickerOption, resultsSearchCount, resultsToolbar, resultTab, resultTabPanel, resultTabs, tabClose, toolbarButton, viewTab, viewTabs
+  anyResultGrid, backendReady, captionFits, connectDialogWindow, searchPlaceholderFit, fitsAcross, moreResultsTools, movePane, nameCut, namedResultGrid, dockPopoutBack, popoutTabs, resultsToolbarFit, resultsToolsMenu, resultTabsFold, resultToggle, columnProfile, gridCell, messagesStrip, outputStatus, part, pivotPanel, pivotSource, quickInputActive, resultGrid, resultsOverflow, resultsPicker, resultsPickerFilter,
+  paneMenuButton, resultsPickerOption, resultsSearchCount, resultsToolbar, resultTab, resultTabPanel, resultTabs, submitConnect, tabClose, toolbarButton, viewTab, viewTabs
 } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -57,10 +57,10 @@ try {
   await expect.poll(() => page.evaluate(() => innerWidth)).toBeGreaterThan(1440)
   await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
   await toolbarButton(page, 'Connect').click()
-  await page.getByLabel('Server Name', { exact: true }).fill('server-a')
-  await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(page.getByRole('dialog')).toHaveCount(0)
+  const { window: connectWin, dialog } = await connectDialogWindow(application)
+  await dialog.getByLabel('Server Name', { exact: true }).fill('server-a')
+  await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
+  await submitConnect(connectWin, dialog)
   await enlargeOutput(page)
 
   // 1. Tabs is the default; the results toolbar's Tabs turns it off and on, and the setting keeps it.

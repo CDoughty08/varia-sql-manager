@@ -30,7 +30,7 @@ async function sql(text) {
 try {
   await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
   await expect(backendReady(page)).toBeVisible({ timeout: 30_000 })
-  await connectLive(page, expect)
+  await connectLive(application, page, expect)
   await enlargeOutput(page)
   const toggle = page.getByRole('button', { name: 'Include Live Execution Plan', exact: true })
   await toggle.click()

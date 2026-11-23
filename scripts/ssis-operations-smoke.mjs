@@ -8,7 +8,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { expandExplorerPath, revealExplorerRow } from './fixtures/explorer-tree.mjs'
-import { documentCrumbs, documentFrame, documentTab, documentTabs, gridPart, gridTones, liveGrid, liveGridSelector, menuItemNames, statusBar, toolbarButton } from './fixtures/ui.mjs'
+import { connectDialogWindow, documentCrumbs, documentFrame, documentTab, documentTabs, gridPart, gridTones, liveGrid, liveGridSelector, menuItemNames, statusBar, submitConnect, toolbarButton } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -66,12 +66,10 @@ async function size(width, height) { await app.evaluate(({ BrowserWindow }, dime
 const serverCrumbWhole = () => documentCrumbs(frame()).first().evaluate(item => { const text = item.firstElementChild; return !!text && text.clientWidth > 0 && text.scrollWidth <= text.clientWidth })
 async function connect(server) {
   await toolbarButton(page, 'Connect').click()
-  const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
-  await expect(dialog.getByText('Loading saved connections…')).toHaveCount(0)
+  const { window: connectWin, dialog } = await connectDialogWindow(app)
   await dialog.getByLabel('Server Name', { exact: true }).fill(server)
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(dialog).toHaveCount(0, { timeout: 30000 })
+  await submitConnect(connectWin, dialog, { timeout: 30000 })
 }
 /** Right-click the server's SSISDB node and choose `item`. */
 async function fromCatalog(server, item) {

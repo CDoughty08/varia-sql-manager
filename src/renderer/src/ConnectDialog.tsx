@@ -1,23 +1,27 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { flushSync } from 'react-dom'
 import type { AdvancedConnectionOptions, ApiResult, BigQueryConnectionOptions, ConnectionInfo, ConnectionOptions, DatabaseInfo, DiscoveredServer, ErrorDetails, ProviderConnectionOptions } from '../../shared/contracts'
 import type { ErrorCode } from '../../shared/ipc/wire/protocol'
 import { changedConnectionDetails, type ConnectionDetailField, type ConnectionDetails } from '../../shared/connection-targets'
 import { detailsOf, type ConnectionAttempt } from './services/connections'
 import { liveGeneration } from './services/backend'
+import { isLiveConnection } from './services/connection-availability'
 import { advancedDefaults, advancedToStore, canRememberPassword, connectionDefaults, credentialBinding, rememberedProfile, type ConnectionLibrary, type ConnectionLibraryView, type ConnectionProfile, type ConnectionProfileInput, type ConnectionSaveView, type SecretStorageState } from '../../shared/connections'
-import { bigQueryTargetOptions, connectionTargetOptions } from '../../shared/connection-targets'
+import { bigQueryTargetOptions, connectionTargetOptions, isBigQueryTarget } from '../../shared/connection-targets'
 import { connectionKey } from '../../shared/connections'
 import type { BigQueryConnectionProfile, BigQueryLibraryView, PickedKeyFile } from '../../shared/bigquery-connections'
 import type { ProviderId } from '../../shared/providers'
 import type { BigQueryAuthenticationMode } from '../../shared/auth'
-import { BigQueryAdvanced, BigQueryConnectFields, accountText, useBigQueryLists } from './BigQueryConnectFields'
-import { bigQueryCredentialReady, bigQueryDefaults, bigQueryFormOptions, bigQueryReady, bigQueryRowDetail, bigQueryRowText, lastServerType, savedCostPrompt, serverTypeLabels, switchServerType, undoServerType, withAuthentication, withoutCostPrompt, type ServerTypeState, bigQueryFormShape } from './bigquery-connect-form'
+import { BigQueryAdvanced, BigQueryConnectFields, accountText, bigQueryAdvancedCount, bigQueryAdvancedDraftFrom, bigQueryAdvancedSummary, bigQueryAdvancedValidationError, useBigQueryLists, type BigQueryAdvancedDraft } from './BigQueryConnectFields'
+import { bigQueryCredentialReady, bigQueryDefaults, bigQueryFormOptions, bigQueryReady, bigQueryRowDetail, bigQueryRowText, lastServerType, parseExtraProjects, savedCostPrompt, serverTypeLabels, switchServerType, undoServerType, withAuthentication, withoutCostPrompt, type ServerTypeState, bigQueryFormShape } from './bigquery-connect-form'
 import { connectionPickerColor, connectionPresets } from '../../shared/theme/connection-colors'
+import { dialogWindowKinds } from '../../shared/popouts'
 import Icon from './Icon'
+import DialogFooter from './kit/DialogFooter'
 import InlineError, { type ErrorAction } from './kit/InlineError'
 import { connectFix } from './connect-fix'
-import { advancedSummary, customSummary, listStep, rowTitle } from './connect-form'
+import { advancedCount, advancedSummary, busyRequestNotice, clampConnectRailWidth, connectRailLimits, listStep, parseConnectionString, rowTitle, validateSqlAdvancedNumber, type ConnectIncomingRequest } from './connect-form'
+export type { ConnectIncomingRequest }
 import { EnvironmentField } from './EnvironmentDialog'
 import EnvironmentTag from './EnvironmentTag'
 import { entryKey, parseEnvironment, savedEntry } from './services/environments'
@@ -25,10 +29,11 @@ import { trapFocus } from './trap-focus'
 import { useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import { IntegratedIdentityLookup } from './services/integrated-identity'
 import { authenticationCatalog, authenticationModes, requiresUser, showsIdentity, usesPassword, type AuthenticationMode } from '../../shared/auth'
-import { focusToReturn, returnFocusTo } from './core/focus'
+import { focusToReturn, returnFocusBeside } from './core/focus'
 import SubDialog from './dialogs/SubDialog'
 import { useKeepFocus } from './dialogs/keep-focus'
 import { applySavedDetails } from './services/saved-connection-details'
+import DialogWindow, { closesDialogWindow, DialogHeading, useDialogWindow } from './popouts/DialogWindow'
 
 /** What Cancel compares: settings and labels (the environment as stored), never the password. */
 function labels(from: ConnectionOptions, autoReconnect: ConnectionDetails['autoReconnect']) {
@@ -57,8 +62,32 @@ type HistoryRow = { readonly sql: ConnectionProfile } | { readonly bigQuery: Big
 const rowTime = (row: HistoryRow) => ('sql' in row ? row.sql : row.bigQuery).lastConnected ?? ''
 const bigQueryShape = bigQueryFormShape
 const bigQueryKey = (from: BigQueryConnectionOptions) => { try { return connectionKey(bigQueryFormOptions({ ...from, displayName: undefined, color: undefined, environment: undefined })) } catch { return undefined } }
-interface Props { initial: ProviderConnectionOptions; initialTargetId?: string; reviewOpen?: boolean; initialAutoReconnect?: ConnectionDetails['autoReconnect']; onConnected(info: ConnectionInfo, options: ProviderConnectionOptions, autoReconnect: ConnectionDetails['autoReconnect'], attempt: ConnectionAttempt, requestId: string, signal: AbortSignal, changedDetails: readonly ConnectionDetailField[]): Promise<void>; onClose(): void }
+const railStorageKey = 'varia.connect.railWidth'
+function loadRailWidth(dialogWidth: number): number {
+  try {
+    const raw = localStorage.getItem(railStorageKey)
+    if (raw !== null) return clampConnectRailWidth(Number(raw), dialogWidth)
+  } catch {}
+  return clampConnectRailWidth(undefined, dialogWidth)
+}
+function saveRailWidth(width: number): void {
+  try { localStorage.setItem(railStorageKey, String(Math.round(width))) } catch {}
+}
+
+interface Props {
+  initial: ProviderConnectionOptions
+  initialTargetId?: string
+  raise?: number
+  incomingRequest?: ConnectIncomingRequest
+  onAcceptRequest?(request: ConnectIncomingRequest): void
+  reviewOpen?: boolean
+  review?: ReactNode
+  initialAutoReconnect?: ConnectionDetails['autoReconnect']
+  onConnected(info: ConnectionInfo, options: ProviderConnectionOptions, autoReconnect: ConnectionDetails['autoReconnect'], attempt: ConnectionAttempt, requestId: string, signal: AbortSignal, changedDetails: readonly ConnectionDetailField[]): Promise<void>
+  onClose(): void
+}
 type Field = { key: keyof AdvancedConnectionOptions; label: string; choices?: readonly string[]; min?: number; max?: number; boolean?: boolean; maxLength?: number }
+type SqlAdvancedDraft = Partial<Record<keyof AdvancedConnectionOptions, { readonly raw: string; readonly badInput?: boolean }>>
 const sections: { title: string; fields: Field[] }[] = [
   { title: 'Common', fields: [{ key: 'commandTimeout', label: 'Command timeout (seconds)', min: 0, max: 86400 }, { key: 'connectTimeout', label: 'Connect timeout (seconds)', min: 0, max: 3600 }] },
   { title: 'Always Encrypted', fields: [{ key: 'columnEncryption', label: 'Enable Always Encrypted', boolean: true }, { key: 'secureEnclaves', label: 'Enable secure enclaves', boolean: true }, { key: 'attestationProtocol', label: 'Attestation protocol', choices: ['None', 'HGS', 'AAS'] }, { key: 'enclaveAttestationUrl', label: 'Enclave attestation URL', maxLength: 2048 }] },
@@ -70,6 +99,7 @@ const sections: { title: string; fields: Field[] }[] = [
   { title: 'Security', fields: [{ key: 'ipAddressPreference', label: 'IP address preference', choices: ['IPv4First', 'IPv6First', 'UsePlatformDefault'] }, { key: 'serverCertificate', label: 'Server certificate (file path)', maxLength: 1024 }] },
   { title: 'Source', fields: [{ key: 'attachDbFilename', label: 'Attach DB filename', maxLength: 1024 }, { key: 'failoverPartner', label: 'Failover partner', maxLength: 256 }, { key: 'failoverPartnerSpn', label: 'Failover partner SPN', maxLength: 512 }, { key: 'multiSubnetFailover', label: 'Multi subnet failover', boolean: true }, { key: 'serverSpn', label: 'Server SPN', maxLength: 512 }, { key: 'userInstance', label: 'User instance', boolean: true }] }
 ]
+
 /**
  * SQL Server's facts about a failed connection, as SSMS shows them under its error; absent facts are left out, and with
  * none (a BACKEND_ERROR carries only its exception types, which Copy details has) there is no expander at all.
@@ -100,9 +130,9 @@ const saveTitle = 'Save settings and labels to History. Opens no session.'
 const keepsPassword = 'Save checks this password with the server, then remembers it.'
 const dropsPassword = 'Save keeps the settings, not this password. Check Remember password to keep it.'
 const forgetsTyped = 'Save keeps the settings and forgets the saved password; it does not keep this one either.'
-/** The key a Load databases result belongs to: the form without its database and labels. */
 /** Object Explorer targets that reconnect with the remembered password for this login: Save cannot replace it under them. */
 const inUseNote = 'Save checks this password with the server, then remembers it. If it differs from the saved one, Object Explorer connections that use the saved one will need the new password entered when they next connect.'
+/** The key a Load databases result belongs to: the form without its database and labels. */
 const databasesKey = (from: ConnectionOptions) => JSON.stringify({ ...from, database: '', displayName: '', color: '', environment: '' })
 const trustLabel = 'Trust server certificate and connect'
 /** Strict encryption validates the certificate whatever Trust server certificate says, so the dialog can only explain. */
@@ -110,40 +140,93 @@ const strictCertificate = "Strict encryption always validates the server's certi
 /** A pinned certificate or name is a check the person chose: trusting would skip it, so the dialog only explains. */
 const pinnedCertificate = "The server's certificate did not match the Server Certificate or the Host Name in Certificate set for this connection, so it was not trusted. Check that this is the server you meant and that those settings are current; Trust server certificate would skip that check."
 const trustNeedsPassword = (action = 'connect') => `Trust server certificate is now checked. The saved password is kept for the old settings only, so enter the password, then ${action}.`
-// Custom Properties starts collapsed; once opened it stays open for this window's later Connect dialogs.
-let customPropertiesOpen = false
 const choiceLabels: Record<string, string> = { default: '<default>', tcp: 'TCP/IP', np: 'Named pipes', lpc: 'Shared memory', IPv4First: 'IPv4 first', IPv6First: 'IPv6 first', UsePlatformDefault: 'Platform default' }
 
-/** Advanced Properties. A command timeout the profile does not set is left empty, showing Tools › Options' Execution time-out. */
-function AdvancedProperties({ value, onSave, onClose }: { value: Partial<AdvancedConnectionOptions>; onSave(value: Partial<AdvancedConnectionOptions>): void; onClose(): void }) {
-  const { settings } = useWorkbench()
-  const executionTimeout = settings.get('queryExecution.executionTimeout')
-  const [draft, setDraft] = useState(() => ({ ...advancedDefaults, ...value.commandTimeout === undefined ? { commandTimeout: '' as unknown as number } : {}, ...value }))
-  const [previous, setPrevious] = useState(value)
-  const edited = useRef(new Set<string>())
-  const edit = (key: string, next: (current: AdvancedConnectionOptions) => AdvancedConnectionOptions) => { edited.current.add(key); setDraft(next) }
-  const form = useRef<HTMLFormElement>(null)
-  useEffect(() => { form.current?.querySelector<HTMLInputElement>('input')?.focus() }, [])
-  return <div className="modal-backdrop advanced-backdrop"><form ref={form} className="connection-modal advanced-dialog" role="dialog" aria-modal="true" aria-labelledby="advanced-title" onSubmit={event => { event.preventDefault(); onSave(advancedToStore(draft, edited.current, previous)) }} onKeyDown={event => { trapFocus(event); if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onClose() } }}>
-    <div className="connection-heading"><h2 id="advanced-title">Advanced Properties</h2><button type="button" className="ui-button icon-button" aria-label="Close advanced properties" onClick={onClose}><Icon name="close" /></button></div>
-    <div className="connection-scroll">
-      {sections.map(section => <fieldset className="property-section" key={section.title}><legend>{section.title}</legend><div className="property-grid">{section.fields.map(field => {
-        const id = 'advanced-' + field.key
-        const disabled = field.key === 'secureEnclaves' && !draft.columnEncryption || ['attestationProtocol', 'enclaveAttestationUrl'].includes(field.key) && (!draft.columnEncryption || !draft.secureEnclaves) || field.key === 'enclaveAttestationUrl' && draft.attestationProtocol === 'None'
-        return <div className="property-row" key={id}><label htmlFor={id}>{field.label}</label>{field.boolean || field.choices
-          ? <select className="ui-field" id={id} disabled={disabled} value={String(draft[field.key])} onChange={event => edit(field.key, current => ({ ...current, [field.key]: field.boolean ? event.target.value === 'true' : event.target.value, ...(field.key === 'columnEncryption' && event.target.value === 'false' ? { secureEnclaves: false } : {}) }))}>{(field.boolean ? ['false', 'true'] : field.choices!).map(choice => <option key={choice} value={choice}>{field.boolean ? choice === 'true' ? 'True' : 'False' : choiceLabels[choice] ?? choice}</option>)}</select>
-          : <input className="ui-field" id={id} disabled={disabled} type={field.min !== undefined ? 'number' : 'text'} required={field.min !== undefined && field.key !== 'commandTimeout'} min={field.min}
-            {...field.key === 'commandTimeout' ? { placeholder: `${executionTimeout} (Tools › Options)`, 'aria-describedby': 'advanced-timeout-note' } : {}} max={field.max} step={field.min !== undefined ? 1 : undefined} maxLength={field.maxLength ?? 128} value={draft[field.key] as string | number} onChange={event => edit(field.key, current => ({ ...current, [field.key]: field.min !== undefined ? event.target.value === '' ? '' : Number(event.target.value) : event.target.value }) as AdvancedConnectionOptions)} />}</div>
-      })}</div></fieldset>)}
-      <p className="field-note" id="advanced-timeout-note">Leave the command timeout empty to use Tools › Options › Query Execution › SQL Server › General. Timeout 0 means no timeout. Query tabs require an explicit reconnect after a lost session; automatic connection recovery retries apply to metadata connections.</p>
+/**
+ * Inline SQL Server Advanced Properties tab: filterable sections applying valid changes live via `advancedToStore`.
+ * Invalid numeric drafts stay in `draft` (never written into `options.advanced`) so zod errors never leak out of Connect
+ * and switching tabs keeps the field's text and error intact. A command timeout the profile does not set is left empty,
+ * showing Tools › Options' Execution time-out.
+ */
+function SqlAdvancedPanel({ value, draft: invalidDraft, edited, errors, error, executionTimeout, locked, onChange, onReset }: {
+  value: Partial<AdvancedConnectionOptions>
+  draft: SqlAdvancedDraft
+  edited: Set<string>
+  errors: Partial<Record<keyof AdvancedConnectionOptions, string>>
+  error: string
+  executionTimeout: number
+  locked: boolean
+  onChange(value: Partial<AdvancedConnectionOptions> | undefined, nextDraft: SqlAdvancedDraft): void
+  onReset(): void
+}) {
+  const [filter, setFilter] = useState('')
+  const [modifiedOnly, setModifiedOnly] = useState(false)
+  const baseDraft = useMemo(() => ({ ...advancedDefaults, ...value.commandTimeout === undefined ? { commandTimeout: '' as unknown as number } : {}, ...value }), [value])
+  const count = advancedCount(value)
+  const query = filter.trim().toLowerCase()
+  const edit = (key: keyof AdvancedConnectionOptions, patch: Partial<AdvancedConnectionOptions>, nextDraft: SqlAdvancedDraft = invalidDraft) => {
+    edited.add(key)
+    const next = { ...baseDraft, ...patch }
+    onChange(advancedToStore(next, edited, value), nextDraft)
+  }
+  const editNumber = (key: keyof AdvancedConnectionOptions, raw: string, badInput: boolean) => {
+    const check = validateSqlAdvancedNumber(key, raw, badInput)
+    if (!check.ok) {
+      onChange(undefined, { ...invalidDraft, [key]: { raw, badInput } })
+      return
+    }
+    const { [key]: _removed, ...rest } = invalidDraft
+    edit(key, { [key]: check.value === undefined ? '' : check.value } as Partial<AdvancedConnectionOptions>, rest)
+  }
+  const isFieldModified = (key: keyof AdvancedConnectionOptions) =>
+    key === 'commandTimeout' ? value.commandTimeout !== undefined : value[key] !== undefined && value[key] !== advancedDefaults[key]
+  const visibleSections = sections.map(section => ({
+    ...section,
+    fields: section.fields.filter(field => {
+      if (modifiedOnly && !isFieldModified(field.key) && !(field.key in invalidDraft)) return false
+      if (!query) return true
+      return field.label.toLowerCase().includes(query) || section.title.toLowerCase().includes(query)
+    })
+  })).filter(section => section.fields.length > 0)
+
+  return <div className="connect-advanced-panel">
+    <div className="connect-advanced-toolbar">
+      <div className="connection-filter-box connect-advanced-filter">
+        <Icon name="search" className="connection-filter-icon" />
+        <input className="ui-field connection-filter" aria-label="Filter advanced properties" placeholder="Filter advanced properties…" value={filter} disabled={locked} onChange={event => setFilter(event.target.value)} />
+        {filter && <button type="button" className="ui-button icon-button connection-filter-clear" aria-label="Clear advanced filter" onClick={() => setFilter('')}><Icon name="close" /></button>}
+      </div>
+      <button type="button" className="ui-button" data-control-variant="secondary" data-control-size="dense" aria-pressed={modifiedOnly} disabled={locked} onClick={() => setModifiedOnly(current => !current)}>Modified ({count})</button>
+      <button type="button" className="ui-button" data-control-variant="secondary" data-control-size="dense" disabled={locked || (count === 0 && Object.keys(invalidDraft).length === 0)} onClick={onReset}>Reset</button>
     </div>
-    <div className="connection-footer"><button className="ui-button" data-control-variant="secondary" type="button" onClick={() => { edited.current.clear(); setPrevious({}); setDraft({ ...advancedDefaults, commandTimeout: '' as unknown as number }) }}>Reset</button><span /><button className="ui-button primary" type="submit">OK</button><button className="ui-button" data-control-variant="secondary" type="button" onClick={onClose}>Cancel</button></div>
-  </form></div>
+    {visibleSections.length === 0
+      ? <p className="field-note">{modifiedOnly && count === 0 ? 'No advanced properties differ from their defaults.' : 'No advanced properties match your filter.'}</p>
+      : visibleSections.map(section => <fieldset className="property-section" key={section.title}><legend>{section.title}</legend><div className="property-grid">{section.fields.map(field => {
+        const id = 'advanced-' + field.key
+        const disabled = locked || (field.key === 'secureEnclaves' && !baseDraft.columnEncryption || ['attestationProtocol', 'enclaveAttestationUrl'].includes(field.key) && (!baseDraft.columnEncryption || !baseDraft.secureEnclaves) || field.key === 'enclaveAttestationUrl' && baseDraft.attestationProtocol === 'None')
+        const fieldValue = field.min !== undefined && field.key in invalidDraft ? invalidDraft[field.key]!.raw : baseDraft[field.key] as string | number
+        return <div className="property-row" key={id}><label htmlFor={id}>{field.label}</label>{field.boolean || field.choices
+          ? <select className="ui-field" id={id} disabled={disabled} value={String(baseDraft[field.key])} onChange={event => edit(field.key, { [field.key]: field.boolean ? event.target.value === 'true' : event.target.value, ...(field.key === 'columnEncryption' && event.target.value === 'false' ? { secureEnclaves: false } : {}) } as Partial<AdvancedConnectionOptions>)}>{(field.boolean ? ['false', 'true'] : field.choices!).map(choice => <option key={choice} value={choice}>{field.boolean ? choice === 'true' ? 'True' : 'False' : choiceLabels[choice] ?? choice}</option>)}</select>
+          : <input className="ui-field" id={id} disabled={disabled} type={field.min !== undefined ? 'number' : 'text'} required={field.min !== undefined && field.key !== 'commandTimeout'} min={field.min}
+            aria-invalid={!!errors[field.key] || undefined}
+            {...field.key === 'commandTimeout' ? { placeholder: `${executionTimeout} (Tools › Options)`, 'aria-describedby': 'advanced-timeout-note' } : {}} max={field.max} step={field.min !== undefined ? 1 : undefined} maxLength={field.maxLength ?? 128} value={fieldValue} onChange={event => field.min !== undefined ? editNumber(field.key, event.target.value, !!event.target.validity?.badInput) : edit(field.key, { [field.key]: event.target.value } as Partial<AdvancedConnectionOptions>)} />}</div>
+      })}</div></fieldset>)}
+    {error && <p className="field-note" role="alert" data-tone="warning">{error}</p>}
+    <p className="field-note" id="advanced-timeout-note">Leave Command timeout empty to use Tools › Options › Query Execution › SQL Server › General (default {executionTimeout}s). Timeout 0 means no timeout. Query tabs require an explicit reconnect after a lost session; automatic connection recovery retries apply to metadata connections.</p>
+  </div>
 }
 
-export default function ConnectDialog({ initial, initialTargetId, reviewOpen, initialAutoReconnect, onConnected, onClose }: Props) {
-  const { theme, platform, gestures, connections, backend, connectionReady, startupReconnect } = useWorkbench()
+/** Renders Reset Form inside the footer only when showing over the main-window backdrop instead of a DialogWindow. */
+function ConnectFooterReset({ disabled, onReset }: { readonly disabled: boolean; onReset(): void }) {
+  return useDialogWindow().inWindow ? null : <button className="ui-button" data-control-variant="secondary" type="button" disabled={disabled} onClick={onReset}>Reset Form</button>
+}
+
+export default function ConnectDialog({ initial, initialTargetId, raise, incomingRequest, onAcceptRequest, reviewOpen, review, initialAutoReconnect, onConnected, onClose }: Props) {
+  const { theme, platform, gestures, connections, backend, connectionReady, startupReconnect, settings, documents } = useWorkbench()
+  const executionTimeout = settings.get('queryExecution.executionTimeout')
   const { active } = useServiceSnapshot(theme)
+  const liveConnections = useServiceSnapshot(connections)
+  const connectionTargets = useServiceSnapshot(connections.connectionTargets)
   // The SQL Server form, and BigQuery's beside it: switching Server type keeps each type's fields.
   const [sqlInitial] = useState<ConnectionOptions>(() => initial.provider === 'bigquery' ? connectionDefaults(platform) : initial)
   const [options, setOptions] = useState<ConnectionOptions>({ ...sqlInitial, password: '' })
@@ -158,7 +241,6 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   const [bigQuerySelectedId, setBigQuerySelectedId] = useState<string>()
   // The picked key file's name; a saved profile's comes with the library.
   const [pickedKeyName, setPickedKeyName] = useState<{ keyFile: string; name: string }>()
-  const [bigQueryAdvanced, setBigQueryAdvanced] = useState(false)
   // Decision 49: a federation configuration whose token file the user has not confirmed yet.
   const [sourcePrompt, setSourcePrompt] = useState<PickedKeyFile>()
   const bigQueryEdited = useRef(false)
@@ -177,6 +259,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   const [storage, setStorage] = useState<SecretStorageState>()
   const [remember, setRemember] = useState(false)
   const rememberEdited = useRef(false)
+  const [showPassword, setShowPassword] = useState(false)
   const [identity, setIdentity] = useState('Current Windows user')
   // Off Windows: the Kerberos principal Windows Authentication signs in with, while there is a valid ticket.
   const [principal, setPrincipal] = useState<string>()
@@ -202,16 +285,19 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   const [tested, setTested] = useState<{ text: string; warning?: string }>()
   const failureBox = useRef<HTMLDivElement>(null)
   const [notice, setNotice] = useState('')
+  const [busyNotice, setBusyNotice] = useState('')
+  const [lastRemoved, setLastRemoved] = useState<{ kind: 'sql'; profile: ConnectionProfile; hadPassword: boolean } | { kind: 'bigquery'; profile: BigQueryConnectionProfile }>()
   const [databases, setDatabases] = useState<DatabaseInfo[]>([])
   const [dbBusy, setDbBusy] = useState(false)
   const [dbNote, setDbNote] = useState('')
   // A failed Load databases' details, shown under its note as a failed Connect shows them under its error.
   const [dbDetails, setDbDetails] = useState<ErrorDetails>()
-  const [properties, setProperties] = useState<'properties' | 'string'>('properties')
+  const [properties, setProperties] = useState<'properties' | 'advanced' | 'string'>('properties')
   const [preview, setPreview] = useState('')
-  const [advanced, setAdvanced] = useState(false)
-  // What Cancel asks about (Save / Don't Save / Cancel): unsaved edits to a saved entry, or (no target) a new connection.
-  const [confirmClose, setConfirmClose] = useState<{ target?: ConnectionProfile; bigQueryTarget?: BigQueryConnectionProfile; type: ProviderId }>()
+  const [copiedString, setCopiedString] = useState(false)
+  const [pasteInput, setPasteInput] = useState('')
+  // What Cancel or an incoming target switch asks about (Save / Don't Save / Cancel): unsaved edits to a saved entry, or (no target) a new connection.
+  const [confirmClose, setConfirmClose] = useState<{ target?: ConnectionProfile; bigQueryTarget?: BigQueryConnectionProfile; type: ProviderId; next: 'close' | ConnectIncomingRequest }>()
   // The user changed the form since it was opened, chosen, saved or reset; and, of that, Name, Color, Environment or
   // Reconnect on startup, which Connect then applies to a reused Explorer connection without asking again.
   const edited = useRef(false)
@@ -225,9 +311,22 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   const [opened] = useState(() => shape({ ...sqlInitial, password: '' }, initialAutoReconnect ?? 'inherit'))
   const pristine = useRef(opened)
   const touched = useRef(false)
-  const [customOpen, setCustomOpenState] = useState(customPropertiesOpen)
-  const setCustomOpen = (open: boolean) => { customPropertiesOpen = open; setCustomOpenState(open) }
-  const dialog = useRef<HTMLFormElement>(null)
+  const [dialogWidth, setDialogWidth] = useState<number>(dialogWindowKinds.connect.width)
+  const [railWidth, setRailWidth] = useState(() => loadRailWidth(dialogWindowKinds.connect.width))
+  const [draggingSplit, setDraggingSplit] = useState(false)
+  // Lifted Advanced drafts so switching tabs preserves invalid values, errors, and pending BigQuery extra-project text.
+  const [sqlAdvancedDraft, setSqlAdvancedDraft] = useState<SqlAdvancedDraft>({})
+  const sqlAdvancedEdited = useRef(new Set<string>())
+  const [bigQueryAdvancedDraft, setBigQueryAdvancedDraft] = useState<BigQueryAdvancedDraft>(() => bigQueryAdvancedDraftFrom(initial.provider === 'bigquery' ? initial : bigQueryDefaults()))
+  const prevRequestSeq = useRef(incomingRequest?.seq ?? 0)
+  const splitterCleanup = useRef<(() => void) | undefined>(undefined)
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const pendingFavoriteFocus = useRef<string | undefined>(undefined)
+  const dialog = useRef<HTMLFormElement | null>(null)
+  const [formElement, setFormElement] = useState<HTMLFormElement | null>(null)
+  const setDialogRef = useCallback((el: HTMLFormElement | null) => { dialog.current = el; setFormElement(el) }, [])
+  const focusedInitial = useRef(false)
+  const [returnFocus] = useState(focusToReturn)
   const sourcesPane = useRef<HTMLDivElement>(null)
   const filterInput = useRef<HTMLInputElement>(null)
   const alive = useRef(true)
@@ -271,7 +370,34 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   const bigQuerySavedCostPrompt = savedCostPrompt(bigQueryLibrary.profiles, bigQuery)
   const bigQueryKeyName = bigQuery.keyFile ? pickedKeyName?.keyFile === bigQuery.keyFile ? pickedKeyName.name : bigQueryLibrary.profiles.find(profile => profile.options.keyFile === bigQuery.keyFile)?.keyFileName : undefined
   const bigQueryLists = useBigQueryLists(bigQuery, alive, isBigQuery)
-  const ready = isBigQuery ? bigQueryReady(bigQuery) : authReady
+  const sqlAdvancedErrors = useMemo(() => {
+    const errors: Partial<Record<keyof AdvancedConnectionOptions, string>> = {}
+    for (const [key, item] of Object.entries(sqlAdvancedDraft) as [keyof AdvancedConnectionOptions, { readonly raw: string; readonly badInput?: boolean }][]) {
+      if (!item) continue
+      const checked = validateSqlAdvancedNumber(key, item.raw, item.badInput)
+      if (!checked.ok) errors[key] = checked.error
+    }
+    return errors
+  }, [sqlAdvancedDraft])
+  const sqlAdvancedErrorEntry = (Object.entries(sqlAdvancedErrors) as [keyof AdvancedConnectionOptions, string][])[0]
+  const sqlAdvancedError = sqlAdvancedErrorEntry?.[1] ?? ''
+  const bigQueryAdvancedError = useMemo(() => bigQueryAdvancedValidationError(bigQueryAdvancedDraft), [bigQueryAdvancedDraft])
+  const ready = isBigQuery ? bigQueryReady(bigQuery) && !bigQueryAdvancedError : authReady && !sqlAdvancedError
+
+  const liveTargets = useMemo(() => {
+    const profileIds = new Set<string>(), sqlKeys = new Set<string>(), bqKeys = new Set<string>()
+    const liveTargetIds = new Set(liveConnections.filter(c => isLiveConnection(c) && c.targetId).map(c => c.targetId!))
+    for (const target of connectionTargets) {
+      if (!liveTargetIds.has(target.id)) continue
+      if (target.credential?.profileId) profileIds.add(target.credential.profileId)
+      const k = entryKey(target.options as ProviderConnectionOptions)
+      if (!k) continue
+      if (isBigQueryTarget(target.options)) bqKeys.add(k)
+      else sqlKeys.add(k)
+    }
+    return { profileIds, sqlKeys, bqKeys }
+  }, [liveConnections, connectionTargets])
+
   /** Main forgot every remembered password for these credentials, which SQL Server rejected. */
   function passwordRejected() {
     rejections.current++
@@ -319,14 +445,81 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     }).catch(reason => { if (alive.current) { setError(message(reason)); setLoaded(true) } })
     return () => {
       alive.current = false; dbRequest.current++; browseRequest.current++
+      splitterCleanup.current?.(); clearTimeout(copyTimer.current)
       cancelDatabases(); stopTest(); stop()
     }
   }, [])
   useEffect(() => {
-    const active = focusToReturn()
-    dialog.current?.querySelector<HTMLInputElement>(initial.provider === 'bigquery' ? '#connect-bq-project' : '#connect-server')?.focus()
-    return () => returnFocusTo(active)
-  }, [])
+    if (!formElement || focusedInitial.current) return
+    focusedInitial.current = true
+    formElement.querySelector<HTMLInputElement>(initial.provider === 'bigquery' ? '#connect-bq-project' : '#connect-server')?.focus()
+  }, [formElement, initial.provider])
+  useEffect(() => () => returnFocusBeside(returnFocus, '[data-connect-dialog]', () => documents.focusActive()), [returnFocus, documents])
+
+  // Track dialog width for safe rail clamping and responsive stacking inside resized OS window.
+  useEffect(() => {
+    if (!formElement) return
+    const updateWidth = () => {
+      const next = formElement.clientWidth
+      if (next > 0) setDialogWidth(next)
+    }
+    updateWidth()
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateWidth) : undefined
+    observer?.observe(formElement)
+    return () => observer?.disconnect()
+  }, [formElement])
+
+  function applyIncomingRequest(request: ConnectIncomingRequest) {
+    onAcceptRequest?.(request)
+    const nextOptions = request.options
+    if (!nextOptions) return
+    if (nextOptions.provider === 'bigquery') {
+      const nextBq = withoutCostPrompt(nextOptions)
+      setServerType({ type: 'bigquery' })
+      setBigQuery(nextBq)
+      setBigQueryReconnect(request.autoReconnect ?? 'inherit')
+      setBigQuerySelectedId(undefined)
+      setBigQueryAdvancedDraft(bigQueryAdvancedDraftFrom(nextBq))
+      bigQuerySettled()
+    } else {
+      const nextSql: ConnectionOptions = { ...nextOptions, password: '' }
+      const nextReconnect = request.autoReconnect ?? 'inherit'
+      setServerType({ type: 'sqlserver' })
+      setOptions(nextSql)
+      setAutoReconnect(nextReconnect)
+      reconnectOwned.current = !!request.targetId || request.autoReconnect !== undefined
+      setSelectedId(undefined)
+      rememberEdited.current = false
+      setShowPassword(false)
+      setSqlAdvancedDraft({})
+      sqlAdvancedEdited.current.clear()
+      labelServer.current = nextOptions.displayName || nextOptions.color || nextOptions.environment ? nextOptions.server : null
+      environmentOwner.current = null
+      startAfresh()
+      settle(nextSql, nextReconnect)
+      setRemember(!!rememberedProfile(library.profiles, savedIds, nextSql))
+    }
+    setProperties('properties')
+    setError(''); setNotice(''); setBusyNotice(''); setTested(undefined); setFailure(undefined); setLastRemoved(undefined)
+    setTimeout(() => { dialog.current?.querySelector<HTMLInputElement>(nextOptions.provider === 'bigquery' ? '#connect-bq-project' : '#connect-server')?.focus() }, 0)
+  }
+
+  // Handle Reconnect / F5 / Activity Monitor requests while the Connect OS window is already open:
+  // report a short notice when busy or awaiting confirmation so an ignored request never vanishes silently,
+  // and ask before dropping unsaved edits only for the server type whose fields will be overwritten.
+  useEffect(() => {
+    if (!incomingRequest || incomingRequest.seq === prevRequestSeq.current) return
+    prevRequestSeq.current = incomingRequest.seq
+    if (locked || reviewOpen || !!sourcePrompt || !!confirmClose || !!connectRequest.current || !!testRequest.current) {
+      setBusyNotice(busyRequestNotice(incomingRequest.kind))
+      return
+    }
+    setBusyNotice('')
+    if (incomingRequest.options) proceedAfter(incomingRequest, incomingRequest.options.provider === 'bigquery' ? 'bigquery' : 'sqlserver')
+    else onAcceptRequest?.(incomingRequest)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incomingRequest])
+
   useEffect(() => { identityLookup.authenticationChanged(options.authentication) }, [identityLookup, options.authentication])
   useEffect(() => {
     if (!entry || ownsEnvironment() || entry.options.environment === currentOptions.current.environment) return
@@ -341,19 +534,29 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   // Connect disables the form, so focus moves to Stop, where Escape and Enter still reach the dialog, and back to Connect after.
   useEffect(() => {
     if (busy) stopButton.current?.focus()
-    else if (document.activeElement === stopButton.current) connectButton.current?.focus()
+    else if ((dialog.current?.ownerDocument.activeElement ?? null) === stopButton.current) connectButton.current?.focus()
   }, [busy])
   // Save's password check disables Save. Focus moves to Cancel, which stops the check, at once: left to the next frame, an
   // Escape pressed meanwhile reaches the page instead of the dialog.
   const checkingSave = testing?.kind === 'save'
   useEffect(() => {
     if (checkingSave) stopButton.current?.focus()
-    else if (document.activeElement === stopButton.current && !busy) saveButton.current?.focus()
+    else if ((dialog.current?.ownerDocument.activeElement ?? null) === stopButton.current && !busy) saveButton.current?.focus()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [checkingSave])
   // Saving disables the button pressed, Remove takes its row away, and a press on the dialog's text would focus the page:
   // focus stays in the dialog, where Escape and Tab reach it.
-  useKeepFocus(dialog, advanced || bigQueryAdvanced || !!sourcePrompt || !!reviewOpen || !!confirmClose)
+  useKeepFocus(formElement, !!sourcePrompt || !!reviewOpen || !!confirmClose)
+  useEffect(() => {
+    const id = pendingFavoriteFocus.current
+    if (!id || saving) return
+    pendingFavoriteFocus.current = undefined
+    const root = dialog.current, doc = root?.ownerDocument
+    if (!root || !doc) return
+    if (doc.activeElement && doc.activeElement !== doc.body && doc.activeElement !== root) return
+    const button = [...root.querySelectorAll<HTMLButtonElement>('.favorite-button[data-profile-id]')].find(item => item.dataset.profileId === id)
+    button?.focus({ preventScroll: true })
+  }, [saving, library, bigQueryLibrary])
   // Choosing an entry with a remembered password checks Remember password, as SSMS does; a typed password keeps the choice.
   useEffect(() => {
     if (!currentOptions.current.password && !rememberEdited.current) setRemember(!!match)
@@ -373,13 +576,14 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   useEffect(() => {
     if (properties !== 'string' || isBigQuery) return
     let cancelled = false
-    setPreview('')
+    setPreview(''); setCopiedString(false)
     const timer = setTimeout(() => {
+      if (sqlAdvancedError) { setPreview(sqlAdvancedError); return }
       if (!authReady || !options.server.trim()) { setPreview('Enter a server and authentication details to preview the connection string.'); return }
       void window.varia.previewConnection(options).then(result => { if (!cancelled) setPreview(result.ok ? result.value.connectionString : result.error) }).catch(reason => { if (!cancelled) setPreview(message(reason)) })
     }, 200)
     return () => { cancelled = true; clearTimeout(timer) }
-  }, [properties, options, authReady, isBigQuery])
+  }, [properties, options, authReady, isBigQuery, sqlAdvancedError])
 
   /** Changing the server drops an inherited Name/Color/Environment, which would otherwise mislabel the new server (e.g. production shown as DEV). */
   function changeServer(server: string, patch: Partial<ConnectionOptions> = {}) {
@@ -407,17 +611,17 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     const base = library.profiles.find(profile => profile.id === editBase.current)
     return base && entryKey(base.options) === entryKey(from) ? base : undefined
   }
-  function update(patch: Partial<ConnectionOptions>) { markEdited(); setOptions(current => ({ ...current, ...patch })); setError(''); setNotice(''); setTested(undefined) }
+  function update(patch: Partial<ConnectionOptions>) { markEdited(); setOptions(current => ({ ...current, ...patch })); setError(''); setNotice(''); setBusyNotice(''); setLastRemoved(undefined); setTested(undefined) }
   function editDetails(patch: Partial<Pick<ConnectionOptions, 'displayName' | 'color' | 'environment'>>) { labelServer.current = null; for (const field of Object.keys(patch) as ConnectionDetailField[]) detailFields.current.add(field); update(patch) }
   function choose(profile: ConnectionProfile) {
     const chosen = { ...profile.options, password: '' }
     setServerType(current => switchServerType(current, 'sqlserver')); setBigQuerySelectedId(undefined)
     environmentOwner.current = null; setSelectedId(profile.id); setOptions(chosen); reconnectOwned.current = true; setAutoReconnect(profile.autoReconnect ?? 'inherit')
     // Enter selects and submits in one event; remembered credentials must follow the row before the form submits.
-    rememberEdited.current = false; startAfresh(); settle(chosen, profile.autoReconnect ?? 'inherit')
+    rememberEdited.current = false; setShowPassword(false); setSqlAdvancedDraft({}); sqlAdvancedEdited.current.clear(); startAfresh(); settle(chosen, profile.autoReconnect ?? 'inherit')
     setRemember(!!rememberedProfile(library.profiles, savedIds, chosen, profile.id))
     labelServer.current = profile.options.displayName || profile.options.color || profile.options.environment ? profile.options.server : null
-    setError(''); setNotice(''); setTested(undefined)
+    setError(''); setNotice(''); setBusyNotice(''); setLastRemoved(undefined); setTested(undefined)
   }
   async function browse(next: 'local' | 'network') {
     const request = ++browseRequest.current
@@ -430,10 +634,8 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     finally { if (alive.current && request === browseRequest.current) setBrowseBusy(false) }
   }
   async function loadDatabases() {
-    if (dbBusy || !authReady || !options.server.trim()) return
-    const key = databasesKey(options)
-    const request = ++dbRequest.current
-    const requestId = crypto.randomUUID()
+    if (dbBusy || !authReady || !options.server.trim() || sqlAdvancedError) return
+    const key = databasesKey(options), request = ++dbRequest.current, requestId = crypto.randomUUID()
     databasesRequest.current = requestId
     let finished!: () => void
     const run = databasesRun.current = new Promise<void>(resolve => { finished = resolve })
@@ -453,8 +655,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     } catch (reason) {
       if (!alive.current || request !== dbRequest.current) return
       failed(message(reason))
-    }
-    finally {
+    } finally {
       if (databasesRequest.current === requestId) databasesRequest.current = undefined
       if (alive.current && request === dbRequest.current) setDbBusy(false)
       if (databasesRun.current === run) databasesRun.current = undefined
@@ -462,12 +663,17 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     }
   }
   /** The form's options with the environment as stored (a preset by its own name), or undefined after saying why a
-   *  Custom label cannot be one. */
+   *  Custom label or Advanced field cannot be used. */
   function labelledOptions(from: ConnectionOptions = options): ConnectionOptions | undefined {
+    if (sqlAdvancedErrorEntry) {
+      setError(sqlAdvancedErrorEntry[1]); setProperties('advanced')
+      setTimeout(() => dialog.current?.querySelector<HTMLInputElement>('#advanced-' + sqlAdvancedErrorEntry[0])?.focus(), 0)
+      return undefined
+    }
     const environment = parseEnvironment(from.environment)
     if (!environment.ok) {
-      // The label to fix may be inside the collapsed Custom Properties: show it and go there.
-      setError(environment.error); setCustomOpen(true)
+      // The label to fix may be on the Connection Properties tab: switch there and focus it.
+      setError(environment.error); setProperties('properties')
       setTimeout(() => dialog.current?.querySelector<HTMLInputElement>('#connect-environment-custom')?.focus(), 0)
       return undefined
     }
@@ -487,7 +693,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   async function saveProfile(favorite?: boolean, registered?: boolean, profile?: ConnectionProfile, how?: { labelled: ConnectionOptions; rememberPassword: boolean; forgetPassword?: boolean }): Promise<ConnectionSaveView | undefined> {
     const labelled = profile ? profile.options : how?.labelled ?? labelledOptions()
     if (!labelled) return undefined
-    setSaving(true); setError(''); setNotice(''); setTested(undefined)
+    setSaving(true); setError(''); setNotice(''); setBusyNotice(''); setLastRemoved(undefined); setTested(undefined)
     try {
       const { value, savedId } = await persist({ id: profile?.id ?? editedEntry(labelled)?.id, options: labelled, favorite, registered, autoReconnect: profile ? profile.autoReconnect ?? 'inherit' : autoReconnect, ...how ? { saved: true, ...how.rememberPassword ? { rememberPassword: true } : how.forgetPassword ? { forgetPassword: true } : {} } : {} }, labelled, profile?.id)
       if (!alive.current) return value
@@ -505,7 +711,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   async function check(labelled: ConnectionOptions, kind: 'test' | 'save'): Promise<DatabaseInfo[] | undefined> {
     const requestId = crypto.randomUUID()
     testRequest.current = requestId
-    setTesting({ kind, server: labelled.server }); setError(''); setFailure(undefined); setTested(undefined)
+    setTesting({ kind, server: labelled.server }); setError(''); setFailure(undefined); setTested(undefined); setBusyNotice(''); setLastRemoved(undefined)
     setNotice(current => current === cancelledNotice || current === testCancelledNotice || current === saveCancelledNotice ? '' : current)
     try {
       // One sign-in at a time: a Load databases still running finishes first, so a password it found rejected is
@@ -538,7 +744,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   }
   /** Test Connection: reports at Connect whether the form signs in, and fills the database list as Load databases does. */
   async function testConnection(chosen: ConnectionOptions = options) {
-    if (locked || !loaded || !authReady) return
+    if (locked || !loaded || !authReady || sqlAdvancedError) return
     const labelled = labelledOptions(chosen)
     if (!labelled) return
     const values = await check(labelled, 'test')
@@ -556,7 +762,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
    *  Explorer connections need the new one (the notice says so), or false when nothing was saved. */
   async function save(chosen: ConnectionOptions = options): Promise<'saved' | 'warned' | false> {
     if (locked || !loaded) return false
-    if (isBigQuery) return bigQueryReady(bigQuery) ? saveBigQuery(undefined, undefined, 'save') : false
+    if (isBigQuery) return bigQueryReady(bigQuery) && !bigQueryAdvancedError ? saveBigQuery(undefined, undefined, 'save') : false
     const labelled = labelledOptions(chosen)
     if (!labelled) return false
     const typed = usesPassword(labelled.authentication) && !!labelled.password
@@ -573,7 +779,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     const value = await saveProfile(undefined, undefined, undefined, { labelled, rememberPassword, forgetPassword })
     if (!value || !alive.current) return value ? 'saved' : false
     if (value.passwordSaved) {
-      setOptions(current => ({ ...current, password: '' })); rememberEdited.current = false
+      setOptions(current => ({ ...current, password: '' })); rememberEdited.current = false; setShowPassword(false)
       setNotice(!value.passwordReplaced ? 'Saved to History. The password is remembered.' : inUse ? 'Saved to History. The new password is remembered; Object Explorer connections that used the old one will need it entered when they next connect.' : 'Saved to History. The new password is remembered.')
       return inUse && value.passwordReplaced ? 'warned' : 'saved'
     }
@@ -601,18 +807,24 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     } catch { return false }
     finally { if (alive.current) setSaving(false) }
   }
-  /** What Cancel asks about: the saved entry this form edits when the user changed it and has not saved since, or a new
-   *  connection the user filled in (no target). A password alone is not a change to the saved settings. */
+  /** What Cancel or an incoming target switch asks about: the saved entry this form edits when the user changed it and
+   *  has not saved since, or a new connection the user filled in (no target). A password alone is not a change to the saved settings. */
   function unsaved(type: ProviderId = serverType.type): { target?: ConnectionProfile; bigQueryTarget?: BigQueryConnectionProfile } | undefined {
     if (type === 'bigquery') {
       // BigQuery's form: an edited saved entry, or a new connection whose settings no entry has yet.
       if (!bigQueryEdited.current) return undefined
-      const form = bigQueryShape(bigQuery, bigQueryReconnect, bigQuery.costPrompt ?? bigQuerySavedCostPrompt)
+      let effective = bigQuery
+      if (bigQueryAdvancedDraft.adding.trim()) {
+        const parsed = parseExtraProjects([...(bigQuery.extraProjects ?? []), bigQueryAdvancedDraft.adding].join(' '), bigQuery.project)
+        if (!parsed.ok) return bigQuerySelected ? { bigQueryTarget: bigQuerySelected } : loaded && bigQueryReady(bigQuery) ? {} : undefined
+        effective = { ...bigQuery, extraProjects: parsed.projects.length ? parsed.projects : undefined }
+      }
+      const form = bigQueryShape(effective, bigQueryReconnect, effective.costPrompt ?? savedCostPrompt(bigQueryLibrary.profiles, effective))
       const baseline = bigQueryBaseline.current
-      if (baseline && form === bigQueryShape(baseline.options, baseline.autoReconnect, baseline.options.costPrompt ?? savedCostPrompt(bigQueryLibrary.profiles, baseline.options))) return undefined
-      if (bigQuerySelected) return form === bigQueryShape(bigQuerySelected.options, bigQuerySelected.autoReconnect ?? 'inherit') ? undefined : { bigQueryTarget: bigQuerySelected }
-      const key = bigQueryKey(bigQuery)
-      if (!loaded || !key || !bigQueryReady(bigQuery) || bigQueryLibrary.profiles.some(profile => connectionKey(profile.options) === key)) return undefined
+      if (!bigQueryAdvancedError && baseline && form === bigQueryShape(baseline.options, baseline.autoReconnect, baseline.options.costPrompt ?? savedCostPrompt(bigQueryLibrary.profiles, baseline.options))) return undefined
+      if (bigQuerySelected) return !bigQueryAdvancedError && form === bigQueryShape(bigQuerySelected.options, bigQuerySelected.autoReconnect ?? 'inherit') ? undefined : { bigQueryTarget: bigQuerySelected }
+      const key = bigQueryKey(effective)
+      if (!loaded || !key || !bigQueryReady(effective) || bigQueryLibrary.profiles.some(profile => connectionKey(profile.options) === key)) return undefined
       return {}
     }
     // An alias found by its labels is no longer found once they change: the entry the edits began on still owns them.
@@ -622,13 +834,13 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     if (target) {
       if (!edited.current || !baseline.current) return undefined
       // Only what the user changed counts (a form that began unlike the entry is not an edit of it).
-      if (form === shape(baseline.current.options, baseline.current.autoReconnect)) return undefined
-      return form === shape(target.options, target.autoReconnect ?? 'inherit') ? undefined : { target }
+      if (!sqlAdvancedError && form === shape(baseline.current.options, baseline.current.autoReconnect)) return undefined
+      return !sqlAdvancedError && form === shape(target.options, target.autoReconnect ?? 'inherit') ? undefined : { target }
     }
     // Settings another saved entry already has are not new; Save must be available (library loaded, a server, authentication ready); a label Save then refuses keeps the prompt open with its error.
     // Aliases (several entries with these settings and none named by the labels) are saved too: Save would overwrite one.
     const key = settingsKey(options)
-    if (!touched.current || form === pristine.current || library.profiles.some(profile => entryKeys.get(profile.id) === key) || !loaded || !options.server.trim() || !authReady) return undefined
+    if (!touched.current || (!sqlAdvancedError && form === pristine.current) || library.profiles.some(profile => entryKeys.get(profile.id) === key) || !loaded || !options.server.trim() || !authReady) return undefined
     return {}
   }
   /** Whether an Object Explorer target keeps a remembered credential for these login settings. */
@@ -639,53 +851,66 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   /** Cancel, Escape and Close: unsaved edits to a saved entry are never dropped without asking. */
   function requestClose() {
     if (locked) return
-    closeAfter(serverType.type, serverType.type === 'bigquery' ? 'sqlserver' : 'bigquery')
+    proceedAfter('close', serverType.type, serverType.type === 'bigquery' ? 'sqlserver' : 'bigquery')
   }
-  /** Asks about the first type in `order` whose form has unsaved edits, showing that type's fields; closes when none has.
-   *  Edits to the type not shown are never dropped without asking either. */
-  function closeAfter(...order: ProviderId[]) {
+  /** Asks about the first type in `order` whose form has unsaved edits, showing that type's fields; runs `next` (closing
+   *  or loading an incoming Reconnect target) once none has. Edits to the type not shown are never dropped without asking either. */
+  function proceedAfter(next: 'close' | ConnectIncomingRequest, ...order: ProviderId[]) {
     for (const type of order) {
       const pending = unsaved(type)
       if (!pending) continue
       if (type !== serverType.type) setServerType(current => switchServerType(current, type))
-      setConfirmClose({ ...pending, type })
+      setConfirmClose({ ...pending, type, next })
       return
     }
-    onClose()
+    if (next === 'close') onClose()
+    else applyIncomingRequest(next)
   }
-  /** After the prompt for one type is answered: the other type's form, if it has unsaved edits, then close. */
-  function closeRest(answered: ProviderId) { closeAfter(answered === 'bigquery' ? 'sqlserver' : 'bigquery') }
+  /** After the prompt for one type is answered: closing still checks the other type's form; an incoming request only overwrites the answered type. */
+  function finishAfter(next: 'close' | ConnectIncomingRequest, answered: ProviderId) {
+    if (next === 'close') proceedAfter('close', answered === 'bigquery' ? 'sqlserver' : 'bigquery')
+    else applyIncomingRequest(next)
+  }
   /** Server type: the other type's fields stay as they were, and Undo goes back. */
   function changeServerType(next: ProviderId) {
+    if (next === serverType.type) return
     touched.current = true
     setServerType(current => switchServerType(current, next))
     if (next === 'bigquery' && properties === 'string') setProperties('properties')
-    setError(''); setFailure(undefined); setTested(undefined); setNotice(current => current === cancelledNotice || current === testCancelledNotice ? '' : current)
+    setError(''); setFailure(undefined); setTested(undefined); setBusyNotice(''); setNotice(current => current === cancelledNotice || current === testCancelledNotice ? '' : current)
   }
   function undoServerTypeChange() {
-    setServerType(current => undoServerType(current))
-    setError(''); setFailure(undefined); setTested(undefined)
-    setTimeout(() => dialog.current?.querySelector<HTMLSelectElement>('#connect-server-type')?.focus(), 0)
+    const back = undoServerType(serverType)
+    setServerType(back)
+    setError(''); setFailure(undefined); setTested(undefined); setBusyNotice('')
+    setTimeout(() => dialog.current?.querySelector<HTMLButtonElement>(`[data-server-type="${back.type}"]`)?.focus(), 0)
+  }
+  function markBigQueryEdited() {
+    touched.current = true
+    if (!bigQueryEdited.current) bigQueryBaseline.current = { options: currentBigQuery.current, autoReconnect: bigQueryReconnect }
+    bigQueryEdited.current = true
   }
   function bigQueryUpdate(patch: Partial<BigQueryConnectionOptions>) {
-    touched.current = true
-    if (!bigQueryEdited.current) bigQueryBaseline.current = { options: currentBigQuery.current, autoReconnect: bigQueryReconnect }
-    bigQueryEdited.current = true
-    setBigQuery(current => ({ ...current, ...patch })); setError(''); setNotice(''); setTested(undefined)
+    markBigQueryEdited()
+    setBigQuery(current => ({ ...current, ...patch })); setError(''); setNotice(''); setBusyNotice(''); setLastRemoved(undefined); setTested(undefined)
+  }
+  function bigQueryDraftChange(next: BigQueryAdvancedDraft) {
+    markBigQueryEdited()
+    setBigQueryAdvancedDraft(next); setError(''); setNotice(''); setBusyNotice(''); setLastRemoved(undefined); setTested(undefined)
   }
   function bigQueryAuthentication(mode: BigQueryAuthenticationMode) {
-    touched.current = true
-    if (!bigQueryEdited.current) bigQueryBaseline.current = { options: currentBigQuery.current, autoReconnect: bigQueryReconnect }
-    bigQueryEdited.current = true
-    setBigQuery(current => withAuthentication(current, mode)); setError(''); setNotice(''); setTested(undefined)
+    markBigQueryEdited()
+    setBigQuery(current => withAuthentication(current, mode)); setError(''); setNotice(''); setBusyNotice(''); setLastRemoved(undefined); setTested(undefined)
   }
   function bigQuerySettled() { bigQueryEdited.current = false; bigQueryBaseline.current = undefined }
   function chooseBigQuery(profile: BigQueryConnectionProfile) {
     setServerType(current => switchServerType(current, 'bigquery'))
     if (properties === 'string') setProperties('properties')
-    setBigQuery(withoutCostPrompt(profile.options)); setBigQuerySelectedId(profile.id); setSelectedId(undefined)
+    const chosen = withoutCostPrompt(profile.options)
+    setBigQuery(chosen); setBigQuerySelectedId(profile.id); setSelectedId(undefined)
+    setBigQueryAdvancedDraft(bigQueryAdvancedDraftFrom(chosen))
     setBigQueryReconnect(profile.autoReconnect ?? 'inherit'); bigQuerySettled()
-    setError(''); setNotice(''); setTested(undefined); setFailure(undefined)
+    setError(''); setNotice(''); setBusyNotice(''); setLastRemoved(undefined); setTested(undefined); setFailure(undefined)
   }
   /** Browse…: main's open dialog. A federation configuration that reads a token file not confirmed yet asks first (decision 49). */
   async function pickKeyFile() {
@@ -706,21 +931,40 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
       setPickedKeyName({ keyFile: picked.keyFile, name: picked.name }); bigQueryUpdate({ keyFile: picked.keyFile })
     } catch (reason) { if (alive.current) setError(message(reason)) }
   }
-  /** BigQuery's form as main takes it, with the environment as stored, or undefined after saying why it cannot be. */
+  /** BigQuery's form as main takes it, with the environment as stored and any pending Extra projects included, or undefined after saying why it cannot be. */
   function bigQueryLabelled(from: BigQueryConnectionOptions = bigQuery): BigQueryConnectionOptions | undefined {
-    const environment = parseEnvironment(from.environment)
+    if (bigQueryAdvancedError) {
+      setError(bigQueryAdvancedError); setProperties('advanced')
+      return undefined
+    }
+    let next = from
+    if (from === bigQuery && bigQueryAdvancedDraft.adding.trim()) {
+      const parsed = parseExtraProjects([...(from.extraProjects ?? []), bigQueryAdvancedDraft.adding].join(' '), from.project)
+      if (!parsed.ok) {
+        setBigQueryAdvancedDraft(current => ({ ...current, extraError: parsed.error }))
+        setProperties('advanced')
+        setTimeout(() => dialog.current?.querySelector<HTMLInputElement>('#bq-extra-project')?.focus(), 0)
+        return undefined
+      }
+      const extraProjects = parsed.projects.length ? parsed.projects : undefined
+      next = { ...from, extraProjects }
+      setBigQuery(current => ({ ...current, extraProjects }))
+      setBigQueryAdvancedDraft(current => ({ ...current, adding: '', extraError: '' }))
+    }
+    const environment = parseEnvironment(next.environment)
     if (!environment.ok) {
-      setError(environment.error); setCustomOpen(true)
+      setError(environment.error); setProperties('properties')
       setTimeout(() => dialog.current?.querySelector<HTMLInputElement>('#connect-environment-custom')?.focus(), 0)
       return undefined
     }
-    try { return bigQueryFormOptions({ ...from, environment: environment.environment }) } catch (reason) { setError(message(reason)); return undefined }
+    try { return bigQueryFormOptions({ ...next, environment: environment.environment }) } catch (reason) { setError(message(reason)); return undefined }
   }
   /** Saves BigQuery's form (or a History row's star) to History; with `how`, it stays there though it never connected. */
   async function saveBigQuery(favorite?: boolean, profile?: BigQueryConnectionProfile, how?: 'save'): Promise<'saved' | false> {
+    if (!profile && bigQueryAdvancedError) return false
     const labelled = profile ? profile.options : bigQueryLabelled()
     if (!labelled) return false
-    setSaving(true); setError(''); setNotice(''); setTested(undefined)
+    setSaving(true); setError(''); setNotice(''); setBusyNotice(''); setLastRemoved(undefined); setTested(undefined)
     try {
       const previous = profile ?? bigQuerySelected
       const value = unwrap(await window.varia.saveConnectionProfile({ ...previous ? { id: previous.id } : {}, options: labelled, ...favorite !== undefined ? { favorite } : {}, autoReconnect: profile ? profile.autoReconnect ?? 'inherit' : bigQueryReconnect, ...how ? { saved: true } : {} }))
@@ -742,17 +986,19 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
       if (!alive.current) return
       showLibrary(value)
       if (bigQuerySelectedId === profile.id) { setBigQuerySelectedId(undefined); bigQuerySettled() }
+      setLastRemoved({ kind: 'bigquery', profile })
+      setNotice(`Removed ${profile.options.displayName || profile.options.project}.`)
     } catch (reason) { if (alive.current) setError(message(reason)) }
     finally { if (alive.current) setSaving(false) }
   }
   /** Test Connection for BigQuery: signs in and lists the project's datasets, opening no session. */
   async function testBigQuery() {
-    if (locked || !loaded || !bigQueryReady(bigQuery)) return
+    if (locked || !loaded || !bigQueryReady(bigQuery) || bigQueryAdvancedError) return
     const labelled = bigQueryLabelled()
     if (!labelled) return
     const requestId = crypto.randomUUID()
     testRequest.current = requestId
-    setTesting({ kind: 'test', server: labelled.project }); setError(''); setFailure(undefined); setTested(undefined)
+    setTesting({ kind: 'test', server: labelled.project }); setError(''); setFailure(undefined); setTested(undefined); setBusyNotice(''); setLastRemoved(undefined)
     setNotice(current => current === cancelledNotice || current === testCancelledNotice ? '' : current)
     try {
       const result = await window.varia.discoverDatabases(labelled, { requestId })
@@ -773,10 +1019,10 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   }
   /** Connect for BigQuery: through main's connection owner as SQL Server's is, with no password to remember. */
   async function connectBigQuery() {
-    if (connectRequest.current || saving || !loaded || !bigQueryReady(bigQuery)) return
+    if (connectRequest.current || saving || !loaded || !bigQueryReady(bigQuery) || bigQueryAdvancedError) return
     const labelled = bigQueryLabelled()
     if (!labelled) return
-    setPendingConnectLabel(connectLabel); setError(''); setTested(undefined); setNotice(current => current === cancelledNotice ? '' : current)
+    setPendingConnectLabel(connectLabel); setError(''); setTested(undefined); setBusyNotice(''); setLastRemoved(undefined); setNotice(current => current === cancelledNotice ? '' : current)
     const requestId = crypto.randomUUID()
     const controller = new AbortController(), foreground = startupReconnect.beginManual()
     connectAbort.current = controller
@@ -823,8 +1069,56 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     setSaving(true); setError('')
     // Removing the entry the form edits is a choice about it: closing then does not offer to save it back.
     const editing = selectedId === profile.id || editedEntry()?.id === profile.id
-    try { const value = unwrap(await window.varia.removeConnectionProfile(profile.id)); if (alive.current) { showLibrary(value); if (selectedId === profile.id) setSelectedId(undefined); if (editing) { startAfresh(); settle(currentOptions.current, autoReconnect) } } }
-    catch (reason) { if (alive.current) setError(message(reason)) }
+    const hadPassword = savedIds.has(profile.id)
+    try {
+      const value = unwrap(await window.varia.removeConnectionProfile(profile.id))
+      if (alive.current) {
+        showLibrary(value)
+        if (selectedId === profile.id) setSelectedId(undefined)
+        if (editing) { startAfresh(); settle(currentOptions.current, autoReconnect) }
+        setLastRemoved({ kind: 'sql', profile, hadPassword })
+        setNotice(`Removed ${profile.options.displayName || profile.options.server}.`)
+      }
+    } catch (reason) { if (alive.current) setError(message(reason)) }
+    finally { if (alive.current) setSaving(false) }
+  }
+  async function undoRemove() {
+    if (!lastRemoved || locked) return
+    setSaving(true); setError('')
+    try {
+      if (lastRemoved.kind === 'sql') {
+        const removed = lastRemoved.profile
+        const needsSaved = removed.saved || (!removed.favorite && !removed.registered && !removed.lastConnected)
+        const value = unwrap(await window.varia.saveConnectionProfile({
+          options: removed.options, favorite: removed.favorite, registered: removed.registered,
+          ...needsSaved ? { saved: true } : {}, ...removed.lastConnected ? { lastConnected: removed.lastConnected } : {},
+          autoReconnect: removed.autoReconnect ?? 'inherit'
+        }))
+        if (!alive.current) return
+        showLibrary(value)
+        const restored = savedEntry(value.library.profiles, new Map(value.library.profiles.map(p => [p.id, entryKey(p.options)])), removed.options)
+        if (restored) choose(restored)
+        const stillRemembered = !!rememberedProfile(value.library.profiles, new Set(value.savedPasswords), removed.options, restored?.id)
+        const name = removed.options.displayName || removed.options.server
+        setNotice(`Restored ${name}.${lastRemoved.hadPassword && !stillRemembered ? ' The saved password was removed; enter it again to remember it.' : ''}`)
+      } else {
+        const removed = lastRemoved.profile
+        const needsSaved = removed.saved || (!removed.favorite && !removed.lastConnected)
+        const value = unwrap(await window.varia.saveConnectionProfile({
+          options: removed.options, favorite: removed.favorite,
+          ...needsSaved ? { saved: true } : {}, ...removed.lastConnected ? { lastConnected: removed.lastConnected } : {},
+          autoReconnect: removed.autoReconnect ?? 'inherit'
+        }))
+        if (!alive.current) return
+        showLibrary(value)
+        const list = value.bigQuery?.profiles ?? []
+        const key = connectionKey(removed.options)
+        const restored = list.find(p => connectionKey(p.options) === key)
+        if (restored) chooseBigQuery(restored)
+        setNotice(`Restored ${removed.options.displayName || removed.options.project}.`)
+      }
+      setLastRemoved(undefined)
+    } catch (reason) { if (alive.current) setError(message(reason)) }
     finally { if (alive.current) setSaving(false) }
   }
   /** Connects with the form's options, or with `chosen` when a fix changed them in the same click. */
@@ -833,7 +1127,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     const labelled = labelledOptions(chosen)
     if (!labelled) return
     // Only Stop's notice is about the last attempt; the library's warnings and a forgotten password's notice stay.
-    setPendingConnectLabel(connectLabel); setError(''); setTested(undefined); setNotice(current => current === cancelledNotice ? '' : current)
+    setPendingConnectLabel(connectLabel); setError(''); setTested(undefined); setBusyNotice(''); setLastRemoved(undefined); setNotice(current => current === cancelledNotice ? '' : current)
     const requestId = crypto.randomUUID()
     const controller = new AbortController(), foreground = startupReconnect.beginManual()
     connectAbort.current = controller
@@ -876,9 +1170,13 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
       const recordReconnect = owner && changedDetails.length && !changedDetails.includes('autoReconnect') ? owner.autoReconnect ?? 'inherit' : autoReconnect
       const recorded = !result.ok || !record || controller.signal.aborted || await recordDetails(record, recordReconnect, owner?.id)
       // The dialog closes once connected, so a failed History save is reported where Connect reports history warnings.
-      if (result.ok) { const { environment: kept, ...connected } = result.value, info = recorded ? connected : { ...connected, historyWarning: connected.historyWarning ?? historyNotSaved }; await onConnected(info, record ? { ...record, password: '' } : { ...labelled, password: '', environment: labelled.environment ?? kept }, record ? recordReconnect : autoReconnect, attempt, requestId, controller.signal, changedDetails); targetAttempt.current = undefined }
+      if (result.ok) {
+        setShowPassword(false)
+        const { environment: kept, ...connected } = result.value, info = recorded ? connected : { ...connected, historyWarning: connected.historyWarning ?? historyNotSaved }
+        await onConnected(info, record ? { ...record, password: '' } : { ...labelled, password: '', environment: labelled.environment ?? kept }, record ? recordReconnect : autoReconnect, attempt, requestId, controller.signal, changedDetails)
+        targetAttempt.current = undefined
       // Stop: the form is the user's again, with nothing to report.
-      else if (result.code === 'CANCELLED') setNotice(cancelledNotice)
+      } else if (result.code === 'CANCELLED') setNotice(cancelledNotice)
       else {
         connections.failAttempt(attempt, result.connectionFailure ?? 'unknown')
         setError(result.error); setFailure({ error: result.error, code: result.code, details: result.details, server: chosen.server, options: chosen })
@@ -941,24 +1239,76 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   // Both engines' entries, each list by recency where it has one.
   const rows: HistoryRow[] = [...filtered.map(sql => ({ sql })), ...bigQueryLibrary.profiles.filter(profile => matches(bigQueryRowText(profile))).map(profile => ({ bigQuery: profile }))]
   const entryOf = (row: HistoryRow) => 'sql' in row ? row.sql : row.bigQuery
-  const recent = rows.filter(row => entryOf(row).lastConnected).sort((a, b) => rowTime(b).localeCompare(rowTime(a)))
+  // Deduplicate Favorites out of Recent Connections so each server appears in one list and highlights once.
   const favorite = rows.filter(row => entryOf(row).favorite)
+  const recent = rows.filter(row => entryOf(row).lastConnected && !entryOf(row).favorite).sort((a, b) => rowTime(b).localeCompare(rowTime(a)))
   // Saved with Save and not yet connected (a favorite is listed under Favorites); connecting moves it to Recent.
   const savedOnly = rows.filter(row => entryOf(row).saved && !entryOf(row).lastConnected && !entryOf(row).favorite)
-  // Custom Properties belong to the type shown.
+  // Labels & Custom Properties belong to the type shown.
   const labelled = isBigQuery ? bigQuery : options
-  const custom = customSummary(labelled)
-  const advancedNote = advancedSummary(options.advanced)
+  const sqlAdvCount = advancedCount(options.advanced)
+  const bqAdvCount = bigQueryAdvancedCount({ ...bigQuery, costPrompt: bigQuery.costPrompt ?? bigQuerySavedCostPrompt })
+  const advBadgeCount = isBigQuery ? bqAdvCount : sqlAdvCount
+  const advSummaryText = isBigQuery ? bigQueryAdvancedSummary({ ...bigQuery, costPrompt: bigQuery.costPrompt ?? bigQuerySavedCostPrompt }) : advancedSummary(options.advanced)
   const passwordShown = usesPassword(options.authentication)
-  const bigQueryReadyCredential = bigQueryCredentialReady(bigQuery)
+  const hasSavedPassword = !options.password && !!match
+  const activeAdvancedError = isBigQuery ? bigQueryAdvancedError : sqlAdvancedError
   /** Name, Color and Environment edit the type shown. */
   const labelEdit = (patch: Partial<Pick<ConnectionOptions, 'displayName' | 'color' | 'environment'>>) => { if (isBigQuery) bigQueryUpdate(patch); else editDetails(patch) }
+
   /** Reset: the type shown goes back to a new connection's fields; the other type's stay. */
   function reset() {
-    setError(''); setTested(undefined); setFailure(undefined)
+    setError(''); setTested(undefined); setFailure(undefined); setBusyNotice(''); setLastRemoved(undefined)
     // Reset clears the shown type's form only, its Reconnect on startup included.
-    if (isBigQuery) { setBigQuerySelectedId(undefined); setBigQuery(bigQueryDefaults()); setBigQueryReconnect('inherit'); bigQuerySettled(); return }
-    reconnectOwned.current = true; setAutoReconnect('inherit'); setSelectedId(undefined); rememberEdited.current = false; startAfresh(); settle(connectionDefaults(platform), 'inherit'); labelServer.current = null; environmentOwner.current = null; setOptions(connectionDefaults(platform))
+    if (isBigQuery) {
+      const defaults = bigQueryDefaults()
+      setBigQuerySelectedId(undefined); setBigQuery(defaults); setBigQueryAdvancedDraft(bigQueryAdvancedDraftFrom(defaults)); setBigQueryReconnect('inherit'); bigQuerySettled()
+      return
+    }
+    reconnectOwned.current = true; setAutoReconnect('inherit'); setSelectedId(undefined); rememberEdited.current = false; setShowPassword(false)
+    setSqlAdvancedDraft({}); sqlAdvancedEdited.current.clear()
+    startAfresh(); settle(connectionDefaults(platform), 'inherit'); labelServer.current = null; environmentOwner.current = null; setOptions(connectionDefaults(platform))
+  }
+  const maxRailWidth = Math.max(connectRailLimits.minWidth, Math.min(connectRailLimits.maxWidth, Math.round(dialogWidth) - connectRailLimits.minFormWidth))
+  function startSplitterDrag(event: React.MouseEvent<HTMLDivElement>) {
+    if (locked) return
+    event.preventDefault()
+    splitterCleanup.current?.()
+    const doc = dialog.current?.ownerDocument ?? document, win = doc.defaultView
+    const startX = event.clientX, startWidth = effectiveRailWidth
+    let current = startWidth
+    setDraggingSplit(true)
+    const onMove = (ev: MouseEvent) => {
+      current = Math.max(connectRailLimits.minWidth, Math.min(maxRailWidth, Math.round(startWidth + (ev.clientX - startX))))
+      setRailWidth(current)
+    }
+    const teardown = () => {
+      doc.removeEventListener('mousemove', onMove)
+      doc.removeEventListener('mouseup', onUp)
+      win?.removeEventListener('blur', onUp)
+      if (splitterCleanup.current === teardown) splitterCleanup.current = undefined
+    }
+    const onUp = () => {
+      teardown()
+      if (alive.current) { setDraggingSplit(false); saveRailWidth(current) }
+    }
+    splitterCleanup.current = teardown
+    doc.addEventListener('mousemove', onMove)
+    doc.addEventListener('mouseup', onUp)
+    win?.addEventListener('blur', onUp)
+  }
+  function splitterKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (locked || event.ctrlKey || event.altKey || event.metaKey) return
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      event.preventDefault()
+      const delta = event.key === 'ArrowLeft' ? -16 : 16
+      const next = clampConnectRailWidth(effectiveRailWidth + delta, dialogWidth)
+      setRailWidth(next); saveRailWidth(next)
+    } else if (event.key === 'Home') {
+      event.preventDefault()
+      const next = clampConnectRailWidth(connectRailLimits.defaultWidth, dialogWidth)
+      setRailWidth(next); saveRailWidth(next)
+    }
   }
   function profileRows(entries: readonly HistoryRow[], empty: string) {
     const keyDown = (event: KeyboardEvent<HTMLButtonElement>, row: HistoryRow) => {
@@ -973,17 +1323,40 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   }
   function bigQueryRow(profile: BigQueryConnectionProfile, keyDown: (event: KeyboardEvent<HTMLButtonElement>, row: HistoryRow) => void) {
     const name = profile.options.displayName || profile.options.project
+    const connectedLive = liveTargets.profileIds.has(profile.id) || (() => { try { return liveTargets.bqKeys.has(connectionKey(profile.options)) } catch { return false } })()
     return <div key={profile.id} className={'connection-list-row' + (bigQuerySelectedId === profile.id && isBigQuery ? ' selected' : '')}>
-      <button type="button" className="connection-choice" disabled={locked} onClick={() => chooseBigQuery(profile)} onKeyDown={event => keyDown(event, { bigQuery: profile })} onDoubleClick={event => { if (gestures.matches('connections.connect', event)) connectButton.current?.click() }} title={[profile.options.displayName, `${profile.options.project} · ${profile.options.dataset || '<no default dataset>'}`].filter(Boolean).join('\n')}><span className="connection-swatch" style={{ backgroundColor: theme.accent(profile.options.color) ?? 'var(--varia-connection-default)' }} /><Icon name="bigquery" /><span><span className="connection-choice-title"><strong>{name}</strong><EnvironmentTag environment={profile.options.environment} place="list" /></span><small>{profile.options.displayName ? profile.options.project + ' · ' : ''}{bigQueryRowDetail(profile)}</small></span></button>
-      <button type="button" className="ui-button icon-button favorite-button" aria-label={`${profile.favorite ? 'Unfavorite' : 'Favorite'} ${name}`} title={profile.favorite ? 'Remove from favorites' : 'Add to favorites'} disabled={locked} onClick={() => void saveBigQuery(!profile.favorite, profile)}><Icon name={profile.favorite ? 'star-full' : 'star-empty'} /></button>
-      <button type="button" className="ui-button icon-button" aria-label={`Remove saved ${name}`} title="Remove saved connection" disabled={locked} onClick={() => void removeBigQuery(profile)}><Icon name="close" /></button>
+      <button type="button" className="connection-choice" disabled={locked} onClick={() => chooseBigQuery(profile)} onKeyDown={event => keyDown(event, { bigQuery: profile })} onDoubleClick={event => { if (gestures.matches('connections.connect', event)) connectButton.current?.click() }} title={[profile.options.displayName, `${profile.options.project} · ${profile.options.dataset || '<no default dataset>'}`].filter(Boolean).join('\n')}>
+        <span className="connection-swatch" style={{ backgroundColor: theme.accent(profile.options.color) ?? 'var(--varia-connection-default)' }} />
+        <Icon name="bigquery" />
+        <span>
+          <span className="connection-choice-title">{connectedLive && <span className="connect-live-dot" title="Connected in Object Explorer" aria-hidden="true" />}<strong>{name}</strong><EnvironmentTag environment={profile.options.environment} place="list" /></span>
+          <small>{profile.options.displayName ? profile.options.project + ' · ' : ''}{bigQueryRowDetail(profile)}</small>
+        </span>
+      </button>
+      <span className="connection-row-actions">
+        <button type="button" className="ui-button icon-button favorite-button" data-profile-id={profile.id} aria-label={`${profile.favorite ? 'Unfavorite' : 'Favorite'} ${name}`} title={profile.favorite ? 'Remove from favorites' : 'Add to favorites'} disabled={locked} onClick={() => { pendingFavoriteFocus.current = profile.id; void saveBigQuery(!profile.favorite, profile) }}><Icon name={profile.favorite ? 'star-full' : 'star-empty'} /></button>
+        <button type="button" className="ui-button icon-button" aria-label={`Remove saved ${name}`} title="Remove saved connection" disabled={locked} onClick={() => void removeBigQuery(profile)}><Icon name="close" /></button>
+      </span>
     </div>
   }
   function sqlRow(profile: ConnectionProfile, keyDown: (event: KeyboardEvent<HTMLButtonElement>, row: HistoryRow) => void) {
+    const k = entryKeys.get(profile.id)
+    const connectedLive = liveTargets.profileIds.has(profile.id) || (!!k && liveTargets.sqlKeys.has(k))
+    const name = profile.options.displayName || profile.options.server
+    const detail = [profile.options.displayName ? profile.options.server : '', profile.options.database || '', showsIdentity(profile.options.authentication) ? identityOf(profile.options.authentication) : profile.options.username ?? ''].filter(Boolean).join(' · ')
     return <div key={profile.id} className={'connection-list-row' + (selectedId === profile.id && !isBigQuery ? ' selected' : '')}>
-      <button type="button" className="connection-choice" disabled={locked} onClick={() => choose(profile)} onKeyDown={event => keyDown(event, { sql: profile })} onDoubleClick={event => { if (gestures.matches('connections.connect', event)) connectButton.current?.click() }} title={rowTitle(profile.options)}><span className="connection-swatch" style={{ backgroundColor: theme.accent(profile.options.color) ?? 'var(--varia-connection-default)' }} /><Icon name="server" /><span><span className="connection-choice-title"><strong>{profile.options.displayName || profile.options.server}</strong><EnvironmentTag environment={profile.options.environment} place="list" /></span><small>{profile.options.displayName ? profile.options.server + ' · ' : ''}{profile.options.database || '<default>'} · {showsIdentity(profile.options.authentication) ? identityOf(profile.options.authentication) : profile.options.username ?? ''}</small></span></button>
-      <button type="button" className="ui-button icon-button favorite-button" aria-label={`${profile.favorite ? 'Unfavorite' : 'Favorite'} ${profile.options.displayName || profile.options.server}`} title={profile.favorite ? 'Remove from favorites' : 'Add to favorites'} disabled={locked} onClick={() => void saveProfile(!profile.favorite, undefined, profile)}><Icon name={profile.favorite ? 'star-full' : 'star-empty'} /></button>
-      <button type="button" className="ui-button icon-button" aria-label={`Remove saved ${profile.options.displayName || profile.options.server}`} title="Remove saved connection" disabled={locked} onClick={() => void remove(profile)}><Icon name="close" /></button>
+      <button type="button" className="connection-choice" disabled={locked} onClick={() => choose(profile)} onKeyDown={event => keyDown(event, { sql: profile })} onDoubleClick={event => { if (gestures.matches('connections.connect', event)) connectButton.current?.click() }} title={rowTitle(profile.options)}>
+        <span className="connection-swatch" style={{ backgroundColor: theme.accent(profile.options.color) ?? 'var(--varia-connection-default)' }} />
+        <Icon name="server" />
+        <span>
+          <span className="connection-choice-title">{connectedLive && <span className="connect-live-dot" title="Connected in Object Explorer" aria-hidden="true" />}<strong>{name}</strong><EnvironmentTag environment={profile.options.environment} place="list" /></span>
+          <small>{detail}</small>
+        </span>
+      </button>
+      <span className="connection-row-actions">
+        <button type="button" className="ui-button icon-button favorite-button" data-profile-id={profile.id} aria-label={`${profile.favorite ? 'Unfavorite' : 'Favorite'} ${name}`} title={profile.favorite ? 'Remove from favorites' : 'Add to favorites'} disabled={locked} onClick={() => { pendingFavoriteFocus.current = profile.id; void saveProfile(!profile.favorite, undefined, profile) }}><Icon name={profile.favorite ? 'star-full' : 'star-empty'} /></button>
+        <button type="button" className="ui-button icon-button" aria-label={`Remove saved ${name}`} title="Remove saved connection" disabled={locked} onClick={() => void remove(profile)}><Icon name="close" /></button>
+      </span>
     </div>
   }
   /** Up and Down move through the shown rows of the list, from the filter box too; Tab still reaches each row's buttons. */
@@ -999,30 +1372,86 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     else rows[next].focus()
   }
   function trap(event: KeyboardEvent<HTMLFormElement>) {
-    if (advanced || bigQueryAdvanced || sourcePrompt) return
+    if (sourcePrompt || confirmClose || reviewOpen) return
     // Connect moves focus to Stop. A held Enter must not turn its next repeat into a cancellation there.
     if (event.key === 'Enter' && event.repeat) { event.preventDefault(); return }
+    if (closesDialogWindow(event, platform)) {
+      event.preventDefault(); event.stopPropagation()
+      if (testing) stopTest()
+      else if (busy) { if (!saving) stop() }
+      else requestClose()
+      return
+    }
     // While testing, Escape stops the test, and while connecting, Escape is Stop, as the footer's buttons are.
     if (event.key === 'Escape' && testing) { event.preventDefault(); event.stopPropagation(); stopTest() }
     else if (event.key === 'Escape' && busy) { event.preventDefault(); event.stopPropagation(); if (!saving) stop() }
     else if (event.key === 'Escape' && !locked) { event.preventDefault(); event.stopPropagation(); requestClose() }
     trapFocus(event)
   }
+  function applyParsedString() {
+    const parsed = parseConnectionString(pasteInput)
+    if (parsed.matchedCount === 0) {
+      setError('')
+      setNotice('No recognized connection string settings were found.')
+      return
+    }
+    const { server, ...rest } = parsed.patch
+    const mergedAdvanced = Object.keys(parsed.advancedPatch).length ? { ...options.advanced, ...parsed.advancedPatch } : undefined
+    const patch: Partial<ConnectionOptions> = { ...rest, password: '', ...(mergedAdvanced ? { advanced: mergedAdvanced } : {}) }
+    if (server !== undefined && server !== options.server || rest.authentication !== undefined && rest.authentication !== options.authentication) {
+      rememberEdited.current = false
+    }
+    setShowPassword(false)
+    if (Object.keys(parsed.advancedPatch).length) {
+      setSqlAdvancedDraft(current => {
+        const next = { ...current }
+        for (const key of Object.keys(parsed.advancedPatch) as (keyof AdvancedConnectionOptions)[]) delete next[key]
+        return next
+      })
+    }
+    if (server !== undefined && server !== options.server) changeServer(server, patch)
+    else update(patch)
+    setNotice(`Applied ${parsed.matchedCount} setting${parsed.matchedCount === 1 ? '' : 's'} from connection string.${parsed.passwordOmitted ? ' Password was omitted for security.' : ''}`)
+  }
+  const copyPreview = () => {
+    if (!preview || sqlAdvancedError) return
+    clearTimeout(copyTimer.current)
+    void window.varia.writeClipboardText(preview).then(result => {
+      if (!alive.current) return
+      if (result.ok) {
+        setCopiedString(true)
+        copyTimer.current = setTimeout(() => { if (alive.current) setCopiedString(false) }, 2000)
+      } else {
+        setNotice('Could not copy connection string.')
+      }
+    }, () => { if (alive.current) setNotice('Could not copy connection string.') })
+  }
+
+  const effectiveRailWidth = clampConnectRailWidth(railWidth, dialogWidth)
   const connectLabel = !isBigQuery && matchingTarget(options) && (options.password || rememberEdited.current) ? 'Update Credentials and Reconnect' : 'Connect'
-  return <>
-    <div className="modal-backdrop"><form ref={dialog} className="connection-modal connect-dialog" role="dialog" aria-labelledby="connect-title" aria-modal={reviewOpen ? undefined : 'true'} aria-hidden={reviewOpen || undefined} tabIndex={-1} inert={advanced || bigQueryAdvanced || !!sourcePrompt || reviewOpen || !!confirmClose} onSubmit={(event: FormEvent) => { event.preventDefault(); if (isBigQuery) void connectBigQuery(); else void connect() }} onKeyDown={trap}>
-      <div className="connection-heading"><h2 id="connect-title">Connect</h2><button type="button" className="ui-button icon-button" aria-label="Close connection dialog" disabled={locked} onClick={requestClose}><Icon name="close" /></button></div>
+  const formStyle = { '--connect-rail-width': `${effectiveRailWidth}px` } as React.CSSProperties
+
+  return <DialogWindow kind="connect" onClose={requestClose} raise={raise}>
+    <form ref={setDialogRef} data-connect-dialog style={formStyle} className={'connection-modal connect-dialog' + (dialogWidth <= connectRailLimits.stackBelow ? ' is-stacked' : '')} role="dialog" aria-labelledby="connect-title" aria-modal={reviewOpen ? undefined : 'true'} aria-hidden={reviewOpen || undefined} tabIndex={-1} inert={!!sourcePrompt || reviewOpen || !!confirmClose} onSubmit={(event: FormEvent) => { event.preventDefault(); if (isBigQuery) void connectBigQuery(); else void connect() }} onKeyDown={trap}>
+      <DialogHeading id="connect-title" title="Connect" closeLabel="Close connection dialog" disabled={locked} onClose={requestClose} />
       <div className="connect-panes">
         <div ref={sourcesPane} className="connect-sources-pane" onKeyDown={sourcesKey}>
-          <div className="connection-tabs" role="tablist" aria-label="Connection sources">{(['history', 'browse'] as const).map(value => <button type="button" className="ui-button" role="tab" key={value} aria-selected={tab === value} aria-controls="connection-sources" disabled={locked} onClick={() => setTab(value)}>{value === 'history' ? 'History' : 'Browse'}</button>)}</div>
-          <div className="connection-filter-box"><Icon name="search" className="connection-filter-icon" /><input className="ui-field connection-filter" ref={filterInput} aria-label="Filter connections" placeholder="Filter connections" maxLength={256} value={filter} onChange={event => setFilter(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') event.preventDefault() }} /></div>
+          <div className="connect-sources-top">
+            <div className="connection-tabs" role="tablist" aria-label="Connection sources">{(['history', 'browse'] as const).map(value => <button type="button" className="ui-button" role="tab" key={value} aria-selected={tab === value} aria-controls="connection-sources" disabled={locked} onClick={() => setTab(value)}>{value === 'history' ? 'History' : 'Browse'}</button>)}</div>
+            <button type="button" className="ui-button" data-control-variant="secondary" data-control-size="dense" disabled={locked} title="Clear form for a new connection" onClick={reset}>Reset</button>
+          </div>
+          <div className="connection-filter-box">
+            <Icon name="search" className="connection-filter-icon" />
+            <input className="ui-field connection-filter" ref={filterInput} aria-label="Filter connections" placeholder="Filter connections" maxLength={256} value={filter} onChange={event => setFilter(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') event.preventDefault() }} />
+            {filter && <button type="button" className="ui-button icon-button connection-filter-clear" aria-label="Clear filter" onClick={() => { setFilter(''); filterInput.current?.focus() }}><Icon name="close" /></button>}
+          </div>
           <div id="connection-sources" className="connection-sources" role="tabpanel" aria-label={tab === 'history' ? 'History' : 'Browse'}>
             {!loaded && <p className="connection-empty">Loading saved connections…</p>}
             {tab === 'browse' && isBigQuery ? <>
-              <div className="browse-toolbar"><span>Google Cloud projects</span><button className="ui-button" data-control-variant="secondary" type="button" disabled={bigQueryLists.projectsBusy || locked || !bigQueryReadyCredential} onClick={() => void bigQueryLists.loadProjects()}>Refresh</button></div>
+              <div className="browse-toolbar"><span>Google Cloud projects</span><button className="ui-button" data-control-variant="secondary" type="button" disabled={bigQueryLists.projectsBusy || locked || !bigQueryReady(bigQuery) && !bigQueryCredentialReady(bigQuery)} onClick={() => void bigQueryLists.loadProjects()}>Refresh</button></div>
               {bigQueryLists.projectsBusy && <p className="connection-empty">Loading projects…</p>}
               {bigQueryLists.projects.filter(project => matches(`${project.id} ${project.friendlyName ?? ''}`)).map(project => <button type="button" className="discovered-server" disabled={locked} key={project.id} onClick={() => { bigQueryUpdate({ project: project.id, ...project.id !== bigQuery.project ? { dataset: undefined } : {} }); setBigQuerySelectedId(undefined) }}><Icon name="project" /><span>{project.id}</span><small>{project.friendlyName}</small></button>)}
-              {!bigQueryLists.projectsBusy && !bigQueryLists.projects.length && <p className="connection-empty">{bigQueryReadyCredential ? 'No projects listed. You can type a project id.' : 'Choose the credential to list its projects.'}</p>}
+              {!bigQueryLists.projectsBusy && !bigQueryLists.projects.length && <p className="connection-empty">{bigQueryCredentialReady(bigQuery) ? 'No projects listed. You can type a project id.' : 'Choose the credential to list its projects.'}</p>}
               {bigQueryLists.projectsNote && <p className="field-note">{bigQueryLists.projectsNote}</p>}
               {bigQueryLists.account.state === 'ok' && bigQueryLists.projects.length > 0 && <p className="field-note">Projects visible to {bigQueryLists.account.account.account}.</p>}
             </> : tab === 'history' ? <><details open><summary>Favorites ({favorite.length})</summary>{profileRows(favorite, 'No favorite connections')}</details>{savedOnly.length > 0 && <details open><summary>Saved ({savedOnly.length})</summary>{profileRows(savedOnly, '')}</details>}<details open><summary>Recent Connections ({recent.length})</summary>{profileRows(recent, 'No recent connections')}</details></> : <>
@@ -1036,74 +1465,124 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
             </>}
           </div>
         </div>
+        <div className={'connect-splitter' + (draggingSplit ? ' is-dragging' : '')} role="separator" aria-orientation="vertical" aria-label="Resize saved connections list" aria-valuenow={effectiveRailWidth} aria-valuemin={connectRailLimits.minWidth} aria-valuemax={maxRailWidth} tabIndex={0} onMouseDown={startSplitterDrag} onKeyDown={splitterKeyDown} onDoubleClick={() => { setRailWidth(connectRailLimits.defaultWidth); saveRailWidth(connectRailLimits.defaultWidth) }} />
         <div className="connect-form-pane">
-          <div className="connection-tabs connection-property-tabs" role="tablist" aria-label="Connection details"><button type="button" className="ui-button" role="tab" aria-selected={properties === 'properties'} aria-controls="connection-properties" onClick={() => setProperties('properties')}>Connection Properties</button>{!isBigQuery && <button type="button" className="ui-button" role="tab" aria-selected={properties === 'string'} aria-controls="connection-properties" onClick={() => setProperties('string')}>Connection String</button>}</div>
-          <div className="connect-form-scroll">
-            <div id="connection-properties" role="tabpanel" aria-label={properties === 'properties' ? 'Connection Properties' : 'Connection String'}>
-              <div className="property-grid" hidden={properties !== 'properties'}>
-                <div className="property-row"><label htmlFor="connect-server-type">Server type</label><select className="ui-field" id="connect-server-type" value={serverType.type} disabled={locked} onChange={event => changeServerType(event.target.value as ProviderId)}>{(['sqlserver', 'bigquery'] as const).map(type => <option key={type} value={type}>{serverTypeLabels[type]}</option>)}</select></div>
-                {serverType.previous && <div className="property-row"><span /><p className="field-note" role="status">Server type changed to {serverTypeLabels[serverType.type]}; the {serverTypeLabels[serverType.previous]} fields are kept. <button type="button" className="ui-button connect-inline-action" data-control-size="dense" disabled={locked} onClick={undoServerTypeChange}>Undo</button></p></div>}
-                {isBigQuery ? <BigQueryConnectFields options={bigQuery} savedCostPrompt={bigQuerySavedCostPrompt} keyFileName={bigQueryKeyName} locked={locked} lists={bigQueryLists} onChange={bigQueryUpdate} onAuthentication={bigQueryAuthentication} onBrowseKeyFile={() => void pickKeyFile()} onAdvanced={() => setBigQueryAdvanced(true)} /> : <>
-                <div className="property-row"><label htmlFor="connect-server">Server Name</label><input className="ui-field" id="connect-server" list="known-servers" required maxLength={256} disabled={locked} value={options.server} placeholder="localhost,1433 or server\instance" onChange={event => changeServer(event.target.value)} /><datalist id="known-servers">{[...new Set(library.profiles.map(profile => profile.options.server))].map(server => <option key={server} value={server} />)}</datalist></div>
-                <div className="property-row"><label htmlFor="connect-auth">Authentication</label><select className="ui-field" id="connect-auth" value={options.authentication} disabled={locked} onChange={event => update({ authentication: event.target.value as AuthenticationMode, password: '' })}>{authenticationModes.map(mode => <option key={mode} value={mode}>{authenticationCatalog[mode].label}</option>)}</select></div>
-                <div className="property-row"><label htmlFor="connect-user">{auth.userLabel}</label><input className="ui-field" id="connect-user" required={requiresUser(options.authentication)} disabled={locked || showsIdentity(options.authentication)} autoComplete="off" maxLength={128} placeholder={userPlaceholders[options.authentication]} value={showsIdentity(options.authentication) ? identityOf(options.authentication) : options.username ?? ''} onChange={event => update({ username: event.target.value })} /></div>
-                {/* Only the types with a password show Password and Remember password; the others have nothing to type there. */}
-                {passwordShown && <>
-                  <div className="property-row"><label htmlFor="connect-password">Password</label><input className="ui-field" id="connect-password" type="password" autoComplete="off" disabled={locked} maxLength={1024} value={options.password ?? ''} {...match && !options.password ? { placeholder: '••••••••', 'aria-describedby': 'connect-password-saved' } : {}} onChange={event => update({ password: event.target.value })} />{match && !options.password && <span id="connect-password-saved" className="visually-hidden">A saved password will be used. Type to replace it.</span>}</div>
-                  {options.password && rememberable && <div className="property-row"><span /><p className="field-note" id="connect-password-save-note">{!remember ? match && rememberEdited.current ? forgetsTyped : dropsPassword : passwordInUse(options) ? inUseNote : keepsPassword}</p></div>}
-                  {!options.password && match && rememberable && !remember && rememberEdited.current && <div className="property-row"><span /><p className="field-note" id="connect-password-forget-note">Save or Connect forgets the saved password.</p></div>}
-                  <div className="property-row"><span /><label className="checkbox-label"><input type="checkbox" checked={remember && rememberable} disabled={locked || !rememberable} {...storageNote ? { 'aria-describedby': 'connect-remember-note' } : {}} onChange={event => { rememberEdited.current = true; setRemember(event.target.checked) }} />Remember password</label></div>
-                  {storageNote && <div className="property-row"><span /><p className="field-note" id="connect-remember-note">{storageNote}</p></div>}
-                </>}
-                {authNote && <div className="property-row"><span /><p className="field-note" id="connect-auth-note">{authNote}</p></div>}
-                <div className="property-row"><label htmlFor="connect-database">Database Name</label><div className="property-input-action"><input className="ui-field" id="connect-database" list="available-databases" maxLength={128} disabled={locked} placeholder="<default>" value={options.database} onFocus={() => { if (dbLoadedKey.current !== databasesKey(currentOptions.current)) void loadDatabases() }} onChange={event => update({ database: event.target.value })} /><button className="ui-button icon-button" data-control-variant="secondary" type="button" aria-label="Load databases" title="Load databases from this server" disabled={locked || dbBusy || !authReady} onClick={() => void loadDatabases()}><Icon name={dbBusy ? 'loading' : 'refresh'} spin={dbBusy} /></button></div><datalist id="available-databases"><option value="" label="<default>" />{databases.map(database => <option key={database.name} value={database.name} />)}</datalist></div>
-                {(dbBusy || dbNote) && <div className="property-row"><span /><div><p className="field-note" role="status">{dbBusy ? 'Loading databases…' : dbNote}</p>{!dbBusy && dbDetails && <FailureDetails details={dbDetails} />}</div></div>}
-                <div className="property-row"><label htmlFor="connect-encrypt">Encrypt</label><select className="ui-field" id="connect-encrypt" value={options.encrypt ?? 'mandatory'} disabled={locked} onChange={event => update({ encrypt: event.target.value as ConnectionOptions['encrypt'] })}><option value="optional">Optional</option><option value="mandatory">Mandatory</option><option value="strict">Strict</option></select></div>
-                <div className="property-row"><span /><label className="checkbox-label"><input type="checkbox" checked={options.encrypt !== 'strict' && options.trustServerCertificate} disabled={locked || options.encrypt === 'strict'} onChange={event => update({ trustServerCertificate: event.target.checked })} />Trust server certificate</label></div>
-                <div className="property-row"><label htmlFor="connect-hostname">Host Name in Certificate</label><input className="ui-field" id="connect-hostname" maxLength={256} disabled={locked} value={options.hostNameInCertificate ?? ''} onChange={event => update({ hostNameInCertificate: event.target.value })} /></div>
-                <div className="advanced-action">{advancedNote && <span className="advanced-summary" id="connect-advanced-summary">{advancedNote}</span>}<button className="ui-button" data-control-variant="secondary" type="button" disabled={locked} {...advancedNote ? { 'aria-describedby': 'connect-advanced-summary' } : {}} onClick={() => setAdvanced(true)}>Advanced…</button></div>
-                </>}
+          <div className="connect-form-header">
+            <div className="connect-engine-row">
+              <div className="connect-engine-switch" role="group" aria-label="Server type">
+                {(['sqlserver', 'bigquery'] as const).map(type => <button key={type} type="button" data-server-type={type} className="ui-button" data-control-size="dense" aria-pressed={serverType.type === type} disabled={locked} onClick={() => changeServerType(type)}>{serverTypeLabels[type]}</button>)}
               </div>
-              {properties === 'string' && !isBigQuery && <div className="connection-preview"><textarea className="ui-field" aria-label="Connection string preview" readOnly value={preview || 'Preparing connection string…'} /><p className="field-note">Preview generated by SqlClient. The password is omitted. Edit settings in Connection Properties.</p></div>}
+              <div className="connect-header-actions">
+                {isBigQuery
+                  ? <button className="ui-button" data-control-variant="secondary" data-control-size="dense" type="button" disabled={locked || !loaded || !ready} onClick={() => void saveBigQuery(!bigQuerySelected?.favorite)}><Icon name={bigQuerySelected?.favorite ? 'star-full' : 'star-empty'} />{bigQuerySelected?.favorite ? 'Remove favorite' : 'Add favorite'}</button>
+                  : <>
+                      <button className="ui-button" data-control-variant="secondary" data-control-size="dense" type="button" disabled={locked || !loaded || !authReady || !!sqlAdvancedError} onClick={() => void saveProfile(!selected?.favorite)}><Icon name={selected?.favorite ? 'star-full' : 'star-empty'} />{selected?.favorite ? 'Remove favorite' : 'Add favorite'}</button>
+                      <button className="ui-button" data-control-variant="secondary" data-control-size="dense" type="button" disabled={locked || !loaded || !authReady || !!sqlAdvancedError} onClick={() => void saveProfile(undefined, !selected?.registered)}>{selected?.registered ? 'Unregister server' : 'Register server'}</button>
+                    </>}
+              </div>
             </div>
-            <section className="property-section custom-properties" aria-labelledby="connect-custom-toggle">
-              <div className="custom-properties-header">
-                <button type="button" id="connect-custom-toggle" className="ui-button custom-properties-toggle" data-control-size="dense" aria-expanded={customOpen} aria-controls="connect-custom" {...customOpen ? {} : { 'aria-describedby': 'connect-custom-summary' }} onClick={() => setCustomOpen(!customOpen)}><Icon name={customOpen ? 'chevron-down' : 'chevron-right'} />Custom Properties</button>
-                {!customOpen && <span className="custom-properties-summary" id="connect-custom-summary">
-                  {custom.color && <span className="connection-swatch" aria-hidden="true" style={{ backgroundColor: theme.accent(labelled.color) ?? 'var(--varia-connection-default)' }} />}
-                  {custom.name && <span className="custom-properties-name" aria-hidden="true">{custom.name}</span>}
-                  {custom.environment && <span aria-hidden="true"><EnvironmentTag environment={custom.environment} place="list" /></span>}
-                  <span className="visually-hidden">{custom.text}</span>
-                </span>}
-              </div>
-              <div id="connect-custom" className="property-grid" role="group" aria-label="Custom Properties" hidden={!customOpen}>
-                <div className="property-row"><label htmlFor="connect-name">Name</label><input className="ui-field" id="connect-name" maxLength={128} disabled={locked} value={labelled.displayName ?? ''} placeholder="Optional connection name" onChange={event => labelEdit({ displayName: event.target.value })} /></div>
-                <div className="property-row"><label htmlFor="connect-color">Color</label><div className="property-input-action"><select className="ui-field" id="connect-color" value={palette.some(([, color]) => color === (labelled.color ?? '')) ? labelled.color ?? '' : 'custom'} disabled={locked} onChange={event => labelEdit({ color: event.target.value || undefined })}>{palette.map(([name, color]) => <option value={color} key={name}>{name === 'Default' ? '<default>' : name}</option>)}{labelled.color && !palette.some(([, color]) => color === labelled.color) && <option value="custom">Custom</option>}</select><input className="ui-field" type="color" aria-label="Custom connection color" title="Custom connection color" disabled={locked} value={connectionPickerColor(labelled.color, active)} onChange={event => labelEdit({ color: event.target.value })} /></div></div>
-                <div className="property-row"><label htmlFor="connect-environment">Environment</label><EnvironmentField id="connect-environment" controlClassName="ui-field" value={labelled.environment} disabled={locked} onChange={environment => { if (!isBigQuery) environmentOwner.current = options.server.trim().toLowerCase(); labelEdit({ environment }) }} /></div>
-                <div className="property-row"><label htmlFor="connect-auto-reconnect">Reconnect on startup</label><select className="ui-field" id="connect-auto-reconnect" disabled={locked} value={isBigQuery ? bigQueryReconnect : autoReconnect} onChange={event => { const value = event.target.value as ConnectionDetails['autoReconnect']; if (isBigQuery) { bigQueryUpdate({}); setBigQueryReconnect(value) } else { reconnectOwned.current = true; markEdited(); detailFields.current.add('autoReconnect'); setAutoReconnect(value) } }}><option value="inherit">Use global default</option><option value="on">On</option><option value="off">Off</option></select></div>
-              </div>
-              {isBigQuery
-                ? <div className="connection-save-actions"><button className="ui-button" data-control-variant="secondary" data-control-size="dense" type="button" disabled={locked || !loaded || !ready} onClick={() => void saveBigQuery(!bigQuerySelected?.favorite)}><Icon name={bigQuerySelected?.favorite ? 'star-full' : 'star-empty'} />{bigQuerySelected?.favorite ? 'Remove favorite' : 'Add favorite'}</button></div>
-                : <div className="connection-save-actions"><button className="ui-button" data-control-variant="secondary" data-control-size="dense" type="button" disabled={locked || !loaded || !authReady} onClick={() => void saveProfile(!selected?.favorite)}><Icon name={selected?.favorite ? 'star-full' : 'star-empty'} />{selected?.favorite ? 'Remove favorite' : 'Add favorite'}</button><button className="ui-button" data-control-variant="secondary" data-control-size="dense" type="button" disabled={locked || !loaded || !authReady} onClick={() => void saveProfile(undefined, !selected?.registered)}>{selected?.registered ? 'Unregister server' : 'Register server'}</button></div>}
-            </section>
+            {serverType.previous && <p className="field-note" role="status">Server type changed to {serverTypeLabels[serverType.type]}; the {serverTypeLabels[serverType.previous]} fields are kept. <button type="button" className="ui-button connect-inline-action" data-control-size="dense" disabled={locked} onClick={undoServerTypeChange}>Undo</button></p>}
+            <div className="connection-tabs connection-property-tabs" role="tablist" aria-label="Connection details">
+              <button type="button" className="ui-button" role="tab" aria-selected={properties === 'properties'} aria-controls="connection-properties" onClick={() => setProperties('properties')}>Connection Properties</button>
+              <button type="button" className="ui-button" role="tab" aria-selected={properties === 'advanced'} aria-controls="connection-properties" aria-label={advSummaryText ? `Advanced (${advBadgeCount} set)` : 'Advanced'} onClick={() => setProperties('advanced')}>Advanced{advBadgeCount > 0 && <span className="connect-tab-badge" aria-hidden="true">{advBadgeCount}</span>}</button>
+              {!isBigQuery && <button type="button" className="ui-button" role="tab" aria-selected={properties === 'string'} aria-controls="connection-properties" onClick={() => setProperties('string')}>Connection String</button>}
+            </div>
+          </div>
+          <div className="connect-form-scroll">
+            <div id="connection-properties" role="tabpanel" aria-label={properties === 'properties' ? 'Connection Properties' : properties === 'advanced' ? 'Advanced Properties' : 'Connection String'}>
+              {properties === 'properties' && <>
+                <div className="property-grid">
+                  {isBigQuery ? <BigQueryConnectFields options={bigQuery} keyFileName={bigQueryKeyName} locked={locked} lists={bigQueryLists} onChange={bigQueryUpdate} onAuthentication={bigQueryAuthentication} onBrowseKeyFile={() => void pickKeyFile()} /> : <>
+                    <div className="property-row"><label htmlFor="connect-server">Server Name</label><input className="ui-field" id="connect-server" list="known-servers" required maxLength={256} disabled={locked} value={options.server} placeholder="localhost,1433 or server\instance" onChange={event => changeServer(event.target.value)} /><datalist id="known-servers">{[...new Set(library.profiles.map(profile => profile.options.server))].map(server => <option key={server} value={server} />)}</datalist></div>
+                    <div className="property-row"><label htmlFor="connect-auth">Authentication</label><select className="ui-field" id="connect-auth" value={options.authentication} disabled={locked} onChange={event => update({ authentication: event.target.value as AuthenticationMode, password: '' })}>{authenticationModes.map(mode => <option key={mode} value={mode}>{authenticationCatalog[mode].label}</option>)}</select></div>
+                    <div className="property-row"><label htmlFor="connect-user">{auth.userLabel}</label><input className="ui-field" id="connect-user" required={requiresUser(options.authentication)} disabled={locked || showsIdentity(options.authentication)} autoComplete="off" maxLength={128} placeholder={userPlaceholders[options.authentication]} value={showsIdentity(options.authentication) ? identityOf(options.authentication) : options.username ?? ''} onChange={event => update({ username: event.target.value })} /></div>
+                    {/* Only the types with a password show Password and Remember password; the others have nothing to type there. */}
+                    {passwordShown && <>
+                      <div className="property-row">
+                        <label htmlFor="connect-password">Password</label>
+                        <div className="property-input-action">
+                          <input className="ui-field" id="connect-password" type={showPassword && !!options.password ? 'text' : 'password'} autoComplete="off" disabled={locked} maxLength={1024} value={options.password ?? ''} {...match && !options.password ? { placeholder: '••••••••', 'aria-describedby': 'connect-password-saved' } : {}} onChange={event => { if (!event.target.value) setShowPassword(false); update({ password: event.target.value }) }} />
+                          {!!options.password && <button type="button" className="ui-button icon-button" data-control-variant="secondary" aria-label={showPassword ? 'Hide password' : 'Show password'} title={showPassword ? 'Hide password' : 'Show password'} disabled={locked} onClick={() => setShowPassword(current => !current)}><Icon name="eye" /></button>}
+                        </div>
+                        {match && !options.password && <span id="connect-password-saved" className="visually-hidden">A saved password will be used. Type to replace it.</span>}
+                      </div>
+                      {hasSavedPassword && <div className="property-row"><span /><span className="connect-pw-saved"><Icon name="lock" />Password saved (leave empty to keep using)</span></div>}
+                      {options.password && rememberable && <div className="property-row"><span /><p className="field-note" id="connect-password-save-note">{!remember ? match && rememberEdited.current ? forgetsTyped : dropsPassword : passwordInUse(options) ? inUseNote : keepsPassword}</p></div>}
+                      {!options.password && match && rememberable && !remember && rememberEdited.current && <div className="property-row"><span /><p className="field-note" id="connect-password-forget-note">Save or Connect forgets the saved password.</p></div>}
+                      <div className="property-row"><span /><label className="checkbox-label"><input type="checkbox" checked={remember && rememberable} disabled={locked || !rememberable} {...storageNote ? { 'aria-describedby': 'connect-remember-note' } : {}} onChange={event => { rememberEdited.current = true; setRemember(event.target.checked) }} />Remember password</label></div>
+                      {storageNote && <div className="property-row"><span /><p className="field-note" id="connect-remember-note">{storageNote}</p></div>}
+                    </>}
+                    {authNote && <div className="property-row"><span /><p className="field-note" id="connect-auth-note">{authNote}</p></div>}
+                    <div className="property-row"><label htmlFor="connect-database">Database Name</label><div className="property-input-action"><input className="ui-field" id="connect-database" list="available-databases" maxLength={128} disabled={locked} placeholder="<default>" value={options.database} onFocus={() => { if (dbLoadedKey.current !== databasesKey(currentOptions.current)) void loadDatabases() }} onChange={event => update({ database: event.target.value })} /><button className="ui-button icon-button" data-control-variant="secondary" type="button" aria-label="Load databases" title="Load databases from this server" disabled={locked || dbBusy || !authReady || !!sqlAdvancedError} onClick={() => void loadDatabases()}><Icon name={dbBusy ? 'loading' : 'refresh'} spin={dbBusy} /></button></div><datalist id="available-databases"><option value="" label="<default>" />{databases.map(database => <option key={database.name} value={database.name} />)}</datalist></div>
+                    {(dbBusy || dbNote) && <div className="property-row"><span /><div><p className="field-note" role="status">{dbBusy ? 'Loading databases…' : dbNote}</p>{!dbBusy && dbDetails && <FailureDetails details={dbDetails} />}</div></div>}
+                    <fieldset className="property-section connect-security-group">
+                      <legend>TLS &amp; Certificate Security</legend>
+                      <div className="property-grid">
+                        <div className="property-row"><label htmlFor="connect-encrypt">Encrypt</label><select className="ui-field" id="connect-encrypt" value={options.encrypt ?? 'mandatory'} disabled={locked} onChange={event => update({ encrypt: event.target.value as ConnectionOptions['encrypt'] })}><option value="optional">Optional</option><option value="mandatory">Mandatory</option><option value="strict">Strict</option></select></div>
+                        <div className="property-row"><span /><label className="checkbox-label"><input type="checkbox" checked={options.encrypt !== 'strict' && options.trustServerCertificate} disabled={locked || options.encrypt === 'strict'} onChange={event => update({ trustServerCertificate: event.target.checked })} />Trust server certificate</label></div>
+                        <div className="property-row"><label htmlFor="connect-hostname">Host Name in Certificate</label><input className="ui-field" id="connect-hostname" maxLength={256} disabled={locked} value={options.hostNameInCertificate ?? ''} onChange={event => update({ hostNameInCertificate: event.target.value })} /></div>
+                      </div>
+                    </fieldset>
+                  </>}
+                </div>
+                <fieldset id="connect-custom" className="property-section custom-properties" aria-label="Labels & Custom Properties">
+                  <legend>Labels &amp; Custom Properties</legend>
+                  <div className="property-grid">
+                    <div className="property-row"><label htmlFor="connect-name">Name</label><input className="ui-field" id="connect-name" maxLength={128} disabled={locked} value={labelled.displayName ?? ''} placeholder="Optional connection name" onChange={event => labelEdit({ displayName: event.target.value })} /></div>
+                    <div className="property-row">
+                      <label htmlFor="connect-color-custom">Color</label>
+                      <div className="connect-swatches">
+                        {palette.map(([name, color]) => {
+                          const selectedSwatch = (labelled.color ?? '').toLowerCase() === color.toLowerCase()
+                          return <button key={name} type="button" className={'connect-swatch-btn' + (selectedSwatch ? ' is-selected' : '')} aria-label={`${name} connection color`} aria-pressed={selectedSwatch} title={name} disabled={locked} style={{ backgroundColor: color ? theme.accent(color) ?? 'var(--varia-connection-default)' : 'var(--varia-connection-default)' }} onClick={() => labelEdit({ color: color || undefined })} />
+                        })}
+                        <input id="connect-color-custom" className="ui-field connect-color-picker" type="color" aria-label="Custom connection color" title="Custom connection color" disabled={locked} value={connectionPickerColor(labelled.color, active)} onChange={event => labelEdit({ color: event.target.value })} />
+                      </div>
+                    </div>
+                    <div className="property-row"><label htmlFor="connect-environment">Environment</label><EnvironmentField id="connect-environment" controlClassName="ui-field" value={labelled.environment} disabled={locked} onChange={environment => { if (!isBigQuery) environmentOwner.current = options.server.trim().toLowerCase(); labelEdit({ environment }) }} /></div>
+                    <div className="property-row"><label htmlFor="connect-auto-reconnect">Reconnect on startup</label><select className="ui-field" id="connect-auto-reconnect" disabled={locked} value={isBigQuery ? bigQueryReconnect : autoReconnect} onChange={event => { const value = event.target.value as ConnectionDetails['autoReconnect']; if (isBigQuery) { bigQueryUpdate({}); setBigQueryReconnect(value) } else { reconnectOwned.current = true; markEdited(); detailFields.current.add('autoReconnect'); setAutoReconnect(value) } }}><option value="inherit">Use global default</option><option value="on">On</option><option value="off">Off</option></select></div>
+                  </div>
+                </fieldset>
+              </>}
+              {properties === 'advanced' && (isBigQuery
+                ? <BigQueryAdvanced options={bigQuery} savedCostPrompt={bigQuerySavedCostPrompt} projects={bigQueryLists.projects} locked={locked} draft={bigQueryAdvancedDraft} onDraftChange={bigQueryDraftChange} onChange={bigQueryUpdate} />
+                : <SqlAdvancedPanel value={options.advanced ?? {}} draft={sqlAdvancedDraft} edited={sqlAdvancedEdited.current} errors={sqlAdvancedErrors} error={sqlAdvancedError} executionTimeout={executionTimeout} locked={locked} onChange={(next, nextDraft) => { setSqlAdvancedDraft(nextDraft); if (next !== undefined) update({ advanced: next }); else { markEdited(); setError(''); setNotice(''); setLastRemoved(undefined); setTested(undefined) } }} onReset={() => { sqlAdvancedEdited.current.clear(); setSqlAdvancedDraft({}); update({ advanced: {} }) }} />)}
+              {properties === 'string' && !isBigQuery && <div className="connection-preview">
+                <div className="connect-preview-header">
+                  <span className="field-note">Preview generated by SqlClient (password omitted).</span>
+                  <button type="button" className="ui-button" data-control-variant="secondary" data-control-size="dense" disabled={!preview || !authReady || !!sqlAdvancedError || !options.server.trim()} onClick={copyPreview}>{copiedString ? 'Copied' : 'Copy'}</button>
+                </div>
+                <textarea className="ui-field" aria-label="Connection string preview" readOnly value={preview || 'Preparing connection string…'} />
+                <div className="connect-paste-box">
+                  <label htmlFor="connect-paste-string">Paste Connection String</label>
+                  <textarea id="connect-paste-string" className="ui-field" aria-label="Paste connection string" disabled={locked} placeholder="Server=tcp:server.database.windows.net,1433;Initial Catalog=SalesLedger;User ID=reader;Encrypt=True;" value={pasteInput} onChange={event => setPasteInput(event.target.value)} />
+                  <div className="connect-paste-actions">
+                    <span className="field-note">Passwords are never imported automatically.</span>
+                    <button type="button" className="ui-button" data-control-variant="secondary" data-control-size="dense" disabled={locked || !pasteInput.trim()} onClick={applyParsedString}>Parse &amp; Fill Form</button>
+                  </div>
+                </div>
+              </div>}
+            </div>
           </div>
         </div>
       </div>
       <div className="connect-actions">
-        {(busy || testing || tested || notice || error) && <div className="connect-outcome">
+        {(busy || testing || tested || notice || (busyNotice && !confirmClose && !sourcePrompt) || error || (activeAdvancedError && properties !== 'advanced')) && <div className="connect-outcome">
           {busy && <p className="field-note" role="status">{!isBigQuery && options.authentication === 'entraMfa' ? mfaWaiting : connectingLabel}</p>}
           {testing && <p className="field-note" role="status">{testing.kind === 'save' ? `Checking the password with ${testing.server}…` : `Testing the connection to ${testing.server}…`}{!isBigQuery && options.authentication === 'entraMfa' ? ' Complete the sign-in in your web browser.' : ''}</p>}
           {tested && <div className="connect-tested" role="status"><p className="field-note" data-tone="success"><Icon name="pass" />{tested.text}</p>{tested.warning && <p className="field-note" data-tone="warning"><Icon name="warning" />{tested.warning}</p>}</div>}
-          {notice && <p className="field-note" role="status">{notice}</p>}
+          {notice && <p className="field-note" role="status">{notice}{lastRemoved && <> <button type="button" className="ui-button connect-inline-action" data-control-size="dense" disabled={locked} onClick={() => void undoRemove()}>Undo</button></>}</p>}
+          {busyNotice && !confirmClose && !sourcePrompt && <p className="field-note" role="status">{busyNotice}</p>}
+          {!error && activeAdvancedError && properties !== 'advanced' && <p className="field-note" role="alert" data-tone="warning">{activeAdvancedError}</p>}
           {error && <div ref={failureBox} className="connect-failure">
             <InlineError message={error} code={shownFailure?.code} details={shownFailure?.details} context={shownFailure ? `${shownFailure.checking === 'save' ? 'Checking the password with' : shownFailure.checking ? 'Testing the connection to' : 'Connecting to'} ${shownFailure.server}` : undefined} actions={fixActions}
               note={fix === 'strict' ? strictCertificate : fix === 'pinned' ? pinnedCertificate : undefined} />
             {shownFailure?.details && <FailureDetails details={shownFailure.details} />}
           </div>}
         </div>}
-        <div className="connection-footer">
+        <DialogFooter wrap>
           <div>
-            <button className="ui-button" data-control-variant="secondary" type="button" disabled={locked} onClick={reset}>Reset</button>
+            <ConnectFooterReset disabled={locked} onReset={reset} />
             <button className="ui-button" data-control-variant="secondary" type="button" data-reserve-label={testConnectionLabel} title={testing ? undefined : 'Sign in with these settings without saving them or opening a session'} disabled={testing ? false : locked || !loaded || !ready} onClick={() => { if (testing) stopTest(); else if (isBigQuery) void testBigQuery(); else void testConnection() }}><span>{testing ? 'Stop' : testConnectionLabel}</span></button>
           </div>
           <div className="connect-footer-end">
@@ -1111,19 +1590,22 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
             <button ref={connectButton} className="ui-button primary" type="submit" data-reserve-label={pendingConnectLabel ?? connectLabel} data-reserve-busy-label={connectingLabel} disabled={locked || !loaded || !ready}><span>{busy ? connectingLabel : connectLabel}</span></button>
             <button ref={stopButton} className="ui-button" data-control-variant="secondary" type="button" data-reserve-label={cancelLabel} disabled={saving} onClick={busy ? stop : testing ? stopTest : requestClose}><span>{busy ? 'Stop' : cancelLabel}</span></button>
           </div>
-        </div>
+        </DialogFooter>
       </div>
-    </form></div>
-    {confirmClose && <SubDialog title={confirmClose.target ? `Save changes to ${confirmClose.target.options.displayName || confirmClose.target.options.server}?` : confirmClose.bigQueryTarget ? `Save changes to ${confirmClose.bigQueryTarget.options.displayName || confirmClose.bigQueryTarget.options.project}?` : isBigQuery ? `Save ${bigQuery.displayName || bigQuery.project} to History?` : `Save ${options.displayName || options.server} to History?`} okLabel="Save" alternative={{ label: "Don't Save", run: () => { const type = confirmClose.type; setConfirmClose(undefined); closeRest(type) } }}
-      onOk={() => { const type = confirmClose.type; setConfirmClose(undefined); void save().then(saved => { if (saved === 'saved') closeRest(type) }) }} onCancel={() => setConfirmClose(undefined)}>
-      <p>{confirmClose.target || confirmClose.bigQueryTarget ? 'You changed this saved connection. Save the changes to History and its Object Explorer connections before closing?' : 'This connection is not saved. Save it to History before closing?'}</p>
+    </form>
+    {review}
+    {confirmClose && <SubDialog title={confirmClose.target ? `Save changes to ${confirmClose.target.options.displayName || confirmClose.target.options.server}?` : confirmClose.bigQueryTarget ? `Save changes to ${confirmClose.bigQueryTarget.options.displayName || confirmClose.bigQueryTarget.options.project}?` : isBigQuery ? `Save ${bigQuery.displayName || bigQuery.project} to History?` : `Save ${options.displayName || options.server} to History?`} okLabel="Save" alternative={{ label: "Don't Save", run: () => { const { type, next } = confirmClose; setConfirmClose(undefined); finishAfter(next, type) } }}
+      onOk={() => { const { type, next } = confirmClose; setConfirmClose(undefined); void save().then(saved => { if (saved === 'saved') finishAfter(next, type) }) }} onCancel={() => setConfirmClose(undefined)}>
+      <p>{confirmClose.target || confirmClose.bigQueryTarget
+        ? `You changed this saved connection. Save the changes to History and its Object Explorer connections before ${confirmClose.next === 'close' ? 'closing' : 'switching connections'}?`
+        : `This connection is not saved. Save it to History before ${confirmClose.next === 'close' ? 'closing' : 'switching connections'}?`}</p>
+      {busyNotice && <p className="field-note" role="status">{busyNotice}</p>}
     </SubDialog>}
-    {bigQueryAdvanced && <BigQueryAdvanced options={bigQuery} savedCostPrompt={bigQuerySavedCostPrompt} projects={bigQueryLists.projects} onSave={patch => { bigQueryUpdate(patch); setBigQueryAdvanced(false); setTimeout(() => dialog.current?.querySelector<HTMLButtonElement>('.advanced-action button')?.focus(), 0) }} onClose={() => { setBigQueryAdvanced(false); setTimeout(() => dialog.current?.querySelector<HTMLButtonElement>('.advanced-action button')?.focus(), 0) }} />}
     {sourcePrompt && <SubDialog title="Use this token file?" okLabel="Use It" onOk={() => void confirmSource(sourcePrompt)} onCancel={() => setSourcePrompt(undefined)}>
       <p>{sourcePrompt.name} signs in with a token that Varia reads from this file each time it connects:</p>
       <p className="bq-source-path">{sourcePrompt.source}</p>
       <p>Use it only if you know what writes this file. Varia asks again if the configuration names another file.</p>
+      {busyNotice && <p className="field-note" role="status">{busyNotice}</p>}
     </SubDialog>}
-    {advanced && <AdvancedProperties value={options.advanced ?? {}} onSave={value => { update({ advanced: value }); setAdvanced(false); setTimeout(() => dialog.current?.querySelector<HTMLButtonElement>('.advanced-action button')?.focus(), 0) }} onClose={() => { setAdvanced(false); setTimeout(() => dialog.current?.querySelector<HTMLButtonElement>('.advanced-action button')?.focus(), 0) }} />}
-  </>
+  </DialogWindow>
 }
