@@ -305,7 +305,8 @@ export class SearchDetailsService extends SnapshotStore<SearchDetailsSnapshot> i
     if (estimated.value.estimate) {
       const prompt = new AbortController()
       reads.prompt = prompt
-      try { answer = await gate(details.connectionId, estimated.value.estimate, prompt.signal) } finally { if (reads.prompt === prompt) reads.prompt = undefined }
+      // A prompt that fails is no consent: the button comes back rather than leave the pane loading.
+      try { answer = await gate(details.connectionId, estimated.value.estimate, prompt.signal).catch(() => ({ run: false })) } finally { if (reads.prompt === prompt) reads.prompt = undefined }
       if (!current() || prompt.signal.aborted) return
     }
     if (!answer.run) { this.update(documentId, id, { definition: { status: 'billed' } }); return }

@@ -42,8 +42,8 @@ function setup(options: { gate?: boolean } = {}) {
   const scriptingOptions = { getSnapshot: () => ({ options: {} as ScriptingOptions }), subscribe: () => () => {} }
   let ids = 0
   const newId = () => `id-${++ids}`
-  const gates: { estimate: unknown; signal: AbortSignal; answer: (value: { run: boolean; maximumBytesBilled?: number }) => void }[] = []
-  const billedGate = (_connection: string, estimate: unknown, signal: AbortSignal) => new Promise<{ run: boolean; maximumBytesBilled?: number }>(resolve => { gates.push({ estimate, signal, answer: resolve }) })
+  const gates: { estimate: unknown; signal: AbortSignal; answer: (value: { run: boolean; maximumBytesBilled?: number }) => void; fail: (error: Error) => void }[] = []
+  const billedGate = (_connection: string, estimate: unknown, signal: AbortSignal) => new Promise<{ run: boolean; maximumBytesBilled?: number }>((resolve, reject) => { gates.push({ estimate, signal, answer: resolve, fail: reject }) })
   let timer: (() => void) | undefined
   const peek = new PeekService({ api: api as never, connections, scriptingOptions, newId })
   const service = new SearchDetailsService({ api: api as never, peek, connections, searches, scriptingOptions, newId, timers: { setTimeout: (callback: () => void) => { timer = callback; return 1 }, clearTimeout: () => { timer = undefined } }, ...options.gate === false ? {} : { billedGate: billedGate as never } })
@@ -139,6 +139,17 @@ describe('Search Objects details pane for BigQuery', () => {
     gates[1]!.answer({ run: true })
     await moved
     expect(api.scriptObjects).toHaveBeenCalledTimes(2)
+    // A prompt that fails runs nothing billed and offers the button again.
+    show(table)
+    pending.properties.at(-1)!(ok(tableFacts))
+    await flush()
+    const broken = service.readCreate('tab')
+    pending.script[2]!(ok({ warnings: [], estimate: { bytesProcessed: 1, incomplete: [], statementType: 'SELECT' } }))
+    await flush()
+    gates[2]!.fail(new Error('prompt lost'))
+    await broken
+    expect(service.getSnapshot().documents.tab?.definition).toEqual({ status: 'billed' })
+    expect(api.scriptObjects).toHaveBeenCalledTimes(3)
   })
 
   it('ends a CREATE read when the pane hides during its prompt or the server goes during its estimate', async () => {
