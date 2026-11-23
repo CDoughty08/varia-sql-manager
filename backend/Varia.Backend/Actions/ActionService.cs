@@ -233,6 +233,8 @@ internal sealed partial class ActionService : IDisposable
         // Login Properties' User Mapping reads one database for the login it shows (D2c): its user there and that user's roles.
         if (args.Login is not null && (args.Dialog != catalog.Logins.RolesDescribe || !ExplorerRefs.Ident(args.Login))) throw Invalid("login.");
         if ((args.Dialog == ServerFilesDescribe) != (args.Files is not null)) throw Invalid("files.");
+        // The Schedules describe (AG-6c) may read one schedule's jobs, and only it names a schedule.
+        if (args.Schedule is { } schedule && (args.Dialog != "agentSchedules" || schedule < 1)) throw Invalid("schedule.");
         if (args.Attach is { } attach && (args.Dialog != AttachDialog || !ServerPath.Valid(attach.Mdf, catalog.Limit("serverPath")))) throw Invalid("attach.");
         if ((args.Dialog == catalog.Restore.Describe) != (args.Restore is not null)) throw Invalid("restore.");
         if (args.Restore is not null) return ValidateRestoreSource(args);
@@ -309,6 +311,8 @@ internal sealed partial class ActionService : IDisposable
         if (args.Secrets is { } secrets) { Secret(secrets.Password, "password"); Secret(secrets.OldPassword, "oldPassword"); }
         // Alerts and operators (AG-7) validate themselves: their documents' Save, the tree's verbs on them, Add recommended alerts and Send test e-mail.
         if (ValidateAgentObjects(args, script) is { } objectTarget) return objectTarget;
+        // A schedule's save (AG-6c) validates itself.
+        if (ValidateAgentSchedule(args) is { } scheduleTarget) return scheduleTarget;
         // A credential's secret goes only with a credential's save, and is bounded there (CredentialSecret).
         if (args.Secrets?.Secret is not null && args.Action is not ("agentProxy" or "credential")) throw Invalid("only a credential's save takes secrets.secret.");
         // The proxy and credential documents (AG-8b) validate themselves, a proxy's Rename and Delete with them.
@@ -504,6 +508,7 @@ internal sealed partial class ActionService : IDisposable
                 "agentAlert" => DescribeAgentAlertDocumentAsync(connection, profile, target, job),
                 "agentOperator" => DescribeAgentOperatorDocumentAsync(connection, profile, target, job),
                 "agentOperators" => DescribeAgentOperatorsAsync(connection, profile, job),
+                "agentSchedules" => DescribeAgentSchedulesAsync(connection, profile, args.Schedule, job),
                 _ => DescribeJobAsync(connection, args.ConnectionId, profile.Explorer(explorer).ServerEngine, target, action, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error), reading ? "Reading the file" : "Reading the object", own: reading ? OwnGate.Browse : OwnGate.None);
@@ -515,6 +520,7 @@ internal sealed partial class ActionService : IDisposable
         if (args.Action == "createLogin") return ScriptNewLoginAsync(args, token);
         if (args.Action == "agentJob") return ScriptAgentJobDocument(args, target);
         if (args.Action is "agentAlert" or "agentOperator" or AddRecommendedAlertsAction || target.Kind is "agentAlert" or "agentOperator") return ScriptAgentObject(args, target);
+        if (args.Action == "agentSchedule") return ScriptAgentSchedule(args);
         if (args.Action == "agentProxy" || target.Kind == "agentProxy") return ScriptAgentProxy(args, target);
         if (args.Action == "credential") return ScriptCredential(args, target);
         if (target.Kind == "agentJob") return ScriptAgentJob(args, target);
@@ -580,6 +586,7 @@ internal sealed partial class ActionService : IDisposable
                 "credential" => ExecuteCredentialAsync(connection, args, target, job),
                 _ when target.Kind == "agentJob" => ExecuteAgentJobAsync(connection, args, target, job),
                 "agentProperties" => ExecuteAgentPropertiesAsync(connection, args, job),
+                "agentSchedule" => ExecuteAgentScheduleAsync(connection, args, job),
                 _ => ExecuteJobAsync(connection, args, target, profile.Explorer(explorer).ServerEngine, band, progress, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionExecuteResult([], [], watch.ElapsedMilliseconds, error));

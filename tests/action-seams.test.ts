@@ -53,6 +53,8 @@ describe('server engines', () => {
       // The alert and operator documents (AG-7): alerts are SQL Server on Windows boxes only; Managed Instance has operators.
       { action: 'agentAlert', class: 'dialog', kind: 'agentAlert', verb: 'properties', engines: ['box'] },
       { action: 'agentOperator', class: 'dialog', kind: 'agentOperator', verb: 'properties', engines: ['box', 'managedInstance'] },
+      // The Schedules document (AG-6c) acts on the Agent node.
+      { action: 'agentSchedule', class: 'dialog', kind: 'agent', verb: 'properties', engines: ['box', 'managedInstance'] },
       // The proxy document (AG-8b) on SQL Server only (Managed Instance has no proxies); the credential's on both.
       { action: 'agentProxy', class: 'dialog', kind: 'agentProxy', verb: 'properties', engines: ['box'] },
       { action: 'credential', class: 'dialog', kind: 'credential', verb: 'properties', engines: ['box', 'managedInstance'] }])

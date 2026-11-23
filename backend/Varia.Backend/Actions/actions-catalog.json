@@ -26,6 +26,7 @@
     {"action":"agentJob","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"kind":"agentJob","title":"Job Properties","verb":"properties"},
     {"action":"agentAlert","class":"dialog","cleanupMs":10000,"engines":["box"],"kind":"agentAlert","title":"Alert Properties","verb":"properties"},
     {"action":"agentOperator","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"kind":"agentOperator","title":"Operator Properties","verb":"properties"},
+    {"action":"agentSchedule","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"kind":"agent","title":"Schedules","verb":"properties"},
     {"action":"agentProxy","class":"dialog","cleanupMs":10000,"engines":["box"],"kind":"agentProxy","title":"Proxy Account Properties","verb":"properties"},
     {"action":"credential","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"kind":"credential","title":"Credential Properties","verb":"properties"}
   ],
@@ -114,6 +115,7 @@
     {"action":"agentJob","dialog":"agentJob","pages":["general","steps","schedules","notifications","targets","alerts","history"]},
     {"action":"agentAlert","dialog":"agentAlert","pages":["general"]},
     {"action":"agentOperator","dialog":"agentOperator","pages":["general"]},
+    {"action":"agentSchedule","dialog":"agentSchedules","pages":["schedules"]},
     {"action":"agentProxy","dialog":"agentProxy","pages":["general","subsystems","principals","references"]},
     {"action":"credential","dialog":"credential","pages":["general","usedBy"]}
   ],

@@ -467,6 +467,9 @@ export const masterReadShapes: readonly MasterReadShape[] = [
   { name: 'xp_servicecontrol', shape: "EXEC @rc = master.dbo.xp_servicecontrol N'QueryState', N'SQLServerAgent';", who: 'sysadmin' }
 ]
 
+/** The timing arguments sp_add_schedule, sp_update_schedule and sp_add_jobschedule share, in sysschedules' column order. */
+export const scheduleTimingArguments = ['@freq_type', '@freq_interval', '@freq_subday_type', '@freq_subday_interval', '@freq_relative_interval', '@freq_recurrence_factor',
+  '@active_start_date', '@active_end_date', '@active_start_time', '@active_end_time'] as const
 export type AgentLane = 'AG-2' | 'AG-5b' | 'AG-6a' | 'AG-6b' | 'AG-6c' | 'AG-7' | 'AG-8a' | 'AG-8b'
 export interface WriteProcedure {
   readonly name: string
@@ -509,12 +512,15 @@ export const writeProcedures: readonly WriteProcedure[] = [
     '@on_success_step_id', '@on_fail_action', '@on_fail_step_id', '@server', '@database_name', '@database_user_name', '@retry_attempts', '@retry_interval', '@os_run_priority',
     '@output_file_name', '@flags', '@proxy_id', '@proxy_name'] },
   { name: 'sp_delete_jobstep', lane: 'AG-6b', database: 'msdb', arguments: ['@job_id', '@step_id'] },
-  { name: 'sp_add_jobschedule', lane: 'AG-6c', database: 'msdb' },
-  { name: 'sp_attach_schedule', lane: 'AG-6c', database: 'msdb' },
-  { name: 'sp_detach_schedule', lane: 'AG-6c', database: 'msdb' },
-  { name: 'sp_add_schedule', lane: 'AG-6c', database: 'msdb' },
-  { name: 'sp_update_schedule', lane: 'AG-6c', database: 'msdb' },
-  { name: 'sp_delete_schedule', lane: 'AG-6c', database: 'msdb' },
+  // Schedules (AG-6c): the job's save adds (sp_add_jobschedule), attaches, detaches and changes them; the Schedules document's save creates
+  // (sp_add_schedule, the new id an OUTPUT), changes, deletes (never @force_delete) and attaches or detaches jobs. Each guarded batch has its
+  // own lint (AgentSql.LintJobSave, AgentSql.LintScheduleSave); the one-call write lint refuses them all.
+  { name: 'sp_add_jobschedule', lane: 'AG-6c', database: 'msdb', arguments: ['@job_id', '@name', '@enabled', ...scheduleTimingArguments] },
+  { name: 'sp_attach_schedule', lane: 'AG-6c', database: 'msdb', arguments: ['@job_id', '@schedule_id'] },
+  { name: 'sp_detach_schedule', lane: 'AG-6c', database: 'msdb', arguments: ['@job_id', '@schedule_id', '@delete_unused_schedule'] },
+  { name: 'sp_add_schedule', lane: 'AG-6c', database: 'msdb', arguments: ['@schedule_name', '@enabled', ...scheduleTimingArguments, '@schedule_id'] },
+  { name: 'sp_update_schedule', lane: 'AG-6c', database: 'msdb', arguments: ['@schedule_id', '@new_name', '@enabled', ...scheduleTimingArguments] },
+  { name: 'sp_delete_schedule', lane: 'AG-6c', database: 'msdb', arguments: ['@schedule_id'] },
   { name: 'sp_add_operator', lane: 'AG-7', database: 'msdb', arguments: ['@name', '@enabled', '@email_address', '@pager_address', '@weekday_pager_start_time', '@weekday_pager_end_time', '@saturday_pager_start_time', '@saturday_pager_end_time', '@sunday_pager_start_time', '@sunday_pager_end_time', '@pager_days', '@netsend_address'] },
   { name: 'sp_update_operator', lane: 'AG-7', database: 'msdb', arguments: ['@name', '@new_name', '@enabled', '@email_address', '@pager_address', '@weekday_pager_start_time', '@weekday_pager_end_time', '@saturday_pager_start_time', '@saturday_pager_end_time', '@sunday_pager_start_time', '@sunday_pager_end_time', '@pager_days', '@netsend_address'] },
   { name: 'sp_delete_operator', lane: 'AG-7', database: 'msdb', arguments: ['@name', '@reassign_to_operator'] },

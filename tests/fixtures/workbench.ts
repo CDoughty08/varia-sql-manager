@@ -96,6 +96,7 @@ import { JobDocumentService } from '../../src/renderer/src/agent/JobDocumentServ
 import { AlertOperatorDocumentService, alertSpec, operatorSpec, operatorsSpec } from '../../src/renderer/src/agent/AlertOperatorDocumentService'
 import { agentContribution } from '../../src/renderer/src/contributions/agent'
 import { agentObjectsContribution } from '../../src/renderer/src/contributions/agent-objects'
+import { SchedulesService } from '../../src/renderer/src/agent/SchedulesService'
 import { ProxyDocumentService } from '../../src/renderer/src/agent/ProxyDocumentService'
 import { CredentialDocumentService } from '../../src/renderer/src/agent/CredentialDocumentService'
 import { agentProxyContribution } from '../../src/renderer/src/contributions/agent-proxy'
@@ -458,6 +459,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const alertDocuments = new AlertOperatorDocumentService(alertSpec, agentObjectOptions)
   const operatorDocuments = new AlertOperatorDocumentService(operatorSpec, agentObjectOptions)
   const operatorsDocuments = new AlertOperatorDocumentService(operatorsSpec, agentObjectOptions)
+  const schedules = new SchedulesService({ api, documents, connections, targetIdOf })
   const proxyDocuments = new ProxyDocumentService({ api, documents, files, connections, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) })
   const credentialDocuments = new CredentialDocumentService({ api, documents, files, connections, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) })
   const logViewer = new LogViewerService({ api, documents, panes, live, connections, targetIdOf })
@@ -598,6 +600,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     alertDocuments,
     operatorDocuments,
     operatorsDocuments,
+    schedules,
     proxyDocuments,
     credentialDocuments,
     objectSearch
@@ -658,6 +661,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     alertDocuments.dispose()
     operatorDocuments.dispose()
     operatorsDocuments.dispose()
+    schedules.dispose()
     proxyDocuments.dispose()
     credentialDocuments.dispose()
     recovery.dispose()
@@ -758,6 +762,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     alertDocuments,
     operatorDocuments,
     operatorsDocuments,
+    schedules,
     proxyDocuments,
     credentialDocuments,
     logViewer,

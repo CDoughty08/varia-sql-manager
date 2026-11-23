@@ -207,7 +207,7 @@ describe('object action catalogue', () => {
   })
   it('declares Delete Object and Database Properties with SSMS\'s titles, pages and Script button wording', () => {
     expect(dialogIds).toEqual(['deleteObject', 'databaseProperties', 'newDatabase', 'attachDatabase', 'newLogin', 'takeOffline', 'bringOnline', 'detachDatabase', 'unlockLogin', 'loginProperties', 'tableProperties',
-      'startJobAtStep', 'startAgent', 'stopAgent', 'restartAgent', 'agentProperties', 'agentJob', 'agentAlert', 'agentOperator', 'agentProxy', 'credential'])
+      'startJobAtStep', 'startAgent', 'stopAgent', 'restartAgent', 'agentProperties', 'agentJob', 'agentAlert', 'agentOperator', 'agentSchedules', 'agentProxy', 'credential'])
     // SSMS's SQL Server Agent Properties (AG-8a) stays a modal dialog, with General and History.
     expect(dialogSpecs.agentProperties).toEqual({ title: 'SQL Server Agent Properties', surface: 'modal', titleFormat: 'plain', size: 'large', action: 'agentProperties',
       pages: [{ id: 'general', title: 'General', icon: 'settings-gear' }, { id: 'history', title: 'History', icon: 'history' }] })

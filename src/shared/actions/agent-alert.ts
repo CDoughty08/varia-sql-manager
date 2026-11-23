@@ -495,7 +495,7 @@ export function agentAlertCommandEntries(): { readonly [K in AgentAlertCommandId
     'agent.newAlertOnAgent': {
       title: 'Alert…', category: 'SQL Server Agent', icon: 'add', keywords: [], palette: false,
       precondition: connected, unavailableHint: connectFirst,
-      menus: [{ menu: 'explorer.new', group: '1_agent', order: 2, mnemonic: 'a', when: `explorerNode == 'agent' && agentRole == 'sysadmin' && ${alertsMenuWhen}` }]
+      menus: [{ menu: 'explorer.new', group: '2_agent', order: 2, mnemonic: 'a', when: `explorerNode == 'agent' && agentRole == 'sysadmin' && ${alertsMenuWhen}` }]
     },
     'agent.openAlert': {
       title: 'Open Alert…', category: 'SQL Server Agent', icon: 'go-to-file', keywords: ['agent', 'alert', 'properties', 'edit', 'sqlserveragent'],

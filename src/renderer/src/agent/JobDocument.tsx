@@ -18,6 +18,7 @@ import Skeleton from '../kit/Skeleton'
 import StatusPill from '../kit/StatusPill'
 import Switch from '../kit/Switch'
 import { jobSections, type JobDocumentService, type JobDocumentState } from './JobDocumentService'
+import JobSchedules from './JobSchedules'
 import JobSteps from './JobSteps'
 
 const fieldId = (documentId: string, key: string) => `agent-job-${documentId}-${key}`
@@ -277,6 +278,7 @@ export default function JobDocument({ documentId }: { documentId: string }) {
       case 'notifications': return <NotificationsSection {...props} />
       case 'targets': return <TargetsSection state={state} />
       case 'alerts': return <AlertsSection {...props} />
+      case 'schedules': return <JobSchedules {...props} />
       default: return null
     }
   }

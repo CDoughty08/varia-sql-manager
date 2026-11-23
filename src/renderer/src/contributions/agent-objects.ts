@@ -11,8 +11,8 @@ import { serverItems } from './query'
  * their menu runs on, else the active document's, else the selected node's, else the one live connection or the one picked from several.
  * Each document's verbs act on the document whose header runs them (`tabId`), else the active one.
  */
-export function agentObjectsContribution({ commands, documents, connections, explorer, quickInput, alertDocuments, operatorDocuments, operatorsDocuments, jobDocuments }:
-  Pick<Workbench, 'commands' | 'documents' | 'connections' | 'explorer' | 'quickInput' | 'alertDocuments' | 'operatorDocuments' | 'operatorsDocuments' | 'jobDocuments'>,
+export function agentObjectsContribution({ commands, documents, connections, explorer, quickInput, alertDocuments, operatorDocuments, operatorsDocuments }:
+  Pick<Workbench, 'commands' | 'documents' | 'connections' | 'explorer' | 'quickInput' | 'alertDocuments' | 'operatorDocuments' | 'operatorsDocuments'>,
   options: { readonly agentEnabled?: boolean } = {}): Disposable {
   if (!options.agentEnabled) return { dispose: () => {} }
   const live = (id: string | undefined) => id !== undefined && connections.isLiveSqlServer(id) ? id : undefined
@@ -60,8 +60,6 @@ export function agentObjectsContribution({ commands, documents, connections, exp
     commands.register('agent.newOperator', { ...onServer, run: args => withServer(args, 'New Operator', connectionId => report(() => operatorDocuments.openNew(connectionId), 'New Operator could not open.')) }),
     commands.register('agent.newOperatorOnAgent', { ...onServer, run: args => withServer(args, 'New Operator', connectionId => report(() => operatorDocuments.openNew(connectionId), 'New Operator could not open.')) }),
     commands.register('agent.openOperator', { ...onServer, run: args => openNamed('agentOperator', args) }),
-    // New › Job… on the SQL Server Agent node: the job document's New Job.
-    commands.register('agent.newJobOnAgent', { ...onServer, run: args => withServer(args, 'New Job', connectionId => report(() => jobDocuments.newJob(connectionId), 'New Job could not open.')) }),
     commands.register('agent.operators', { ...onServer, run: args => withServer(args, 'Operators and Notifications', openGrid) }),
     // Add recommended alerts: the grid, with its dialog open once the grid has read the server.
     commands.register('agent.addRecommendedAlerts', { ...onServer, run: args => withServer(args, 'Add Recommended Alerts', connectionId => { const id = openGrid(connectionId); if (id) operatorsDocuments.setAsk(id, 'recommended') }) }),

@@ -56,8 +56,8 @@ internal static class AgentJobDocumentChecks
     {
         var results = AgentSql.LintJobSaves().ToList();
         var failures = results.Where(item => item.Problems.Count > 0).Select(item => item.Name + ": " + string.Join(", ", item.Problems)).ToList();
-        check(failures.Count == 0 && results.Count == 4, "the job document's four save shapes pass their lint" + (failures.Count == 0 ? "" : ": " + string.Join("; ", failures)));
-        check(AgentSql.LintWrites().Count(item => item.Name.StartsWith("job save ", StringComparison.Ordinal)) == 4, "the Agent write lint (and so the object actions' lint) runs the job saves too");
+        check(failures.Count == 0 && results.Count == 9, "the job document's nine save shapes (AG-6b: two with steps; AG-6c: three with schedule calls; two with both) pass their lint" + (failures.Count == 0 ? "" : ": " + string.Join("; ", failures)));
+        check(AgentSql.LintWrites().Count(item => item.Name.StartsWith("job save ", StringComparison.Ordinal)) == 9, "the Agent write lint (and so the object actions' lint) runs the job saves too");
         foreach (var statement in (AgentStatement[])[ AgentSql.JobDocument, AgentSql.JobDocumentSteps, AgentSql.JobCategories, AgentSql.Operators, AgentSql.Alerts, AgentSql.AgentMail, AgentSql.MailProfiles,
             AgentSql.JobDocumentFacts, AgentSql.OwnerLogins, AgentSql.JobStepDatabases, AgentSql.Subsystems, ..AgentSql.JobStepProxies])
             check(AgentSql.Known(statement) && AgentSql.Lint(statement, null).Count == 0, "the job document's read " + statement.Id + " is one the reader runs, and passes the Agent read lint");
@@ -85,12 +85,12 @@ internal static class AgentJobDocumentChecks
             (existing + Call(1, "EXEC @rc = msdb.dbo.sp_delete_job @job_id = @job_id;"), "EXECs sp_delete_job, which a job save does not call"),
             (existing + Call(1, "EXEC @rc = msdb.dbo.sp_update_job @enabled = @enabled;"), "sp_update_job does not name the job"),
             (existing + Call(1, "EXEC @rc = msdb.dbo.sp_update_job @job_id = @job_id OUTPUT, @enabled = @enabled;"), "passes @job_id as an OUTPUT"),
-            (existing + AgentSql.AlertGuard(1) + Call(1, "EXEC @rc = msdb.dbo.sp_update_alert @name = @name_1, @job_id = @no_job;") + Call(2, "EXEC @rc = msdb.dbo.sp_update_job @job_id = @job_id, @enabled = @enabled;"), "updates the job more than once, or calls out of the save's order (job, alerts, step deletes, temporary names, inserts, step contents, Start step)"),
+            (existing + AgentSql.AlertGuard(1) + Call(1, "EXEC @rc = msdb.dbo.sp_update_alert @name = @name_1, @job_id = @no_job;") + Call(2, "EXEC @rc = msdb.dbo.sp_update_job @job_id = @job_id, @enabled = @enabled;"), "updates the job more than once, or calls out of the save's order (job, alerts, step deletes, temporary names, inserts, step contents, Start step, schedules)"),
             (existing + add, "adds a job in an existing job's save"),
             (AgentSql.NewJobHead + Call(1, "EXEC @rc = msdb.dbo.sp_add_job @job_name = @job_name, @job_id = @job_id;") + Call(2, "EXEC @rc = msdb.dbo.sp_add_jobserver @job_id = @job_id;"),
                 "does not take the new job's id as sp_add_job's OUTPUT"),
-            (AgentSql.NewJobHead + Call(1, "EXEC @rc = msdb.dbo.sp_add_job @job_name = @job_name, @job_id = @job_id OUTPUT;"), "New Job's save is not sp_add_job, its steps, sp_add_jobserver and at most the Start step"),
-            (AgentSql.NewJobHead + add + Call(3, "EXEC @rc = msdb.dbo.sp_update_job @job_id = @job_id, @enabled = @enabled;"), "New Job's save is not sp_add_job, its steps, sp_add_jobserver and at most the Start step"),
+            (AgentSql.NewJobHead + Call(1, "EXEC @rc = msdb.dbo.sp_add_job @job_name = @job_name, @job_id = @job_id OUTPUT;"), "New Job's save is not sp_add_job, its steps, sp_add_jobserver, at most the Start step, then its schedules"),
+            (AgentSql.NewJobHead + add + Call(3, "EXEC @rc = msdb.dbo.sp_update_job @job_id = @job_id, @enabled = @enabled;"), "New Job's save is not sp_add_job, its steps, sp_add_jobserver, at most the Start step, then its schedules"),
             (existing + Call(1, "EXEC @rc = master.dbo.xp_servicecontrol @a = @a;"), "uses xp_servicecontrol"),
             (existing, "makes no call")
         };
@@ -307,9 +307,9 @@ internal static class AgentJobDocumentChecks
             (existing + Call(1, "EXEC @rc = msdb.dbo.sp_add_jobstep @job_id = @job_id, @step_id = @step_id_1, @step_name = @step_name_1, @command = @command_1;"), "inserts a step with more than its id and temporary name"),
             (existing + Call(1, "EXEC @rc = msdb.dbo.sp_update_job @job_id = @job_id, @enabled = @enabled, @start_step_id = @start_step_id;"), "sets the Start step with other job settings"),
             (existing + Call(1, "EXEC @rc = msdb.dbo.sp_update_jobstep @job_id = @job_id, @step_id = @step_id_1, @step_name = @step_name_1;")
-                + Call(2, "EXEC @rc = msdb.dbo.sp_delete_jobstep @job_id = @job_id, @step_id = @step_id_2;"), "calls out of the save's order (job, alerts, step deletes, temporary names, inserts, step contents, Start step)"),
+                + Call(2, "EXEC @rc = msdb.dbo.sp_delete_jobstep @job_id = @job_id, @step_id = @step_id_2;"), "calls out of the save's order (job, alerts, step deletes, temporary names, inserts, step contents, Start step, schedules)"),
             (existing + Call(1, "EXEC @rc = msdb.dbo.sp_update_job @job_id = @job_id, @start_step_id = @start_step_id;")
-                + Call(2, "EXEC @rc = msdb.dbo.sp_update_jobstep @job_id = @job_id, @step_id = @step_id_2, @step_name = @step_name_2;"), "calls out of the save's order (job, alerts, step deletes, temporary names, inserts, step contents, Start step)"),
+                + Call(2, "EXEC @rc = msdb.dbo.sp_update_jobstep @job_id = @job_id, @step_id = @step_id_2, @step_name = @step_name_2;"), "calls out of the save's order (job, alerts, step deletes, temporary names, inserts, step contents, Start step, schedules)"),
             (AgentSql.NewJobHead + Call(1, "EXEC @rc = msdb.dbo.sp_add_job @job_name = @job_name, @job_id = @job_id OUTPUT;") + Call(2, "EXEC @rc = msdb.dbo.sp_add_jobstep @job_id = @job_id, @step_id = @step_id_2, @step_name = @step_name_2;")
                 + Call(3, "EXEC @rc = msdb.dbo.sp_add_jobserver @job_id = @job_id;"), "adds a new job's step without its whole content"),
             (existing + Call(1, "EXEC @rc = msdb.dbo.sp_update_jobstep @job_id = @job_id, @step_id = @step_id_1, @step_name = @step_name_1, @output_file_name = @output_file_name_1;"), "updates a step with neither its whole content nor only a temporary name")

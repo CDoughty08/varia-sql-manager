@@ -64,6 +64,7 @@ export const kindDialogActions = [
   'agentJob',
   'agentAlert',
   'agentOperator',
+  'agentSchedule',
   'agentProxy',
   'credential'
 ] as const
@@ -107,6 +108,7 @@ export const dialogIds = [
   'agentJob',
   'agentAlert',
   'agentOperator',
+  'agentSchedules',
   'agentProxy',
   'credential'
 ] as const
@@ -975,6 +977,9 @@ const dialogSpecData = {
   agentAlert: { title: 'Alert Properties', surface: 'document', titleFormat: 'withName', size: 'large', action: 'agentAlert', pages: [page('general', 'General')] },
   // The operator document (AG-7, rx-operators' side pane as a tab): its addresses, pager duty and the alerts that notify it.
   agentOperator: { title: 'Operator Properties', surface: 'document', titleFormat: 'withName', size: 'large', action: 'agentOperator', pages: [page('general', 'General')] },
+  // The Schedules document (AG-6c, docs/agent-ui-rethink.md › rx-schedules-doc), which replaces SSMS's Manage Schedules: the grid of the
+  // schedules the login may see, the selected one's editor and its jobs beside it. Each save is one `agentSchedule` action.
+  agentSchedules: { title: 'Schedules', surface: 'document', titleFormat: 'plain', size: 'large', action: 'agentSchedule', pages: [page('schedules', 'Schedules')] },
   // The proxy document (AG-8b, docs/agent-ui-rethink.md › rx-proxy): SSMS's Proxy Account Properties on one screen, its credential created in
   // place. Save runs CREATE CREDENTIAL (when new), the proxy's msdb calls and its grants in one transaction.
   agentProxy: {
@@ -1145,6 +1150,8 @@ export const kindDialogActionSpecs: { readonly [A in KindDialogAction]: KindDial
   // SQL Server on Windows only (the backend refuses Linux as NOT_SUPPORTED); operators run where Agent does.
   agentAlert: { title: 'Alert Properties', dialog: 'agentAlert', kind: 'agentAlert', verb: 'properties', engines: ['box'] },
   agentOperator: { title: 'Operator Properties', dialog: 'agentOperator', kind: 'agentOperator', verb: 'properties', engines: onServers },
+  // A schedule's save from the Schedules document or New › Schedule… (AG-6c): on the SQL Server Agent node, as New Job's.
+  agentSchedule: { title: 'Schedules', dialog: 'agentSchedules', kind: 'agent', verb: 'properties', engines: onServers },
   // The proxy document's Save (AG-8b): an existing proxy's changes, or New Proxy (target the Agent node). Managed Instance has no proxies.
   agentProxy: { title: 'Proxy Account Properties', dialog: 'agentProxy', kind: 'agentProxy', verb: 'properties', engines: ['box'] },
   // The credential document's Save (AG-8b): an existing credential's ALTER, or New Credential (target the server).

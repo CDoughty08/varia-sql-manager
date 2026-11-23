@@ -282,7 +282,7 @@ export const notifyOperatorRequestSchema = z.object({
 
 // --- Commands ------------------------------------------------------------------------------------------------------------
 
-export type AgentOperatorCommandId = 'agent.newOperator' | 'agent.newOperatorOnAgent' | 'agent.newJobOnAgent' | 'agent.openOperator' | 'agent.operators' | 'agentOperator.save' | 'agentOperator.reload' | 'agentOperator.sendTest'
+export type AgentOperatorCommandId = 'agent.newOperator' | 'agent.newOperatorOnAgent' | 'agent.openOperator' | 'agent.operators' | 'agentOperator.save' | 'agentOperator.reload' | 'agentOperator.sendTest'
   | 'agentOperators.save' | 'agentOperators.reload'
 const connected = 'agentEnabled && backendReady && hasConnection'
 const connectFirst = 'Connect to a SQL Server whose SQL Server Agent you can see first.'
@@ -302,12 +302,7 @@ export function agentOperatorCommandEntries(): { readonly [K in AgentOperatorCom
     'agent.newOperatorOnAgent': {
       title: 'Operator…', category: 'SQL Server Agent', icon: 'add', keywords: [], palette: false,
       precondition: connected, unavailableHint: connectFirst,
-      menus: [{ menu: 'explorer.new', group: '1_agent', order: 3, mnemonic: 'o', when: "explorerNode == 'agent' && agentRole == 'sysadmin' && !explorerServerLost" }]
-    },
-    'agent.newJobOnAgent': {
-      title: 'Job…', category: 'SQL Server Agent', icon: 'add', keywords: [], palette: false,
-      precondition: connected, unavailableHint: connectFirst,
-      menus: [{ menu: 'explorer.new', group: '1_agent', order: 1, mnemonic: 'j', when: "explorerNode == 'agent' && !explorerServerLost" }]
+      menus: [{ menu: 'explorer.new', group: '2_agent', order: 3, mnemonic: 'o', when: "explorerNode == 'agent' && agentRole == 'sysadmin' && !explorerServerLost" }]
     },
     'agent.openOperator': {
       title: 'Open Operator…', category: 'SQL Server Agent', icon: 'go-to-file', keywords: ['agent', 'operator', 'properties', 'edit', 'sqlserveragent'],

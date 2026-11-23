@@ -121,6 +121,7 @@ import { JobDocumentService } from '../agent/JobDocumentService'
 import { AlertOperatorDocumentService, alertSpec, operatorSpec, operatorsSpec, type AlertDocumentService, type OperatorDocumentService, type OperatorsDocumentService } from '../agent/AlertOperatorDocumentService'
 import { agentContribution } from '../contributions/agent'
 import { agentObjectsContribution } from '../contributions/agent-objects'
+import { SchedulesService } from '../agent/SchedulesService'
 import { ProxyDocumentService } from '../agent/ProxyDocumentService'
 import { CredentialDocumentService } from '../agent/CredentialDocumentService'
 import { agentProxyContribution } from '../contributions/agent-proxy'
@@ -290,6 +291,7 @@ export interface Workbench extends Disposable {
   readonly alertDocuments: AlertDocumentService
   readonly operatorDocuments: OperatorDocumentService
   readonly operatorsDocuments: OperatorsDocumentService
+  readonly schedules: SchedulesService
   /** The proxy and Credential documents (AG-8b). */
   readonly proxyDocuments: ProxyDocumentService
   readonly credentialDocuments: CredentialDocumentService
@@ -559,6 +561,11 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const alertDocuments = new AlertOperatorDocumentService(alertSpec, { api, documents, files, connections, targetIdOf, focus: agentObjectFocus('data-agent-alert') })
   const operatorDocuments = new AlertOperatorDocumentService(operatorSpec, { api, documents, files, connections, targetIdOf, focus: agentObjectFocus('data-agent-operator') })
   const operatorsDocuments = new AlertOperatorDocumentService(operatorsSpec, { api, documents, files, connections, targetIdOf, focus: agentObjectFocus('data-agent-operators') })
+  // The Schedules document (AG-6c): Manage Schedules, and New › Schedule… with a new schedule in its editor.
+  const schedules = new SchedulesService({
+    api, documents, connections, targetIdOf,
+    focus: (id, target) => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-schedules="${CSS.escape(id)}"] ${target === 'name' ? '[data-schedule-name]' : '[data-agent-schedules-focus]'}`)?.focus())
+  })
   // The proxy and Credential documents (AG-8b): New's name field, else the first section's item in the list.
   const focusAgentObject = (attribute: string, field: string) => (id: string) => focusLater(() => {
     const root = document.querySelector<HTMLElement>(`[${attribute}="${CSS.escape(id)}"]`)
@@ -768,6 +775,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     alertDocuments,
     operatorDocuments,
     operatorsDocuments,
+    schedules,
     proxyDocuments,
     credentialDocuments,
     objectSearch,
@@ -830,6 +838,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       alertDocuments.dispose()
       operatorDocuments.dispose()
       operatorsDocuments.dispose()
+      schedules.dispose()
       proxyDocuments.dispose()
       credentialDocuments.dispose()
       // Before the live views: each monitor disposes its own; then the client, while the port is still there.

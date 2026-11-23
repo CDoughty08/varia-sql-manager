@@ -189,7 +189,7 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     activeDocumentIsJobActivity: active?.kind === 'agentJobActivity', activeDocumentIsAgentJob: active?.kind === 'agentJob',
     activeDocumentIsAgentAlert: active?.kind === 'agentAlert', activeDocumentIsAgentOperator: active?.kind === 'agentOperator', activeDocumentIsAgentOperators: active?.kind === 'agentOperators',
     activeDocumentIsAgentProxy: active?.kind === 'agentProxy', activeDocumentIsCredential: active?.kind === 'credential',
-    activeDocumentIsLogViewer: active?.kind === 'agentLogViewer',
+    activeDocumentIsLogViewer: active?.kind === 'agentLogViewer', activeDocumentIsAgentSchedules: active?.kind === 'agentSchedules',
     activeDocumentIsSsisOperations: active?.kind === 'ssisOperations', ssisOperationStoppable: !!operations?.stoppable, ssisOperationsPaused: !!operations?.paused, ssisOperationsRefreshable: !!operations?.refreshable, ssisOperationsPausable: !!operations?.pausable,
     designerEditable: !!designer?.editable, designerRowSelected: !!designer?.rowSelected, designerPrimaryKeyRemovable: !!designer?.keyRemovable, designerSaving: !!inputs.designer?.saving, multipleDocuments: documents.documents.length > 1, multipleEditorGroups: groups.length > 1,
     activeDocumentFloating: !!activeGroup?.floating, documentBusy: documents.busy,

@@ -3,14 +3,16 @@
 // edit counts on Save, Save sends one agentJob action carrying the version it read, a save that loses the race (the job-save-race
 // control file) opens the field-by-field compare whose Reload and keep my changes saves on the next try, Start once at step sends the
 // chosen step, Steps reorders, parses, deletes with Undo and saves the renumbering (AG-6b), and New Job from the palette copies an existing
-// job and creates it. Alerts and operators (AG-7): the new job's New alert for this job creates an alert that runs it and notifies an operator,
-// and the palette's Operators and Notifications grid saves a changed cell as one agentAlert action and sends a test e-mail through the fake
-// backend (nothing is sent). Screenshots in Dark and Light go to artifacts/.
+// job and creates it. The Schedules section (AG-6c) adds a new schedule from a preset and attaches a shared one found by search, both sent
+// with the job's Save; the Schedules document (Manage Schedules) saves the Enabled box at once and a rename under the schedule's guard, and
+// the Agent node's New › Schedule… creates one. Alerts and operators (AG-7): the new job's New alert for this job creates an alert that runs
+// it and notifies an operator, and the palette's Operators and Notifications grid saves a changed cell as one agentAlert action and sends a
+// test e-mail through the fake backend (nothing is sent). Screenshots in Dark and Light go to artifacts/.
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { chooseExplorerMenuItem } from './fixtures/explorer-tree.mjs'
-import { documentFrame, documentState, documentTab, documentVerb, gridPart, liveGrid, quickInputRows, statusBar, toolbarButton } from './fixtures/ui.mjs'
+import { closeDocumentButton, documentFrame, documentState, documentTab, documentVerb, gridPart, liveGrid, quickInputRows, statusBar, toolbarButton } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -101,6 +103,64 @@ try {
   expect(accepted.agentJob.version).toBe(refused.agentJob.version + 1)
   console.log('Stale passed: a lost race opens the compare, and Reload and keep my changes saves on the next try.')
 
+  step = 'schedules'
+  // The Schedules section: New schedule from a preset with its sentence and next runs, and a shared schedule found by search and attached.
+  const section = job('Nightly').getByRole('group', { name: /^Schedules/ })
+  await expect(section.getByRole('button', { name: /Nightly 02:30/ })).toBeVisible()
+  await section.getByRole('button', { name: 'New schedule', exact: true }).click()
+  // A schedule that blocks Save says so on its row and under the list, even while another is selected.
+  await section.getByRole('button', { name: /Nightly 02:30/ }).click()
+  await expect(section.getByRole('button', { name: /needs a fix before Save/ })).toBeVisible()
+  await expect(section.getByText('(no name): The schedule needs a name.', { exact: true })).toBeVisible()
+  await section.getByRole('button', { name: /needs a fix before Save/ }).click()
+  await section.getByLabel('Name', { exact: true }).fill('Weekly reports')
+  await section.getByRole('button', { name: 'Weekdays at…', exact: true }).click()
+  await expect(section.getByText('Occurs every week on Monday, Tuesday, Wednesday, Thursday, Friday at 00:00.', { exact: false })).toBeVisible()
+  await expect(section.getByRole('region', { name: 'Next 5 runs', exact: true }).getByRole('listitem')).toHaveCount(5)
+  await section.getByRole('searchbox', { name: 'Search shared schedules', exact: true }).fill('quarter')
+  await section.getByRole('list', { name: 'Shared schedules', exact: true }).getByRole('button', { name: /Quarter end/ }).click()
+  await section.getByRole('region', { name: 'Shared schedule Quarter end', exact: true }).getByRole('button', { name: 'Attach to this job', exact: true }).click()
+  await page.screenshot({ path: 'artifacts/agent-job-schedules.png' })
+  await verb('Nightly', 'Save · 2 changes').click()
+  await expect(job('Nightly').getByRole('status').filter({ hasText: 'The job was saved.' })).toBeVisible()
+  expect((await saves()).at(-1).agentJob.schedules).toMatchObject({ attach: [{ id: 2, version: 1 }], add: [{ name: 'Weekly reports', enabled: true, timing: { freqType: 8, freqInterval: 62 } }] })
+  await expect(section.getByRole('button', { name: /Weekly reports/ })).toBeVisible()
+  console.log('Schedules passed: a preset fills a new schedule, a search finds a shared one to attach, and both go with the job\'s Save.')
+
+  step = 'schedules document'
+  // Manage Schedules from the palette: the Enabled box saves at once, and the selected schedule's rename saves under its guard.
+  const scheduleSaves = async () => (await calls('actions.execute')).filter(call => call.action === 'agentSchedule')
+  await page.keyboard.press('F1')
+  await page.keyboard.type('Manage Schedules')
+  await quickInputRows(page).filter({ hasText: 'Manage Schedules' }).first().click()
+  await expect(documentTab(page, 'Schedules')).toHaveAttribute('aria-selected', 'true')
+  const grid = page.getByRole('table', { name: 'Schedules', exact: true })
+  await expect(grid.getByRole('button', { name: 'Weekly reports', exact: true })).toBeVisible()
+  await grid.getByRole('checkbox', { name: 'Enabled: Nightly 02:30', exact: true }).click()
+  await expect.poll(async () => (await scheduleSaves()).at(-1)).toMatchObject({ target: { kind: 'agent' }, agentSchedule: { op: 'disable', schedule: { id: 1, version: 2 } } })
+  await expect(grid.getByRole('checkbox', { name: 'Enabled: Nightly 02:30', exact: true })).not.toBeChecked()
+  await grid.getByRole('button', { name: 'Quarter end', exact: true }).click()
+  const detail = page.getByRole('region', { name: 'Schedule Quarter end', exact: true })
+  await detail.getByLabel('Name', { exact: true }).fill('Quarter close')
+  await detail.getByRole('button', { name: 'Save · 1 change', exact: true }).click()
+  await expect(page.getByRole('status').filter({ hasText: 'Saved Quarter close.' })).toBeVisible()
+  expect((await scheduleSaves()).at(-1)).toMatchObject({ agentSchedule: { op: 'update', schedule: { id: 2 }, name: 'Quarter close' } })
+  await page.screenshot({ path: 'artifacts/agent-schedules-dark.png' })
+  // With every change saved the tab closes at once, and New › Schedule… opens it again on a new schedule; Create adds it.
+  await closeDocumentButton(page, 'Schedules').click()
+  await expect(documentTab(page, 'Schedules')).toHaveCount(0)
+  await chooseExplorerMenuItem(page, ['server-a', 'SQL Server Agent'], ['New', 'Schedule…'])
+  const created = page.getByRole('region', { name: 'New schedule', exact: true })
+  // New schedule puts the caret in its Name, not in the filter, once the first read draws it.
+  await expect(created.getByLabel('Name', { exact: true })).toBeFocused()
+  await created.getByLabel('Name', { exact: true }).fill('Ad hoc')
+  await created.getByRole('button', { name: 'Create', exact: true }).click()
+  await expect(page.getByRole('status').filter({ hasText: 'Created Ad hoc.' })).toBeVisible()
+  expect((await scheduleSaves()).at(-1)).toMatchObject({ agentSchedule: { op: 'create', name: 'Ad hoc', enabled: true } })
+  await expect(page.getByRole('region', { name: 'Schedule Ad hoc', exact: true })).toBeVisible()
+  await documentTab(page, 'Job Properties - Nightly').click()
+  console.log('Schedules document passed: Enabled saves at once, a rename saves under its guard, and New › Schedule… creates one.')
+
   step = 'start at step'
   // Start once at step lists the steps and sends the chosen one; the header shows the run.
   await job('Nightly').getByRole('button', { name: 'Start once at step', exact: true }).click()
@@ -182,10 +242,10 @@ try {
   await documentVerb(alert, 'Backup weekly late', 'Create').click()
   await expect(documentTab(page, 'Alert Properties - Backup weekly late')).toHaveAttribute('aria-selected', 'true')
   await expect(alert.getByRole('status').filter({ hasText: 'The alert was created.' })).toBeVisible()
-  const created = (await calls('actions.execute')).filter(call => call.action === 'agentAlert').at(-1)
-  expect(created).toMatchObject({ target: { kind: 'agent' }, agentAlert: { name: 'Backup weekly late', severity: 17, notifications: [{ name: 'DBA Team', methods: 1, change: 'add' }] } })
-  expect(created.agentAlert.jobId).toBeTruthy()
-  expect(created.agentObjectId).toBeUndefined()
+  const alertSave = (await calls('actions.execute')).filter(call => call.action === 'agentAlert').at(-1)
+  expect(alertSave).toMatchObject({ target: { kind: 'agent' }, agentAlert: { name: 'Backup weekly late', severity: 17, notifications: [{ name: 'DBA Team', methods: 1, change: 'add' }] } })
+  expect(alertSave.agentAlert.jobId).toBeTruthy()
+  expect(alertSave.agentObjectId).toBeUndefined()
   await page.screenshot({ path: 'artifacts/agent-alert-dark.png' })
   console.log('New alert passed: the job document opens New Alert for the job, and Create adds it with its operator.')
 
@@ -196,16 +256,16 @@ try {
   await page.keyboard.type('Operators and Notifications')
   await quickInputRows(page).filter({ hasText: 'Operators and Notifications…' }).first().click()
   await expect(documentTab(page, 'Operators and Notifications')).toHaveAttribute('aria-selected', 'true')
-  const grid = documentFrame(page, 'Operators and notifications')
-  await grid.getByRole('button', { name: 'Severity 017, On Call: not notified', exact: true }).click()
-  await expect(grid.getByRole('button', { name: 'Severity 017, On Call: E-mail', exact: true })).toBeVisible()
-  await documentVerb(grid, 'Operators and notifications', 'Save · 1 change').click()
-  await expect(grid.getByRole('status').filter({ hasText: 'The notifications were saved.' })).toBeVisible()
+  const operators = documentFrame(page, 'Operators and notifications')
+  await operators.getByRole('button', { name: 'Severity 017, On Call: not notified', exact: true }).click()
+  await expect(operators.getByRole('button', { name: 'Severity 017, On Call: E-mail', exact: true })).toBeVisible()
+  await documentVerb(operators, 'Operators and notifications', 'Save · 1 change').click()
+  await expect(operators.getByRole('status').filter({ hasText: 'The notifications were saved.' })).toBeVisible()
   expect((await calls('actions.execute')).filter(call => call.action === 'agentAlert').at(-1)).toMatchObject({ target: { kind: 'agentAlert', name: 'Severity 017' }, agentObjectId: 21,
     agentAlert: { notifications: [{ name: 'On Call', methods: 1, change: 'add' }] } })
-  await grid.getByRole('button', { name: 'DBA Team', exact: true }).click()
-  await grid.getByRole('button', { name: 'Send test e-mail', exact: true }).click()
-  await expect(grid.getByRole('status').filter({ hasText: 'Test e-mail queued for DBA Team.' })).toBeVisible()
+  await operators.getByRole('button', { name: 'DBA Team', exact: true }).click()
+  await operators.getByRole('button', { name: 'Send test e-mail', exact: true }).click()
+  await expect(operators.getByRole('status').filter({ hasText: 'Test e-mail queued for DBA Team.' })).toBeVisible()
   expect((await calls('actions.execute')).filter(call => call.action === 'notifyOperator').at(-1)).toMatchObject({ target: { kind: 'agentOperator', name: 'DBA Team' }, agentObjectId: 1 })
   await page.screenshot({ path: 'artifacts/agent-operators-dark.png' })
   console.log('Operators grid passed: a changed cell saves as its alert\'s change, and Send test e-mail names the operator by id.')
