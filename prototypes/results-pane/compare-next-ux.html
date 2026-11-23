@@ -397,7 +397,7 @@ function sceneIgnore() {
   const list = COLS.map((c, i) => ({ c, i })).filter(({ c }) => c[0].includes(S.ignoreFind.toLowerCase()))
   const allTicked = draft.size === COLS.length
   const menu = S.ignoreMenu ? `<div class="menu" id="ignMenu" role="dialog" aria-label="Ignore columns" style="top:28px;left:0">
-      <input class="mfind" id="ignFind" placeholder="Find a column" value="${esc(S.ignoreFind)}" aria-label="Find a column">
+      <input class="mfind" id="ignFind" placeholder="Search columns" value="${esc(S.ignoreFind)}" aria-label="Search columns to ignore">
       ${list.map(({ c, i }) => i === 0 && !auto
         ? `<label class="mi off" title="Rows are matched by this column, so it cannot be ignored."><input type="checkbox" disabled> ⚷ ${esc(c[0])} <small>${esc(c[1])}</small><span class="acc">Rows are matched by this column, so it cannot be ignored.</span></label>`
         : `<label class="mi"><input type="checkbox" data-ign="${i}"${draft.has(i) ? ' checked' : ''}> ${esc(c[0])} <small>${esc(c[1])}</small>${i === 0 && !draft.has(0) ? '<span class="acc">Chosen automatically: ignoring it matches rows another way</span>' : ''}</label>`).join('')}
@@ -728,14 +728,14 @@ function sceneScript() {
       ${first || badName ? '' : idxLine}</div>
     <div class="sec"><div class="h">Direction</div>
       <label class="row2"><input type="radio" name="dir" data-dir="toNew"${noDir || toOld ? '' : ' checked'}> ${esc(tname)} holds ${RES[0]}'s rows: change them to ${RES[1]}'s</label>
-      <label class="row2"><input type="radio" name="dir" data-dir="toOld"${!noDir && toOld ? ' checked' : ''}> ${esc(tname)} holds ${RES[1]}'s rows: change them to ${RES[0]}'s</label>${noDir || S.script.dir !== S.script.dirOrig ? '' : `<div class="row2 infol" style="font-size:11px">Remembered from the last script for ${RES[0]} and ${RES[1]}.</div>`}</div>
+      <label class="row2"><input type="radio" name="dir" data-dir="toOld"${!noDir && toOld ? ' checked' : ''}> ${esc(tname)} holds ${RES[1]}'s rows: change them to ${RES[0]}'s</label>${noDir || S.script.dir !== S.script.dirOrig ? '' : `<div class="row2 infol" style="font-size:11px">Remembered from last time for ${RES[0]} and ${RES[1]}.</div>`}</div>
     <div class="sec"><div class="h">Statements</div>
       <label class="row2"><input type="checkbox" data-sc="del"${sc.del ? ' checked' : ''}> DELETE${noDir || st === 'preverror' ? '' : ` <small>(${dels})</small>`}</label>
       <label class="row2"><input type="checkbox" data-sc="upd"${sc.upd ? ' checked' : ''}> UPDATE${noDir || st === 'preverror' ? '' : ` <small>(${upds})</small>`}</label>
       <label class="row2"><input type="checkbox" data-sc="ins"${sc.ins ? ' checked' : ''}> INSERT${noDir || st === 'preverror' ? '' : ` <small>(${ins})</small>`}</label>
       ${lookLine ? `<div class="row2 warnl" style="font-size:11px">⚠ ${lookLine}</div>` : ''}
       ${sc.del ? '<div class="row2 infol" style="font-size:11px">ⓘ DELETEs fire the target\'s delete triggers and ON DELETE cascades. A row missing from a result is deleted, even when the query only left it out (a WHERE or TOP).</div>' : ''}</div>
-    <div class="sec"><div class="h">Columns</div><input class="txt" type="search" aria-label="Search columns" placeholder="Search columns" style="margin-bottom:4px"><div class="cols" role="group" aria-label="Columns (arrows move, Space ticks)">${COLS.map((c, i) => i === 0 ? `<label class="off"><input type="checkbox" checked aria-disabled="true" tabindex="0" onclick="return false" aria-describedby="keyWhy"> ⚷ ${c[0]} <small id="keyWhy">Key column: always scripted</small></label>`
+    <div class="sec"><div class="h">Columns</div><input class="txt" type="search" aria-label="Search columns to script" placeholder="Search columns" style="margin-bottom:4px"><div class="cols" role="group" aria-label="Columns (arrows move, Space ticks)">${COLS.map((c, i) => i === 0 ? `<label class="off"><input type="checkbox" checked aria-disabled="true" tabindex="0" onclick="return false" aria-describedby="keyWhy"> ⚷ ${c[0]} <small id="keyWhy">Key column: always scripted</small></label>`
       : `<label><input type="checkbox" tabindex="-1" data-scol="${i}"${cols.includes(i) ? ' checked' : ''}> ${c[0]}${S.ignore.has(i) ? ' (ignored):' : ''} <small>${S.ignore.has(i) ? 'INSERT only' : c[1]}</small></label>`).join('')}${st === 'notintarget' ? `<label><input type="checkbox" tabindex="-1"> server_time (ignored): <small>Not in ${esc(tgtq)}</small></label>` : ''}</div>
       ${untickedLines.map(t => `<div class="row2 warnl" style="font-size:11px">⚠ ${t}</div>`).join('')}
       ${ignLine ? `<div class="row2 warnl" style="font-size:11px">⚠ ${ignLine}</div>` : ''}
