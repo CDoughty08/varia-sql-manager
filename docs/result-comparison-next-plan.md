@@ -480,8 +480,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - The **old value** depends on the cell:
     - One row, changed cell: the hidden previous-value column at `old + pair`, in the same row.
     - One row, soft cell: no old value is stored. It is read from the old input's cell (its stored row from the gutter's
-      `leftRow`, through the input's own handle) while the input is open. Otherwise the card gives the closed-input
-      state above.
+      `leftRow`, which is 1-based, less one, through the input's own handle) while the input is open. Otherwise the card
+      gives the closed-input state above.
     - Two rows, soft cell: an entry whose only differences are soft is `same`, stored as one row
       (`UnifiedDiff.StoredRows`), so there is no other half. It takes One row's soft path: the old input's cell at
       `leftRow`, or the closed-input state.
@@ -839,7 +839,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     it never reads as if the target already matched. Either way Script is unavailable.
     - The preview asks the backend for its 30 lines (`results.scriptDiff` with `maxLines`), 300 ms after the form last
       changed, cancelling the request before. It refuses only what those lines need (a truncated or U+FFFD value among
-      them, or a refusal known on opening); the rest are found on Script.
+      them, or a refusal known on opening); the rest are found on Script. A preview line over 2,000 characters (a long
+      value's literal) ends in "…", the preview's only cut; the script holds it whole.
     - The counts and the summary are entries by kind in the chosen rows. All differences reads the diff's own counts.
       Rows in the grid and Selected rows are counted by the backend in one pass over the chosen rows, reserving the bit
       per stored row as Copy as Diff does; in Two rows an entry is chosen when either half is (a value filter on an old
@@ -951,9 +952,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     takes the same refusal ("1 value in ratio cannot be written exactly (row id = 1004)."), so an INSERT or SET never
     writes 0 in its place;
   - a key value of a char or varchar column with a SQL_ collation that is not all ASCII (Literals below): "2 key values
-    in code cannot be matched exactly under its collation ('Straße' and 1 more). Choose rows without them, or other
-    key columns.", with
-    **Choose key columns…**;
+    in code cannot be matched exactly under its collation ('Straße' and 1 more). Choose rows without them, or other key
+    columns.", with **Choose key columns…**;
   - no differences in the chosen rows: "The chosen rows have no differences to script.";
   - every UPDATE skipped because its changes are all in unticked columns, with no other statement left: "None of the
     ticked columns changed in the chosen rows. Tick a changed column.";
@@ -1020,26 +1020,32 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - its reservations (Budget below);
     - the fake backend, and `FakeHandle` in `tests/fixtures/results.ts`.
   - **Params:** `{ resultId, viewId?, rows?: ranges (as Copy's parts), target: { database, schema, name } (each 1–128
-    characters, no control characters, U+2028 or U+2029; the renderer resolves a two-part name to the query
-    document's database, so it is always sent), names: { left, right, document, server } (each 1–260 characters, for
-    the header, which escapes each one's control characters), direction: 'toNew' | 'toOld', columns: number[],
-    identity?: number,
-    statements: { delete, update, insert }, transaction, checkRows, identityInsert, maxLines? }`. `columns` holds
-    distinct pair indexes, at most `limits.page.maxColumns` in zod, each below the pair count (checked in C#).
-    `identity` is the pair the index names as the target's identity column, one of `columns` (checked in both): only
-    the renderer knows it, from Search Objects. `DiffScript` leaves it out of every SET. With `identityInsert` on it
-    wraps the INSERTs in `SET IDENTITY_INSERT`; with it off it leaves the identity column out of the INSERTs, and
-    refuses (`INVALID_PARAMS`) when that column is a key.
+    characters, no control characters, U+2028 or U+2029; the renderer resolves a two-part name to the query document's
+    database, so it is always sent), names: { left, right, document, server } (each 1–260 characters, for the header,
+    which escapes each one's control characters), direction: 'toNew' | 'toOld', columns: number[], identity?: number,
+    statements: { delete, update, insert }, transaction, checkRows, identityInsert, rowsChoice: 'all' | 'grid' |
+    'selected' (for the header, since a grid with no filter sends no view), maxLines? }`. `columns` holds distinct pair
+    indexes, at most `limits.page.maxColumns` in zod, each below the pair count (checked in C#). `identity` is the pair
+    the index names as the target's identity column, one of `columns` (checked in both): only the renderer knows it,
+    from Search Objects. `DiffScript` leaves it out of every SET. With `identityInsert` on it wraps the INSERTs in `SET
+    IDENTITY_INSERT`; with it off it leaves the identity column out of the INSERTs, and refuses (`INVALID_PARAMS`) when
+    that column is a key; `identityInsert` on without `identity` is `INVALID_PARAMS` in both zod and C#.
   - **Deadline and Cancel:** 120 s in `methodPolicies`, as the other result jobs. The dialog's Cancel cancels the request
     through the protocol's cancel, and the backend drops its chunks.
   - **Preview:** `maxLines?: number` (1–30) answers only the first lines, with `complete: false` when there are more,
     and always the counts by kind for the chosen rows, even when it refuses (the refusal then comes back as the answer's
-    `refusal` sentence, not an error). It
-    reads only the rows those lines need, and skips the size estimate.
-  - **Answer:** `{ text (≤ 1,000,000 characters), deletes, updates, inserts, complete, refusal? }`. Past 1,000,000
-    characters, estimated first, it answers `TOO_LARGE`, well inside the 16 MiB response limit. Other refusals are
-    `INVALID_PARAMS` with the sentences above. The backend itself refuses a comparison whose match is not a `columns`
-    match, so Automatic's choice can never be scripted by accident (Use order_no as key columns replaces the
+    `refusal`, not an error). It reads only the rows those lines need, and skips the size estimate. Each preview line is
+    cut at 2,000 characters with "…", so a preview answer stays within 60,000 characters whatever the values (one INSERT
+    of a 2,097,152-character XML value is about 8.4 million characters as its hex term); the size refusal is Script's.
+  - **Answer:** `{ text (≤ 1,000,000 characters), deletes, updates, inserts, complete, refusal? }`. A refusal is an
+    answer, not an error, with empty `text`: `refusal: { kind, sentence }`, `kind` one of `asShown`, `keyType`,
+    `keyName`, `notColumns`, `repeatedKey`, `truncated`, `unwritable`, `keyCollation`, `noDifferences`, `noTickedChange`
+    and `tooLarge`, and the sentence at most 1,000 characters, both bounded in the answer schema. The dialog chooses the
+    refusal's buttons and its closed-input wording by `kind`, never by parsing the sentence, which carries counts and
+    names. Past 1,000,000 characters, estimated first, it refuses with `tooLarge`, well inside the 16 MiB response
+    limit. In a preview the counts are the chosen rows' entries by kind; after Script they are the script's own
+    statements, which can be lower (Counts above). The backend itself refuses a comparison whose match is not a
+    `columns` match, so Automatic's choice can never be scripted by accident (Use order_no as key columns replaces the
     comparison with that `columns` match first), and a comparison of rows as shown. Both read the diff set's records
     (C3's match and C6's as-shown flags), and the WHERE clauses take the recorded key pairs, so the params carry no key
     columns.
@@ -1050,7 +1056,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   | Integers; decimal, numeric, money, smallmoney | As stored; decimals exactly |
   | float, real | Stored as G15 and G7 text: that text when it reads back as the value, else the exact value kept beside it (`PageLengths.TryExact`, in CellLengths.cs), written round-trip. Always with an exponent (`3.0000000000000004E-1`, `1E0`): without one, T-SQL reads the text as a numeric literal, whose conversion to float may not round correctly. A real is written as its value widened to double, in that double's round-trip text (0.1 as `1.0000000149011612E-1`): a literal is a float, and comparing it with a real column widens the real, so the shorter `1E-1` would find no row as a key or in Q11's guard, while the widened value is exact both compared and assigned, with no decimal → double → real double rounding. A non-zero float smaller in magnitude than 2.2250738585072014E-308 (subnormal: SQL Server stores one that arithmetic produces, but reads its literal as 0) is refused as a value that cannot be written exactly; a real widened to double is never subnormal |
   | bit | 0 or 1 |
-  | char, varchar, text; nchar, nvarchar, ntext | `N'…'` with `''` escaping. A non-N literal is read in the database's default code page, so even char columns get `N'…'`, converted to the column's collation on assignment. CR, LF, U+0085, U+2028, U+2029 and every other control character but tab are written as `NCHAR(n)` joins (`N'a' + NCHAR(13) + NCHAR(10) + N'b'`): the query window's model normalizes line breaks and the clipboard may convert them. A joined value over 4,000 characters starts with `CAST(N'…' AS nvarchar(max))`, since joining shorter strings stops at 4,000. A value that would need more than 64 joins (pretty-printed JSON or XML, a long multi-line note) is written instead as one exact term, `CAST(0x<its UTF-16LE bytes> AS nvarchar(max))`: a chain of thousands of `+` terms risks SQL Server's nesting and expression limits (errors 191, 8631, 8632), which would fail the statement and roll the script back. The size estimate counts its 4 hex digits a code unit. In a WHERE clause (keys, Q11's guard, the INSERT check) a char or varchar value that is all ASCII is written as a plain `'…'` literal instead: ASCII has the same bytes in every code page, and the comparison then follows the column's own collation, while under a SQL_ collation a varchar column compared with `N'…'` follows Unicode rules, so `N'ss'` also matches a stored 'ß'. A value that is not all ASCII from a column with a SQL_ collation (`ResultCollation.SortId` ≠ 0) cannot be matched exactly: as a key it is refused, and Q11's guard leaves it out. Under a Windows collation it is written `N'…'`, which compares by the same rules |
+  | char, varchar, text; nchar, nvarchar, ntext | `N'…'` with `''` escaping. A non-N literal is read in the database's default code page, so even char columns get `N'…'`, converted to the column's collation on assignment. CR, LF, U+0085, U+2028, U+2029 and every other control character but tab are written as `NCHAR(n)` joins (`N'a' + NCHAR(13) + NCHAR(10) + N'b'`): the query window's model normalizes line breaks and the clipboard may convert them. A joined value over 4,000 characters starts with `CAST(N'…' AS nvarchar(max))`, since joining shorter strings stops at 4,000. A value that would need more than 64 joins (pretty-printed JSON or XML, a long multi-line note) is written instead as one exact term, `CAST(0x<its UTF-16LE bytes> AS nvarchar(max))`: a chain of thousands of `+` terms risks SQL Server's nesting and expression limits (errors 191, 8631, 8632), which would fail the statement and roll the script back. The size estimate counts its 4 hex digits a code unit. In a WHERE clause (keys, Q11's guard, the INSERT check) a char or varchar value that is all ASCII is written in a plain form instead, varchar end to end: `'…'`, its control characters joined with `CHAR(n)` (an `NCHAR` term would make the whole expression nvarchar again), a joined value over 8,000 characters started with `CAST('…' AS varchar(max))` (non-max varchar joins stop at 8,000), and past 64 joins `CAST(0x<its ASCII bytes> AS varchar(max))`: ASCII has the same bytes in every code page, and the comparison then follows the column's own collation, while under a SQL_ collation a varchar column compared with `N'…'` follows Unicode rules, so `N'ss'` also matches a stored 'ß'. A value that is not all ASCII from a column with a SQL_ collation (`ResultCollation.SortId` ≠ 0) cannot be matched exactly: as a key it is refused, and Q11's guard leaves it out. Under a Windows collation it is written `N'…'`, which compares by the same rules |
   | date, time(n), datetime2(n), datetimeoffset(n) | ISO 8601 text in a `CAST('…' AS <type>)` of the column's own type and precision |
   | datetime, smalldatetime | `CAST('yyyy-MM-ddTHH:mm:ss.fff' AS <type>)`: the stored `yyyy-MM-dd HH:mm:ss` form depends on DATEFORMAT and language, the `T` form does not |
   | uniqueidentifier | Quoted |
@@ -1094,6 +1100,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - quoting, NULL keys, composite keys;
     - both directions, statement order, the row checks and their cut key text;
     - Two rows filtered by an old value, so only − halves are in the grid: the counts, the summary and the script agree;
+    - a preview of a 2,097,152-character XML INSERT, cut to 2,000 characters a line; each refusal's `kind`;
     - Q11's old values in an UPDATE's WHERE: NULL, each type it leaves out, a truncated or U+FFFD value left out, a
       real key and guard compared exactly, both directions; the same in a DELETE's WHERE; the INSERT check with NULL
       and composite keys;
@@ -1115,18 +1122,20 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - identity with SET IDENTITY_INSERT on and off, and off refused for an identity key;
     - floats with 17 significant digits and none after the point, written with an exponent; a subnormal float
       refused, and a subnormal real written widened;
-    - char keys and guards: all-ASCII values written plain, others refused (keys) or left out (guards) under a SQL_
-      collation and written `N'…'` under a Windows one;
+    - char keys and guards: all-ASCII values written plain, with `CHAR` joins, the varchar(max) cast and the varchar hex
+      term, never an nvarchar term; others refused (keys) or left out (guards) under a SQL_ collation and written `N'…'`
+      under a Windows one;
     - key columns a WHERE cannot use, unnamed and repeated names, an identity pair never SET, pairs whose types differ.
   - A **live round trip** (`VARIA_TEST_SQL_SCRATCH`): two scratch tables with every type (multi-line and
     control-character text, a value with 10,000 line breaks, an xml value stored with style 1, 17-digit floats, a
-    subnormal real, a real key column, and a varchar key under SQL_Latin1_General_CP1_CI_AS holding 'ss' beside 'ß',
-    included), compare their SELECTs, script, run the script on the target, then
-    compare again and expect no differences. Run it in both directions, and under a non-English language and DATEFORMAT.
-    Then run a script of the wrong direction, once whole and once with only INSERT ticked, and one whose deleted row was
-    changed after the comparison, and expect the check's THROW, with the target unchanged and, in the same session, an
-    ordinary INSERT into the identity table succeeding (IDENTITY_INSERT was turned off). It is a new live `Suite(...)`
-    with a `LiveGroups.Suites` entry, and its CI seconds go in docs/ci.md's table.
+    subnormal real, a real key column, and a varchar key and guarded column under SQL_Latin1_General_CP1_CI_AS holding
+    'ss' beside 'ß' and 'ss' + CR beside 'ß' + CR, only the 'ss' rows changed, included), compare their SELECTs, script,
+    run the script on the target, then compare again and expect no differences. Run it in both directions, and under a
+    non-English language and DATEFORMAT. Then run a script of the wrong direction, once whole and once with only INSERT
+    ticked, and one whose deleted row was changed after the comparison, and expect the check's THROW, with the target
+    unchanged and, in the same session, an ordinary INSERT into the identity table succeeding (IDENTITY_INSERT was
+    turned off). It is a new live `Suite(...)` with a `LiveGroups.Suites` entry, and its CI seconds go in docs/ci.md's
+    table.
   - vitest for the dialog: states, counts per direction, locked and unticked columns, warnings, the comparison replaced
     or closed while open, switching to another comparison, Enter and Escape in the suggestion list and on buttons, the
     draft memory, multipart target names, the Automatic and as-shown refusals and their buttons, the closed-input form
@@ -1374,7 +1383,7 @@ When the last lane ships, this plan folds into the area docs and is deleted.
 | C3 | Copy as Diff, Save as Diff… (Q1) | C2 (the submenu, and the header's `ignored:` part) | M |
 | C5 | Change details card and hover | C2 (the submenu) | M |
 | C6 | Compare rows as shown, Out of date | C2 (both change `results.diff` and the pair memory) | L |
-| C4 | Script Differences as T-SQL | C2 (ignored columns' INSERT rule), C3 (the match and ignored pairs it records on the diff set), Connect in an OS window (dialog windows) | L |
+| C4 | Script Differences as T-SQL | C2 (ignored columns' INSERT rule), C3 (the match and ignored pairs it records on the diff set, and cut changed-pair lists in both layouts), Connect in an OS window (dialog windows) | L |
 | C5b | Compare Values in Tab | C5 | M |
 | (later) | C4b GoogleSQL script; side-by-side; Pivots | Q4; N4 | M; L; M |
 
