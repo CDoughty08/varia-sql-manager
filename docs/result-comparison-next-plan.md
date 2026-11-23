@@ -997,15 +997,16 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     comparison to one customer gets statements only for the rows they saw. It starts there each time, not from the
     draft, so a filter set since never meets a remembered All differences. While All differences is chosen and chips or
     filters hide differences, the summary adds "All differences includes 35 differences the grid does not show."
-    Selected rows are the grid's selection, which always holds at least the active cell's row. The dialog follows it
-    live, so the option names the keys of the chosen entries that differ while there are at most three ("Selected rows
-    (1: id = 1002)", "(2: id = 1002; id = 1004)", the answer's `selectedKeys`, joined with "; " since a composite key
-    holds commas), the header's rows line names them too, and while Selected rows is chosen, a change to the differing
-    entries it holds says "Selected rows now holds 1 difference (id = 1009)." ("…now holds 12 differences." past three,
-    "…now holds no differences." for none), the form the replace sentences take, so a click in the grid to look at a
-    cell never changes the script unnoticed; a move that leaves those entries as they were (another cell of the same
-    row, a row with no difference) says nothing. In Two rows an entry is chosen when either of its halves is. The
-    preview reads them as it shows, and Script reads them again.
+    Selected rows are the grid's selection, which holds at least the active cell's row while the grid has rows; an empty
+    grid (Rows set to Changes only on a comparison with no differences, or a filter that leaves no rows) has none, so
+    Selected rows counts 0. The dialog follows it live, so the option names the keys of the chosen entries that differ
+    while there are at most three ("Selected rows (1: id = 1002)", "(2: id = 1002; id = 1004)", the answer's
+    `selectedKeys`, joined with "; " since a composite key holds commas), the header's rows line names them too, and
+    while Selected rows is chosen, a change to the differing entries it holds says "Selected rows now holds 1 difference
+    (id = 1009)." ("…now holds 12 differences." past three, "…now holds no differences." for none), the form the replace
+    sentences take, so a click in the grid to look at a cell never changes the script unnoticed; a move that leaves
+    those entries as they were (another cell of the same row, a row with no difference) says nothing. In Two rows an
+    entry is chosen when either of its halves is. The preview reads them as it shows, and Script reads them again.
   - **Options:** Wrap in a transaction (on), Check each statement changes one row (on; Q2), with the line "UPDATEs also
     check that the row still holds the values they change from, DELETEs the values the comparison saw, and INSERTs that
     the row is not there yet." (Q11). While UPDATE is ticked and some chosen UPDATEs change only columns the check
@@ -1095,11 +1096,13 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       the header's names take it without the quotes and backslash. Escaping after the cut means a doubled quote or an
       escape is never split.
   - `COMMIT TRANSACTION;`.
-  - When the script turns SET IDENTITY_INSERT on, its body after `SET XACT_ABORT ON;` runs in `BEGIN TRY … END TRY
-    BEGIN CATCH IF @@TRANCOUNT > 0 ROLLBACK; SET IDENTITY_INSERT <target> OFF; THROW; END CATCH`: a rollback does not
-    undo a SET option, so a failed check or key violation would otherwise leave IDENTITY_INSERT on in the query
-    window's session, failing its next ordinary INSERT into the table and any other table's `SET IDENTITY_INSERT …
-    ON`.
+  - When the script turns SET IDENTITY_INSERT on, its body after `SET XACT_ABORT ON;` runs in `BEGIN TRY … END TRY BEGIN
+    CATCH IF @@TRANCOUNT > 0 ROLLBACK; SET IDENTITY_INSERT <target> OFF; THROW; END CATCH`: a rollback does not undo a
+    SET option, so a failed check or key violation would otherwise leave IDENTITY_INSERT on in the query window's
+    session, failing its next ordinary INSERT into the table and any other table's `SET IDENTITY_INSERT … ON`. Cancel or
+    a query timeout in the query window is an attention, which skips CATCH: XACT_ABORT still rolls the transaction back,
+    but IDENTITY_INSERT stays on, so the header adds "-- If you stop it while it runs, run SET IDENTITY_INSERT
+    [Sales_Test].[dbo].[Orders] OFF; in the same window." (Msg 545 otherwise).
   - The New Query Editor Window opens on the comparison's connection, as Script As does, and does not run.
 - **Generating:** the footer shows "Writing statements…" with progress in place of the summary, and the form is
   read-only (its controls `aria-disabled`), so the script written is always the form shown. Script keeps the focus,
@@ -1302,35 +1305,36 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       neither says so once an input is closed;
     - its reservations (Budget below);
     - the fake backend, and `FakeHandle` in `tests/fixtures/results.ts`.
-  - **Params:** `{ resultId, viewId?, rows: ranges (as Copy's parts; at least one, since the selection always holds the
-    active cell's row), target?: { database, schema, name } (each 1–128 characters, no control characters, U+2028 or
-    U+2029; the renderer resolves a two-part name to the query document's database, so it always has three parts),
-    names: { left, right, document, server } (each 1–260 characters, for the header, which escapes each one's control
-    characters), direction?: 'toNew' | 'toOld', columns: number[], identity?: number, statements: { delete, update,
-    insert }, transaction, checkRows, identityInsert, rowsChoice: 'all' | 'grid' | 'selected' (the rows the script
-    takes, and the header's words), maxLines? }`. Whatever Rows chooses, the renderer sends `rows` (the selection) and,
-    while the grid has one, `viewId`, so every answer counts every Rows option. `columns` holds distinct pair indexes,
-    at most `limits.page.maxColumns` in zod, each below the pair count (checked in C#). `identity` is the pair the index
-    names as the target's identity column, one of `columns` (checked in both): only the renderer knows it, from Search
-    Objects. `DiffScript` leaves it out of every SET. With `identityInsert` on it wraps the INSERTs in `SET
-    IDENTITY_INSERT`; with it off it leaves the identity column out of the INSERTs, and refuses (`INVALID_PARAMS`) when
-    that column is a key; `identityInsert` on without `identity` is `INVALID_PARAMS` in both zod and C#. `indexReasons?:
-    { pair, reason: 'computed' | 'generated' | 'notInsertable' | 'notInTarget' }[]` holds the pairs left out for a
-    reason only the index knows (a computed or GENERATED ALWAYS column of the target, a target column of rowversion or
-    timestamp, a column the target lacks), with distinct pairs, at most `limits.page.maxColumns`, each below the pair
-    count and none in `columns`, checked in zod and C#, so the header's left-out line gives the form's reason
-    ("(computed)", "(generated)", "(not insertable)", "(not in [Sales_Test].[dbo].[Orders])") rather than "(unticked)".
-    C# also answers `INVALID_PARAMS` when `columns` leaves out a recorded key pair (an INSERT would write its row
-    without the key, and the existence check by key would still pass), and on Script when no statement is ticked. It
-    answers the four refusals known on opening (below) before it checks `columns` and `identity`, so a comparison keyed
-    on a hierarchyid column or a repeated name gets its refusal, with its Choose key columns…, never `INVALID_PARAMS`
-    and a failed preview. The other locked reasons (rowversion, CLR types, sql_variant, vector) follow from the recorded
-    types. Script (no `maxLines`) requires `target` and `direction` (`INVALID_PARAMS` in both); a preview may leave
-    either out, as the dialog's request on opening does before the form has them. Its answer has empty `text` and
-    carries any of the four refusals known on opening (`asShown`, `keyType`, `keyName`, `notColumns`), `differences`,
-    `updates` and `softValues`, and, only with a `direction`, which decides them (which rows are deleted, and the target
-    side's values and collations), `deletes`, `inserts`, the look-alike counts, `uncheckedUpdates` and
-    `uncheckedDeletes`.
+  - **Params:** `{ resultId, viewId?, rows: ranges (as Copy's parts, but possibly none, since an empty grid has no
+    selection: `GridView` answers no active cell with no rows and `resolveBlocks` drops empty ranges, so Copy's
+    `.min(1)` would refuse the dialog's opening request), target?: { database, schema, name } (each 1–128 characters, no
+    control characters, U+2028 or U+2029; the renderer resolves a two-part name to the query document's database, so it
+    always has three parts), names: { left, right, document, server } (each 1–260 characters, for the header, which
+    escapes each one's control characters), direction?: 'toNew' | 'toOld', columns: number[], identity?: number,
+    statements: { delete, update, insert }, transaction, checkRows, identityInsert, rowsChoice: 'all' | 'grid' |
+    'selected' (the rows the script takes, and the header's words), maxLines? }`. Whatever Rows chooses, the renderer
+    sends `rows` (the selection) and, while the grid has one, `viewId`, so every answer counts every Rows option.
+    `columns` holds distinct pair indexes, at most `limits.page.maxColumns` in zod, each below the pair count (checked
+    in C#). `identity` is the pair the index names as the target's identity column, one of `columns` (checked in both):
+    only the renderer knows it, from Search Objects. `DiffScript` leaves it out of every SET. With `identityInsert` on
+    it wraps the INSERTs in `SET IDENTITY_INSERT`; with it off it leaves the identity column out of the INSERTs, and
+    refuses (`INVALID_PARAMS`) when that column is a key; `identityInsert` on without `identity` is `INVALID_PARAMS` in
+    both zod and C#. `indexReasons?: { pair, reason: 'computed' | 'generated' | 'notInsertable' | 'notInTarget' }[]`
+    holds the pairs left out for a reason only the index knows (a computed or GENERATED ALWAYS column of the target, a
+    target column of rowversion or timestamp, a column the target lacks), with distinct pairs, at most
+    `limits.page.maxColumns`, each below the pair count and none in `columns`, checked in zod and C#, so the header's
+    left-out line gives the form's reason ("(computed)", "(generated)", "(not insertable)", "(not in
+    [Sales_Test].[dbo].[Orders])") rather than "(unticked)". C# also answers `INVALID_PARAMS` when `columns` leaves out
+    a recorded key pair (an INSERT would write its row without the key, and the existence check by key would still
+    pass), and on Script when no statement is ticked. It answers the four refusals known on opening (below) before it
+    checks `columns` and `identity`, so a comparison keyed on a hierarchyid column or a repeated name gets its refusal,
+    with its Choose key columns…, never `INVALID_PARAMS` and a failed preview. The other locked reasons (rowversion, CLR
+    types, sql_variant, vector) follow from the recorded types. Script (no `maxLines`) requires `target` and `direction`
+    (`INVALID_PARAMS` in both); a preview may leave either out, as the dialog's request on opening does before the form
+    has them. Its answer has empty `text` and carries any of the four refusals known on opening (`asShown`, `keyType`,
+    `keyName`, `notColumns`), `differences`, `updates` and `softValues`, and, only with a `direction`, which decides
+    them (which rows are deleted, and the target side's values and collations), `deletes`, `inserts`, the look-alike
+    counts, `uncheckedUpdates` and `uncheckedDeletes`.
   - **Deadline and Cancel:** 120 s in `methodPolicies`, as the other result jobs. The dialog's Cancel cancels the request
     through the protocol's cancel, and the backend drops its chunks.
   - **Preview:** `maxLines?: number` (1–30) answers only the first lines, with `complete: false` when there are more,
@@ -1436,30 +1440,35 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     bracketed 128-character parts with every ] doubled), table?: { database, schema, name } (the target as the renderer
     resolved it, a two-part name in the query document's current database, each part 1–128 characters), columns (every
     pair's name in pair order, compared and ignored alike, since an INSERT names both: at most `limits.page.maxColumns`,
-    each 1–128 characters), ignored? (the indexes into `columns` of the ignored pairs, distinct, each below its length),
-    limit (1–20) }`.
-  - **Answer:** `{ suggestions: { database, schema, name, holds }[], table?: { columns: { name, type, nullable,
-    identity, computed, generated, hasDefault }[], columnsCut?, pairs: (number | null)[] }, state, held }`. `holds`
-    counts the compared names (those not in `ignored`) a table holds. `pairs` gives, for each sent name, the index of
-    the table's column it names, or null when the table lacks it, compared as `Objects()` compares names (the database's
+    each 0–128 characters, since an unaliased expression pairs with its namesake unnamed column and an empty name
+    matches nothing), ignored? (the indexes into `columns` of the ignored pairs, distinct, each below its length), limit
+    (1–20) }`.
+  - **Answer:** `{ suggestions: { database, schema, name, holds? }[], table?: { columns: { name, type, nullable,
+    identity, computed, generated, hasDefault }[], columnsCut?, pairs: (number | null)[] }, state?, held? }`. `holds`
+    counts the compared names (those not in `ignored`, and not empty) a table holds, and only a suggestion from a read
+    with its columns has it; `state` and `held` describe the database of the sent `table` and come only with one, since
+    the opening request and a suggestion-only request send none. `pairs` gives, for each sent name, the index of the
+    table's column it names, or null when the table lacks it, compared as `Objects()` compares names (the database's
     case, and the dotted I of Turkish and Azeri collations), since a case-sensitive database's [ID] is not its [id] and
     the renderer knows no collation; the dialog reads every fact for a pair through it (identity, computed, generated,
     the type, and a column the table lacks). Suggestions are at most limit tables whose name holds the typed text's last
     part, found as Search Objects' literal search finds a name (`SearchMatcher`, without case) by a scan of each held
     read's tables, since `IndexLookup.Objects()` finds only exact names; a schema or database part typed must equal that
     part, compared as `Objects()` compares, and empty text lists every table by rank. They are ranked with those holding
-    every compared column first, then by `holds`, the renderer putting the query document's current database first among
-    equals, then by name, leaving out history tables (subtypes `history` and `ledgerHistory`), since an INSERT into one
-    fails (Msg 13559). `table` answers the sent `table` when the index holds it, so two databases that both hold
-    `dbo.Orders` are told apart, with at most 4,096 columns (`columnsCut` past that). `state` is that database's state
-    from `Database()` (ready, partial, building, skipped or absent), and `held` says whether the index holds a read of
-    it with its columns (`LookupDatabase.Held` set and `LookupGaps.ChildrenLeftOut` clear), whatever `state` says: a
-    read without definitions (`objectExplorer.search.definitions` off), with a cut definition or without system objects
-    is partial and still holds every column, a rebuild running over an earlier read is building, and a failed read after
-    an earlier one is skipped, each with that earlier read still answering. The dialog keys every column fact on `held`,
-    and `state` only picks the sentence: unless `held`, it claims no column facts, ranks no suggestions by `holds`, and
-    says still indexing (building), skipped (skipped), indexed without columns (partial) or the table unknown (absent);
-    with `held` and a building or skipped `state`, the knows line adds that its facts are from the last index.
+    every compared column first, then by `holds`, those without `holds` last, the renderer putting the query document's
+    current database first among equals, then by name, leaving out history tables (subtypes `history` and
+    `ledgerHistory`), since an INSERT into one fails (Msg 13559). `table` answers the sent `table` when the index holds
+    it, so two databases that both hold `dbo.Orders` are told apart, with at most 4,096 columns (`columnsCut` past
+    that). `state` is that database's state from `Database()` (ready, partial, building, skipped or absent), and `held`
+    says whether the index holds a read of it with its columns (`LookupDatabase.Held` set, `LookupGaps.ChildrenLeftOut`
+    clear and the held read not `FailedPart`, since a read that failed part way, kept when nothing was held before, can
+    stop before its columns), whatever `state` says: a read without definitions (`objectExplorer.search.definitions`
+    off), with a cut definition or without system objects is partial and still holds every column, a rebuild running
+    over an earlier read is building, and a failed read after an earlier one is skipped, each with that earlier read
+    still answering. The dialog keys every column fact on `held`, and `state` only picks the sentence: unless `held`, it
+    claims no column facts and says still indexing (building), skipped (skipped), indexed without columns (partial) or
+    the table unknown (absent); with `held` and a building or skipped `state`, the knows line adds that its facts are
+    from the last index.
   - **Tests:** a new offline suite in Program.cs's `offlineSuites` over a built index: ranking by compared columns held,
     three-part suggestions across two databases with the same schema and the sent `table` choosing between them, a
     table's identity, computed, generated, NOT NULL and default flags, history tables left out, the 4,096-column cut, a
@@ -1467,9 +1476,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     cut definition and one without system objects, `held` with `state` building for a rebuild running over a held read
     and skipped for a failed read after one, a name typed as a fragment, with a schema part and with a database part,
     `pairs` for a name differing only by case in a case-sensitive database and in a case-insensitive one, an ignored
-    name the table lacks (null, and not counted in `holds`), and `LaneOf` naming the method as Explorer; vitest for the
-    schema's bounds against `objectSearchLimits`, a request sent while one runs (the first cancelled through
-    `explorerCancel`, no `DUPLICATE_REQUEST`), and the dialog's index line from a fake answer.
+    name the table lacks (null, and not counted in `holds`), an unnamed pair (null, not counted in `holds`), a read kept
+    after failing part way (not `held`), `state`, `held` and `holds` absent without a sent `table` or for a read without
+    columns, and `LaneOf` naming the method as Explorer; vitest for the schema's bounds against `objectSearchLimits` (an
+    empty name accepted), a request sent while one runs (the first cancelled through `explorerCancel`, no
+    `DUPLICATE_REQUEST`), and the dialog's index line from a fake answer.
 - **Renderer:**
   - The dialog is a `DialogWindow` of the new kind in `dialogWindowKinds` (`src/shared/popouts.ts`), which also widens
     the `dialogWindowName` pattern (today `options|about|connect`). `DialogWindow` takes the window to open over, the
@@ -1502,6 +1513,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - `columns` without a key pair, and Script with no statement ticked, each `INVALID_PARAMS`; an opening preview of a
       comparison keyed on a hierarchyid column, and one keyed on a repeated name, each answering its refusal, not
       `INVALID_PARAMS`;
+    - the header's SET IDENTITY_INSERT OFF line for a stopped script, only while SET IDENTITY_INSERT is on;
     - the header's left-out line with Result 1 closed: one-sided, unticked and identity columns, and each of
       `indexReasons`' four reasons; `indexReasons` with a repeated pair, a pair in `columns` or a fifth reason
       `INVALID_PARAMS` in both;
@@ -1509,6 +1521,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       direction; `uncheckedUpdates` alike in a preview and in Script (an UPDATE changing only an xml column, one
       changing only non-ASCII varchar under a SQL_ collation, and one with an ASCII value there, which is checked);
       `selectedKeys` for one to three entries and none past three;
+    - an empty grid: `rows` with no ranges answers 0 for Selected rows and Rows in the grid, and the diff's counts for
+      All differences, never `INVALID_PARAMS`;
     - a preview with no target or direction: empty `text`, an opening refusal, `differences` for all three options,
       `updates` and no delete, insert or look-alike counts; Script without either `INVALID_PARAMS`;
     - quoting, NULL keys, composite keys;
@@ -1599,6 +1613,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - A wrong literal corrupts data when the user runs the script. Mitigations: the round-trip live test over every type,
     the row checks, the transaction, refusing truncated values, and never running it.
   - Result column names may be aliases rather than table columns: the index warning and the checklist cover that.
+  - A script stopped while it runs (Cancel, a query timeout) skips its CATCH, so SET IDENTITY_INSERT stays on in that
+    session until the header's OFF line is run; the next ordinary INSERT into the table fails (Msg 545), which is safe.
   - varbinary keys that differ only by trailing zero bytes are two keys to the diff but one to SQL Server (`0x01 =
     0x0100`); the row checks THROW, so it fails safely.
   - A target char column whose collation lacks a character stores `?`, as any assignment would. The index does not know
