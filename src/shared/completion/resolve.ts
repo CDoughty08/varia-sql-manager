@@ -54,10 +54,14 @@ export function childrenOf(columns: readonly ScopeColumn[], parent: readonly str
 
 /** How many WITH queries or subqueries deep a `*` is followed for columns: past it a source gives none (a long chain of WITH
  *  queries, each reading the last through `*`, would otherwise recurse once per query). */
+/** How many select-list reads and `*` columns merged one resolver does: past it the rest come back cut short (a web of WITH
+ *  queries over wide tables could otherwise take seconds, each read again at each depth the star budget cuts it at). */
+const work = 1_000_000
+
 /** unnestHops: how many UNNESTs deep a prefix is mapped; narrowPrefixes: prefixes per object in one second ask (each is a request);
  *  narrowUnnests: UNNEST sources whose element fields a second ask covers; fieldSources: sources a bare column name is looked for
  *  in (an UNNEST of a bare name reads them, and each may be an UNNEST of a bare name). */
-export const resolverLimits = { starHops: 64, unnestHops: 8, narrowPrefixes: 4, narrowUnnests: 16, fieldSources: 64 } as const
+export const resolverLimits = { starHops: 64, unnestHops: 8, narrowPrefixes: 4, narrowUnnests: 16, fieldSources: 64, work } as const
 
 /** The column at a field path, case ignored. */
 export function columnAt(columns: readonly ScopeColumn[], path: readonly string[]): ScopeColumn | undefined {
@@ -108,6 +112,8 @@ export class ScopeResolver {
   private readonly shaping = new Set<QueryShape>()
   /** The scope's sources by name (lowercased), nearest first. */
   private named?: Map<string, ScopeSource[]>
+  /** Select-list reads and columns merged so far (resolverLimits.work). */
+  private spent = 0
   private readonly ctes = new Map<string, QueryShape>()
   /** Sources being read: one met again while it is read (a WITH query that reads itself) gives no columns. */
   private readonly reading = new Set<ScopeSource>()
@@ -272,8 +278,11 @@ export class ScopeResolver {
     const known = new Set(columns.map(column => column.path.toLowerCase()))
     let truncated = false
     let budget = false
+    this.spent++
     for (const star of shape.stars) {
+      if (this.spent > resolverLimits.work) return { columns, truncated: true, budget: true }
       const given = await this.columns(star, hops + 1)
+      this.spent += given.columns.length
       truncated ||= given.truncated
       budget ||= given.budget === true
       for (const column of given.columns) {

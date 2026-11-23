@@ -112,15 +112,14 @@ async function caretAt(count) {
 /** A BigQuery connection through the Connect dialog in emulator mode, which the fake backend answers (project varia-fake). */
 async function connectBigQuery() {
   await toolbarButton(page, 'Connect').click()
-  const dialog = page.getByRole('dialog')
-  await dialog.getByLabel('Server type', { exact: true }).selectOption('bigquery')
+  const { window: connectWin, dialog } = await connectDialogWindow(application)
+  await dialog.getByRole('group', { name: 'Server type', exact: true }).getByRole('button', { name: 'BigQuery', exact: true }).click()
   await expect(dialog.getByText(/^Emulator account /)).toBeVisible()
   await dialog.getByLabel('Project', { exact: true }).fill('varia-fake')
   await dialog.getByRole('button', { name: 'Load datasets', exact: true }).click()
   await expect.poll(() => dialog.getByLabel('Default dataset', { exact: true }).evaluate(input => [...input.list?.options ?? []].map(option => option.value))).toContain('sales')
   await dialog.getByLabel('Default dataset', { exact: true }).fill('sales')
-  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(dialog).toHaveCount(0)
+  await submitConnect(connectWin, dialog)
   await toolbarButton(page, 'New query').click()
   await expect(queryServer(page)).toContainText('varia-fake')
   return queryServer(page).inputValue()

@@ -339,6 +339,19 @@ describe('completion from the index', () => {
     expect(performance.now() - timed).toBeLessThan(3000)
   })
 
+  it('bounds the work of a web of WITH queries over a wide table, nearest listed first, and says the list is cut short', async () => {
+    const wide = '`varia-wide.lab.wide`'
+    const web = 'WITH ' + Array.from({ length: 522 }, (_, index) => `c${index} AS (SELECT * FROM ${wide} w${Array.from({ length: Math.min(8, index) }, (_, back) => `, c${index - 1 - back} a${back}`).join('')})`).join(', ') + ' SELECT c00| FROM c521'
+    const timed = performance.now()
+    const list = await complete(web)
+    expect(performance.now() - timed).toBeLessThan(3000)
+    expect(list.labels('column')).toContain('c0000')
+    expect(list.incomplete).toBe(true)
+    // UNNESTs past the cap over a table that was not cut short leave the list final.
+    const plain = await complete('SELECT cu| FROM sales.orders o, `varia-wide.lab.wide` w' + Array.from({ length: 18 }, (_, index) => `, UNNEST(o.items) u${index}`).join(''))
+    expect(plain.incomplete).toBe(false)
+  })
+
   it('says the list is not final when an UNNEST\'s prefix went unasked', async () => {
     const dropped = await complete('SELECT al| FROM `varia-wide.lab.wide` w, UNNEST(w.nope1) a, UNNEST(w.nope2) b, UNNEST(w.nope3) c, UNNEST(w.zrec) d')
     expect(dropped.incomplete).toBe(true)
