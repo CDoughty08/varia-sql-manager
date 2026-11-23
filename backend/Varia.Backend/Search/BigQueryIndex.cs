@@ -15,7 +15,7 @@ internal interface IBigQueryIndexSource
     Task<Routine> RoutineAsync(string connectionId, string project, string dataset, string routine, CancellationToken token);
     /// <summary>The billed bulk path's rows for one project's location (<see cref="BigQueryBulkSql"/>), a dataset at a time in name order,
     /// under the cap. Leaving early cancels its jobs; a failed job throws as a job's failure does.</summary>
-    IAsyncEnumerable<BigQueryBulkDataset> BulkAsync(string connectionId, string project, string location, bool definitions, long? cap, CancellationToken token);
+    IAsyncEnumerable<BigQueryBulkDataset> BulkAsync(string connectionId, string project, string location, bool definitions, long? cap, Func<string, string, bool> wanted, CancellationToken token);
     /// <summary>A failed read as a RequestException with BigQuery's code and a sentence that names no object.</summary>
     Exception Map(Exception error, string project, string permission, CancellationToken token);
 }

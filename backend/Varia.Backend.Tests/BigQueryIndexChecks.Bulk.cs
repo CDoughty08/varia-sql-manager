@@ -51,7 +51,8 @@ internal static partial class BigQueryIndexChecks
         {
             ("INT64", "INT64"), ("STRING(64)", "STRING(64)"), ("NUMERIC(10,2)", "NUMERIC(10, 2)"), ("NUMERIC(10, 2)", "NUMERIC(10, 2)"), ("ARRAY<STRING>", "ARRAY<STRING>"),
             ("STRUCT<a INT64, b STRUCT<c STRING>>", "STRUCT"), ("ARRAY<STRUCT<sku STRING>>", "ARRAY<STRUCT>"), ("RANGE<DATE>", "RANGE"), ("ARRAY<RANGE<DATE>>", "ARRAY<RANGE>"),
-            ("STRING COLLATE 'und:ci'", "STRING"), ("INT64 NOT NULL", "INT64"), ("ARRAY<NUMERIC(38, 9)>", "ARRAY<NUMERIC(38, 9)>"), ("INTEGER", "INT64")
+            ("STRING COLLATE 'und:ci'", "STRING"), ("INT64 NOT NULL", "INT64"), ("ARRAY<NUMERIC(38, 9)>", "ARRAY<NUMERIC(38, 9)>"), ("INTEGER", "INT64"),
+            ("TIMESTAMP(12)", "TIMESTAMP"), ("BYTES(16)", "BYTES(16)"), ("BIGNUMERIC(76, 38)", "BIGNUMERIC(76, 38)")
         };
         var wrong = cases.Where(item => BigQueryBulk.TypeText(item.Type) != item.Shown).Select(item => item.Type + " → " + BigQueryBulk.TypeText(item.Type)).ToList();
         check(wrong.Count == 0, "INFORMATION_SCHEMA's type text reads as pass 2 shows tables.get's: " + string.Join("; ", wrong));
@@ -69,6 +70,15 @@ internal static partial class BigQueryIndexChecks
         check(string.Join(", ", detail.Columns.Select(column => column.Path + ":" + column.Type + (column.Nullable ? "" : "!") + (column.Record ? "+" : "") + (column.Description is { } text ? "=" + text : "")))
             == "a:INT64!, b:STRUCT+, b.z:STRING, b.a:STRUCT+, b.a.q:INT64!=deep",
             "rows in any order flatten depth first in declared order, with nested NOT NULL and descriptions: " + string.Join(", ", detail.Columns.Select(column => column.Path)));
+        // A dataset's rows are held under a character budget: past it, it keeps nothing and its objects go to the free calls.
+        var big = new BigQueryBulkDataset("sales");
+        big.Add("orders", "BASE TABLE", new("id", "INT64", null, 1, false));
+        var listed = new BigQueryEntry("bqTable", "bqTables", null, "orders", 1, null);
+        var covered = BigQueryBulk.Detail(big, listed, false) is not null;
+        big.AddText(big.Views, "daily", new string('x', (int)BigQueryBulkSql.DatasetChars));
+        big.Add("orders", "BASE TABLE", new("n", "INT64", null, 2, true));
+        check(covered && big.Over && big.Tables.Count == 0 && big.Views.Count == 0 && BigQueryBulk.Detail(big, listed, false) is null,
+            "a dataset's bulk rows past their character budget are dropped, leaving its objects to the free calls");
     }
 
     /// <summary>The fake's bulk answers: jobs.insert records each job by the view it reads; jobs.getQueryResults pages its rows (the
@@ -88,7 +98,8 @@ internal static partial class BigQueryIndexChecks
         [
             Row("sales", table, type, "1", "NO", "id", "INT64", null),
             Row("sales", table, type, "2", "YES", "customer", "STRING", null),
-            Row("sales", table, type, "3", "YES", "tags", "ARRAY<STRING>", null),
+            // COLUMNS says an array is never NULL; tables.get's REPEATED mode is nullable to pass 2.
+            Row("sales", table, type, "3", "NO", "tags", "ARRAY<STRING>", null),
             Row("sales", table, type, "4", "YES", "placed", "TIMESTAMP", null),
             Row("sales", table, type, "5", "YES", "address", "STRUCT<city STRING, geo STRUCT<lat FLOAT64>>", null),
             Row("sales", table, type, "5", "YES", "address.geo.lat", "FLOAT64", null),

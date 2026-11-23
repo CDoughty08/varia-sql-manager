@@ -266,9 +266,12 @@ internal sealed partial class ObjectSearchService
                     if (!asked.Add((project, location.ToUpperInvariant()))) continue;
                     var inLocation = pending.Keys.Where(key => key.Item1 == project && string.Equals(located.GetValueOrDefault(key), location, StringComparison.OrdinalIgnoreCase)).ToHashSet();
                     if (inLocation.Count == 0) continue;
+                    // The objects pass 2 would read, by dataset: the rows of any other are dropped as they arrive.
+                    var names = inLocation.ToDictionary(key => key.Item2, key => pending.TryGetValue(key, out var value) ? value.Read.Select(at => value.Listed[at].Name).ToHashSet(StringComparer.Ordinal) : [], StringComparer.Ordinal);
                     try
                     {
-                        await foreach (var rows in source.BulkAsync(args.ConnectionId, project, location, definitions, bulk.MaximumBytesBilled, stop).WithCancellation(stop))
+                        await foreach (var rows in source.BulkAsync(args.ConnectionId, project, location, definitions, bulk.MaximumBytesBilled,
+                            (dataset, name) => names.TryGetValue(dataset, out var set) && set.Contains(name), stop).WithCancellation(stop))
                             if (inLocation.Remove((project, rows.Dataset)) && pending.TryRemove((project, rows.Dataset), out var value))
                                 await DetailAsync((project, rows.Dataset), value, rows, stop);
                         bulkRead++;
@@ -281,7 +284,7 @@ internal sealed partial class ObjectSearchService
                         bulkError ??= mapped is RequestException request ? (request.Code, Explorer.ExplorerLabels.Clip(request.Message, 512)) : ("BACKEND_ERROR", "BigQuery refused the request.");
                     }
                 }
-                lock (state.Gate) state.Bulk = new(bulkRead, bulkFailed, bulkError?.Code, bulkError?.Message);
+                lock (state.Gate) if (ReferenceEquals(state.Build, source2)) state.Bulk = new(bulkRead, bulkFailed, bulkError?.Code, bulkError?.Message);
             }
             await Parallel.ForEachAsync(pending.OrderBy(pair => pair.Key.Item1, StringComparer.Ordinal).ThenBy(pair => pair.Key.Item2, StringComparer.Ordinal),
                 new ParallelOptions { MaxDegreeOfParallelism = BigQueryIndexLimits.Datasets, CancellationToken = stop }, (pair, loop) => new ValueTask(DetailAsync(pair.Key, pair.Value, null, loop)));

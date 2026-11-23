@@ -141,6 +141,33 @@ describe('Search Objects details pane for BigQuery', () => {
     expect(api.scriptObjects).toHaveBeenCalledTimes(2)
   })
 
+  it('ends a CREATE read when the pane hides during its prompt or the server goes during its estimate', async () => {
+    const hidden = setup()
+    hidden.show(table)
+    hidden.pending.properties[0]!(ok(tableFacts))
+    await flush()
+    const read = hidden.service.readCreate('tab')
+    hidden.pending.script[0]!(ok({ warnings: [], estimate: { bytesProcessed: 1, incomplete: [], statementType: 'SELECT' } }))
+    await flush()
+    hidden.service.setHidden(true)
+    expect(hidden.gates[0]!.signal.aborted).toBe(true)
+    hidden.gates[0]!.answer({ run: true })
+    await read
+    expect(hidden.api.scriptObjects).toHaveBeenCalledTimes(1)
+    const lost = setup()
+    lost.show(table)
+    lost.pending.properties[0]!(ok(tableFacts))
+    await flush()
+    const estimating = lost.service.readCreate('tab')
+    lost.lose()
+    expect(lost.api.cancelScripting).toHaveBeenCalledWith(['id-2'])
+    lost.pending.script[0]!(ok({ warnings: [], estimate: { bytesProcessed: 1, incomplete: [], statementType: 'SELECT' } }))
+    await estimating
+    expect(lost.gates).toEqual([])
+    expect(lost.api.scriptObjects).toHaveBeenCalledTimes(1)
+    expect(lost.service.getSnapshot().documents.tab?.definition).toMatchObject({ status: 'error' })
+  })
+
   it('offers no billed read without the cost prompts, for kinds Script As cannot write, or once the connection is lost', async () => {
     const ungated = setup({ gate: false })
     ungated.show(table)

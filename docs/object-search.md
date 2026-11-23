@@ -373,16 +373,19 @@ queries per location, which is faster for projects with thousands of objects:
 - **Cost.** BigQuery bills each query at least 10 MiB for every INFORMATION_SCHEMA view it reads (the column query reads
   three) and never answers them from cache. So a full build first asks `bigquery.indexEstimate`: the locations of the
   billing project's datasets (and the extra projects' when their schemas are indexed), up to 64, each query dry-run free,
-  with the floor counted in. The estimate then goes through the same cost prompts as Execute (threshold, incomplete
-  estimate); the jobs run with the connection's maximum bytes billed, or the cap the prompt answered. The status says
-  "Estimating the billed INFORMATION_SCHEMA read…" meanwhile; Stop ends it.
+  with the floor counted in. The estimate then goes through the same cost prompts as Execute, which ask only above the
+  cost threshold or when the estimate may be low. Each job is capped at the connection's maximum bytes billed, else
+  Options' (Query Execution › BigQuery › Cost), else the whole estimate, so an estimate that proves low fails its
+  location's jobs at no charge and those datasets are read with the free calls. The status says "Estimating the billed
+  INFORMATION_SCHEMA read of the index's details…" meanwhile; Stop, a newer build or a disconnect ends it.
 - **The same entries.** The rows fill exactly the entries pass 2's `tables.get` and `routines.get` would (the offline
   checks compare them), with the same limits. Objects the rows do not cover still use the free calls: materialized views'
   text, routines without a body, objects created after the queries ran, and every dataset in a location whose queries
-  failed. Bulk-read objects carry no row count, size, partitioning, clustering or routine signature in the index; the
-  details pane reads those live.
-- **When it runs.** Only full builds (indexing on connect, Rebuild Search Index); a refresh of a project, dataset or DDL
-  change uses the free calls. A declined prompt or a failed estimate builds with the free calls only. The index line says
+  failed, and a dataset whose rows pass 8 million characters. Bulk-read objects carry no row count, size, partitioning,
+  clustering, routine signature or last change in the index (a table's hit shows its creation date); the details pane
+  reads those live.
+- **When it runs.** Only full builds (indexing on connect, Rebuild Search Index, Refresh on the connection's node); a
+  refresh of a project, dataset or DDL change uses the free calls. A declined prompt or a failed estimate builds with the free calls only. The index line says
   how many locations were read with INFORMATION_SCHEMA, and when a location's read failed (with BigQuery's reason), that
   its details were read with free calls instead.
 - **SQL.** The text is constant but for the region qualifier (`` `project`.`region-us` ``), which `BqNames.RegionPath`

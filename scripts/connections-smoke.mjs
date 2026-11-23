@@ -911,7 +911,11 @@ async function bigQuerySearchDetails() {
   // New Query on the result: a GoogleSQL tab on the connection, in the result's dataset (the billing project's).
   await hits.filter({ hasText: 'search_orders_daily' }).click({ button: 'right' })
   const hitMenu = page.getByRole('menu', { name: 'Search result', exact: true })
+  const tabs = await documentTab(page).count()
   await hitMenu.getByRole('menuitem', { name: 'New Query', exact: true }).click()
+  // A new query tab, active: the dataset box below is its own.
+  await expect(documentTab(page)).toHaveCount(tabs + 1)
+  await expect(activeDocument(page)).toContainText(/SQLQuery\d+/)
   await expect(queryServer(page)).toContainText('varia-emulator')
   await expect(page.getByLabel('Query dataset', { exact: true })).toHaveValue('varia_fixture')
   console.log('BigQuery Search Objects checks passed against the emulator: the details pane\'s facts, columns and view text, the billed CREATE only on a button, and New Query.')

@@ -352,12 +352,15 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     if (!partial) this.refreshes.delete(connectionId)
     const requestId = this.newId()
     const previous = this.getSnapshot().indexes[connectionId]
-    // A newer build closes an older one's prompt (the older one's explorer.index, if sent, the backend supersedes).
-    if (previous?.requestId) this.estimating.get(previous.requestId)?.abort()
     const definitions = this.o.settings.get('objectExplorer.search.definitions')
     const extraDetails = bigQuery ? this.o.settings.get('objectExplorer.search.bigQueryExtraProjects') : undefined
     // The billed bulk path: a full BigQuery build with the option on, only after its free estimate and the cost prompts.
     const bulk = bigQuery && !partial && this.o.settings.get('textEditor.googleSql.bulkIndex') && !!this.o.billedGate && !!this.o.api.bigQueryIndexEstimate
+    // A newer build closes an older one's prompt. An older build already sent the backend supersedes when the new one is sent, which
+    // the bulk path does only after its prompt: so it is stopped now, or Stop at the prompt would leave it running unseen.
+    const prompt = previous?.requestId ? this.estimating.get(previous.requestId) : undefined
+    if (prompt) prompt.abort()
+    else if (bulk && previous?.requestId) void this.o.api.explorerCancel([previous.requestId]).catch(onUnexpectedError)
     this.putIndex({ connectionId, requestId, done: 0, total: 0, objects: previous?.status?.objects ?? 0, ...bulk ? { phase: 'estimate' as const } : {}, ...previous?.status ? { status: previous.status } : {} })
     const send = (billed: BigQueryBulkIndex | undefined) => {
       void this.o.api.explorerIndex({
@@ -411,7 +414,11 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
       const answer = await this.o.billedGate!(connectionId, estimated.value.estimate, controller.signal)
       if (ended()) return 'stopped'
       if (!answer.run) return undefined
-      return { locations: estimated.value.locations, ...answer.maximumBytesBilled !== undefined ? { maximumBytesBilled: answer.maximumBytesBilled } : {} }
+      // Without a cap of the connection's or Options', each job is capped at the whole estimate: an estimate that proves low fails
+      // its location's jobs at no charge (its datasets are read with the free calls) instead of billing more than was shown.
+      const estimate = Math.ceil(estimated.value.estimate.bytesProcessed)
+      const cap = answer.maximumBytesBilled ?? (estimate >= 1 && estimate <= Number.MAX_SAFE_INTEGER ? estimate : undefined)
+      return { locations: estimated.value.locations, ...cap !== undefined ? { maximumBytesBilled: cap } : {} }
     } finally { this.estimating.delete(requestId) }
   }
 
@@ -912,6 +919,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     for (const id of [...this.refreshes.keys()]) if (!ids.has(id)) this.refreshes.delete(id)
     if (gone.length) {
       const kept = { ...indexes }
+      // A disconnect closes a bulk build's estimate or cost prompt.
+      for (const id of gone) { const requestId = indexes[id]?.requestId; if (requestId) this.estimating.get(requestId)?.abort() }
       for (const id of gone) delete kept[id]
       this.publish({ ...this.getSnapshot(), indexes: kept })
     }

@@ -93,7 +93,7 @@ internal sealed partial class BigQueryService
     };
 
     async IAsyncEnumerable<BigQueryBulkDataset> IBigQueryIndexSource.BulkAsync(string connectionId, string project, string location, bool definitions, long? cap,
-        [EnumeratorCancellation] CancellationToken token)
+        Func<string, string, bool> wanted, [EnumeratorCancellation] CancellationToken token)
     {
         var connection = Connection(connectionId);
         var billed = connection.Options.MaximumBytesBilled ?? cap;
@@ -123,17 +123,23 @@ internal sealed partial class BigQueryService
                 foreach (var cursor in cursors)
                     if (await cursor.DatasetAsync() is { } dataset && (next is null || string.CompareOrdinal(dataset, next) < 0)) next = dataset;
                 if (next is null) break;
+                // Only the objects the build still needs are kept (not a sharded group's older shards, nor objects with reused details),
+                // under the dataset's character budget.
                 var rows = new BigQueryBulkDataset(next);
                 await columns.TakeAsync(next, row =>
                 {
-                    if (BulkCursor.Cell(row, 1) is { } table && BulkCursor.Cell(row, 5) is { } path && BulkCursor.Cell(row, 6) is { } type)
+                    if (BulkCursor.Cell(row, 1) is { } table && wanted(next, table) && BulkCursor.Cell(row, 5) is { } path && BulkCursor.Cell(row, 6) is { } type)
                         rows.Add(table, BulkCursor.Cell(row, 2), new(path, type, BulkCursor.Cell(row, 7),
                             long.TryParse(BulkCursor.Cell(row, 3), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var ordinal) ? ordinal : long.MaxValue,
-                            BulkCursor.Cell(row, 4) != "NO"));
+                            // tables.get's REPEATED mode is nullable to pass 2 (Mode != REQUIRED), while COLUMNS says an array is never NULL.
+                            BulkCursor.Cell(row, 4) != "NO" || type.StartsWith("ARRAY<", StringComparison.OrdinalIgnoreCase)));
                 });
-                if (views is not null) await views.TakeAsync(next, row => { if (BulkCursor.Cell(row, 1) is { } name && BulkCursor.Cell(row, 2) is { } text) rows.Views.TryAdd(name, text); });
-                if (routines is not null) await routines.TakeAsync(next, row => { if (BulkCursor.Cell(row, 1) is { } name && BulkCursor.Cell(row, 2) is { } text) rows.Routines.TryAdd(name, text); });
+                if (views is not null) await views.TakeAsync(next, row => { if (BulkCursor.Cell(row, 1) is { } name && wanted(next, name) && BulkCursor.Cell(row, 2) is { } text) rows.AddText(rows.Views, name, text); });
+                if (routines is not null) await routines.TakeAsync(next, row => { if (BulkCursor.Cell(row, 1) is { } name && wanted(next, name) && BulkCursor.Cell(row, 2) is { } text) rows.AddText(rows.Routines, name, text); });
+                // The time limit is BigQuery's: it stops while the build files the dataset's rows (and reads what they lack).
+                budget.CancelAfter(Timeout.InfiniteTimeSpan);
                 yield return rows;
+                budget.CancelAfter(BulkLimit);
             }
             finished = true;
         }

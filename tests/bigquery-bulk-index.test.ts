@@ -119,6 +119,38 @@ describe('BigQuery bulk index path (renderer)', () => {
     expect(index.map(call => call.requestId)).toEqual(['req3'])
   })
 
+  it('caps each job at the estimate without a cap of its own, stops an older running build, and closes the prompt on a disconnect', async () => {
+    const { service, api, index, gates, connections, pending } = harness({ bulk: true })
+    connections.set([bigQuery('bq')])
+    await settle()
+    gates[0].answer({ run: true })
+    await settle()
+    expect(index[0]?.bulk).toEqual({ locations: estimate.locations, maximumBytesBilled: estimate.estimate.bytesProcessed })
+    // Rebuild while a build runs: the running one is stopped at once, since the new one is sent only after its prompt.
+    service.build('bq')
+    await settle()
+    expect(api.explorerCancel).toHaveBeenCalledWith(['req1'])
+    expect(gates).toHaveLength(2)
+    pending[0]({ ok: false, error: 'The object index build was stopped.', code: 'CANCELLED' })
+    await settle()
+    connections.set([])
+    await settle()
+    expect(gates[1].signal.aborted).toBe(true)
+    gates[1].answer({ run: true })
+    await settle()
+    expect(index).toHaveLength(1)
+    // Refresh on the connection's node is a rebuild, so it takes the bulk path too.
+    connections.set([bigQuery('bq')])
+    await settle()
+    gates[2].answer({ run: false })
+    await settle()
+    pending[1]({ ok: true, value: { status: status(), elapsedMs: 1 } })
+    await settle()
+    service.refreshNode('bq', { type: 'object', object: { kind: 'server' } } as never)
+    await settle()
+    expect(gates).toHaveLength(4)
+  })
+
   it('never estimates for a refresh, a SQL Server connection or without the cost prompts', async () => {
     const { service, estimates, index, connections, gates, pending } = harness({ bulk: true })
     connections.set([sqlServer('a')])

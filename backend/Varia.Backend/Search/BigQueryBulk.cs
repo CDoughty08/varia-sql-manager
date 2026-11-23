@@ -17,6 +17,8 @@ internal static class BigQueryBulkSql
     public const long FloorBytes = 10L << 20;
     /// <summary>The most (project, location) pairs one estimate or build covers; datasets in others are read with free calls.</summary>
     public const int MaxLocations = 64;
+    /// <summary>Characters of rows one dataset keeps while it is gathered (about 16 MiB); a dataset past it is read with free calls.</summary>
+    public const long DatasetChars = 8_000_000;
 
     /// <summary>Every column and nested field with its type and description (COLUMN_FIELD_PATHS), the top-level column's position and
     /// nullability (COLUMNS: field paths carry neither) and the table's type (TABLES: a clone is a plain table to tables.list). Hidden and
@@ -69,13 +71,36 @@ internal sealed class BigQueryBulkDataset(string dataset)
     public Dictionary<string, BigQueryBulkTable> Tables { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, string> Views { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, string> Routines { get; } = new(StringComparer.Ordinal);
+    /// <summary>Characters kept so far; past <see cref="BigQueryBulkSql.DatasetChars"/> the dataset keeps nothing (<see cref="Over"/>).</summary>
+    public long Chars { get; private set; }
+    /// <summary>The dataset's rows went past their budget and were dropped: its objects get their details from the free calls.</summary>
+    public bool Over { get; private set; }
 
     /// <summary>A field row for a table, keeping at most <see cref="BigQueryIndexLimits.Columns"/> (BigQuery's own limit, nested fields included).</summary>
     public void Add(string table, string? type, BigQueryBulkField field)
     {
+        if (!Charge(table.Length + field.Path.Length + field.Type.Length + (field.Description?.Length ?? 0))) return;
         if (!Tables.TryGetValue(table, out var rows)) Tables[table] = rows = new(type);
         if (rows.Fields.Count >= BigQueryIndexLimits.Columns) rows.Cut = true;
         else rows.Fields.Add(field);
+    }
+
+    /// <summary>A view's text or a routine's body.</summary>
+    public void AddText(Dictionary<string, string> into, string name, string text)
+    {
+        if (!into.ContainsKey(name) && Charge(name.Length + text.Length)) into[name] = text;
+    }
+
+    bool Charge(long chars)
+    {
+        if (Over) return false;
+        Chars += chars;
+        if (Chars <= BigQueryBulkSql.DatasetChars) return true;
+        Over = true;
+        Tables.Clear();
+        Views.Clear();
+        Routines.Clear();
+        return false;
     }
 }
 
@@ -90,6 +115,7 @@ internal static partial class BigQueryBulk
     /// </summary>
     public static BigQueryDetail? Detail(BigQueryBulkDataset rows, BigQueryEntry entry, bool definitions)
     {
+        if (rows.Over) return null;
         if (entry.Kind == "bqRoutine")
             return !definitions ? new(null, null, null, []) : rows.Routines.TryGetValue(entry.Name, out var body) ? new(null, null, body, []) : null;
         if (entry.Kind == "bqModel" || !rows.Tables.TryGetValue(entry.Name, out var table)) return null;
@@ -140,7 +166,8 @@ internal static partial class BigQueryBulk
         if (Starts(text, "RANGE<")) return "RANGE";
         var open = text.IndexOf('(');
         var name = (open < 0 ? text : text[..open]).Trim().ToUpperInvariant() switch { "INTEGER" => "INT64", "FLOAT" => "FLOAT64", "BOOLEAN" => "BOOL", var other => other };
-        if (open < 0 || !text.EndsWith(')')) return name;
+        // Pass 2 shows parameters only for these (maxLength, precision and scale); TIMESTAMP(12)'s precision it leaves out.
+        if (open < 0 || !text.EndsWith(')') || name is not ("STRING" or "BYTES" or "NUMERIC" or "BIGNUMERIC")) return name;
         return name + "(" + string.Join(", ", text[(open + 1)..^1].Split(',').Select(part => part.Trim())) + ")";
     }
 
