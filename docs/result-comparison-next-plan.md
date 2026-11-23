@@ -46,7 +46,7 @@ Decided on 2026-11-22:
 | N3 | An ignored column stays **shown, muted**, its header marked "ignored". It can still be sorted and filtered. |
 | N4 | Side-by-side layout and comparing Pivots are **deferred**: designs kept here, not in the build order. |
 | N5 | Comparing with a result of an earlier run (cross-run comparison) gets **its own plan, next**. This round's jobs are one-batch jobs. |
-| N6 | Script Differences opens in an **OS dialog window**, a new kind beside Options and About ([popout-windows.md § Dialog windows](popout-windows.md#dialog-windows)), after Connect moves to one (branch `codex/connect-os-window`). |
+| N6 | Script Differences opens in an **OS dialog window**, a new kind beside Connect, Options and About ([popout-windows.md § Dialog windows](popout-windows.md#dialog-windows)). |
 | N7 | The new grid-menu commands go in a **Comparison** submenu, with the shipped Go to Next/Previous Difference and Go to Possible Match moved into it. |
 | N8 | Compare Values in Tab (C5b) is kept, as **one reused tab**. |
 
@@ -121,9 +121,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     shown, and a comparison hides Choose Headers…, so there Show Change Details takes its H. Each lane that adds to More
     results tools (C2 to C6, and C5b) updates `results-toolbar-fold.test.ts`'s pinned `output.tools` list.
 - **Engine-neutral.** Commands, context keys and settings declare both providers, except Script Differences (Q4).
-  Result-naming methods are declared for both engines in `methods.ts` and checked in C#. New protocol members are optional
-  fields of existing v2 shapes, and C4's one new method is offered through HELLO as every method is, so the protocol
-  stays v2.
+  Result-naming methods are declared for both engines in `methods.ts` and checked in C#. New protocol members are
+  optional fields of existing v2 shapes, and C4's two new methods (`results.scriptDiff` and `explorer.scriptTarget`) are
+  offered through HELLO as every method is, so the protocol stays v2.
 - **Every protocol change follows the results path.**
   - Results requests travel renderer → results worker (`worker-protocol.ts`, `ResultClient.ts`, and `worker-core.ts`,
     which rebuilds each port request member by member) → the strict port schema (`src/shared/ipc/port-messages.ts`) →
@@ -524,11 +524,13 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - A look-alike card reads the partner through `results.diffSeek { partnerOf }`. Its answer gains `differing?:
     number[]` (the pair indexes whose values differ, ascending, each below the pair count) and `compared?: number` (the
     compared pairs other than the match's key columns). Today `LookAlikes` returns only the partners, and `DiffIndex`
-    keeps only a partner per row, so the build keeps more: as `LookAlikes` scores a pair it records which compared pairs' hashes differ, and `DiffIndex`
-    stores that as a changed-pair bitset beside each partner (one bit a pair), charged in `BytesFor` with the partner.
-    A seek still reads only the index, so architecture.md's change-index bullet gains "and each look-alike's differing
-    pairs". The renderer compares no cells, so collation and soft equality stay the backend's. Both members go
-    through every results-path step.
+    keeps only a partner per row, so the build keeps more: as `LookAlikes` scores a pair it records which compared
+    pairs' hashes differ, and `DiffIndex` stores that as a changed-pair bitset beside each partner (one bit a pair).
+    `BytesFor` charges a flat `PossibleBytes` a look-alike today and takes no pair count, so it gains `pairs`, as
+    `CutBytes(pairs)` has, and SqlService passes `model.Pairs.Length`, so a wide comparison's bitsets are charged. A
+    seek still reads only the index, so architecture.md's change-index bullet gains "and each look-alike's differing
+    pairs". The renderer compares no cells, so collation and soft equality stay the backend's. Both members go through
+    every results-path step.
   - A view seek's `hidden` answer carries no row (`diffSeekResultSchema`'s strict `{ hidden: true }`), so the card seeks
     `partnerOf` on the comparison's base result, whose stored rows are never hidden, for the partner's stored row,
     `differing` and `compared`, and reads that row through the base handle. `partnerOf` is a row of the result sought,
@@ -599,8 +601,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       a soft cell of a changed Two rows entry (the other half), Two rows sorted apart (identified first);
     - the look-alike card from `differing`, and its hidden partner;
     - the hover debounce, no hover card while the focus is outside the grid and card, and the key's `when`.
-  - `DiffChecks`: `partnerOf` answers `differing` and `compared`, skipping ignored pairs; `BytesFor` charges the
-    bitsets, and a diff with many look-alikes on a low budget is refused, not cut.
+  - `DiffChecks`: `partnerOf` answers `differing` and `compared`, skipping ignored pairs; `BytesFor` charges the bitsets
+    by the pair count, and a diff with many look-alikes on a low budget, and a wide one (2,046 pairs) with a few, is
+    refused, not cut.
   - `results-port`: a partner answer carrying `differing` and `compared` passes `diffSeekResultSchema` and reaches the
     renderer, so a schema left unwidened is caught.
   - Smoke: Ctrl+I finds the dialog by role and name, Alt+F5 updates it, Escape returns focus. C5b opens the tab by
@@ -782,12 +785,13 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
 - **Where:** **Script Differences as T-SQL…** in the Comparison submenu, More results tools and the palette. It opens an
   **OS dialog window** (N6): kind `scriptDiff`, titled "Script Differences as T-SQL" (main sets the kind's static title,
   `dialogWindowKinds`), 640 × 600 by default, at least 520 × 440, its size remembered as Options' is, modeless. One is
-  open at a time, as Options is. It opens at its remembered position (`dialogWindowBounds`, after Connect in an OS
-  window) while its title bar lies on a connected display (`placeWindow`'s rule), remembered apart for a Results pane in
-  the main window and one in a popout, so a dialog parked on a second display beside the grid opens there again; else it
-  opens centred over the window that holds the comparison's Results pane (the main window, or a popout on another
-  display), and stays a child of the main window, as every dialog window is: parented to a popout, it would close when
-  the panel docks back. A popout clicked meanwhile can cover it; Script Differences as T-SQL… brings it forward.
+  open at a time, as Options is. It opens at its remembered position (`dialogWindowBounds`, which Connect in an OS
+  window brought) while it lies on a connected display (main's `onDisplay` check, else the window opens centred),
+  remembered apart for a Results pane in the main window and one in a popout, so a dialog parked on a second display
+  beside the grid opens there again; else it opens centred over the window that holds the comparison's Results pane (the
+  main window, or a popout on another display), and stays a child of the main window, as every dialog window is:
+  parented to a popout, it would close when the panel docks back. A popout clicked meanwhile can cover it; Script
+  Differences as T-SQL… brings it forward.
 - **The form:**
   - A first line names the comparison and how rows are matched: "Result 1 → Result 3 (SQLQuery3.sql), rows matched by
     key columns: id" ("rows matched automatically by order_no" under Automatic, and the strip's own `matchedBy` words
@@ -1329,16 +1333,41 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   `SqlService`'s dispatch hands the job to `DiffScript`, as copy and export go to `ResultJobs`, so the reservations live
   there and `DiffScriptChecks` refusal checks on a low budget pin them (the lint's reservation checks read only
   `SqlService.cs`).
+- **New method `explorer.scriptTarget`, on the explorer lane.** No method gives the renderer what the target field
+  needs: `explorer.search` hits carry an object, label, range and subtype (`src/shared/explorer/search.ts`), and
+  `tables.columns` asks the server for names and types. The index already holds each column's type, nullability,
+  identity, computed and default flags (`ObjectSearchSql.TypedColumns`), so this method reads them from `ObjectIndex`
+  and never queries the server.
+  - **The five places:** `RpcMethods`, a strict zod schema in `validation.ts` beside `objectSearchParamsSchema`,
+    `methodPolicies` (explorer lane, 15 s as `explorer.search`, `providers: ['sqlserver']`), a preload method, and a
+    `SqlService.DispatchAsync` case handing it to `ObjectSearchService`, with its `MethodNames` entry and records in
+    `Contracts.cs`.
+  - **Params:** `{ connectionId, text (the field's typed name, at most 400 characters), columns (the compared columns'
+    names, at most `limits.page.maxColumns`, each 1–128 characters), limit (1–20) }`.
+  - **Answer:** `{ suggestions: { database, schema, name, holds }[] (at most limit, tables whose name matches
+    `text`, those holding every compared column first, then by `holds` and name), table?: { database, schema, name,
+    columns: { name, type, nullable, identity, computed, hasDefault }[], columnsCut? }, indexed }`. `table` comes back
+    when `text` names exactly one indexed table, with at most 4,096 columns (`columnsCut` past that, when the dialog
+    claims no column facts and only warns). `indexed` is false while a database the name could be in has no index yet,
+    and the dialog then shows no suggestions or facts and warns as for a table the index lacks.
+  - **Tests:** a new offline suite in Program.cs's `offlineSuites` over a built `ObjectIndex`: ranking by compared
+    columns held, three-part suggestions across two databases with the same schema, a table's identity, computed,
+    NOT NULL and default flags, the 4,096-column cut, and no index; vitest for the schema's bounds and the dialog's
+    index line from a fake answer.
 - **Renderer:**
   - The dialog is a `DialogWindow` of the new kind in `dialogWindowKinds` (`src/shared/popouts.ts`), which also widens
-    the `dialogWindowName` pattern (today `options|about`). `DialogWindow` takes the window to open over, the one
-    holding the comparison's Results pane, where today it centres on the main window, and keeps the kind's remembered
-    position per holder (the main window, or a popout), placed by `placeWindow`'s title-bar rule; the window stays the
-    main window's child. popout-windows.md § Dialog windows gains the kind and that rule, and its "At most four" follows
-    `maxWindows`, two per kind (eight once Connect's kind has landed too).
+    the `dialogWindowName` pattern (today `options|about|connect`). `DialogWindow` takes the window to open over, the
+    one holding the comparison's Results pane, where today `dialogWindowBounds` centres on the main window and keeps one
+    position per kind; for this kind the remembered position is kept per kind and holder (the main window, or a popout),
+    and main's rule stays: a position main refuses as off every display (`onDisplay`, in `dialogRequest`) is tried again
+    centred over the holder, as `openHost` retries today. The window stays the main window's child. popout-windows.md §
+    Dialog windows gains the kind and that rule, and its "At most four" follows `maxWindows`, two per kind (eight with
+    Connect's kind and this one).
   - New Query Editor Window opens through the document service with the connection, as Script As's destination does.
   - Clipboard goes through the existing clipboard path.
-  - The table suggestions read the Search Objects index, the single metadata source, and never query the server.
+  - The table suggestions and the index line read `explorer.scriptTarget`, 300 ms after Target table last changed,
+    cancelling the request before: the Search Objects index is the single metadata source, and the dialog never queries
+    the server.
 - **Catalogues:** command `output.compareScript` (the submenu, More results tools with access key Q, palette;
   `providers: ['sqlserver']`, with Q4's hint on BigQuery). Regenerate the commands docs. No setting.
 - **Tests:**
@@ -1421,14 +1450,14 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     with the focus on Cancel, a failed preview request on opening and later (a backend loss showing the closed state),
     the changed line above the summary and a sort not cancelling a generation, the form read-only while generating and a
     failure beside Script, the background replay (the latest sentence of each kind, a refusal left to the description,
-    dropped on a switch), the remembered position kept per holder while its title bar is on a display, Script's
-    description while generating, the stop sentence and Script available after a generation failure, the updating
-    state's focus and description, the unchecked line's backend sentence, both identity sentences, the unticked line's
-    DELETE clause, the unchecked-UPDATEs line, Selected rows' keys and its sentence said only when the differing entries
-    change, the key-name refusal's button, the look-alike lines for rows whose look-alike is not chosen, the column list
-    as one Tab stop, the key-column form of the truncation and U+FFFD refusals, closing while generating opening
-    nothing, Enter in Target table with nothing highlighted, the window over a popped-out Results pane, a cancelled
-    generation giving way to a closed or refused state, and the Clipboard announcement.
+    dropped on a switch), the remembered position kept per holder while it is on a display, Script's description while
+    generating, the stop sentence and Script available after a generation failure, the updating state's focus and
+    description, the unchecked line's backend sentence, both identity sentences, the unticked line's DELETE clause, the
+    unchecked-UPDATEs line, Selected rows' keys and its sentence said only when the differing entries change, the
+    key-name refusal's button, the look-alike lines for rows whose look-alike is not chosen, the column list as one Tab
+    stop, the key-column form of the truncation and U+FFFD refusals, closing while generating opening nothing, Enter in
+    Target table with nothing highlighted, the window over a popped-out Results pane, a cancelled generation giving way
+    to a closed or refused state, and the Clipboard announcement.
   - Smoke: open the dialog window by role, script to a New Query Editor Window, and find `BEGIN TRANSACTION` in the
     focused editor. A frameless OS window can behave differently on Linux, so run it through `npm run test:smoke:wsl`
     before pushing.
@@ -1689,7 +1718,7 @@ When the last lane ships, this plan folds into the area docs and is deleted.
 | C3 | Copy as Diff, Save as Diff… (Q1) | C2 (the submenu, and the header's `ignored:` part) | M |
 | C5 | Change details card and hover | C2 (the submenu) | M |
 | C6 | Compare rows as shown, Out of date | C2 (both change `results.diff` and the pair memory) | L |
-| C4 | Script Differences as T-SQL | C2 (ignored columns' INSERT rule), C3 (the match and ignored pairs it records on the diff set, and cut changed-pair lists in both layouts), Connect in an OS window (dialog windows) | L |
+| C4 | Script Differences as T-SQL | C2 (ignored columns' INSERT rule), C3 (the match and ignored pairs it records on the diff set, and cut changed-pair lists in both layouts) | L |
 | C5b | Compare Values in Tab | C5 | M |
 | (later) | C4b GoogleSQL script; side-by-side; Pivots | Q4; N4 | M; L; M |
 
@@ -1703,8 +1732,8 @@ When the last lane ships, this plan folds into the area docs and is deleted.
   worker-protocol.ts, worker-core.ts, `ResultClient.ts`, `SqlService.cs`, `Contracts.cs` and the fake backend), so the
   second to land merges main first. Whichever of them lands second also adds Script Differences' refusal of a comparison
   of rows as shown, and whichever of C3 and C6 lands second, Copy as Diff's as-shown header lines. C4 is listed last
-  because it is the largest and riskiest lane, waits on Connect in an OS window, and its "script back a bad UPDATE" job
-  is worth most once cross-run comparison (N5) lands.
+  because it is the largest and riskiest lane, and its "script back a bad UPDATE" job is worth most once cross-run
+  comparison (N5) lands.
 
 ## Coordination with in-flight work
 
@@ -1720,13 +1749,14 @@ In flight as of 2026-11-22. After each merges, open comparison branches merge ma
   - BigQuery disables Compare on windowed results, so a comparison's inputs are in memory. C6's remote-view refusal is the
     backstop.
   - New commands and keys are engine-neutral except C4 (Q4).
-- **Connect in an OS window** (branch `codex/connect-os-window`) reworks `DialogWindow`, `popouts.ts` and
-  `popout-windows.ts`. C4's dialog kind follows it.
-- **SQL Server Agent** (docs/agent-plan.md, 0.11.0; AG-7 is open, AG-6b and AG-6c have merged) does not touch the
-  results pipeline, but shares files with the comparison lanes. Both sides only append to them:
+- **Connect in an OS window** has merged: `DialogWindow`, `popouts.ts` and `popout-windows.ts` hold its `connect` kind
+  and `dialogWindowBounds`, which C4's kind builds on.
+- **SQL Server Agent** (docs/agent-plan.md, 0.11.0; AG-6b, AG-6c and AG-7 have merged, and its later lanes are in
+  flight) does not touch the results pipeline, but shares files with the comparison lanes. Both sides only append to
+  them:
   - menus and keys: the commands catalogue, `menus.ts`, `tests/command-catalog.test.ts`, `context-keys.ts` and
-    `core/contextkeys.ts` (AG-7), against C2's submenu and every lane's commands;
-  - documents: `documents.ts`, `EditorArea.tsx` and `services/files.ts` (AG-7), and `start.tsx` with
+    `core/contextkeys.ts` (as AG-7 did), against C2's submenu and every lane's commands;
+  - documents: `documents.ts`, `EditorArea.tsx` and `services/files.ts` (as AG-7 did), and `start.tsx` with
     `tests/fixtures/monaco-runtime.ts`'s reviewed imports, which AG-6b changed and C5b builds on;
   - `icons.ts` (as AG-6c did), against C2's `eye-closed`;
   - the protocol files: the fake backend, contracts.ts, methods.ts, `SqlService.cs` and `Contracts.cs` (all three),
