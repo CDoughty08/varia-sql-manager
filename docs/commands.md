@@ -268,7 +268,7 @@ keys it uses are listed below.
 | Move Down | `explorer.moveServerDown` | Alt+Down (`explorerFocus && !textInputFocus`) | Alt+Down (`explorerFocus && !textInputFocus`) | ⌥↓ (`explorerFocus && !textInputFocus`) | Always | Object Explorer context menu › Move Down |
 | Collapse All | `explorer.collapseAll` | — | — | — | `hasConnection` | — |
 | Group by Schema | `explorer.groupBySchema` | — | — | — | Always; checked when `explorerGroupBySchema` | — |
-| New Query | `explorer.newQuery` | — | — | — | `!documentBusy` | Object Explorer context menu › New Query |
+| New Query | `explorer.newQuery` | — | — | — | `!documentBusy` | Object Explorer context menu › New Query; Search Objects result context menu › New Query |
 | Select Top 1000 Rows | `explorer.selectTopRows` | — | — | — | `backendReady && explorerActionSelectTop == 'enabled' && !documentBusy` | Object Explorer context menu › Select Top 1000 Rows; Search Objects result context menu › Select Top 1000 Rows |
 | Rename | `explorer.rename` | F2 (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`) | F2 (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`) | F2 (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`) | `backendReady && explorerActionRename == 'enabled'` | Object Explorer context menu › Rename |
 | Delete | `explorer.delete` | Delete (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`) | Delete (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`) | ⌘⌫ (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`), ⌦ (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`) | `backendReady && explorerActionDelete == 'enabled'` | Object Explorer context menu › Delete |
@@ -1075,6 +1075,7 @@ Right-click a Search Objects result (in the Search Objects tab or Object Explore
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
 | `0_reveal` | **R**eveal in Object Explorer | `search.revealHit` | Always |
+| `1_query` | New **Q**uery | `explorer.newQuery` | `searchHitBigQuery` |
 | `1_query` | **P**review Rows | `explorer.previewRows` | `explorerSelectionKind == 'bqTable'` |
 | `1_query` | Select Top 1000 Ro**w**s | `explorer.selectTopRows` | `explorerActionSelectTop != ''` |
 | `1_query` | Modif**y** | `explorer.modify` | `explorerSelectionModifiable` |

@@ -469,7 +469,11 @@ export const commandCatalog = {
   },
   'explorer.newQuery': {
     title: 'New Query', category: 'Object Explorer', icon: 'new-file', precondition: '!documentBusy', unavailableHint: 'Select a server or database in Object Explorer.', providers: both,
-    menus: [{ menu: 'explorer.context', group: '1_query', order: 2, mnemonic: 'q', when: "(explorerNode == 'server' && !explorerServerLost) || explorerNode == 'database'" }]
+    menus: [
+      { menu: 'explorer.context', group: '1_query', order: 2, mnemonic: 'q', when: "(explorerNode == 'server' && !explorerServerLost) || explorerNode == 'database'" },
+      // A BigQuery Search Objects result: a GoogleSQL query on its connection, in its dataset when that is in the billing project.
+      { menu: 'search.hit.context', group: '1_query', order: 0, mnemonic: 'q', when: 'searchHitBigQuery' }
+    ]
   },
   // Select Top 1000 Rows, Rename and Delete: generated from src/shared/actions/catalog.ts. Each acts on its menu's node,
   // else the selection; explorer.selectTopRows keeps PR4's id.
