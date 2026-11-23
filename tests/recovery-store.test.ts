@@ -6,7 +6,7 @@ import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWrite
 import { SettingsStore } from '../src/main/settings-store'
 import { writeJsonAtomic } from '../src/main/json-file'
 import { SqlFileStore } from '../src/main/sql-files'
-import { lossDetails, recoveryCapMessage, recoveryLimits, type RecoveryWrite } from '../src/shared/files/recovery'
+import { bigQueryLoss, lossDetails, recoveryCapMessage, recoveryLimits, type RecoveryWrite } from '../src/shared/files/recovery'
 
 let directory: string, folder: string
 beforeEach(async () => {
@@ -69,6 +69,23 @@ describe('the AutoRecover store', () => {
     expect((await next.list(2)).map(item => item.characters)).toEqual([8])
     await next.discard([kept.id], 1)
     expect(await records()).toEqual([])
+  })
+
+  it("keeps a BigQuery query's job key, so a recovered copy re-attaches to its jobs", async () => {
+    const store = new RecoveryStore(folder), jobKey = randomUUID()
+    const kept = query({ provider: 'bigquery', jobKey, database: 'sales', server: 'example-project' })
+    await store.write(kept, 1)
+    await store.list(2)
+    expect(await store.take(kept.id, 2)).toMatchObject({ provider: 'bigquery', jobKey })
+    expect(recoveryWriteSchema.safeParse({ ...query(), jobKey: 'x' }).success).toBe(false)
+  })
+
+  it("lists every copy's job key, whoever owns it, so jobs a copy may still re-attach to are not asked about", async () => {
+    const store = new RecoveryStore(folder), jobKey = randomUUID()
+    await store.write(query({ provider: 'bigquery', jobKey, database: 'sales', server: 'example-project' }), 1)
+    await store.write(query(), 1)
+    expect(await store.jobKeys()).toEqual([jobKey])
+    expect(await new RecoveryStore(folder).jobKeys()).toEqual([jobKey])
   })
 
   // sandbox-guard.ts's profilePathsRefused: a packaged smoke run's profile belongs to whoever started it.
@@ -283,6 +300,11 @@ describe('the AutoRecover store', () => {
 
   it('words the crash, hang and reload prompts for AutoRecover only once it kept the page\'s queries', () => {
     const lost = lossDetails({ enabled: true, minutes: 5, saved: false })
+    // With a BigQuery handle open, the crash and reload prompts say its jobs carry on (docs/bigquery.md, Re-attaching to jobs).
+    const bigQuery = lossDetails({ enabled: true, minutes: 5, saved: false }, undefined, true)
+    expect(bigQuery.stopped).toBe(lost.stopped + ' ' + bigQueryLoss)
+    expect(bigQuery.reload).toBe(lost.reload + ' ' + bigQueryLoss)
+    expect(lost.reload).not.toContain('BigQuery')
     expect(lossDetails({ enabled: false, minutes: 5, saved: true })).toEqual(lost)
     expect(lost).toEqual({
       stopped: 'Unsaved queries were lost. Connections were closed and uncommitted transactions were rolled back.',

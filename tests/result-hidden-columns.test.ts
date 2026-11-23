@@ -9,7 +9,7 @@ import { diffSuffixOf, hiddenRoles, isHiddenColumn, visibleColumnCount } from '.
 import { tileColumnOf, tileRowOf } from '../src/renderer/src/grid/tiles'
 import { diffSidesOf } from '../src/renderer/src/grid/ResultGrid'
 
-// A comparison's marker, row numbers and tone are a hidden suffix (docs/result-comparison-ux-plan.md, D6): one predicate
+// A comparison's marker, row numbers and tone are a hidden suffix: one predicate
 // says which columns are not data, and a new `role === 'tone'` test elsewhere would treat the suffix as data again.
 const walk = (root: string, pattern: RegExp): string[] => readdirSync(root).flatMap(name => {
   const path = join(root, name).replaceAll('\\', '/')

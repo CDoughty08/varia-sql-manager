@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (384)
+## Commands (394)
 
 ### File
 
@@ -213,6 +213,9 @@ keys it uses are listed below.
 | Swap Sides | `output.compareSwapSides` | — | — | — | Always | Results toolbar › More results tools › Swap Sides |
 | Go to Old Result | `output.compareGoToOld` | — | — | — | Always | Results toolbar › More results tools › Go to Old Result |
 | Go to New Result | `output.compareGoToNew` | — | — | — | Always | Results toolbar › More results tools › Go to New Result |
+| Go to Next Difference | `output.compareNextDifference` | Alt+F5 (`outputGridFocus && resultsGridComparison`) | Alt+F5 (`outputGridFocus && resultsGridComparison`) | ⌥F5 (`outputGridFocus && resultsGridComparison`) | `resultsGridComparison` | Query Output context menu › Go to Next Difference; Results toolbar › More results tools › Go to Next Difference |
+| Go to Previous Difference | `output.comparePreviousDifference` | Shift+Alt+F5 (`outputGridFocus && resultsGridComparison`) | Shift+Alt+F5 (`outputGridFocus && resultsGridComparison`) | ⌥⇧F5 (`outputGridFocus && resultsGridComparison`) | `resultsGridComparison` | Query Output context menu › Go to Previous Difference; Results toolbar › More results tools › Go to Previous Difference |
+| Go to Possible Match | `output.compareGoToPossibleMatch` | — | — | — | `comparisonRowHasPartner` | Query Output context menu › Go to Possible Match |
 | Show Column Profile | `output.toggleColumnProfile` | — | — | — | Always; checked when `resultsColumnProfile` | Query Output context menu › Column Profile; Results toolbar › More results tools › Column Profile |
 | Column Profile: Selected Columns Only | `output.toggleProfileSelectedColumns` | — | — | — | Always; checked when `resultsProfileSelectedOnly` | Results toolbar › More results tools › Profile Selected Columns Only |
 | Show Results as Tabs | `output.toggleResultsTabs` | — | — | — | Always; checked when `resultsTabs` | Window › Results as Tabs; Results toolbar › More results tools › Results as Tabs |
@@ -289,6 +292,9 @@ keys it uses are listed below.
 | New Database… | `explorer.newDatabase` | — | — | — | `backendReady && (explorerSelectionFolder == 'databases' \|\| explorerSelectionKind == 'database') && explorerSelectionServerEngine == 'box'` | Object Explorer context menu › New Database… |
 | New Database… (not in the palette) | `explorer.newDatabaseOnDatabase` | — | — | — | `backendReady && (explorerSelectionFolder == 'databases' \|\| explorerSelectionKind == 'database') && explorerSelectionServerEngine == 'box'` | Object Explorer context menu › New Database… |
 | New Table… | `explorer.newTable` | — | — | — | `backendReady && explorerSelectionFolder == 'tables' && !documentBusy` | Object Explorer context menu › New › Table… |
+| New Credential… | `agent.newCredential` | — | — | — | `agentEnabled && backendReady && (explorerSelectionFolder == 'credentials' \|\| explorerSelectionKind == 'credential')` | Object Explorer context menu › New Credential… |
+| Save Credential | `credential.save` | — | — | — | `agentEnabled && backendReady && activeDocumentIsCredential` | — |
+| Reload Credential | `credential.reload` | — | — | — | `agentEnabled && backendReady && activeDocumentIsCredential` | — |
 | Script as CREATE to New Query Editor Window (not in the palette) | `explorer.scriptCreateToNewQuery` | — | — | — | `backendReady && explorerScriptCreate == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › CREATE To › New Query Editor Window |
 | Script as CREATE to File… (not in the palette) | `explorer.scriptCreateToFile` | — | — | — | `backendReady && explorerScriptCreate == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › CREATE To › File… |
 | Script as CREATE to Clipboard (not in the palette) | `explorer.scriptCreateToClipboard` | — | — | — | `backendReady && explorerScriptCreate == 'enabled'` | Object Explorer context menu › Script … as › CREATE To › Clipboard |
@@ -442,6 +448,10 @@ keys it uses are listed below.
 | Start Job at Step… | `agentJob.startAtStep` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentJob` | — |
 | Stop Job | `agentJob.stop` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentJob` | — |
 | Reload Job | `agentJob.reload` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentJob` | — |
+| New Proxy… | `agent.newProxy` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › New Proxy… |
+| Proxy… (not in the palette) | `agent.newProxyOnAgent` | — | — | — | `agentEnabled && backendReady && explorerSelectionKind == 'agent'` | Object Explorer context menu › New › Proxy… |
+| Save Proxy | `agentProxy.save` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentProxy` | — |
+| Reload Proxy | `agentProxy.reload` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentProxy` | — |
 | View History | `agent.viewHistory` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › View History |
 | Refresh History | `agent.refreshHistory` | — | — | — | `agentEnabled && backendReady && activeDocumentIsLogViewer` | — |
 | Delete History… | `agent.deleteHistory` | — | — | — | `agentEnabled && backendReady && activeDocumentIsLogViewer` | — |
@@ -730,10 +740,12 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `0_connect` | **R**econnect… | `connection.reconnect` | `explorerServerLost` |
 | `0_connect` | Rem**o**ve from Explorer | `connection.removeFromExplorer` | `explorerServerLost` |
 | `0_connect` | En**v**ironment… | `connection.environment` | `explorerNode == 'server' && !explorerServerLost` |
-| `0_new` | **N**ew › | Submenu: Object Explorer context menu › New | `explorerNode == 'folder' && (explorerFolder == 'tables' \|\| (explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance') && !explorerServerLost))` |
+| `0_new` | **N**ew › | Submenu: Object Explorer context menu › New | `(explorerNode == 'folder' && (explorerFolder == 'tables' \|\| (explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance') && !explorerServerLost))) \|\| (explorerNode == 'agent' && !explorerServerLost)` |
+| `0_new` | **N**ew Credential… | `agent.newCredential` | `agentEnabled && ((explorerNode == 'folder' && explorerFolder == 'credentials') \|\| explorerNode == 'credential') && !explorerServerLost && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance')` |
 | `0_new` | **N**ew Database… | `explorer.newDatabase` | `explorerNode == 'folder' && explorerFolder == 'databases' && !explorerServerLost && explorerServerEngine == 'box'` |
 | `0_new` | **N**ew Job… | `agent.newJob` | `((explorerNode == 'folder' && explorerFolder == 'agentJobs') \|\| explorerNode == 'agentJob') && !explorerServerLost` |
 | `0_new` | **N**ew Login… | `explorer.newLogin` | `((explorerNode == 'folder' && explorerFolder == 'logins') \|\| explorerNode == 'login') && !explorerServerLost && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance')` |
+| `0_new` | **N**ew Proxy… | `agent.newProxy` | `((explorerNode == 'folder' && (explorerFolder == 'agentProxies' \|\| explorerFolder == 'agentUnassignedProxies')) \|\| explorerNode == 'agentProxySubsystem' \|\| explorerNode == 'agentProxy') && !explorerServerLost` |
 | `0_new` | **A**ttach… | `explorer.attachDatabase` | `explorerActionAttach != '' && explorerNode == 'folder'` |
 | `0_new` | Crea**t**e Catalog… | `explorer.createCatalog` | `explorerNode == 'folder' && explorerFolder == 'integrationServicesCatalogs' && !explorerServerLost` |
 | `0_new` | **R**estore Database… | `explorer.restoreDatabase` | `explorerActionRestore != '' && explorerNode == 'folder'` |
@@ -784,6 +796,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | --- | --- | --- | --- |
 | `1_security` | **L**ogin… | `explorer.newLoginOnSecurity` | `explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance')` |
 | `1_table` | **T**able… | `explorer.newTable` | `explorerFolder == 'tables'` |
+| `2_agent` | **P**roxy… | `agent.newProxyOnAgent` | `explorerNode == 'agent' && explorerServerEngine == 'box'` |
 
 #### Object Explorer context menu › Tasks
 
@@ -961,6 +974,9 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 | `2_sort` | **U**pdate Pivot | `output.updatePivot` | `outputView == 'grid' && !outputGridBare` |
 | `2_sort` | Tra**n**spose › | Submenu: Query Output context menu › Transpose | `outputGridTransposable` |
 | `2_width` | F**i**t Column | `output.fitColumn` | `outputView == 'grid' \|\| outputView == 'live'` |
+| `3_compare` | Go to Ne**x**t Difference | `output.compareNextDifference` | `outputGridComparison` |
+| `3_compare` | Go to Previous Difference | `output.comparePreviousDifference` | `outputGridComparison` |
+| `3_compare` | Go to Possible Match | `output.compareGoToPossibleMatch` | `outputGridComparison` |
 | `3_save` | Sa**v**e Results As… | `output.saveResultsAs` | `outputView == 'grid' \|\| outputView == 'live'` |
 | `4_view` | Show Spaces and Ta**b**s | `output.showSpaces` | `outputView == 'grid' \|\| outputView == 'live'` |
 | `4_view` | Show All **W**hite Space | `output.showAllWhitespace` | `outputView == 'grid' \|\| outputView == 'live'` |
@@ -1102,6 +1118,8 @@ Click the ⋯ button at the end of the results toolbar (More results tools), or 
 | `5_compare` | Go to Ol**d** Result | `output.compareGoToOld` | `resultsGridComparison` |
 | `5_compare` | Go to New Res**u**lt | `output.compareGoToNew` | `resultsGridComparison` |
 | `5_compare` | Sa**v**e Results As… | `output.saveResultsAs` | `resultsGridComparison` |
+| `5_compare` | Go to Next Difference | `output.compareNextDifference` | `resultsGridComparison` |
+| `5_compare` | Go to Previous Difference | `output.comparePreviousDifference` | `resultsGridComparison` |
 | `z_close` | C**l**ose Results | `output.closeResults` | Always |
 
 #### Peek Properties context menu (`peek.properties.context`)
@@ -1129,7 +1147,7 @@ Right-click the execution plan's Properties pane, or press Shift+F10 or the cont
 | `1_copy` | **C**opy | `plan.copyProperties` | Always |
 | `1_copy` | Copy **V**alue | `plan.copyPropertyValues` | Always |
 
-## Context keys (184)
+## Context keys (187)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1173,6 +1191,8 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `activeDocumentIsSsisOperations` | boolean | state | The active document is Integration Services Operations. |
 | `activeDocumentIsJobActivity` | boolean | state | The active document is SQL Server Agent's Job Activity Monitor. |
 | `activeDocumentIsAgentJob` | boolean | state | The active document is a SQL Server Agent job (Job Properties, or New Job). |
+| `activeDocumentIsAgentProxy` | boolean | state | The active document is a SQL Server Agent proxy (Proxy Account Properties, or New Proxy). |
+| `activeDocumentIsCredential` | boolean | state | The active document is a credential (Credential Properties, or New Credential). |
 | `activeDocumentIsLogViewer` | boolean | state | The active document is SQL Server Agent's Log File Viewer (job history). |
 | `ssisOperationStoppable` | boolean | state | The operation selected in the active Integration Services Operations document is an execution or validation that is running or pending, and no stop of it is on its way. |
 | `ssisOperationsPaused` | boolean | state | The active Integration Services Operations document is paused (Pause): it reads nothing until resumed. |
@@ -1322,6 +1342,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `comparisonExactText` | boolean | state | That comparison compares text exactly: values that differ only by case or trailing spaces count as changed (its Exact text toggle). |
 | `comparisonOneRow` | boolean | state | That comparison shows one row per entry (its Layout is One row). |
 | `comparisonChangesOnly` | boolean | state | That comparison shows only its changed, added and removed rows (its Rows choice is Changes only). |
+| `comparisonRowHasPartner` | boolean | state | That comparison's active row is a removed or added row with a possible match (? in its row header), so Go to Possible Match can select it; false until the row's change marker has loaded. In a results grid's own menu, the row it was opened on. |
 
 ## Reserved keys
 

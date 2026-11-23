@@ -14,7 +14,7 @@ export interface ConnectionReceiptResult { readonly accepted: boolean; readonly 
 export interface ConnectionOpenDeps extends ConnectionRequestDeps {
   readonly generation: () => number | undefined
   readonly open: (options: unknown, generation: number, signal: AbortSignal) => Promise<ConnectionInfo>
-  readonly close: (handle: BackendConnectionHandle) => Promise<{ disconnected: boolean }>
+  readonly close: (handle: BackendConnectionHandle) => Promise<{ disconnected: boolean; failedAborts?: number }>
   readonly bindingsChanged?: (event: ConnectionBindingsChanged) => void
 }
 interface Receipt {
@@ -370,7 +370,7 @@ export class ConnectionOpenService {
     return pruned
   }
 
-  async disconnect(connectionId: string): Promise<{ disconnected: boolean }> {
+  async disconnect(connectionId: string): Promise<{ disconnected: boolean; failedAborts?: number }> {
     if (this.mutationPending) throw new BackendError('BUSY', 'Wait for the connection settings change to finish before disconnecting.')
     const generation = this.deps.generation(), owner = [...this.handles.values()].find(value => value.info.id === connectionId && value.info.generation === generation)
     if (!owner) return { disconnected: false }

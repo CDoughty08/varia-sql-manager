@@ -4,6 +4,9 @@ import * as monaco from 'monaco-editor/editor/editor.api.js'
 import 'monaco-editor/languages/definitions/sql/register.js'
 // XML, JSON and plan values open from the results grid in their own tabs.
 import 'monaco-editor/languages/definitions/xml/register.js'
+// Job steps' PowerShell and CmdExec commands (AG-6b).
+import 'monaco-editor/languages/definitions/powershell/register.js'
+import 'monaco-editor/languages/definitions/bat/register.js'
 import 'monaco-editor/editor/contrib/find/browser/findController.js'
 import 'monaco-editor/editor/contrib/clipboard/browser/clipboard.js'
 // With text drag-and-drop enabled, this also places the caret when a selection is clicked without dragging.

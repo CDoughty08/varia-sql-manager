@@ -38,7 +38,8 @@ internal static class ActionErrors
         // permissions a login granted.
         ["DEPENDENTS"] = [3726, 3729, 15336, 5042, 3709, 15174, 15170, 15141, 15155, 15186, 15144, 15138, 15421, 15284, 15183, 15173],
         // 1828 and 5170: a logical file name or a physical file is taken; 15025 a login (a login's rename too), 15023 a user.
-        ["NAME_IN_USE"] = [2714, 1801, 15335, 1828, 5170, 15025, 15023, 14261],
+        // 15530: a credential (CREATE CREDENTIAL, and a proxy's credential made in place).
+        ["NAME_IN_USE"] = [2714, 1801, 15335, 1828, 5170, 15025, 15023, 14261, 15530],
         // 15007: the login is not valid; 15010 a default database, 15033 a language and 15401 a Windows account that does not exist;
         // 50010: a guarded DROP's principal is not the one it was planned for (ActionSql.UserCheck, LoginCheck). 15404: Check Names'
         // xp_logininfo found no such Windows account (D2e, probed).

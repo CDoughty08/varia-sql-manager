@@ -118,7 +118,10 @@ import { JobActivityService } from '../agent/JobActivityService'
 import { LogViewerService } from '../agent/LogViewerService'
 import { AgentJobStatusService } from '../agent/AgentJobStatusService'
 import { JobDocumentService } from '../agent/JobDocumentService'
+import { ProxyDocumentService } from '../agent/ProxyDocumentService'
+import { CredentialDocumentService } from '../agent/CredentialDocumentService'
 import { agentContribution } from '../contributions/agent'
+import { agentProxyContribution } from '../contributions/agent-proxy'
 import { SearchDetailsService } from '../search/SearchDetailsService'
 import { ObjectSearchService } from '../search/ObjectSearchService'
 import { MenuService } from '../menus/MenuService'
@@ -281,6 +284,9 @@ export interface Workbench extends Disposable {
   /** The status bar's running Agent jobs this window started, followed while hidden (AG-3). */
   readonly agentJobs: AgentJobStatusService
   readonly jobDocuments: JobDocumentService
+  /** The proxy and Credential documents (AG-8b). */
+  readonly proxyDocuments: ProxyDocumentService
+  readonly credentialDocuments: CredentialDocumentService
   /** Search Objects: each connected server's object index (built in the backend) and the Search Objects tabs. */
   readonly objectSearch: ObjectSearchService
   /** The Search Objects tabs' details pane: the selected hit's properties and definition. */
@@ -399,9 +405,13 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values, retainedPlans)
   // A BigQuery close's note shows in the query's Messages while it stays, else as a notification (docs/bigquery.md, Sessions).
   queries.notify = text => { notifications.notify({ severity: 'warning', message: text }) }
+  // A BigQuery job left running is no tab's any more: its id can be copied to find it in BigQuery's job history.
+  queries.notifyJobs = (text, jobIds) => { notifications.notify({ severity: 'info', message: text, actions: [{ label: jobIds.length === 1 ? 'Copy Job ID' : 'Copy Job IDs', run: () => { void api.writeClipboardText(jobIds.join('\n')) } }] }) }
+  const failedAbortsSubscription = api.onFailedAborts?.(count => { queries.failedAborts(count, false) })
   documents.sessionHooks = {
     message: (id, text, kind) => { queries.addSessionMessage(id, text, kind) },
     note: (id, note) => { queries.sessionNote(id, note) },
+    ended: (id, entry) => { queries.sessionClosed(id, entry) },
     bigQuery: id => { const connectionId = documents.get(id)?.connectionId; return !!connectionId && connections.get(connectionId)?.providerId === 'bigquery' }
   }
   const costPrompts = new CostPromptService()
@@ -409,6 +419,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   let costChoiceChanged = () => {}
   const bigQueryCost = new BigQueryCostService({ api, documents, connections, settings, events, monaco, ask: (request, signal, stillAsks, onAnswer) => costPrompts.ask(request, signal, stillAsks, onAnswer), optOut: costOptOut(api, () => costChoiceChanged()) })
   costChoiceChanged = () => bigQueryCost.optOutChanged()
+  queries.estimateOf = (id, sql) => bigQueryCost.estimateFor(id, sql)
   queries.setCostGate((tabId, sql, origin, signal) => bigQueryCost.beforeExecute(tabId, sql, origin, signal))
   const queryPlans = new QueryPlansService(live, documents, queries, panes, results)
   const planPreparation = new PlanPreparationCache()
@@ -431,8 +442,13 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const recentFiles = new RecentFilesService(api)
   const recovery = new RecoveryService({
     api, documents, files, settings, warn: message => commands.reportWarning(message),
-    server: id => { const connection = connections.get(id); return connection ? connection.displayName || connection.server : undefined }
+    server: id => { const connection = connections.get(id); return connection ? connection.displayName || connection.server : undefined },
+    restoredJobs: (tabId, jobs) => queries.restoreJobs(tabId, jobs)
   })
+  // A tab holding BigQuery jobs it does not follow re-attaches once its connection is live (docs/bigquery.md, Re-attaching to jobs).
+  let reattachQueued = false
+  const reattachSoon = () => { if (reattachQueued) return; reattachQueued = true; queueMicrotask(() => { reattachQueued = false; queries.reattach() }) }
+  const reattachSubscriptions = [connections.subscribe(reattachSoon), documents.subscribe(reattachSoon)]
   const resultSelection = new ResultSelectionService(results)
   const targets = new TargetService(documents, queries, connections, files, connectionTargets, (connectionId, dataset) => databaseList.get(connectionId).find(entry => entry.name === dataset)?.location)
   const serverDrop = new ServerDropService({ documents, queries, targets, connections })
@@ -523,11 +539,19 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // The SQL Server Agent job document (AG-6a): its first section's item in the list once loaded, or New Job's start panel.
   const jobDocuments = new JobDocumentService({
     api, documents, files, connections, live, targetIdOf,
+    openQuery: (sql, name, connectionId, database) => { documents.newQuery(sql, name, connectionId, database) },
     focus: id => focusLater(() => {
       const root = document.querySelector<HTMLElement>(`[data-agent-job="${CSS.escape(id)}"]`)
       ;(root?.querySelector<HTMLElement>('[data-agent-job-focus]') ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]'))?.focus()
     })
   })
+  // The proxy and Credential documents (AG-8b): New's name field, else the first section's item in the list.
+  const focusAgentObject = (attribute: string, field: string) => (id: string) => focusLater(() => {
+    const root = document.querySelector<HTMLElement>(`[${attribute}="${CSS.escape(id)}"]`)
+    ;(root?.querySelector<HTMLElement>(`[${field}]:not(:disabled)`) ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]'))?.focus()
+  })
+  const proxyDocuments = new ProxyDocumentService({ api, documents, files, connections, targetIdOf, focus: focusAgentObject('data-agent-proxy', 'data-agent-proxy-focus') })
+  const credentialDocuments = new CredentialDocumentService({ api, documents, files, connections, targetIdOf, focus: focusAgentObject('data-credential', 'data-credential-focus') })
   const jobActivity = new JobActivityService({
     api, documents, panes, groups: editorGroups, live, connections, targetIdOf,
     started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt),
@@ -727,6 +751,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     logViewer,
     agentJobs,
     jobDocuments,
+    proxyDocuments,
+    credentialDocuments,
     objectSearch,
     searchDetails,
     theme,
@@ -748,6 +774,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       disconnectPrompts.dispose()
       // Before the documents close: a page that unloads leaves its AutoRecover copies to be offered.
       recovery.dispose()
+      reattachSubscriptions.forEach(unsubscribe => unsubscribe())
+      failedAbortsSubscription?.()
       // Hiding the quick input first aborts its loads and ends any theme preview before the services they use go away.
       listeners.forEach(listener => listener.dispose()); menus.dispose(); quickInput.dispose(); menuState.dispose(); keybindings.dispose()
       contributions.forEach(contribution => contribution.dispose())
@@ -782,6 +810,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       logViewer.dispose()
       agentJobs.dispose()
       jobDocuments.dispose()
+      proxyDocuments.dispose()
+      credentialDocuments.dispose()
       // Before the live views: each monitor disposes its own; then the client, while the port is still there.
       activity.dispose()
       // Before the client: its views cancel their subscriptions while the port is still there.
@@ -867,6 +897,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     ssisContribution(workbench),
     activityContribution(workbench),
     agentContribution(workbench, { agentEnabled: api.agentPreview }),
+    agentProxyContribution(workbench, { agentEnabled: api.agentPreview }),
     searchContribution(workbench, api),
     settingsContribution(workbench),
     notificationsContribution(workbench)
@@ -888,8 +919,14 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // The tabs the last close kept (hot exit), else the welcome query; what an earlier run or page left unsaved is offered
   // once the workbench is up.
   const welcome = () => { if (!disposed) documents.create('SQLQuery1.sql', welcomeQueryText, 'master') }
-  if (api.hotExit) void restoreSession({ api, documents, files, groups: editorGroups, connectionTargets, resumeRecovery: (tabId, id) => recovery.resume(tabId, id), otherwise: welcome })
-    .catch(() => {}).then(() => { connectionRestored(); if (!disposed) void recovery.start() })
-  else { welcome(); connectionRestored(); void recovery.start() }
+  if (api.hotExit) void restoreSession({ api, documents, files, groups: editorGroups, connectionTargets, resumeRecovery: (tabId, id) => recovery.resume(tabId, id), restoredJobs: (tabId, jobs) => queries.restoreJobs(tabId, jobs), otherwise: welcome })
+    .then(opened => opened >= 0, () => false).then(restored => {
+      connectionRestored()
+      if (disposed) return
+      void recovery.start()
+      // A session that could not be restored may still reopen its tabs (previous.json): their jobs are not asked about.
+      if (restored) void queries.reviewJobsWithoutTab(api)
+    })
+  else { welcome(); connectionRestored(); void recovery.start(); void queries.reviewJobsWithoutTab(api) }
   return workbench
 }

@@ -24,8 +24,10 @@ commands can be given shortcuts in Tools > Options > Environment > Shortcuts.
   Headers** are unchanged.
 - **Fit Column**: fits the column to its header and widest measured value, as double-clicking its right border does
   (first 4,096 rows plus visible rows, within width limits). From the keyboard menu, the active column.
-- **Close Results** (grid menu, results toolbar, palette): releases all the query's result sets, keeps Messages.
-  Unavailable while executing. Hiding the results pane keeps results. The toolbar never switches or closes documents.
+- **Close Results** (grid menu, results toolbar, palette): releases all the query's result sets, keeps Messages. Once a
+  BigQuery job has started it asks whether to cancel the job or leave it running, unless a choice was remembered
+  ([BigQuery](bigquery.md#re-attaching-to-jobs)); otherwise it is unavailable while executing.
+  Hiding the results pane keeps results. The toolbar never switches or closes documents.
 
 ## Sorting, filtering and highlighting
 
@@ -322,11 +324,13 @@ buttons are unavailable and say why.
 ### The comparison toolbar
 
 Above each comparison's grid: its title, its sides (each a link to that result, − old then + new) with **⇄ Swap sides**
-between them, **Match**, **Rows**, **Layout** (One row, Two rows), **Exact text**, the chips, **Profile** (the Column
-Profile of the comparison) and **Save Results As**. In a narrow pane they fold away in that order from Exact text (the
-chips first shrink to their sign and count) into More results tools, which holds Match Rows By…, Changes Only, One Row
-per Entry, Exact Text, Swap Sides, Go to Old Result, Go to New Result and Save Results As while a comparison has the
-focus. Match, Rows, Layout, Exact text and Swap sides each change that comparison in place: the same result
+between them, **Match**, **Rows**, **Layout** (One row, Two rows), **Exact text**, the chips, **Previous difference**
+and **Next difference** with the position ([Moving between differences](#moving-between-differences)), **Profile** (the
+Column Profile of the comparison) and **Save Results As**. In a narrow pane the chips first shrink to their sign and count
+and the position hides; then Exact text, Layout, Rows, Match, the sides, Profile and Save fold away in that order into
+More results tools (the title, chips and arrows stay), which holds Match Rows By…, Changes Only, One Row per Entry,
+Exact Text, Swap Sides, Go to Old Result, Go to New Result, Save Results As and Go to Next and Previous Difference while
+a comparison has the focus. Match, Rows, Layout, Exact text and Swap sides each change that comparison in place: the same result
 tab, number and place, renamed when its sides or Exact text change, keeping its column widths (by column name across a
 swap, as are the key columns it matched by) and its highlights, which follow their rows; its sort, filters and scroll
 reset. Swap onto a pair the run already has the other way round goes to that comparison instead. A change shows its
@@ -339,6 +343,26 @@ input while a change runs cancels it ("Result 1 was closed, so the change was ca
 new comparisons; the toolbar's Layout changes one comparison. Screen readers hear "Comparison ready: …" when a comparison
 is shown and "Comparison updated: …" after a change, with what it matched by and how many rows changed, were added and
 were removed, then any notice it newly shows.
+
+### Moving between differences
+
+**Go to Next Difference** (Alt+F5) and **Go to Previous Difference** (Alt+Shift+F5) move the active cell to the next or
+previous change, wrapping round: each changed value (on a changed row's + row in Two rows), and each added or removed
+row, which is selected whole. A row whose changes are not all listed ("More changes in this row are not listed") counts
+its unlisted changes as one more, which selects the row. The keys work while a comparison's grid has the focus; the
+palette, the grid's menu, More results tools and the toolbar's arrow buttons work from anywhere. The toolbar shows "Change
+2 of 31" until the active cell leaves that row, and screen readers hear the same; otherwise it shows the total ("31
+changes"), or nothing under a chip or filter until you move. Under a chip or
+another filter the counts are of the rows shown ("Change 2 of 5 shown"). Some Linux window managers take Alt+F5, macOS
+keyboards may need Fn (Option+Fn+F5) and macOS shortcuts may take it; it can be remapped
+([commands and keyboard shortcuts](commands.md)).
+
+**Go to Possible Match** (the grid's menu on a row with ? in its gutter, or the palette for the active row) selects the
+look-alike row it names, whole. When the chips hide the look-alike's kind it is unavailable ("The possible match is
+hidden by a filter"); under another filter that hides it, it says so instead of moving.
+
+While the grid shows every row of the comparison in its own order, a strip beside the vertical scroll bar marks where
+the changed, added and removed rows are; pressing a mark scrolls there. A sort or filter hides the strip.
 
 ## Tabs
 

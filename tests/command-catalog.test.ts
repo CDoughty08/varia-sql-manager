@@ -37,7 +37,7 @@ const explorerSelections: Partial<ContextKeys>[] = [
  * Menu items left without an access key. The result grid's menu shows more items than its titles have letters (none has
  * k, q or x), so Update Pivot takes 'u' and Pivot Results… goes without; every other item keeps the key users know.
  */
-const keylessItems: Partial<Record<MenuId, readonly string[]>> = { 'output.context': ['Pivot Results…'] }
+const keylessItems: Partial<Record<MenuId, readonly string[]>> = { 'output.context': ['Pivot Results…', 'Go to Previous Difference', 'Go to Possible Match'], 'output.tools': ['Go to Next Difference', 'Go to Previous Difference'] }
 /** Whether two placements' `when` clauses can both hold: for Object Explorer's menu, on some node, with any other keys. */
 function showTogether(menu: MenuId, ...clauses: (string | undefined)[]): boolean {
   const asts = clauses.flatMap(clause => clause === undefined ? [] : [parseWhen(clause)])
@@ -62,7 +62,7 @@ describe('command catalogue', () => {
   it('is the renderer\'s command id type', () => {
     expectTypeOf<CommandId>().toEqualTypeOf<RendererCommandId>()
     // Includes generated Script As commands and internal lifecycle commands.
-    expect(commandIds).toHaveLength(384)
+    expect(commandIds).toHaveLength(394)
     expect(commandIds.filter(id => id.startsWith('explorer.script') && id.includes('To'))).toEqual([...scriptCommandIds])
   })
   it('has a handler for every command once all contributions have run', () => {
@@ -200,7 +200,7 @@ describe('command catalogue', () => {
       // A menu assigns access keys over the items it shows, so only items that never show together may share one (an SSIS
       // folder's Properties and a database's).
       for (let first = 0; first < items.length; first++) for (let second = first + 1; second < items.length; second++) {
-        if (letters[first] !== letters[second]) continue
+        if (letters[first] === undefined || letters[first] !== letters[second]) continue
         expect(showTogether(menu, items[first].when, items[second].when), `${menu}: ${items[first].title} and ${items[second].title} share "${letters[first]}"`).toBe(false)
       }
     }

@@ -1,0 +1,695 @@
+// The job document's Steps section (AG-6b, docs/agent-plan.md › Job document sections › Steps, docs/agent-ui-rethink.md › rx-job-steps,
+// rx-step-*): a step as the describe reads it (sp_help_jobstep), the draft the section edits (go-to targets name steps by key, so they
+// follow a move), the draft's operations (add, move, delete with what it changed for Undo's banner), the problems it shows, the
+// More options sentence, and the save planner, pure and table-tested: msdb renumbers as it goes, so step numbers are never sent as they
+// stand. No React here.
+import { z } from 'zod'
+import { agentLimits, stepActions, stepFlagMask, stepFlags, subsystems } from './catalog.ts'
+
+/** sysjobsteps.on_success_action / on_fail_action: quit reporting success, quit reporting failure, go to the next step, go to a step. */
+export type StepAction = 1 | 2 | 3 | 4
+const stepActionCodes = [1, 2, 3, 4] as const
+
+/** A step as sp_help_jobstep reads it. AG-6a's describe carried only id, name and subsystem; the rest default as sp_add_jobstep does. */
+export interface AgentJobStepRecord {
+  readonly id: number
+  readonly name: string
+  readonly subsystem: string
+  readonly command?: string
+  readonly flags?: number
+  readonly cmdexecSuccessCode?: number
+  readonly onSuccessAction?: number
+  readonly onSuccessStepId?: number
+  readonly onFailAction?: number
+  readonly onFailStepId?: number
+  /** The Analysis Services types' server (their Server field); other types pass it back as read. */
+  readonly server?: string
+  readonly databaseName?: string
+  readonly databaseUserName?: string
+  readonly retryAttempts?: number
+  readonly retryInterval?: number
+  /** Not modelled (-15, -1, 0, 1, 15); passed back as read. */
+  readonly osRunPriority?: number
+  readonly outputFileName?: string
+  /** 0: SQL Server Agent Service Account (no proxy). */
+  readonly proxyId?: number
+  /** The describe cut the command at stepCommandChars (or the job's stepCommandTotalChars): the steps cannot be saved from here. */
+  readonly commandTruncated?: boolean
+}
+
+/** A proxy the Run as picker offers, with the step types it is active for (sp_help_proxy @subsystem_name; below sysadmin only the proxies
+ *  granted to the login). */
+export interface AgentJobProxy {
+  readonly id: number
+  readonly name: string
+  readonly enabled: boolean
+  /** The credential's identity (the account the step runs as). */
+  readonly identity?: string
+  readonly subsystems: readonly string[]
+}
+
+/** One step of the draft. `key` is stable for the document's life; `from` is the step's id as described (absent for a new step). A go-to
+ *  target is a key: it follows the step it names through moves. A target that named no described step keeps `s<id>`, dangling. */
+export interface AgentStepDraft {
+  readonly key: string
+  readonly from?: number
+  /** The command as read was cut (AgentJobStepRecord.commandTruncated). */
+  readonly truncated?: boolean
+  readonly name: string
+  readonly subsystem: string
+  readonly command: string
+  readonly databaseName: string
+  readonly databaseUserName: string
+  readonly onSuccess: StepAction
+  readonly onSuccessTarget?: string
+  readonly onFail: StepAction
+  readonly onFailTarget?: string
+  readonly retryAttempts: number
+  readonly retryInterval: number
+  readonly outputFileName: string
+  /** The whole sysjobsteps.flags value: the bits the section edits and the ones it carries (32, 64). */
+  readonly flags: number
+  readonly cmdexecSuccessCode: number
+  readonly proxyId: number
+  readonly server: string
+  readonly osRunPriority: number
+}
+
+/** The steps part of the job draft: the steps in order and the key of the Start step (undefined when there are none). */
+export interface AgentStepsDraft { readonly steps: readonly AgentStepDraft[]; readonly startKey?: string }
+
+const action = (value: number | undefined, fallback: StepAction): StepAction => stepActionCodes.includes(value as StepAction) ? value as StepAction : fallback
+const keyOf = (id: number) => `s${id}`
+/** The id a dangling or described key names (`s<id>`), else undefined. */
+/** A step name as msdb keeps it: its LTRIM and RTRIM strip spaces only, so a tab or a no-break space stays part of the name. */
+const msdbTrim = (text: string) => text.replace(/^ +| +$/g, '')
+const describedId = (key: string): number | undefined => /^s[1-9][0-9]*$/.test(key) ? Number(key.slice(1)) : undefined
+
+/** A described step as the draft holds it. */
+/** msdb stores a subsystem as a script spelled it (N'CMDEXEC'; it compares them case-insensitively): the catalogue's id, else as stored. */
+const subsystemId = (stored: string) => subsystems.find(entry => entry.id.toLowerCase() === stored.toLowerCase())?.id ?? stored
+export function stepDraftOf(step: AgentJobStepRecord): AgentStepDraft {
+  const onSuccess = action(step.onSuccessAction, 1), onFail = action(step.onFailAction, 2)
+  return {
+    key: keyOf(step.id), from: step.id, name: step.name, subsystem: subsystemId(step.subsystem), command: step.command ?? '', databaseName: step.databaseName ?? '', databaseUserName: step.databaseUserName ?? '',
+    onSuccess, ...onSuccess === 4 && step.onSuccessStepId ? { onSuccessTarget: keyOf(step.onSuccessStepId) } : {},
+    onFail, ...onFail === 4 && step.onFailStepId ? { onFailTarget: keyOf(step.onFailStepId) } : {},
+    retryAttempts: step.retryAttempts ?? 0, retryInterval: step.retryInterval ?? 0, outputFileName: step.outputFileName ?? '', flags: step.flags ?? 0,
+    cmdexecSuccessCode: step.cmdexecSuccessCode ?? 0, proxyId: step.proxyId ?? 0, server: step.server ?? '', osRunPriority: step.osRunPriority ?? 0,
+    ...step.commandTruncated ? { truncated: true } : {}
+  }
+}
+/** The described steps as the draft opens with them; the Start step is the job's start_step_id when it names a step, else the first. */
+export function initialStepsDraft(steps: readonly AgentJobStepRecord[], startStepId: number | undefined): AgentStepsDraft {
+  const drafted = [...steps].sort((a, b) => a.id - b.id).map(stepDraftOf)
+  const start = drafted.find(step => step.from === startStepId) ?? drafted[0]
+  return { steps: drafted, ...start ? { startKey: start.key } : {} }
+}
+
+// --- Operations on the draft --------------------------------------------------------------------------------------------
+
+/** A key no step of the draft has: `n1`, `n2`, … */
+export function newStepKey(steps: readonly AgentStepDraft[]): string {
+  const used = steps.map(step => /^n([0-9]+)$/.exec(step.key)?.[1]).filter((value): value is string => !!value).map(Number)
+  return `n${(used.length ? Math.max(...used) : 0) + 1}`
+}
+/** A unique name for a new step: "Step n", counting up past names in use. */
+export function newStepName(steps: readonly AgentStepDraft[]): string {
+  const names = new Set(steps.map(step => step.name.toUpperCase()))
+  for (let at = steps.length + 1; ; at++) if (!names.has(`STEP ${at}`)) return `Step ${at}`
+}
+/** A new step of `subsystem` as SSMS's New Step opens it (go to the next step on success, quit reporting failure on failure). */
+export function newStepDraft(steps: readonly AgentStepDraft[], subsystem = 'TSQL', databaseName = 'master'): AgentStepDraft {
+  return {
+    key: newStepKey(steps), name: newStepName(steps), subsystem, command: '', databaseName: subsystem === 'TSQL' ? databaseName : '', databaseUserName: '',
+    onSuccess: 3, onFail: 2, retryAttempts: 0, retryInterval: 0, outputFileName: '', flags: 0, cmdexecSuccessCode: 0, proxyId: 0, server: '', osRunPriority: 0
+  }
+}
+/** Adds `step` at `index` (the end by default); the first step becomes the Start step. The previous last step's "next step" now reaches it. */
+export function addStep(draft: AgentStepsDraft, step: AgentStepDraft, index = draft.steps.length): AgentStepsDraft {
+  const steps = [...draft.steps]
+  steps.splice(Math.max(0, Math.min(index, steps.length)), 0, step)
+  return { steps, startKey: draft.startKey ?? step.key }
+}
+/** Moves the step `key` to `index` (its position after the move). Go-to targets are keys, so they follow; the Start step stays the same step. */
+export function moveStep(draft: AgentStepsDraft, key: string, index: number): AgentStepsDraft {
+  const from = draft.steps.findIndex(step => step.key === key)
+  if (from < 0) return draft
+  const to = Math.max(0, Math.min(index, draft.steps.length - 1))
+  if (to === from) return draft
+  const steps = [...draft.steps]
+  const [moved] = steps.splice(from, 1)
+  steps.splice(to, 0, moved!)
+  return { ...draft, steps }
+}
+/** What a delete changed, for the banner and Undo: the steps (by key) that went to it and now quit reporting failure, and whether it was the
+ *  Start step (the first remaining step is now). */
+export interface StepDeletion { readonly deleted: AgentStepDraft; readonly position: number; readonly retargeted: readonly string[]; readonly startMoved: boolean; readonly before: AgentStepsDraft }
+/** Deletes the step `key`, as SSMS does: a step that went to it now quits reporting failure. Returns the draft and what changed (undefined when
+ *  no such step). */
+export function deleteStep(draft: AgentStepsDraft, key: string): { readonly draft: AgentStepsDraft; readonly deletion: StepDeletion } | undefined {
+  const position = draft.steps.findIndex(step => step.key === key)
+  if (position < 0) return undefined
+  const deleted = draft.steps[position]!
+  const retargeted: string[] = []
+  const steps = draft.steps.filter(step => step.key !== key).map(step => {
+    const success = step.onSuccess === 4 && step.onSuccessTarget === key, fail = step.onFail === 4 && step.onFailTarget === key
+    if (!success && !fail) return step
+    retargeted.push(step.key)
+    const { onSuccessTarget, onFailTarget, ...rest } = step
+    return { ...rest, onSuccess: success ? 2 : step.onSuccess, onFail: fail ? 2 : step.onFail, ...success ? {} : onSuccessTarget ? { onSuccessTarget } : {}, ...fail ? {} : onFailTarget ? { onFailTarget } : {} } as AgentStepDraft
+  })
+  const startMoved = draft.startKey === key
+  const startKey = startMoved ? steps[0]?.key : draft.startKey
+  return { draft: { steps, ...startKey ? { startKey } : {} }, deletion: { deleted, position, retargeted, startMoved, before: draft } }
+}
+/** Undo of a delete: the step back at its position, the steps it retargeted going to it again (each side only while it still quits reporting
+ *  failure, as the delete left it), and the Start step back when it moved. Edits made since the delete are kept. */
+export function undoStepDeletion(draft: AgentStepsDraft, deletion: StepDeletion): AgentStepsDraft {
+  if (draft.steps.some(step => step.key === deletion.deleted.key)) return draft
+  const original = new Map(deletion.before.steps.map(step => [step.key, step]))
+  const steps = draft.steps.map(step => {
+    const was = deletion.retargeted.includes(step.key) ? original.get(step.key) : undefined
+    if (!was) return step
+    const success = was.onSuccess === 4 && was.onSuccessTarget === deletion.deleted.key && step.onSuccess === 2
+    const fail = was.onFail === 4 && was.onFailTarget === deletion.deleted.key && step.onFail === 2
+    return { ...step, ...success ? { onSuccess: 4 as const, onSuccessTarget: deletion.deleted.key } : {}, ...fail ? { onFail: 4 as const, onFailTarget: deletion.deleted.key } : {} }
+  })
+  steps.splice(Math.min(deletion.position, steps.length), 0, deletion.deleted)
+  const startKey = deletion.startMoved && draft.startKey === deletion.before.steps.find(step => step.key !== deletion.deleted.key)?.key ? deletion.deleted.key : draft.startKey ?? deletion.deleted.key
+  return { steps, startKey }
+}
+/** Changes a step's type, dropping what the new type cannot keep (msdb refuses flag 4 outside T-SQL, 64 outside CmdExec and a proxy on a
+ *  T-SQL step (14517), and clears a CmdExec step's database and a non-T-SQL step's database user). */
+export function withSubsystem(step: AgentStepDraft, subsystem: string): AgentStepDraft {
+  if (step.subsystem === subsystem) return step
+  let flags = step.flags
+  const tsql = subsystem === 'TSQL'
+  if (step.subsystem === 'TSQL' && !tsql && (flags & stepFlags.includeStepOutputInHistory)) flags = (flags & ~stepFlags.includeStepOutputInHistory) | includeAllOutput
+  else if (step.subsystem !== 'TSQL' && tsql && (flags & includeAllOutput)) flags = (flags & ~includeAllOutput) | stepFlags.includeStepOutputInHistory
+  if (subsystem !== 'CmdExec') flags &= ~cmdExecAbortEvent
+  if (!tableLogSubsystems.has(subsystem)) flags &= ~(stepFlags.logToTable | stepFlags.logToTableAppend)
+  // msdb refuses an output file on a type that cannot log to one (14545), and a server outside sysservers on any but Analysis Services (14234).
+  return { ...step, subsystem, flags, databaseName: tsql ? step.databaseName || 'master' : subsystem === 'CmdExec' ? '' : step.databaseName, databaseUserName: tsql ? step.databaseUserName : '', proxyId: tsql ? 0 : step.proxyId,
+    outputFileName: tableLogSubsystems.has(subsystem) ? step.outputFileName : '', server: serverSubsystems.has(subsystem) ? step.server : '' }
+}
+
+// --- Flags (docs/agent-plan.md › Step dialog Advanced) ----------------------------------------------------------------------
+
+/** "Include step output in history" outside T-SQL: msdb takes 4 only for T-SQL steps, and SSMS sets 32 (all output) for the others. */
+const includeAllOutput = 32
+/** CmdExec's abort event bit, carried as read; msdb refuses it on any other type. */
+const cmdExecAbortEvent = 64
+/** The types msdb lets log to a table or an output file. */
+/** The Analysis Services types, which run against the server their step names (msdb refuses one without, 14262). */
+export const serverSubsystems: ReadonlySet<string> = new Set(['ANALYSISQUERY', 'ANALYSISCOMMAND'])
+const tableLogSubsystems = new Set(['TSQL', 'CmdExec', 'ANALYSISQUERY', 'ANALYSISCOMMAND', 'SSIS', 'PowerShell'])
+export const stepOutputSubsystems: ReadonlySet<string> = tableLogSubsystems
+/** The More options checkboxes as `flags` holds them. */
+export interface StepFlagChoices { readonly appendOutput: boolean; readonly includeOutput: boolean; readonly logToTable: boolean; readonly appendTable: boolean }
+export function stepFlagChoices(step: Pick<AgentStepDraft, 'flags' | 'subsystem'>): StepFlagChoices {
+  const include = step.subsystem === 'TSQL' ? stepFlags.includeStepOutputInHistory : includeAllOutput
+  return {
+    appendOutput: (step.flags & stepFlags.appendOutputFile) !== 0, includeOutput: (step.flags & include) !== 0,
+    logToTable: (step.flags & (stepFlags.logToTable | stepFlags.logToTableAppend)) !== 0, appendTable: (step.flags & stepFlags.logToTableAppend) !== 0
+  }
+}
+/** `flags` with the choices applied, as SSMS scripts them: Log to table alone is 8, with Append 16 (never 24); every other bit is kept. */
+export function stepFlagsWith(step: Pick<AgentStepDraft, 'flags' | 'subsystem'>, choices: Partial<StepFlagChoices>): number {
+  const next = { ...stepFlagChoices(step), ...choices }
+  const include = step.subsystem === 'TSQL' ? stepFlags.includeStepOutputInHistory : includeAllOutput
+  let flags = step.flags & ~stepFlagMask & ~include
+  if (next.appendOutput) flags |= stepFlags.appendOutputFile
+  if (next.includeOutput) flags |= include
+  if (next.logToTable) flags |= next.appendTable ? stepFlags.logToTableAppend : stepFlags.logToTable
+  return flags
+}
+
+// --- Words --------------------------------------------------------------------------------------------------------------
+
+export const stepTypeLabel = (subsystem: string): string => subsystems.find(entry => entry.id.toLowerCase() === subsystem.toLowerCase())?.label ?? subsystem
+/** The list's short type names (rx-job-steps). */
+export const stepTypeShort = (subsystem: string): string => ({ TSQL: 'T-SQL', CmdExec: 'CmdExec', PowerShell: 'PowerShell', SSIS: 'SSIS' } as Record<string, string>)[subsystem] ?? stepTypeLabel(subsystem)
+export const stepActionLabel = (code: StepAction): string => stepActions.find(entry => entry.code === code)?.label ?? 'Go to step'
+
+/** Where a step goes on success or failure, as the list shows it (✓ / ✗): "Next step", "Quit, success", "Step 4". */
+export function stepTargetShort(draft: AgentStepsDraft, step: AgentStepDraft, which: 'success' | 'fail'): string {
+  const code = which === 'success' ? step.onSuccess : step.onFail, target = which === 'success' ? step.onSuccessTarget : step.onFailTarget
+  if (code === 1) return 'Quit, success'
+  if (code === 2) return 'Quit, failure'
+  if (code === 3) return draft.steps[draft.steps.length - 1]?.key === step.key ? 'Next step (none: quits)' : 'Next step'
+  const at = target ? draft.steps.findIndex(item => item.key === target) : -1
+  return at >= 0 ? `Step ${at + 1}` : `Step ${target ? describedId(target) ?? '?' : '?'} (missing)`
+}
+/** The More options fold's one line (rx-job-steps): retries, output file, history, run as user. */
+export function stepOptionsSummary(step: AgentStepDraft): string {
+  const parts: string[] = []
+  parts.push(step.retryAttempts ? `Retry ${step.retryAttempts} ${step.retryAttempts === 1 ? 'time' : 'times'}, ${step.retryInterval} ${step.retryInterval === 1 ? 'minute' : 'minutes'} apart` : 'No retries')
+  const choices = stepFlagChoices(step)
+  if (step.outputFileName) parts.push(`output to ${step.outputFileName} (${choices.appendOutput ? 'append' : 'overwrite'})`)
+  if (choices.logToTable) parts.push(`log to table${choices.appendTable ? ' (append)' : ''}`)
+  parts.push(choices.includeOutput ? 'include step output in history' : 'step output not kept in history')
+  if (step.subsystem === 'TSQL' && step.databaseUserName) parts.push(`run as ${step.databaseUserName}`)
+  return parts.join(' · ')
+}
+
+export const stepText = {
+  deleted: (position: number, name: string) => `Deleted step ${position} '${name}'.`,
+  retargeted: (numbers: readonly number[]) => numbers.length === 0 ? '' : `${numbers.length === 1 ? 'Step' : 'Steps'} ${listed(numbers)} went to it; ${numbers.length === 1 ? 'it now quits' : 'they now quit'} reporting failure.`,
+  startMoved: 'It was the Start step; the first step is the Start step now.',
+  notYet: 'Nothing changes on the server until you save.',
+  undo: 'Undo',
+  dragHint: 'Drag to reorder, or use Move up and Move down. The check is where the job goes on success, the cross on failure; targets follow a move, and one that no longer exists is flagged.',
+  none: 'This job has no steps yet, so it does nothing when it runs. Add a step to give it work.',
+  tsqlContext: (database: string) => `Completion and errors come from ${database}, as in a query window. Open in query window runs it there to test, not as the job.`,
+  cmdExecHelp: (server: string, account: string) => `Runs on ${server} as ${account}, not on your computer. Paths are the server's.`,
+  powerShellHelp: (server: string, account: string) => `Runs in the SQL Server Agent PowerShell host on ${server}, as ${account}.`,
+  successCode: 'Any other exit code fails the step.',
+  serviceAccount: 'SQL Server Agent Service Account',
+  serviceAccountSysadmin: 'Only sysadmin can run a step as the SQL Server Agent service account; pick a proxy.',
+  proxyInactive: (name: string, type: string) => `${name} is not active for ${type}.`,
+  tableLogMoves: "This step logs to a table, whose rows stay with the step's position: after the move they belong to the step now in that position.",
+  outputSysadmin: 'Only sysadmin can set an output file; msdb refuses to save this step for other logins.',
+  truncated: `This command is longer than Varia reads (${agentLimits.stepCommandChars.toLocaleString('en-US')} characters a step), so only its start is shown. Edit it in SSMS.`,
+  truncatedSave: `This command was cut when it was read (over ${agentLimits.stepCommandChars.toLocaleString('en-US')} characters a step), so the steps cannot be saved from here. Undo the step changes to save the rest, and edit the steps in SSMS.`,
+  runAsUserSysadmin: 'Only sysadmin can set Run as user; msdb ignores it for other logins.',
+  unmodelled: 'Varia cannot lay this command out field by field, so it is edited as text.',
+  tooMany: `A job saved from here holds at most ${agentLimits.stepsPerJob} steps.`,
+  stepsTruncated: `This job has more than ${agentLimits.stepsPerJob} steps. Varia lists the first ${agentLimits.stepsPerJob} and does not change its steps; edit them in SSMS.`,
+  targetPast: `It goes to a step past step ${agentLimits.stepsPerJob}, which a save from here cannot write: choose where it goes.`,
+  unsavableOptions: 'This step has flags or a run priority Varia does not edit, so the steps cannot be saved from here. Edit them in SSMS.',
+  outputUnsupported: 'This step type cannot write an output file or log to a table.',
+  serverNeeded: 'An Analysis Services step needs the server it runs on.',
+  exitCodePast: 'The success exit code is a whole number from -2,147,483,648 to 2,147,483,647.',
+  nulCharacter: 'A step\'s name, command, output path, user, database or server cannot hold a NUL character.',
+  retriesPast: `Retry attempts and the retry interval are each 0 to ${agentLimits.stepRetries.toLocaleString('en-US')}.`,
+  parseOk: 'Commands completed successfully. (Parsed only; nothing ran.)',
+  parseUnavailable: 'Parse is not available: the SQL backend is not running.'
+} as const
+const listed = (numbers: readonly number[]) => numbers.length < 2 ? numbers.join('') : `${numbers.slice(0, -1).join(', ')} and ${numbers[numbers.length - 1]}`
+
+// --- Problems: on the step, its field, the Steps tab and the header; only what msdb would refuse outright is an error -------
+
+export type AgentStepField = 'name' | 'type' | 'command' | 'database' | 'runAs' | 'onSuccess' | 'onFail' | 'output' | 'runAsUser' | 'package' | 'server'
+export interface AgentStepProblem { readonly key: string; readonly field: AgentStepField; readonly severity: 'error' | 'warning'; readonly message: string }
+export interface AgentStepContext {
+  readonly sysadmin: boolean
+  /** Undefined when the login may not read proxies: nothing is said about them. */
+  readonly proxies?: readonly AgentJobProxy[]
+  /** Problems the SSIS section found (a required parameter without a value), by step key. */
+  readonly ssis?: ReadonlyMap<string, readonly string[]>
+  /** The steps as the job was read (absent for New Job). While the draft's steps equal them, Save sends no step, so limits on what a save
+   *  writes do not apply to them. */
+  readonly original?: AgentStepsDraft
+}
+/** The steps' problems. Errors (Save cannot send them): a missing, duplicate or reserved name, a go-to to itself, a too long command or path.
+ *  Warnings: a target that no longer exists, a proxy not active for the type, an output file or run-as user only sysadmin may set, SSIS. */
+export function agentStepProblems(draft: AgentStepsDraft, context: AgentStepContext): AgentStepProblem[] {
+  const problems: AgentStepProblem[] = []
+  const names = new Map<string, number>()
+  // Upper-cased, as the backend's OrdinalIgnoreCase compares names.
+  for (const step of draft.steps) names.set(msdbTrim(step.name).toUpperCase(), (names.get(msdbTrim(step.name).toUpperCase()) ?? 0) + 1)
+  const keys = new Set(draft.steps.map(step => step.key))
+  const saved = !context.original || stepsValue(context.original) !== stepsValue(draft)
+  let commandChars = 0
+  for (const step of draft.steps) {
+    const push = (field: AgentStepField, severity: 'error' | 'warning', message: string) => problems.push({ key: step.key, field, severity, message })
+    const name = msdbTrim(step.name)
+    if (!name) push('name', 'error', 'The step needs a name.')
+    else if (name.length > agentLimits.nameChars) push('name', 'error', `A step name holds at most ${agentLimits.nameChars} characters.`)
+    // What msdb already holds only blocks a save that writes the steps; until then it is a warning.
+    else if (name.toLowerCase().startsWith(temporaryStepPrefix)) push('name', saved ? 'error' : 'warning', `A step name cannot start with ${temporaryStepPrefix}: Save uses it while it renumbers.`)
+    else if ((names.get(name.toUpperCase()) ?? 0) > 1) push('name', saved ? 'error' : 'warning', `Another step is also named '${name}'; step names are unique within a job.`)
+    if (saved && [step.name, step.command, step.outputFileName, step.databaseUserName, step.databaseName, step.server].some(text => text.includes('\u0000'))) push('name', 'error', stepText.nulCharacter)
+    for (const which of ['onSuccess', 'onFail'] as const) {
+      const target = which === 'onSuccess' ? step.onSuccessTarget : step.onFailTarget
+      if (step[which] !== 4) continue
+      if (target === step.key) push(which, 'error', 'A step cannot go to itself.')
+      else if (saved && target && !keys.has(target) && (describedId(target) ?? 0) > agentLimits.stepsPerJob) push(which, 'error', stepText.targetPast)
+      else if (!target || !keys.has(target)) push(which, 'warning', `It goes to step ${target ? describedId(target) ?? '?' : '?'}, which no longer exists: choose where it goes.`)
+    }
+    // Values msdb holds that a save cannot send back (the save's bounds, agentStepWriteSchema): only a save that writes the steps is refused.
+    if (saved && (step.flags < 0 || step.flags > 114 || !stepRunPriorities.includes(step.osRunPriority))) push('type', 'error', stepText.unsavableOptions)
+    if (saved && (!Number.isInteger(step.cmdexecSuccessCode) || step.cmdexecSuccessCode < -2_147_483_648 || step.cmdexecSuccessCode > 2_147_483_647)) push('type', 'error', stepText.exitCodePast)
+    if (saved && (step.retryAttempts < 0 || step.retryInterval < 0 || step.retryAttempts > agentLimits.stepRetries || step.retryInterval > agentLimits.stepRetryMinutes)) push('output', 'error', stepText.retriesPast)
+    if (step.truncated) push('command', saved ? 'error' : 'warning', saved ? stepText.truncatedSave : stepText.truncated)
+    else if (saved && step.command.length > agentLimits.stepCommandChars) push('command', 'error', `A step's command holds at most ${agentLimits.stepCommandChars.toLocaleString('en-US')} characters.`)
+    commandChars += step.command.length
+    if (serverSubsystems.has(step.subsystem) && saved && !step.server.trim()) push('server', 'error', stepText.serverNeeded)
+    else if (step.server.length > agentLimits.nameChars) push('server', 'error', `A server name holds at most ${agentLimits.nameChars} characters.`)
+    if (saved && !tableLogSubsystems.has(step.subsystem) && (step.outputFileName.trim() || (step.flags & (stepFlags.logToTable | stepFlags.logToTableAppend)))) push('output', 'error', stepText.outputUnsupported)
+    if (step.outputFileName.length > agentLimits.stepOutputChars) push('output', 'error', `An output file path holds at most ${agentLimits.stepOutputChars} characters.`)
+    if (step.outputFileName.trim() && !context.sysadmin) push('output', 'warning', stepText.outputSysadmin)
+    if (step.databaseUserName.trim() && step.subsystem === 'TSQL' && !context.sysadmin) push('runAsUser', 'warning', stepText.runAsUserSysadmin)
+    if (step.proxyId && context.proxies) {
+      const proxy = context.proxies.find(item => item.id === step.proxyId)
+      if (proxy && !proxy.subsystems.some(subsystem => subsystem.toLowerCase() === step.subsystem.toLowerCase())) push('runAs', 'warning', stepText.proxyInactive(proxy.name, stepTypeShort(step.subsystem)))
+    }
+    if (!step.proxyId && !context.sysadmin && step.subsystem !== 'TSQL') push('runAs', 'warning', stepText.serviceAccountSysadmin)
+    for (const message of context.ssis?.get(step.key) ?? []) push('package', 'warning', message)
+  }
+  if (saved && draft.steps.length > agentLimits.stepsPerJob) problems.push({ key: draft.steps[agentLimits.stepsPerJob]!.key, field: 'name', severity: 'error', message: stepText.tooMany })
+  if (saved && commandChars > agentLimits.stepCommandTotalChars) problems.push({ key: draft.steps[0]?.key ?? '', field: 'command', severity: 'error', message: `The steps' commands hold at most ${agentLimits.stepCommandTotalChars.toLocaleString('en-US')} characters together.` })
+  return problems
+}
+
+// --- The save planner (docs/agent-plan.md › Steps › Save order) ---------------------------------------------------------------
+
+/** The prefix of the names Save gives every surviving step while it renumbers (then a GUID's 32 hex digits): under 128 characters. */
+export const temporaryStepPrefix = '__varia_step_'
+/** sp_add_jobstep's @os_run_priority values (agentStepWriteSchema). */
+const stepRunPriorities: readonly number[] = [-15, -1, 0, 1, 15]
+export const temporaryStepPattern = /^__varia_step_[0-9a-f]{32}$/
+/** One step's whole content written into step `id`: sp_update_jobstep (an existing job's) or sp_add_jobstep (New Job's). Go-to targets are
+ *  final ids. A proxy of 0 is the service account (sp_update_jobstep's @proxy_name = N''). Strings are '' for none (msdb stores NULL). */
+export interface AgentStepWrite {
+  readonly id: number
+  readonly name: string
+  readonly subsystem: string
+  readonly command: string
+  readonly databaseName: string
+  readonly databaseUserName: string
+  readonly onSuccessAction: StepAction
+  readonly onSuccessStepId: number
+  readonly onFailAction: StepAction
+  readonly onFailStepId: number
+  readonly retryAttempts: number
+  readonly retryInterval: number
+  readonly outputFileName: string
+  readonly flags: number
+  readonly cmdexecSuccessCode: number
+  readonly proxyId: number
+  readonly server: string
+  readonly osRunPriority: number
+}
+/** What Save sends for the steps, in the order the backend calls them: (1) `deletes`, described ids from the highest down (sp_delete_jobstep);
+ *  (2) `temporary`, a unique temporary name for every surviving step at its id after the deletes (sp_update_jobstep @step_name); (3) `adds`,
+ *  a new step at each final position in ascending order, also under a temporary name (sp_add_jobstep @step_id); (4) `writes`, each step's
+ *  whole content into its final id; (5) `startStepId` (sp_update_job). New Job's has only `writes` (sp_add_jobstep in order, ids 1..n) and
+ *  `startStepId`. With no add, delete, move or rename, only the changed steps' writes and a changed Start step go. */
+export interface AgentStepsSave {
+  readonly deletes?: readonly number[]
+  readonly temporary?: readonly { readonly id: number; readonly name: string }[]
+  readonly adds?: readonly { readonly id: number; readonly name: string }[]
+  readonly writes?: readonly AgentStepWrite[]
+  readonly startStepId?: number
+}
+
+/** Step `step`'s content at final id `id`, its targets resolved to final ids. A dangling target keeps the id it named while that id is still
+ *  past the last step (as msdb holds it); once a step has that id it would go there instead, so it quits reporting failure. */
+function writeOf(draft: AgentStepsDraft, step: AgentStepDraft, id: number): AgentStepWrite {
+  const resolve = (code: StepAction, key: string | undefined): [StepAction, number] => {
+    if (code !== 4 || !key) return [code, 0]
+    const at = draft.steps.findIndex(item => item.key === key)
+    if (at >= 0) return [4, at + 1]
+    const dangling = describedId(key) ?? 0
+    return dangling > draft.steps.length ? [4, dangling] : [2, 0]
+  }
+  const [onSuccessAction, onSuccessStepId] = resolve(step.onSuccess, step.onSuccessTarget), [onFailAction, onFailStepId] = resolve(step.onFail, step.onFailTarget)
+  return {
+    id, name: msdbTrim(step.name), subsystem: step.subsystem, command: step.command, databaseName: step.subsystem === 'CmdExec' ? '' : msdbTrim(step.databaseName),
+    databaseUserName: step.subsystem === 'TSQL' ? msdbTrim(step.databaseUserName) : '', onSuccessAction, onSuccessStepId,
+    onFailAction, onFailStepId, retryAttempts: step.retryAttempts, retryInterval: step.retryInterval,
+    outputFileName: msdbTrim(step.outputFileName), flags: step.flags, cmdexecSuccessCode: step.cmdexecSuccessCode, proxyId: step.subsystem === 'TSQL' ? 0 : step.proxyId, server: step.server, osRunPriority: step.osRunPriority
+  }
+}
+const sameWrite = (a: AgentStepWrite, b: AgentStepWrite) => JSON.stringify(a) === JSON.stringify(b)
+
+const hexGuid = () => crypto.randomUUID().replace(/-/g, '')
+/**
+ * The save of the steps: undefined when they change nothing. `described` are the steps as read with `startStepId` (undefined for New Job,
+ * whose steps are all new). `guid` makes the temporary names' 32 hex digits (tests pass their own).
+ */
+export function planAgentSteps(described: readonly AgentJobStepRecord[] | undefined, draft: AgentStepsDraft, startStepId: number | undefined, guid: () => string = hexGuid): AgentStepsSave | undefined {
+  const final = draft.steps.length
+  const start = draft.startKey ? draft.steps.findIndex(step => step.key === draft.startKey) + 1 : 0
+  const writes = draft.steps.map((step, at) => writeOf(draft, step, at + 1))
+  if (!described) {
+    if (final === 0) return undefined
+    return { writes, ...start > 1 ? { startStepId: start } : {} }
+  }
+  const byId = new Map(described.map(step => [step.id, step]))
+  const original = initialStepsDraft(described, startStepId)
+  const survivors = draft.steps.filter(step => step.from !== undefined && byId.has(step.from))
+  const kept = new Set(survivors.map(step => step.from!))
+  const deletes = [...byId.keys()].filter(id => !kept.has(id)).sort((a, b) => b - a)
+  const adds = draft.steps.map((step, at) => ({ step, at })).filter(({ step }) => step.from === undefined || !byId.has(step.from))
+  const structural = deletes.length > 0 || adds.length > 0 || draft.steps.some((step, at) => step.from !== undefined && (step.from !== at + 1 || msdbTrim(step.name) !== byId.get(step.from)?.name))
+  if (!structural) {
+    const changed = writes.filter((write, at) => {
+      const was = original.steps.find(step => step.from === draft.steps[at]!.from)
+      return !was || !sameWrite(write, writeOf(original, was, write.id))
+    })
+    const startChanged = final > 0 && start !== (original.startKey ? original.steps.findIndex(step => step.key === original.startKey) + 1 : 0)
+    if (changed.length === 0 && !startChanged) return undefined
+    return { ...changed.length ? { writes: changed } : {}, ...startChanged ? { startStepId: start } : {} }
+  }
+  return {
+    ...deletes.length ? { deletes } : {},
+    ...survivors.length ? { temporary: survivors.map((_, at) => ({ id: at + 1, name: temporaryStepPrefix + guid() })) } : {},
+    ...adds.length ? { adds: adds.map(({ at }) => ({ id: at + 1, name: temporaryStepPrefix + guid() })) } : {},
+    ...final ? { writes } : {},
+    // With every step deleted the Start step goes back to 1: sp_delete_jobstep leaves start_step_id, and a later sp_update_job refuses one past
+    // the last step + 1 (14266).
+    ...final || startStepId !== 1 ? { startStepId: start || 1 } : {}
+  }
+}
+
+/** The steps' share of "Save · n changes": each step added, deleted, moved, renamed or edited, and a changed Start step. */
+export function agentStepChangeCount(described: readonly AgentJobStepRecord[] | undefined, draft: AgentStepsDraft, startStepId: number | undefined): number {
+  return described ? agentStepChangeCountFrom(initialStepsDraft(described, startStepId), draft) : draft.steps.length
+}
+/** The same count from the steps as the document opened them. */
+export function agentStepChangeCountFrom(original: AgentStepsDraft, draft: AgentStepsDraft): number {
+  const deleted = original.steps.filter(step => !draft.steps.some(item => item.from === step.from)).length
+  const changed = draft.steps.filter((step, at) => {
+    const was = original.steps.find(item => item.from !== undefined && item.from === step.from)
+    return !was || was.from !== at + 1 || !sameWrite(writeOf(draft, step, at + 1), writeOf(original, was, at + 1))
+  }).length
+  const startChanged = (draft.startKey ?? '') !== (original.startKey ?? '') && draft.steps.length > 0 ? 1 : 0
+  return deleted + changed + startChanged
+}
+
+/** The steps as the compare shows them: "3 steps: Extract, Load, Notify". */
+export function stepsText(draft: AgentStepsDraft): string {
+  return draft.steps.length ? `${draft.steps.length} ${draft.steps.length === 1 ? 'step' : 'steps'}: ${draft.steps.map(step => step.name).join(', ')}` : 'No steps'
+}
+/** A comparable value of the steps (order, content, Start step). */
+export function stepsValue(draft: AgentStepsDraft): string {
+  return JSON.stringify([draft.steps.map((step, at) => writeOf(draft, step, at + 1)), draft.startKey ? draft.steps.findIndex(step => step.key === draft.startKey) : -1])
+}
+/** How a compare names the step a go-to reaches: `identity`, the described id it was read under (its key when new), within one read; `name`,
+ *  its name, across two reads whose ids differ. */
+type StepMatch = 'identity' | 'name'
+/** A step's content with its go-tos as the steps they reach, so the same step compares equal however the draft keys or orders it. */
+function stepContent(draft: AgentStepsDraft, step: AgentStepDraft, match: StepMatch): string {
+  const reached = (key: string | undefined) => {
+    if (key === undefined) return undefined
+    const to = draft.steps.find(item => item.key === key)
+    return !to ? key : match === 'name' ? foldName(to.name) : to.from !== undefined ? `#${to.from}` : to.key
+  }
+  const { key: _key, from: _from, truncated: _truncated, onSuccessTarget, onFailTarget, ...rest } = step
+  const fields: Record<string, unknown> = { ...rest, onSuccessTarget: reached(onSuccessTarget), onFailTarget: reached(onFailTarget) }
+  return JSON.stringify(Object.keys(fields).sort().map(field => [field, fields[field]]))
+}
+/** Names compare upper-cased, as msdb (and the backend's OrdinalIgnoreCase) treat step names. */
+const foldName = (name: string) => msdbTrim(name).toUpperCase()
+
+/**
+ * Reload and keep my changes, step by step. Steps match the job read now by name (unique within a job), not by number, since another session
+ * may have renumbered them. A step the user did not touch takes the job's version read now, or goes when the job no longer has it; an edited
+ * one keeps the user's content at its current id, or becomes a new step when the job no longer has it, so the save never writes over another
+ * step by its number. Steps another session added or renamed are kept where the job has them, and a step the user deleted stays deleted. The
+ * order is the job's now unless the user reordered steps, and the Start step the job's now unless the user changed it. The result is keyed
+ * `s<current id>` like a fresh read, so a later rebase compares each step with its own; a go-to whose step is not kept quits reporting failure,
+ * as msdb leaves a step that went to a deleted one.
+ */
+export function rebaseSteps(opened: readonly AgentJobStepRecord[], current: readonly AgentJobStepRecord[], draft: AgentStepsDraft, openedStart?: number, currentStart?: number): AgentStepsDraft {
+  const read = initialStepsDraft(opened, openedStart)
+  const readByFrom = new Map(read.steps.map(step => [step.from!, step]))
+  const openedById = new Map(opened.map(step => [step.id, step]))
+  const currentByName = new Map(current.map(step => [foldName(step.name), step]))
+  const openedNames = new Set(opened.map(step => foldName(step.name)))
+  const keyOfCurrent = new Map<number, string>()
+  const fromServer = new Set<string>()
+  const currentIds = new Set(current.map(step => step.id)), openedIds = new Set(opened.map(step => step.id))
+  const steps: AgentStepDraft[] = []
+  for (const step of draft.steps) {
+    if (step.from === undefined) { steps.push(step); continue }
+    const was = openedById.get(step.from), now = was ? currentByName.get(foldName(was.name)) : undefined
+    const before = readByFrom.get(step.from)
+    if (before && stepContent(draft, step, 'identity') === stepContent(read, before, 'identity')) {
+      if (now) { steps.push({ ...stepDraftOf(now), key: step.key }); keyOfCurrent.set(now.id, step.key); fromServer.add(step.key) }
+      continue
+    }
+    if (now) {
+      // A go-to the user left as read follows the job's own copy of the step, whose ids msdb kept right through renumbering, deletes
+      // (quit) and renames; `cur:<id>` names the job's current step id until the keys are final.
+      const server = stepDraftOf(now)
+      const follow = (which: 'onSuccess' | 'onFail', field: 'onSuccessTarget' | 'onFailTarget'): Partial<AgentStepDraft> => {
+        if (!before || step[which] !== before[which] || step[field] !== before[field]) return {}
+        const id = server[field] === undefined ? undefined : describedId(server[field]!)
+        return { [which]: server[which], [field]: id === undefined ? undefined : `cur:${id}` }
+      }
+      steps.push({ ...step, from: now.id, ...follow('onSuccess', 'onSuccessTarget'), ...follow('onFail', 'onFailTarget') })
+      keyOfCurrent.set(now.id, step.key)
+    }
+    else { const { from: _from, ...rest } = step; steps.push(rest) }
+  }
+  // Each step another session added goes where the job has it: after the step before it there (first when none).
+  for (const now of [...current].sort((x, y) => x.id - y.id)) {
+    if (openedNames.has(foldName(now.name))) continue
+    const key = newStepKey(steps)
+    const before = current.filter(item => item.id < now.id && keyOfCurrent.has(item.id)).sort((x, y) => y.id - x.id)[0]
+    const at = before ? steps.findIndex(step => step.key === keyOfCurrent.get(before.id)) + 1 : 0
+    steps.splice(at, 0, { ...stepDraftOf(now), key }); keyOfCurrent.set(now.id, key); fromServer.add(key)
+  }
+  // The server's steps name their go-tos by the job's current ids (`s<id>` from stepDraftOf): map them to the draft's keys.
+  const targeted = steps.map(step => {
+    if (!fromServer.has(step.key)) return step
+    // A go-to past the job's last step is msdb's to keep (warning 14236): marked here, it ends as `s<id>`, as a fresh read has it.
+    const target = (key: string | undefined) => { const id = key === undefined ? undefined : describedId(key); return id === undefined ? undefined : keyOfCurrent.get(id) ?? (currentIds.has(id) ? `missing:${id}` : `dangling:${id}`) }
+    return { ...step, ...step.onSuccessTarget ? { onSuccessTarget: target(step.onSuccessTarget) } : {}, ...step.onFailTarget ? { onFailTarget: target(step.onFailTarget) } : {} }
+  })
+  // The job's order unless the user reordered the steps both reads have; the user's new steps then follow the step before them in the draft.
+  const matched = draft.steps.filter(step => step.from !== undefined && readByFrom.has(step.from)).map(step => step.from!)
+  const readOrder = read.steps.map(step => step.from!).filter(from => matched.includes(from))
+  let ordered = targeted
+  if (matched.join(',') === readOrder.join(',')) {
+    ordered = targeted.filter(step => step.from !== undefined).sort((x, y) => x.from! - y.from!)
+    targeted.forEach((step, at) => {
+      if (step.from !== undefined) return
+      const previous = targeted.slice(0, at).reverse().find(item => ordered.includes(item))
+      ordered.splice(previous ? ordered.indexOf(previous) + 1 : 0, 0, step)
+    })
+  }
+  // Keyed like a fresh read: `s<current id>`, and `n<k>` for new steps (an old `s<id>` key of a step that became new is renamed).
+  const keyMap = new Map<string, string>()
+  const fresh: AgentStepDraft[] = []
+  const serverKeys = new Set<string>()
+  for (const step of ordered) {
+    const key = step.from !== undefined ? `s${step.from}` : /^n[0-9]+$/.test(step.key) && !keyMap.has(step.key) ? step.key : newStepKey([...fresh, ...ordered.filter(item => /^n[0-9]+$/.test(item.key))])
+    keyMap.set(step.key, key)
+    if (fromServer.has(step.key)) serverKeys.add(key)
+    fresh.push({ ...step, key })
+  }
+  const rekeyed = fresh.map(step => {
+    // A dangling go-to (to no step of either read, or for the server's steps of the job now) is kept as it is; one to a step not kept quits.
+    const dangling = (key: string) => { const id = describedId(key); return id !== undefined && !currentIds.has(id) && !openedIds.has(id) && !serverKeys.has(step.key) }
+    const target = (code: StepAction, key: string | undefined, quit: StepAction): [StepAction, string | undefined] => {
+      if (code !== 4 || !key) return [code, undefined]
+      if (key.startsWith('dangling:')) return [4, `s${key.slice('dangling:'.length)}`]
+      if (key.startsWith('cur:')) {
+        const id = Number(key.slice('cur:'.length)), to = keyMap.get(keyOfCurrent.get(id) ?? '')
+        return to ? [4, to] : currentIds.has(id) ? [quit, undefined] : [4, `s${id}`]
+      }
+      const to = keyMap.get(key)
+      if (to) return [4, to]
+      if (dangling(key)) return [4, key]
+      // A go-to the user set to a step the job no longer has by name: quit as msdb's sp_delete_jobstep leaves one (with success on success,
+      // reporting failure on failure), rather than guess which step now holds its number.
+      return [quit, undefined]
+    }
+    const [onSuccess, onSuccessTarget] = target(step.onSuccess, step.onSuccessTarget, 1), [onFail, onFailTarget] = target(step.onFail, step.onFailTarget, 2)
+    const { onSuccessTarget: _s, onFailTarget: _f, ...rest } = step
+    return { ...rest, onSuccess, onFail, ...onSuccessTarget ? { onSuccessTarget } : {}, ...onFailTarget ? { onFailTarget } : {} } as AgentStepDraft
+  })
+  // The Start step: the user's when they changed it (by the step it names, not its key) and it is kept, else the job's now.
+  const mine = draft.steps.find(step => step.key === draft.startKey)
+  const changed = !!mine && (mine.from === undefined || mine.from !== read.steps.find(step => step.key === read.startKey)?.from)
+  const startKey = (changed ? keyMap.get(mine!.key) : undefined) ?? (currentStart === undefined ? undefined : keyMap.get(keyOfCurrent.get(currentStart) ?? '')) ?? rekeyed[0]?.key
+  return { steps: rekeyed, ...startKey ? { startKey } : {} }
+}
+
+/** What changed in the steps from `base` to `next`, for the STALE compare: "Added Notify · edited Extract · reordered · Start step Load".
+ *  `match`: `identity` for the user's draft against the read it came from (a rename is an edit), `name` for the job read now against it. */
+export function stepsChangesText(base: AgentStepsDraft, next: AgentStepsDraft, match: StepMatch = 'name'): string {
+  const id = (step: AgentStepDraft) => match === 'identity' && step.from !== undefined ? `#${step.from}` : match === 'identity' ? step.key : foldName(step.name)
+  const index = (draft: AgentStepsDraft) => new Map(draft.steps.map(step => [id(step), step]))
+  const was = index(base), now = index(next)
+  const added = next.steps.filter(step => !was.has(id(step))).map(step => step.name)
+  const deleted = base.steps.filter(step => !now.has(id(step))).map(step => step.name)
+  const edited = next.steps.filter(step => { const before = was.get(id(step)); return before && stepContent(next, step, match) !== stepContent(base, before, match) }).map(step => step.name)
+  const common = (draft: AgentStepsDraft, other: Map<string, AgentStepDraft>) => draft.steps.filter(step => other.has(id(step))).map(id).join('\n')
+  const start = (draft: AgentStepsDraft) => draft.steps.find(step => step.key === draft.startKey)
+  const startNext = start(next), startBase = start(base)
+  const parts = [
+    added.length ? `added ${added.join(', ')}` : '', deleted.length ? `deleted ${deleted.join(', ')}` : '', edited.length ? `edited ${edited.join(', ')}` : '',
+    common(base, now) !== common(next, was) ? 'reordered' : '', startNext && (!startBase || id(startBase) !== id(startNext)) ? `Start step ${startNext.name}` : ''
+  ].filter(Boolean)
+  if (!parts.length) return stepsText(next)
+  const text = parts.join(' · ')
+  return text[0]!.toUpperCase() + text.slice(1)
+}
+
+// --- Bounds (zod here, C# in ActionService.ValidateAgentJob) -------------------------------------------------------------
+
+const stepName = z.string().min(1).max(agentLimits.nameChars)
+const noNul = (value: string) => !value.includes('\u0000')
+const text = (max: number) => z.string().max(max).refine(noNul, 'Text cannot contain U+0000.')
+const stepId = z.number().int().min(1).max(agentLimits.stepsPerJob)
+export const agentStepWriteSchema = z.object({
+  id: stepId,
+  name: stepName.refine(noNul, 'A name cannot contain U+0000.').refine(value => !value.toLowerCase().startsWith(temporaryStepPrefix), 'A step name cannot use the temporary prefix.'),
+  subsystem: z.enum(subsystems.map(entry => entry.id) as [string, ...string[]]),
+  command: text(agentLimits.stepCommandChars),
+  databaseName: text(agentLimits.nameChars),
+  databaseUserName: text(agentLimits.nameChars),
+  onSuccessAction: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
+  onSuccessStepId: z.number().int().min(0).max(agentLimits.stepsPerJob),
+  onFailAction: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
+  onFailStepId: z.number().int().min(0).max(agentLimits.stepsPerJob),
+  retryAttempts: z.number().int().min(0).max(agentLimits.stepRetries),
+  retryInterval: z.number().int().min(0).max(agentLimits.stepRetryMinutes),
+  outputFileName: text(agentLimits.stepOutputChars),
+  flags: z.number().int().min(0).max(114),
+  cmdexecSuccessCode: z.number().int().min(-2_147_483_648).max(2_147_483_647),
+  proxyId: z.number().int().min(0).max(2_147_483_647),
+  server: text(agentLimits.nameChars),
+  osRunPriority: z.union([z.literal(-15), z.literal(-1), z.literal(0), z.literal(1), z.literal(15)])
+}).strict() satisfies z.ZodType<AgentStepWrite>
+const temporaryName = z.object({ id: stepId, name: z.string().regex(temporaryStepPattern) }).strict()
+export const agentStepsSaveSchema = z.object({
+  deletes: z.array(stepId).min(1).max(agentLimits.stepsPerJob).optional(),
+  temporary: z.array(temporaryName).min(1).max(agentLimits.stepsPerJob).optional(),
+  adds: z.array(temporaryName).min(1).max(agentLimits.stepsPerJob).optional(),
+  writes: z.array(agentStepWriteSchema).min(1).max(agentLimits.stepsPerJob).optional(),
+  startStepId: stepId.optional()
+}).strict() satisfies z.ZodType<AgentStepsSave>
+
+/** Why a steps save is not in the planner's shape (C#'s ValidateAgentSteps refuses the same). `create`: New Job's. */
+export function agentStepsSaveProblems(save: AgentStepsSave, create: boolean): string[] {
+  const problems: string[] = []
+  const deletes = save.deletes ?? [], temporary = save.temporary ?? [], adds = save.adds ?? [], writes = save.writes ?? []
+  const ascending = (ids: readonly number[]) => ids.every((id, at) => at === 0 || id > ids[at - 1]!)
+  if (create) {
+    if (deletes.length || temporary.length || adds.length) problems.push('A new job has no steps to delete, rename or insert.')
+    if (!writes.every((write, at) => write.id === at + 1)) problems.push("A new job's steps are added in order from 1.")
+  } else if (deletes.length || temporary.length || adds.length) {
+    if (!deletes.every((id, at) => at === 0 || id < deletes[at - 1]!)) problems.push('Steps are deleted from the highest id down.')
+    if (!temporary.every((item, at) => item.id === at + 1)) problems.push('Every surviving step is renamed, at its id after the deletes.')
+    if (!ascending(adds.map(item => item.id))) problems.push('New steps are inserted in ascending order.')
+    const final = temporary.length + adds.length
+    if (adds.some(item => item.id > final)) problems.push('A new step is inserted past the last step.')
+    if (writes.length !== final || !writes.every((write, at) => write.id === at + 1)) problems.push('After renumbering, every step is written once, in order.')
+    const names = [...temporary, ...adds].map(item => item.name.toUpperCase())
+    if (new Set(names).size !== names.length) problems.push('A temporary name is used twice.')
+    if (final > 0 && save.startStepId === undefined) problems.push('After renumbering, the Start step is set.')
+  } else {
+    if (new Set(writes.map(write => write.id)).size !== writes.length) problems.push('A step is written twice.')
+  }
+  if (create || deletes.length || temporary.length || adds.length) {
+    const names = writes.map(write => write.name.toUpperCase())
+    if (new Set(names).size !== names.length) problems.push('Two steps have the same name.')
+  }
+  const count = create || deletes.length || temporary.length || adds.length ? writes.length : agentLimits.stepsPerJob
+  for (const write of writes) {
+    if (write.onSuccessAction === 4 && (write.onSuccessStepId < 1 || write.onSuccessStepId === write.id)) problems.push(`Step ${write.id} goes to an invalid step on success.`)
+    if (write.onFailAction === 4 && (write.onFailStepId < 1 || write.onFailStepId === write.id)) problems.push(`Step ${write.id} goes to an invalid step on failure.`)
+    if (write.onSuccessAction !== 4 && write.onSuccessStepId !== 0) problems.push(`Step ${write.id} names a target without going to it.`)
+    if (write.onFailAction !== 4 && write.onFailStepId !== 0) problems.push(`Step ${write.id} names a target without going to it.`)
+  }
+  if (save.startStepId !== undefined && save.startStepId > Math.max(count, 1)) problems.push('The Start step is past the last step.')
+  if (writes.reduce((sum, write) => sum + write.command.length, 0) > agentLimits.stepCommandTotalChars) problems.push("The steps' commands are too long together.")
+  return problems
+}

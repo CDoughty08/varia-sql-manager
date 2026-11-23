@@ -6,8 +6,8 @@
 // messages=40 errors=2 memory=0.92 hold` streams synthetic sets instead (backend/shapes.mjs). results.copy and
 // results.export format text with src/shared/results/text-writer.ts, the C# ResultTextWriter's twin. Its control directory,
 // VARIA_TEST_BACKEND_DIR, holds:
-//   calls.jsonl         one { generation, method, params } line per request, passwords (and entra.cache.import's data)
-//                       redacted
+//   calls.jsonl         one { generation, method, params } line per request, passwords, credential secrets (and
+//                       entra.cache.import's data) redacted
 //   reject-passwords    server 'password-check' refuses every login (18456), as after a password change; otherwise it
 //                       accepts only the password correct-horse-marker
 //   untrusted-certificate  server 'password-check' refuses a connect without Trust server certificate, as a self-signed
@@ -397,8 +397,13 @@ const explorerRows = {
   ssisPackages: owner => [
     explorerObject({ kind: 'ssisPackage', ssisFolder: owner.ssisFolder, ssisProject: owner.name, name: 'Daily.dtsx' }, 'Daily.dtsx', { subtype: 'entryPoint' }),
     explorerObject({ kind: 'ssisPackage', ssisFolder: owner.ssisFolder, ssisProject: owner.name, name: 'Child.dtsx' }, 'Child.dtsx', { subtype: 'child', icon: 'symbol-file' })
-  ]
+  ],
+  // SQL Server Agent's Proxies (AG-8b): the Proxies folder (list agentProxies, as its folder is named) lists a folder per subsystem,
+  // and each subsystem (whose kind lists agentProxies too) the proxies active to it; Security › Credentials.
+  agentProxies: owner => owner.kind !== 'agentProxySubsystem' ? proxySubsystems.map(subsystem => explorerObject({ kind: 'agentProxySubsystem', name: subsystem.name }, subsystem.label, { hasChildren: true })) : fakeProxies.filter(proxy => proxy.subsystems.includes(proxySubsystems.find(subsystem => subsystem.name === owner.name)?.id)).map(proxy => explorerObject({ kind: 'agentProxy', name: proxy.name }, proxy.name)),
+  credentials: () => fakeCredentials.map(credential => explorerObject({ kind: 'credential', name: credential.name }, credential.name))
 }
+const agentListings = new Set(['agentProxies', 'credentials'])
 // What extra/<folder> adds: a role or table created since the folder was first listed.
 const explorerExtras = {
   serverRoles: () => explorerObject({ kind: 'serverRole', name: 'VariaAuditors' }, 'VariaAuditors'),
@@ -446,7 +451,9 @@ async function explorerChildren({ node, subtype }) {
   // Jobs folder, as SingletonNode lists them (the agent-jobs suite; other suites keep the tree they check).
   const singleton = kind => explorerObject({ kind }, kindSpecs[kind].title, { hasChildren: kind === 'agent' })
   const agent = node.type !== 'object' || !await controlled('agent-node') ? [] : node.object.kind === 'server' ? [singleton('agent')] : node.object.kind === 'agent' ? [singleton('agentJobActivity')] : []
-  const nodes = [...node.type === 'object' && node.object.kind === 'agent' ? [...statics.slice(0, 1), ...agent, ...statics.slice(1)] : [...statics, ...agent], ...(list ? explorerRows[list]?.(owner) ?? [] : []), ...extra]
+  // Proxies and credentials (AG-8b) list only for the Agent suites too.
+  const rows = list && (!agentListings.has(list) || await controlled('agent-node')) ? explorerRows[list]?.(owner) ?? [] : []
+  const nodes = [...node.type === 'object' && node.object.kind === 'agent' ? [...statics.slice(0, 1), ...agent, ...statics.slice(1)] : [...statics, ...agent], ...rows, ...extra]
   return { nodes, total: nodes.length, elapsedMs: 1 }
 }
 // Stored results of this process (one backend generation), by resultId, as the real result store keeps them. Rows come
@@ -1849,17 +1856,86 @@ function agentJobDoc(job) {
   if (!agentJobDocs.has(job.id)) agentJobDocs.set(job.id, { description: `${job.name} maintenance.`, owner: 'sa', emailLevel: 2, emailOperator: 'DBA Team', pageLevel: 0, pageOperator: '', netSendLevel: 0, netSendOperator: '', eventLogLevel: 2, deleteLevel: 0, version: 3, modified: '2026-11-10T09:15:30.120', alerts: [{ id: 7, name: `${job.name} failed`, enabled: true, severity: 0, messageId: 50001 }] })
   return agentJobDocs.get(job.id)
 }
-const agentJobSteps = job => Array.from({ length: job.steps }, (_, index) => ({ id: index + 1, name: ['Check integrity', 'Rebuild indexes', 'Update statistics'][index] ?? `Step ${index + 1}`, subsystem: 'TSQL' }))
+// Each job's steps with their whole content (AG-6b), kept per job so a steps save renumbers them as msdb would.
+const agentStepContent = (id, name) => ({ id, name, subsystem: 'TSQL', command: `-- ${name}\nSELECT ${id};`, flags: 0, cmdexecSuccessCode: 0, onSuccessAction: 3, onSuccessStepId: 0, onFailAction: 2, onFailStepId: 0,
+  server: '', databaseName: 'master', databaseUserName: '', retryAttempts: 0, retryInterval: 0, osRunPriority: 0, outputFileName: '', proxyId: 0 })
+const agentStepLists = new Map()
+function agentJobSteps(job) {
+  if (!agentStepLists.has(job.id)) agentStepLists.set(job.id, { start: 1, steps: Array.from({ length: job.steps }, (_, index) => agentStepContent(index + 1, ['Check integrity', 'Rebuild indexes', 'Update statistics'][index] ?? `Step ${index + 1}`)) })
+  return agentStepLists.get(job.id).steps
+}
+/** A steps save (planAgentSteps' shape) as msdb runs it: deletes lower later ids, an insert raises them, then each step is written whole. */
+function agentApplySteps(job, save) {
+  const list = agentStepLists.get(job.id) ?? { start: 1, steps: [] }
+  let steps = [...(agentStepLists.has(job.id) ? list.steps : agentJobSteps(job))]
+  for (const id of save.deletes ?? []) steps = steps.filter(step => step.id !== id).map(step => step.id > id ? { ...step, id: step.id - 1 } : step)
+  for (const item of save.temporary ?? []) steps = steps.map(step => step.id === item.id ? { ...step, name: item.name } : step)
+  for (const item of save.adds ?? []) steps = [...steps.map(step => step.id >= item.id ? { ...step, id: step.id + 1 } : step), agentStepContent(item.id, item.name)]
+  for (const write of save.writes ?? []) steps = steps.map(step => step.id === write.id ? { id: write.id, name: write.name, subsystem: write.subsystem, command: write.command, flags: write.flags,
+    cmdexecSuccessCode: write.cmdexecSuccessCode, onSuccessAction: write.onSuccessAction, onSuccessStepId: write.onSuccessStepId, onFailAction: write.onFailAction, onFailStepId: write.onFailStepId,
+    server: write.server, databaseName: write.databaseName, databaseUserName: write.databaseUserName, retryAttempts: write.retryAttempts, retryInterval: write.retryInterval,
+    osRunPriority: write.osRunPriority, outputFileName: write.outputFileName, proxyId: write.proxyId } : step)
+  steps.sort((a, b) => a.id - b.id)
+  agentStepLists.set(job.id, { start: save.startStepId ?? list.start, steps })
+  job.steps = steps.length
+}
 function agentJobDocument(params) {
-  const base = { login: 'sa', sysadmin: true, platform: 'windows', categories: ['[Uncategorized (Local)]', 'Database Maintenance'], operators: agentOperators, owners: ['sa', 'CONTOSO\agent'], alertsEditable: true, mail: { checked: true, xps: true, profiles: 1, sysadmin: true, useDatabaseMail: true, agentProfile: 'Varia Mail' } }
+  const base = { login: 'sa', sysadmin: true, platform: 'windows', categories: ['[Uncategorized (Local)]', 'Database Maintenance'], operators: agentOperators, owners: ['sa', 'CONTOSO\agent'], alertsEditable: true, mail: { checked: true, xps: true, profiles: 1, sysadmin: true, useDatabaseMail: true, agentProfile: 'Varia Mail' },
+    subsystems: ['TSQL', 'CmdExec', 'PowerShell', 'SSIS'], databases: ['master', 'model', 'msdb', 'Sales', 'tempdb'], proxies: [{ id: 1, name: 'FileShareWriter', enabled: true, subsystems: ['CmdExec', 'PowerShell'], identity: 'CONTOSO\\svc-fswriter' }] }
   if (params.target.kind === 'agent') return { agentJobDocument: { ...base, steps: [], jobs: agentJobs.map(job => job.name).sort() }, elapsedMs: 1 }
   const job = agentJobs.find(item => item.name === params.target.name)
   if (!job) return undefined
   const doc = agentJobDoc(job)
   const record = { jobId: job.id.toUpperCase(), name: job.name, enabled: job.enabled, description: doc.description, category: job.category, owner: doc.owner,
     emailLevel: doc.emailLevel, emailOperator: doc.emailOperator, pageLevel: doc.pageLevel, pageOperator: doc.pageOperator, netSendLevel: doc.netSendLevel, netSendOperator: doc.netSendOperator,
-    eventLogLevel: doc.eventLogLevel, deleteLevel: doc.deleteLevel, created: job.created, modified: doc.modified, version: doc.version, startStepId: 1, lastRun: job.lastRun.replace(' ', 'T'), lastOutcome: job.outcome }
+    eventLogLevel: doc.eventLogLevel, deleteLevel: doc.deleteLevel, created: job.created, modified: doc.modified, version: doc.version, startStepId: (agentJobSteps(job), agentStepLists.get(job.id).start), lastRun: job.lastRun.replace(' ', 'T'), lastOutcome: job.outcome }
   return { agentJobDocument: { ...base, job: record, steps: agentJobSteps(job), alerts: doc.alerts }, elapsedMs: 1 }
+}
+// The proxy and Credential documents (AG-8b): one proxy as its credential's only user, and the documents' saves applied to them.
+const proxySubsystems = [{ id: 3, name: 'CmdExec', label: 'Operating system (CmdExec)' }, { id: 11, name: 'SSIS', label: 'SQL Server Integration Services Package' }, { id: 12, name: 'PowerShell', label: 'PowerShell' }]
+const fakeProxies = [{ id: 1, name: 'FileShareWriter', enabled: true, description: 'Writes extracts to the file share.', credential: 'FileShareWriterCred', subsystems: [3, 12], principals: [{ name: 'CONTOSO\\etl', kind: 'login' }] }]
+const fakeCredentials = [{ id: 65536, name: 'FileShareWriterCred', identity: 'CONTOSO\\svc-fswriter', created: '2025-03-02T10:20:00', modified: '2026-11-08T16:02:11.123' }]
+const proxyChoices = [{ name: 'CONTOSO\\etl', kind: 'login' }, { name: 'SQLAgentOperatorRole', kind: 'msdbRole' }, { name: 'securityadmin', kind: 'serverRole' }]
+function agentProxyDocument(params) {
+  const base = { platform: 'windows', subsystems: proxySubsystems.map(({ id, name }) => ({ id, name })), credentials: fakeCredentials.map(item => ({ name: item.name, identity: item.identity })), credentialsTruncated: false,
+    canCreateCredential: true, principalChoices: proxyChoices }
+  if (params.target.kind === 'agent') return { agentProxyDocument: base, elapsedMs: 1 }
+  const proxy = fakeProxies.find(item => item.name === params.target.name)
+  if (!proxy) return { elapsedMs: 1, error: { code: 'NOT_FOUND', message: `The proxy ${params.target.name} no longer exists.`, retryable: false } }
+  const credential = fakeCredentials.find(item => item.name === proxy.credential)
+  return { agentProxyDocument: { ...base, proxy: { ...proxy, ...credential ? { credentialIdentity: credential.identity } : {} }, references: [{ job: 'Nightly', stepId: 2, step: 'Copy extracts', subsystem: 'CmdExec' }], referencesTruncated: false }, elapsedMs: 1 }
+}
+function credentialDocument(params) {
+  const base = { platform: 'box', providers: [] }
+  if (params.target.kind === 'server') return { credentialDocument: base, elapsedMs: 1 }
+  const credential = fakeCredentials.find(item => item.name === params.target.name)
+  if (!credential) return { elapsedMs: 1, error: { code: 'NOT_FOUND', message: `The credential ${params.target.name} no longer exists.`, retryable: false } }
+  const usedBy = fakeProxies.filter(proxy => proxy.credential === credential.name)
+    .map(proxy => ({ proxy: proxy.name, subsystems: proxy.subsystems.map(id => proxySubsystems.find(item => item.id === id)?.name ?? String(id)), steps: [{ job: 'Nightly', stepId: 2, step: 'Copy extracts' }] }))
+  return { credentialDocument: { ...base, credential, usedBy, usedByTruncated: false }, elapsedMs: 1 }
+}
+function agentProxySave(params) {
+  const save = params.agentProxy, done = title => ({ status: 'done', title })
+  if (save.newCredential) fakeCredentials.push({ id: 65536 + fakeCredentials.length, ...save.newCredential, created: '2026-11-22T10:00:00', modified: '2026-11-22T10:00:00.000' })
+  let proxy = fakeProxies.find(item => item.name === params.target.name && item.id === params.proxyId)
+  if (params.target.kind === 'agent') fakeProxies.push(proxy = { id: fakeProxies.length + 1, name: save.name, enabled: save.enabled ?? true, description: save.description ?? '', credential: '', subsystems: [], principals: [] })
+  if (!proxy) return { steps: [], messages: [], elapsedMs: 1, error: { code: 'NOT_FOUND', message: 'This proxy is not the one that was read.', retryable: false } }
+  Object.assign(proxy, { ...save.name !== undefined ? { name: save.name } : {}, ...save.enabled !== undefined ? { enabled: save.enabled } : {}, ...save.description !== undefined ? { description: save.description } : {} })
+  if (save.newCredential || save.credential) proxy.credential = save.newCredential?.name ?? save.credential
+  proxy.subsystems = [...proxy.subsystems.filter(id => !(save.revokeSubsystems ?? []).includes(id)), ...save.grantSubsystems ?? []].sort((a, b) => a - b)
+  proxy.principals = [...proxy.principals.filter(item => !(save.revokePrincipals ?? []).includes(item.name)), ...save.grantPrincipals ?? []]
+  const principals = save.grantPrincipals || save.revokePrincipals
+  return { steps: [done(params.target.kind === 'agent' ? 'Create the proxy' : 'Save the proxy'), ...principals ? [done('Grant and revoke principals')] : []], messages: [], elapsedMs: 1 }
+}
+function credentialSave(params) {
+  const save = params.credential
+  if (params.target.kind === 'server') fakeCredentials.push({ id: 65536 + fakeCredentials.length, name: save.name, identity: save.identity, created: '2026-11-22T10:00:00', modified: '2026-11-22T10:00:00.000' })
+  else {
+    const credential = fakeCredentials.find(item => item.name === params.target.name)
+    if (!credential || credential.modified !== save.modified) return { steps: [], messages: [], elapsedMs: 1, error: { code: 'STALE', message: 'Changed by someone else since it was opened. Reload to see the changes.', retryable: false } }
+    Object.assign(credential, { identity: save.identity, modified: new Date().toISOString().slice(0, 23) })
+  }
+  return { steps: [{ status: 'done', title: params.target.kind === 'server' ? 'Create the credential' : 'Save the credential' }], messages: [], elapsedMs: 1 }
 }
 async function agentJobSave(params) {
   const refused = (code, message, field) => ({ steps: [], messages: [], elapsedMs: 1, error: { code, message, retryable: false, ...field ? { field } : {} } })
@@ -1874,6 +1950,7 @@ async function agentJobSave(params) {
     const doc = agentJobDoc(job)
     for (const field of fields) if (save[field] !== undefined) doc[field] = save[field]
     Object.assign(doc, { alerts: [], version: 1, modified: stamp() })
+    if (save.steps) agentApplySteps(job, save.steps)
     return { steps: [{ status: 'done', title: 'Create the job' }], messages: [], elapsedMs: 1 }
   }
   const job = agentJobs.find(item => item.name === params.target.name)
@@ -1888,6 +1965,7 @@ async function agentJobSave(params) {
   if (save.category !== undefined) job.category = save.category
   for (const field of fields) if (save[field] !== undefined) doc[field] = save[field]
   if (save.removeAlerts) doc.alerts = doc.alerts.filter(alert => !save.removeAlerts.some(removed => removed.id === alert.id))
+  if (save.steps) agentApplySteps(job, save.steps)
   Object.assign(doc, { version: doc.version + 1, modified: stamp() })
   return { steps: [{ status: 'done', title: 'Save the job' }], messages: [], elapsedMs: 1 }
 }
@@ -2027,7 +2105,9 @@ async function entraWait(id, method) {
 
 async function workbench(id, method, params, credit) {
   if (controlDirectory) {
-    const redacted = params?.password === undefined ? params : { ...params, password: '<redacted>' }
+    const unpassworded = params?.password === undefined ? params : { ...params, password: '<redacted>' }
+    // A credential's secret (the proxy and Credential documents) is never written in clear, even a test one: the log shows it was sent.
+    const redacted = unpassworded?.secrets?.secret === undefined ? unpassworded : { ...unpassworded, secrets: { ...unpassworded.secrets, secret: '<redacted>' } }
     const line = JSON.stringify({ generation, method, params: method === 'entra.cache.import' && redacted?.data !== undefined ? { ...redacted, data: '<redacted>' } : redacted }) + '\n'
     const entry = logged.then(() => appendFile(join(controlDirectory, 'calls.jsonl'), line))
     logged = entry.catch(() => {})
@@ -2350,6 +2430,11 @@ async function workbench(id, method, params, credit) {
       write(FrameKind.EVENT, id, 0, { type: 'resultSet.closed', descriptor })
       return respond(id, { resultSets: [descriptor], discardedResultSets: 0, messages: [info('The result was loaded into memory.')], recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1, database: '', messagesTruncated: false, budget: summaryBudget(), completedAt: new Date().toISOString().replace('Z', '0000+00:00') })
     }
+    // The job step editor's Parse (AG-6b): a misspelt SELECT is the one syntax error the fake knows.
+    case 'language.parse': {
+      const lines = String(params.text).split('\n'), line = lines.findIndex(text => /\bSELEC\b/i.test(text))
+      return respond(id, { errors: line < 0 ? [] : [{ line: line + 1, column: lines[line].search(/\bSELEC\b/i) + 1, number: 102, message: "Incorrect syntax near 'SELEC'." }], truncated: false })
+    }
   }
   const connection = workbenchConnections.get(params.connectionId)
   if (!connection) return fail(id, 'NOT_CONNECTED', 'Connect to a SQL Server first.')
@@ -2374,6 +2459,8 @@ async function workbench(id, method, params, credit) {
           // As the backend answers a job msdb no longer has: an error in the result, not a failed request.
           return respond(id, value ?? { elapsedMs: 1, error: { code: 'NOT_FOUND', message: `The job ${params.target.name} no longer exists.`, retryable: false } })
         }
+        case 'agentProxy': return respond(id, agentProxyDocument(params))
+        case 'credential': return respond(id, credentialDocument(params))
         case 'tableDesigner': return respond(id, { tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', canCreate: true }, elapsedMs: 1 })
         default: return respond(id, { deleteTarget: { name: [params.target.schema, params.target.name].filter(Boolean).join('.'), type: 'Table', owner: 'dbo', warnings: [], dependentsTruncated: false }, elapsedMs: 1 })
       }
@@ -2394,6 +2481,9 @@ QuitWithRollback:
 EndSave:
 GO
 `, database: 'msdb', warnings: [] })
+        // The proxy and Credential documents' scripts write <secret>; the request never carries one.
+        case 'agentProxy': return respond(id, { text: `USE [msdb]\nGO\nEXEC msdb.dbo.sp_${params.target.kind === 'agent' ? 'add' : 'update'}_proxy @proxy_name=N'${params.agentProxy.name ?? params.target.name}'\nGO\n`, database: 'msdb', warnings: [] })
+        case 'credential': return respond(id, { text: `USE [master]\nGO\n${params.target.kind === 'server' ? 'CREATE' : 'ALTER'} CREDENTIAL [${params.credential.name ?? params.target.name}] WITH IDENTITY = N'${params.credential.identity}', SECRET = <secret>\nGO\n`, database: 'master', warnings: [] })
         case 'properties': return respond(id, { text: `USE [master]\r\nGO\r\nALTER DATABASE [${params.target.name}] SET RECOVERY SIMPLE WITH NO_WAIT\r\nGO\r\n`, database: 'master', warnings: [] })
         default: return respond(id, { text: 'DROP TABLE [dbo].[Orders]', database: params.target.database ?? 'master', warnings: [] })
       }
@@ -2401,6 +2491,8 @@ GO
     // 250 ms) until step 1 replaces it, and drops the out-of-range one.
     case 'actions.execute':
       if (params.action === 'agentJob') return respond(id, await agentJobSave(params))
+      if (params.action === 'agentProxy') return respond(id, agentProxySave(params))
+      if (params.action === 'credential') return respond(id, credentialSave(params))
       if (params.target?.kind === 'agentJob') return respond(id, agentJobVerb(params))
       if (params.action === 'deleteJobHistory') return respond(id, agentDeleteHistory(params))
       for (const [step, percent] of [[0, 25], [0, 100], [0, 101], [1, 40]]) write(FrameKind.EVENT, id, 0, { type: 'action.progress', step, percent })

@@ -297,7 +297,8 @@ internal sealed partial class SqlService
     /// </summary>
     private async Task<QueryResult> RemoteLoadAsync(RemoteQueryArgs args, RequestContext? context)
     {
-        if (!Guid.TryParse(args.QueryId, out _) || args.ResultId == 0 || args.Kind != "load" || args.Sort is not null || args.Filters is not null || args.Column is not null || args.Kept is not null || args.Fallback is not null)
+        if (!Guid.TryParse(args.QueryId, out _) || args.ResultId == 0 || args.Kind != "load" || args.Sort is not null || args.Filters is not null || args.Column is not null || args.Kept is not null || args.Fallback is not null
+            || args.JobKey is not null && !BigQueryLimits.Uuid().IsMatch(args.JobKey))
             throw new RequestException("INVALID_PARAMS", "A remote query needs its query ID, a result and a kind (load).");
         var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
         if (set.Remote is not { Source: BigQueryWindow window } remote) throw new RequestException("INVALID_PARAMS", "Only a windowed BigQuery result can be loaded into memory.");

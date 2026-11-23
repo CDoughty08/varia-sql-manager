@@ -7,6 +7,7 @@ import {
   agentJobFieldLabels, agentJobText, gateClosedText, notificationGates, uncategorizedCategory, type AgentJobDocumentModel, type AgentJobDraft, type AgentJobField,
   type AgentJobProblem, type AgentNotifyLevel
 } from '../../../shared/actions/agent-job.ts'
+import { jobErrorField } from '../../../shared/actions/schema.ts'
 import { agentLimits, notifyLevels } from '../../../shared/agent/catalog.ts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
@@ -17,6 +18,7 @@ import Skeleton from '../kit/Skeleton'
 import StatusPill from '../kit/StatusPill'
 import Switch from '../kit/Switch'
 import { jobSections, type JobDocumentService, type JobDocumentState } from './JobDocumentService'
+import JobSteps from './JobSteps'
 
 const fieldId = (documentId: string, key: string) => `agent-job-${documentId}-${key}`
 const outcomeWords: Readonly<Record<number, string>> = { 0: 'Last run failed', 1: 'Last run succeeded', 3: 'Last run canceled', 5: 'Never ran' }
@@ -261,6 +263,7 @@ export default function JobDocument({ documentId }: { documentId: string }) {
     const props: SectionProps = { state, model, draft, editable, problems, service: jobDocuments }
     switch (section) {
       case 'general': return <GeneralSection {...props} />
+      case 'steps': return <JobSteps state={state} model={model} draft={draft} editable={editable} service={jobDocuments} />
       case 'notifications': return <NotificationsSection {...props} />
       case 'targets': return <TargetsSection state={state} />
       case 'alerts': return <AlertsSection {...props} />
@@ -276,7 +279,7 @@ export default function JobDocument({ documentId }: { documentId: string }) {
     {phaseLabel && <p className="document-status" role="status"><Icon name="loading" spin />{phaseLabel}</p>}
     {state.stale ? <StaleCompare state={state} service={jobDocuments} />
       : state.error && !state.error.field && <InlineError message={state.error.message} code={state.error.code} context={`Job ${name} on ${state.server}`} actions={recovery} />}
-    {state.error?.field && !state.stale && <p className="property-field-error" role="alert"><Icon name="error" />{`Not saved: ${agentJobFieldLabels[state.error.field]}. Nothing was changed; your changes are kept.`}</p>}
+    {jobErrorField(state.error) && !state.stale && <p className="property-field-error" role="alert"><Icon name="error" />{`Not saved: ${agentJobFieldLabels[jobErrorField(state.error)!]}. Nothing was changed; your changes are kept.`}</p>}
     {!state.error && state.notice && <p className="document-status" role="status"><Icon name="pass" />{state.notice}</p>}
     {model?.readOnly && <p className="document-status"><Icon name="lock" />{model.job ? agentJobText.readOnly(model.job.owner) : model.readOnly}</p>}
   </>

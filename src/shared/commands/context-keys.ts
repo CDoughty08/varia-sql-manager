@@ -78,6 +78,8 @@ export const contextKeys = {
   activeDocumentIsSsisOperations: { type: 'boolean', scope: 'state', description: 'The active document is Integration Services Operations.' },
   activeDocumentIsJobActivity: { type: 'boolean', scope: 'state', description: "The active document is SQL Server Agent's Job Activity Monitor." },
   activeDocumentIsAgentJob: { type: 'boolean', scope: 'state', description: 'The active document is a SQL Server Agent job (Job Properties, or New Job).' },
+  activeDocumentIsAgentProxy: { type: 'boolean', scope: 'state', description: 'The active document is a SQL Server Agent proxy (Proxy Account Properties, or New Proxy).' },
+  activeDocumentIsCredential: { type: 'boolean', scope: 'state', description: 'The active document is a credential (Credential Properties, or New Credential).' },
   activeDocumentIsLogViewer: { type: 'boolean', scope: 'state', description: "The active document is SQL Server Agent's Log File Viewer (job history)." },
   ssisOperationStoppable: { type: 'boolean', scope: 'state', description: 'The operation selected in the active Integration Services Operations document is an execution or validation that is running or pending, and no stop of it is on its way.' },
   ssisOperationsPaused: { type: 'boolean', scope: 'state', description: 'The active Integration Services Operations document is paused (Pause): it reads nothing until resumed.' },
@@ -236,7 +238,8 @@ export const contextKeys = {
   outputGridComparison: { type: 'boolean', scope: 'target', menu: 'output.context', description: "The menu is for a comparison's results grid." },
   comparisonExactText: { type: 'boolean', scope: 'state', description: "That comparison compares text exactly: values that differ only by case or trailing spaces count as changed (its Exact text toggle)." },
   comparisonOneRow: { type: 'boolean', scope: 'state', description: "That comparison shows one row per entry (its Layout is One row)." },
-  comparisonChangesOnly: { type: 'boolean', scope: 'state', description: "That comparison shows only its changed, added and removed rows (its Rows choice is Changes only)." }
+  comparisonChangesOnly: { type: 'boolean', scope: 'state', description: "That comparison shows only its changed, added and removed rows (its Rows choice is Changes only)." },
+  comparisonRowHasPartner: { type: 'boolean', scope: 'state', description: "That comparison's active row is a removed or added row with a possible match (? in its row header), so Go to Possible Match can select it; false until the row's change marker has loaded. In a results grid's own menu, the row it was opened on." }
 } as const satisfies Record<string, ContextKeyDeclaration>
 
 type Declarations = typeof contextKeys
