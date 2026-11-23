@@ -2063,7 +2063,8 @@ internal static partial class BigQueryExecutionChecks
             string outcome;
             try { await ReadRemote(remote, 0, 10); outcome = "ok"; }
             catch (RequestException error) { outcome = error.Code; }
-            SpinWait.SpinUntil(() => store.WindowCacheBytes == 0, 5000);
+            // The read-ahead blocks may still be building (and later refused) on a starved machine: wait for them to settle.
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0 && store.WindowCacheBytes == 0, 15_000);
             check(outcome == "TOO_LARGE" && remote.BlockRows == RemoteResult.MaxBlockRows && blocks.Written < remote.BlockRows && store.WindowCacheBytes == 0,
                 $"a block of rows far wider than estimated stops at the cache's limit and is refused: {outcome} {blocks.Written} of {remote.BlockRows} {store.WindowCacheBytes}");
         }
