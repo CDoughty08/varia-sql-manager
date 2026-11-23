@@ -158,10 +158,13 @@ alerts, operators and who is notified, behind the same gate until 0.11.0.
   usually is. While the job runs, the section starts with the run view: the elapsed time from the run's start and the server's clock
   (the header's `agent.jobs.watched` probe; no elapsed time where the start is unreadable, never a guess) against the usual time as a
   bar, each step's state (finished steps as their rows say, the step Agent reports as current Executing or Between retries, the rest
-  Waiting) with this run's and the usual time, and Stop. Saved edits apply from the next run, which the run view says. The section
+  Waiting; with this run not selected under All, or its rows not read yet, the others show — rather than a guess) with this run's and
+  the usual time, and Stop. A step or the run ending reads History again at once. Saved edits apply from the next run, which the run view says. The section
   is one `agent.history` view (one checked job, `usual: true`, so the probe adds a fourth table of the usual durations for the job
-  and each step, a step's rows in a run added up) opened when the section first shows; it pauses while the document is hidden or
-  the section collapsed, and runs nothing between samples: the backend schedules every read. A New Job has no History until it is
+  and each step, a step's rows in a run added up) opened when the section first shows (on its connection's return when it shows
+  disconnected); it runs while the document is the active one with History open, pauses while the document is hidden or the section
+  collapsed, and runs nothing between samples: the backend schedules every read. The watched clock redraws the document only while
+  History shows. A New Job has no History until it is
   saved. All jobs' history in Log File Viewer opens the viewer with this job checked. The bars are plain elements with one
   accessible name, not a ChartView chart: runs are not samples of a series.
 - **Schedules document** (Manage Schedules on the Jobs folder's menu and the palette; New › Schedule… on the Agent node). One

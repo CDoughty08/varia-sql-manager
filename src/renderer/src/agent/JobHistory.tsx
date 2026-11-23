@@ -31,7 +31,8 @@ export const jobHistoryCopy = {
   none: 'This job has no history yet. Runs show here as SQL Server Agent records them.',
   noneFailed: 'No failed runs in the history SQL Server Agent keeps.',
   logViewer: "All jobs' history in Log File Viewer",
-  runningUnknown: "The other steps' states show with this run selected under All."
+  runningUnknown: "The other steps' states show once History has read this run, with it selected under All.",
+  disconnected: "The job's history is read once the connection is back."
 } as const
 
 /** The run durations as bars, newest last, with the usual time as a line: plain elements with one accessible name (not a ChartView: runs are not samples over time). */
@@ -152,8 +153,11 @@ export default function JobHistory({ state, model, service }: { readonly state: 
   const spanned = view ? Math.min(jobHistoryLimits.sparkRuns, view.spark.filter(run => run.seconds !== undefined && !runIsInProgress(run)).length) : 0
   // The running view knows each step's state only from this run's own rows: with another run selected (or Failed on) it holds none. A run
   // not listed yet (msdb writes a row only when a step ends) has no rows to hold, under All with the newest followed.
-  const runningKnown = !!view && (inProgress ? sameRun(view.selected, inProgress.key) : !view.failedOnly && !view.pinned)
-  const runningRows = running && inProgress && runningKnown && view!.stepsFor === historyRunKeyText(inProgress.key) ? view!.steps : []
+  // Once Agent has moved past step 1 a run with no rows read is not one with no rows, so its earlier steps are unknown until History reads them.
+  const runningKnown = !!view && (inProgress
+    ? sameRun(view.selected, inProgress.key) && view.stepsFor === historyRunKeyText(inProgress.key)
+    : !view.failedOnly && !view.pinned && (state.live?.step ?? 1) <= 1)
+  const runningRows = running && inProgress && runningKnown ? view!.steps : []
   const openViewer = () => {
     const connectionId = tabs.get(state.id)?.connectionId
     try { if (connectionId) logViewer.open(connectionId, { jobs: [jobId] }) } catch (error) { commands.reportError(error instanceof Error ? error.message : 'Log File Viewer could not open.') }
@@ -161,7 +165,7 @@ export default function JobHistory({ state, model, service }: { readonly state: 
   return <div className="agent-history" data-agent-history={state.id}>
     {running && <RunningView state={state} model={model} rows={runningRows} known={runningKnown} usual={view?.usual} service={service} />}
     {ended && <InlineError message={ended.message} code={ended.code} context={`History of ${model.job!.name} on ${state.server}`} actions={ended.code === 'PERMISSION_DENIED' ? [] : [{ label: 'Retry', run: () => history.refresh(state.id) }]} />}
-    {!view?.loaded ? !ended && <Skeleton rows={3} label="Reading the job's history" /> : <>
+    {!view?.loaded ? !ended && (history.connected(state.id) ? <Skeleton rows={3} label="Reading the job's history" /> : <p className="field-note">{jobHistoryCopy.disconnected}</p>) : <>
       <div className="agent-history-head">
         <strong>{spanned ? `Duration, last ${spanned} ${spanned === 1 ? 'run' : 'runs'}` : 'Duration'}</strong>
         <span className="field-note">{view.usual?.job !== undefined ? `usual ${durationWords(view.usual.job)}` : 'no usual time yet: no successful run'}</span>

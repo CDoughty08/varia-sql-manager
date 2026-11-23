@@ -70,6 +70,8 @@ export const jobHistoryText = {
 export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> implements Disposable {
   private readonly views = new Map<string, { readonly jobId: string; readonly handle: LiveHandle; readonly stop: () => void }>()
   private readonly reads = new Map<string, number>()
+  // Samples read since All or Failed changed: one taken with the args before may still arrive, and nothing says which args a sample had.
+  private readonly settling = new Map<string, number>()
   // Sections shown while their connection was not usable: each opens its view when the connection is back.
   private readonly pending = new Map<string, string>()
   private readonly unsubscribe: () => void
@@ -91,7 +93,7 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     const live = this.options.live, job = jobId.toLowerCase()
     if (!live || this.disposed || this.views.get(id)?.jobId === job) return
     // Another job (a re-created one): its view and what it read go, so nothing of the old job shows while this one waits for a connection.
-    if (this.views.has(id)) { this.views.get(id)!.stop(); this.views.delete(id); this.reads.delete(id); this.put(id, fresh(job)) }
+    if (this.views.has(id)) { this.views.get(id)!.stop(); this.views.delete(id); this.reads.delete(id); this.settling.delete(id); this.put(id, fresh(job)) }
     const connectionId = this.options.connectionOf(id)
     if (!connectionId) { this.pending.set(id, job); return }
     this.pending.delete(id)
@@ -124,6 +126,7 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     const state = this.get(id)
     if (!state || state.failedOnly === failedOnly) return
     this.patch(id, { failedOnly, pinned: false })
+    this.settling.set(id, 0)
     this.sendArgs(id)
   }
   /** The person picks a run: it stays selected while it is listed. */
@@ -164,6 +167,8 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     if (!connectionId || !this.options.openQuery) return
     this.options.openQuery(ssisExecutionQuery(executionId), `SSIS execution ${executionId}.sql`, connectionId, 'SSISDB')
   }
+  /** The document's connection is usable now. */
+  connected(id: string): boolean { return !!this.options.connectionOf(id) }
   canOpenQuery(id: string): boolean { return !!this.options.openQuery && !!this.options.connectionOf(id) }
 
   closed(id: string): void {
@@ -171,6 +176,7 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     this.views.delete(id)
     this.pending.delete(id)
     this.reads.delete(id)
+    this.settling.delete(id)
     if (this.get(id)) this.publish({ documents: Object.fromEntries(Object.entries(this.getSnapshot().documents).filter(([key]) => key !== id)) })
   }
   dispose(): void {
@@ -206,6 +212,16 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     const state = this.get(id)
     if (this.reads.get(id) !== read || !state || this.disposed) return
     const runs = runCells.rows.map(cell => runOf(cell)).filter((run): run is JobHistoryRun => !!run)
+    // After a change of filter: under Failed, a run that did not fail is from a sample taken before, so it is dropped. Under All, the
+    // sparkline waits for a sample with a run that did not fail, or the second one, since only failed runs may be a sample from before.
+    let sparkReady = !state.failedOnly
+    const settling = this.settling.get(id)
+    if (settling !== undefined) {
+      const unfailed = runs.some(run => run.tone !== 'error')
+      if (state.failedOnly && unfailed) return
+      if (state.failedOnly || unfailed || settling >= 1) this.settling.delete(id)
+      else { this.settling.set(id, settling + 1); sparkReady = false }
+    }
     const steps = stepCells.rows.map(cell => stepOf(cell))
     const usual = usualOf(usualCells.rows)
     const listed = (key: HistoryRunKey | undefined) => !!key && runs.some(run => sameRun(run.key, key))
@@ -219,7 +235,7 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     const ownRows = !changed && !!state.selected && steps.some(step => step.instance === state.selected!.instance)
     const next: Partial<JobHistoryState> = {
       runs, more: runCells.total > runs.length, loaded: true, usual, pinned: keep,
-      ...state.failedOnly ? {} : { spark: runs },
+      ...sparkReady ? { spark: runs } : {},
       ...changed ? { selected, steps: [], stepsFor: undefined, step: undefined, message: undefined, notice: undefined } : ownRows ? { steps, stepsFor } : {}
     }
     this.patch(id, next)

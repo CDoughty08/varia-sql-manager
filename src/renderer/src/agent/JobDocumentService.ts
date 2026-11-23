@@ -191,12 +191,14 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     // History (AG-6d): its view runs while the document shows with History open.
     this.history = new JobHistoryService({
       api: options.api, ...options.live ? { live: options.live } : {}, ...options.openQuery ? { openQuery: options.openQuery } : {}, newId: this.newId, connectionOf: id => this.live(id) ? this.connectionOf(id) : undefined,
-      visible: id => options.documents.getSnapshot().activeId === id && !this.get(id)?.frame.collapsed.includes('history'),
+      visible: id => this.historyShows(id),
       subscribe: listener => { const a = options.connections.subscribe(listener), b = options.documents.subscribe(listener), c = this.subscribe(listener); return () => { a(); b(); c() } }
     })
   }
 
   get(id: string): JobDocumentState | undefined { return this.getSnapshot().documents[id] }
+  /** The document is the active one and its History section is open. */
+  private historyShows(id: string): boolean { return this.options.documents.getSnapshot().activeId === id && !!this.get(id) && !this.get(id)!.frame.collapsed.includes('history') }
 
   /** A job's document: brought forward if open on this connection, otherwise a tab opens at once, loading. */
   openJob(connectionId: string, name: string): string {
@@ -730,7 +732,12 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
       const next = jobLive(watchedSlot(watched.metrics!, 0), watchedServerNow(watched.metrics!))
       const state = this.get(id)
       if (!state || JSON.stringify(next) === JSON.stringify(state.live)) return
+      // The server clock alone moves every sample: it redraws the document only while History shows its elapsed time.
+      const moved = JSON.stringify({ ...next, now: undefined }) !== JSON.stringify({ ...state.live, now: undefined })
+      if (!moved && !this.historyShows(id)) return
       this.patch(id, { live: next })
+      // A step ended or the run did: History reads it now rather than at its next sample (event-driven, not a timer).
+      if (moved && (next?.step !== state.live?.step || next?.running !== state.live?.running)) this.history.refresh(id)
     })
     this.views.set(id, { jobId: jobId.toLowerCase(), handle, stop: () => { ended = true; ticks.dispose(); handle.dispose() } })
   }

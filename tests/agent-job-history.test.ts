@@ -227,6 +227,37 @@ describe("the job document's History section", () => {
   })
 })
 
+describe("the job document's watched state and History", () => {
+  it('redraws for the server clock alone only while History shows, and reads History again when a step or the run ends', async () => {
+    const { jobDocuments, history, live } = opened()
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    jobDocuments.history.attach(id, job)
+    const watched = (live.handles as FakeLiveHandle[]).find(handle => handle.spec.source === 'agent.jobs')!
+    const tick = (status: number, step: number, now: number) => {
+      const metrics = Array.from({ length: 19 }, () => 0)
+      metrics.splice(0, 4, status, step, 2, 20261122140900)
+      metrics[18] = now
+      watched.deliver({ type: 'live.tick', seq: now, sampledAt: now, samples: [{ probe: 'agent.jobs.watched', costMs: 1, effectiveIntervalMs: 2000, metrics }] })
+    }
+    tick(1, 1, 20261122141000)
+    expect(jobDocuments.get(id)?.live).toMatchObject({ running: true, step: 1, now: 20261122141000 })
+    const refreshes = history()!.refreshes
+    tick(1, 1, 20261122141002)
+    expect(jobDocuments.get(id)?.live?.now).toBe(20261122141002)
+    jobDocuments.setFrame(id, { ...jobDocuments.get(id)!.frame, collapsed: ['history'] })
+    tick(1, 1, 20261122141004)
+    expect(jobDocuments.get(id)?.live?.now).toBe(20261122141002)
+    expect(history()!.refreshes).toBe(refreshes)
+    tick(1, 2, 20261122141006)
+    expect(jobDocuments.get(id)?.live).toMatchObject({ step: 2, now: 20261122141006 })
+    expect(history()!.refreshes).toBe(refreshes + 1)
+    tick(4, 0, 20261122141008)
+    expect(jobDocuments.get(id)?.live?.running).toBe(false)
+    expect(history()!.refreshes).toBe(refreshes + 2)
+  })
+})
+
 describe("the History section's service on its own", () => {
   function service() {
     const live = fakeLive(), listeners = new Set<() => void>()
@@ -282,6 +313,26 @@ describe("the History section's service on its own", () => {
     expect(history.get('d1')).toMatchObject({ step: 17, message: { instance: 17, state: 'failed' } })
     expect(history.messageText('d1')).toBe(cut)
     expect(api.agentHistoryMessage).not.toHaveBeenCalled()
+  })
+  it('reads no sample taken with the filter before as one taken with the new filter', async () => {
+    const { history, connect, deliver } = service()
+    connect('c1')
+    history.attach('d1', job)
+    const failed = (instance: number) => runRow(instance, { runOutcome: 'Failed', runTone: 'error' })
+    await deliver({ 0: table(0, [runRow(21), failed(20), runRow(19)]), 1: table(1, []), 3: table(3, []) })
+    history.setFailedOnly('d1', true)
+    // A sample from before Failed (it lists runs that did not fail) is dropped; the next is the filtered one.
+    await deliver({ 0: table(0, [runRow(21), failed(20), runRow(19)]) })
+    expect(history.get('d1')?.runs.map(item => item.key.instance)).toEqual([21, 20, 19])
+    await deliver({ 0: table(0, [failed(20)]) })
+    expect(history.get('d1')?.runs.map(item => item.key.instance)).toEqual([20])
+    expect(history.get('d1')?.spark.map(item => item.key.instance)).toEqual([21, 20, 19])
+    // Back to All: a sample of failed runs only may be from before, so the sparkline keeps the unfiltered runs until a sample shows more.
+    history.setFailedOnly('d1', false)
+    await deliver({ 0: table(0, [failed(20)]) })
+    expect(history.get('d1')?.spark.map(item => item.key.instance)).toEqual([21, 20, 19])
+    await deliver({ 0: table(0, [runRow(22), runRow(21), failed(20), runRow(19)]) })
+    expect(history.get('d1')?.spark.map(item => item.key.instance)).toEqual([22, 21, 20, 19])
   })
   it("asks for no new sample after an empty one, and drops a re-created job's old view while it waits for a connection", async () => {
     const { history, live, connect, deliver } = service()
