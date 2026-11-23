@@ -128,15 +128,28 @@ internal sealed partial class BigQueryService
                 // read, Stop) may still bill up to its cap, so the next location never counts on it.
                 budget.Remaining -= billed;
                 references.Add(request.JobReference);
-                var job = await InsertJobAsync(connection, request, null, stop);
-                if (BigQueryJobException.Of(job) is { } refused) throw BigQueryErrors.Job(refused.Result, refused.Errors, project, billed);
-                var cursor = new BulkCursor(this, connection, job.JobReference ?? request.JobReference, location, billed, project, stop);
-                cursors.Add(cursor);
-                // The next job starts only once this one finished: a failed column job bills nothing more, and what it did not bill
-                // (its cap less jobs.get's totalBytesBilled, free) returns to the budget. Bytes processed are no guide: INFORMATION_SCHEMA
-                // can report none for a view it bills at its floor. When the bill cannot be read, the whole cap stays charged.
-                await cursor.StartAsync();
-                if (await BilledAsync(connection, cursor.Job, location, stop) is { } actual) budget.Remaining += billed - Math.Min(billed, actual);
+                var reference = request.JobReference;
+                try
+                {
+                    var job = await InsertJobAsync(connection, request, null, stop);
+                    reference = job.JobReference ?? reference;
+                    if (BigQueryJobException.Of(job) is { } refused) throw BigQueryErrors.Job(refused.Result, refused.Errors, project, billed);
+                    var cursor = new BulkCursor(this, connection, reference, location, billed, project, stop);
+                    cursors.Add(cursor);
+                    // The next job starts only once this one finished: a failed column job bills nothing more.
+                    await cursor.StartAsync();
+                }
+                catch (Exception) when (!stop.IsCancellationRequested)
+                {
+                    // A job that failed may have billed nothing: once BigQuery says it is done, what it did not bill returns, so a
+                    // refused location leaves the next one its budget.
+                    if (await BilledAsync(connection, reference, location, token) is { } failedBill) budget.Remaining += billed - Math.Min(billed, failedBill);
+                    throw;
+                }
+                // What it did not bill (its cap less jobs.get's totalBytesBilled, free) returns to the budget. Bytes processed are no
+                // guide: INFORMATION_SCHEMA can report none for a view it bills at its floor. When the bill cannot be read, the whole
+                // cap stays charged.
+                if (await BilledAsync(connection, reference, location, stop) is { } actual) budget.Remaining += billed - Math.Min(billed, actual);
             }
             var columns = cursors[0];
             var views = cursors.ElementAtOrDefault(1);
@@ -180,13 +193,13 @@ internal sealed partial class BigQueryService
         }
     }
 
-    /// <summary>A finished job's totalBytesBilled (jobs.get, free), or null when BigQuery does not say or the read fails.</summary>
+    /// <summary>A finished job's totalBytesBilled (jobs.get, free), or null when it is not done, BigQuery does not say, or the read fails.</summary>
     async Task<long?> BilledAsync(BigQueryConnection connection, JobReference job, string location, CancellationToken token)
     {
         try
         {
             var read = await GetJobAsync(connection, job.ProjectId, job.JobId, job.Location ?? location, token);
-            return read.Statistics?.Query?.TotalBytesBilled is >= 0 and var bytes ? bytes : null;
+            return read.Status?.State == "DONE" && read.Statistics?.Query?.TotalBytesBilled is >= 0 and var bytes ? bytes : null;
         }
         catch (Exception error) when (!token.IsCancellationRequested && error is not RequestException { Code: "NOT_CONNECTED" }) { return null; }
     }

@@ -25,7 +25,7 @@ function harness(options: { bulk?: boolean; extraProjects?: boolean; estimate?: 
   const index: Parameters<VariaApi['explorerIndex']>[0][] = []
   const pending: ((result: ApiResult<ObjectIndexResult>) => void)[] = []
   const estimates: Parameters<VariaApi['bigQueryIndexEstimate']>[0][] = []
-  const gates: { connectionId: string; estimate: BigQueryDryRunResult; signal: AbortSignal; answer: (value: { run: boolean; maximumBytesBilled?: number }) => void }[] = []
+  const gates: { connectionId: string; estimate: BigQueryDryRunResult; signal: AbortSignal; answer: (value: { run: boolean; maximumBytesBilled?: number }) => void; fail: (error: Error) => void }[] = []
   const api: ObjectSearchOptions['api'] = {
     explorerIndex: vi.fn(params => { index.push(params); return new Promise<ApiResult<ObjectIndexResult>>(resolve => pending.push(resolve)) }),
     explorerSearch: vi.fn(async () => ({ ok: false as const, error: 'unused' })),
@@ -46,7 +46,7 @@ function harness(options: { bulk?: boolean; extraProjects?: boolean; estimate?: 
   let ids = 0
   const service = new ObjectSearchService({
     api, documents, connections, settings: { get: (key => values[key]) as ObjectSearchOptions['settings']['get'] }, newId: () => 'req' + ++ids,
-    ...options.gate === false ? {} : { billedGate: (connectionId, value, signal) => new Promise(answer => { gates.push({ connectionId, estimate: value, signal, answer }) }) }
+    ...options.gate === false ? {} : { billedGate: (connectionId, value, signal) => new Promise((answer, fail) => { gates.push({ connectionId, estimate: value, signal, answer, fail }) }) }
   })
   return { service, api, index, pending, estimates, gates, connections }
 }
@@ -96,6 +96,14 @@ describe('BigQuery bulk index path (renderer)', () => {
       expect(failed.gates).toEqual([])
       expect(failed.index).toEqual([{ connectionId: 'bq', requestId: 'req1', definitions: true, extraDetails: false }])
     }
+    // A prompt that fails (its service gone, an IPC failure) is no consent, and the index does not stay at Estimating.
+    const broken = harness({ bulk: true })
+    broken.connections.set([bigQuery('bq')])
+    await settle()
+    broken.gates[0].fail(new Error('prompt lost'))
+    await settle()
+    expect(broken.index).toEqual([{ connectionId: 'bq', requestId: 'req1', definitions: true, extraDetails: false }])
+    expect(broken.service.getSnapshot().indexes.bq.phase).toBeUndefined()
   })
 
   it('Stop at the prompt closes it and sends nothing; a newer build closes the older one\'s prompt', async () => {

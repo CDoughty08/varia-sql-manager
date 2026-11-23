@@ -62,7 +62,7 @@ internal sealed partial class BigQueryService
         var detail = Search.BigQueryEntries.FromTable(table);
         var columns = detail.Columns;
         if (columns.Count == 0) return (null, null);
-        static string Bound(string text) => text.Length <= MaxColumnText ? text : text[..(MaxColumnText - 1)] + "…";
+        static string Bound(string text) => text.Length <= MaxColumnText ? text : text[..(char.IsHighSurrogate(text[MaxColumnText - 2]) ? MaxColumnText - 2 : MaxColumnText - 1)] + "…";
         var kept = new List<BigQueryColumnFact>();
         long chars = 0;
         foreach (var column in columns.Take(MaxColumnFacts))

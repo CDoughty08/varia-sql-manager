@@ -372,22 +372,23 @@ queries per location, which is faster for projects with thousands of objects:
   (routine bodies). With definitions off (`objectExplorer.search.definitions`), only the column query runs.
 - **Cost.** BigQuery bills each query at least 10 MiB for every INFORMATION_SCHEMA view it reads (the column query reads
   three) and never answers them from cache. So a full build first asks `bigquery.indexEstimate`: the locations of the
-  billing project's datasets (and the extra projects' when their schemas are indexed), up to 64, each query dry-run free,
-  each counted as every view's floor plus its bytes. The estimate then goes through the same cost prompts as Execute,
-  which ask only above the cost threshold or when the estimate may be low. The estimate shown is the build's budget: a
-  location's queries run one at a time, each capped at what is left of the budget less the later queries' floors (or at
-  the connection's or Options' maximum bytes billed, Query Execution › BigQuery › Cost, when lower). The whole cap leaves
-  the budget when the query starts, and only once it finishes does what it did not bill (its cap less BigQuery's billed
-  bytes for the job) return; when that cannot be read, the whole cap stays charged. So the build never bills more than the estimate. A query over its cap fails without being billed, and a
-  location the rest of the budget or the cap cannot cover is not started; either way its datasets are read with the
-  free calls. The status says "Estimating the billed INFORMATION_SCHEMA read of the index's details…" meanwhile; Stop, a
-  newer build or a disconnect ends it.
+  billing project's datasets (and the extra projects' when their schemas are indexed), up to 64, each query dry-run
+  free, each counted as every view's floor plus its bytes. The estimate then goes through the same cost prompts as
+  Execute, which ask only above the cost threshold or when the estimate may be low. The estimate shown is the build's
+  budget: a location's queries run one at a time, each capped at what is left of the budget less the later queries'
+  floors (or at the connection's or Options' maximum bytes billed, Query Execution › BigQuery › Cost, when lower). The
+  whole cap leaves the budget when the query starts, and only once it is done, finished or failed, does what it did not
+  bill (its cap less BigQuery's billed bytes for the job) return; when that cannot be read, the whole cap stays charged.
+  So the build never bills more than the estimate. A query over its cap fails without being billed, and a location the
+  rest of the budget or the cap cannot cover is not started; either way its datasets are read with the free calls. The
+  status says "Estimating the billed INFORMATION_SCHEMA read of the index's details…" meanwhile; Stop, a newer build or
+  a disconnect ends it.
 - **The same entries.** The rows fill exactly the entries pass 2's `tables.get` and `routines.get` would (the offline
-  checks compare them), with the same limits. Objects the rows do not cover still use the free calls: materialized views'
-  text, routines without a body, objects dropped or created again after the listing (or not yet in INFORMATION_SCHEMA), and every dataset in a location whose queries
-  failed, and a dataset whose rows pass 8 million characters. Bulk-read objects carry no row count, size, partitioning,
-  clustering, routine signature or last change in the index (a table's hit shows its creation date); the details pane
-  reads those live.
+  checks compare them), with the same limits. Objects the rows do not cover still use the free calls: materialized
+  views' text, routines without a body, objects dropped or created again after the listing (or not yet in
+  INFORMATION_SCHEMA), and every dataset in a location whose queries failed, and a dataset whose rows pass 8 million
+  characters. Bulk-read objects carry no row count, size, partitioning, clustering, routine signature or last change in
+  the index (a table's hit shows its creation date); the details pane reads those live.
 - **When it runs.** Only full builds (indexing on connect, Rebuild Search Index, Refresh on the connection's node); a
   refresh of a project, dataset or DDL change uses the free calls. A declined prompt or a failed estimate builds with
   the free calls only. The next build reads bulk-read objects again rather than reuse them. The index line says

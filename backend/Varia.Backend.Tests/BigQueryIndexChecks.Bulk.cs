@@ -56,10 +56,10 @@ internal static partial class BigQueryIndexChecks
         };
         var wrong = cases.Where(item => BigQueryBulk.TypeText(item.Type) != item.Shown).Select(item => item.Type + " → " + BigQueryBulk.TypeText(item.Type)).ToList();
         check(wrong.Count == 0, "INFORMATION_SCHEMA's type text reads as pass 2 shows tables.get's: " + string.Join("; ", wrong));
-        var fields = BigQueryBulk.Fields(BigQueryBulk.StructBody("STRUCT<city STRING NOT NULL, `my field` STRUCT<x INT64, y ARRAY<STRING>>, n NUMERIC(10, 2), `tick\\`s` BOOL>")!).ToList();
-        check(fields is [("city", "STRING NOT NULL", false), ("my field", "STRUCT<x INT64, y ARRAY<STRING>>", true), ("n", "NUMERIC(10, 2)", true), ("tick`s", "BOOL", true)]
+        var fields = BigQueryBulk.Fields(BigQueryBulk.StructBody("STRUCT<city STRING NOT NULL, `my field` STRUCT<x INT64, y ARRAY<STRING>>, n NUMERIC(10, 2), `tick\\`s` BOOL, code STRING COLLATE 'und:ci' NOT NULL>")!).ToList();
+        check(fields is [("city", "STRING NOT NULL", false), ("my field", "STRUCT<x INT64, y ARRAY<STRING>>", true), ("n", "NUMERIC(10, 2)", true), ("tick`s", "BOOL", true), ("code", "STRING COLLATE 'und:ci' NOT NULL", false)]
             && BigQueryBulk.StructBody("ARRAY<STRUCT<sku STRING>>") == "sku STRING" && BigQueryBulk.StructBody("ARRAY<STRING>") is null,
-            "a STRUCT's fields come in order, backticked names unquoted, NOT NULL as not nullable: " + string.Join(", ", fields));
+            "a STRUCT's fields come in order, backticked names unquoted, NOT NULL as not nullable (after a COLLATE too): " + string.Join(", ", fields));
         var table = new BigQueryBulkTable("BASE TABLE");
         table.Fields.Add(new("b", "STRUCT<z STRING, a STRUCT<q INT64 NOT NULL>>", null, 2, true));
         table.Fields.Add(new("b.a.q", "INT64", "deep", 2, true));
@@ -306,6 +306,25 @@ internal static partial class BigQueryIndexChecks
             await silent.Index(more => more["bulk"] = request);
             check(silentJobs.Created.Select(job => job.Cap).SequenceEqual(new long?[] { 80L << 20, 10L << 20, 10L << 20 }),
                 "an unknown bill counts as the job's cap: " + string.Join(", ", silentJobs.Created.Select(job => job.Cap)));
+        }
+        // A job BigQuery refused and reports done with nothing billed returns its cap, so the next location keeps its budget.
+        using (var refusedHarness = new Harness())
+        {
+            var refusedJobs = new BulkJobs();
+            refusedJobs.Route(refusedHarness.Fake);
+            refusedHarness.Fake.On("GET", @"https://bigquery\.googleapis\.com/bigquery/v2/projects/varia-alpha/queries/[^/]+", BigQueryFake.Fixture("error-access-denied", 403));
+            refusedHarness.Fake.On("GET", @"https://bigquery\.googleapis\.com/bigquery/v2/projects/varia-alpha/jobs/[^/]+", new BigQueryFake.Reply(200,
+                "{\"jobReference\":{\"projectId\":\"varia-alpha\",\"jobId\":\"x\"},\"statistics\":{\"query\":{\"totalBytesBilled\":\"0\"}},\"status\":{\"state\":\"DONE\",\"errorResult\":{\"reason\":\"accessDenied\",\"message\":\"Access Denied: INFORMATION_SCHEMA\"}}}"));
+            await refusedHarness.ConnectAsync(key);
+            var shared = new BigQueryBulkBudget(200L << 20);
+            string? failure = null;
+            try
+            {
+                await foreach (var _ in ((IBigQueryIndexSource)refusedHarness.Service.BigQuery).BulkAsync(refusedHarness.ConnectionId, "varia-alpha", "US", true, null, shared, (_, _) => true, CancellationToken.None)) { }
+            }
+            catch (RequestException error) { failure = error.Code; }
+            check(failure == "PERMISSION_DENIED" && refusedJobs.Created.Count == 1 && shared.Remaining == 200L << 20,
+                $"a refused job that billed nothing returns its cap to the shared budget ({failure}, {shared.Remaining} B left)");
         }
         using (var stuck = new Harness())
         {

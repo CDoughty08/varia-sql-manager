@@ -238,10 +238,11 @@ internal static partial class BigQueryBulk
         return text;
     }
 
+    /// <summary>Whether any trailer outside brackets and quotes is NOT NULL (it may follow a COLLATE).</summary>
     static bool NotNull(string declared)
     {
         foreach (Match match in Trailer().Matches(declared))
-            if (Depth(declared, match.Index) == 0) return match.Value.TrimStart().StartsWith("NOT", StringComparison.OrdinalIgnoreCase);
+            if (Depth(declared, match.Index) == 0 && match.Value.TrimStart().StartsWith("NOT", StringComparison.OrdinalIgnoreCase)) return true;
         return false;
     }
 

@@ -414,9 +414,10 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
       // never bill more than what the prompts showed (a location the rest cannot cover is read with the free calls).
       const budgetBytes = estimated?.ok ? Math.ceil(estimated.value.estimate.bytesProcessed) : 0
       if (!estimated?.ok || !estimated.value.locations.length || !(budgetBytes >= 1 && budgetBytes <= Number.MAX_SAFE_INTEGER)) return undefined
-      const answer = await this.o.billedGate!(connectionId, estimated.value.estimate, controller.signal)
+      // A prompt that fails is no consent: the build goes ahead with the free calls rather than stay at Estimating.
+      const answer = await this.o.billedGate!(connectionId, estimated.value.estimate, controller.signal).catch(() => undefined)
       if (ended()) return 'stopped'
-      if (!answer.run) return undefined
+      if (!answer?.run) return undefined
       return { locations: estimated.value.locations, budgetBytes, ...answer.maximumBytesBilled !== undefined ? { maximumBytesBilled: answer.maximumBytesBilled } : {} }
     } finally { this.estimating.delete(requestId) }
   }
