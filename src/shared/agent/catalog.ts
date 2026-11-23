@@ -367,15 +367,28 @@ export const agentLimits = {
   /** Cryptographic providers New Credential lists (`sys.cryptographic_providers`). */
   cryptographicProviders: 64,
   /** The most days, weeks or months "Delete old history now" goes back: 999 months stays inside `datetime`, so the cut-off is never NULL. */
-  purgeCount: 999
+  purgeCount: 999,
+  /** The job document's Steps (AG-6b): characters of one step's command (`sysjobsteps.command` is nvarchar(max); this keeps a save's request
+   *  bounded), of all the steps' commands in one save, and of an output file path (`output_file_name` is nvarchar(200)). */
+  stepCommandChars: 100_000,
+  stepCommandTotalChars: 1_000_000,
+  stepOutputChars: 200,
+  /** A step's Retry attempts and Retry interval (minutes), as SSMS's step dialog bounds them. */
+  stepRetries: 9_999,
+  stepRetryMinutes: 9_999,
+  /** Characters the step editor's Parse sends (`language.parse`), as the language service bounds a document. */
+  parseChars: 250_000,
+  /** Errors one Parse reports; more set `truncated`. */
+  parseErrors: 100
 } as const
 export type AgentLimit = keyof typeof agentLimits
 
 /** THROW states carry a save's call index, 1 to 255, so a save's calls stay below this, guards included. */
 export const agentCallIndexLimit = 255
-/** The most calls one job save can make at its caps: per step a temporary rename and a final update (or an add and an
- *  update), per schedule an attach or detach plus an add, per removed alert its guard and its detach, and the job's own calls and guards. */
-export const agentJobSaveCalls = agentLimits.stepsPerJob * 2 + agentLimits.schedulesPerJob * 2 + agentLimits.jobAlerts * 2 + 8
+/** The most calls one job save can make at its caps: per step a delete, or a temporary rename and a final update, or an add and an
+ *  update (AG-6b's planner: deleting every described step and adding as many is three calls a step), per schedule an attach or detach plus
+ *  an add, per removed alert its guard and its detach, and the job's own calls and guards. */
+export const agentJobSaveCalls = agentLimits.stepsPerJob * 3 + agentLimits.schedulesPerJob * 2 + agentLimits.jobAlerts * 2 + 8
 
 // --- Procedures -----------------------------------------------------------------------------------------------------
 
@@ -450,7 +463,9 @@ export const writeProcedures: readonly WriteProcedure[] = [
   { name: 'sp_stop_job', lane: 'AG-2', database: 'msdb', arguments: ['@job_id'] },
   // The job document (AG-6a) adds the General and Notifications arguments; sp_update_job leaves an argument it is not passed as it is.
   { name: 'sp_update_job', lane: 'AG-2', database: 'msdb', arguments: ['@job_id', '@enabled', '@new_name', '@description', '@category_name', '@owner_login_name', '@notify_level_eventlog', '@notify_level_email',
-    '@notify_level_netsend', '@notify_level_page', '@notify_email_operator_name', '@notify_netsend_operator_name', '@notify_page_operator_name', '@delete_level'] },
+    '@notify_level_netsend', '@notify_level_page', '@notify_email_operator_name', '@notify_netsend_operator_name', '@notify_page_operator_name', '@delete_level',
+    // The step save (AG-6b) sets the Start step last, in a call of its own, once the steps are in place.
+    '@start_step_id'] },
   { name: 'sp_delete_job', lane: 'AG-2', database: 'msdb', arguments: ['@job_id', '@delete_history', '@delete_unused_schedule'] },
   // Agent Properties' server-wide purge (AG-8a) passes only @oldest_date (its lint refuses @job_id); Delete History (AG-5a) passes @job_id,
   // and @oldest_date for "older than", with its own template and lint (AgentSql.LintHistoryDelete).
@@ -461,9 +476,15 @@ export const writeProcedures: readonly WriteProcedure[] = [
   { name: 'sp_add_jobserver', lane: 'AG-6a', database: 'msdb', arguments: ['@job_id'] },
   // The job's Alerts section's Remove (sysadmin): the alert by name, its job set to none (the zero uniqueidentifier). AG-7 adds its own arguments.
   { name: 'sp_update_alert', lane: 'AG-6a', database: 'msdb', arguments: ['@name', '@job_id'] },
-  { name: 'sp_add_jobstep', lane: 'AG-6b', database: 'msdb' },
-  { name: 'sp_update_jobstep', lane: 'AG-6b', database: 'msdb' },
-  { name: 'sp_delete_jobstep', lane: 'AG-6b', database: 'msdb' },
+  // The step save planner (AG-6b, src/shared/agent/steps.ts): New Job's steps are added whole; an existing job's new steps are inserted at
+  // their final id under a temporary name, then every step's whole content is written. @proxy_name only ever clears the proxy (N'').
+  { name: 'sp_add_jobstep', lane: 'AG-6b', database: 'msdb', arguments: ['@job_id', '@step_id', '@step_name', '@subsystem', '@command', '@cmdexec_success_code', '@on_success_action',
+    '@on_success_step_id', '@on_fail_action', '@on_fail_step_id', '@server', '@database_name', '@database_user_name', '@retry_attempts', '@retry_interval', '@os_run_priority',
+    '@output_file_name', '@flags', '@proxy_id', '@proxy_name'] },
+  { name: 'sp_update_jobstep', lane: 'AG-6b', database: 'msdb', arguments: ['@job_id', '@step_id', '@step_name', '@subsystem', '@command', '@cmdexec_success_code', '@on_success_action',
+    '@on_success_step_id', '@on_fail_action', '@on_fail_step_id', '@server', '@database_name', '@database_user_name', '@retry_attempts', '@retry_interval', '@os_run_priority',
+    '@output_file_name', '@flags', '@proxy_id', '@proxy_name'] },
+  { name: 'sp_delete_jobstep', lane: 'AG-6b', database: 'msdb', arguments: ['@job_id', '@step_id'] },
   // Schedules (AG-6c): the job's save adds (sp_add_jobschedule), attaches, detaches and changes them; the Schedules document's save creates
   // (sp_add_schedule, the new id an OUTPUT), changes, deletes (never @force_delete) and attaches or detaches jobs. Each guarded batch has its
   // own lint (AgentSql.LintJobSave, AgentSql.LintScheduleSave); the one-call write lint refuses them all.

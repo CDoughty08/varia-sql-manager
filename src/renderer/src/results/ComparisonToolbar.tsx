@@ -8,6 +8,9 @@ import MatchMenu from './MatchMenu'
 import { chipKinds, fallbackText, matchLabel, noticeId, type CompareInfo, type CompareSource, type ComparisonNotice, type NoticeAction } from './CompareService'
 import { entryName, type EntryKey, type ResultSetEntry } from './ResultsService'
 import { formatCount } from './status'
+import { unitsText } from '../grid/diff-navigation'
+import { useKeybindingLabel } from '../core/useCommand'
+import { withKey } from '../query-context'
 
 /** The Layout choices: one row per entry, or a changed entry's old and new values on two rows. */
 const layouts: readonly { readonly layout: DiffLayout; readonly label: string; readonly title: string }[] = [
@@ -108,6 +111,18 @@ export default function ComparisonToolbar({ tabId, entry, info, sources, goTo }:
     </button>
   }
   const focusGrid = () => results.focusEntry(tabId, entry.key)
+  // Previous and Next Difference: "Change 2 of 31" once moved in what the grid shows now, else the comparison's units.
+  const shownHandle = useSyncExternalStore(results.subscribe, () => results.sortOf(tabId, entry.key)?.view ?? entry.handle)
+  const position = useSyncExternalStore(compare.subscribe, () => compare.positionOf(entry, shownHandle))
+  const filteredView = shownHandle !== entry.handle && (results.sortOf(tabId, entry.key)?.applied.length ?? 0) > 0
+  const positionLabel = position ?? (filteredView ? '' : unitsText(info.units))
+  const nextKey = useKeybindingLabel('output.compareNextDifference'), previousKey = useKeybindingLabel('output.comparePreviousDifference')
+  const step = (direction: 'next' | 'previous', title: string, key: ReturnType<typeof useKeybindingLabel>) => {
+    const none = info.units === 0
+    return <button type="button" className="rg-compare-step" data-control={direction} tabIndex={-1} aria-label={title} aria-keyshortcuts={key?.aria}
+      {...none ? { 'aria-disabled': true, title: `${title}: no differences` } : { title: withKey(title, key) }}
+      onClick={() => { if (!none) void compare.navigate(tabId, entry.key, direction) }}><Icon name={direction === 'next' ? 'arrow-down' : 'arrow-up'} /></button>
+  }
   // One element around the toolbar and its notices (display: contents), so a change that remounts both hands the focus
   // from either to its new copy.
   return <div ref={head} className="rg-compare-head" data-notices={noticeKey}>
@@ -142,6 +157,11 @@ export default function ComparisonToolbar({ tabId, entry, info, sources, goTo }:
         {chipKinds.map(chip)}
         <span className="rg-compare-count" title={info.context === 0 ? 'Unchanged rows: left out by Changes only' : 'Unchanged rows'}>{formatCount(info.same)} unchanged{info.context === 0 && info.same > 0 ? ' (hidden)' : ''}</span>
         {info.repeated > 0 && <span className="rg-compare-count is-repeated" title="Rows whose key repeats were paired in order (≈ in their row headers)"><span aria-hidden="true">≈ </span>{formatCount(info.repeated)} repeated</span>}
+      </span>
+      <span className="rg-compare-nav" role="group" aria-label="Differences">
+        {step('previous', 'Previous difference', previousKey)}
+        {step('next', 'Next difference', nextKey)}
+        {positionLabel && <span className="rg-compare-position">{positionLabel}</span>}
       </span>
       <span className="rg-compare-gap" />
       <button type="button" className="results-icon-toggle" data-control="profile" data-fold-group="profile" aria-label="Profile" aria-pressed={profile} tabIndex={-1} title="Column profile of this comparison: each column's changes"

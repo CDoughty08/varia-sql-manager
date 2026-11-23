@@ -8,6 +8,7 @@ import { quarantine, readJsonFile, writeBytesAtomic } from './json-file'
 import type { SettingsStore } from './settings-store'
 import { fileKinds, maxDocumentCharacters } from './sql-files'
 import { providerIds } from '../shared/providers'
+import { jobKeySchema } from '../shared/bigquery/jobs'
 
 const fits = (value: { kind: DocumentKind; text: string }) => value.text.length <= fileKinds[value.kind].maxChars
 const eol = z.enum(['crlf', 'lf'])
@@ -21,7 +22,7 @@ const databaseFits = (value: { provider?: string; database?: string }) => value.
 const recordId = z.uuid().regex(/^[0-9a-f-]{36}$/, 'An AutoRecover id is a lower-case uuid.')
 /** varia:recovery-write: the query's text, at most its kind's limit, and what the dialog shows about it. */
 export const recoveryWriteSchema = z.object({
-  id: recordId, name, kind: z.enum(documentKinds), fileId: z.uuid().optional(), eol, server: server.optional(), database: database.optional(), provider: provider.optional(), text: z.string().max(maxDocumentCharacters)
+  id: recordId, name, kind: z.enum(documentKinds), fileId: z.uuid().optional(), eol, server: server.optional(), database: database.optional(), provider: provider.optional(), jobKey: jobKeySchema.optional(), text: z.string().max(maxDocumentCharacters)
 }).strict().refine(fits, 'The query is too large for AutoRecover.').refine(databaseFits, 'A database name has at most 128 characters.')
 export const recoveryDiscardSchema = z.object({ ids: z.array(recordId).min(1).max(recoveryLimits.discardIds) }).strict()
 export const recoveryTakeSchema = z.object({ id: recordId }).strict()
@@ -36,7 +37,7 @@ const recordFields = {
   savedAt: z.iso.datetime(), text: z.string().max(maxDocumentCharacters)
 }
 const v1RecordSchema = z.object({ ...recordFields, version: z.literal(1), database: z.string().min(1).max(recoveryLimits.databaseChars).optional() }).strict().refine(fits)
-const v2RecordSchema = z.object({ ...recordFields, version: z.literal(2), provider: provider.optional(), fileSha256: z.string().regex(/^[0-9a-f]{64}$/).optional() }).strict().refine(fits).refine(databaseFits)
+const v2RecordSchema = z.object({ ...recordFields, version: z.literal(2), provider: provider.optional(), fileSha256: z.string().regex(/^[0-9a-f]{64}$/).optional(), jobKey: jobKeySchema.optional() }).strict().refine(fits).refine(databaseFits)
 export const recoveryRecordSchema = z.union([v2RecordSchema, v1RecordSchema.transform(record => ({ ...record, version: 2 as const }))])
 const recordSchema = recoveryRecordSchema
 export type RecoveryRecord = z.infer<typeof v2RecordSchema>
@@ -137,7 +138,7 @@ export class RecoveryStore {
       const record: RecoveryRecord = {
         version: 2, id: request.id, owner: { instance: this.instance, generation }, name: request.name, kind: request.kind,
         ...request.path && request.path.length <= recoveryLimits.pathChars ? { path: request.path, fileSha256: request.fileSha256 } : {}, eol: request.eol,
-        ...request.server ? { server: request.server } : {}, ...request.database ? { database: request.database } : {}, ...request.provider ? { provider: request.provider } : {},
+        ...request.server ? { server: request.server } : {}, ...request.database ? { database: request.database } : {}, ...request.provider ? { provider: request.provider } : {}, ...request.jobKey ? { jobKey: request.jobKey } : {},
         savedAt: this.now().toISOString(), text: request.text
       }
       const bytes = Buffer.from(JSON.stringify(record) + '\n')
@@ -175,6 +176,20 @@ export class RecoveryStore {
         entries.push(listed.entry)
       }
       return entries.sort((a, b) => b.savedAt.localeCompare(a.savedAt) || a.name.localeCompare(b.name))
+    })
+  }
+
+  /** The job keys of every readable copy, whoever owns it: a BigQuery query that may still be recovered keeps its jobs. */
+  jobKeys(): Promise<string[]> {
+    return this.serial(async () => {
+      const keys: string[] = []
+      for (const file of await this.records()) {
+        if (!file.canonical) continue
+        // A copy that cannot be read now may still reopen: the caller asks about nothing rather than about its jobs.
+        const record = await this.read(file.id)
+        if (record?.jobKey) keys.push(record.jobKey)
+      }
+      return keys
     })
   }
 

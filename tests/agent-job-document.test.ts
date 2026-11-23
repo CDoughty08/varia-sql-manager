@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  agentJobChangeCount, agentJobCommandEntries, agentJobCompare, agentJobProblems, agentJobSavable, agentJobSave, agentJobSaveProblems, agentJobSaveSchema, agentJobTabName, copiedAgentJobDraft,
+  agentJobChangeCount, agentJobCommandEntries, agentJobCompare, agentJobProblems, agentJobSavable, agentJobSave, agentJobSaveProblems, agentJobSaveSchema, agentJobTabName, copiedAgentJobDraft, type AgentJobSave,
   initialAgentJobDraft, pagerDuty, rebaseAgentJobDraft, uncategorizedCategory, type AgentJobDocumentModel, type AgentJobOperator, type AgentJobRecord
 } from '../src/shared/actions/agent-job'
 import { actionMenuState, dialogSpecs } from '../src/shared/actions/catalog'
@@ -305,5 +305,135 @@ describe('the job document', () => {
     expect(jobDocuments.get(id)?.live).toMatchObject({ running: true, step: 1 })
     jobDocuments.closed(id)
     expect(handle.disposed).toBe(true)
+  })
+})
+
+describe("the job document's Steps page", () => {
+  const stepped = () => model({ steps: [
+    { id: 1, name: 'Extract', subsystem: 'TSQL', command: 'SELECT 1;', databaseName: 'Sales', onSuccessAction: 3, onFailAction: 4, onFailStepId: 3 },
+    { id: 2, name: 'Load', subsystem: 'TSQL', command: 'SELEC 2', databaseName: 'master', onSuccessAction: 3, onFailAction: 2 },
+    { id: 3, name: 'Notify', subsystem: 'CmdExec', command: 'notify.cmd', onSuccessAction: 1, onFailAction: 2 }
+  ] })
+  const keys = (jobDocuments: ReturnType<typeof opened>['jobDocuments'], id: string) => jobDocuments.get(id)?.draft?.steps.steps.map(step => step.key)
+
+  it('adds, moves with go-to targets following, deletes with Undo and sets the Start step, saving them in the planner\'s order', async () => {
+    const { jobDocuments, executes } = opened(stepped())
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    expect(jobDocuments.selectedStep(id)?.key).toBe('s1')
+    jobDocuments.moveStepBy(id, 's3', -2)
+    expect(keys(jobDocuments, id)).toEqual(['s3', 's1', 's2'])
+    expect(jobDocuments.get(id)?.draft?.steps.steps[1]).toMatchObject({ key: 's1', onFail: 4, onFailTarget: 's3' })
+    jobDocuments.deleteStepOf(id, 's3')
+    expect(jobDocuments.get(id)?.deletion).toMatchObject({ deleted: { key: 's3' }, retargeted: ['s1'] })
+    expect(jobDocuments.get(id)?.draft?.steps.steps[0]).toMatchObject({ key: 's1', onFail: 2 })
+    expect(jobDocuments.selectedStep(id)?.key).toBe('s1')
+    jobDocuments.undoDeleteStep(id)
+    expect(jobDocuments.get(id)?.deletion).toBeUndefined()
+    expect(keys(jobDocuments, id)).toEqual(['s3', 's1', 's2'])
+    expect(jobDocuments.get(id)?.draft?.steps.steps[1]).toMatchObject({ onFail: 4, onFailTarget: 's3' })
+    jobDocuments.addStepOf(id, 'PowerShell')
+    expect(jobDocuments.selectedStep(id)).toMatchObject({ key: 'n1', name: 'Step 4', subsystem: 'PowerShell', databaseName: '' })
+    // A step added while a deleted new step waits for Undo never takes its key, so Undo still puts it back.
+    jobDocuments.deleteStepOf(id, 'n1')
+    jobDocuments.addStepOf(id, 'PowerShell')
+    expect(jobDocuments.selectedStep(id)?.key).toBe('n2')
+    jobDocuments.undoDeleteStep(id)
+    expect(keys(jobDocuments, id)).toEqual(['s3', 's1', 's2', 'n1', 'n2'])
+    jobDocuments.deleteStepOf(id, 'n2')
+    jobDocuments.dismissDeletion(id)
+    jobDocuments.updateStep(id, 'n1', { command: 'Get-Date' })
+    jobDocuments.setStartStep(id, 's2')
+    expect(jobDocuments.get(id)?.draft?.steps.startKey).toBe('s2')
+    expect(jobDocuments.get(id)?.changes).toBeGreaterThan(0)
+    expect(await jobDocuments.save(id)).toBe(true)
+    const steps = (executes()[0] as ActionRequest & { agentJob: AgentJobSave }).agentJob.steps!
+    expect(steps.deletes ?? []).toEqual([])
+    expect(steps.temporary?.map(item => item.id)).toEqual([1, 2, 3])
+    expect(steps.adds?.map(item => item.id)).toEqual([4])
+    expect(steps.writes?.map(write => [write.id, write.name, write.onFailAction, write.onFailStepId])).toEqual([[1, 'Notify', 2, 0], [2, 'Extract', 4, 1], [3, 'Load', 2, 0], [4, 'Step 4', 2, 0]])
+    expect(steps.startStepId).toBe(3)
+  })
+  it('drops what a new type cannot keep, parses T-SQL in the backend and opens a step in a query window on its database', async () => {
+    const fixture = opened(stepped()), { jobDocuments, documents } = fixture
+    const parse = vi.fn(async () => ({ ok: true as const, value: { errors: [{ line: 1, column: 1, number: 102, message: "Incorrect syntax near 'SELEC'." }], truncated: false } }))
+    Object.assign(fixture.api, { languageParse: parse })
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    await jobDocuments.parseStep(id, 's2')
+    expect(parse).toHaveBeenCalledWith({ text: 'SELEC 2' })
+    expect(jobDocuments.get(id)?.parse).toMatchObject({ key: 's2', running: false, errors: [{ number: 102 }] })
+    jobDocuments.updateStep(id, 's2', { command: 'SELECT 2' })
+    expect(jobDocuments.get(id)?.parse).toBeUndefined()
+    await jobDocuments.parseStep(id, 's3')
+    expect(parse).toHaveBeenCalledTimes(1)
+    jobDocuments.updateStep(id, 's1', { subsystem: 'CmdExec' })
+    expect(jobDocuments.get(id)?.draft?.steps.steps[0]).toMatchObject({ subsystem: 'CmdExec', databaseName: '' })
+    jobDocuments.updateStep(id, 's2', { databaseName: 'Sales' })
+    jobDocuments.openStepInQuery(id, 's2')
+    expect(documents.active).toMatchObject({ name: 'Load.sql', connectionId: 'c1', database: 'Sales' })
+  })
+  it('drops a pending delete when Reload and keep my changes rebases the steps', async () => {
+    const { jobDocuments, answers, setModel } = opened(stepped())
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    jobDocuments.deleteStepOf(id, 's3')
+    expect(jobDocuments.get(id)?.deletion).toBeDefined()
+    setModel({ ...stepped(), job: record({ version: 8 }) })
+    answers.push({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'STALE', message: 'stale', retryable: false } } })
+    expect(await jobDocuments.save(id)).toBe(false)
+    jobDocuments.reloadKeep(id)
+    expect(jobDocuments.get(id)?.deletion).toBeUndefined()
+    jobDocuments.undoDeleteStep(id)
+    expect(keys(jobDocuments, id)).toEqual(['s1', 's2'])
+  })
+  it('keeps the selection on the same step and drops its Parse when a reload renumbers the steps', async () => {
+    const fixture = opened(stepped()), { jobDocuments, answers, setModel } = fixture
+    Object.assign(fixture.api, { languageParse: vi.fn(async () => ({ ok: true as const, value: { errors: [], truncated: false } })) })
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    jobDocuments.selectStep(id, 's3')
+    await jobDocuments.parseStep(id, 's3')
+    jobDocuments.updateDraft(id, { description: 'mine' })
+    const inserted = { ...stepped(), job: record({ version: 8 }), steps: [{ id: 1, name: 'Precheck', subsystem: 'TSQL', command: 'SELECT 0;', onSuccessAction: 3, onFailAction: 2 }, ...stepped().steps.map(step => ({ ...step, id: step.id + 1, ...step.onFailStepId ? { onFailStepId: step.onFailStepId + 1 } : {} }))] }
+    setModel(inserted)
+    answers.push({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'STALE', message: 'stale', retryable: false } } })
+    expect(await jobDocuments.save(id)).toBe(false)
+    jobDocuments.reloadKeep(id)
+    const state = jobDocuments.get(id)!
+    expect(state.parse).toBeUndefined()
+    expect(state.draft?.steps.steps.find(step => step.key === state.step)?.name).toBe('Notify')
+  })
+  it('lists the steps of a job with more than Varia reads read-only, with no problems', async () => {
+    const { jobDocuments } = opened({ ...stepped(), stepsTruncated: true })
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    expect(jobDocuments.canEdit(id)).toBe(true)
+    expect(jobDocuments.canEditSteps(id)).toBe(false)
+    jobDocuments.addStepOf(id)
+    jobDocuments.deleteStepOf(id, 's1')
+    jobDocuments.moveStepBy(id, 's3', -1)
+    expect(keys(jobDocuments, id)).toEqual(['s1', 's2', 's3'])
+    expect(jobDocuments.stepProblems(id)).toEqual([])
+  })
+  it("keeps every SSIS describe it read, whichever reply comes back last", async () => {
+    const fixture = opened(stepped()), { jobDocuments } = fixture
+    const replies: ((value: unknown) => void)[] = []
+    const describeSsis = vi.fn(() => new Promise(resolve => { replies.push(resolve) }))
+    Object.assign(fixture.api, { describeSsis })
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    const project = (name: string) => ({ ok: true, value: { elapsedMs: 1, model: { view: 'project', name, parameters: [], packages: [], references: [] } } })
+    const first = jobDocuments.loadSsisPackage(id, 'F', 'P1')
+    const second = jobDocuments.loadSsisPackage(id, 'F', 'P2')
+    await settled()
+    replies[1]!(project('P2'))
+    await second
+    replies[0]!(project('P1'))
+    await first
+    // Each reply fills its own entry, whichever comes back last; browsing opens a project without dropping another's describe.
+    expect(Object.keys(jobDocuments.get(id)?.ssis?.projectModels ?? {}).sort()).toEqual(['F\\P1', 'F\\P2'])
+    void jobDocuments.loadSsisPackage(id, 'F', 'P1', undefined, true)
+    expect(jobDocuments.get(id)?.ssis).toMatchObject({ open: 'F\\P1', projectModels: { 'F\\P2': expect.anything() } })
   })
 })

@@ -109,11 +109,13 @@ describe('Agent catalogue', () => {
     expect(writeProcedures.filter(procedure => procedure.lane === 'AG-2').map(procedure => [procedure.name, procedure.arguments])).toEqual([
       ['sp_start_job', ['@job_id', '@step_name']], ['sp_stop_job', ['@job_id']],
       ['sp_update_job', ['@job_id', '@enabled', '@new_name', '@description', '@category_name', '@owner_login_name', '@notify_level_eventlog', '@notify_level_email', '@notify_level_netsend', '@notify_level_page',
-        '@notify_email_operator_name', '@notify_netsend_operator_name', '@notify_page_operator_name', '@delete_level']],
+        '@notify_email_operator_name', '@notify_netsend_operator_name', '@notify_page_operator_name', '@delete_level', '@start_step_id']],
       ['sp_delete_job', ['@job_id', '@delete_history', '@delete_unused_schedule']]
     ])
     // The job document (AG-6a): New Job's sp_add_job (the id its OUTPUT) and sp_add_jobserver, and the Alerts section's sp_update_alert detach.
     expect(writeProcedures.filter(procedure => procedure.lane === 'AG-6a').map(procedure => [procedure.name, procedure.arguments?.length])).toEqual([['sp_add_job', 14], ['sp_add_jobserver', 1], ['sp_update_alert', 2]])
+    // The Steps section (AG-6b): a step's whole content (the proxy by id, or none by an empty name), and the delete by id.
+    expect(writeProcedures.filter(procedure => procedure.lane === 'AG-6b').map(procedure => [procedure.name, procedure.arguments?.length])).toEqual([['sp_add_jobstep', 20], ['sp_update_jobstep', 20], ['sp_delete_jobstep', 2]])
     for (const shape of masterReadShapes) {
       expect(shape.shape, shape.name).toMatch(new RegExp(`^EXEC (@rc = )?master\\.dbo\\.${shape.name} `))
       expect(shape.shape.endsWith(';'), shape.name).toBe(true)

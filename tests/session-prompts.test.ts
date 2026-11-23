@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bigQueryCommitTimeout, needsSessionPrompt, quitStoppingNotes, sessionActions, sessionCloseNoteText, sessionPrompt, sessionPromptLimits, sessionPromptRequestSchema, type SessionAction, type SessionCloseNoteCode, type SessionTab } from '../src/shared/sessions'
+import { bigQueryCommitTimeout, cancelNotesText, jobPromptAnswer, needsSessionPrompt, rememberedJobAnswer, quitStoppingNotes, runningJobPrompt, runningJobRequestSchema, sessionActions, sessionCloseNoteText, sessionPrompt, sessionPromptLimits, sessionPromptRequestSchema, type SessionAction, type SessionCloseNoteCode, type SessionTab } from '../src/shared/sessions'
 
 const open = (name: string, transactions = 1): SessionTab => ({ name, transactions, running: false })
 const running = (name: string, transactions = 0): SessionTab => ({ name, transactions, running: true })
@@ -115,6 +115,8 @@ describe('session prompts', () => {
     expect(prompt.message).toContain('q.sql is in US')
     expect(prompt.buttons.map(button => `${button.label}=${button.answer}`)).toEqual(['Switch=proceed', "Don't Switch=cancel"])
     expect(prompt.buttons[prompt.cancelId].answer).toBe('cancel')
+    // A job running in the session is asked about next, and leaving it running keeps the session.
+    expect(prompt.detail).toContain("leaving it running keeps the job's session open")
     // The request carries the location only for a switch, with one query, which need not have anything open.
     const valid = { action: 'switchLocation', tabs: [{ name: 'q.sql', transactions: 0, running: false, provider: 'bigquery' }], location }
     expect(sessionPromptRequestSchema.parse(valid)).toEqual(valid)
@@ -138,5 +140,112 @@ describe('session prompts', () => {
     expect(sessionCloseNoteText('q.sql', { code: 'outcomeUnknown', message: 'The stopped job committed a transaction before it stopped.', jobId: 'job_2' })).toContain('q.sql: The stopped job committed a transaction before it stopped. Varia could not learn whether job job_2 committed.')
     expect([...quitStoppingNotes].sort()).toEqual(['abortFailed', 'committedBeforeCancel', 'outcomeUnknown'])
     expect(bigQueryCommitTimeout).toContain('could not learn whether the commit took effect')
+  })
+})
+
+describe('BigQuery job prompts', () => {
+  const job = (name: string, patch: Partial<NonNullable<SessionTab['job']>> = {}): SessionTab => ({ name, transactions: 0, running: true, provider: 'bigquery', job: { elapsedMs: 12 * 60_000, ...patch } })
+  it('offers Cancel the job, Leave it running or Don\'t close, with Don\'t close the default, and Remember my choice', () => {
+    for (const action of sessionActions) {
+      const prompt = sessionPrompt({ action, tabs: [job('a.sql', { estimateBytes: 3 * 2 ** 30 })] })!
+      expect(prompt.buttons.map(button => button.answer)).toEqual(['proceed', 'leave', 'cancel'])
+      expect(prompt.buttons.map(button => button.label).slice(0, 2)).toEqual(['Cancel the Job', 'Leave It Running'])
+      expect(prompt.buttons[2].label).toMatch(/^Don't /)
+      expect([prompt.defaultId, prompt.cancelId]).toEqual([2, 2])
+      expect(prompt.checkbox).toEqual(action === 'exit' ? undefined : { label: 'Remember my choice', checked: false, remembers: true })
+      expect(prompt.detail).toContain('• a.sql (running 12 minutes, estimated 3.00 GiB · $0.02)')
+      expect(prompt.detail).toContain('stays open until the session ends')
+    }
+    // Show cost as Bytes only leaves the dollars out, in the session boxes and Close Results' box alike.
+    expect(sessionPrompt({ action: 'close', tabs: [job('a.sql', { estimateBytes: 3 * 2 ** 30 })] }, 'ask', false)!.detail).toContain('• a.sql (running 12 minutes, estimated 3.00 GiB)\n')
+    expect(runningJobPrompt({ name: 'a.sql', job: { elapsedMs: 0, estimateBytes: 2 ** 40 } }).detail).toContain('estimated 1.00 TiB · $6.25')
+    expect(runningJobPrompt({ name: 'a.sql', job: { elapsedMs: 0, estimateBytes: 2 ** 40 } }, false).detail).not.toContain('$')
+    expect(sessionPrompt({ action: 'exit', tabs: [job('a.sql')] })!.buttons[2].label).toBe("Don't Quit")
+    expect(sessionPrompt({ action: 'disconnect', tabs: [job('a.sql')] })!.buttons[2].label).toBe("Don't Disconnect")
+    // A server Disconnect says an unconfirmed job cancel lets it go on, reporting the outcome as unknown; a close does not.
+    expect(sessionPrompt({ action: 'disconnect', tabs: [job('a.sql')] })!.detail).toContain('the disconnect goes on and says the outcome is unknown')
+    expect(sessionPrompt({ action: 'disconnect', tabs: [job('a.sql')] })!.detail).not.toContain('disconnect stops with every tab open')
+    expect(sessionPrompt({ action: 'close', tabs: [job('a.sql')] })!.detail).not.toContain('disconnect stops')
+    // The Close Results and location boxes allow for a remembered choice.
+    expect(runningJobPrompt({ name: 'a.sql', job: { elapsedMs: 0 } }).detail).toContain('(unless a choice is remembered)')
+    expect(sessionPrompt({ action: 'switchLocation', tabs: [{ name: 'q.sql', transactions: 0, running: false, provider: 'bigquery' }], location: { dataset: 'eu', from: 'US', to: 'EU' } })!.detail).toContain('handled as Remember my choice set it')
+  })
+  it('lists the job ids at a quit, and says a detached job was left running', () => {
+    const quit = sessionPrompt({ action: 'exit', tabs: [job('a.sql', { jobIds: ['job_1'] }), { ...job('b.sql', { detached: true, jobIds: ['job_2'] }), running: false }] })!
+    expect(quit.detail).toContain('• a.sql (running 12 minutes): job_1')
+    expect(quit.detail).toContain('• b.sql (left running): job_2')
+    expect(quit.detail).toContain('note its job id')
+    // Ids beyond the eight sent are counted, and a quit's mixed box names job tabs before a long list of SQL Server ones.
+    expect(sessionPrompt({ action: 'exit', tabs: [job('a.sql', { jobIds: ['job_1'], moreJobIds: 3 })] })!.detail).toContain('• a.sql (running 12 minutes): job_1 and 3 more')
+    const crowded = sessionPrompt({ action: 'exit', tabs: [...Array.from({ length: 12 }, (_, k) => running(`s${k}.sql`)), job('b.sql', { jobIds: ['job_9'] })] })!
+    expect(crowded.detail).toContain('• b.sql (running 12 minutes): job_9')
+    // One tab holding several jobs is asked about them in the plural.
+    const several = sessionPrompt({ action: 'close', tabs: [job('a.sql', { jobIds: ['job_1', 'job_2'] })] })!
+    expect([several.message, several.buttons[0].label]).toEqual(['a.sql holds BigQuery jobs that are still running.', 'Cancel the Jobs'])
+    expect(several.detail).toContain('Cancel the jobs stops them in BigQuery and rolls back any transaction in their sessions')
+    expect(several.detail).toContain('Leave it running lets the jobs finish')
+    expect(sessionPrompt({ action: 'close', tabs: [job('a.sql', { jobIds: ['job_1'] })] })!.detail).not.toContain('job_1')
+  })
+  it("keeps SQL Server's buttons beside executing SQL Server queries, with Leave BigQuery jobs running as the checkbox", () => {
+    const mixed = sessionPrompt({ action: 'close', tabs: [running('s.sql'), job('b.sql')] }, 'leave')!
+    expect(mixed.buttons.map(button => button.answer)).toEqual(['proceed', 'cancel'])
+    expect(mixed.checkbox).toEqual({ label: 'Leave BigQuery jobs running', checked: true, remembers: false })
+    expect(sessionPrompt({ action: 'close', tabs: [running('s.sql'), job('b.sql')] })!.checkbox?.checked).toBe(false)
+    expect(mixed.message).toBe('2 queries are still executing.')
+    // A job left running or not re-attached is not executing in its tab.
+    expect(sessionPrompt({ action: 'close', tabs: [running('s.sql'), { ...job('b.sql', { detached: true }), running: false }] })!.message).toBe('2 queries are still executing or hold running BigQuery jobs.')
+  })
+  it('answers from the remembered choice only when the box would ask about BigQuery jobs alone', () => {
+    const only = { action: 'close' as const, tabs: [job('a.sql')] }
+    expect(rememberedJobAnswer(only, 'ask')).toBeUndefined()
+    expect(rememberedJobAnswer(only, 'cancel')).toBe('proceed')
+    expect(rememberedJobAnswer(only, 'leave')).toBe('leave')
+    expect(rememberedJobAnswer({ action: 'close', tabs: [running('s.sql'), job('b.sql')] }, 'leave')).toBeUndefined()
+    // A quit always asks: its box lists the job ids nothing holds afterwards.
+    expect(rememberedJobAnswer({ action: 'exit', tabs: [job('a.sql')] }, 'leave')).toBeUndefined()
+  })
+  it("maps the box's button and checkbox: Remember sets the option, a mixed box's checkbox turns Cancel into Leave", () => {
+    const only = sessionPrompt({ action: 'close', tabs: [job('a.sql')] })!, mixed = sessionPrompt({ action: 'close', tabs: [running('s.sql'), job('b.sql')] })!
+    expect(jobPromptAnswer(only, 0, true)).toEqual({ answer: 'proceed', remember: 'cancel' })
+    expect(jobPromptAnswer(only, 1, true)).toEqual({ answer: 'leave', remember: 'leave' })
+    expect(jobPromptAnswer(only, 1, false)).toEqual({ answer: 'leave' })
+    expect(jobPromptAnswer(only, 2, true)).toEqual({ answer: 'cancel' })
+    expect(jobPromptAnswer(only, -1, true)).toEqual({ answer: 'cancel' })
+    expect(jobPromptAnswer(mixed, 0, true)).toEqual({ answer: 'leave' })
+    expect(jobPromptAnswer(mixed, 0, false)).toEqual({ answer: 'proceed' })
+    expect(jobPromptAnswer(mixed, 1, true)).toEqual({ answer: 'cancel' })
+    expect(jobPromptAnswer(runningJobPrompt({ name: 'a.sql', job: { elapsedMs: 0 } }), 0, true)).toEqual({ answer: 'proceed', remember: 'cancel' })
+    // A note naming no job is said once.
+    expect(cancelNotesText('BigQuery', [{ jobId: 'job_1', note: { code: 'abortFailed' } }, { jobId: 'job_2', note: { code: 'abortFailed' } }, { jobId: 'job_3' }])).toHaveLength(1)
+  })
+  it("says a restored job was not re-attached, and keeps Disconnect's warning in a mixed box", () => {
+    expect(sessionPrompt({ action: 'close', tabs: [{ ...job('a.sql', { unattached: true }), running: false }] })!.detail).toContain('• a.sql (not re-attached)')
+    // A quit names a job whose id has not arrived yet; the mixed box names its checkbox, not a button it lacks.
+    expect(sessionPrompt({ action: 'exit', tabs: [job('a.sql')] })!.detail).toContain('• a.sql (running 12 minutes): no job id reported yet')
+    expect(sessionPrompt({ action: 'close', tabs: [running('s.sql'), job('b.sql')] })!.detail).not.toContain('Leave it running lets')
+    expect(sessionPrompt({ action: 'disconnect', tabs: [running('s.sql'), job('b.sql')] })!.detail).toContain("If a query's completion cannot be confirmed, the outcome may be unknown and disconnect stops with every tab open")
+    expect(sessionPrompt({ action: 'disconnect', tabs: [running('s.sql'), job('b.sql')] })!.detail).toContain('the disconnect goes on and says the outcome is unknown')
+  })
+  it('accepts a job only on a BigQuery query, bounded', () => {
+    expect(sessionPromptRequestSchema.safeParse({ action: 'close', tabs: [{ ...job('a.sql'), running: false }] }).success).toBe(true)
+    expect(needsSessionPrompt([{ ...job('a.sql'), running: false }])).toBe(true)
+    for (const tab of [{ ...job('a.sql'), provider: undefined }, job('a.sql', { elapsedMs: -1 }), job('a.sql', { jobIds: Array.from({ length: 9 }, (_, index) => `job_${index}`) }), job('a.sql', { jobIds: ['bad id'] }), { ...job('a.sql'), job: { elapsedMs: 0, extra: 1 } }])
+      expect(sessionPromptRequestSchema.safeParse({ action: 'close', tabs: [tab] }).success, JSON.stringify(tab)).toBe(false)
+  })
+})
+
+describe('Close Results while a BigQuery job runs', () => {
+  it("offers Cancel the Job, Leave It Running or Don't Close, with Don't Close the default, and Remember my choice", () => {
+    const prompt = runningJobPrompt({ name: 'orders.sql', job: { elapsedMs: 120_000, jobIds: ['job_1'] } })
+    expect(prompt.buttons).toEqual([{ label: 'Cancel the Job', answer: 'proceed' }, { label: 'Leave It Running', answer: 'leave' }, { label: "Don't Close", answer: 'cancel' }])
+    expect([prompt.defaultId, prompt.cancelId]).toEqual([2, 2])
+    expect(prompt.checkbox).toEqual({ label: 'Remember my choice', checked: false, remembers: true })
+    expect(prompt.detail).toContain('the next Execute in this tab waits for it')
+  })
+  it('accepts a bounded, strict request', () => {
+    expect(runningJobRequestSchema.safeParse({ name: 'orders.sql', job: { elapsedMs: 1 } }).success).toBe(true)
+    expect(runningJobRequestSchema.safeParse({ name: 'orders.sql', job: { elapsedMs: 1 }, extra: true }).success).toBe(false)
+    expect(runningJobRequestSchema.safeParse({ name: 'x'.repeat(sessionPromptLimits.name + 1), job: { elapsedMs: 1 } }).success).toBe(false)
+    expect(runningJobRequestSchema.safeParse({ name: 'orders.sql', job: { elapsedMs: 1, jobIds: Array.from({ length: sessionPromptLimits.jobIds + 1 }, (_, i) => `job_${i}`) } }).success).toBe(false)
   })
 })

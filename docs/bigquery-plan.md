@@ -491,8 +491,9 @@ SQL Server tab keeps nothing across a restart.
 - in the WorkbenchSession document record (`SessionDocumentWrite`, the session file schema and `RestoredDocument`, as a
   new optional field), so a restored tab brings it back;
 - in AutoRecover records, so a tab recovered from its AutoRecover copy brings it back too. A recovered tab opens with no
-  connection (AutoRecover keeps only the server name), so its jobs' records carry the profile id and the tab offers
-  "Connect to <profile> to re-attach".
+  connection (AutoRecover keeps only the server name), so its jobs' records carry the profile id, Messages says the
+  job carries on, and connecting the tab to BigQuery (Connect or Change Connection, without asking about its jobs)
+  re-attaches.
 
 **Job records.**
 
@@ -648,21 +649,22 @@ with a running or detached job the box offers **Cancel the job**, **Leave it run
 | `switchLocation` (a dataset in another location, decision 18) | Unavailable while the tab's query runs, as Change Connection is. For a tab holding a detached job, the three choices with "Don't switch", honouring the remembered setting; an idle session with an open or possibly open transaction is asked in the second box |
 | `exit` | Kept tabs: not asked, jobs (running or detached) keep running and re-attach. Unkept tabs: the three choices, "Don't quit"; the box's detail lists each job id as text, since no tab or record will hold it afterwards |
 
-- **Mixed boxes.** When the box also lists SQL Server tabs, its existing buttons stay and the BigQuery choice is the
+- **Mixed boxes.** When the box also lists other executing queries (SQL Server, or a BigQuery run without a job such as Preview Rows), its existing buttons stay and the BigQuery choice is the
   box's checkbox, "Leave BigQuery jobs running" (its default from the setting). Proceeding cancels SQL Server queries
   as today, and BigQuery jobs per the checkbox.
 - **Contract.**
-  - `SessionTab` gains optional `provider` (in BQ-3a-2, for decision 54's note) and `job` (`elapsedMs`, `estimateBytes`, `detached`); an open or possibly
+  - `SessionTab` gains optional `provider` (in BQ-3a-2, for decision 54's note) and `job` (`elapsedMs`, `estimateBytes`, `detached`, `unattached`, `jobIds`, `moreJobIds`); an open or possibly
     open transaction uses today's `transactions` and `unchecked`; the
     schema's `refine`, which accepts only running, transactions or unchecked tabs, also accepts a tab with a `job`.
-  - `SessionAnswer` gains `leave`; the mixed box's answer carries `leaveJobs`.
+  - `SessionAnswer` gains `leave`; in the mixed box, the "Leave BigQuery jobs running" checkbox turns its Cancel Queries
+    into `leave` (`jobPromptAnswer`).
   - `QueryService` gains `addSessionMessage(tabId, text)` (BQ-3a-2), which appends a line to the tab's Messages at once,
     outside any execution, creating a messages-only view when no results are open; every "Messages line" this plan
     adds for a tab that stays (close notes, `JOB_RUNNING`, `JOB_FINISHED`, a failed abort, the detached-job line) goes
     through it, called from `files.ts`, `targets.ts`, `disconnect.ts` and `disconnect-workbench.ts`.
   - `sessionActions` (`src/shared/sessions.ts`) gains `switchLocation` (BQ-3a-2), with its `phrases` entry ("switching
     the location") and its first-box button label "Don't switch"; main's strict `sessionPromptRequestSchema` accepts it.
-  - `SessionPlan` entries become `SessionEnd | 'leave' | 'cancelJob'`, and `endSession` passes them on. A tab holding a
+  - `SessionPlan` entries become `SessionEnd | 'leave' | 'cancelJob' | 'leaveCommit' | 'leaveRollback'` (the last two leave jobs held outside the session running and end it with the user's commit or rollback), and `endSession` passes them on. A tab holding a
     job gets a job answer only, since it is asked only in the first box.
   - `query.session.close` gains optional `keepJob: true`, which detaches the job and skips `ABORT_SESSION` (only while
     the backend still sees the job running; for a job that has finished it is a normal close that aborts, unless the
@@ -905,7 +907,7 @@ Varia follows BigQuery Studio: the estimate is always visible, and nothing block
   and the status bar says why. It also checks how BigQuery refuses a concurrent session query and how soon a
   cancelled job frees the session; until then the queue waits for a cancelled job to reach DONE. `ABORT_SESSION` runs
   on every session end (closing the tab, Change Connection, Disconnect, Disconnect All, a switch to another location, and `bigquery.endIdleSessions`
-  before every backend stop main makes), except when its job is left running
+  before every backend stop main makes, except of one not responding), except when its job is left running
   ([Re-attaching to jobs](#re-attaching-to-jobs-bq-3d)).
 - **Open transactions ask, as SQL Server's do** (decision 54). The backend tracks a session's transaction from the
   statement types of its executed jobs, top-level and child (children applied in creation order; dry runs, diagnostics

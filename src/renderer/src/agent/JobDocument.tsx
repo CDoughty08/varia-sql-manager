@@ -19,6 +19,7 @@ import StatusPill from '../kit/StatusPill'
 import Switch from '../kit/Switch'
 import { jobSections, type JobDocumentService, type JobDocumentState } from './JobDocumentService'
 import JobSchedules from './JobSchedules'
+import JobSteps from './JobSteps'
 
 const fieldId = (documentId: string, key: string) => `agent-job-${documentId}-${key}`
 const outcomeWords: Readonly<Record<number, string>> = { 0: 'Last run failed', 1: 'Last run succeeded', 3: 'Last run canceled', 5: 'Never ran' }
@@ -263,6 +264,7 @@ export default function JobDocument({ documentId }: { documentId: string }) {
     const props: SectionProps = { state, model, draft, editable, problems, service: jobDocuments }
     switch (section) {
       case 'general': return <GeneralSection {...props} />
+      case 'steps': return <JobSteps state={state} model={model} draft={draft} editable={editable} service={jobDocuments} />
       case 'notifications': return <NotificationsSection {...props} />
       case 'targets': return <TargetsSection state={state} />
       case 'alerts': return <AlertsSection {...props} />

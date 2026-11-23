@@ -5,6 +5,7 @@ import type { RpcMethod } from '../shared/contracts'
 import { bigQueryDryRunRequestSchema, bigQueryDryRunResultSchema } from '../shared/bigquery/dry-run'
 import { resultsRemoteQuerySchema } from '../shared/bigquery/remote-view'
 import { bigQueryPreviewTargetSchema, bigQueryPropertiesRequestSchema, bigQueryPropertiesSchema } from '../shared/bigquery/objects'
+import { jobKeySchema, queryAttachParamsSchema } from '../shared/bigquery/jobs'
 import { bigQueryAccountSchema, bigQueryDatasetSchema, bigQueryCredentialParamsSchema, bigQueryProjectListSchema, bigQueryProjectsParamsSchema, connectionOptionsSchema, providerConnectionOptionsSchema } from '../shared/connections'
 import { providerIds } from '../shared/providers'
 import { connectionPrincipalIdSchema } from './connection-principal'
@@ -18,6 +19,7 @@ import { ssisCatalogSetupSchema, ssisDescribeSchema, ssisExecuteSchema } from '.
 import { activityDetailsRequestSchema, activityKillRequestSchema } from '../shared/activity/schema.ts'
 import { agentProfileResultSchema, agentProfileSchema } from '../shared/agent/profile.ts'
 import { agentHistoryMessageResultSchema, agentHistoryMessageSchema } from '../shared/agent/history.ts'
+import { languageParseResultSchema, languageParseSchema } from '../shared/agent/parse.ts'
 import { languageCloseSchema, languageRequestSchema, languageCompletionsSchema, languageHoverSchema, languageStatusSchema, languageRefreshRequestSchema, languageRefreshResultSchema, languageDiagnosticResultSchema, languageDefinitionSchema } from '../shared/language-service'
 
 // Identifiers are used verbatim by the backend, so they are never trimmed here (a database may be named ' x').
@@ -58,12 +60,16 @@ export const requestSchemas = {
     maxRows: z.number().int().min(0).max(limits.maxRows), maxResultSets: z.number().int().min(limits.maxResultSets.min).max(limits.maxResultSets.max).optional(),
     timeoutSeconds: z.number().int().min(0).max(86400), stopOnError: z.boolean().optional(), includeActualPlan: z.boolean().optional(), includeClientStatistics: z.boolean().optional(), includeLivePlan: z.boolean().optional(), discardResults: z.boolean().optional(),
     maximumBytesBilled: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(), prices: z.boolean().optional(), preview: bigQueryPreviewTargetSchema.optional(),
-    residence: z.enum(['automatic', 'memory', 'windowed']).optional(), windowCacheMiB: z.number().int().min(16).max(4096).optional()
+    residence: z.enum(['automatic', 'memory', 'windowed']).optional(), windowCacheMiB: z.number().int().min(16).max(4096).optional(), jobKey: jobKeySchema.optional()
   }).strict(),
-  'query.cancel': z.object({ queryId: z.uuid() }).strict(),
+  'query.cancel': z.object({ queryId: z.uuid(), detach: z.literal(true).optional() }).strict(),
+  // A BigQuery job by its reference (docs/bigquery.md, Re-attaching to jobs); C# checks the bounds again.
+  'query.attach': queryAttachParamsSchema.refine(params => params.maxRows <= limits.maxRows && params.maxResultSets >= limits.maxResultSets.min && params.maxResultSets <= limits.maxResultSets.max, 'Row limits are out of range.'),
+  // A tab holding a job gets a job answer (keepJob or cancelJob) only, never with a transaction.
+  'query.session.close': z.object({ sessionId: z.uuid(), transaction: z.enum(['commit', 'rollback']).optional(), abortOnRefusedCommit: z.boolean().optional(), keepJob: z.literal(true).optional(), cancelJob: z.literal(true).optional() }).strict()
+    .refine(params => !(params.keepJob && params.cancelJob) && !((params.keepJob || params.cancelJob) && params.transaction), 'A job is left running or cancelled, and its transaction is not asked about.'),
   // Main checks the renderer owns the result, and every value list its filters name, in that generation before sending it.
   'results.remoteQuery': resultsRemoteQuerySchema,
-  'query.session.close': z.object({ sessionId: z.uuid(), transaction: z.enum(['commit', 'rollback']).optional(), abortOnRefusedCommit: z.boolean().optional() }).strict(),
   'query.session.state': z.object({ sessionId: z.uuid() }).strict(),
   // Distinct, as C# checks (SqlService.SetVisibility); an empty set says no result is shown.
   'results.visibility': z.object({ source: z.uuid(), seq: z.number().int().min(1).max(2 ** 31 - 1), visible: z.array(z.number().int().min(1).max(0xffffffff)).max(limits.visibility.maxResults).refine(ids => new Set(ids).size === ids.length, 'Result ids must be distinct.') }).strict(),
@@ -84,7 +90,8 @@ export const requestSchemas = {
   'activity.details': activityDetailsRequestSchema,
   'activity.kill': activityKillRequestSchema,
   'agent.profile': agentProfileSchema,
-  'agent.historyMessage': agentHistoryMessageSchema
+  'agent.historyMessage': agentHistoryMessageSchema,
+  'language.parse': languageParseSchema
 } satisfies Record<RpcMethod, z.ZodType>
 
 /** Databases, or BigQuery's datasets with their locations (BigQueryService.ListDatasetsAsync bounds them the same). */
@@ -119,10 +126,13 @@ export const resultSchemas: Partial<Record<RpcMethod, z.ZodType>> = {
   'plans.parse': planDocumentSchema,
   'plans.estimate': estimatedPlanResultSchema,
   'connections.identity': z.object({ principal: principal.optional() }).strict(),
+  'connections.disconnect': z.object({ disconnected: z.boolean(), failedAborts: z.number().int().min(0).max(2 ** 31 - 1).optional() }).strict(),
+  'query.session.state': z.object({ transactionCount: z.number().int().min(0).max(2 ** 31 - 1), checked: z.boolean(), job: z.enum(['running', 'none']).optional() }).strict(),
   // Steps carry SQL Server's text and names: bounded here as in C# (ActionSteps.Bound).
   'actions.execute': actionExecuteResultSchema,
   'agent.profile': agentProfileResultSchema,
-  'agent.historyMessage': agentHistoryMessageResultSchema
+  'agent.historyMessage': agentHistoryMessageResultSchema,
+  'language.parse': languageParseResultSchema
 }
 
 export function validateResult(method: RpcMethod, value: unknown): unknown {

@@ -1,4 +1,4 @@
-// Names of derived results (docs/result-comparison-ux-plan.md D8): a comparison or a Pivot is named for itself on every
+// Names of derived results: a comparison or a Pivot is named for itself on every
 // surface that names an original result by its title, never by the number it was given ("Column profile Result 3").
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
