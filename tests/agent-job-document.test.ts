@@ -161,6 +161,9 @@ describe('the job document', () => {
     jobDocuments.reloadKeep(id)
     expect(jobDocuments.get(id)?.stale).toBeUndefined()
     expect(jobDocuments.get(id)).toMatchObject({ changes: 1, draft: { description: 'Mine', category: 'Database Maintenance' }, model: { job: { version: 8 } } })
+    // Save waits for the shared schedules read again, which gives picked schedules their new guards.
+    expect(jobDocuments.canSave(id)).toBe(false)
+    await settled()
     expect(jobDocuments.canSave(id)).toBe(true)
     answers.push({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'STALE', message: 'stale', retryable: false } } })
     await jobDocuments.save(id)

@@ -407,7 +407,11 @@ and script use `LOCK_TIMEOUT 10000`. A lost backend answers `BACKEND_LOST` (unkn
   failing call changed.
 - `agentJob` (the job document): `dialog: 'agentJob'` describes a job (`target: { kind: 'agentJob', name }`) or New Job
   (`target: { kind: 'agent' }`, with `jobs`); execute and script take `agentJob` (`AgentJobSave`, bounded in zod and C#) and,
-  for an existing job, `agentIdentity`.
+  for an existing job, `agentIdentity`. Its `schedules` (detach, attach, update, add) run last in the job's transaction.
+- `agentSchedule` (the Schedules document): `dialog: 'agentSchedules'` on `target: { kind: 'agent' }` describes the shared
+  schedules, the jobs, which job uses which and the jobs' usual durations (the last two for sysadmin), or, with `schedule: id`,
+  only that schedule's jobs; execute and script take `agentSchedule` (`AgentScheduleSave`: `op` create, update, enable,
+  disable or delete, the schedule's guard, values and job changes, bounded in zod and C#) on the same target.
 - `actions.execute` answers `{ steps: { status: done | failed | skipped | cancelled | rolledBack, title, message?,
   detail?, compensates?, progress? }[], messages: str[] (≤ 32 × 512), elapsedMs, error? }`; statements run in order and
   stop at the first failure; `rolledBack` marks a step undone by a later failure or Stop in its transaction. The
