@@ -216,8 +216,9 @@ internal static partial class BigQuerySessionChecks
         await harness.Call("query.cancel", new JsonObject { ["queryId"] = args2["queryId"]!.GetValue<string>(), ["detach"] = true });
         await run2.WaitAsync(TimeSpan.FromSeconds(30));
         var behind = harness.Execute(tab, "SELECT 1");
-        await Task.Delay(100);
-        check(!behind.IsCompleted, "the next Execute waits behind a detached job");
+        // SESSION_BUSY: the Execute holds the session's queue, so it is waiting rather than not yet started.
+        var waits = await Poll(() => behind.IsCompleted || harness.State(tab).Result.Code == "SESSION_BUSY");
+        check(waits && !behind.IsCompleted, "the next Execute waits behind a detached job");
         bq.Release(bq.Jobs[job2]);
         var after = await behind.WaitAsync(TimeSpan.FromSeconds(30));
         check(after is { Code: "ok", Result.Status: "completed" } && Says(after.Result, "Waiting for BigQuery job"), $"it runs once the detached job is DONE: {after.Code} {after.Result?.Status}");
