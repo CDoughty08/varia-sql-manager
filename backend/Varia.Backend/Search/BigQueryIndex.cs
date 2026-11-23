@@ -13,12 +13,16 @@ internal interface IBigQueryIndexSource
     Task<BigQueryListing> ObjectsAsync(string connectionId, string project, string dataset, CancellationToken token);
     Task<Table> TableAsync(string connectionId, string project, string dataset, string table, CancellationToken token);
     Task<Routine> RoutineAsync(string connectionId, string project, string dataset, string routine, CancellationToken token);
+    /// <summary>The billed bulk path's rows for one project's location (<see cref="BigQueryBulkSql"/>), a dataset at a time in name order,
+    /// under the cap. Leaving early cancels its jobs; a failed job throws as a job's failure does.</summary>
+    IAsyncEnumerable<BigQueryBulkDataset> BulkAsync(string connectionId, string project, string location, bool definitions, long? cap, CancellationToken token);
     /// <summary>A failed read as a RequestException with BigQuery's code and a sentence that names no object.</summary>
     Exception Map(Exception error, string project, string permission, CancellationToken token);
 }
 
-/// <summary>A project's datasets; Cut when the listing stopped at <see cref="BigQueryIndexLimits.ListPages"/>.</summary>
-internal sealed record BigQueryDatasetList(List<string> Datasets, bool Cut);
+/// <summary>A project's datasets, each one's location as datasets.list gives it (the bulk path's regions); Cut when the listing
+/// stopped at <see cref="BigQueryIndexLimits.ListPages"/>.</summary>
+internal sealed record BigQueryDatasetList(List<string> Datasets, bool Cut, IReadOnlyDictionary<string, string>? Locations = null);
 /// <summary>A dataset's objects as tables.list, routines.list and models.list give them; Cut when a listing stopped at its page cap.</summary>
 internal sealed record BigQueryListing(List<TableList.TablesData> Tables, List<Routine> Routines, List<Model> Models, bool Cut);
 

@@ -38,6 +38,7 @@ internal sealed partial class BigQueryService : IBigQueryIndexSource
     {
         var connection = Connection(connectionId);
         var names = new List<string>();
+        var locations = new Dictionary<string, string>(StringComparer.Ordinal);
         string? pageToken = null;
         for (var page = 0; page < BigQueryIndexLimits.ListPages; page++)
         {
@@ -49,11 +50,15 @@ internal sealed partial class BigQueryService : IBigQueryIndexSource
                 return call.ExecuteAsync(t);
             }, token);
             foreach (var dataset in list.Datasets ?? [])
-                if (dataset.DatasetReference?.DatasetId is { } name && BqNames.IsDataset(name)) names.Add(name);
+                if (dataset.DatasetReference?.DatasetId is { } name && BqNames.IsDataset(name))
+                {
+                    names.Add(name);
+                    if (BqNames.IsLocation(dataset.Location)) locations[name] = dataset.Location;
+                }
             pageToken = list.NextPageToken is { Length: > 0 and <= BigQueryLimits.PageToken } next ? next : null;
-            if (pageToken is null) return new(names, false);
+            if (pageToken is null) return new(names, false, locations);
         }
-        return new(names, true);
+        return new(names, true, locations);
     }
 
     async Task<BigQueryListing> IBigQueryIndexSource.ObjectsAsync(string connectionId, string project, string dataset, CancellationToken token)

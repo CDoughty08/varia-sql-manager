@@ -443,18 +443,33 @@ internal sealed record DependenciesResult(List<PeekDependency> Items, long Elaps
 /// same connection, Stop, or a disconnect ends it (CANCELLED), keeping what it read.</summary>
 /// <summary>BigQuery only (SQL Server refuses them): ExtraDetails reads the extra projects' schemas too (pass 2), Scope re-reads one
 /// project or dataset (Object Explorer's Refresh, re-reading every object in it), and Stale re-reads only the datasets DDL marked.</summary>
-internal sealed record ObjectIndexArgs(string ConnectionId, string RequestId, bool? Definitions = null, bool? ExtraDetails = null, BigQueryIndexScope? Scope = null, bool? Stale = null);
+/// <summary>Bulk: pass 2 reads these locations' details with the billed INFORMATION_SCHEMA queries (a full build only, after
+/// bigquery.indexEstimate and the cost prompts).</summary>
+internal sealed record ObjectIndexArgs(string ConnectionId, string RequestId, bool? Definitions = null, bool? ExtraDetails = null, BigQueryIndexScope? Scope = null, bool? Stale = null,
+    BigQueryBulkArgs? Bulk = null);
 /// <summary>A BigQuery refresh's scope: a project, or one of its datasets.</summary>
 internal sealed record BigQueryIndexScope(string Project, string? Dataset = null);
+/// <summary>The bulk path's locations, as bigquery.indexEstimate answered them, and the cap every job carries (a connection's own wins).</summary>
+internal sealed record BigQueryBulkArgs(List<BigQueryIndexLocation> Locations, long? MaximumBytesBilled = null);
+/// <summary>A project's location (US, EU, us-central1, …), whose region-scoped INFORMATION_SCHEMA the bulk path reads.</summary>
+internal sealed record BigQueryIndexLocation(string Project, string Location);
+/// <summary>bigquery.indexEstimate: what a full build's bulk path would bill, for the cost prompts: Definitions and ExtraDetails as the
+/// build will send them.</summary>
+internal sealed record BigQueryIndexEstimateArgs(string ConnectionId, bool? Definitions = null, bool? ExtraDetails = null);
+/// <summary>The locations to read (datasets.list's, at most 64; Cut when there were more, whose datasets pass 2 reads with free calls)
+/// and their queries' estimate, each at least BigQuery's 10 MiB per view read. A location whose dry run failed is left out.</summary>
+internal sealed record BigQueryIndexEstimateResult(List<BigQueryIndexLocation> Locations, BigQuery.BigQueryDryRunResult Estimate, bool Cut, long ElapsedMs);
+/// <summary>The last full build's bulk path: the locations read billed, and the first failure of those that fell back to free calls.</summary>
+internal sealed record BigQueryBulkStatus(int Locations, int Failed = 0, string? Code = null, string? Message = null);
 /// <summary>A database the index could not read: its code (NO_DB_ACCESS, TIMEOUT, TOO_LARGE, CATALOG_ERROR) and a sentence.</summary>
 /// <summary>Agent: SQL Server Agent's objects were left out, not the database named (msdb, where they are read).</summary>
 /// <summary>Project: a BigQuery dataset's project (Database is the dataset, or empty when the project's listing failed).</summary>
 internal sealed record ObjectIndexSkip(string Database, string Code, string Message, bool? Agent = null, string? Project = null, bool? Details = null);
 /// <summary>The index as a search finds it. State: none (never built), building, or ready. BuiltAt: UTC, when the last build ended.</summary>
 /// <summary>BigQuery: Databases and Indexed count datasets; Phase is names (pass 1) or details (pass 2) while building; NamesOnly lists
-/// the projects indexed without schemas (extra projects, by default).</summary>
+/// the projects indexed without schemas (extra projects, by default); Bulk is the last full build's billed bulk path, when it ran.</summary>
 internal sealed record ObjectIndexStatus(string State, int Databases, int Indexed, int Objects, int Modules, int Cut, List<ObjectIndexSkip> Skipped, bool Definitions, string? BuiltAt = null,
-    string? Provider = null, string? Phase = null, List<string>? NamesOnly = null);
+    string? Provider = null, string? Phase = null, List<string>? NamesOnly = null, BigQueryBulkStatus? Bulk = null);
 internal sealed record ObjectIndexResult(ObjectIndexStatus Status, long ElapsedMs);
 /// <summary>explorer.search: In is names, definitions or all; Kinds and Database narrow it; Limit is at most 1000 hits; Match is
 /// exact (the default) or fuzzy, which adds approximate name matches and cannot go with Regex.</summary>
