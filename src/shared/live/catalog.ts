@@ -10,9 +10,11 @@ import { limits } from '../ipc/wire/protocol.ts'
 import { catalogFingerprintStatus } from '../ssis/catalog.ts'
 import type { ProviderId } from '../providers.ts'
 import { agentLimits } from '../agent/catalog.ts'
+import { jobHistoryColumns, jobHistoryLimits, jobHistoryProbe, jobHistorySource, jobHistoryStatus } from '../bigquery/history-catalog.ts'
 
-/** Where a source reads: server DMVs, the SSISDB catalog, or nothing (a test source that touches no SQL Server). */
-export type LiveScope = 'server' | 'ssisdb' | 'none'
+/** Where a source reads: server DMVs, the SSISDB catalog, BigQuery's REST API (a BigQuery connection), or nothing (a test
+ *  source that touches no server). */
+export type LiveScope = 'server' | 'ssisdb' | 'bigquery' | 'none'
 export const liveUnits = ['perSecond', 'percent', 'ms', 'msPerSecond', 'bytesPerSecond', 'count', 'seconds'] as const
 export type LiveUnit = typeof liveUnits[number]
 /** A snapshot table is replaced by each sample (a new stored result, two revisions kept); an append table grows. */
@@ -67,6 +69,10 @@ export interface LiveProbeSpec {
   readonly label: string
   readonly description: string
   readonly intervalMs: { readonly default: number; readonly min: number; readonly max: number }
+  /** The interval while the probe's last sample held nothing open (BigQuery's Job History: no pending or running job): the
+   *  backend then samples at the larger of this and the asked interval, and at the asked one again once something opens. The
+   *  load guard applies to whichever is in force, which samples report as effectiveIntervalMs. Absent: always the asked one. */
+  readonly idleIntervalMs?: number
   readonly series?: readonly LiveSeriesSpec[]
   /** At most 4 snapshot and 4 append tables, in the order samples name them by index. */
   readonly tables?: readonly LiveTableSpec[]
@@ -95,7 +101,8 @@ export interface LiveProbeSpec {
 }
 export interface LiveSourceSpec {
   readonly id: string
-  /** The engines this source samples (live.subscribe serves SQL Server only); absent, SQL Server only (src/shared/providers.ts). tests/providers-catalog.test.ts checks it. */
+  /** The engines this source samples: main and the backend refuse a live.subscribe on another engine's connection
+   *  (UNSUPPORTED_PROVIDER). Absent, SQL Server only (src/shared/providers.ts). tests/providers-catalog.test.ts checks it. */
   readonly providers?: readonly ProviderId[]
   readonly label: string
   readonly description: string
@@ -135,12 +142,12 @@ const agentWatchedSeries: readonly LiveSeriesSpec[] = [
   { id: 'serverNow', unit: 'count', label: 'Server time (yyyymmddhhmmss)', counter: 'gauge' }
 ]
 
-export const liveSourceIds = ['debug.synthetic', 'activity', 'explorer', 'ssis.catalog', 'ssis.operations', 'query.plan', 'agent.jobs', 'agent.history'] as const
+export const liveSourceIds = ['debug.synthetic', 'activity', 'explorer', 'ssis.catalog', 'ssis.operations', 'query.plan', 'agent.jobs', 'agent.history', 'bigquery.jobs'] as const
 export type LiveSourceId = typeof liveSourceIds[number]
 export const liveProbeIds = [
   'debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status', 'debug.synthetic.grid', 'debug.synthetic.log', 'debug.synthetic.wide', ...activityLiveProbes,
   'explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability', 'ssis.catalogProbe', 'ssis.operations.list', 'query.plan.operators',
-  'explorer.agentService', 'agent.jobs.list', 'agent.jobs.service', 'agent.jobs.watched', 'agent.history.list'
+  'explorer.agentService', 'agent.jobs.list', 'agent.jobs.service', 'agent.jobs.watched', 'agent.history.list', 'bigquery.jobs.list'
 ] as const
 export type LiveProbeId = typeof liveProbeIds[number]
 
@@ -176,6 +183,10 @@ export const liveSources: { readonly [S in LiveSourceId]: LiveSourceSpec } = {
   'agent.history': {
     id: 'agent.history', label: 'SQL Server Agent job history', scope: 'server', testOnly: false, probes: ['agent.history.list'], hidden: 'pause',
     description: `SQL Server Agent's job history as the login may see it (docs/sql-server-agent.md, Log File Viewer), read on the server pool (" - Activity Monitor": READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW) opened in master, through msdb's own procedures (AgentReader, linted by AgentSql.LintRead), so every Agent role reads the history msdb shows it. The Log File Viewer opens one view per document; hidden views pause. Args: the checked jobs (jobs; absent every job, empty none), the date window in days, a run outcome, a message text, a step id, and the selected run whose steps the second table lists (run).`
+  },
+  [jobHistorySource]: {
+    id: jobHistorySource, label: 'BigQuery job history', scope: 'bigquery', providers: ['bigquery'], testOnly: false, probes: [jobHistoryProbe], hidden: 'pause',
+    description: 'A BigQuery connection\'s jobs in its billing project (docs/bigquery.md, Job History), read through BigQuery\'s REST API with jobs.list and jobs.get, which are free API calls, never a query and never the INFORMATION_SCHEMA.JOBS views; every call goes through the connection principal\'s shared rate limiter. The Job History document opens one view per connection; hidden views pause. Args: the scope (the principal\'s jobs, or the project\'s with allUsers), the time range, state, job type, statement type and Started from Varia filters, pinned jobs, the scripts whose children show under them (expand), and whether the Cost column is written (prices).'
   }
 }
 
@@ -336,6 +347,14 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
     id: 'agent.jobs.watched', source: 'agent.jobs', label: 'Watched jobs', intervalMs: { default: 5000, min: 2000, max: 300_000 }, gates: { minMajor: 13, editions: [1, 2, 3, 8] },
     description: `The jobs this window started (args.watch, at most ${agentLimits.watchedJobs}), each read through msdb.dbo.sp_help_job @job_aspect = N'JOB' into fixed slot series by its place in the args: its execution status, current step, step count, start (yyyymmddhhmmss in server local time, from msdb.dbo.sp_help_jobactivity; none where not readable), last run outcome and last run start (yyyymmddhhmmss). A slot with no job, or whose read was refused this sample, has no values; a job no longer there reads status -1 and nothing else. The last series is the server's clock (yyyymmddhhmmss, server local time), by which the status bar dates a Start in server time. It has no table, so a status bar view of it keeps sampling while the window is hidden (whileHidden statusOnly).`,
     series: agentWatchedSeries
+  },
+  [jobHistoryProbe]: {
+    id: jobHistoryProbe, source: jobHistorySource, label: 'Jobs',
+    intervalMs: { default: jobHistoryLimits.intervalMs, min: jobHistoryLimits.minIntervalMs, max: jobHistoryLimits.maxIntervalMs }, idleIntervalMs: jobHistoryLimits.idleIntervalMs,
+    budgetMs: { min: 1000, max: limits.live.budgetMs.max }, minGapMs: jobHistoryLimits.minIntervalMs, filterMode: 'memory',
+    description: `The newest ${jobHistoryLimits.jobs} top-level jobs in the time range, newest first, from jobs.list with projection=full in pages of ${jobHistoryLimits.pageJobs}, each job's SQL cut to a ${jobHistoryLimits.previewChars}-character one-line preview as its page is decoded. A refresh asks for new jobs from ${jobHistoryLimits.overlapMs / 1000} s before the newest one held, for the open jobs (stateFilter pending and running), and, for each held open job missing from that answer, its final state: jobs.get for the principal's own jobs and, where BigQuery allows it, others', else one stateFilter=done listing over their creation window. A done job never changes, so it is kept and never read again; new args list from scratch. In All users a second, minimal listing without allUsers marks the principal's own jobs, never an email comparison; another user's job that came back without its configuration is marked details hidden. Failed and cancelled are DONE jobs with an error, cancelled when its reason is stopped. A refresh stops at ${jobHistoryLimits.responseBytes / 1024 / 1024} MiB of responses or its budget and goes on from where it stopped at the next one, which comes at the asked interval while the list is loading. Expanded scripts list their children (jobs.list?parentJobId, at most ${jobHistoryLimits.children}, in statement order) under them, read again only while the script runs. Pinned jobs are read with jobs.get whatever their age. Status: jobs held, whether more exist in the range, whether the list is still loading, the locations BigQuery could not read, the open jobs, and whether All users was refused (PERMISSION_DENIED).`,
+    status: jobHistoryStatus,
+    tables: [{ id: 'jobs', mode: 'snapshot', key: ['job'], rowCap: jobHistoryLimits.jobs + jobHistoryLimits.expanded * jobHistoryLimits.children, columns: jobHistoryColumns }]
   },
   'agent.history.list': {
     id: 'agent.history.list', source: 'agent.history', label: 'Job history', intervalMs: { default: 15_000, min: 5000, max: 300_000 }, gates: { minMajor: 13, editions: [1, 2, 3, 8] }, budgetMs: { min: 1000, max: 10_000 },

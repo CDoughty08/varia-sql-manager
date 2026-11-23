@@ -452,7 +452,7 @@ describe('object action catalogue', () => {
     // Databases menu.
     for (const kind of nodeKinds) expect(actionOffered(kind, 'createDatabase' as never), kind).toBe(false)
     expect(titles({ explorerNode: 'folder', explorerFolder: 'databases' }, 'box', 'databases').slice(0, 5)).toEqual(['New Database…', 'Attach…', 'Restore Database…', 'Restore Files and Filegroups…', '---'])
-    expect(commandIds.filter(id => /attach|restore/i.test(id)).sort()).toEqual(['explorer.attachDatabase', 'explorer.restoreDatabase', 'explorer.restoreFiles', 'explorer.tasks.restoreDatabase', 'explorer.tasks.restoreFiles', 'restoreDatabase.refresh', 'restoreDatabase.run', 'restoreDatabase.stop'])
+    expect(commandIds.filter(id => /(?:^|\.)(?:attach|restore)/i.test(id)).sort()).toEqual(['explorer.attachDatabase', 'explorer.restoreDatabase', 'explorer.restoreFiles', 'explorer.tasks.restoreDatabase', 'explorer.tasks.restoreFiles', 'restoreDatabase.refresh', 'restoreDatabase.run', 'restoreDatabase.stop'])
     expect(renderObjectActionsDocs()).toContain('## New Database')
   })
   it('declares the database node\'s Tasks (Take Offline, Bring Online, Restore › Database… and Files and Filegroups…) and the Databases folder\'s Restore Database… and Restore Files and Filegroups…, hidden where they do not apply', () => {

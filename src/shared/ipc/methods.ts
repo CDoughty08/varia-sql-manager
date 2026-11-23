@@ -4,6 +4,7 @@
 import type { BackendMethod, BackendMethods } from '../contracts'
 import { actionDrainMs } from '../actions/catalog.ts'
 import { bothProviders, providersOf, type ProviderId } from '../providers.ts'
+import { isLiveSource, liveSources } from '../live/catalog.ts'
 
 export type MethodKind = 'unary' | 'stream'
 /** Backend scheduling: control runs at once, metadata waits for one of 8 slots, query takes the session path, results
@@ -89,6 +90,10 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'bigquery.dryRun': { ...metadata, deadlineMs: 30_000, providers: ['bigquery'] },
   // A table-like object's Properties facts: one tables.get, free (docs/bigquery.md, Properties).
   'bigquery.properties': { ...metadata, deadlineMs: 30_000, providers: ['bigquery'] },
+  // Job History (docs/bigquery.md, Job History): one job's details and a script's children (jobs.get and jobs.list, free), and
+  // jobs.cancel, which BigQuery answers at once, so it fits the control lane.
+  'bigquery.jobs.get': { ...metadata, deadlineMs: 30_000, providers: ['bigquery'] },
+  'bigquery.jobs.cancel': { ...control, deadlineMs: 30_000, providers: ['bigquery'] },
   // GSSAPI reads the credential cache without contacting the KDC; one lookup at a time (SqlService.IdentityAsync).
   'connections.identity': { ...control, lane: 'metadata' },
   // A BigQuery handle lists its billing project's datasets (a query tab's Dataset box).
@@ -192,9 +197,10 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // Help › Clear Entra ID Token Cache: empties memory only, at once.
   'entra.cache.clear': control,
   // No deadline and no backstop: only CANCEL, a disconnect, a loss or the source ending ends it.
-  'live.subscribe': { kind: 'stream', lane: 'live', deadlineMs: 0, creditedEvents: true },
+  // Both engines: each source names its own (src/shared/live/catalog.ts), which main (optionsAllow) and the backend check.
+  'live.subscribe': { kind: 'stream', lane: 'live', deadlineMs: 0, creditedEvents: true, ...both },
   // Applied at once to the subscription's settings; its next scheduler wake uses them.
-  'live.update': control,
+  'live.update': { ...control, ...both },
   'debug.results.synthesize': { kind: 'unary', lane: 'metadata', deadlineMs: 120_000 }
 }
 
@@ -231,7 +237,13 @@ export function methodAllows(method: BackendMethod, provider: ProviderId | undef
  *  error, actual and live plans, client statistics) are not BigQuery's, and a dataset is not SQL Server's. C# checks again
  *  (SqlService.ExecuteAsync). */
 export function optionsAllow(method: BackendMethod, provider: ProviderId | undefined, params: unknown): boolean {
-  if (method !== 'query.execute' || provider === undefined || typeof params !== 'object' || params === null) return true
+  if (provider === undefined || typeof params !== 'object' || params === null) return true
+  // A live source serves only the engines it names (absent: SQL Server).
+  if (method === 'live.subscribe') {
+    const source = (params as { source?: unknown }).source
+    return typeof source === 'string' && isLiveSource(source) && providersOf(liveSources[source]).includes(provider)
+  }
+  if (method !== 'query.execute') return true
   const options = params as Partial<BackendMethods['query.execute']['params']>
   if (provider === 'bigquery') return !options.stopOnError && !options.includeActualPlan && !options.includeLivePlan && !options.includeClientStatistics
   return options.dataset === undefined && options.maximumBytesBilled === undefined && options.prices === undefined && options.preview === undefined && options.residence === undefined && options.windowCacheMiB === undefined

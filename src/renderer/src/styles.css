@@ -2571,6 +2571,28 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 @media (forced-colors: active) {
   .ssis-tile[aria-pressed="true"] .tile { outline: 2px solid Highlight; outline-offset: -2px; }
 }
+/* BigQuery Job History (BQ-9): Job Activity Monitor's layout, SSIS Operations' filters, a status line and the details pane beside the grid. */
+.bq-jobs-status { margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.bq-jobs-body { display: flex; flex: 1; gap: var(--varia-space-2); min-height: 0; }
+.bq-jobs-body > .agent-jobs-grid { min-width: 0; }
+.bq-jobs-details { display: flex; flex-direction: column; flex: 0 0 38%; min-width: 280px; max-width: 640px; border: 1px solid var(--varia-panel-border); }
+.bq-jobs-details-head { display: flex; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-2); font-size: var(--varia-size-sm); }
+.bq-jobs-details-head > strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bq-jobs-actions { display: flex; flex-wrap: wrap; gap: var(--varia-space-1); padding: 0 var(--varia-space-2) var(--varia-space-1); }
+.bq-jobs-details-body { flex: 1; min-height: 0; overflow: auto; padding: 0 var(--varia-space-2) var(--varia-space-2); }
+.bq-jobs-facts { display: grid; grid-template-columns: max-content 1fr; gap: var(--varia-space-0) var(--varia-space-3); margin: 0 0 var(--varia-space-2); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.bq-jobs-facts > div { display: contents; }
+.bq-jobs-facts dt { color: var(--varia-descriptionForeground); }
+.bq-jobs-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.bq-jobs-sql { max-height: 40vh; overflow: auto; }
+.bq-jobs-children-title { margin: var(--varia-space-2) 0 var(--varia-space-1); font-size: var(--varia-size-sm); }
+.bq-jobs-children { margin: 0; padding-left: var(--varia-space-4); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.bq-jobs-child-sql { color: var(--varia-descriptionForeground); }
+.bq-jobs .ssis-filter-field input.bq-jobs-field-wide { width: 28ch; }
+.bq-jobs .ssis-filter-field input[type="datetime-local"] { width: auto; }
+.bq-jobs-pinned { display: inline-flex; align-items: center; gap: var(--varia-space-1); font-size: var(--varia-size-sm); }
+.bq-jobs-pinned > button { padding: 0 var(--varia-space-1); border-color: transparent; background: transparent; }
+.message-job-line { display: flex; align-items: center; gap: var(--varia-space-2); }
 /* SQL Server Agent's Job Activity Monitor (AG-3): the SSIS Operations document's layout, with Agent's banner, a bulk bar, the
    expanded job's last run under the grid and the bulk verbs' result lines. */
 .agent-jobs { display: flex; flex-direction: column; gap: var(--varia-space-2); box-sizing: border-box; height: 100%; min-height: 360px; padding: var(--varia-space-3) var(--varia-space-4) var(--varia-space-4); }

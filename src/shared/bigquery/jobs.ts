@@ -74,5 +74,18 @@ export type CancelJobsResult = z.infer<typeof cancelJobsResultSchema>
  *  outcome, and the jobs whose profile cannot cancel without a connection (an ad-hoc connection, a key file picked for one
  *  run), listed by id for BigQuery's job history. */
 export interface RecordedJobsCancel { readonly jobs: CancelJobsResult['jobs']; readonly uncancellable: readonly string[] }
-/** The records dialog's outcome: what was asked about, and what Cancel Jobs did. */
-export interface JobsWithoutTabReview { readonly answer: 'cancel' | 'keep'; readonly jobIds: readonly string[]; readonly cancel?: RecordedJobsCancel }
+/** The records dialog's outcome: what was asked about, what Cancel Jobs did, and the jobs Show in Job History lists, by project. */
+export interface JobsWithoutTabReview {
+  readonly answer: 'cancel' | 'keep' | 'show'; readonly jobIds: readonly string[]; readonly cancel?: RecordedJobsCancel
+  readonly show?: readonly { readonly project: string; readonly jobs: readonly { readonly jobId: string; readonly location?: string }[] }[]
+}
+/** Show in Job History's jobs, grouped by their billing project, at most 64 a project (Job History's pinned jobs). */
+export function jobsByProject(records: readonly Pick<JobRecord, 'jobId' | 'project' | 'location'>[]): NonNullable<JobsWithoutTabReview['show']> {
+  const projects = new Map<string, { jobId: string; location?: string }[]>()
+  for (const record of records) {
+    const jobs = projects.get(record.project) ?? []
+    if (jobs.length < 64) jobs.push({ jobId: record.jobId, ...record.location ? { location: record.location } : {} })
+    projects.set(record.project, jobs)
+  }
+  return [...projects].map(([project, jobs]) => ({ project, jobs }))
+}

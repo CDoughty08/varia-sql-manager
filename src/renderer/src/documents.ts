@@ -39,7 +39,7 @@ export interface QueryDocument {
 }
 /** What a tab holds: a shared DocumentKind (its text crosses IPC to be saved and kept by AutoRecover), or a table designer,
  *  Database Properties, New Database, an SSIS Catalog object's properties, an Activity Monitor, Integration Services Operations or Restore Database, which live only in the renderer. */
-export type WorkbenchDocumentKind = DocumentKind | 'tableDesigner' | 'databaseProperties' | 'tableProperties' | 'newDatabase' | SsisDocumentKind | 'activityMonitor' | 'ssisOperations' | 'restoreDatabase' | 'objectSearch' | 'peek' | 'releaseNotes' | 'help' | 'agentJobActivity' | 'agentLogViewer' | 'bigQueryProperties' | 'agentJob' | 'agentProxy' | 'credential'
+export type WorkbenchDocumentKind = DocumentKind | 'tableDesigner' | 'databaseProperties' | 'tableProperties' | 'newDatabase' | SsisDocumentKind | 'activityMonitor' | 'ssisOperations' | 'restoreDatabase' | 'objectSearch' | 'peek' | 'releaseNotes' | 'help' | 'agentJobActivity' | 'agentLogViewer' | 'bigQueryProperties' | 'bigQueryJobs' | 'agentJob' | 'agentProxy' | 'credential'
 /** Documents whose content is not text in the editor: a provider saves and closes them (DocumentService.registerProvider). */
 export type CustomDocumentKind = Exclude<WorkbenchDocumentKind, DocumentKind>
 
@@ -51,7 +51,7 @@ export type SessionNotice = 'restarted' | 'lost'
 export const documentKind = (document: Pick<QueryDocument, 'kind'> | undefined): WorkbenchDocumentKind => document?.kind ?? 'sql'
 /** A query tab, as opposed to a value opened from the results: only queries connect, execute, and have results. */
 export const isQueryDocument = (document: Pick<QueryDocument, 'kind'> | undefined): boolean => !!document && documentKind(document) === 'sql'
-const customKinds: ReadonlySet<WorkbenchDocumentKind> = new Set<CustomDocumentKind>(['tableDesigner', 'databaseProperties', 'tableProperties', 'newDatabase', ...ssisDocumentKinds, 'activityMonitor', 'ssisOperations', 'restoreDatabase', 'objectSearch', 'peek', 'releaseNotes', 'help', 'agentJobActivity', 'agentLogViewer', 'bigQueryProperties', 'agentJob', 'agentProxy', 'credential'])
+const customKinds: ReadonlySet<WorkbenchDocumentKind> = new Set<CustomDocumentKind>(['tableDesigner', 'databaseProperties', 'tableProperties', 'newDatabase', ...ssisDocumentKinds, 'activityMonitor', 'ssisOperations', 'restoreDatabase', 'objectSearch', 'peek', 'releaseNotes', 'help', 'agentJobActivity', 'agentLogViewer', 'bigQueryProperties', 'bigQueryJobs', 'agentJob', 'agentProxy', 'credential'])
 /** A kind whose provider owns its content (DocumentService.registerProvider): no text, no model, nothing AutoRecover keeps. */
 export const isCustomKind = (kind: WorkbenchDocumentKind | undefined): kind is CustomDocumentKind => !!kind && customKinds.has(kind)
 /** A document whose content is text in the editor (a query or a value), as opposed to a table designer, Database Properties,
@@ -82,6 +82,7 @@ export const kindInfo: Readonly<Record<WorkbenchDocumentKind, KindInfo>> = {
   objectSearch: { language: '', icon: 'search', label: 'Search Objects', value: 'search', blankName: 'Search Objects' },
   peek: { language: '', icon: 'eye', label: 'Peek', value: 'peek', blankName: 'Peek' },
   bigQueryProperties: { language: '', icon: 'info', label: 'BigQuery Properties', value: 'properties', blankName: 'Properties' },
+  bigQueryJobs: { language: '', icon: 'history', label: 'BigQuery Job History', value: 'job history', blankName: 'Job History' },
   help: { language: '', icon: 'info', label: 'Getting Started', value: 'guide', blankName: 'Getting Started' },
   releaseNotes: { language: '', icon: 'info', label: 'Release Notes', value: 'release notes', blankName: 'Release Notes' },
   ...Object.fromEntries((Object.keys(ssisDocumentSpecs) as SsisDocumentKind[]).map(kind => [kind, { language: '', icon: ssisDocumentSpecs[kind].icon, label: ssisDocumentSpecs[kind].title, value: ssisDocumentSpecs[kind].noun, blankName: ssisDocumentSpecs[kind].title }])) as Record<SsisDocumentKind, KindInfo>
@@ -90,8 +91,10 @@ export const kindInfo: Readonly<Record<WorkbenchDocumentKind, KindInfo>> = {
 /** Each engine's query language in Monaco: Transact-SQL is Monaco's `sql`, GoogleSQL Varia's own (languages/googlesql.ts). */
 export const queryLanguages: Readonly<Record<ProviderId, string>> = { sqlserver: 'sql', bigquery: 'googlesql' }
 const googleSqlInfo: KindInfo = { ...kindInfo.sql, language: queryLanguages.bigquery, label: 'GoogleSQL' }
-/** The active document's engine: a query's (SQL Server unless it says otherwise), SQL Server for every other tab, '' with none open. */
-export const documentProvider = (document: Pick<QueryDocument, 'kind' | 'provider'> | undefined): ProviderContext => !document ? '' : isQueryDocument(document) ? document.provider ?? 'sqlserver' : 'sqlserver'
+/** The active document's engine: a query's (SQL Server unless it says otherwise), BigQuery for Job History, SQL Server for every
+ *  other tab, '' with none open. */
+export const documentProvider = (document: Pick<QueryDocument, 'kind' | 'provider'> | undefined): ProviderContext =>
+  !document ? '' : isQueryDocument(document) ? document.provider ?? 'sqlserver' : document.kind === 'bigQueryJobs' ? 'bigquery' : 'sqlserver'
 /** `kindInfo` for a document: a BigQuery query is GoogleSQL, in its language, where every other query is Transact-SQL. */
 export function documentInfo(document: Pick<QueryDocument, 'kind' | 'provider'>): KindInfo {
   return isQueryDocument(document) && document.provider === 'bigquery' ? googleSqlInfo : kindInfo[documentKind(document)]

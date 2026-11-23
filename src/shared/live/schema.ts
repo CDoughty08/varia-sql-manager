@@ -12,6 +12,7 @@ import { activityLiveArgsSchema } from '../activity/schema'
 import { ssisOperationsArgsSchema } from '../ssis/schema'
 import { agentJobsArgsSchema } from '../agent/jobs'
 import { agentHistoryArgsSchema } from '../agent/history'
+import { jobHistoryArgsSchema } from '../bigquery/history'
 import { liveProbes, liveSources, type LiveProbeId, type LiveProbeSpec, type LiveSourceId, type LiveTableSpec, type LiveSourceSpec } from './catalog'
 
 const L = limits.live
@@ -58,7 +59,10 @@ export const liveArgsSchemas = {
   // list's column value filters. Each args replaces the last whole.
   'agent.jobs': agentJobsArgsSchema,
   // SQL Server Agent's job history (AG-5a): the Log File Viewer's filters and its selected run. Each args replaces the last whole.
-  'agent.history': agentHistoryArgsSchema
+  'agent.history': agentHistoryArgsSchema,
+  // BigQuery's Job History (BQ-9): the scope, filters, pinned jobs, expanded scripts and price setting. Each args replaces the last
+  // whole, and a new scope or filter lists again from scratch.
+  'bigquery.jobs': jobHistoryArgsSchema
 } as const satisfies { readonly [S in LiveSourceId]: z.ZodType }
 export type LiveArgs = z.infer<typeof liveArgsSchemas[LiveSourceId]>
 
@@ -101,7 +105,10 @@ export const liveErrorCodes = [
   // The connection's engine has no such source.
   'UNSUPPORTED_PROVIDER',
   // SQL Server Agent is stopped or its Agent XPs option is 0 (error 15281).
-  'AGENT_DISABLED'
+  'AGENT_DISABLED',
+  // BigQuery (docs/bigquery.md, Errors): the sign-in expired or was revoked, a quota or rate limit refused the call, or the
+  // BigQuery API is not enabled on the project. PERMISSION_DENIED above is a refused permission (All users, jobs.get).
+  'AUTH_EXPIRED', 'QUOTA', 'API_DISABLED'
 ] as const
 export type LiveErrorCode = typeof liveErrorCodes[number]
 export interface LiveProbeError {

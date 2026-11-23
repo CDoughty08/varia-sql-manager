@@ -714,9 +714,10 @@ Each `methodPolicies` entry may declare `providers` (`src/shared/providers.ts`);
 only. `connections.connect`, `.databases` and `.preview` take an optional `provider` in their options (`sqlserver`;
 absent means SQL Server, an unknown one is `INVALID_PARAMS`). `connections.connect` and `.disconnect` serve both engines:
 a `bigquery` connect opens a BigQuery handle ([BigQuery](bigquery.md)). `.databases` and `databases.list` serve both
-(BigQuery's datasets); `.preview` refuses `bigquery` with `UNSUPPORTED_PROVIDER`. `bigquery.account`,
+(BigQuery's datasets); `.preview` refuses `bigquery` with `UNSUPPORTED_PROVIDER`. `live.subscribe` and `live.update` serve
+both, each source only the engines its catalogue entry names (Job History's `bigquery.jobs` is BigQuery's). `bigquery.account`,
 `bigquery.projects`, `bigquery.dryRun`, `bigquery.properties`, `bigquery.endIdleSessions`, `bigquery.cancelJobs`,
-`results.remoteQuery` and `query.attach` serve BigQuery alone (`Providers.BigQueryMethods`). Two main-only channels serve the Connect dialog:
+`bigquery.jobs.get`, `bigquery.jobs.cancel`, `results.remoteQuery` and `query.attach` serve BigQuery alone (`Providers.BigQueryMethods`). Two main-only channels serve the Connect dialog:
 `varia:connections-pick-key-file` (main's file picker; answers an opaque reference and the file's name) and
 `varia:connections-confirm-source` (records a federation token file the user confirmed), and one serves the cost prompt:
 `varia:bigquery-cost-prompt` (`{ options, costPrompt }`, strict; sets only the saved entry's cost-prompt choice and answers

@@ -1,5 +1,5 @@
 import type { ConnectionInfo, QueryEvent, QueryResult, VariaApi } from '../../../shared/contracts'
-import type { RestoredJob } from '../../../shared/bigquery/jobs'
+import type { JobsWithoutTabReview, RestoredJob } from '../../../shared/bigquery/jobs'
 import type { BigQueryPreviewTarget } from '../../../shared/bigquery/objects'
 import { estimatedPlanCacheCharacters, type EstimatedPlanMode, type EstimatedPlanResult } from '../../../shared/estimated-plans'
 import type { ErrorCode } from '../../../shared/ipc/wire/protocol'
@@ -18,8 +18,10 @@ import { isLiveConnection, type ConnectionAvailability } from './connection-avai
 /** `attach`: a re-attach to a BigQuery job (query.attach), which Stop cancels as it would the query. */
 export interface RunningQuery { readonly queryId: string; readonly connectionId: string; readonly startedAt: number; readonly kind?: 'estimate' | 'attach' | 'preview'; readonly estimateMode?: EstimatedPlanMode; readonly jobId?: string; /** A re-attach to a finished job, which only reads its results. */ readonly finished?: true; /** BigQuery: the dry run's estimate as the run started, which the job prompt names. */ readonly estimateBytes?: number }
 /** A BigQuery job the tab holds but does not follow (docs/bigquery.md, Re-attaching to jobs): handed back by a restore, kept
- *  when the backend was lost mid-job, or left running (`detached`, Leave it running on Close Results). */
-export type TabJob = RestoredJob
+ *  when the backend was lost mid-job, left running (`detached`, Leave it running on Close Results), or opened from Job History.
+ *  `adopt` false (Job History's Open Results) attaches without taking over the session the job ran in, which another tab may
+ *  still use. */
+export type TabJob = RestoredJob & { readonly adopt?: false }
 export interface EstimatedPlanState { readonly requestId: string; readonly mode?: EstimatedPlanMode; readonly result?: EstimatedPlanResult; readonly error?: string; readonly loading?: true; readonly view?: OutputViewName }
 /** The tab's SQL session as its execution reported it: its SPID and login, read when it opened (SSMS's status bar
  *  shows them). It belongs to the connection it ran on, so a query moved elsewhere (or a connection lost) no longer has
@@ -228,7 +230,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     options: { maxRows: number; maxResultSets: number; residence?: 'automatic' | 'memory' | 'windowed'; windowCacheMiB?: number; prices?: boolean }, follow: boolean) {
     return this.api.attach!({
       connectionId, sessionId: tabId, queryId, jobKey, jobId: job.jobId, project: job.project, ...job.location ? { location: job.location } : {},
-      maxRows: options.maxRows, maxResultSets: Math.max(1, options.maxResultSets), adoptSession: true, transaction: job.transaction,
+      maxRows: options.maxRows, maxResultSets: Math.max(1, options.maxResultSets), adoptSession: job.adopt !== false, transaction: job.transaction,
       ...job.detached || !follow ? { detached: true } : {}, ...options.residence ? { residence: options.residence } : {},
       ...options.windowCacheMiB ? { windowCacheMiB: options.windowCacheMiB } : {}, ...options.prices === false ? { prices: false } : {}
     })
@@ -357,13 +359,14 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   }
   /**
    * After a restore: running jobs no open tab (or AutoRecover copy) will re-attach to are asked about once, in main's box.
-   * The outcome's failures are shown by id to copy.
+   * The outcome's failures are shown by id to copy; Show in Job History's jobs go to `show`, by project.
    */
-  async reviewJobsWithoutTab(api: Partial<Pick<VariaApi, 'reviewJobsWithoutTab'>>): Promise<void> {
+  async reviewJobsWithoutTab(api: Partial<Pick<VariaApi, 'reviewJobsWithoutTab'>>, show?: (projects: NonNullable<JobsWithoutTabReview['show']>) => void): Promise<void> {
     if (this.disposed || !api.reviewJobsWithoutTab) return
     const keys = [...new Set(this.documents.getSnapshot().documents.flatMap(document => isQueryDocument(document) && document.jobKey ? [document.jobKey] : []))]
     let review
     try { const response = await api.reviewJobsWithoutTab(keys); if (!response.ok) return; review = response.value } catch { return }
+    if (review?.answer === 'show' && review.show?.length && !this.disposed) { show?.(review.show); return }
     if (!review || review.answer !== 'cancel' || !review.cancel || this.disposed) return
     for (const text of cancelNotesText('BigQuery', review.cancel.jobs)) this.notify?.(text)
     const failed = [...review.cancel.uncancellable, ...review.cancel.jobs.filter(job => !job.cancelled).map(job => job.jobId)]
@@ -399,6 +402,18 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       }
       return !!this.getSnapshot()[id]?.jobs?.some(job => job.state === 'running')
     } catch { return true }
+  }
+  /** The open query tab that holds a BigQuery job (Job History focuses it rather than attach the job a second time): one
+   *  running it, or holding it as a reference to re-attach, or whose last result came from it. */
+  tabHoldingJob(jobId: string, project: string): string | undefined {
+    for (const [tabId, state] of Object.entries(this.getSnapshot())) {
+      if (!this.documents.get(tabId)) continue
+      // An attach to a finished job counts too: until it ends, the job is in neither the tab's records nor its summary.
+      if (state.running?.jobId === jobId) return tabId
+      if (state.jobs?.some(job => job.jobId === jobId && job.project === project)) return tabId
+      if (state.summary?.job?.jobId === jobId && state.summary.job.project === project) return tabId
+    }
+    return undefined
   }
   isConnectionRunning(id: string): boolean { return Object.values(this.getSnapshot()).some(state => state.running?.connectionId === id) }
   /** A location from this exact execution while the submitted document is still unchanged. */

@@ -62,6 +62,8 @@ export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> 
   /** Live SQL Server connections: what SQL Server's own tools (Activity Monitor, Search Objects, Integration Services) act on. */
   liveSqlServer(): LiveConnection[] { return this.live().filter(connection => !isBigQueryConnection(connection)) }
   isLiveSqlServer(id: string): boolean { const connection = this.get(id); return isLiveConnection(connection) && !isBigQueryConnection(connection) }
+  liveBigQuery(): LiveConnection[] { return this.live().filter(connection => isBigQueryConnection(connection)) }
+  isLiveBigQuery(id: string): boolean { const connection = this.get(id); return isLiveConnection(connection) && isBigQueryConnection(connection) }
   bindingRevision(handle: BackendConnectionHandle): number { return this.connectionTargets.bindingRevision(handle) }
   /**
    * Refuses a checkpoint while query affinity is still being handed over. `final`: the close or reload is going ahead now,

@@ -25,6 +25,8 @@ internal sealed class BigQueryPage(JsonDocument document, long bytes) : IDisposa
 {
     private readonly JsonElement root = document.RootElement;
     public long Bytes { get; } = bytes;
+    /// <summary>The whole answer, for a reader of another shape (Job History's job listings).</summary>
+    public JsonElement Root => root;
     public bool JobComplete => root.TryGetProperty("jobComplete", out var value) && value.ValueKind == JsonValueKind.True;
     public JsonElement? Schema => root.TryGetProperty("schema", out var value) && value.ValueKind == JsonValueKind.Object ? value : null;
     public JsonElement Rows => root.TryGetProperty("rows", out var value) && value.ValueKind == JsonValueKind.Array ? value : default;
@@ -231,10 +233,13 @@ internal sealed partial class BigQueryService
             return SendRawAsync(service, request, t);
         }, token, rateLimits: false);
 
-    /// <summary>A REST read whose JSON body Varia parses itself, under <see cref="MaxPageBytes"/>: sent through the service's
-    /// client (its credential and the library's own retries).</summary>
-    internal async Task<BigQueryPage> SendRawAsync(Google.Apis.Bigquery.v2.BigqueryService service, Google.Apis.Requests.IClientServiceRequest request, CancellationToken token)
+    /// <summary>A REST read whose JSON body Varia parses itself, under <see cref="MaxPageBytes"/> (or <paramref name="limit"/>, past
+    /// which it throws <see cref="BigQueryOverLimit"/> so the caller can ask for less): sent through the service's client (its
+    /// credential and the library's own retries).</summary>
+    internal async Task<BigQueryPage> SendRawAsync(Google.Apis.Bigquery.v2.BigqueryService service, Google.Apis.Requests.IClientServiceRequest request, CancellationToken token, int? limit = null)
     {
+        var cap = Math.Min(limit ?? MaxPageBytes, MaxPageBytes);
+        Exception Over() => limit is not null ? new BigQueryOverLimit() : TooLarge();
         using var message = request.CreateRequest();
         using var response = await service.HttpClient.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, token);
         if (!response.IsSuccessStatusCode)
@@ -242,13 +247,13 @@ internal sealed partial class BigQueryService
             var error = await service.DeserializeError(response);
             throw new GoogleApiException(service.Name, error.Message ?? "BigQuery refused the request.") { Error = error, HttpStatusCode = response.StatusCode };
         }
-        if (response.Content.Headers.ContentLength > MaxPageBytes) throw TooLarge();
+        if (response.Content.Headers.ContentLength > cap) throw Over();
         await using var stream = await response.Content.ReadAsStreamAsync(token);
         using var body = new MemoryStream();
         var buffer = new byte[81920];
         for (int read; (read = await stream.ReadAsync(buffer, token)) > 0;)
         {
-            if (body.Length + read > MaxPageBytes) throw TooLarge();
+            if (body.Length + read > cap) throw Over();
             body.Write(buffer, 0, read);
         }
         var bytes = body.Length;
@@ -257,6 +262,10 @@ internal sealed partial class BigQueryService
 
     RequestException TooLarge() => new("BACKEND_ERROR", "BigQuery answered with a result page larger than " + BigQueryCost.Bytes(MaxPageBytes) + ", which Varia does not read.");
 }
+
+/// <summary>A REST answer larger than its caller's limit (<see cref="BigQueryService.SendRawAsync"/>): the caller asks for less
+/// or stops for now. Never retried.</summary>
+internal sealed class BigQueryOverLimit() : Exception("BigQuery's answer is larger than this read allows.");
 
 /// <summary>An insert's failure after which its job may exist (an earlier attempt's answer was lost), or does (a 409). The
 /// message and inner exception are the last failure's, which the error mapping and the session-expiry check read; no caller

@@ -121,6 +121,7 @@ if (args is ["--bigquery-checks"])
     await BigQuerySessionChecks.RunAsync(Collect);
     await BigQueryExplorerChecks.RunAsync(Collect);
     await BigQueryIndexChecks.RunAsync(Collect);
+    await BigQueryJobHistoryChecks.RunAsync(Collect);
     foreach (var name in failed) Console.Error.WriteLine("FAIL: " + name);
     Console.WriteLine("Passed " + passed + " BigQuery checks, failed " + failed.Count + ".");
     Environment.ExitCode = failed.IsEmpty ? 0 : 1;
@@ -498,6 +499,7 @@ if (liveGroup is null)
         ("BigQuerySession", () => BigQuerySessionChecks.RunAsync(Check)),
         ("BigQueryExplorer", () => BigQueryExplorerChecks.RunAsync(Check)),
         ("BigQueryIndex", () => BigQueryIndexChecks.RunAsync(Check)),
+        ("BigQueryJobHistory", () => BigQueryJobHistoryChecks.RunAsync(Check)),
         ("Pivot", Sync(() => PivotChecks.Run(Check))),
         ("Distinct", Sync(() => DistinctChecks.Run(Check))),
         ("FloatExact", Sync(() => FloatExactChecks.Run(Check))),

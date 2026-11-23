@@ -1,0 +1,4 @@
+{"kind":"bigquery#jobList","etag":"\"fixture\"","jobs":[
+{"id":"varia-alpha:US.load_1","kind":"bigquery#job","jobReference":{"projectId":"varia-alpha","jobId":"load_1","location":"US"},"state":"DONE","statistics":{"creationTime":"T-3000","startTime":"T-2999","endTime":"T-2990","load":{"outputRows":"10"}},"configuration":{"jobType":"LOAD","load":{"destinationTable":{"projectId":"varia-alpha","datasetId":"sales","tableId":"landing"}}},"status":{"state":"DONE"},"user_email":"ana@example.com"},
+{"id":"varia-alpha:US.other_user","kind":"bigquery#job","jobReference":{"projectId":"varia-alpha","jobId":"other_user","location":"US"},"state":"DONE","statistics":{"creationTime":"T-3100","startTime":"T-3099","endTime":"T-3090"},"status":{"state":"DONE"},"user_email":"ben@example.com"}
+]}

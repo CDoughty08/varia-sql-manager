@@ -39,7 +39,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
         "ssis.describe", "ssis.execute", "ssis.catalogSetup",
         "bigquery.account", "bigquery.projects", "bigquery.dryRun", "bigquery.properties", "agent.profile", "agent.historyMessage", "results.remoteQuery",
-        "query.attach", "bigquery.endIdleSessions", "bigquery.cancelJobs",
+        "query.attach", "bigquery.endIdleSessions", "bigquery.cancelJobs", "bigquery.jobs.get", "bigquery.jobs.cancel",
         "results.diffSeek", "language.parse"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
@@ -328,6 +328,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// <summary>Activity Monitor's Details and Kill (the checks shorten their budgets).</summary>
     internal SessionActions SessionActions => sessionActions;
     bool ILiveHost.TestHooks => hooks;
+    BigQueryService? ILiveHost.BigQuery => bigQuery;
     bool ILiveHost.IsConnected(string connectionId) => connections.ContainsKey(connectionId);
     Plans.LivePlanTarget? ILiveHost.QueryPlan(string connectionId, string queryId) => queries.TryGetValue(queryId, out var query) && query.ConnectionId == connectionId
         ? Volatile.Read(ref query.PlanTarget) : null;
@@ -461,7 +462,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "live.subscribe" or "activity.details" => RequestLane.Live,
         // Kill Process takes no metadata slot: it runs at once under its own gates, as object actions do under theirs.
         "activity.kill" => RequestLane.Actions,
-        "system.health" or "connections.disconnect" or "bigquery.account" or "bigquery.projects" or "bigquery.endIdleSessions" or "bigquery.cancelJobs" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "results.viewClose" or "results.distinctClose" or "results.rowIds" or "results.setMemoryLimit" or "results.visibility" or "entra.cache.clear"
+        "system.health" or "connections.disconnect" or "bigquery.account" or "bigquery.projects" or "bigquery.endIdleSessions" or "bigquery.cancelJobs" or "bigquery.jobs.cancel" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "results.viewClose" or "results.distinctClose" or "results.rowIds" or "results.setMemoryLimit" or "results.visibility" or "entra.cache.clear"
             or "live.update" or "language.status" or "language.refresh" or "language.close" => RequestLane.Control,
         SynthesizeMethod when hooks => RequestLane.Metadata,
         _ when Array.IndexOf(MethodNames, method) < 0 => RequestLane.Control,
@@ -542,6 +543,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "bigquery.projects" => await bigQuery.ProjectsAsync(Read<BigQueryProjectsArgs>(parameters, json), Token(context)),
         "bigquery.dryRun" => await BigQueryDryRunAsync(Read<BigQueryDryRunArgs>(parameters, json), Token(context)),
         "bigquery.properties" => await bigQuery.PropertiesAsync(Read<BigQueryPropertiesArgs>(parameters, json), Token(context)),
+        "bigquery.jobs.get" => await bigQuery.JobDetailsAsync(Read<BigQueryJobArgs>(parameters, json), Token(context)),
+        "bigquery.jobs.cancel" => await bigQuery.CancelHistoryJobAsync(Read<BigQueryJobArgs>(parameters, json), Token(context)),
         "language.status" => GetLanguageStatus(parameters, json),
         "language.complete" => await language.CompleteAsync(Read<LanguageRequest>(parameters, json), Token(context)),
         "language.hover" => (object?)await language.HoverAsync(Read<LanguageRequest>(parameters, json), Token(context)) ?? null!,
@@ -888,6 +891,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             // Its running queries end as cancelled before the client they read through is disposed (a job left running was
             // detached first); its idle sessions end, and those holding a detached job are left to BigQuery.
             foreach (var query in queries.Values.Where(query => query.ConnectionId == args.ConnectionId)) query.Cancel();
+            // Its Job History views end with disconnected before the client they read through is disposed.
+            live.Forget(args.ConnectionId);
             var disconnected = await bigQuery.DisconnectAsync(args.ConnectionId, CancellationToken.None);
             search.Forget(args.ConnectionId);
             ReportIndexMemory();

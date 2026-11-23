@@ -16,6 +16,8 @@ internal interface ILiveHost
     Plans.LivePlanTarget? QueryPlan(string connectionId, string queryId) => null;
     /// <summary>VARIA_BACKEND_TEST_HOOKS=1: test-only sources (debug.synthetic) are accepted.</summary>
     bool TestHooks { get; }
+    /// <summary>The BigQuery service whose connections the bigquery scope samples (Job History); null where there is none.</summary>
+    Varia.Backend.BigQuery.BigQueryService? BigQuery => null;
     bool IsConnected(string connectionId);
     /// <summary>The server a connection reaches, the same for every login and database on it (the per-server cap), or
     /// null when the id is not connected.</summary>
@@ -50,8 +52,11 @@ internal sealed class LiveProbeState(LiveProbeJson spec, int intervalMs)
     public LiveProbeJson Spec { get; } = spec;
     /// <summary>The interval asked for, clamped to the probe's own range.</summary>
     public int IntervalMs { get; set; } = intervalMs;
-    /// <summary>The interval in force: the asked one, doubled by the load guard while the probe costs too much.</summary>
+    /// <summary>The asked interval, doubled by the load guard while the probe costs too much (LiveSubscription.InForce adds the
+    /// idle interval).</summary>
     public int EffectiveIntervalMs { get; set; } = intervalMs;
+    /// <summary>The last sample held nothing open, so a probe with an idle interval samples at it (LiveSubscription.InForce).</summary>
+    public bool Idle { get; set; }
     public bool Paused { get; set; }
     public LiveSortArgs[]? Sort { get; set; }
     /// <summary>An update changed the sort since the probe's tables were last written: the next tick re-emits them re-sorted
@@ -117,6 +122,14 @@ internal interface ILiveSampler : IDisposable
     uint[] Keep();
     /// <summary>On every other end: releases every result the source stored.</summary>
     void Release();
+    /// <summary>The source's samples carry rates, so a baseline is followed by a quick second sample; a source without them (a
+    /// REST listing) waits its interval.</summary>
+    bool HasRates => true;
+    /// <summary>After a sample: whether it left the probe nothing open, so a probe with an idleIntervalMs samples at it.</summary>
+    bool IsIdle(string probe) => false;
+    /// <summary>The load guard weighs the source's sample cost: a SQL source's is the server's work. A REST listing's is mostly
+    /// network and quota waits, which a longer interval would not ease, so it opts out (the catalogue's intervals hold).</summary>
+    bool GuardsLoad => true;
     /// <summary>Nothing is due for a while (every probe paused, or the next one far off): give back what is held between
     /// ticks, such as a pooled connection.</summary>
     void Idle() { }
@@ -193,7 +206,11 @@ internal sealed class LiveSubscription : IDisposable
     /// <summary>The longest a failing or costly probe waits: the back-off cap, or its asked interval when that is longer.</summary>
     public int CapOf(LiveProbeState probe) => Math.Min(limits.IntervalMs.Max, Math.Max(limits.BackoffMs, probe.IntervalMs));
 
-    public int PeriodOf(LiveProbeState probe) => Sampler.PeriodMs ?? probe.EffectiveIntervalMs;
+    public int PeriodOf(LiveProbeState probe) => Sampler.PeriodMs ?? InForce(probe);
+
+    /// <summary>The interval in force, which samples report as effectiveIntervalMs: the load guard's, or, while the last sample held
+    /// nothing open, the larger of that and the probe's idleIntervalMs.</summary>
+    public static int InForce(LiveProbeState probe) => probe.Idle && probe.Spec.IdleIntervalMs > 0 ? Math.Max(probe.Spec.IdleIntervalMs, probe.EffectiveIntervalMs) : probe.EffectiveIntervalMs;
 
     /// <summary>A random start within a quarter of the subscription's first second, so views opened together never wake
     /// together. One phase for all of a subscription's probes, so probes with one interval share a tick (one round of SQL and
@@ -366,7 +383,7 @@ internal sealed class LiveSubscription : IDisposable
         {
             var samples = new List<LiveSample>();
             foreach (var sample in batch.Samples)
-                if (Probes.Find(probe => probe.Spec.Id == sample.Probe) is { } probe) samples.Add(sample with { EffectiveIntervalMs = probe.EffectiveIntervalMs, Resorted = true });
+                if (Probes.Find(probe => probe.Spec.Id == sample.Probe) is { } probe) samples.Add(sample with { EffectiveIntervalMs = InForce(probe), Resorted = true });
             var errors = new List<LiveProbeError>();
             foreach (var error in batch.Errors)
                 if (Probes.Find(probe => probe.Spec.Id == error.Probe) is { } probe)
@@ -399,12 +416,20 @@ internal sealed class LiveSubscription : IDisposable
                 if (sample is not null)
                 {
                     probe.Failures = 0;
+                    // A probe with an idle interval slows down while its last sample held nothing open, and comes back to the asked
+                    // interval once something opens: the next slot moves to the interval now in force.
+                    var idle = probe.Spec.IdleIntervalMs > 0 && Sampler.IsIdle(probe.Spec.Id);
+                    if (idle != probe.Idle)
+                    {
+                        probe.Idle = idle;
+                        probe.DueAt = item.TakenAt + PeriodOf(probe);
+                    }
                     Guard(probe, sample.CostMs, item.TakenAt);
                     // Rates need two samples: the second comes within a second, then the probe settles on its interval. The sample
                     // says whether it has rates: a source also starts again from a baseline after a failed first attempt or a lost
                     // connection, which the schedule cannot see. A baseline has no earlier slots to have skipped.
-                    if (sample.Gap is "baseline" or "resumed") probe.DueAt = Math.Min(probe.DueAt, item.TakenAt + Math.Min(PeriodOf(probe), QuickMs));
-                    samples.Add(sample with { EffectiveIntervalMs = probe.EffectiveIntervalMs, Skipped = sample.Gap == "baseline" ? null : sample.Skipped });
+                    if (sample.Gap is "baseline" or "resumed" && Sampler.HasRates) probe.DueAt = Math.Min(probe.DueAt, item.TakenAt + Math.Min(PeriodOf(probe), QuickMs));
+                    samples.Add(sample with { EffectiveIntervalMs = InForce(probe), Skipped = sample.Gap == "baseline" ? null : sample.Skipped });
                 }
                 if (error is null) continue;
                 int retry;
@@ -443,21 +468,23 @@ internal sealed class LiveSubscription : IDisposable
 
     /// <summary>The load guard: a probe whose smoothed cost passes its duty cycle of the interval in force for 3 samples in a
     /// row doubles that interval (up to the cap); one under 10 % for 10 samples halves it back toward the asked interval.
-    /// Only the SQL sources' costs count (a test period has none to guard).</summary>
+    /// Only the SQL sources' costs count (a test period has none to guard, and a REST source opts out).</summary>
     private void Guard(LiveProbeState probe, int costMs, long takenAt)
     {
-        if (Sampler.PeriodMs is not null) return;
+        if (Sampler.PeriodMs is not null || !Sampler.GuardsLoad) return;
         probe.CostEwma = probe.CostEwma is { } ewma ? CostWeight * costMs + (1 - CostWeight) * ewma : costMs;
         var effective = probe.EffectiveIntervalMs;
-        if (probe.CostEwma > probe.Spec.MaxDutyCycle * effective) { probe.Over++; probe.Under = 0; }
-        else if (probe.CostEwma < UnderShare * effective) { probe.Under = Math.Min(probe.Under + 1, UnderSamples); probe.Over = 0; }
+        // The cost is weighed against the interval in force (an idle interval included), and the guard moves the asked one's.
+        var inForce = InForce(probe);
+        if (probe.CostEwma > probe.Spec.MaxDutyCycle * inForce) { probe.Over++; probe.Under = 0; }
+        else if (probe.CostEwma < UnderShare * inForce) { probe.Under = Math.Min(probe.Under + 1, UnderSamples); probe.Over = 0; }
         else probe.Over = probe.Under = 0;
         var next = probe.Over >= OverSamples ? Math.Min(effective * 2, CapOf(probe))
             : probe.Under >= UnderSamples && effective > probe.IntervalMs ? Math.Max(effective / 2, probe.IntervalMs) : effective;
         if (next == effective) return;
         probe.EffectiveIntervalMs = next;
         probe.Over = probe.Under = 0;
-        probe.DueAt = takenAt + next;
+        probe.DueAt = takenAt + InForce(probe);
     }
 
     /// <summary>Wakes the loop: an update changed the schedule.</summary>
@@ -549,7 +576,14 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
             if (!probes.Any(probe => probe.Spec.Tables.Any(table => table.Mode == "append"))) throw Invalid("This live source cannot resume.");
             cursors = LiveResume.Parse(resume, source.Id, [.. probes.Select(probe => probe.Spec)], Limits.ResumeCharacters);
         }
-        if (source.Scope != "none" && !host.IsConnected(args.ConnectionId)) throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first.");
+        // A source serves only the engines it names: a BigQuery connection has no SQL Server source, and the reverse. An id no
+        // engine holds (a connection that just closed) is NOT_CONNECTED below, never UNSUPPORTED_PROVIDER.
+        var bigQuery = host.BigQuery?.Owns(args.ConnectionId) == true;
+        if (source.Scope != "none" && (bigQuery || host.IsConnected(args.ConnectionId))
+            && !source.Engines.Contains(bigQuery ? Providers.BigQuery : Providers.SqlServer, StringComparer.Ordinal))
+            throw new RequestException("UNSUPPORTED_PROVIDER", "This live view is not available for this kind of connection.");
+        if (source.Scope == "bigquery" ? !bigQuery : source.Scope != "none" && !host.IsConnected(args.ConnectionId))
+            throw new RequestException("NOT_CONNECTED", source.Scope == "bigquery" ? "Connect to BigQuery first." : "Connect to a SQL Server first.");
         var server = host.ServerOf(args.ConnectionId) ?? args.ConnectionId;
         // Refused before the sampler exists, so a refusal touches nothing the running subscriptions hold.
         lock (registration) Admit(args.SubscriptionId, server);
@@ -637,7 +671,7 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
             if (args.Paused is { } all) subscription.SetPaused(all, now);
             if (args.Refresh is true) subscription.Refresh(now);
             subscription.Signal();
-            return new LiveUpdateResult(true, [.. subscription.Probes.Select(probe => new LiveProbeApplied(probe.Spec.Id, probe.IntervalMs, probe.EffectiveIntervalMs, subscription.Paused || probe.Paused))]);
+            return new LiveUpdateResult(true, [.. subscription.Probes.Select(probe => new LiveProbeApplied(probe.Spec.Id, probe.IntervalMs, LiveSubscription.InForce(probe), subscription.Paused || probe.Paused))]);
         }
     }
 
@@ -765,6 +799,8 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
     private ILiveSampler CreateSampler(LiveSourceJson source, object? args, string subscriptionId, string connectionId) => TestSampler?.Invoke(source) ?? source.Id switch
     {
         SyntheticSampler.Source => new SyntheticSampler(host.Store, subscriptionId, (SyntheticLiveArgs?)args ?? new SyntheticLiveArgs(), Limits),
+        BigQueryJobsSampler.Source when source.Scope == "bigquery" && host.BigQuery is { } bigQuery => new BigQueryJobsSampler(bigQuery, host.Store, subscriptionId, connectionId,
+            (BigQuery.BigQueryJobHistoryArgs?)args, Limits),
         "query.plan" => new Plans.LivePlanSampler(host, Gates, connectionId, args as Plans.LivePlanArgs ?? throw Invalid("A query id is required.")),
         SsisOperationsSource when source.Scope == "ssisdb" => new SqlSampler(host, Gates, subscriptionId, connectionId, source, Limits, TestText, null,
             new SsisOperationsReader(Ssis.SsisCatalog.Current, (SsisOperationsLiveArgs?)args, () => host.SsisCatalog, host.SsisIgnoresLinux)),
@@ -842,6 +878,7 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
             {
                 "query.plan" => Plans.LivePlanSampler.Check(element.Deserialize<Plans.LivePlanArgs>(json) ?? throw Invalid("A query id is required.")),
                 SyntheticSampler.Source => SyntheticSampler.Check(element.Deserialize<SyntheticLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source."), maxTail),
+                BigQueryJobsSampler.Source => BigQuery.BigQueryJobHistory.Check(element.Deserialize<BigQuery.BigQueryJobHistoryArgs>(json) ?? throw Invalid("Invalid arguments for this source.")),
                 SsisOperationsSource => SsisOperationsArgs.Check(element.Deserialize<SsisOperationsLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source."), Ssis.SsisCatalog.Current),
                 Agent.AgentJobsReader.Source => Agent.AgentJobsArgs.Check(element.Deserialize<Agent.AgentJobsLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source."), Agent.AgentCatalog.Current),
                 Agent.AgentHistoryReader.Source => Agent.AgentHistoryArgs.Check(element.Deserialize<Agent.AgentHistoryLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source."), Agent.AgentCatalog.Current),
