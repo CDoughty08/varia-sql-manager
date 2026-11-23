@@ -89,8 +89,10 @@ internal static partial class BigQueryIndexChecks
         public ConcurrentQueue<(string Sql, string? Location, long? Cap, bool? Cache)> Created { get; } = new();
         public ConcurrentQueue<(string Sql, string? Location)> DryRuns { get; } = new();
         public long DryRunBytes { get; set; }
-        /// <summary>What each job's first page says it processed; null leaves it out.</summary>
+        /// <summary>What each job's first page says it processed (no guide to its bill); null leaves it out.</summary>
         public string? Processed { get; set; } = "1048577";
+        /// <summary>What jobs.get says each job billed, by kind; null leaves totalBytesBilled out.</summary>
+        public Dictionary<string, long>? BilledBytes { get; set; } = new() { ["columns"] = 30L << 20, ["views"] = 10L << 20, ["routines"] = 10L << 20 };
         /// <summary>Inserts and result reads in order ("insert columns", "read columns"…).</summary>
         public ConcurrentQueue<string> Events { get; } = new();
         public int Cancels;
@@ -180,6 +182,17 @@ internal static partial class BigQueryIndexChecks
                 if (!second && Processed is { } processed) answer["totalBytesProcessed"] = processed;
                 return new(200, answer.ToJsonString());
             });
+            fake.On("GET", @"https://bigquery\.googleapis\.com/bigquery/v2/projects/varia-alpha/jobs/[^/]+", request =>
+            {
+                var id = request.Url[(request.Url.LastIndexOf('/') + 1)..];
+                var query = new JsonObject { ["statementType"] = "SELECT" };
+                if (BilledBytes?.GetValueOrDefault(Kinds.GetValueOrDefault(id) ?? "") is > 0 and var billed) query["totalBytesBilled"] = billed.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                return new(200, new JsonObject
+                {
+                    ["jobReference"] = new JsonObject { ["projectId"] = "varia-alpha", ["jobId"] = id }, ["status"] = new JsonObject { ["state"] = "DONE" },
+                    ["statistics"] = new JsonObject { ["query"] = query }
+                }.ToJsonString());
+            });
             fake.On("POST", @"https://bigquery\.googleapis\.com/bigquery/v2/projects/varia-alpha/jobs/[^/]+/cancel", _ => { Interlocked.Increment(ref Cancels); return new(200, "{}"); });
             // Datasets in two locations: staging and sales in the US, archive in us-east1 (no objects to read there).
             fake.On("GET", Alpha + "/datasets", request => new(200, request.Uri.Query.Contains("pageToken=page-2", StringComparison.Ordinal)
@@ -230,8 +243,8 @@ internal static partial class BigQueryIndexChecks
             "without definitions only the column query is estimated, a dry run's bytes count beside the floors, and extraDetails adds the extra project's locations");
 
         // The build: the US location's queries run once each, one at a time, never cached, each capped so the three together bill no
-        // more than the budget (the estimate shown): 100 MiB less the later jobs' floors (10 and 10 MiB) and what the earlier ones may
-        // have billed (their floors plus 2 MiB for 1 MiB and a byte processed). us-east1 holds nothing to read and bills nothing.
+        // more than the budget (the estimate shown): 100 MiB less the later jobs' floors (10 and 10 MiB) and what the earlier ones
+        // billed (jobs.get: 30 and 10 MiB). us-east1 holds nothing to read and bills nothing.
         var built = await harness.Index(more => more["bulk"] = new JsonObject
         {
             ["locations"] = new JsonArray(new JsonObject { ["project"] = "varia-alpha", ["location"] = "US" }, new JsonObject { ["project"] = "varia-alpha", ["location"] = "us-east1" },
@@ -240,7 +253,7 @@ internal static partial class BigQueryIndexChecks
         });
         var bulk = Entries(harness.Service, harness.ConnectionId, "varia-alpha", "sales");
         var created = jobs.Created.ToList();
-        check(created.Count == 3 && created.All(job => job.Location == "US" && job.Cache == false) && created.Select(job => job.Cap).SequenceEqual(new long?[] { 80L << 20, 58L << 20, 56L << 20 })
+        check(created.Count == 3 && created.All(job => job.Location == "US" && job.Cache == false) && created.Select(job => job.Cap).SequenceEqual(new long?[] { 80L << 20, 60L << 20, 60L << 20 })
             && built.Status.Bulk is { Locations: 1, Failed: 0 } && jobs.Cancels == 0,
             "the build runs the US location's three queries once, in the US, uncached, each capped inside the budget, none for a location with nothing to read, and cancels nothing it finished: "
             + string.Join(", ", created.Select(job => job.Location + " " + job.Cap)));
@@ -281,11 +294,11 @@ internal static partial class BigQueryIndexChecks
             check(poorJobs.Created.IsEmpty && shortOf.Status.Bulk is { Locations: 0, Failed: 1, Code: "COST_CAP" } && Entries(poor.Service, poor.ConnectionId, "varia-alpha", "sales").SequenceEqual(rest),
                 $"a budget of {budgetBytes} B or a cap of {cap} B below the floors starts no job and falls back to the free calls ({shortOf.Status.Bulk?.Code}, {poorJobs.Created.Count} jobs)");
         }
-        // A job whose first page does not say what it processed keeps its whole cap charged: the later jobs get only their floors.
+        // A job whose bill jobs.get does not give keeps its whole cap charged, whatever it processed: the later jobs get only their floors.
         // One that never finishes (the location's time limit) keeps it charged too, so the next location cannot count on it.
         using (var silent = new Harness())
         {
-            var silentJobs = new BulkJobs { Processed = null };
+            var silentJobs = new BulkJobs { BilledBytes = null, Processed = "0" };
             silentJobs.Route(silent.Fake);
             await silent.ConnectAsync(key);
             var request = Bulk();

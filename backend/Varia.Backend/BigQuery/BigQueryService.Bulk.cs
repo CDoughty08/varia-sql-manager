@@ -132,10 +132,11 @@ internal sealed partial class BigQueryService
                 if (BigQueryJobException.Of(job) is { } refused) throw BigQueryErrors.Job(refused.Result, refused.Errors, project, billed);
                 var cursor = new BulkCursor(this, connection, job.JobReference ?? request.JobReference, location, billed, project, stop);
                 cursors.Add(cursor);
-                // The next job starts only once this one finished: a failed column job bills nothing more, and what it cannot have
-                // billed (its cap less the bound on its bytes processed; nothing when BigQuery does not say) returns to the budget.
-                var processed = await cursor.StartAsync();
-                if (processed is { } bytes) budget.Remaining += billed - Math.Min(billed, BigQueryBulkSql.Billed(bytes, read));
+                // The next job starts only once this one finished: a failed column job bills nothing more, and what it did not bill
+                // (its cap less jobs.get's totalBytesBilled, free) returns to the budget. Bytes processed are no guide: INFORMATION_SCHEMA
+                // can report none for a view it bills at its floor. When the bill cannot be read, the whole cap stays charged.
+                await cursor.StartAsync();
+                if (await BilledAsync(connection, cursor.Job, location, stop) is { } actual) budget.Remaining += billed - Math.Min(billed, actual);
             }
             var columns = cursors[0];
             var views = cursors.ElementAtOrDefault(1);
@@ -177,6 +178,17 @@ internal sealed partial class BigQueryService
             // A read left early (Stop, the time limit, a failure, a superseded build) bills nothing more.
             if (!finished) foreach (var reference in references) _ = CancelDdlAsync(connection, reference);
         }
+    }
+
+    /// <summary>A finished job's totalBytesBilled (jobs.get, free), or null when BigQuery does not say or the read fails.</summary>
+    async Task<long?> BilledAsync(BigQueryConnection connection, JobReference job, string location, CancellationToken token)
+    {
+        try
+        {
+            var read = await GetJobAsync(connection, job.ProjectId, job.JobId, job.Location ?? location, token);
+            return read.Statistics?.Query?.TotalBytesBilled is >= 0 and var bytes ? bytes : null;
+        }
+        catch (Exception error) when (!token.IsCancellationRequested && error is not RequestException { Code: "NOT_CONNECTED" }) { return null; }
     }
 
     /// <summary>One bulk job's rows, a page at a time (jobs.getQueryResults), skipping rows whose dataset name is not one.</summary>
@@ -228,12 +240,10 @@ internal sealed partial class BigQueryService
             catch (BigQueryJobException failed) { throw BigQueryErrors.Job(failed.Result, failed.Errors, project, cap); }
         }
 
-        /// <summary>Waits for the job to finish and keeps its first page; the bytes it processed, if BigQuery says.</summary>
-        public async Task<long?> StartAsync()
-        {
-            page ??= await ReadAsync(null);
-            return long.TryParse(page.Text("totalBytesProcessed"), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var bytes) ? bytes : null;
-        }
+        public JobReference Job => job;
+
+        /// <summary>Waits for the job to finish and keeps its first page.</summary>
+        public async Task StartAsync() => page ??= await ReadAsync(null);
 
         public async Task<string?> DatasetAsync() => await PeekAsync() is { } row ? Cell(row, 0) : null;
 

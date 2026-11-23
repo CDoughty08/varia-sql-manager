@@ -49,10 +49,10 @@ internal static class BigQueryBulkSql
         : [(Columns(project, location), 3)];
 
     /// <summary>The most a query reading <paramref name="views"/> INFORMATION_SCHEMA views bills for <paramref name="bytes"/> processed
-    /// (a dry run's, for the estimate; a finished job's, for the build's budget): BigQuery bills each view its bytes but at least the
+    /// (a dry run's, for the estimate): BigQuery bills each view its bytes but at least the
     /// floor, which every view's floor plus all the bytes, rounded up to whole MiB, bounds from above.</summary>
     public static long Billed(long bytes, int views) =>
-        views * FloorBytes + (bytes > 0 ? Math.Min(BigQueryLimits.MaxSafeInteger, (bytes + (1L << 20) - 1) / (1L << 20) * (1L << 20)) : 0);
+        views * FloorBytes + (bytes > 0 ? (Math.Min(bytes, BigQueryLimits.MaxSafeInteger) + (1L << 20) - 1) / (1L << 20) * (1L << 20) : 0);
 }
 
 /// <summary>One column or nested field as COLUMN_FIELD_PATHS gives it, with its top-level column's position and nullability.</summary>
@@ -119,7 +119,7 @@ internal static partial class BigQueryBulk
 {
     /// <summary>
     /// The detail of a listed object from its dataset's bulk rows, or null when they do not cover it, so pass 2 reads it with free
-    /// calls instead: an object created after the queries ran, a view or materialized view whose text the views query lacks (it lists
+    /// calls instead: an object dropped or created again after the listing, or not yet in INFORMATION_SCHEMA, a view or materialized view whose text the views query lacks (it lists
     /// no materialized views), a routine the routines query lacks. Without definitions a routine needs no row (pass 2 would keep only
     /// its signature, which the bulk path does not read).
     /// </summary>

@@ -7,7 +7,7 @@ import type { ObjectSearchHit } from '../src/shared/explorer/search'
 import type { ScriptingOptions } from '../src/shared/scripting/options'
 import { PeekService } from '../src/renderer/src/explorer/PeekService'
 import { bigQueryColumnsTable, bigQueryFacts, hitProperties, Properties } from '../src/renderer/src/search/SearchDetails'
-import { bigQueryDetailKind, columnsOf, scriptable, SearchDetailsService } from '../src/renderer/src/search/SearchDetailsService'
+import { bigQueryDetailKind, columnsOf, SearchDetailsService } from '../src/renderer/src/search/SearchDetailsService'
 
 const ok = <T>(value: T): ApiResult<T> => ({ ok: true, value })
 const flush = () => new Promise(resolve => setTimeout(resolve, 0))
@@ -181,7 +181,8 @@ describe('Search Objects details pane for BigQuery', () => {
     expect(bigQueryDetailKind(model.object)).toBeUndefined()
     show(model)
     expect(api.bigQueryProperties).not.toHaveBeenCalled()
-    expect(service.getSnapshot().documents.tab?.definition.status).toBe(scriptable(model) ? 'billed' : 'none')
+    // Models are not scriptable: no billed CREATE either.
+    expect(service.getSnapshot().documents.tab?.definition.status).toBe('none')
     show(table)
     pending.properties[0]!(ok(tableFacts))
     await flush()
