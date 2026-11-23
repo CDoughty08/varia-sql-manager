@@ -148,10 +148,22 @@ export default function ShortcutsPage({ draft, stored, onChange, platform, files
 
   return <div className="shortcuts-page">
     <div className="shortcuts-head">
-      <div><h4 className="shortcuts-title">Keyboard and mouse shortcuts</h4><p className="shortcuts-muted">Changes apply when you choose OK. A shortcut works in its scope; a narrower scope wins over Global.</p></div>
-      <span id="shortcuts-view-label" className="visually-hidden">Show</span>
-      <Segmented id="shortcuts-view" labelledBy="shortcuts-view-label" value={view} onChange={value => setView(value as ShortcutsView)}
-        segments={[{ value: 'all', label: 'All' }, { value: 'keyboard', label: 'Keyboard' }, { value: 'mouse', label: 'Mouse' }]} />
+      <div className="shortcuts-head-main">
+        <h4 className="shortcuts-title">Keyboard and mouse shortcuts</h4>
+        <span id="shortcuts-view-label" className="visually-hidden">Show</span>
+        <Segmented id="shortcuts-view" labelledBy="shortcuts-view-label" value={view} onChange={value => setView(value as ShortcutsView)}
+          segments={[{ value: 'all', label: 'All' }, { value: 'keyboard', label: 'Keyboard' }, { value: 'mouse', label: 'Mouse' }]} />
+      </div>
+      <div className="shortcuts-scheme">
+        <label htmlFor="shortcuts-scheme" className="visually-hidden">Mapping scheme:</label>
+        <select id="shortcuts-scheme" aria-label="Mapping scheme" className="ui-field" value={draft.scheme} onChange={event => onChange({ ...draft, scheme: event.target.value })}>
+          {shortcutSchemes.map(scheme => <option key={scheme.id} value={scheme.id}>{scheme.title}</option>)}
+          {!shortcutSchemes.some(scheme => scheme.id === draft.scheme) && <option value={draft.scheme}>{draft.scheme} (not in this version)</option>}
+        </select>
+        <button type="button" className="ui-button" data-control-variant="secondary" data-control-size="dense" disabled={busy} onClick={() => void startImport()}><Icon name="folder-opened" />Import…</button>
+        <button type="button" className="ui-button" data-control-variant="secondary" data-control-size="dense" disabled={busy} onClick={() => void startExport()}><Icon name="export" />Export…</button>
+        <button type="button" className="ui-button" data-control-variant="secondary" data-control-size="dense" disabled={!reset.here && !reset.elsewhere && !reset.gestures} onClick={() => setSheet({ kind: 'resetAll', everywhere: false })}><Icon name="discard" />Reset All…</button>
+      </div>
     </div>
     {salvaged !== undefined && showSalvage && <div className="shortcuts-banner" data-kind="info" role="status"><Icon name="info" /><div>{salvaged || salvageText}</div>
       <button type="button" className="ui-button icon-button" aria-label="Dismiss" onClick={() => setShowSalvage(false)}><Icon name="close" /></button></div>}
@@ -161,17 +173,6 @@ export default function ShortcutsPage({ draft, stored, onChange, platform, files
     </div><button type="button" className="ui-button" onClick={() => onChange(removeEntries(draft, problems.map(problem => problem.index), platform))}>Remove</button></div>}
     {notice && <div className="shortcuts-banner" data-kind={notice.kind} role={notice.kind === 'error' ? 'alert' : 'status'}><Icon name={notice.kind === 'error' ? 'error' : 'pass'} /><div>{notice.text}</div>
       <button type="button" className="ui-button icon-button" aria-label="Dismiss" onClick={() => setNotice(undefined)}><Icon name="close" /></button></div>}
-    <div className="shortcuts-scheme">
-      <label htmlFor="shortcuts-scheme">Mapping scheme:</label>
-      <select id="shortcuts-scheme" className="ui-field" value={draft.scheme} onChange={event => onChange({ ...draft, scheme: event.target.value })}>
-        {shortcutSchemes.map(scheme => <option key={scheme.id} value={scheme.id}>{scheme.title}</option>)}
-        {!shortcutSchemes.some(scheme => scheme.id === draft.scheme) && <option value={draft.scheme}>{draft.scheme} (not in this version)</option>}
-      </select>
-      <span />
-      <button type="button" className="ui-button" data-control-variant="secondary" disabled={busy} onClick={() => void startImport()}><Icon name="folder-opened" />Import…</button>
-      <button type="button" className="ui-button" data-control-variant="secondary" disabled={busy} onClick={() => void startExport()}><Icon name="export" />Export…</button>
-      <button type="button" className="ui-button" data-control-variant="secondary" disabled={!reset.here && !reset.elsewhere && !reset.gestures} onClick={() => setSheet({ kind: 'resetAll', everywhere: false })}><Icon name="discard" />Reset All…</button>
-    </div>
     <div className="shortcuts-toolbar">
       <div className="shortcuts-search" data-recording={recording || undefined}>
         <Icon name="search" />
@@ -181,15 +182,15 @@ export default function ShortcutsPage({ draft, stored, onChange, platform, files
           : <input type="search" className="ui-field shortcuts-search-input" aria-label="Search shortcuts" maxLength={shortcutSearchChars} value={query}
             placeholder="Search shortcuts: try @modified, @scope:editor, @source:user" onChange={event => setQuery(event.target.value)} onKeyDown={searchKeyDown} />}
       </div>
-      <button type="button" className="ui-button" data-control-variant="secondary" aria-pressed={recording} title="Record Keys: filter by the exact shortcut you press" onClick={() => { setRecording(!recording); setRecord([]) }}><Icon name="record-keys" />Record Keys</button>
+      <button type="button" className="ui-button" data-control-variant="secondary" data-control-size="dense" aria-pressed={recording} title="Record Keys: filter by the exact shortcut you press" onClick={() => { setRecording(!recording); setRecord([]) }}><Icon name="record-keys" />Record Keys</button>
+      {view !== 'mouse' && <>
+        <ChipGroup label="Filters">
+          {chipTokens.map(token => <Chip key={token} label={chipTitles[token]} count={counts[token]} pressed={!recording && hasToken(query, token)} disabled={recording} onToggle={() => setQuery(toggleToken(query, token))} />)}
+        </ChipGroup>
+        <label className="shortcuts-check"><input type="checkbox" checked={byPlatform} onChange={event => setByPlatform(event.target.checked)} />Show other platforms</label>
+        <span className="shortcuts-count" role="status">{plural(shownCommands, 'command')}{byPlatform ? ` · ${allPlatforms.map(item => platformTitles[item]).join(', ')}` : ''}</span>
+      </>}
     </div>
-    {view !== 'mouse' && <div className="shortcuts-toolbar">
-      <ChipGroup label="Filters">
-        {chipTokens.map(token => <Chip key={token} label={chipTitles[token]} count={counts[token]} pressed={!recording && hasToken(query, token)} disabled={recording} onToggle={() => setQuery(toggleToken(query, token))} />)}
-      </ChipGroup>
-      <label className="shortcuts-check"><input type="checkbox" checked={byPlatform} onChange={event => setByPlatform(event.target.checked)} />Show other platforms</label>
-      <span className="shortcuts-count" role="status">{plural(shownCommands, 'command')}{byPlatform ? ` · ${allPlatforms.map(item => platformTitles[item]).join(', ')}` : ''}</span>
-    </div>}
     {view === 'mouse'
       ? <MouseView draft={draft} onChange={onChange} platform={platform} search={query} multiCursorModifier={linked?.multiCursorModifier} />
       : <>

@@ -22,7 +22,7 @@ export const popoutLimits = {
  * window (`src/main/popout-windows.ts`).
  */
 export const dialogWindowKinds = {
-  options: { title: 'Options', width: 940, height: 680, minWidth: 640, minHeight: 440, resizable: true },
+  options: { title: 'Options', width: 960, height: 700, minWidth: 640, minHeight: 440, resizable: true },
   about: { title: 'About Varia SQL Manager', width: 520, height: 460, minWidth: 420, minHeight: 320, resizable: false },
   connect: { title: 'Connect', width: 900, height: 730, minWidth: 640, minHeight: 480, resizable: true }
 } as const satisfies Record<string, { readonly title: string; readonly width: number; readonly height: number; readonly minWidth: number; readonly minHeight: number; readonly resizable: boolean }>

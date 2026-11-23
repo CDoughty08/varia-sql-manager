@@ -5,6 +5,7 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { useCommandEnabled } from '../core/useCommand'
 import { focusToReturn, returnFocusBeside } from '../core/focus'
 import Icon from '../Icon'
+import DialogFooter from '../kit/DialogFooter'
 import DialogWindow, { closesDialogWindow, DialogHeading } from '../popouts/DialogWindow'
 import InlineError from '../kit/InlineError'
 import { copyStatus, copyText, type CopyRecord } from '../kit/format'
@@ -62,6 +63,6 @@ export default function AboutDialog({ onClose, raise }: { readonly onClose: () =
       <details className="about-details"><summary>Version details</summary><pre>{details}</pre></details>
       {error && <InlineError message={error} copy={false} />}
     </div>
-    <div className="connection-footer"><span /><button type="button" autoFocus onClick={close}>Done</button></div>
+    <DialogFooter trailing={<button type="button" autoFocus onClick={close}>Done</button>} />
   </section></DialogWindow>
 }
