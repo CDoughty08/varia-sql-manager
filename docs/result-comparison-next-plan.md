@@ -908,25 +908,28 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       pending, so an edit does not make it wait and the not-connected rules apply. While it waits it is unavailable,
       described "Checking the target table…", which pressing it says, so a suggestion picked with Enter and Enter
       pressed again never scripts with the last name's facts. The renderer sends facts (`identity`, `indexReasons`, SET
-      IDENTITY_INSERT) only from an answer whose `table` is the target it sends. A lookup that fails (its deadline, a
-      backend error) leaves no facts: "Search Objects did not answer, so the target's columns cannot be checked and SET
-      IDENTITY_INSERT is not offered.", with **Try again** beside it, which asks again, and Script available. Pressed,
-      Try again stays in place, unavailable (`aria-disabled`, so it keeps the focus) while the request runs, and the
-      live region says "Checking the target table…" and then the line that follows, the failure sentence again when it
-      fails again. A disconnect while a lookup is pending, or after one failed, shows the not-connected state instead,
-      with no Try again. The line is Target table's description, which a screen reader does not read again when it
-      changes, so an answer for the name in the field that brings a warning or the failed-lookup sentence shows, with
-      its buttons, and has the live region say it once: on arrival while the suggestion list is closed or the field does
-      not have the focus, else when the list closes, the line staying empty meanwhile (Script still waits for the
-      answer), so it never talks over the list while a name is still being typed (such a name usually has suggestions),
-      and an Enter that closes the list says it before a later Enter can script; Script waits while the lookup is
-      pending (above). A held warning is shown and said only while the field still holds the name it answers; one for a
-      name since changed (a suggestion picked with Enter) is dropped, and the knows line that follows it stays silent.
-      An answer that arrives while the window reads "Reading the comparison…" shows with the form, and is said then only
-      when the focus is not moving to Target table, whose description it is. A typo ("Search Objects does not know
-      [Sales_Test].[dbo].[Ordrs]…"), which has no suggestions, is heard as soon as its lookup answers. The knows line is
-      said only when it replaces a warning that was said, so a fixed typo is confirmed; otherwise it is not said, since
-      it asks nothing of the user.
+      IDENTITY_INSERT) only from an answer whose `table` is the target it sends, and holds the answer's `pairs` by the
+      names it sent: a replace that reorders the pairs (a swap of results whose columns are in another order) maps them
+      to the new pair indexes by name, so `identity` and `indexReasons` stay on the same named columns, and one that
+      changes the pair names asks again, with Script "Checking the target table…" until it answers. A lookup that fails
+      (its deadline, a backend error) leaves no facts: "Search Objects did not answer, so the target's columns cannot be
+      checked and SET IDENTITY_INSERT is not offered.", with **Try again** beside it, which asks again, and Script
+      available. Pressed, Try again stays in place, unavailable (`aria-disabled`, so it keeps the focus) while the
+      request runs, and the live region says "Checking the target table…" and then the line that follows, the failure
+      sentence again when it fails again. A disconnect while a lookup is pending, or after one failed, shows the
+      not-connected state instead, with no Try again. The line is Target table's description, which a screen reader does
+      not read again when it changes, so an answer for the name in the field that brings a warning or the failed-lookup
+      sentence shows, with its buttons, and has the live region say it once: on arrival while the suggestion list is
+      closed or the field does not have the focus, else when the list closes, the line staying empty meanwhile (Script
+      still waits for the answer), so it never talks over the list while a name is still being typed (such a name
+      usually has suggestions), and an Enter that closes the list says it before a later Enter can script; Script waits
+      while the lookup is pending (above). A held warning is shown and said only while the field still holds the name it
+      answers; one for a name since changed (a suggestion picked with Enter) is dropped, and the knows line that follows
+      it stays silent. An answer that arrives while the window reads "Reading the comparison…" shows with the form, and
+      is said then only when the focus is not moving to Target table, whose description it is. A typo ("Search Objects
+      does not know [Sales_Test].[dbo].[Ordrs]…"), which has no suggestions, is heard as soon as its lookup answers. The
+      knows line is said only when it replaces a warning that was said, so a fixed typo is confirmed; otherwise it is
+      not said, since it asks nothing of the user.
   - **Direction**, naming the target as resolved ("The target table" before one is chosen):
     - "[Sales_Test].[dbo].[Orders] holds Result 1's rows: change them to Result 3's";
     - "[Sales_Test].[dbo].[Orders] holds Result 3's rows: change them to Result 1's".
@@ -1441,34 +1444,35 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     'selected' (the rows the script takes, and the header's words), maxLines? }`. Whatever Rows chooses, the renderer
     sends `rows` (the selection) and, while the grid has one, `viewId`, so every answer counts every Rows option.
     `columns` holds distinct pair indexes, at most `limits.page.maxColumns` in zod, each below the pair count (checked
-    in C#). `identity` is the pair the index names as the target's identity column, ticked or not (below the pair count,
-    checked in both), so the header can name an unticked one: only the renderer knows it, from Search Objects.
-    `identityInsert` applies only while `identity` is in `columns`, and is ignored otherwise. `DiffScript` leaves it out
-    of every SET. With `identityInsert` on it wraps the INSERTs in `SET IDENTITY_INSERT`, and writes that, its TRY/CATCH
-    body and the header's stop line only when the script holds at least one INSERT, since SET IDENTITY_INSERT needs
-    ALTER on the table and an UPDATE-only script must not fail for a login that has only UPDATE; with it off it leaves
-    the identity column out of the INSERTs, and refuses (`INVALID_PARAMS`) when that column is a key and the script
-    holds an INSERT. While the form does not show the option (INSERT unticked or without rows, or before an answer gives
-    INSERT's count), the renderer sends the value it keeps for the script whenever it sends `identity`: on unless the
-    user unticked it, and always on for a key identity column, so an UPDATE-only script on an identity-keyed table is
-    never refused and a stale count never handles the identity column otherwise than the form last showed;
-    `identityInsert` on without `identity` is `INVALID_PARAMS` in both zod and C#. `indexReasons?: { pair, reason:
-    'computed' | 'generated' | 'notInsertable' | 'notInTarget' }[]` holds the pairs left out for a reason only the index
-    knows (a computed or GENERATED ALWAYS column of the target, a target column of rowversion or timestamp, a column the
-    target lacks), with distinct pairs, at most `limits.page.maxColumns`, each below the pair count and none in
-    `columns`, checked in zod and C#, so the header's left-out line gives the form's reason ("(computed)",
-    "(generated)", "(not insertable)", "(not in [Sales_Test].[dbo].[Orders])") rather than "(unticked)". C# also answers
-    `INVALID_PARAMS` when `columns` leaves out a recorded key pair (an INSERT would write its row without the key, and
-    the existence check by key would still pass), and on Script when no statement is ticked. It answers the four
-    refusals known on opening (below) before it checks `columns` and `identity`, so a comparison keyed on a hierarchyid
-    column or a repeated name gets its refusal, with its Choose key columns…, never `INVALID_PARAMS` and a failed
-    preview. The other locked reasons (rowversion, CLR types, sql_variant, vector) follow from the recorded types.
-    Script (no `maxLines`) requires `target` and `direction` (`INVALID_PARAMS` in both); a preview may leave either out,
-    as the dialog's request on opening does before the form has them. Its answer has empty `text` and carries any of the
-    four refusals known on opening (`asShown`, `keyType`, `keyName`, `notColumns`), `differences`, `updates`,
-    `softValues`, `softValuesCut` and `selectedKeys` (Selected rows and the Exact text line need them on opening), and,
-    only with a `direction`, which decides them (which rows are deleted, and the target side's values and collations),
-    `deletes`, `inserts`, the look-alike counts, `uncheckedUpdates` and `uncheckedDeletes`.
+    in C#). `identity` is the pair the index names as the target's identity column, ticked or not (below
+    `limits.page.maxColumns` in zod, below the pair count in C#), so the header can name an unticked one: only the
+    renderer knows it, from Search Objects. `identityInsert` applies only while `identity` is in `columns`, and is
+    ignored otherwise. `DiffScript` leaves it out of every SET. With `identityInsert` on it wraps the INSERTs in `SET
+    IDENTITY_INSERT`, and writes that, its TRY/CATCH body and the header's stop line only when the script holds at least
+    one INSERT, since SET IDENTITY_INSERT needs ALTER on the table and an UPDATE-only script must not fail for a login
+    that has only UPDATE; with it off it leaves the identity column out of the INSERTs, and refuses (`INVALID_PARAMS`)
+    when that column is a key and the script holds an INSERT. While the form does not show the option (INSERT unticked
+    or without rows, or before an answer gives INSERT's count), the renderer sends the value it keeps for the script
+    whenever it sends `identity`: on unless the user unticked it, and always on for a key identity column, so an
+    UPDATE-only script on an identity-keyed table is never refused and a stale count never handles the identity column
+    otherwise than the form last showed; `identityInsert` on without `identity` is `INVALID_PARAMS` in both zod and C#.
+    `indexReasons?: { pair, reason: 'computed' | 'generated' | 'notInsertable' | 'notInTarget' }[]` holds the pairs left
+    out for a reason only the index knows (a computed or GENERATED ALWAYS column of the target, a target column of
+    rowversion or timestamp, a column the target lacks), with distinct pairs, at most `limits.page.maxColumns`, each
+    below the pair count and none in `columns`, checked in zod and C#, so the header's left-out line gives the form's
+    reason ("(computed)", "(generated)", "(not insertable)", "(not in [Sales_Test].[dbo].[Orders])") rather than
+    "(unticked)". C# also answers `INVALID_PARAMS` when `columns` leaves out a recorded key pair (an INSERT would write
+    its row without the key, and the existence check by key would still pass), and on Script when no statement is
+    ticked. It answers the four refusals known on opening (below) before it checks `columns` and `identity`, so a
+    comparison keyed on a hierarchyid column or a repeated name gets its refusal, with its Choose key columns…, never
+    `INVALID_PARAMS` and a failed preview. The other locked reasons (rowversion, CLR types, sql_variant, vector) follow
+    from the recorded types. Script (no `maxLines`) requires `target` and `direction` (`INVALID_PARAMS` in both); a
+    preview may leave either out, as the dialog's request on opening does before the form has them. Its answer has empty
+    `text` and carries any of the four refusals known on opening (`asShown`, `keyType`, `keyName`, `notColumns`),
+    `differences`, `updates`, `softValues`, `softValuesCut` and `selectedKeys` (Selected rows and the Exact text line
+    need them on opening), and, only with a `direction`, which decides them (which rows are deleted, and the target
+    side's values and collations), `deletes`, `inserts`, the look-alike counts, `uncheckedUpdates` and
+    `uncheckedDeletes`.
   - **Deadline and Cancel:** 120 s in `methodPolicies`, as the other result jobs. The dialog's Cancel cancels the request
     through the protocol's cancel, and the backend drops its chunks.
   - **Preview:** `maxLines?: number` (1–30) answers only the first lines, with `complete: false` when there are more,
@@ -1483,43 +1487,46 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     count, sentence }, selectedKeys?, complete, refusal? }`. `differences` is each Rows option's count of entries that
     are not `same`, which the options show beside their names and the "N of M differences" sentences read (`grid` is
     `all` when no view is sent). `differencesKey` is each option's fingerprint, a 64-bit sum of a hash of each differing
-    entry's stored row, added in the same counting pass, so the dialog finds a change of rows at the same count (a hex
-    string, so it is exact across the port). `uncheckedUpdates` is the chosen UPDATEs whose every SET column Q11 leaves
-    out, so their WHERE checks only the keys, counted in the counts pass by value, so a preview and Script agree: by
-    type alone for a column Q11 always leaves out, and from the value the target holds now (Result 1's under `toNew`,
-    Result 3's under `toOld`), judged by that side's column type and collation, for one whose type leaves it to the
-    value (char or varchar under a SQL_ collation or with none recorded, a value marked truncated, U+FFFD, a subnormal
-    float), reading only those cells. Its sentence is the backend's, as a refusal's is, since only the backend knows the
-    reasons: it names at most three columns, then "and 2 more", each cut at 60 characters with its reason (the type, as
-    "note: xml"; "id: int and varchar in the two results"; or by value, "code: values not all ASCII under its SQL_
-    collation", "memo: values not kept in full", "note: values that cannot be written exactly", "ratio: values too small
-    to write exactly"), within 1,000 characters. `uncheckedDeletes` is counted and worded the same way, over the chosen
-    DELETEs whose ticked, compared columns (at least one) Q11 all leaves out, so their WHERE checks only the keys.
-    `selectedKeys` holds the key text of Selected rows' entries that differ (each as the row checks write it, `id =
-    1002`, cut at 60 characters) while there are at most three. The look-alike counts are the chosen rows to delete and
-    to insert that have a look-alike (`DiffIndex.Poss`) among the chosen rows, and `lookAlikeDeletesAlone` and
-    `lookAlikeInsertsAlone` those whose look-alike the chosen rows leave out, told apart by the same reserved bit per
-    stored row, which the marking pass sets for every chosen row before the counting pass reads a partner's, and
-    `softValues` the chosen rows' soft values in ticked columns, counted in the same pass as the counts and
-    `differences`, so the look-alike and Exact text lines describe the chosen rows, not the whole diff. Past a cut tone
-    the change index keeps only changed pairs, so a cut entry's later soft values are not counted, and `softValuesCut`
-    says so, turning the Exact text line's and the header's count into "at least 12 values". A refusal is an answer, not
-    an error, with empty `text`: `refusal: { kind, sentence }`, `kind` one of `asShown`, `keyType`, `keyName`,
-    `notColumns`, `repeatedKey`, `truncated`, `keyTruncated`, `unwritable`, `keyUnwritable`, `keyCollation`,
-    `noDifferences`, `noTickedChange` and `tooLarge`, and the sentence at most 1,000 characters, both bounded in the
-    answer schema. Every refusal's sentence, closed-input forms included, is the backend's (naming at most three
-    columns, then "and 2 more", each cut at 60 characters, so it stays within its 1,000), which holds the counts, names
-    and sample values and knows when an input's result was released; the dialog chooses only the refusal's buttons and
-    their availability, by `kind` and the comparison's own facts (`notColumns` covers Row position, Whole rows,
-    Automatic's fallback and Automatic with a key, so whether to offer **Use order_no as key columns** comes from the
-    comparison's match, the key's type and whether nothing paired (`nothingPaired`), which the renderer holds,
-    `CompareService`), and never parses the sentence. Past 1,000,000 characters, estimated first, it refuses with
-    `tooLarge`, well inside the 16 MiB response limit. In a preview the counts are the chosen rows' entries by kind;
-    after Script they are the script's own statements, which can be lower (Counts above). The backend itself refuses a
-    comparison whose match is not a `columns` match, so Automatic's choice can never be scripted by accident (Use
-    order_no as key columns replaces the comparison with that `columns` match first), and a comparison of rows as shown.
-    Both read the diff set's records (C3's match and C6's as-shown flags), and the WHERE clauses take the recorded key
-    pairs, so the params carry no key columns.
+    entry's identity as `RowIdentity.Entries` builds it (its input result ids and rows, ordered by input, not by old and
+    new, and shared by both halves of a changed entry), so it stays the same through a layout switch, an All rows or
+    Changes only switch, a swap and a move between an entry's halves, and changes when other rows are chosen at the same
+    count. `grid` and `selected` are added in the same counting pass; `all` is found once per diff set and cached, since
+    the set never changes. It is a hex string, so it is exact across the port. `uncheckedUpdates` is the chosen UPDATEs
+    whose every SET column Q11 leaves out, so their WHERE checks only the keys, counted in the counts pass by value, so
+    a preview and Script agree: by type alone for a column Q11 always leaves out, and from the value the target holds
+    now (Result 1's under `toNew`, Result 3's under `toOld`), judged by that side's column type and collation, for one
+    whose type leaves it to the value (char or varchar under a SQL_ collation or with none recorded, a value marked
+    truncated, U+FFFD, a subnormal float), reading only those cells. Its sentence is the backend's, as a refusal's is,
+    since only the backend knows the reasons: it names at most three columns, then "and 2 more", each cut at 60
+    characters with its reason (the type, as "note: xml"; "id: int and varchar in the two results"; or by value, "code:
+    values not all ASCII under its SQL_ collation", "memo: values not kept in full", "note: values that cannot be
+    written exactly", "ratio: values too small to write exactly"), within 1,000 characters. `uncheckedDeletes` is
+    counted and worded the same way, over the chosen DELETEs whose ticked, compared columns (at least one) Q11 all
+    leaves out, so their WHERE checks only the keys. `selectedKeys` holds the key text of Selected rows' entries that
+    differ (each as the row checks write it, `id = 1002`, cut at 60 characters) while there are at most three. The
+    look-alike counts are the chosen rows to delete and to insert that have a look-alike (`DiffIndex.Poss`) among the
+    chosen rows, and `lookAlikeDeletesAlone` and `lookAlikeInsertsAlone` those whose look-alike the chosen rows leave
+    out, told apart by the same reserved bit per stored row, which the marking pass sets for every chosen row before the
+    counting pass reads a partner's, and `softValues` the chosen rows' soft values in ticked columns, counted in the
+    same pass as the counts and `differences`, so the look-alike and Exact text lines describe the chosen rows, not the
+    whole diff. Past a cut tone the change index keeps only changed pairs, so a cut entry's later soft values are not
+    counted, and `softValuesCut` says so, turning the Exact text line's and the header's count into "at least 12
+    values". A refusal is an answer, not an error, with empty `text`: `refusal: { kind, sentence }`, `kind` one of
+    `asShown`, `keyType`, `keyName`, `notColumns`, `repeatedKey`, `truncated`, `keyTruncated`, `unwritable`,
+    `keyUnwritable`, `keyCollation`, `noDifferences`, `noTickedChange` and `tooLarge`, and the sentence at most 1,000
+    characters, both bounded in the answer schema. Every refusal's sentence, closed-input forms included, is the
+    backend's (naming at most three columns, then "and 2 more", each cut at 60 characters, so it stays within its
+    1,000), which holds the counts, names and sample values and knows when an input's result was released; the dialog
+    chooses only the refusal's buttons and their availability, by `kind` and the comparison's own facts (`notColumns`
+    covers Row position, Whole rows, Automatic's fallback and Automatic with a key, so whether to offer **Use order_no
+    as key columns** comes from the comparison's match, the key's type and whether nothing paired (`nothingPaired`),
+    which the renderer holds, `CompareService`), and never parses the sentence. Past 1,000,000 characters, estimated
+    first, it refuses with `tooLarge`, well inside the 16 MiB response limit. In a preview the counts are the chosen
+    rows' entries by kind; after Script they are the script's own statements, which can be lower (Counts above). The
+    backend itself refuses a comparison whose match is not a `columns` match, so Automatic's choice can never be
+    scripted by accident (Use order_no as key columns replaces the comparison with that `columns` match first), and a
+    comparison of rows as shown. Both read the diff set's records (C3's match and C6's as-shown flags), and the WHERE
+    clauses take the recorded key pairs, so the params carry no key columns.
 - **Backend `Results/DiffScript.cs`:** literals by the column's `dataType`, precision and scale:
 
   | Type | Literal |
@@ -1646,7 +1653,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   `providers: ['sqlserver']`, with Q4's hint on BigQuery). Regenerate the commands docs. No setting.
 - **Tests:**
   - `DiffScriptChecks` goldens, a new offline suite in Program.cs's `offlineSuites`:
-    - `differencesKey` changing for a filter moved to other rows of the same count, and not for a sort of the same rows;
+    - `differencesKey` changing for a filter moved to other rows of the same count, and not for a sort of the same rows,
+      a One row and Two rows switch, an All rows and Changes only switch, a swap, or Selected rows moving between the
+      two halves of one entry;
+    - an unticked identity column named "id (unticked)" in the header's left-out line of a script without INSERTs,
+      and an ignored identity column taking the identity form;
     - an unticked identity column named in the header's left-out line ("id (unticked: new values from the target)"),
       with `identityInsert` ignored, and `identity` past the pair count `INVALID_PARAMS`;
     - the not-looked-for header line from the recorded `PossibleSkipped`; the Automatic no-pairs refusal only with the
@@ -1737,7 +1748,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     text. It is a new live `Suite(...)` with a `LiveGroups.Suites` entry, and its CI seconds go in docs/ci.md's table.
   - vitest: a `results-port.test.ts` case sending every new `results.scriptDiff` member (`viewId`, `identity`,
     `indexReasons`, `maxLines`, `rowsChoice`) and checking each reaches the backend request, as the diff layout's case
-    does, and a `worker-core` case for the rebuilt request.
+    does, a case sending an answer with every optional member (`differencesKey`, the look-alike counts,
+    `uncheckedUpdates`, `uncheckedDeletes`, `softValuesCut`, `selectedKeys`, `refusal`) through the strict answer
+    schema, as C5's does for `diffSeekResultSchema`, and a `worker-core` case for the rebuilt request.
   - vitest for the dialog: states, counts per direction, locked and unticked columns, warnings, the comparison replaced
     or closed while open, switching to another comparison, Enter and Escape in the suggestion list and on buttons, the
     draft memory, multipart target names, the Automatic and as-shown refusals and their buttons, the closed-input form
@@ -1760,51 +1773,52 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     again when a failed preview hides SET IDENTITY_INSERT, the remembered-direction line kept as it was across the
     Choose key columns… round trip, one Rows line rewritten on every change to the chosen option's differing entries (a
     replace with its cause, any other change in the plain form, All differences and a same-count change found by
-    `differencesKey` included), a swap while open inverting the form's direction and relabelling it, index warnings
-    shown and said only once the suggestion list closes, a held warning dropped when the name changed, an opening
-    warning not said over the focus landing on Target table, the index line in the replay, and replayed as it stands,
-    cleared by a change in the form, Script or a switch, its count dropped after a failed preview, the changed line
-    cleared the same way, the unticked line's sentences per kind of column, an unticked identity column's INSERT clause,
-    closing during a replace leaving it running, the remembered position kept per holder while it is on a display,
-    Script's description while generating, the stop sentence and Script available after a generation failure, the
-    updating state's focus and description, the unchecked line's backend sentence, both identity sentences, the unticked
-    line's DELETE clause, the unchecked-UPDATEs line, Selected rows' keys and its sentence said only when the differing
-    entries change, the key-name refusal's button, the look-alike lines for rows whose look-alike is not chosen, the
-    column list as one Tab stop with its search field, the index sentences (the table unknown with Rebuild Search Index,
-    still indexing, indexed without columns, a column unknown, over 4,096 columns) and the request again when the index
-    build finishes, the unchecked lines hidden while their statement is unticked, the remembered-direction line and its
-    hiding once the direction changes, the not-connected state (no request, New Query Editor Window unavailable, the
-    facts back on reconnect), Rebuild Search Index keeping the focus, saying the rebuild and building the comparison's
-    connection (not the active document's), the no-index and skipped sentences, the document's database first among
-    equal suggestions, the locked SET IDENTITY_INSERT's description, a temporal table's period columns locked as
-    generated, an ignored expression column the target lacks starting unticked with its reason and warning once ticked
-    again, a target rowversion column paired with a binary(8) column locked as not insertable, the knows line from a
-    held read while a rebuild runs and after a definitions-off read, a two-part name kept when the document's database
-    changes (the line, said and said again on activation), Script waiting for a pending lookup ("Checking the target
-    table…") and facts sent only from the answer for the sent target, a failed lookup's sentence, a two-part name
-    resolved to a disconnected document's kept database, Script's destination sentence while disconnected, a connection
-    lost while generating, the focus after Rebuild Search Index, a later Try again and a footer refusal's button go
-    away, Enter and Escape in the columns' search field (Enter with no match doing nothing), Script pressed inside the
-    300 ms wait before a lookup saying "Checking the target table…", the request sent while SET IDENTITY_INSERT is
-    hidden carrying the value kept for the script (on by default, off after an untick, on for a key identity), SET
-    IDENTITY_INSERT unticked, hidden and offered again still unticked, hidden before an answer gives INSERT's count (no
-    direction, a failed preview), Rows and the options kept across the Choose key columns… round trip, Script waiting
-    after Try again, a reconnect and a finished build, an edit while disconnected leaving Script to the destination's
-    rule, the other-server warning winning over the moved line when both hold, the moved line for another connection to
-    the same server, SET IDENTITY_INSERT hidden while INSERT is unticked or has no rows, the not-connected warning said
-    when the connection drops and said again on activation, the preview's Try again while its request runs, the field
-    rewritten in three parts when the document's database or connection changes, the connection lines (now on another
-    server, no connection now) winning over the three-part line, the draft recording the document's connection, an
-    ignored column the target lacks left out of the ignored line, the failed lookup's Try again while it runs and
-    failing again, a disconnect while a lookup is pending showing the not-connected state, the focus staying on Cancel
-    when a refusal that replaced the form clears, a lookup held while the script is written, the no-connection sentence,
-    the three-part line for another database, the opening request carrying the draft's target with Script checking until
-    it answers, a failed lookup's Try again, the summary's order with a failed preview leaving Script unavailable while
-    a reason holds, the not-connected state after a connection lost while generating, the focus staying on Script when a
-    footer refusal clears and falling back to Target table, a two-part target in a database beside another holding the
-    same table, the key-column form of the truncation and U+FFFD refusals, closing while generating opening nothing,
-    Enter in Target table with nothing highlighted, the window over a popped-out Results pane, a cancelled generation
-    giving way to a closed or refused state, and the Clipboard announcement.
+    `differencesKey` included), a swap while open inverting the form's direction and relabelling it, a swap of
+    differently ordered columns keeping `identity` and `indexReasons` on the same named columns, index warnings shown
+    and said only once the suggestion list closes, a held warning dropped when the name changed, an opening warning not
+    said over the focus landing on Target table, the index line in the replay, and replayed as it stands, cleared by a
+    change in the form, Script or a switch, its count dropped after a failed preview, the changed line cleared the same
+    way, the unticked line's sentences per kind of column, an unticked identity column's INSERT clause, closing during a
+    replace leaving it running, the remembered position kept per holder while it is on a display, Script's description
+    while generating, the stop sentence and Script available after a generation failure, the updating state's focus and
+    description, the unchecked line's backend sentence, both identity sentences, the unticked line's DELETE clause, the
+    unchecked-UPDATEs line, Selected rows' keys and its sentence said only when the differing entries change, the
+    key-name refusal's button, the look-alike lines for rows whose look-alike is not chosen, the column list as one Tab
+    stop with its search field, the index sentences (the table unknown with Rebuild Search Index, still indexing,
+    indexed without columns, a column unknown, over 4,096 columns) and the request again when the index build finishes,
+    the unchecked lines hidden while their statement is unticked, the remembered-direction line and its hiding once the
+    direction changes, the not-connected state (no request, New Query Editor Window unavailable, the facts back on
+    reconnect), Rebuild Search Index keeping the focus, saying the rebuild and building the comparison's connection (not
+    the active document's), the no-index and skipped sentences, the document's database first among equal suggestions,
+    the locked SET IDENTITY_INSERT's description, a temporal table's period columns locked as generated, an ignored
+    expression column the target lacks starting unticked with its reason and warning once ticked again, a target
+    rowversion column paired with a binary(8) column locked as not insertable, the knows line from a held read while a
+    rebuild runs and after a definitions-off read, a two-part name kept when the document's database changes (the line,
+    said and said again on activation), Script waiting for a pending lookup ("Checking the target table…") and facts
+    sent only from the answer for the sent target, a failed lookup's sentence, a two-part name resolved to a
+    disconnected document's kept database, Script's destination sentence while disconnected, a connection lost while
+    generating, the focus after Rebuild Search Index, a later Try again and a footer refusal's button go away, Enter and
+    Escape in the columns' search field (Enter with no match doing nothing), Script pressed inside the 300 ms wait
+    before a lookup saying "Checking the target table…", the request sent while SET IDENTITY_INSERT is hidden carrying
+    the value kept for the script (on by default, off after an untick, on for a key identity), SET IDENTITY_INSERT
+    unticked, hidden and offered again still unticked, hidden before an answer gives INSERT's count (no direction, a
+    failed preview), Rows and the options kept across the Choose key columns… round trip, Script waiting after Try
+    again, a reconnect and a finished build, an edit while disconnected leaving Script to the destination's rule, the
+    other-server warning winning over the moved line when both hold, the moved line for another connection to the same
+    server, SET IDENTITY_INSERT hidden while INSERT is unticked or has no rows, the not-connected warning said when the
+    connection drops and said again on activation, the preview's Try again while its request runs, the field rewritten
+    in three parts when the document's database or connection changes, the connection lines (now on another server, no
+    connection now) winning over the three-part line, the draft recording the document's connection, an ignored column
+    the target lacks left out of the ignored line, the failed lookup's Try again while it runs and failing again, a
+    disconnect while a lookup is pending showing the not-connected state, the focus staying on Cancel when a refusal
+    that replaced the form clears, a lookup held while the script is written, the no-connection sentence, the three-part
+    line for another database, the opening request carrying the draft's target with Script checking until it answers, a
+    failed lookup's Try again, the summary's order with a failed preview leaving Script unavailable while a reason
+    holds, the not-connected state after a connection lost while generating, the focus staying on Script when a footer
+    refusal clears and falling back to Target table, a two-part target in a database beside another holding the same
+    table, the key-column form of the truncation and U+FFFD refusals, closing while generating opening nothing, Enter in
+    Target table with nothing highlighted, the window over a popped-out Results pane, a cancelled generation giving way
+    to a closed or refused state, and the Clipboard announcement.
   - Smoke: open the dialog window by role, script to a New Query Editor Window, and find `BEGIN TRANSACTION` in the
     focused editor. A frameless OS window can behave differently on Linux, so run it through `npm run test:smoke:wsl`
     before pushing.
