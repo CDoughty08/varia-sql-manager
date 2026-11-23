@@ -59,8 +59,11 @@ internal sealed partial class SqlService
         var type = BigQueryService.StatementOf(job.Statistics);
         if (type == "SCRIPT" || job.Statistics?.NumChildJobs > 0)
             throw new RequestException("INVALID_PARAMS", "Only a single SELECT's result runs again in place, and this result came from a script. Run the query again.");
-        if (type != "SELECT" && !(type is null && bigQuery.Environment.Emulator))
+        // There the text itself must be one query: a script's parent job holds the whole script.
+        if (type != "SELECT" && !(type is null && bigQuery.Environment.Emulator && GoogleSqlScanner.IsSingleQuery(query.Query)))
             throw new RequestException("INVALID_PARAMS", "Only a single SELECT's result runs again in place, and BigQuery does not name this result's statement a SELECT. Run the query again.");
+        // A job made outside Varia may be legacy SQL, which Varia never runs (nor guesses at as GoogleSQL).
+        if (query.UseLegacySql == true || BigQueryErrors.IsLegacySql(query.Query)) throw new RequestException("LEGACY_SQL", BigQueryErrors.LegacySql);
         var own = query.DefaultDataset is { DatasetId: { } dataset, ProjectId: var project } && (project is null || project == window.Project) && BqNames.IsDataset(dataset) ? dataset : null;
         return (query.Query, own ?? plan.Dataset, job.Statistics?.SessionInfo?.SessionId is { Length: > 0 });
     }

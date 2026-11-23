@@ -14,8 +14,8 @@ export class SampleDialogService extends SnapshotStore<{ readonly request?: Samp
   private readonly unsubscribe: () => void
   constructor(private readonly results: Pick<ResultsService, 'sampleSource' | 'subscribe'>) {
     super({})
-    // Closed once its result can no longer be sampled (closed, its tab closed or run again, the backend lost), so Load never
-    // goes quietly nowhere.
+    // Closed once its result can no longer be sampled (closed, its tab closed or run again), so Load seldom goes nowhere; a
+    // lost backend leaves it open, and Load then says the result is unavailable.
     this.unsubscribe = results.subscribe(() => {
       const request = this.getSnapshot().request
       if (request && !this.results.sampleSource(request.tabId, request.key)) this.close()

@@ -73,6 +73,7 @@ describe('the sample\'s words and arithmetic', () => {
     expect(first).toContain('The first rows are free')
     expect(first).toContain('needs about 2,000 MB of result memory, of 4,000 MB free.')
     expect(sampleNote({ method: 'random', rows: 1_000, rowBytes: undefined, freeBytes: undefined, prices: true })).toBe('Estimating what the random sample processes…')
+    expect(sampleNote({ method: 'random', rows: undefined, rowBytes: undefined, freeBytes: undefined, prices: true })).toBe('The random sample is estimated once the rows are a number in range.')
     expect(sampleNote({ method: 'random', rows: 1_000, rowBytes: undefined, freeBytes: undefined, prices: true, estimate: { state: 'failed', reason: 'No.' } })).toBe('The random sample could not be estimated: No.')
     const priced = sampleNote({ method: 'random', rows: 1_000, rowBytes: undefined, freeBytes: undefined, prices: true, estimate: { state: 'done', bytes: 2 ** 40, incomplete: true } })
     expect(priced).toBe('The random sample processes about 1.00 TiB (about $6.25), which may be low. BigQuery bills only the blocks it reads.')
@@ -323,9 +324,10 @@ describe('Re-run in the results service', () => {
     await vi.waitFor(() => expect(f.signals.length).toBe(1))
     f.service.stopLoad('t1', f.key)
     expect(f.signals[0].reason).toBe(remoteStop)
-    expect(f.tab().announcement ?? '').toBe('')
+    // Its strip is a status that says it is stopping (loadingText 'rerunStopping'), so nothing is announced besides.
     f.timers.advance(1_000)
-    expect(f.tab().announcement).toContain('Stopping the re-run')
+    expect(f.tab().announcement ?? '').not.toContain('Stopping')
+    expect(f.tab().loads?.get(f.key)).toEqual(expect.objectContaining({ kind: 'rerun', stopping: true }))
     f.answers[0].reject(new RemoteDeclined())
     await running
     expect(f.tab().sets[0].descriptor.resultId).toBe(1)

@@ -44,7 +44,8 @@ export type SampleEstimate = { readonly state: 'estimating' } | { readonly state
  *  result memory it needs beside what is free. */
 export function sampleNote(o: { method: SampleMethod; rows: number | undefined; rowBytes: number | undefined; freeBytes: number | undefined; estimate?: SampleEstimate; prices: boolean }): string {
   const cost = o.method === 'first' ? 'The first rows are free: tabledata.list reads them, and no job runs.'
-    : !o.estimate || o.estimate.state === 'estimating' ? 'Estimating what the random sample processes…'
+    : o.rows === undefined ? 'The random sample is estimated once the rows are a number in range.'
+      : !o.estimate || o.estimate.state === 'estimating' ? 'Estimating what the random sample processes…'
       : o.estimate.state === 'failed' ? `The random sample could not be estimated: ${o.estimate.reason}`
         : `The random sample processes about ${formatBillingBytes(o.estimate.bytes)}${o.prices ? ` (about ${formatDollars(o.estimate.bytes)})` : ''}${o.estimate.incomplete ? ', which may be low' : ''}. BigQuery bills only the blocks it reads.`
   if (o.rows === undefined || !o.rowBytes) return cost

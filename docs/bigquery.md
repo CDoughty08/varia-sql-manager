@@ -443,8 +443,9 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
   (the screen reader hears so). While it runs the strip says so and offers Stop, which leaves the result as it was, and
   closing the result cancels it. Only a query's own result (or a re-run's) runs again: a view, value list or sample reads
   a table that may be gone, so its query is run again from the editor. A result whose job BigQuery names a script, or
-  anything but one SELECT (a script whose statements were not listed), is refused with `INVALID_PARAMS`, so a script
-  never runs again whole. It runs outside the session, so a statement that reads the tab's temp tables or variables fails
+  anything but one SELECT (a script whose statements were not listed; in emulator mode, which names no type, text that
+  is not one query), is refused with `INVALID_PARAMS`, so a script never runs again whole, and a legacy SQL job with
+  `LEGACY_SQL`. It runs outside the session, so a statement that reads the tab's temp tables or variables fails
   as BigQuery says, and session settings (`@@dataset_id`) and an open transaction's changes do not carry over: its rows
   may differ, and when the job ran in a session Messages says so. A cache hit's destination table is an older one, which may expire sooner, so a
   windowed cache hit's caption adds "cached result: may expire early".
@@ -497,7 +498,7 @@ BigQuery" in their tooltips.
 ### Load a sample
 
 A windowed result too large to load offers **Load sample…** on its strip, and any windowed result of a finished run offers
-it in the results toolbar's ⋯ menu (Load Sample… in the palette). Its dialog takes how many rows (a million by default,
+it in the results toolbar's ⋯ menu (Load Sample… in the palette). Its dialog names the result and takes how many rows (a million by default,
 fewer when the result has fewer or they would not fit half the result memory free; at most 10,000,000) and how to pick
 them, and its note says what the sample costs and the result memory it needs (`LoadSampleDialog.tsx`, `sample.ts`,
 `SqlService.BigQuerySample.cs`; the protocol is `results.remoteQuery`'s `sample` kind in docs/ipc.md).
@@ -515,7 +516,7 @@ them, and its note says what the sample costs and the result memory it needs (`L
   source. The in-memory features work on it, and the name carries to what is built from it (a pivot, a comparison, a
   column profile). It reads the table, so it is refused with `REMOTE_EXPIRED` once the table has expired.
 - **Auxiliary.** A sample, like a re-run, runs no job history record and is never left running: Stop on the source's
-  strip or closing the source cancels it. One runs at a time per result, never while its query still runs or another
+  strip or closing the source cancels it. The workbench runs one at a time per result, and the backend none while its query still runs or another
   result of the query loads (`BUSY`). A Load into memory started beside a running sample shares its budget, so it may
   stay windowed until the sample ends and it is loaded again.
 

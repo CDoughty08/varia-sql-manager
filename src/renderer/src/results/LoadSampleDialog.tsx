@@ -24,7 +24,7 @@ export default function LoadSampleDialog() {
 
 function Dialog({ request }: { readonly request: SampleRequest }) {
   const { sampleDialog, results, bigQueryCost, settings } = useWorkbench()
-  const rowsId = useId(), methodId = useId(), noteId = useId(), hintId = useId(), warningId = useId()
+  const rowsId = useId(), methodId = useId(), noteId = useId(), hintId = useId(), warningId = useId(), sourceId = useId()
   const [text, setText] = useState(() => formatCount(defaultSampleRows(request.total, request.rowBytes, request.freeBytes)))
   const [method, setMethod] = useState<SampleMethod>('first')
   const [estimate, setEstimate] = useState<SampleEstimate | undefined>()
@@ -52,8 +52,10 @@ function Dialog({ request }: { readonly request: SampleRequest }) {
     void results.loadSample(tabId, request.key, rows, method).then(refused => { if (refused) results.announce(tabId, refused) })
   }
   return <SubDialog title="Load Sample" okLabel="Load" okDisabled={rows === undefined} onOk={ok} onCancel={() => sampleDialog.close()} className="load-sample-dialog"
-    describedBy={tooLarge ? `${noteId} ${warningId}` : noteId} status={rows === undefined ? undefined : sampleStatus(method, rows, request.total)}>
+    describedBy={tooLarge ? `${sourceId} ${noteId} ${warningId}` : `${sourceId} ${noteId}`} status={rows === undefined ? undefined : sampleStatus(method, rows, request.total)}>
     <div className="property-grid">
+      {/* Which result it samples: several windowed results may be stacked. */}
+      <div className="property-row"><span className="load-sample-label">Result</span><span className="load-sample-source" id={sourceId}>{request.name}</span></div>
       <div className="property-row"><label htmlFor={rowsId}>Rows</label>
         <span className="load-sample-rows">
           <input className="ui-field" id={rowsId} type="text" inputMode="numeric" autoComplete="off" spellCheck={false} maxLength={12} value={text}

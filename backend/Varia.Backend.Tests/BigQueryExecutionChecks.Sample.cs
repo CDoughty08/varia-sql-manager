@@ -211,6 +211,18 @@ internal static partial class BigQueryExecutionChecks
         var (_, blank, _, _) = await Run(harness, "results.remoteQuery", Rerun(id));
         check(blank is { Status: "failed", Error.Code: "BACKEND_ERROR" } && blank.Error.Message.Contains("Run the query again", StringComparison.Ordinal),
             $"a statement BigQuery does not name is refused: {blank?.Status} {blank?.Error?.Code} {blank?.Error?.Message}");
+        // A job made as legacy SQL is never run again as GoogleSQL.
+        jobs.ChildQuery = "#legacySQL " + "SELECT n FROM [d.t]";
+        var inserts = harness.Jobs.InsertedIds.Count;
+        var (_, legacy, _, _) = await Run(harness, "results.remoteQuery", Rerun(id));
+        check(legacy is { Status: "failed", Error.Code: "LEGACY_SQL" } && harness.Jobs.InsertedIds.Count == inserts,
+            $"a legacy SQL job is not run again: {legacy?.Status} {legacy?.Error?.Code} {harness.Jobs.InsertedIds.Count - inserts}");
+        // The emulator names no statement type: one query's text runs again.
+        jobs.ChildQuery = "SELECT n, s FROM t ORDER BY n";
+        jobs.StatementType = null!;
+        var (_, untyped, _, untypedMessage) = await Run(harness, "results.remoteQuery", Rerun(id));
+        check(untyped?.Status == "completed" && harness.Jobs.InsertedIds.Count == inserts + 1 && InsertedSql(harness) == "SELECT n, s FROM t ORDER BY n",
+            $"in emulator mode a job of one query with no statement type runs again: {untyped?.Status} {untyped?.Error?.Message} {untypedMessage}");
     }
 
     static async Task ScriptParentRerunAsync(Action<bool, string> check)
@@ -234,6 +246,11 @@ internal static partial class BigQueryExecutionChecks
         var (_, other, _, _) = await Run(harness, "results.remoteQuery", Rerun(id));
         check(other is { Status: "failed", Error.Code: "INVALID_PARAMS" } && harness.Jobs.InsertedIds.Count == inserts,
             $"a statement other than a SELECT is not run again in place: {other?.Status} {other?.Error?.Code}");
+        // In emulator mode, which names no statement type, the script's own text refuses it.
+        jobs.StatementType = null!;
+        var (_, untyped, _, _) = await Run(harness, "results.remoteQuery", Rerun(id));
+        check(untyped is { Status: "failed", Error.Code: "INVALID_PARAMS" } && harness.Jobs.InsertedIds.Count == inserts,
+            $"in emulator mode a script's text with no statement type is not run again whole: {untyped?.Status} {untyped?.Error?.Code}");
     }
 
     static async Task SampleRefusalsAsync(Action<bool, string> check)
@@ -257,8 +274,8 @@ internal static partial class BigQueryExecutionChecks
         var rerunView = await Refused(Rerun(viewId));
         var sampleView = viewId == 0 ? "" : await Refused(Sample(viewId, 10, "first"));
         check(none == "INVALID_PARAMS" && zero == "INVALID_PARAMS" && tooMany == "INVALID_PARAMS" && method == "INVALID_PARAMS" && withSort == "INVALID_PARAMS"
-            && rerunWithRows == "INVALID_PARAMS" && rerunView == "INVALID_PARAMS" && harness.Jobs.InsertedIds.Count == inserts,
-            $"a malformed sample or rerun, or a rerun of a view, is refused before any job: {none} {zero} {tooMany} {method} {withSort} {rerunWithRows} {rerunView} {sampleView}");
+            && rerunWithRows == "INVALID_PARAMS" && rerunView == "INVALID_PARAMS" && sampleView == "ok" && harness.Jobs.InsertedIds.Count == inserts,
+            $"a malformed sample or rerun, or a rerun of a view, is refused before any job (a view's first rows sample): {none} {zero} {tooMany} {method} {withSort} {rerunWithRows} {rerunView} {sampleView}");
         // Never into a budget another result of the query is loading into.
         var source = harness.Service.Results.Find(id)!;
         var began = source.Budget.TryBeginLoad();

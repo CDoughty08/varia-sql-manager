@@ -893,7 +893,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (!run || !load || load.stopping || (!load.abort && !this.api.cancel)) return
     run.loads = new Map(run.loads).set(key, { ...load, stopping: true })
     this.schedule(tabId)
-    this.announce(tabId, load.kind === 'sample' ? 'Stopping the sample.' : load.kind === 'rerun' ? 'Stopping the re-run: the result stays as it was.' : 'Stopping the load: the result stays windowed in BigQuery.')
+    // A re-run's strip is a status that says it is stopping itself.
+    if (load.kind !== 'rerun') this.announce(tabId, load.kind === 'sample' ? 'Stopping the sample.' : 'Stopping the load: the result stays windowed in BigQuery.')
     if (load.abort) load.abort.abort(remoteStop)
     else void this.api.cancel?.(load.queryId).catch(() => {})
   }
