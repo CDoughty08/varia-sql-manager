@@ -197,7 +197,7 @@ internal static class BigQueryJobHistoryChecks
     {
         public BigQueryFake Fake { get; }
         public SqlService Service { get; }
-        public ResultStore Store { get; } = new(64L << 20, 32L << 20);
+        public ResultStore Store { get; }
         public string ConnectionId { get; private set; } = "";
         public long Now { get; } = BigQueryJobHistoryChecks.Now;
 
@@ -217,7 +217,7 @@ internal static class BigQueryJobHistoryChecks
                         ["status"] = new JsonObject { ["state"] = "DONE", ["errorResult"] = new JsonObject { ["reason"] = "stopped", ["message"] = "Job execution was cancelled" } }
                     }
                 }.ToJsonString()));
-            Service = new SqlService(Store, bigQuery: new BigQueryEnvironment(null, Fake.Factory, new SubjectTokens([])));
+            Service = new SqlService(Store = CheckStores.Unprobed(), bigQuery: new BigQueryEnvironment(null, Fake.Factory, new SubjectTokens([])));
             Service.BigQuery.RetryDelay = TimeSpan.FromMilliseconds(1);
         }
 
@@ -555,27 +555,32 @@ internal static class BigQueryJobHistoryChecks
         using var waiting = stalled.Sampler(new("mine", Hours: 24));
         var cut = new List<LiveSampleBatch>();
         for (var n = 0; n <= BigQueryJobsSampler.StallsBeforeTimeout; n++) cut.Add(await waiting.SampleAsync([Due(1000)], CancellationToken.None));
-        check(cut[..^2].All(batch => batch.Errors.Count == 0 && Status(batch, "loading") is 1) && cut[^2].Errors is [{ Code: "TIMEOUT" }] && cut[^1].Errors is [{ Code: "TIMEOUT" }],
-            $"samples the budget cuts before any answer fail with TIMEOUT from the {BigQueryJobsSampler.StallsBeforeTimeout}rd on, each one after, so the back-off grows");
+        var sizes = stalled.Listings().Select(query => int.Parse(Regex.Match(query, "maxResults=(\\d+)").Groups[1].Value)).ToList();
+        check(cut[..^2].All(batch => batch.Errors.Count == 0 && Status(batch, "loading") is 1) && cut[^2].Errors is [{ Code: "TIMEOUT" }] && cut[^1].Errors is [{ Code: "TIMEOUT" }]
+            && sizes is [100, 25, 6, 1],
+            $"samples the budget cuts before any answer fail with TIMEOUT from the {BigQueryJobsSampler.StallsBeforeTimeout}rd on, each one after, so the back-off grows; each asks for a quarter of the jobs a page: {string.Join(",", sizes)}");
 
         // The open jobs' listing goes on from its page next time: a finished job is read once that listing is whole, and its
-        // first page is never asked again (a slow first page stops the first sample past the soft deadline).
+        // first page is never asked again.
         using var slow = new Harness();
         await slow.ConnectAsync(key);
         using var follower = slow.Sampler(new("mine", Hours: 24));
         await SampleAsync(follower);
+        // Its second page hangs in the first sample until the budget's cancellation cuts it, whatever the runner's speed.
+        var cutting = true;
+        slow.Fake.Hang = request => cutting && request.Uri.Query.Contains("pageToken=o2", StringComparison.Ordinal);
         slow.Fake.On("GET", Jobs, request =>
         {
             var query = request.Uri.Query;
             if (!query.Contains("stateFilter=", StringComparison.Ordinal) || query.Contains("pageToken=o2", StringComparison.Ordinal)) return BigQueryFake.Text("""{"kind":"bigquery#jobList"}""");
-            Thread.Sleep(900);
             return BigQueryFake.Text("""{"kind":"bigquery#jobList","nextPageToken":"o2"}""");
         }).On("GET", Jobs + "/varia_running", _ => new BigQueryFake.Reply(200, JsonNode.Parse(Timed("jobs-list", slow.Now).Replace("\"RUNNING\"", "\"DONE\""))!["jobs"]![0]!.ToJsonString()));
-        await follower.SampleAsync([Due(1000)], CancellationToken.None);
+        await follower.SampleAsync([Due(3000)], CancellationToken.None);
+        cutting = false;
         var settled = await SampleAsync(follower);
         var open = slow.Listings().Where(query => query.Contains("stateFilter=", StringComparison.Ordinal)).ToList();
         check(settled.Errors.Count == 0 && Status(settled, "open") is 0 && slow.Gets("varia_running") == 1
-            && open.Count(query => !query.Contains("pageToken=", StringComparison.Ordinal)) == 1 && open.Count(query => query.Contains("pageToken=o2", StringComparison.Ordinal)) == 1,
+            && open.Count(query => !query.Contains("pageToken=", StringComparison.Ordinal)) == 1 && open.Count(query => query.Contains("pageToken=o2", StringComparison.Ordinal)) == 2,
             "the open jobs' listing goes on from its page in the next sample, and a job it left out is read once it is whole: " + string.Join(" | ", open));
     }
 

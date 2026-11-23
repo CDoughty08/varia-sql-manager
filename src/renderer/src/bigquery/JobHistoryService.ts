@@ -255,6 +255,7 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     if (value('allUsersDenied') === 1 && state.filters.scope === 'all' && state.connectionId) {
       this.refuse(state.connectionId, { all: jobHistoryText.allUsersRefused })
       // As a manual switch to My jobs does: another user's expanded script or open details go with All users.
+      this.bump(id, 'details')
       this.patch(id, { status, notice: { tone: 'info', text: jobHistoryText.allUsersDenied(), code: 'PERMISSION_DENIED' }, expanded: [], details: undefined })
       this.setFilters(id, { ...state.filters, scope: 'mine' })
       return
@@ -320,7 +321,8 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     if (!state || state.filters.scope === scope) return
     const refused = this.refused(id).all
     if (scope === 'all' && refused) { this.patch(id, { notice: { tone: 'info', text: refused, code: 'PERMISSION_DENIED' } }); return }
-    // Rows of the other scope are other jobs: the scripts expanded and the details pane go with them.
+    // Rows of the other scope are other jobs: the scripts expanded and the details pane go with them (and any answer on its way).
+    this.bump(id, 'details')
     this.patch(id, { expanded: [], details: undefined })
     this.setFilters(id, { ...state.filters, scope })
   }

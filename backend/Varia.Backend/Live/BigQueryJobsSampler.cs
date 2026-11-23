@@ -33,6 +33,9 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
     /// say "still loading" for ever.</summary>
     private long answers;
     private int stalls;
+    /// <summary>Jobs a page asks for: a quarter after each stalled sample (a page too slow for the time budget, as long query
+    /// texts on a slow link make it, would otherwise never land), doubling back after each sample that finished.</summary>
+    private int pageSize = BigQueryJobHistory.PageJobs;
     internal const int StallsBeforeTimeout = 3;
 
     /// <summary>What one listing holds: the top-level jobs by id, which of them are the principal's (All users), how far the
@@ -131,12 +134,14 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
             {
                 loading = !await RefreshAsync(connection, view, item.BudgetMs, budget.Token);
                 stalls = 0;
+                pageSize = Math.Min(BigQueryJobHistory.PageJobs, pageSize * 2);
             }
             catch (OperationCanceledException) when (!token.IsCancellationRequested)
             {
                 loading = true;
                 // Every stalled sample past the threshold fails, so the schedule's back-off grows; an answer starts the count again.
                 stalls = answers == answered ? stalls + 1 : 0;
+                if (stalls > 0) pageSize = Math.Max(1, pageSize / 4);
                 if (stalls >= StallsBeforeTimeout)
                 {
                     failure = LiveErrors.Create(Probe, "TIMEOUT", "BigQuery did not answer the job listing within the refresh's time budget, several times in a row.");
@@ -274,7 +279,7 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
     private async Task<bool> ListAsync(BigQueryConnection connection, View state, HistoryListing listing, string? pageToken, Action<string?> save, CancellationToken token,
         Func<int> left, Action<long> spend, bool first)
     {
-        var size = BigQueryJobHistory.PageJobs;
+        var size = pageSize;
         while (true)
         {
             token.ThrowIfCancellationRequested();
@@ -381,7 +386,7 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
             state.Open = listing with { States = ["pending", "running"], MinCreated = Math.Max(start, oldest) };
             state.OpenIds.UnionWith(held.Select(job => job.Id));
         }
-        var size = BigQueryJobHistory.PageJobs;
+        var size = pageSize;
         while (true)
         {
             if (left() <= 0) return false;
@@ -399,6 +404,8 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
             foreach (var job in page.Items)
             {
                 state.OpenSeen.Add(job.Id);
+                // A listing that spans samples keeps its first window: what the sliding range has dropped since stays out.
+                if (job.Created is { } created && created < (listing.MinCreated ?? 0)) continue;
                 Merge(state, job);
             }
             // Kept as each page lands, so a listing larger than one sample goes on from here rather than start again.
@@ -443,7 +450,7 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
         {
             var window = listing with { States = ["done"], MinCreated = other.Created ?? 0, MaxCreated = (other.Created ?? 0) + 1 };
             string? pageToken = null;
-            size = BigQueryJobHistory.PageJobs;
+            size = pageSize;
             while (true)
             {
                 if (left() <= 0) return false;

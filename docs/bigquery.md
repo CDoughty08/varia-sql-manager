@@ -624,7 +624,8 @@ without going to BigQuery Studio. Everything comes from BigQuery's free REST cal
   stays open until it can. A DONE job never changes and is never read again; new scope or filters list from scratch, at
   once, even when the sample under way then finds nothing open. Three samples in a row that the time budget cuts before
   any answer lands (a stalled network, rate limits retried until the budget runs out) fail with `TIMEOUT`, as does each one
-  after until an answer lands, so the retries back off; a failure retries from the asked interval, never the idle one. The
+  after until an answer lands, so the retries back off; each such sample asks for a quarter of the jobs a page (down to one,
+  doubling back once samples finish), so a page too slow for the budget still lands; a failure retries from the asked interval, never the idle one. The
   open jobs' listing goes on from its page as the others do, and a job missing from it counts as finished once it is whole. The `bigquery.jobs` live source refreshes every 5 s while a job is running or
   pending and every 60 s otherwise (its `idleIntervalMs`, [docs/live.md](live.md)), and the load guard leaves it alone: its
   cost is network and quota waits, which a longer interval would not ease. Pinned jobs (a link, the dialog) are read by id
