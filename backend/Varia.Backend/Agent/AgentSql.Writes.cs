@@ -100,6 +100,8 @@ internal static partial class AgentSql
         foreach (var item in LintJobSaves()) yield return item;
         // Delete History's batches (AG-5a, AgentSql.History.cs).
         foreach (var item in LintHistoryWrites()) yield return item;
+        // The Schedules document's saves (AG-6c, AgentSql.Schedules.cs).
+        foreach (var item in LintScheduleSaves()) yield return item;
         // The proxy document's Save, Rename and Delete (AG-8b, AgentSql.Proxy.cs).
         foreach (var item in LintProxySaves()) yield return item;
     }

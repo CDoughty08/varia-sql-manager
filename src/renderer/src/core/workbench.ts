@@ -119,6 +119,7 @@ import { JobActivityService } from '../agent/JobActivityService'
 import { LogViewerService } from '../agent/LogViewerService'
 import { AgentJobStatusService } from '../agent/AgentJobStatusService'
 import { JobDocumentService } from '../agent/JobDocumentService'
+import { SchedulesService } from '../agent/SchedulesService'
 import { ProxyDocumentService } from '../agent/ProxyDocumentService'
 import { CredentialDocumentService } from '../agent/CredentialDocumentService'
 import { agentContribution } from '../contributions/agent'
@@ -287,6 +288,7 @@ export interface Workbench extends Disposable {
   /** The status bar's running Agent jobs this window started, followed while hidden (AG-3). */
   readonly agentJobs: AgentJobStatusService
   readonly jobDocuments: JobDocumentService
+  readonly schedules: SchedulesService
   /** The proxy and Credential documents (AG-8b). */
   readonly proxyDocuments: ProxyDocumentService
   readonly credentialDocuments: CredentialDocumentService
@@ -548,6 +550,11 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       ;(root?.querySelector<HTMLElement>('[data-agent-job-focus]') ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]'))?.focus()
     })
   })
+  // The Schedules document (AG-6c): Manage Schedules, and New › Schedule… with a new schedule in its editor.
+  const schedules = new SchedulesService({
+    api, documents, connections, targetIdOf,
+    focus: (id, target) => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-schedules="${CSS.escape(id)}"] ${target === 'name' ? '[data-schedule-name]' : '[data-agent-schedules-focus]'}`)?.focus())
+  })
   // The proxy and Credential documents (AG-8b): New's name field, else the first section's item in the list.
   const focusAgentObject = (attribute: string, field: string) => (id: string) => focusLater(() => {
     const root = document.querySelector<HTMLElement>(`[${attribute}="${CSS.escape(id)}"]`)
@@ -757,6 +764,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     logViewer,
     agentJobs,
     jobDocuments,
+    schedules,
     proxyDocuments,
     credentialDocuments,
     objectSearch,
@@ -816,6 +824,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       logViewer.dispose()
       agentJobs.dispose()
       jobDocuments.dispose()
+      schedules.dispose()
       proxyDocuments.dispose()
       credentialDocuments.dispose()
       // Before the live views: each monitor disposes its own; then the client, while the port is still there.

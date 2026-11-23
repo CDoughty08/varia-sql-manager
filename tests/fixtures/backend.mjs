@@ -1919,14 +1919,15 @@ function agentApplySteps(job, save) {
 function agentJobDocument(params) {
   const base = { login: 'sa', sysadmin: true, platform: 'windows', categories: ['[Uncategorized (Local)]', 'Database Maintenance'], operators: agentOperators, owners: ['sa', 'CONTOSO\agent'], alertsEditable: true, mail: { checked: true, xps: true, profiles: 1, sysadmin: true, useDatabaseMail: true, agentProfile: 'Varia Mail' },
     subsystems: ['TSQL', 'CmdExec', 'PowerShell', 'SSIS'], databases: ['master', 'model', 'msdb', 'Sales', 'tempdb'], proxies: [{ id: 1, name: 'FileShareWriter', enabled: true, subsystems: ['CmdExec', 'PowerShell'], identity: 'CONTOSO\\svc-fswriter' }] }
-  if (params.target.kind === 'agent') return { agentJobDocument: { ...base, steps: [], jobs: agentJobs.map(job => job.name).sort() }, elapsedMs: 1 }
+  if (params.target.kind === 'agent') return { agentJobDocument: { ...base, steps: [], jobs: agentJobs.map(job => job.name).sort(), now: '2026-11-22T14:30:00' }, elapsedMs: 1 }
   const job = agentJobs.find(item => item.name === params.target.name)
   if (!job) return undefined
   const doc = agentJobDoc(job)
   const record = { jobId: job.id.toUpperCase(), name: job.name, enabled: job.enabled, description: doc.description, category: job.category, owner: doc.owner,
     emailLevel: doc.emailLevel, emailOperator: doc.emailOperator, pageLevel: doc.pageLevel, pageOperator: doc.pageOperator, netSendLevel: doc.netSendLevel, netSendOperator: doc.netSendOperator,
     eventLogLevel: doc.eventLogLevel, deleteLevel: doc.deleteLevel, created: job.created, modified: doc.modified, version: doc.version, startStepId: (agentJobSteps(job), agentStepLists.get(job.id).start), lastRun: job.lastRun.replace(' ', 'T'), lastOutcome: job.outcome }
-  return { agentJobDocument: { ...base, job: record, steps: agentJobSteps(job), alerts: doc.alerts }, elapsedMs: 1 }
+  const schedules = agentSchedules.filter(schedule => agentScheduleLinks.some(link => link.scheduleId === schedule.id && link.jobId === job.id)).map(scheduleRecord)
+  return { agentJobDocument: { ...base, job: record, steps: agentJobSteps(job), alerts: doc.alerts, schedules, now: '2026-11-22T14:30:00' }, elapsedMs: 1 }
 }
 // The proxy and Credential documents (AG-8b): one proxy as its credential's only user, and the documents' saves applied to them.
 const proxySubsystems = [{ id: 3, name: 'CmdExec', label: 'Operating system (CmdExec)' }, { id: 11, name: 'SSIS', label: 'SQL Server Integration Services Package' }, { id: 12, name: 'PowerShell', label: 'PowerShell' }]
@@ -1987,6 +1988,7 @@ async function agentJobSave(params) {
     const doc = agentJobDoc(job)
     for (const field of fields) if (save[field] !== undefined) doc[field] = save[field]
     Object.assign(doc, { alerts: [], version: 1, modified: stamp() })
+    if (save.schedules) agentJobScheduleSave(job.id, save.schedules)
     if (save.steps) agentApplySteps(job, save.steps)
     return { steps: [{ status: 'done', title: 'Create the job' }], messages: [], elapsedMs: 1 }
   }
@@ -2001,10 +2003,78 @@ async function agentJobSave(params) {
   if (save.enabled !== undefined) job.enabled = save.enabled
   if (save.category !== undefined) job.category = save.category
   for (const field of fields) if (save[field] !== undefined) doc[field] = save[field]
+  if (save.schedules) { const refusal = agentJobScheduleSave(job.id, save.schedules); if (refusal) return refusal }
   if (save.removeAlerts) doc.alerts = doc.alerts.filter(alert => !save.removeAlerts.some(removed => removed.id === alert.id))
   if (save.steps) agentApplySteps(job, save.steps)
   Object.assign(doc, { version: doc.version + 1, modified: stamp() })
   return { steps: [{ status: 'done', title: 'Save the job' }], messages: [], elapsedMs: 1 }
+}
+// The shared schedules (AG-6c) of the same jobs: Nightly uses Nightly 02:30, nothing uses Quarter end. Each has the version and modified
+// date its guard checks; the agentSchedules describe lists them, and the agentSchedule action and a job save's schedules change them.
+const agentScheduleTiming = (patch = {}) => ({ freqType: 4, freqInterval: 1, freqSubdayType: 1, freqSubdayInterval: 0, freqRelativeInterval: 0, freqRecurrenceFactor: 0, activeStartDate: 20260101, activeEndDate: 99991231, activeStartTime: 23000, activeEndTime: 235959, ...patch })
+const agentSchedules = [
+  { id: 1, name: 'Nightly 02:30', enabled: true, owner: 'sa', version: 2, modified: '2026-11-01T02:00:00.000', ...agentScheduleTiming() },
+  { id: 2, name: 'Quarter end', enabled: false, owner: 'sa', version: 1, modified: '2026-11-01T02:00:00.000', ...agentScheduleTiming({ freqType: 16, freqInterval: 31, freqRecurrenceFactor: 3, activeStartTime: 230000 }) }
+]
+const agentScheduleLinks = [{ scheduleId: 1, jobId: 'a1b2c3d4-0000-4000-8000-000000000001' }]
+const scheduleRecord = schedule => ({ ...schedule, jobCount: agentScheduleLinks.filter(link => link.scheduleId === schedule.id).length })
+const agentScheduleStamp = () => new Date().toISOString().slice(0, 23)
+function agentSchedulesDescribe(params) {
+  const jobs = agentJobs.map(job => ({ id: job.id.toUpperCase(), name: job.name, enabled: job.enabled, owner: 'sa', version: agentJobDoc(job).version }))
+  if (params.schedule !== undefined) return { agentSchedules: { login: 'sa', sysadmin: true, platform: 'windows', now: '2026-11-22T14:30:00', schedules: [], scheduleJobs: jobs.filter(job => agentScheduleLinks.some(link => link.scheduleId === params.schedule && link.jobId === job.id.toLowerCase())) }, elapsedMs: 1 }
+  return { agentSchedules: { login: 'sa', sysadmin: true, platform: 'windows', now: '2026-11-22T14:30:00', idleDefined: false, schedules: agentSchedules.map(scheduleRecord), jobs,
+    links: agentScheduleLinks.map(link => ({ scheduleId: link.scheduleId, jobId: link.jobId.toUpperCase() })), durations: [{ jobId: agentJobs[0].id.toUpperCase(), seconds: 1080 }] }, elapsedMs: 1 }
+}
+function agentScheduleRefused(code, message, field) { return { steps: [], messages: [], elapsedMs: 1, error: { code, message, retryable: false, ...field ? { field } : {} } } }
+const scheduleGuardFails = guard => { const schedule = agentSchedules.find(item => item.id === guard.id); return !schedule || schedule.version !== guard.version || schedule.modified !== guard.modified }
+function agentScheduleSave(params) {
+  const save = params.agentSchedule
+  const linkJobs = (scheduleId, jobs = []) => {
+    for (const change of jobs) {
+      const jobId = change.jobId.toLowerCase()
+      const at = agentScheduleLinks.findIndex(link => link.scheduleId === scheduleId && link.jobId === jobId)
+      if (change.attach && at < 0) agentScheduleLinks.push({ scheduleId, jobId })
+      if (!change.attach && at >= 0) agentScheduleLinks.splice(at, 1)
+    }
+  }
+  if (save.op === 'create') {
+    const id = Math.max(0, ...agentSchedules.map(item => item.id)) + 1
+    agentSchedules.push({ id, name: save.name, enabled: save.enabled, owner: 'sa', version: 1, modified: agentScheduleStamp(), ...save.timing })
+    linkJobs(id, save.jobs)
+    return { steps: [{ status: 'done', title: 'Create the schedule' }], messages: [], elapsedMs: 1 }
+  }
+  if (scheduleGuardFails(save.schedule)) return agentScheduleRefused('STALE', 'Someone changed this schedule after it was read. Nothing was saved.')
+  const schedule = agentSchedules.find(item => item.id === save.schedule.id)
+  if (save.op === 'delete') {
+    if (agentScheduleLinks.some(link => link.scheduleId === schedule.id)) return agentScheduleRefused('IN_USE', 'The schedule is used by a job.')
+    agentSchedules.splice(agentSchedules.indexOf(schedule), 1)
+    return { steps: [{ status: 'done', title: 'Delete the schedule' }], messages: [], elapsedMs: 1 }
+  }
+  if (save.op === 'enable' || save.op === 'disable') schedule.enabled = save.op === 'enable'
+  else Object.assign(schedule, save.name !== undefined ? { name: save.name } : {}, save.enabled !== undefined ? { enabled: save.enabled } : {}, save.timing ?? {})
+  linkJobs(schedule.id, save.jobs)
+  Object.assign(schedule, { version: schedule.version + 1, modified: agentScheduleStamp() })
+  return { steps: [{ status: 'done', title: 'Save the schedule' }], messages: [], elapsedMs: 1 }
+}
+/** A job save's schedules (detach, guarded update, guarded attach, add), as the backend runs them in the job's transaction. */
+function agentJobScheduleSave(jobId, save) {
+  for (const guard of [...save.update ?? [], ...save.attach ?? []]) if (scheduleGuardFails(guard)) return agentScheduleRefused('STALE', 'Someone changed a schedule after it was read. Nothing was saved.')
+  for (const detach of save.detach ?? []) {
+    const at = agentScheduleLinks.findIndex(link => link.scheduleId === detach.id && link.jobId === jobId)
+    if (at >= 0) agentScheduleLinks.splice(at, 1)
+    if (detach.deleteUnused && !agentScheduleLinks.some(link => link.scheduleId === detach.id)) agentSchedules.splice(agentSchedules.findIndex(item => item.id === detach.id), 1)
+  }
+  for (const update of save.update ?? []) {
+    const schedule = agentSchedules.find(item => item.id === update.id)
+    Object.assign(schedule, update.name !== undefined ? { name: update.name } : {}, update.enabled !== undefined ? { enabled: update.enabled } : {}, update.timing ?? {}, { version: schedule.version + 1, modified: agentScheduleStamp() })
+  }
+  for (const attach of save.attach ?? []) agentScheduleLinks.push({ scheduleId: attach.id, jobId })
+  for (const add of save.add ?? []) {
+    const id = Math.max(0, ...agentSchedules.map(item => item.id)) + 1
+    agentSchedules.push({ id, name: add.name, enabled: add.enabled, owner: 'sa', version: 1, modified: agentScheduleStamp(), ...add.timing })
+    agentScheduleLinks.push({ scheduleId: id, jobId })
+  }
+  return undefined
 }
 /** A job verb (AG-2's actions.execute on an agentJob) against the fake jobs: one result per job, JOB_STATE when there is nothing to do. */
 // The Log File Viewer's history (agent.history) of the same jobs: Nightly's last run failed at its second step, an older one
@@ -2507,6 +2577,8 @@ async function workbench(id, method, params, credit) {
           // As the backend answers a job msdb no longer has: an error in the result, not a failed request.
           return respond(id, value ?? { elapsedMs: 1, error: { code: 'NOT_FOUND', message: `The job ${params.target.name} no longer exists.`, retryable: false } })
         }
+        // The Schedules document and the job document's Schedules section (AG-6c).
+        case 'agentSchedules': return respond(id, agentSchedulesDescribe(params))
         case 'agentProxy': return respond(id, agentProxyDocument(params))
         case 'credential': return respond(id, credentialDocument(params))
         case 'tableDesigner': return respond(id, { tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', canCreate: true }, elapsedMs: 1 })
@@ -2539,6 +2611,7 @@ GO
     // 250 ms) until step 1 replaces it, and drops the out-of-range one.
     case 'actions.execute':
       if (params.action === 'agentJob') return respond(id, await agentJobSave(params))
+      if (params.action === 'agentSchedule') return respond(id, agentScheduleSave(params))
       if (params.action === 'agentProxy') return respond(id, agentProxySave(params))
       if (params.action === 'credential') return respond(id, credentialSave(params))
       if (params.target?.kind === 'agentJob') return respond(id, agentJobVerb(params))

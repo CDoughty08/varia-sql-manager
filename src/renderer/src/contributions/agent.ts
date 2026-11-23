@@ -16,7 +16,7 @@ import { serverItems } from './query'
  * bar's button) the jobs selected there, and the Agent node, the Jobs folder and the palette every job. Refresh History and
  * Delete History act on the viewer whose header runs them, else the active document.
  */
-export function agentContribution({ commands, jobActivity, logViewer, documents, connections, explorer, quickInput, jobDocuments }: Pick<Workbench, 'commands' | 'jobActivity' | 'logViewer' | 'documents' | 'connections' | 'explorer' | 'quickInput' | 'jobDocuments'>,
+export function agentContribution({ commands, jobActivity, logViewer, documents, connections, explorer, quickInput, jobDocuments, schedules }: Pick<Workbench, 'commands' | 'jobActivity' | 'logViewer' | 'documents' | 'connections' | 'explorer' | 'quickInput' | 'jobDocuments' | 'schedules'>,
   options: { readonly agentEnabled?: boolean } = {}): Disposable {
   if (!options.agentEnabled) return { dispose: () => {} }
   const live = (id: string | undefined) => id !== undefined && connections.isLiveSqlServer(id) ? id : undefined
@@ -62,7 +62,25 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
     when: (args?: CommandArgs) => { const id = jobOf(args); return !!id && when(id) },
     run: async (args?: CommandArgs) => { const id = jobOf(args); if (id && when(id)) await run(id, args) }
   })
+  // The Schedules document (AG-6c): Manage Schedules and New Schedule… on a server picked as New Job's is; its verbs on the Schedules
+  // document whose toolbar runs them, else the active one.
+  const schedulesOf = (args?: CommandArgs): string | undefined => { const id = args?.tabId ?? documents.getSnapshot().activeId; return schedules.get(id) ? id : undefined }
+  const onSchedules = (when: (id: string) => boolean, run: (id: string) => unknown) => ({
+    when: (args?: CommandArgs) => { const id = schedulesOf(args); return !!id && when(id) },
+    run: async (args?: CommandArgs) => { const id = schedulesOf(args); if (id && when(id)) await run(id) }
+  })
   const registrations = [
+    commands.register('agent.schedules', {
+      when: args => { const node = explorerNodeOf(args); return !node || (!node.lost && connections.isLiveSqlServer(node.connectionId)) },
+      run: args => withServer(args, 'Manage Schedules', connectionId => report(() => schedules.open(connectionId), 'The Schedules document could not open.'))
+    }),
+    commands.register('agent.newSchedule', {
+      when: args => { const node = explorerNodeOf(args); return !node || (!node.lost && connections.isLiveSqlServer(node.connectionId)) },
+      run: args => withServer(args, 'New Schedule', connectionId => report(() => schedules.open(connectionId, true), 'New Schedule could not open.'))
+    }),
+    commands.register('agentSchedules.save', onSchedules(id => schedules.canSaveAll(id), id => schedules.save(id))),
+    commands.register('agentSchedules.refresh', onSchedules(id => schedules.canRefresh(id), id => schedules.refresh(id))),
+    commands.register('agentSchedules.delete', onSchedules(id => schedules.canDelete(id), id => schedules.askDelete(id))),
     commands.register('agent.jobActivity', {
       when: args => { const node = explorerNodeOf(args); return !node || (!node.lost && connections.isLiveSqlServer(node.connectionId)) },
       run: args => {
@@ -123,10 +141,10 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
         withServer(args, 'Open Job', pickJob)
       }
     }),
-    commands.register('agent.newJob', {
+    ...(['agent.newJob', 'agent.newJobOnAgent'] as const).map(id => commands.register(id, {
       when: args => { const node = explorerNodeOf(args); return !node || (!node.lost && connections.isLiveSqlServer(node.connectionId)) },
       run: args => withServer(args, 'New Job', connectionId => report(() => jobDocuments.newJob(connectionId), 'New Job could not open.'))
-    }),
+    })),
     commands.register('agentJob.save', onJob(id => jobDocuments.canSave(id), id => jobDocuments.save(id))),
     commands.register('agentJob.start', onJob(id => jobDocuments.canStart(id), id => jobDocuments.start(id))),
     commands.register('agentJob.startAtStep', onJob(id => jobDocuments.canStart(id) && jobDocuments.steps(id).length > 0, (id, args) => {
