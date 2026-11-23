@@ -16,17 +16,27 @@ namespace Varia.Backend;
 /// </summary>
 internal sealed partial class SqlService
 {
-    /// <summary>results.remoteQuery (docs/ipc.md): Load into memory, or a sort or filter (view) or value list (distinct).</summary>
+    /// <summary>results.remoteQuery (docs/ipc.md): Load into memory, a sort or filter (view), a value list (distinct), Load sample
+    /// (sample) or Re-run (rerun).</summary>
     private Task<QueryResult> RemoteQueryAsync(RemoteQueryArgs args, RequestContext? context) => args.Kind switch
     {
         "load" => RemoteLoadAsync(args, context),
-        "view" or "distinct" => RemoteDerivedAsync(args, context),
-        _ => throw new RequestException("INVALID_PARAMS", "A remote query's kind is load, view or distinct.")
+        "view" or "distinct" or "sample" or "rerun" => RemoteDerivedAsync(args, context),
+        _ => throw new RequestException("INVALID_PARAMS", "A remote query's kind is load, view, distinct, sample or rerun.")
     };
 
     /// <summary>A derived remote query, checked and written: its source result and window, its SQL and parameters, whether it
-    /// runs the original query again, and the value list's column.</summary>
-    private sealed record RemotePlan(ResultSetBuffer Set, BigQueryWindow Window, string Sql, List<QueryParameter> Parameters, bool Fallback, int? Column, bool Lists);
+    /// runs the original query again, and the value list's column. A sample reads <see cref="SampleRows"/> rows, its first ones
+    /// through tabledata.list when <see cref="FirstRows"/> (no job, no SQL); a rerun runs the result's own statement in
+    /// <see cref="Dataset"/>, its text read from the job when <see cref="FromJob"/>.</summary>
+    private sealed record RemotePlan(ResultSetBuffer Set, BigQueryWindow Window, string Sql, List<QueryParameter> Parameters, bool Fallback, int? Column, bool Lists)
+    {
+        public string Kind { get; init; } = "view";
+        public int SampleRows { get; init; }
+        public bool FirstRows { get; init; }
+        public bool FromJob { get; init; }
+        public string? Dataset { get; init; }
+    }
 
     /// <summary>Whether a windowed result's original query may run again in place of its expired result table: one query the
     /// scanner finds deterministic, not a script's child, run outside a session. Every tab job runs in the tab's session
@@ -36,9 +46,12 @@ internal sealed partial class SqlService
 
     private static RequestException NotWindowed() => new("INVALID_PARAMS", "Only a windowed BigQuery result is sorted or filtered in BigQuery.");
 
-    /// <summary>Checks a view or distinct request against its source result and writes its query.</summary>
-    private RemotePlan PlanRemote(uint resultId, string kind, RemoteSortArgs[]? sort, RemoteFilterArgs[]? filters, int? column, RemoteFilterArgs[]? kept, bool fallback)
+    /// <summary>Checks a view, distinct, sample or rerun request against its source result and writes its query.</summary>
+    private RemotePlan PlanRemote(uint resultId, string kind, RemoteSortArgs[]? sort, RemoteFilterArgs[]? filters, int? column, RemoteFilterArgs[]? kept, bool fallback,
+        int? rows = null, string? method = null)
     {
+        if (kind is "sample" or "rerun") return PlanAuxiliary(resultId, kind, sort, filters, column, kept, fallback, rows, method);
+        if (rows is not null || method is not null) throw new RequestException("INVALID_PARAMS", "Only a sample takes rows and a method.");
         if (resultId == 0 || kind is not ("view" or "distinct"))
             throw new RequestException("INVALID_PARAMS", "A remote view or value list needs a result and a kind (view or distinct).");
         var set = store.Find(resultId) ?? throw Unavailable(resultId);
@@ -161,12 +174,29 @@ internal sealed partial class SqlService
         if (set.Remote is not { Source: BigQueryWindow window }) throw NotWindowed();
         if (window.Connection != connection) throw new RequestException("INVALID_PARAMS", "The result is not this connection's.");
         // The request is checked whole before anything is asked of BigQuery.
-        var plan = PlanRemote(remote.ResultId, remote.Kind, remote.Sort, remote.Filters, remote.Column, remote.Kept, false);
-        if (await TableGoneAsync(connection, window.Table, token)) plan = PlanRemote(remote.ResultId, remote.Kind, remote.Sort, remote.Filters, remote.Column, remote.Kept, true);
+        var plan = PlanRemote(remote.ResultId, remote.Kind, remote.Sort, remote.Filters, remote.Column, remote.Kept, false, remote.Rows, remote.Method);
+        // The first rows are free (tabledata.list, no job): nothing to estimate.
+        if (plan.FirstRows) return new(0, StatementType: "SELECT");
+        var sql = plan.Sql;
+        var dataset = plan.Dataset;
+        if (plan.Kind == "rerun")
+        {
+            // A rerun reads what its statement reads, not the result table, so whether that expired does not matter.
+            if (plan.FromJob) (sql, dataset, _) = await StatementAsync(plan, token);
+        }
+        // TABLESAMPLE reads a table, never a subquery: a sample of an expired result has nothing to fall back to.
+        else if (plan.Kind == "sample") await SampleTableAsync(connection, window.Table, token);
+        else if (await TableGoneAsync(connection, window.Table, token))
+        {
+            plan = PlanRemote(remote.ResultId, remote.Kind, remote.Sort, remote.Filters, remote.Column, remote.Kept, true);
+            sql = plan.Sql;
+            dataset = window.Args.Dataset ?? connection.Options.Dataset;
+        }
         BigQueryEstimate estimate;
-        try { estimate = await bigQuery.EstimateAsync(connection, plan.Sql, token, plan.Fallback ? window.Args.Dataset ?? connection.Options.Dataset : null, plan.Parameters, window.Location); }
-        // A table that is not there is a value list's, unless the result's own expired since the check above.
-        catch (RequestException error) when (error.Code is "SQL_ERROR" or "NOT_FOUND" && error.Message.StartsWith("Not found: Table", StringComparison.Ordinal))
+        try { estimate = await bigQuery.EstimateAsync(connection, sql, token, dataset, plan.Parameters, window.Location); }
+        // A table that is not there is a value list's, unless the result's own expired since the check above. A rerun's
+        // missing table is its statement's, which BigQuery's own words name.
+        catch (RequestException error) when (plan.Kind != "rerun" && error.Code is "SQL_ERROR" or "NOT_FOUND" && error.Message.StartsWith("Not found: Table", StringComparison.Ordinal))
         {
             if (!plan.Fallback && await TableGoneAsync(connection, window.Table, token)) throw Expired();
             if (plan.Lists) throw ValueListExpired();
@@ -179,29 +209,38 @@ internal sealed partial class SqlService
     internal Action? RemoteDerivedRegistered { get; set; }
 
     /// <summary>
-    /// results.remoteQuery, kind view or distinct: one query job over the windowed result (or its original query, Fallback),
-    /// outside the tab's session, under the original query's billing cap and timeout. Its answer becomes a new result of the
-    /// same query, announced with resultSet.opened: a view by the residence rule (so a small one is in memory, and a large one
-    /// is windowed itself), a value list whole in memory and marked as one (<see cref="ResultSetBuffer.ValueList"/>). Stop,
-    /// the source's release or a failure releases the new result and cancels the job; the answer is a query summary.
+    /// results.remoteQuery, kind view, distinct, sample or rerun: one query job over the windowed result (or its original query,
+    /// Fallback; or, for a rerun, the result's own statement), outside the tab's session, under the original query's billing cap
+    /// and timeout. Its answer becomes a new result of the same query, announced with resultSet.opened: a view or rerun by the
+    /// residence rule (so a small one is in memory, and a large one is windowed itself), a value list whole in memory and marked
+    /// as one (<see cref="ResultSetBuffer.ValueList"/>), a sample in memory. A sample of the first rows runs no job: it reads
+    /// them through tabledata.list. Stop, the source's release or a failure releases the new result and cancels the job; the
+    /// answer is a query summary.
     /// </summary>
     private async Task<QueryResult> RemoteDerivedAsync(RemoteQueryArgs args, RequestContext? context)
     {
         if (!Guid.TryParse(args.QueryId, out _)) throw new RequestException("INVALID_PARAMS", "A remote query needs its query ID.");
         var distinct = args.Kind == "distinct";
-        var plan = PlanRemote(args.ResultId, args.Kind, args.Sort, args.Filters, args.Column, args.Kept, args.Fallback == true);
+        var plan = PlanRemote(args.ResultId, args.Kind, args.Sort, args.Filters, args.Column, args.Kept, args.Fallback == true, args.Rows, args.Method);
         var (set, window) = (plan.Set, plan.Window);
+        var kind = plan.Kind;
+        var sample = kind == "sample";
         var connection = window.Connection;
         if (bigQuery.Find(connection.Id) != connection) throw new RequestException("NOT_CONNECTED", "The connection was closed.");
-        if (set.Budget.Executing) throw new RequestException("BUSY", "This result's query is still running. Sort or filter it once the query has finished.");
+        if (set.Budget.Executing) throw new RequestException("BUSY", "This result's query is still running. " + RemoteVerb(kind) + " once the query has finished.");
+        // A sample or rerun is read into the same budget a load is filling.
+        if (kind is "sample" or "rerun" && set.Budget.Loading)
+            throw new RequestException("BUSY", "Another result of this query is loading into memory. " + RemoteVerb(kind) + " once it has finished.");
         if (BudgetStopped(set.Budget) is { } stopped) throw stopped;
         var queryArgs = window.Args with
         {
             Sql = plan.Sql, QueryId = args.QueryId,
-            // A value list is read whole, never capped by Maximum rows, so its rows are its values' ranks.
-            MaxRows = distinct ? 0 : window.Args.MaxRows, Residence = distinct ? "memory" : window.Args.Residence
+            // A value list is read whole, never capped by Maximum rows, so its rows are its values' ranks; a sample is capped by
+            // its own LIMIT and is always read into memory.
+            MaxRows = distinct || sample ? 0 : window.Args.MaxRows, Residence = distinct || sample ? "memory" : window.Args.Residence
         };
-        var timeout = window.Args.TimeoutSeconds;
+        // The query's timeout bounds a job; a first-rows sample runs none, and Stop ends its free reads.
+        var timeout = plan.FirstRows ? 0 : window.Args.TimeoutSeconds;
         using var cancellation = timeout == 0 ? new CancellationTokenSource() : new CancellationTokenSource(TimeSpan.FromSeconds(timeout));
         var running = new RunningQuery(connection.Id, args.QueryId, cancellation);
         if (!Register(args.QueryId, running)) throw new RequestException("DUPLICATE_QUERY", "This query is already running.");
@@ -222,7 +261,7 @@ internal sealed partial class SqlService
         var project = window.Project;
         var jobId = BigQueryService.NewJobId();
         var location = window.Location;
-        var dataset = plan.Fallback ? window.Args.Dataset ?? connection.Options.Dataset : null;
+        var dataset = plan.Fallback ? window.Args.Dataset ?? connection.Options.Dataset : plan.Dataset;
         var cap = connection.Options.MaximumBytesBilled ?? window.Args.MaximumBytesBilled;
         var prices = window.Args.Prices != false;
         var sent = false;
@@ -240,88 +279,118 @@ internal sealed partial class SqlService
         using var stopJob = token.Register(StopJob);
         try
         {
-            if (plan.Fallback) messages.Add("BigQuery no longer has the result's temporary table, so the original query runs again with the sort or filter around it.");
-            var job = new Job
+            if (plan.FirstRows)
             {
-                JobReference = new JobReference { ProjectId = project, JobId = jobId, Location = location },
-                Configuration = new JobConfiguration
-                {
-                    Labels = new Dictionary<string, string>(BigQueryService.Labels),
-                    JobTimeoutMs = timeout > 0 ? timeout * 1000L : null,
-                    Query = new JobConfigurationQuery
-                    {
-                        Query = plan.Sql, UseLegacySql = false, QueryParameters = plan.Parameters, ParameterMode = "NAMED",
-                        DefaultDataset = dataset is null ? null : new DatasetReference { ProjectId = project, DatasetId = dataset },
-                        MaximumBytesBilled = cap
-                    }
-                }
-            };
-            sent = true;
-            var inserted = await bigQuery.InsertJobAsync(connection, job, dataset, token);
-            created = true;
-            location = KnownLocation(inserted.JobReference?.Location) ?? location;
-            messages.Add("BigQuery job " + JobName(project, location, jobId) + ".");
-            events.Job(JobEvent(project, jobId, location, "running", BigQueryTransaction.None));
-            if (BigQueryJobException.Of(inserted) is { } refused) throw refused;
-            BigQueryPage? page = null;
-            try
-            {
-                while (true)
-                {
-                    token.ThrowIfCancellationRequested();
-                    page = await bigQuery.QueryResultsAsync(connection, project, jobId, location, null, BigQueryFirstPageRows, bigQuery.ChildPollMs, token);
-                    if (page.JobComplete) break;
-                    page.Dispose();
-                    page = null;
-                }
-                complete = true;
-                var finished = await bigQuery.GetJobAsync(connection, project, jobId, location, token);
-                summary = JobSummary(project, location, jobId, finished);
-                events.Job(JobEvent(project, jobId, location, "done", BigQueryTransaction.None));
-                var columns = BigQueryColumnPlan.From(page.Schema) ?? throw new RequestException("BACKEND_ERROR", "BigQuery answered the query without columns.");
-                var total = page.TotalRows ?? 0;
-                derived = store.Open(set.Budget, set.Index, set.BatchNumber, set.Iteration, "rows", columns.Columns, columns.Wires, lengths: columns.Lengths, derived: true)
-                    ?? throw TooLarge(distinct ? "There is not enough result memory for this column's values. Close other results and try again."
-                        : "There is not enough result memory for this view. Close other results and try again.");
-                BigQueryWindow? derivedWindow = null;
-                RemoteResult? windowed;
-                // Announced even when deciding fails, so the end closes a set the grid heard open.
-                try { windowed = await DecideResidenceAsync(queryArgs, connection, project, jobId, location, finished, false, columns, page, derived, set.Budget, messages, value => derivedWindow = value, token); }
-                catch
-                {
-                    events.Opened(derived);
-                    throw;
-                }
+                // Free: tabledata.list reads the result table's first rows, and no job runs.
+                derived = store.Open(set.Budget, set.Index, set.BatchNumber, set.Iteration, "rows", window.Plan.Columns, window.Plan.Wires, lengths: window.Plan.Lengths, derived: true)
+                    ?? throw TooLarge(SampleRoom);
+                derived.InMemory(Math.Min(plan.SampleRows, window.TotalRows));
                 events.Opened(derived);
-                if (windowed is null)
-                {
-                    var readSession = distinct ? null : await BigQueryStorageSessionAsync(queryArgs, connection, project, jobId, location, columns, page, messages, token);
-                    var reading = page;
-                    page = null;
-                    if (readSession is null) await ReadBigQueryRowsAsync(queryArgs, connection, project, jobId, location, columns, reading, derived, set.Budget, total, new RoomWaited(), events, warn, token, derivedWindow, messages);
-                    else
-                    {
-                        reading.Dispose();
-                        await ReadBigQueryArrowAsync(queryArgs, readSession, derived, set.Budget, total, new RoomWaited(), events, warn, token, derivedWindow, messages);
-                    }
-                }
+                await SampleFirstRowsAsync(connection, window, plan.SampleRows, derived, set.Budget, events, warn, token);
                 derived.Complete();
-                if (distinct)
-                {
-                    // A value list is used whole: its rows are named by rank, so a part would name the wrong values.
-                    if (derived.IsRemote || derived.Describe().RowsStored < total)
-                        throw TooLarge("There is not enough result memory for this column's values. Close other results and try again.");
-                    var table = await DestinationAsync(connection, project, jobId, location, finished, token)
-                        ?? throw new RequestException("BACKEND_ERROR", "BigQuery did not name the value list's result table.");
-                    derived.ValueList = new RemoteValueList(table, set.ResultId, plan.Column!.Value, (int)total, total >= BigQueryViewSql.ValueListCap);
-                }
                 // The source released while the last rows came: nothing owns the new result (the catch releases it).
                 if (set.IsReleased) throw Unavailable(args.ResultId);
                 events.Closed(derived);
-                messages.Add(distinct ? "The column's values were listed in BigQuery."
-                    : total == 1 ? "(1 row affected)" : "(" + total.ToString(CultureInfo.InvariantCulture) + " rows affected)");
+                messages.Add(SampleSentence(derived, window.TotalRows) + " Its first rows were read with tabledata.list, which is free and runs no job.");
             }
-            finally { page?.Dispose(); }
+            else
+            {
+                if (plan.Fallback) messages.Add("BigQuery no longer has the result's temporary table, so the original query runs again with the sort or filter around it.");
+                // A random sample's table is checked against TABLESAMPLE's limitations (free) before anything is billed.
+                var sampled = sample ? await SampleTableAsync(connection, window.Table, token) : null;
+                // A rerun's statement is read from its job (free) before anything is billed.
+                if (plan.FromJob)
+                {
+                    var (statement, from, session) = await StatementAsync(plan, token);
+                    // The window it opens keeps them, so its own rerun starts from what ran.
+                    queryArgs = queryArgs with { Sql = statement, Dataset = from };
+                    dataset = from;
+                    if (session) messages.Add(RerunOutsideSession);
+                }
+                var job = new Job
+                {
+                    JobReference = new JobReference { ProjectId = project, JobId = jobId, Location = location },
+                    Configuration = new JobConfiguration
+                    {
+                        Labels = new Dictionary<string, string>(BigQueryService.Labels),
+                        JobTimeoutMs = timeout > 0 ? timeout * 1000L : null,
+                        Query = new JobConfigurationQuery
+                        {
+                            Query = queryArgs.Sql, UseLegacySql = false, QueryParameters = plan.Parameters, ParameterMode = "NAMED",
+                            DefaultDataset = dataset is null ? null : new DatasetReference { ProjectId = project, DatasetId = dataset },
+                            MaximumBytesBilled = cap
+                        }
+                    }
+                };
+                sent = true;
+                var inserted = await bigQuery.InsertJobAsync(connection, job, dataset, token);
+                created = true;
+                location = KnownLocation(inserted.JobReference?.Location) ?? location;
+                messages.Add("BigQuery job " + JobName(project, location, jobId) + ".");
+                events.Job(JobEvent(project, jobId, location, "running", BigQueryTransaction.None));
+                if (BigQueryJobException.Of(inserted) is { } refused) throw refused;
+                BigQueryPage? page = null;
+                try
+                {
+                    while (true)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        page = await bigQuery.QueryResultsAsync(connection, project, jobId, location, null, BigQueryFirstPageRows, bigQuery.ChildPollMs, token);
+                        if (page.JobComplete) break;
+                        page.Dispose();
+                        page = null;
+                    }
+                    complete = true;
+                    var finished = await bigQuery.GetJobAsync(connection, project, jobId, location, token);
+                    summary = JobSummary(project, location, jobId, finished);
+                    events.Job(JobEvent(project, jobId, location, "done", BigQueryTransaction.None));
+                    var columns = BigQueryColumnPlan.From(page.Schema) ?? throw new RequestException("BACKEND_ERROR", "BigQuery answered the query without columns.");
+                    var total = page.TotalRows ?? 0;
+                    derived = store.Open(set.Budget, set.Index, set.BatchNumber, set.Iteration, "rows", columns.Columns, columns.Wires, lengths: columns.Lengths, derived: true)
+                        ?? throw TooLarge(distinct ? "There is not enough result memory for this column's values. Close other results and try again."
+                            : sample ? SampleRoom : "There is not enough result memory for this view. Close other results and try again.");
+                    BigQueryWindow? derivedWindow = null;
+                    RemoteResult? windowed;
+                    // Announced even when deciding fails, so the end closes a set the grid heard open.
+                    try { windowed = await DecideResidenceAsync(queryArgs, connection, project, jobId, location, finished, false, columns, page, derived, set.Budget, messages, value => derivedWindow = value, token); }
+                    catch
+                    {
+                        events.Opened(derived);
+                        throw;
+                    }
+                    events.Opened(derived);
+                    if (windowed is null)
+                    {
+                        var readSession = distinct ? null : await BigQueryStorageSessionAsync(queryArgs, connection, project, jobId, location, columns, page, messages, token);
+                        var reading = page;
+                        page = null;
+                        if (readSession is null) await ReadBigQueryRowsAsync(queryArgs, connection, project, jobId, location, columns, reading, derived, set.Budget, total, new RoomWaited(), events, warn, token, derivedWindow, messages);
+                        else
+                        {
+                            reading.Dispose();
+                            await ReadBigQueryArrowAsync(queryArgs, readSession, derived, set.Budget, total, new RoomWaited(), events, warn, token, derivedWindow, messages);
+                        }
+                    }
+                    derived.Complete();
+                    if (distinct)
+                    {
+                        // A value list is used whole: its rows are named by rank, so a part would name the wrong values.
+                        if (derived.IsRemote || derived.Describe().RowsStored < total)
+                            throw TooLarge("There is not enough result memory for this column's values. Close other results and try again.");
+                        var table = await DestinationAsync(connection, project, jobId, location, finished, token)
+                            ?? throw new RequestException("BACKEND_ERROR", "BigQuery did not name the value list's result table.");
+                        derived.ValueList = new RemoteValueList(table, set.ResultId, plan.Column!.Value, (int)total, total >= BigQueryViewSql.ValueListCap);
+                    }
+                    // A rerun stands for its source from now on, so it may be run again itself.
+                    if (kind == "rerun") derived.Reran = true;
+                    // The source released while the last rows came: nothing owns the new result (the catch releases it).
+                    if (set.IsReleased) throw Unavailable(args.ResultId);
+                    events.Closed(derived);
+                    messages.Add(distinct ? "The column's values were listed in BigQuery." : sample ? SampleSentence(derived, window.TotalRows) + ShortSample(total, plan.SampleRows, window.TotalRows) + OneBlock(sampled!)
+                        : total == 1 ? "(1 row affected)" : "(" + total.ToString(CultureInfo.InvariantCulture) + " rows affected)");
+                }
+                finally { page?.Dispose(); }
+            }
         }
         catch (Exception error)
         {
@@ -347,7 +416,7 @@ internal sealed partial class SqlService
             {
                 StopJob();
                 status = running.UserCancelled ? "cancelled" : "timedOut";
-                var sentence = running.UserCancelled ? "The sort or filter was cancelled." : "The sort or filter exceeded the query's execution timeout.";
+                var sentence = running.UserCancelled ? RemoteNoun(kind) + " was cancelled." : RemoteNoun(kind) + " exceeded the query's execution timeout.";
                 messages.Add(sentence, MessageKind.Error);
                 if (running.UserCancelled && sent && !complete)
                     messages.Add("Varia asked BigQuery to cancel job " + JobName(project, location, jobId) + ". Cancelling is best-effort: BigQuery may still bill work done before the job stopped.");
@@ -355,7 +424,7 @@ internal sealed partial class SqlService
             }
             else
             {
-                var mapped = error as RequestException ?? await RemoteFailureAsync(error, connection, window, created, cap, prices, plan.Lists);
+                var mapped = error as RequestException ?? await RemoteFailureAsync(error, connection, window, created, cap, prices, plan.Lists, kind);
                 status = "failed";
                 messages.Add(mapped.Message, MessageKind.Error);
                 failure = new(mapped.Code, mapped.Message.Length > 16384 ? mapped.Message[..16384] + "…" : mapped.Message, 1, 1);
@@ -376,10 +445,13 @@ internal sealed partial class SqlService
 
     /// <summary>A derived query's failure: an expired result table (or value list) as REMOTE_EXPIRED, an ORDER BY BigQuery had
     /// no resources for with a pointer to filtering first, anything else as Execute reports it.</summary>
-    private async Task<RequestException> RemoteFailureAsync(Exception error, BigQueryConnection connection, BigQueryWindow window, bool created, long? cap, bool prices, bool lists)
+    private async Task<RequestException> RemoteFailureAsync(Exception error, BigQueryConnection connection, BigQueryWindow window, bool created, long? cap, bool prices, bool lists,
+        string kind = "view")
     {
         var mapped = await BigQueryFailureAsync(error, connection, created, cap, prices, CancellationToken.None);
-        if (error is BigQueryJobException job && job.Errors.Concat([job.Result]).Any(entry => entry.Reason == "resourcesExceeded"))
+        // A rerun reads its statement's tables, not the expired result table: BigQuery's own words name what is missing.
+        if (kind == "rerun") return mapped;
+        if (kind is "view" or "distinct" && error is BigQueryJobException job && job.Errors.Concat([job.Result]).Any(entry => entry.Reason == "resourcesExceeded"))
             return new RequestException(mapped.Code, mapped.Message + " Filter the result first, so BigQuery sorts fewer rows.");
         if (NotFound(error) || (error is BigQueryJobException missing && missing.Errors.Concat([missing.Result]).Any(entry => entry.Reason == "notFound")))
             return await TableGoneAsync(connection, window.Table, CancellationToken.None) ? Expired() : lists ? ValueListExpired() : mapped;

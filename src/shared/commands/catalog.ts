@@ -1241,6 +1241,13 @@ export const commandCatalog = {
     title: 'Load Result into Memory', category: 'Query', icon: 'cloud-download', keywords: ['bigquery', 'windowed', 'load', 'memory', 'remote', 'rows', 'grid', 'result'], providers: ['bigquery'], methods: ['results.remoteQuery'],
     menus: [{ menu: 'output.tools', group: '2_view', order: 5, title: 'Load into Memory', mnemonic: 'i' }]
   },
+  // Some rows of a windowed BigQuery result read into a new result in memory (results.remoteQuery `sample`): its first rows,
+  // free, or a random sample, billed after its estimate. The dialog asks how many and how. A comparison is never windowed,
+  // so its menu leaves it out (and Match Rows By keeps its M).
+  'output.loadSample': {
+    title: 'Load Sample…', category: 'Query', icon: 'beaker', keywords: ['bigquery', 'windowed', 'sample', 'tablesample', 'random', 'first', 'rows', 'memory', 'remote', 'grid', 'result'], providers: ['bigquery'], methods: ['results.remoteQuery'],
+    menus: [{ menu: 'output.tools', group: '2_view', order: 6, title: 'Load Sample…', mnemonic: 'm', when: '!resultsGridComparison' }]
+  },
   'output.transposeSelectedRows': {
     title: 'Transpose Selected Rows', category: 'Query', icon: 'transpose', keywords: ['transpose', 'rotate', 'record', 'selected', 'rows', 'details', 'keep', 'grid'], providers: both,
     menus: [{ menu: 'output.transposeMenu', group: '1_rows', order: 2, title: 'Selected Rows', mnemonic: 's', when: 'outputGridTransposable' }]

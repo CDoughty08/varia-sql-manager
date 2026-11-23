@@ -134,10 +134,57 @@ internal sealed class BigQueryFake
             Unmatched.Enqueue(request);
             return new HttpResponseMessage((HttpStatusCode)599) { Content = new StringContent("{}", Encoding.UTF8, "application/json") };
         }
-        var reply = answer(request);
+        var reply = Shape(request, answer(request));
         var response = new HttpResponseMessage((HttpStatusCode)reply.Status) { Content = new StringContent(reply.Body, Encoding.UTF8, reply.ContentType), RequestMessage = message };
         foreach (var (name, value) in reply.Headers ?? new Dictionary<string, string>()) response.Headers.TryAddWithoutValidation(name, value);
         return response;
+    }
+
+    /// <summary>
+    /// What BigQuery does with two query parameters any reply may meet, so a caller that confuses them fails here as it would
+    /// against BigQuery: <c>fields</c> (partial response) keeps only the named top-level properties, and tables.get's
+    /// <c>selectedFields</c> keeps only the table's columns of those names.
+    /// </summary>
+    private static Reply Shape(Request request, Reply reply)
+    {
+        if (reply.Status != 200 || reply.ContentType != "application/json") return reply;
+        var query = System.Web.HttpUtility.ParseQueryString(request.Uri.Query);
+        if (query["fields"] is null && query["selectedFields"] is null) return reply;
+        if (System.Text.Json.Nodes.JsonNode.Parse(reply.Body) is not System.Text.Json.Nodes.JsonObject json) return reply;
+        if (query["selectedFields"] is { } selected && json["schema"]?["fields"] is System.Text.Json.Nodes.JsonArray columns)
+        {
+            var names = selected.Split(',').ToHashSet(StringComparer.Ordinal);
+            json["schema"]!["fields"] = new System.Text.Json.Nodes.JsonArray([.. columns.Where(column => names.Contains(column!["name"]!.GetValue<string>())).Select(column => column!.DeepClone())]);
+        }
+        if (query["fields"] is { } fields)
+        {
+            var kept = TopLevel(fields);
+            foreach (var name in json.Select(pair => pair.Key).Where(name => !kept.Contains(name)).ToList()) json.Remove(name);
+        }
+        return reply with { Body = json.ToJsonString() };
+    }
+
+    /// <summary>A partial-response mask's top-level names: <c>a,b(c,d),e/f</c> keeps a, b and e.</summary>
+    private static HashSet<string> TopLevel(string mask)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        var depth = 0;
+        var name = new StringBuilder();
+        var naming = true;
+        foreach (var letter in mask + ",")
+        {
+            if (letter == '(') depth++;
+            else if (letter == ')') depth--;
+            if (depth == 0 && letter == ',')
+            {
+                if (name.Length > 0) names.Add(name.ToString().Trim());
+                name.Clear();
+                naming = true;
+            }
+            else if (depth > 0 || letter is '(' or ')' or '/') naming = false;
+            else if (naming) name.Append(letter);
+        }
+        return names;
     }
 
     /// <summary>Every client the Google libraries create gets a relay to this fake; disposing a client disposes only its relay.</summary>

@@ -7,8 +7,8 @@ using Varia.Backend.Live;
 namespace Varia.Backend.Agent;
 
 /// <summary>agent.history's args (src/shared/agent/history.ts agentHistoryArgsSchema): the checked jobs (null: every job; empty: none), the date
-/// window in days, a run outcome, a message text, a step id and the selected run.</summary>
-internal sealed record AgentHistoryLiveArgs(string[]? Jobs = null, int? Days = null, string? Outcome = null, string? Text = null, int? Step = null, AgentHistoryRunDto? Run = null);
+/// window in days, a run outcome, a message text, a step id, the selected run and, for the job document's History (AG-6d), whether to add the one checked job's usual durations.</summary>
+internal sealed record AgentHistoryLiveArgs(string[]? Jobs = null, int? Days = null, string? Outcome = null, string? Text = null, int? Step = null, AgentHistoryRunDto? Run = null, bool? Usual = null);
 internal sealed record AgentHistoryRunDto(string? Job, int Instance);
 
 /// <summary>Checks agent.history's args as main's schema does.</summary>
@@ -29,6 +29,7 @@ internal static class AgentHistoryArgs
         if (args.Text is { } text && (text.Length == 0 || text.Length > catalog.Limit("searchChars"))) throw Invalid("The message text is 1 to " + catalog.Limit("searchChars") + " characters.");
         if (args.Step is { } step && (step < 0 || step > MaxStep)) throw Invalid("The step is 0 to " + MaxStep + ".");
         if (args.Run is { } run && (!IsUuid(run.Job) || run.Instance < 1)) throw Invalid("The run names a job id and an instance.");
+        if (args.Usual is { } usual && (!usual || args.Jobs is not { Length: 1 })) throw Invalid("Usual durations are read for one checked job.");
         return args;
     }
 
@@ -59,7 +60,8 @@ internal sealed record AgentHistoryRun(Guid Job, AgentHistoryRow? Outcome, List<
 /// <summary>
 /// The agent.history live source (docs/sql-server-agent.md, Log File Viewer): its one probe reads the checked jobs' history through msdb's own
 /// procedures by <see cref="AgentReader"/> (so every Agent role reads what msdb shows it) and groups it into runs (<see cref="Group"/>). Table 0 is
-/// the runs that pass the filters, newest first; table 1 the selected run's rows; table 2 every job the login may see, the viewer's sources. A new
+/// the runs that pass the filters, newest first; table 1 the selected run's rows; table 2 every job the login may see, the viewer's sources; table 3, with
+/// args.usual, the one checked job's usual durations (<see cref="UsualRows"/>, the job document's History). A new
 /// date window or job list reads again; any other change of args regroups the last read in memory. A refused part is a value: the jobs read failing
 /// fails the probe; the history read failing leaves the runs and steps empty with its error; the running state or the caps failing leave only
 /// their part out. Nothing is logged.
@@ -281,8 +283,8 @@ internal sealed class AgentHistoryReader(AgentHistoryLiveArgs? args = null, Agen
         ]))]);
         if (read.Rows is not { } rows)
         {
-            if (read.HistoryError is { } failed) errors.Add(Error(failed) with { Tables = [0, 1] });
-            return new(null, [new(0, []), new(1, []), jobsTable], errors, Status: Status(read));
+            if (read.HistoryError is { } failed) errors.Add(Error(failed) with { Tables = [0, 1, 3] });
+            return new(null, [new(0, []), new(1, []), jobsTable, new(3, [])], errors, Status: Status(read));
         }
         var runs = Group(rows, read.States, read.Label, windowed: now.Days is not null);
         var since = now.Days is { } days && read.ServerNow is { } clock ? clock.AddDays(-days) : (DateTime?)null;
@@ -294,7 +296,46 @@ internal sealed class AgentHistoryReader(AgentHistoryLiveArgs? args = null, Agen
         var steps = new List<LiveRow>();
         if (now.Run is { } selected && Guid.TryParse(selected.Job, out var job) && runs.FirstOrDefault(run => run.Job == job && run.Key == selected.Instance) is { } chosen)
             steps = [.. chosen.Rows.Select(row => StepRow(row, maxChars))];
-        return new(null, [new(0, runRows, read.Truncated || kept.Count > cap ? 1 : 0), new(1, steps), jobsTable], errors, Status: Status(read));
+        var usual = now.Usual == true ? UsualRows(runs) : [];
+        return new(null, [new(0, runRows, read.Truncated || kept.Count > cap ? 1 : 0), new(1, steps), jobsTable, new(3, usual)], errors, Status: Status(read));
+    }
+
+    /// <summary>How many of the newest succeeded runs the usual durations come from (docs/agent-ui-rethink.md, "usual 18 min").</summary>
+    public const int UsualRuns = 10;
+
+    /// <summary>
+    /// The job document's usual durations (table 3, with args.usual): the median of the newest <see cref="UsualRuns"/> succeeded runs, whatever the
+    /// filters, for the job (step 0, its outcome row's duration) and each step id (the step's rows in a run added up, retries included). A run with
+    /// no readable duration is left out; a step with no succeeded run has no row.
+    /// </summary>
+    internal static List<LiveRow> UsualRows(IEnumerable<AgentHistoryRun> runs)
+    {
+        var succeeded = runs.Where(run => run.Outcome is { Status: 1 }).OrderByDescending(run => run.Started ?? DateTime.MinValue).ThenByDescending(run => run.Key).Take(UsualRuns).ToList();
+        var samples = new SortedDictionary<int, List<long>>();
+        foreach (var run in succeeded)
+        {
+            if (AgentJobsReader.DecodeDuration(run.Outcome!.Duration) is { } total) Add(0, total);
+            foreach (var step in run.Steps.GroupBy(row => row.Step))
+            {
+                var parts = step.Select(row => AgentJobsReader.DecodeDuration(row.Duration)).ToList();
+                if (parts.All(part => part is not null)) Add(step.Key, parts.Sum(part => part!.Value));
+            }
+        }
+        return [.. samples.Select(entry => new LiveRow([LiveCell.Of((long)entry.Key), LiveCell.Of(Median(entry.Value)), LiveCell.Of((long)entry.Value.Count)]))];
+
+        void Add(int step, long seconds)
+        {
+            if (!samples.TryGetValue(step, out var list)) samples[step] = list = [];
+            list.Add(seconds);
+        }
+    }
+
+    /// <summary>The middle value, or the two middle values' mean rounded half up, of a non-empty list.</summary>
+    internal static long Median(List<long> values)
+    {
+        var sorted = values.Order().ToList();
+        var middle = sorted.Count / 2;
+        return sorted.Count % 2 == 1 ? sorted[middle] : (sorted[middle - 1] + sorted[middle] + 1) / 2;
     }
 
     private List<LiveStatus> Status(Read read)
