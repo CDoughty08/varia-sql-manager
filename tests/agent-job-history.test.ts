@@ -251,8 +251,12 @@ describe("the job document's watched state and History", () => {
     tick(1, 1, 20261122141004)
     expect(jobDocuments.get(id)?.live?.now).toBe(20261122141002)
     expect(history()!.refreshes).toBe(refreshes)
+    // Hidden, a step change leaves History paused: it samples afresh when it shows again.
     tick(1, 2, 20261122141006)
     expect(jobDocuments.get(id)?.live).toMatchObject({ step: 2, now: 20261122141006 })
+    expect(history()!.refreshes).toBe(refreshes)
+    jobDocuments.setFrame(id, { ...jobDocuments.get(id)!.frame, collapsed: [] })
+    tick(1, 3, 20261122141007)
     expect(history()!.refreshes).toBe(refreshes + 1)
     tick(4, 0, 20261122141008)
     expect(jobDocuments.get(id)?.live?.running).toBe(false)

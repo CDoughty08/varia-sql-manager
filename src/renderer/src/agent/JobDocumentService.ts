@@ -736,8 +736,9 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
       const moved = JSON.stringify({ ...next, now: undefined }) !== JSON.stringify({ ...state.live, now: undefined })
       if (!moved && !this.historyShows(id)) return
       this.patch(id, { live: next })
-      // A step ended or the run did: History reads it now rather than at its next sample (event-driven, not a timer).
-      if (moved && (next?.step !== state.live?.step || next?.running !== state.live?.running)) this.history.refresh(id)
+      // A step ended or the run did: History, while it shows, reads it now rather than at its next sample (event-driven, not a timer); hidden, it
+      // stays paused and samples afresh when it shows again.
+      if (moved && this.historyShows(id) && (next?.step !== state.live?.step || next?.running !== state.live?.running)) this.history.refresh(id)
     })
     this.views.set(id, { jobId: jobId.toLowerCase(), handle, stop: () => { ended = true; ticks.dispose(); handle.dispose() } })
   }

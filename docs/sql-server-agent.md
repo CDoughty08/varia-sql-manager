@@ -159,7 +159,7 @@ alerts, operators and who is notified, behind the same gate until 0.11.0.
   (the header's `agent.jobs.watched` probe; no elapsed time where the start is unreadable, never a guess) against the usual time as a
   bar, each step's state (finished steps as their rows say, the step Agent reports as current Executing or Between retries, the rest
   Waiting; with this run not selected under All, or its rows not read yet, the others show — rather than a guess) with this run's and
-  the usual time, and Stop. A step or the run ending reads History again at once. Saved edits apply from the next run, which the run view says. The section
+  the usual time, and Stop. A step or the run ending reads History again at once while it shows. Saved edits apply from the next run, which the run view says. The section
   is one `agent.history` view (one checked job, `usual: true`, so the probe adds a fourth table of the usual durations for the job
   and each step, a step's rows in a run added up) opened when the section first shows (on its connection's return when it shows
   disconnected); it runs while the document is the active one with History open, pauses while the document is hidden or the section
