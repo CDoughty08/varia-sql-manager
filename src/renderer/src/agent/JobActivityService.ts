@@ -449,6 +449,7 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
     // The rows change on their own from the live view; reading now shows the verbs' effect at once.
     this.handles.get(id)?.refresh()
   }
+
   // --- Change owner and Attach schedule (AG-3b) ------------------------------------------------------------------------------
 
   /** Opens Change owner's or Attach schedule's form for the jobs selected now, and reads what it offers: New Job's describe (whether the login

@@ -157,7 +157,7 @@ describe('Job Activity Monitor: Attach schedule', () => {
     jobActivity.setFormSearch(id, 'night')
     jobActivity.pickFormSchedule(id, 7)
     expect(jobActivity.formUnavailable(id)).toBeUndefined()
-    api.executeObjectAction.mockImplementation(async request => (request as { agentSchedule: { jobs: { jobId: string }[] } }).agentSchedule.jobs[0].jobId === backup.toUpperCase()
+    api.executeObjectAction.mockImplementation(async request => (request as unknown as { agentSchedule: { jobs: { jobId: string }[] } }).agentSchedule.jobs[0].jobId === backup.toUpperCase()
       ? { ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'STALE', message: 'Someone changed this job after it was read.', retryable: false } } } as never
       : { ok: true, value: { steps: [], messages: [], elapsedMs: 1 } })
     await jobActivity.submitForm(id)
