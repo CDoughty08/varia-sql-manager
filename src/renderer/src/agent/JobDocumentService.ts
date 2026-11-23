@@ -38,7 +38,7 @@ import { parseSsisCommand, ssisParameterRows, ssisProblems } from '../../../shar
 import type { LanguageParseError } from '../../../shared/agent/parse.ts'
 import type { SsisPackageModel, SsisProjectModel } from '../../../shared/ssis/schema.ts'
 import {
-  applyReplace, createFromCompare, createFromDraft, createFromLimits, createFromProblems, createFromText, jobCopySource, replaceMatches, withCopyScheduleChoice,
+  applyReplace, copiedScheduleKey, createFromCompare, createFromDraft, createFromLimits, createFromProblems, createFromText, jobCopySource, replaceMatches, withCopyScheduleChoice,
   type CopyCompareRow, type CopyScheduleChoice, type JobCopySource, type ReplaceMatch
 } from '../../../shared/agent/create-from.ts'
 
@@ -1000,7 +1000,9 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const entry = draft?.schedules.find(item => item.key === key)
     if (!draft || !entry || !this.canEdit(id) || !this.canDetachSchedule(id, entry)) return
     const record = this.scheduleRecord(id, entry)
-    const copy: JobScheduleEntry = { key: `n:${this.newId()}`, fields: { ...entry.fields, name: jobScheduleText.copyName(record?.name ?? entry.fields.name) } }
+    // A copy's source schedule copied here takes the key Changes from source reads its Copy choice by (AG-6e).
+    const sourced = entry.id !== undefined && !!this.get(id)?.source?.model.schedules?.some(item => item.id === entry.id) && !draft.schedules.some(item => item.key === copiedScheduleKey(entry.id!))
+    const copy: JobScheduleEntry = { key: sourced ? copiedScheduleKey(entry.id!) : `n:${this.newId()}`, fields: { ...entry.fields, name: jobScheduleText.copyName(record?.name ?? entry.fields.name) } }
     const rest = entry.attached ? draft.schedules.filter(item => item !== entry) : draft.schedules.map(item => item === entry ? { key: item.key, id: item.id, fields: record ? scheduleFieldsOf(record) : item.fields, remove: 'detach' as const } : item)
     this.setSchedules(id, [...rest, copy], copy.key)
   }

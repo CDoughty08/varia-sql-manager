@@ -141,8 +141,8 @@ function StepKeys({ state, model, editable, service, goTo, step, at }: Props & {
 
 function Schedules({ state, draft, editable, service, goTo }: Props) {
   const records = state.source!.model.schedules ?? []
-  if (!records.length) return <div role="group" className="agent-copy-group" aria-label={createFromText.schedulesTitle}><h3>{createFromText.schedulesTitle}</h3><p className="field-note">{createFromText.schedulesNone}</p></div>
-  return <div role="group" className="agent-copy-group" aria-label={createFromText.schedulesTitle}>
+  if (!records.length) return <div role="group" className="agent-copy-group" aria-label={createFromText.schedulesGroup}><h3>{createFromText.schedulesTitle}</h3><p className="field-note">{createFromText.schedulesNone}</p></div>
+  return <div role="group" className="agent-copy-group" aria-label={createFromText.schedulesGroup}>
     <h3>{createFromText.schedulesTitle}</h3>
     <div className="properties-fields">
       {records.map(record => {

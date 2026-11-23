@@ -53,6 +53,8 @@ export const createFromText = {
   setItNow: 'Set it now',
   noSteps: 'The source has no steps.',
   schedulesTitle: 'Schedules',
+  /** The group's name, apart from the Schedules section's own. */
+  schedulesGroup: 'Schedules from source',
   schedulesNone: 'The source has no schedules, so the copy runs only when started.',
   share: 'Share',
   copy: 'Copy',
@@ -98,7 +100,7 @@ export function withCopyScheduleChoice(schedules: readonly JobScheduleEntry[], r
   if (copyScheduleChoice(schedules, record) === choice) return schedules
   const own = (entry: JobScheduleEntry, item: AgentScheduleRecord) => (entry.id === item.id && entry.attached) || entry.key === copiedScheduleKey(item.id)
   const next = copyScheduleEntry(record, choice)
-  // A copied schedule switched away and back keeps what was typed into it.
+  // Copy while a copy is already there (beside a share) keeps that copy and what was typed into it.
   const kept = choice === 'copy' ? schedules.find(entry => entry.key === copiedScheduleKey(record.id)) : undefined
   const sourced = records.flatMap(item => {
     if (item.id === record.id) return next ? [kept ?? next] : []
@@ -159,11 +161,17 @@ function replaceTargets(draft: AgentJobDraft): ReplaceTarget[] {
   for (const entry of draft.schedules) if (entry.id === undefined && !entry.remove) targets.push({ field: 'scheduleName', key: entry.key, label: `Schedule '${entry.fields.name}' · name`, text: entry.fields.name })
   return targets
 }
+/** Where `find` occurs in `text`, as offsets into `text` itself: a case-insensitive search runs on the original string (a RegExp), since
+ *  lower-casing can change a string's length ('İ' becomes two code units) and would shift every later offset. */
 function occurrences(text: string, find: string, matchCase: boolean): number[] {
   if (!find) return []
-  const haystack = matchCase ? text : text.toLowerCase(), needle = matchCase ? find : find.toLowerCase()
   const found: number[] = []
-  for (let at = haystack.indexOf(needle); at >= 0; at = haystack.indexOf(needle, at + needle.length)) found.push(at)
+  if (matchCase) {
+    for (let at = text.indexOf(find); at >= 0; at = text.indexOf(find, at + find.length)) found.push(at)
+    return found
+  }
+  const pattern = new RegExp(find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')
+  for (let match = pattern.exec(text); match; match = pattern.exec(text)) found.push(match.index)
   return found
 }
 /** Every match of `find` across the copy, in the document's order, at most createFromLimits.replaceMatches (`more` says there were others). */

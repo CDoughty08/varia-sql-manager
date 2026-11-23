@@ -151,15 +151,16 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
       when: args => { const node = explorerNodeOf(args); return !node || (!node.lost && connections.isLiveSqlServer(node.connectionId)) },
       run: async args => {
         const like = (connectionId: string, name: string) => report(() => jobDocuments.createLike(connectionId, name), 'Create Job Like This could not open.')
-        const monitor = monitorOf(args)
+        // A job's menu names its job, whichever document is active.
+        const node = explorerNodeOf(args)
+        if (node?.ref.type === 'object' && node.ref.object.kind === 'agentJob' && node.ref.object.name !== undefined) return like(node.connectionId, node.ref.object.name)
+        const monitor = node ? undefined : monitorOf(args)
         if (monitor) {
           const selected = await jobActivity.settledSelection(monitor)
           const state = jobActivity.get(monitor), job = selected.length === 1 ? selected[0] : undefined
           if (!state?.connectionId || !job) { commands.reportError('Select one job to create a job like it.'); return }
           return like(state.connectionId, job.name)
         }
-        const node = explorerNodeOf(args)
-        if (node?.ref.type === 'object' && node.ref.object.kind === 'agentJob' && node.ref.object.name !== undefined) return like(node.connectionId, node.ref.object.name)
         const open = jobOf(args), job = open ? jobDocuments.get(open)?.model?.job : undefined, openConnection = open ? jobDocuments.connectionId(open) : undefined
         if (job && openConnection && connections.isLiveSqlServer(openConnection)) return like(openConnection, job.name)
         withServer(args, 'Create Job Like This', connectionId => quickInput.show({

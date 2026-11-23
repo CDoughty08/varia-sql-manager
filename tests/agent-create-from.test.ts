@@ -11,6 +11,7 @@ import type { AgentJobStepRecord } from '../src/shared/agent/steps'
 import { commandDescriptor } from '../src/shared/commands/catalog'
 import type { ApiResult } from '../src/shared/contracts'
 import { jobCopySection } from '../src/renderer/src/agent/JobDocumentService'
+import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import { connectionInfo, readyBackend, workbenchFixture } from './fixtures/workbench'
 
 const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
@@ -99,6 +100,13 @@ describe('Create Job Like This: the copy', () => {
     expect(replaceMatches(draft, 'Nightly').matches).toEqual([])
     expect(applyReplace(draft, 'sales', 'HR', new Set())).toBe(draft)
     expect(replaceMatches(draft, 'x'.repeat(createFromLimits.replaceChars + 1)).matches).toEqual([])
+  })
+  it('finds case-insensitive matches at their offsets in the original text, even after a character that lower-cases longer', () => {
+    const draft = createFromDraft(model({ steps: [{ id: 1, name: 'İstanbul Sales', subsystem: 'TSQL', command: '-- İİ (a+b) [x]\nEXEC dbo.LoadSALES; -- (a+b) [x]' }] }), 'dana', false)
+    const replaced = applyReplace(draft, 'sales', 'HR', new Set(replaceMatches(draft, 'sales').matches.map(match => match.id)))
+    expect(replaced.steps.steps[0]).toMatchObject({ name: 'İstanbul HR', command: '-- İİ (a+b) [x]\nEXEC dbo.LoadHR; -- (a+b) [x]' })
+    // Regular-expression characters in the find text are literal.
+    expect(replaceMatches(draft, '(a+b) [x]').matches.filter(match => match.field === 'stepCommand').map(match => match.start)).toEqual([6, 39])
   })
   it('lists at most the match limit and says there were more', () => {
     const draft = createFromDraft(model({ steps: [{ id: 1, name: 'Many', subsystem: 'TSQL', command: 'a'.repeat(createFromLimits.replaceMatches + 5) }] }), 'dana', false)
@@ -225,6 +233,25 @@ describe('Create Job Like This: the document', () => {
     expect(failing.jobDocuments.get(other)).toMatchObject({ phase: 'loadFailed' })
     expect(failing.jobDocuments.get(other)?.copying).toBeUndefined()
     expect(failing.jobDocuments.canReload(other)).toBe(true)
+  })
+  it("copies the job of the menu it runs from, even with Job Activity Monitor active", async () => {
+    const { jobDocuments, jobActivity, commands, documents } = opened()
+    jobActivity.open('c1')
+    expect(jobActivity.get(documents.getSnapshot().activeId)).toBeDefined()
+    const node = { id: 3, lost: false, kind: 'agentJob', connectionId: 'c1', label: 'ETL – Load Sales', engine: 'box', ref: { type: 'object', object: { kind: 'agentJob', name: 'ETL – Load Sales' } } } as unknown as ExplorerMenuNode
+    await commands.execute('agent.createJobLike', { target: { kind: 'explorer', node } }, 'menu')
+    await settled()
+    expect(Object.values(jobDocuments.getSnapshot().documents).map(state => state.source?.base.name)).toEqual(['ETL – Load Sales'])
+  })
+  it('reads a copy made on Schedules as Copy, so Changes from source never adds a second one', async () => {
+    const { jobDocuments } = opened()
+    const id = jobDocuments.createLike('c1', 'ETL – Load Sales')
+    await settled()
+    jobDocuments.copySchedule(id, 's:9')
+    expect(copyScheduleChoice(jobDocuments.get(id)!.draft!.schedules, { id: 9 })).toBe('copy')
+    jobDocuments.setCopySchedule(id, 9, 'copy')
+    expect(jobDocuments.get(id)!.draft!.schedules.filter(entry => entry.id === undefined).map(entry => entry.key).sort()).toEqual(['n:copy:10', 'n:copy:9'])
+    expect(jobDocuments.compareRows(id).filter(row => row.field === 'Schedule').map(row => row.group)).toEqual(["Schedule 'Nightly 02:30'", "Schedule 'Unread'"])
   })
   it('keeps the source\'s owner only for sysadmin', async () => {
     const { jobDocuments } = opened(model({ sysadmin: true, login: 'sa' }))
