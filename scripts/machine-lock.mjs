@@ -211,13 +211,14 @@ export async function acquire(mode, { label = basename(process.argv[1] ?? 'node'
   process.once('exit', release)
   // A holder whose file was cleared as stale while it still ran (the machine slept past staleMs) takes it back if it can.
   heartbeat = setInterval(() => {
-    for (const file of [...leftovers]) drop(file)
+    for (const file of [...leftovers]) if (!owned.includes(file)) drop(file)
     for (const file of owned) try { utimesSync(file, new Date(), new Date()) } catch {
       let back = false
       try {
         const attempt = create(file, record, ops)
-        back = attempt.ok
-        if (attempt.cleanup) drop(attempt.cleanup)
+        // `file` is already owned, so a `wx` write that hit a read-back error (`cleanup`) still re-created our own file:
+        // keep it on disk instead of dropping it or putting an owned file into `leftovers`.
+        back = attempt.ok || attempt.cleanup === file
       } catch { /* the directory is gone too */ }
       if (!back && !lost.has(file)) lost.add(file) && log(`The machine lock (${mode}) for ${label} was taken over while this run still held it.`)
     }
@@ -256,6 +257,7 @@ export async function acquire(mode, { label = basename(process.argv[1] ?? 'node'
       signal?.throwIfAborted()
       const leftoverErrors = new Map()
       for (const file of [...leftovers]) {
+        if (owned.includes(file)) { leftovers.delete(file); continue }
         const error = drop(file)
         if (error) leftoverErrors.set(file, error)
       }

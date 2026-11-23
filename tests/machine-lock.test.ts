@@ -113,6 +113,34 @@ describe('the machine lock', () => {
     await vi.waitFor(() => expect(existsSync(join(dir, 'exclusive.lock'))).toBe(true), { timeout: 10_000, interval: 10 })
   })
 
+  it('keeps an owned lock file re-created by the heartbeat via wx even when read-back hits a transient EBUSY', async () => {
+    const denyLink = () => { throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' }) }
+    const file = join(dir, 'exclusive.lock')
+    let failHeartbeatRead = false, failedReads = 0
+    const logs: string[] = []
+    const lock = await acquire('exclusive', {
+      env: env(), dir, beatMs: 10, pollMs: 10, log: text => logs.push(text), label: 'heartbeat-wx',
+      fsOps: {
+        linkSync: denyLink,
+        readFileSync: (target, enc) => {
+          if (target === file && failHeartbeatRead && ++failedReads <= 2) throw Object.assign(new Error('file busy'), { code: 'EBUSY' })
+          return readFileSync(target, enc)
+        }
+      }
+    })
+    held.push(lock)
+    failHeartbeatRead = true
+    rmSync(file)
+    await vi.waitFor(() => expect(failedReads).toBeGreaterThanOrEqual(1), { timeout: 10_000, interval: 10 })
+    // Let several heartbeat ticks run after the transient read error clears: the owned file must stay on disk, never be unlinked as a leftover.
+    await new Promise(resolve => setTimeout(resolve, 60))
+    expect(existsSync(file)).toBe(true)
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ pid: process.pid, label: 'heartbeat-wx' })
+    expect(logs).toEqual([])
+    lock.release()
+    expect(existsSync(file)).toBe(false)
+  })
+
   it('removes its own file on release and leaves another holder alone', async () => {
     const lock = await take('exclusive')
     expect(JSON.parse(readFileSync(join(dir, 'exclusive.lock'), 'utf8'))).toMatchObject({ pid: process.pid, mode: 'exclusive' })
