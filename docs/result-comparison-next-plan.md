@@ -703,12 +703,16 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     ignored column names, `# rows matched by id; ignored: updated_at`, and the `#` column line), so a name holding a
     line break cannot forge a diff line.
   - The rest of the header comes from the diff set, which records it beside `DiffInputs` in `DiffWritten`: the match
-    used (`DiffMatch`, its mode and key pairs), the ignored pairs, and, for a side read as shown (C6), its rows shown
-    and its rows. Today it records only `DiffInputs`, so C3 adds the match and ignored pairs, and C6 the counts (C4 adds
-    Result 1's column types and collations and whether the inputs were BigQuery results, which only it reads). The match
-    text, "lines start with row numbers" under a match without key columns, and the `# Result 1 shows 120 of 5,000 rows`
-    line are written from them. Whichever of C3 and C6 lands second writes the "(as shown)" names and that line, in both
-    writers, with a shared golden and the fake backend's recorded counts.
+    requested and used (the requested mode beside `DiffModel`'s mode and key pairs, since Automatic that finds no key
+    becomes whole rows, so the used mode alone cannot write "rows matched automatically by whole rows"), the ignored
+    pairs, and, for a side read as shown (C6), its rows shown and its rows. Today it records only `DiffInputs`, so C3
+    adds the match and ignored pairs, and C6 the counts (C4 adds Result 1's column types and collations, whether the
+    inputs were BigQuery results, and the diff answer's `PossibleSkipped` and `NothingPaired`, which only it reads: the
+    not-looked-for line and the Automatic no-pairs sentence need them, and neither can be rebuilt from the set, since
+    under Changes only the unchanged rows after the last difference are not stored). The match text, "lines start with
+    row numbers" under a match without key columns, and the `# Result 1 shows 120 of 5,000 rows` line are written from
+    them. Whichever of C3 and C6 lands second writes the "(as shown)" names and that line, in both writers, with a
+    shared golden and the fake backend's recorded counts.
   - They change in `resultsCopyRequestSchema` and `resultsSaveRequestSchema` (`src/main/validation.ts`), the preload
     signatures (`copyResults`, `saveResults`), the params `results-jobs.ts` builds (`ResultsCopyParams` and the export's),
     the fake backend and the C# records, each with `names`.
@@ -752,6 +756,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - gap and skip lines, cut rows in both layouts, a cut Two rows entry's full changed-pair list kept;
     - NULL against the text `NULL`, escapes;
     - ignored columns, forced key columns, row-number prefixes without keys, CRLF and LF;
+    - Automatic that fell back to whole rows: `# rows matched automatically by whole rows; lines start with row
+      numbers`, from the recorded requested mode;
     - the header from the diff set's recorded match and ignored pairs, and side names, a key column name and an ignored
       column name each holding a line break, escaped;
     - a changed entry whose copied columns are unchanged, written as one unchanged line;
@@ -813,9 +819,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     of the name is at most 128 characters."; an unclosed bracket or quote "Close the bracket or quote in the name." The
     field is checked as it changes, and its sentence shows once it loses focus or on Script. Empty the first time, with
     suggestions from Search Objects' index for the comparison's connection (tables holding every compared column first,
-    then by how many they hold, then the query document's current database first, then by name, history and dropped
-    ledger tables left out, none highlighted until an arrow key moves to one, so Enter never picks one unchosen), and
-    Script waits for it ("Choose the target table."); after that, the pair's remembered draft.
+    then by how many they hold, then the query document's current database first, then by name, history, dropped ledger
+    and external tables left out, none highlighted until an arrow key moves to one, so Enter never picks one unchosen),
+    and Script waits for it ("Choose the target table."); after that, the pair's remembered draft.
     - **Database.** A two-part name is resolved to the query document's current database when it is typed or picked,
       while the document is on the comparison's connection: its target is the comparison's server, connected or not,
       since Disconnect with Keep Tabs keeps the document's database (connections-explorer.md), and a document a
@@ -1466,13 +1472,16 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     characters, both bounded in the answer schema. Every refusal's sentence, closed-input forms included, is the
     backend's (naming at most three columns, then "and 2 more", each cut at 60 characters, so it stays within its
     1,000), which holds the counts, names and sample values and knows when an input's result was released; the dialog
-    chooses only the refusal's buttons and their availability, by `kind`, and never parses the sentence. Past 1,000,000
-    characters, estimated first, it refuses with `tooLarge`, well inside the 16 MiB response limit. In a preview the
-    counts are the chosen rows' entries by kind; after Script they are the script's own statements, which can be lower
-    (Counts above). The backend itself refuses a comparison whose match is not a `columns` match, so Automatic's choice
-    can never be scripted by accident (Use order_no as key columns replaces the comparison with that `columns` match
-    first), and a comparison of rows as shown. Both read the diff set's records (C3's match and C6's as-shown flags),
-    and the WHERE clauses take the recorded key pairs, so the params carry no key columns.
+    chooses only the refusal's buttons and their availability, by `kind` and the comparison's own facts (`notColumns`
+    covers Row position, Whole rows, Automatic's fallback and Automatic with a key, so whether to offer **Use order_no
+    as key columns** comes from the comparison's match and the key's type, which the renderer holds, `CompareService`),
+    and never parses the sentence. Past 1,000,000 characters, estimated first, it refuses with `tooLarge`, well inside
+    the 16 MiB response limit. In a preview the counts are the chosen rows' entries by kind; after Script they are the
+    script's own statements, which can be lower (Counts above). The backend itself refuses a comparison whose match is
+    not a `columns` match, so Automatic's choice can never be scripted by accident (Use order_no as key columns replaces
+    the comparison with that `columns` match first), and a comparison of rows as shown. Both read the diff set's records
+    (C3's match and C6's as-shown flags), and the WHERE clauses take the recorded key pairs, so the params carry no key
+    columns.
 - **Backend `Results/DiffScript.cs`:** literals by the column's `dataType`, precision and scale:
 
   | Type | Literal |
@@ -1553,27 +1562,28 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     typed must equal that part, compared as `Objects()` compares, and empty text lists every table by rank. They are
     ranked with those holding every compared column first, then by `holds`, those without `holds` last, the renderer
     putting the query document's current database first among equals, then by name, leaving out history tables (subtypes
-    `history` and `ledgerHistory`), since an INSERT into one fails (Msg 13559, or 37361 for a ledger history table), and
-    dropped ledger tables (`droppedLedger`), which refuse every change. An append-only ledger table, which refuses
-    UPDATE and DELETE, is kept, since the index does not record that kind; such a script fails and rolls back. `table`
-    answers the sent `table` when the index holds it, so two databases that both hold `dbo.Orders` are told apart, with
-    at most 4,096 columns (`columnsCut` past that). `state` is that database's state from `Database()` (ready, partial,
-    building, skipped or absent), and `held` says whether the index holds a read of it with its columns
-    (`LookupDatabase.Held` set, `LookupGaps.ChildrenLeftOut` clear and the held read not `FailedPart`, since a read that
-    failed part way, kept when nothing was held before, can stop before its columns), whatever `state` says: a read
-    without definitions (`objectExplorer.search.definitions` off), with a cut definition or without system objects is
-    partial and still holds every column, a rebuild running over an earlier read is building, and a failed read after an
-    earlier one is skipped, each with that earlier read still answering. The dialog keys every column fact on `held`,
-    and `state` only picks the sentence: unless `held`, it claims no column facts and says still indexing (building),
-    skipped (skipped), indexed without columns (partial) or the table unknown (absent); with `held` and a building or
-    skipped `state`, the knows line adds that its facts are from the last index.
+    `history` and `ledgerHistory`), since an INSERT into one fails (Msg 13559, or 37361 for a ledger history table),
+    dropped ledger tables (`droppedLedger`), which refuse every change, and external tables (`external`), which refuse
+    UPDATE and DELETE. An append-only ledger table, which refuses UPDATE and DELETE, is kept, since the index does not
+    record that kind; such a script fails and rolls back. `table` answers the sent `table` when the index holds it, so
+    two databases that both hold `dbo.Orders` are told apart, with at most 4,096 columns (`columnsCut` past that).
+    `state` is that database's state from `Database()` (ready, partial, building, skipped or absent), and `held` says
+    whether the index holds a read of it with its columns (`LookupDatabase.Held` set, `LookupGaps.ChildrenLeftOut` clear
+    and the held read not `FailedPart`, since a read that failed part way, kept when nothing was held before, can stop
+    before its columns), whatever `state` says: a read without definitions (`objectExplorer.search.definitions` off),
+    with a cut definition or without system objects is partial and still holds every column, a rebuild running over an
+    earlier read is building, and a failed read after an earlier one is skipped, each with that earlier read still
+    answering. The dialog keys every column fact on `held`, and `state` only picks the sentence: unless `held`, it
+    claims no column facts and says still indexing (building), skipped (skipped), indexed without columns (partial) or
+    the table unknown (absent); with `held` and a building or skipped `state`, the knows line adds that its facts are
+    from the last index.
   - **Tests:** a new offline suite in Program.cs's `offlineSuites` over a built index: ranking by compared columns held,
     three-part suggestions across two databases with the same schema and the sent `table` choosing between them, a
-    table's identity, computed, generated, NOT NULL and default flags, history and dropped ledger tables left out, the
-    4,096-column cut, a database read without its columns, no index, `held` with `state` partial for a read without
-    definitions, one with a cut definition and one without system objects, `held` with `state` building for a rebuild
-    running over a held read and skipped for a failed read after one, a name typed as a fragment, with a schema part and
-    with a database part, `pairs` for a name differing only by case in a case-sensitive database and in a
+    table's identity, computed, generated, NOT NULL and default flags, history, dropped ledger and external tables left
+    out, the 4,096-column cut, a database read without its columns, no index, `held` with `state` partial for a read
+    without definitions, one with a cut definition and one without system objects, `held` with `state` building for a
+    rebuild running over a held read and skipped for a failed read after one, a name typed as a fragment, with a schema
+    part and with a database part, `pairs` for a name differing only by case in a case-sensitive database and in a
     case-insensitive one, an ignored name the table lacks (null, and not counted in `holds`), an unnamed pair (null, not
     counted in `holds`), a read kept after failing part way (not `held`), `state`, `held` and `holds` absent without a
     sent `table` or for a read without columns, and `LaneOf` naming the method as Explorer; vitest for the schema's
@@ -1597,6 +1607,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   `providers: ['sqlserver']`, with Q4's hint on BigQuery). Regenerate the commands docs. No setting.
 - **Tests:**
   - `DiffScriptChecks` goldens, a new offline suite in Program.cs's `offlineSuites`:
+    - the not-looked-for header line from the recorded `PossibleSkipped`; the Automatic no-pairs refusal only with the
+      recorded `NothingPaired`, and the plain Automatic one for a Changes-only comparison whose paired rows are all
+      unchanged and come after the last difference;
     - the header's look-alike lines for each tick wording, the left-out-rows forms and the not-looked-for line, none
       while the chosen rows hold no look-alike;
     - an UPDATE-only script with an identity key and `identityInsert` on, and one whose chosen rows have no inserts,
