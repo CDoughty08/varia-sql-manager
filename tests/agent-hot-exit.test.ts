@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initialAgentJobDraft, uncategorizedCategory, type AgentJobDocumentModel, type AgentJobRecord } from '../src/shared/actions/agent-job'
-import type { AgentProxyDocumentModel } from '../src/shared/actions/agent-proxy'
+import type { AgentProxyDocumentModel, CredentialDocumentModel } from '../src/shared/actions/agent-proxy'
 import { notifyEmail, type AgentAlertDocumentModel, type AgentAlertRecord } from '../src/shared/actions/agent-alert'
 import { withCell, type AgentOperatorsModel } from '../src/shared/actions/agent-operator'
 import type { AgentSchedulesModel } from '../src/shared/actions/agent-schedule'
@@ -34,6 +34,10 @@ const proxyModel = (): AgentProxyDocumentModel => ({
   platform: 'windows', subsystems: [{ id: 3, name: 'CmdExec' }], credentials: [{ name: 'FileShareWriterCred', identity: 'CONTOSO\\svc-fswriter' }], credentialsTruncated: false, canCreateCredential: true,
   principalChoices: [], references: [], referencesTruncated: false
 })
+const credentialModel = (): CredentialDocumentModel => ({
+  credential: { id: 9, name: 'FileShareWriterCred', identity: 'CONTOSO\svc-fswriter', created: '2025-03-02T10:20:00', modified: '2026-11-08T16:02:11.123' },
+  platform: 'box', providers: [], usedBy: [], usedByTruncated: false
+})
 const schedulesModel = (): AgentSchedulesModel => ({ login: 'sa', sysadmin: true, platform: 'windows', now: '2026-11-22T14:30:00', schedules: [], jobs: [], links: [], durations: [] })
 
 /** A workbench whose describe answers each Agent document from `models`, with registry-backed connection targets. */
@@ -44,6 +48,7 @@ function bench(agentPreview = true) {
   const models = { job: jobModel(), proxy: proxyModel(), schedules: schedulesModel() }
   fixture.api.describeObject.mockImplementation(async params => ({ ok: true, value: (params.dialog === 'agentJob' ? { agentJobDocument: params.target.kind === 'agent' ? { ...models.job, job: undefined, jobs: [], jobIds: [] } : models.job, elapsedMs: 1 }
     : params.dialog === 'agentProxy' ? { agentProxyDocument: params.target.kind === 'agent' ? { ...models.proxy, proxy: undefined } : models.proxy, elapsedMs: 1 }
+      : params.dialog === 'credential' ? { credentialDocument: credentialModel(), elapsedMs: 1 }
       : params.dialog === 'agentSchedules' ? { agentSchedules: models.schedules, elapsedMs: 1 } : { elapsedMs: 1 }) as ActionDescribeResult }))
   const accept = (handleId: string, generation = 1) => {
     const attempt = fixture.connections.beginConnect(connectionOptions, generation, targetId)!
@@ -217,22 +222,30 @@ describe('hot exit for SQL Server Agent documents', () => {
       }
     }
   })
-  it('never keeps a proxy\'s typed password: the reopened proxy asks for it again', async () => {
+  it('never keeps a proxy\'s typed password: one with a password typed is asked about, and a kept one reopens with its password fields empty', async () => {
     const first = bench()
     first.accept(uuid(50))
     const id = first.proxyDocuments.openProxy(uuid(50), 'FileShareWriter')
     await settled()
     first.proxyDocuments.updateDraft(id, { description: 'Mine' })
     first.proxyDocuments.setCredentialMode(id, 'new')
-    first.proxyDocuments.updateDraft(id, { newCredentialName: 'NewCred', newCredentialIdentity: 'CONTOSO\\svc' })
+    first.proxyDocuments.updateDraft(id, { newCredentialName: 'NewCred', newCredentialIdentity: 'CONTOSO\svc' })
+    const state = first.documents.keepCustom(id)!
     first.proxyDocuments.setSecret(id, 'secret', secret)
     first.proxyDocuments.setSecret(id, 'confirm', secret)
-    const state = first.documents.keepCustom(id)!
-    expect(state).not.toContain(secret)
+    expect(first.documents.keepCustom(id)).toBeUndefined()
     const session = keptSession(first.documents, () => undefined, { connectionTargets: first.connectionTargets })
+    expect(session.kept.has(id)).toBe(false)
     expect(JSON.stringify(session.session)).not.toContain(secret)
     await first.recovery.flush()
     expect(JSON.stringify(first.api.writeRecovery.mock.calls)).not.toContain(secret)
+    // A password alone (an existing credential's only change) is asked about too, rather than kept and lost.
+    const credential = first.credentialDocuments.openCredential(uuid(50), 'FileShareWriterCred')
+    await settled()
+    first.credentialDocuments.setSecret(credential, 'secret', secret)
+    first.credentialDocuments.setSecret(credential, 'confirm', secret)
+    expect(first.documents.get(credential)?.dirty).toBe(true)
+    expect(keptSession(first.documents, () => undefined, { connectionTargets: first.connectionTargets }).kept.has(credential)).toBe(false)
     const f = bench()
     const document = f.documents.reopenKept('agentProxy', { name: 'Proxy Account Properties - FileShareWriter', state, targetId })
     expect(f.proxyDocuments.get(document.id)).toMatchObject({ restored: true, draft: { description: 'Mine', credentialMode: 'new', newCredentialName: 'NewCred' }, secrets: { secret: 'empty' } })

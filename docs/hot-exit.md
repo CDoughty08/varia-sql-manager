@@ -63,8 +63,8 @@ query, following the setting and the pinned shelf as a query does; a clean one i
 
 - **What is kept** (`src/shared/agent/kept.ts`): the document's connection target, the object it edits (kind and name),
   the read its changes began from and the changes themselves, as bounded JSON in the record's text (at most 4,194,304
-  characters; a larger document is not kept and asks). A credential's or proxy's password fields are never kept: they
-  reopen empty, and a change that needs the password asks for it again.
+  characters; a larger document is not kept and asks). A credential's or proxy's password is never kept: a document with a
+  password typed is not kept, so the close asks about it as before.
 - **Reopening.** The tab reopens with its changes and its unsaved mark, disconnected, saying the changes were kept and
   that its server must connect. When that target connects (at start, by Connect, or by reconnecting), the document reads
   the object again and puts the changes on top, saying so. Where the object was also changed on the server, the

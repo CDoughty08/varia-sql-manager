@@ -403,7 +403,8 @@ export abstract class AgentObjectDocumentService<Model, Draft, Field extends str
   /** The object's unsaved state: the target, the read the draft began from and the draft. Never the secret slot's value. */
   keep(id: string): string | undefined {
     const state = this.get(id)
-    if (!state?.model || !state.draft) return undefined
+    // A typed password is never kept, so a document holding one is not kept at all: the close asks about it instead of losing it quietly.
+    if (!state?.model || !state.draft || state.secrets.secret === 'set' || !state.secrets.matches) return undefined
     return encodeKeptState({ version: 1, kind: this.kind, target: state.target, server: state.server, ...state.login ? { login: state.login } : {}, model: state.model, draft: state.draft, ...state.preset ? { extra: { preset: state.preset } } : {} })
   }
   /** A kept document reopened disconnected on its target, its password fields empty; it reads the object again once the target connects. */
