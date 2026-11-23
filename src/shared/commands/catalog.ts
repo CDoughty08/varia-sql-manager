@@ -10,6 +10,7 @@ import { agentJobCommandEntries } from '../actions/agent-job.ts'
 import { agentAlertCommandEntries } from '../actions/agent-alert.ts'
 import { agentOperatorCommandEntries } from '../actions/agent-operator.ts'
 import { agentScheduleCommandEntries } from '../actions/agent-schedule.ts'
+import { createFromCommandEntries } from '../agent/create-from.ts'
 import { agentProxyCommandEntries } from '../actions/agent-proxy.ts'
 import { logViewerCommandEntries } from '../agent/history.ts'
 import { jobHistoryCommandEntries } from '../bigquery/history-catalog.ts'
@@ -510,6 +511,8 @@ export const commandCatalog = {
   ...jobHistoryCommandEntries(),
   // The Schedules document (AG-6c): Manage Schedules, New Schedule… and the document's verbs, from src/shared/actions/agent-schedule.ts.
   ...agentScheduleCommandEntries(),
+  // Create Job Like This (AG-6e): from src/shared/agent/create-from.ts.
+  ...createFromCommandEntries(),
   // Script as › <verb> To › <destination>: 30 commands generated from src/shared/scripting/catalog.ts, which keep the
   // table menu's explorer.scriptCreateTo* ids. Each acts on its menu's node, else the selection.
   ...scriptCommandEntries(),

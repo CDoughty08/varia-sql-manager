@@ -150,7 +150,7 @@ export function SectionNav({ id, sections, current, onChoose }: NavProps) {
   </nav>
 }
 
-const sectionDomId = (id: string, section: string) => `${id}-section-${section}`
+export const sectionDomId = (id: string, section: string) => `${id}-section-${section}`
 const tabbableSelector = 'button, input, select, textarea, a[href], [tabindex], [contenteditable="true"]'
 /** The first element Tab would stop at inside `root`: enabled, in the tab order, and rendered. */
 function firstTabbable(root: HTMLElement | null | undefined): HTMLElement | undefined {

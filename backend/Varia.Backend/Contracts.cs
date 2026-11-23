@@ -691,6 +691,28 @@ internal sealed record AgentStepsSaveDto(List<int>? Deletes = null, List<AgentSt
 internal sealed record AgentStepNameDto(int Id, string Name);
 /// <summary>language.parse (AG-6b, src/shared/agent/parse.ts): the job step editor's Parse of one T-SQL text.</summary>
 internal sealed record LanguageParseArgs(string Text);
+
+/// <summary>
+/// language.lookup (docs/object-search.md, Editor lookup): the editor's completion and hover read the Search Objects index by
+/// path, whatever the engine. A path names a container level by level: none for the connection's top level, then one segment per
+/// level below it. For BigQuery the levels are project, dataset and object: [] lists projects, [project] datasets,
+/// [project, dataset] objects, [project, dataset, object] the object's facts and its columns with nested fields by path. Prefix
+/// keeps the names that start with it (case ignored); Exact keeps the one name it resolves to; Details adds columns' descriptions.
+/// </summary>
+internal sealed record LanguageLookupArgs(string ConnectionId, List<LanguageLookupPath> Requests);
+internal sealed record LanguageLookupPath(List<string> Path, string? Prefix = null, bool? Exact = null, int? Limit = null, bool? Details = null);
+/// <summary>Index is none (never built), building or ready; one answer per request, in order.</summary>
+internal sealed record LanguageLookupResult(string Index, List<LanguageLookupAnswer> Answers);
+/// <summary>State is ready, partial, building, skipped or absent. Path is the request's as the index names it (case resolved) as far
+/// as it resolved. Object is the object a path to one names, when the index holds it. Truncated: more names matched than came back.</summary>
+internal sealed record LanguageLookupAnswer(string State, List<string> Path, List<LanguageLookupItem> Items, bool Truncated, LanguageLookupObject? Object = null, string? Skip = null);
+/// <summary>A name below the path: its kind and subtype as Object Explorer names them, a column's type and nullability, a routine's
+/// signature (Detail), a sharded group, and with Details a column's description.</summary>
+internal sealed record LanguageLookupItem(string Name, string Kind, string? Subtype = null, string? Type = null, bool? Nullable = null, string? Detail = null,
+    string? Description = null, BigQueryShardsDto? Shards = null);
+/// <summary>An object's facts: Detailed is false until the index has read its details (columns, size, layout).</summary>
+internal sealed record LanguageLookupObject(string Name, string Kind, string? Subtype, bool Detailed, long? Rows = null, long? Bytes = null, string? Partitioning = null,
+    string? Clustering = null, string? Signature = null, BigQueryShardsDto? Shards = null, bool? ColumnsCut = null, DateTime? Modified = null);
 internal sealed record LanguageParseError(int Line, int Column, int Number, string Message);
 internal sealed record LanguageParseResult(IReadOnlyList<LanguageParseError> Errors, bool Truncated);
 /// <summary>One step's whole content (src/shared/agent/steps.ts AgentStepWrite): strings '' for none, ProxyId 0 for the service account.</summary>

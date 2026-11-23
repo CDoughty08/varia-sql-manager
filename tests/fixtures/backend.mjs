@@ -37,6 +37,9 @@
 //   ignore-eof-<generation>  the same for that generation only
 //   spawns.jsonl        one { pid } line per process started
 //   cancels.jsonl       one { method } line per entra-wait request a CANCEL frame ended
+// A BigQuery connect (provider bigquery; main sends it only in emulator mode, VARIA_TEST_BIGQUERY_ENDPOINT, so no credential is
+// involved) answers as the emulator's anonymous account, lists the datasets of bigQueryIndex, and language.lookup answers from
+// that fixed index (project varia-fake, datasets sales and staging) as the real backend's BigQueryLookup does.
 // Server 'entra-wait' connects (and lists databases) as a Microsoft Entra MFA sign-in waiting for the browser does: only a
 // CANCEL frame (the Connect dialog's Stop) ends it, answered CANCELLED.
 // live.subscribe for debug.synthetic (docs/ipc.md, Live subscriptions) runs as the real backend's test source does, with
@@ -336,6 +339,40 @@ const workbenchDatabases = [
 // With the spaced-databases cue, names that differ only in their spaces, as SQL Server allows: a list that took an
 // option's text, whose spaces are collapsed and trimmed, would name another database or none.
 const spacedDatabases = ['Sales  2024', 'Sales 2024', ' lead', 'tab\there'].map(name => ({ name, isSystem: false, isSnapshot: false }))
+// BigQuery's fake Search Objects index for language.lookup: project → dataset → object, columns by field path in schema order.
+const bigQueryIndex = {
+  'varia-fake': {
+    sales: {
+      orders: { kind: 'bqTable', rows: 1200, bytes: 5 * 1024 * 1024, partitioning: 'DAY on placed', columns: [
+        { name: 'id', type: 'INT64', nullable: false }, { name: 'customer', type: 'STRING', nullable: true }, { name: 'placed', type: 'TIMESTAMP', nullable: true },
+        { name: 'address', type: 'STRUCT', subtype: 'struct', nullable: true }, { name: 'address.city', type: 'STRING', nullable: true }] },
+      customers: { kind: 'bqTable', rows: 40, bytes: 4096, columns: [{ name: 'id', type: 'INT64', nullable: false }, { name: 'name', type: 'STRING', nullable: true }] },
+      daily: { kind: 'bqView', columns: [{ name: 'day', type: 'DATE', nullable: true }, { name: 'total', type: 'NUMERIC', nullable: true }] }
+    },
+    staging: {}
+  }
+}
+const bigQueryNamed = (names, name) => names.find(entry => entry === name) ?? names.find(entry => entry.toLowerCase() === name.toLowerCase())
+function bigQueryLookup(request) {
+  const [projectName, datasetName, objectName] = request.path
+  const keep = name => request.prefix === undefined || (request.exact ? name.toLowerCase() === request.prefix.toLowerCase() : name.toLowerCase().startsWith(request.prefix.toLowerCase()))
+  const answer = (path, entries, object) => {
+    const kept = entries.filter(entry => keep(entry.name)), limit = request.limit ?? 500
+    return { state: 'ready', path, items: kept.slice(0, limit), truncated: kept.length > limit, ...object ? { object } : {} }
+  }
+  if (projectName === undefined) return answer([], Object.keys(bigQueryIndex).map(name => ({ name, kind: 'bqProject' })))
+  const project = bigQueryNamed(Object.keys(bigQueryIndex), projectName)
+  if (!project) return { state: 'absent', path: request.path, items: [], truncated: false }
+  if (datasetName === undefined) return answer([project], Object.keys(bigQueryIndex[project]).sort().map(name => ({ name, kind: 'bqDataset' })))
+  const dataset = bigQueryNamed(Object.keys(bigQueryIndex[project]), datasetName)
+  if (!dataset) return { state: 'absent', path: request.path, items: [], truncated: false }
+  const objects = bigQueryIndex[project][dataset]
+  if (objectName === undefined) return answer([project, dataset], Object.keys(objects).sort().map(name => ({ name, kind: objects[name].kind })))
+  const name = bigQueryNamed(Object.keys(objects), objectName)
+  if (!name) return { state: 'ready', path: [project, dataset], items: [], truncated: false }
+  const { columns, kind, ...facts } = objects[name]
+  return answer([project, dataset, name], columns.map(column => ({ ...column, kind: 'bqColumn' })), { name, kind, detailed: true, ...facts })
+}
 const databaseRows = async () => await controlled('spaced-databases') ? [...workbenchDatabases, ...spacedDatabases] : workbenchDatabases
 const serverRoles = ['##MS_DatabaseConnector##', '##MS_LoginManager##', 'bulkadmin', 'dbcreator', 'public', 'securityadmin', 'serveradmin', 'sysadmin']
 // Object Explorer's fixture tree (explorer.children), on a SQL Server 2022 box: the catalogue's static folders, and
@@ -2239,6 +2276,11 @@ async function workbench(id, method, params, credit) {
   }
   switch (method) {
     case 'system.health': return respond(id, { protocolVersion: 2, runtime: 'fake', platform: process.platform, smoVersion: 'fake', sqlClientVersion: 'fake' })
+    case 'bigquery.account': return respond(id, { kind: 'emulator', account: 'Anonymous (emulator)' })
+    case 'language.lookup': {
+      if (!workbenchConnections.get(params.connectionId)?.bigQuery) return fail(id, 'UNSUPPORTED_PROVIDER', 'language.lookup needs a BigQuery connection.')
+      return respond(id, { index: 'ready', answers: params.requests.map(bigQueryLookup) })
+    }
     case 'language.status': {
       if (await controlled('language-status-fail')) return fail(id, 'BACKEND_UNAVAILABLE', 'SQL language provider availability check failed.')
       const configured = await controlled('language-enabled')
@@ -2311,6 +2353,11 @@ async function workbench(id, method, params, credit) {
       return respond(id, { version: '', build: '', notices: [], statements: [] })
     }
     case 'connections.connect': {
+      if (params.provider === 'bigquery') {
+        const info = { id: crypto.randomUUID(), server: params.project, database: params.dataset ?? '', serverVersion: 'BigQuery', login: 'Anonymous (emulator)', principalId: 'bigquery:anonymous:emulator', providerId: 'bigquery', ...params.displayName ? { displayName: params.displayName } : {} }
+        workbenchConnections.set(info.id, { ...info, bigQuery: true })
+        return respond(id, info)
+      }
       if (params.server === 'entra-wait') return entraWait(id, method)
       if (params.server === 'password-check' && !params.trustServerCertificate && await controlled('untrusted-certificate')) {
         return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: 'The certificate chain was issued by an authority that is not trusted.', details: { number: -2146893019, state: 0, class: 20, server: params.server, reason: 'certificate' } } })
@@ -2327,6 +2374,7 @@ async function workbench(id, method, params, credit) {
       return respond(id, info)
     }
     case 'connections.databases':
+      if (params.provider === 'bigquery') return respond(id, Object.keys(bigQueryIndex[params.project] ?? {}).sort().map(name => ({ name, isSystem: false, isSnapshot: false })))
       if (params.server === 'entra-wait') return entraWait(id, method)
       if (params.server === 'password-check' && (params.password !== 'correct-horse-marker' || await controlled('reject-passwords'))) return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: "Login failed for user 'reader'.", details: { number: 18456, state: 8, class: 14, server: params.server } } })
       return respond(id, await databaseRows())

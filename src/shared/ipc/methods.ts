@@ -197,6 +197,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'agent.historyMessage': { kind: 'unary', lane: 'metadata', deadlineMs: 45_000 },
   'agent.counterValues': { kind: 'unary', lane: 'metadata', deadlineMs: 45_000 },
   'language.parse': { kind: 'unary', lane: 'metadata', deadlineMs: 15_000 },
+  // In-memory reads of the index: completion asks as the user types, so a lookup never waits long.
+  'language.lookup': { kind: 'unary', lane: 'metadata', deadlineMs: 10_000, providers: ['bigquery'] },
   // Help › Clear Entra ID Token Cache: empties memory only, at once.
   'entra.cache.clear': control,
   // No deadline and no backstop: only CANCEL, a disconnect, a loss or the source ending ends it.
