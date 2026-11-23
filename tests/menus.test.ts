@@ -427,9 +427,10 @@ describe('menu state', () => {
       'output.compareNextDifference', 'output.comparePreviousDifference', 'output.compareGoToPossibleMatch',
       // Stepping through the results' tabs: keys, the tabs' own arrow keys and the palette; Window › Go to Result… lists them.
       'output.nextResult', 'output.previousResult', 'output.nextResultView', 'output.previousResultView',
-      // Browser tab keys and the palette: Go to Result 1 to 8 and the last, and the same for query tabs.
+      // Browser tab keys and the palette: Go to Result 1 to 8 and the last, the same for query tabs and object inspector sections.
       'output.goToResult1', 'output.goToResult2', 'output.goToResult3', 'output.goToResult4', 'output.goToResult5', 'output.goToResult6', 'output.goToResult7', 'output.goToResult8', 'output.goToLastResult',
-      'document.goToQuery1', 'document.goToQuery2', 'document.goToQuery3', 'document.goToQuery4', 'document.goToQuery5', 'document.goToQuery6', 'document.goToQuery7', 'document.goToQuery8', 'document.goToLastQuery']
+      'document.goToQuery1', 'document.goToQuery2', 'document.goToQuery3', 'document.goToQuery4', 'document.goToQuery5', 'document.goToQuery6', 'document.goToQuery7', 'document.goToQuery8', 'document.goToLastQuery',
+      'inspector.goToTab1', 'inspector.goToTab2', 'inspector.goToTab3', 'inspector.goToTab4', 'inspector.goToTab5', 'inspector.goToTab6', 'inspector.goToTab7', 'inspector.goToTab8', 'inspector.goToLastTab']
     expect(menuCommandIds).toEqual(commandIds.filter(id => ![...roles, ...unplaced].includes(id)))
     // Query › Connection is a native submenu too.
     for (const id of ['preferences.colorTheme', 'connection.connect', 'query.disconnect', 'query.disconnectAll', 'query.changeConnection', 'file.closeAll', 'view.toggleResultsPane'] as const) expect(menuCommandIds).toContain(id)

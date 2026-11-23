@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (400)
+## Commands (409)
 
 ### File
 
@@ -93,15 +93,24 @@ keys it uses are listed below.
 | Reset Layout | `layout.reset` | — | — | — | Always | View › Reset Layout; Window › Reset Window Layout |
 | Next Query | `document.next` | Ctrl+Tab, Ctrl+PageDown (`!resultsFocus \|\| !multipleResults`) | Ctrl+Tab, Ctrl+PageDown (`!resultsFocus \|\| !multipleResults`) | ⌃⇥ | `multipleDocuments` | Window › Next Query |
 | Previous Query | `document.previous` | Ctrl+Shift+Tab, Ctrl+PageUp (`!resultsFocus \|\| !multipleResults`) | Ctrl+Shift+Tab, Ctrl+PageUp (`!resultsFocus \|\| !multipleResults`) | ⌃⇧⇥ | `multipleDocuments` | Window › Previous Query |
-| Go to Query 1 | `document.goToQuery1` | Ctrl+1 (`!resultsFocus \|\| !multipleResults`) | Ctrl+1 (`!resultsFocus \|\| !multipleResults`) | ⌘1 (`!resultsFocus \|\| !multipleResults`) | `hasActiveDocument` | — |
-| Go to Query 2 | `document.goToQuery2` | Ctrl+2 (`!resultsFocus \|\| !multipleResults`) | Ctrl+2 (`!resultsFocus \|\| !multipleResults`) | ⌘2 (`!resultsFocus \|\| !multipleResults`) | `hasActiveDocument` | — |
-| Go to Query 3 | `document.goToQuery3` | Ctrl+3 (`!resultsFocus \|\| !multipleResults`) | Ctrl+3 (`!resultsFocus \|\| !multipleResults`) | ⌘3 (`!resultsFocus \|\| !multipleResults`) | `hasActiveDocument` | — |
-| Go to Query 4 | `document.goToQuery4` | Ctrl+4 (`!resultsFocus \|\| !multipleResults`) | Ctrl+4 (`!resultsFocus \|\| !multipleResults`) | ⌘4 (`!resultsFocus \|\| !multipleResults`) | `hasActiveDocument` | — |
-| Go to Query 5 | `document.goToQuery5` | Ctrl+5 (`!resultsFocus \|\| !multipleResults`) | Ctrl+5 (`!resultsFocus \|\| !multipleResults`) | ⌘5 (`!resultsFocus \|\| !multipleResults`) | `hasActiveDocument` | — |
-| Go to Query 6 | `document.goToQuery6` | Ctrl+6 (`!resultsFocus \|\| !multipleResults`) | Ctrl+6 (`!resultsFocus \|\| !multipleResults`) | ⌘6 (`!resultsFocus \|\| !multipleResults`) | `hasActiveDocument` | — |
-| Go to Query 7 | `document.goToQuery7` | Ctrl+7 (`!resultsFocus \|\| !multipleResults`) | Ctrl+7 (`!resultsFocus \|\| !multipleResults`) | ⌘7 (`!resultsFocus \|\| !multipleResults`) | `hasActiveDocument` | — |
-| Go to Query 8 | `document.goToQuery8` | Ctrl+8 (`!resultsFocus \|\| !multipleResults`) | Ctrl+8 (`!resultsFocus \|\| !multipleResults`) | ⌘8 (`!resultsFocus \|\| !multipleResults`) | `hasActiveDocument` | — |
-| Go to Last Query | `document.goToLastQuery` | Ctrl+9 (`!resultsFocus \|\| !multipleResults`) | Ctrl+9 (`!resultsFocus \|\| !multipleResults`) | ⌘9 (`!resultsFocus \|\| !multipleResults`) | `hasActiveDocument` | — |
+| Go to Query 1 | `document.goToQuery1` | Ctrl+1 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | Ctrl+1 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | ⌘1 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | `hasActiveDocument` | — |
+| Go to Query 2 | `document.goToQuery2` | Ctrl+2 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | Ctrl+2 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | ⌘2 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | `hasActiveDocument` | — |
+| Go to Query 3 | `document.goToQuery3` | Ctrl+3 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | Ctrl+3 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | ⌘3 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | `hasActiveDocument` | — |
+| Go to Query 4 | `document.goToQuery4` | Ctrl+4 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | Ctrl+4 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | ⌘4 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | `hasActiveDocument` | — |
+| Go to Query 5 | `document.goToQuery5` | Ctrl+5 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | Ctrl+5 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | ⌘5 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | `hasActiveDocument` | — |
+| Go to Query 6 | `document.goToQuery6` | Ctrl+6 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | Ctrl+6 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | ⌘6 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | `hasActiveDocument` | — |
+| Go to Query 7 | `document.goToQuery7` | Ctrl+7 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | Ctrl+7 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | ⌘7 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | `hasActiveDocument` | — |
+| Go to Query 8 | `document.goToQuery8` | Ctrl+8 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | Ctrl+8 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | ⌘8 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | `hasActiveDocument` | — |
+| Go to Last Query | `document.goToLastQuery` | Ctrl+9 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | Ctrl+9 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | ⌘9 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | `hasActiveDocument` | — |
+| Go to Inspector Section 1 (not in the palette) | `inspector.goToTab1` | Ctrl+1 (`objectInspectorFocus`) | Ctrl+1 (`objectInspectorFocus`) | ⌘1 (`objectInspectorFocus`) | Always | — |
+| Go to Inspector Section 2 (not in the palette) | `inspector.goToTab2` | Ctrl+2 (`objectInspectorFocus`) | Ctrl+2 (`objectInspectorFocus`) | ⌘2 (`objectInspectorFocus`) | Always | — |
+| Go to Inspector Section 3 (not in the palette) | `inspector.goToTab3` | Ctrl+3 (`objectInspectorFocus`) | Ctrl+3 (`objectInspectorFocus`) | ⌘3 (`objectInspectorFocus`) | Always | — |
+| Go to Inspector Section 4 (not in the palette) | `inspector.goToTab4` | Ctrl+4 (`objectInspectorFocus`) | Ctrl+4 (`objectInspectorFocus`) | ⌘4 (`objectInspectorFocus`) | Always | — |
+| Go to Inspector Section 5 (not in the palette) | `inspector.goToTab5` | Ctrl+5 (`objectInspectorFocus`) | Ctrl+5 (`objectInspectorFocus`) | ⌘5 (`objectInspectorFocus`) | Always | — |
+| Go to Inspector Section 6 (not in the palette) | `inspector.goToTab6` | Ctrl+6 (`objectInspectorFocus`) | Ctrl+6 (`objectInspectorFocus`) | ⌘6 (`objectInspectorFocus`) | Always | — |
+| Go to Inspector Section 7 (not in the palette) | `inspector.goToTab7` | Ctrl+7 (`objectInspectorFocus`) | Ctrl+7 (`objectInspectorFocus`) | ⌘7 (`objectInspectorFocus`) | Always | — |
+| Go to Inspector Section 8 (not in the palette) | `inspector.goToTab8` | Ctrl+8 (`objectInspectorFocus`) | Ctrl+8 (`objectInspectorFocus`) | ⌘8 (`objectInspectorFocus`) | Always | — |
+| Go to Last Inspector Section (not in the palette) | `inspector.goToLastTab` | Ctrl+9 (`objectInspectorFocus`) | Ctrl+9 (`objectInspectorFocus`) | ⌘9 (`objectInspectorFocus`) | Always | — |
 | Move Query Left | `document.moveLeft` | Ctrl+Shift+PageUp | Ctrl+Shift+PageUp | ⌃⇧⇞ | `multipleDocuments` | Query tab context menu › Move Left |
 | Move Query Right | `document.moveRight` | Ctrl+Shift+PageDown | Ctrl+Shift+PageDown | ⌃⇧⇟ | `multipleDocuments` | Query tab context menu › Move Right |
 | Rename Tab… | `document.rename` | F2 (`documentTabFocus && !inputFocus`) | F2 (`documentTabFocus && !inputFocus`) | F2 (`documentTabFocus && !inputFocus`) | `hasActiveDocument` | Query tab context menu › Rename Tab… |
@@ -1156,7 +1165,7 @@ Right-click the execution plan's Properties pane, or press Shift+F10 or the cont
 | `1_copy` | **C**opy | `plan.copyProperties` | Always |
 | `1_copy` | Copy **V**alue | `plan.copyPropertyValues` | Always |
 
-## Context keys (188)
+## Context keys (189)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1189,6 +1198,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `peekFocus` | boolean | focus | Focus is in Object Explorer's Peek card, which floats outside every pane (activePanel is then ''). |
 | `peekTabFocus` | boolean | focus | Focus is in the active Peek tab; activePanel is then 'editor'. |
 | `peekEditorFocus` | boolean | focus | Focus is in Peek's read-only definition editor (a card's or a Peek tab's), its find widget included. It is not the query editor: editorFocus and editorTextFocus stay false, so query commands (Execute, Parse and the rest) leave it alone. |
+| `objectInspectorFocus` | boolean | focus | Focus is inside a unified object inspector (Peek card, Peek tab or Properties document), so Ctrl+1 to Ctrl+9 (⌘1 to ⌘9 on macOS) jump between its sections. |
 | `quickInputVisible` | boolean | state | The command palette or a picker is open. |
 | `backendStatus` | `'starting'`, `'ready'`, `'unresponsive'`, `'restarting'`, `'failed'`, `'stopped'`, `''` | state | The SQL backend's state; '' before the workbench has heard from main. |
 | `backendReady` | boolean | state | `backendStatus == 'ready'`. |
