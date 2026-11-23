@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { contextMenuIds } from '../src/shared/commands/menus'
 import { argsFor, contextMenuLabels, editableText, inputTarget, isEditableText, menuForTarget, MenuTargetService, registerLiveOutput, targetKeys, type LiveOutput, type MenuTarget } from '../src/renderer/src/menus/targets'
-import { registerGridAnchor } from '../src/renderer/src/grid/anchor'
+import { registerGridAnchor, registerGridTarget, type GridTarget } from '../src/renderer/src/grid/anchor'
 import { fakeDocument, FakeElement } from './fixtures/elements'
 
 const element = (tag: string, init?: ConstructorParameters<typeof FakeElement>[2]) => new FakeElement(document, tag, init)
@@ -310,5 +310,34 @@ describe("a comparison grid's row menu", () => {
     expect(argsFor({ ...base, row: 2 }).state).toMatchObject({ comparisonRowHasPartner: false })
     expect(argsFor(base).state).not.toHaveProperty('comparisonRowHasPartner')
     expect(argsFor({ ...base, resultKind: 'rows', row: 2 }).state).not.toHaveProperty('comparisonRowHasPartner')
+  })
+  it('gives a keyboard menu the active cell\'s possible match, and a clicked row number its own', () => {
+    const doc = fakeDocument(), make = (tag: string, init?: ConstructorParameters<typeof FakeElement>[2]) => new FakeElement(doc, tag, init)
+    const number = make('div', { className: 'rg-rn' }), plain = make('div', { className: 'rg-c' }), marked = make('div', { className: 'rg-c' })
+    const grid = make('div', { attributes: { 'data-output-view': 'grid', 'data-tab-id': 'query', 'data-result-entry': 'e1', 'data-result-kind': 'diff' } }).append(number, plain, marked)
+    make('body').append(grid)
+    // The grid's answers (GridView.targetOf): row 3 is marked ? (a possible match), row 0 is not.
+    const facts = new Map<Element, GridTarget>([[dom(number), { row: 0 }], [dom(plain), { row: 0, column: 1 }], [dom(marked), { row: 3, column: 2, partner: true }]])
+    let active = marked
+    const untarget = registerGridTarget(dom(grid), element => facts.get(element)), unanchor = registerGridAnchor(dom(grid), () => dom(active))
+    const service = new MenuTargetService(), menu = (from: FakeElement) => service.targetFor(dom(from))!.target
+    try {
+      // Shift+F10 or the Menu key on a ? row offers Go to Possible Match, as a right click on its cell does.
+      expect(menu(grid)).toMatchObject({ row: 3, column: 2, rowHasPartner: true })
+      expect(argsFor(menu(grid)).state).toMatchObject({ comparisonRowHasPartner: true })
+      expect(argsFor(menu(marked)).state).toMatchObject({ comparisonRowHasPartner: true })
+      // A clicked row number keeps its own row and match: none here, though the active cell's row has one.
+      expect(menu(number)).toMatchObject({ row: 0, column: 2 })
+      expect(menu(number)).not.toHaveProperty('rowHasPartner')
+      expect(argsFor(menu(number)).state).toMatchObject({ comparisonRowHasPartner: false })
+      // On a row with no possible match the keyboard's menu offers none.
+      active = plain
+      expect(menu(grid)).toMatchObject({ row: 0, column: 1 })
+      expect(menu(grid)).not.toHaveProperty('rowHasPartner')
+      expect(argsFor(menu(grid)).state).toMatchObject({ comparisonRowHasPartner: false })
+      // A clicked ? row number keeps its match while the active cell's row has none.
+      facts.set(dom(number), { row: 3, partner: true })
+      expect(menu(number)).toMatchObject({ row: 3, column: 1, rowHasPartner: true })
+    } finally { untarget(); unanchor() }
   })
 })
