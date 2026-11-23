@@ -175,7 +175,7 @@ export const liveSources: { readonly [S in LiveSourceId]: LiveSourceSpec } = {
   },
   'agent.history': {
     id: 'agent.history', label: 'SQL Server Agent job history', scope: 'server', testOnly: false, probes: ['agent.history.list'], hidden: 'pause',
-    description: `SQL Server Agent's job history as the login may see it (docs/sql-server-agent.md, Log File Viewer), read on the server pool (" - Activity Monitor": READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW) opened in master, through msdb's own procedures (AgentReader, linted by AgentSql.LintRead), so every Agent role reads the history msdb shows it. The Log File Viewer opens one view per document; hidden views pause. Args: the checked jobs (jobs; absent every job, empty none), the date window in days, a run outcome, a message text, a step id, and the selected run whose steps the second table lists (run).`
+    description: `SQL Server Agent's job history as the login may see it (docs/sql-server-agent.md, Log File Viewer), read on the server pool (" - Activity Monitor": READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW) opened in master, through msdb's own procedures (AgentReader, linted by AgentSql.LintRead), so every Agent role reads the history msdb shows it. The Log File Viewer opens one view per document; hidden views pause. Args: the checked jobs (jobs; absent every job, empty none), the date window in days, a run outcome, a message text, a step id, and the selected run whose steps the second table lists (run); the job document's History (AG-6d) checks its one job and asks for its usual durations (usual).`
   }
 }
 
@@ -339,7 +339,7 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
   },
   'agent.history.list': {
     id: 'agent.history.list', source: 'agent.history', label: 'Job history', intervalMs: { default: 15_000, min: 5000, max: 300_000 }, gates: { minMajor: 13, editions: [1, 2, 3, 8] }, budgetMs: { min: 1000, max: 10_000 },
-    description: `The checked jobs' runs, newest first: msdb.dbo.sp_help_jobhistory in FULL mode (each checked job by @job_id, else every job the login may see; a multi-server job's history from the every-job read, since by @job_id msdb answers its target servers; with a window, from the day before its start), up to ${agentLimits.historyRows} rows a job read (more set the runs table's truncation; once the rows read reach that, checked jobs not yet read are counted in historySkippedJobs; a checked job that no longer exists is skipped), grouped into runs: a job outcome row (step 0) with the step rows Agent wrote after the job's previous outcome row that started at or after it. Step rows with no outcome row are In progress while the job runs (msdb.dbo.sp_help_job, and msdb.dbo.sp_help_jobactivity for its start), In progress or unknown while Agent XPs is off and the service is not read as stopped, and Unknown (no job outcome) otherwise. The window (from the server's clock), outcome, message text and step filters keep whole runs, in backend memory. The second table is the selected run's rows (args.run); the third is every job the login may see (the viewer's sources), with whether it runs now. Messages are cut to ${agentLimits.gridMessageChars} characters (agent.historyMessage reads one whole). Status: SQL Server Agent's history caps from msdb.dbo.sp_get_sqlagent_properties, where the login may read them, and how many checked jobs the cap left unread.`,
+    description: `The checked jobs' runs, newest first: msdb.dbo.sp_help_jobhistory in FULL mode (each checked job by @job_id, else every job the login may see; a multi-server job's history from the every-job read, since by @job_id msdb answers its target servers; with a window, from the day before its start), up to ${agentLimits.historyRows} rows a job read (more set the runs table's truncation; once the rows read reach that, checked jobs not yet read are counted in historySkippedJobs; a checked job that no longer exists is skipped), grouped into runs: a job outcome row (step 0) with the step rows Agent wrote after the job's previous outcome row that started at or after it. Step rows with no outcome row are In progress while the job runs (msdb.dbo.sp_help_job, and msdb.dbo.sp_help_jobactivity for its start), In progress or unknown while Agent XPs is off and the service is not read as stopped, and Unknown (no job outcome) otherwise. The window (from the server's clock), outcome, message text and step filters keep whole runs, in backend memory. The second table is the selected run's rows (args.run); the third is every job the login may see (the viewer's sources), with whether it runs now; the fourth, only with args.usual (one checked job), is the job's usual durations: the median of its newest 10 succeeded runs, whatever the filters, for the job (step 0) and each step id (a step's rows in a run added up). Messages are cut to ${agentLimits.gridMessageChars} characters (agent.historyMessage reads one whole). Status: SQL Server Agent's history caps from msdb.dbo.sp_get_sqlagent_properties, where the login may read them, and how many checked jobs the cap left unread.`,
     status: ['historyMaxRows', 'historyMaxRowsPerJob', 'historySkippedJobs'],
     tables: [
       {
@@ -364,6 +364,12 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
         columns: [
           { id: 'jobId', name: 'Job ID', dataType: 'uniqueidentifier' }, { id: 'jobName', name: 'Name', dataType: 'nvarchar' }, { id: 'jobOwner', name: 'Owner', dataType: 'nvarchar' },
           { id: 'jobRunning', name: 'Running', dataType: 'nvarchar' }, { id: 'jobEnabled', name: 'Enabled', dataType: 'nvarchar' }
+        ]
+      },
+      {
+        id: 'usual', mode: 'snapshot', key: ['usualStep'], rowCap: 1001,
+        columns: [
+          { id: 'usualStep', name: 'Step ID', dataType: 'int' }, { id: 'usualSeconds', name: 'Usual Seconds', dataType: 'int' }, { id: 'usualRuns', name: 'Runs', dataType: 'int' }
         ]
       }
     ]

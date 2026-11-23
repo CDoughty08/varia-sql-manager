@@ -279,7 +279,7 @@ internal static partial class BigQuerySessionChecks
         {
             Bq = bq;
             Fake = bq.Fake();
-            Service = new SqlService(bigQuery: new BigQueryEnvironment(null, Fake.Factory, new SubjectTokens([])));
+            Service = new SqlService(CheckStores.Unprobed(), bigQuery: new BigQueryEnvironment(null, Fake.Factory, new SubjectTokens([])));
             BigQuery.RetryDelay = TimeSpan.FromMilliseconds(1);
             BigQuery.ChildPollMs = 50;
             BigQuery.DonePoll = TimeSpan.FromMilliseconds(10);

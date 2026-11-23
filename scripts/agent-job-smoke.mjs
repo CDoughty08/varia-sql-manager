@@ -70,6 +70,35 @@ try {
   await page.screenshot({ path: 'artifacts/agent-job-dark.png' })
   console.log('Open passed: double-click and Enter in Job Activity Monitor open one tab per job with its live state and alerts.')
 
+  step = 'history'
+  // History (AG-6d): one agent.history view of this job with its usual durations; the newest run is selected with its failed step's
+  // message open, and the step's SSIS execution link opens the catalog's messages in a query window (not run).
+  await job('Nightly').getByRole('button', { name: 'History', exact: true }).click()
+  const history = job('Nightly').getByRole('group', { name: 'History', exact: true })
+  await expect(history.getByRole('list', { name: 'Runs', exact: true }).getByRole('button')).toHaveCount(2)
+  await expect(history.getByRole('button', { name: /Failed at step 2/ })).toHaveAttribute('aria-pressed', 'true')
+  await expect(history.getByRole('img', { name: /^Durations of the last 2 runs, 1 failed; usual 2 s$/ })).toBeVisible()
+  expect((await calls('live.subscribe')).find(call => call.source === 'agent.history')).toMatchObject({ args: { jobs: ['a1b2c3d4-0000-4000-8000-000000000001'], usual: true } })
+  await expect(history.getByRole('region', { name: 'Step 2 message', exact: true })).toContainText('Violation of PRIMARY KEY constraint.')
+  await expect(history.getByRole('table', { name: 'Steps of the selected run', exact: true })).toContainText('Truncate')
+  await history.getByRole('button', { name: 'SSIS execution 48213', exact: true }).click()
+  await expect(documentTab(page, 'SSIS execution 48213.sql')).toHaveAttribute('aria-selected', 'true')
+  await closeDocumentButton(page, 'SSIS execution 48213.sql').click()
+  await documentTab(page, 'Job Properties - Nightly').click()
+  // Failed lists only the failed run; an older run picked shows its own steps and no failed message.
+  await history.getByRole('radio', { name: 'Failed', exact: true }).click()
+  await expect(history.getByRole('list', { name: 'Runs', exact: true }).getByRole('button')).toHaveCount(1)
+  await history.getByRole('radio', { name: 'All', exact: true }).click()
+  await history.getByRole('button', { name: /Succeeded/ }).click()
+  await expect(history.getByRole('region', { name: 'Step 2 message', exact: true })).toHaveCount(0)
+  const picked = history.getByRole('group', { name: 'Run of 2026-11-14 02:30:00', exact: true })
+  await expect(picked.getByRole('table', { name: 'Steps of the selected run', exact: true })).toBeVisible()
+  await expect(picked).toContainText('The job succeeded.')
+  await expect(picked).not.toContainText('The job failed.')
+  await page.screenshot({ path: 'artifacts/agent-job-history-dark.png' })
+  await job('Nightly').getByRole('button', { name: 'General', exact: true }).click()
+  console.log('History passed: the job\'s runs with the usual time, the failed step\'s message open, the SSIS execution link and the Failed filter.')
+
   step = 'save'
   // An edit counts on Save; Save sends only what changed with the version it read, then reads the job again.
   await job('Nightly').getByLabel('Description', { exact: true }).fill('Nightly integrity and index care.')

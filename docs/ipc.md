@@ -1207,7 +1207,16 @@ and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residen
   snapshot gone (`VIEW_NOT_FOUND`), the source's table or a list's table expired (`REMOTE_EXPIRED`). `fallback: true`
   (emulator mode only, when the dry run answered `fallback`) runs the original query again around the view instead of
   reading the expired table. A failure, Stop, the timeout or the source's release keeps nothing.
-- **`bigquery.dryRun { connectionId, remote }`** estimates a `view` or `distinct` request (`remote` holds `resultId`,
+- **`results.remoteQuery` kinds `sample` and `rerun`** ([BigQuery's Load a sample](bigquery.md#load-a-sample)) take no
+  sort, filters or fallback, and record no job (they are auxiliary: the source's release cancels them). `sample { rows:
+  1 – 10,000,000, method: 'first' | 'random' }` answers a new derived result in memory: `first` reads the table's first
+  rows with `tabledata.list` (no job, free), `random` runs `TABLESAMPLE SYSTEM` over it (billed). A budget refusal part
+  way keeps the rows read and never stops the source. `rerun {}` runs the windowed result's own statement again (read with
+  `jobs.get`: a script child's alone) and answers its result, which the renderer puts in place of the source and releases
+  the source; only a query's own result, or a rerun's, from a job of one SELECT runs again (`INVALID_PARAMS` for a view,
+  value list or sample, or a script's job). Both answer `BUSY` as `load` does, and a sample of an expired table `REMOTE_EXPIRED`.
+- **`bigquery.dryRun { connectionId, remote }`** estimates a `view`, `distinct`, `sample` or `rerun` request (a first-rows
+  sample answers 0 bytes without asking BigQuery) (`remote` holds `resultId`,
   `generation` and the kind's fields, no query ID or fallback) with the query's parameters, on the result's own connection;
   main checks ownership as for `results.remoteQuery`. It answers `fallback: true` when the source's table is gone and
   emulator mode can run the original query again.
@@ -2556,7 +2565,7 @@ terminal for live probes. Display login text is never identity proof.
 | Code | Sentence |
 | --- | --- |
 | `BACKEND_LOST` | "The SQL backend stopped before answering. The request was not retried." |
-| `BACKEND_LOST` (`results.remoteQuery`) | "The SQL backend stopped during a query over a BigQuery result (Load into memory, a sort, a filter or a value list). It was not re-run, and the result is gone with the backend." |
+| `BACKEND_LOST` (`results.remoteQuery`) | "The SQL backend stopped during a query over a BigQuery result (Load into memory, a sort, a filter, a value list, a sample or a re-run). It was not re-run, and the result is gone with the backend." |
 | `BACKEND_LOST` (BigQuery `query.execute`, `query.attach`) | "The SQL backend stopped while this BigQuery query was running. A job still running carries on in BigQuery and is re-attached once the tab reconnects; a transaction open in its session stays open until the session ends." |
 | `BACKEND_LOST` (`query.execute`) | "The SQL backend stopped while this script was running. It was not re-run. Statements that finished before the failure may have taken effect; SQL Server rolls back the session's open transaction when it detects the closed connection." |
 | `BACKEND_LOST` (reload) | "The workbench was reloaded." |

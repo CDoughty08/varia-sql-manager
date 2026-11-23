@@ -15,7 +15,7 @@ import {
   jobScheduleText, momentOfText, ownsSchedule, refreshPickedSchedules, scheduleFieldsOf, scheduleKey, type AgentScheduleJob, type AgentScheduleRecord, type AgentSchedulesModel, type JobScheduleEntry
 } from '../../../shared/actions/agent-schedule.ts'
 import { defaultSchedule, msdbTrim, type AgentMoment, type AgentScheduleFields } from '../../../shared/agent/schedule.ts'
-import { agentJobsSource, agentWatchedProbe, watchedGoneStatus, watchedSlot, type WatchedSample } from '../../../shared/agent/jobs.ts'
+import { agentJobsSource, agentWatchedProbe, watchedGoneStatus, watchedServerNow, watchedSlot, type WatchedSample } from '../../../shared/agent/jobs.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import type { ObjectRef } from '../../../shared/explorer/refs.ts'
 import { liveProbes } from '../../../shared/live/catalog.ts'
@@ -30,6 +30,7 @@ import type { LiveHandle, LiveService } from '../live/LiveService'
 import { previewDelayMs } from '../properties/DatabasePropertiesService'
 import { deliverScript, type DeliverScriptDeps } from '../scripting/deliver'
 import type { LiveConnection } from '../services/connections'
+import { JobHistoryService } from './JobHistoryService'
 import { CustomDocumentTargets, type CustomDocumentTargetOptions } from '../services/custom-document-targets'
 import type { CustomDocumentProvider, DocumentService } from '../services/documents'
 import { agentLimits } from '../../../shared/agent/catalog.ts'
@@ -44,7 +45,11 @@ import { liveConnectionOn } from './kept-documents'
 
 export type JobDocumentPhase = 'loading' | 'loadFailed' | 'choosing' | 'ready' | 'saving'
 /** The header's live state from the watched probe: running (with its step), idle, or a job msdb no longer has. */
-export interface JobLive { readonly running: boolean; readonly retrying?: boolean; readonly step?: number; readonly steps?: number; readonly lastOutcome?: number; readonly gone?: boolean }
+/** While running, `started` and `now` are the run's start and the server's clock (yyyymmddhhmmss, server time), where readable: History's elapsed time (AG-6d). */
+export interface JobLive {
+  readonly running: boolean; readonly retrying?: boolean; readonly step?: number; readonly steps?: number; readonly lastOutcome?: number; readonly gone?: boolean
+  readonly started?: number; readonly now?: number
+}
 /** A STALE refusal: the job as read now, the compare, and the conflicts the user chose the server's value for. */
 export interface JobStale { readonly current: AgentJobDocumentModel; readonly rows: readonly AgentJobCompareRow[]; readonly keepServer: readonly AgentJobField[] }
 
@@ -116,7 +121,7 @@ export interface JobDocumentSnapshot { readonly documents: Readonly<Record<strin
 
 export interface JobDocumentServiceOptions extends CustomDocumentTargetOptions {
   readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions' | 'writeClipboardText'>
-    & Partial<Pick<VariaApi, 'languageParse' | 'describeSsis' | 'explorerChildren'>>
+    & Partial<Pick<VariaApi, 'languageParse' | 'describeSsis' | 'explorerChildren' | 'agentHistoryMessage'>>
   /** Steps' Open in query window (AG-6b): a new query tab on the job's connection, in the step's database. */
   readonly openQuery?: (sql: string, name: string, connectionId: string, database?: string) => void
   readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'setDirty' | 'activate' | 'getSnapshot' | 'subscribe'> & Partial<Pick<DocumentService, 'openKeptCustom'>> & DeliverScriptDeps['documents']
@@ -147,16 +152,19 @@ export const jobDocumentText = {
 } as const
 export const jobSections: readonly { readonly id: AgentJobSection; readonly title: string }[] = [
   { id: 'general', title: 'General' }, { id: 'steps', title: 'Steps' }, { id: 'schedules', title: 'Schedules' }, { id: 'notifications', title: 'Notifications' }, { id: 'targets', title: 'Targets' },
-  { id: 'alerts', title: 'Alerts' }
+  { id: 'alerts', title: 'Alerts' }, { id: 'history', title: 'History' }
 ]
 const fallback = (code: ActionError['code'], message: string): ActionError => ({ code, message, retryable: code !== 'STALE' && code !== 'NOT_FOUND' })
 
 /** The header's state out of a watched slot. */
-export function jobLive(sample: WatchedSample | undefined): JobLive | undefined {
+export function jobLive(sample: WatchedSample | undefined, now?: number): JobLive | undefined {
   if (!sample || sample.status === undefined) return undefined
   if (sample.status === watchedGoneStatus) return { running: false, gone: true }
   const running = [1, 2, 3, 7].includes(sample.status)
-  return { running, ...running ? { step: sample.step || undefined, steps: sample.steps || undefined, retrying: sample.status === 3 } : {}, ...sample.lastOutcome !== undefined ? { lastOutcome: sample.lastOutcome } : {} }
+  return {
+    running, ...running ? { step: sample.step || undefined, steps: sample.steps || undefined, retrying: sample.status === 3 } : {},
+    ...running && sample.started && now ? { started: sample.started, now } : {}, ...sample.lastOutcome !== undefined ? { lastOutcome: sample.lastOutcome } : {}
+  }
 }
 
 export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> implements Disposable, CustomDocumentProvider {
@@ -177,6 +185,8 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   private readonly views = new Map<string, { readonly jobId: string; readonly stop: () => void; readonly handle: LiveHandle }>()
   private readonly targetBindings: CustomDocumentTargets
   private disposed = false
+  /** The History section of each job document (AG-6d). */
+  readonly history: JobHistoryService
 
   constructor(private readonly options: JobDocumentServiceOptions) {
     super({ documents: {} })
@@ -186,9 +196,17 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     this.registration = options.documents.registerProvider(this)
     const changed = () => { try { this.connectionsChanged(); this.readRestored() } catch (failure) { onUnexpectedError(failure) } }
     this.unsubscribe = [options.connections.subscribe(changed), options.documents.subscribe(changed)]
+    // History (AG-6d): its view runs while the document shows with History open.
+    this.history = new JobHistoryService({
+      api: options.api, ...options.live ? { live: options.live } : {}, ...options.openQuery ? { openQuery: options.openQuery } : {}, newId: this.newId, connectionOf: id => this.live(id) ? this.connectionOf(id) : undefined,
+      visible: id => this.historyShows(id),
+      subscribe: listener => { const a = options.connections.subscribe(listener), b = options.documents.subscribe(listener), c = this.subscribe(listener); return () => { a(); b(); c() } }
+    })
   }
 
   get(id: string): JobDocumentState | undefined { return this.getSnapshot().documents[id] }
+  /** The document is the active one and its History section is open. */
+  private historyShows(id: string): boolean { return this.options.documents.getSnapshot().activeId === id && !!this.get(id) && !this.get(id)!.frame.collapsed.includes('history') }
 
   /** A job's document: brought forward if open on this connection, otherwise a tab opens at once, loading. */
   openJob(connectionId: string, name: string): string {
@@ -721,10 +739,16 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const ticks = handle.onTick(({ tick }) => {
       const watched = tick.samples.find(sample => sample.probe === agentWatchedProbe && sample.metrics)
       if (!watched) return
-      const next = jobLive(watchedSlot(watched.metrics!, 0))
+      const next = jobLive(watchedSlot(watched.metrics!, 0), watchedServerNow(watched.metrics!))
       const state = this.get(id)
       if (!state || JSON.stringify(next) === JSON.stringify(state.live)) return
+      // The server clock alone moves every sample: it redraws the document only while History shows its elapsed time.
+      const moved = JSON.stringify({ ...next, now: undefined }) !== JSON.stringify({ ...state.live, now: undefined })
+      if (!moved && !this.historyShows(id)) return
       this.patch(id, { live: next })
+      // A step ended or the run did: History, while it shows, reads it now rather than at its next sample (event-driven, not a timer); hidden, it
+      // stays paused and samples afresh when it shows again.
+      if (moved && this.historyShows(id) && (next?.step !== state.live?.step || next?.running !== state.live?.running)) this.history.refresh(id)
     })
     this.views.set(id, { jobId: jobId.toLowerCase(), handle, stop: () => { ended = true; ticks.dispose(); handle.dispose() } })
   }
@@ -865,6 +889,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     this.requests.delete(id)
     this.previews.delete(id)
     this.clearPreviewTimer(id)
+    this.history.closed(id)
     this.views.get(id)?.stop()
     this.views.delete(id)
     this.publish({ documents: Object.fromEntries(Object.entries(this.getSnapshot().documents).filter(([key]) => key !== id)) })
@@ -877,6 +902,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     for (const timer of this.previewTimers.values()) this.timers.clearTimeout(timer)
     for (const view of this.views.values()) view.stop()
     this.views.clear()
+    this.history.dispose()
     this.requests.clear()
     this.previews.clear()
     this.previewTimers.clear()

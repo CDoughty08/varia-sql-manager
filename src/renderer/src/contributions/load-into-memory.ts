@@ -28,3 +28,25 @@ export function loadIntoMemoryContribution({ commands, results, documents, menuT
     }
   })
 }
+
+/**
+ * Load Sample…: opens Load sample's dialog (docs/bigquery.md, Load a sample) for a windowed BigQuery result of a finished run,
+ * the same target Load Result into Memory takes. Its grid's strip offers it too when the result is too large to load.
+ */
+export function loadSampleContribution({ commands, results, documents, menuTargets, sampleDialog }: Pick<Workbench, 'commands' | 'results' | 'documents' | 'menuTargets' | 'sampleDialog'>): Disposable {
+  const targetOf = (args?: CommandArgs) => {
+    const target = outputOf(args) ?? (args?.tabId || args?.target ? undefined : focusedOutput(menuTargets))
+    if (args?.target && !target) return undefined
+    if (target) return target.view === 'grid' && target.entry !== undefined && results.canLoadSample(target.tabId, target.entry) ? { tabId: target.tabId, key: target.entry } : undefined
+    const tabId = args?.tabId ?? documents.getSnapshot().activeId
+    const focused = tabId ? results.focusedEntry(tabId) : undefined
+    return tabId && focused && results.canLoadSample(tabId, focused.key) ? { tabId, key: focused.key } : undefined
+  }
+  return commands.register('output.loadSample', {
+    when: (args?: CommandArgs) => !!targetOf(args),
+    run: (args?: CommandArgs) => {
+      const target = targetOf(args)
+      if (target) sampleDialog.open(target.tabId, target.key)
+    }
+  })
+}

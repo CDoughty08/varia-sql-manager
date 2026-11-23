@@ -382,6 +382,15 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     return await this.prompts(connection, response.value, this.entries.get(tabId), signal) ? response.value : undefined
   }
 
+  /** A results.remoteQuery request's estimate alone, with no prompt (Load sample's dialog shows it as its rows change). */
+  async estimateRemote(tabId: string, remote: RemoteDryRun, signal?: AbortSignal): Promise<BigQueryDryRunResult | undefined> {
+    const connection = this.connection(tabId)
+    if (!connection) throw new Error('The tab is no longer connected to BigQuery.')
+    const response = await this.deps.api.bigQueryDryRun({ connectionId: connection.id, remote })
+    if (!response.ok) throw new RemoteEstimateError(response.error, response.code)
+    return signal?.aborted || this.disposed ? undefined : response.value
+  }
+
   /** The prompts for an estimate, in turn (the threshold, then an incomplete estimate's warning); resolves whether to run. */
   private async prompts(connection: LiveConnection, estimate: BigQueryDryRunResult, entry: Entry | undefined, signal?: AbortSignal): Promise<boolean> {
     await this.deps.optOut.refresh(connection)

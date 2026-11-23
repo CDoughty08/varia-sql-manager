@@ -19,6 +19,7 @@ export function smokeSuites() {
  * Connections, Activity Monitor, Explorer, results, live plans and menus use PR #469's 2026-11-13 run (43540439831).
  * Windows live plans retain their prior weight because that platform's run had no SQL endpoint and skipped them.
  * Hot exit adds the five-second replacement-window grace to its last green Linux/Windows measurements (17/18 seconds).
+ * BigQuery results is a local estimate until its first CI run.
  */
 export const suiteSeconds = {
   linux: {
@@ -29,7 +30,7 @@ export const suiteSeconds = {
     'scripts/backend-smoke.mjs': 34, 'scripts/live-smoke.mjs': 28, 'scripts/chart-smoke.mjs': 31,
     'scripts/live-grid-smoke.mjs': 21, 'scripts/activity-monitor-smoke.mjs': 91, 'scripts/menus-smoke.mjs': 76,
     'scripts/explorer-smoke.mjs': 60, 'scripts/scripting-smoke.mjs': 19, 'scripts/object-actions-smoke.mjs': 106,
-    'scripts/results-smoke.mjs': 91, 'scripts/grouped-results-smoke.mjs': 7, 'scripts/estimated-plans-smoke.mjs': 12, 'scripts/options-resize-smoke.mjs': 3, 'scripts/options-smoke.mjs': 18,
+    'scripts/results-smoke.mjs': 91, 'scripts/grouped-results-smoke.mjs': 7, 'scripts/bigquery-results-smoke.mjs': 15, 'scripts/estimated-plans-smoke.mjs': 12, 'scripts/options-resize-smoke.mjs': 3, 'scripts/options-smoke.mjs': 18,
     'scripts/files-smoke.mjs': 15, 'scripts/hot-exit-smoke.mjs': 22, 'scripts/editor-smoke.mjs': 21, 'scripts/language-services-smoke.mjs': 12, 'scripts/language-diagnostics-smoke.mjs': 20,
     'scripts/table-designer-smoke.mjs': 5, 'scripts/document-frame-smoke.mjs': 16, 'scripts/ssis-smoke.mjs': 5,
     'scripts/ssis-operations-smoke.mjs': 18, 'scripts/agent-jobs-smoke.mjs': 38, 'scripts/agent-job-smoke.mjs': 40, 'scripts/agent-proxy-smoke.mjs': 12, 'scripts/agent-hot-exit-smoke.mjs': 15, 'scripts/updates-smoke.mjs': 11
@@ -42,7 +43,7 @@ export const suiteSeconds = {
     'scripts/backend-smoke.mjs': 30, 'scripts/live-smoke.mjs': 25, 'scripts/chart-smoke.mjs': 32,
     'scripts/live-grid-smoke.mjs': 21, 'scripts/activity-monitor-smoke.mjs': 91, 'scripts/menus-smoke.mjs': 103,
     'scripts/explorer-smoke.mjs': 57, 'scripts/scripting-smoke.mjs': 18, 'scripts/object-actions-smoke.mjs': 149,
-    'scripts/results-smoke.mjs': 93, 'scripts/grouped-results-smoke.mjs': 9, 'scripts/estimated-plans-smoke.mjs': 12, 'scripts/options-resize-smoke.mjs': 2, 'scripts/options-smoke.mjs': 16,
+    'scripts/results-smoke.mjs': 93, 'scripts/grouped-results-smoke.mjs': 9, 'scripts/bigquery-results-smoke.mjs': 15, 'scripts/estimated-plans-smoke.mjs': 12, 'scripts/options-resize-smoke.mjs': 2, 'scripts/options-smoke.mjs': 16,
     'scripts/files-smoke.mjs': 13, 'scripts/hot-exit-smoke.mjs': 23, 'scripts/editor-smoke.mjs': 25, 'scripts/language-services-smoke.mjs': 15, 'scripts/language-diagnostics-smoke.mjs': 25,
     'scripts/table-designer-smoke.mjs': 7, 'scripts/document-frame-smoke.mjs': 22, 'scripts/ssis-smoke.mjs': 4,
     'scripts/ssis-operations-smoke.mjs': 18, 'scripts/agent-jobs-smoke.mjs': 38, 'scripts/agent-job-smoke.mjs': 40, 'scripts/agent-proxy-smoke.mjs': 12, 'scripts/agent-hot-exit-smoke.mjs': 15, 'scripts/updates-smoke.mjs': 11
