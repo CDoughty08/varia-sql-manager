@@ -49,7 +49,7 @@ export async function completeFromIndex(read: CompletionRead, dialect: Completio
       if (cutShort.size && (field ? field.columns.truncated : !namespace)) {
         const { prefix, object } = field ? await resolver.prefixThrough(field.source, field.path, word.typed) : { prefix: [...site.qualifier, word.typed].join('.'), object: undefined }
         if (prefix) {
-          resolver = new ScopeResolver(scope, dialect, lookup, object && cutShort.has(object) ? new Map([[object, [prefix]]]) : narrowing(cutShort, [prefix])).inherit(resolver)
+          resolver = new ScopeResolver(scope, dialect, lookup, object && cutShort.has(object) ? new Map([[object, [prefix]]]) : narrowing(cutShort, [prefix]))
           await resolver.load()
           field = await resolver.field(site.qualifier) ?? field
         }
@@ -89,7 +89,7 @@ export async function completeFromIndex(read: CompletionRead, dialect: Completio
           const { prefix, object } = await resolver.prefixThrough(source, [], word.typed)
           for (const [path, prefixes] of plan) if (prefix && (!object || object === path) && !prefixes.includes(prefix)) prefixes.push(prefix)
         }
-        resolver = new ScopeResolver(scope, dialect, lookup, plan).inherit(resolver)
+        resolver = new ScopeResolver(scope, dialect, lookup, plan)
         await resolver.load()
         given = await resolver.all(scope.sources)
       }

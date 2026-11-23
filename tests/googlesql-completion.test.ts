@@ -363,6 +363,9 @@ describe('completion from the index', () => {
     const copies = Array.from({ length: 600 }, (_, index) => `c0 a${index}`).join(', ')
     const member = await complete(`WITH c0 AS (SELECT * FROM \`varia-wide.lab.whole\`), c1 AS (SELECT * FROM ${copies}) SELECT items.| FROM c1, sales.orders o`)
     expect(member.incomplete).toBe(true)
+    // A second ask (one typed letter beside a table cut short) lists what the first did: it has a cap of its own.
+    const web80 = 'WITH ' + Array.from({ length: 80 }, (_, index) => `c${index} AS (SELECT * FROM \`varia-wide.lab.whole\` w${Array.from({ length: Math.min(8, index) }, (_, back) => `, c${index - 1 - back} a${back}`).join('')})`).join(', ')
+    expect((await complete(`${web80} SELECT x.c| FROM c79 x, \`varia-wide.lab.wide\` z`)).labels('column').length).toBeGreaterThanOrEqual(1900)
   })
 
   it('says the list is not final when an UNNEST\'s prefix went unasked', async () => {

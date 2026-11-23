@@ -114,11 +114,8 @@ export class ScopeResolver {
   /** Select-list reads and columns merged so far (resolverLimits.work). */
   private spent = 0
 
-  /** Whether reads went past the work cap: what they gave is not all there is. */
-  get overBudget(): boolean { return this.spent > resolverLimits.work }
-
-  /** Carries an earlier resolver's work over (a second ask is the same completion's, under the same cap). */
-  inherit(from: ScopeResolver): this { this.spent = Math.max(this.spent, from.spent); return this }
+  /** Some read was cut by the work cap: what the reads gave is not all there is. */
+  overBudget = false
   private readonly ctes = new Map<string, QueryShape>()
   /** Sources being read: one met again while it is read (a WITH query that reads itself) gives no columns. */
   private readonly reading = new Set<ScopeSource>()
@@ -252,7 +249,7 @@ export class ScopeResolver {
       case 'cte': { const shape = this.cte(source.cte); return shape ? this.shape(shape, hops) : { columns: [], truncated: false } }
       case 'derived': return this.shape(source.shape, hops)
       case 'unnest': {
-        if (this.spent > resolverLimits.work) return { columns: [], truncated: true, budget: true }
+        if (this.spent > resolverLimits.work) { this.overBudget = true; return { columns: [], truncated: true, budget: true } }
         // UNNEST(hits) AS hits: the path names what the source reads, not the source itself.
         const field = await this.field(source.path, source)
         // Not found: it may lie past what a table cut short gave.
@@ -287,7 +284,7 @@ export class ScopeResolver {
     let budget = false
     this.spent++
     for (const star of shape.stars) {
-      if (this.spent > resolverLimits.work) return { columns, truncated: true, budget: true }
+      if (this.spent > resolverLimits.work) { this.overBudget = true; return { columns, truncated: true, budget: true } }
       const given = await this.columns(star, hops + 1)
       this.spent += given.columns.length
       truncated ||= given.truncated
