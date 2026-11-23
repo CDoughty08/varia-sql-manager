@@ -28,7 +28,7 @@ export function childrenOf(columns: readonly ScopeColumn[], parent: readonly str
 
 /** How many WITH queries or subqueries deep a `*` is followed for columns: past it a source gives none (a long chain of WITH
  *  queries, each reading the last through `*`, would otherwise recurse once per query). */
-export const resolverLimits = { starHops: 64 } as const
+export const resolverLimits = { starHops: 64, unnestHops: 8 } as const
 
 /** The column at a field path, case ignored. */
 export function columnAt(columns: readonly ScopeColumn[], path: readonly string[]): ScopeColumn | undefined {
@@ -54,10 +54,32 @@ export function boundedLookup(lookup: IndexLookup): IndexLookup {
   }
 }
 
+/** Prefixes to ask again by, per object (its path's key), when the first answer for it was cut short. */
+export type Narrowing = ReadonlyMap<string, readonly string[]>
+
+/** The same prefixes for every object in `paths`; an empty prefix would only repeat the first ask. */
+export function narrowing(paths: ReadonlySet<string>, prefixes: readonly string[]): Narrowing {
+  const kept = [...new Set(prefixes.filter(prefix => prefix.length > 0))]
+  return new Map([...paths].map(path => [path, kept]))
+}
+
+/** At most this many prefixes per object in one second ask (each is a request of its own). */
+const narrowPrefixes = 4
+
+/** Two answers for one object (asked by different prefixes) as one. */
+function merged(had: LanguageLookupAnswer, more: LanguageLookupAnswer): LanguageLookupAnswer {
+  const names = new Set(had.items.map(item => item.name))
+  return { ...had, object: had.object ?? more.object, path: had.object ? had.path : more.path, truncated: had.truncated || more.truncated,
+    items: [...had.items, ...more.items.filter(item => !names.has(item.name))] }
+}
+
 /** One lookup per completion or hover: the objects the scope reads, by path, each asked once. */
 export class ScopeResolver {
   private readonly answers = new Map<string, LanguageLookupAnswer>()
   private readonly cache = new Map<ScopeSource, Promise<SourceColumns>>()
+  /** A select list's columns, shared by every source that reads it (each name of a WITH query). */
+  private readonly shapes = new Map<QueryShape, Promise<SourceColumns>>()
+  private readonly shaping = new Set<QueryShape>()
   private readonly ctes = new Map<string, QueryShape>()
   /** Sources being read: one met again while it is read (a WITH query that reads itself) gives no columns. */
   private readonly reading = new Set<ScopeSource>()
@@ -68,9 +90,9 @@ export class ScopeResolver {
   /** Objects past the request cap went unasked, so the scope's columns are not all here. */
   cut = false
 
-  /** `narrow` asks again, for the objects at `paths` only, the columns that start with `prefix`: a second ask when the first answer
-   *  for them was cut short. The other objects are asked as before (the cache answers them). */
-  constructor(private readonly scope: QueryScope, private readonly dialect: CompletionDialect, lookup: IndexLookup, private readonly narrow?: { readonly prefix: string; readonly paths: ReadonlySet<string> }) {
+  /** `narrow` asks again, for the objects it names only, the columns that start with its prefixes: a second ask when the first
+   *  answer for them was cut short. The other objects are asked as before (the cache answers them). */
+  constructor(private readonly scope: QueryScope, private readonly dialect: CompletionDialect, lookup: IndexLookup, private readonly narrow?: Narrowing) {
     this.lookup = boundedLookup(lookup)
     for (const cte of scope.ctes) if (!this.ctes.has(cte.name.toLowerCase())) this.ctes.set(cte.name.toLowerCase(), cte.shape)
   }
@@ -97,16 +119,28 @@ export class ScopeResolver {
       }
       level = next
     }
-    // Each object gets its share of the answer's total, so a later one is not left with nothing.
-    const objects = [...paths.values()].slice(0, languageLookupLimits.requests - extra.length)
-    this.cut = objects.length < paths.size
-    const share = Math.max(1, Math.min(languageLookupLimits.items, Math.floor((languageLookupLimits.totalItems - extra.reduce((sum, request) => sum + (request.limit ?? languageLookupLimits.defaultItems), 0)) / Math.max(1, objects.length))))
-    const wanted: LanguageLookupPath[] = objects.map(path => ({ path, limit: share, ...this.narrow?.paths.has(key(path)) ? { prefix: this.narrow.prefix } : {}, ...details ? { details } : {} }))
+    // One request per object, or per prefix of an object asked again; past the request cap the rest go unasked.
+    const asks: { path: string[]; prefix?: string }[] = []
+    for (const path of paths.values()) {
+      const prefixes = this.narrow?.get(key(path))?.slice(0, narrowPrefixes)
+      if (prefixes?.length) for (const prefix of prefixes) asks.push({ path, prefix })
+      else asks.push({ path })
+    }
+    const kept = asks.slice(0, Math.max(0, languageLookupLimits.requests - extra.length))
+    this.cut = kept.length < asks.length
+    // Each request gets its share of the answer's total, so a later one is not left with nothing.
+    const share = Math.max(1, Math.min(languageLookupLimits.items, Math.floor((languageLookupLimits.totalItems - extra.reduce((sum, request) => sum + (request.limit ?? languageLookupLimits.defaultItems), 0)) / Math.max(1, kept.length))))
+    const wanted: LanguageLookupPath[] = kept.map(ask => ({ path: ask.path, limit: share, ...ask.prefix !== undefined ? { prefix: ask.prefix } : {}, ...details ? { details } : {} }))
     const requests = [...extra, ...wanted]
     if (!requests.length) return []
     const answers = await this.lookup(requests)
     if (!answers) { this.failed = true; return [] }
-    wanted.forEach((request, index) => { const answer = answers[extra.length + index]; if (answer) this.answers.set(key(request.path), answer) })
+    wanted.forEach((request, index) => {
+      const answer = answers[extra.length + index]
+      if (!answer) return
+      const had = this.answers.get(key(request.path))
+      this.answers.set(key(request.path), had ? merged(had, answer) : answer)
+    })
     return answers.slice(0, extra.length)
   }
 
@@ -115,6 +149,16 @@ export class ScopeResolver {
   /** The objects (by the path asked) whose answer held fewer columns than the index has. */
   cutShort(): ReadonlySet<string> {
     return new Set([...this.answers].filter(([, answer]) => answer.truncated && answer.object).map(([path]) => path))
+  }
+
+  /** The prefix a field path written on `source` means on the object beneath it: through an UNNEST, the array's path first
+   *  (i.alpha over UNNEST(w.zrec) is zrec.alpha); through `*`, the same names. */
+  async prefixThrough(source: ScopeSource, path: readonly string[], typed: string, depth = 0): Promise<string> {
+    if (source.kind === 'unnest' && depth < resolverLimits.unnestHops) {
+      const inner = await this.field(source.path, source)
+      if (inner) return this.prefixThrough(inner.source, [...inner.path, ...path], typed, depth + 1)
+    }
+    return [...path, typed].join('.')
   }
 
   /** Every source's columns, read one after another: a source read while another is still being read would meet it in `reading`
@@ -166,14 +210,32 @@ export class ScopeResolver {
     }
   }
 
+  /** A select list's columns, read once however many sources name it; one met again while it is read gives none. */
+  private shape(shape: QueryShape, hops: number): Promise<SourceColumns> {
+    if (this.shaping.has(shape)) return Promise.resolve({ columns: [], truncated: false })
+    let found = this.shapes.get(shape)
+    if (!found) {
+      this.shaping.add(shape)
+      found = this.readShape(shape, hops).finally(() => this.shaping.delete(shape))
+      this.shapes.set(shape, found)
+    }
+    return found
+  }
+
   /** A select list's columns: its named ones, then every column its `*` sources give (their top level and below). */
-  private async shape(shape: QueryShape, hops: number): Promise<SourceColumns> {
+  private async readShape(shape: QueryShape, hops: number): Promise<SourceColumns> {
     const columns: ScopeColumn[] = shape.columns.map(path => ({ path }))
+    const known = new Set(columns.map(column => column.path.toLowerCase()))
     let truncated = false
     for (const star of shape.stars) {
       const given = await this.columns(star, hops + 1)
       truncated ||= given.truncated
-      for (const column of given.columns) if (!columns.some(known => sameName(known.path, column.path))) columns.push(column)
+      for (const column of given.columns) {
+        const name = column.path.toLowerCase()
+        if (known.has(name)) continue
+        known.add(name)
+        columns.push(column)
+      }
     }
     return { columns, truncated }
   }

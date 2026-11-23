@@ -129,7 +129,8 @@ index ([object-search.md](object-search.md#bigquery)) in the backend's memory th
   `WITH` names, the default dataset's objects, the billing project's datasets and the projects. `x.` lists a project's
   datasets or the billing project's dataset `x`'s objects; `x.y.` that dataset's objects. A date-sharded group is one
   item with its range, and a wildcard (`events_*`) or one of its shards within the range reads the newest shard's columns
-  (a wildcard that could mean two groups, or a group and a table, reads none).
+  (`events_*` reads the `events_YYYYMMDD` group even beside `events_summary`; `ev*` over two groups, or a group and a
+  table, reads none).
 - **Expressions.** The columns of every source in scope, the scope's aliases, functions and keywords. `alias.` lists that
   source's columns, `alias.record.` a STRUCT's fields, `NET.` (and the other namespaces) their functions, and `SAFE.` any
   function. After `CAST(… AS`, types and keywords.

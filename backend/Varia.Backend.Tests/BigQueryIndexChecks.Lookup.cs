@@ -111,8 +111,11 @@ internal static partial class BigQueryIndexChecks
         (string, BigQueryShardsDto?)[] ga4 = [("events_20260102", Group("events_")), ("events_intraday_20260102", Group("events_intraday_")), ("orders", null)];
         check(BigQueryLookup.PickShardGroup("events_*", ga4) == 0 && BigQueryLookup.PickShardGroup("events_intraday_*", ga4) == 1 && BigQueryLookup.PickShardGroup("events_i*", ga4) == 1
             && BigQueryLookup.PickShardGroup("ev*", ga4) == -1 && BigQueryLookup.PickShardGroup("events_20260102", ga4) == 0
-            && BigQueryLookup.PickShardGroup("e*", [("events_20260102", Group("events_")), ("employees", null)]) == -1 && BigQueryLookup.PickShardGroup("o*", ga4) == -1,
-            "a wildcard means the group it covers whole before groups it only begins, and none when it begins a plain table or two groups");
+            && BigQueryLookup.PickShardGroup("e*", [("events_20260102", Group("events_")), ("employees", null)]) == -1 && BigQueryLookup.PickShardGroup("o*", ga4) == -1
+            && BigQueryLookup.PickShardGroup("events_*", [("events_20260102", Group("events_")), ("events_summary", null)]) == 0
+            && BigQueryLookup.PickShardGroup("ev*", [("events_20260102", Group("events_")), ("evaluations", null)]) == -1 && BigQueryLookup.PickShardGroup("ev*", [("events_20260102", Group("events_"))]) == 0
+            && BigQueryLookup.PickShardGroup("events_20260101", [("events_20260102", Group("events_")), ("events_summary", null)]) == 0,
+            "a wildcard means the group it covers whole before the tables and groups it only begins, else none when it begins a plain table and a group or two groups");
         check(With(new ObjectIndexSkip("SALES", "PERMISSION_DENIED", "x", Project: "varia-alpha")).Dataset("varia-alpha", "SALES") is { State: LookupState.Skipped, Dataset: "SALES" },
             "a skip spelled exactly as asked wins over a held dataset that differs from it only in case");
         var events = With().Dataset("varia-alpha", "sales");

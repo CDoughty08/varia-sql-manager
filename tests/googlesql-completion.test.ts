@@ -209,6 +209,18 @@ describe('GoogleSQL scope reader', () => {
     expect(performance.now() - timed).toBeLessThan(3000)
   })
 
+  it('reads subqueries and WITH queries over a wide table without work growing with its width squared', async () => {
+    const wide = '`varia-wide.lab.wide`'
+    const subqueries = 'SELECT c24 FROM ' + Array.from({ length: 200 }, (_, index) => `(SELECT * FROM ${wide}) s${index}`).join(', ')
+    const chain = 'WITH ' + Array.from({ length: 60 }, (_, index) => `w${index} AS (SELECT * FROM ${index ? `w${index - 1}` : wide})`).join(', ') + ' SELECT c24 FROM w59, w59 AS again'
+    const timed = performance.now()
+    const first = await completeFromIndex(readGoogleSqlCompletion(subqueries, 'SELECT c24'.length), dialect, fakeLookup())
+    const second = await completeFromIndex(readGoogleSqlCompletion(chain, chain.indexOf('SELECT c24') + 'SELECT c24'.length), dialect, fakeLookup())
+    expect(performance.now() - timed).toBeLessThan(3000)
+    expect(first.items.some(item => item.label === 'c2499')).toBe(true)
+    expect(second.items.some(item => item.label === 'c2499')).toBe(true)
+  })
+
   it('reads a dot after a project id that ends in digits', () => {
     expect(read('SELECT * FROM my-project-123456.|').site).toEqual({ kind: 'object', qualifier: ['my-project-123456'] })
   })
@@ -293,6 +305,18 @@ describe('completion from the index', () => {
     expect(joined.labels('column')).toEqual(expect.arrayContaining(['customer', 'placed']))
     expect(both.at(-1)?.find(request => request.path.at(-1) === 'orders')?.prefix).toBeUndefined()
     expect(both.at(-1)?.find(request => request.path.at(-1) === 'wide')?.prefix).toBe('id')
+  })
+
+  it('asks a wide table again through UNNEST, WITH queries and subqueries, and not for a function namespace', async () => {
+    const unnest = await complete('SELECT al| FROM `varia-wide.lab.wide` w, UNNEST(w.zrec) AS i')
+    expect(unnest.labels('column')).toContain('alpha')
+    expect(unnest.incomplete).toBe(false)
+    expect((await complete('WITH c AS (SELECT * FROM `varia-wide.lab.wide`) SELECT c.zr| FROM c')).labels('column')).toEqual(['zrec'])
+    expect((await complete('SELECT s.zr| FROM (SELECT * FROM `varia-wide.lab.wide`) s')).labels('column')).toEqual(['zrec'])
+    expect((await complete('SELECT i.| FROM `varia-wide.lab.wide` w, UNNEST(w.zrec) i')).labels()).toEqual(['alpha', 'beta'])
+    const log: LanguageLookupPath[][] = []
+    expect((await complete('SELECT SAFE.| FROM `varia-wide.lab.wide`', fakeLookup(log))).items.length).toBeGreaterThan(0)
+    expect(log).toHaveLength(1)
   })
 
   it('lists an UNNEST alias\'s element fields beside the table it reads', async () => {

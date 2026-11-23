@@ -110,32 +110,33 @@ internal sealed class BigQueryLookup
         var exact = named.Where(at => table.Name(at) == name).ToList();
         var at = exact.Count > 0 ? exact[0] : named.Count == 1 ? named[0] : -1;
         if (at >= 0) return new(dataset.Project, table, at, read);
-        var entries = Objects(dataset).ToList();
+        // A wildcard reads tables only: routines and models neither match nor stand in its way.
+        var entries = Objects(dataset).Where(entry => entry.Kind is not ("bqRoutine" or "bqModel")).ToList();
         var pick = PickShardGroup(name, [.. entries.Select(entry => (entry.Name, Shards(entry)))]);
         return pick >= 0 ? entries[pick] : null;
     }
 
     /// <summary>Which shard group a written name means, by its index among <paramref name="entries"/> (a dataset's objects, each
-    /// with its group or null), or -1. A group the name covers whole (<c>events_*</c> over <c>events_YYYYMMDD</c>) wins over groups
-    /// the stem only begins (<c>events_intraday_</c>); among the latter, or beside a plain table the stem also begins, the wildcard
-    /// could mean either, so it means none.</summary>
+    /// with its group or null), or -1. A group the name covers whole (<c>events_*</c> over <c>events_YYYYMMDD</c>) wins over the
+    /// tables and groups the stem only begins (<c>events_summary</c>, <c>events_intraday_</c>): it is what such a wildcard is written
+    /// for. Otherwise a stem that begins two groups, or a group and a plain table, could mean either, so it means none.</summary>
     internal static int PickShardGroup(string name, IReadOnlyList<(string Name, BigQueryShardsDto? Shards)> entries)
     {
-        int whole = -1, begun = -1, wholes = 0, begins = 0;
+        int whole = -1, begun = -1, wholes = 0, begins = 0, plain = 0;
         var stem = name.EndsWith('*') ? name[..^1] : null;
         for (var index = 0; index < entries.Count; index++)
         {
             var (entryName, shards) = entries[index];
             if (shards is null)
             {
-                if (stem is not null && entryName.StartsWith(stem, StringComparison.Ordinal)) begins++;
+                if (stem is not null && entryName.StartsWith(stem, StringComparison.Ordinal)) plain++;
                 continue;
             }
             if (Shard(shards, name)) { whole = index; wholes++; }
             else if (stem is not null && shards.Prefix.Length > stem.Length && shards.Prefix.StartsWith(stem, StringComparison.Ordinal)) { begun = index; begins++; }
         }
         if (wholes > 0) return wholes == 1 ? whole : -1;
-        return begins == 1 ? begun : -1;
+        return begins == 1 && plain == 0 ? begun : -1;
     }
 
     /// <summary>Whether a written name covers a shard group whole: a wildcard of its prefix and up to 8 digits within the group's range

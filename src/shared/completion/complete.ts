@@ -3,7 +3,7 @@
 // keywords; a dotted name lists an alias's columns or a STRUCT's fields. Nothing here knows an engine.
 import { languageLookupLimits, type LanguageLookupPath } from '../language-lookup'
 import type { CompletionDialect, CompletionItem, CompletionKind, CompletionList, CompletionRead, DialectFunction, IndexLookup } from './model'
-import { ScopeResolver, boundedLookup, childrenOf, sameName, type ScopeColumn } from './resolve'
+import { ScopeResolver, boundedLookup, childrenOf, narrowing, sameName, type ScopeColumn } from './resolve'
 
 /** Groups order the list ahead of the editor's fuzzy score among equals: what the scope gives first, the dialect's words last. */
 const group: Readonly<Record<CompletionKind, string>> = { column: '1', field: '1', alias: '2', cte: '2', table: '3', view: '3', routine: '4', model: '4', container: '5', function: '6', keyword: '7' }
@@ -42,14 +42,17 @@ export async function completeFromIndex(read: CompletionRead, dialect: Completio
       let resolver = new ScopeResolver(scope, dialect, lookup)
       await resolver.load()
       let field = await resolver.field(site.qualifier)
-      // A table wider than its share of the answer may hold the field past what came back (or, written without an alias, the
-      // column itself): ask again for the names that start with what is written.
+      // A table wider than its share of the answer may hold the field past what came back, read directly, through `*` or an UNNEST
+      // (or, written without an alias, the column itself): ask again for the names that start with what is written.
       const cutShort = resolver.cutShort()
-      const prefix = [...field ? field.path : site.qualifier, word.typed].join('.')
-      if (cutShort.size && prefix && (!field || (field.columns.truncated && field.columns.object))) {
-        resolver = new ScopeResolver(scope, dialect, lookup, { prefix, paths: cutShort })
-        await resolver.load()
-        field = await resolver.field(site.qualifier) ?? field
+      const namespace = site.qualifier.length === 1 && [...dialect.functionNamespaces, ...dialect.anyFunctionPrefixes].some(name => sameName(name, site.qualifier[0]))
+      if (cutShort.size && (field ? field.columns.truncated : !namespace)) {
+        const prefix = field ? await resolver.prefixThrough(field.source, field.path, word.typed) : [...site.qualifier, word.typed].join('.')
+        if (prefix) {
+          resolver = new ScopeResolver(scope, dialect, lookup, narrowing(cutShort, [prefix]))
+          await resolver.load()
+          field = await resolver.field(site.qualifier) ?? field
+        }
       }
       incomplete ||= resolver.failed || resolver.cut || (!field && resolver.cutShort().size > 0)
       if (field) {
@@ -72,7 +75,10 @@ export async function completeFromIndex(read: CompletionRead, dialect: Completio
       let given = await resolver.all(scope.sources)
       const cutShort = resolver.cutShort()
       if (word.typed && cutShort.size) {
-        resolver = new ScopeResolver(scope, dialect, lookup, { prefix: word.typed, paths: cutShort })
+        // The typed names, and an UNNEST's element fields that start with them (UNNEST(w.items) asks items.<typed>).
+        const prefixes = [word.typed]
+        for (const source of scope.sources) if (source.kind === 'unnest') prefixes.push(await resolver.prefixThrough(source, [], word.typed))
+        resolver = new ScopeResolver(scope, dialect, lookup, narrowing(cutShort, prefixes))
         await resolver.load()
         given = await resolver.all(scope.sources)
       }
