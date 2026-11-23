@@ -20,6 +20,7 @@ import { orderPlanEntries } from '../plans/sources'
 import { ResultOperations, type OperationTicket } from './operations'
 import { nameMeetsOthers, sameFileName, saveName, type SaveSubject } from './save-names'
 import { isHiddenColumn, visibleColumnCount } from '../grid/hidden-columns'
+import type { DiffUnit } from '../grid/diff-navigation'
 import { isRemoteHandle, isRemoteView, RemoteDeclined, remoteStop, remoteOrderable, remoteSelectionText, unorderableText, type RemoteViews } from './remote-views'
 import type { MemoryUsage } from './memory'
 
@@ -364,6 +365,20 @@ export interface GridController {
   filterColumn?(column: number): void
   /** Selects a whole column (in the result's columns) and scrolls it into view, without taking the focus. */
   selectColumn?(column: number): void
+  /** A comparison's grid: what moving between its differences reads and does (CompareService.navigate). */
+  diff?: DiffGridControls
+}
+/** A mounted comparison grid, for Go to Next or Previous Difference and Go to Possible Match: its active cell (with whether
+ *  its whole row is selected) and that row's tone (undefined while not read), the handle it shows (its sorted or filtered
+ *  view, whose positions results.diffSeek then takes), and landing on a change unit (GridView.landDiff). */
+export interface DiffGridControls {
+  active(): { readonly row: number; readonly column: number; readonly whole: boolean; readonly tone: string | null | undefined } | undefined
+  handle(): ResultHandle
+  land(row: number, first: DiffUnit, settle: ((tone: string | null) => DiffUnit) | undefined, focus: boolean): void
+  /** A row's tone, once its tile has loaded (undefined until then). */
+  tone(row: number): string | null | undefined
+  /** A row's tone once its tile is read; undefined when it cannot come (GridView.toneWhenRead). */
+  toneWhenRead(row: number, signal: AbortSignal): Promise<string | null | undefined>
 }
 /** How a run ended: the summary, or main's failure (`code` BACKEND_LOST when the backend stopped), plus a notice to show first. */
 export interface RunEnd { summary?: QueryResult; error?: string; code?: ErrorCode; notice?: string; planContext?: PlanExecutionContext }
@@ -1071,6 +1086,11 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
         if (run) this.closeHeld(run, key)
       }
     }
+  }
+  /** The mounted comparison grid of an entry, for moving between its differences. */
+  diffControls(tabId: string, key: EntryKey): DiffGridControls | undefined {
+    const set = this.entry(this.runs.get(tabId), key)
+    return set?.descriptor.kind === 'diff' ? this.controllers.get(set.key)?.diff : undefined
   }
   /** Fitting uses the mounted grid's bounded measurement and current (possibly sorted) view. */
   canFitColumn(tabId: string, key: EntryKey, column: number): boolean {

@@ -18,7 +18,7 @@ export function gridAnchor(root: Element): Element | undefined {
 /** What a menu opened on an element of a grid is for, in the result's rows and columns: a cell both, a column's header its
  *  column, a row's number its row. The grid answers from its own slots, so the answer holds however it draws them (ARIA
  *  indices number what is drawn). */
-export interface GridTarget { readonly row?: number; readonly column?: number }
+export interface GridTarget { readonly row?: number; readonly column?: number; readonly partner?: boolean }
 const targets = new WeakMap<Element, (element: Element) => GridTarget | undefined>()
 /** Registers the grid at `root`; the returned function unregisters it. */
 export function registerGridTarget(root: Element, target: (element: Element) => GridTarget | undefined): () => void {

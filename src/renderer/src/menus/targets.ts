@@ -84,6 +84,9 @@ export interface OutputTarget {
   readonly transposed?: boolean
   /** A comparison's grid whose inputs are both still open (`comparisonInputsOpen`). */
   readonly inputsOpen?: boolean
+  /** On a comparison's row (a cell or its row number): whether that row has a possible match (`comparisonRowHasPartner`),
+   *  once its change marker has loaded. */
+  readonly rowHasPartner?: boolean
   readonly selectedText: string
   readonly element: HTMLElement
   /** A live grid's own commands (view `live`): its table is not a result set in ResultsService. */
@@ -219,7 +222,11 @@ export function argsFor(target: MenuTarget): CommandArgs {
   // that reads a grid from its target falls back to that query's focused grid.
   if (target.kind === 'resultsTools') return { tabId: target.tabId }
   const tabId = target.kind === 'editor' || target.kind === 'documentTab' || target.kind === 'output' || target.kind === 'tableDesigner' || target.kind === 'ssisOperations' ? target.tabId : undefined
-  const state = target.kind === 'searchHit' ? target.state : target.kind === 'output' && target.view === 'grid' ? { resultsGridTransposed: !!target.transposed, resultsGridComparison: target.resultKind === 'diff', comparisonInputsOpen: target.resultKind === 'diff' && !!target.inputsOpen } : undefined
+  const state = target.kind === 'searchHit' ? target.state : target.kind === 'output' && target.view === 'grid'
+    ? { resultsGridTransposed: !!target.transposed, resultsGridComparison: target.resultKind === 'diff', comparisonInputsOpen: target.resultKind === 'diff' && !!target.inputsOpen,
+      // The menu's row, when it was opened on one; else (the keyboard's menu on the grid) the focused grid's active row.
+      ...target.resultKind === 'diff' && target.row !== undefined ? { comparisonRowHasPartner: !!target.rowHasPartner } : {} }
+    : undefined
   return { target, ...(tabId ? { tabId } : {}), ...(state ? { state } : {}) }
 }
 export const peekPropertiesOf = (args: CommandArgs | undefined): PeekPropertiesTarget | undefined => args?.target?.kind === 'peekProperties' ? args.target : undefined
@@ -301,7 +308,7 @@ export function selectedTextIn(element: Element): string {
 }
 /** The result's row and column under `element`, as the grid there answers (grid/anchor.ts): a cell's both, a header's
  *  column, a row number's row. Where no GridView is registered, the column by ARIA index. */
-function outputCell(element: Element, view: HTMLElement): { readonly row?: number; readonly column?: number } {
+function outputCell(element: Element, view: HTMLElement): { readonly row?: number; readonly column?: number; readonly partner?: boolean } {
   const grid = gridTarget(view, element)
   if (grid.registered) return grid.target ?? {}
   const column = outputColumn(element, view)
@@ -324,7 +331,7 @@ export function outputTarget(element: Element): OutputTarget | undefined {
   }
   // A grid that does not say which entry it shows is no target: nothing could act on it.
   if (!view || !outputViews.has(kind) || !tabId || (kind === 'grid' && !entry)) return undefined
-  const { row, column }: { readonly row?: number; readonly column?: number } = kind === 'grid' ? outputCell(element, view) : {}
+  const { row, column, partner }: { readonly row?: number; readonly column?: number; readonly partner?: boolean } = kind === 'grid' ? outputCell(element, view) : {}
   const generation = Number(view.getAttribute('data-result-generation')), resultId = Number(view.getAttribute('data-result-id'))
   const result = kind === 'grid' && Number.isSafeInteger(generation) && generation > 0 && Number.isSafeInteger(resultId) && resultId > 0 ? { generation, resultId } : undefined
   const resultKind = kind === 'grid' ? view.getAttribute('data-result-kind') ?? undefined : undefined
@@ -332,7 +339,7 @@ export function outputTarget(element: Element): OutputTarget | undefined {
   const transposed = kind === 'grid' && view.getAttribute('data-orientation') === 'transposed'
   const inputsOpen = kind === 'grid' && view.getAttribute('data-comparison-inputs') === 'open'
   return { kind: 'output', tabId, view: kind as OutputView, ...(kind === 'grid' ? { entry } : {}), selectedText: kind === 'grid' ? '' : selectedTextIn(view), element: view,
-    ...(column !== undefined ? { column } : {}), ...(row !== undefined ? { row } : {}), ...(result ? { result } : {}), ...(resultKind ? { resultKind } : {}), ...(transposed ? { transposed } : {}), ...(inputsOpen ? { inputsOpen } : {}), ...(bare ? { bare: true as const } : {}) }
+    ...(column !== undefined ? { column } : {}), ...(row !== undefined ? { row } : {}), ...(result ? { result } : {}), ...(resultKind ? { resultKind } : {}), ...(transposed ? { transposed } : {}), ...(inputsOpen ? { inputsOpen } : {}), ...(partner ? { rowHasPartner: true } : {}), ...(bare ? { bare: true as const } : {}) }
 }
 
 /**

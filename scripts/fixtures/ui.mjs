@@ -303,6 +303,9 @@ export const gridPart = {
   rowNumber: '.rg-rn',
   /** A comparison's gutter mark (− or +) before its row number, drawn only (the row's header names its kind and rows). */
   diffMark: '.rg-dm',
+  /** A comparison's overview strip beside the scroll bar (aria-hidden: the gutter and chips say what it draws), and its marks. */
+  overview: '.rg-overview',
+  overviewMark: '.rg-overview-mark',
   cell: '[role="gridcell"]',
   selectedCell: '[role="gridcell"][aria-selected="true"]',
   loadingCell: '.rg-c.is-load',

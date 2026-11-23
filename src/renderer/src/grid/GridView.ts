@@ -28,6 +28,8 @@ import { remapSelection, remapTop, sameSelection, type RowMap } from './swap'
 import { colorAt, highlightColors, type RowHighlights } from './highlights'
 import { tableTiles, tileKey, transposedTiles, type TileShape } from './tiles'
 import { whitespaceRuns, type WhitespaceMode } from './whitespace'
+import { partnerKind, type DiffUnit } from './diff-navigation'
+import { OverviewStrip } from './overview'
 import { diffGutter, type DiffSides } from './diff-gutter'
 import { diffSuffixOf, visibleColumnCount, type DiffSuffix } from './hidden-columns'
 import { displayText } from '../../../shared/ipc/wire/cells'
@@ -206,6 +208,9 @@ export interface GridViewOptions {
   readonly diffChanged?: readonly boolean[]
   /** A comparison's key columns (per visible column), marked ⚷ in their headers. */
   readonly diffKeys?: readonly boolean[]
+  /** A comparison's active row and its tone once read (null: none, or not read yet), after each frame either changed in:
+   *  what Go to Possible Match is offered for (CompareService.activeRow). -1 without an active cell. */
+  onDiffRow?(row: number, tone: string | null): void
   /** The columns the grid is sorted by, in order; their headers show it. */
   readonly sort?: readonly HeaderSortKey[]
   /** A header's sort button was clicked (`add`: grid.addSortKey's modifier was held); without it headers have none. */
@@ -284,6 +289,16 @@ export class GridView {
   private readonly diff: DiffSuffix | undefined
   /** A comparison's hidden runs of unchanged rows as drawn (setDiffGaps). */
   private gaps: { readonly shown: boolean; readonly trailing: number } = { shown: false, trailing: 0 }
+  /** A change unit landed on before its row's tone was read: once it is, `settle` says where it lands (an added, removed or
+   *  cut row takes the whole row), unless the selection moved meanwhile. */
+  private landing: { readonly row: number; readonly selection: GridSelection; readonly settle: (tone: string | null) => DiffUnit } | undefined
+  /** The active row and tone last told to `onDiffRow`. */
+  private diffRowKey: string | undefined
+  /** Moves waiting for a row's tone (toneWhenRead), answered after a frame once it is read or can no longer come. */
+  private toneWaiters: { readonly row: number; readonly resolve: (tone: string | null | undefined) => void }[] = []
+  /** A comparison's overview strip (setOverview), beside the scroll bar while it shows the comparison's own rows. */
+  private overview: OverviewStrip | undefined
+  private overviewShown = false
   /** Rows a live revision lists as departed: muted, whatever their tone column says. */
   private muted: ReadonlySet<number> = new Set()
   /** Highlighted rows (setHighlights); only those of the handle shown are drawn. */
@@ -640,6 +655,131 @@ export class GridView {
     this.schedule()
   }
 
+  /** A comparison's overview (its answer's `overview` buckets of kind bits over its stored rows), drawn beside the scroll bar
+   *  while `shown` (no sort or filter, a chip included, reorders or drops rows); clicking a mark scrolls there. */
+  setOverview(o: { readonly buckets: readonly number[]; readonly shown: boolean } | undefined): void {
+    if (!this.diff || this.rotated) return
+    if (o && !this.overview) {
+      this.overview = new OverviewStrip(this.root.ownerDocument, (bucket, buckets) => this.scrollToBucket(bucket, buckets))
+      this.root.append(this.overview.el)
+      const strip = this.overview
+      this.cleanup.push(() => strip.el.remove())
+    }
+    this.overview?.draw(o?.buckets ?? [])
+    this.overviewShown = !!o?.shown && (o?.buckets.some(bits => bits !== 0) ?? false)
+    this.schedule()
+  }
+  /** Scrolls the first stored row of an overview bucket to the middle of the body. */
+  private scrollToBucket(bucket: number, buckets: number): void {
+    const rows = this.rows()
+    if (this.disposed || rows === 0 || buckets <= 0) return
+    // Bucket b holds the rows r with floor(r * buckets / rows) = b (DiffIndex): the first is ceil(b * rows / buckets).
+    const row = Math.min(rows - 1, Math.ceil(bucket * rows / buckets))
+    const body = Math.max(g.rowHeight, this.viewportHeight - g.headerHeight), most = Math.max(0, g.headerHeight + rows * g.rowHeight - this.viewportHeight)
+    this.pendingTop = Math.min(most, Math.max(0, row * g.rowHeight - (body - g.rowHeight) / 2))
+    this.schedule()
+  }
+
+  /** A comparison's active cell, whether its whole row (alone) is selected, and its row's tone (null for none, undefined
+   *  while its tile is not read); undefined without an active cell. */
+  diffActive(): { readonly row: number; readonly column: number; readonly whole: boolean; readonly tone: string | null | undefined } | undefined {
+    // A landing whose tone came in since the last frame lands where the tone says first, so a move steps from there.
+    this.settleLanding()
+    const selection = this.diff ? this.sourceSelection() : undefined, rows = this.rows()
+    if (!selection || rows === 0 || this.columns === 0) return undefined
+    const row = Math.min(selection.active.row, rows - 1), column = Math.min(selection.active.column, this.columns - 1)
+    const block = selection.blocks.length === 1 ? selection.blocks[0] : undefined
+    const whole = block?.kind === 'rows' && block.anchor.row === row && block.focus.row === row
+    return { row, column, whole, tone: this.diffTone(row) }
+  }
+  /** A comparison row's tone from the tiles read: null for none, undefined while its tile is not read. */
+  diffTone(row: number): string | null | undefined {
+    const diff = this.diff
+    if (!diff || diff.tone < 0 || row < 0 || row >= this.rows()) return undefined
+    const shape = this.tiles
+    return this.hiddenText(row, diff.tone, (at, column) => this.data.peek(tileKey(Math.floor(at / shape.rows), Math.floor(column / shape.columns))) ?? null)
+  }
+  /**
+   * Lands on a comparison's change unit (Go to Next or Previous Difference, Go to Possible Match): selects its cell, or its
+   * row with the first column active, scrolls it into view and, with `focus`, takes the focus. `first` is where it lands
+   * while the row's tone is not read; `settle` says where once it is (asked at once when it is read already).
+   */
+  landDiff(row: number, first: DiffUnit, settle: ((tone: string | null) => DiffUnit) | undefined, focus: boolean): void {
+    if (this.disposed || !this.diff || row < 0 || row >= this.rows()) return
+    const tone = settle ? this.diffTone(row) : undefined
+    const unit = settle && tone !== undefined ? settle(tone) : first
+    const selection = this.unitSelection(row, unit)
+    this.select(selection)
+    if (focus) this.root.focus({ preventScroll: true })
+    this.revealUnit(row, unit)
+    this.landing = settle && tone === undefined ? { row, selection, settle } : undefined
+  }
+  /**
+   * A comparison row's tone once its tile is read, so a quick repeat steps within the row it landed on. Only a landing still
+   * waiting for its row's tone (whose scroll brings the row's tile in) is waited for, and only while the grid is drawn.
+   * Undefined at once otherwise, or later when it cannot come: the landing settled elsewhere or the active cell left the
+   * row, the tile's read failed, the pane hid, the grid stopped or went, or the move was given up (its result replaced).
+   */
+  toneWhenRead(row: number, signal: AbortSignal): Promise<string | null | undefined> {
+    const tone = this.diffTone(row)
+    if (tone !== undefined || this.disposed || !this.diff || signal.aborted) return Promise.resolve(tone)
+    if (this.stopped || this.landing?.row !== row || this.scroller.clientWidth <= 0 || this.scroller.clientHeight <= 0) return Promise.resolve(undefined)
+    return new Promise(resolve => {
+      const waiter = { row, resolve: (value: string | null | undefined) => { signal.removeEventListener('abort', abort); resolve(value) } }
+      const abort = () => { this.toneWaiters = this.toneWaiters.filter(item => item !== waiter); waiter.resolve(undefined) }
+      signal.addEventListener('abort', abort, { once: true })
+      this.toneWaiters.push(waiter)
+      this.schedule()
+    })
+  }
+  private answerToneWaiters(): void {
+    if (this.toneWaiters.length === 0) return
+    const diff = this.diff, active = this.diffActive()
+    this.toneWaiters = this.toneWaiters.filter(waiter => {
+      const tone = this.diffTone(waiter.row)
+      const gone = !diff || active?.row !== waiter.row || this.landing?.row !== waiter.row || this.data.failed(tileKey(Math.floor(waiter.row / this.tiles.rows), Math.floor(diff.tone / this.tiles.columns)))
+      if (tone === undefined && !gone) return true
+      waiter.resolve(tone)
+      return false
+    })
+  }
+  private unitSelection(row: number, unit: DiffUnit): GridSelection {
+    const cell = { row, column: Math.min(Math.max(0, this.columns - 1), unit.whole ? 0 : unit.column) }
+    return { entry: this.o.entry, blocks: [{ kind: unit.whole ? 'rows' : 'cells', anchor: cell, focus: cell }], active: cell }
+  }
+  private revealUnit(row: number, unit: DiffUnit): void {
+    const column = unit.whole ? 0 : unit.column
+    this.reveal(row, column)
+    this.outerReveal = { row, column, frames: 10 }
+  }
+  /** After a frame: a landing waiting for its row's tone lands where the tone says, and `onDiffRow` hears of a new active
+   *  row or tone. */
+  private settleDiff(): void {
+    this.settleLanding()
+    this.answerToneWaiters()
+    if (!this.o.onDiffRow) return
+    const active = this.diffActive(), tone = active?.tone ?? null, key = active ? `${active.row}|${tone ?? ''}` : ''
+    if (key === this.diffRowKey) return
+    this.diffRowKey = key
+    this.o.onDiffRow(active?.row ?? -1, tone)
+  }
+  /** A landing waiting for its row's tone: dropped once the selection moved, else landed where the tone says once read. */
+  private settleLanding(): void {
+    const landing = this.landing
+    if (landing && this.o.state.selection !== landing.selection) this.landing = undefined
+    else if (landing) {
+      const tone = this.diffTone(landing.row)
+      if (tone !== undefined) {
+        this.landing = undefined
+        const unit = landing.settle(tone), was = landing.selection
+        if (unit.whole !== (was.blocks[0].kind === 'rows') || (!unit.whole && unit.column !== was.active.column)) {
+          this.select(this.unitSelection(landing.row, unit))
+          this.revealUnit(landing.row, unit)
+        }
+      }
+    }
+  }
+
   setHighlights(sets: readonly RowHighlights[]): void {
     this.highlightSets = sets
     const shown = sets.find(set => set.handle === this.handle)
@@ -721,6 +861,7 @@ export class GridView {
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    for (const waiter of this.toneWaiters.splice(0)) waiter.resolve(undefined)
     const alive = (GridView.alive.get(this.o.entry) ?? 1) - 1
     if (alive > 0) GridView.alive.set(this.o.entry, alive); else GridView.alive.delete(this.o.entry)
     this.fitting?.abort()
@@ -841,7 +982,12 @@ export class GridView {
       this.failures = 0
     } catch (error) {
       this.o.onError(error)
-      if (++this.failures >= 3) { this.stopped = true; this.setStatus({ ...this.status, renderError: true }) }
+      if (++this.failures >= 3) {
+        this.stopped = true
+        this.setStatus({ ...this.status, renderError: true })
+        // A stopped grid paints no more until Retry: no tone a move waits for will come.
+        for (const waiter of this.toneWaiters.splice(0)) waiter.resolve(undefined)
+      }
       else this.schedule()
     }
     this.o.stats?.frame(performance.now() - started)
@@ -1549,8 +1695,10 @@ export class GridView {
       if (!slot) continue
       if (slot.header) return slot.header.column < 0 ? undefined : this.rotated ? { row: slot.header.column } : { column: slot.header.column }
       const row = slot.row && slot.row.row >= 0 ? slot.row.row : undefined
-      if (slot.cell) return row === undefined || slot.cell.column < 0 ? undefined : this.rotated ? { row: slot.cell.column, column: row } : { row, column: slot.cell.column }
-      return row === undefined ? undefined : this.rotated ? { column: row } : { row }
+      // A comparison's row says whether it has a possible match, for Go to Possible Match in its menu.
+      const partner = row !== undefined && this.diff && partnerKind(this.diffTone(row)) ? { partner: true } : {}
+      if (slot.cell) return row === undefined || slot.cell.column < 0 ? undefined : this.rotated ? { row: slot.cell.column, column: row } : { row, column: slot.cell.column, ...partner }
+      return row === undefined ? undefined : this.rotated ? { column: row } : { row, ...partner }
     }
     return undefined
   }
@@ -1562,8 +1710,14 @@ export class GridView {
     this.viewportWidth = this.scroller.clientWidth
     this.viewportHeight = this.scroller.clientHeight
     const width = this.viewportWidth, height = this.viewportHeight
-    // A hidden pane (Ctrl+R) or a background tab has no size: nothing to paint until it is shown.
-    if (width <= 0 || height <= 0) return
+    // A hidden pane (Ctrl+R) or a background tab has no size: nothing to paint until it is shown, and no tile to wait for.
+    if (width <= 0 || height <= 0) {
+      for (const waiter of this.toneWaiters.splice(0)) waiter.resolve(undefined)
+      return
+    }
+    // The overview strip sits between the header and the horizontal scroll bar, left of the vertical one (read here, with
+    // the other offsets; written after the paint).
+    const bars = this.overview ? { right: Math.max(0, this.scroller.offsetWidth - width), bottom: Math.max(0, this.scroller.offsetHeight - height) } : undefined
     const state = this.o.state, snapshot = this.handle.getSnapshot()
     // A result loading into memory keeps drawing the rows it showed (loading past those read): reads stop at those available.
     const rows = drawnRowCount(snapshot), available = snapshot.rowsAvailable
@@ -1683,6 +1837,8 @@ export class GridView {
     if (this.rotated) this.paintBands(headerRange, Math.max(0, Math.min(height - g.headerHeight, drawnRows * g.rowHeight - virtualTop)))
     this.aria(snapshot.state, rows)
     this.report(model, virtualTop, drawnRows, height)
+    if (this.diff) this.settleDiff()
+    if (bars) this.overview!.place(this.overviewShown && rows > 0, g.headerHeight, bars.right, bars.bottom)
   }
 
   /** Transposed: an active cell in a row past those drawn (the selection was made in the table, or a swap moved it) moves
