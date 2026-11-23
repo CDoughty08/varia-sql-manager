@@ -3745,3 +3745,41 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .agent-copy-more p { margin: var(--varia-space-1) 0 0; color: var(--varia-descriptionForeground); }
 .agent-copy-compare { padding: var(--varia-space-2) var(--varia-space-4); max-height: 40vh; overflow: auto; }
 @media (forced-colors: active) { .agent-copy-banner .link-button, .agent-copy .link-button { color: LinkText; } }
+/* Create several (AG-6f): the copy as a table, one row per new job. Grey cells inherit; typed ones carry the accent edge. */
+.agent-copy-several { padding-top: var(--varia-space-2); border-top: 1px solid var(--varia-widget-border); }
+.agent-several { display: flex; flex-direction: column; gap: var(--varia-space-2); min-height: 0; padding: var(--varia-space-2) var(--varia-space-4); }
+.agent-several-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1) var(--varia-space-2); font-size: var(--varia-size-sm); }
+.agent-several-sep { align-self: stretch; width: 1px; background: var(--varia-widget-border); }
+.agent-several-end { display: inline-flex; align-items: center; gap: var(--varia-space-2); margin-left: auto; }
+.agent-several-attention { display: inline-flex; align-items: center; gap: var(--varia-space-1); color: var(--varia-warningForeground); }
+.agent-several-panel { display: flex; flex-direction: column; gap: var(--varia-space-2); padding: var(--varia-space-2); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); }
+.agent-several-panel p { margin: 0; }
+.agent-several-columns { display: flex; flex-wrap: wrap; gap: var(--varia-space-3); max-height: 18em; overflow: auto; }
+.agent-several-columns fieldset { display: flex; flex-direction: column; gap: var(--varia-space-0); margin: 0; padding: 0 var(--varia-space-2); border: 0; border-left: 1px solid var(--varia-widget-border); }
+.agent-several-columns legend { padding: 0; font-weight: 600; }
+.agent-several-scroll { overflow: auto; max-height: 50vh; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); }
+.agent-several-table { border-collapse: collapse; font-size: var(--varia-size-sm); }
+.agent-several-table th, .agent-several-table td { padding: var(--varia-space-0) var(--varia-space-1); text-align: left; white-space: nowrap; border-bottom: 1px solid var(--varia-widget-border); }
+.agent-several-table thead th { position: sticky; top: 0; background: var(--varia-editor-background); font-weight: 600; }
+.agent-several-table tr[aria-selected="true"] { background: var(--varia-list-inactiveSelectionBackground); }
+.agent-several-table tr[data-locked] { color: var(--varia-descriptionForeground); }
+.agent-several-num { min-width: 2.5em; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+.agent-several-cell { border-left: 2px solid transparent; }
+.agent-several-cell[data-changed] { border-left-color: var(--varia-focusBorder); }
+.agent-several-cell[data-error] { border-left-color: var(--varia-errorForeground); }
+.agent-several-cell .property-input { width: 14em; min-width: 8em; }
+.agent-several-cell textarea.property-input { width: 20em; height: 1.8em; resize: vertical; }
+.agent-several-cell[data-inherited] select.property-input { color: var(--varia-descriptionForeground); }
+.agent-several-tag { padding: 0 var(--varia-space-1); border: 1px solid var(--varia-focusBorder); border-radius: var(--varia-radius-sm); }
+.agent-several-details { display: flex; flex-direction: column; gap: var(--varia-space-2); padding-top: var(--varia-space-2); border-top: 1px solid var(--varia-widget-border); }
+.agent-several-details-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); }
+.agent-several-details .link-button, .agent-several-results .link-button, .agent-several-table .link-button { padding: 0; border: 0; background: none; color: var(--varia-list-highlightForeground); font: inherit; text-decoration: underline; cursor: pointer; }
+.agent-several-problems { margin: 0; padding: 0; list-style: none; }
+.agent-several-problems li { display: flex; align-items: center; gap: var(--varia-space-1); }
+.agent-several-results { display: flex; flex-direction: column; gap: var(--varia-space-2); }
+.agent-several-results tr[data-state="skipped"] { color: var(--varia-descriptionForeground); }
+.agent-several-failed { color: var(--varia-errorForeground); }
+@media (forced-colors: active) {
+  .agent-several-cell[data-changed] { border-left-color: Highlight; }
+  .agent-several-details .link-button, .agent-several-results .link-button, .agent-several-table .link-button { color: LinkText; }
+}
