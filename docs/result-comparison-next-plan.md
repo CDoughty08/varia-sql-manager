@@ -64,7 +64,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
 | Q8 | Show Change Details key: Ctrl+I (⌘I on macOS), only in a comparison's grid or card? | **Yes.** VS Code's Show Hover is the chord Ctrl+K Ctrl+I, but Varia's two-part chords work only in editor text (Monaco dispatches them), so a grid key must be one keystroke. Ctrl+I is free in Varia's catalogue and keeps the "I" for information. ⌘I is already Properties in Object Explorer on macOS, so the two share it by focus, as ⌘I and Get Info do in Finder. Monaco binds both to Trigger Suggest in editor text, so `monacoShadowAllowlist` gains `ctrl+i` and its `cmd+i` reason names the grid too; the card's `focusSamples` entry is under § 3 + 7's catalogues. |
 | Q9 | A comparison of rows as shown going out of date: rebuild automatically like Pivots, or Update only? | **Update only.** A rebuild resets the comparison's sort, filters and scroll, which is more disruptive than a Pivot rebuild. |
 | Q10 | A global "always ignore columns named …" setting (dbForge's mask) with C2? | **No.** Ignored columns are remembered per pair. Revisit if people ask. |
-| Q11 | Should Check each statement also check that each UPDATE's and DELETE's row still holds the values the comparison saw, and that each INSERT's row is not in the target yet? | **Yes, as part of that check.** Each UPDATE's WHERE also compares the columns it SETs with the values the target should hold now, NULL-safe (`AND [status] = N'Open'`), so a wrong direction, or a row changed since the comparison, updates no row and the check THROWs. Each DELETE's WHERE also compares the row's ticked, compared columns, so a row changed since, or a same-keyed row of another table, is not deleted. Each INSERT is preceded by `IF EXISTS (SELECT 1 FROM … WHERE <its keys>) THROW …`, so a wrong direction with only INSERT ticked, or a row already restored, inserts nothing instead of a duplicate where the key is not the table's. Without these, the wrong direction for a repair passes every check and changes nothing, or inserts the other side's rows again. Columns without `=` (xml, text, ntext, image, json, vector) and values that were truncated or hold U+FFFD are left out of the comparison. Values compare in the target column's collation, so a case-only change under a case-insensitive collation is not caught. |
+| Q11 | Should Check each statement also check that each UPDATE's and DELETE's row still holds the values the comparison saw, and that each INSERT's row is not in the target yet? | **Yes, as part of that check.** Each UPDATE's WHERE also compares the columns it SETs with the values the target should hold now, NULL-safe (`AND [status] = N'Open'`), so a wrong direction, or a row changed since the comparison, updates no row and the check THROWs. Each DELETE's WHERE also compares the row's ticked, compared columns, so a row changed since, or a same-keyed row of another table, is not deleted. Each INSERT is preceded by `IF EXISTS (SELECT 1 FROM … WHERE <its keys>) THROW …`, so a wrong direction with only INSERT ticked, or a row already restored, inserts nothing instead of a duplicate where the key is not the table's. Without these, the wrong direction for a repair passes every check and changes nothing, or inserts the other side's rows again. Columns without `=` (xml, text, ntext, image, json, vector), values that were truncated or hold U+FFFD, and char or varchar values that are not all ASCII under a SQL_ collation are left out of the comparison. Values compare in the target column's collation, so a case-only change under a case-insensitive collation is not caught. |
 
 ## What every feature shares
 
@@ -114,7 +114,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - Toolbar buttons and the palette keep their own entries.
   - `tests/command-catalog.test.ts` (its `keylessItems` for both menus) and `results-smoke.mjs`'s grid-menu steps follow
     the move. That test assigns keys without a menu's `when`, so `tests/menus-content.test.ts` gains a comparison
-    grid-menu sample (`fixtures/menus-context.*.txt`), pinning Comparison's S and Then Sort Descending's N. Each lane
+    grid-menu sample (`fixtures/menus-context.*.txt`), pinning Comparison's S and Then Sort Descending's N, and a
+    comparison's More results tools, where hidden items free letters too (Show Change Details takes Choose Headers…'s
+    H). Each lane
     that adds to More results tools (C2 to C6) updates `results-toolbar-fold.test.ts`'s pinned `output.tools` list.
 - **Engine-neutral.** Commands, context keys and settings declare both providers, except Script Differences (Q4).
   Result-naming methods are declared for both engines in `methods.ts` and checked in C#. New protocol members are optional
@@ -716,11 +718,12 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
 ### UX
 
 - **Where:** **Script Differences as T-SQL…** in the Comparison submenu, More results tools and the palette. It opens an
-  **OS dialog window** (N6): kind `scriptDiff`, titled "Script Differences as T-SQL · Result 1 → Result 3
-  (SQLQuery3.sql)", 640 × 600 by default, at least 520 × 440, size remembered as Options' is, modeless. One is open at a
-  time, as Options is.
+  **OS dialog window** (N6): kind `scriptDiff`, titled "Script Differences as T-SQL" (main sets the kind's static title,
+  `dialogWindowKinds`), 640 × 600 by default, at least 520 × 440, size remembered as Options' is, modeless. One is open
+  at a time, as Options is.
 - **The form:**
-  - A first line says how rows are matched: "Rows matched by key columns: id". A script is written only under Key
+  - A first line names the comparison and how rows are matched: "Result 1 → Result 3 (SQLQuery3.sql), rows matched by
+    key columns: id", and changes when another comparison invokes the dialog. A script is written only under Key
     columns the user chose (below).
   - **Target table:** `[database.]schema.table`, each part 1 to 128 characters, parsed as SQL Server parses a multipart
     name: parts plain, bracketed (`[my.schema].Orders`, with `]]` inside brackets) or double-quoted. One part is refused
@@ -806,7 +809,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - **Rows:** All differences, Rows in the grid (chips and filters) or Selected rows, each with its count. Rows in the
     grid is the default, and the same rows as All differences while nothing is filtered: someone who filtered the
     comparison to one customer gets statements only for the rows they saw. The draft remembers the choice. Selected
-    rows are the grid's selection, which always holds at least the active cell's row. The preview reads them as it shows,
+    rows are the grid's selection, which always holds at least the active cell's row. In Two rows an entry is chosen
+    when either of its halves is. The preview reads them as it shows,
     and Script reads them again.
   - **Options:** Wrap in a transaction (on), Check each statement changes one row (on; Q2), with the line "UPDATEs also
     check that the row still holds the values they change from, DELETEs the values the comparison saw, and INSERTs that
@@ -828,10 +832,13 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - The preview asks the backend for its 30 lines (`results.scriptDiff` with `maxLines`), 300 ms after the form last
       changed, cancelling the request before. It refuses only what those lines need (a truncated or U+FFFD value among
       them, or a refusal known on opening); the rest are found on Script.
-    - The counts and the summary are entries by kind in the chosen rows, read from the change index (cheap at any
-      size). Each statement shows its count whether or not it is ticked. Every preview answer carries them, a refused
-      one included, so the counts and the zero-count rules hold while a refusal shows. An UPDATE whose changed columns
-      are all unticked is skipped, so the counts said after Script, which are the script's own, can be lower.
+    - The counts and the summary are entries by kind in the chosen rows. All differences reads the diff's own counts.
+      Rows in the grid and Selected rows are counted by the backend in one pass over the chosen rows, reserving the bit
+      per stored row as Copy as Diff does; in Two rows an entry is chosen when either half is (a value filter on an old
+      value keeps only − halves), as Copy as Diff pairs them, so the counts and the script agree. Each statement shows
+      its count whether or not it is ticked. Every preview answer carries them, a refused one included, so the counts
+      and the zero-count rules hold while a refusal shows. An UPDATE whose changed columns are all unticked is skipped,
+      so the counts said after Script, which are the script's own, can be lower.
 - **The script:**
   - A header of `--` lines names the comparison, the match and any ignored columns, the server and database, the
     direction, the rows chosen and any statement left out ("-- Rows in the grid: 5 of 40 differences. Not included:
@@ -930,6 +937,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     since both sides store U+FFFD and compare equal, so an offline check does. A subnormal float (Literals below)
     takes the same refusal ("1 value in ratio cannot be written exactly."), so an INSERT or SET never writes 0 in its
     place;
+  - a key value of a char or varchar column with a SQL_ collation that is not all ASCII (Literals below): "2 key values
+    in code cannot be matched exactly under its collation. Choose rows without them, or other key columns.", with
+    **Choose key columns…**;
   - no differences in the chosen rows: "The chosen rows have no differences to script.";
   - every UPDATE skipped because its changes are all in unticked columns, with no other statement left: "None of the
     ticked columns changed in the chosen rows. Tick a changed column.";
@@ -991,7 +1001,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       and `supervisorResults` there, and a strict, bounded answer schema;
     - `SqlService.LaneOf`, and `Providers.BothMethods` with its `tests/validation.test.ts` mirror. C# answers
       `UNSUPPORTED_PROVIDER` when the diff set records BigQuery inputs (below): a derived set has no `residence`, and
-      `ProviderOf` falls back to SQL Server for it, so neither says so once an input is closed;
+      `ProviderOf` answers SQL Server for any result outside `ProviderChecks` (only they set `RequestProvider`), so
+      neither says so once an input is closed;
     - its reservations (Budget below);
     - the fake backend, and `FakeHandle` in `tests/fixtures/results.ts`.
   - **Params:** `{ resultId, viewId?, rows?: ranges (as Copy's parts), target: { database, schema, name } (each 1–128
@@ -1025,7 +1036,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   | Integers; decimal, numeric, money, smallmoney | As stored; decimals exactly |
   | float, real | Stored as G15 and G7 text: that text when it reads back as the value, else the exact value kept beside it (`PageLengths.TryExact`, in CellLengths.cs), written round-trip. Always with an exponent (`3.0000000000000004E-1`, `1E0`): without one, T-SQL reads the text as a numeric literal, whose conversion to float may not round correctly. A real is written as its value widened to double, in that double's round-trip text (0.1 as `1.0000000149011612E-1`): a literal is a float, and comparing it with a real column widens the real, so the shorter `1E-1` would find no row as a key or in Q11's guard, while the widened value is exact both compared and assigned, with no decimal → double → real double rounding. A non-zero float smaller in magnitude than 2.2250738585072014E-308 (subnormal: SQL Server stores one that arithmetic produces, but reads its literal as 0) is refused as a value that cannot be written exactly; a real widened to double is never subnormal |
   | bit | 0 or 1 |
-  | char, varchar, text; nchar, nvarchar, ntext | `N'…'` with `''` escaping. A non-N literal is read in the database's default code page, so even char columns get `N'…'`, converted to the column's collation on assignment. CR, LF, U+0085, U+2028, U+2029 and every other control character but tab are written as `NCHAR(n)` joins (`N'a' + NCHAR(13) + NCHAR(10) + N'b'`): the query window's model normalizes line breaks and the clipboard may convert them. A joined value over 4,000 characters starts with `CAST(N'…' AS nvarchar(max))`, since joining shorter strings stops at 4,000. A value that would need more than 64 joins (pretty-printed JSON or XML, a long multi-line note) is written instead as one exact term, `CAST(0x<its UTF-16LE bytes> AS nvarchar(max))`: a chain of thousands of `+` terms risks SQL Server's nesting and expression limits (errors 191, 8631, 8632), which would fail the statement and roll the script back. The size estimate counts its 4 hex digits a code unit |
+  | char, varchar, text; nchar, nvarchar, ntext | `N'…'` with `''` escaping. A non-N literal is read in the database's default code page, so even char columns get `N'…'`, converted to the column's collation on assignment. CR, LF, U+0085, U+2028, U+2029 and every other control character but tab are written as `NCHAR(n)` joins (`N'a' + NCHAR(13) + NCHAR(10) + N'b'`): the query window's model normalizes line breaks and the clipboard may convert them. A joined value over 4,000 characters starts with `CAST(N'…' AS nvarchar(max))`, since joining shorter strings stops at 4,000. A value that would need more than 64 joins (pretty-printed JSON or XML, a long multi-line note) is written instead as one exact term, `CAST(0x<its UTF-16LE bytes> AS nvarchar(max))`: a chain of thousands of `+` terms risks SQL Server's nesting and expression limits (errors 191, 8631, 8632), which would fail the statement and roll the script back. The size estimate counts its 4 hex digits a code unit. In a WHERE clause (keys, Q11's guard, the INSERT check) a char or varchar value that is all ASCII is written as a plain `'…'` literal instead: ASCII has the same bytes in every code page, and the comparison then follows the column's own collation, while under a SQL_ collation a varchar column compared with `N'…'` follows Unicode rules, so `N'ss'` also matches a stored 'ß'. A value that is not all ASCII from a column with a SQL_ collation (`ResultCollation.SortId` ≠ 0) cannot be matched exactly: as a key it is refused, and Q11's guard leaves it out. Under a Windows collation it is written `N'…'`, which compares by the same rules |
   | date, time(n), datetime2(n), datetimeoffset(n) | ISO 8601 text in a `CAST('…' AS <type>)` of the column's own type and precision |
   | datetime, smalldatetime | `CAST('yyyy-MM-ddTHH:mm:ss.fff' AS <type>)`: the stored `yyyy-MM-dd HH:mm:ss` form depends on DATEFORMAT and language, the `T` form does not |
   | uniqueidentifier | Quoted |
@@ -1041,7 +1052,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - A cut tone lists only the first changed cells, so `DiffScript` takes an entry's changed pairs (its SET columns
       and Q11's) from the change index's full list whenever the tone was cut, which C3 keeps in both layouts (§ 4a).
     - Two more records on the diff set, written in `DiffWritten` beside the match C3 records: Result 1's column type
-      per pair (Columns above), and whether the inputs were BigQuery results (`residence` set), for the refusal.
+      and collation per pair (Columns above, Literals), and whether the inputs were BigQuery results (`residence` set),
+      for the refusal.
   - Names are bracket-quoted by the existing shared `ScriptFormatter.Quote`, unchanged: it has many callers (Script As,
     restore, the alter and DML templates among them), so a control character in a target name (NUL and line breaks
     among them) is refused by the request's zod schema and by C#'s request validation instead.
@@ -1067,6 +1079,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - every SQL Server type in `sortKind`'s table;
     - quoting, NULL keys, composite keys;
     - both directions, statement order, the row checks and their cut key text;
+    - Two rows filtered by an old value, so only − halves are in the grid: the counts, the summary and the script agree;
     - Q11's old values in an UPDATE's WHERE: NULL, each type it leaves out, a truncated or U+FFFD value left out, a
       real key and guard compared exactly, both directions; the same in a DELETE's WHERE; the INSERT check with NULL
       and composite keys;
@@ -1088,10 +1101,13 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - identity with SET IDENTITY_INSERT on and off, and off refused for an identity key;
     - floats with 17 significant digits and none after the point, written with an exponent; a subnormal float
       refused, and a subnormal real written widened;
+    - char keys and guards: all-ASCII values written plain, others refused (keys) or left out (guards) under a SQL_
+      collation and written `N'…'` under a Windows one;
     - key columns a WHERE cannot use, unnamed and repeated names, an identity pair never SET, pairs whose types differ.
   - A **live round trip** (`VARIA_TEST_SQL_SCRATCH`): two scratch tables with every type (multi-line and
     control-character text, a value with 10,000 line breaks, an xml value stored with style 1, 17-digit floats, a
-    subnormal real and a real key column, included), compare their SELECTs, script, run the script on the target, then
+    subnormal real, a real key column, and a varchar key under SQL_Latin1_General_CP1_CI_AS holding 'ss' beside 'ß',
+    included), compare their SELECTs, script, run the script on the target, then
     compare again and expect no differences. Run it in both directions, and under a non-English language and DATEFORMAT.
     Then run a script of the wrong direction, once whole and once with only INSERT ticked, and one whose deleted row was
     changed after the comparison, and expect the check's THROW, with the target unchanged and, in the same session, an
@@ -1110,8 +1126,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - Result column names may be aliases rather than table columns: the index warning and the checklist cover that.
   - A target char column whose collation lacks a character stores `?`, as any assignment would. The index does not know
     the target's collations, so the dialog cannot warn.
-  - Key values of char and varchar columns are written `N'…'`, so under a SQL_ collation each statement converts the
-    column and scans instead of seeking. Slow on a large target, never wrong. A later refinement can write `CAST(N'…' AS
+  - All-ASCII char and varchar keys are written plain, so they seek. A key that is not all ASCII is refused under a SQL_
+    collation, and written `N'…'` under a Windows one, which converts the column and scans: slow on a large target, but
+    exact. The target is assumed to share the result column's collation, since the index does not know collations; if
+    it differs, the row checks THROW rather than change a second row. A later refinement can write `CAST(N'…' AS
     varchar(n))` where the index knows the column.
 
 **Size L. Build (N2): lane C4.** GoogleSQL DML for BigQuery (typed literals, backticked paths, no row checks) is C4b,
@@ -1274,7 +1292,9 @@ would leave out the sort, and "Rows" is already the toolbar's All rows / Changes
   - Staleness is a pure `comparisonOutOfDate`, beside `pivotOutOfDate` (ResultsService). It compares the recorded filters
     with `shownFilters`, and the recorded sort keys only under Row position. No events are needed.
   - The caption and dot reuse the Pivot's components.
-  - Context keys: `comparisonAsShown`, `comparisonOutOfDate`.
+  - Context keys: `comparisonAsShown`, `comparisonOutOfDate`, and `comparisonInputsShowable` (an input has filters or,
+    under Row position, a sort), Compare Rows as Shown's `precondition` while unticked; all three are state keys, as
+    `precondition` and `toggled` require.
 - **Catalogues:** commands `output.compareAsShown` ("Compare Rows as Shown", `toggled: comparisonAsShown`) and
   `output.compareUpdate` ("Update Comparison", `when: comparisonAsShown`), in the submenu, More results tools'
   `6_compareactions` and the palette. No setting (Q9).

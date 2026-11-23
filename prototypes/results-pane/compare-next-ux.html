@@ -667,7 +667,7 @@ function sceneScript() {
   const onOpen = ['nokey', 'auto', 'inputclosed', 'shown', 'keytype', 'names', 'updating'].includes(st)
   const sugg = first ? `<div class="sugg" role="listbox" aria-label="Tables on this connection">${[`${DB}.dbo.Orders`, `${DB}.dbo.OrdersArchive`, 'Sales_Dev.dbo.Orders'].map((t, i) => `<div role="option" aria-selected="${i === 0}"${i === 0 ? ' class="on"' : ''}>${t} <small>Search Objects</small></div>`).join('')}</div>` : ''
   const form = `
-    <div class="sec"><div class="row2 infol">Rows matched by key columns: id</div></div>
+    <div class="sec"><div class="row2 infol">${RES[0]} → ${RES[1]} (SQLQuery3.sql), rows matched by key columns: id</div></div>
     <div class="sec"><div class="h">Target table</div><input class="txt" id="tgt" value="${esc(target)}" placeholder="schema.table" aria-label="Target table" aria-describedby="tgtDb" spellcheck="false"${first ? ' role="combobox" aria-expanded="true" aria-autocomplete="list"' : ''}>${sugg}
       <div class="row2 infol" id="tgtDb" style="font-size:11px">In ${DB}, SQLQuery3.sql's database. A three-part name picks another.</div>
       ${first ? '' : `<div class="row2 infol" style="font-size:11px">ⓘ Search Objects knows ${esc(tgtq)} on this connection, with all 6 columns. id is its identity column.</div>`}</div>
@@ -704,7 +704,7 @@ function sceneScript() {
   const stays = noDir || !parts.length ? '' : [!sc.del && dels && `DELETE is unticked, so ${rowsN(dels)} only in ${toOld ? RES[1] : RES[0]} ${dels === 1 ? 'stays' : 'stay'}.`, !sc.upd && upds && `UPDATE is unticked, so ${upds} changed row${upds === 1 ? ' stays as it is' : 's stay as they are'}.`, !sc.ins && ins && `INSERT is unticked, so ${rowsN(ins)} only in ${toOld ? RES[0] : RES[1]} ${ins === 1 ? 'is' : 'are'} not added.`].filter(Boolean).map(t => ' ' + t).join('')
   const canScript = !refusal && !noDir && parts.length > 0
   const gen = st === 'generating'
-  const win = `<div class="win" role="dialog" aria-label="Script Differences as T-SQL"${refusal && onOpen ? ' aria-describedby="scrRefusal"' : ''}><div class="titlebar">Script Differences as T-SQL<span class="lbl" style="font-weight:400">· ${RES[0]} → ${RES[1]} (SQLQuery3.sql)</span><button class="x" title="Close">✕</button></div>
+  const win = `<div class="win" role="dialog" aria-label="Script Differences as T-SQL"${refusal && onOpen ? ' aria-describedby="scrRefusal"' : ''}><div class="titlebar">Script Differences as T-SQL<button class="x" title="Close">✕</button></div>
     <div class="wbody">${body}</div>
     <div class="acts">${gen ? '<span class="lbl" style="margin-right:auto;display:flex;gap:8px;align-items:center;flex:1">Writing statements… <span class="progress" style="flex:1"><i></i></span></span><button class="btn o">Cancel</button>' : `${refusal && onOpen ? '' : (inFooter ? `<span class="lbl err" role="status" style="margin-right:auto;align-self:center;white-space:normal;flex:1;min-width:0">⚠ ${refusal[0]}</span>${refusal[1] || ''}` : `<span class="lbl" style="margin-right:auto;align-self:center;white-space:normal;flex:1;min-width:0" aria-live="polite">${summary}${stays}</span>`)}<button class="btn o">Cancel</button><button class="btn p"${canScript ? '' : refusal && !onOpen ? ' aria-disabled="true" style="opacity:.5"' : ' disabled'}>Script</button>`}</div></div>`
   frame(tabs() + resultsBar() + compBar(m) + stdBody(g, 'rows matched by id', win))
