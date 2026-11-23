@@ -53,8 +53,10 @@ internal sealed class BigQueryLookup
     public LookupState ProjectState(string project)
     {
         if (Project(project) is not { } known) return LookupState.Absent;
-        if (reads.ContainsKey(known)) return LookupState.Ready;
-        if (skips.Any(skip => skip.Project == known && skip.Database == "")) return LookupState.Skipped;
+        var listing = skips.Any(skip => skip.Project == known && skip.Database == "");
+        // Datasets read before a listing that failed (or was cut) still answer, but the list may be short.
+        if (reads.ContainsKey(known)) return listing ? LookupState.Partial : LookupState.Ready;
+        if (listing) return LookupState.Skipped;
         return building ? LookupState.Building : Index == "none" ? LookupState.Absent : LookupState.Ready;
     }
 
@@ -63,8 +65,8 @@ internal sealed class BigQueryLookup
         Project(project) is { } known && reads.TryGetValue(known, out var datasets) ? [.. datasets.Keys.Order(StringComparer.Ordinal)] : [];
 
     /// <summary>One dataset: Ready when read whole; Partial when its columns were left out (the budget, or a project read by name
-    /// only) or some objects' details could not be read; Building while a build has not reached it; Skipped with its last read's
-    /// skip; Absent otherwise.</summary>
+    /// only), some objects' details could not be read or a later read failed (or was cut) with an earlier one kept; Building while a
+    /// build has not reached it; Skipped with its last read's skip; Absent otherwise. A name differing only in case finds its skip.</summary>
     public BigQueryLookupDataset Dataset(string project, string dataset)
     {
         var known = Project(project);
@@ -72,10 +74,12 @@ internal sealed class BigQueryLookup
         reads.TryGetValue(known, out var datasets);
         var name = datasets is null ? dataset : Resolve(datasets.Keys, dataset) ?? dataset;
         var read = datasets?.GetValueOrDefault(name);
-        var skip = skips.LastOrDefault(item => item.Project == known && item.Database == name) ?? skips.LastOrDefault(item => item.Project == known && item.Database == "");
+        var own = skips.LastOrDefault(item => item.Project == known && item.Database == name)
+            ?? (read is null ? skips.LastOrDefault(item => item.Project == known && item.Database != "" && string.Equals(item.Database, name, StringComparison.OrdinalIgnoreCase)) : null);
         if (read is not null)
-            return new(known, name, read.ChildrenLeftOut || namesOnly.Contains(known) || skip?.Details == true ? LookupState.Partial : LookupState.Ready, read, skip?.Details == true ? skip : null);
-        if (skip is not null) return new(known, name, LookupState.Skipped, null, skip);
+            return new(known, name, read.ChildrenLeftOut || namesOnly.Contains(known) || own is not null ? LookupState.Partial : LookupState.Ready, read, own);
+        var skip = own ?? skips.LastOrDefault(item => item.Project == known && item.Database == "");
+        if (skip is not null) return new(known, own?.Database ?? name, LookupState.Skipped, null, skip);
         return new(known, name, building ? LookupState.Building : LookupState.Absent, null, null);
     }
 
@@ -113,7 +117,9 @@ internal sealed class BigQueryLookup
     public static BigQueryObjectFacts? Facts(LookupObject entry) => entry.Source?.Facts?.Of(entry.At);
 
     /// <summary>A sharded group's prefix, count and date range, for its newest shard's entry; null otherwise.</summary>
-    public static BigQueryShardsDto? Shards(LookupObject entry) => entry.Source?.Facts?.Shards(entry.At);
+    public static BigQueryShardsDto? Shards(LookupObject entry) =>
+        // A shard suffix is eight digits; one the regex took from another script (two UTF-16 units a digit) is left out, not sent.
+        entry.Source?.Facts?.Shards(entry.At) is { First.Length: 8, Last.Length: 8 } shards ? shards : null;
 
     /// <summary>A column's description, or null.</summary>
     public static string? Description(LookupColumn column) => column.Entry.Source?.Facts?.Description(column.Entry.At);

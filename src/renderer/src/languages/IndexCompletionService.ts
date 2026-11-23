@@ -60,18 +60,19 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
         const start = model.getPositionAt(read.word.start), end = model.getPositionAt(Math.max(read.word.end, offset))
         const insert = { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: position.lineNumber, endColumn: position.column }
         const replace = { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column }
-        // Every list is incomplete while the index builds, so names it reads later still show as the word grows.
-        const building = target.key ? this.caches.get(target.key)?.index !== 'ready' : false
+        // Every list that asked the index is incomplete while it builds, so names it reads later still show as the word grows.
+        const building = target.key && read.site.kind !== 'keyword' ? this.caches.get(target.key)?.index !== 'ready' : false
         return { incomplete: list.incomplete || building, suggestions: list.items.map(item => suggestion(monaco, item, { insert, replace })) }
       }
     }), monaco.languages.registerHoverProvider(googleSqlLanguageId, {
       provideHover: async (model, position, token) => {
         const target = this.target(model)
         if (!target || token.isCancellationRequested) return null
+        const version = model.getVersionId()
         const read = readGoogleSqlHover(model.getValue(), model.getOffsetAt(position))
         if (!read) return null
         const hover = await hoverFromIndex(read, target.dialect, this.lookup(target))
-        if (!hover || token.isCancellationRequested || model.isDisposed()) return null
+        if (!hover || token.isCancellationRequested || model.isDisposed() || model.getVersionId() !== version) return null
         const start = model.getPositionAt(hover.span.start), end = model.getPositionAt(hover.span.end)
         return { contents: [{ value: hover.markdown, isTrusted: false, supportHtml: false }], range: { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column } }
       }
@@ -115,12 +116,12 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
     if (!connectionId || !key) return async () => undefined
     let cache = this.caches.get(key)
     if (!cache) {
-      cache = new LookupCache(async requests => this.ask(connectionId, documentId, requests))
+      cache = new LookupCache(async (requests, caller) => this.ask(connectionId, caller, requests))
       this.caches.set(key, cache)
     }
     const kept = cache
     return async requests => {
-      const answers = await kept.lookup(requests)
+      const answers = await kept.lookup(requests, documentId)
       if (kept.index && this.getSnapshot().indexes.get(key) !== kept.index) {
         const indexes = new Map(this.getSnapshot().indexes).set(key, kept.index)
         this.publish({ ...this.getSnapshot(), indexes })
@@ -130,7 +131,8 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
     }
   }
 
-  private async ask(connectionId: string, documentId: string, requests: LanguageLookupPath[]) {
+  /** One language.lookup; its failure (or success) is shown on the tab that asked. */
+  private async ask(connectionId: string, documentId: string | undefined, requests: LanguageLookupPath[]) {
     if (this.disposed || this.inFlight >= indexCompletionLimits.inFlight) return undefined
     this.inFlight++
     try {
@@ -144,8 +146,8 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
     } finally { this.inFlight-- }
   }
 
-  private failure(documentId: string, error?: string): void {
-    if (this.disposed || this.getSnapshot().errors.get(documentId) === error) return
+  private failure(documentId: string | undefined, error?: string): void {
+    if (this.disposed || !documentId || this.getSnapshot().errors.get(documentId) === error) return
     const errors = new Map(this.getSnapshot().errors)
     if (error) errors.set(documentId, error); else errors.delete(documentId)
     this.publish({ ...this.getSnapshot(), errors })

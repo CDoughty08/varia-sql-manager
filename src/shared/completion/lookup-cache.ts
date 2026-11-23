@@ -33,15 +33,16 @@ export class LookupCache {
   /** The index's state in the last answer: none, building or ready. */
   index?: LanguageLookupResult['index']
 
-  constructor(private readonly ask: (requests: LanguageLookupPath[]) => Promise<LanguageLookupResult | undefined>, private readonly now: () => number = Date.now) {}
+  constructor(private readonly ask: (requests: LanguageLookupPath[], caller?: string) => Promise<LanguageLookupResult | undefined>, private readonly now: () => number = Date.now) {}
 
-  /** One answer per request: the kept ones where they answer it, the backend's for the rest (one call). Undefined when it failed. */
-  async lookup(requests: readonly LanguageLookupPath[]): Promise<LanguageLookupAnswer[] | undefined> {
+  /** One answer per request: the kept ones where they answer it, the backend's for the rest (one call, which gets `caller`, the
+   *  editor that asked). Undefined when it failed. */
+  async lookup(requests: readonly LanguageLookupPath[], caller?: string): Promise<LanguageLookupAnswer[] | undefined> {
     const now = this.now()
     const answers: (LanguageLookupAnswer | undefined)[] = requests.map(request => this.find(request, now))
     const missing = requests.filter((_, index) => !answers[index])
     if (!missing.length) return answers as LanguageLookupAnswer[]
-    const result = await this.ask(missing)
+    const result = await this.ask(missing, caller)
     if (!result) return undefined
     this.index = result.index
     let next = 0

@@ -16,6 +16,7 @@ internal static class EditorLookup
         if (args.Requests is not { Count: > 0 and <= EditorLookupLimits.Requests }) throw Invalid("requests.");
         foreach (var request in args.Requests)
         {
+            if (request is null) throw Invalid("requests.");
             if (request.Path is not { Count: <= EditorLookupLimits.Segments } || request.Path.Any(segment => segment is not { Length: > 0 and <= EditorLookupLimits.SegmentChars })) throw Invalid("path.");
             if (request.Prefix is { Length: > EditorLookupLimits.PrefixChars }) throw Invalid("prefix.");
             if (request.Exact == true && string.IsNullOrEmpty(request.Prefix)) throw Invalid("exact needs a prefix.");

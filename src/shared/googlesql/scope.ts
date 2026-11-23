@@ -16,16 +16,19 @@ const joinWords = new Set(['JOIN', 'INNER', 'LEFT', 'RIGHT', 'FULL', 'CROSS', 'N
 const setWords = new Set(['UNION', 'INTERSECT', 'EXCEPT'])
 /** Words that end a FROM clause at its block's level. */
 const fromEnd = new Set(['WHERE', 'GROUP', 'HAVING', 'QUALIFY', 'WINDOW', 'ORDER', 'LIMIT', 'SET', 'SELECT', 'WHEN', 'OPTIONS', 'PIVOT', 'UNPIVOT', ...setWords])
-/** Words that start a clause: the nearest one before a position says where it is. */
-const clauseWords = new Set([...objectWords, ...fromEnd, 'ON', 'USING', 'VALUES', 'THEN', 'WITH', 'BY', 'AND', 'OR', 'NOT', 'CASE', 'ELSE'])
 const castCalls = new Set(['CAST', 'SAFE_CAST'])
 /** Tokens an expression can end with before an implicit alias (`'x' label`); a parenthesis (`COUNT(*) n`) shows at its block's level as its '('. */
 const valueEnds: ReadonlySet<string> = new Set(['word', 'quotedIdentifier', 'string', 'number', 'parameter', 'systemVariable'])
+/** Words after a FROM item that are not its alias. */
+const notAliases = new Set(['PIVOT', 'UNPIVOT', 'OPTIONS', 'FOR', 'TABLESAMPLE', 'ON', 'USING', 'WITH'])
+/** How deep the reader follows nested subqueries for their columns: past it a subquery gives none (keeps a keystroke cheap). */
+export const readerLimits = { depth: 64 } as const
 
 /** A name token's parts: a word, or a quoted identifier's dotted path (`my-proj.sales.orders`), unescaped. */
 function partsOf(token: Tok): string[] {
   if (token.kind === 'word') return [token.text]
-  const body = token.text.slice(1, token.open ? undefined : -1)
+  // An unclosed backtick runs to the end of the line: its name ends at the first space.
+  const body = token.open ? token.text.slice(1).split(/\s/)[0] : token.text.slice(1, -1)
   return body.split('.').map(part => part.replace(/\\(.)/g, '$1'))
 }
 const isName = (token: Tok | undefined): token is Tok => !!token && (token.kind === 'word' || token.kind === 'quotedIdentifier')
@@ -43,9 +46,15 @@ class Statement {
   readonly parent: number[]
   /** The token the caret is inside (a string, comment or quoted identifier), if any. */
   readonly inside?: Tok
+  /** Each block's top-level token indexes (the statement's under -1), without a parenthesis's closing ')'. */
+  private readonly children = new Map<number, number[]>()
 
   constructor(readonly text: string, readonly offset: number) {
-    const all = scanGoogleSql(text).map(token => ({ ...token, text: text.slice(token.start, token.end), upper: token.kind === 'word' ? text.slice(token.start, token.end).toUpperCase() : '' }))
+    const scanned = scanGoogleSql(text)
+    // `my-proj-2.sales`: the scanner reads `2.` as a number; a name follows, so it is `2` then a dot.
+    const split = scanned.flatMap((token, index) => token.kind === 'number' && /^\d+\.$/.test(text.slice(token.start, token.end)) && scanned[index + 1]?.kind === 'word' && scanned[index + 1].start === token.end
+      ? [{ kind: 'number' as const, start: token.start, end: token.end - 1 }, { kind: 'punctuation' as const, start: token.end - 1, end: token.end }] : [token])
+    const all = split.map(token => ({ ...token, text: text.slice(token.start, token.end), upper: token.kind === 'word' ? text.slice(token.start, token.end).toUpperCase() : '' }))
     let start = 0, end = text.length
     for (const token of all) {
       if (token.kind !== 'punctuation' || token.text !== ';') continue
@@ -59,9 +68,12 @@ class Statement {
     this.parent = this.toks.map(() => -1)
     const stack: number[] = []
     this.toks.forEach((token, index) => {
-      this.parent[index] = stack.at(-1) ?? -1
+      const parent = stack.at(-1) ?? -1
+      this.parent[index] = parent
+      const closing = isPunct(token, ')') && stack.length > 0
+      if (!closing) { const list = this.children.get(parent); if (list) list.push(index); else this.children.set(parent, [index]) }
       if (isPunct(token, '(')) { stack.push(index); this.match[index] = this.toks.length }
-      else if (isPunct(token, ')') && stack.length) this.match[stack.pop()!] = index
+      else if (closing) this.match[stack.pop()!] = index
     })
   }
 
@@ -75,10 +87,8 @@ class Statement {
   }
 
   /** A block's top-level token indexes: the statement's (open -1) or a parenthesis's. */
-  top(open: number): number[] {
-    const end = open < 0 ? this.toks.length : this.match[open], out: number[] = []
-    for (let index = open + 1; index < end; index++) if (this.parent[index] === open) out.push(index)
-    return out
+  top(open: number): readonly number[] {
+    return this.children.get(open) ?? []
   }
 
   /** Whether a block is a query: it starts with SELECT or WITH (or, for the statement, holds one at its top). */
@@ -111,32 +121,60 @@ function segments(statement: Statement, open: number): Run[] {
 
 /** Reads one block: its WITH queries, and per segment its sources and select list's shape. */
 class BlockReader {
+  private readonly bodies = new Map<number, Run[]>()
+  private readonly shapes = new Map<number, QueryShape>()
+  private depth = 0
+  /** For a WITH query's body (by its '('), the WITH names it cannot see: itself (unless RECURSIVE) and the ones after it. */
+  readonly hidden = new Map<number, readonly CteScope[]>()
+
   constructor(private readonly statement: Statement, private readonly ctes: CteScope[]) {}
 
   private get toks() { return this.statement.toks }
 
-  /** The block's segments after its WITH queries (whose shapes are added to the scope's). */
+  /** The block's segments after its WITH queries (whose shapes are added to the scope's), read once. */
   body(open: number): Run[] {
+    const kept = this.bodies.get(open)
+    if (kept) return kept
+    const read = this.readBody(open)
+    this.bodies.set(open, read)
+    return read
+  }
+
+  private readBody(open: number): Run[] {
     const all = segments(this.statement, open)
     const first = all[0]
     if (!first.length || !isWord(this.toks[first[0]], 'WITH')) return all
     let at = 1
-    if (isWord(this.toks[first[at]], 'RECURSIVE')) at++
+    const recursive = isWord(this.toks[first[at]], 'RECURSIVE')
+    if (recursive) at++
+    const siblings: { cte: CteScope; paren: number }[] = []
     while (at < first.length) {
       const name = this.toks[first[at]], as = this.toks[first[at + 1]], paren = first[at + 2]
       if (!isName(name) || !isWord(as, 'AS') || !isPunct(this.toks[paren], '(')) break
-      this.ctes.push({ name: partsOf(name).join('.'), shape: this.shape(paren) })
+      // Read before its name is added: a WITH query sees only the ones before it (GoogleSQL's rule without RECURSIVE).
+      const cte = { name: partsOf(name).join('.'), shape: this.shape(paren) }
+      this.ctes.push(cte)
+      siblings.push({ cte, paren })
       at += 3
       if (!isPunct(this.toks[first[at]], ',')) break
       at++
     }
+    siblings.forEach(({ paren }, index) => this.hidden.set(paren, siblings.slice(recursive ? index + 1 : index).map(entry => entry.cte)))
     return [first.slice(at), ...all.slice(1)]
   }
 
-  /** The columns a parenthesized query gives: its first segment's select list. */
+  /** The columns a parenthesized query gives: its first segment's select list. Nesting past readerLimits.depth gives none. */
   shape(open: number): QueryShape {
-    const [first] = this.body(open)
-    return first ? this.selectShape(first) : { columns: [], stars: [] }
+    const kept = this.shapes.get(open)
+    if (kept) return kept
+    if (this.depth >= readerLimits.depth) return { columns: [], stars: [] }
+    this.depth++
+    try {
+      const [first] = this.body(open)
+      const shape = first ? this.selectShape(first) : { columns: [], stars: [] }
+      this.shapes.set(open, shape)
+      return shape
+    } finally { this.depth-- }
   }
 
   /** A segment's sources: the targets of DML, then its FROM (or MERGE's USING) items. */
@@ -193,20 +231,42 @@ class BlockReader {
       source = path ? { kind: 'unnest', path } : undefined
       at += 2
     } else if (isName(token)) {
-      const parts = [...partsOf(token)]
-      at++
+      const first = dashed(toks, run, at)
+      const parts = [...first.parts]
+      at = first.next
       while (isPunct(toks[run[at]], '.') && isName(toks[run[at + 1]])) { parts.push(...partsOf(toks[run[at + 1]])); at += 2 }
       // A table-valued function's columns are not indexed.
       if (isPunct(toks[run[at]], '(') && !target) return { next: at + 1 }
       source = { kind: 'object', name: parts.at(-1)!, parts, span: { start: token.start, end: toks[run[at - 1]].end } }
     } else return { next: at + 1 }
-    // FOR SYSTEM_TIME AS OF … holds an AS that names nothing.
-    if (isWord(toks[run[at]], 'FOR') && isWord(toks[run[at + 1]], 'SYSTEM_TIME')) at = Math.min(run.length, at + 5)
+    at = this.skipModifiers(run, at)
     let alias: string | undefined
     if (isWord(toks[run[at]], 'AS') && isAlias(toks[run[at + 1]])) { alias = partsOf(toks[run[at + 1]]).join('.'); at += 2 }
-    else if (isAlias(toks[run[at]]) && !isWord(toks[run[at]], 'PIVOT', 'UNPIVOT', 'OPTIONS', 'FOR')) { alias = partsOf(toks[run[at]]).join('.'); at++ }
+    else if (isAlias(toks[run[at]]) && !(toks[run[at]].kind === 'word' && notAliases.has(toks[run[at]].upper))) { alias = partsOf(toks[run[at]]).join('.'); at++ }
+    at = this.skipModifiers(run, at)
     if (source && alias !== undefined) source = { ...source, name: alias }
     return { source, next: at }
+  }
+
+  /** Skips FOR SYSTEM_TIME AS OF <expression> (whose AS names nothing) and TABLESAMPLE <method> (…), before or after an alias. */
+  private skipModifiers(run: Run, at: number): number {
+    const { toks } = this
+    for (;;) {
+      if (isWord(toks[run[at]], 'FOR') && isWord(toks[run[at + 1]], 'SYSTEM_TIME')) {
+        at += 2
+        if (isWord(toks[run[at]], 'AS') && isWord(toks[run[at + 1]], 'OF')) at += 2
+        // The timestamp runs to an AS alias, a comma, a join or the clause's end (its parentheses are one token here).
+        while (at < run.length) {
+          const token = toks[run[at]]
+          if (isPunct(token, ',') || (token.kind === 'word' && (token.upper === 'AS' || token.upper === 'TABLESAMPLE' || token.upper === 'ON' || token.upper === 'USING' || joinWords.has(token.upper) || fromEnd.has(token.upper)))) break
+          at++
+        }
+      } else if (isWord(toks[run[at]], 'TABLESAMPLE')) {
+        at++
+        if (toks[run[at]]?.kind === 'word') at++
+        if (isPunct(toks[run[at]], '(')) at++
+      } else return at
+    }
   }
 
   /** A segment's select list: named columns (aliases, a column reference's last part) and `*` or `alias.*`. */
@@ -214,7 +274,8 @@ class BlockReader {
     const { toks } = this
     const select = run.findIndex(index => isWord(toks[index], 'SELECT'))
     if (select < 0) return { columns: [], stars: [] }
-    const sources = this.sources(run)
+    // WITH names as far as they are known here: a WITH query's body is read before its own name and the later ones are added.
+    const sources = this.sources(run).map(source => resolveCte(source, this.ctes))
     let at = select + 1
     if (isWord(toks[run[at]], 'AS') && isWord(toks[run[at + 1]], 'STRUCT', 'VALUE')) at += 2
     if (isWord(toks[run[at]], 'DISTINCT', 'ALL')) at++
@@ -248,6 +309,20 @@ class BlockReader {
   }
 }
 
+/** A name at run position `at` with any dashed words joined on (`my-proj-2`, written without backticks in FROM). */
+function dashed(toks: readonly Tok[], run: Run, at: number): { parts: string[]; next: number } {
+  const token = toks[run[at]]
+  if (token.kind !== 'word') return { parts: partsOf(token), next: at + 1 }
+  let text = token.text, end = token.end
+  at++
+  while (isPunct(toks[run[at]], '-') && toks[run[at]].start === end && (toks[run[at + 1]]?.kind === 'word' || toks[run[at + 1]]?.kind === 'number') && toks[run[at + 1]].start === toks[run[at]].end) {
+    text += '-' + toks[run[at + 1]].text
+    end = toks[run[at + 1]].end
+    at += 2
+  }
+  return { parts: [text], next: at }
+}
+
 /** A run that is only a name chain (`a.b.c`, `` `p.d`.t ``) as its parts, else undefined. */
 function chainOf(tokens: readonly Tok[]): string[] | undefined {
   if (!tokens.length || tokens.length % 2 === 0) return
@@ -270,14 +345,17 @@ function scopeAt(statement: Statement, open: number, offset: number): QueryScope
   const bodies = new Map<number, Run[]>()
   // Outer blocks first, so their WITH queries are known when an inner block's names are read.
   for (const block of [...blocks].reverse()) bodies.set(block, reader.body(block))
+  // Inside a WITH query's body, the names it cannot see (itself and the later ones) are out of scope.
+  const hidden = new Set(blocks.flatMap(block => reader.hidden.get(block) ?? []))
+  const visible = ctes.filter(cte => !hidden.has(cte))
   const sources: ScopeSource[] = []
   const end = (run: Run) => run.length ? statement.toks[run.at(-1)!].end : -1
   blocks.forEach((block, depth) => {
     const body = bodies.get(block)!
     const run = depth === 0 ? body.find(segment => segment.length && end(segment) >= offset) ?? body.at(-1) : body.find(segment => segment.includes(blocks[depth - 1]))
-    if (run) sources.push(...reader.sources(run).map(source => resolveCte(source, ctes)))
+    if (run) sources.push(...reader.sources(run).map(source => resolveCte(source, visible)))
   })
-  return { sources, ctes }
+  return { sources, ctes: visible }
 }
 
 /** A one-part name that is a WITH query refers to it. */
@@ -285,16 +363,6 @@ function resolveCte(source: ScopeSource, ctes: readonly CteScope[]): ScopeSource
   if (source.kind !== 'object' || source.parts.length !== 1) return source
   const cte = ctes.find(entry => entry.name.toLowerCase() === source.parts[0].toLowerCase())
   return cte ? { kind: 'cte', name: source.name, cte: cte.name, span: source.span } : source
-}
-
-/** The nearest clause word before token `index` in its block, skipping nested parentheses. */
-function clauseBefore(statement: Statement, index: number, open: number): Tok | undefined {
-  const { toks } = statement
-  for (let at = index - 1; at > open; at--) {
-    if (statement.parent[at] !== open) continue
-    const token = toks[at]
-    if (token.kind === 'word' && clauseWords.has(token.upper)) return token
-  }
 }
 
 /** Where a name that starts at token `first` (or the caret, when `first` is the next token) sits: a table name, an alias, or an expression. */
@@ -305,14 +373,30 @@ function placeOf(statement: Statement, first: number, open: number): 'object' | 
   const previous = before > open ? toks[before] : undefined
   if (!previous) return open < 0 || statement.isQuery(open) ? 'start' : 'expression'
   if (isWord(previous, 'AS')) return 'alias'
+  // Inside a call or other parenthesis that holds no query, FROM is an argument's (EXTRACT(YEAR FROM placed)).
+  if (open >= 0 && !statement.isQuery(open)) return 'expression'
   if (previous.kind === 'word' && objectWords.has(previous.upper)) return 'object'
   if (isWord(previous, 'USING') && isWord(toks[open + 1] ?? toks[0], 'MERGE')) return 'object'
-  const clause = clauseBefore(statement, first, open)
-  const inFrom = !!clause && (clause.upper === 'FROM' || clause.upper === 'JOIN' || (clause.upper === 'USING' && isWord(toks[0], 'MERGE')))
-  if (isPunct(previous, ',') && inFrom) return 'object'
+  const from = fromPlace(statement, first, open)
+  if (isPunct(previous, ',') && from) return 'object'
   // After a table, its alias or a subquery in FROM: an alias or the next clause's keyword.
-  if (inFrom && (isName(previous) || isPunct(previous, ')'))) return 'keyword'
+  if (from === 'items' && (isName(previous) || isPunct(previous, ')'))) return 'keyword'
   return 'expression'
+}
+
+/** Whether token `index` is in its block's FROM clause: among its items, or in a join's ON or USING condition. */
+function fromPlace(statement: Statement, index: number, open: number): 'items' | 'condition' | undefined {
+  const { toks } = statement
+  const merge = isWord(toks[open + 1] ?? toks[0], 'MERGE')
+  let condition = false
+  for (let at = index - 1; at > open; at--) {
+    if (statement.parent[at] !== open) continue
+    const token = toks[at]
+    if (token.kind !== 'word') continue
+    if (token.upper === 'FROM' || token.upper === 'JOIN' || (token.upper === 'USING' && merge)) return condition ? 'condition' : 'items'
+    if (token.upper === 'ON' || token.upper === 'USING') condition = true
+    else if (fromEnd.has(token.upper) || token.upper === 'WITH') return
+  }
 }
 
 /** The name chain that ends just before token or position `end`: the parts written before the one typed, and its first token. */
@@ -323,9 +407,17 @@ function chainBefore(statement: Statement, end: number): { parts: string[]; firs
   if (!isPunct(toks[at], '.')) return { parts, first: end }
   while (isPunct(toks[at], '.')) {
     const name = toks[at - 1]
-    if (!isName(name) || name.open) return undefined
-    parts.unshift(...partsOf(name))
-    at -= 2
+    // A dashed project written without backticks (my-proj-2.ds.): its words (and numbers) join into one part.
+    const plain = name?.kind === 'word' || (name?.kind === 'number' && isPunct(toks[at - 2], '-'))
+    if (!plain && (!isName(name) || name.open)) return undefined
+    let start = at - 1, text = name.text
+    while (plain && isPunct(toks[start - 1], '-') && toks[start - 1].end === toks[start].start
+      && (toks[start - 2]?.kind === 'word' || toks[start - 2]?.kind === 'number') && toks[start - 2].end === toks[start - 1].start) {
+      text = toks[start - 2].text + '-' + text
+      start -= 2
+    }
+    parts.unshift(...plain ? [text] : partsOf(name))
+    at = start - 1
   }
   return { parts, first: at + 1 }
 }
@@ -351,7 +443,8 @@ export function readGoogleSqlCompletion(text: string, offset: number): Completio
       const before = text.slice(token.start + 1, offset)
       const dot = before.lastIndexOf('.')
       const start = token.start + 1 + dot + 1
-      const after = text.slice(offset, bodyEnd).indexOf('.')
+      // An unclosed backtick's part ends at a dot, or (its closing backtick not typed yet) at the first space.
+      const after = text.slice(offset, bodyEnd).search(token.open ? /[.\s]/ : /\./)
       qualifier = dot < 0 ? [] : before.slice(0, dot).split('.').map(part => part.replace(/\\(.)/g, '$1'))
       word = { start, end: after < 0 ? bodyEnd : offset + after, typed: text.slice(start, offset), quoted: true }
       next = current

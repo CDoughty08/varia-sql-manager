@@ -620,7 +620,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     };
 
     /// <summary>language.lookup: the editor's completion and hover read a BigQuery connection's index in process, from one snapshot
-    /// (CheckProvider has refused any other engine's handle, so the connection is BigQuery's, or gone: NOT_CONNECTED).</summary>
+    /// (CheckProvider has refused any handle BigQuery does not own, a closed one included, with UNSUPPORTED_PROVIDER).</summary>
     private LanguageLookupResult LookupIndex(LanguageLookupArgs args)
     {
         EditorLookup.Validate(args);

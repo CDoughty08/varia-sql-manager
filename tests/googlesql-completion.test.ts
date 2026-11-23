@@ -125,6 +125,48 @@ describe('GoogleSQL scope reader', () => {
     expect(names(read('SELECT | FROM sales.orders; SELECT 1 FROM sales.daily').scope.sources)).toEqual(['orders=sales.orders'])
   })
 
+  it('reads FROM inside a call as an argument, and a comma after a join condition as the next table', () => {
+    expect(read('SELECT EXTRACT(YEAR FROM |) FROM sales.orders').site).toEqual({ kind: 'expression' })
+    expect(read('SELECT * FROM sales.orders t WHERE EXTRACT(DATE FROM t.|) > x').site).toEqual({ kind: 'member', qualifier: ['t'] })
+    const { text, offset } = at('SELECT EXTRACT(YEAR FROM pl|aced) FROM sales.orders')
+    expect(readGoogleSqlHover(text, offset)?.object).toBe(false)
+    expect(read('SELECT * FROM a LEFT JOIN b ON a.x = b.x, |').site).toEqual({ kind: 'object', qualifier: [] })
+    expect(read('SELECT * FROM a JOIN b USING (x), |').site).toEqual({ kind: 'object', qualifier: [] })
+    expect(read('SELECT * FROM a JOIN b ON a.x = b.x AND |').site).toEqual({ kind: 'expression' })
+  })
+
+  it('keeps an alias after time travel and TABLESAMPLE, and joins a dashed project written without backticks', () => {
+    expect(names(read('SELECT x.| FROM t FOR SYSTEM_TIME AS OF TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 HOUR) AS x').scope.sources)).toEqual(['x=t'])
+    expect(names(read("SELECT x.| FROM t FOR SYSTEM_TIME AS OF TIMESTAMP '2024-01-01' AS x").scope.sources)).toEqual(['x=t'])
+    expect(names(read('SELECT x.| FROM t AS x TABLESAMPLE SYSTEM (10 PERCENT)').scope.sources)).toEqual(['x=t'])
+    expect(names(read('SELECT x.| FROM t TABLESAMPLE SYSTEM (10 PERCENT) AS x').scope.sources)).toEqual(['x=t'])
+    expect(names(read('SELECT | FROM my-proj-2.sales.orders o').scope.sources)).toEqual(['o=my-proj-2.sales.orders'])
+    expect(read('SELECT * FROM my-proj.sales.|').site).toEqual({ kind: 'object', qualifier: ['my-proj', 'sales'] })
+    expect(read('SELECT * FROM my-proj-2.sales.|').site).toEqual({ kind: 'object', qualifier: ['my-proj-2', 'sales'] })
+  })
+
+  it('ends an unclosed backtick name at the first space', () => {
+    const { text, offset } = at('SELECT * FROM `varia-alpha.sales.| WHERE x = 1')
+    const reading = readGoogleSqlCompletion(text, offset)
+    expect(reading.word).toMatchObject({ start: offset, end: offset, quoted: true })
+    expect(reading.site).toEqual({ kind: 'object', qualifier: ['varia-alpha', 'sales'] })
+  })
+
+  it('lets a WITH query see only the ones before it, so one may read the table it shadows', () => {
+    const shadow = read('WITH orders AS (SELECT * FROM orders), daily AS (SELECT | FROM daily) SELECT 1')
+    expect(names(shadow.scope.sources)).toEqual(['daily=daily'])
+    expect(shadow.scope.ctes.map(cte => cte.name)).toEqual(['orders'])
+  })
+
+  it('reads deeply nested subqueries in bounded time and without overflowing', () => {
+    const depth = 3000
+    const text = 'SELECT '.padEnd(7) + '* FROM ('.repeat(depth) + 'SELECT id FROM t' + ') q'.repeat(depth)
+    const started = performance.now()
+    expect(() => readGoogleSqlCompletion(text, 7)).not.toThrow()
+    expect(() => readGoogleSqlCompletion(text, text.indexOf('id'))).not.toThrow()
+    expect(performance.now() - started).toBeLessThan(2000)
+  })
+
   it('reads the targets of UPDATE, DELETE, MERGE and INSERT', () => {
     expect(names(read('UPDATE sales.orders SET |').scope.sources)).toEqual(['orders=sales.orders'])
     expect(names(read('UPDATE sales.orders o SET x = 1 FROM sales.daily d WHERE |').scope.sources)).toEqual(['o=sales.orders', 'd=sales.daily'])
@@ -171,6 +213,11 @@ describe('completion from the index', () => {
     const cte = await complete('WITH a AS (SELECT * FROM sales.daily), b AS (SELECT a.*, 1 AS one FROM a) SELECT b.| FROM b')
     expect(cte.labels()).toEqual(['one', 'day', 'n'])
     expect((await complete('SELECT s.| FROM (SELECT id, placed AS at FROM sales.orders) s')).labels()).toEqual(['id', 'at'])
+  })
+
+  it('lists the columns of a table a WITH query of the same name reads, and of the table it joins', async () => {
+    const list = await complete('WITH orders AS (SELECT * FROM orders o JOIN daily d ON o.id = d.n) SELECT | FROM orders')
+    expect(list.labels('column')).toEqual(expect.arrayContaining(['id', 'customer', 'day', 'n']))
   })
 
   it('lists projects, datasets and objects for a table name, nearest first, quoting names that need it', async () => {
@@ -273,9 +320,17 @@ describe('language.lookup cache', () => {
     now = lookupCacheLimits.ttlMs + 1
     await cache.lookup([{ path: ['varia-alpha', 'sales'], prefix: 'or' }])
     expect(asked).toHaveLength(3)
-    const cut = new LookupCache(async requests => result(requests.map(request => ({ ...answer(request), truncated: true }))))
+    let cutAsks = 0
+    const cut = new LookupCache(async requests => { cutAsks++; return result(requests.map(request => ({ ...answer(request), truncated: true }))) })
     await cut.lookup([{ path: [], prefix: 'v' }])
     expect(await cut.lookup([{ path: [], prefix: 'va' }])).toBeDefined()
+    expect(cutAsks).toBe(2)
+    // The editor that asked reaches the backend call, so a failure shows on its own tab.
+    const callers: (string | undefined)[] = []
+    const tagged = new LookupCache(async (requests, caller) => { callers.push(caller); return result(requests.map(answer)) })
+    await tagged.lookup([{ path: [] }], 'tab-a')
+    await tagged.lookup([{ path: ['varia-alpha'] }], 'tab-b')
+    expect(callers).toEqual(['tab-a', 'tab-b'])
   })
 
   it('keeps nothing from an index that is still building, and only asks for what it lacks', async () => {

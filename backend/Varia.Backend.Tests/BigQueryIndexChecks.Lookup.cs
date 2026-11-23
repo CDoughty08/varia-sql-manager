@@ -26,6 +26,11 @@ internal static partial class BigQueryIndexChecks
         check(skipped.Dataset("p", "d") is { State: LookupState.Skipped, Skip.Code: "PERMISSION_DENIED" } && skipped.ProjectState("q") == LookupState.Skipped
             && skipped.Dataset("p", "other").State == LookupState.Absent && skipped.ProjectState("nope") == LookupState.Absent && skipped.Index == "ready",
             "a dataset whose read failed is skipped with its reason, a project whose listing failed is skipped, and a name the index never held is absent");
+        check(skipped.Dataset("p", "D") is { State: LookupState.Skipped, Dataset: "d", Skip.Code: "PERMISSION_DENIED" }, "a skipped dataset asked for in another case finds its skip, spelled as the index holds it");
+        var nullRequest = false;
+        try { EditorLookup.Validate(new LanguageLookupArgs(Guid.NewGuid().ToString(), [null!])); }
+        catch (RequestException error) { nullRequest = error.Code == "INVALID_PARAMS"; }
+        check(nullRequest, "a null request is refused as invalid, not a backend failure");
         var none = new BigQueryLookup("p", [], [], null, [], building: false, built: false, budget);
         check(none.Index == "none" && none.ProjectState("p") == LookupState.Absent && none.Datasets("p").Count == 0, "a connection never indexed has no index and no datasets");
     }
