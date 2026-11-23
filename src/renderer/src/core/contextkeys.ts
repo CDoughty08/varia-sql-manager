@@ -77,8 +77,9 @@ export function focusFacts<E extends FocusElement>(element: E | null, editor: Fo
   const tree = element.closest('[data-explorer-tree]')
   return {
     editorFocus, editorTextFocus, inputFocus, activePanel: isOutputPane(pane) ? 'output' : panels.has(pane) ? pane as FocusFacts['activePanel'] : editorFocus ? 'editor' : '', outputGridFocus: !!element.closest('[data-result-grid]') || !!element.closest('[data-output-view="live"]'),
-    // Any live view's grid (LiveGridPane marks its frame), with Query Output's menu or its owner's own (Job History).
-    liveGridFocus: !!element.closest('[data-live-probe]'),
+    // Any live view's grid (LiveGridPane marks its frame), with Query Output's menu or its owner's own (Job History); not a
+    // control drawn in that frame, which takes its own keys (Enter presses a button).
+    liveGridFocus: !!element.closest('[data-live-probe]') && !element.closest('button, a, input, select, textarea'),
     searchHitsFocus: !!element.closest('[data-search-hits]'), planOutlineFocus: !!element.closest('[data-plan-outline]'),
     designerFocus: !!element.closest('[data-designer]'), queryBarFocus: !!element.closest('[data-query-bar]'), activityMonitorFocus: !!element.closest('[data-activity-monitor]'),
     documentTabFocus: !!element.closest('[data-document-tab]'), peekFocus: !!element.closest('[data-peek-card]'), peekTabFocus: !!element.closest('[data-peek-tab]'), peekEditorFocus: !!element.closest(`[${peekEditorAttribute}]`), messagesFocus: !!element.closest('[data-output-view="messages"]'),

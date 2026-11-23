@@ -347,6 +347,9 @@ describe('Job History documents', () => {
     connections.markLostBefore(2)
     await service.loadDetails(id)
     expect(service.get(id)?.details).toEqual({ jobId: 'job_1', loading: false, error: { message: jobHistoryText.notConnected } })
+    // A grid that goes away takes its selection with it.
+    service.attachGrid(id, undefined)
+    expect(service.get(id)?.selected).toBeUndefined()
   })
   it('show jobs of a project not connected yet once a connection to it goes live', () => {
     const { service, connections, documents } = history()

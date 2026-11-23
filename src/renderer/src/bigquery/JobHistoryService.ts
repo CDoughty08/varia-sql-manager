@@ -357,7 +357,11 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
   attachGrid(id: string, grid: LiveGrid | undefined): void {
     this.grids.get(id)?.stop()
     this.grids.delete(id)
-    if (!grid) return
+    if (!grid) {
+      // No grid, no selection: the toolbar and the details pane stop acting on a row nobody can see.
+      if (this.get(id)?.selected) this.patch(id, { selected: undefined })
+      return
+    }
     const entry = { grid, stop: grid.subscribe(() => this.selectionChanged(id)), read: 0 }
     this.grids.set(id, entry)
     this.selectionChanged(id)

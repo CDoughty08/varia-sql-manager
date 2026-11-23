@@ -8,7 +8,7 @@ import { createServer } from 'node:http'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { chooseExplorerMenuItem } from './fixtures/explorer-tree.mjs'
-import { documentFrame, documentTab, gridPart, gridTones, liveGrid, liveGridSelector, statusBar, toolbarButton } from './fixtures/ui.mjs'
+import { connectDialogWindow, documentFrame, documentTab, gridPart, gridTones, liveGrid, liveGridSelector, statusBar, submitConnect, toolbarButton } from './fixtures/ui.mjs'
 
 const project = 'varia-emulator'
 const started = Date.now()
@@ -96,13 +96,11 @@ try {
   step = 'connect'
   await expect(statusBar(page)).toContainText(/Ready/, { timeout: 30000 })
   await toolbarButton(page, 'Connect').click()
-  const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
-  await expect(dialog.getByText('Loading saved connections…')).toHaveCount(0)
-  await dialog.getByLabel('Server type', { exact: true }).selectOption('bigquery')
+  const { window: connectWindow, dialog } = await connectDialogWindow(app)
+  await dialog.getByRole('group', { name: 'Server type', exact: true }).getByRole('button', { name: 'BigQuery', exact: true }).click()
   await expect(dialog.getByText(/^Emulator account /)).toBeVisible({ timeout: 20000 })
   await dialog.getByLabel('Project', { exact: true }).fill(project)
-  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(dialog).toHaveCount(0, { timeout: 30000 })
+  await submitConnect(connectWindow, dialog, { timeout: 30000 })
 
   step = 'open'
   await chooseExplorerMenuItem(page, [project], 'Job History')
@@ -120,6 +118,10 @@ try {
 
   step = 'cancel'
   // Cancel Job from the grid's menu asks first; Keep running sends nothing, Cancel Job posts jobs.cancel in the job's location.
+  // The menu greys what the selected row's cells rule out, read as the row is selected: select it and wait for that read (the
+  // toolbar's Cancel Job turns on for a running job) before opening the menu.
+  await jobCell('varia_running').click()
+  await expect(frame().getByRole('button', { name: 'Cancel Job', exact: true })).toBeEnabled()
   await jobCell('varia_running').click({ button: 'right' })
   const menu = page.getByRole('menu', { name: 'Job History', exact: true })
   await expect(menu).toBeVisible()

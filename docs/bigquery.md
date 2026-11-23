@@ -618,7 +618,7 @@ without going to BigQuery Studio. Everything comes from BigQuery's free REST cal
   each job's SQL is cut to a one-line, 200-character preview as its page is read, and a refresh reads at most 10 MiB of
   answers within its time budget (0.8 of the interval, at most 10 s), going on from there next time (the status line says "still loading"). A refresh asks for
   jobs created since a minute before the newest job a whole listing read (filtered out or not; a refresh the budget stops
-  goes on from its page next time; it stops between pages at three quarters of the time budget), for the open jobs (`stateFilter` pending and running) and, for
+  goes on from its page next time, since each page's token is kept as it lands; it stops between pages at three quarters of the time budget), for the open jobs (`stateFilter` pending and running, from the oldest open job held) and, for
   each open job that left that answer, its final state (`jobs.get`, or one `stateFilter=done` listing over their creation
   window for other users' jobs when `jobs.get` on them is refused). A DONE job never changes and is never read again; new
   scope or filters list from scratch, at once. The `bigquery.jobs` live source refreshes every 5 s while a job is running or
@@ -637,7 +637,8 @@ without going to BigQuery Studio. Everything comes from BigQuery's free REST cal
 - **Filters.** State and Type chips (every chip on is no filter), Range (last hour, 24 hours, 7 days, 30 days, or Custom…
   with From and To, at most 180 days and no older than BigQuery's 180-day retention), Statements (statement types such as
   `SELECT, MERGE`), Started from Varia, and Search over job id, user, destination and the SQL preview. Clear filters keeps
-  the scope and the search.
+  the scope and the search. A State filter of only Running and Pending lists open jobs alone (both states, so a pending job is
+  there when it starts); a finished job the filters leave out is not kept, and the 1,000-job cap counts the jobs shown.
 - **Details** (Enter, or the header's Details) reads the selected job with `bigquery.jobs.get`: its facts (times, bytes
   processed, bytes billed with their cost, slot time, cache hit, rows affected, default dataset, destination, maximum bytes billed, whether it ran
   in a session, labels), its error with its position, its whole SQL with GoogleSQL highlighting (up to 1,000,000

@@ -144,9 +144,9 @@ internal static class BigQueryJobHistoryChecks
         var (oldMin, oldMax) = BigQueryJobsSampler.Range(new("mine", From: 0, To: 10), now);
         check(min == now - 3_600_000 && max is null && oldMin == now - BigQueryJobHistory.RetentionMs && oldMax == oldMin && BigQueryJobsSampler.Range(new("mine"), now).Min == now - 86_400_000,
             "the range counts back from now (24 hours by default) and stays within BigQuery's retention");
-        check(BigQueryJobsSampler.ServerStates(new("mine", States: ["running"])) is ["running"] && BigQueryJobsSampler.ServerStates(new("mine", States: ["running", "done"])) is null
+        check(BigQueryJobsSampler.ServerStates(new("mine", States: ["running"])) is ["pending", "running"] && BigQueryJobsSampler.ServerStates(new("mine", States: ["running", "done"])) is null
             && BigQueryJobsSampler.ServerStates(new("mine")) is null,
-            "only an open-states filter narrows the listing; otherwise every state is listed so open jobs are followed to the end");
+            "only an open-states filter narrows the listing, to both open states (a pending job starts running later); otherwise every state is listed so open jobs are followed to the end");
         var job = BigQueryJobHistory.Page(Parse(Timed("jobs-list", now)), 0).Items[0];
         check(BigQueryJobsSampler.Passes(new("mine", Types: ["query"], Statements: ["SELECT"], Varia: true), job) && !BigQueryJobsSampler.Passes(new("mine", Types: ["load"]), job)
             && !BigQueryJobsSampler.Passes(new("mine", Statements: ["INSERT"]), job) && !BigQueryJobsSampler.Passes(new("mine", Varia: true), job with { Varia = false }),
@@ -405,7 +405,8 @@ internal static class BigQueryJobHistoryChecks
             && !BigQueryJobHistory.Cancelled("invalidQuery", "Syntax error"), "a stopped job is cancelled unless it timed out, in the grid and in a cancel's answer alike");
     }
 
-    /// <summary>A listing the time budget stops goes on from its page next time, never from its first page again; an open job
+    /// <summary>A listing the time budget stops goes on from its page next time, never from its first page again, even when the
+    /// budget's cancellation cut a request; an open job
     /// the filters leave out is still followed (the probe is not idle while it runs); and another user's finished job, where
     /// jobs.get on it is refused, is read by a done listing of its own creation millisecond.</summary>
     static async Task BudgetAndFollowAsync(Action<bool, string> check, JsonObject key)
@@ -422,23 +423,41 @@ internal static class BigQueryJobHistoryChecks
             job["statistics"]!.AsObject().Remove("numChildJobs");
             return job;
         }
-        // Six pages of one job each, every answer 300 ms late: a 2 s budget stops between pages at 1.5 s, after about five.
-        harness.Fake.On("GET", Jobs, request =>
+        Func<BigQueryFake.Request, BigQueryFake.Reply> Pages(int delayMs) => request =>
         {
-            Thread.Sleep(300);
+            Thread.Sleep(delayMs);
             var at = Regex.Match(request.Uri.Query, "pageToken=p(\\d)") is { Success: true } match ? int.Parse(match.Groups[1].Value) : 1;
             var page = new JsonObject { ["kind"] = "bigquery#jobList", ["jobs"] = new JsonArray(Job(at)) };
             if (at < 6) page["nextPageToken"] = "p" + (at + 1);
             return new BigQueryFake.Reply(200, page.ToJsonString());
-        });
+        };
+        List<string> Tokens(Harness of) => [.. of.Listings().Select(query => Regex.Match(query, "pageToken=(p\\d)").Groups[1].Value)];
+        // Six pages of one job each, every answer 300 ms late: a 2 s budget stops between pages at 1.5 s, before the sixth. A
+        // starved machine reads fewer pages a sample, but never the first page twice.
+        harness.Fake.On("GET", Jobs, Pages(300));
         using var sampler = harness.Sampler(new("mine", Hours: 24));
         var samples = 0;
         LiveSampleBatch batch;
         do batch = await sampler.SampleAsync([Due(2000)], CancellationToken.None);
-        while (Status(batch, "loading") is 1 && ++samples < 8);
-        var tokens = harness.Listings().Select(query => Regex.Match(query, "pageToken=(p\\d)").Groups[1].Value).ToList();
-        check(Status(batch, "loading") is 0 && Status(batch, "held") is 6 && samples >= 1 && tokens.Count == 6 && tokens.Distinct().Count() == 6,
-            $"a listing the time budget stops goes on from its page over {samples + 1} samples, each page asked once: {string.Join(",", tokens)}");
+        while (Status(batch, "loading") is 1 && ++samples < 30);
+        var tokens = Tokens(harness);
+        check(Status(batch, "loading") is 0 && Status(batch, "held") is 6 && samples >= 1 && tokens.Count(token => token == "") == 1
+            && Enumerable.Range(2, 5).All(page => tokens.Contains("p" + page)),
+            $"a listing the time budget stops goes on from its page over {samples + 1} samples, its first page asked once: {string.Join(",", tokens)}");
+
+        // The budget's cancellation cuts the third page's request: the next sample asks for that page again, not the first.
+        using var cut = new Harness();
+        await cut.ConnectAsync(key);
+        cut.Fake.On("GET", Jobs, Pages(0));
+        var hung = 0;
+        cut.Fake.Hang = request => request.Uri.Query.Contains("pageToken=p3", StringComparison.Ordinal) && Interlocked.Increment(ref hung) == 1;
+        using var cutSampler = cut.Sampler(new("mine", Hours: 24));
+        var stopped = await cutSampler.SampleAsync([Due(1000)], CancellationToken.None);
+        var resumed = await cutSampler.SampleAsync([Due()], CancellationToken.None);
+        var asked = Tokens(cut);
+        check(Status(stopped, "loading") is 1 && Status(stopped, "held") is 2 && Status(resumed, "loading") is 0 && Status(resumed, "held") is 6
+            && asked.Count(token => token == "") == 1 && asked.Count(token => token == "p3") == 2,
+            "a request the budget's cancellation cuts loses only that page: " + string.Join(",", asked));
 
         using var filtered = new Harness();
         await filtered.ConnectAsync(key);
@@ -446,6 +465,11 @@ internal static class BigQueryJobHistoryChecks
         var first = await SampleAsync(loads);
         check(Status(first, "held") is 1 && Status(first, "open") is 0 && Rows(first) == 1 && !loads.IsIdle(BigQueryJobsSampler.Probe),
             "a running job the type filter leaves out is not a row but is still followed, so the probe is not idle");
+        await SampleAsync(loads);
+        var openWindow = filtered.Listings().LastOrDefault(query => query.Contains("stateFilter=pending", StringComparison.Ordinal)) ?? "";
+        var runningCreated = JsonNode.Parse(Timed("jobs-list", filtered.Now))!["jobs"]![0]!["statistics"]!["creationTime"]!.ToString();
+        check(Regex.Match(openWindow, "minCreationTime=(\\d+)").Groups[1].Value == runningCreated,
+            "the open jobs' listing starts at the oldest open job held, not at the range's start: " + openWindow);
 
         using var shared = new Harness();
         await shared.ConnectAsync(key);
@@ -543,7 +567,7 @@ internal static class BigQueryJobHistoryChecks
         var (allUsers, _, _) = await harness.Call("bigquery.jobs.cancel", new JsonObject { ["connectionId"] = harness.ConnectionId, ["jobId"] = "x", ["allUsers"] = true });
         check(denied == "PERMISSION_DENIED" && deniedMessage.Contains("bigquery.jobs.update", StringComparison.Ordinal) && allUsers == "INVALID_PARAMS",
             $"cancelling another user's job without bigquery.jobs.update is PERMISSION_DENIED naming it; allUsers is no cancel parameter: {denied} {allUsers}");
-        check(harness.Fake.To(Jobs + "/[^/]+/cancel").Count() == 2, "a cancel is never re-sent");
+        check(harness.Fake.To(Jobs + "/[^/]+/cancel").Count() == 2, "a refused cancel is not re-sent");
     }
 
     /// <summary>live.subscribe serves a source only on the engines it names: a SQL Server source on a BigQuery connection is

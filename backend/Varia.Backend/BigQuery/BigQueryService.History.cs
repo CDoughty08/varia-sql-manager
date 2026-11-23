@@ -92,8 +92,9 @@ internal sealed partial class BigQueryService
 
     /// <summary>A script's children (jobs.list with parentJobId, full projection), in statement order: ascending creation time,
     /// ties by job id. At most <see cref="BigQueryJobHistory.Children"/>, read within <paramref name="budget"/> bytes; More says
-    /// the listing was cut, and Bytes is what the answers took.</summary>
-    internal async Task<(List<HistoryJob> Children, bool More, long Bytes)> ChildJobsAsync(BigQueryConnection connection, string parentId, bool allUsers, int budget, CancellationToken token)
+    /// the listing was cut, and Bytes is what the answers took. <paramref name="stop"/>, asked before each later page, cuts it
+    /// there (Job History's time budget).</summary>
+    internal async Task<(List<HistoryJob> Children, bool More, long Bytes)> ChildJobsAsync(BigQueryConnection connection, string parentId, bool allUsers, int budget, CancellationToken token, Func<bool>? stop = null)
     {
         var children = new Dictionary<string, HistoryJob>(StringComparer.Ordinal);
         string? pageToken = null;
@@ -116,7 +117,7 @@ internal sealed partial class BigQueryService
                 if (child.Parent == parentId && children.Count < BigQueryJobHistory.Children) children[child.Id] = child;
             pageToken = page.Next;
             if (pageToken is null) break;
-            if (children.Count >= BigQueryJobHistory.Children || budget <= 0) { more = true; break; }
+            if (children.Count >= BigQueryJobHistory.Children || budget <= 0 || stop?.Invoke() == true) { more = true; break; }
         }
         return ([.. children.Values.OrderBy(child => child.Created ?? 0).ThenBy(child => child.Id, StringComparer.Ordinal)], more, start - budget);
     }

@@ -1117,7 +1117,7 @@ Right-click the Integration Services Operations grid (a right-click outside the 
 
 #### BigQuery Job History context menu (`bigquery.jobs.context`)
 
-Right-click the BigQuery Job History grid (a right-click outside the selection selects that row first), or press Shift+F10 or the context-menu key in it. Items act on the selected job; one that does not apply to it is greyed, and its reason shows in the details pane.
+Right-click the BigQuery Job History grid (a right-click outside the selection selects that row first), or press Shift+F10 or the context-menu key in it. Items act on the selected job; one that does not apply to it is greyed once the selected row's cells are read, and its reason shows in the details pane.
 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |

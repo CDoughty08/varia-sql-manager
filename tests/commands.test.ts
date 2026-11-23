@@ -451,6 +451,7 @@ describe('context keys', () => {
           : selector === '[data-explorer-tree]' ? options.tree ? { getAttribute: (name: string) => name === 'data-type-ahead' && options.tree === 'typing' ? '' : name === 'data-explorer-tree' ? '' : null } : null
           : selector === '[data-options-dialog]' ? options.options ? { getAttribute: () => '' } : null
           : selector === '[data-results-picker]' ? options.picker ? { getAttribute: () => '' } : null
+          : selector === 'button, a, input, select, textarea' ? selector.split(', ').includes(tag) ? { getAttribute: () => '' } : null
           : options.editable ? { getAttribute: () => 'true' } : null
     })
     const textArea = element('textarea', { pane: 'editor' }), findInput = element('input', { pane: 'editor' })
@@ -480,6 +481,8 @@ describe('context keys', () => {
     expect(focusFacts(element('div', { pane: 'editor', monitor: true }), editor(false))).toMatchObject({ activityMonitorFocus: true, outputGridFocus: false, liveGridFocus: false })
     // A live grid with its owner's own menu (Job History): its Enter, not Query Output's keys.
     expect(focusFacts(element('div', { pane: 'editor', liveGrid: true }), editor(false))).toMatchObject({ liveGridFocus: true, outputGridFocus: false })
+    // A button drawn in a live view's frame takes Enter itself: it is not the grid.
+    expect(focusFacts(element('button', { pane: 'editor', liveGrid: true }), editor(false))).toMatchObject({ liveGridFocus: false })
     expect(focusFacts(element('div', { pane: 'editor', monitor: true, live: true }), editor(false))).toMatchObject({ liveGridFocus: true })
     // Each output panel (Results, Messages, Execution plan) is the output to the keybindings.
     expect(focusFacts(element('div', { pane: 'messages' }), editor(false))).toMatchObject({ activePanel: 'output', outputGridFocus: false })
