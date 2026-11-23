@@ -460,14 +460,14 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     be read."
 - **On a ? row:** Show Change Details on any of its cells, or hovering its gutter flag, opens the **look-alike card**:
   "Looks like row 9 in Result 3: 4 of 5 compared columns equal", the values that differ, each old → new with marks, and
-  **Go to Possible Match**. Ignored columns are not counted, nor are the match's key columns, which always differ on a
-  look-alike. Its summary, for the live region, is "removed row, looks like row 9 in Result 3: 4 of 5 compared columns
-  equal". Which values differ comes from the backend, which judged the look-alike. A partner hidden by the comparison's
-  filters or chips is still described, with navigation's sentence (`partnerHiddenText`, "The possible match is hidden by
-  a filter", which the card ends with a period) in place of Go to Possible Match. Go to Possible Match in the card moves
-  the active cell to the partner, as the command does, and returns the focus to the grid; a following card then
-  describes the partner and says follow mode's combined message, and any other card closes. The gutter's own tooltip
-  stays everywhere else.
+  **Go to Possible Match**. Ignored columns are not counted, nor are the match's key columns, at least one of which
+  differs on a look-alike. Its summary, for the live region, is "removed row, looks like row 9 in Result 3: 4 of 5
+  compared columns equal". Which values differ comes from the backend, which judged the look-alike. A partner hidden by
+  the comparison's filters or chips is still described, with navigation's sentence (`partnerHiddenText`, "The possible
+  match is hidden by a filter", which the card ends with a period) in place of Go to Possible Match. Go to Possible
+  Match in the card moves the active cell to the partner, as the command does, and returns the focus to the grid; a
+  following card then describes the partner and says follow mode's combined message, and any other card closes. The
+  gutter's own tooltip stays everywhere else.
 - **Opened by key elsewhere,** the card says what there is:
   - an added row: "Added row: only in Result 3."; a removed row: "Removed row: only in Result 1."; these cards, and a
     cut row's, describe the whole row, so they are named for it ("Change details: added row", "Change details: removed
@@ -596,6 +596,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - the hover debounce, no hover card while the focus is outside the grid and card, and the key's `when`.
   - `DiffChecks`: `partnerOf` answers `differing` and `compared`, skipping ignored pairs; `BytesFor` charges the
     bitsets, and a diff with many look-alikes on a low budget is refused, not cut.
+  - `results-port`: a partner answer carrying `differing` and `compared` passes `diffSeekResultSchema` and reaches the
+    renderer, so a schema left unwidened is caught.
   - Smoke: Ctrl+I finds the dialog by role and name, Alt+F5 updates it, Escape returns focus. C5b opens the tab by
     role and replaces it on a second use.
 - **Risks:**
@@ -1193,12 +1195,14 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     that column is a key; `identityInsert` on without `identity` is `INVALID_PARAMS` in both zod and C#. `computed?:
     number[]` holds the pairs the index names as computed columns of the target (distinct, at most
     `limits.page.maxColumns`, each below the pair count, none in `columns`), so the header's left-out line says
-    "(computed)" rather than "(unticked)"; the other locked reasons (rowversion, CLR types, sql_variant, vector) follow
-    from the recorded types. Script (no `maxLines`) requires `target` and `direction` (`INVALID_PARAMS` in both); a
-    preview may leave either out, as the dialog's request on opening does before the form has them. Its answer has empty
-    `text` and carries any of the four refusals known on opening (`asShown`, `keyType`, `keyName`, `notColumns`),
-    `differences`, `updates` and `softValues`, and, only with a `direction`, which decides them, `deletes`, `inserts`
-    and the look-alike counts.
+    "(computed)" rather than "(unticked)". C# also answers `INVALID_PARAMS` when `columns` leaves out a recorded key
+    pair (an INSERT would write its row without the key, and the existence check by key would still pass), and on Script
+    when no statement is ticked; the other locked reasons (rowversion, CLR types, sql_variant, vector) follow from the
+    recorded types. Script (no `maxLines`) requires `target` and `direction` (`INVALID_PARAMS` in both); a preview may
+    leave either out, as the dialog's request on opening does before the form has them. Its answer has empty `text` and
+    carries any of the four refusals known on opening (`asShown`, `keyType`, `keyName`, `notColumns`), `differences`,
+    `updates` and `softValues`, and, only with a `direction`, which decides them, `deletes`, `inserts` and the
+    look-alike counts.
   - **Deadline and Cancel:** 120 s in `methodPolicies`, as the other result jobs. The dialog's Cancel cancels the request
     through the protocol's cancel, and the backend drops its chunks.
   - **Preview:** `maxLines?: number` (1–30) answers only the first lines, with `complete: false` when there are more,
@@ -1296,6 +1300,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       never cast; a date key paired with a time key refused;
     - a rowversion key accepted with INSERT unticked; a subnormal float as a key refused and as a guard left out;
     - the look-alike and soft counts for Rows in the grid and Selected rows; a refusal naming four long columns, cut;
+    - `columns` without a key pair, and Script with no statement ticked, each `INVALID_PARAMS`;
     - the header's left-out line with Result 1 closed: one-sided, computed, unticked and identity columns;
     - `uncheckedUpdates` alike in a preview and in Script (an UPDATE changing only an xml column, one changing only
       non-ASCII varchar under a SQL_ collation, and one with an ASCII value there, which is checked); `selectedKeys` for
@@ -1608,7 +1613,7 @@ Each lane runs `npm run check` and regenerates the catalogues it changes, in the
 - results-tools.md § Comparisons;
 - the architecture.md Comparisons and Rows bullets, including the diffs bullet's sentence that hidden columns are never
   copied or searched, which C1 (search reads `old` columns) and C3 (Copy as Diff reads previous values) narrow, and the
-  derived-results bullet's rule that a copied exact value is kept when its own column holds exact values, which C4 keys
+  float and real bullet's rule that a copied exact value is kept when its own column holds exact values, which C4 keys
   on the source column instead;
 - ipc.md (Result diffs, Limits, the method table) where the protocol changes;
 - the results guide (`help/guides/results.tsx`, with live `CommandRef`s), or records why there is no guide impact;
@@ -1628,8 +1633,10 @@ When the last lane ships, this plan folds into the area docs and is deleted.
 | (later) | C4b GoogleSQL script; side-by-side; Pivots | Q4; N4 | M; L; M |
 
 - C1 and C2 can run in parallel: they touch search and `ResultDiff`.
-- C3 and C5 can run in parallel after C2: they touch the writer and the grid's card. Both append to the submenu, and C5
-  also changes `diffSeek`'s answer across the results-path files, which C3, C4 and C6 append to as well.
+- C3 and C5 can run in parallel after C2: they touch the writer and the grid's card. Both append to the submenu and
+  change `DiffIndex.cs` and architecture.md's change-index bullet (C3's cut lists in both layouts, C5's look-alike
+  bitsets, both charged there), and C5 also changes `diffSeek`'s answer across the results-path files, which C3, C4 and
+  C6 append to as well.
 - C6 can start after C2, and C4 after C3, whose recorded match it reads for its keys and its refusal. They can then be
   built in parallel, but both append to the results-path files (contracts.ts, port-messages.ts, results-port.ts,
   worker-protocol.ts, worker-core.ts, `ResultClient.ts`, `SqlService.cs`, `Contracts.cs` and the fake backend), so the
