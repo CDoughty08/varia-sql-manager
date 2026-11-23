@@ -403,8 +403,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - Follow mode ends on Escape, on focus leaving the grid and card, or on a replace of the comparison, and the card
     closes with it: a card left open would go stale, and Escape could no longer reach it.
   - While a card opened by key shows, hover opens none. A second Ctrl+I moves the focus into the card, as VS Code's Show
-    or Focus Hover does. Ctrl+I always describes the active cell: while a hover card shows, it replaces that card with
-    one opened by key for the active cell, which may be another cell.
+    or Focus Hover does. Ctrl+I always describes the active cell: a card on another cell (a hover card, or one the grid
+    menu opened) is replaced by one opened by key for the active cell, and only a card already on the active cell takes
+    the focus.
 - **Card content:**
   - A header: column, type, "changed" or "equal by collation", and "row 4 in Result 1 → row 4 in Result 3".
   - A summary sentence, the card's first line: the number of edits, the first edit, then how many more ("2 edits:
@@ -442,10 +443,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   "Looks like row 9 in Result 3: 4 of 5 compared columns equal", the values that differ, each old → new with marks, and
   **Go to Possible Match**. Ignored columns are not counted, nor are the match's key columns, which always differ on a
   look-alike. Its summary, for the live region, is "removed row, looks like row 9 in Result 3: 4 of 5 compared columns
-  equal". Which values differ comes from the backend, which judged the
-  look-alike. A partner hidden by the comparison's filters or chips is still described, with navigation's sentence
-  "The possible match is hidden by a filter." (`partnerHiddenText`) in place of Go to Possible Match. The gutter's own
-  tooltip stays everywhere else.
+  equal". Which values differ comes from the backend, which judged the look-alike. A partner hidden by the comparison's
+  filters or chips is still described, with navigation's sentence "The possible match is hidden by a filter."
+  (`partnerHiddenText`) in place of Go to Possible Match. Go to Possible Match in the card moves the active cell to the
+  partner, as the command does, and returns the focus to the grid; a following card then describes the partner and says
+  follow mode's combined message, and any other card closes. The gutter's own tooltip stays everywhere else.
 - **Opened by key elsewhere,** the card says what there is:
   - an added row: "Added row: only in Result 3."; a removed row: "Removed row: only in Result 1."; these cards, and a
     cut row's, describe the whole row, so they are named for it ("Change details: added row", "Change details: removed
@@ -471,7 +473,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   cell, and moves back with it.
 - **Interactions:**
   - One row: the card is on the cell. Two rows: either half's cell, showing both halves.
-  - Chips, Rows and filters do not change it. Highlights and search hits stay in the grid.
+  - Chips and filters do not change it; Rows, like any replace, closes it. Highlights and search hits stay in the grid.
   - Exact text off: soft cells open as "equal by collation".
 
 ### Technical sketch
@@ -601,9 +603,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     with its row's stored number in its own input, the gutter's number (`-4`, `+4`; an unchanged line takes its number
     in the new input). The header names the match and says so (`# rows matched by whole rows; lines start with row
     numbers`, with any `ignored: …` before that last part), and the column line starts with `row`.
-  - **Save as Diff…** (Q1) writes the same text for every row and column the grid shows to a file. While chips or
-    filters narrow the grid, its header says so (`# the comparison shows 12 of 40 differences`), counted in a first pass
-    over the view, so a saved diff with the ~ chip pressed is not read as having no added or removed rows.
+  - **Save as Diff…** (Q1) writes the same text for every row the grid shows, with every column it shows but ignored
+    ones, to a file. While chips or filters narrow the grid, its header says so (`# the comparison shows 12 of 40
+    differences`), counted in a first pass over the view, so a saved diff with the ~ chip pressed is not read as having
+    no added or removed rows.
 - **Text:**
 
   ```
@@ -786,13 +789,13 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     replace such rows." and "…so a row whose key changed is deleted and not inserted under its new key. Tick INSERT to
     replace such rows."
   - **Columns:** the data columns.
-    - Key columns are ticked and locked. A key column INSERT cannot write (rowversion or timestamp, or computed per
-      the index) leaves INSERT unavailable, with the reason ("row_ver is a key column and Not insertable, so rows cannot
-      be inserted."). Ignored columns are ticked, for INSERT only. While UPDATE is ticked, a line
-      says what ignoring costs, since the summary's "to match Result 3" would otherwise hide it: "updated_at is ignored:
-      UPDATEs leave its changes out, and rows that differ only in it get no statement. Stop ignoring it to include
-      them." ("updated_at and memo are ignored: … their changes … only in them …"). While an input is closed, the
-      comparison cannot be rebuilt, so this line and the Exact text line below drop their last sentence.
+    - Key columns are ticked and locked. A key column INSERT cannot write (rowversion or timestamp, or computed per the
+      index) leaves INSERT unavailable, with the reason ("row_ver is a key column that cannot be inserted (rowversion),
+      so INSERT is unavailable."). Ignored columns are ticked, for INSERT only. While UPDATE is ticked, a line says what
+      ignoring costs, since the summary's "to match Result 3" would otherwise hide it: "updated_at is ignored: UPDATEs
+      leave its changes out, and rows that differ only in it get no statement. Stop ignoring it to include them."
+      ("updated_at and memo are ignored: … their changes … only in them …"). While an input is closed, the comparison
+      cannot be rebuilt, so this line and the Exact text line below drop their last sentence.
     - Unscriptable columns start unticked and locked, with the reason: rowversion and timestamp ("Not insertable"),
       computed per the index ("Computed"), CLR types and sql_variant ("Cannot be written as a literal"), and vector
       ("Not scripted": it has a literal but no `=`, so it is left out until a lane writes and round-trips it).
@@ -852,7 +855,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     stays, so "to match" never reads as a full sync: "DELETE is unticked, so 2 rows only in Result 1 stay." ("UPDATE is
     unticked, so 5 changed rows stay as they are."; "INSERT is unticked, so 2 rows only in Result 3 are not added.").
     While the chosen rows hold fewer differences than All differences, it adds that too: "Rows in the grid holds 5 of 40
-    differences; the other 35 stay as they are." ("Selected rows hold 1 of 40 differences; …"), and the announcement
+    differences; the other 35 stay as they are." ("Selected rows holds 1 of 40 differences; …"), and the announcement
     after Script repeats the summary. When every count is 0, the summary is "The chosen rows have no differences to
     script."; when only unticked statements have rows, it is "The ticked statements change no rows." with the stays
     sentences ("DELETE is unticked, so 3 rows only in Result 3 stay."), so it never reads as if the target already
@@ -953,7 +956,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       hidden (`DialogWindow` only opens, focuses and closes one). When the menu closes on Apply, Cancel or Escape, that
       window's renderer opens the dialog again from the draft, over it, with the focus, and the replace that follows
       refreshes it. When it closes otherwise (a press outside, F6, the pane hiding, the comparison closing), the dialog
-      stays closed rather than take the focus back, and Script Differences… opens it again from the draft;
+      stays closed rather than take the focus back, and Script Differences as T-SQL… opens it again from the draft;
     - with an input closed, rows cannot be matched again, so the buttons are unavailable and the sentence's last part
       becomes "…, and Result 1 is closed, so rows cannot be matched again. Run the query again to script differences."
       The xml-key refusal takes the same form, the repeated-key refusal keeps only "Choose rows without a repeated
@@ -995,20 +998,26 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     "A filter was turned off, so Rows in the grid now holds 31 differences."; "The selection was reset, so Selected rows
     now holds 1 difference." A refusal's button never changes the rows unannounced.
   - The comparison closing (re-run, Close Results, backend loss) says "The comparison was closed." and disables Script.
-  - The draft (target, direction, rows, columns, options) is remembered per pair in the tab as it changes, so it is kept
-    however the window closes, in the same 64-pair memory as the match. It keeps the target as resolved and shows it
-    in three parts, so a later run never moves it to another database; when that is not the query document's current
+  - The draft (target, direction, rows, columns, destination) is remembered per pair in the tab as it changes, so it is
+    kept however the window closes, in the same 64-pair memory as the match. It keeps the target as resolved and shows
+    it in three parts, so a later run never moves it to another database; when that is not the query document's current
     database, the line under the field says so ("In Sales_Test. SQLQuery3.sql's database is now Sales_Dev."). It keeps
-    unticked columns by name, as ignored columns are: one that no longer pairs is dropped, with a line ("memo was
-    unticked last time and no longer pairs."). The memory follows a swap to the swapped pair, so Swap inverts the
+    unticked columns by name, as ignored columns are. The memory follows a swap to the swapped pair, so Swap inverts the
     remembered direction, and the target still holds the same result's rows. Result names repeat across runs ("Result
-    1"), so the draft also records the pair's column names, and when the pair's columns are not those, another query
-    has taken the names: the dialog starts as the first time (no target or direction, DELETE unticked), with a line by
+    1"), so the draft also records the pair's column names, and when the pair's columns are not those, another query has
+    taken the names: the dialog starts as the first time (no target or direction, DELETE unticked), with a line by
     Target table ("Result 1 and Result 3 have other columns than last time, so the last target was not reused.").
+  - Wrap in a transaction and the row checks are not in the draft: they start on each time the dialog opens, so turning
+    one off for a script never carries over unseen to a later one, whose warnings would sit below the fold.
   - Invoked from another comparison, the open window switches to it, with that pair's draft, and is activated with
     the focus and description it has on opening; the first pair's draft stays remembered.
   - It works while an input is closed: the script reads only the comparison.
-- **Keyboard and screen readers:** a labelled form in its own window, Tab order top to bottom. The focus starts in
+- **Keyboard and screen readers:** a labelled form in its own window, Tab order top to bottom. Its sentences are
+  descriptions (`aria-describedby`), so Tab reads them: the summary, with its stays and "N of M differences"
+  sentences, is Script's; each warning or note is the control's it follows (the look-alike and DELETE lines DELETE's or
+  INSERT's, the column lines the column list's, each Options warning its checkbox's, the name's sentence Target
+  table's). Script with a target name it cannot use puts the name's sentence in the summary and says it in the live
+  region. The focus starts in
   Target table, or on a refusal's first button, or on Cancel when a refusal has none or its buttons are unavailable
   (an input closed).
   - Enter on a button presses that button. In the target box it picks a suggestion while the list is open. Elsewhere it
@@ -1064,15 +1073,16 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - **Answer:** `{ text (≤ 1,000,000 characters), deletes, updates, inserts, complete, refusal? }`. A refusal is an
     answer, not an error, with empty `text`: `refusal: { kind, sentence }`, `kind` one of `asShown`, `keyType`,
     `keyName`, `notColumns`, `repeatedKey`, `truncated`, `unwritable`, `keyCollation`, `noDifferences`, `noTickedChange`
-    and `tooLarge`, and the sentence at most 1,000 characters, both bounded in the answer schema. The dialog chooses the
-    refusal's buttons and its closed-input wording by `kind`, never by parsing the sentence, which carries counts and
-    names. Past 1,000,000 characters, estimated first, it refuses with `tooLarge`, well inside the 16 MiB response
-    limit. In a preview the counts are the chosen rows' entries by kind; after Script they are the script's own
-    statements, which can be lower (Counts above). The backend itself refuses a comparison whose match is not a
-    `columns` match, so Automatic's choice can never be scripted by accident (Use order_no as key columns replaces the
-    comparison with that `columns` match first), and a comparison of rows as shown. Both read the diff set's records
-    (C3's match and C6's as-shown flags), and the WHERE clauses take the recorded key pairs, so the params carry no key
-    columns.
+    and `tooLarge`, and the sentence at most 1,000 characters, both bounded in the answer schema. Every refusal's
+    sentence, closed-input forms included, is the backend's, which holds the counts, names and sample values and knows
+    when an input's result was released; the dialog chooses only the refusal's buttons and their availability, by
+    `kind`, and never parses the sentence. Past 1,000,000 characters, estimated first, it refuses with `tooLarge`, well
+    inside the 16 MiB response limit. In a preview the counts are the chosen rows' entries by kind; after Script they
+    are the script's own statements, which can be lower (Counts above). The backend itself refuses a comparison whose
+    match is not a `columns` match, so Automatic's choice can never be scripted by accident (Use order_no as key columns
+    replaces the comparison with that `columns` match first), and a comparison of rows as shown. Both read the diff
+    set's records (C3's match and C6's as-shown flags), and the WHERE clauses take the recorded key pairs, so the params
+    carry no key columns.
 - **Backend `Results/DiffScript.cs`:** literals by the column's `dataType`, precision and scale:
 
   | Type | Literal |
@@ -1167,8 +1177,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     or closed while open, switching to another comparison, Enter and Escape in the suggestion list and on buttons, the
     draft memory, multipart target names, the Automatic and as-shown refusals and their buttons, the closed-input form
     of the key refusals, refusals said in the live region, Cancel while generating, the comparison changing while it
-    generates, the INSERT line for target columns the result lacks, the refusal's buttons chosen by `kind`, and the
-    Clipboard announcement.
+    generates, the INSERT line for target columns the result lacks, the refusal's buttons chosen by `kind`, the form's
+    descriptions, the safety options starting on each time, and the Clipboard announcement.
   - Smoke: open the dialog window by role, script to a New Query Editor Window, and find `BEGIN TRANSACTION` in the
     focused editor. A frameless OS window can behave differently on Linux, so run it through `npm run test:smoke:wsl`
     before pushing.
