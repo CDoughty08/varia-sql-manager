@@ -576,7 +576,7 @@ internal static class BigQueryJobHistoryChecks
             if (!query.Contains("stateFilter=", StringComparison.Ordinal) || query.Contains("pageToken=o2", StringComparison.Ordinal)) return BigQueryFake.Text("""{"kind":"bigquery#jobList"}""");
             return BigQueryFake.Text("""{"kind":"bigquery#jobList","nextPageToken":"o2"}""");
         }).On("GET", Jobs + "/varia_running", _ => new BigQueryFake.Reply(200, JsonNode.Parse(Timed("jobs-list", slow.Now).Replace("\"RUNNING\"", "\"DONE\""))!["jobs"]![0]!.ToJsonString()));
-        // Two samples cut there: in the second the refresh answers first, then the open listing's first request is cut.
+        // Two samples cut there: in the second the open listing under way goes on first, and its first request is cut.
         await follower.SampleAsync([Due(3000)], CancellationToken.None);
         await follower.SampleAsync([Due(3000)], CancellationToken.None);
         cutting = false;
@@ -591,6 +591,32 @@ internal static class BigQueryJobHistoryChecks
             // answered: each such cut asks for a quarter of the jobs a page after.
             && int.Parse(Regex.Match(open[^1], "maxResults=(\\d+)").Groups[1].Value) == 100 / (int)Math.Pow(4, Stuck(open)),
             "the open jobs' listing goes on from its page in the next sample, and a job it left out is read once it is whole: " + string.Join(" | ", open));
+
+        // A refresh listing slower than a quarter of the budget: the open jobs' listing sent after it had too little time for its
+        // cut to say pages are too large, and it goes first in the next sample rather than wait behind the refresh again.
+        using var late = new Harness();
+        await late.ConnectAsync(key);
+        using var trailing = late.Sampler(new("mine", Hours: 24));
+        await SampleAsync(trailing);
+        var lagging = true;
+        late.Fake.Hang = request => lagging && request.Uri.Query.Contains("stateFilter=", StringComparison.Ordinal);
+        late.Fake.On("GET", Jobs, request =>
+        {
+            // The answer's latency is what this check is about: half the budget below, past its first quarter.
+            if (lagging && !request.Uri.Query.Contains("stateFilter=", StringComparison.Ordinal)) Thread.Sleep(500);
+            return BigQueryFake.Text("""{"kind":"bigquery#jobList"}""");
+        }).On("GET", Jobs + "/varia_running", _ => new BigQueryFake.Reply(200, JsonNode.Parse(Timed("jobs-list", late.Now).Replace("\"RUNNING\"", "\"DONE\""))!["jobs"]![0]!.ToJsonString()));
+        var before = late.Listings().Count;
+        var cutLate = await trailing.SampleAsync([Due(1000)], CancellationToken.None);
+        lagging = false;
+        var middle = late.Listings().Count;
+        var caughtUp = await SampleAsync(trailing);
+        var lateListings = late.Listings().Skip(before).ToList();
+        var nextSample = late.Listings().Skip(middle).ToList();
+        check(cutLate.Errors.Count == 0 && Status(cutLate, "loading") is 1 && caughtUp.Errors.Count == 0 && Status(caughtUp, "open") is 0
+            && nextSample.Count > 0 && nextSample[0].Contains("stateFilter=", StringComparison.Ordinal)
+            && lateListings.All(query => query.Contains("maxResults=100", StringComparison.Ordinal)),
+            "a late request the budget cuts keeps the page size, and the open jobs' listing it cut goes first next time: " + string.Join(" | ", lateListings));
     }
 
     /// <summary>BigQuery's refusals reach the probe as their liveErrorCodes.</summary>

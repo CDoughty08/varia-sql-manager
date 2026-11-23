@@ -36,9 +36,12 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
     /// <summary>Jobs a page asks for: a quarter after each stalled sample (a page too slow for the time budget, as long query
     /// texts on a slow link make it, would otherwise never land), doubling back after each sample that finished.</summary>
     private int pageSize = BigQueryJobHistory.PageJobs;
-    /// <summary>A listing's request is in flight before any page of that listing landed this sample: if the budget's
-    /// cancellation cuts it, that listing made no progress, whatever other listings read, and the page size shrinks.</summary>
+    /// <summary>A listing's request, sent in the sample's first quarter, is in flight before any page of that listing landed this
+    /// sample: if the budget's cancellation cuts it, that listing made no progress in most of the budget, whatever other listings
+    /// read, and the page size shrinks. One sent later had less time than a page may need, so its cut says nothing.</summary>
     private bool stuck;
+    /// <summary>The end of the running sample's first quarter (<see cref="Environment.TickCount64"/>).</summary>
+    private long early;
     internal const int StallsBeforeTimeout = 3;
 
     /// <summary>What one listing holds: the top-level jobs by id, which of them are the principal's (All users), how far the
@@ -206,6 +209,7 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
         // between pages. Each listing saves its page token as each page lands, so the budget's cancellation, the backstop, loses
         // only the request it cut.
         var deadline = Environment.TickCount64 + Math.Max(1000, budgetMs) * 3 / 4;
+        early = Environment.TickCount64 + Math.Max(1000, budgetMs) / 4;
         int Left() => Environment.TickCount64 >= deadline ? 0 : (int)Math.Clamp(bytes, 0, int.MaxValue);
         void Spend(long spent) { bytes -= spent; answers++; }
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -241,12 +245,15 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
                 else
                 {
                     // A stopped refresh goes on from its page with its own window; a new one starts at the newest job read whole.
+                    // Open jobs are followed even while new jobs are still being listed. An open jobs' listing under way goes on
+                    // first, so a refresh listing that fills each sample does not leave it behind for ever.
+                    var opening = state.Open is not null;
+                    if (opening && !await FinishedAsync(connection, state, listing, token, Left, Spend)) whole = false;
                     state.Since ??= listing with { MinCreated = Math.Max(min, state.Newest - BigQueryJobHistory.OverlapMs) };
                     var done = await ListAsync(connection, state, state.Since, state.SinceToken, next => state.SinceToken = next, token, Left, Spend, first: false);
                     if (done) (state.Since, state.SinceToken, state.SinceMerged) = (null, null, 0);
                     else whole = false;
-                    // Open jobs are followed even while new jobs are still being listed.
-                    if (!await FinishedAsync(connection, state, listing, token, Left, Spend)) whole = false;
+                    if (!opening && !await FinishedAsync(connection, state, listing, token, Left, Spend)) whole = false;
                 }
             }
             finally { Trim(state); }
@@ -291,12 +298,13 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
             token.ThrowIfCancellationRequested();
             if (left() <= 0) return false;
             HistoryPage? page;
-            stuck = !landed;
+            stuck = !landed && Environment.TickCount64 < early;
             try { page = await ListPageAsync(connection, state, listing, pageToken, size, left(), token); }
             catch (BigQueryOverLimit)
             {
                 // Kept for the samples after (doubling back as they finish), so each does not download the large page again.
                 if (size > 1 && left() >= BigQueryJobHistory.JobBytes) { size = pageSize = Math.Max(1, size / 4); continue; }
+                stuck = false;
                 return false;
             }
             (stuck, landed) = (false, true);
@@ -401,12 +409,13 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
         {
             if (left() <= 0) return false;
             HistoryPage? page;
-            stuck = !landed;
+            stuck = !landed && Environment.TickCount64 < early;
             try { page = await ListPageAsync(connection, state, state.Open, state.OpenToken, size, left(), token); }
             catch (BigQueryOverLimit)
             {
                 // Pages of long query texts: fewer jobs a page, as the listing does.
                 if (size > 1 && left() >= BigQueryJobHistory.JobBytes) { size = pageSize = Math.Max(1, size / 4); continue; }
+                stuck = false;
                 return false;
             }
             (stuck, landed) = (false, true);
