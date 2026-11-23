@@ -30,14 +30,32 @@ export interface ConnectRequestTrigger {
 }
 export type ConnectRequestPlan =
   | { readonly action: 'open'; readonly reconnecting?: string; readonly options?: ProviderConnectionOptions; readonly pendingExecute?: string; readonly pendingMonitor: boolean }
-  | { readonly action: 'raise' }
+  | { readonly action: 'raise'; readonly ignoredKind?: ConnectIncomingRequest['kind'] }
   | { readonly action: 'incoming'; readonly request: ConnectIncomingRequest }
+
+/** Status notice shown when an incoming request arrives while Connect is busy or awaiting confirmation. */
+export function busyRequestNotice(kind: ConnectIncomingRequest['kind']): string {
+  switch (kind) {
+    case 'execute': return 'Connect is busy. Finish or stop the current action, then run the query again.'
+    case 'monitor': return 'Connect is busy. Finish or stop the current action, then open Activity Monitor again.'
+    case 'reconnect': return 'Connect is busy. Finish or stop the current action, then select Reconnect again.'
+  }
+}
+
+/**
+ * Next reconnect target when an open Connect dialog accepts an incoming request: requests that carry no server details
+ * (Activity Monitor, or F5 on an unconnected query tab) keep the current Reconnect target so the shown server still
+ * reconnects its lost Object Explorer entry.
+ */
+export function nextConnectReconnecting(current: string | undefined, request: Pick<ConnectIncomingRequest, 'options' | 'reconnecting'>): string | undefined {
+  return request.options ? request.reconnecting : current
+}
 
 /**
  * Decides how App handles a Connect / Reconnect / F5 / Activity Monitor trigger given whether Connect is already open
  * and whether a details-review dialog is active. Plain Connect on an already-open window only raises it so any active
  * reconnect target or pending execute stays intact; other triggers become incoming requests that ConnectDialog accepts
- * only when idle and after confirming unsaved edits.
+ * only when idle and after confirming unsaved edits (or raise with a busy notice during a details review).
  */
 export function planConnectRequest(open: boolean, reviewOpen: boolean, seq: number, trigger: ConnectRequestTrigger): ConnectRequestPlan {
   if (!open) {
@@ -49,7 +67,8 @@ export function planConnectRequest(open: boolean, reviewOpen: boolean, seq: numb
       pendingMonitor: trigger.kind === 'monitor'
     }
   }
-  if (trigger.kind === 'open' || reviewOpen) return { action: 'raise' }
+  if (trigger.kind === 'open') return { action: 'raise' }
+  if (reviewOpen) return { action: 'raise', ignoredKind: trigger.kind }
   return {
     action: 'incoming',
     request: {

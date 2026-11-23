@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { advancedCount, advancedSummary, clampConnectRailWidth, colorName, connectRailLimits, customSummary, listStep, parseConnectionString, planConnectRequest, rowTitle, validateSqlAdvancedNumber } from '../src/renderer/src/connect-form'
+import { advancedCount, advancedSummary, busyRequestNotice, clampConnectRailWidth, colorName, connectRailLimits, customSummary, listStep, nextConnectReconnecting, parseConnectionString, planConnectRequest, rowTitle, validateSqlAdvancedNumber } from '../src/renderer/src/connect-form'
 import EnvironmentTag from '../src/renderer/src/EnvironmentTag'
 import { advancedDefaults, advancedToStore } from '../src/shared/connections'
 import { connectionPresets } from '../src/shared/theme/connection-colors'
@@ -158,8 +158,17 @@ describe('Connect dialog v2 form', () => {
       action: 'incoming',
       request: { seq: 2, kind: 'execute', reconnecting: 'target-b', targetId: 'target-b', options: serverA, autoReconnect: 'off', pendingExecute: 'tab-b', pendingMonitor: false }
     })
-    // Details review open: raises only, never disrupting the handoff.
-    expect(planConnectRequest(true, true, 3, { kind: 'reconnect', reconnecting: 'target-b', options: serverA })).toEqual({ action: 'raise' })
+    // Details review open: raises only with an ignoredKind for non-open triggers, never disrupting the handoff.
+    expect(planConnectRequest(true, true, 3, { kind: 'reconnect', reconnecting: 'target-b', options: serverA })).toEqual({ action: 'raise', ignoredKind: 'reconnect' })
+    expect(planConnectRequest(true, true, 4, { kind: 'open' })).toEqual({ action: 'raise' })
+    // Requests without server details (Activity Monitor, F5 on an unconnected tab) keep the current Reconnect target.
+    expect(nextConnectReconnecting('conn-lost-x', { options: undefined, reconnecting: undefined })).toBe('conn-lost-x')
+    expect(nextConnectReconnecting('conn-lost-x', { options: serverA, reconnecting: 'conn-lost-y' })).toBe('conn-lost-y')
+    expect(nextConnectReconnecting('conn-lost-x', { options: serverA, reconnecting: undefined })).toBeUndefined()
+    // Busy-request notices tell the user which action to retry.
+    expect(busyRequestNotice('execute')).toContain('run the query again')
+    expect(busyRequestNotice('monitor')).toContain('open Activity Monitor again')
+    expect(busyRequestNotice('reconnect')).toContain('select Reconnect again')
   })
   it('validates SQL Server Advanced numeric fields before they can enter options', () => {
     expect(validateSqlAdvancedNumber('commandTimeout', '')).toEqual({ ok: true, value: undefined })

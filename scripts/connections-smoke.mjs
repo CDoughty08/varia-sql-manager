@@ -298,10 +298,17 @@ try {
   await dialog.getByLabel('Login', { exact: true }).fill('reader')
   await dialog.getByLabel('Password', { exact: true }).fill('never-store-this-marker')
   await dialog.getByLabel('Name', { exact: true }).fill('Development')
-  await dialog.getByRole('button', { name: 'Red connection color', exact: true }).click()
-  await expect(dialog.getByRole('button', { name: 'Red connection color', exact: true })).toHaveAttribute('aria-pressed', 'true')
-  // The custom picker shows the active theme's resolved preset colour (#e66767 in Varia Dark), not the stored identifier.
-  await expect(dialog.getByLabel('Custom connection color', { exact: true })).toHaveValue('#e66767')
+  const redSwatch = dialog.getByRole('button', { name: 'Red connection color', exact: true })
+  await redSwatch.click()
+  await expect(redSwatch).toHaveAttribute('aria-pressed', 'true')
+  const expectedRedHex = await redSwatch.evaluate(el => {
+    const match = /^rgb\(\s*(\d+),\s*(\d+),\s*(\d+)\s*\)$/i.exec(getComputedStyle(el).backgroundColor)
+    if (!match) return ''
+    return '#' + match.slice(1).map(channel => Number(channel).toString(16).padStart(2, '0')).join('')
+  })
+  expect(expectedRedHex).toMatch(/^#[0-9a-f]{6}$/)
+  // The custom picker shows the active theme's resolved preset colour, matching the swatch rather than the stored identifier.
+  await expect(dialog.getByLabel('Custom connection color', { exact: true })).toHaveValue(expectedRedHex)
   await dialog.getByRole('button', { name: 'Add favorite', exact: false }).click()
   await expect(dialog.getByRole('button', { name: 'Remove favorite', exact: false })).toBeEnabled()
   await dialog.getByRole('button', { name: 'Register server', exact: true }).click()

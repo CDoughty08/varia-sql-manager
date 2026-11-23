@@ -19,7 +19,7 @@ import { dialogWindowKinds } from '../../shared/popouts'
 import Icon from './Icon'
 import InlineError, { type ErrorAction } from './kit/InlineError'
 import { connectFix } from './connect-fix'
-import { advancedCount, advancedSummary, clampConnectRailWidth, connectRailLimits, listStep, parseConnectionString, rowTitle, validateSqlAdvancedNumber, type ConnectIncomingRequest } from './connect-form'
+import { advancedCount, advancedSummary, busyRequestNotice, clampConnectRailWidth, connectRailLimits, listStep, parseConnectionString, rowTitle, validateSqlAdvancedNumber, type ConnectIncomingRequest } from './connect-form'
 export type { ConnectIncomingRequest }
 import { EnvironmentField } from './EnvironmentDialog'
 import EnvironmentTag from './EnvironmentTag'
@@ -284,6 +284,7 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
   const [tested, setTested] = useState<{ text: string; warning?: string }>()
   const failureBox = useRef<HTMLDivElement>(null)
   const [notice, setNotice] = useState('')
+  const [busyNotice, setBusyNotice] = useState('')
   const [lastRemoved, setLastRemoved] = useState<{ kind: 'sql'; profile: ConnectionProfile; hadPassword: boolean } | { kind: 'bigquery'; profile: BigQueryConnectionProfile }>()
   const [databases, setDatabases] = useState<DatabaseInfo[]>([])
   const [dbBusy, setDbBusy] = useState(false)
@@ -498,17 +499,22 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
       setRemember(!!rememberedProfile(library.profiles, savedIds, nextSql))
     }
     setProperties('properties')
-    setError(''); setNotice(''); setTested(undefined); setFailure(undefined); setLastRemoved(undefined)
+    setError(''); setNotice(''); setBusyNotice(''); setTested(undefined); setFailure(undefined); setLastRemoved(undefined)
     setTimeout(() => { dialog.current?.querySelector<HTMLInputElement>(nextOptions.provider === 'bigquery' ? '#connect-bq-project' : '#connect-server')?.focus() }, 0)
   }
 
   // Handle Reconnect / F5 / Activity Monitor requests while the Connect OS window is already open:
-  // ignore while locked or reviewing so an in-flight connect keeps its own pending state, and ask before dropping unsaved edits.
+  // report a short notice when busy or awaiting confirmation so an ignored request never vanishes silently,
+  // and ask before dropping unsaved edits only for the server type whose fields will be overwritten.
   useEffect(() => {
     if (!incomingRequest || incomingRequest.seq === prevRequestSeq.current) return
     prevRequestSeq.current = incomingRequest.seq
-    if (locked || reviewOpen || !!sourcePrompt || !!confirmClose || !!connectRequest.current || !!testRequest.current) return
-    if (incomingRequest.options) proceedAfter(incomingRequest, serverType.type, serverType.type === 'bigquery' ? 'sqlserver' : 'bigquery')
+    if (locked || reviewOpen || !!sourcePrompt || !!confirmClose || !!connectRequest.current || !!testRequest.current) {
+      setBusyNotice(busyRequestNotice(incomingRequest.kind))
+      return
+    }
+    setBusyNotice('')
+    if (incomingRequest.options) proceedAfter(incomingRequest, incomingRequest.options.provider === 'bigquery' ? 'bigquery' : 'sqlserver')
     else onAcceptRequest?.(incomingRequest)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [incomingRequest])
@@ -604,7 +610,7 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
     const base = library.profiles.find(profile => profile.id === editBase.current)
     return base && entryKey(base.options) === entryKey(from) ? base : undefined
   }
-  function update(patch: Partial<ConnectionOptions>) { markEdited(); setOptions(current => ({ ...current, ...patch })); setError(''); setNotice(''); setLastRemoved(undefined); setTested(undefined) }
+  function update(patch: Partial<ConnectionOptions>) { markEdited(); setOptions(current => ({ ...current, ...patch })); setError(''); setNotice(''); setBusyNotice(''); setLastRemoved(undefined); setTested(undefined) }
   function editDetails(patch: Partial<Pick<ConnectionOptions, 'displayName' | 'color' | 'environment'>>) { labelServer.current = null; for (const field of Object.keys(patch) as ConnectionDetailField[]) detailFields.current.add(field); update(patch) }
   function choose(profile: ConnectionProfile) {
     const chosen = { ...profile.options, password: '' }
@@ -614,7 +620,7 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
     rememberEdited.current = false; setShowPassword(false); setSqlAdvancedDraft({}); sqlAdvancedEdited.current.clear(); startAfresh(); settle(chosen, profile.autoReconnect ?? 'inherit')
     setRemember(!!rememberedProfile(library.profiles, savedIds, chosen, profile.id))
     labelServer.current = profile.options.displayName || profile.options.color || profile.options.environment ? profile.options.server : null
-    setError(''); setNotice(''); setLastRemoved(undefined); setTested(undefined)
+    setError(''); setNotice(''); setBusyNotice(''); setLastRemoved(undefined); setTested(undefined)
   }
   async function browse(next: 'local' | 'network') {
     const request = ++browseRequest.current
@@ -686,7 +692,7 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
   async function saveProfile(favorite?: boolean, registered?: boolean, profile?: ConnectionProfile, how?: { labelled: ConnectionOptions; rememberPassword: boolean; forgetPassword?: boolean }): Promise<ConnectionSaveView | undefined> {
     const labelled = profile ? profile.options : how?.labelled ?? labelledOptions()
     if (!labelled) return undefined
-    setSaving(true); setError(''); setNotice(''); setLastRemoved(undefined); setTested(undefined)
+    setSaving(true); setError(''); setNotice(''); setBusyNotice(''); setLastRemoved(undefined); setTested(undefined)
     try {
       const { value, savedId } = await persist({ id: profile?.id ?? editedEntry(labelled)?.id, options: labelled, favorite, registered, autoReconnect: profile ? profile.autoReconnect ?? 'inherit' : autoReconnect, ...how ? { saved: true, ...how.rememberPassword ? { rememberPassword: true } : how.forgetPassword ? { forgetPassword: true } : {} } : {} }, labelled, profile?.id)
       if (!alive.current) return value
@@ -704,7 +710,7 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
   async function check(labelled: ConnectionOptions, kind: 'test' | 'save'): Promise<DatabaseInfo[] | undefined> {
     const requestId = crypto.randomUUID()
     testRequest.current = requestId
-    setTesting({ kind, server: labelled.server }); setError(''); setFailure(undefined); setTested(undefined); setLastRemoved(undefined)
+    setTesting({ kind, server: labelled.server }); setError(''); setFailure(undefined); setTested(undefined); setBusyNotice(''); setLastRemoved(undefined)
     setNotice(current => current === cancelledNotice || current === testCancelledNotice || current === saveCancelledNotice ? '' : current)
     try {
       // One sign-in at a time: a Load databases still running finishes first, so a password it found rejected is
@@ -859,20 +865,23 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
     if (next === 'close') onClose()
     else applyIncomingRequest(next)
   }
-  /** After the prompt for one type is answered: the other type's form, if it has unsaved edits, then finish `next`. */
-  function finishAfter(next: 'close' | ConnectIncomingRequest, answered: ProviderId) { proceedAfter(next, answered === 'bigquery' ? 'sqlserver' : 'bigquery') }
+  /** After the prompt for one type is answered: closing still checks the other type's form; an incoming request only overwrites the answered type. */
+  function finishAfter(next: 'close' | ConnectIncomingRequest, answered: ProviderId) {
+    if (next === 'close') proceedAfter('close', answered === 'bigquery' ? 'sqlserver' : 'bigquery')
+    else applyIncomingRequest(next)
+  }
   /** Server type: the other type's fields stay as they were, and Undo goes back. */
   function changeServerType(next: ProviderId) {
     if (next === serverType.type) return
     touched.current = true
     setServerType(current => switchServerType(current, next))
     if (next === 'bigquery' && properties === 'string') setProperties('properties')
-    setError(''); setFailure(undefined); setTested(undefined); setNotice(current => current === cancelledNotice || current === testCancelledNotice ? '' : current)
+    setError(''); setFailure(undefined); setTested(undefined); setBusyNotice(''); setNotice(current => current === cancelledNotice || current === testCancelledNotice ? '' : current)
   }
   function undoServerTypeChange() {
     const back = undoServerType(serverType)
     setServerType(back)
-    setError(''); setFailure(undefined); setTested(undefined)
+    setError(''); setFailure(undefined); setTested(undefined); setBusyNotice('')
     setTimeout(() => dialog.current?.querySelector<HTMLButtonElement>(`[data-server-type="${back.type}"]`)?.focus(), 0)
   }
   function markBigQueryEdited() {
@@ -882,15 +891,15 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
   }
   function bigQueryUpdate(patch: Partial<BigQueryConnectionOptions>) {
     markBigQueryEdited()
-    setBigQuery(current => ({ ...current, ...patch })); setError(''); setNotice(''); setLastRemoved(undefined); setTested(undefined)
+    setBigQuery(current => ({ ...current, ...patch })); setError(''); setNotice(''); setBusyNotice(''); setLastRemoved(undefined); setTested(undefined)
   }
   function bigQueryDraftChange(next: BigQueryAdvancedDraft) {
     markBigQueryEdited()
-    setBigQueryAdvancedDraft(next); setError(''); setNotice(''); setLastRemoved(undefined); setTested(undefined)
+    setBigQueryAdvancedDraft(next); setError(''); setNotice(''); setBusyNotice(''); setLastRemoved(undefined); setTested(undefined)
   }
   function bigQueryAuthentication(mode: BigQueryAuthenticationMode) {
     markBigQueryEdited()
-    setBigQuery(current => withAuthentication(current, mode)); setError(''); setNotice(''); setLastRemoved(undefined); setTested(undefined)
+    setBigQuery(current => withAuthentication(current, mode)); setError(''); setNotice(''); setBusyNotice(''); setLastRemoved(undefined); setTested(undefined)
   }
   function bigQuerySettled() { bigQueryEdited.current = false; bigQueryBaseline.current = undefined }
   function chooseBigQuery(profile: BigQueryConnectionProfile) {
@@ -900,7 +909,7 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
     setBigQuery(chosen); setBigQuerySelectedId(profile.id); setSelectedId(undefined)
     setBigQueryAdvancedDraft(bigQueryAdvancedDraftFrom(chosen))
     setBigQueryReconnect(profile.autoReconnect ?? 'inherit'); bigQuerySettled()
-    setError(''); setNotice(''); setLastRemoved(undefined); setTested(undefined); setFailure(undefined)
+    setError(''); setNotice(''); setBusyNotice(''); setLastRemoved(undefined); setTested(undefined); setFailure(undefined)
   }
   /** Browse…: main's open dialog. A federation configuration that reads a token file not confirmed yet asks first (decision 49). */
   async function pickKeyFile() {
@@ -954,7 +963,7 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
     if (!profile && bigQueryAdvancedError) return false
     const labelled = profile ? profile.options : bigQueryLabelled()
     if (!labelled) return false
-    setSaving(true); setError(''); setNotice(''); setLastRemoved(undefined); setTested(undefined)
+    setSaving(true); setError(''); setNotice(''); setBusyNotice(''); setLastRemoved(undefined); setTested(undefined)
     try {
       const previous = profile ?? bigQuerySelected
       const value = unwrap(await window.varia.saveConnectionProfile({ ...previous ? { id: previous.id } : {}, options: labelled, ...favorite !== undefined ? { favorite } : {}, autoReconnect: profile ? profile.autoReconnect ?? 'inherit' : bigQueryReconnect, ...how ? { saved: true } : {} }))
@@ -988,7 +997,7 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
     if (!labelled) return
     const requestId = crypto.randomUUID()
     testRequest.current = requestId
-    setTesting({ kind: 'test', server: labelled.project }); setError(''); setFailure(undefined); setTested(undefined); setLastRemoved(undefined)
+    setTesting({ kind: 'test', server: labelled.project }); setError(''); setFailure(undefined); setTested(undefined); setBusyNotice(''); setLastRemoved(undefined)
     setNotice(current => current === cancelledNotice || current === testCancelledNotice ? '' : current)
     try {
       const result = await window.varia.discoverDatabases(labelled, { requestId })
@@ -1012,7 +1021,7 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
     if (connectRequest.current || saving || !loaded || !bigQueryReady(bigQuery) || bigQueryAdvancedError) return
     const labelled = bigQueryLabelled()
     if (!labelled) return
-    setPendingConnectLabel(connectLabel); setError(''); setTested(undefined); setLastRemoved(undefined); setNotice(current => current === cancelledNotice ? '' : current)
+    setPendingConnectLabel(connectLabel); setError(''); setTested(undefined); setBusyNotice(''); setLastRemoved(undefined); setNotice(current => current === cancelledNotice ? '' : current)
     const requestId = crypto.randomUUID()
     const controller = new AbortController(), foreground = startupReconnect.beginManual()
     connectAbort.current = controller
@@ -1117,7 +1126,7 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
     const labelled = labelledOptions(chosen)
     if (!labelled) return
     // Only Stop's notice is about the last attempt; the library's warnings and a forgotten password's notice stay.
-    setPendingConnectLabel(connectLabel); setError(''); setTested(undefined); setLastRemoved(undefined); setNotice(current => current === cancelledNotice ? '' : current)
+    setPendingConnectLabel(connectLabel); setError(''); setTested(undefined); setBusyNotice(''); setLastRemoved(undefined); setNotice(current => current === cancelledNotice ? '' : current)
     const requestId = crypto.randomUUID()
     const controller = new AbortController(), foreground = startupReconnect.beginManual()
     connectAbort.current = controller
@@ -1248,7 +1257,7 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
 
   /** Reset: the type shown goes back to a new connection's fields; the other type's stay. */
   function reset() {
-    setError(''); setTested(undefined); setFailure(undefined); setLastRemoved(undefined)
+    setError(''); setTested(undefined); setFailure(undefined); setBusyNotice(''); setLastRemoved(undefined)
     // Reset clears the shown type's form only, its Reconnect on startup included.
     if (isBigQuery) {
       const defaults = bigQueryDefaults()
@@ -1557,11 +1566,12 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
         </div>
       </div>
       <div className="connect-actions">
-        {(busy || testing || tested || notice || error || (activeAdvancedError && properties !== 'advanced')) && <div className="connect-outcome">
+        {(busy || testing || tested || notice || (busyNotice && !confirmClose && !sourcePrompt) || error || (activeAdvancedError && properties !== 'advanced')) && <div className="connect-outcome">
           {busy && <p className="field-note" role="status">{!isBigQuery && options.authentication === 'entraMfa' ? mfaWaiting : connectingLabel}</p>}
           {testing && <p className="field-note" role="status">{testing.kind === 'save' ? `Checking the password with ${testing.server}…` : `Testing the connection to ${testing.server}…`}{!isBigQuery && options.authentication === 'entraMfa' ? ' Complete the sign-in in your web browser.' : ''}</p>}
           {tested && <div className="connect-tested" role="status"><p className="field-note" data-tone="success"><Icon name="pass" />{tested.text}</p>{tested.warning && <p className="field-note" data-tone="warning"><Icon name="warning" />{tested.warning}</p>}</div>}
           {notice && <p className="field-note" role="status">{notice}{lastRemoved && <> <button type="button" className="ui-button connect-inline-action" data-control-size="dense" disabled={locked} onClick={() => void undoRemove()}>Undo</button></>}</p>}
+          {busyNotice && !confirmClose && !sourcePrompt && <p className="field-note" role="status">{busyNotice}</p>}
           {!error && activeAdvancedError && properties !== 'advanced' && <p className="field-note" role="alert" data-tone="warning">{activeAdvancedError}</p>}
           {error && <div ref={failureBox} className="connect-failure">
             <InlineError message={error} code={shownFailure?.code} details={shownFailure?.details} context={shownFailure ? `${shownFailure.checking === 'save' ? 'Checking the password with' : shownFailure.checking ? 'Testing the connection to' : 'Connecting to'} ${shownFailure.server}` : undefined} actions={fixActions}
@@ -1588,11 +1598,13 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
       <p>{confirmClose.target || confirmClose.bigQueryTarget
         ? `You changed this saved connection. Save the changes to History and its Object Explorer connections before ${confirmClose.next === 'close' ? 'closing' : 'switching connections'}?`
         : `This connection is not saved. Save it to History before ${confirmClose.next === 'close' ? 'closing' : 'switching connections'}?`}</p>
+      {busyNotice && <p className="field-note" role="status">{busyNotice}</p>}
     </SubDialog>}
     {sourcePrompt && <SubDialog title="Use this token file?" okLabel="Use It" onOk={() => void confirmSource(sourcePrompt)} onCancel={() => setSourcePrompt(undefined)}>
       <p>{sourcePrompt.name} signs in with a token that Varia reads from this file each time it connects:</p>
       <p className="bq-source-path">{sourcePrompt.source}</p>
       <p>Use it only if you know what writes this file. Varia asks again if the configuration names another file.</p>
+      {busyNotice && <p className="field-note" role="status">{busyNotice}</p>}
     </SubDialog>}
   </DialogWindow>
 }
