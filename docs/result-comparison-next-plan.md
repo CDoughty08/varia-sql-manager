@@ -306,8 +306,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - Save writes it.
   - vitest:
     - the checklist (`compare-ignore.test.ts`), Automatic's label, memory by name across a swap;
-    - a `results-port.test.ts` case sending `ignore` and checking it reaches the backend request, and a `worker-core`
-      case for the rebuilt request, as C4 and C6 have;
+    - a `results-port.test.ts` case sending `ignore` and checking it reaches the backend request, one where the backend
+      answers a diff whose descriptor column carries `ignored: true` and the descriptor reaches the renderer unchanged
+      (the strict column schema is the only gate, so a missed widening would refuse every answer with an ignored pair),
+      and a `worker-core` case for the rebuilt request, as C4 and C6 have;
     - the toggle's `when`, notice text and Dismiss; the focus after Stop ignoring moving as a Dismiss's when its notice
       goes, staying on the button when the replace fails, and staying where the user moved it before the replace landed;
       a key match applied from the Match menu a possible-match or nothing-paired notice's Choose key columns… opened
@@ -1554,34 +1556,34 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     U+FFFD, a subnormal float), reading only those cells. Its sentence is the backend's, as a refusal's is, since only
     the backend knows the reasons: it names at most three columns, then "and 2 more", each cut at 60 characters with its
     reason (the type, as "note: xml"; "id: int and varchar in the two results"; or by value, "code: values not all ASCII
-    under its SQL_ collation", "memo: values not kept in full", "note: values that cannot be written exactly", "ratio:
-    values too small to write exactly"), within 1,000 characters. `uncheckedDeletes` is counted and worded the same way,
-    over the chosen DELETEs whose ticked, compared columns (at least one) Q11 all leaves out, so their WHERE checks only
-    the keys. `selectedKeys` holds the key text of Selected rows' entries that differ (each as the row checks write it,
-    `id = 1002`, cut at 60 characters) while there are at most three. The look-alike counts are the chosen rows to
-    delete and to insert that have a look-alike (`DiffIndex.Poss`) among the chosen rows, and `lookAlikeDeletesAlone`
-    and `lookAlikeInsertsAlone` those whose look-alike the chosen rows leave out, told apart by the chosen option's
-    reserved bit, which the marking pass sets for every chosen row before the counting pass reads a partner's, and
-    `softValues` the chosen rows' soft values in ticked columns, counted in the same pass as the counts and
-    `differences`, so the look-alike and Exact text lines describe the chosen rows, not the whole diff. Past a cut tone
-    the change index keeps only changed pairs, so a cut entry's later soft values are not counted, and `softValuesCut`
-    says so, turning the Exact text line's and the header's count into "at least 12 values". A refusal is an answer, not
-    an error, with empty `text`: `refusal: { kind, sentence }`, `kind` one of `asShown`, `keyType`, `keyName`,
-    `notColumns`, `repeatedKey`, `truncated`, `keyTruncated`, `unwritable`, `keyUnwritable`, `keyCollation`,
-    `noDifferences`, `noTickedChange` and `tooLarge`, and the sentence at most 1,000 characters, both bounded in the
-    answer schema. Every refusal's sentence, closed-input forms included, is the backend's (naming at most three
-    columns, then "and 2 more", each cut at 60 characters, so it stays within its 1,000), which holds the counts, names
-    and sample values and knows when an input's result was released; the dialog chooses only the refusal's buttons and
-    their availability, by `kind` and the comparison's own facts (`notColumns` covers Row position, Whole rows,
-    Automatic's fallback and Automatic with a key, so whether to offer **Use order_no as key columns** comes from the
-    comparison's match, the key's type and whether nothing paired (`nothingPaired`), which the renderer holds,
-    `CompareService`), and never parses the sentence. Past 1,000,000 characters, estimated first, it refuses with
-    `tooLarge`, well inside the 16 MiB response limit. In a preview the counts are the chosen rows' entries by kind;
-    after Script they are the script's own statements, which can be lower (Counts above). The backend itself refuses a
-    comparison whose match is not a `columns` match, so Automatic's choice can never be scripted by accident (Use
-    order_no as key columns replaces the comparison with that `columns` match first), and a comparison of rows as shown.
-    Both read the diff set's records (C3's match and C6's as-shown flags), and the WHERE clauses take the recorded key
-    pairs, so the params carry no key columns.
+    under its SQL_ collation", "code: values not all ASCII, collation unknown" for a column with no recorded collation,
+    "memo: values not kept in full", "note: values that cannot be written exactly", "ratio: values too small to write
+    exactly"), within 1,000 characters. `uncheckedDeletes` is counted and worded the same way, over the chosen DELETEs
+    whose ticked, compared columns (at least one) Q11 all leaves out, so their WHERE checks only the keys.
+    `selectedKeys` holds the key text of Selected rows' entries that differ (each as the row checks write it, `id =
+    1002`, cut at 60 characters) while there are at most three. The look-alike counts are the chosen rows to delete and
+    to insert that have a look-alike (`DiffIndex.Poss`) among the chosen rows, and `lookAlikeDeletesAlone` and
+    `lookAlikeInsertsAlone` those whose look-alike the chosen rows leave out, told apart by the chosen option's reserved
+    bit, which the marking pass sets for every chosen row before the counting pass reads a partner's, and `softValues`
+    the chosen rows' soft values in ticked columns, counted in the same pass as the counts and `differences`, so the
+    look-alike and Exact text lines describe the chosen rows, not the whole diff. Past a cut tone the change index keeps
+    only changed pairs, so a cut entry's later soft values are not counted, and `softValuesCut` says so, turning the
+    Exact text line's and the header's count into "at least 12 values". A refusal is an answer, not an error, with empty
+    `text`: `refusal: { kind, sentence }`, `kind` one of `asShown`, `keyType`, `keyName`, `notColumns`, `repeatedKey`,
+    `truncated`, `keyTruncated`, `unwritable`, `keyUnwritable`, `keyCollation`, `noDifferences`, `noTickedChange` and
+    `tooLarge`, and the sentence at most 1,000 characters, both bounded in the answer schema. Every refusal's sentence,
+    closed-input forms included, is the backend's (naming at most three columns, then "and 2 more", each cut at 60
+    characters, so it stays within its 1,000), which holds the counts, names and sample values and knows when an input's
+    result was released; the dialog chooses only the refusal's buttons and their availability, by `kind` and the
+    comparison's own facts (`notColumns` covers Row position, Whole rows, Automatic's fallback and Automatic with a key,
+    so whether to offer **Use order_no as key columns** comes from the comparison's match, the key's type and whether
+    nothing paired (`nothingPaired`), which the renderer holds, `CompareService`), and never parses the sentence. Past
+    1,000,000 characters, estimated first, it refuses with `tooLarge`, well inside the 16 MiB response limit. In a
+    preview the counts are the chosen rows' entries by kind; after Script they are the script's own statements, which
+    can be lower (Counts above). The backend itself refuses a comparison whose match is not a `columns` match, so
+    Automatic's choice can never be scripted by accident (Use order_no as key columns replaces the comparison with that
+    `columns` match first), and a comparison of rows as shown. Both read the diff set's records (C3's match and C6's
+    as-shown flags), and the WHERE clauses take the recorded key pairs, so the params carry no key columns.
 - **Backend `Results/DiffScript.cs`:** literals by the column's `dataType`, precision and scale:
 
   | Type | Literal |
@@ -1715,6 +1717,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - a view closed mid-run answering `VIEW_NOT_FOUND`;
     - a one-sided column the target holds named once in the header, as only in its result, and not again among the
       columns INSERTs leave out;
+    - the unchecked-UPDATEs reason "values not all ASCII, collation unknown" for a char SET column with no recorded
+      collation;
     - an unticked identity column named "id (unticked)" in the header's left-out line of a script without INSERTs,
       and an ignored identity column taking the identity form;
     - an unticked identity column named in the header's left-out line of a script with INSERTs ("id (unticked: new
