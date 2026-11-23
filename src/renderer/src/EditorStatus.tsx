@@ -10,10 +10,11 @@ import { withKey } from './query-context'
  * ending, the file's encoding (what a new query will be saved in), and Read-only. Shown while a document is open.
  */
 export default function EditorStatus() {
-  const { editorStatus, inputMode, documents, settings, commands, sqlLanguage, sqlDiagnostics, bigQueryCost } = useWorkbench()
+  const { editorStatus, inputMode, documents, settings, commands, sqlLanguage, sqlDiagnostics, bigQueryCost, indexCompletion } = useWorkbench()
   useServiceSnapshot(sqlLanguage)
   useServiceSnapshot(sqlDiagnostics)
   useServiceSnapshot(bigQueryCost)
+  useServiceSnapshot(indexCompletion)
   const canGoToLine = useCommandEnabled('edit.goToLine'), canToggleMode = useCommandEnabled('editor.toggleOvertype')
   const goToLineKey = useKeybindingLabel('edit.goToLine')
   const caret = useServiceSnapshot(editorStatus)
@@ -24,7 +25,8 @@ export default function EditorStatus() {
   if (!active || !caret) return <span className="editor-status" />
   const file = active.file
   const encoding = documentEncodingLabel(file, values['environment.documents.saveWithSpecificEncoding'] ? values['environment.documents.saveEncoding'] : undefined)
-  const language = isQueryDocument(active) ? sqlLanguage.availability(active.id) : undefined
+  // A BigQuery tab's IntelliSense is Varia's own, from the index; SQL Server's is SQL Tools Service's.
+  const language = isQueryDocument(active) ? indexCompletion.availability(active.id) ?? sqlLanguage.availability(active.id) : undefined
   // A BigQuery tab's issues come from its dry runs; SQL Server's from SQL analysis.
   const issues = isQueryDocument(active) ? bigQueryCost.status(active.id) ?? sqlDiagnostics.status(active.id) : undefined
   return <span className="editor-status">

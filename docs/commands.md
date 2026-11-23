@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (416)
+## Commands (417)
 
 ### File
 
@@ -269,7 +269,7 @@ keys it uses are listed below.
 | Move Down | `explorer.moveServerDown` | Alt+Down (`explorerFocus && !textInputFocus`) | Alt+Down (`explorerFocus && !textInputFocus`) | ⌥↓ (`explorerFocus && !textInputFocus`) | Always | Object Explorer context menu › Move Down |
 | Collapse All | `explorer.collapseAll` | — | — | — | `hasConnection` | — |
 | Group by Schema | `explorer.groupBySchema` | — | — | — | Always; checked when `explorerGroupBySchema` | — |
-| New Query | `explorer.newQuery` | — | — | — | `!documentBusy` | Object Explorer context menu › New Query |
+| New Query | `explorer.newQuery` | — | — | — | `!documentBusy` | Object Explorer context menu › New Query; Search Objects result context menu › New Query |
 | Select Top 1000 Rows | `explorer.selectTopRows` | — | — | — | `backendReady && explorerActionSelectTop == 'enabled' && !documentBusy` | Object Explorer context menu › Select Top 1000 Rows; Search Objects result context menu › Select Top 1000 Rows |
 | Rename | `explorer.rename` | F2 (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`) | F2 (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`) | F2 (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`) | `backendReady && explorerActionRename == 'enabled'` | Object Explorer context menu › Rename |
 | Delete | `explorer.delete` | Delete (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`) | Delete (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`) | ⌘⌫ (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`), ⌦ (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`) | `backendReady && explorerActionDelete == 'enabled'` | Object Explorer context menu › Delete |
@@ -477,6 +477,7 @@ keys it uses are listed below.
 | Save Schedule | `agentSchedules.save` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentSchedules` | — |
 | Refresh Schedules | `agentSchedules.refresh` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentSchedules` | — |
 | Delete Schedule | `agentSchedules.delete` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentSchedules` | — |
+| Create Job Like This… | `agent.createJobLike` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › Create Job Like This… |
 
 ### Preferences
 
@@ -773,6 +774,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `0_new` | Add **R**ecommended Alerts… | `agent.addRecommendedAlerts` | `explorerNode == 'folder' && explorerFolder == 'agentAlerts' && agentRole == 'sysadmin' && !explorerServerLost` |
 | `0_new` | **A**ttach… | `explorer.attachDatabase` | `explorerActionAttach != '' && explorerNode == 'folder'` |
 | `0_new` | Crea**t**e Catalog… | `explorer.createCatalog` | `explorerNode == 'folder' && explorerFolder == 'integrationServicesCatalogs' && !explorerServerLost` |
+| `0_new` | **C**reate Job Like This… | `agent.createJobLike` | `explorerNode == 'agentJob' && !explorerServerLost` |
 | `0_new` | **O**perators and Notifications… | `agent.operators` | `explorerNode == 'folder' && (explorerFolder == 'agentOperators' \|\| explorerFolder == 'agentAlerts') && !explorerServerLost` |
 | `0_new` | **R**estore Database… | `explorer.restoreDatabase` | `explorerActionRestore != '' && explorerNode == 'folder'` |
 | `0_new` | R**e**store Files and Filegroups… | `explorer.restoreFiles` | `explorerActionRestoreFiles != '' && explorerNode == 'folder'` |
@@ -1106,6 +1108,7 @@ Right-click a Search Objects result (in the Search Objects tab or Object Explore
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
 | `0_reveal` | **R**eveal in Object Explorer | `search.revealHit` | Always |
+| `1_query` | New **Q**uery | `explorer.newQuery` | `searchHitBigQuery` |
 | `1_query` | **P**review Rows | `explorer.previewRows` | `explorerSelectionKind == 'bqTable'` |
 | `1_query` | Select Top 1000 Ro**w**s | `explorer.selectTopRows` | `explorerActionSelectTop != ''` |
 | `1_query` | Modif**y** | `explorer.modify` | `explorerSelectionModifiable` |

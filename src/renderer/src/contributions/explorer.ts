@@ -25,6 +25,11 @@ export function explorerContribution({ commands, documents, connections, explore
   const nodeOf = (args?: CommandArgs): ExplorerMenuNode | undefined => args?.target ? explorerNodeOf(args) : explorer.menuNode(explorer.getSnapshot().selected)
   const live = (node: ExplorerMenuNode | undefined): node is ExplorerMenuNode => !!node && !node.lost && connections.isLive(node.connectionId)
   const queryNode = (args?: CommandArgs) => { const node = nodeOf(args); return live(node) && (node.kind === 'server' || node.kind === 'database') ? node : undefined }
+  // A BigQuery Search Objects result: New Query opens on its connection.
+  const bigQueryHit = (args?: CommandArgs) => {
+    const node = args?.target?.kind === 'searchHit' ? objectNodeOf(args) : undefined
+    return node && !node.lost && connections.isLive(node.connectionId) && node.ref.type === 'object' && node.ref.object.project !== undefined ? node : undefined
+  }
   // From the node's identity, so it works while the node is being reloaded; only a Columns folder needs its loaded rows.
   const copyText = (args?: CommandArgs) => {
     const node = nodeOf(args)
@@ -58,11 +63,16 @@ export function explorerContribution({ commands, documents, connections, explore
     // The setting is the state: ExplorerService follows it, and its context key checks the button and the palette entry.
     commands.register('explorer.groupBySchema', { when: () => !!settings, run: () => settings?.toggle('objectExplorer.groupBySchema') }),
     commands.register('explorer.newQuery', {
-      when: args => !!queryNode(args),
+      when: args => args?.target?.kind === 'searchHit' ? !!bigQueryHit(args) : !!queryNode(args),
       run: args => {
-        const node = queryNode(args), connection = node && connections.get(node.connectionId)
-        if (!node || !connection) return
-        const database = node.ref.type === 'object' && node.ref.object.kind === 'database' ? node.ref.object.name : undefined
+        const hit = bigQueryHit(args)
+        const node = hit ?? (args?.target?.kind === 'searchHit' ? undefined : queryNode(args)), connection = node && connections.get(node.connectionId)
+        if (!node || !connection || node.ref.type !== 'object') return
+        const object = node.ref.object
+        // A BigQuery object's dataset is the new query's when it is in the billing project, as Preview Rows' is.
+        const dataset = object.kind === 'bqDataset' ? object.name : object.dataset
+        const database = hit ? (object.project === connection.server && dataset !== undefined ? dataset : connection.database)
+          : object.kind === 'database' ? object.name : undefined
         documents.newQuery('', undefined, connection.id, database ?? connection.database)
         // The menu returned focus to the tree; the new query's editor may mount only on a later frame.
         frame(() => documents.boundEditor?.focus())

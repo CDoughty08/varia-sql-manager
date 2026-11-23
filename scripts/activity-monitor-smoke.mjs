@@ -654,7 +654,8 @@ try {
   // Refresh Now brings a sample with rates (the first has none, so every rate ties), still by CPU.
   await rankBy.getByRole('button', { name: 'CPU', exact: true }).focus()
   await page.keyboard.press('F5')
-  await expect(recent.getByRole('gridcell', { name: '310.0', exact: true })).toBeVisible()
+  // A rate and a total can both read 310.0 in one sample (the interval decides), so any such cell shows the rates arrived.
+  await expect(recent.getByRole('gridcell', { name: '310.0', exact: true }).first()).toBeVisible()
   await expect(queryAt(0)).toHaveText(/^SELECT c\.CustomerId/)
   const rankUpdates = (await calls('live.update')).length
   // A rank chip is the table's sort, sent to the probe, which re-sorts its last sample at once: most executions first, well

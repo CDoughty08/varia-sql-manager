@@ -189,6 +189,26 @@ describe('hot exit for SQL Server Agent documents', () => {
     f.jobDocuments.reloadKeep(document.id)
     expect(f.jobDocuments.get(document.id)).toMatchObject({ draft: { description: 'Mine' }, model: { job: { version: 8 } } })
   })
+  it('keeps a Create Job Like This copy as a New Job with its changes, without the link to its source', async () => {
+    const first = bench()
+    first.accept(uuid(50))
+    const id = first.jobDocuments.createLike(uuid(50), 'Nightly load')
+    await settled()
+    expect(first.jobDocuments.get(id)).toMatchObject({ phase: 'ready', draft: { name: 'Copy of Nightly load' }, source: { base: { name: 'Nightly load' } } })
+    first.jobDocuments.updateDraft(id, { description: 'Copied' })
+    const state = first.documents.keepCustom(id)!
+    expect(decodeKeptState(state, 'agentJob')).toMatchObject({ target: { kind: 'agent' }, draft: { name: 'Copy of Nightly load', description: 'Copied' } })
+    const f = bench()
+    const document = f.documents.reopenKept('agentJob', { name: first.documents.get(id)!.name, state, targetId, database: 'msdb' })
+    f.accept(uuid(60))
+    f.targets.attachTarget(targetId, uuid(60))
+    await settled()
+    const job = f.jobDocuments.get(document.id)!
+    expect(job).toMatchObject({ phase: 'ready', draft: { name: 'Copy of Nightly load', description: 'Copied' } })
+    expect(job.source).toBeUndefined()
+    expect(job.restored).toBeUndefined()
+    expect(f.documents.get(document.id)).toMatchObject({ name: 'New Job', dirty: true })
+  })
   it('takes a live connection at once when the target is already connected, and refuses a state that is not a job', async () => {
     const { state, name } = await keptJob()
     const f = bench()

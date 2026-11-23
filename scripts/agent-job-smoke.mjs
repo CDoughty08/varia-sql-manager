@@ -249,7 +249,8 @@ try {
   await quickInputRows(page).filter({ hasText: 'Backup' }).click()
   const draft = documentFrame(page, 'Copy of Backup')
   await expect(draft.getByLabel('Description', { exact: true })).toHaveValue('Backup maintenance.')
-  await draft.getByLabel('Name', { exact: true }).fill('Backup weekly')
+  // Copy an existing job opens Create Job Like This (AG-6e): Changes from source holds a Name of its own beside General's.
+  await draft.getByRole('group', { name: 'Job', exact: true }).getByLabel('Name', { exact: true }).fill('Backup weekly')
   await documentVerb(documentFrame(page, 'Backup weekly'), 'Backup weekly', 'Create').click()
   await expect(documentTab(page, 'Job Properties - Backup weekly')).toHaveAttribute('aria-selected', 'true')
   await expect(documentFrame(page, 'Backup weekly').getByRole('status').filter({ hasText: 'The job was created.' })).toBeVisible()
@@ -296,6 +297,38 @@ try {
   expect((await calls('actions.execute')).filter(call => call.action === 'notifyOperator').at(-1)).toMatchObject({ target: { kind: 'agentOperator', name: 'DBA Team' }, agentObjectId: 1 })
   await page.screenshot({ path: 'artifacts/agent-operators-dark.png' })
   console.log('Operators grid passed: a changed cell saves as its alert\'s change, and Send test e-mail names the operator by id.')
+
+  step = 'create like'
+  // Create Job Like This… on Job Activity Monitor's bar (AG-6e): New Job filled from Backup with Changes from source first, saved disabled.
+  // Replace across the copy previews each match and replaces only the ticked ones; Compare with source lists the differences; Create
+  // sends New Job's own save with the copied steps.
+  // By now the tab strip overflows, so the monitor comes forward through its own command (one per connection).
+  await chooseExplorerMenuItem(page, ['server-a', 'SQL Server Agent'], 'Job Activity Monitor')
+  await expect(documentTab(page, 'Job Activity Monitor - server-a')).toHaveAttribute('aria-selected', 'true')
+  await jobCell('Backup').click()
+  await page.getByRole('toolbar', { name: 'Selected jobs', exact: true }).getByRole('button', { name: 'Create Job Like This…', exact: true }).click()
+  const like = documentFrame(page, 'Copy of Backup')
+  await expect(like.getByRole('navigation', { name: 'Sections', exact: true }).getByRole('button').first()).toContainText('Changes from source')
+  await expect(like.getByRole('group', { name: 'Job', exact: true }).getByRole('checkbox', { name: 'Enable when saved', exact: true })).not.toBeChecked()
+  await expect(like.getByRole('group', { name: /^Step 1 / })).toContainText('Database')
+  await like.getByLabel('Find', { exact: true }).fill('Backup')
+  await like.getByLabel('Replace with', { exact: true }).fill('Archive')
+  await like.getByRole('button', { name: 'Preview', exact: true }).click()
+  const matches = like.getByRole('list', { name: 'Matches', exact: true }).getByRole('checkbox')
+  await expect(matches).toHaveCount(1)
+  await like.getByRole('button', { name: 'Replace 1 match', exact: true }).click()
+  const archive = documentFrame(page, 'Copy of Archive')
+  await expect(archive.getByRole('status').filter({ hasText: 'Replaced 1 match.' })).toBeVisible()
+  await archive.getByRole('button', { name: 'Compare with source', exact: true }).click()
+  await expect(archive.getByRole('table', { name: 'Compare with source', exact: true })).toContainText('Copy of Archive')
+  await page.screenshot({ path: 'artifacts/agent-job-create-like-dark.png' })
+  await documentVerb(archive, 'Copy of Archive', 'Create').click()
+  await expect(documentTab(page, 'Job Properties - Copy of Archive')).toHaveAttribute('aria-selected', 'true')
+  const likeSave = (await saves()).at(-1)
+  expect(likeSave).toMatchObject({ target: { kind: 'agent' }, agentJob: { name: 'Copy of Archive', enabled: false, description: 'Backup maintenance.' } })
+  expect(likeSave.agentJob.steps.writes.map(write => write.name)).toEqual(['Check integrity', 'Rebuild indexes'])
+  expect(likeSave.agentIdentity).toBeUndefined()
+  console.log('Create like passed: Job Activity Monitor opens a copy with Changes from source, Replace previews and applies, and Create saves it disabled with its steps.')
 
   step = 'light'
   await page.evaluate(() => window.varia.setThemePreference({ mode: 'light' }))
