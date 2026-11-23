@@ -138,13 +138,62 @@ internal sealed record BigQueryDryRunResult(long BytesProcessed, string? Incompl
 /// <summary>query.execute's Preview Rows target (docs/bigquery.md, Preview Rows): the table whose first rows tabledata.list reads
 /// instead of running the query text, which is the SELECT the tab shows. BigQuery handles only.</summary>
 internal sealed record BigQueryPreviewTarget(string Project, string Dataset, string Table);
+/// <summary>The bounds zod sets on bigquery.properties (bigQueryPropertiesLimits in src/shared/bigquery/objects.ts).</summary>
+internal static class BigQueryPropertiesLimits
+{
+    public const int Name = 1024;
+    public const int Type = 64;
+    public const int FullName = 2200;
+    public const int Location = 64;
+    public const int Timestamp = 64;
+    public const int FactValue = 2000;
+    public const int Partitioning = 512;
+    public const int ClusteringFields = 16;
+    public const int ColumnName = 300;
+    public const int ColumnType = 64;
+    public const int ColumnMode = 32;
+    public const int ColumnDescription = 2000;
+    /// <summary>Seven field levels use all 16 MessagePack containers (0-based depth 15 in JsonBridge.FromJson) inside { result: { columns: [...] } }, leaving no headroom for a 7th-level fields array.</summary>
+    public const int ColumnDepth = 7;
+    public const int ColumnFields = 10_000;
+    /// <summary>Estimated UTF-8 byte budget for mapped schema fields so wide schemas with long descriptions truncate cleanly before the 16 MiB response limit.</summary>
+    public const int ColumnsTextBytes = 8 * 1024 * 1024;
+    public const int Labels = 64;
+    public const int LabelKey = 128;
+    public const int LabelValue = 256;
+    public const int DefinitionChars = 1_000_000;
+}
+
 /// <summary>bigquery.properties: a table-like object's facts from tables.get (docs/bigquery.md, Properties).</summary>
 internal sealed record BigQueryPropertiesArgs(string ConnectionId, string RequestId, string Kind, string Project, string Dataset, string Name);
 internal sealed record BigQueryFact(string Label, string Value);
 internal sealed record BigQueryFactGroup(string Title, List<BigQueryFact> Facts);
+internal sealed record BigQueryStorageInfo(long? Rows = null, long? LogicalBytes = null, long? LongTermLogicalBytes = null, long? PhysicalBytes = null);
+internal sealed record BigQueryLayoutInfo(string? Partitioning = null, bool? RequirePartitionFilter = null, List<string>? Clustering = null);
+internal sealed record BigQuerySchemaField(string Name, string Type, string? Mode = null, string? Description = null, List<BigQuerySchemaField>? Fields = null);
+internal sealed record BigQueryLabel(string Key, string Value);
 /// <summary>Type: tables.get's type in words ("table", "snapshot", "view"…). Groups: Table, Storage, Layout, History, in that
-/// order, each left out when it has no facts.</summary>
-internal sealed record BigQueryProperties(string Name, string Type, List<BigQueryFactGroup> Groups, long ElapsedMs);
+/// order, each left out when it has no facts. Structured fields carry the same free tables.get metadata for the inspector UI.</summary>
+internal sealed record BigQueryProperties(
+    string Name,
+    string Type,
+    List<BigQueryFactGroup> Groups,
+    long ElapsedMs,
+    string? FullName = null,
+    string? Location = null,
+    string? Description = null,
+    string? BaseTable = null,
+    string? CreatedUtc = null,
+    string? ModifiedUtc = null,
+    string? ExpiresUtc = null,
+    string? SnapshotTimeUtc = null,
+    BigQueryStorageInfo? Storage = null,
+    BigQueryLayoutInfo? Layout = null,
+    List<BigQuerySchemaField>? Columns = null,
+    bool? ColumnsTruncated = null,
+    List<BigQueryLabel>? Labels = null,
+    string? Definition = null,
+    bool? DefinitionTruncated = null);
 
 /// <summary>
 /// query.attach (docs/bigquery.md, Re-attaching to jobs): re-attaches the tab <c>SessionId</c> to a job a previous run (or
