@@ -202,6 +202,7 @@ BigQuery query tabs. Not in SSMS.
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `textEditor.googleSql.dryRunDiagnostics` | Check queries with a dry run while editing | Boolean | True |  | All | At once | After a pause in typing, a free BigQuery dry run marks the query's error at its line and column and updates the estimate beside Execute. A dry run sends the query text to Google, as Execute does; it runs nothing and bills nothing. Off, Execute still dry-runs the query for its estimate. Not in SSMS. |
+| `textEditor.googleSql.bulkIndex` | Read the search index’s details with billed INFORMATION_SCHEMA queries | Boolean | False |  | All | At once | A full build of a BigQuery connection's Search Objects index reads columns, view text and routine bodies with three region-scoped INFORMATION_SCHEMA queries per location instead of one free call per object, which is faster for large projects. BigQuery bills each query at least 10 MiB per view it reads, never from cache, so every build first shows the free estimate and asks as Execute does. Off, the index reads only free metadata calls. Not in SSMS. |
 
 ### Query Execution › SQL Server › General
 
@@ -398,4 +399,4 @@ Sections: **Object Explorer**, **Operations** (The Operations view of the SSIS C
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (135 today).
+A patch holds at most one entry per setting (136 today).

@@ -1,7 +1,8 @@
 import type { VariaApi } from '../../../shared/contracts'
 import { belowSchema, folderSpecs, kindSpecs, type FolderId } from '../../../shared/explorer/catalog.ts'
 import type { ExplorerNodeRef, ObjectRef } from '../../../shared/explorer/refs.ts'
-import { objectSearchLimits, type BigQueryIndexScope, type ObjectIndexProgress, type ObjectIndexStatus, type ObjectSearchHit, type ObjectSearchResult, type SearchScope, type SearchType, agentSearchKinds, providerSearchKinds, searchTypeKinds } from '../../../shared/explorer/search.ts'
+import type { BigQueryDryRunResult } from '../../../shared/bigquery/dry-run.ts'
+import { objectSearchLimits, type BigQueryBulkIndex, type BigQueryIndexScope, type ObjectIndexProgress, type ObjectIndexStatus, type ObjectSearchHit, type ObjectSearchResult, type SearchScope, type SearchType, agentSearchKinds, providerSearchKinds, searchTypeKinds } from '../../../shared/explorer/search.ts'
 import type { WorkbenchEvent } from '../core/types'
 import type { SettingKey, SettingValue } from '../../../shared/settings/catalog'
 import { onUnexpectedError } from '../core/errors'
@@ -23,8 +24,8 @@ export interface IndexEntry {
   readonly done: number
   readonly total: number
   readonly objects: number
-  /** A BigQuery build's pass: names, then details. */
-  readonly phase?: 'names' | 'details'
+  /** A BigQuery build's pass: names, then details; `estimate` while the billed bulk path's estimate and cost prompts come first. */
+  readonly phase?: 'estimate' | 'names' | 'details'
   readonly status?: ObjectIndexStatus
   readonly error?: string
 }
@@ -96,7 +97,7 @@ export interface RevealHost {
   readonly groupBySchema?: boolean
 }
 export interface ObjectSearchOptions extends CustomDocumentTargetOptions {
-  readonly api: Pick<VariaApi, 'explorerIndex' | 'explorerSearch' | 'explorerCancel' | 'onExplorerIndexProgress'>
+  readonly api: Pick<VariaApi, 'explorerIndex' | 'explorerSearch' | 'explorerCancel' | 'onExplorerIndexProgress'> & Partial<Pick<VariaApi, 'bigQueryIndexEstimate'>>
   readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'activate' | 'getSnapshot'> & Partial<Pick<DocumentService, 'update' | 'subscribe'>>
   readonly connections: Pick<ConnectionService, 'getSnapshot' | 'subscribe' | 'get'>
   readonly settings: { get<K extends SettingKey>(key: K): SettingValue<K> }
@@ -107,6 +108,8 @@ export interface ObjectSearchOptions extends CustomDocumentTargetOptions {
   readonly agentEnabled?: boolean
   /** The workbench's events: a BigQuery query whose DDL may have changed objects re-reads the datasets it marked (`stale`). */
   readonly events?: { subscribe(listener: (event: WorkbenchEvent) => void): Disposable }
+  /** BigQuery's cost prompts before a full build's billed bulk path runs (BigQueryCostService.beforeScript); without it the bulk path never runs. */
+  readonly billedGate?: (connectionId: string, estimate: BigQueryDryRunResult, signal: AbortSignal) => Promise<{ readonly run: boolean; readonly maximumBytesBilled?: number }>
 }
 /** A BigQuery refresh: one project or dataset re-read whole (Object Explorer's Refresh), the datasets DDL marked, or everything
  *  (Refresh on the server's node). */
@@ -319,6 +322,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   private paneFocusTaken = 0
   /** BigQuery refreshes asked while a build ran, by connection: each runs once the build ends, so none cancels another. */
   private readonly refreshes = new Map<string, BigQueryRefresh[]>()
+  /** Builds still at the bulk path's estimate or cost prompt, by request: Stop, a newer build or dispose closes the prompt. */
+  private readonly estimating = new Map<string, AbortController>()
 
   constructor(private readonly o: ObjectSearchOptions) {
     super({ indexes: {}, documents: {}, paneFocus: 0 })
@@ -347,26 +352,67 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     if (!partial) this.refreshes.delete(connectionId)
     const requestId = this.newId()
     const previous = this.getSnapshot().indexes[connectionId]
-    this.putIndex({ connectionId, requestId, done: 0, total: 0, objects: previous?.status?.objects ?? 0, ...previous?.status ? { status: previous.status } : {} })
-    void this.o.api.explorerIndex({
-      connectionId, requestId, definitions: this.o.settings.get('objectExplorer.search.definitions'),
-      ...bigQuery ? { extraDetails: this.o.settings.get('objectExplorer.search.bigQueryExtraProjects') } : {}, ...bigQuery && partial ? partial : {}
-    }).then(result => {
+    // A newer build closes an older one's prompt (the older one's explorer.index, if sent, the backend supersedes).
+    if (previous?.requestId) this.estimating.get(previous.requestId)?.abort()
+    const definitions = this.o.settings.get('objectExplorer.search.definitions')
+    const extraDetails = bigQuery ? this.o.settings.get('objectExplorer.search.bigQueryExtraProjects') : undefined
+    // The billed bulk path: a full BigQuery build with the option on, only after its free estimate and the cost prompts.
+    const bulk = bigQuery && !partial && this.o.settings.get('textEditor.googleSql.bulkIndex') && !!this.o.billedGate && !!this.o.api.bigQueryIndexEstimate
+    this.putIndex({ connectionId, requestId, done: 0, total: 0, objects: previous?.status?.objects ?? 0, ...bulk ? { phase: 'estimate' as const } : {}, ...previous?.status ? { status: previous.status } : {} })
+    const send = (billed: BigQueryBulkIndex | undefined) => {
+      void this.o.api.explorerIndex({
+        connectionId, requestId, definitions,
+        ...extraDetails !== undefined ? { extraDetails } : {}, ...bigQuery && partial ? partial : {}, ...billed ? { bulk: billed } : {}
+      }).then(result => {
+        const entry = this.getSnapshot().indexes[connectionId]
+        if (this.disposed || entry?.requestId !== requestId) return
+        if (result.ok) {
+          this.putIndex({ connectionId, done: result.value.status.databases, total: result.value.status.databases, objects: result.value.status.objects, status: result.value.status })
+          this.refresh(connectionId)
+        } else {
+          // A refresh that fails leaves the index it refreshed as it was, still searchable: only a whole build's failure is the index's.
+          const failed = result.code !== 'CANCELLED' && !(partial && entry.status && entry.status.state !== 'none')
+          this.putIndex({ connectionId, done: entry.done, total: entry.total, objects: entry.objects, ...entry.status ? { status: entry.status } : {}, ...failed ? { error: result.error } : {} })
+          // Stop (or a disconnect) ends the refreshes waiting behind the build too, and so does a whole build's failure, whose error
+          // they would otherwise hide.
+          if (result.code === 'CANCELLED' || failed) this.refreshes.delete(connectionId)
+        }
+        this.nextRefresh(connectionId)
+      }, onUnexpectedError)
+    }
+    if (!bulk) { send(undefined); return }
+    void this.bulkPath(connectionId, requestId, definitions, extraDetails === true).then(answer => {
       const entry = this.getSnapshot().indexes[connectionId]
       if (this.disposed || entry?.requestId !== requestId) return
-      if (result.ok) {
-        this.putIndex({ connectionId, done: result.value.status.databases, total: result.value.status.databases, objects: result.value.status.objects, status: result.value.status })
-        this.refresh(connectionId)
-      } else {
-        // A refresh that fails leaves the index it refreshed as it was, still searchable: only a whole build's failure is the index's.
-        const failed = result.code !== 'CANCELLED' && !(partial && entry.status && entry.status.state !== 'none')
-        this.putIndex({ connectionId, done: entry.done, total: entry.total, objects: entry.objects, ...entry.status ? { status: entry.status } : {}, ...failed ? { error: result.error } : {} })
-        // Stop (or a disconnect) ends the refreshes waiting behind the build too, and so does a whole build's failure, whose error
-        // they would otherwise hide.
-        if (result.code === 'CANCELLED' || failed) this.refreshes.delete(connectionId)
+      if (answer === 'stopped') {
+        // Stopped at the estimate or the prompt: nothing was sent, and the index stays as it was.
+        this.putIndex({ connectionId, done: entry.done, total: entry.total, objects: entry.objects, ...entry.status ? { status: entry.status } : {} })
+        this.refreshes.delete(connectionId)
+        return
       }
-      this.nextRefresh(connectionId)
+      this.putIndex({ connectionId, requestId, done: 0, total: 0, objects: entry.objects, ...entry.status ? { status: entry.status } : {} })
+      send(answer)
     }, onUnexpectedError)
+  }
+
+  /**
+   * The bulk path's estimate (bigquery.indexEstimate, free) and the cost prompts on it: the locations to read billed and the cap,
+   * or undefined for a build with the free calls only (the estimate failed or found nothing to read, or the prompt was declined),
+   * or `stopped` when Stop, a newer build or a disconnect ended it first.
+   */
+  private async bulkPath(connectionId: string, requestId: string, definitions: boolean, extraDetails: boolean): Promise<BigQueryBulkIndex | undefined | 'stopped'> {
+    const controller = new AbortController()
+    this.estimating.set(requestId, controller)
+    const ended = () => controller.signal.aborted || this.disposed || this.getSnapshot().indexes[connectionId]?.requestId !== requestId || !live(this.o.connections.get(connectionId))
+    try {
+      const estimated = await this.o.api.bigQueryIndexEstimate!({ connectionId, definitions, ...extraDetails ? { extraDetails } : {} }).catch(() => undefined)
+      if (ended()) return 'stopped'
+      if (!estimated?.ok || !estimated.value.locations.length) return undefined
+      const answer = await this.o.billedGate!(connectionId, estimated.value.estimate, controller.signal)
+      if (ended()) return 'stopped'
+      if (!answer.run) return undefined
+      return { locations: estimated.value.locations, ...answer.maximumBytesBilled !== undefined ? { maximumBytesBilled: answer.maximumBytesBilled } : {} }
+    } finally { this.estimating.delete(requestId) }
   }
 
   /**
@@ -402,12 +448,14 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   stopBuild(connectionId: string): void {
     this.refreshes.delete(connectionId)
     const requestId = this.getSnapshot().indexes[connectionId]?.requestId
+    if (requestId) this.estimating.get(requestId)?.abort()
     if (requestId) void this.o.api.explorerCancel([requestId]).catch(onUnexpectedError)
   }
 
   /** Stops every running build (the status bar's Stop). */
   stopAll(): void {
     this.refreshes.clear()
+    for (const controller of this.estimating.values()) controller.abort()
     const ids = Object.values(this.getSnapshot().indexes).flatMap(entry => entry.requestId ? [entry.requestId] : [])
     if (ids.length) void this.o.api.explorerCancel(ids).catch(onUnexpectedError)
   }
@@ -642,6 +690,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    for (const controller of this.estimating.values()) controller.abort()
+    this.estimating.clear()
     this.targetBindings.clear()
     for (const pending of this.typing.values()) this.timers.clearTimeout(pending)
     this.typing.clear()

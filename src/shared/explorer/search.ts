@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { maxIdentifierLength } from '../sql/identifiers.ts'
 import { bracketName, scriptName } from '../designer/catalog.ts'
 import { bigQueryFieldText, bigQueryPath, isBigQueryName } from '../bigquery/names.ts'
+import { bigQueryDryRunResultSchema, type BigQueryDryRunResult } from '../bigquery/dry-run.ts'
 import type { ProviderId } from '../providers.ts'
 import type { ObjectRef } from './refs.ts'
 import type { FolderId, NodeKind, NodeSubtype } from './catalog.ts'
@@ -167,6 +168,19 @@ export const childrenLeftOut = 'CHILDREN_LEFT_OUT'
 
 /** A BigQuery refresh's scope: one of the connection's projects, or one of its datasets. */
 export interface BigQueryIndexScope { readonly project: string; readonly dataset?: string }
+/** A project's location (US, EU, us-central1, …), whose region-scoped INFORMATION_SCHEMA the billed bulk path reads. */
+export interface BigQueryIndexLocation { readonly project: string; readonly location: string }
+/** The billed bulk path (docs/object-search.md, Bulk index): the locations bigquery.indexEstimate answered and the cost prompts
+ *  let run, and the cap every job carries (a connection's own wins). */
+export interface BigQueryBulkIndex { readonly locations: readonly BigQueryIndexLocation[]; readonly maximumBytesBilled?: number }
+/** bigquery.indexEstimate: what a full build's bulk path would bill, for the cost prompts. */
+export interface BigQueryIndexEstimateRequest { readonly connectionId: string; readonly definitions?: boolean; readonly extraDetails?: boolean }
+/** The locations to read (at most 64; `cut` when there were more) and their queries' estimate, each query at least 10 MiB per view. */
+export interface BigQueryIndexEstimateResult { readonly locations: readonly BigQueryIndexLocation[]; readonly estimate: BigQueryDryRunResult; readonly cut: boolean; readonly elapsedMs: number }
+/** The last full build's bulk path: the locations read billed, and the first failure of those that fell back to free calls. */
+export interface BigQueryBulkStatus { readonly locations: number; readonly failed: number; readonly code?: string; readonly message?: string }
+/** The most locations one estimate or build covers (BigQueryBulkSql.MaxLocations). */
+export const bigQueryBulkLocations = 64
 /** BigQuery only (SQL Server refuses them): `extraDetails` reads the extra projects' schemas too
  *  (`objectExplorer.search.bigQueryExtraProjects`), `scope` re-reads one project or dataset whole (Object Explorer's Refresh), and
  *  `stale` re-reads only the datasets DDL run from a tab marked. */
@@ -177,6 +191,8 @@ export interface ObjectIndexParams {
   readonly extraDetails?: boolean
   readonly scope?: BigQueryIndexScope
   readonly stale?: true
+  /** A full build only: pass 2 reads these locations with the billed bulk queries. */
+  readonly bulk?: BigQueryBulkIndex
 }
 /** `agent`: SQL Server Agent's objects were left out, not the database named (msdb, where they are read). `project`: a BigQuery
  *  dataset's project (`database` is the dataset, or empty when the project's listing failed). `details`: the dataset is indexed, but
@@ -201,6 +217,8 @@ export interface ObjectIndexStatus {
   readonly phase?: 'names' | 'details'
   /** BigQuery: the projects indexed by name only (extra projects, unless their details were asked for). */
   readonly namesOnly?: readonly string[]
+  /** BigQuery: the last full build's billed bulk path, when it ran. */
+  readonly bulk?: BigQueryBulkStatus
 }
 export interface ObjectIndexResult { readonly status: ObjectIndexStatus; readonly elapsedMs: number }
 
@@ -328,10 +346,21 @@ export interface ObjectIndexProgress { readonly requestId: string; readonly done
 // zod's max() counts code points; the backend counts UTF-16 code units.
 const units = (max: number) => z.string().min(1).refine(value => value.length <= max, `At most ${max} UTF-16 code units.`)
 const bigQueryName = (kind: 'project' | 'dataset') => z.string().refine(value => isBigQueryName(kind, value), `Not a BigQuery ${kind} name.`)
+// BigQuery's location ids (BigQueryLimits.LocationId).
+const bigQueryLocation = z.string().min(1).max(64).regex(/^[A-Za-z0-9-]+$/)
+const bigQueryIndexLocationSchema = z.object({ project: bigQueryName('project'), location: bigQueryLocation }).strict()
 export const objectIndexParamsSchema = z.object({
   connectionId: z.uuid(), requestId: z.uuid(), definitions: z.boolean().optional(), extraDetails: z.boolean().optional(),
-  scope: z.object({ project: bigQueryName('project'), dataset: bigQueryName('dataset').optional() }).strict().optional(), stale: z.literal(true).optional()
-}).strict().refine(value => !(value.scope && value.stale), 'A refresh is scoped or stale-only, not both.') satisfies z.ZodType<ObjectIndexParams>
+  scope: z.object({ project: bigQueryName('project'), dataset: bigQueryName('dataset').optional() }).strict().optional(), stale: z.literal(true).optional(),
+  bulk: z.object({
+    locations: z.array(bigQueryIndexLocationSchema).min(1).max(bigQueryBulkLocations), maximumBytesBilled: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional()
+  }).strict().optional()
+}).strict().refine(value => !(value.scope && value.stale), 'A refresh is scoped or stale-only, not both.')
+  .refine(value => !(value.bulk && (value.scope || value.stale)), 'The bulk path reads a full build only.') satisfies z.ZodType<ObjectIndexParams>
+export const bigQueryIndexEstimateRequestSchema = z.object({ connectionId: z.uuid(), definitions: z.boolean().optional(), extraDetails: z.boolean().optional() }).strict() satisfies z.ZodType<BigQueryIndexEstimateRequest>
+export const bigQueryIndexEstimateResultSchema = z.object({
+  locations: z.array(bigQueryIndexLocationSchema).max(bigQueryBulkLocations), estimate: bigQueryDryRunResultSchema, cut: z.boolean(), elapsedMs: z.number().int().min(0)
+}).strict() satisfies z.ZodType<BigQueryIndexEstimateResult>
 export const objectSearchParamsSchema = z.object({
   connectionId: z.uuid(), requestId: z.uuid(), text: units(objectSearchLimits.text).refine(value => !value.includes('\u0000'), 'The text cannot contain U+0000.'),
   caseSensitive: z.boolean().optional(), wholeWord: z.boolean().optional(), regex: z.boolean().optional(), in: z.enum(searchScopes).optional(),
