@@ -122,11 +122,11 @@ function table(index: number, rows: Record<string, string>[]): LiveTable {
 }
 const runRow = (instance: number, patch: Record<string, string> = {}) => ({
   runDate: `2026-11-${String(instance).padStart(2, '0')} 02:30:00`, runJob: 'Nightly load', runOutcome: 'Succeeded', runDuration: '00:01:00', runSteps: '2',
-  runMessage: 'The job succeeded.  The Job was invoked by Schedule 4 (Nightly).  The last step to run was step 2 (Load).', runKey: `${job}:${instance}`, runJobId: job, runTone: 'success', ...patch
+  runMessage: 'The job succeeded.  The Job was invoked by Schedule 4 (Nightly).  The last step to run was step 2 (Load).', runKey: `${job}:${instance}`, runJobId: job, runTone: '', ...patch
 })
 const stepRow = (instance: number, stepId: number, patch: Record<string, string> = {}) => ({
   stepId: String(stepId), stepName: stepId ? ['', 'Extract', 'Load'][stepId] : '(Job outcome)', stepOutcome: 'Succeeded', stepStarted: '2026-11-20 02:30:00', stepDuration: '00:00:30',
-  stepRetries: '0', stepMessage: 'ok', stepInstance: String(instance), stepJobId: job, stepTone: 'success', ...patch
+  stepRetries: '0', stepMessage: 'ok', stepInstance: String(instance), stepJobId: job, stepTone: '', ...patch
 })
 
 function opened() {
@@ -166,6 +166,8 @@ describe("the job document's History section", () => {
     let state = jobDocuments.history.get(id)!
     expect(state).toMatchObject({ loaded: true, selected: { job, instance: 20 }, pinned: false, usual: { job: 60, bySteps: { 0: 60, 2: 30 }, runs: 1 } })
     expect(state.runs.map(item => [item.key.instance, item.seconds])).toEqual([[20, 60], [19, 60]])
+    // The live table gives Succeeded no tone (as the backend sends it): the run still reads as a success.
+    expect(state.runs.map(item => item.tone)).toEqual(['error', 'success'])
     expect(view.args.at(-1)).toEqual({ jobs: [job], usual: true, run: { job, instance: 20 } })
     expect(view.refreshes).toBe(1)
     // The run's rows: a cut message is read whole through agent.historyMessage.
@@ -356,6 +358,18 @@ describe("the History section's service on its own", () => {
     connect('c1')
     expect(live.handles).toHaveLength(2)
     expect(live.handles[1].spec.args).toEqual({ jobs: [other], usual: true })
+  })
+  it("says when a run has more rows than the section reads", async () => {
+    const { history, connect, deliver } = service()
+    connect('c1')
+    history.attach('d1', job)
+    await deliver({ 0: table(0, [runRow(500)]), 1: table(1, []), 3: table(3, []) })
+    const many = [stepRow(500, 0), ...Array.from({ length: 250 }, (_, at) => stepRow(at + 1, 1, { stepOutcome: 'Retry', stepTone: 'warning' }))]
+    await deliver({ 1: table(1, many) })
+    expect(history.get('d1')).toMatchObject({ stepsFor: `${job}:500`, stepsCut: true })
+    expect(history.get('d1')?.steps).toHaveLength(200)
+    await deliver({ 1: table(1, many.slice(0, 3)) })
+    expect(history.get('d1')?.stepsCut).toBe(false)
   })
   it('says a Copy is done only under the message it copied', async () => {
     const { history, connect, deliver, api } = service()

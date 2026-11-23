@@ -4,7 +4,7 @@
 // what the section draws: the newest runs, the selected run (the newest until the person picks one) and its rows, the failed step with its
 // whole message (agent.historyMessage when the grid's copy is cut), and the usual durations. Failures are values; nothing throws into React.
 import type { VariaApi } from '../../../shared/contracts'
-import { agentLimits } from '../../../shared/agent/catalog.ts'
+import { agentLimits, runStatuses } from '../../../shared/agent/catalog.ts'
 import { agentHistoryProbe, agentHistorySource, historyRunKeyText, parseHistoryRunKey, type HistoryRunKey } from '../../../shared/agent/history.ts'
 import {
   durationSeconds, failedStep, jobHistoryArgs, jobHistoryLimits, sameRun, ssisExecutionQuery, type JobHistoryRun, type JobHistoryStep, type JobUsual
@@ -37,6 +37,8 @@ export interface JobHistoryState {
   /** The selected run's rows (step 0 the job outcome row), and the run they belong to. */
   readonly steps: readonly JobHistoryStep[]
   readonly stepsFor?: string
+  /** The run has more rows than the section reads (jobHistoryLimits.messageRows): a step's many retries. */
+  readonly stepsCut?: boolean
   /** The row whose message the detail shows (its instance), and that message. */
   readonly step?: number
   readonly message?: JobHistoryMessage
@@ -134,7 +136,7 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     const state = this.get(id)
     if (!state) return
     if (sameRun(state.selected, key)) { if (!state.pinned) this.patch(id, { pinned: true }); return }
-    this.patch(id, { selected: key, pinned: true, steps: [], stepsFor: undefined, step: undefined, message: undefined, notice: undefined })
+    this.patch(id, { selected: key, pinned: true, steps: [], stepsFor: undefined, stepsCut: undefined, step: undefined, message: undefined, notice: undefined })
     this.sendArgs(id)
   }
   /** Shows a row's whole message in the detail. */
@@ -236,7 +238,7 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     const next: Partial<JobHistoryState> = {
       runs, more: runCells.total > runs.length, loaded: true, usual, pinned: keep,
       ...sparkReady ? { spark: runs } : {},
-      ...changed ? { selected, steps: [], stepsFor: undefined, step: undefined, message: undefined, notice: undefined } : ownRows ? { steps, stepsFor } : {}
+      ...changed ? { selected, steps: [], stepsFor: undefined, stepsCut: undefined, step: undefined, message: undefined, notice: undefined } : ownRows ? { steps, stepsFor, stepsCut: stepCells.total > steps.length } : {}
     }
     this.patch(id, next)
     if (changed) { this.sendArgs(id); return }
@@ -282,17 +284,20 @@ async function cells(table: LiveTable | undefined, index: number, limit: number)
   const window = count ? await table.handle.getWindow(0, count, { colStart: 0, colEnd: columns, display: false }) : { count: 0, text: [] as string[] }
   return { total, rows: Array.from({ length: window.count }, (_, row) => (column: string) => window.text[row * columns + names[column]] ?? '') }
 }
+// The live tables give success no tone (src/shared/live/catalog.ts liveTones), so a Succeeded run or step gets it here, for its glyph and pill.
+const succeededLabel = runStatuses.find(status => status.code === 1)!.label
+const toneOf = (tone: string, outcome: string) => tone || (outcome === succeededLabel ? 'success' : '')
 function runOf(cell: (column: string) => string): JobHistoryRun | undefined {
   const key = parseHistoryRunKey(cell('runKey'))
   if (!key) return undefined
   const seconds = durationSeconds(cell('runDuration'))
-  return { key, started: cell('runDate'), outcome: cell('runOutcome'), ...seconds !== undefined ? { seconds } : {}, duration: cell('runDuration'), message: cell('runMessage'), tone: cell('runTone') }
+  return { key, started: cell('runDate'), outcome: cell('runOutcome'), ...seconds !== undefined ? { seconds } : {}, duration: cell('runDuration'), message: cell('runMessage'), tone: toneOf(cell('runTone'), cell('runOutcome')) }
 }
 function stepOf(cell: (column: string) => string): JobHistoryStep {
   const seconds = durationSeconds(cell('stepDuration'))
   return {
     instance: Number(cell('stepInstance')), stepId: Number(cell('stepId')), name: cell('stepName'), outcome: cell('stepOutcome'), started: cell('stepStarted'),
-    ...seconds !== undefined ? { seconds } : {}, duration: cell('stepDuration'), retries: Number(cell('stepRetries')) || 0, message: cell('stepMessage'), tone: cell('stepTone')
+    ...seconds !== undefined ? { seconds } : {}, duration: cell('stepDuration'), retries: Number(cell('stepRetries')) || 0, message: cell('stepMessage'), tone: toneOf(cell('stepTone'), cell('stepOutcome'))
   }
 }
 function usualOf(rows: readonly ((column: string) => string)[]): JobUsual | undefined {
