@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { acquire, entryMode, lockEnabled, sharedSlots, staleMs, type Held } from '../scripts/machine-lock.mjs'
+import { acquire, birthGraceMs, entryMode, lockEnabled, sharedSlots, staleMs, type Held } from '../scripts/machine-lock.mjs'
 import { cpuBudget, vitestWorkers } from '../scripts/check.mjs'
 
 // Parallel agent sessions each ran npm run check, the benchmarks and the smoke suites at once and overloaded the machine:
@@ -194,6 +194,57 @@ describe('the machine lock', () => {
     expect(result.stdout.trim()).toBe('shared')
     expect(readdirSync(dir)).toEqual([])
     expect(spawnSync(process.execPath, ['scripts/machine-lock.mjs', 'everything'], { encoding: 'utf8' }).status).toBe(2)
+  })
+
+  it('protects a brand-new empty or partial lock file during birthGraceMs, then clears it once aged', async () => {
+    const file = join(dir, 'exclusive.lock')
+    writeFileSync(file, '')
+    const logs: string[] = []
+    let taken = false
+    const pending = acquire('shared', { env: env(), dir, pollMs: 10, graceMs: birthGraceMs, log: text => logs.push(text), label: 'shared' }).then(lock => { taken = true; held.push(lock); return lock })
+    await waiting(logs)
+    expect(taken).toBe(false)
+    expect(logs[0]).toContain('held by a starting run.')
+    expect(existsSync(file)).toBe(true)
+    const old = new Date(Date.now() - birthGraceMs - 1000)
+    utimesSync(file, old, old)
+    await pending
+    expect(taken).toBe(true)
+    expect(existsSync(file)).toBe(false)
+  })
+
+  it('retries transient EPERM/EBUSY on lock creation and fails fast on persistent permission errors without logging empty holders', async () => {
+    // Transient failure on the first two attempts succeeds on the third.
+    let attempts = 0
+    const flaky = (file: string, data: string, options: { flag: string }) => {
+      if (++attempts <= 2) throw Object.assign(new Error('transient lock'), { code: 'EBUSY' })
+      writeFileSync(file, data, options)
+    }
+    const ok = await acquire('shared', { env: env(), dir, pollMs: 5, writeFile: flaky, label: 'flaky' })
+    held.push(ok)
+    expect(attempts).toBe(3)
+    ok.release()
+
+    // Persistent EPERM in shared mode (both when empty and when another slot is held) fails fast and never logs "held by .".
+    const eperm = () => { throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' }) }
+    const emptyLogs: string[] = []
+    await expect(acquire('shared', { env: env(), dir, pollMs: 5, writeFile: eperm, log: text => emptyLogs.push(text), label: 'blocked' }))
+      .rejects.toThrow(/Could not create machine lock.*EPERM.*VARIA_LOCK=off/)
+    expect(emptyLogs.join('\n')).not.toContain('held by .')
+
+    const occupant = await take('shared')
+    const partialLogs: string[] = []
+    await expect(acquire('shared', { env: env(), dir, slots: 2, pollMs: 5, writeFile: eperm, log: text => partialLogs.push(text), label: 'blocked-partial' }))
+      .rejects.toThrow(/Could not create machine lock.*EPERM.*VARIA_LOCK=off/)
+    expect(partialLogs.join('\n')).not.toContain('held by .')
+    occupant.release()
+
+    // Persistent EPERM in exclusive mode fails fast instead of hanging silently.
+    await expect(acquire('exclusive', { env: env(), dir, pollMs: 5, writeFile: eperm, label: 'blocked-exclusive' }))
+      .rejects.toThrow(/Could not create machine lock.*EPERM.*VARIA_LOCK=off/)
+
+    // Never imports or calls hard links (linkSync), which Windows sandboxes deny with EPERM.
+    expect(readFileSync('scripts/machine-lock.mjs', 'utf8')).not.toMatch(/\blinkSync\s*\(|import\s*\{[^}]*\blinkSync\b/)
   })
 
   // Every heavy entry point takes it: a suite or Electron benchmark that skipped the shared fixture would run beside everything.

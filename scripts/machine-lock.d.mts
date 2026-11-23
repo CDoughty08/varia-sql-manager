@@ -3,11 +3,13 @@ export type LockMode = 'shared' | 'exclusive'
 export interface Held { release(): void, others: number }
 export interface AcquireOptions {
   label?: string, env?: Record<string, string | undefined>, dir?: string, slots?: number, pollMs?: number, beatMs?: number
+  graceMs?: number, writeFile?: (file: string, data: string, options: { flag: string }) => void
   log?: (text: string) => void, isAlive?: (pid: number) => boolean
   signal?: AbortSignal
 }
 export const heartbeatMs: number
 export const staleMs: number
+export const birthGraceMs: number
 export function defaultDir(): string
 export function lockEnabled(env?: Record<string, string | undefined>): boolean
 export function sharedSlots(env?: Record<string, string | undefined>): number
