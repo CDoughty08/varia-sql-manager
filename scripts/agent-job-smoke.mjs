@@ -5,7 +5,9 @@
 // chosen step, Steps reorders, parses, deletes with Undo and saves the renumbering (AG-6b), and New Job from the palette copies an existing
 // job and creates it. The Schedules section (AG-6c) adds a new schedule from a preset and attaches a shared one found by search, both sent
 // with the job's Save; the Schedules document (Manage Schedules) saves the Enabled box at once and a rename under the schedule's guard, and
-// the Agent node's New › Schedule… creates one. Screenshots in Dark and Light go to artifacts/.
+// the Agent node's New › Schedule… creates one. Alerts and operators (AG-7): the new job's New alert for this job creates an alert that runs
+// it and notifies an operator, and the palette's Operators and Notifications grid saves a changed cell as one agentAlert action and sends a
+// test e-mail through the fake backend (nothing is sent). Screenshots in Dark and Light go to artifacts/.
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
@@ -225,11 +227,51 @@ try {
   expect((await saves()).at(-1)).toMatchObject({ target: { kind: 'agent' }, agentJob: { name: 'Backup weekly', description: 'Backup maintenance.', emailLevel: 2, emailOperator: 'DBA Team' } })
   expect((await saves()).at(-1).agentJob.version).toBeUndefined()
 
+  console.log('New Job passed: the palette opens New Job, Copy an existing job fills it, and Create adds the job.')
+
+  step = 'new alert'
+  // The job document's Alerts section opens New Alert with the job as its response; Create sends one agentAlert action on the Agent node.
+  await documentFrame(page, 'Backup weekly').getByRole('button', { name: 'New alert for this job…', exact: true }).click()
+  await expect(documentTab(page, 'New Alert')).toHaveAttribute('aria-selected', 'true')
+  await documentFrame(page, 'New Alert').getByLabel('Name', { exact: true }).fill('Backup weekly late')
+  const alert = documentFrame(page, 'Backup weekly late')
+  await alert.getByLabel('Add an operator', { exact: true }).selectOption('DBA Team')
+  await expect(alert.getByRole('listitem').filter({ hasText: 'DBA Team' })).toBeVisible()
+  await documentVerb(alert, 'Backup weekly late', 'Create').click()
+  await expect(documentTab(page, 'Alert Properties - Backup weekly late')).toHaveAttribute('aria-selected', 'true')
+  await expect(alert.getByRole('status').filter({ hasText: 'The alert was created.' })).toBeVisible()
+  const alertSave = (await calls('actions.execute')).filter(call => call.action === 'agentAlert').at(-1)
+  expect(alertSave).toMatchObject({ target: { kind: 'agent' }, agentAlert: { name: 'Backup weekly late', severity: 17, notifications: [{ name: 'DBA Team', methods: 1, change: 'add' }] } })
+  expect(alertSave.agentAlert.jobId).toBeTruthy()
+  expect(alertSave.agentObjectId).toBeUndefined()
+  await page.screenshot({ path: 'artifacts/agent-alert-dark.png' })
+  console.log('New alert passed: the job document opens New Alert for the job, and Create adds it with its operator.')
+
+  step = 'operators grid'
+  // The palette opens the grid; a cell click cycles its methods, Save sends that alert's change with its id, and Send test e-mail runs at once.
+  await page.keyboard.press('F1')
+  await expect(page.getByRole('combobox', { name: 'Command Palette', exact: true })).toBeFocused()
+  await page.keyboard.type('Operators and Notifications')
+  await quickInputRows(page).filter({ hasText: 'Operators and Notifications…' }).first().click()
+  await expect(documentTab(page, 'Operators and Notifications')).toHaveAttribute('aria-selected', 'true')
+  const operators = documentFrame(page, 'Operators and notifications')
+  await operators.getByRole('button', { name: 'Severity 017, On Call: not notified', exact: true }).click()
+  await expect(operators.getByRole('button', { name: 'Severity 017, On Call: E-mail', exact: true })).toBeVisible()
+  await documentVerb(operators, 'Operators and notifications', 'Save · 1 change').click()
+  await expect(operators.getByRole('status').filter({ hasText: 'The notifications were saved.' })).toBeVisible()
+  expect((await calls('actions.execute')).filter(call => call.action === 'agentAlert').at(-1)).toMatchObject({ target: { kind: 'agentAlert', name: 'Severity 017' }, agentObjectId: 21,
+    agentAlert: { notifications: [{ name: 'On Call', methods: 1, change: 'add' }] } })
+  await operators.getByRole('button', { name: 'DBA Team', exact: true }).click()
+  await operators.getByRole('button', { name: 'Send test e-mail', exact: true }).click()
+  await expect(operators.getByRole('status').filter({ hasText: 'Test e-mail queued for DBA Team.' })).toBeVisible()
+  expect((await calls('actions.execute')).filter(call => call.action === 'notifyOperator').at(-1)).toMatchObject({ target: { kind: 'agentOperator', name: 'DBA Team' }, agentObjectId: 1 })
+  await page.screenshot({ path: 'artifacts/agent-operators-dark.png' })
+  console.log('Operators grid passed: a changed cell saves as its alert\'s change, and Send test e-mail names the operator by id.')
+
   step = 'light'
   await page.evaluate(() => window.varia.setThemePreference({ mode: 'light' }))
   await page.screenshot({ path: 'artifacts/agent-job-light.png' })
   await page.evaluate(() => window.varia.setThemePreference({ mode: 'dark' }))
-  console.log('New Job passed: the palette opens New Job, Copy an existing job fills it, and Create adds the job.')
 
   if (failures.length) throw new Error('Page errors: ' + failures.join(' | '))
   console.log('Job document suite passed.')

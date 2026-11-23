@@ -93,10 +93,12 @@ import { JobActivityService } from '../../src/renderer/src/agent/JobActivityServ
 import { LogViewerService } from '../../src/renderer/src/agent/LogViewerService'
 import { AgentJobStatusService } from '../../src/renderer/src/agent/AgentJobStatusService'
 import { JobDocumentService } from '../../src/renderer/src/agent/JobDocumentService'
+import { AlertOperatorDocumentService, alertSpec, operatorSpec, operatorsSpec } from '../../src/renderer/src/agent/AlertOperatorDocumentService'
+import { agentContribution } from '../../src/renderer/src/contributions/agent'
+import { agentObjectsContribution } from '../../src/renderer/src/contributions/agent-objects'
 import { SchedulesService } from '../../src/renderer/src/agent/SchedulesService'
 import { ProxyDocumentService } from '../../src/renderer/src/agent/ProxyDocumentService'
 import { CredentialDocumentService } from '../../src/renderer/src/agent/CredentialDocumentService'
-import { agentContribution } from '../../src/renderer/src/contributions/agent'
 import { bigQueryJobsContribution } from '../../src/renderer/src/contributions/bigquery-jobs'
 import { JobHistoryService } from '../../src/renderer/src/bigquery/JobHistoryService'
 import { agentProxyContribution } from '../../src/renderer/src/contributions/agent-proxy'
@@ -357,6 +359,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     scriptObjectAction: vi.fn<VariaApi['scriptObjectAction']>(async params => ({ ok: true, value: { text: `-- ${params.action} ${params.target.name}`, database: params.action === 'createTable' ? params.target.name : params.action === 'createDatabase' ? 'master' : params.target.database ?? 'master', warnings: [] } })),
     agentProfile: vi.fn<VariaApi['agentProfile']>(async () => ({ ok: true, value: { elapsedMs: 1, error: { code: 'NOT_SUPPORTED', message: 'No Agent here.', retryable: false } } })),
     agentHistoryMessage: vi.fn<VariaApi['agentHistoryMessage']>(async () => ({ ok: true, value: { message: '', elapsedMs: 1 } })),
+    agentCounterValues: vi.fn<VariaApi['agentCounterValues']>(async () => ({ ok: true, value: { values: [], elapsedMs: 1 } })),
     executeObjectAction: vi.fn<VariaApi['executeObjectAction']>(async () => ({ ok: true, value: { steps: [{ status: 'done', title: 'Drop the object' }], messages: [], elapsedMs: 1 } })),
     cancelObjectActions: vi.fn<VariaApi['cancelObjectActions']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
     // Create Catalog: a server without a catalog and with CLR off; creating it succeeds.
@@ -457,6 +460,10 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const agentJobs = new AgentJobStatusService({ api, live, connections })
   const jobActivity = new JobActivityService({ api, documents, panes, live, connections, targetIdOf, started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt) })
   const jobDocuments = new JobDocumentService({ api, documents, files, connections, live, targetIdOf, openQuery: (sql, name, connectionId, database) => { documents.newQuery(sql, name, connectionId, database) }, ...(options.timers ? { timers: options.timers } : {}) })
+  const agentObjectOptions = { api, documents, files, connections, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) }
+  const alertDocuments = new AlertOperatorDocumentService(alertSpec, agentObjectOptions)
+  const operatorDocuments = new AlertOperatorDocumentService(operatorSpec, agentObjectOptions)
+  const operatorsDocuments = new AlertOperatorDocumentService(operatorsSpec, agentObjectOptions)
   const schedules = new SchedulesService({ api, documents, connections, targetIdOf })
   const proxyDocuments = new ProxyDocumentService({ api, documents, files, connections, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) })
   const credentialDocuments = new CredentialDocumentService({ api, documents, files, connections, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) })
@@ -597,6 +604,9 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     logViewer,
     agentJobs,
     jobDocuments,
+    alertDocuments,
+    operatorDocuments,
+    operatorsDocuments,
     schedules,
     proxyDocuments,
     credentialDocuments,
@@ -633,6 +643,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     activityContribution(workbench),
     agentContribution(workbench, { agentEnabled: api.agentPreview }),
     bigQueryJobsContribution(workbench),
+    agentObjectsContribution(workbench, { agentEnabled: api.agentPreview }),
     agentProxyContribution(workbench, { agentEnabled: api.agentPreview }),
     searchContribution(workbench, api),
     settingsContribution(workbench),
@@ -655,6 +666,9 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     disconnectPrompts.dispose()
     actionProgress.dispose()
     jobDocuments.dispose()
+    alertDocuments.dispose()
+    operatorDocuments.dispose()
+    operatorsDocuments.dispose()
     schedules.dispose()
     proxyDocuments.dispose()
     credentialDocuments.dispose()
@@ -755,6 +769,9 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     jobHistory,
     jobActivity,
     jobDocuments,
+    alertDocuments,
+    operatorDocuments,
+    operatorsDocuments,
     schedules,
     proxyDocuments,
     credentialDocuments,

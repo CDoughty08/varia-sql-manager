@@ -141,6 +141,8 @@ export interface DeleteDraft {
   readonly deleteHistory: boolean; readonly closeConnections: boolean; readonly dropMappedUsers: boolean
   /** A SQL Server Agent job's ID as the tree listed it, so a job created since under the name is refused. */
   readonly listed?: string
+  /** An operator's Delete (AG-7): the operator its notifications move to; absent drops them. */
+  readonly reassignTo?: string
 }
 /** The mapped users a login's Delete may drop: those it lists that are not kept (they own a schema or role, or their database is read-only). */
 export const droppableUsers = (model: DeleteTarget) => (model.mappings?.users ?? []).filter(user => !mappedUserKept(user))
@@ -198,6 +200,12 @@ export const deleteObjectDefinition: ObjectDialogDefinition<DeleteTarget, Delete
     if (target.kind === 'agentJob') {
       const jobId = draft.listed ?? model.agentIdentity?.jobId
       return { action: 'delete', target, closeConnections: false, deleteHistory: true, deleteUnusedSchedule: true, ...(jobId ? { agentIdentity: { jobId } } : {}) }
+    }
+    // An alert or operator (AG-7): the id the dialog read, so one created since under the name is refused NOT_FOUND; an operator's
+    // notifications move to the operator chosen, else they go with it.
+    if (target.kind === 'agentAlert' || target.kind === 'agentOperator') {
+      const reassignTo = target.kind === 'agentOperator' && draft.reassignTo && model.reassignChoices?.includes(draft.reassignTo) ? draft.reassignTo : undefined
+      return { action: 'delete', target, closeConnections: false, deleteHistory: false, ...(model.agentObjectId ? { agentObjectId: model.agentObjectId } : {}), ...(reassignTo ? { reassignTo } : {}) }
     }
     // A SQL Server Agent proxy (AG-8b): sp_delete_proxy under the proxy_id the dialog read, so a proxy that took the name since is refused NOT_FOUND.
     if (target.kind === 'agentProxy') return { action: 'delete', target, closeConnections: false, deleteHistory: false, ...(model.proxyId ? { proxyId: model.proxyId } : {}) }
@@ -450,9 +458,9 @@ export const loginPropertiesDefinition: ObjectDialogDefinition<LoginPropertiesMo
   initialFocus: loginPropertiesFocus
 }
 
-/** The dialogs this module defines: New Database, Table Properties and the Agent job and Schedules documents are documents with services of their own (src/renderer/src/new-database, src/renderer/src/properties/TablePropertiesService.ts, src/renderer/src/agent/JobDocumentService.ts),
+/** The dialogs this module defines: New Database, Table Properties and the Agent job, alert, operator and Schedules documents are documents with services of their own (src/renderer/src/new-database, src/renderer/src/properties/TablePropertiesService.ts, src/renderer/src/agent/JobDocumentService.ts),
  *  as are the proxy and credential documents (AG-8b, src/renderer/src/agent/ProxyDocumentService.ts and CredentialDocumentService.ts). */
-export type DefinedDialogId = Exclude<DialogId, 'newDatabase' | 'tableProperties' | 'agentJob' | 'agentSchedules' | 'agentProxy' | 'credential'>
+export type DefinedDialogId = Exclude<DialogId, 'newDatabase' | 'tableProperties' | 'agentJob' | 'agentAlert' | 'agentOperator' | 'agentSchedules' | 'agentProxy' | 'credential'>
 export interface DialogModels {
   readonly deleteObject: DeleteTarget; readonly databaseProperties: DatabasePropertiesModel; readonly attachDatabase: AttachServerFacts; readonly newLogin: NewLoginModel
   readonly takeOffline: DatabaseStateModel; readonly bringOnline: DatabaseStateModel; readonly detachDatabase: DatabaseStateModel; readonly unlockLogin: UnlockModel

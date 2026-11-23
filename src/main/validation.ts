@@ -20,6 +20,7 @@ import { ssisCatalogSetupSchema, ssisDescribeSchema, ssisExecuteSchema } from '.
 import { activityDetailsRequestSchema, activityKillRequestSchema } from '../shared/activity/schema.ts'
 import { agentProfileResultSchema, agentProfileSchema } from '../shared/agent/profile.ts'
 import { agentHistoryMessageResultSchema, agentHistoryMessageSchema } from '../shared/agent/history.ts'
+import { agentCounterValuesResultSchema, agentCounterValuesSchema } from '../shared/actions/agent-alert.ts'
 import { languageParseResultSchema, languageParseSchema } from '../shared/agent/parse.ts'
 import { languageCloseSchema, languageRequestSchema, languageCompletionsSchema, languageHoverSchema, languageStatusSchema, languageRefreshRequestSchema, languageRefreshResultSchema, languageDiagnosticResultSchema, languageDefinitionSchema } from '../shared/language-service'
 
@@ -94,6 +95,7 @@ export const requestSchemas = {
   'activity.kill': activityKillRequestSchema,
   'agent.profile': agentProfileSchema,
   'agent.historyMessage': agentHistoryMessageSchema,
+  'agent.counterValues': agentCounterValuesSchema,
   'language.parse': languageParseSchema
 } satisfies Record<RpcMethod, z.ZodType>
 
@@ -137,6 +139,7 @@ export const resultSchemas: Partial<Record<RpcMethod, z.ZodType>> = {
   'actions.execute': actionExecuteResultSchema,
   'agent.profile': agentProfileResultSchema,
   'agent.historyMessage': agentHistoryMessageResultSchema,
+  'agent.counterValues': agentCounterValuesResultSchema,
   'language.parse': languageParseResultSchema
 }
 

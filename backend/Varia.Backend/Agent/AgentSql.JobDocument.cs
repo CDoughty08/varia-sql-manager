@@ -172,6 +172,7 @@ internal static partial class AgentSql
     /// the Schedules document's guarded batch).</summary>
     internal static readonly IReadOnlySet<string> SaveOnly = new HashSet<string>(["sp_add_job", "sp_add_jobserver", "sp_update_alert", "sp_delete_jobstep", "sp_update_jobstep", "sp_add_jobstep",
         "sp_add_jobschedule", "sp_attach_schedule", "sp_detach_schedule", "sp_add_schedule", "sp_update_schedule", "sp_delete_schedule"], StringComparer.Ordinal);
+    private static readonly IReadOnlySet<string> JobAlertArguments = new HashSet<string>(["@name", "@job_id"], StringComparer.Ordinal);
 
     /// <summary>Problems with a job save's full text; empty when it passes. It opens with <see cref="NewJobHead"/> (New Job: sp_add_job, its steps'
     /// sp_add_jobstep with their whole content, sp_add_jobserver, then at most the Start step's sp_update_job) or with <see cref="Resolve"/> and
@@ -227,6 +228,8 @@ internal static partial class AgentSql
             var procedure = match.Groups["proc"].Value;
             procedures.Add(procedure);
             if (!SaveProcedures.Contains(procedure) || !catalog.WriteArguments.TryGetValue(procedure, out var allowed)) { problems.Add("EXECs " + procedure + ", which a job save does not call"); continue; }
+            // A job save only detaches alerts; sp_update_alert's other arguments are the alert document's (AG-7).
+            if (procedure == "sp_update_alert") allowed = JobAlertArguments;
             if (guarded != (procedure == "sp_update_alert")) problems.Add(guarded ? "guards a call that is not sp_update_alert" : "detaches an alert without its guard");
             if (scheduleGuarded != (procedure is "sp_update_schedule" or "sp_attach_schedule")) problems.Add(scheduleGuarded ? "guards a call that does not change or attach a schedule" : "changes or attaches a schedule without its guard");
             var schedule = JobScheduleProcedures.Contains(procedure);
