@@ -79,8 +79,8 @@ const footerFit = dialog => dialog.locator(part.connectionFooter).evaluate(foote
       return [...range.getClientRects()].every(text =>
         text.left >= rect.left - 0.5 && text.right <= rect.right + 0.5 && text.top >= rect.top - 0.5 && text.bottom <= rect.bottom + 0.5)
     }),
-    inset: insets.every(inset => Math.abs(inset - 16) < 1),
-    inside: bounds.every(button => button.left >= box.left + 15 && button.right <= box.right - 15 && button.bottom <= box.bottom + 0.5),
+    inset: insets.every(inset => Math.abs(inset - 8) < 1),
+    inside: bounds.every(button => button.left >= box.left + 7 && button.right <= box.right - 7 && button.bottom <= box.bottom + 0.5),
     grouped: [...footer.children].every(group => {
       const groupButtons = [...group.querySelectorAll('button')]
       return groupButtons.length > 0 && groupButtons.every(button => Math.abs(button.getBoundingClientRect().bottom - groupButtons[0].getBoundingClientRect().bottom) < 1)

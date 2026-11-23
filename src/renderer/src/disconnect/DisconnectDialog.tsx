@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useSyncExternalStore, type KeyboardEvent } fr
 import { createPortal } from 'react-dom'
 import { focusToReturn, returnFocusTo } from '../core/focus'
 import { trapFocus } from '../trap-focus'
+import DialogFooter from '../kit/DialogFooter'
 import type { DisconnectChoice, DisconnectPrompt, DisconnectPromptService } from './DisconnectPromptService'
 
 /** Mount once in the main window; the shared service also accepts commands from popouts. */
@@ -35,10 +36,10 @@ function Prompt({ prompt, answer }: { readonly prompt: DisconnectPrompt; readonl
       {running && <p>Disconnecting cancels the running queries after confirmation. Cancellation may leave the outcome unknown; completed statements may already have taken effect.</p>}
       <p>Cancel keeps the connection and all tabs. Files explicitly saved during review may remain saved.</p>
     </div>
-    <div className="connection-footer" style={{ flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+    <DialogFooter wrap trailing={<>
       <button type="button" onClick={() => answer('keep-tabs')}>Disconnect and Keep Tabs</button>
       <button type="button" onClick={() => answer('close-query-tabs')}>Disconnect and Close Query Tabs</button>
       <button type="button" ref={cancel} onClick={() => answer('cancel')}>Cancel</button>
-    </div>
+    </>} />
   </div></div>, document.body)
 }

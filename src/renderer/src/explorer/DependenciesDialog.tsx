@@ -5,6 +5,7 @@ import { displayText } from '../../../shared/explorer/refs.ts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { findInWindows, returnFocusTo } from '../core/focus'
 import Icon from '../Icon'
+import DialogFooter from '../kit/DialogFooter'
 import { trapFocus } from '../trap-focus'
 import ExplorerIcon from './ExplorerIcon'
 import type { OpenDependencies } from './DependenciesService'
@@ -103,12 +104,13 @@ function DependenciesForm({ open }: { open: OpenDependencies }) {
         </dl>
       </section>}
     </div>
-    <div className="connection-footer">
-      <button type="button" disabled={!selected || !dependencies.canPeek(selected.id)} onClick={() => selected && dependencies.peek(selected.id)}>Peek</button>
-      <button type="button" disabled={!selected || unavailable || !dependencies.canReveal(selected.id)} onClick={() => selected && dependencies.reveal(selected.id)}>Show in Object Explorer</button>
-      <span />
-      <button type="button" className="primary" onClick={close}>OK</button>
-    </div>
+    <DialogFooter
+      leading={<>
+        <button type="button" disabled={!selected || !dependencies.canPeek(selected.id)} onClick={() => selected && dependencies.peek(selected.id)}>Peek</button>
+        <button type="button" disabled={!selected || unavailable || !dependencies.canReveal(selected.id)} onClick={() => selected && dependencies.reveal(selected.id)}>Show in Object Explorer</button>
+      </>}
+      trailing={<button type="button" className="primary" onClick={close}>OK</button>}
+    />
   </div></div>
 }
 
