@@ -271,10 +271,12 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     `GridTarget`, as `partner` carries the row's partner for `comparisonRowHasPartner`. A keyboard menu has no clicked
     cell, and `targetFor`'s anchor fill takes only `column` and `row` from the anchor's `outputCell` today, so it drops
     `partner` (Go to Possible Match is unavailable from Shift+F10 on a ? row) and would drop the new facts; C2 makes the
-    fill take the anchor cell's whole grid target (`partner` as `rowHasPartner`, and the column facts). The second is
-    Ignore This Column's `precondition`, true on a column already ignored so the checkbox can be unticked. Its handler's
-    `unavailable()` gives the reason for the case at hand (the key column, the last compared column, or an input
-    closed), so `unavailableHint` is only the fallback;
+    fill take the anchor's `partner` (as `rowHasPartner`) with its row, only when the row came from the anchor (a
+    keyboard menu), and the column facts whenever the column did: a right-click on a row number already carries the
+    clicked row and its partner, which the active cell's must not replace. The second is Ignore This Column's
+    `precondition`, true on a column already ignored so the checkbox can be unticked. Its handler's `unavailable()`
+    gives the reason for the case at hand (the key column, the last compared column, or an input closed), so
+    `unavailableHint` is only the fallback;
   - icon `eye-closed` in `src/shared/icons.ts`.
 
   Regenerate the commands and icons docs. No setting.
@@ -292,7 +294,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - the checklist (`compare-ignore.test.ts`), Automatic's label, memory by name across a swap;
     - the toggle's `when`, notice text and Dismiss; `outputGridOnColumn` and the two state keys for gutter, header, cell
       and keyboard menus, the keyboard ones through `targetFor` with a registered grid target, on a ? row
-      (`comparisonRowHasPartner`) and on an ignored column;
+      (`comparisonRowHasPartner`) and on an ignored column; and through `targetFor`, a right-click on a ? row's number
+      while the active cell is on a plain row, and on a plain row's number while it is on a ? row, each keeping the
+      clicked row's partner;
     - sort keys and chips kept, and filters (a value filter, Keep Selected Rows) removed with "The comparison's filters
       were removed.", across Ignore and Stop ignoring, in the announcement's order; the lost-column notice and its
       plural;
@@ -745,7 +749,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       with its copied line, of all of them, without it, and of one column whose entries changed elsewhere, with the
       not-copied line;
   - the refusal on a non-comparison, and a `DiffChecks` case: a sorted Two rows copy on a low budget is refused, not
-    cut;
+    cut; and a Two rows build with a cut entry on a low budget refused, since `Builder.Add` stores a cut row's list
+    without checking it was reserved and the new half's list is C3's;
   - `results-jobs`: Save as Diff to `orders.txt` writes diff, and leaves the remembered last format alone;
   - smoke: a clipboard read-back through the fake backend (needs an unlocked screen).
 - **Risks:** low for the format, which changes nothing existing. Bringing the TypeScript writer level touches the fake
@@ -840,20 +845,25 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     replace such rows." and "…so a row whose key changed is deleted and not inserted under its new key. Tick INSERT to
     replace such rows."
   - **Columns:** the data columns.
-    - Key columns are ticked and locked. A key column INSERT cannot write (rowversion or timestamp, or computed per the
-      index) leaves INSERT unavailable, with the reason ("row_ver is a key column that cannot be inserted (rowversion),
-      so INSERT is unavailable."). Ignored columns are ticked, for INSERT only. While UPDATE is ticked, a line says what
-      ignoring costs, since the summary's "to match Result 3" would otherwise hide it: "updated_at is ignored: UPDATEs
-      leave its changes out, and rows that differ only in it get no statement. Stop ignoring it to include them."
-      ("updated_at and memo are ignored: … their changes … only in them …"). While an input is closed, the comparison
-      cannot be rebuilt, so this line and the Exact text line below drop their last sentence.
+    - Key columns are ticked and locked, whatever else would lock a column unticked (a type no literal writes, a
+      repeated name), since the key refusals answer those before anything else (Params in the sketch). A key column
+      INSERT cannot write (rowversion or timestamp, or computed per the index) leaves INSERT unavailable, with the
+      reason ("row_ver is a key column that cannot be inserted (rowversion), so INSERT is unavailable."). Ignored
+      columns are ticked, for INSERT only. While UPDATE is ticked, a line says what ignoring costs, since the summary's
+      "to match Result 3" would otherwise hide it: "updated_at is ignored: UPDATEs leave its changes out, and rows that
+      differ only in it get no statement. Stop ignoring it to include them." ("updated_at and memo are ignored: … their
+      changes … only in them …"). While an input is closed, the comparison cannot be rebuilt, so this line and the Exact
+      text line below drop their last sentence.
     - Unscriptable columns start unticked and locked, with the reason: rowversion and timestamp ("Not insertable"),
       computed per the index ("Computed"), CLR types and sql_variant ("Cannot be written as a literal"), and vector
       ("Not scripted": it has a literal but no `=`, so it is left out until a lane writes and round-trips it).
-      Unscriptable wins over ignored: "row_ver (ignored): Not insertable". The renderer is untrusted, so `DiffScript`
-      also refuses (`INVALID_PARAMS`) a `columns` pair either result's recorded type cannot write (CLR types,
-      sql_variant, vector, rowversion and timestamp), except a rowversion or timestamp key pair, which a WHERE compares
-      as binary, while INSERT is not ticked; computed columns are known only to the index, and an INSERT that names one
+      Unscriptable wins over ignored: "row_ver (ignored): Not insertable". A diff's columns carry Result 3's types, so
+      the comparison records both inputs' column types per pair when it is built (as the remembered match reads them,
+      `resolveRemembered`), and the form locks a pair by either type while Result 1 is closed. The renderer is
+      untrusted, so `DiffScript` also refuses (`INVALID_PARAMS`) a `columns` pair either result's recorded type cannot
+      write (CLR types, sql_variant, vector, rowversion and timestamp), except a key pair: a key of the first three
+      takes the `keyType` refusal first, and a rowversion or timestamp key pair, which a WHERE compares as binary, is
+      accepted while INSERT is not ticked; computed columns are known only to the index, and an INSERT that names one
       fails the whole batch when it compiles (Msg 271), before any statement runs.
     - A line names columns only one result has ("note2 is only in Result 1, so INSERTs leave it out").
     - While INSERT is ticked and the index knows the table, a line names its columns the result lacks: "INSERTs leave
@@ -873,10 +883,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - A line names pairs whose types differ ("amount is decimal(10,2) in Result 1 and decimal(12,2) in Result 3. Each
       value is written as its own result's type."). Each value is formatted by its own input's column type. A diff's
       data columns carry Result 3's types (`UnifiedDiff.Columns`) whichever result a value came from, and only One row's
-      previous-value columns carry Result 1's, so the diff set also records Result 1's column type and collation per
-      pair. Every Result 1 value is formatted by it, even while Result 1 is closed: removed rows in both layouts, Two
-      rows' `changedOld` halves (the values a toOld UPDATE SETs), and the WHERE keys taken from them. A literal's form
-      always comes from its own input's column type, never another column's: pairs join by name and wire (Text or
+      previous-value columns carry Result 1's, so the diff set also records Result 1's column type (its name, precision,
+      scale and maximum length, as `ResultColumn` holds them, since a literal or a key's CAST needs them) and collation
+      per pair. Every Result 1 value is formatted by it, even while Result 1 is closed: removed rows in both layouts,
+      Two rows' `changedOld` halves (the values a toOld UPDATE SETs), and the WHERE keys taken from them. A literal's
+      form always comes from its own input's column type, never another column's: pairs join by name and wire (Text or
       Binary, `ResultDiffer.Pairs`), so `id int` can pair with `id varchar`, and an int rule would copy varchar text raw
       into the script. In a WHERE clause (keys, Q11's guards, the INSERT check) only the text decisions follow the
       column of the side the target holds, Result 1's under `toNew` (One row keeps only Result 3's key values on a
@@ -1207,49 +1218,53 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     `limits.page.maxColumns`, each below the pair count, none in `columns`), so the header's left-out line says
     "(computed)" rather than "(unticked)". C# also answers `INVALID_PARAMS` when `columns` leaves out a recorded key
     pair (an INSERT would write its row without the key, and the existence check by key would still pass), and on Script
-    when no statement is ticked; the other locked reasons (rowversion, CLR types, sql_variant, vector) follow from the
-    recorded types. Script (no `maxLines`) requires `target` and `direction` (`INVALID_PARAMS` in both); a preview may
-    leave either out, as the dialog's request on opening does before the form has them. Its answer has empty `text` and
-    carries any of the four refusals known on opening (`asShown`, `keyType`, `keyName`, `notColumns`), `differences`,
-    `updates` and `softValues`, and, only with a `direction`, which decides them, `deletes`, `inserts` and the
-    look-alike counts.
+    when no statement is ticked. It answers the four refusals known on opening (below) before it checks `columns` and
+    `identity`, so a comparison keyed on a hierarchyid column or a repeated name gets its refusal, with its Choose key
+    columns…, never `INVALID_PARAMS` and a failed preview. The other locked reasons (rowversion, CLR types, sql_variant,
+    vector) follow from the recorded types. Script (no `maxLines`) requires `target` and `direction` (`INVALID_PARAMS`
+    in both); a preview may leave either out, as the dialog's request on opening does before the form has them. Its
+    answer has empty `text` and carries any of the four refusals known on opening (`asShown`, `keyType`, `keyName`,
+    `notColumns`), `differences`, `updates` and `softValues`, and, only with a `direction`, which decides them,
+    `deletes`, `inserts` and the look-alike counts.
   - **Deadline and Cancel:** 120 s in `methodPolicies`, as the other result jobs. The dialog's Cancel cancels the request
     through the protocol's cancel, and the backend drops its chunks.
   - **Preview:** `maxLines?: number` (1–30) answers only the first lines, with `complete: false` when there are more,
     and always the counts for the chosen rows (Params above), even when it refuses (the refusal then comes back as the
     answer's `refusal`, not an error). It reads only the rows those lines need, and skips the size estimate. Each
-    preview line is cut at 2,000 characters with "…", so a preview answer stays near 60,000 characters whatever the
-    values (one INSERT of a 2,097,152-character XML value is about 8.4 million characters as its hex term); the size
-    refusal is Script's.
+    preview line is cut at 2,000 characters with "…" while it is written, so a long value's literal is never built whole
+    for a preview, and a preview answer stays near 60,000 characters whatever the values (one INSERT of a
+    2,097,152-character XML value is about 8.4 million characters as its hex term); the size refusal is Script's.
   - **Answer:** `{ text (≤ 1,000,000 characters), differences: { all, grid, selected }, deletes?, updates, inserts?,
-    lookAlikeDeletes?, lookAlikeInserts?, softValues, uncheckedUpdates?: { count, sentence }, selectedKeys?, complete,
-    refusal? }`. `differences` is each Rows option's count of entries that are not `same`, which the options show beside
-    their names and the "N of M differences" sentences read (`grid` is `all` when no view is sent). `uncheckedUpdates`
-    is the chosen UPDATEs whose every SET column Q11 leaves out, so their WHERE checks only the keys, counted in the
-    counts pass by value, so a preview and Script agree: by type alone for a column Q11 always leaves out, and from the
-    old value for one whose type leaves it to the value (char or varchar under a SQL_ collation or with none recorded, a
-    value marked truncated, U+FFFD, a subnormal float), reading only those cells. Its sentence is the backend's, as a
-    refusal's is, since only the backend knows the reasons: it names at most three columns, then "and 2 more", each cut
-    at 60 characters with its reason (the type, as "note: xml"; "id: int and varchar in the two results"; or by value,
-    "code: values not all ASCII under its SQL_ collation", "memo: values not kept in full", "note: values that cannot be
-    written exactly", "ratio: values too small to write exactly"), within 1,000 characters. `selectedKeys` holds the key
-    text of Selected rows' entries that differ (each as the row checks write it, `id = 1002`, cut at 60 characters)
-    while there are at most three. The look-alike counts are the chosen rows to delete and to insert that have a
-    look-alike (`DiffIndex.Poss`), and `softValues` the chosen rows' soft values in ticked columns, counted in the same
-    pass as the counts and `differences`, so the look-alike and Exact text lines describe the chosen rows, not the whole
-    diff. A refusal is an answer, not an error, with empty `text`: `refusal: { kind, sentence }`, `kind` one of
-    `asShown`, `keyType`, `keyName`, `notColumns`, `repeatedKey`, `truncated`, `unwritable`, `keyCollation`,
-    `noDifferences`, `noTickedChange` and `tooLarge`, and the sentence at most 1,000 characters, both bounded in the
-    answer schema. Every refusal's sentence, closed-input forms included, is the backend's (naming at most three
-    columns, then "and 2 more", each cut at 60 characters, so it stays within its 1,000), which holds the counts, names
-    and sample values and knows when an input's result was released; the dialog chooses only the refusal's buttons and
-    their availability, by `kind`, and never parses the sentence. Past 1,000,000 characters, estimated first, it refuses
-    with `tooLarge`, well inside the 16 MiB response limit. In a preview the counts are the chosen rows' entries by
-    kind; after Script they are the script's own statements, which can be lower (Counts above). The backend itself
-    refuses a comparison whose match is not a `columns` match, so Automatic's choice can never be scripted by accident
-    (Use order_no as key columns replaces the comparison with that `columns` match first), and a comparison of rows as
-    shown. Both read the diff set's records (C3's match and C6's as-shown flags), and the WHERE clauses take the
-    recorded key pairs, so the params carry no key columns.
+    lookAlikeDeletes?, lookAlikeInserts?, softValues, softValuesCut?, uncheckedUpdates?: { count, sentence },
+    selectedKeys?, complete, refusal? }`. `differences` is each Rows option's count of entries that are not `same`,
+    which the options show beside their names and the "N of M differences" sentences read (`grid` is `all` when no view
+    is sent). `uncheckedUpdates` is the chosen UPDATEs whose every SET column Q11 leaves out, so their WHERE checks only
+    the keys, counted in the counts pass by value, so a preview and Script agree: by type alone for a column Q11 always
+    leaves out, and from the old value for one whose type leaves it to the value (char or varchar under a SQL_ collation
+    or with none recorded, a value marked truncated, U+FFFD, a subnormal float), reading only those cells. Its sentence
+    is the backend's, as a refusal's is, since only the backend knows the reasons: it names at most three columns, then
+    "and 2 more", each cut at 60 characters with its reason (the type, as "note: xml"; "id: int and varchar in the two
+    results"; or by value, "code: values not all ASCII under its SQL_ collation", "memo: values not kept in full",
+    "note: values that cannot be written exactly", "ratio: values too small to write exactly"), within 1,000 characters.
+    `selectedKeys` holds the key text of Selected rows' entries that differ (each as the row checks write it, `id =
+    1002`, cut at 60 characters) while there are at most three. The look-alike counts are the chosen rows to delete and
+    to insert that have a look-alike (`DiffIndex.Poss`), and `softValues` the chosen rows' soft values in ticked
+    columns, counted in the same pass as the counts and `differences`, so the look-alike and Exact text lines describe
+    the chosen rows, not the whole diff. Past a cut tone the change index keeps only changed pairs, so a cut entry's
+    later soft values are not counted, and `softValuesCut` says so, turning the Exact text line's and the header's count
+    into "at least 12 values". A refusal is an answer, not an error, with empty `text`: `refusal: { kind, sentence }`,
+    `kind` one of `asShown`, `keyType`, `keyName`, `notColumns`, `repeatedKey`, `truncated`, `unwritable`,
+    `keyCollation`, `noDifferences`, `noTickedChange` and `tooLarge`, and the sentence at most 1,000 characters, both
+    bounded in the answer schema. Every refusal's sentence, closed-input forms included, is the backend's (naming at
+    most three columns, then "and 2 more", each cut at 60 characters, so it stays within its 1,000), which holds the
+    counts, names and sample values and knows when an input's result was released; the dialog chooses only the refusal's
+    buttons and their availability, by `kind`, and never parses the sentence. Past 1,000,000 characters, estimated
+    first, it refuses with `tooLarge`, well inside the 16 MiB response limit. In a preview the counts are the chosen
+    rows' entries by kind; after Script they are the script's own statements, which can be lower (Counts above). The
+    backend itself refuses a comparison whose match is not a `columns` match, so Automatic's choice can never be
+    scripted by accident (Use order_no as key columns replaces the comparison with that `columns` match first), and a
+    comparison of rows as shown. Both read the diff set's records (C3's match and C6's as-shown flags), and the WHERE
+    clauses take the recorded key pairs, so the params carry no key columns.
 - **Backend `Results/DiffScript.cs`:** literals by the column's `dataType`, precision and scale:
 
   | Type | Literal |
@@ -1273,9 +1288,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - A cut tone lists only the first changed cells, so `DiffScript` takes an entry's changed pairs (its SET columns
       and Q11's) from the change index's full list whenever the tone was cut, which C3 keeps in both layouts (§ 4a).
     - Three more records on the diff set, written in `DiffWritten` beside the match C3 records: Result 1's column type
-      and collation per pair (Columns above, Literals); whether the inputs were BigQuery results (`residence` set), for
-      the refusal; and the names of columns only one result has, as the diff answer's `OneSided` lists them (at most
-      `MaxDiffColumnNames` a side), for the header's left-out line, which must be written while Result 1 is closed.
+      (name, precision, scale and maximum length) and collation per pair (Columns above, Literals); whether the inputs
+      were BigQuery results (`residence` set), for the refusal; and the names of columns only one result has, as the
+      diff answer's `OneSided` lists them (at most `MaxDiffColumnNames` a side), for the header's left-out line, which
+      must be written while Result 1 is closed.
   - Names are bracket-quoted by the existing shared `ScriptFormatter.Quote`, unchanged: it has many callers (Script As,
     restore, the alter and DML templates among them), so a control character in a target name (NUL and line breaks
     among them) is refused by the request's zod schema and by C#'s request validation instead.
@@ -1305,12 +1321,15 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       refused;
     - an int key paired with a varchar key holding `1) SELECT 1; --`, both directions, refused as a key pair of
       different kinds, and such a pair left out of Q11's guards; an int key paired with a decimal key accepted; a
-      datetime key paired with a datetime2(3) key, both directions, cast to the target side's type, its UPDATE matching
-      its row and its INSERT check finding an existing one; a varchar key paired with an nvarchar key, both directions,
-      never cast; a date key paired with a time key refused;
+      datetime key paired with a datetime2(3) key, both directions and with each result as the datetime2(3) side (so a
+      cast to Result 1's type needs its recorded scale), cast to the target side's type, its UPDATE matching its row and
+      its INSERT check finding an existing one; a varchar key paired with an nvarchar key, both directions, never cast;
+      a date key paired with a time key refused;
     - a rowversion key accepted with INSERT unticked; a subnormal float as a key refused and as a guard left out;
     - the look-alike and soft counts for Rows in the grid and Selected rows; a refusal naming four long columns, cut;
-    - `columns` without a key pair, and Script with no statement ticked, each `INVALID_PARAMS`;
+    - `columns` without a key pair, and Script with no statement ticked, each `INVALID_PARAMS`; an opening preview of a
+      comparison keyed on a hierarchyid column, and one keyed on a repeated name, each answering its refusal, not
+      `INVALID_PARAMS`;
     - the header's left-out line with Result 1 closed: one-sided, computed, unticked and identity columns;
     - `uncheckedUpdates` alike in a preview and in Script (an UPDATE changing only an xml column, one changing only
       non-ASCII varchar under a SQL_ collation, and one with an ASCII value there, which is checked); `selectedKeys` for
@@ -1320,7 +1339,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - quoting, NULL keys, composite keys;
     - both directions, statement order, the row checks and their cut key text;
     - Two rows filtered by an old value, so only − halves are in the grid: the counts, the summary and the script agree;
-    - a preview of a 2,097,152-character XML INSERT, cut to 2,000 characters a line; each refusal's `kind`;
+    - a preview of a 2,097,152-character XML INSERT, cut to 2,000 characters a line, with the working memory it charged
+      near that line's size, not the hex term's; each refusal's `kind`;
     - Q11's old values in an UPDATE's WHERE: NULL, each type it leaves out, a truncated or U+FFFD value left out, a
       real key and guard compared exactly, both directions; the same in a DELETE's WHERE; the INSERT check with NULL
       and composite keys;
