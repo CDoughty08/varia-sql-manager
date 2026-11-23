@@ -249,7 +249,9 @@ export abstract class AgentObjectDocumentService<Model, Draft, Field extends str
       this.afterDraft(id)
       return
     }
-    this.patch(id, { phase: 'ready', model, draft: this.initialDraft(model, current), revision: current.revision + 1, changes: 0, error: undefined, unread: undefined, notice, script: { state: 'idle', message: noScriptNotice }, scriptRevision: undefined })
+    // A read that replaces the draft (Reload) ends a reopened document's wait for its first read too.
+    this.rereadOn.delete(id)
+    this.patch(id, { phase: 'ready', model, draft: this.initialDraft(model, current), revision: current.revision + 1, changes: 0, error: undefined, unread: undefined, restored: undefined, notice, script: { state: 'idle', message: noScriptNotice }, scriptRevision: undefined })
     this.options.documents.setDirty(id, !this.hasObject(model))
     this.schedulePreview(id, 0)
   }

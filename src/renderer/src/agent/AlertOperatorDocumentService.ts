@@ -312,7 +312,9 @@ export class AlertOperatorDocumentService<M, D> extends SnapshotStore<AgentObjec
       return
     }
     const draft = this.spec.exists(model) ? base : this.spec.initial(model, current.preset)
-    this.patch(id, { phase: 'ready', model, base, draft, revision: current.revision + 1, changes: 0, unread: false, error: undefined, notice, script: { state: 'idle', message: noScriptNotice }, scriptRevision: undefined })
+    // A read that replaces the draft (Reload) ends a reopened document's wait for its first read too.
+    this.rereadOn.delete(id)
+    this.patch(id, { phase: 'ready', model, base, draft, revision: current.revision + 1, changes: 0, unread: false, restored: undefined, error: undefined, notice, script: { state: 'idle', message: noScriptNotice }, scriptRevision: undefined })
     // New Alert and New Operator stay clean until their first edit, as New Job does, so closing an untouched one asks nothing.
     this.options.documents.setDirty(id, false)
     this.schedulePreview(id, 0)
