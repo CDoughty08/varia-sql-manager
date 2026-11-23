@@ -76,6 +76,8 @@ internal sealed partial class ObjectSearchService : IDisposable
         public string? Phase;
         /// <summary>BigQuery's projects indexed by name only (extra projects unless their details were asked for).</summary>
         public List<string>? NamesOnly;
+        /// <summary>BigQuery's last full build's bulk path, when it ran.</summary>
+        public BigQueryBulkStatus? Bulk;
         /// <summary>BigQuery datasets DDL changed since their last read, by project and dataset (under Gate): the next build re-reads them whole.</summary>
         public readonly Dictionary<(string Project, string Dataset), long> Stale = [];
         /// <summary>Numbers each stale mark (under Gate), so a build clears only the marks it saw before it read the dataset.</summary>
@@ -358,7 +360,7 @@ internal sealed partial class ObjectSearchService : IDisposable
                 return new(state.Building ? "building" : state.Built || held > 0 ? "ready" : "none",
                     state.Building ? state.Databases : held + skipped.Count(skip => skip.Database.Length > 0 && skip.Code is not ChildrenLeftOut && !databases.Any(value => value.Database == skip.Project && value.Dataset == skip.Database)),
                     state.Building ? state.Indexed : held, state.Index.Objects, databases.Sum(value => value.Modules), databases.Sum(value => value.Cut), skipped, state.Definitions,
-                    state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture), Providers.BigQuery, state.Building ? state.Phase : null, state.NamesOnly is { Count: > 0 } names ? names : null);
+                    state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture), Providers.BigQuery, state.Building ? state.Phase : null, state.NamesOnly is { Count: > 0 } names ? names : null, state.Bulk);
             }
             return new(state.Building ? "building" : state.Built ? "ready" : databases.Count > 0 ? "ready" : "none", state.Databases, state.Building ? state.Indexed : databases.Count,
                 state.Index.Objects, databases.Sum(value => value.Modules) + (state.Index.Resource?.Modules ?? 0) + (state.Index.Server?.Modules ?? 0),

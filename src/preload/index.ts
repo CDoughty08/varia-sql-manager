@@ -79,6 +79,7 @@ const api: VariaApi = {
   bigQueryProjects: params => request('bigquery.projects', params),
   bigQueryDryRun: params => request('bigquery.dryRun', params),
   bigQueryProperties: params => request('bigquery.properties', params),
+  bigQueryIndexEstimate: params => request('bigquery.indexEstimate', params),
   databases: connectionId => request('databases.list', { connectionId }),
   tableColumns: (connectionId, database, schema, name) => request('tables.columns', { connectionId, database, schema, name }),
   explorerChildren: params => request('explorer.children', params),

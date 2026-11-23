@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { bigQueryFieldPathMax, bigQueryFieldText, bigQueryPath, isBigQueryFieldPath, isBigQueryName, quoteBigQuery } from '../src/shared/bigquery/names'
-import { bigQueryPreviewTargetSchema, bigQueryPropertiesRequestSchema, bigQueryPropertiesSchema } from '../src/shared/bigquery/objects'
+import { bigQueryMaxColumnFacts, bigQueryMaxDefinition, bigQueryPreviewTargetSchema, bigQueryPropertiesRequestSchema, bigQueryPropertiesSchema } from '../src/shared/bigquery/objects'
 import { validateRequest } from '../src/main/validation'
 import { optionsAllow } from '../src/shared/ipc/methods'
 
@@ -49,13 +49,23 @@ describe('BigQuery Object Explorer requests', () => {
     expect(optionsAllow('query.execute', 'sqlserver', { preview })).toBe(false)
   })
 
-  it('validates bigquery.properties for table-like kinds only, and bounds its answer', () => {
+  it('validates bigquery.properties for table-like kinds and routines, and bounds its answer', () => {
     const request = { connectionId: uuid, requestId: uuid, kind: 'bqView', project: 'varia-alpha', dataset: 'sales', name: 'daily' }
     expect(() => validateRequest('bigquery.properties', request)).not.toThrow()
-    expect(bigQueryPropertiesRequestSchema.safeParse({ ...request, kind: 'bqRoutine' }).success).toBe(false)
+    expect(bigQueryPropertiesRequestSchema.safeParse({ ...request, kind: 'bqRoutine', name: 'to_cents' }).success).toBe(true)
+    // A routine name is checked by the routine rule (letters, digits and underscores), a table name by the table rule.
+    expect(bigQueryPropertiesRequestSchema.safeParse({ ...request, kind: 'bqRoutine', name: 'daily view' }).success).toBe(false)
+    expect(bigQueryPropertiesRequestSchema.safeParse({ ...request, name: 'daily view' }).success).toBe(true)
+    expect(bigQueryPropertiesRequestSchema.safeParse({ ...request, kind: 'bqModel' }).success).toBe(false)
     expect(bigQueryPropertiesRequestSchema.safeParse({ ...request, name: 'a\\b' }).success).toBe(false)
     const facts = { name: 'daily', type: 'view', elapsedMs: 3, groups: [{ title: 'Table', facts: [{ label: 'Type', value: 'view' }] }] }
     expect(bigQueryPropertiesSchema.safeParse(facts).success).toBe(true)
     expect(bigQueryPropertiesSchema.safeParse({ ...facts, groups: [{ title: 'Table', facts: [{ label: 'Description', value: 'x'.repeat(2001) }] }] }).success).toBe(false)
+    const detailed = { ...facts, definition: 'SELECT 1', columns: [{ name: 'day', type: 'DATE', description: 'The day.' }, { name: 'n', type: 'INT64' }] }
+    expect(bigQueryPropertiesSchema.safeParse(detailed).success).toBe(true)
+    expect(bigQueryPropertiesSchema.safeParse({ ...detailed, definition: 'x'.repeat(bigQueryMaxDefinition + 1) }).success).toBe(false)
+    expect(bigQueryPropertiesSchema.safeParse({ ...detailed, columns: Array.from({ length: bigQueryMaxColumnFacts + 1 }, (_, i) => ({ name: 'c' + i, type: 'INT64' })) }).success).toBe(false)
+    expect(bigQueryPropertiesSchema.safeParse({ ...detailed, columns: [{ name: 'day', type: 'DATE', description: 'x'.repeat(1025) }] }).success).toBe(false)
+    expect(bigQueryPropertiesSchema.safeParse({ ...detailed, columnsCut: false }).success).toBe(false)
   })
 })

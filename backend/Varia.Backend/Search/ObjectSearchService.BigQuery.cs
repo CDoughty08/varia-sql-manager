@@ -61,6 +61,11 @@ internal sealed partial class ObjectSearchService
         if (scope is not null && (!projects.Contains(scope.Project, StringComparer.Ordinal) || scope.Dataset is { } only && !BqNames.IsDataset(only))) throw Invalid("scope.");
         if (scope is not null && staleOnly) throw Invalid("stale.");
         var detailed = args.ExtraDetails == true ? projects.ToHashSet(StringComparer.Ordinal) : new HashSet<string>(StringComparer.Ordinal) { billing };
+        // The billed bulk path reads only what the estimate covered: a full build's own detailed projects, the locations named.
+        var bulk = args.Bulk;
+        if (bulk is not null && (scope is not null || staleOnly || bulk.Locations is not { Count: > 0 and <= BigQueryBulkSql.MaxLocations }
+            || bulk.Locations.Any(item => item is null || !detailed.Contains(item.Project) || !BqNames.IsLocation(item.Location))
+            || bulk.MaximumBytesBilled is < 1 or > BigQueryLimits.MaxSafeInteger || bulk.BudgetBytes is not (>= 1 and <= BigQueryLimits.MaxSafeInteger))) throw Invalid("bulk.");
         var definitions = args.Definitions ?? true;
         var state = states.GetOrAdd(args.ConnectionId, _ => new State(pool, resources));
         using var source2 = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -85,6 +90,7 @@ internal sealed partial class ObjectSearchService
             if (scope is null && !staleOnly)
             {
                 state.Definitions = definitions;
+                state.Bulk = null;
                 state.NamesOnly = [.. projects.Where(project => !detailed.Contains(project))];
             }
             state.Indexed = 0;
@@ -118,6 +124,8 @@ internal sealed partial class ObjectSearchService
         {
             // The datasets this build reads: a stale-only build those DDL marked; otherwise each project's listing (or the scope's dataset).
             var targets = new List<(string Project, string Dataset)>();
+            // Each listed dataset's location, for the bulk path's regions.
+            var located = new Dictionary<(string, string), string>();
             if (staleOnly) targets.AddRange(stale.Where(item => projects.Contains(item.Project, StringComparer.Ordinal)).OrderBy(item => item.Project, StringComparer.Ordinal).ThenBy(item => item.Dataset, StringComparer.Ordinal));
             else
                 foreach (var project in scope is null ? projects : [scope.Project])
@@ -137,6 +145,8 @@ internal sealed partial class ObjectSearchService
                     state.Index.KeepWhere(read => read.Database != project || read.Dataset is not { } dataset || names.Contains(dataset) || list.Cut
                         || scope?.Dataset is { } kept && kept != dataset);
                     targets.AddRange(listed.Select(name => (project, name)));
+                    foreach (var name in listed)
+                        if (list.Locations?.GetValueOrDefault(name) is { } where) located[(project, name)] = where;
                 }
             lock (state.Gate) state.Databases = targets.Count;
             // Pass 2's datasets: their objects as listed, the ones to read (by position), and whether the listing was cut. Details reused
@@ -202,21 +212,27 @@ internal sealed partial class ObjectSearchService
             var detailsDone = 0;
             Report(0, wanted, "details", true);
             using var slots = new SemaphoreSlim(BigQueryIndexLimits.Details);
-            await Parallel.ForEachAsync(pending.OrderBy(pair => pair.Key.Item1, StringComparer.Ordinal).ThenBy(pair => pair.Key.Item2, StringComparer.Ordinal),
-                new ParallelOptions { MaxDegreeOfParallelism = BigQueryIndexLimits.Datasets, CancellationToken = stop }, async (pair, loop) =>
+            // One dataset's details: the bulk path's rows where they cover an object, free tables.get and routines.get for the rest.
+            async Task DetailAsync((string Project, string Dataset) target, (List<BigQueryEntry> Listed, int[] Read, bool Cut) value, BigQueryBulkDataset? rows, CancellationToken loop)
             {
-                var (project, dataset) = pair.Key;
+                var (project, dataset) = target;
                 var reused = BigQueryEntries.Known(state.Index.Get(project + "\u0001" + dataset), definitions);
-                var entries = pair.Value.Listed.Select(item => BigQueryEntries.Reuse(reused, item)).ToArray();
+                var entries = value.Listed.Select(item => BigQueryEntries.Reuse(reused, item)).ToArray();
                 reused.Clear();
                 ObjectIndexSkip? failed = null;
                 var failures = 0;
                 var tasks = new List<Task>();
                 // Only what pass 1 counted: an object whose reused details pass 1 could not keep stays as it was held.
-                foreach (var at in pair.Value.Read)
+                foreach (var at in value.Read)
                 {
                     var item = entries[at];
                     var index = at;
+                    if (rows is not null && BigQueryBulk.Detail(rows, item, definitions) is { } read)
+                    {
+                        entries[index] = item with { Detail = read };
+                        Report(Interlocked.Increment(ref detailsDone), wanted, "details", false);
+                        continue;
+                    }
                     tasks.Add(Task.Run(async () =>
                     {
                         await slots.WaitAsync(loop);
@@ -250,8 +266,46 @@ internal sealed partial class ObjectSearchService
                 if (held is not null) Skip(held);
                 if (failed is { } first)
                     Skip(first with { Details = true, Message = failures == 1 ? "The details of 1 object could not be read: " + first.Message : "The details of " + failures.ToString(System.Globalization.CultureInfo.InvariantCulture) + " objects could not be read: " + first.Message });
-                else if (held is null or { Code: ChildrenLeftOut } && !pair.Value.Cut) Clear(pair.Key);
-            });
+                else if (held is null or { Code: ChildrenLeftOut } && !value.Cut) Clear(target);
+            }
+            if (bulk is not null)
+            {
+                // Each location the estimate covered, one at a time, only when it holds datasets still to read (an empty one bills
+                // nothing); its rows arrive a dataset at a time. A location whose queries fail leaves its other datasets to the free calls.
+                var bulkRead = 0;
+                var bulkFailed = 0;
+                (string Code, string Message)? bulkError = null;
+                var asked = new HashSet<(string, string)>();
+                // What the cost prompts showed: the jobs of every location together bill no more.
+                var budget = new BigQueryBulkBudget(bulk.BudgetBytes!.Value);
+                foreach (var (project, location) in bulk.Locations.Select(item => (item.Project, item.Location)))
+                {
+                    // Location ids are case-insensitive: one spelled twice is read once.
+                    if (!asked.Add((project, location.ToUpperInvariant()))) continue;
+                    var inLocation = pending.Keys.Where(key => key.Item1 == project && string.Equals(located.GetValueOrDefault(key), location, StringComparison.OrdinalIgnoreCase)).ToHashSet();
+                    if (inLocation.Count == 0) continue;
+                    // The objects pass 2 would read, by dataset: the rows of any other are dropped as they arrive.
+                    var names = inLocation.ToDictionary(key => key.Item2, key => pending.TryGetValue(key, out var value) ? value.Read.Select(at => value.Listed[at].Name).ToHashSet(StringComparer.Ordinal) : [], StringComparer.Ordinal);
+                    try
+                    {
+                        await foreach (var rows in source.BulkAsync(args.ConnectionId, project, location, definitions, bulk.MaximumBytesBilled, budget,
+                            (dataset, name) => names.TryGetValue(dataset, out var set) && set.Contains(name), stop).WithCancellation(stop))
+                            if (inLocation.Remove((project, rows.Dataset)) && pending.TryRemove((project, rows.Dataset), out var value))
+                                await DetailAsync((project, rows.Dataset), value, rows, stop);
+                        bulkRead++;
+                    }
+                    catch (Exception error) when (!stop.IsCancellationRequested && error is not RequestException { Code: "NOT_CONNECTED" })
+                    {
+                        bulkFailed++;
+                        // A location past its own time limit timed out; its datasets still get their details from the free calls below.
+                        var mapped = source.Map(error is OperationCanceledException ? new TimeoutException() : error, project, "bigquery.jobs.create", stop);
+                        bulkError ??= mapped is RequestException request ? (request.Code, Explorer.ExplorerLabels.Clip(request.Message, 512)) : ("BACKEND_ERROR", "BigQuery refused the request.");
+                    }
+                }
+                lock (state.Gate) if (ReferenceEquals(state.Build, source2)) state.Bulk = new(bulkRead, bulkFailed, bulkError?.Code, bulkError?.Message);
+            }
+            await Parallel.ForEachAsync(pending.OrderBy(pair => pair.Key.Item1, StringComparer.Ordinal).ThenBy(pair => pair.Key.Item2, StringComparer.Ordinal),
+                new ParallelOptions { MaxDegreeOfParallelism = BigQueryIndexLimits.Datasets, CancellationToken = stop }, (pair, loop) => new ValueTask(DetailAsync(pair.Key, pair.Value, null, loop)));
             Report(detailsDone, wanted, "details", true);
             lock (state.Gate)
             {

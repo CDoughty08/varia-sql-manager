@@ -29,11 +29,14 @@ internal static partial class BigQueryIndexChecks
         Ddl(check);
         Budget(check);
         Reuse(check);
+        BulkSql(check);
+        BulkTypes(check);
         using var rsa = System.Security.Cryptography.RSA.Create(2048);
         var key = BigQueryCredentialChecks.Key(rsa.ExportPkcs8PrivateKeyPem());
         await BuildAsync(check, key);
         await RefreshAsync(check, key);
         await FailuresAsync(check, key);
+        await BulkAsync(check, key);
         LookupStates(check);
         await LookupAsync(check, key);
     }

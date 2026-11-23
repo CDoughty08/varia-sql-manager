@@ -55,6 +55,10 @@ internal static partial class BqNames
     /// <summary>`project`.`dataset`.`table`, each part quoted on its own.</summary>
     public static string TablePath(string project, string dataset, string table) => DatasetPath(project, dataset) + "." + QuoteTable(table);
     public static string RoutinePath(string project, string dataset, string routine) => DatasetPath(project, dataset) + "." + QuoteRoutine(routine);
+    /// <summary>Whether a location can name a region qualifier: BigQuery's location ids (US, EU, us-central1, …).</summary>
+    public static bool IsLocation(string? value) => value is { Length: > 0 and <= BigQueryLimits.Location } && BigQueryLimits.LocationId().IsMatch(value);
+    /// <summary>`project`.`region-us`: a location's region qualifier, as region-scoped INFORMATION_SCHEMA views below it take it.</summary>
+    public static string RegionPath(string project, string location) => QuoteProject(project) + "." + (IsLocation(location) ? Wrap("region-" + location.ToLowerInvariant()) : throw Invalid("location"));
     /// <summary>A field path as a query names it: each part quoted, joined by dots.</summary>
     public static string FieldPathText(string path) => IsFieldPath(path) ? string.Join('.', path.Split('.').Select(QuoteColumn)) : throw Invalid("column");
 }

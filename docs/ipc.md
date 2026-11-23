@@ -721,8 +721,8 @@ only. `connections.connect`, `.databases` and `.preview` take an optional `provi
 absent means SQL Server, an unknown one is `INVALID_PARAMS`). `connections.connect` and `.disconnect` serve both engines:
 a `bigquery` connect opens a BigQuery handle ([BigQuery](bigquery.md)). `.databases` and `databases.list` serve both
 (BigQuery's datasets); `.preview` refuses `bigquery` with `UNSUPPORTED_PROVIDER`. `bigquery.account`,
-`bigquery.projects`, `bigquery.dryRun`, `bigquery.properties`, `bigquery.endIdleSessions`, `bigquery.cancelJobs`,
-`results.remoteQuery`, `query.attach` and `language.lookup` serve BigQuery alone (`Providers.BigQueryMethods`). Two main-only channels serve the Connect dialog:
+`bigquery.projects`, `bigquery.dryRun`, `bigquery.properties`, `bigquery.indexEstimate`, `bigquery.endIdleSessions`,
+`bigquery.cancelJobs`, `results.remoteQuery`, `query.attach` and `language.lookup` serve BigQuery alone (`Providers.BigQueryMethods`). Two main-only channels serve the Connect dialog:
 `varia:connections-pick-key-file` (main's file picker; answers an opaque reference and the file's name) and
 `varia:connections-confirm-source` (records a federation token file the user confirmed), and one serves the cost prompt:
 `varia:bigquery-cost-prompt` (`{ options, costPrompt }`, strict; sets only the saved entry's cost-prompt choice and answers
