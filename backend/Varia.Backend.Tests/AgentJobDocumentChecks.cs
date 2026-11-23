@@ -75,6 +75,7 @@ internal static class AgentJobDocumentChecks
             (existing + update + AgentSql.AlertGuard(3) + Call(2, "EXEC @rc = msdb.dbo.sp_update_alert @name = @name_2, @job_id = @no_job;"), "call 2 has an alert guard that is not exactly its own"),
             (existing + update + AgentSql.AlertGuard(2) + Call(2, "EXEC @rc = msdb.dbo.sp_update_alert @name = @name_1, @job_id = @no_job;"), "passes @name another parameter's value"),
             (existing + update + AgentSql.AlertGuard(2) + Call(2, "EXEC @rc = msdb.dbo.sp_update_alert @name = @name_2, @job_id = @job_id;"), "passes @job_id another parameter's value"),
+            (existing + update + AgentSql.AlertGuard(2) + Call(2, "EXEC @rc = msdb.dbo.sp_update_alert @name = @name_2, @job_id = @no_job, @enabled = @enabled;"), "passes @enabled to sp_update_alert"),
             (existing + "EXEC @rc = msdb.dbo.sp_update_job @job_id = @job_id, @description = @description;" + AgentSql.CheckAt(2), "call 1 is not followed by its return-code check"),
             (existing + Call(1, "EXEC @rc = msdb.dbo.sp_update_job @job_id = @job_id, @enabled = @enabled, @enabled = @enabled;"), "passes @enabled twice"),
             (existing + Call(1, "EXEC @rc = msdb.dbo.sp_update_job @job_id = @job_id, @enabled = @description;"), "passes @enabled another parameter's value"),

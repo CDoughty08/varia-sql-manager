@@ -39,7 +39,7 @@ export interface QueryDocument {
 }
 /** What a tab holds: a shared DocumentKind (its text crosses IPC to be saved and kept by AutoRecover), or a table designer,
  *  Database Properties, New Database, an SSIS Catalog object's properties, an Activity Monitor, Integration Services Operations or Restore Database, which live only in the renderer. */
-export type WorkbenchDocumentKind = DocumentKind | 'tableDesigner' | 'databaseProperties' | 'tableProperties' | 'newDatabase' | SsisDocumentKind | 'activityMonitor' | 'ssisOperations' | 'restoreDatabase' | 'objectSearch' | 'peek' | 'releaseNotes' | 'help' | 'agentJobActivity' | 'agentLogViewer' | 'bigQueryProperties' | 'agentJob' | 'agentSchedules' | 'agentProxy' | 'credential'
+export type WorkbenchDocumentKind = DocumentKind | 'tableDesigner' | 'databaseProperties' | 'tableProperties' | 'newDatabase' | SsisDocumentKind | 'activityMonitor' | 'ssisOperations' | 'restoreDatabase' | 'objectSearch' | 'peek' | 'releaseNotes' | 'help' | 'agentJobActivity' | 'agentLogViewer' | 'bigQueryProperties' | 'agentJob' | 'agentAlert' | 'agentOperator' | 'agentOperators' | 'agentSchedules' | 'agentProxy' | 'credential'
 /** Documents whose content is not text in the editor: a provider saves and closes them (DocumentService.registerProvider). */
 export type CustomDocumentKind = Exclude<WorkbenchDocumentKind, DocumentKind>
 
@@ -51,7 +51,7 @@ export type SessionNotice = 'restarted' | 'lost'
 export const documentKind = (document: Pick<QueryDocument, 'kind'> | undefined): WorkbenchDocumentKind => document?.kind ?? 'sql'
 /** A query tab, as opposed to a value opened from the results: only queries connect, execute, and have results. */
 export const isQueryDocument = (document: Pick<QueryDocument, 'kind'> | undefined): boolean => !!document && documentKind(document) === 'sql'
-const customKinds: ReadonlySet<WorkbenchDocumentKind> = new Set<CustomDocumentKind>(['tableDesigner', 'databaseProperties', 'tableProperties', 'newDatabase', ...ssisDocumentKinds, 'activityMonitor', 'ssisOperations', 'restoreDatabase', 'objectSearch', 'peek', 'releaseNotes', 'help', 'agentJobActivity', 'agentLogViewer', 'bigQueryProperties', 'agentJob', 'agentSchedules', 'agentProxy', 'credential'])
+const customKinds: ReadonlySet<WorkbenchDocumentKind> = new Set<CustomDocumentKind>(['tableDesigner', 'databaseProperties', 'tableProperties', 'newDatabase', ...ssisDocumentKinds, 'activityMonitor', 'ssisOperations', 'restoreDatabase', 'objectSearch', 'peek', 'releaseNotes', 'help', 'agentJobActivity', 'agentLogViewer', 'bigQueryProperties', 'agentJob', 'agentAlert', 'agentOperator', 'agentOperators', 'agentSchedules', 'agentProxy', 'credential'])
 /** A kind whose provider owns its content (DocumentService.registerProvider): no text, no model, nothing AutoRecover keeps. */
 export const isCustomKind = (kind: WorkbenchDocumentKind | undefined): kind is CustomDocumentKind => !!kind && customKinds.has(kind)
 /** A document whose content is text in the editor (a query or a value), as opposed to a table designer, Database Properties,
@@ -75,6 +75,9 @@ export const kindInfo: Readonly<Record<WorkbenchDocumentKind, KindInfo>> = {
   ssisOperations: { language: '', icon: 'pulse', label: 'Integration Services Operations', value: 'operations', blankName: 'Operations' },
   agentJobActivity: { language: '', icon: 'agent-activity', label: 'Job Activity Monitor', value: 'job activity', blankName: 'Job Activity Monitor' },
   agentJob: { language: '', icon: 'settings-gear', label: 'Job Properties', value: 'job', blankName: 'New Job' },
+  agentAlert: { language: '', icon: 'bell', label: 'Alert Properties', value: 'alert', blankName: 'New Alert' },
+  agentOperator: { language: '', icon: 'agent-operator', label: 'Operator Properties', value: 'operator', blankName: 'New Operator' },
+  agentOperators: { language: '', icon: 'agent-operator', label: 'Operators and Notifications', value: 'notifications', blankName: 'Operators and Notifications' },
   agentSchedules: { language: '', icon: 'agent-schedule', label: 'Schedules', value: 'schedules', blankName: 'Schedules' },
   agentProxy: { language: '', icon: 'agent-proxy', label: 'Proxy Account Properties', value: 'proxy', blankName: 'New Proxy' },
   credential: { language: '', icon: 'key', label: 'Credential Properties', value: 'credential', blankName: 'New Credential' },

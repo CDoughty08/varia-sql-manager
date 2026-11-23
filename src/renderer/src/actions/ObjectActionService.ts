@@ -115,6 +115,12 @@ export const jobActionMessages = {
   /** The tree's row carries the job's ID, which the backend checks before it changes the job; a row without it is refused. */
   unidentified: 'Refresh Object Explorer: this row did not include the job ID.'
 } as const
+/** An alert's or operator's Enable and Disable (AG-7). */
+export const agentObjectActionMessages = {
+  enabled: (noun: string, label: string) => `Enabled the ${noun} ${label}.`,
+  disabled: (noun: string, label: string) => `Disabled the ${noun} ${label}.`,
+  unavailable: { disable: 'Select an enabled alert or operator in Object Explorer.', enable: 'Select a disabled alert or operator in Object Explorer.' }
+} as const
 const verbTitle = { rename: 'Rename', disable: 'Disable', enable: 'Enable', stopJob: 'Stop Job' } as const satisfies { readonly [V in StateVerb]: string }
 const isLoginSubtype = (subtype: string | undefined): subtype is LoginSubtype => (loginSubtypes as readonly string[]).includes(subtype ?? '')
 const isLoginVerb = (action: ObjectAction): action is ObjectAction & LoginVerb => (loginVerbs as readonly string[]).includes(action)
@@ -355,6 +361,23 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
   }
 
   /**
+   * An alert's or operator's Enable or Disable (AG-7): one status-bar job; the backend finds the object by its name (sp_update_alert and
+   * sp_update_operator take the name) and refuses a row msdb no longer has. The folder is reconciled so the row's badge follows.
+   */
+  async changeAgentObjectState(node: ExplorerMenuNode, verb: 'disable' | 'enable'): Promise<void> {
+    const object = objectOf(node)
+    if (!this.canRun(verb, node) || (object?.kind !== 'agentAlert' && object?.kind !== 'agentOperator') || object.name === undefined) throw new Error(agentObjectActionMessages.unavailable[verb])
+    const running = this.jobs.get(node.id)
+    if (running) { this.options.report.error(renameMessages.running(running.label, running.verb)); return }
+    const folder = this.options.explorer.listingFolderOf(node.id)
+    const outcome = await this.runStateJob(node, verb, undefined, requestId => this.options.api.executeObjectAction({ action: verb, connectionId: node.connectionId, requestId, target: object }))
+    if (!this.succeeded(node, verb, outcome)) return
+    if (folder !== undefined) this.options.explorer.reconcile(folder, { select: node.ref })
+    const label = displayText(object.name), noun = object.kind === 'agentAlert' ? 'alert' : 'operator'
+    this.options.report.notice(verb === 'disable' ? agentObjectActionMessages.disabled(noun, label) : agentObjectActionMessages.enabled(noun, label))
+  }
+
+  /**
    * The login's facts as the backend's preflight reads them, read as the verb's status-bar job, or undefined after reporting
    * why not; nothing is said when the server went or Stop ended the read.
    */
@@ -394,7 +417,7 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
     if (dropped || this.disposed || !result) return undefined
     if (!result.ok) {
       // A Stop the backend could not confirm in time; otherwise CANCELLED is a disconnect, which drops the job first.
-      if (result.code === 'CANCELLED') { if (stopped) this.options.report.error(verb === 'rename' ? renameMessages.stoppedUnknown : verb === 'stopJob' || objectOf(node)?.kind === 'agentJob' ? jobActionMessages.stoppedUnknown(verb) : loginActionMessages.stoppedUnknown(verb)); return undefined }
+      if (result.code === 'CANCELLED') { if (stopped) this.options.report.error(verb === 'rename' ? renameMessages.stoppedUnknown : verb === 'stopJob' || objectOf(node)?.kind?.startsWith('agent') ? jobActionMessages.stoppedUnknown(verb) : loginActionMessages.stoppedUnknown(verb)); return undefined }
       this.options.report.error(result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST' ? unknownOutcomeMessage : `${failed}: ${result.error}`)
       return undefined
     }

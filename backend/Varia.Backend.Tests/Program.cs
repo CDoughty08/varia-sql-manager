@@ -551,6 +551,7 @@ if (liveGroup is null)
         ("AgentJobDocument", () => AgentJobDocumentChecks.RunAsync(Check)),
         ("AgentProxy", () => AgentProxyChecks.RunAsync(Check)),
         ("AgentHistory", () => AgentHistoryChecks.RunAsync(Check)),
+        ("AgentObject", () => AgentObjectChecks.RunAsync(Check)),
         ("AgentSchedule", () => AgentScheduleChecks.RunAsync(Check)),
         ("Discard", () => DiscardChecks.RunAsync(Check))
     ];

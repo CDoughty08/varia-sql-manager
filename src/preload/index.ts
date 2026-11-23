@@ -112,6 +112,7 @@ const api: VariaApi = {
   catalogSetupSsis: params => request('ssis.catalogSetup', params),
   agentProfile: params => request('agent.profile', params),
   agentHistoryMessage: params => request('agent.historyMessage', params),
+  agentCounterValues: params => request('agent.counterValues', params),
   languageParse: params => request('language.parse', params),
   cancelSsis: requestIds => ipcRenderer.invoke('varia:ssis-cancel', { requestIds }),
   activityDetails: params => request('activity.details', params),

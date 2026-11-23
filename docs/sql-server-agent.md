@@ -4,8 +4,9 @@ SQL Server Agent support is planned for 0.11.0 ([docs/agent-plan.md](agent-plan.
 [docs/agent-ui-rethink.md](agent-ui-rethink.md)). Behind the release gate (below) Object Explorer shows the SQL Server Agent node, a job's New Job…, View History, Start Job at Step…, Stop
 Job, Enable, Disable, Rename, Delete and Properties, and the Agent node's Start, Stop, Restart and Properties; Search Objects finds jobs, alerts
 and operators, Script As scripts jobs, alerts, operators and proxies, Job Activity Monitor follows the jobs live, the
-Log File Viewer reads and deletes job history, the job document edits a job's General, Steps, Schedules, Notifications, Targets and Alerts or creates a job, and
-the Schedules document manages the shared schedules, behind the same gate until 0.11.0.
+Log File Viewer reads and deletes job history, the job document edits a job's General, Steps, Schedules, Notifications, Targets and Alerts or creates a job,
+the Schedules document manages the shared schedules, and the alert and operator documents and the Operators and notifications grid edit and create
+alerts, operators and who is notified, behind the same gate until 0.11.0.
 
 ## How it works
 
@@ -57,7 +58,7 @@ the Schedules document manages the shared schedules, behind the same gate until 
   Linux server, Managed Instance, the service changing state), and the backend refuses them
   `NOT_SUPPORTED`. A start, stop or restart takes the long gate, so one runs per connection. The state shown elsewhere
   stays SQL's (`xp_servicecontrol N'QueryState'`); `xp_servicecontrol` never starts or stops anything.
-- **Job Activity Monitor** (`agent.jobs`, docs/live.md). The Agent node's menu (first item), Enter or double-click on its
+- **Job Activity Monitor** (`agent.jobs`, docs/live.md). The Agent node's menu (first after New), Enter or double-click on its
   Job Activity Monitor node, and the palette's SQL Server Agent: Job Activity Monitor open one document per connection
   ("Job Activity Monitor - server"), focused if open. Its view of `agent.jobs.list` (every 5 s) and `agent.jobs.service`
   (every 10 s) lists every job the login may see from `sp_help_job`, with SSMS's columns, how long a running job has run
@@ -81,7 +82,7 @@ the Schedules document manages the shared schedules, behind the same gate until 
   **Notifications** (e-mail, page, net send, Windows event log and delete, each a level and an operator; whether Database Mail
   can send, read through `sysmail_help_profile_sp` where the login may, and an operator's missing address or pager duty hours
   as warnings), **Targets** (this server only; multi-server targets come later) and **Alerts** (the alerts that run the job;
-  Remove for sysadmin only, since msdb grants `sp_update_alert` to no Agent role; New Alert comes with the Alerts lane).
+  Remove for sysadmin only, since msdb grants `sp_update_alert` to no Agent role; New alert for this job… opens New Alert with the job as its response).
   **Steps** is a master/detail page: the list shows each step's number, type and where it goes on success and on failure, marks
   the Start step, and reorders by drag or Move up and Move down; go-to targets follow the step they name, since the draft keys
   steps rather than numbering them. Delete acts at once and its banner names the steps that went to the deleted one and now quit
@@ -160,6 +161,30 @@ the Schedules document manages the shared schedules, behind the same gate until 
   sysadmin, `sysjobschedules` is closed, so a schedule's jobs are read when it is selected (`sp_help_jobs_in_schedule`, which
   shows SQLAgentUserRole only its own jobs) and Unused counts every job, the unseen included. The saves have their own
   exact-shape lint, `AgentSql.LintScheduleSave`, which also refuses `@force_delete`.
+- **Alerts and operators** (`actions` dialogs `agentAlert`, `agentOperator`, `agentOperators`; `src/renderer/src/agent/`). An alert or
+  operator opens in its own tab from its node (Enter, double-click or Properties) or the palette's Open Alert… and Open Operator…;
+  the Agent node's New › Alert… and Operator…, the Alerts and Operators folders' New, and the palette open New Alert and New Operator,
+  which create nothing until Create. The **alert document** is one screen: **When** (a SQL Server event: an error number or a
+  severity, a database and a "Message contains" text; or a performance condition: object, counter, instance, comparison and value,
+  with the counter's current values read through `agent.counterValues`; msdb wants a value that starts with a digit, and an instance for a counter that has them), **Then** (a job to run, and the operators to notify as chips
+  with E-mail, Pager and Net send toggles, an "Add an operator" pick and an inline New operator created in the same save) and
+  **Options** (the delay between responses, the error text in e-mail, pager or net send, an additional message). The header shows
+  the history: when it last fired and how often. A WMI alert's When is read-only; its Then and Options can change. The **operator document** has General (name, enabled,
+  e-mail, pager and net send addresses, Send test e-mail), Pager duty (the days and each day kind's hours) and Notifications (the
+  alerts that notify it, each a method toggle, and the jobs that notify it, read-only). Save sends only what changed as one batch
+  in one transaction (`AgentSql.ObjectBatch`): an existing object's opens with its identity guard (name and id; 50010 `NOT_FOUND`
+  when the object was replaced), every call checks its return code, and a refusal names the call that failed with the document's
+  edits kept. The Script drawer shows the same calls with literal values. **Operators and Notifications…** (the Alerts and Operators folders'
+  menus or the palette) opens the grid (read-only past the notifications it reads at once): one row per alert, one column per operator, each cell cycling none, E-mail, E-mail and Pager,
+  Pager; Save sends one `agentAlert` save per changed alert, in turn, and says how many saved if one is refused. Its side pane opens
+  the selected operator, sends a test e-mail or deletes it (not while the grid is read-only, when it cannot count what notifies the operator), and a table below the grid lists the jobs that notify operators. **Add recommended alerts…**
+  creates any of severity 17 and 19 to 25 and errors 823 to 825 the server has no alert for (any name), each with an operator if
+  one is picked. **Send test e-mail** runs `sp_notify_operator` through Agent's own Database Mail profile, refused before anything
+  is sent when Agent has none, the operator is disabled or Database Mail XPs is off; the Agent mail check (Database Mail XPs, a profile, Agent using it) shows on the operator document
+  and among the alert's warnings. **Delete** on an operator that alerts or jobs notify offers Reassign to (`sp_delete_operator
+  @reassign_to_operator`); Enable, Disable, Rename and Delete on alert and operator rows go through the same batches. Alerts are
+  SQL Server on Windows only (NOT_SUPPORTED on Linux and Managed Instance), and only sysadmin writes alerts and operators: msdb
+  refuses the other roles, so the documents open read-only for them. The tree's verbs are not greyed by role yet.
 - **Proxies and credentials** (`agentProxy`, `credential`, object actions, docs/object-actions.md). A proxy's document ("Proxy
   Account Properties - FileShareWriter") opens from a proxy's node (Enter, double-click or Properties); **New Proxy…** from the
   Proxies folder, a subsystem's folder (the proxy starts active to it), Unassigned Proxies or a proxy, and **Proxy…** from the
@@ -366,6 +391,14 @@ with `VARIA_TEST_SQL_SCRATCH=1`, `AgentHistoryLiveChecks` reads the scratch job'
 reads a message, and runs Delete History on it and a second scratch job (older than 30 days keeps the run, all deletes it).
 The `agent-jobs` smoke suite opens the Log File Viewer from Job Activity Monitor and drives All jobs, the Failed outcome, a
 run's steps and message, and Delete History.
+
+`AgentObjectChecks` checks the alert and operator writes offline: validation and its refusals, each save's batch, the object batch
+lint with near misses, the error mapping and the scripts. In the Agent live suite with `VARIA_TEST_SQL_SCRATCH=1`,
+`AgentObjectLiveChecks` creates a scratch operator, saves it and is refused `NOT_FOUND` under another id, renames it to a hostile
+name and back, disables and enables it, and on Windows creates a scratch alert with an inline new operator and two notifications,
+changes and drops them, fails a later call and checks nothing committed, deletes the operator with Reassign to and deletes the
+alert. No check sends e-mail. The `agent-job` smoke suite creates an alert from a job's New alert for this job…, saves a changed
+cell in the Operators and notifications grid and sends a test e-mail through the fake backend.
 
 The service verbs have offline checks through the `IServiceControl` fake (every refusal, the waits, a partial restart and
 the platform gates) and a live suite of their own, `AgentService` (`VARIA_TEST_SQL_AGENT_SERVICE=1`), which really stops,
@@ -596,7 +629,7 @@ Writes (from AG-2) call only these, each followed by a return-code check:
 | `msdb.dbo.sp_purge_jobhistory` | `@oldest_date`, `@job_id` | AG-8a |
 | `msdb.dbo.sp_add_job` | `@job_name`, `@enabled`, `@description`, `@category_name`, `@owner_login_name`, `@notify_level_eventlog`, `@notify_level_email`, `@notify_level_netsend`, `@notify_level_page`, `@notify_email_operator_name`, `@notify_netsend_operator_name`, `@notify_page_operator_name`, `@delete_level`, `@job_id` | AG-6a |
 | `msdb.dbo.sp_add_jobserver` | `@job_id` | AG-6a |
-| `msdb.dbo.sp_update_alert` | `@name`, `@job_id` | AG-6a |
+| `msdb.dbo.sp_update_alert` | `@name`, `@job_id`, `@new_name`, `@enabled`, `@message_id`, `@severity`, `@delay_between_responses`, `@notification_message`, `@include_event_description_in`, `@database_name`, `@event_description_keyword`, `@occurrence_count`, `@count_reset_date`, `@count_reset_time`, `@performance_condition` | AG-6a |
 | `msdb.dbo.sp_add_jobstep` | `@job_id`, `@step_id`, `@step_name`, `@subsystem`, `@command`, `@cmdexec_success_code`, `@on_success_action`, `@on_success_step_id`, `@on_fail_action`, `@on_fail_step_id`, `@server`, `@database_name`, `@database_user_name`, `@retry_attempts`, `@retry_interval`, `@os_run_priority`, `@output_file_name`, `@flags`, `@proxy_id`, `@proxy_name` | AG-6b |
 | `msdb.dbo.sp_update_jobstep` | `@job_id`, `@step_id`, `@step_name`, `@subsystem`, `@command`, `@cmdexec_success_code`, `@on_success_action`, `@on_success_step_id`, `@on_fail_action`, `@on_fail_step_id`, `@server`, `@database_name`, `@database_user_name`, `@retry_attempts`, `@retry_interval`, `@os_run_priority`, `@output_file_name`, `@flags`, `@proxy_id`, `@proxy_name` | AG-6b |
 | `msdb.dbo.sp_delete_jobstep` | `@job_id`, `@step_id` | AG-6b |
@@ -606,14 +639,14 @@ Writes (from AG-2) call only these, each followed by a return-code check:
 | `msdb.dbo.sp_add_schedule` | `@schedule_name`, `@enabled`, `@freq_type`, `@freq_interval`, `@freq_subday_type`, `@freq_subday_interval`, `@freq_relative_interval`, `@freq_recurrence_factor`, `@active_start_date`, `@active_end_date`, `@active_start_time`, `@active_end_time`, `@schedule_id` | AG-6c |
 | `msdb.dbo.sp_update_schedule` | `@schedule_id`, `@new_name`, `@enabled`, `@freq_type`, `@freq_interval`, `@freq_subday_type`, `@freq_subday_interval`, `@freq_relative_interval`, `@freq_recurrence_factor`, `@active_start_date`, `@active_end_date`, `@active_start_time`, `@active_end_time` | AG-6c |
 | `msdb.dbo.sp_delete_schedule` | `@schedule_id` | AG-6c |
-| `msdb.dbo.sp_add_operator` | later lanes | AG-7 |
-| `msdb.dbo.sp_update_operator` | later lanes | AG-7 |
-| `msdb.dbo.sp_delete_operator` | later lanes | AG-7 |
-| `msdb.dbo.sp_add_alert` | later lanes | AG-7 |
-| `msdb.dbo.sp_delete_alert` | later lanes | AG-7 |
-| `msdb.dbo.sp_add_notification` | later lanes | AG-7 |
-| `msdb.dbo.sp_update_notification` | later lanes | AG-7 |
-| `msdb.dbo.sp_delete_notification` | later lanes | AG-7 |
+| `msdb.dbo.sp_add_operator` | `@name`, `@enabled`, `@email_address`, `@pager_address`, `@weekday_pager_start_time`, `@weekday_pager_end_time`, `@saturday_pager_start_time`, `@saturday_pager_end_time`, `@sunday_pager_start_time`, `@sunday_pager_end_time`, `@pager_days`, `@netsend_address` | AG-7 |
+| `msdb.dbo.sp_update_operator` | `@name`, `@new_name`, `@enabled`, `@email_address`, `@pager_address`, `@weekday_pager_start_time`, `@weekday_pager_end_time`, `@saturday_pager_start_time`, `@saturday_pager_end_time`, `@sunday_pager_start_time`, `@sunday_pager_end_time`, `@pager_days`, `@netsend_address` | AG-7 |
+| `msdb.dbo.sp_delete_operator` | `@name`, `@reassign_to_operator` | AG-7 |
+| `msdb.dbo.sp_add_alert` | `@name`, `@message_id`, `@severity`, `@enabled`, `@delay_between_responses`, `@notification_message`, `@include_event_description_in`, `@database_name`, `@event_description_keyword`, `@job_id`, `@performance_condition` | AG-7 |
+| `msdb.dbo.sp_delete_alert` | `@name` | AG-7 |
+| `msdb.dbo.sp_add_notification` | `@alert_name`, `@operator_name`, `@notification_method` | AG-7 |
+| `msdb.dbo.sp_update_notification` | `@alert_name`, `@operator_name`, `@notification_method` | AG-7 |
+| `msdb.dbo.sp_delete_notification` | `@alert_name`, `@operator_name` | AG-7 |
 | `msdb.dbo.sp_set_sqlagent_properties` | `@sqlserver_restart`, `@monitor_autostart`, `@jobhistory_max_rows`, `@jobhistory_max_rows_per_job` | AG-8a |
 | `msdb.dbo.sp_add_proxy` | `@proxy_name`, `@enabled`, `@description`, `@credential_name`, `@proxy_id` | AG-8b |
 | `msdb.dbo.sp_update_proxy` | `@proxy_id`, `@credential_name`, `@new_name`, `@enabled`, `@description` | AG-8b |
@@ -623,6 +656,7 @@ Writes (from AG-2) call only these, each followed by a return-code check:
 | `msdb.dbo.sp_grant_login_to_proxy` | `@proxy_id`, `@login_name`, `@fixed_server_role`, `@msdb_role` | AG-8b |
 | `msdb.dbo.sp_revoke_login_from_proxy` | `@proxy_id`, `@name` | AG-8b |
 | `msdb.dbo.sp_cycle_agent_errorlog` | later lanes | AG-5b |
+| `msdb.dbo.sp_notify_operator` | `@profile_name`, `@name`, `@subject`, `@body` | AG-7 |
 
 msdb error numbers the actions map (AG-2 onward; reads map 15281 to `AGENT_DISABLED` instead):
 
@@ -680,6 +714,18 @@ msdb error numbers the actions map (AG-2 onward; reads map 15281 to `AGENT_DISAB
 | `credentialSecretChars` | 4,000 | UTF-16 code units of a credential's secret (its own bound: a credential secret is not a login password) |
 | `cryptographicProviders` | 64 | Cryptographic providers New Credential lists (`sys.cryptographic_providers`) |
 | `purgeCount` | 999 | The most days, weeks or months "Delete old history now" goes back (999 months stays inside `datetime`) |
+| `notificationChanges` | 64 | Notification changes one alert or operator save makes (each one msdb call) |
+| `newOperators` | 4 | Operators an alert save creates in place (the inline New operator) |
+| `alertMessageChars` | 512 | Characters of an alert's additional notification message |
+| `alertKeywordChars` | 100 | Characters of an alert's "Message contains" text |
+| `conditionChars` | 512 | Characters of a performance condition (object\|counter\|instance\|comparator\|value) |
+| `addressChars` | 100 | Characters of an operator's e-mail, pager and net send addresses |
+| `alertDelaySeconds` | 86,400 | The most seconds an alert waits between responses |
+| `counterRows` | 4,000 | Performance counters the alert document's pickers list |
+| `counterInstances` | 500 | Instances one counter's current values list |
+| `recommendedAlerts` | 16 | Alerts one Add recommended alerts creates |
+| `alertRows` | 1,000 | Alerts the Operators and notifications grid reads |
+| `operatorRows` | 500 | Operators one listing reads |
 | `stepCommandChars` | 100,000 | Characters of one step's command in a job save |
 | `stepCommandTotalChars` | 1,000,000 | Characters of all the steps' commands in one job save |
 | `stepOutputChars` | 200 | Characters of a step's output file path (`sysjobsteps.output_file_name`) |

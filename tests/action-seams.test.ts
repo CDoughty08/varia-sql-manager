@@ -50,6 +50,9 @@ describe('server engines', () => {
       { action: 'agentProperties', class: 'dialog', kind: 'agent', verb: 'properties', engines: ['box', 'managedInstance'] },
       // The job document (AG-6a) is what a job's Properties opens.
       { action: 'agentJob', class: 'dialog', kind: 'agentJob', verb: 'properties', engines: ['box', 'managedInstance'] },
+      // The alert and operator documents (AG-7): alerts are SQL Server on Windows boxes only; Managed Instance has operators.
+      { action: 'agentAlert', class: 'dialog', kind: 'agentAlert', verb: 'properties', engines: ['box'] },
+      { action: 'agentOperator', class: 'dialog', kind: 'agentOperator', verb: 'properties', engines: ['box', 'managedInstance'] },
       // The Schedules document (AG-6c) acts on the Agent node.
       { action: 'agentSchedule', class: 'dialog', kind: 'agent', verb: 'properties', engines: ['box', 'managedInstance'] },
       // The proxy document (AG-8b) on SQL Server only (Managed Instance has no proxies); the credential's on both.
