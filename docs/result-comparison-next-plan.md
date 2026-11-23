@@ -136,6 +136,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
 - **The fake backend** (`tests/fixtures/backend.mjs`, which smoke runs against) implements each change, or the smoke step
   moves to the real-server part. Its copy and save use the TypeScript text writer, which today writes no `(old)` columns
   for a comparison and never sees a cut tone, so C3 first brings it level with C#.
+- **Notice buttons that remove their notice.** **Stop ignoring** (1), **Compare whole results** and the shipped filtered
+  notice's **Compare rows as shown** (6) start a replace whose comparison no longer shows their notice. When it lands,
+  the focus moves as a Dismiss's does (`ComparisonToolbar`'s rule, which Show changes only follows today): to the notice
+  that takes its place, else the one before, else the toolbar's Tab stop. A replace that fails, is cancelled or does not
+  start leaves the notice, and the focus on its button.
 - **Inputs closed.** Features that read only the comparison work while an input is closed: Change details and Compare
   Values in Tab (except a soft cell's old value, below), Copy as Diff, Save as Diff, Script Differences (except its
   re-matching buttons), Search. Features that re-run it (Ignore, Compare Rows as Shown, Update, and the notices'
@@ -297,8 +302,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - the checklist (`compare-ignore.test.ts`), Automatic's label, memory by name across a swap;
     - a `results-port.test.ts` case sending `ignore` and checking it reaches the backend request, and a `worker-core`
       case for the rebuilt request, as C4 and C6 have;
-    - the toggle's `when`, notice text and Dismiss; `outputGridOnColumn` and the two state keys for gutter, header, cell
-      and keyboard menus, the keyboard ones through `targetFor` with a registered grid target, on a ? row
+    - the toggle's `when`, notice text and Dismiss; the focus after Stop ignoring moving as a Dismiss's when its notice
+      goes, and staying on the button when the replace fails; `outputGridOnColumn` and the two state keys for gutter,
+      header, cell and keyboard menus, the keyboard ones through `targetFor` with a registered grid target, on a ? row
       (`comparisonRowHasPartner`) and on an ignored column; and through `targetFor`, a right-click on a ? row's number
       while the active cell is on a plain row, and on a plain row's number while it is on a ? row, each keeping the
       clicked row's partner;
@@ -806,10 +812,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   Differences as T-SQL… brings it forward.
 - **The form:**
   - A first line names the comparison and how rows are matched: "Result 1 → Result 3 (SQLQuery3.sql), rows matched by
-    key columns: id" ("rows matched automatically by order_no" under Automatic, "rows matched automatically by whole
-    rows" when it fell back, as Copy as Diff's match line says, and the strip's own `matchedBy` words for the rest:
-    "whole rows matched", "rows matched by position"), and changes when another comparison invokes the dialog. A script
-    is written only under Key columns the user chose (below).
+    id" ("rows matched automatically by order_no" under Automatic, "rows matched automatically by whole rows" when it
+    fell back, "rows matched by whole rows", "rows matched by position"), in Copy as Diff's match-line words, so the two
+    exports name one match alike, and changes when another comparison invokes the dialog. A script is written only under
+    Key columns the user chose (below).
   - **Target table:** `[database.]schema.table`, each part 1 to 128 characters, parsed as SQL Server parses a multipart
     name: parts plain, bracketed (`[my.schema].Orders`, with `]]` inside brackets) or double-quoted. One part is refused
     ("Name the schema too, such as dbo.Orders."), and so are four ("A linked server cannot be the target. Name the table
@@ -883,8 +889,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       - the database was indexed without its columns: "Search Objects holds no columns for Sales_Test, since its index
         did not fit the memory budget, so its columns cannot be checked and SET IDENTITY_INSERT is not offered.";
       - a ticked column the table lacks (compared, or ignored and ticked for INSERT): "[Sales_Test].[dbo].[Orders] has
-        no column note in Search Objects' index, so a statement naming it would fail. Check the table, or rebuild the
-        search index.";
+        no column note in Search Objects' index, so a statement naming it would fail. Untick it, check the table, or
+        rebuild the search index." (an aliased or joined column is the likely cause, Risks below);
       - over 4,096 columns: "[Sales_Test].[dbo].[Orders] has more than 4,096 columns, so its columns are not checked and
         SET IDENTITY_INSERT is not offered." (the dialog uses no facts from a cut answer);
       - the comparison's connection is not open (Disconnect with Keep Tabs keeps the comparison, and the index is
@@ -926,10 +932,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       while the lookup is pending (above). A held warning is shown and said only while the field still holds the name it
       answers; one for a name since changed (a suggestion picked with Enter) is dropped, and the knows line that follows
       it stays silent. An answer that arrives while the window reads "Reading the comparison…" shows with the form, and
-      is said then only when the focus is not moving to Target table, whose description it is. A typo ("Search Objects
-      does not know [Sales_Test].[dbo].[Ordrs]…"), which has no suggestions, is heard as soon as its lookup answers. The
-      knows line is said only when it replaces a warning that was said, so a fixed typo is confirmed; otherwise it is
-      not said, since it asks nothing of the user.
+      is said then only when the focus is not moving to Target table, whose description it is; read that way, it counts
+      as said. A typo ("Search Objects does not know [Sales_Test].[dbo].[Ordrs]…"), which has no suggestions, is heard
+      as soon as its lookup answers. The knows line is said only when it replaces a warning that was heard (said, or
+      read as Target table's description on opening), so a fixed typo is confirmed, and so is a still-indexing warning
+      heard on opening when the build finishes; otherwise it is not said, since it asks nothing of the user.
   - **Direction**, naming the target as resolved ("The target table" before one is chosen):
     - "[Sales_Test].[dbo].[Orders] holds Result 1's rows: change them to Result 3's";
     - "[Sales_Test].[dbo].[Orders] holds Result 3's rows: change them to Result 1's".
@@ -1009,8 +1016,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - A line names columns only one result has ("note2 is only in Result 1, so INSERTs leave it out").
     - While INSERT is ticked and the index knows the table, a line names its columns the result lacks: "INSERTs leave
       created_by and region out, so inserted rows get their defaults or NULL." (not columns the target fills itself:
-      rowversion, computed, GENERATED ALWAYS and identity). One that is NOT NULL without a default fails the INSERT, and
-      the transaction rolls the script back.
+      rowversion, computed, GENERATED ALWAYS and identity, nor a one-sided column the line above names, since
+      `explorer.scriptTarget` sees only pair names). One that is NOT NULL without a default fails the INSERT, and the
+      transaction rolls the script back.
     - While UPDATE or INSERT is ticked, a line names the unticked columns the script would otherwise write: "note is
       unticked: UPDATEs leave its changes out, and inserted rows get its default or NULL." ("note and memo are unticked:
       … their changes …"), each clause only while its statement is ticked and naming only the columns it would write (an
@@ -1081,15 +1089,16 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     Selected rows counts 0. The dialog follows it live, so the option names the keys of the chosen entries that differ
     while there are at most three ("Selected rows (1: id = 1002)", "(2: id = 1002; id = 1004)", the answer's
     `selectedKeys`, joined with "; " since a composite key holds commas), the header's rows line names them too.
-    Whichever option is chosen, a change to the differing entries it holds that no replace explains (the selection under
-    Selected rows; a chip or filter under Rows in the grid) gives the Rows line (While it is open below) its plain form:
-    "Selected rows now holds 1 difference (id = 1009)." ("…now holds 12 differences." past three, "…now holds no
-    differences." for none), "Rows in the grid now holds 40 differences.", "All differences now holds 52 differences.",
-    so a click in the grid to look at a cell never changes the script unnoticed and a cleared filter never widens it
-    unheard; a change that leaves those entries as they were (another cell of the same row, a row with no difference, a
-    sort) says nothing. A change is found from each answer's count and fingerprint for the option (`differences` and
-    `differencesKey`, Technical sketch), so a filter moved to other rows of the same count is found too. In Two rows an
-    entry is chosen when either of its halves is. The preview reads them as it shows, and Script reads them again.
+    Whichever option is chosen, a change to the differing entries it holds that no listed replace cause explains (the
+    selection under Selected rows; a chip or filter under Rows in the grid) gives the Rows line (While it is open below)
+    its plain form: "Selected rows now holds 1 difference (id = 1009)." ("…now holds 12 differences." past three, "…now
+    holds no differences." for none), "Rows in the grid now holds 40 differences.", "All differences now holds 52
+    differences.", so a click in the grid to look at a cell never changes the script unnoticed and a cleared filter
+    never widens it unheard; a change that leaves those entries as they were (another cell of the same row, a row with
+    no difference, a sort) says nothing. A change is found from each answer's count and fingerprint for the option
+    (`differences` and `differencesKey`, Technical sketch), so a filter moved to other rows of the same count is found
+    too. In Two rows an entry is chosen when either of its halves is. The preview reads them as it shows, and Script
+    reads them again.
   - **Options:** Wrap in a transaction (on), Check each statement changes one row (on; Q2), with the line "UPDATEs also
     check that the row still holds the values they change from, DELETEs the values the comparison saw, and INSERTs that
     the row is not there yet." (Q11). While UPDATE is ticked and some chosen UPDATEs change only columns the check
@@ -1216,12 +1225,14 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   the summary back. A backend loss shows the closed state instead. If the chosen rows change while it generates (a
   replace, chips or filters under Rows in the grid, the selection under Selected rows, or another comparison invoking
   the window; a sort changes no statement, so it does not), the generation is cancelled and a line above the summary
-  says "The comparison changed, so the script was not written. Script again to write it.", the two Script's description
-  until the next change made in the dialog's form, the next Script or a switch to another comparison (a change in the
-  grid while the window is in the background does not clear it, so the replay says it), so the refreshed summary and its
-  "N of M differences" stay in sight; the live region says the line after the shipped sentence and any Rows sentence;
-  when the change closed the comparison or brought a refusal, it shows that state instead, and when another comparison
-  invoked the window it says "The script for Result 1 → Result 3 was not written." before the new pair's form.
+  says "The comparison changed, so the script was not written. Script again to write it." ("…was not written." alone
+  while a reason in the summary's order leaves Script unavailable, the chosen rows left with no differences, say), the
+  two Script's description until the next change made in the dialog's form, the next Script or a switch to another
+  comparison (a change in the grid while the window is in the background does not clear it, so the replay says it), so
+  the refreshed summary and its "N of M differences" stay in sight; the live region says the line after the shipped
+  sentence and any Rows sentence; when the change closed the comparison or brought a refusal, it shows that state
+  instead, and when another comparison invoked the window it says "The script for Result 1 → Result 3 was not written."
+  before the new pair's form.
 - **Refused, with the reason in the dialog.** The first four are known when the dialog opens (its first preview request,
   which C# answers before anything else, with or without a target and direction, answers them): the refusal replaces the
   form below its first line (the comparison and its match, so a refusal never hides which comparison it is about), the
@@ -1338,13 +1349,14 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     changed."; "Rows in the grid changed."), so a widened Rows is never silent.
   - A screen reader does not read a live region in a window in the background, so of what the dialog's live region said
     while its window was in the background, each of these lines that changed then is said again when the window is
-    activated, as it stands at activation, in the order they last changed: the Rows line, the line under Target table,
-    the index line (a build started from the main window finishing, say), the connection's sentence (the not-connected
-    warning, or "SQLDEV01 is connected again." and the line the lookup brought), the changed line, the closed sentence.
-    A line back as it was when the window was last active says nothing (a database switched away and back, a connection
-    dropped and back, a selection moved and returned), so activation never says what the form no longer shows; a replace
-    started from the main window never widens what Script writes unheard, and choosing rows in the grid for Selected
-    rows leaves one sentence, not one per move. A refusal that arose there is not said again, since it is the window's
+    activated, as it stands at activation, in the order they last changed: the Rows line, a refusal in the footer (a
+    filter under Rows in the grid bringing a truncated value, say), the line under Target table, the index line (a build
+    started from the main window finishing, say), the connection's sentence (the not-connected warning, or "SQLDEV01 is
+    connected again." and the line the lookup brought), the changed line, the closed sentence. A line back as it was
+    when the window was last active says nothing (a database switched away and back, a connection dropped and back, a
+    selection moved and returned), so activation never says what the form no longer shows; a replace started from the
+    main window never widens what Script writes unheard, and choosing rows in the grid for Selected rows leaves one
+    sentence, not one per move. A refusal that replaced the form there is not said again, since it is the window's
     description, which activation reads, and a switch to another comparison drops what the first pair's form said.
   - The comparison closing (re-run, Close Results, backend loss) says "The comparison was closed." and makes Script
     unavailable (`aria-disabled`).
@@ -1387,9 +1399,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   statements change no rows."); Script is unavailable while any of them holds. Until the first preview answer arrives,
   the window shows only the first line and "Reading the comparison…" with progress, the two its description, Script
   unavailable and Cancel, with the focus on Cancel, so a refusal that answer brings never takes the focus from a field
-  being typed in. The answer then shows the form or the refusal, and the focus moves to Target table, or to a refusal's
-  first button, or to Cancel when a refusal has none or its buttons are unavailable (an input closed), from Cancel or
-  from the opening Try again alike; the live region says a refusal.
+  being typed in. The answer then shows the form or a refusal that replaces it, and the focus moves to Target table, or
+  to that refusal's first button, or to Cancel when it has none or its buttons are unavailable (an input closed), from
+  Cancel or from the opening Try again alike. A refusal the answer shows in the footer (a remembered draft's truncated
+  value, say) leaves the focus on Target table, since its fix is in the form; the live region says a refusal.
   - When the focused control goes away, the focus moves to a fixed place and the live region says the line that replaced
     it: from Rebuild Search Index or Build index when the build ends, to Target table; from the opening Try again when
     an answer arrives, where the first answer places it (above); from a later Try again when an answer arrives, to the
@@ -1656,6 +1669,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - `differencesKey` changing for a filter moved to other rows of the same count, and not for a sort of the same rows,
       a One row and Two rows switch, an All rows and Changes only switch, a swap, or Selected rows moving between the
       two halves of one entry;
+    - a one-sided column the target holds named once in the header, as only in its result, and not again among the
+      columns INSERTs leave out;
     - an unticked identity column named "id (unticked)" in the header's left-out line of a script without INSERTs,
       and an ignored identity column taking the identity form;
     - an unticked identity column named in the header's left-out line ("id (unticked: new values from the target)"),
@@ -1762,63 +1777,65 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     the header's left-out line, the preview's waiting and refused states, suggestions unhighlighted, the request on
     opening (no target or direction) filling the Rows counts and showing an opening refusal, the reading state before it
     with the focus on Cancel, a failed preview request on opening and later (a backend loss showing the closed state,
-    and later every line drawn from an answer hidden, with its summary), the changed line above the summary and a sort
-    not cancelling a generation, the form read-only while generating and a failure beside Script, the background replay
-    (each changed line as it stands at activation, nothing for a line back as it was, a refusal left to the description,
+    and later every line drawn from an answer hidden, with its summary), the changed line above the summary (without
+    "Script again to write it." while Script is unavailable) and a sort not cancelling a generation, the form read-only
+    while generating and a failure beside Script, the background replay (each changed line as it stands at activation,
+    nothing for a line back as it was, a refusal that replaced the form left to the description, a footer refusal said,
     dropped on a switch), the return sentences (the plain line when the document comes back, "SQLDEV01 is connected
     again." and the lookup's line), the three-part line after a re-run on another connection to the same server, the
-    focus after the opening Try again (Target table, a refusal's first button, or Cancel), a lookup's warning said on
-    arrival while the suggestion list is closed or the field has lost focus, else when the list closes, held until the
-    form shows on opening, and the knows line said only after a spoken warning, the focus moving to the preview's Try
-    again when a failed preview hides SET IDENTITY_INSERT, the remembered-direction line kept as it was across the
-    Choose key columns… round trip, one Rows line rewritten on every change to the chosen option's differing entries (a
-    replace with its cause, any other change in the plain form, All differences and a same-count change found by
-    `differencesKey` included), a swap while open inverting the form's direction and relabelling it, a swap of
-    differently ordered columns keeping `identity` and `indexReasons` on the same named columns, index warnings shown
-    and said only once the suggestion list closes, a held warning dropped when the name changed, an opening warning not
-    said over the focus landing on Target table, the index line in the replay, and replayed as it stands, cleared by a
-    change in the form, Script or a switch, its count dropped after a failed preview, the changed line cleared the same
-    way, the unticked line's sentences per kind of column, an unticked identity column's INSERT clause, closing during a
-    replace leaving it running, the remembered position kept per holder while it is on a display, Script's description
-    while generating, the stop sentence and Script available after a generation failure, the updating state's focus and
-    description, the unchecked line's backend sentence, both identity sentences, the unticked line's DELETE clause, the
-    unchecked-UPDATEs line, Selected rows' keys and its sentence said only when the differing entries change, the
-    key-name refusal's button, the look-alike lines for rows whose look-alike is not chosen, the column list as one Tab
-    stop with its search field, the index sentences (the table unknown with Rebuild Search Index, still indexing,
-    indexed without columns, a column unknown, over 4,096 columns) and the request again when the index build finishes,
-    the unchecked lines hidden while their statement is unticked, the remembered-direction line and its hiding once the
-    direction changes, the not-connected state (no request, New Query Editor Window unavailable, the facts back on
-    reconnect), Rebuild Search Index keeping the focus, saying the rebuild and building the comparison's connection (not
-    the active document's), the no-index and skipped sentences, the document's database first among equal suggestions,
-    the locked SET IDENTITY_INSERT's description, a temporal table's period columns locked as generated, an ignored
-    expression column the target lacks starting unticked with its reason and warning once ticked again, a target
-    rowversion column paired with a binary(8) column locked as not insertable, the knows line from a held read while a
-    rebuild runs and after a definitions-off read, a two-part name kept when the document's database changes (the line,
-    said and said again on activation), Script waiting for a pending lookup ("Checking the target table…") and facts
-    sent only from the answer for the sent target, a failed lookup's sentence, a two-part name resolved to a
-    disconnected document's kept database, Script's destination sentence while disconnected, a connection lost while
-    generating, the focus after Rebuild Search Index, a later Try again and a footer refusal's button go away, Enter and
-    Escape in the columns' search field (Enter with no match doing nothing), Script pressed inside the 300 ms wait
-    before a lookup saying "Checking the target table…", the request sent while SET IDENTITY_INSERT is hidden carrying
-    the value kept for the script (on by default, off after an untick, on for a key identity), SET IDENTITY_INSERT
-    unticked, hidden and offered again still unticked, hidden before an answer gives INSERT's count (no direction, a
-    failed preview), Rows and the options kept across the Choose key columns… round trip, Script waiting after Try
-    again, a reconnect and a finished build, an edit while disconnected leaving Script to the destination's rule, the
-    other-server warning winning over the moved line when both hold, the moved line for another connection to the same
-    server, SET IDENTITY_INSERT hidden while INSERT is unticked or has no rows, the not-connected warning said when the
-    connection drops and said again on activation, the preview's Try again while its request runs, the field rewritten
-    in three parts when the document's database or connection changes, the connection lines (now on another server, no
-    connection now) winning over the three-part line, the draft recording the document's connection, an ignored column
-    the target lacks left out of the ignored line, the failed lookup's Try again while it runs and failing again, a
-    disconnect while a lookup is pending showing the not-connected state, the focus staying on Cancel when a refusal
-    that replaced the form clears, a lookup held while the script is written, the no-connection sentence, the three-part
-    line for another database, the opening request carrying the draft's target with Script checking until it answers, a
-    failed lookup's Try again, the summary's order with a failed preview leaving Script unavailable while a reason
-    holds, the not-connected state after a connection lost while generating, the focus staying on Script when a footer
-    refusal clears and falling back to Target table, a two-part target in a database beside another holding the same
-    table, the key-column form of the truncation and U+FFFD refusals, closing while generating opening nothing, Enter in
-    Target table with nothing highlighted, the window over a popped-out Results pane, a cancelled generation giving way
-    to a closed or refused state, and the Clipboard announcement.
+    focus after the opening Try again (Target table, a refusal's first button, or Cancel), a footer refusal on opening
+    leaving the focus on Target table, a lookup's warning said on arrival while the suggestion list is closed or the
+    field has lost focus, else when the list closes, held until the form shows on opening, and the knows line said only
+    after a heard warning (a still-indexing warning read as Target table's description on opening included), the focus
+    moving to the preview's Try again when a failed preview hides SET IDENTITY_INSERT, the remembered-direction line
+    kept as it was across the Choose key columns… round trip, one Rows line rewritten on every change to the chosen
+    option's differing entries (a replace with its cause, any other change in the plain form, All differences and a
+    same-count change found by `differencesKey` included), a swap while open inverting the form's direction and
+    relabelling it, a swap of differently ordered columns keeping `identity` and `indexReasons` on the same named
+    columns, index warnings shown and said only once the suggestion list closes, a held warning dropped when the name
+    changed, an opening warning not said over the focus landing on Target table, the index line in the replay, and
+    replayed as it stands, cleared by a change in the form, Script or a switch, its count dropped after a failed
+    preview, the changed line cleared the same way, the unticked line's sentences per kind of column, an unticked
+    identity column's INSERT clause, closing during a replace leaving it running, the remembered position kept per
+    holder while it is on a display, Script's description while generating, the stop sentence and Script available after
+    a generation failure, the updating state's focus and description, the unchecked line's backend sentence, both
+    identity sentences, the unticked line's DELETE clause, the unchecked-UPDATEs line, Selected rows' keys and its
+    sentence said only when the differing entries change, the key-name refusal's button, the look-alike lines for rows
+    whose look-alike is not chosen, the column list as one Tab stop with its search field, the index sentences (the
+    table unknown with Rebuild Search Index, still indexing, indexed without columns, a column unknown, over 4,096
+    columns) and the request again when the index build finishes, the unchecked lines hidden while their statement is
+    unticked, the remembered-direction line and its hiding once the direction changes, the not-connected state (no
+    request, New Query Editor Window unavailable, the facts back on reconnect), Rebuild Search Index keeping the focus,
+    saying the rebuild and building the comparison's connection (not the active document's), the no-index and skipped
+    sentences, the document's database first among equal suggestions, the locked SET IDENTITY_INSERT's description, a
+    temporal table's period columns locked as generated, an ignored expression column the target lacks starting unticked
+    with its reason and warning once ticked again, a target rowversion column paired with a binary(8) column locked as
+    not insertable, the knows line from a held read while a rebuild runs and after a definitions-off read, a two-part
+    name kept when the document's database changes (the line, said and said again on activation), Script waiting for a
+    pending lookup ("Checking the target table…") and facts sent only from the answer for the sent target, a failed
+    lookup's sentence, a two-part name resolved to a disconnected document's kept database, Script's destination
+    sentence while disconnected, a connection lost while generating, the focus after Rebuild Search Index, a later Try
+    again and a footer refusal's button go away, Enter and Escape in the columns' search field (Enter with no match
+    doing nothing), Script pressed inside the 300 ms wait before a lookup saying "Checking the target table…", the
+    request sent while SET IDENTITY_INSERT is hidden carrying the value kept for the script (on by default, off after an
+    untick, on for a key identity), SET IDENTITY_INSERT unticked, hidden and offered again still unticked, hidden before
+    an answer gives INSERT's count (no direction, a failed preview), Rows and the options kept across the Choose key
+    columns… round trip, Script waiting after Try again, a reconnect and a finished build, an edit while disconnected
+    leaving Script to the destination's rule, the other-server warning winning over the moved line when both hold, the
+    moved line for another connection to the same server, SET IDENTITY_INSERT hidden while INSERT is unticked or has no
+    rows, the not-connected warning said when the connection drops and said again on activation, the preview's Try again
+    while its request runs, the field rewritten in three parts when the document's database or connection changes, the
+    connection lines (now on another server, no connection now) winning over the three-part line, the draft recording
+    the document's connection, an ignored column the target lacks left out of the ignored line, the failed lookup's Try
+    again while it runs and failing again, a disconnect while a lookup is pending showing the not-connected state, the
+    focus staying on Cancel when a refusal that replaced the form clears, a lookup held while the script is written, the
+    no-connection sentence, the three-part line for another database, the opening request carrying the draft's target
+    with Script checking until it answers, a failed lookup's Try again, the summary's order with a failed preview
+    leaving Script unavailable while a reason holds, the not-connected state after a connection lost while generating,
+    the focus staying on Script when a footer refusal clears and falling back to Target table, a two-part target in a
+    database beside another holding the same table, the key-column form of the truncation and U+FFFD refusals, closing
+    while generating opening nothing, Enter in Target table with nothing highlighted, the window over a popped-out
+    Results pane, a cancelled generation giving way to a closed or refused state, and the Clipboard announcement.
   - Smoke: open the dialog window by role, script to a New Query Editor Window, and find `BEGIN TRANSACTION` in the
     focused editor. A frameless OS window can behave differently on Linux, so run it through `npm run test:smoke:wsl`
     before pushing.
@@ -2029,7 +2046,9 @@ would leave out the sort, and "Rows" is already the toolbar's All rows / Changes
     only under key and under Row position, Keep Selected Rows), Update dropping "(as shown)", other changes updating an
     out-of-date comparison and saying so, and a build with nothing to apply recorded whole, its choice Whole result, so
     a later Layout after a filter still reads whole results; the grid menu on a comparison that is not the focused one,
-    its Compare Rows as Shown tick and Update Comparison following that comparison's state.
+    its Compare Rows as Shown tick and Update Comparison following that comparison's state; the focus after the notices'
+    Compare whole results and Compare rows as shown moving as a Dismiss's when the notice goes, and staying when the
+    replace fails.
   - The fake backend reads views. A `results-smoke.mjs` step: filter an input, Compare rows as shown, change the filter,
     see Out of date, Update.
   - Whichever of C3 and C6 lands second: a shared golden for both writers with one side read as shown ("(as shown)" in
