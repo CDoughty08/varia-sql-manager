@@ -148,7 +148,13 @@ describe('saved connection library', () => {
     expect(await readFile(path, 'utf8')).not.toContain('password')
     state = await library.save({ id, options: { ...options, displayName: 'Updated' }, favorite: false })
     expect(state.profiles[0]).toMatchObject({ favorite: false, registered: true, options: { displayName: 'Updated' } })
+    const timestamp = state.profiles[0].lastConnected!
     expect((await library.remove(id)).profiles).toEqual([])
+    // Restoring a removed recent entry preserves its original recency rather than forcing saved-only.
+    state = await library.save({ options: { ...options, displayName: 'Updated' }, favorite: false, registered: false, lastConnected: timestamp })
+    expect(state.profiles).toHaveLength(1)
+    expect(state.profiles[0]).toMatchObject({ favorite: false, registered: false, lastConnected: timestamp })
+    expect(state.profiles[0].saved).toBeUndefined()
   })
   it('keeps a Microsoft Entra MFA connection in history, by its user name and type', async () => {
     const { store: library, path } = await store()

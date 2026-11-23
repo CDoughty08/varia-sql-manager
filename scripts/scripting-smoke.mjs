@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { encryptedMessage, installScriptingStub, scriptingStubData, viewDefinitionWarning } from './fixtures/scripting-stub.mjs'
-import { activeDocument, backendReady, documentTabs, editorText as editorTextOf, errorBanner, errorMessages, explorerLabel, menuItemNames, messages, openMenus as openMenusOf, optionsDescription, optionsHeading, outputView, part, quickInput as quickInputOf, quickInputActive, serverRows, statusSegment, toolbarButton, unsavedMark, warningBanner as warningBannerOf, expectEditorShown, dialogClosed, dialogWindow, pressToClose, clickToClose } from './fixtures/ui.mjs'
+import { activeDocument, backendReady, connectDialogWindow, documentTabs, editorText as editorTextOf, errorBanner, errorMessages, explorerLabel, menuItemNames, messages, openMenus as openMenusOf, optionsDescription, optionsHeading, outputView, part, quickInput as quickInputOf, quickInputActive, serverRows, statusSegment, submitConnect, toolbarButton, unsavedMark, warningBanner as warningBannerOf, expectEditorShown, dialogClosed, dialogWindow, pressToClose, clickToClose } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -101,8 +101,7 @@ const ordersPath = ['server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders']
 /** Connects from the main toolbar: Windows authentication for the stub, the test login for a real server. */
 async function connect(server) {
   await toolbarButton(page, 'Connect').click()
-  const connectDialog = page.getByRole('dialog', { name: 'Connect', exact: true })
-  await expect(connectDialog.getByText('Loading saved connections…')).toHaveCount(0)
+  const { window: connectWin, dialog: connectDialog } = await connectDialogWindow(application)
   await connectDialog.getByLabel('Server Name', { exact: true }).fill(server)
   if (server === process.env.VARIA_TEST_SQL_SERVER && liveUser) {
     await connectDialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
@@ -110,8 +109,7 @@ async function connect(server) {
     await connectDialog.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
   } else await connectDialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
   if (server === process.env.VARIA_TEST_SQL_SERVER) await connectDialog.getByLabel('Trust server certificate', { exact: true }).check()
-  await connectDialog.getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(connectDialog).toHaveCount(0, { timeout: 30000 })
+  await submitConnect(connectWin, connectDialog, { timeout: 30000 })
 }
 /** Right-clicks the row at `path` and clicks through `items`, one menu level after the other. */
 async function scriptFrom(path, ...items) {

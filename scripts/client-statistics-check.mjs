@@ -2,7 +2,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
-import { backendReady, localGrid, outputStatus, outputView, queryBarButton } from './fixtures/ui.mjs'
+import { backendReady, connectDialogWindow, localGrid, outputStatus, outputView, queryBarButton, submitConnect, toolbarButton } from './fixtures/ui.mjs'
 import { connectLive } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { checkClientStatistics } from './fixtures/client-statistics.mjs'
@@ -21,14 +21,12 @@ for (const live of [false, ...(process.env.VARIA_TEST_SQL_SERVER ? [true] : [])]
     page.on('pageerror', error => failures.push(error.message))
     await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
     if (live) await expect(backendReady(page)).toBeVisible({ timeout: 30000 })
-    if (live) await connectLive(page, expect)
+    if (live) await connectLive(app, page, expect)
     else {
-      const { toolbarButton } = await import('./fixtures/ui.mjs')
       await toolbarButton(page, 'Connect').click()
-      const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
+      const { window: connectWin, dialog } = await connectDialogWindow(app)
       await dialog.getByLabel('Server Name', { exact: true }).fill('statistics-fixture')
-      await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
-      await expect(dialog).toHaveCount(0)
+      await submitConnect(connectWin, dialog)
     }
     await enlargeOutput(page)
     const run = async (sql, { running = false } = {}) => {

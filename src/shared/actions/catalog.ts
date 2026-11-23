@@ -62,6 +62,8 @@ export const kindDialogActions = [
   'tableProperties',
   'agentProperties',
   'agentJob',
+  'agentAlert',
+  'agentOperator',
   'agentSchedule',
   'agentProxy',
   'credential'
@@ -104,6 +106,8 @@ export const dialogIds = [
   'restartAgent',
   'agentProperties',
   'agentJob',
+  'agentAlert',
+  'agentOperator',
   'agentSchedules',
   'agentProxy',
   'credential'
@@ -346,6 +350,20 @@ export const actionKindSpecs: { readonly [K in NodeKind]?: ActionKindSpec } = {
     titles: { enable: 'Enable Job', disable: 'Disable Job', rename: 'Rename Job', delete: 'Delete Job' },
     // Properties opens the job document (AG-6a); another owner's job opens read-only, as the describe says.
     dialogs: { properties: 'agentJob' }
+  },
+  // SQL Server Agent alerts and operators (AG-7): a disabled one offers Enable in place of Disable; Properties opens its document. Only sysadmin
+  // may change them: msdb refuses the others with PERMISSION_DENIED, and the documents open read-only.
+  agentAlert: {
+    row: { disable: 'enabled', rename: 'enabled', delete: 'enabled', properties: 'enabled' },
+    statuses: { disabled: { disable: '', enable: 'enabled' } },
+    titles: { enable: 'Enable Alert', disable: 'Disable Alert', rename: 'Rename Alert', delete: 'Delete Alert' },
+    dialogs: { properties: 'agentAlert' }
+  },
+  agentOperator: {
+    row: { disable: 'enabled', rename: 'enabled', delete: 'enabled', properties: 'enabled' },
+    statuses: { disabled: { disable: '', enable: 'enabled' } },
+    titles: { enable: 'Enable Operator', disable: 'Disable Operator', rename: 'Rename Operator', delete: 'Delete Operator' },
+    dialogs: { properties: 'agentOperator' }
   },
   // The SQL Server Agent node: Start, Stop and Restart of its service, narrowed by agentServiceRules.
   // Its Properties (AG-8a) opens SQL Server Agent Properties for every login msdb lets read them; the describe says when it is read-only.
@@ -954,6 +972,11 @@ const dialogSpecData = {
     pages: [page('general', 'General'), page('steps', 'Steps'), page('schedules', 'Schedules'), page('notifications', 'Notifications'), page('targets', 'Targets'), page('alerts', 'Alerts'),
       page('history', 'History', { icon: 'history' })]
   },
+  // The alert document (AG-7, docs/agent-ui-rethink.md › rx-alert): When, Then and Options on one screen, New Alert on the Agent node. Save runs
+  // its new operators, the alert and its notification changes in one transaction.
+  agentAlert: { title: 'Alert Properties', surface: 'document', titleFormat: 'withName', size: 'large', action: 'agentAlert', pages: [page('general', 'General')] },
+  // The operator document (AG-7, rx-operators' side pane as a tab): its addresses, pager duty and the alerts that notify it.
+  agentOperator: { title: 'Operator Properties', surface: 'document', titleFormat: 'withName', size: 'large', action: 'agentOperator', pages: [page('general', 'General')] },
   // The Schedules document (AG-6c, docs/agent-ui-rethink.md › rx-schedules-doc), which replaces SSMS's Manage Schedules: the grid of the
   // schedules the login may see, the selected one's editor and its jobs beside it. Each save is one `agentSchedule` action.
   agentSchedules: { title: 'Schedules', surface: 'document', titleFormat: 'plain', size: 'large', action: 'agentSchedule', pages: [page('schedules', 'Schedules')] },
@@ -978,7 +1001,9 @@ export const dialogSpecs: { readonly [D in DialogId]: DialogSpec } = dialogSpecD
  */
 export const factDescribeSpecs = {
   renameDatabase: { action: 'rename', kinds: ['database'] },
-  loginFacts: { action: 'disable', kinds: ['login'] }
+  loginFacts: { action: 'disable', kinds: ['login'] },
+  // AG-7: the Operators and notifications grid reads every operator, alert and notification on the SQL Server Agent node.
+  agentOperators: { action: 'properties', kinds: ['agent'] }
 } as const satisfies { readonly [id: string]: { readonly action: ObjectAction; readonly kinds: readonly NodeKind[] } }
 export type FactDescribeId = keyof typeof factDescribeSpecs
 export const factDescribeIds = Object.keys(factDescribeSpecs) as FactDescribeId[]
@@ -1121,6 +1146,10 @@ export const kindDialogActionSpecs: { readonly [A in KindDialogAction]: KindDial
   agentProperties: { title: 'SQL Server Agent Properties', dialog: 'agentProperties', kind: 'agent', verb: 'properties', engines: onServers },
   // The job document's Save (AG-6a): an existing job's changes, or New Job (target the Agent node). Agent runs on SQL Server and Managed Instance.
   agentJob: { title: 'Job Properties', dialog: 'agentJob', kind: 'agentJob', verb: 'properties', engines: onServers },
+  // The alert and operator documents' Save (AG-7): an existing one's changes, or New Alert and New Operator (target the Agent node). Alerts are
+  // SQL Server on Windows only (the backend refuses Linux as NOT_SUPPORTED); operators run where Agent does.
+  agentAlert: { title: 'Alert Properties', dialog: 'agentAlert', kind: 'agentAlert', verb: 'properties', engines: ['box'] },
+  agentOperator: { title: 'Operator Properties', dialog: 'agentOperator', kind: 'agentOperator', verb: 'properties', engines: onServers },
   // A schedule's save from the Schedules document or New › Schedule… (AG-6c): on the SQL Server Agent node, as New Job's.
   agentSchedule: { title: 'Schedules', dialog: 'agentSchedules', kind: 'agent', verb: 'properties', engines: onServers },
   // The proxy document's Save (AG-8b): an existing proxy's changes, or New Proxy (target the Agent node). Managed Instance has no proxies.

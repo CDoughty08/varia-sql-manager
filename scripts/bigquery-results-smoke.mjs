@@ -9,7 +9,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { startBigQueryRest } from './fixtures/bigquery-rest.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
-import { backendReady, editorTextbox, gridCell, gridPart, moreResultsTools, outputStatus, resultGrid, resultIdOf, resultsToolsMenu, toolbarButton } from './fixtures/ui.mjs'
+import { backendReady, connectDialogWindow, editorTextbox, gridCell, gridPart, moreResultsTools, outputStatus, resultGrid, resultIdOf, resultsToolsMenu, submitConnect, toolbarButton } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'bigquery-results-profile-'))
@@ -44,15 +44,14 @@ try {
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].showInactive())
   // The query tab's text is unsaved at quit: Don't Save.
   await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
+  // Connect opens in its own window (or over the main one where it cannot).
   await toolbarButton(page, 'Connect').click()
-  const connect = page.getByRole('dialog', { name: 'Connect', exact: true })
-  await expect(page.getByText('Loading saved connections…')).toHaveCount(0)
+  const { window: connectWindow, dialog: connect } = await connectDialogWindow(application)
   await connect.getByLabel('Server type', { exact: true }).selectOption('bigquery')
   await expect(connect.getByText(/^Emulator account /)).toBeVisible({ timeout: 20000 })
   await connect.getByLabel('Project', { exact: true }).fill(fake.project)
   await connect.getByLabel('Default dataset', { exact: true }).fill(fake.dataset)
-  await connect.getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(connect).toHaveCount(0, { timeout: 30000 })
+  await submitConnect(connectWindow, connect, { timeout: 30000 })
   await toolbarButton(page, 'New query').click()
   await editorTextbox(page).focus()
   await page.keyboard.insertText('SELECT n, s FROM t')

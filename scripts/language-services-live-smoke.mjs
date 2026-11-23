@@ -1,5 +1,5 @@
 import { electron, expect } from './fixtures/smoke.mjs'
-import { activeDocumentName, backendReady, documentTab, editorGroupForDocument, editorGroups, editorText, editorTextbox, floatingEditorGroups, movePane, dockPopoutBack, popoutDockButton, popoutTabs, queryDatabase, queryServer, suggestionOption, toolbarButton } from './fixtures/ui.mjs'
+import { activeDocumentName, backendReady, connectDialogWindow, documentTab, editorGroupForDocument, editorGroups, editorText, editorTextbox, floatingEditorGroups, movePane, dockPopoutBack, popoutDockButton, popoutTabs, queryDatabase, queryServer, submitConnect, suggestionOption, toolbarButton } from './fixtures/ui.mjs'
 import { mkdir, mkdtemp } from 'node:fs/promises'
 import { appendFileSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -79,16 +79,16 @@ async function caret(target, offset) {
 }
 async function connect(database) {
   await toolbarButton(page, 'Connect').click()
-  await page.getByLabel('Server Name', { exact: true }).fill(server)
-  await page.getByLabel('Authentication', { exact: true }).selectOption(username ? 'sql' : 'windows')
+  const { window: connectWin, dialog } = await connectDialogWindow(application)
+  await dialog.getByLabel('Server Name', { exact: true }).fill(server)
+  await dialog.getByLabel('Authentication', { exact: true }).selectOption(username ? 'sql' : 'windows')
   if (username) {
-    await page.getByLabel('Login', { exact: true }).fill(username)
-    await page.getByLabel('Password', { exact: true }).fill(password)
+    await dialog.getByLabel('Login', { exact: true }).fill(username)
+    await dialog.getByLabel('Password', { exact: true }).fill(password)
   }
-  await page.getByLabel('Database Name', { exact: true }).fill(database)
-  await page.getByLabel('Trust server certificate', { exact: true }).check()
-  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(page.getByRole('dialog')).toHaveCount(0, { timeout: 60000 })
+  await dialog.getByLabel('Database Name', { exact: true }).fill(database)
+  await dialog.getByLabel('Trust server certificate', { exact: true }).check()
+  await submitConnect(connectWin, dialog, { timeout: 60000 })
   await expect(queryDatabase(page)).toHaveValue(database)
   // The database can show before the server select takes the new connection's id: read the id only once it is set.
   await expect(queryServer(page)).not.toHaveValue('')

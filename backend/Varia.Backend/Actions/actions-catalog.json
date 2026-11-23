@@ -24,6 +24,8 @@
     {"action":"tableProperties","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"kind":"table","title":"Table Properties","verb":"properties"},
     {"action":"agentProperties","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"kind":"agent","title":"SQL Server Agent Properties","verb":"properties"},
     {"action":"agentJob","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"kind":"agentJob","title":"Job Properties","verb":"properties"},
+    {"action":"agentAlert","class":"dialog","cleanupMs":10000,"engines":["box"],"kind":"agentAlert","title":"Alert Properties","verb":"properties"},
+    {"action":"agentOperator","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"kind":"agentOperator","title":"Operator Properties","verb":"properties"},
     {"action":"agentSchedule","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"kind":"agent","title":"Schedules","verb":"properties"},
     {"action":"agentProxy","class":"dialog","cleanupMs":10000,"engines":["box"],"kind":"agentProxy","title":"Proxy Account Properties","verb":"properties"},
     {"action":"credential","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"kind":"credential","title":"Credential Properties","verb":"properties"}
@@ -90,7 +92,8 @@
   "databaseStates": {"0":"online","1":"restoring","2":"recovering","3":"recoveryPending","4":"suspect","5":"emergency","6":"offline","7":"copying","10":"offlineSecondary"},
   "describes": [
     {"action":"rename","describe":"renameDatabase","kinds":["database"]},
-    {"action":"disable","describe":"loginFacts","kinds":["login"]}
+    {"action":"disable","describe":"loginFacts","kinds":["login"]},
+    {"action":"properties","describe":"agentOperators","kinds":["agent"]}
   ],
   "dialogs": [
     {"action":"delete","dialog":"deleteObject","pages":["general"]},
@@ -110,6 +113,8 @@
     {"action":"restartAgent","dialog":"restartAgent","pages":["general"]},
     {"action":"agentProperties","dialog":"agentProperties","pages":["general","history"]},
     {"action":"agentJob","dialog":"agentJob","pages":["general","steps","schedules","notifications","targets","alerts","history"]},
+    {"action":"agentAlert","dialog":"agentAlert","pages":["general"]},
+    {"action":"agentOperator","dialog":"agentOperator","pages":["general"]},
     {"action":"agentSchedule","dialog":"agentSchedules","pages":["schedules"]},
     {"action":"agentProxy","dialog":"agentProxy","pages":["general","subsystems","principals","references"]},
     {"action":"credential","dialog":"credential","pages":["general","usedBy"]}
@@ -205,6 +210,10 @@
     {"disabled":[],"enabled":["properties","startAgent","stopAgent","restartAgent"],"kind":"agent","subtype":""},
     {"disabled":[],"enabled":["rename","delete","properties","disable","startJob","stopJob"],"kind":"agentJob","subtype":""},
     {"disabled":[],"enabled":["rename","delete","properties","enable","startJob","stopJob"],"kind":"agentJob","status":"disabled","subtype":""},
+    {"disabled":[],"enabled":["rename","delete","properties","disable"],"kind":"agentAlert","subtype":""},
+    {"disabled":[],"enabled":["rename","delete","properties","enable"],"kind":"agentAlert","status":"disabled","subtype":""},
+    {"disabled":[],"enabled":["rename","delete","properties","disable"],"kind":"agentOperator","subtype":""},
+    {"disabled":[],"enabled":["rename","delete","properties","enable"],"kind":"agentOperator","status":"disabled","subtype":""},
     {"disabled":[],"enabled":["rename","delete","properties"],"kind":"agentProxy","subtype":""}
   ],
   "scopedConfigurations": [

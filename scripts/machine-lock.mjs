@@ -41,55 +41,143 @@ export function alive(pid) {
   try { process.kill(pid, 0); return true } catch (error) { return error.code === 'EPERM' }
 }
 
-const text = file => { try { return readFileSync(file, 'utf8') } catch { return null } }
-const parse = content => { try { return JSON.parse(content) } catch { return { pid: -1 } } }
-const read = file => { const content = text(file); return content === null ? null : parse(content) }
-
 /** Windows reports a file being deleted, or held by antivirus or the indexer, as busy: taken for now, so try again later. */
 const busy = error => ['EEXIST', 'EPERM', 'EBUSY', 'EACCES'].includes(error.code)
+const defaultFs = { linkSync, readFileSync, statSync, unlinkSync, writeFileSync }
+
+function readText(file, ops = defaultFs) {
+  try { return { ok: true, content: ops.readFileSync(file, 'utf8') } }
+  catch (error) {
+    if (error.code === 'ENOENT') return { ok: false, missing: true }
+    if (busy(error)) return { ok: false, error }
+    throw error
+  }
+}
+function statFile(file, ops = defaultFs) {
+  try { return { ok: true, stat: ops.statSync(file, { bigint: true }) } }
+  catch (error) {
+    if (error.code === 'ENOENT') return { ok: false, missing: true }
+    if (busy(error)) return { ok: false, error }
+    throw error
+  }
+}
+const sameFile = (a, b) => !!a && !!b && a.ino === b.ino && a.mtimeNs === b.mtimeNs && a.birthtimeNs === b.birthtimeNs && a.size === b.size
+function parse(content) {
+  try {
+    const value = JSON.parse(content)
+    return value && typeof value === 'object' && Number.isInteger(value.pid) ? value : null
+  } catch { return null }
+}
 
 /**
  * A holder refreshes its file's time every heartbeatMs; one older than staleMs belongs to a process that stopped, or to
- * an unrelated process that took a dead holder's pid (Windows reuses them soon).
+ * an unrelated process that took a dead holder's pid (Windows reuses them soon). birthGraceMs protects a newly created
+ * `wx` fallback lock file during the brief window before its JSON lands on disk.
  */
-export const heartbeatMs = 10_000, staleMs = 90_000
+export const heartbeatMs = 10_000, staleMs = 90_000, birthGraceMs = 5_000
 
-/** The holder of `file`, or null when it is free or its holder is gone (the stale file is removed). */
-function holder(file, isAlive, now = Date.now()) {
-  const content = text(file)
-  if (content === null) return null
+const startingHolder = now => ({ pid: 0, label: 'starting run', cwd: '', started: now, starting: true })
+
+/**
+ * Inspects `file`: returns `{ record, error }`, where `record` is the live/starting holder (or null when free/cleared)
+ * and `error` reports a stat, read or unlink failure so persistent permission errors fail fast instead of blocking forever.
+ */
+function holder(file, isAlive, now = Date.now(), graceMs = birthGraceMs, ops = defaultFs) {
+  const before = statFile(file, ops)
+  if (!before.ok) return before.missing ? { record: null } : { record: null, error: before.error }
+  const age = now - Number(before.stat.mtimeNs / 1_000_000n)
+  const result = readText(file, ops)
+  if (!result.ok) {
+    if (result.missing) return { record: null }
+    if (age < staleMs) return { record: startingHolder(now), error: result.error }
+    const after = statFile(file, ops)
+    if (after.ok && sameFile(before.stat, after.stat)) {
+      try { ops.unlinkSync(file); return { record: null } }
+      catch (error) { if (error.code === 'ENOENT') return { record: null }; return { record: null, error } }
+    }
+    return { record: null, error: result.error }
+  }
+  const { content } = result
   const record = parse(content)
-  let fresh = false
-  try { fresh = now - statSync(file).mtimeMs < staleMs } catch { return null }
-  if (fresh && isAlive(record.pid)) return record
-  // Only the file just judged stale: another waiter may have cleared it and a new holder taken its place meanwhile.
-  if (text(file) === content) try { unlinkSync(file) } catch { /* another waiter cleared it first */ }
-  return null
+  if (!record) {
+    if (age < graceMs) return { record: startingHolder(now) }
+  } else if (age < staleMs && isAlive(record.pid)) {
+    return { record }
+  }
+  // Confirm both content and file identity (inode/timestamps/size) before unlinking so two empty files never collide.
+  const latest = readText(file, ops)
+  const after = statFile(file, ops)
+  if (latest.ok && latest.content === content && after.ok && sameFile(before.stat, after.stat)) {
+    try { ops.unlinkSync(file) } catch (error) {
+      if (error.code !== 'ENOENT') return { record: record ?? startingHolder(now), error }
+    }
+  }
+  return { record: null }
 }
 
-/** Creates `file` holding `record` only if it does not exist: written beside it and linked, so nobody reads it half written. */
-function create(file, record) {
+/**
+ * Creates `file` holding `record` only if it does not exist.
+ * Primary path writes a uniquely named staged file and hard-links it into place so other runs (including older worktrees)
+ * never see an empty file. When hard links are denied (Windows sandboxes deny CreateHardLinkW with EPERM), falls back to
+ * atomic exclusive creation (`wx` = CREATE_NEW / O_CREAT|O_EXCL) and verifies our token landed on disk before claiming ownership.
+ */
+function create(file, record, ops = defaultFs) {
+  const payload = JSON.stringify(record)
   const staged = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}`
-  writeFileSync(staged, JSON.stringify(record))
-  try { linkSync(staged, file); return true } catch (error) {
-    if (busy(error)) return false
+  try {
+    ops.writeFileSync(staged, payload)
+    try {
+      ops.linkSync(staged, file)
+      return { ok: true }
+    } catch (error) {
+      if (error.code === 'EEXIST') return { ok: false, busy: true }
+      if (!['EPERM', 'EACCES', 'ENOTSUP', 'EXDEV'].includes(error.code)) {
+        if (busy(error)) return { ok: false, error }
+        throw error
+      }
+    } finally {
+      try { ops.unlinkSync(staged) } catch { /* a scanner holds it; the name is unique, so it harms nothing */ }
+    }
+  } catch (error) {
+    if (busy(error)) return { ok: false, error }
     throw error
-  } finally { try { unlinkSync(staged) } catch { /* a scanner holds it; the name is unique, so it harms nothing */ } }
+  }
+  try {
+    ops.writeFileSync(file, payload, { flag: 'wx' })
+  } catch (error) {
+    if (error.code === 'EEXIST') return { ok: false, busy: true }
+    if (busy(error)) return { ok: false, error }
+    throw error
+  }
+  // Verify the file on disk still belongs to us in case a waiter unlinked it during a stalled birth or from an older worktree.
+  // Distinguish a read error from a token mismatch so a transient EBUSY never abandons our own live lock file on disk.
+  try {
+    const check = readText(file, ops)
+    if (check.ok) return parse(check.content)?.token === record.token ? { ok: true } : { ok: false, busy: true }
+    if (check.missing) return { ok: false, busy: true }
+    return { ok: false, error: check.error, cleanup: file }
+  } catch (error) {
+    return { ok: false, error, cleanup: file, fatal: true }
+  }
 }
 
-const describe = record => `${record.label} (pid ${record.pid}, ${record.cwd}, since ${new Date(record.started).toLocaleTimeString()})`
+const describe = record => record.starting
+  ? 'a starting run'
+  : `${record.label} (pid ${record.pid}, ${record.cwd}, since ${new Date(record.started).toLocaleTimeString()})`
+
+const maxIoErrors = 5
 
 /**
  * Waits for the lock in `mode` ('shared' or 'exclusive') and holds it until `release()` or the process exits. Returns
  * `{ release, others }`, where `others` is how many shared holders were running when it was taken.
  */
-export async function acquire(mode, { label = basename(process.argv[1] ?? 'node'), env = process.env, dir = env.VARIA_LOCK_DIR || defaultDir(), slots = sharedSlots(env), pollMs = 1000, beatMs = heartbeatMs, log = text => process.stderr.write(text + '\n'), isAlive = alive, signal } = {}) {
+export async function acquire(mode, { label = basename(process.argv[1] ?? 'node'), env = process.env, dir = env.VARIA_LOCK_DIR || defaultDir(), slots = sharedSlots(env), pollMs = 1000, beatMs = heartbeatMs, graceMs = birthGraceMs, fsOps, log = text => process.stderr.write(text + '\n'), isAlive = alive, signal } = {}) {
   signal?.throwIfAborted()
   if (!lockEnabled(env) || env.VARIA_LOCK_HELD) return { release() {}, others: 0 }
+  const ops = fsOps ? { ...defaultFs, ...fsOps } : defaultFs
   mkdirSync(dir, { recursive: true })
   // The token tells this hold's files from any other's, including another hold in the same process (the tests).
   const record = { pid: process.pid, token: randomUUID(), mode, label, cwd: process.cwd(), started: Date.now() }
-  const mine = file => read(file)?.token === record.token
   const exclusive = join(dir, 'exclusive.lock')
   const slotFiles = Array.from({ length: slots }, (_, index) => join(dir, `shared-${index}.lock`))
   // Every shared holder, including slots past this run's own VARIA_LOCK_SHARED that a run with a larger setting took.
@@ -98,8 +186,18 @@ export async function acquire(mode, { label = basename(process.argv[1] ?? 'node'
   // Files to remove that Windows held busy: retried on every look, and on release.
   const leftovers = new Set()
   const drop = file => {
-    if (!mine(file)) { leftovers.delete(file); return }
-    try { unlinkSync(file); leftovers.delete(file) } catch (error) { if (error.code === 'ENOENT') leftovers.delete(file); else leftovers.add(file) }
+    let content
+    try { content = ops.readFileSync(file, 'utf8') } catch (error) {
+      if (error.code === 'ENOENT') { leftovers.delete(file); return null }
+      leftovers.add(file)
+      return error
+    }
+    if (parse(content)?.token !== record.token) { leftovers.delete(file); return null }
+    try { ops.unlinkSync(file); leftovers.delete(file); return null } catch (error) {
+      if (error.code === 'ENOENT') { leftovers.delete(file); return null }
+      leftovers.add(file)
+      return error
+    }
   }
   let heartbeat
   const lost = new Set()
@@ -107,23 +205,30 @@ export async function acquire(mode, { label = basename(process.argv[1] ?? 'node'
     clearInterval(heartbeat)
     process.off('exit', release)
     for (const file of owned.splice(0)) drop(file)
-    for (const file of leftovers) drop(file)
+    for (const file of [...leftovers]) drop(file)
   }
   // A run killed outright (Ctrl+C with no handler, a closed terminal) skips this; its file is cleared as stale instead.
   process.once('exit', release)
   // A holder whose file was cleared as stale while it still ran (the machine slept past staleMs) takes it back if it can.
   heartbeat = setInterval(() => {
+    for (const file of [...leftovers]) if (!owned.includes(file)) drop(file)
     for (const file of owned) try { utimesSync(file, new Date(), new Date()) } catch {
       let back = false
-      try { back = create(file, record) } catch { /* the directory is gone too */ }
+      try {
+        const attempt = create(file, record, ops)
+        // `file` is already owned, so a `wx` write that hit a read-back error (`cleanup`) still re-created our own file:
+        // keep it on disk instead of dropping it or putting an owned file into `leftovers`.
+        back = attempt.ok || attempt.cleanup === file
+      } catch { /* the directory is gone too */ }
       if (!back && !lost.has(file)) lost.add(file) && log(`The machine lock (${mode}) for ${label} was taken over while this run still held it.`)
     }
   }, beatMs)
   heartbeat.unref()
 
   const waitedSince = Date.now()
-  let reported = '', lastNote = waitedSince
+  let reported = '', lastNote = waitedSince, ioErrors = 0
   const report = blockers => {
+    if (!blockers.length) return
     const text = blockers.map(describe).join('; ')
     if (text !== reported) {
       reported = text
@@ -133,32 +238,94 @@ export async function acquire(mode, { label = basename(process.argv[1] ?? 'node'
       log(`Still waiting for the machine lock after ${Math.round((Date.now() - waitedSince) / 1000)} s.`)
     }
   }
-  const sharedHolders = () => allSlots().map(file => holder(file, isAlive)).filter(Boolean)
+  const sharedHolders = () => {
+    const records = []
+    let firstError = null
+    for (const file of allSlots()) {
+      const state = holder(file, isAlive, Date.now(), graceMs, ops)
+      if (state.record) records.push(state.record)
+      if (state.error && !firstError) firstError = { error: state.error, file }
+    }
+    return { records, error: firstError }
+  }
+  const failAccess = ({ error, file }) => {
+    throw new Error(`Could not access machine lock file ${file} (${error.code}): ${error.message}. Run outside a restricted sandbox or set VARIA_LOCK=off.`)
+  }
 
   try {
     for (;;) {
       signal?.throwIfAborted()
-      for (const file of leftovers) drop(file)
+      const leftoverErrors = new Map()
+      for (const file of [...leftovers]) {
+        if (owned.includes(file)) { leftovers.delete(file); continue }
+        const error = drop(file)
+        if (error) leftoverErrors.set(file, error)
+      }
       if (mode === 'exclusive') {
-        if (!owned.includes(exclusive) && create(exclusive, record)) owned.push(exclusive)
+        let pollError = leftoverErrors.has(exclusive) ? { error: leftoverErrors.get(exclusive), file: exclusive } : null
+        if (!owned.includes(exclusive) && !leftovers.has(exclusive)) {
+          const attempt = create(exclusive, record, ops)
+          if (attempt.ok) owned.push(exclusive)
+          else {
+            if (attempt.cleanup) drop(attempt.cleanup)
+            if (attempt.fatal) throw attempt.error
+            if (attempt.error) pollError = { error: attempt.error, file: exclusive }
+          }
+        }
         if (owned.includes(exclusive)) {
-          const running = sharedHolders()
-          if (!running.length) break
-          report(running)
+          const { records, error } = sharedHolders()
+          if (!records.length && !error) break
+          if (error) { if (++ioErrors >= maxIoErrors) failAccess(error) }
+          else ioErrors = 0
+          report(records)
+        } else if (leftovers.has(exclusive)) {
+          // Our own wx-created file is still stuck busy on disk; retry cleanup on the next poll instead of waiting on ourselves.
+          if (pollError && ++ioErrors >= maxIoErrors) failAccess(pollError)
         } else {
-          const other = holder(exclusive, isAlive)
-          if (other) report([other])
+          const state = holder(exclusive, isAlive, Date.now(), graceMs, ops)
+          const accessError = state.error ? { error: state.error, file: exclusive } : pollError
+          if (state.record) report([state.record])
+          if (accessError) { if (++ioErrors >= maxIoErrors) failAccess(accessError) }
+          else ioErrors = 0
         }
       } else {
-        const writer = holder(exclusive, isAlive)
-        if (writer) report([writer])
-        else {
-          const free = slotFiles.find(file => !holder(file, isAlive) && create(file, record))
-          if (free) {
+        const writer = holder(exclusive, isAlive, Date.now(), graceMs, ops)
+        if (writer.error) {
+          if (writer.record) report([writer.record])
+          if (++ioErrors >= maxIoErrors) failAccess({ error: writer.error, file: exclusive })
+        } else if (writer.record) {
+          ioErrors = 0
+          report([writer.record])
+        } else if (leftovers.size > 0) {
+          // Clean up any stuck leftover slot of ours before claiming another slot so we never hold two slots at once.
+          const [file, error] = leftoverErrors.entries().next().value ?? []
+          if (error && ++ioErrors >= maxIoErrors) failAccess({ error, file })
+        } else {
+          let claimed = null, slotError = null
+          for (const file of slotFiles) {
+            const state = holder(file, isAlive, Date.now(), graceMs, ops)
+            if (state.error) { slotError ??= { error: state.error, file }; continue }
+            if (state.record) continue
+            const attempt = create(file, record, ops)
+            if (attempt.ok) { claimed = file; break }
+            if (attempt.cleanup) drop(attempt.cleanup)
+            if (attempt.fatal) throw attempt.error
+            if (attempt.error) slotError ??= { error: attempt.error, file }
+            if (leftovers.size > 0) break
+          }
+          if (claimed) {
+            ioErrors = 0
             // An exclusive run that arrived meanwhile goes first: give the slot back rather than both waiting on each other.
-            if (!holder(exclusive, isAlive)) { owned.push(free); break }
-            drop(free)
-          } else report(sharedHolders())
+            if (!holder(exclusive, isAlive, Date.now(), graceMs, ops).record) { owned.push(claimed); break }
+            drop(claimed)
+          } else {
+            if (slotError) { if (++ioErrors >= maxIoErrors) failAccess(slotError) }
+            else ioErrors = 0
+            if (leftovers.size === 0) {
+              const { records } = sharedHolders()
+              report(records)
+            }
+          }
         }
       }
       await delay(pollMs, undefined, { signal })
@@ -166,7 +333,7 @@ export async function acquire(mode, { label = basename(process.argv[1] ?? 'node'
     signal?.throwIfAborted()
     if (reported) log(`Took the machine lock (${mode}) after ${Math.round((Date.now() - waitedSince) / 1000)} s.`)
     env.VARIA_LOCK_HELD = mode
-    const others = mode === 'shared' ? allSlots().filter(file => !owned.includes(file) && holder(file, isAlive)).length : 0
+    const others = mode === 'shared' ? allSlots().filter(file => !owned.includes(file) && holder(file, isAlive, Date.now(), graceMs, ops).record).length : 0
     return { release, others }
   } catch (error) { release(); throw error }
 }

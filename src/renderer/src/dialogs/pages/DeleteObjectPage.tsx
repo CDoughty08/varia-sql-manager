@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { agentOperatorText } from '../../../../shared/actions/agent-operator.ts'
 import { loginDeleteText, mappedUserKept } from '../../../../shared/actions/logins.ts'
 import { loginConnectionsText } from '../../../../shared/actions/prompts.ts'
 import { displayText } from '../../../../shared/explorer/refs.ts'
@@ -83,7 +84,24 @@ export default function DeleteObjectPage({ open, editable }: PageProps) {
     </fieldset>}
     {usage && <p className="field-note">{usage}</p>}
     {login && model && draft && <LoginMappings model={model} draft={draft} editable={editable} />}
+    {open.target.kind === 'agentOperator' && model && draft && <OperatorReassign model={model} draft={draft} editable={editable} />}
   </div>
+}
+
+/** An operator's Delete (AG-7): what notifies it, and where its notifications go (another operator, or nowhere). */
+function OperatorReassign({ model, draft, editable }: { readonly model: DeleteTarget; readonly draft: DeleteDraft; readonly editable: boolean }) {
+  const { dialogs } = useWorkbench()
+  const uses = model.notifiedBy ?? { alerts: 0, jobs: 0 }
+  const choices = model.reassignChoices ?? []
+  return <fieldset className="object-dialog-options" disabled={!editable}>
+    <p className="field-note">{uses.alerts + uses.jobs ? agentOperatorText.deleteUses(uses.alerts, uses.jobs) : agentOperatorText.deleteUnused}</p>
+    {uses.alerts + uses.jobs > 0 && <label className="object-dialog-reassign">{agentOperatorText.reassign}{' '}
+      <select value={draft.reassignTo ?? ''} aria-label={agentOperatorText.reassign} onChange={event => dialogs.updateDraft({ reassignTo: event.target.value || undefined })}>
+        <option value="">{agentOperatorText.dropAll}</option>
+        {choices.map(name => <option key={name} value={name}>{displayText(name)}</option>)}
+      </select>
+    </label>}
+  </fieldset>
 }
 
 /** A login's mapped users (its database: its user, and why one is kept), SSMS's orphan note, and the option to delete them too,
