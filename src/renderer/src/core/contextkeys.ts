@@ -198,7 +198,7 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     activeDocumentIsRestore: active?.kind === 'restoreDatabase', restoreRunnable: !!restore?.runnable, restoreRunning: !!restore?.running, restoreRefreshable: !!restore?.refreshable,
     activeDocumentIsActivityMonitor: active?.kind === 'activityMonitor', activeDocumentIsPeek: active?.kind === 'peek', activityPaused: !!monitor?.paused, activitySplit: !!monitor?.split,
     activeDocumentIsJobActivity: active?.kind === 'agentJobActivity', activeDocumentIsAgentJob: active?.kind === 'agentJob', activeDocumentIsAgentProxy: active?.kind === 'agentProxy', activeDocumentIsCredential: active?.kind === 'credential',
-    activeDocumentIsLogViewer: active?.kind === 'agentLogViewer',
+    activeDocumentIsLogViewer: active?.kind === 'agentLogViewer', activeDocumentIsAgentSchedules: active?.kind === 'agentSchedules',
     activeDocumentIsSsisOperations: active?.kind === 'ssisOperations', ssisOperationStoppable: !!operations?.stoppable, ssisOperationsPaused: !!operations?.paused, ssisOperationsRefreshable: !!operations?.refreshable, ssisOperationsPausable: !!operations?.pausable,
     activeDocumentIsJobHistory: active?.kind === 'bigQueryJobs', jobHistoryPaused: !!history?.paused, jobHistoryRefreshable: !!history?.refreshable, jobHistoryPausable: !!history?.pausable,
     jobHistoryJobSelected: !!history?.selected, jobHistoryCanOpenResults: !!history?.openResults, jobHistoryCanReattach: !!history?.reattach, jobHistoryCanOpenSql: !!history?.openSql,

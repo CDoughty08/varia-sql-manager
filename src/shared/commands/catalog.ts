@@ -7,6 +7,7 @@ import { scriptCommandEntries, scriptUnavailableHint } from '../scripting/catalo
 import { operationsCommandEntries } from '../ssis/operations.ts'
 import { jobActivityCommandEntries } from '../agent/jobs.ts'
 import { agentJobCommandEntries } from '../actions/agent-job.ts'
+import { agentScheduleCommandEntries } from '../actions/agent-schedule.ts'
 import { agentProxyCommandEntries } from '../actions/agent-proxy.ts'
 import { logViewerCommandEntries } from '../agent/history.ts'
 import { jobHistoryCommandEntries } from '../bigquery/history-catalog.ts'
@@ -498,6 +499,8 @@ export const commandCatalog = {
   // BigQuery Job History (BQ-9): the document on a connection's and billing project's menus and in the palette, and its row
   // actions, generated from src/shared/bigquery/history-catalog.ts.
   ...jobHistoryCommandEntries(),
+  // The Schedules document (AG-6c): Manage Schedules, New Schedule… and the document's verbs, from src/shared/actions/agent-schedule.ts.
+  ...agentScheduleCommandEntries(),
   // Script as › <verb> To › <destination>: 30 commands generated from src/shared/scripting/catalog.ts, which keep the
   // table menu's explorer.scriptCreateTo* ids. Each acts on its menu's node, else the selection.
   ...scriptCommandEntries(),

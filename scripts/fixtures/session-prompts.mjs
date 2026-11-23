@@ -12,7 +12,7 @@ import { join, resolve } from 'node:path'
 import { electron, expect, within } from './smoke.mjs'
 import { explorerRow } from './explorer-tree.mjs'
 import { crashRendererAndAwaitLoss } from './dialog-lifecycle.mjs'
-import { activeDocumentName, anyResultGrid, backendReady, banner, closeDocumentButton, documentTabs, executingMark, explorerToolbar, queryBarButton, queryServer, querySession, toolbarButton } from './ui.mjs'
+import { activeDocumentName, anyResultGrid, backendReady, banner, closeDocumentButton, connectDialogWindow, documentTabs, executingMark, explorerToolbar, queryBarButton, queryServer, querySession, submitConnect, toolbarButton } from './ui.mjs'
 import { parseCalls } from './call-log.mjs'
 
 const wait = ms => new Promise(done => setTimeout(done, ms))
@@ -71,12 +71,10 @@ async function launch(launchOptions, name) {
     await page.keyboard.press('F5')
   }
   const connectDialog = async () => {
-    const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
-    await expect(dialog).toBeVisible()
+    const { window, dialog } = await connectDialogWindow(application)
     await dialog.getByLabel('Server Name', { exact: true }).fill('server-a')
     await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
-    await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
-    await expect(dialog).toHaveCount(0)
+    await submitConnect(window, dialog)
   }
   const cleanup = async () => {
     await within(application.close(), 10000).catch(() => {})
@@ -104,7 +102,6 @@ export async function sessionPrompts(launchOptions) {
     // 1. F5 on a disconnected query opens Connect, and the query runs once connected; the status bar shows its login
     // and SPID, as SSMS does.
     await run('BEGIN TRAN; SELECT 1')
-    await expect(page.getByRole('dialog', { name: 'Connect', exact: true })).toBeVisible()
     expect(await calls(control, 'query.execute')).toEqual([])
     await connectDialog()
     await expect.poll(async () => (await calls(control, 'query.execute')).map(call => call.params.sql)).toEqual(['BEGIN TRAN; SELECT 1'])

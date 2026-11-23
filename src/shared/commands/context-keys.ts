@@ -92,6 +92,7 @@ export const contextKeys = {
   jobHistoryCanOpenSql: { type: 'boolean', scope: 'state', description: 'The job selected in Job History is a query job whose SQL BigQuery shows (Open SQL in New Tab).' },
   jobHistoryCanRerun: { type: 'boolean', scope: 'state', description: 'The job selected in Job History is a top-level query job whose SQL BigQuery shows (Re-run).' },
   jobHistoryCanCancel: { type: 'boolean', scope: 'state', description: 'The job selected in Job History is running or pending, no cancel of it is on its way, and BigQuery has not refused cancelling other users\' jobs on this connection.' },
+  activeDocumentIsAgentSchedules: { type: 'boolean', scope: 'state', description: "The active document is SQL Server Agent's Schedules document (Manage Schedules)." },
   ssisOperationStoppable: { type: 'boolean', scope: 'state', description: 'The operation selected in the active Integration Services Operations document is an execution or validation that is running or pending, and no stop of it is on its way.' },
   ssisOperationsPaused: { type: 'boolean', scope: 'state', description: 'The active Integration Services Operations document is paused (Pause): it reads nothing until resumed.' },
   ssisOperationsRefreshable: { type: 'boolean', scope: 'state', description: 'The active Integration Services Operations document reads the catalog, or stopped on a failure that Refresh may get past (not a missing catalog).' },

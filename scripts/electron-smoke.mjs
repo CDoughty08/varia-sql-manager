@@ -6,9 +6,9 @@ import { pathToFileURL } from 'node:url'
 import { parseCalls } from './fixtures/call-log.mjs'
 import { explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
 import {
-  activeDocument, anyResultGrid, resultIdOf, backendReady, closeDocumentButton, documentTab, documentTabs, editorStatus, editorText as editorTextOf, emptyState, emptyStateIcon, emptyStateTitle, errorMessages,
+  activeDocument, anyResultGrid, resultIdOf, backendReady, closeDocumentButton, connectDialogWindow, documentTab, documentTabs, editorStatus, editorText as editorTextOf, emptyState, emptyStateIcon, emptyStateTitle, errorMessages,
   editorGroups, environmentPill, executingMark, explorerFooter, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, part, primaryAction, queryBar, queryBarButton, queryConnection, queryDatabase, queryServer,
-  queryStatus, readOnlyMark, resultGrid, selectOpenDocument, statusChips, tabNameBox, toolbar, toolbarButton, unsavedMark, workspaceEmpty, expectEditorShown
+  queryStatus, readOnlyMark, resultGrid, selectOpenDocument, statusChips, submitConnect, tabNameBox, toolbar, toolbarButton, unsavedMark, workspaceEmpty, expectEditorShown
 } from './fixtures/ui.mjs'
 import { pinStackedResults } from './fixtures/results-pane.mjs'
 
@@ -494,17 +494,14 @@ try {
   const executions = async () => (await calls()).filter(call => call.method === 'query.execute')
   async function connect(server, environment) {
     await toolbarButton(page, 'Connect').click()
-    await page.getByLabel('Server Name', { exact: true }).fill(server)
-    await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
+    const { window: connectWin, dialog } = await connectDialogWindow(application)
+    await dialog.getByLabel('Server Name', { exact: true }).fill(server)
+    await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
     if (environment) {
-      const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
-      const custom = dialog.getByRole('button', { name: 'Custom Properties', exact: true })
-      if (await custom.getAttribute('aria-expanded') !== 'true') await custom.click()
       await dialog.getByLabel('Environment', { exact: true }).selectOption('custom')
       await dialog.getByLabel('Custom environment label', { exact: true }).fill(environment)
     }
-    await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
-    await expect(page.getByRole('dialog')).toHaveCount(0)
+    await submitConnect(connectWin, dialog)
     await expect(await explorerRow(page, server)).toBeVisible()
     // The picker and provisional root finish before the unbound query's session ends and its connection is assigned.
     // Wait for this server's selected option: any nonempty value could still be the previous server's query.
@@ -524,6 +521,7 @@ try {
   try {
     await expect.poll(async () => (await calls()).filter(call => call.method === 'query.session.close').length).toBe(initialCloses + 1)
     await expect(page.getByRole('dialog')).toHaveCount(0)
+    await expect.poll(() => application.windows().filter(w => !w.isClosed()).length).toBe(1)
     await expect(await explorerRow(page, 'server-a')).toBeVisible()
     await expect(queryServer(page)).toBeDisabled()
     await expect(queryServer(page)).toHaveValue('')

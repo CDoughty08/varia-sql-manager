@@ -5,9 +5,9 @@ import { chooseExplorerMenuItem, expandExplorerPath, explorerMenuItems, explorer
 import { resizeWindow } from './fixtures/window-resize.mjs'
 import { actionsStubData, caution, dependentsMessage, detachFiles, detachScript, installActionsStub, longDatabase, longRole, offlineScript, offlineWarning, propertiesScript, restoreFilesScript, restoreScript, scriptText, stubServerFiles, stubSessions, tablePropertiesScript } from './fixtures/actions-stub.mjs'
 import {
-  activeDocument, activeDocumentName, addObjectDialogSteps, attachFileNameShown, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentVerb, editorText, editorTextbox, openDocument, openDocuments, selectOpenDocument,
+  activeDocument, activeDocumentName, addObjectDialogSteps, attachFileNameShown, backendReady, closeDocumentButton, connectDialogWindow, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentVerb, editorText, editorTextbox, openDocument, openDocuments, selectOpenDocument,
   errorBanner, explorerLabel, fieldHint, frameSection, gridCell, gridPart, inputShowsEnd, localGrid, localGridFrame, objectDialogConnection, objectDialogMappedUsers, objectDialogPage, objectDialogProgress, objectDialogSessions, objectDialogSessionsToggle, objectDialogStepItems, objectDialogTabs, objectDialogWarningIcons, objectDialogWarnings, openMenus as openMenusOf, part,
-  passwordField, propertyFact, propertyRow, queryDatabase, quickInput, quickInputActive, quickInputMessage, renameBox, scriptActions, scriptDrawer, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, toastMessage, toasts, toolbarButton, unsavedMark,
+  passwordField, propertyFact, propertyRow, queryDatabase, quickInput, quickInputActive, quickInputMessage, renameBox, scriptActions, scriptDrawer, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, submitConnect, toastMessage, toasts, toolbarButton, unsavedMark,
   warningBanner as warningBannerOf, pane
 } from './fixtures/ui.mjs'
 
@@ -41,12 +41,10 @@ const ordersPath = [...tablesPath, 'dbo.Orders']
 
 async function connect(server) {
   await toolbarButton(page, 'Connect').click()
-  const connectDialog = page.getByRole('dialog', { name: 'Connect', exact: true })
-  await expect(connectDialog.getByText('Loading saved connections…')).toHaveCount(0)
+  const { window: connectWin, dialog: connectDialog } = await connectDialogWindow(application)
   await connectDialog.getByLabel('Server Name', { exact: true }).fill(server)
   await connectDialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  await connectDialog.getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(connectDialog).toHaveCount(0, { timeout: 30000 })
+  await submitConnect(connectWin, connectDialog, { timeout: 30000 })
 }
 /** Opens a row's menu (explorerMenuItems) and returns its item labels; the menu stays open. */
 async function menuOf(...path) {

@@ -81,5 +81,16 @@ describe('window roles', () => {
     expect(activation.recent()).toBe(true)
     now += 1
     expect(activation.recent()).toBe(false)
+    // Activation sequence numbers advance monotonically on trusted inputs across instances and ignore non-activation inputs.
+    const first = new UserActivation(() => now), second = new UserActivation(() => now)
+    expect([first.sequence, second.sequence]).toEqual([0, 0])
+    first.note('mouseDown')
+    const seq1 = first.sequence
+    first.note('mouseMove')
+    expect(first.sequence).toBe(seq1)
+    second.note('keyDown')
+    expect(second.sequence).toBeGreaterThan(seq1)
+    first.note('mouseUp')
+    expect(first.sequence).toBeGreaterThan(second.sequence)
   })
 })
