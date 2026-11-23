@@ -57,7 +57,8 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
         const text = model.getValue(), offset = model.getOffsetAt(position), version = model.getVersionId()
         const read = readGoogleSqlCompletion(text, offset)
         if (read.site.kind === 'none') return { suggestions: [] }
-        const list = await completeFromIndex(read, target.dialect, this.lookup(target))
+        // A failure is a value: an empty list the editor asks for again, never a rejection.
+        const list = await completeFromIndex(read, target.dialect, this.lookup(target)).catch(() => ({ items: [], incomplete: true }))
         if (token.isCancellationRequested || model.isDisposed() || model.getVersionId() !== version) return { suggestions: [] }
         const start = model.getPositionAt(read.word.start), end = model.getPositionAt(Math.max(read.word.end, offset))
         const insert = { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: position.lineNumber, endColumn: position.column }
@@ -73,7 +74,7 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
         const version = model.getVersionId()
         const read = readGoogleSqlHover(model.getValue(), model.getOffsetAt(position))
         if (!read) return null
-        const hover = await hoverFromIndex(read, target.dialect, this.lookup(target))
+        const hover = await hoverFromIndex(read, target.dialect, this.lookup(target)).catch(() => undefined)
         if (!hover || token.isCancellationRequested || model.isDisposed() || model.getVersionId() !== version) return null
         const start = model.getPositionAt(hover.span.start), end = model.getPositionAt(hover.span.end)
         return { contents: [{ value: hover.markdown, isTrusted: false, supportHtml: false }], range: { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column } }

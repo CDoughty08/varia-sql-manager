@@ -368,6 +368,15 @@ describe('completion from the index', () => {
     expect((await complete(`${web80} SELECT x.c| FROM c79 x, \`varia-wide.lab.wide\` z`)).labels('column').length).toBeGreaterThanOrEqual(1900)
   })
 
+  it('follows a long chain of UNNESTs, each reading the last, without overflowing', async () => {
+    const chain = (count: number) => Array.from({ length: count }, (_, index) => `, UNNEST(${index ? `u${index - 1}.zz` : 'o.items'}) u${index}`).join('')
+    const member = await complete(`SELECT u2999.| FROM sales.orders o${chain(3000)}`)
+    expect(member.incomplete).toBe(true)
+    expect((await complete(`SELECT u0.| FROM sales.orders o${chain(3000)}`)).labels()).toEqual(['sku', 'qty'])
+    const text = `SELECT u2999.q FROM sales.orders o${chain(3000)}`
+    expect(await hoverFromIndex(readGoogleSqlHover(text, 'SELECT u2999.'.length)!, dialect, fakeLookup())).toBeUndefined()
+  })
+
   it('says the list is not final when an UNNEST\'s prefix went unasked', async () => {
     const dropped = await complete('SELECT al| FROM `varia-wide.lab.wide` w, UNNEST(w.nope1) a, UNNEST(w.nope2) b, UNNEST(w.nope3) c, UNNEST(w.zrec) d')
     expect(dropped.incomplete).toBe(true)
