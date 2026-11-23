@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { acquire, entryMode, lockEnabled, sharedSlots, staleMs, type Held } from '../scripts/machine-lock.mjs'
+import { acquire, birthGraceMs, entryMode, lockEnabled, sharedSlots, staleMs, type Held } from '../scripts/machine-lock.mjs'
 import { cpuBudget, vitestWorkers } from '../scripts/check.mjs'
 
 // Parallel agent sessions each ran npm run check, the benchmarks and the smoke suites at once and overloaded the machine:
@@ -113,6 +113,35 @@ describe('the machine lock', () => {
     await vi.waitFor(() => expect(existsSync(join(dir, 'exclusive.lock'))).toBe(true), { timeout: 10_000, interval: 10 })
   })
 
+  it('keeps an owned lock file re-created by the heartbeat via wx even when read-back hits a transient EBUSY', async () => {
+    const denyLink = () => { throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' }) }
+    const file = join(dir, 'exclusive.lock')
+    let failHeartbeatRead = false, failedReads = 0
+    const logs: string[] = []
+    const lock = await acquire('exclusive', {
+      env: env(), dir, beatMs: 10, pollMs: 10, log: text => logs.push(text), label: 'heartbeat-wx',
+      fsOps: {
+        linkSync: denyLink,
+        readFileSync: (target, enc) => {
+          if (target === file && failHeartbeatRead && ++failedReads <= 2) throw Object.assign(new Error('file busy'), { code: 'EBUSY' })
+          return readFileSync(target, enc)
+        }
+      }
+    })
+    held.push(lock)
+    failHeartbeatRead = true
+    rmSync(file)
+    await vi.waitFor(() => expect(failedReads).toBeGreaterThanOrEqual(1), { timeout: 10_000, interval: 10 })
+    // A later heartbeat tick (which first goes through the leftovers) refreshes the same file: it was kept, not unlinked and re-created.
+    const recreated = statSync(file, { bigint: true })
+    await vi.waitFor(() => expect(statSync(file, { bigint: true }).mtimeNs).toBeGreaterThan(recreated.mtimeNs), { timeout: 10_000, interval: 10 })
+    expect(statSync(file, { bigint: true }).ino).toBe(recreated.ino)
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ pid: process.pid, label: 'heartbeat-wx' })
+    expect(logs).toEqual([])
+    lock.release()
+    expect(existsSync(file)).toBe(false)
+  })
+
   it('removes its own file on release and leaves another holder alone', async () => {
     const lock = await take('exclusive')
     expect(JSON.parse(readFileSync(join(dir, 'exclusive.lock'), 'utf8'))).toMatchObject({ pid: process.pid, mode: 'exclusive' })
@@ -194,6 +223,212 @@ describe('the machine lock', () => {
     expect(result.stdout.trim()).toBe('shared')
     expect(readdirSync(dir)).toEqual([])
     expect(spawnSync(process.execPath, ['scripts/machine-lock.mjs', 'everything'], { encoding: 'utf8' }).status).toBe(2)
+  })
+
+  it('protects a brand-new empty or partial lock file during birthGraceMs, then clears it once aged', async () => {
+    const file = join(dir, 'exclusive.lock')
+    writeFileSync(file, '')
+    const logs: string[] = []
+    let taken = false
+    const pending = acquire('shared', { env: env(), dir, pollMs: 10, graceMs: birthGraceMs, log: text => logs.push(text), label: 'shared' }).then(lock => { taken = true; held.push(lock); return lock })
+    await waiting(logs)
+    expect(taken).toBe(false)
+    expect(logs[0]).toContain('held by a starting run.')
+    expect(existsSync(file)).toBe(true)
+    const old = new Date(Date.now() - birthGraceMs - 1000)
+    utimesSync(file, old, old)
+    await pending
+    expect(taken).toBe(true)
+    expect(existsSync(file)).toBe(false)
+  })
+
+  it('falls back to exclusive file creation (wx) when hard links are denied with EPERM, and verifies the token landed on disk', async () => {
+    const denyLink = () => { throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' }) }
+    const shared = await acquire('shared', { env: env(), dir, pollMs: 5, fsOps: { linkSync: denyLink }, label: 'sandbox-shared' })
+    held.push(shared)
+    expect(readdirSync(dir)).toEqual(['shared-0.lock'])
+    shared.release()
+
+    const exclusive = await acquire('exclusive', { env: env(), dir, pollMs: 5, fsOps: { linkSync: denyLink }, label: 'sandbox-exclusive' })
+    held.push(exclusive)
+    expect(readdirSync(dir)).toEqual(['exclusive.lock'])
+    exclusive.release()
+
+    // If an older worktree or stalled-birth cleanup unlinks a `wx` file before our token is verified on disk, retry instead of running unlocked.
+    let unlinkedOnce = false
+    const racingWrite = (file: string, data: string, options?: { flag?: string }) => {
+      writeFileSync(file, data, options)
+      if (options?.flag === 'wx' && !unlinkedOnce) { unlinkedOnce = true; unlinkSync(file) }
+    }
+    const retried = await acquire('shared', { env: env(), dir, slots: 1, pollMs: 5, fsOps: { linkSync: denyLink, writeFileSync: racingWrite }, label: 'raced' })
+    held.push(retried)
+    expect(unlinkedOnce).toBe(true)
+    expect(existsSync(join(dir, 'shared-0.lock'))).toBe(true)
+    retried.release()
+  })
+
+  it('cleans up its own wx-created file when read-back hits transient EBUSY instead of self-deadlocking or taking a second slot', async () => {
+    const denyLink = () => { throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' }) }
+    // Exclusive mode: read-back and immediate cleanup both hit EBUSY (e.g. antivirus scan), then clear on the next poll.
+    let exclusiveReads = 0
+    const exclusiveLogs: string[] = []
+    const exclusiveLock = await acquire('exclusive', {
+      env: env(), dir, pollMs: 5, log: text => exclusiveLogs.push(text), label: 'scanner-exclusive',
+      fsOps: {
+        linkSync: denyLink,
+        readFileSync: (target, enc) => {
+          if (target === join(dir, 'exclusive.lock') && ++exclusiveReads <= 2) throw Object.assign(new Error('file busy'), { code: 'EBUSY' })
+          return readFileSync(target, enc)
+        }
+      }
+    })
+    held.push(exclusiveLock)
+    expect(exclusiveReads).toBeGreaterThanOrEqual(3)
+    expect(exclusiveLogs).toEqual([])
+    expect(readdirSync(dir)).toEqual(['exclusive.lock'])
+    exclusiveLock.release()
+    expect(readdirSync(dir)).toEqual([])
+
+    // Shared mode: transient EBUSY on shared-0.lock read-back cleans up shared-0.lock on the next poll instead of leaking it and grabbing shared-1.lock.
+    let sharedReads = 0
+    const sharedLogs: string[] = []
+    const sharedLock = await acquire('shared', {
+      env: env(), dir, slots: 2, pollMs: 5, log: text => sharedLogs.push(text), label: 'scanner-shared',
+      fsOps: {
+        linkSync: denyLink,
+        readFileSync: (target, enc) => {
+          if (target === join(dir, 'shared-0.lock') && ++sharedReads <= 2) throw Object.assign(new Error('file busy'), { code: 'EBUSY' })
+          return readFileSync(target, enc)
+        }
+      }
+    })
+    held.push(sharedLock)
+    expect(sharedReads).toBeGreaterThanOrEqual(3)
+    expect(sharedLogs).toEqual([])
+    expect(readdirSync(dir)).toEqual(['shared-0.lock'])
+    sharedLock.release()
+    expect(readdirSync(dir)).toEqual([])
+
+    // Persistent EACCES on read-back after wx write succeeds fails fast instead of waiting on itself.
+    const persistentLogs: string[] = []
+    await expect(acquire('exclusive', {
+      env: env(), dir, pollMs: 5, log: text => persistentLogs.push(text), label: 'unreadable-wx',
+      fsOps: {
+        linkSync: denyLink,
+        readFileSync: (target, enc) => {
+          if (target === join(dir, 'exclusive.lock')) throw Object.assign(new Error('permission denied'), { code: 'EACCES' })
+          return readFileSync(target, enc)
+        }
+      }
+    })).rejects.toThrow(/Could not access machine lock file .*exclusive\.lock.*EACCES.*VARIA_LOCK=off/)
+    expect(persistentLogs).toEqual([])
+    unlinkSync(join(dir, 'exclusive.lock'))
+  })
+
+  it('checks file identity (inode/timestamps) before unlinking an aged empty file so a newly created empty file is never deleted', async () => {
+    const file = join(dir, 'exclusive.lock')
+    writeFileSync(file, '')
+    const old = new Date(Date.now() - birthGraceMs - 1000)
+    utimesSync(file, old, old)
+    let swapped = false, unlinkCalls = 0
+    const racingStat = (target: string, options: { bigint: true }) => {
+      const result = statSync(target, options)
+      // Simulate another waiter removing the old empty file and a new holder creating a fresh empty file before unlink.
+      // Matches the aged file by age, not exact mtime: Linux and macOS do not round-trip a millisecond Date through utimes exactly.
+      if (target === file && !swapped && result.mtimeNs < BigInt(Date.now() - birthGraceMs) * 1_000_000n) {
+        swapped = true
+        return result
+      }
+      if (target === file && swapped && unlinkCalls === 0) {
+        unlinkSync(file)
+        writeFileSync(file, '')
+        return statSync(file, options)
+      }
+      return result
+    }
+    const controller = new AbortController()
+    const logs: string[] = []
+    const pending = acquire('shared', {
+      env: env(), dir, pollMs: 10, graceMs: birthGraceMs, signal: controller.signal, log: text => logs.push(text),
+      fsOps: {
+        statSync: racingStat,
+        unlinkSync: target => { if (target === file) unlinkCalls++; unlinkSync(target) }
+      },
+      label: 'identity-check'
+    })
+    await waiting(logs)
+    expect(unlinkCalls).toBe(0)
+    expect(existsSync(file)).toBe(true)
+    controller.abort()
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+  })
+
+  it('retries transient EPERM/EBUSY on lock creation and fails fast on persistent create, read, or unlink errors without logging empty holders', async () => {
+    const denyLink = () => { throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' }) }
+    // Transient failure on the first two wx attempts succeeds on the third.
+    let attempts = 0
+    const flakyWrite = (file: string, data: string, options?: { flag?: string }) => {
+      if (options?.flag === 'wx' && ++attempts <= 2) throw Object.assign(new Error('transient lock'), { code: 'EBUSY' })
+      writeFileSync(file, data, options)
+    }
+    const ok = await acquire('shared', { env: env(), dir, pollMs: 5, fsOps: { linkSync: denyLink, writeFileSync: flakyWrite }, label: 'flaky' })
+    held.push(ok)
+    expect(attempts).toBe(3)
+    ok.release()
+
+    // Persistent EPERM in shared mode (when empty, when 1 slot is held, or when a larger VARIA_LOCK_SHARED holds higher slots) fails fast.
+    const epermWrite = () => { throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' }) }
+    const emptyLogs: string[] = []
+    await expect(acquire('shared', { env: env(), dir, pollMs: 5, fsOps: { linkSync: denyLink, writeFileSync: epermWrite }, log: text => emptyLogs.push(text), label: 'blocked' }))
+      .rejects.toThrow(/Could not access machine lock file .*shared-0\.lock.*EPERM.*VARIA_LOCK=off/)
+    expect(emptyLogs.join('\n')).not.toContain('held by .')
+
+    // Even when a larger VARIA_LOCK_SHARED holds shared-2 and shared-3, failures on this run's own shared-0/1 still fail fast.
+    const bigHolders = [await take('shared', { slots: 4 }), await take('shared', { slots: 4 }), await take('shared', { slots: 4 }), await take('shared', { slots: 4 })]
+    bigHolders[0].release()
+    bigHolders[1].release()
+    const partialLogs: string[] = []
+    await expect(acquire('shared', { env: env(), dir, slots: 2, pollMs: 5, fsOps: { linkSync: denyLink, writeFileSync: epermWrite }, log: text => partialLogs.push(text), label: 'blocked-partial' }))
+      .rejects.toThrow(/Could not access machine lock file .*shared-0\.lock.*EPERM.*VARIA_LOCK=off/)
+    expect(partialLogs.join('\n')).not.toContain('held by .')
+    bigHolders[2].release()
+    bigHolders[3].release()
+
+    // Persistent EPERM in exclusive mode fails fast instead of hanging silently.
+    await expect(acquire('exclusive', { env: env(), dir, pollMs: 5, fsOps: { linkSync: denyLink, writeFileSync: epermWrite }, label: 'blocked-exclusive' }))
+      .rejects.toThrow(/Could not access machine lock file .*exclusive\.lock.*EPERM.*VARIA_LOCK=off/)
+
+    // Persistent read EACCES on an existing lock file fails fast naming the file instead of waiting forever on "a starting run".
+    const blockedFile = join(dir, 'exclusive.lock')
+    writeFileSync(blockedFile, JSON.stringify({ pid: process.pid, mode: 'exclusive', label: 'other', cwd: dir, started: Date.now() }))
+    await expect(acquire('shared', {
+      env: env(), dir, pollMs: 5, log: () => {},
+      fsOps: { readFileSync: target => { if (target === blockedFile) throw Object.assign(new Error('permission denied'), { code: 'EACCES' }); return readFileSync(target, 'utf8') } },
+      label: 'unreadable'
+    })).rejects.toThrow(/Could not access machine lock file .*exclusive\.lock.*EACCES.*VARIA_LOCK=off/)
+
+    // Persistent unlink EPERM on a stale file fails fast naming the file instead of blocking forever.
+    const old = new Date(Date.now() - staleMs - 5000)
+    utimesSync(blockedFile, old, old)
+    await expect(acquire('shared', {
+      env: env(), dir, pollMs: 5, log: () => {},
+      fsOps: { unlinkSync: target => { if (target === blockedFile) throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' }); unlinkSync(target) } },
+      label: 'unremovable'
+    })).rejects.toThrow(/Could not access machine lock file .*exclusive\.lock.*EPERM.*VARIA_LOCK=off/)
+    unlinkSync(blockedFile)
+  })
+
+  it('does not throw out of release() when reading an owned file fails with an unexpected I/O error', async () => {
+    let failRead = false
+    const lock = await acquire('exclusive', {
+      env: env(), dir, pollMs: 5,
+      fsOps: { readFileSync: (target, enc) => { if (failRead) throw Object.assign(new Error('i/o error'), { code: 'EIO' }); return readFileSync(target, enc) } },
+      label: 'release-safe'
+    })
+    failRead = true
+    expect(() => lock.release()).not.toThrow()
+    failRead = false
+    unlinkSync(join(dir, 'exclusive.lock'))
   })
 
   // Every heavy entry point takes it: a suite or Electron benchmark that skipped the shared fixture would run beside everything.
