@@ -588,6 +588,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   })
   const objectSearch = new ObjectSearchService({
     api, documents, connections, settings, targetIdOf, events, agentEnabled: api.agentPreview,
+    billedGate: (connectionId, estimate, signal) => bigQueryCost.beforeScript(connectionId, estimate, signal),
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-object-search="${CSS.escape(id)}"] [data-object-search-focus]`)?.focus())
   })
   const peekTabs = new PeekTabService({
@@ -618,7 +619,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     if (windows.active() !== window) window.focus()
     target.focus()
   }))
-  const searchDetails = new SearchDetailsService({ api, peek, connections, searches: objectSearch, scriptingOptions })
+  const searchDetails = new SearchDetailsService({ api, peek, connections, searches: objectSearch, scriptingOptions, billedGate: (connectionId, estimate, signal) => bigQueryCost.beforeScript(connectionId, estimate, signal) })
   const context = new ContextKeyService({
     platform,
     agentEnabled: api.agentPreview,

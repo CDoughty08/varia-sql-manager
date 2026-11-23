@@ -134,7 +134,8 @@ export function indexSummary(entry: IndexEntry | undefined, status: ObjectIndexS
 
 /** A BigQuery index's summary: datasets in place of databases, the pass a build is in (names, then details), and the projects
  *  read by name only. */
-function bigQueryIndexSummary(entry: IndexEntry | undefined, status: ObjectIndexStatus | undefined): string {
+export function bigQueryIndexSummary(entry: IndexEntry | undefined, status: ObjectIndexStatus | undefined): string {
+  if (entry?.requestId && entry.phase === 'estimate') return 'Estimating the billed INFORMATION_SCHEMA read of the index’s details…'
   if (entry?.requestId) return entry.phase === 'details'
     ? `Reading details of ${numbers.format(entry.done)} of ${count(entry.total, 'object')}…`
     : `Indexing ${numbers.format(entry.done)} of ${count(entry.total, 'dataset')} (${count(entry.objects, 'object')} so far)…`
@@ -148,8 +149,12 @@ function bigQueryIndexSummary(entry: IndexEntry | undefined, status: ObjectIndex
   const skipped = (projects ? ` · ${count(projects, 'project')} skipped` : '') + (datasets ? ` · ${count(datasets, 'dataset')} skipped` : '')
     + (details ? ` · details missing in ${count(details, 'dataset')}` : '') + (partial ? ` · columns left out of ${count(partial, 'large dataset')}` : '')
     + (namesOnly ? ` · names only in ${count(namesOnly, 'project')}` : '')
+  // The billed bulk path: where it read, and a location whose queries failed (its datasets were read with the free calls instead).
+  const bulk = status.bulk
+  const billed = bulk ? (bulk.locations ? ` · details read with INFORMATION_SCHEMA in ${count(bulk.locations, 'location')}` : '')
+    + (bulk.failed ? ` · the billed read failed in ${count(bulk.failed, 'location')}${bulk.code ? ` (${bulk.code})` : ''}, read with free calls instead` : '') : ''
   const modules = status.definitions ? `, ${count(status.modules, 'definition')}` : ' (names only)'
-  return `Index: ${count(status.objects, 'object')}${modules} in ${count(status.indexed, 'dataset')}${skipped}`
+  return `Index: ${count(status.objects, 'object')}${modules} in ${count(status.indexed, 'dataset')}${skipped}${billed}`
 }
 
 /**

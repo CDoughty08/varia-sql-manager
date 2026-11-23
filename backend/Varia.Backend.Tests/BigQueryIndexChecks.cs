@@ -13,7 +13,7 @@ namespace Varia.Backend.Tests;
 /// refresh reuse, scoped and stale refreshes, failures as skips, the memory budget, and the disconnect. Every request goes to
 /// <see cref="BigQueryFake"/>; none leaves the process, and no check runs a job.
 /// </summary>
-internal static class BigQueryIndexChecks
+internal static partial class BigQueryIndexChecks
 {
     static readonly JsonSerializerOptions Wire = new(JsonSerializerDefaults.Web)
     {
@@ -29,11 +29,14 @@ internal static class BigQueryIndexChecks
         Ddl(check);
         Budget(check);
         Reuse(check);
+        BulkSql(check);
+        BulkTypes(check);
         using var rsa = System.Security.Cryptography.RSA.Create(2048);
         var key = BigQueryCredentialChecks.Key(rsa.ExportPkcs8PrivateKeyPem());
         await BuildAsync(check, key);
         await RefreshAsync(check, key);
         await FailuresAsync(check, key);
+        await BulkAsync(check, key);
     }
 
     sealed class Harness : IDisposable
