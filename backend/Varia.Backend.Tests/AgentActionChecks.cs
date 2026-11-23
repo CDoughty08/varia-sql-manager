@@ -62,6 +62,7 @@ internal static class AgentActionChecks
     {
         Lint(check);
         Validation(check);
+        ChangeOwner(check);
         PlansAndScripts(check);
         Names(check);
         await PreflightAsync(check);
@@ -71,7 +72,7 @@ internal static class AgentActionChecks
     private static void Lint(Action<bool, string> check)
     {
         var failures = AgentSql.LintWrites().Where(item => item.Problems.Count > 0).Select(item => item.Name + ": " + string.Join(", ", item.Problems)).ToList();
-        check(failures.Count == 0 && AgentSql.Writes.Count == 6, "every Agent write passes its lint, as do the job verbs' own reads" + (failures.Count == 0 ? "" : ": " + string.Join("; ", failures)));
+        check(failures.Count == 0 && AgentSql.Writes.Count == 7, "every Agent write passes its lint, as do the job verbs' own reads" + (failures.Count == 0 ? "" : ": " + string.Join("; ", failures)));
         check(ActionSql.Lint().Count(item => item.Name.StartsWith("agent ", StringComparison.Ordinal)) == AgentSql.Writes.Count + 2 + AgentSql.LintJobSaves().Count() + AgentSql.LintServerWrites().Count() + AgentSql.LintHistoryWrites().Count() + AgentSql.LintObjectWrites().Count() + AgentSql.LintScheduleSaves().Count() + AgentSql.LintProxySaves().Count(), "the object actions' lint runs the Agent writes too, SQL Server Agent Properties', the job document's saves and Delete History's, the alert and operator batches, the Schedules document's and the proxy document's included");
         var start = AgentSql.StartJob.Text;
         string Call(string call) => AgentSql.Resolve + call + AgentSql.Check;
@@ -124,6 +125,34 @@ internal static class AgentActionChecks
         };
         foreach (var (name, args, script) in invalid) check(Answer(args, script) == "INVALID_PARAMS", "a job's or the service's verb is refused: " + name);
         check(Answer(JobArgs("delete") with { AgentIdentity = null, CloseConnections = false, DeleteHistory = true }, script: true) == "accepted", "a job's Script runs nothing, so it needs no identity");
+    }
+
+    /// <summary>Job Activity Monitor's bulk Change owner (AG-3b): one job per request through AG-2's guarded write, re-validated as zod's
+    /// changeJobOwnerRequestSchema, with no script and jobOwner refused on every other request.</summary>
+    private static void ChangeOwner(Action<bool, string> check)
+    {
+        using var service = new ActionService(new Host(Box2022));
+        string Answer(ActionArgs args, bool script = false)
+        {
+            try { service.Validate(args, script); return "accepted"; }
+            catch (RequestException error) { return error.Code; }
+        }
+        var owner = JobArgs(ActionService.ChangeJobOwnerAction) with { JobOwner = "CONTOSO\\agent" };
+        check(Answer(owner) == "accepted" && Answer(owner with { JobOwner = new string('l', 128) }) == "accepted", "Change owner validates with the job, its identity and a login of up to 128 characters");
+        var refused = new (string Name, ActionArgs Args, bool Script)[]
+        {
+            ("without the owner", owner with { JobOwner = null }, false), ("an empty owner", owner with { JobOwner = "" }, false), ("an owner past 128 characters", owner with { JobOwner = new string('l', 129) }, false),
+            ("an owner with U+0000", owner with { JobOwner = "a\0b" }, false), ("without the identity", owner with { AgentIdentity = null }, false), ("a malformed identity", owner with { AgentIdentity = new("x") }, false),
+            ("its script", owner, true), ("on an alert", Args(ActionService.ChangeJobOwnerAction, new ObjectRefDto("agentAlert", Name: "a")) with { JobOwner = "sa" }, false),
+            ("on the Agent node", Args(ActionService.ChangeJobOwnerAction, AgentNode) with { JobOwner = "sa" }, false), ("with a new name", owner with { NewName = "x" }, false),
+            ("with a step", owner with { StepName = "Load" }, false), ("an owner on a job's enable", JobArgs("enable") with { JobOwner = "sa" }, false),
+            ("an owner on a table's rename", Args("rename", new ObjectRefDto("table", "AppData", "dbo", "Orders")) with { NewName = "x", JobOwner = "sa" }, false)
+        };
+        foreach (var (name, args, script) in refused) check(Answer(args, script) == "INVALID_PARAMS", "Change owner is refused: " + name);
+        check(ActionService.AgentJobPlan(owner) is { Write: var write, Values: ["CONTOSO\\agent"] } && write == AgentSql.ChangeOwner
+            && AgentSql.ChangeOwner.Text.EndsWith("EXEC @rc = msdb.dbo.sp_update_job @job_id = @job_id, @owner_login_name = @owner_login_name;" + AgentSql.Check, StringComparison.Ordinal)
+            && AgentSql.ChangeOwner.Text.StartsWith(AgentSql.Resolve, StringComparison.Ordinal),
+            "Change owner resolves the job by its listed identity, then passes the login as sp_update_job's @owner_login_name parameter");
     }
 
     private static void PlansAndScripts(Action<bool, string> check)

@@ -43,7 +43,7 @@ const limitNotes: { readonly [L in AgentLimit]: string } = {
   ownerLogins: "Logins the job document's owner picker lists (sysadmin; the owner can still be typed)",
   scheduleJobChanges: 'Jobs one schedule save may attach or detach',
   lastRunRows: "History rows Job Activity Monitor's last run reads, newest first, before it cancels the rest",
-  startJobs: 'Jobs one Start, Stop, Enable or Disable from Job Activity Monitor may name',
+  startJobs: 'Jobs one Start, Stop, Enable, Disable, Change owner or Attach schedule from Job Activity Monitor may name',
   watchedJobs: 'Jobs the status bar follows with live progress',
   serviceStatementMs: 'One service Start or Stop statement, in ms',
   serviceWaitMs: 'How long a Start or Stop waits for the service\'s new state, in ms',
