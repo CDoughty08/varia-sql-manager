@@ -526,7 +526,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
 ### Technical sketch
 
 - **No protocol change for the values themselves.** Values come through the results worker's whole-cell read
-  (`ResultHandle.getCell`, as Open Value in New Tab uses), which gains a `maxChars` option.
+  (`ResultHandle.getCell`, as Open Value in New Tab uses), which gains a `maxChars` option on every step: the request
+  `getCell` builds (`ResultClient.ts`), the worker's `cell` request (`worker-protocol.ts`), its dispatch in
+  `worker-core.ts`, and `cell()`, which cuts the text and reports it `truncated` (whose guard already skips formatting a
+  cut value), with a worker test that a 200,000-character value comes back cut at 100,001 with `truncated` set.
   - The card reads at most 100,001 characters a side; Compare Values in Tab reads whole values.
   - The **new value** is the data column at the grid's position.
   - The **old value** depends on the cell:
