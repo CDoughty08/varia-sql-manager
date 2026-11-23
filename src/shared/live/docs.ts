@@ -11,7 +11,7 @@ const runsOn = (probe: LiveProbeSpec) => [
 ].join('; ')
 const schedule = (probe: LiveProbeSpec) => {
   const budget = probe.budgetMs ?? defaultBudgetMs
-  return `budget ${seconds(budget.min)} to ${seconds(budget.max)}; slows above ${Math.round((probe.maxDutyCycle ?? defaultDutyCycle) * 100)} % of its interval${probe.minGapMs ? `; refresh at most every ${seconds(probe.minGapMs)}` : ''}${probe.idleIntervalMs ? `; at least ${seconds(probe.idleIntervalMs)} apart while its last sample held nothing open` : ''}`
+  return `budget ${seconds(budget.min)} to ${seconds(budget.max)}; ${probe.loadGuard === false ? 'no load guard' : `slows above ${Math.round((probe.maxDutyCycle ?? defaultDutyCycle) * 100)} % of its interval`}${probe.minGapMs ? `; refresh at most every ${seconds(probe.minGapMs)}` : ''}${probe.idleIntervalMs ? `; at least ${seconds(probe.idleIntervalMs)} apart while its last sample held nothing open` : ''}`
 }
 
 const count = (value: number) => value.toLocaleString('en-US')

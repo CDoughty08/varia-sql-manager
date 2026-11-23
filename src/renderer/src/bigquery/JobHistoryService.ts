@@ -202,12 +202,14 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     const pinned = jobs?.length ? jobs.slice(0, jobHistoryLimits.pinned) : undefined
     const existing = Object.values(this.getSnapshot().documents).find(state => state.connectionId === connectionId)
     if (existing) {
-      if (pinned) this.setFilters(existing.id, { ...existing.filters, jobs: pinned })
+      // The pinned jobs show whatever the filters say, the search box's included.
+      if (pinned) { this.setText(existing.id, ''); this.setFilters(existing.id, { ...existing.filters, jobs: pinned }) }
       this.options.documents.activate(existing.id)
       return existing.id
     }
     const label = connection.displayName || project
-    const document = this.options.documents.openCustom('bigQueryJobs', jobHistoryTabName(label), connection.id, project)
+    // No database: a new query opened from Job History takes the active document's, and the project is no dataset.
+    const document = this.options.documents.openCustom('bigQueryJobs', jobHistoryTabName(label), connection.id, '')
     this.targetBindings.bind(document.id, connection.id)
     const state: JobHistoryState = {
       id: document.id, connectionId: connection.id, project, label, filters: { ...defaultJobHistoryFilters, ...pinned ? { jobs: pinned } : {} }, expanded: [], text: '',
@@ -341,8 +343,10 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
 
   private sendArgs(id: string): void {
     const state = this.get(id), handle = this.handles.get(id)
-    if (!state || !handle || !this.usable(id)) return
+    if (!state || !handle) return
+    // Kept by the handle even with no stream open, so a view that subscribes again after a Reconnect sends what the filters say.
     handle.setArgs(jobHistoryArgs(state.filters, state.expanded, this.prices))
+    if (!this.usable(id)) return
     // New args sample at once (after them: the view's updates go in order); a view with no open job would otherwise wait
     // out the source's idle interval before listing anew or reading a script's statements. An ended view starts again.
     handle.refresh()
@@ -385,7 +389,9 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
       }
       const before = this.get(id)?.selected
       if (!before || before.pending || JSON.stringify(before) !== JSON.stringify(job)) this.patch(id, { selected: job })
-      if (this.get(id)?.detailsOpen && this.get(id)?.details?.jobId !== key) void this.loadDetails(id)
+      // Another job, or the same one in a new state (it finished): its facts changed.
+      const changed = this.get(id)?.details?.jobId !== key || !!before && !before.pending && before.jobId === key && before.state !== job.state
+      if (this.get(id)?.detailsOpen && changed) void this.loadDetails(id)
     }, onUnexpectedError)
   }
   /** The selected job once its cells are read; undefined when none is selected or the document cannot act. */
@@ -420,7 +426,12 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
   async loadDetails(id: string): Promise<void> {
     const job = await this.selectedJob(id)
     const state = this.get(id)
-    if (!job || !state?.connectionId) return
+    if (!job || !state?.connectionId) {
+      // A job is selected but the document cannot read it (its connection is gone): say so rather than "Loading the job…".
+      const selected = state?.selected
+      if (state?.detailsOpen && selected && !selected.pending) this.patch(id, { details: { jobId: selected.jobId, loading: false, error: { message: jobHistoryText.notConnected } } })
+      return
+    }
     if (!job.mine && this.refused(id).get) { this.patch(id, { details: { jobId: job.jobId, loading: false, error: { message: this.refused(id).get!, code: 'PERMISSION_DENIED' } } }); return }
     const generation = this.bump(id, 'details'), connectionId = state.connectionId
     this.patch(id, { details: { jobId: job.jobId, loading: true } })

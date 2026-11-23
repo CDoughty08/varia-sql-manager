@@ -155,7 +155,8 @@ function Facts({ details, prices }: { readonly details: JobHistoryDetails; reado
   const rows: [string, string | undefined][] = [
     ['Job ID', job.jobId], ['Location', job.location], ['State', jobHistoryStateLabels[job.state]], ['Statement', job.statement], ['User', job.user],
     ['Created', time(job.created)], ['Started', time(job.started)], ['Ended', time(job.ended)],
-    ['Bytes processed', bytes(job.processed)], ['Bytes billed', bytes(job.billed)], ['Slot time', job.slotMs === undefined ? undefined : `${(job.slotMs / 1000).toFixed(1)} s`],
+    // On-demand cost is from bytes billed; bytes processed carry no price.
+    ['Bytes processed', job.processed === undefined ? undefined : formatBytes(job.processed)], ['Bytes billed', bytes(job.billed)], ['Slot time', job.slotMs === undefined ? undefined : `${(job.slotMs / 1000).toFixed(1)} s`],
     ['Cache hit', job.cacheHit === undefined ? undefined : job.cacheHit ? 'Yes' : 'No'], ['Rows affected', job.rowsAffected?.toLocaleString('en-US')],
     ['Default dataset', job.dataset], ['Destination', job.destination], ['Maximum bytes billed', job.maximumBytesBilled === undefined ? undefined : formatBytes(job.maximumBytesBilled)],
     ['Session', job.session ? 'Ran in a session' : undefined], ['Labels', job.labels.length ? job.labels.map(label => `${label.key}=${label.value}`).join(', ') : undefined], ['Parent script', job.parentJobId]

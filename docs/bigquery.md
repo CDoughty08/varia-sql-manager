@@ -616,15 +616,16 @@ without going to BigQuery Studio. Everything comes from BigQuery's free REST cal
   marks the principal's own jobs (never an email comparison).
 - **Listing and refresh.** The newest 1,000 top-level jobs in the range, newest first, in pages of 100 with `projection=full`;
   each job's SQL is cut to a one-line, 200-character preview as its page is read, and a refresh reads at most 10 MiB of
-  answers within its 10 s budget, going on from there next time (the status line says "still loading"). A refresh asks for
+  answers within its time budget (0.8 of the interval, at most 10 s), going on from there next time (the status line says "still loading"). A refresh asks for
   jobs created since a minute before the newest job a whole listing read (filtered out or not; a refresh the budget stops
-  goes on from its page next time), for the open jobs (`stateFilter` pending and running) and, for
+  goes on from its page next time; it stops between pages at three quarters of the time budget), for the open jobs (`stateFilter` pending and running) and, for
   each open job that left that answer, its final state (`jobs.get`, or one `stateFilter=done` listing over their creation
   window for other users' jobs when `jobs.get` on them is refused). A DONE job never changes and is never read again; new
   scope or filters list from scratch, at once. The `bigquery.jobs` live source refreshes every 5 s while a job is running or
   pending and every 60 s otherwise (its `idleIntervalMs`, [docs/live.md](live.md)), and the load guard leaves it alone: its
   cost is network and quota waits, which a longer interval would not ease. Pinned jobs (a link, the dialog) are read by id
-  and shown whatever the filters say; a hidden document pauses, and Refresh (F5) and
+  and shown whatever the filters say (pinning clears the search); an open job the filters leave out is still followed
+  until it finishes; a hidden document pauses, and Refresh (F5) and
   Pause are in its header. The status line counts the jobs and open jobs, says when more exist in the range, and names
   locations BigQuery could not read.
 - **Columns.** State (Running, Pending, Done, Failed, Cancelled, with row tones: failed and cancelled are DONE jobs with an
@@ -632,13 +633,13 @@ without going to BigQuery Studio. Everything comes from BigQuery's free REST cal
   Processed, Billed, Cost (on demand, from bytes billed; empty with Show cost as Bytes only), Slot time, Cache, Location,
   Varia (jobs with the `varia_client` label), Destination, Error and SQL; then the identity columns the actions read (Job,
   Parent job, Mine, Details hidden, Children). A script shows ▸; "Show statements in grid" in the details pane lists up to
-  1,000 of its statements under it in statement order (at most 4 scripts at once), read again only while it runs.
+  1,000 of its statements (the newest, when it has more) under it in statement order (at most 4 scripts at once), read again only while it runs.
 - **Filters.** State and Type chips (every chip on is no filter), Range (last hour, 24 hours, 7 days, 30 days, or Custom…
   with From and To, at most 180 days and no older than BigQuery's 180-day retention), Statements (statement types such as
   `SELECT, MERGE`), Started from Varia, and Search over job id, user, destination and the SQL preview. Clear filters keeps
   the scope and the search.
 - **Details** (Enter, or the header's Details) reads the selected job with `bigquery.jobs.get`: its facts (times, bytes
-  with their cost, slot time, cache hit, rows affected, default dataset, destination, maximum bytes billed, whether it ran
+  processed, bytes billed with their cost, slot time, cache hit, rows affected, default dataset, destination, maximum bytes billed, whether it ran
   in a session, labels), its error with its position, its whole SQL with GoogleSQL highlighting (up to 1,000,000
   characters), and a script's statements. Another user's job without `bigquery.jobs.get` is refused once, remembered for
   the connection, and shown as hidden from then on.

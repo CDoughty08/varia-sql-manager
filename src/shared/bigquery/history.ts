@@ -1,6 +1,6 @@
 // BigQuery's Job History (docs/bigquery.md, Job History): the `bigquery.jobs` live source's args, bigquery.jobs.get and
 // bigquery.jobs.cancel with their bounds (zod here, C# in BigQueryJobHistory.Check), and the pure rules the document follows:
-// the qualified job id, the console link, finding job ids in Messages, and what each row action may do. The backend lists and
+// the qualified job id, the console link, and what each row action may do. The backend lists and
 // derives the jobs (BigQuery/BigQueryService.History.cs); this decides only what the renderer sends and shows. No React here.
 import { z } from 'zod'
 import { jobIdSchema, jobLimits, jobLocationSchema, jobProjectSchema } from './jobs'
@@ -102,23 +102,6 @@ export function qualifiedJobId(project: string, jobId: string, location?: string
 export function consoleJobLink(project: string, jobId: string, location?: string): string {
   const query = new URLSearchParams({ project, j: `bq:${location ?? 'US'}:${jobId}`, page: 'queryresults' })
   return `https://console.cloud.google.com/bigquery?${query.toString()}`
-}
-
-const qualifiedPattern = /(?<![\w.:-])((?:[a-z\d][a-z\d.-]{0,61}[a-z\d]:)?[a-z][a-z\d-]{4,28}[a-z\d]):(?:([A-Za-z\d-]{1,64})\.)?([\w-]{1,1024})(?![\w-])/g
-/** A job id found in Messages text, with where it sits in the text. */
-export interface MessageJobReference { readonly project: string; readonly jobId: string; readonly location?: string; readonly start: number; readonly end: number }
-/** The qualified job ids (`project:LOCATION.job_id`) a BigQuery tab's message names, for its Show in Job History link: only
- *  the connection's billing project's, since jobs belong to the project that ran them. At most 4 a message. */
-export function messageJobReferences(text: string, project: string): MessageJobReference[] {
-  const found: MessageJobReference[] = []
-  for (const match of text.slice(0, 16_384).matchAll(qualifiedPattern)) {
-    if (match[1] !== project) continue
-    const jobId = match[3], location = match[2]
-    if (!jobIdSchema.safeParse(jobId).success || location !== undefined && !jobLocationSchema.safeParse(location).success) continue
-    found.push({ project, jobId, ...location ? { location } : {}, start: match.index, end: match.index + match[0].length })
-    if (found.length === 4) break
-  }
-  return found
 }
 
 /** The document's filters as it holds them, and the args they send. */

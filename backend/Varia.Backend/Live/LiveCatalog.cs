@@ -26,10 +26,11 @@ internal sealed record LiveGatesJson(int MinMajor, List<int> Editions);
 /// <summary>FilterMode is memory, restart or none (the probe refuses filters). BudgetMs bounds a statement's budget (0.8 × the
 /// interval), MinGapMs is the least time between two samples a refresh may cause, MaxDutyCycle the load guard's share of the
 /// interval, Gates where the probe runs (null: everywhere its source runs), Permission serverState or none, and IdleIntervalMs
-/// the interval while the sampler reports nothing open (0: none; LiveSubscription.InForce).</summary>
+/// the interval while the sampler reports nothing open (0: none; LiveSubscription.InForce). LoadGuard false: the load guard
+/// leaves the probe alone (a REST listing, whose cost is network and quota waits).</summary>
 internal sealed record LiveProbeJson(string Id, string Source, string Label, string Description, LiveIntervalJson IntervalMs, List<LiveSeriesJson> Series,
     List<LiveTableJson> Tables, List<string> Status, List<string> Views, string FilterMode, LiveIntervalBoundsJson? BudgetMs = null, int MinGapMs = 0,
-    double MaxDutyCycle = 0.25, LiveGatesJson? Gates = null, string Permission = "none", int IdleIntervalMs = 0)
+    double MaxDutyCycle = 0.25, LiveGatesJson? Gates = null, string Permission = "none", int IdleIntervalMs = 0, bool LoadGuard = true)
 {
     /// <summary>The budget when the entry names none: cheap DMV reads.</summary>
     public static readonly LiveIntervalBoundsJson DefaultBudget = new(500, 5000);

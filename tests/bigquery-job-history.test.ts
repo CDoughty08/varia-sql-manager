@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   agoText, cancelQuestion, consoleJobLink, customRange, parseStatements, defaultJobHistoryFilters, jobHistoryActionState, jobHistoryActiveFilters, jobHistoryArgs, jobHistoryColumns, jobHistoryLimits,
-  jobHistoryDetailsSchema, messageJobReferences, qualifiedJobId, type JobHistoryDetails, type JobHistoryRow
+  jobHistoryDetailsSchema, qualifiedJobId, type JobHistoryDetails, type JobHistoryRow
 } from '../src/shared/bigquery/history'
 import { jobsByProject } from '../src/shared/bigquery/jobs'
 import { liveArgsSchemas } from '../src/shared/live/schema'
@@ -28,14 +28,6 @@ describe('Job History rules', () => {
     expect(qualifiedJobId('varia-alpha', 'job_1')).toBe('varia-alpha:job_1')
     expect(consoleJobLink('varia-alpha', 'job_1', 'EU')).toBe('https://console.cloud.google.com/bigquery?project=varia-alpha&j=bq%3AEU%3Ajob_1&page=queryresults')
     expect(consoleJobLink('varia-alpha', 'job_1')).toContain('j=bq%3AUS%3Ajob_1')
-  })
-  it('finds the billing project\'s qualified job ids in a message, at most four', () => {
-    const text = 'Job ID: varia-alpha:US.script_1 and other-project:US.x_1, also varia-alpha:job_2.'
-    expect(messageJobReferences(text, 'varia-alpha')).toEqual([
-      { project: 'varia-alpha', jobId: 'script_1', location: 'US', start: 8, end: 31 },
-      { project: 'varia-alpha', jobId: 'job_2', start: 63, end: 80 }
-    ])
-    expect(messageJobReferences(Array(6).fill('varia-alpha:US.j').join(' '), 'varia-alpha')).toHaveLength(4)
   })
   it('send only the filters that apply, always within the source\'s schema', () => {
     expect(jobHistoryArgs(defaultJobHistoryFilters, [], true)).toEqual({ scope: 'mine', hours: 24, prices: true })
@@ -321,6 +313,40 @@ describe('Job History documents', () => {
     await service.copy(id, 'link')
     expect(api.writeClipboardText).toHaveBeenLastCalledWith(consoleJobLink('varia-alpha', 'job_1', 'EU'))
     expect(service.get(id)?.notice?.text).toBe(jobHistoryText.copied('the console link'))
+  })
+  it('keep filters changed while the connection is lost for the next subscription, and give the document no dataset', () => {
+    const { service, handle, connections, documents } = history()
+    const id = service.open('bq1')
+    // The project is no dataset: a new query opened from Job History takes the active document's, so it holds none.
+    expect(documents.active).toMatchObject({ id, database: '' })
+    const refreshes = handle().refreshes
+    connections.markLostBefore(2)
+    service.setScope(id, 'all')
+    expect(handle().args.at(-1)).toMatchObject({ scope: 'all' })
+    expect(handle().refreshes).toBe(refreshes)
+  })
+  it('clear the search when a link pins jobs, and say why the details pane cannot read a job on a lost connection', async () => {
+    const { service, handle, grid, connections, api } = history()
+    const id = service.open('bq1')
+    service.setText(id, 'orders')
+    expect(service.open('bq1', [{ jobId: 'job_1', location: 'US' }])).toBe(id)
+    expect(service.get(id)?.text).toBe('')
+    expect(handle().probes.at(-1)).toMatchObject({ probe: 'bigquery.jobs.list' })
+    // A running job that finishes reloads the open details pane: its facts changed.
+    service.attachGrid(id, grid as unknown as LiveGrid)
+    grid.select(cells({ state: 'Running' }))
+    await settled()
+    api.bigQueryJob.mockResolvedValue({ ok: true, value: details({ state: 'running' }) })
+    await service.toggleDetails(id)
+    expect(api.bigQueryJob).toHaveBeenCalledTimes(1)
+    api.bigQueryJob.mockResolvedValue({ ok: true, value: details() })
+    grid.select(cells())
+    await settled()
+    expect(api.bigQueryJob).toHaveBeenCalledTimes(2)
+    expect(service.get(id)?.details).toMatchObject({ loading: false, value: { job: { state: 'done' } } })
+    connections.markLostBefore(2)
+    await service.loadDetails(id)
+    expect(service.get(id)?.details).toEqual({ jobId: 'job_1', loading: false, error: { message: jobHistoryText.notConnected } })
   })
   it('show jobs of a project not connected yet once a connection to it goes live', () => {
     const { service, connections, documents } = history()

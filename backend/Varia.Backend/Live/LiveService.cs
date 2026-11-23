@@ -127,9 +127,6 @@ internal interface ILiveSampler : IDisposable
     bool HasRates => true;
     /// <summary>After a sample: whether it left the probe nothing open, so a probe with an idleIntervalMs samples at it.</summary>
     bool IsIdle(string probe) => false;
-    /// <summary>The load guard weighs the source's sample cost: a SQL source's is the server's work. A REST listing's is mostly
-    /// network and quota waits, which a longer interval would not ease, so it opts out (the catalogue's intervals hold).</summary>
-    bool GuardsLoad => true;
     /// <summary>Nothing is due for a while (every probe paused, or the next one far off): give back what is held between
     /// ticks, such as a pooled connection.</summary>
     void Idle() { }
@@ -468,10 +465,10 @@ internal sealed class LiveSubscription : IDisposable
 
     /// <summary>The load guard: a probe whose smoothed cost passes its duty cycle of the interval in force for 3 samples in a
     /// row doubles that interval (up to the cap); one under 10 % for 10 samples halves it back toward the asked interval.
-    /// Only the SQL sources' costs count (a test period has none to guard, and a REST source opts out).</summary>
+    /// Only the SQL sources' costs count (a test period has none to guard, and a probe with loadGuard false opts out).</summary>
     private void Guard(LiveProbeState probe, int costMs, long takenAt)
     {
-        if (Sampler.PeriodMs is not null || !Sampler.GuardsLoad) return;
+        if (Sampler.PeriodMs is not null || !probe.Spec.LoadGuard) return;
         probe.CostEwma = probe.CostEwma is { } ewma ? CostWeight * costMs + (1 - CostWeight) * ewma : costMs;
         var effective = probe.EffectiveIntervalMs;
         // The cost is weighed against the interval in force (an idle interval included), and the guard moves the asked one's.
