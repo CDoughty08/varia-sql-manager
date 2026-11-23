@@ -411,7 +411,7 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
 - **Load into memory.** A windowed result of a finished run offers Load into memory on its grid's strip and in the results
   toolbar's ⋯ menu (Load Result into Memory in the palette) while its projection (the descriptor's `projectedBytes`, its
   measured row cost times its rows) fits the result memory free at that point; otherwise the strip says it is too large to
-  load now and to close other results to make room. It runs `results.remoteQuery` kind `load`, which reads the whole
+  load now, offers Load sample… (below) and says to close other results to make room. It runs `results.remoteQuery` kind `load`, which reads the whole
   table into memory under the budget (REST, or Storage Read when it qualifies; a script statement's rows always through
   REST, which keeps their order), so the in-memory features work on it. While it runs the strip counts the rows read and
   offers Stop, and the grid keeps the rows it showed and its place, drawing those not yet read as loading. A refusal part
@@ -436,9 +436,18 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
   `REMOTE_EXPIRED` and leaves no file. Save reads the table itself, so it carries on through a load or Close Results. A sort or filter run in BigQuery saves as its own result.
 - **Expiry.** A destination table lasts about 24 hours: once it has expired, a read answers with the cached rows from the
   start of its window, and one that starts on rows not cached answers `REMOTE_EXPIRED`. The grid keeps the rows it has, and
-  its strip says BigQuery no longer keeps the result and offers Re-run…, which runs the tab's query again through Execute
-  (the editor's text, or its selection, with the estimate and cost prompt); a grid shown while another tab is active
-  does not offer it. A cache hit's destination table is an older one, which may expire sooner, so a
+  its strip says BigQuery no longer keeps the result and offers Re-run…: `results.remoteQuery` kind `rerun` runs the
+  result's own statement again in BigQuery (read from its job with `jobs.get`, free, with the default dataset it ran
+  with: a script statement's alone), after its estimate and the cost prompts, outside the tab's session, and the new
+  result replaces the old one in place, keeping its number, column widths and place; its sort and filters are removed
+  (the screen reader hears so). While it runs the strip says so and offers Stop, which leaves the result as it was, and
+  closing the result cancels it. Only a query's own result (or a re-run's) runs again: a view, value list or sample reads
+  a table that may be gone, so its query is run again from the editor. A result whose job BigQuery names a script, or
+  anything but one SELECT (a script whose statements were not listed; in emulator mode, which names no type, text that
+  is not one query), is refused with `INVALID_PARAMS`, so a script never runs again whole, and a legacy SQL job with
+  `LEGACY_SQL`. It runs outside the session, so a statement that reads the tab's temp tables or variables fails
+  as BigQuery says, and session settings (`@@dataset_id`) and an open transaction's changes do not carry over: its rows
+  may differ, and when the job ran in a session Messages says so. A cache hit's destination table is an older one, which may expire sooner, so a
   windowed cache hit's caption adds "cached result: may expire early".
 - **What waits.** Search, profiles, pivots, row identities and comparisons of a windowed result (its sorts, filters and
   value lists run in BigQuery, below) answer "This result is windowed in BigQuery" (`REMOTE_RESULT`) for now; a request whose result switches to
@@ -485,6 +494,38 @@ BigQuery" in their tooltips.
   value list that has expired answers the same when a filter names it. In emulator mode, where jobs run outside the
   tab's session, the estimate notices the table is gone and the original query runs again with the sort or filter
   around it, when the query has no parameters and nothing in it can change between runs; Messages says so.
+
+### Load a sample
+
+A windowed result too large to load offers **Load sample…** on its strip, and any windowed result of a finished run offers
+it in the results toolbar's ⋯ menu (Load Sample… in the palette). Its dialog names the result and takes how many rows (a million by default,
+fewer when the result has fewer or they would not fit half the result memory free; at most 10,000,000) and how to pick
+them, and its note says what the sample costs and the result memory it needs (`LoadSampleDialog.tsx`, `sample.ts`,
+`SqlService.BigQuerySample.cs`; the protocol is `results.remoteQuery`'s `sample` kind in docs/ipc.md).
+
+- **First rows (free).** `tabledata.list` reads the first rows of the result table, as the grid's blocks are read: no job
+  runs and nothing is billed, so there is no estimate or prompt, and the query's timeout does not apply (Stop does).
+- **Random sample.** `SELECT * FROM` the result table `TABLESAMPLE SYSTEM (@percent PERCENT) LIMIT @rows`, the percent
+  being the rows' share of the table with 10% to spare. BigQuery picks whole blocks of varying size, so a sample holds
+  about that share, up to the rows asked, and Messages says when it holds fewer. A table under about 1 GB is usually one
+  block, which TABLESAMPLE reads whole: its sample is the rows BigQuery returns first, not a random pick, and Messages
+  says so. BigQuery bills only the blocks it reads and never caches a TABLESAMPLE query: the dialog shows the dry run's
+  estimate as the rows or method change, and Load goes through Cost › Before Execute's prompts as a sort does. Its job
+  runs outside the tab's session and its rows and cost go to Messages. TABLESAMPLE is in Preview at Google.
+- **TABLESAMPLE's limitations** ([Google's list](https://cloud.google.com/bigquery/docs/table-sampling#limitations)).
+  The statement's fixed shape names the table once and samples no view, subquery, table-valued function, `UNNEST` or
+  `IN` subquery. `tables.get` (free) checks the result's table is a table, not a view or materialized view
+  (`INVALID_PARAMS`), before the estimate and again before the job. A table with row-level security (only a re-attached
+  job's own destination could have one) is refused by BigQuery at the estimate, so no job runs. A partitioned or
+  clustered destination samples with more bias, as Google notes.
+- **The result.** A new result in memory beside its source, named for what it holds ("Sample: 1,000,000 of 52,341,118
+  rows"), held under the source's budget: a refusal part way keeps the rows read and says so, and never stops the
+  source. The in-memory features work on it, and the name carries to what is built from it (a pivot, a comparison, a
+  column profile). It reads the table, so it is refused with `REMOTE_EXPIRED` once the table has expired.
+- **Auxiliary.** A sample, like a re-run, runs no job history record and is never left running: Stop on the source's
+  strip or closing the source cancels it. The workbench runs one at a time per result, and the backend none while its query still runs or another
+  result of the query loads (`BUSY`). A Load into memory started beside a running sample shares its budget, so it may
+  stay windowed until the sample ends and it is loaded again.
 
 ### Cost
 
@@ -696,8 +737,8 @@ without going to BigQuery Studio. Everything comes from BigQuery's free REST cal
 | `COST_CAP` | `bytesBilledLimitExceeded` | Names the cap the job carried (the connection's own, else Options') and Google's figure, in bytes alone under Bytes only; raise the cap or read less |
 | `CANCELLED` | `stopped` | The job was cancelled |
 | `REMOTE_RESULT` | Sort, filter, search, profiles, distinct values, pivots, row identities or comparisons of a windowed result | "This result is windowed in BigQuery: its rows are not in memory, so this is not available for it yet." |
-| `REMOTE_EXPIRED` | Rows of a windowed result not cached, or a load into memory, once BigQuery's temporary result table expired (about 24 hours) | "BigQuery no longer has this result…": run the query again |
-| `BUSY` | A load (`results.remoteQuery`) while the query that made the result still runs, or while another result of that query loads | Refused until that query or load has finished |
+| `REMOTE_EXPIRED` | Rows of a windowed result not cached, a load into memory or a sample, once BigQuery's temporary result table expired (about 24 hours) | "BigQuery no longer has this result…": run the query again |
+| `BUSY` | A load, sample or re-run (`results.remoteQuery`) while the query that made the result still runs, or while another result of that query loads | Refused until that query or load has finished |
 | `ROW_ACCESS` | Preview Rows on a table with row access policies | Use Script As › SELECT to query it (billed) |
 
 ## Emulator mode
@@ -732,7 +773,9 @@ and TIME columns, writes BYTES base64-encoded twice and exits on ARRAY columns; 
   the row limit and budget, resume from an offset, failures, Stop, and a local proxy that must receive the channel's
   CONNECT. Its Residence part covers the decision and both settings, the block cache (sizes, LRU, budget, lanes,
   read-ahead per viewer, a jump, waits, expiry, rate limits), every reader's `REMOTE_RESULT`, the switch to windowed on
-  a misestimate through REST and Arrow, Load into memory with its refusal and Stop, and Copy and Save (the Copy limit,
+  a misestimate through REST and Arrow, Load into memory with its refusal and Stop, Load sample (first rows through
+  `tabledata.list` with no job, a random sample's SQL and estimate, a short sample's note) and Re-run (a statement, a script
+  statement's and a re-attached job's text, a script's job refused, cancel on close), and Copy and Save (the Copy limit,
   transposed rows across blocks, expiry, release, Save through Storage Read and REST with Maximum rows and a resumed stream). `tests/bigquery-remote-results.test.ts`,
   `tests/results-port.test.ts` and `tests/result-client.test.ts` cover main's and the renderer's side.
   `tests/bigquery-credentials.test.ts`, `tests/bigquery-connection-store.test.ts` and
@@ -766,6 +809,10 @@ and TIME columns, writes BYTES base64-encoded twice and exits on ARRAY columns; 
   ```
 
   Add `-p 9060:9060` for Storage Read. On Windows use `http://127.0.0.1:9050` (`localhost` may resolve to IPv6 first).
+- **Smoke.** `scripts/bigquery-results-smoke.mjs` runs the Release backend against a loopback REST fake
+  (`scripts/fixtures/bigquery-rest.mjs`, set as `VARIA_TEST_BIGQUERY_ENDPOINT`, so emulator mode with no Google project): a
+  windowed result's Load Sample… of its first rows (no job) and at random (a `TABLESAMPLE` job), then its table expiring
+  and Re-run replacing it in place.
 - **Throughput.** `-- --bigquery-read-bench [--rows N] [--runs N]` times `query.execute` reading the same rows through
   REST and through Storage Read (four streams and one; uncompressed, LZ4 and Zstandard) against the offline fakes, so
   it measures decoding and storing, not the network or the fakes (the REST fake serializes each page once, and the

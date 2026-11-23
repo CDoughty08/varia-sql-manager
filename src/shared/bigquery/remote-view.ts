@@ -4,10 +4,14 @@ import { jobKeySchema } from './jobs'
 
 /**
  * results.remoteQuery's params (docs/ipc.md, docs/bigquery.md › Sort and filter in BigQuery): a query over a windowed
- * BigQuery result. `load` reads it into memory; `view` sorts and filters it in BigQuery; `distinct` lists a column's values.
+ * BigQuery result. `load` reads it into memory; `view` sorts and filters it in BigQuery; `distinct` lists a column's values;
+ * `sample` reads a sample of it into a new result in memory (Load sample); `rerun` runs its own statement again in place.
  * BigQueryViewSql and SqlService.BigQueryViews.cs (C#) check the same limits.
  */
-export const remoteViewLimits = { keys: 16, filters: 16, rows: 2, valueListCap: 100_000 } as const
+export const remoteViewLimits = { keys: 16, filters: 16, rows: 2, valueListCap: 100_000, sampleRows: 10_000_000 } as const
+
+/** How Load sample picks its rows: the first rows (tabledata.list, free) or a random sample (TABLESAMPLE SYSTEM, billed). */
+export type SampleMethod = 'first' | 'random'
 
 export interface RemoteSortKey { column: number; descending: boolean }
 /**
@@ -25,15 +29,20 @@ export type RemoteQueryKind =
   | { kind: 'load'; jobKey?: string }
   | { kind: 'view'; sort?: RemoteSortKey[]; filters?: RemoteFilter[]; fallback?: boolean }
   | { kind: 'distinct'; column: number; filters?: RemoteFilter[]; kept?: RemoteFilter[]; fallback?: boolean }
+  | { kind: 'sample'; rows: number; method: SampleMethod }
+  | { kind: 'rerun' }
 
 /** results.remoteQuery (docs/ipc.md): a query over a windowed BigQuery result this renderer owns in `generation`, run like
  *  query.execute under its own `queryId` (query.cancel stops it). */
 export type ResultsRemoteQueryParams = { queryId: string; resultId: number; generation: number } & RemoteQueryKind
 
-/** A view or distinct request as bigquery.dryRun estimates it: no query id, and no fallback (the estimate says whether one is needed). */
+/** A view, distinct, sample or rerun request as bigquery.dryRun estimates it: no query id, and no fallback (the estimate says
+ *  whether one is needed). */
 export type RemoteDryRun = { resultId: number; generation: number } & (
   | { kind: 'view'; sort?: RemoteSortKey[]; filters?: RemoteFilter[] }
-  | { kind: 'distinct'; column: number; filters?: RemoteFilter[]; kept?: RemoteFilter[] })
+  | { kind: 'distinct'; column: number; filters?: RemoteFilter[]; kept?: RemoteFilter[] }
+  | { kind: 'sample'; rows: number; method: SampleMethod }
+  | { kind: 'rerun' })
 
 /** The result ids a remote request names: its source and every value list its filters name, each checked for ownership. */
 export function remoteResultIds(params: { resultId: number } & ({ filters?: readonly RemoteFilter[]; kept?: readonly RemoteFilter[] } | object)): number[] {
@@ -61,16 +70,21 @@ const viewFields = { kind: z.literal('view'), sort: sort.optional(), filters: fi
 const distinctFields = { kind: z.literal('distinct'), column, filters: filters.optional(), kept: filters.optional() }
 const someClause = (value: { sort?: readonly unknown[]; filters?: readonly unknown[] }): boolean => (value.sort?.length ?? 0) + (value.filters?.length ?? 0) > 0
 const head = { queryId: z.uuid(), resultId, generation }
+const sampleFields = { kind: z.literal('sample'), rows: z.number().int().min(1).max(remoteViewLimits.sampleRows), method: z.enum(['first', 'random']) }
 
 export const resultsRemoteQuerySchema = z.discriminatedUnion('kind', [
   z.object({ ...head, kind: z.literal('load'), jobKey: jobKeySchema.optional() }).strict(),
   z.object({ ...head, ...viewFields, fallback: z.boolean().optional() }).strict()
     .refine(someClause, 'A remote view takes a sort key or a filter.').refine(value => distinctKeys(value.sort ?? []), 'Each sort key must be a distinct column.'),
-  z.object({ ...head, ...distinctFields, fallback: z.boolean().optional() }).strict()
+  z.object({ ...head, ...distinctFields, fallback: z.boolean().optional() }).strict(),
+  z.object({ ...head, ...sampleFields }).strict(),
+  z.object({ ...head, kind: z.literal('rerun') }).strict()
 ])
 
 export const remoteDryRunSchema = z.discriminatedUnion('kind', [
   z.object({ resultId, generation, ...viewFields }).strict()
     .refine(someClause, 'A remote view takes a sort key or a filter.').refine(value => distinctKeys(value.sort ?? []), 'Each sort key must be a distinct column.'),
-  z.object({ resultId, generation, ...distinctFields }).strict()
+  z.object({ resultId, generation, ...distinctFields }).strict(),
+  z.object({ resultId, generation, ...sampleFields }).strict(),
+  z.object({ resultId, generation, kind: z.literal('rerun') }).strict()
 ])

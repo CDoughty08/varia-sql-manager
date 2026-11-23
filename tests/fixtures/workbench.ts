@@ -37,7 +37,8 @@ import { PivotService } from '../../src/renderer/src/results/PivotService'
 import { highlightsContribution } from '../../src/renderer/src/contributions/highlights'
 import { pivotContribution } from '../../src/renderer/src/contributions/pivot'
 import { transposeContribution } from '../../src/renderer/src/contributions/transpose'
-import { loadIntoMemoryContribution } from '../../src/renderer/src/contributions/load-into-memory'
+import { loadIntoMemoryContribution, loadSampleContribution } from '../../src/renderer/src/contributions/load-into-memory'
+import { SampleDialogService } from '../../src/renderer/src/results/sample-dialog'
 import { plansContribution } from '../../src/renderer/src/contributions/plans'
 import { compareContribution } from '../../src/renderer/src/contributions/compare'
 import { ResultsSearchService } from '../../src/renderer/src/results/search'
@@ -401,6 +402,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const highlights = new HighlightsService(results, { timers: options.timers ?? browserTimers })
   const compare = new CompareService(results)
   const pivot = new PivotService(results)
+  const sampleDialog = new SampleDialogService(results)
   const resultsSearch = new ResultsSearchService({ results, timers: options.timers ?? browserTimers })
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
   const files = new FileService(documents, queries, api, {
@@ -578,6 +580,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     highlights,
     compare,
     pivot,
+    sampleDialog,
     resultsSearch,
     settings,
     scripting,
@@ -629,6 +632,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     pivotContribution(workbench),
     transposeContribution(workbench),
     loadIntoMemoryContribution(workbench),
+    loadSampleContribution(workbench),
     plansContribution(workbench, api),
     shellContribution(workbench, host),
     paletteContribution(workbench, history),
@@ -685,6 +689,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     highlights.dispose()
     compare.dispose()
     pivot.dispose()
+    sampleDialog.dispose()
     resultsSearch.dispose()
     results.dispose()
     resultVisibility.dispose()
