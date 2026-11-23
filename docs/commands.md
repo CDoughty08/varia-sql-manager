@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (418)
+## Commands (419)
 
 ### File
 
@@ -479,6 +479,7 @@ keys it uses are listed below.
 | Save Schedule | `agentSchedules.save` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentSchedules` | — |
 | Refresh Schedules | `agentSchedules.refresh` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentSchedules` | — |
 | Delete Schedule | `agentSchedules.delete` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentSchedules` | — |
+| Create Job Like This… | `agent.createJobLike` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › Create Job Like This… |
 
 ### Preferences
 
@@ -775,6 +776,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `0_new` | Add **R**ecommended Alerts… | `agent.addRecommendedAlerts` | `explorerNode == 'folder' && explorerFolder == 'agentAlerts' && agentRole == 'sysadmin' && !explorerServerLost` |
 | `0_new` | **A**ttach… | `explorer.attachDatabase` | `explorerActionAttach != '' && explorerNode == 'folder'` |
 | `0_new` | Crea**t**e Catalog… | `explorer.createCatalog` | `explorerNode == 'folder' && explorerFolder == 'integrationServicesCatalogs' && !explorerServerLost` |
+| `0_new` | **C**reate Job Like This… | `agent.createJobLike` | `explorerNode == 'agentJob' && !explorerServerLost` |
 | `0_new` | **O**perators and Notifications… | `agent.operators` | `explorerNode == 'folder' && (explorerFolder == 'agentOperators' \|\| explorerFolder == 'agentAlerts') && !explorerServerLost` |
 | `0_new` | **R**estore Database… | `explorer.restoreDatabase` | `explorerActionRestore != '' && explorerNode == 'folder'` |
 | `0_new` | R**e**store Files and Filegroups… | `explorer.restoreFiles` | `explorerActionRestoreFiles != '' && explorerNode == 'folder'` |

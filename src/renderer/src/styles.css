@@ -3724,3 +3724,28 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
   .agent-history .link-button { color: LinkText; }
 }
 @media (max-width: 720px) { .agent-history-body { grid-template-columns: 1fr; } }
+/* Create Job Like This (AG-6e): the copy banner, Changes from source and Compare with source. */
+.agent-copy-banner { display: flex; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-4); font-size: var(--varia-size-sm); border-left: 2px solid var(--varia-focusBorder); }
+.agent-copy-banner .link-button, .agent-copy .link-button { padding: 0; border: 0; background: none; color: var(--varia-list-highlightForeground); font: inherit; text-decoration: underline; cursor: pointer; }
+.agent-copy-banner .link-button { margin-left: auto; }
+.agent-copy { display: flex; flex-direction: column; gap: var(--varia-space-3); }
+.agent-copy-group { display: flex; flex-direction: column; gap: var(--varia-space-2); padding-bottom: var(--varia-space-3); border-bottom: 1px solid var(--varia-widget-border); }
+.agent-copy-group > h3 { display: flex; align-items: baseline; gap: var(--varia-space-2); margin: 0; font-size: var(--varia-size-md); font-weight: 600; }
+.agent-copy-group > h3 .field-note { margin-left: auto; font-weight: normal; }
+.agent-copy-group[data-warn] { border-left: 2px solid var(--varia-warningForeground); padding-left: var(--varia-space-2); }
+.agent-copy-replace, .agent-copy-inline { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); }
+.agent-copy-replace .property-input { width: 14em; }
+.agent-copy-check { display: inline-flex; align-items: center; gap: var(--varia-space-1); }
+.agent-copy-mono { font-family: var(--varia-font-mono); font-size: var(--varia-size-sm); }
+.agent-copy-command { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40em; }
+.agent-copy-preview ul { margin: 0; padding: 0; list-style: none; max-height: 16em; overflow: auto; }
+.agent-copy-preview li label { display: flex; align-items: baseline; gap: var(--varia-space-2); padding: var(--varia-space-0) 0; }
+.agent-copy-where { flex: 0 0 16em; color: var(--varia-descriptionForeground); }
+.agent-copy-context { overflow-wrap: anywhere; }
+.agent-copy-context del { color: var(--varia-errorForeground); }
+.agent-copy-context ins { color: var(--varia-successForeground); text-decoration: underline; }
+.agent-copy-warn { display: flex; align-items: center; gap: var(--varia-space-1); }
+.agent-copy-more summary { cursor: pointer; font-weight: 600; }
+.agent-copy-more p { margin: var(--varia-space-1) 0 0; color: var(--varia-descriptionForeground); }
+.agent-copy-compare { padding: var(--varia-space-2) var(--varia-space-4); max-height: 40vh; overflow: auto; }
+@media (forced-colors: active) { .agent-copy-banner .link-button, .agent-copy .link-button { color: LinkText; } }

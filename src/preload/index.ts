@@ -116,6 +116,7 @@ const api: VariaApi = {
   agentCounterValues: params => request('agent.counterValues', params),
   agentErrorLogs: params => request('agent.errorLogs', params),
   languageParse: params => request('language.parse', params),
+  languageLookup: params => request('language.lookup', params),
   cancelSsis: requestIds => ipcRenderer.invoke('varia:ssis-cancel', { requestIds }),
   activityDetails: params => request('activity.details', params),
   activityKill: params => request('activity.kill', params),

@@ -17,6 +17,7 @@ import type { AuthenticationMode, BigQueryAuthenticationMode } from './auth'
 import type { ProviderId } from './providers'
 import type { ExplorerChildrenParams, ExplorerNodeRef } from './explorer/refs.ts'
 import type { BigQueryIndexEstimateRequest, BigQueryIndexEstimateResult, ObjectIndexParams, ObjectIndexProgress, ObjectIndexResult, ObjectSearchParams, ObjectSearchResult } from './explorer/search.ts'
+import type { LanguageLookupRequest, LanguageLookupResult } from './language-lookup.ts'
 import type { ExplorerIcon, NodeStatus, NodeSubtype } from './explorer/catalog.ts'
 import type { PeekDefinitionParams, PeekDefinitionResult, PeekDependenciesParams, PeekDependenciesResult, PeekParams, PeekResult } from './explorer/peek.ts'
 import type { DependenciesParams, DependenciesResult } from './explorer/dependencies.ts'
@@ -744,6 +745,7 @@ export interface RpcMethods {
   'agent.counterValues': { params: AgentCounterValuesRequest; result: AgentCounterValuesResult }
   'agent.errorLogs': { params: AgentErrorLogsRequest; result: AgentErrorLogsResult }
   'language.parse': { params: LanguageParseRequest; result: LanguageParseResult }
+  'language.lookup': { params: LanguageLookupRequest; result: LanguageLookupResult }
 }
 export type RpcMethod = keyof RpcMethods
 /** results.visibility: distinct result ids of the backend's current generation, at most limits.visibility.maxResults.
@@ -1023,6 +1025,8 @@ export interface VariaApi {
   agentErrorLogs(params: AgentErrorLogsRequest): Promise<ApiResult<AgentErrorLogsResult>>
   /** The job step editor's Parse (AG-6b): ScriptDom only, no connection. */
   languageParse(params: LanguageParseRequest): Promise<ApiResult<LanguageParseResult>>
+  /** The Search Objects index by path, for the editor's completion and hover (BigQuery connections; src/shared/language-lookup.ts). */
+  languageLookup(params: LanguageLookupRequest): Promise<ApiResult<LanguageLookupResult>>
   /** Cancels SSIS requests by their `requestId`s (1–64); `cancelled` counts those still running. A request cancelled this way
    *  answers `CANCELLED`. */
   cancelSsis(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>

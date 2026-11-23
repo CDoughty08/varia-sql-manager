@@ -37,6 +37,8 @@ internal static partial class BigQueryIndexChecks
         await RefreshAsync(check, key);
         await FailuresAsync(check, key);
         await BulkAsync(check, key);
+        LookupStates(check);
+        await LookupAsync(check, key);
     }
 
     sealed class Harness : IDisposable

@@ -171,6 +171,31 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
       when: args => { const node = explorerNodeOf(args); return !node || (!node.lost && connections.isLiveSqlServer(node.connectionId)) },
       run: args => withServer(args, 'New Job', connectionId => report(() => jobDocuments.newJob(connectionId), 'New Job could not open.'))
     })),
+    // Create Job Like This (AG-6e): the job of the menu's node, of Job Activity Monitor's one selected row, or of the active job document;
+    // else the palette asks for a server and a job.
+    commands.register('agent.createJobLike', {
+      when: args => { const node = explorerNodeOf(args); return !node || (!node.lost && connections.isLiveSqlServer(node.connectionId)) },
+      run: async args => {
+        const like = (connectionId: string, name: string) => report(() => jobDocuments.createLike(connectionId, name), 'Create Job Like This could not open.')
+        // A job's menu names its job, whichever document is active.
+        const node = explorerNodeOf(args)
+        if (node?.ref.type === 'object' && node.ref.object.kind === 'agentJob' && node.ref.object.name !== undefined) return like(node.connectionId, node.ref.object.name)
+        const monitor = node ? undefined : monitorOf(args)
+        if (monitor) {
+          const selected = await jobActivity.settledSelection(monitor)
+          const state = jobActivity.get(monitor), job = selected.length === 1 ? selected[0] : undefined
+          if (!state?.connectionId || !job) { commands.reportError('Select one job to create a job like it.'); return }
+          return like(state.connectionId, job.name)
+        }
+        const open = jobOf(args), job = open ? jobDocuments.get(open)?.model?.job : undefined, openConnection = open ? jobDocuments.connectionId(open) : undefined
+        if (job && openConnection && connections.isLiveSqlServer(openConnection)) return like(openConnection, job.name)
+        withServer(args, 'Create Job Like This', connectionId => quickInput.show({
+          ariaLabel: 'Create Job Like This', placeholder: 'Select the job to copy', noun: 'jobs',
+          items: async signal => (await jobDocuments.jobNames(connectionId, signal)).map(name => ({ id: name, label: name, icon: 'agent-job' as const })),
+          onDidAccept: item => like(connectionId, item.id)
+        }))
+      }
+    }),
     commands.register('agentJob.save', onJob(id => jobDocuments.canSave(id), id => jobDocuments.save(id))),
     commands.register('agentJob.start', onJob(id => jobDocuments.canStart(id), id => jobDocuments.start(id))),
     commands.register('agentJob.startAtStep', onJob(id => jobDocuments.canStart(id) && jobDocuments.steps(id).length > 0, (id, args) => {
