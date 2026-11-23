@@ -61,10 +61,17 @@ internal static partial class BigQuerySql
     public const string ValuesFrom = "), FALSE) AS k FROM ";
     public const string ValuesTail = " GROUP BY 1 ORDER BY 2 DESC, 1 ASC NULLS FIRST LIMIT @cap) ORDER BY r";
     public const string CapParameter = "cap";
+    /// <summary>Load sample's random sample (docs/bigquery.md, Load a sample): the blocks TABLESAMPLE SYSTEM picks of the result
+    /// table, which is all BigQuery bills, then at most the rows asked for.</summary>
+    public const string SampleOpen = " TABLESAMPLE SYSTEM (@";
+    public const string SamplePercentParameter = "percent";
+    public const string SampleLimit = " PERCENT) LIMIT @";
+    public const string SampleRowsParameter = "rows";
 
     /// <summary>Every fragment above, for the lint.</summary>
     public static readonly IReadOnlyList<string> ViewFragments = [SelectAll, SourceOpen, SourceClose, Where, And, OrderBy, Comma, Ascending, Descending, IsNull, IsNotNull,
-        Open, Close, Or, NotIn, In, True, False, Between, MembersFrom, MembersWhere, IsNan, NanMembersFrom, NanMembersWhere, Not, AtMost, ValueAt, RowIs, Parameter, ValuesHead, ValuesCount, ValuesFrom, ValuesTail, CapParameter];
+        Open, Close, Or, NotIn, In, True, False, Between, MembersFrom, MembersWhere, IsNan, NanMembersFrom, NanMembersWhere, Not, AtMost, ValueAt, RowIs, Parameter, ValuesHead, ValuesCount, ValuesFrom, ValuesTail, CapParameter,
+        SampleOpen, SamplePercentParameter, SampleLimit, SampleRowsParameter];
 
     /// <summary>A BigQuery session id as Varia keeps it: an opaque token of URL-safe base64 characters. Anything else
     /// BigQuery answers is not kept, so it can never reach a statement or a log.</summary>

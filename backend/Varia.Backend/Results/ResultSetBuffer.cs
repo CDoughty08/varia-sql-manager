@@ -212,6 +212,9 @@ internal sealed class ResultSetBuffer
     /// system memory fails only this set, which its caller then releases whole, and never stops its query from storing
     /// more, so a smaller one can still fit.</summary>
     public bool Derived { get; init; }
+    /// <summary>A derived set that replaces its source as the source's own result (results.remoteQuery, kind rerun): it may be run
+    /// again itself, as the run's own results may and a view, value list or sample may not.</summary>
+    internal bool Reran { get; set; }
     /// <summary>A BigQuery value list (results.remoteQuery, kind distinct): its rows are a windowed result's distinct values,
     /// read whole into memory, and results.distinct lists them with their counts rather than grouping them again.</summary>
     internal BigQuery.RemoteValueList? ValueList { get; set; }

@@ -1,5 +1,5 @@
 import type { BigQueryDryRunResult } from '../../../shared/bigquery/dry-run'
-import type { RemoteDryRun, RemoteFilter, RemoteQueryKind, RemoteSortKey } from '../../../shared/bigquery/remote-view'
+import type { RemoteDryRun, RemoteFilter, RemoteQueryKind, RemoteSortKey, SampleMethod } from '../../../shared/bigquery/remote-view'
 import type { MessageEntry, QueryEvent, ResultColumn, ResultDescriptor, ResolvedViewFilter, VariaApi, ViewFilter, ViewSortKey } from '../../../shared/contracts'
 import { ResultError, type DistinctList, type ResultClient, type ResultHandle, type ResultView } from './ResultClient'
 
@@ -90,10 +90,28 @@ export class RemoteViews {
     }
   }
 
-  /** Estimates, asks, runs and opens: the new result's handle. Stop (the signal) cancels the query. */
+  /** Load sample (docs/bigquery.md, Load a sample): `rows` of `source` read into a new result in memory, its first rows (free,
+   *  so nothing is estimated or asked) or a random sample (billed: estimated and asked first). The sample's descriptor, whose
+   *  handle the caller keeps; Stop (the signal) cancels it. */
+  async sample(tabId: string, source: ResultHandle, rows: number, method: SampleMethod, signal: AbortSignal): Promise<ResultDescriptor> {
+    return (await this.query(tabId, source, { kind: 'sample', rows, method }, signal, method === 'first')).descriptor
+  }
+
+  /** Re-run (docs/bigquery.md, Expiry): `source`'s own statement run again in BigQuery, after its estimate and the cost
+   *  prompts; the new result's descriptor, which replaces the source where it is. Stop (the signal) cancels it. */
+  async rerun(tabId: string, source: ResultHandle, signal: AbortSignal): Promise<ResultDescriptor> {
+    return (await this.query(tabId, source, { kind: 'rerun' }, signal)).descriptor
+  }
+
   private async run(tabId: string, source: ResultHandle, kind: Exclude<RemoteQueryKind, { kind: 'load' }>, signal: AbortSignal): Promise<ResultHandle> {
+    return (await this.query(tabId, source, kind, signal)).handle
+  }
+
+  /** Estimates, asks, runs and opens: the new result and its handle. Stop (the signal) cancels the query. A `free` query (the
+   *  first rows of a sample, read with tabledata.list) runs no job, so it is neither estimated nor asked about. */
+  private async query(tabId: string, source: ResultHandle, kind: Exclude<RemoteQueryKind, { kind: 'load' }>, signal: AbortSignal, free = false): Promise<{ descriptor: ResultDescriptor; handle: ResultHandle }> {
     const { resultId, generation } = source.key
-    const estimate = await this.deps.estimate(tabId, { resultId, generation, ...kind } as RemoteDryRun, signal)
+    const estimate = free ? {} as Partial<BigQueryDryRunResult> : await this.deps.estimate(tabId, { resultId, generation, ...kind } as RemoteDryRun, signal)
     if (!estimate || signal.aborted) throw new RemoteDeclined()
     const queryId = this.deps.newId?.() ?? crypto.randomUUID()
     let opened: ResultDescriptor | undefined
@@ -113,7 +131,7 @@ export class RemoteViews {
       }
       const descriptor = summary.resultSets[0] ?? (summary.status === 'completed' ? opened : undefined)
       if (summary.status !== 'completed' || !descriptor) throw new ResultError((summary.error?.code ?? 'BACKEND_ERROR') as ResultError['code'], summary.error?.message ?? 'BigQuery did not answer the query.')
-      return this.deps.client.open(descriptor)
+      return { descriptor, handle: this.deps.client.open(descriptor) }
     } finally {
       signal.removeEventListener('abort', cancel)
       events.dispose()

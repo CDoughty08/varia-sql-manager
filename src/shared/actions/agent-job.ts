@@ -114,7 +114,7 @@ export interface AgentJobDocumentModel {
 /** The editable fields, as the document, the changes, the compare and the save's error mapping name them. */
 export const agentJobFields = ['name', 'owner', 'category', 'description', 'enabled', 'email', 'page', 'netSend', 'eventLog', 'delete', 'alerts', 'steps', 'schedules'] as const
 export type AgentJobField = typeof agentJobFields[number]
-export type AgentJobSection = 'general' | 'notifications' | 'targets' | 'alerts' | 'steps' | 'schedules'
+export type AgentJobSection = 'general' | 'notifications' | 'targets' | 'alerts' | 'steps' | 'schedules' | 'history'
 export const agentJobFieldSection: { readonly [F in AgentJobField]: AgentJobSection } = {
   name: 'general', owner: 'general', category: 'general', description: 'general', enabled: 'general',
   email: 'notifications', page: 'notifications', netSend: 'notifications', eventLog: 'notifications', delete: 'notifications', alerts: 'alerts', steps: 'steps', schedules: 'schedules'

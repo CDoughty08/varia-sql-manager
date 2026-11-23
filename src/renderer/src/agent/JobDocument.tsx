@@ -21,6 +21,7 @@ import Skeleton from '../kit/Skeleton'
 import StatusPill from '../kit/StatusPill'
 import Switch from '../kit/Switch'
 import { jobCopySection, jobSections, type JobDocumentService, type JobDocumentState } from './JobDocumentService'
+import JobHistory from './JobHistory'
 import JobSchedules from './JobSchedules'
 import JobSteps from './JobSteps'
 
@@ -282,11 +283,12 @@ export default function JobDocument({ documentId }: { documentId: string }) {
       case 'targets': return <TargetsSection state={state} />
       case 'alerts': return <AlertsSection {...props} />
       case 'schedules': return <JobSchedules {...props} />
+      case 'history': return <JobHistory state={state} model={model} service={jobDocuments} />
       default: return null
     }
   }
-  // Alerts shows where the platform has them and the login may read them; New Job says to save first.
-  const shown = jobSections.filter(section => section.id !== 'alerts' || !model?.job || model.alerts !== undefined)
+  // Alerts shows where the platform has them and the login may read them; New Job says to save first. History (AG-6d) needs a saved job.
+  const shown = jobSections.filter(section => (section.id !== 'alerts' || !model?.job || model.alerts !== undefined) && (section.id !== 'history' || !!model?.job))
   const sections: FrameSection[] = shown.map(section => ({ id: section.id, title: section.title, problem: problemSections.has(section.id), content: content(section.id) }))
   // Create Job Like This (AG-6e): Changes from source leads the sections, and its links go to Steps or Schedules.
   const frameId = `agent-job-${state.id}`

@@ -2393,6 +2393,13 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .server-file-picker .sub-dialog-body { flex: 1; min-height: 0; }
 .server-file-picker .object-dialog-message { margin: 0; }
 .bigquery-cost-prompt .sub-dialog-body { gap: var(--varia-space-2); }
+.load-sample-dialog { width: min(480px, calc(100vw - 40px)); }
+.load-sample-dialog .property-row { grid-template-columns: 96px minmax(0, 1fr); }
+.load-sample-rows { display: flex; align-items: center; gap: var(--varia-space-2); min-width: 0; color: var(--varia-dialog-descriptionForeground); }
+.load-sample-rows input { width: 120px; flex: none; }
+.load-sample-label { font-size: var(--varia-size-xs); color: var(--varia-dialog-labelForeground); }
+.load-sample-source { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-dialog-descriptionForeground); }
+.load-sample-dialog .field-note[data-tone="warning"] { color: var(--varia-warningForeground); }
 .bigquery-cost-sentence { margin: 0; }
 .bigquery-cost-prompt .link-button { padding: 0; border: 0; background: none; color: var(--varia-list-highlightForeground); font: inherit; text-decoration: underline; cursor: pointer; }
 @media (forced-colors: active) { .bigquery-cost-prompt .link-button { color: LinkText; } }
@@ -3674,6 +3681,45 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
   .agent-proxy-new-credential .link-button { color: LinkText; }
   .agent-proxy-chip[data-changed], .agent-proxy-checks label[data-changed] { outline: 1px solid Highlight; }
 }
+
+/* The job document's History section (AG-6d): the run durations' bars with the usual time, the runs beside the selected run's detail, and the live run view. */
+.agent-history { display: flex; flex-direction: column; gap: var(--varia-space-2); }
+.agent-history-head { display: flex; align-items: baseline; gap: var(--varia-space-2); font-size: var(--varia-size-sm); }
+.agent-history-head > :last-child { margin-left: auto; }
+.agent-history-spark { position: relative; display: flex; align-items: flex-end; gap: 3px; height: 40px; max-width: 360px; padding-bottom: 1px; border-bottom: 1px solid var(--varia-panel-border); }
+.agent-history-spark > i { flex: 1 1 0; min-width: 4px; max-width: 16px; border-top-left-radius: var(--varia-radius-sm); border-top-right-radius: var(--varia-radius-sm); background: var(--varia-list-highlightForeground); opacity: 0.55; }
+.agent-history-spark > i:last-of-type { opacity: 1; }
+.agent-history-spark > i[data-failed] { background: var(--varia-errorForeground); opacity: 1; }
+.agent-history-spark > b { position: absolute; left: 0; right: 0; height: 0; border-top: 1px dashed var(--varia-descriptionForeground); }
+.agent-history-filter { display: inline-flex; border: 1px solid var(--varia-button-border); border-radius: var(--varia-radius-sm); overflow: hidden; }
+.agent-history-filter > button { padding: 0 var(--varia-space-2); border: 0; border-radius: 0; background: none; font-size: var(--varia-size-xs); }
+.agent-history-filter > button[aria-checked="true"] { transition: none; background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); }
+.agent-history-body { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(320px, 2fr); gap: var(--varia-space-3); align-items: start; }
+.agent-history-runs { display: flex; flex-direction: column; gap: 1px; max-height: 360px; margin: 0; padding: 0; overflow: auto; list-style: none; }
+.agent-history-runs button { display: grid; grid-template-columns: auto 1fr auto; gap: 0 var(--varia-space-2); width: 100%; padding: var(--varia-space-1) var(--varia-space-2); border: 0; border-radius: var(--varia-radius-sm); background: none; text-align: left; }
+.agent-history-runs button:hover { background: var(--varia-list-hoverBackground); }
+.agent-history-runs button[aria-pressed="true"] { transition: none; background: var(--varia-list-inactiveSelectionBackground); }
+.agent-history-run-note { grid-column: 2 / 4; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.agent-history-run-tag, .agent-history .mono { font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); }
+.agent-history-detail { display: flex; flex-direction: column; gap: var(--varia-space-2); min-width: 0; }
+.agent-history-detail dd[data-tone="error"] { color: var(--varia-errorForeground); }
+.agent-history-steps tr[aria-selected="true"] { background: var(--varia-list-inactiveSelectionBackground); }
+.agent-history .link-button { display: inline-flex; align-items: center; gap: var(--varia-space-1); padding: 0; border: 0; background: none; color: var(--varia-list-highlightForeground); font: inherit; text-decoration: underline; cursor: pointer; }
+.agent-history-message-head { display: flex; align-items: center; gap: var(--varia-space-2); }
+.agent-history-message-head > button { margin-left: auto; }
+.agent-history-message-text { max-height: 240px; margin: 0; padding: var(--varia-space-2); overflow: auto; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); white-space: pre-wrap; word-break: break-word; }
+.agent-history-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); margin: 0; }
+.agent-history-running { display: flex; flex-direction: column; gap: var(--varia-space-2); padding-bottom: var(--varia-space-2); border-bottom: 1px solid var(--varia-panel-border); }
+.agent-history-progress-head { display: flex; align-items: baseline; gap: var(--varia-space-2); font-size: var(--varia-size-sm); }
+.agent-history-progress-head > span { margin-left: auto; color: var(--varia-descriptionForeground); }
+.agent-history-progress { height: 6px; border-radius: var(--varia-radius-pill); background: var(--varia-list-hoverBackground); overflow: hidden; }
+.agent-history-progress > i { display: block; height: 100%; background: var(--varia-list-highlightForeground); }
+@media (forced-colors: active) {
+  .agent-history-spark > i, .agent-history-progress > i { background: Highlight; forced-color-adjust: none; }
+  .agent-history-spark > i[data-failed] { background: Mark; }
+  .agent-history .link-button { color: LinkText; }
+}
+@media (max-width: 720px) { .agent-history-body { grid-template-columns: 1fr; } }
 /* Create Job Like This (AG-6e): the copy banner, Changes from source and Compare with source. */
 .agent-copy-banner { display: flex; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-4); font-size: var(--varia-size-sm); border-left: 2px solid var(--varia-focusBorder); }
 .agent-copy-banner .link-button, .agent-copy .link-button { padding: 0; border: 0; background: none; color: var(--varia-list-highlightForeground); font: inherit; text-decoration: underline; cursor: pointer; }

@@ -2090,7 +2090,7 @@ function agentJobScheduleSave(jobId, save) {
 const historyColumns = table => liveProbes['agent.history.list'].tables[table].columns.map(spec => ({ name: spec.name, dataType: spec.dataType, wire: 'text', nullable: true, ...spec.role ? { role: spec.role } : {} }))
 const agentHistory = [
   { job: agentJobs[0].id, instance: 12, outcome: 0, date: '2026-11-15 02:30:00', message: 'The job failed.  The Job was invoked by Schedule 1 (Nightly).  The last step to run was step 2 (Load).',
-    steps: [{ instance: 10, id: 1, name: 'Truncate', outcome: 1, message: 'Executed as user: sa. The step succeeded.' }, { instance: 11, id: 2, name: 'Load', outcome: 0, message: 'Executed as user: sa. Violation of PRIMARY KEY constraint. The step failed.' }] },
+    steps: [{ instance: 10, id: 1, name: 'Truncate', outcome: 1, message: 'Executed as user: sa. The step succeeded.' }, { instance: 11, id: 2, name: 'Load', outcome: 0, message: 'Executed as user: sa. Violation of PRIMARY KEY constraint. Package execution on IS Server failed. Execution ID: 48213, Execution Status:4. The step failed.' }] },
   { job: agentJobs[0].id, instance: 8, outcome: 1, date: '2026-11-14 02:30:00', message: 'The job succeeded.  The Job was invoked by Schedule 1 (Nightly).',
     steps: [{ instance: 6, id: 1, name: 'Truncate', outcome: 1, message: 'Executed as user: sa. The step succeeded.' }, { instance: 7, id: 2, name: 'Load', outcome: 1, message: 'Executed as user: sa. The step succeeded.' }] },
   { job: agentJobs[1].id, instance: 5, outcome: 1, date: '2026-11-15 01:00:00', message: 'The job succeeded.  The Job was invoked by User sa.',
@@ -2115,10 +2115,14 @@ function agentHistorySample(live, probe) {
   const stepRow = (step, run) => [String(step.id), step.name, agentOutcomes[step.outcome], run.date, '00:00:01', '0', '0', '0', step.message, String(step.instance), run.job.toUpperCase(), historyTones[step.outcome] ?? null]
   const steps = storeResult({ columns: historyColumns(1), rows: selected ? [stepRow({ id: 0, name: '(Job outcome)', outcome: selected.outcome, message: selected.message, instance: selected.instance }, selected), ...selected.steps.map(step => stepRow(step, selected))] : [] }, 0)
   const jobs = storeResult({ columns: historyColumns(2), rows: [...agentJobs].sort((a, b) => a.name.localeCompare(b.name)).map(job => [job.id.toUpperCase(), job.name, 'sa', agentRunning(job) ? 'Yes' : 'No', job.enabled ? 'Yes' : 'No']) }, 0)
+  // The job document's History (AG-6d) asks for one job's usual durations: every run here takes 2 s and each step 1 s.
+  const succeeded = args.usual ? agentHistory.filter(run => named(run) && run.outcome === 1) : []
+  const usualSteps = [...new Set(succeeded.flatMap(run => run.steps.map(step => step.id)))].sort((a, b) => a - b)
+  const usual = storeResult({ columns: historyColumns(3), rows: succeeded.length ? [['0', '2', String(succeeded.length)], ...usualSteps.map(id => [String(id), '1', String(succeeded.length)])] : [] }, 0)
   // Each table keeps its last two revisions and retires its own older ones, as the backend does.
-  live.revisions.push(runs.resultId, steps.resultId, jobs.resultId)
-  live.historyRevisions ??= [[], [], []]
-  const retiredOf = [runs, steps, jobs].map((result, table) => {
+  live.revisions.push(runs.resultId, steps.resultId, jobs.resultId, usual.resultId)
+  live.historyRevisions ??= [[], [], [], []]
+  const retiredOf = [runs, steps, jobs, usual].map((result, table) => {
     const list = live.historyRevisions[table]
     list.push(result.resultId)
     const gone = list.length > 2 ? list.splice(0, list.length - 2) : []
@@ -2129,7 +2133,7 @@ function agentHistorySample(live, probe) {
   const tracked = track && { seq: track.seq, rows: track.keys.map(wanted => kept.findIndex(run => key(run) === wanted.toLowerCase())) }
   return {
     status: [{ id: 'historyMaxRows', value: 1000 }, { id: 'historyMaxRowsPerJob', value: 100 }],
-    tables: [runs, steps, jobs].map((result, table) => ({ table, descriptor: describe(result), revision: n, ...(retiredOf[table].length ? { retired: retiredOf[table] } : {}), ...(table === 0 && tracked ? { tracked } : {}) }))
+    tables: [runs, steps, jobs, usual].map((result, table) => ({ table, descriptor: describe(result), revision: n, ...(retiredOf[table].length ? { retired: retiredOf[table] } : {}), ...(table === 0 && tracked ? { tracked } : {}) }))
   }
 }
 function agentHistoryMessage(params) {
