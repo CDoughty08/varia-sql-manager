@@ -400,7 +400,7 @@ function sceneIgnore() {
       <input class="mfind" id="ignFind" placeholder="Find a column" value="${esc(S.ignoreFind)}" aria-label="Find a column">
       ${list.map(({ c, i }) => i === 0 && !auto
         ? `<label class="mi off" title="Rows are matched by this column, so it cannot be ignored."><input type="checkbox" disabled> ⚷ ${esc(c[0])} <small>${esc(c[1])}</small><span class="acc">Rows are matched by this column, so it cannot be ignored.</span></label>`
-        : `<label class="mi"><input type="checkbox" data-ign="${i}"${draft.has(i) ? ' checked' : ''}> ${esc(c[0])} <small>${esc(c[1])}</small>${i === 0 ? '<span class="acc">Chosen automatically: ignoring it matches rows another way</span>' : ''}</label>`).join('')}
+        : `<label class="mi"><input type="checkbox" data-ign="${i}"${draft.has(i) ? ' checked' : ''}> ${esc(c[0])} <small>${esc(c[1])}</small>${i === 0 && !draft.has(0) ? '<span class="acc">Chosen automatically: ignoring it matches rows another way</span>' : ''}</label>`).join('')}
       <div class="msep"></div><div class="mnote">A ticked column is ignored: it stays in the grid, muted, but its differences are not counted, coloured or stepped through. Remembered for ${RES[0]} → ${RES[1]}.</div>
       ${allTicked ? '<div class="mnote" style="color:var(--rem)">Compare at least one column.</div>' : ''}
       <div class="mfoot"><button class="btn o" id="ignCancel">Cancel</button><button class="btn p" id="ignApply"${allTicked ? ' disabled' : ''}>Apply</button></div></div>` : ''
@@ -628,7 +628,7 @@ function scriptText(m, target, scIn, colsIn) {
   return out
 }
 function sceneScript() {
-  stateSeg('State', 'scriptState', [['ready', 'Ready'], ['opening', 'Opening'], ['openerror', 'Opening failed'], ['preverror', 'Preview failed'], ['unchecked', 'Unchecked UPDATEs'], ['selected', 'Selected rows'], ['rowsline', 'Rows after a replace'], ['moved', 'Document moved'], ['otherserver', 'Last target elsewhere'], ['changed', 'Changed while generating'], ['othercols', 'Other columns'], ['first', 'First time'], ['nodir', 'No direction yet'], ['generating', 'Generating'], ['genfail', 'Generation failed'], ['nokey', 'Not matched by key'], ['auto', 'Matched automatically'], ['autodate', 'Automatic by chance'], ['inputclosed', 'Automatic, input closed'], ['shown', 'Compared as shown'], ['keytype', 'xml key'], ['names', 'Repeated name'], ['dup', 'Repeated key'], ['fffd', 'U+FFFD value'], ['nodiff', 'No differences'], ['updating', 'Updating the comparison'], ['skipped', 'Changes all unticked'], ['trunc', 'Truncated value'], ['big', 'Too large'], ['badname', 'Target name'], ['closed', 'Comparison closed']])
+  stateSeg('State', 'scriptState', [['ready', 'Ready'], ['opening', 'Opening'], ['openerror', 'Opening failed'], ['preverror', 'Preview failed'], ['unchecked', 'Unchecked UPDATEs'], ['selected', 'Selected rows'], ['rowsline', 'Rows after a replace'], ['lookalone', 'Look-alike left out'], ['moved', 'Document moved'], ['otherserver', 'Last target elsewhere'], ['changed', 'Changed while generating'], ['othercols', 'Other columns'], ['first', 'First time'], ['nodir', 'No direction yet'], ['generating', 'Generating'], ['genfail', 'Generation failed'], ['nokey', 'Not matched by key'], ['auto', 'Matched automatically'], ['autodate', 'Automatic by chance'], ['inputclosed', 'Automatic, input closed'], ['shown', 'Compared as shown'], ['keytype', 'xml key'], ['names', 'Repeated name'], ['dup', 'Repeated key'], ['fffd', 'U+FFFD value'], ['nodiff', 'No differences'], ['updating', 'Updating the comparison'], ['skipped', 'Changes all unticked'], ['trunc', 'Truncated value'], ['big', 'Too large'], ['badname', 'Target name'], ['closed', 'Comparison closed']])
   const st = S.scriptState, first = st === 'first' || st === 'othercols', noDir = first || st === 'nodir', skipped = st === 'skipped'
   const badName = st === 'badname' || st === 'moved'
   const m = model(), g = gridHTML(m), target = first ? '' : st === 'moved' ? 'dbo.Orders' : badName ? 'Sales_Test..Orders' : S.script.target
@@ -655,13 +655,17 @@ function sceneScript() {
   const keyBtn = '<button class="btn o">Choose key columns…</button>'
   // The look-alike warning, worded by the ticks: with only one of DELETE and INSERT, a pair is neither replaced nor kept whole.
   const pairs = m.entries.filter(e => e.poss && e.kind === 'removed').length, one = pairs === 1
-  const lookLine = !pairs || !(sc.del || sc.ins) || st === 'nodiff' || noDir ? ''
+  // A row whose look-alike the chosen rows leave out: ticking the other statement would not write the partner.
+  const lookLine = st === 'lookalone' && !noDir && (sc.del || sc.ins) ? (sc.del ? '2 rows to delete look like rows the chosen rows leave out, so they are deleted and not replaced. Choose rows that hold both, or untick DELETE.' : '2 rows to insert look like rows the chosen rows leave out, so the target keeps both. Choose rows that hold both, or untick INSERT.')
+    : !pairs || !(sc.del || sc.ins) || st === 'nodiff' || noDir ? ''
     : sc.del && sc.ins ? `${pairs} ${one ? 'removed row looks like an added row: the pair is' : 'removed rows look like added rows: each pair is'} scripted as a DELETE and an INSERT, not an UPDATE.`
     : sc.ins ? `${pairs} ${one ? 'row to insert looks like a row' : 'rows to insert look like rows'} DELETE would remove. With DELETE unticked, the target keeps both. Tick DELETE to replace ${one ? 'it' : 'them'}.`
     : `${pairs} ${one ? 'row to delete looks like a row' : 'rows to delete look like rows'} INSERT would add. With INSERT unticked, ${one ? 'it is' : 'they are'} deleted and not replaced. Tick INSERT to replace ${one ? 'it' : 'them'}.`
   // What ignoring costs, while UPDATE is ticked: the summary's "to match" would otherwise hide it.
   const ignN = [...S.ignore].sort((a, b) => a - b).map(i => COLS[i][0])
-  const ignLine = sc.upd && ignN.length ? `${ignN.length === 1 ? `${ignN[0]} is` : `${both(ignN)} are`} ignored: UPDATEs leave ${ignN.length === 1 ? 'its' : 'their'} changes out, and rows that differ only in ${ignN.length === 1 ? 'it' : 'them'} get no statement. Stop ignoring ${ignN.length === 1 ? 'it' : 'them'} to include them.` : ''
+  const ignDel = sc.del && sc.check, ign1 = ignN.length === 1
+  const ignLine = !ignN.length ? '' : sc.upd ? `${ign1 ? `${ignN[0]} is` : `${both(ignN)} are`} ignored: UPDATEs leave ${ign1 ? 'its' : 'their'} changes out, and rows that differ only in ${ign1 ? 'it' : 'them'} get no statement${ignDel ? `, and DELETEs do not check ${ign1 ? 'it' : 'them'}` : ''}. Stop ignoring ${ign1 ? 'it' : 'them'} to include them.`
+    : ignDel ? `${ign1 ? `${ignN[0]} is` : `${both(ignN)} are`} ignored, so DELETEs do not check ${ign1 ? 'it' : 'them'}.` : ''
   const refusal = {
     nokey: [`Rows are not matched by key columns, so a statement could not find its row. Choose key columns to script differences.`, keyBtn],
     auto: [`Rows were matched automatically by id. Choose key columns to script differences.`, `<button class="btn p">Choose key columns…</button><button class="btn o">Use id as key columns</button>`],
@@ -683,14 +687,14 @@ function sceneScript() {
   // found on Script and said in the window's live region.
   const onOpen = ['nokey', 'auto', 'autodate', 'inputclosed', 'shown', 'keytype', 'names', 'updating'].includes(st)
   const sugg = first ? `<div class="sugg" role="listbox" aria-label="Tables on this connection">${[`${DB}.dbo.Orders`, `${DB}.dbo.OrdersArchive`, 'Sales_Dev.dbo.Orders'].map((t, i) => `<div role="option" aria-selected="false">${t} <small>Search Objects</small></div>`).join('')}</div>` : ''
-  const matchText = { nokey: 'rows matched by row position', auto: 'rows matched automatically by id', autodate: 'rows matched automatically by updated_at', inputclosed: 'rows matched automatically by id', updating: 'rows matched automatically by id', keytype: 'rows matched by key columns: notes' }[st] || 'rows matched by key columns: id'
+  const matchText = { nokey: 'rows matched by position', auto: 'rows matched automatically by id', autodate: 'rows matched automatically by updated_at', inputclosed: 'rows matched automatically by id', updating: 'rows matched automatically by id', keytype: 'rows matched by key columns: notes' }[st] || 'rows matched by key columns: id'
   const firstLine = `<div class="sec"><div class="row2 infol" id="scrFirst">${RES[0]}${st === 'shown' ? ' (as shown)' : ''} → ${RES[1]} (SQLQuery3.sql), ${matchText}</div></div>`
   // The preview refuses only what its own lines need: here the truncated and U+FFFD values fall in the first 30 lines.
   const previewRefused = st === 'fffd' || st === 'trunc'
   const form = `
     ${firstLine}
     <div class="sec"><div class="h">Target table</div><input class="txt" id="tgt" value="${esc(target)}" placeholder="schema.table" aria-label="Target table" aria-describedby="${badName ? 'tgtName tgtDb' : 'tgtDb'}" spellcheck="false"${first ? ' role="combobox" aria-expanded="true" aria-autocomplete="list"' : ''}>${sugg}
-      <div class="row2 infol" id="tgtDb" style="font-size:11px">${st === 'otherserver' ? `In ${DB} on SQLPROD02. The last target was on SQLDEV01.` : st === 'moved' ? "On SQLDEV01, the comparison's connection." : `In ${DB} on SQLDEV01, SQLQuery3.sql's database.`}</div>${st === 'othercols' ? `<div class="row2 infol" style="font-size:11px">${RES[0]} and ${RES[1]} have other columns than last time, so the last target was not reused.</div>` : ''}${badName ? `<div class="row2 warnl" id="tgtName" style="font-size:11px">⚠ ${st === 'moved' ? 'SQLQuery3.sql is now on another connection. Name the database too, such as Sales_Test.dbo.Orders.' : 'Name each part, such as Sales_Test.dbo.Orders.'}</div>` : ''}
+      <div class="row2 ${st === 'otherserver' ? 'warnl' : 'infol'}" id="tgtDb" style="font-size:11px">${st === 'otherserver' ? `⚠ In ${DB} on SQLPROD02. The last target was on SQLDEV01.` : st === 'moved' ? "On SQLDEV01, the comparison's connection." : `In ${DB} on SQLDEV01, SQLQuery3.sql's database.`}</div>${st === 'othercols' ? `<div class="row2 infol" style="font-size:11px">${RES[0]} and ${RES[1]} have other columns than last time, so the last target was not reused.</div>` : ''}${badName ? `<div class="row2 warnl" id="tgtName" style="font-size:11px">⚠ ${st === 'moved' ? 'SQLQuery3.sql is now on another connection. Name the database too, such as Sales_Test.dbo.Orders.' : 'Name each part, such as Sales_Test.dbo.Orders.'}</div>` : ''}
       ${first || badName ? '' : `<div class="row2 infol" style="font-size:11px">ⓘ Search Objects knows ${esc(tgtq)} on this connection: 8 columns, all 6 compared columns among them. id is its identity column.</div>`}</div>
     <div class="sec"><div class="h">Direction</div>
       <label class="row2"><input type="radio" name="dir" data-dir="toNew"${noDir || toOld ? '' : ' checked'}> ${esc(tname)} holds ${RES[0]}'s rows: change them to ${RES[1]}'s</label>
@@ -701,8 +705,8 @@ function sceneScript() {
       <label class="row2"><input type="checkbox" data-sc="ins"${sc.ins ? ' checked' : ''}> INSERT${noDir || st === 'preverror' ? '' : ` <small>(${ins})</small>`}</label>
       ${lookLine ? `<div class="row2 warnl" style="font-size:11px">⚠ ${lookLine}</div>` : ''}
       ${sc.del ? '<div class="row2 infol" style="font-size:11px">ⓘ DELETEs fire the target\'s delete triggers and ON DELETE cascades. A row missing from a result is deleted, even when the query only left it out (a WHERE or TOP).</div>' : ''}</div>
-    <div class="sec"><div class="h">Columns</div><div class="cols">${COLS.map((c, i) => i === 0 ? `<label class="off"><input type="checkbox" checked disabled> ⚷ ${c[0]} <small>key</small></label>`
-      : `<label><input type="checkbox" data-scol="${i}"${cols.includes(i) ? ' checked' : ''}> ${c[0]} <small>${S.ignore.has(i) ? 'ignored: INSERT only' : c[1]}</small></label>`).join('')}</div>
+    <div class="sec"><div class="h">Columns</div><div class="cols" role="group" aria-label="Columns (arrows move, Space ticks, type to find)">${COLS.map((c, i) => i === 0 ? `<label class="off"><input type="checkbox" checked aria-disabled="true" tabindex="0" onclick="return false"> ⚷ ${c[0]} <small>key</small></label>`
+      : `<label><input type="checkbox" tabindex="-1" data-scol="${i}"${cols.includes(i) ? ' checked' : ''}> ${c[0]} <small>${S.ignore.has(i) ? 'ignored: INSERT only' : c[1]}</small></label>`).join('')}</div>
       ${untickedLines.map(t => `<div class="row2 warnl" style="font-size:11px">⚠ ${t}</div>`).join('')}
       ${ignLine ? `<div class="row2 warnl" style="font-size:11px">⚠ ${ignLine}</div>` : ''}
       ${sc.ins && !first ? '<div class="row2 warnl" style="font-size:11px">⚠ INSERTs leave created_by and region out, so inserted rows get their defaults or NULL.</div>' : ''}

@@ -571,7 +571,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - It holds a snapshot: closing or replacing its comparison leaves it as it is, until the next use replaces it.
   - A value read only in part, cut at 2,097,152 characters or stored truncated, says so in the header, in Open Value in
     New Tab's words, at the limit for its kind ("The old value was truncated at 65,535 characters."; 2,097,152 for XML
-    and JSON), so the tab never passes for whole values.
+    and JSON), so the tab never passes for whole values. A NULL side shows as empty text, so the header says so too
+    ("The old value is NULL."), since the editor cannot tell it from an empty string.
   - It is not saved, and is left out of hot exit's session and recovery records. It needs no connection.
   - Wiring: the document registry, `icons.ts`, `start.tsx`'s reviewed imports for the diff editor (regenerate
     `monaco-keybindings`), and Close and Close Others.
@@ -629,8 +630,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   always included so each line identifies its row.
   - Without key columns (Row position, Whole rows, or Automatic that fell back to whole rows), each line instead starts
     with its row's stored number in its own input, the gutter's number (`-4`, `+4`; an unchanged line takes its number
-    in the new input). The header names the match and says so (`# rows matched by whole rows; lines start with row
-    numbers`, with any `ignored: …` before that last part), and the column line starts with `row`.
+    in the new input). Under Automatic the match line says so (`# rows matched automatically by id`), as Script
+    Differences' first line does. The header names the match and says so (`# rows matched by whole rows; lines start
+    with row numbers`, with any `ignored: …` before that last part), and the column line starts with `row`.
   - **Save as Diff…** (Q1) writes the same text for every row the grid shows, with every column it shows but ignored
     ones, to a file. While chips or filters narrow the grid, its header says so (`# the comparison shows 12 of 40
     differences`), counted in a first pass over the view, so a saved diff with the ~ chip pressed is not read as having
@@ -788,8 +790,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   the panel docks back. A popout clicked meanwhile can cover it; Script Differences as T-SQL… brings it forward.
 - **The form:**
   - A first line names the comparison and how rows are matched: "Result 1 → Result 3 (SQLQuery3.sql), rows matched by
-    key columns: id", and changes when another comparison invokes the dialog. A script is written only under Key
-    columns the user chose (below).
+    key columns: id" ("rows matched automatically by order_no" under Automatic, and the strip's own `matchedBy` words
+    for the rest: "whole rows matched", "rows matched by position"), and changes when another comparison invokes the
+    dialog. A script is written only under Key columns the user chose (below).
   - **Target table:** `[database.]schema.table`, each part 1 to 128 characters, parsed as SQL Server parses a multipart
     name: parts plain, bracketed (`[my.schema].Orders`, with `]]` inside brackets) or double-quoted. One part is refused
     ("Name the schema too, such as dbo.Orders."), and so are four ("A linked server cannot be the target. Name the table
@@ -824,27 +827,35 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     is written for the chosen direction, and the comparison is not swapped. The summary names the end state, and Q11's
     check stops a wrong direction when the script runs, except in an UPDATE that changes only columns the check cannot
     compare, which a line names (Options below).
-  - **Statements:** DELETE (n), UPDATE (n) and INSERT (n), each a checkbox with its count for the direction, shown
-    once one is picked. The first time UPDATE and INSERT are ticked and DELETE is not, since a row missing from a result
-    is often one the query left out; the draft remembers the ticks. While DELETE is ticked, a line says "DELETEs fire
-    the target's delete triggers and ON DELETE cascades. A row missing from a result is deleted, even when the query
-    only left it out (a WHERE or TOP)." With none ticked, the summary says "No statements are ticked." and Script is
-    unavailable.
-    When the chosen rows hold look-alike rows (?) and DELETE or INSERT is ticked, a line warns, counting them (the
-    answer's look-alike counts), worded by the ticks, since with only one ticked a look-alike pair is neither replaced
-    nor kept whole:
+  - **Statements:** DELETE (n), UPDATE (n) and INSERT (n), each a checkbox with its count for the direction, shown once
+    one is picked. The first time UPDATE and INSERT are ticked and DELETE is not, since a row missing from a result is
+    often one the query left out; the draft remembers the ticks. While DELETE is ticked, a line says "DELETEs fire the
+    target's delete triggers and ON DELETE cascades. A row missing from a result is deleted, even when the query only
+    left it out (a WHERE or TOP)." With none ticked, the summary says "No statements are ticked." and Script is
+    unavailable. When the chosen rows hold look-alike rows (?) and DELETE or INSERT is ticked, a line warns, counting
+    them (the answer's look-alike counts), worded by the ticks, since with only one ticked a look-alike pair is neither
+    replaced nor kept whole. These lines count only rows whose look-alike is among the chosen rows too:
     - both: "12 removed rows look like added rows: each pair is scripted as a DELETE and an INSERT, not an UPDATE.";
     - INSERT only (the first time's ticks): "12 rows to insert look like rows DELETE would remove. With DELETE unticked,
       the target keeps both. Tick DELETE to replace them.";
     - DELETE only: "12 rows to delete look like rows INSERT would add. With INSERT unticked, they are deleted and not
       replaced. Tick INSERT to replace them."
 
-    When the comparison did not look for them ("Too many unmatched rows to look for possible matches."), the line says
-    "Possible matches were not looked for, so a changed key is scripted as a DELETE and an INSERT.", or with one ticked
-    "…so a row whose key changed is inserted under its new key and also stays under its old one. Tick DELETE to
-    replace such rows." and "…so a row whose key changed is deleted and not inserted under its new key. Tick INSERT to
-    replace such rows."
-  - **Columns:** the data columns.
+    A row whose look-alike the chosen rows leave out (the − chip pressed, or Selected rows on one ? row) gets its own
+    line while its statement is ticked, whatever the other tick, since ticking the other would not write the partner: "2
+    rows to delete look like rows the chosen rows leave out, so they are deleted and not replaced. Choose rows that hold
+    both, or untick DELETE." and "2 rows to insert look like rows the chosen rows leave out, so the target keeps both.
+    Choose rows that hold both, or untick INSERT."
+
+    When the comparison did not look for them ("Too many unmatched rows to look for possible matches."), the line,
+    worded by the ticked statements that have rows among the chosen rows, says "Possible matches were not looked for, so
+    a changed key is scripted as a DELETE and an INSERT.", or with one ticked "…so a row whose key changed is inserted
+    under its new key and also stays under its old one. Tick DELETE to replace such rows." and "…so a row whose key
+    changed is deleted and not inserted under its new key. Tick INSERT to replace such rows."; when the other statement
+    is ticked but has no rows among the chosen rows, its advice is "Choose rows that hold both." instead.
+  - **Columns:** the data columns, as one list and one Tab stop, as Ignore Columns…' checklist is: arrows move, Space
+    ticks, and typing finds a column, so a result of 60 columns adds one Tab stop, not 60. A locked column takes the
+    focus and says its reason, but Space leaves it as it is.
     - Key columns are ticked and locked, whatever else would lock a column unticked (a type no literal writes, a
       repeated name), since the key refusals answer those before anything else (Params in the sketch). A key column
       INSERT cannot write (rowversion or timestamp, or computed per the index) leaves INSERT unavailable, with the
@@ -852,8 +863,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       columns are ticked, for INSERT only. While UPDATE is ticked, a line says what ignoring costs, since the summary's
       "to match Result 3" would otherwise hide it: "updated_at is ignored: UPDATEs leave its changes out, and rows that
       differ only in it get no statement. Stop ignoring it to include them." ("updated_at and memo are ignored: … their
-      changes … only in them …"). While an input is closed, the comparison cannot be rebuilt, so this line and the Exact
-      text line below drop their last sentence.
+      changes … only in them …"). While DELETE and the checks are on, it names that cost too ("…get no statement, and
+      DELETEs do not check it."), and shows for it alone when UPDATE is unticked ("updated_at is ignored, so DELETEs do
+      not check it."). While an input is closed, the comparison cannot be rebuilt, so this line and the Exact text line
+      below drop their last sentence.
     - Unscriptable columns start unticked and locked, with the reason: rowversion and timestamp ("Not insertable"),
       computed per the index ("Computed"), CLR types and sql_variant ("Cannot be written as a literal"), and vector
       ("Not scripted": it has a literal but no `=`, so it is left out until a lane writes and round-trips it).
@@ -934,11 +947,14 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     the row is not there yet." (Q11). While some chosen UPDATEs change only columns the check cannot compare (the
     answer's `uncheckedUpdates`), a line under it gives the answer's sentence: "2 UPDATEs change only columns the checks
     cannot compare (note: xml; code: values not all ASCII under its SQL_ collation), so nothing stops them with the
-    wrong direction, where they change nothing, or on a row changed since the comparison, which they overwrite." The
-    line, and the header's part for it, show only while the checks are on. Turning off the transaction warns "Without a
-    transaction, statements before a failure stay applied.", since a failed check, a key violation or a trigger's error
-    all leave earlier statements in place. Turning off the checks warns "Without the checks, a statement runs even when
-    its row is missing, repeated, changed or already there, and nothing says so."
+    wrong direction, where they change nothing, or on a row changed since the comparison, which they overwrite." While
+    some chosen DELETEs have ticked, compared columns that Q11 all leaves out (the answer's `uncheckedDeletes`), a line
+    gives that sentence too: "3 DELETEs check only their keys, since their other ticked columns cannot be compared
+    (note: xml), so nothing stops them on a row changed since the comparison." These lines, and the header's parts for
+    them, show only while the checks are on. Turning off the transaction warns "Without a transaction, statements before
+    a failure stay applied.", since a failed check, a key violation or a trigger's error all leave earlier statements in
+    place. Turning off the checks warns "Without the checks, a statement runs even when its row is missing, repeated,
+    changed or already there, and nothing says so."
   - **Destination:** New Query Editor Window (default) or Clipboard.
   - A **preview** of the first 30 lines (headed "Preview: first 30 lines" while the script is longer), a summary beside
     Script ("Deletes 2 rows, updates 5 rows and inserts 1 row in [Sales_Test].[dbo].[Orders] to match Result 3.", with
@@ -947,13 +963,13 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     5 rows", since an UPDATE whose changes are all in unticked columns or the identity column, which is never SET, is
     skipped. While a statement with rows is unticked, the summary adds what stays, so "to match" never reads as a full
     sync: "DELETE is unticked, so 2 rows only in Result 1 stay." ("UPDATE is unticked, so 5 changed rows stay as they
-    are."; "INSERT is unticked, so 2 rows only in Result 3 are not added."). While the chosen rows hold fewer
-    differences than All differences, it adds that too: "Rows in the grid holds 5 of 40 differences; the other 35 stay
-    as they are." ("Selected rows holds 1 of 40 differences; …"), and the announcement after Script repeats the summary.
-    When every count is 0, the summary is "The chosen rows have no differences to script."; when only unticked
-    statements have rows, it is "The ticked statements change no rows." with the stays sentences ("DELETE is unticked,
-    so 3 rows only in Result 3 stay."), so it never reads as if the target already matched. Either way Script is
-    unavailable.
+    are."; "INSERT is unticked, so 2 rows only in Result 3 are not added."; "INSERT is unavailable, so …" when a key
+    column cannot be inserted). While the chosen rows hold fewer differences than All differences, it adds that too:
+    "Rows in the grid holds 5 of 40 differences; the other 35 stay as they are." ("Selected rows holds 1 of 40
+    differences; …"), and the announcement after Script repeats the summary. When every count is 0, the summary is "The
+    chosen rows have no differences to script."; when only unticked statements have rows, it is "The ticked statements
+    change no rows." with the stays sentences ("DELETE is unticked, so 3 rows only in Result 3 stay."), so it never
+    reads as if the target already matched. Either way Script is unavailable.
     - The preview asks the backend for its 30 lines (`results.scriptDiff` with `maxLines`) on opening, with or without a
       target and direction, and then 300 ms after the form last changed, cancelling the request before. Each answer
       brings the Rows options' counts. It refuses only what those lines need (a truncated or U+FFFD value among them, or
@@ -970,24 +986,25 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       failure. A backend loss is not such a failure: it releases the comparison, so the closed state shows instead, on
       opening and later.
     - The counts and the summary are entries by kind in the chosen rows. All differences reads the diff's own counts.
-      Rows in the grid and Selected rows are counted by the backend in one pass over the chosen rows, reserving the bit
-      per stored row as Copy as Diff does; in Two rows an entry is chosen when either half is (a value filter on an old
-      value keeps only − halves), as Copy as Diff pairs them, so the counts and the script agree. Once a direction is
-      chosen, each statement shows its count whether or not it is ticked. Every preview answer carries them, a refused
-      one included, so the counts and the zero-count rules hold while a refusal shows. An UPDATE whose changed columns
-      are all unticked is skipped, so the counts said after Script, which are the script's own, can be lower.
+      Rows in the grid and Selected rows are counted by the backend in a pass over the chosen rows, after one that marks
+      them (so a look-alike's partner can be found among them), reserving the bit per stored row as Copy as Diff does;
+      in Two rows an entry is chosen when either half is (a value filter on an old value keeps only − halves), as Copy
+      as Diff pairs them, so the counts and the script agree. Once a direction is chosen, each statement shows its count
+      whether or not it is ticked. Every preview answer carries them, a refused one included, so the counts and the
+      zero-count rules hold while a refusal shows. An UPDATE whose changed columns are all unticked is skipped, so the
+      counts said after Script, which are the script's own, can be lower.
 - **The script:**
   - A header of `--` lines names the comparison, the match and any ignored columns, the server and database, the
     direction, the rows chosen ("N of M differences" while they are fewer than All differences) and any statement left
     out ("-- Rows in the grid: 5 of 40 differences. Not included: DELETE (2 rows)."), what else it leaves out, as the
     form's lines say ("-- Left out: note (unticked); changes to id (identity column); note2 (only in Result 1); 12
-    values that differ only by collation (Exact text off); the old-value check for 2 UPDATEs (note: xml)."), the
-    left-out reasons as the form's lines give them, and the time, so a reviewer reading only the script never takes it
-    for a full sync. It says "Review it before you run it. Varia does not run it for you. It leaves XACT_ABORT on."
-    Every name in every header line (results, the query document, key and ignored columns, the left-out line's columns,
-    server, database, target) has its control characters escaped (`\t`, `\r`, `\n`, and `\uXXXX` for the others, U+2028
-    and U+2029) and nothing else, so a name holding a line break cannot end a comment line and put its text into the
-    script as a statement, and `HOST\SQL2022` or `O'Brien` reads as it is.
+    values that differ only by collation (Exact text off); the old-value check for 2 UPDATEs (note: xml); the value
+    check for 3 DELETEs (note: xml)."), the left-out reasons as the form's lines give them, and the time, so a reviewer
+    reading only the script never takes it for a full sync. It says "Review it before you run it. Varia does not run it
+    for you. It leaves XACT_ABORT on." Every name in every header line (results, the query document, key and ignored
+    columns, the left-out line's columns, server, database, target) has its control characters escaped (`\t`, `\r`,
+    `\n`, and `\uXXXX` for the others, U+2028 and U+2029) and nothing else, so a name holding a line break cannot end a
+    comment line and put its text into the script as a statement, and `HOST\SQL2022` or `O'Brien` reads as it is.
   - Then `SET XACT_ABORT ON;` and `BEGIN TRANSACTION;`.
   - DELETEs, then UPDATEs, then INSERTs, so a reused key cannot collide.
     - One statement per row, keyed by the match's key columns, NULL-safe (`[k] IS NULL`).
@@ -1106,7 +1123,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     genuine U+FFFD is refused too: the cost of never writing a wrong value. The live round trip cannot catch this, since
     both sides store U+FFFD and compare equal, so an offline check does. A subnormal float (Literals below) in a key,
     SET or INSERT takes the same refusal ("1 value in ratio cannot be written exactly (row id = 1004)."), so a statement
-    never writes or matches 0 in its place (SQL Server reads such a literal as 0), and Q11's guards leave one out;
+    never writes or matches 0 in its place (SQL Server reads such a literal as 0), and Q11's guards leave one out. When
+    the values are in a key column, which cannot be unticked, these two refusals end "Choose rows without them, or other
+    key columns." and offer **Choose key columns…**, as the key-collation refusal does;
   - a key value of a char or varchar column with a SQL_ collation that is not all ASCII (Literals below): "2 key values
     in code cannot be matched exactly under its collation ('Straße' and 1 more). Choose rows without them, or other key
     columns.", with **Choose key columns…**;
@@ -1142,12 +1161,13 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     target as resolved and shows it in three parts, so a later run never moves it to another database; when that is not
     the query document's current database, the line under the field says so ("In Sales_Test on SQLDEV01. SQLQuery3.sql's
     database is now Sales_Dev."). The draft records the server too, and a target remembered from a comparison on another
-    server says so ("In Sales_Test on SQLPROD02. The last target was on SQLDEV01."). It keeps unticked columns by name,
-    as ignored columns are. The memory follows a swap to the swapped pair, so Swap inverts the remembered direction, and
-    the target still holds the same result's rows. Result names repeat across runs ("Result 1"), so the draft also
-    records the pair's column names, and when the pair's columns are not those, another query has taken the names: the
-    dialog starts as the first time (no target or direction, DELETE unticked), with a line by Target table ("Result 1
-    and Result 3 have other columns than last time, so the last target was not reused.").
+    server says so as a warning, since its draft carries over to a server that may be production ("⚠ In Sales_Test on
+    SQLPROD02. The last target was on SQLDEV01."). It keeps unticked columns by name, as ignored columns are. The memory
+    follows a swap to the swapped pair, so Swap inverts the remembered direction, and the target still holds the same
+    result's rows. Result names repeat across runs ("Result 1"), so the draft also records the pair's column names, and
+    when the pair's columns are not those, another query has taken the names: the dialog starts as the first time (no
+    target or direction, DELETE unticked), with a line by Target table ("Result 1 and Result 3 have other columns than
+    last time, so the last target was not reused.").
   - Wrap in a transaction, the row checks and SET IDENTITY_INSERT are not in the draft: they start on (SET
     IDENTITY_INSERT whenever it is offered) each time the dialog opens, as Rows starts at Rows in the grid, so a
     choice made for one script never carries over unseen to a later one, whose lines would sit below the fold. The
@@ -1172,7 +1192,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     suggestion, or with none highlighted closes the list and keeps the typed name; it never presses Script while the
     list is open. Elsewhere it presses Script, the default button.
   - Escape closes an open suggestion list first. Otherwise it is Cancel, with Cancel's two steps while generating (stop,
-    then close). The close button, Alt+F4 and ⌘W close at once.
+    then close). The close button, Alt+F4 and ⌘W close at once; while generating they cancel the request first, so no
+    query window opens and the clipboard is left as it was.
   - The preview is a read-only text area.
   - After Script to a New Query Editor Window, the window closes, that editor has focus, and the live region says "Script opened in a new
     query editor window." and the summary ("It deletes 2 rows, updates 5 rows and inserts 1 row in
@@ -1235,36 +1256,41 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     for a preview, and a preview answer stays near 60,000 characters whatever the values (one INSERT of a
     2,097,152-character XML value is about 8.4 million characters as its hex term); the size refusal is Script's.
   - **Answer:** `{ text (≤ 1,000,000 characters), differences: { all, grid, selected }, deletes?, updates, inserts?,
-    lookAlikeDeletes?, lookAlikeInserts?, softValues, softValuesCut?, uncheckedUpdates?: { count, sentence },
-    selectedKeys?, complete, refusal? }`. `differences` is each Rows option's count of entries that are not `same`,
-    which the options show beside their names and the "N of M differences" sentences read (`grid` is `all` when no view
-    is sent). `uncheckedUpdates` is the chosen UPDATEs whose every SET column Q11 leaves out, so their WHERE checks only
-    the keys, counted in the counts pass by value, so a preview and Script agree: by type alone for a column Q11 always
-    leaves out, and from the old value for one whose type leaves it to the value (char or varchar under a SQL_ collation
-    or with none recorded, a value marked truncated, U+FFFD, a subnormal float), reading only those cells. Its sentence
-    is the backend's, as a refusal's is, since only the backend knows the reasons: it names at most three columns, then
-    "and 2 more", each cut at 60 characters with its reason (the type, as "note: xml"; "id: int and varchar in the two
-    results"; or by value, "code: values not all ASCII under its SQL_ collation", "memo: values not kept in full",
-    "note: values that cannot be written exactly", "ratio: values too small to write exactly"), within 1,000 characters.
-    `selectedKeys` holds the key text of Selected rows' entries that differ (each as the row checks write it, `id =
-    1002`, cut at 60 characters) while there are at most three. The look-alike counts are the chosen rows to delete and
-    to insert that have a look-alike (`DiffIndex.Poss`), and `softValues` the chosen rows' soft values in ticked
-    columns, counted in the same pass as the counts and `differences`, so the look-alike and Exact text lines describe
-    the chosen rows, not the whole diff. Past a cut tone the change index keeps only changed pairs, so a cut entry's
-    later soft values are not counted, and `softValuesCut` says so, turning the Exact text line's and the header's count
-    into "at least 12 values". A refusal is an answer, not an error, with empty `text`: `refusal: { kind, sentence }`,
-    `kind` one of `asShown`, `keyType`, `keyName`, `notColumns`, `repeatedKey`, `truncated`, `unwritable`,
-    `keyCollation`, `noDifferences`, `noTickedChange` and `tooLarge`, and the sentence at most 1,000 characters, both
-    bounded in the answer schema. Every refusal's sentence, closed-input forms included, is the backend's (naming at
-    most three columns, then "and 2 more", each cut at 60 characters, so it stays within its 1,000), which holds the
-    counts, names and sample values and knows when an input's result was released; the dialog chooses only the refusal's
-    buttons and their availability, by `kind`, and never parses the sentence. Past 1,000,000 characters, estimated
-    first, it refuses with `tooLarge`, well inside the 16 MiB response limit. In a preview the counts are the chosen
-    rows' entries by kind; after Script they are the script's own statements, which can be lower (Counts above). The
-    backend itself refuses a comparison whose match is not a `columns` match, so Automatic's choice can never be
-    scripted by accident (Use order_no as key columns replaces the comparison with that `columns` match first), and a
-    comparison of rows as shown. Both read the diff set's records (C3's match and C6's as-shown flags), and the WHERE
-    clauses take the recorded key pairs, so the params carry no key columns.
+    lookAlikeDeletes?, lookAlikeInserts?, lookAlikeDeletesAlone?, lookAlikeInsertsAlone?, softValues, softValuesCut?,
+    uncheckedUpdates?: { count, sentence }, uncheckedDeletes?: { count, sentence }, selectedKeys?, complete, refusal?
+    }`. `differences` is each Rows option's count of entries that are not `same`, which the options show beside their
+    names and the "N of M differences" sentences read (`grid` is `all` when no view is sent). `uncheckedUpdates` is the
+    chosen UPDATEs whose every SET column Q11 leaves out, so their WHERE checks only the keys, counted in the counts
+    pass by value, so a preview and Script agree: by type alone for a column Q11 always leaves out, and from the old
+    value for one whose type leaves it to the value (char or varchar under a SQL_ collation or with none recorded, a
+    value marked truncated, U+FFFD, a subnormal float), reading only those cells. Its sentence is the backend's, as a
+    refusal's is, since only the backend knows the reasons: it names at most three columns, then "and 2 more", each cut
+    at 60 characters with its reason (the type, as "note: xml"; "id: int and varchar in the two results"; or by value,
+    "code: values not all ASCII under its SQL_ collation", "memo: values not kept in full", "note: values that cannot be
+    written exactly", "ratio: values too small to write exactly"), within 1,000 characters. `uncheckedDeletes` is
+    counted and worded the same way, over the chosen DELETEs whose ticked, compared columns (at least one) Q11 all
+    leaves out, so their WHERE checks only the keys. `selectedKeys` holds the key text of Selected rows' entries that
+    differ (each as the row checks write it, `id = 1002`, cut at 60 characters) while there are at most three. The
+    look-alike counts are the chosen rows to delete and to insert that have a look-alike (`DiffIndex.Poss`) among the
+    chosen rows, and `lookAlikeDeletesAlone` and `lookAlikeInsertsAlone` those whose look-alike the chosen rows leave
+    out, told apart by the same reserved bit per stored row, which the marking pass sets for every chosen row before the
+    counting pass reads a partner's, and `softValues` the chosen rows' soft values in ticked columns, counted in the
+    same pass as the counts and `differences`, so the look-alike and Exact text lines describe the chosen rows, not the
+    whole diff. Past a cut tone the change index keeps only changed pairs, so a cut entry's later soft values are not
+    counted, and `softValuesCut` says so, turning the Exact text line's and the header's count into "at least 12
+    values". A refusal is an answer, not an error, with empty `text`: `refusal: { kind, sentence }`, `kind` one of
+    `asShown`, `keyType`, `keyName`, `notColumns`, `repeatedKey`, `truncated`, `unwritable`, `keyCollation`,
+    `noDifferences`, `noTickedChange` and `tooLarge`, and the sentence at most 1,000 characters, both bounded in the
+    answer schema. Every refusal's sentence, closed-input forms included, is the backend's (naming at most three
+    columns, then "and 2 more", each cut at 60 characters, so it stays within its 1,000), which holds the counts, names
+    and sample values and knows when an input's result was released; the dialog chooses only the refusal's buttons and
+    their availability, by `kind`, and never parses the sentence. Past 1,000,000 characters, estimated first, it refuses
+    with `tooLarge`, well inside the 16 MiB response limit. In a preview the counts are the chosen rows' entries by
+    kind; after Script they are the script's own statements, which can be lower (Counts above). The backend itself
+    refuses a comparison whose match is not a `columns` match, so Automatic's choice can never be scripted by accident
+    (Use order_no as key columns replaces the comparison with that `columns` match first), and a comparison of rows as
+    shown. Both read the diff set's records (C3's match and C6's as-shown flags), and the WHERE clauses take the
+    recorded key pairs, so the params carry no key columns.
 - **Backend `Results/DiffScript.cs`:** literals by the column's `dataType`, precision and scale:
 
   | Type | Literal |
@@ -1326,14 +1352,15 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       its INSERT check finding an existing one; a varchar key paired with an nvarchar key, both directions, never cast;
       a date key paired with a time key refused;
     - a rowversion key accepted with INSERT unticked; a subnormal float as a key refused and as a guard left out;
-    - the look-alike and soft counts for Rows in the grid and Selected rows; a refusal naming four long columns, cut;
+    - the look-alike and soft counts for Rows in the grid and Selected rows, and the alone counts with the − chip
+      pressed and with Selected rows on one ? row; a refusal naming four long columns, cut;
     - `columns` without a key pair, and Script with no statement ticked, each `INVALID_PARAMS`; an opening preview of a
       comparison keyed on a hierarchyid column, and one keyed on a repeated name, each answering its refusal, not
       `INVALID_PARAMS`;
     - the header's left-out line with Result 1 closed: one-sided, computed, unticked and identity columns;
-    - `uncheckedUpdates` alike in a preview and in Script (an UPDATE changing only an xml column, one changing only
-      non-ASCII varchar under a SQL_ collation, and one with an ASCII value there, which is checked); `selectedKeys` for
-      one to three entries and none past three;
+    - `uncheckedDeletes` for a DELETE whose only ticked compared column is xml; `uncheckedUpdates` alike in a preview
+      and in Script (an UPDATE changing only an xml column, one changing only non-ASCII varchar under a SQL_ collation,
+      and one with an ASCII value there, which is checked); `selectedKeys` for one to three entries and none past three;
     - a preview with no target or direction: empty `text`, an opening refusal, `differences` for all three options,
       `updates` and no delete, insert or look-alike counts; Script without either `INVALID_PARAMS`;
     - quoting, NULL keys, composite keys;
@@ -1398,8 +1425,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     description while generating, the stop sentence and Script available after a generation failure, the updating
     state's focus and description, the unchecked line's backend sentence, both identity sentences, the unticked line's
     DELETE clause, the unchecked-UPDATEs line, Selected rows' keys and its sentence said only when the differing entries
-    change, the key-name refusal's button, Enter in Target table with nothing highlighted, the window over a popped-out
-    Results pane, a cancelled generation giving way to a closed or refused state, and the Clipboard announcement.
+    change, the key-name refusal's button, the look-alike lines for rows whose look-alike is not chosen, the column list
+    as one Tab stop, the key-column form of the truncation and U+FFFD refusals, closing while generating opening
+    nothing, Enter in Target table with nothing highlighted, the window over a popped-out Results pane, a cancelled
+    generation giving way to a closed or refused state, and the Clipboard announcement.
   - Smoke: open the dialog window by role, script to a New Query Editor Window, and find `BEGIN TRANSACTION` in the
     focused editor. A frameless OS window can behave differently on Linux, so run it through `npm run test:smoke:wsl`
     before pushing.
