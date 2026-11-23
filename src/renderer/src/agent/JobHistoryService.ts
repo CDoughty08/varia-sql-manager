@@ -70,9 +70,17 @@ export const jobHistoryText = {
 export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> implements Disposable {
   private readonly views = new Map<string, { readonly jobId: string; readonly handle: LiveHandle; readonly stop: () => void }>()
   private readonly reads = new Map<string, number>()
+  // Sections shown while their connection was not usable: each opens its view when the connection is back.
+  private readonly pending = new Map<string, string>()
+  private readonly unsubscribe: () => void
   private disposed = false
 
-  constructor(private readonly options: JobHistoryServiceOptions) { super({ documents: {} }) }
+  constructor(private readonly options: JobHistoryServiceOptions) {
+    super({ documents: {} })
+    this.unsubscribe = options.subscribe(() => {
+      for (const [id, jobId] of [...this.pending]) if (options.connectionOf(id)) { this.pending.delete(id); this.attach(id, jobId) }
+    })
+  }
 
   get(id: string): JobHistoryState | undefined { return this.getSnapshot().documents[id] }
   handle(id: string): LiveHandle | undefined { return this.views.get(id)?.handle }
@@ -84,7 +92,8 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     if (!live || this.disposed || this.views.get(id)?.jobId === job) return
     this.views.get(id)?.stop()
     const connectionId = this.options.connectionOf(id)
-    if (!connectionId) return
+    if (!connectionId) { this.pending.set(id, job); return }
+    this.pending.delete(id)
     let ended = false
     const owner: LiveOwner = {
       key: 'agent-job-history:' + id, visible: () => this.options.visible(id), connectionId: () => this.options.connectionOf(id), closed: () => ended,
@@ -121,7 +130,7 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     const state = this.get(id)
     if (!state) return
     if (sameRun(state.selected, key)) { if (!state.pinned) this.patch(id, { pinned: true }); return }
-    this.patch(id, { selected: key, pinned: true, steps: [], stepsFor: undefined, step: undefined, message: undefined })
+    this.patch(id, { selected: key, pinned: true, steps: [], stepsFor: undefined, step: undefined, message: undefined, notice: undefined })
     this.sendArgs(id)
   }
   /** Shows a row's whole message in the detail. */
@@ -157,12 +166,15 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
   closed(id: string): void {
     this.views.get(id)?.stop()
     this.views.delete(id)
+    this.pending.delete(id)
     this.reads.delete(id)
     if (this.get(id)) this.publish({ documents: Object.fromEntries(Object.entries(this.getSnapshot().documents).filter(([key]) => key !== id)) })
   }
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    this.unsubscribe()
+    this.pending.clear()
     for (const view of this.views.values()) view.stop()
     this.views.clear()
     this.clearListeners()
@@ -204,7 +216,7 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     const next: Partial<JobHistoryState> = {
       runs, more: runCells.total > runs.length, loaded: true, usual, pinned: keep,
       ...state.failedOnly ? {} : { spark: runs },
-      ...changed ? { selected, steps: [], stepsFor: undefined, step: undefined, message: undefined } : ownRows ? { steps, stepsFor } : {}
+      ...changed ? { selected, steps: [], stepsFor: undefined, step: undefined, message: undefined, notice: undefined } : ownRows ? { steps, stepsFor } : {}
     }
     this.patch(id, next)
     if (changed) { this.sendArgs(id); return }
@@ -221,7 +233,9 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     const state = this.get(id), connectionId = this.options.connectionOf(id), api = this.options.api.agentHistoryMessage
     if (!state) return
     const cut = row.message.length >= agentLimits.gridMessageChars && row.message.endsWith('…')
-    if (!cut || !connectionId || !api) { this.patch(id, { message: { instance: row.instance, state: 'ready', text: row.message } }); return }
+    if (!cut) { this.patch(id, { message: { instance: row.instance, state: 'ready', text: row.message } }); return }
+    // Cut, with no way to read the rest now: the start of it shows, said as such.
+    if (!connectionId || !api) { this.patch(id, { message: { instance: row.instance, state: 'failed' } }); return }
     this.patch(id, { message: { instance: row.instance, state: 'reading' } })
     let message: JobHistoryMessage
     try {

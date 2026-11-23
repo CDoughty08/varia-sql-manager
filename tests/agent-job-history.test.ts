@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AgentJobDocumentModel } from '../src/shared/actions/agent-job'
 import { uncategorizedCategory } from '../src/shared/actions/agent-job'
 import { agentLimits } from '../src/shared/agent/catalog'
@@ -9,10 +9,10 @@ import {
 } from '../src/shared/agent/job-history'
 import { liveProbes } from '../src/shared/live/catalog'
 import { jobLive } from '../src/renderer/src/agent/JobDocumentService'
-import { jobHistoryText } from '../src/renderer/src/agent/JobHistoryService'
+import { JobHistoryService, jobHistoryText } from '../src/renderer/src/agent/JobHistoryService'
 import type { LiveTable } from '../src/renderer/src/live/LiveService'
 import { connectionInfo, readyBackend, workbenchFixture } from './fixtures/workbench'
-import type { FakeLiveHandle } from './fixtures/live-handle'
+import { fakeLive, type FakeLiveHandle } from './fixtures/live-handle'
 
 const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
 const cleanups: (() => void)[] = []
@@ -80,6 +80,8 @@ describe("the job document's History rules", () => {
       { id: 3, name: 'Stats', state: 'waiting', label: 'Waiting' }
     ])
     expect(runningSteps(steps, [], 1, true)[0]).toMatchObject({ state: 'retrying', label: 'Between retries' })
+    // Without this run's rows (another run selected, or Failed on) only the current step is known: the rest are never called Waiting.
+    expect(runningSteps(steps, [], 2, false, undefined, false).map(item => item.state)).toEqual(['unknown', 'executing', 'unknown'])
   })
   it('times this run from the server clock against the usual time, never a guess', () => {
     expect(elapsedSeconds(20261122140900, 20261122142104)).toBe(724)
@@ -222,5 +224,63 @@ describe("the job document's History section", () => {
     await settled()
     expect(history()!.disposed).toBe(true)
     expect(jobDocuments.history.get(id)).toBeUndefined()
+  })
+})
+
+describe("the History section's service on its own", () => {
+  function service() {
+    const live = fakeLive(), listeners = new Set<() => void>()
+    let connection: string | undefined
+    const api = { agentHistoryMessage: vi.fn(), writeClipboardText: vi.fn(async () => ({ ok: true as const, value: undefined })) }
+    const history = new JobHistoryService({
+      api, live, connectionOf: () => connection, visible: () => true, newId: () => 'r1',
+      subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener) }
+    })
+    cleanups.push(() => history.dispose())
+    const connect = (id: string | undefined) => { connection = id; for (const listener of [...listeners]) listener() }
+    const deliver = async (tables: Record<number, LiveTable>) => {
+      const handle = live.handles.at(-1)!
+      for (const [index, value] of Object.entries(tables)) handle.tables.set(`agent.history.list:${index}`, value)
+      handle.deliver({ type: 'live.tick', seq: 1, sampledAt: 1, samples: [{ probe: 'agent.history.list', costMs: 1, effectiveIntervalMs: 15_000, tables: [] as never }] })
+      await settled()
+    }
+    return { history, live, api, connect, deliver, listeners }
+  }
+  it('opens the view of a section first shown while disconnected once the connection is back, and forgets it when closed', () => {
+    const { history, live, connect, listeners } = service()
+    history.attach('d1', job)
+    expect(live.handles).toHaveLength(0)
+    connect('c1')
+    expect(live.handles).toHaveLength(1)
+    expect(live.handles[0].spec).toMatchObject({ connectionId: 'c1', args: { jobs: [job], usual: true } })
+    connect('c1')
+    expect(live.handles).toHaveLength(1)
+    // A section closed before the connection came back opens nothing.
+    connect(undefined)
+    history.attach('d2', job)
+    history.closed('d2')
+    connect('c1')
+    expect(live.handles).toHaveLength(1)
+    history.dispose()
+    expect(listeners.size).toBe(0)
+  })
+  it("drops the Copy notice with the run, and says a cut message is only its start when it cannot be read whole", async () => {
+    const { history, connect, deliver, api } = service()
+    connect('c1')
+    history.attach('d1', job)
+    await deliver({ 0: table(0, [runRow(20), runRow(19)]), 1: table(1, []), 3: table(3, []) })
+    await deliver({ 1: table(1, [stepRow(20, 0), stepRow(18, 1, { stepTone: 'error', stepOutcome: 'Failed', stepMessage: 'boom' })]) })
+    expect(history.get('d1')).toMatchObject({ step: 18, message: { state: 'ready', text: 'boom' } })
+    await history.copyMessage('d1')
+    expect(history.get('d1')?.notice).toBe(jobHistoryText.copied)
+    history.selectRun('d1', { job, instance: 19 })
+    expect(history.get('d1')?.notice).toBeUndefined()
+    // Disconnected, a cut message is shown as its start and said to be so; nothing is asked of the backend.
+    connect(undefined)
+    const cut = 'y'.repeat(agentLimits.gridMessageChars - 1) + '…'
+    await deliver({ 1: table(1, [stepRow(19, 0), stepRow(17, 2, { stepTone: 'error', stepOutcome: 'Failed', stepMessage: cut })]) })
+    expect(history.get('d1')).toMatchObject({ step: 17, message: { instance: 17, state: 'failed' } })
+    expect(history.messageText('d1')).toBe(cut)
+    expect(api.agentHistoryMessage).not.toHaveBeenCalled()
   })
 })

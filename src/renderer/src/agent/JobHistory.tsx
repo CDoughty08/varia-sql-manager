@@ -30,7 +30,8 @@ export const jobHistoryCopy = {
   ssisHint: 'For an SSIS step, its execution link opens the catalog\'s messages for that execution in a query window, where the real error usually is.',
   none: 'This job has no history yet. Runs show here as SQL Server Agent records them.',
   noneFailed: 'No failed runs in the history SQL Server Agent keeps.',
-  logViewer: "All jobs' history in Log File Viewer"
+  logViewer: "All jobs' history in Log File Viewer",
+  runningUnknown: "The other steps' states show with this run selected under All."
 } as const
 
 /** The run durations as bars, newest last, with the usual time as a line: plain elements with one accessible name (not a ChartView: runs are not samples over time). */
@@ -46,15 +47,15 @@ function Sparkline({ runs, usual }: { readonly runs: readonly JobHistoryRun[]; r
 }
 
 /** The running job's view: this run against the usual time, each step's state, and Stop. */
-function RunningView({ state, model, rows, usual, service }: {
-  readonly state: JobDocumentState; readonly model: AgentJobDocumentModel; readonly rows: readonly JobHistoryStep[]; readonly usual?: JobUsual
+function RunningView({ state, model, rows, known, usual, service }: {
+  readonly state: JobDocumentState; readonly model: AgentJobDocumentModel; readonly rows: readonly JobHistoryStep[]; readonly known: boolean; readonly usual?: JobUsual
   readonly service: JobDocumentService
 }) {
   const { commands } = useWorkbench()
   const live = state.live!
   const elapsed = elapsedSeconds(live.started, live.now)
   const progress = runProgress(elapsed, usual?.job)
-  const steps = runningSteps(model.steps.map(step => ({ id: step.id, name: step.name })), rows.filter(row => row.stepId > 0), live.step, !!live.retrying, usual)
+  const steps = runningSteps(model.steps.map(step => ({ id: step.id, name: step.name })), rows.filter(row => row.stepId > 0), live.step, !!live.retrying, usual, known)
   return <div className="agent-history-running" role="group" aria-label="This run">
     <p className="document-status" role="status"><Icon name="play" />{jobHistoryCopy.running(live.started ? stampText(live.started, live.now ? Math.trunc(live.now / 1_000_000) : undefined) : undefined)}</p>
     <div className="agent-history-progress-head"><strong>This run</strong><span>{progress.text}</span></div>
@@ -66,12 +67,13 @@ function RunningView({ state, model, rows, usual, service }: {
       <thead><tr><th scope="col">Step</th><th scope="col">State</th><th scope="col">This run</th><th scope="col">Usual</th></tr></thead>
       <tbody>{steps.map(step => <tr key={step.id} data-state={step.state} aria-current={step.state === 'executing' || step.state === 'retrying' ? 'step' : undefined}>
         <td>{step.id} · {step.name}</td>
-        <td>{step.state === 'executing' || step.state === 'retrying' ? <StatusPill tone="running" label={step.label} size="small" /> : step.state === 'waiting' ? <span className="field-note">{step.label}</span>
+        <td>{step.state === 'executing' || step.state === 'retrying' ? <StatusPill tone="running" label={step.label} size="small" /> : step.state === 'waiting' || step.state === 'unknown' ? <span className="field-note">{step.label}</span>
           : <StatusPill tone={step.state === 'failed' ? 'critical' : step.state === 'succeeded' ? 'success' : step.state === 'retry' ? 'warning' : 'neutral'} label={step.label} size="small" />}</td>
         <td className="mono">{step.seconds !== undefined ? durationText(step.seconds) : ''}</td>
         <td className="mono field-note">{step.usual !== undefined ? durationText(step.usual) : ''}</td>
       </tr>)}</tbody>
     </table>
+    {!known && <p className="field-note">{jobHistoryCopy.runningUnknown}</p>}
     <p className="agent-history-actions">
       <button type="button" className="danger" disabled={!service.canStop(state.id)} onClick={() => void commands.execute('agentJob.stop', { tabId: state.id }, 'toolbar')}><Icon name="debug-stop" />Stop job</button>
       <span className="field-note">{jobHistoryCopy.stopHint}</span>
@@ -148,13 +150,16 @@ export default function JobHistory({ state, model, service }: { readonly state: 
   const selected = view?.runs.find(run => sameRun(run.key, view.selected))
   const inProgress = view?.runs.find(runIsInProgress)
   const spanned = view ? Math.min(jobHistoryLimits.sparkRuns, view.spark.filter(run => run.seconds !== undefined && !runIsInProgress(run)).length) : 0
-  const runningRows = running && inProgress && view && sameRun(view.selected, inProgress.key) && view.stepsFor === historyRunKeyText(inProgress.key) ? view.steps : []
+  // The running view knows each step's state only from this run's own rows: with another run selected (or Failed on) it holds none. A run
+  // not listed yet (msdb writes a row only when a step ends) has no rows to hold, under All with the newest followed.
+  const runningKnown = !!view && (inProgress ? sameRun(view.selected, inProgress.key) : !view.failedOnly && !view.pinned)
+  const runningRows = running && inProgress && runningKnown && view!.stepsFor === historyRunKeyText(inProgress.key) ? view!.steps : []
   const openViewer = () => {
     const connectionId = tabs.get(state.id)?.connectionId
     try { if (connectionId) logViewer.open(connectionId, { jobs: [jobId] }) } catch (error) { commands.reportError(error instanceof Error ? error.message : 'Log File Viewer could not open.') }
   }
   return <div className="agent-history" data-agent-history={state.id}>
-    {running && <RunningView state={state} model={model} rows={runningRows} usual={view?.usual} service={service} />}
+    {running && <RunningView state={state} model={model} rows={runningRows} known={runningKnown} usual={view?.usual} service={service} />}
     {ended && <InlineError message={ended.message} code={ended.code} context={`History of ${model.job!.name} on ${state.server}`} actions={ended.code === 'PERMISSION_DENIED' ? [] : [{ label: 'Retry', run: () => history.refresh(state.id) }]} />}
     {!view?.loaded ? !ended && <Skeleton rows={3} label="Reading the job's history" /> : <>
       <div className="agent-history-head">

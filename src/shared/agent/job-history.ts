@@ -121,7 +121,7 @@ export function failedStep(steps: readonly JobHistoryStep[]): JobHistoryStep | u
 export interface RunningStep {
   readonly id: number
   readonly name: string
-  readonly state: 'succeeded' | 'failed' | 'retry' | 'canceled' | 'executing' | 'retrying' | 'waiting'
+  readonly state: 'succeeded' | 'failed' | 'retry' | 'canceled' | 'executing' | 'retrying' | 'waiting' | 'unknown'
   readonly label: string
   readonly seconds?: number
   readonly usual?: number
@@ -131,9 +131,10 @@ const finishedState = (step: JobHistoryStep): RunningStep['state'] =>
 /**
  * Each step of the job while it runs: the step Agent reports as current is Executing (Between retries while retrying), a step with rows in this
  * run has finished as its last row says, and the rest are Waiting. This run's time adds a step's rows up (its retries); the current step has
- * none yet, since msdb writes a step's row only when it ends.
+ * none yet, since msdb writes a step's row only when it ends. Without this run's rows (`known` false: another run is selected or filtered in)
+ * only the current step is known; the rest are Unknown, never Waiting.
  */
-export function runningSteps(steps: readonly { readonly id: number; readonly name: string }[], rows: readonly JobHistoryStep[], current: number | undefined, retrying: boolean, usual?: JobUsual): RunningStep[] {
+export function runningSteps(steps: readonly { readonly id: number; readonly name: string }[], rows: readonly JobHistoryStep[], current: number | undefined, retrying: boolean, usual?: JobUsual, known = true): RunningStep[] {
   return steps.map(step => {
     const own = rows.filter(row => row.stepId === step.id)
     const seconds = own.length && own.every(row => row.seconds !== undefined) ? own.reduce((sum, row) => sum + row.seconds!, 0) : undefined
@@ -141,7 +142,7 @@ export function runningSteps(steps: readonly { readonly id: number; readonly nam
     const base = { id: step.id, name: step.name, ...usualSeconds !== undefined ? { usual: usualSeconds } : {} }
     if (step.id === current) return { ...base, state: retrying ? 'retrying' : 'executing', label: retrying ? 'Between retries' : 'Executing' }
     if (own.length) { const last = own[own.length - 1]; return { ...base, state: finishedState(last), label: last.outcome, ...seconds !== undefined ? { seconds } : {} } }
-    return { ...base, state: 'waiting', label: 'Waiting' }
+    return known ? { ...base, state: 'waiting', label: 'Waiting' } : { ...base, state: 'unknown', label: '—' }
   })
 }
 
