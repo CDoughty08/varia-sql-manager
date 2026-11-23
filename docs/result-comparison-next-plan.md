@@ -822,9 +822,12 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       are told apart. The script writes three-part names everywhere, so it changes that database whatever the query
       window's database is when it runs, and its header names the server and the database.
     - When the index knows the table it says so ("Search Objects knows [Sales_Test].[dbo].[Orders] on this connection: 8
-      columns, all 6 compared columns among them. id is its identity column."). It warns, never refuses, when it cannot,
-      naming what that costs, since without the index the dialog cannot offer SET IDENTITY_INSERT and an INSERT into an
-      identity column then fails and rolls the script back (Msg 544):
+      columns, all 6 compared columns among them. id is its identity column."). It knows the table whenever the index
+      holds a read of that database with its columns, whatever else that read left out (definitions, cut definitions,
+      system objects); while a rebuild runs over that read, or after a later read of the database failed, the line adds
+      "These are from Search Objects' last index of Sales_Test." It warns, never refuses, when it cannot, naming what
+      that costs, since without the index the dialog cannot offer SET IDENTITY_INSERT and an INSERT into an identity
+      column then fails and rolls the script back (Msg 544):
       - the index lacks the table: "Search Objects does not know [Sales_Test].[dbo].[Orders], so its columns cannot be
         checked and SET IDENTITY_INSERT is not offered. Check the name, or rebuild the search index.", with **Rebuild
         Search Index** (`explorer.rebuildIndex` for the comparison's connection). Pressed, it stays in place,
@@ -833,15 +836,16 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       - the connection has no index (Index on connect off): "SQLDEV01 has no search index yet, so its tables are not
         suggested, the target's columns cannot be checked and SET IDENTITY_INSERT is not offered.", with **Build index**,
         as Search Objects offers, which behaves as Rebuild Search Index does;
-      - the database was skipped (the login cannot open it, say): "Search Objects skipped Sales_Test, so the target's
-        columns cannot be checked and SET IDENTITY_INSERT is not offered.", with no button, since a rebuild would skip
-        it again;
-      - the database is still being indexed: "Search Objects is still indexing Sales_Test, so its columns cannot be
-        checked yet.";
+      - the database was skipped (the login cannot open it, say) and no earlier read of it is held: "Search Objects
+        skipped Sales_Test, so the target's columns cannot be checked and SET IDENTITY_INSERT is not offered.", with no
+        button, since a rebuild would skip it again;
+      - the database is still being indexed and no earlier read of it is held: "Search Objects is still indexing
+        Sales_Test, so its columns cannot be checked yet.";
       - the database was indexed without its columns: "Search Objects holds no columns for Sales_Test, since its index
         did not fit the memory budget, so its columns cannot be checked and SET IDENTITY_INSERT is not offered.";
-      - a compared column the table lacks: "[Sales_Test].[dbo].[Orders] has no column note in Search Objects' index, so
-        a statement naming it would fail. Check the table, or rebuild the search index.";
+      - a ticked column the table lacks (compared, or ignored and ticked for INSERT): "[Sales_Test].[dbo].[Orders] has
+        no column note in Search Objects' index, so a statement naming it would fail. Check the table, or rebuild the
+        search index.";
       - over 4,096 columns: "[Sales_Test].[dbo].[Orders] has more than 4,096 columns, so its columns are not checked.";
       - the comparison's connection is not open (Disconnect with Keep Tabs keeps the comparison, and the index is
         dropped on disconnect): "SQLDEV01 is not connected, so the target's columns cannot be checked and SET
@@ -895,28 +899,34 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     scripted"), but Space leaves it as it is.
     - Key columns are ticked and locked, whatever else would lock a column unticked (a type no literal writes, a
       repeated name), since the key refusals answer those before anything else (Params in the sketch). A key column
-      INSERT cannot write (rowversion or timestamp, or computed or GENERATED ALWAYS per the index) leaves INSERT
-      unavailable, with the reason ("row_ver is a key column that cannot be inserted (rowversion), so INSERT is
-      unavailable."). Ignored columns are ticked, for INSERT only. While UPDATE is ticked, a line says what ignoring
-      costs, since the summary's "to match Result 3" would otherwise hide it: "updated_at is ignored: UPDATEs leave its
-      changes out, and rows that differ only in it get no statement. Stop ignoring it to include them." ("updated_at and
-      memo are ignored: … their changes … only in them …"). While DELETE and the checks are on, it names that cost too
-      ("…get no statement, and DELETEs do not check it."), and shows for it alone when UPDATE is unticked ("updated_at
-      is ignored, so DELETEs do not check it."). While an input is closed, the comparison cannot be rebuilt, so this
-      line and the Exact text line below drop their last sentence.
-    - Unscriptable columns start unticked and locked, with the reason: rowversion and timestamp ("Not insertable"),
-      computed per the index ("Computed"), GENERATED ALWAYS per the index ("Generated by the server": a temporal table's
-      period columns, which change in every updated row, so an UPDATE whose only changes are there is skipped), CLR
-      types and sql_variant ("Cannot be written as a literal"), and vector ("Not scripted": it has a literal but no `=`,
-      so it is left out until a lane writes and round-trips it). Unscriptable wins over ignored: "row_ver (ignored): Not
-      insertable". A diff's columns carry Result 3's types, so the comparison records both inputs' column types per pair
-      when it is built (as the remembered match reads them, `resolveRemembered`), and the form locks a pair by either
-      type while Result 1 is closed. The renderer is untrusted, so `DiffScript` also refuses (`INVALID_PARAMS`) a
-      `columns` pair either result's recorded type cannot write (CLR types, sql_variant, vector, rowversion and
-      timestamp), except a key pair: a key of the first three takes the `keyType` refusal first, and a rowversion or
-      timestamp key pair, which a WHERE compares as binary, is accepted while INSERT is not ticked; computed and
-      GENERATED ALWAYS columns are known only to the index, and an INSERT that names one fails the whole batch when it
-      compiles (Msg 271, Msg 13536), before any statement runs.
+      INSERT cannot write (rowversion or timestamp, in either result or per the index in the target, or computed or
+      GENERATED ALWAYS per the index) leaves INSERT unavailable, with the reason ("row_ver is a key column that cannot
+      be inserted (rowversion), so INSERT is unavailable."). Ignored columns are ticked, for INSERT only, except one the
+      index says the target lacks (an expression alias such as `server_time = GETDATE()`, usually), which starts
+      unticked with its reason ("Not in [Sales_Test].[dbo].[Orders]"), since an INSERT naming it fails the whole batch
+      when it compiles (Msg 207), before the transaction's TRY can catch it. That start follows the target and is not
+      remembered as the user's choice; ticking the column again brings the warning for a column the table lacks. While
+      UPDATE is ticked, a line says what ignoring costs, since the summary's "to match Result 3" would otherwise hide
+      it: "updated_at is ignored: UPDATEs leave its changes out, and rows that differ only in it get no statement. Stop
+      ignoring it to include them." ("updated_at and memo are ignored: … their changes … only in them …"). While DELETE
+      and the checks are on, it names that cost too ("…get no statement, and DELETEs do not check it."), and shows for
+      it alone when UPDATE is unticked ("updated_at is ignored, so DELETEs do not check it."). While an input is closed,
+      the comparison cannot be rebuilt, so this line and the Exact text line below drop their last sentence.
+    - Unscriptable columns start unticked and locked, with the reason: rowversion and timestamp, in either result or,
+      per the index, in the target ("Not insertable": an INSERT or SET naming one fails when it compiles, Msg 273 and
+      272), computed per the index ("Computed"), GENERATED ALWAYS per the index ("Generated by the server": a temporal
+      table's period columns, which change in every updated row, so an UPDATE whose only changes are there is skipped),
+      CLR types and sql_variant ("Cannot be written as a literal"), and vector ("Not scripted": it has a literal but no
+      `=`, so it is left out until a lane writes and round-trips it). Unscriptable wins over ignored: "row_ver
+      (ignored): Not insertable". A diff's columns carry Result 3's types, so the comparison records both inputs' column
+      types per pair when it is built (as the remembered match reads them, `resolveRemembered`), and the form locks a
+      pair by either type while Result 1 is closed. The renderer is untrusted, so `DiffScript` also refuses
+      (`INVALID_PARAMS`) a `columns` pair either result's recorded type cannot write (CLR types, sql_variant, vector,
+      rowversion and timestamp), except a key pair: a key of the first three takes the `keyType` refusal first, and a
+      rowversion or timestamp key pair, which a WHERE compares as binary, is accepted while INSERT is not ticked;
+      computed and GENERATED ALWAYS columns, a target's rowversion column paired with another type, and a column the
+      target lacks are known only to the index, and an INSERT that names one fails the whole batch when it compiles (Msg
+      271, 13536, 273, 207), before any statement runs.
     - A line names columns only one result has ("note2 is only in Result 1, so INSERTs leave it out").
     - While INSERT is ticked and the index knows the table, a line names its columns the result lacks: "INSERTs leave
       created_by and region out, so inserted rows get their defaults or NULL." (not columns the target fills itself:
@@ -925,10 +935,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - While UPDATE or INSERT is ticked, a line names the unticked columns the script would otherwise write: "note is
       unticked: UPDATEs leave its changes out, and inserted rows get its default or NULL." ("note and memo are unticked:
       … their changes …"), each clause only while its statement is ticked and naming only the columns it would write (an
-      ignored column only in the INSERT clause). While DELETE and the checks are on, it adds "and DELETEs do not check
-      it" ("…check them"), since a DELETE's WHERE holds only ticked columns, and the line shows for that alone when
-      UPDATE and INSERT are unticked. Columns the target fills itself (rowversion, computed, GENERATED ALWAYS, an
-      identity left out) have their own lines instead.
+      ignored column only in the INSERT clause, and not one the target lacks, whose reason says it). While DELETE and
+      the checks are on, it adds "and DELETEs do not check it" ("…check them"), since a DELETE's WHERE holds only ticked
+      columns, and the line shows for that alone when UPDATE and INSERT are unticked. Columns the target fills itself
+      (rowversion, computed, GENERATED ALWAYS, an identity left out) have their own lines instead.
     - A data column without a name, whose name the result repeats, or whose name holds a control character, U+2028 or
       U+2029 (the target parts' rule) starts unticked and locked ("No name", "Name repeated", "Name has a control
       character"), since an INSERT could not name it: a query window normalizes line breaks in a bracketed name too.
@@ -1282,20 +1292,23 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     names as the target's identity column, one of `columns` (checked in both): only the renderer knows it, from Search
     Objects. `DiffScript` leaves it out of every SET. With `identityInsert` on it wraps the INSERTs in `SET
     IDENTITY_INSERT`; with it off it leaves the identity column out of the INSERTs, and refuses (`INVALID_PARAMS`) when
-    that column is a key; `identityInsert` on without `identity` is `INVALID_PARAMS` in both zod and C#. `computed?:
-    number[]` holds the pairs the index names as computed columns of the target (distinct, at most
-    `limits.page.maxColumns`, each below the pair count, none in `columns`), so the header's left-out line says
-    "(computed)" rather than "(unticked)". C# also answers `INVALID_PARAMS` when `columns` leaves out a recorded key
-    pair (an INSERT would write its row without the key, and the existence check by key would still pass), and on Script
-    when no statement is ticked. It answers the four refusals known on opening (below) before it checks `columns` and
-    `identity`, so a comparison keyed on a hierarchyid column or a repeated name gets its refusal, with its Choose key
-    columns…, never `INVALID_PARAMS` and a failed preview. The other locked reasons (rowversion, CLR types, sql_variant,
-    vector) follow from the recorded types. Script (no `maxLines`) requires `target` and `direction` (`INVALID_PARAMS`
-    in both); a preview may leave either out, as the dialog's request on opening does before the form has them. Its
-    answer has empty `text` and carries any of the four refusals known on opening (`asShown`, `keyType`, `keyName`,
-    `notColumns`), `differences`, `updates` and `softValues`, and, only with a `direction`, which decides them (which
-    rows are deleted, and the target side's values and collations), `deletes`, `inserts`, the look-alike counts,
-    `uncheckedUpdates` and `uncheckedDeletes`.
+    that column is a key; `identityInsert` on without `identity` is `INVALID_PARAMS` in both zod and C#. `indexReasons?:
+    { pair, reason: 'computed' | 'generated' | 'notInsertable' | 'notInTarget' }[]` holds the pairs left out for a
+    reason only the index knows (a computed or GENERATED ALWAYS column of the target, a target column of rowversion or
+    timestamp, a column the target lacks), with distinct pairs, at most `limits.page.maxColumns`, each below the pair
+    count and none in `columns`, checked in zod and C#, so the header's left-out line gives the form's reason
+    ("(computed)", "(generated)", "(not insertable)", "(not in [Sales_Test].[dbo].[Orders])") rather than "(unticked)".
+    C# also answers `INVALID_PARAMS` when `columns` leaves out a recorded key pair (an INSERT would write its row
+    without the key, and the existence check by key would still pass), and on Script when no statement is ticked. It
+    answers the four refusals known on opening (below) before it checks `columns` and `identity`, so a comparison keyed
+    on a hierarchyid column or a repeated name gets its refusal, with its Choose key columns…, never `INVALID_PARAMS`
+    and a failed preview. The other locked reasons (rowversion, CLR types, sql_variant, vector) follow from the recorded
+    types. Script (no `maxLines`) requires `target` and `direction` (`INVALID_PARAMS` in both); a preview may leave
+    either out, as the dialog's request on opening does before the form has them. Its answer has empty `text` and
+    carries any of the four refusals known on opening (`asShown`, `keyType`, `keyName`, `notColumns`), `differences`,
+    `updates` and `softValues`, and, only with a `direction`, which decides them (which rows are deleted, and the target
+    side's values and collations), `deletes`, `inserts`, the look-alike counts, `uncheckedUpdates` and
+    `uncheckedDeletes`.
   - **Deadline and Cancel:** 120 s in `methodPolicies`, as the other result jobs. The dialog's Cancel cancels the request
     through the protocol's cancel, and the backend drops its chunks.
   - **Preview:** `maxLines?: number` (1–30) answers only the first lines, with `complete: false` when there are more,
@@ -1390,31 +1403,51 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - **The places it touches:** `RpcMethods`; a strict zod schema beside `objectSearchParamsSchema` in
     `src/shared/explorer/search.ts`, mapped in `validation.ts`, its new limits in `objectSearchLimits` and their C#
     mirror, which `tests/object-search.test.ts` compares; `methodPolicies` (explorer lane, 15 s as `explorer.search`,
-    `providers: ['sqlserver']`); a preload method; main's cancellable explorer requests (`cancellableRequests` in
-    `src/main/backend/renderer-requests.ts` and the method union in `src/main/index.ts`), since every explorer request
-    is registered by its `requestId` and cancelled through `explorerCancel`; and a `SqlService.DispatchAsync` case
-    handing it to `ObjectSearchService`, with its `MethodNames` entry, a `LaneOf` entry (a method `LaneOf` does not
-    name runs on the Metadata lane, whatever `methods.ts` says) and records in `Contracts.cs`.
+    `providers: ['sqlserver']`); a preload method; main's cancellable explorer requests, where only the method union in
+    `src/main/index.ts` gains it, since `cancellableRequests` (`src/main/backend/renderer-requests.ts`) already takes
+    every `explorer.` method, registered by its `requestId` and cancelled through `explorerCancel`; the fake backend
+    (`tests/fixtures/backend.mjs`, whose HELLO lists `backendMethods`), which answers it from a fixture for the smoke
+    runs; and a `SqlService.DispatchAsync` case handing it to `ObjectSearchService`, with its `MethodNames` entry, a
+    `LaneOf` entry (a method `LaneOf` does not name runs on the Metadata lane, whatever `methods.ts` says) and records
+    in `Contracts.cs`.
   - **Params:** `{ connectionId, requestId, text (the field's typed name, for suggestions, at most 800 characters: three
     bracketed 128-character parts with every ] doubled), table?: { database, schema, name } (the target as the renderer
-    resolved it, a two-part name in the query document's current database, each part 1–128 characters), columns (the
-    compared columns' names, at most `limits.page.maxColumns`, each 1–128 characters), limit (1–20) }`.
+    resolved it, a two-part name in the query document's current database, each part 1–128 characters), columns (every
+    pair's name in pair order, compared and ignored alike, since an INSERT names both: at most `limits.page.maxColumns`,
+    each 1–128 characters), ignored? (the indexes into `columns` of the ignored pairs, distinct, each below its length),
+    limit (1–20) }`.
   - **Answer:** `{ suggestions: { database, schema, name, holds }[], table?: { columns: { name, type, nullable,
-    identity, computed, generated, hasDefault }[], columnsCut? }, state }`. Suggestions are at most limit tables whose
-    name matches `text`, those holding every compared column first, then by `holds`, the renderer putting the query
-    document's current database first among equals, then by name, leaving out history tables (subtypes `history` and
-    `ledgerHistory`), since an INSERT into one fails (Msg 13559). `table` answers the sent `table` when the index holds
-    it, so two databases that both hold `dbo.Orders` are told apart, with at most 4,096 columns (`columnsCut` past
-    that). `state` is that database's index state from `Database()`: ready, building, skipped, absent, or partial with
-    `LookupGaps.ChildrenLeftOut` (a database whose index would not fit the memory budget, read again without its
-    columns). Unless it is ready and holds the columns, the dialog claims no column facts, ranks no suggestions by
-    `holds`, and warns as for a table the index lacks.
+    identity, computed, generated, hasDefault }[], columnsCut?, pairs: (number | null)[] }, state, held }`. `holds`
+    counts the compared names (those not in `ignored`) a table holds. `pairs` gives, for each sent name, the index of
+    the table's column it names, or null when the table lacks it, compared as `Objects()` compares names (the database's
+    case, and the dotted I of Turkish and Azeri collations), since a case-sensitive database's [ID] is not its [id] and
+    the renderer knows no collation; the dialog reads every fact for a pair through it (identity, computed, generated,
+    the type, and a column the table lacks). Suggestions are at most limit tables whose name holds the typed text's last
+    part, found as Search Objects' literal search finds a name (`SearchMatcher`, without case) by a scan of each held
+    read's tables, since `IndexLookup.Objects()` finds only exact names; a schema or database part typed must equal that
+    part, compared as `Objects()` compares, and empty text lists every table by rank. They are ranked with those holding
+    every compared column first, then by `holds`, the renderer putting the query document's current database first among
+    equals, then by name, leaving out history tables (subtypes `history` and `ledgerHistory`), since an INSERT into one
+    fails (Msg 13559). `table` answers the sent `table` when the index holds it, so two databases that both hold
+    `dbo.Orders` are told apart, with at most 4,096 columns (`columnsCut` past that). `state` is that database's state
+    from `Database()` (ready, partial, building, skipped or absent), and `held` says whether the index holds a read of
+    it with its columns (`LookupDatabase.Held` set and `LookupGaps.ChildrenLeftOut` clear), whatever `state` says: a
+    read without definitions (`objectExplorer.search.definitions` off), with a cut definition or without system objects
+    is partial and still holds every column, a rebuild running over an earlier read is building, and a failed read after
+    an earlier one is skipped, each with that earlier read still answering. The dialog keys every column fact on `held`,
+    and `state` only picks the sentence: unless `held`, it claims no column facts, ranks no suggestions by `holds`, and
+    says still indexing (building), skipped (skipped), indexed without columns (partial) or the table unknown (absent);
+    with `held` and a building or skipped `state`, the knows line adds that its facts are from the last index.
   - **Tests:** a new offline suite in Program.cs's `offlineSuites` over a built index: ranking by compared columns held,
     three-part suggestions across two databases with the same schema and the sent `table` choosing between them, a
     table's identity, computed, generated, NOT NULL and default flags, history tables left out, the 4,096-column cut, a
-    database read without its columns, no index, and `LaneOf` naming the method as Explorer; vitest for the schema's
-    bounds against `objectSearchLimits`, a request sent while one runs (the first cancelled through `explorerCancel`,
-    no `DUPLICATE_REQUEST`), and the dialog's index line from a fake answer.
+    database read without its columns, no index, `held` with `state` partial for a read without definitions, one with a
+    cut definition and one without system objects, `held` with `state` building for a rebuild running over a held read
+    and skipped for a failed read after one, a name typed as a fragment, with a schema part and with a database part,
+    `pairs` for a name differing only by case in a case-sensitive database and in a case-insensitive one, an ignored
+    name the table lacks (null, and not counted in `holds`), and `LaneOf` naming the method as Explorer; vitest for the
+    schema's bounds against `objectSearchLimits`, a request sent while one runs (the first cancelled through
+    `explorerCancel`, no `DUPLICATE_REQUEST`), and the dialog's index line from a fake answer.
 - **Renderer:**
   - The dialog is a `DialogWindow` of the new kind in `dialogWindowKinds` (`src/shared/popouts.ts`), which also widens
     the `dialogWindowName` pattern (today `options|about|connect`). `DialogWindow` takes the window to open over, the
@@ -1447,7 +1480,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - `columns` without a key pair, and Script with no statement ticked, each `INVALID_PARAMS`; an opening preview of a
       comparison keyed on a hierarchyid column, and one keyed on a repeated name, each answering its refusal, not
       `INVALID_PARAMS`;
-    - the header's left-out line with Result 1 closed: one-sided, computed, unticked and identity columns;
+    - the header's left-out line with Result 1 closed: one-sided, unticked and identity columns, and each of
+      `indexReasons`' four reasons; `indexReasons` with a repeated pair, a pair in `columns` or a fifth reason
+      `INVALID_PARAMS` in both;
     - `uncheckedDeletes` for a DELETE whose only ticked compared column is xml; neither in an answer without a
       direction; `uncheckedUpdates` alike in a preview and in Script (an UPDATE changing only an xml column, one
       changing only non-ASCII varchar under a SQL_ collation, and one with an ASCII value there, which is checked);
@@ -1524,10 +1559,12 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     direction changes, the not-connected state (no request, New Query Editor Window unavailable, the facts back on
     reconnect), Rebuild Search Index keeping the focus and saying the rebuild, the no-index and skipped sentences, the
     document's database first among equal suggestions, the locked SET IDENTITY_INSERT's description, a temporal table's
-    period columns locked as generated, a two-part target in a database beside another holding the same table, the
-    key-column form of the truncation and U+FFFD refusals, closing while generating opening nothing, Enter in Target
-    table with nothing highlighted, the window over a popped-out Results pane, a cancelled generation giving way to a
-    closed or refused state, and the Clipboard announcement.
+    period columns locked as generated, an ignored expression column the target lacks starting unticked with its reason
+    and warning once ticked again, a target rowversion column paired with a binary(8) column locked as not insertable,
+    the knows line from a held read while a rebuild runs and after a definitions-off read, a two-part target in a
+    database beside another holding the same table, the key-column form of the truncation and U+FFFD refusals, closing
+    while generating opening nothing, Enter in Target table with nothing highlighted, the window over a popped-out
+    Results pane, a cancelled generation giving way to a closed or refused state, and the Clipboard announcement.
   - Smoke: open the dialog window by role, script to a New Query Editor Window, and find `BEGIN TRANSACTION` in the
     focused editor. A frameless OS window can behave differently on Linux, so run it through `npm run test:smoke:wsl`
     before pushing.
