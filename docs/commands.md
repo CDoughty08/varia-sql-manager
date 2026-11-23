@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (394)
+## Commands (395)
 
 ### File
 
@@ -202,6 +202,7 @@ keys it uses are listed below.
 | Update Pivot | `output.updatePivot` | — | — | — | Always | Query Output context menu › Update Pivot |
 | Transpose Results | `output.transpose` | — | — | — | Always; checked when `resultsGridTransposed` | Query Output context menu › Transpose › Transposed; Results toolbar › More results tools › Transposed |
 | Load Result into Memory | `output.loadIntoMemory` | — | — | — | Always | Results toolbar › More results tools › Load into Memory |
+| Load Sample… | `output.loadSample` | — | — | — | Always | Results toolbar › More results tools › Load Sample… |
 | Transpose Selected Rows | `output.transposeSelectedRows` | — | — | — | Always | Query Output context menu › Transpose › Selected Rows |
 | Transpose Using Column as Headers | `output.transposeWithHeaders` | — | — | — | Always | Query Output context menu › Transpose › Using Column as Headers |
 | Choose Headers for Transposed Results… | `output.transposeChooseHeaders` | — | — | — | Always | Query Output context menu › Transpose › Choose Headers…; Results toolbar › More results tools › Choose Headers… |
@@ -1103,6 +1104,7 @@ Click the ⋯ button at the end of the results toolbar (More results tools), or 
 | `2_view` | **T**ransposed | `output.transpose` | Always |
 | `2_view` | Choose **H**eaders… | `output.transposeChooseHeaders` | `resultsGridTransposed` |
 | `2_view` | Load **i**nto Memory | `output.loadIntoMemory` | Always |
+| `2_view` | Load Sa**m**ple… | `output.loadSample` | Always |
 | `3_show` | Column Pro**f**ile | `output.toggleColumnProfile` | Always |
 | `3_show` | Profile Selected Columns **O**nly | `output.toggleProfileSelectedColumns` | Always |
 | `3_show` | Row Si**z**e | `output.toggleRowSize` | Always |

@@ -2278,6 +2278,10 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .server-file-picker .sub-dialog-body { flex: 1; min-height: 0; }
 .server-file-picker .object-dialog-message { margin: 0; }
 .bigquery-cost-prompt .sub-dialog-body { gap: var(--varia-space-2); }
+.load-sample-dialog { width: min(480px, calc(100vw - 40px)); }
+.load-sample-dialog .property-row { grid-template-columns: 96px minmax(0, 1fr); }
+.load-sample-rows { display: flex; align-items: center; gap: var(--varia-space-2); min-width: 0; color: var(--varia-dialog-descriptionForeground); }
+.load-sample-rows input { width: 120px; flex: none; }
 .bigquery-cost-sentence { margin: 0; }
 .bigquery-cost-prompt .link-button { padding: 0; border: 0; background: none; color: var(--varia-list-highlightForeground); font: inherit; text-decoration: underline; cursor: pointer; }
 @media (forced-colors: active) { .bigquery-cost-prompt .link-button { color: LinkText; } }

@@ -23,6 +23,8 @@ import { isHiddenColumn, visibleColumnCount } from '../grid/hidden-columns'
 import type { DiffUnit } from '../grid/diff-navigation'
 import { isRemoteHandle, isRemoteView, RemoteDeclined, remoteStop, remoteOrderable, remoteSelectionText, unorderableText, type RemoteViews } from './remote-views'
 import type { MemoryUsage } from './memory'
+import type { SampleMethod } from '../../../shared/bigquery/remote-view'
+import { sampleName } from './sample'
 
 export type RunStatus = 'running' | QueryStatus | 'lost' | 'closed'
 /**
@@ -42,8 +44,11 @@ export type EntryKey = string
 export interface ResultSetEntry {
   readonly key: EntryKey; readonly ordinal?: number; readonly number: number
   readonly descriptor: ResultDescriptor; readonly handle: ResultHandle; readonly capturedPlan?: true; readonly label?: string
+  /** A sample of a windowed BigQuery result (Load sample): a group of its own, its `label` its name everywhere it shows
+   *  ("Sample: 1,000 of 52,341,118 rows"), so what is built from it says it is a sample. */
+  readonly sample?: true
 }
-type Named = Pick<ResultSetEntry, 'label' | 'number'> & { readonly descriptor?: Pick<ResultDescriptor, 'name'> & Partial<Pick<ResultDescriptor, 'kind'>> }
+type Named = Pick<ResultSetEntry, 'label' | 'number' | 'sample'> & { readonly descriptor?: Pick<ResultDescriptor, 'name'> & Partial<Pick<ResultDescriptor, 'kind'>> }
 // One naming function for every results surface (docs/named-result-sets-scope.md, Where the name shows): an entry's name,
 // and apart from it its positional text, so a surface shows either or both. An unnamed result reads as it always has.
 /** An entry's positional text, "Result 4" by its number: every entry has one, named or not, and two results of one name
@@ -65,7 +70,12 @@ export const entryName = (entry: Pick<ResultSetEntry, 'label' | 'number'>): stri
  *  save jobs, the Column Profile): the query's name for it with its number ("Totals, Result 3"), so two of one name are
  *  told apart, else "Result N". Unlike
  *  `entryName` it never takes a Pivot's or a comparison's label, so those read as they did. */
-export const resultTitle = (entry: Named): string => { const name = queryName(entry); return name === undefined ? entryNumber(entry) : `${name}, ${entryNumber(entry)}` }
+export const resultTitle = (entry: Named): string => {
+  // A sample is named for what it is wherever an original result would be numbered, so its profile or copy says so.
+  if (entry.sample) return entryName(entry)
+  const name = queryName(entry)
+  return name === undefined ? entryNumber(entry) : `${name}, ${entryNumber(entry)}`
+}
 /** What a surface that names an original result by its title (its splitter, its plans, the Column Profile and its
  *  operation) calls any entry: an original result by `resultTitle`, a Pivot or a comparison by its own name ("Differences:
  *  Result 1 → Result 3"), never by the number a derived entry was given, which no one sees elsewhere. */
@@ -326,7 +336,7 @@ export interface TabResults {
   /** A view made only to show Messages lines written outside any execution (`addMessage`): no run summary is drawn. */
   readonly messagesOnly?: true
   /** Windowed BigQuery results loading into memory, by entry key, and whether Stop was asked. */
-  readonly loads?: ReadonlyMap<EntryKey, { readonly stopping: boolean }>
+  readonly loads?: ReadonlyMap<EntryKey, { readonly stopping: boolean; readonly kind?: AuxiliaryKind }>
 }
 /** One grid's view, outside React and never in a snapshot: it survives tab switches, Ctrl+R and unmounting. */
 export interface GridViewState {
@@ -453,7 +463,11 @@ interface Run {
   loads: ReadonlyMap<EntryKey, RunningLoad>
 }
 /** A Load into memory: its own query id (query.cancel stops it) and the subscription to its events. */
-interface RunningLoad { readonly queryId: string; readonly subscription: Disposable; readonly stopping: boolean }
+/** A query over a windowed result its grid shows running: Load into memory (no kind), Load sample or Re-run, which `abort`
+ *  stops (their RemoteViews query cancels itself). */
+interface RunningLoad { readonly queryId: string; readonly subscription?: Disposable; readonly stopping: boolean; readonly kind?: AuxiliaryKind; readonly abort?: AbortController }
+/** The queries over a windowed result besides Load into memory that its strip shows running, with Stop. */
+export type AuxiliaryKind = 'sample' | 'rerun'
 /** `handle` and `done`: a save's result, and when it ends (a rebuilt Pivot releases the old one only after its saves). */
 interface RunningJob { job: ResultJob; readonly tabId: string; timer?: unknown; handle?: ResultSetEntry['handle']; done?: Promise<void> }
 
@@ -468,6 +482,9 @@ const stillLoading = 'Save the results after this result set finishes loading.'
 const stillSorting = 'Save the results after they are sorted.'
 const remoteUnavailable = 'This result is windowed in BigQuery, and this window cannot query BigQuery. Load it into memory first.'
 const loadWhileRunning = 'Load the result into memory once its query has finished.'
+const sampleWhileRunning = 'Load a sample of the result once its query has finished.'
+const rerunWhileRunning = 'Run the result again once its query has finished.'
+const busyWindowed = 'This result is already loading or running again in BigQuery. Wait for it, or stop it first.'
 // A view built while rows still arrived whose rebuild from every row was cancelled: nothing builds it again by itself.
 const partialView = 'The grid is sorted or filtered over only the rows that had arrived. Sort or filter it again to include every row, then save.'
 const saveCancelled = 'Saving was cancelled. The file was not written.'
@@ -866,14 +883,196 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     return fitsFreeMemory(snapshot.projectedBytes, this.memory?.()) ? 'ready' : 'room'
   }
 
-  /** Stops a Load into memory (query.cancel with its own id): the result stays windowed, whole. */
+  /** Stops a Load into memory (query.cancel with its own id): the result stays windowed, whole. Stops a Load sample or a
+   *  Re-run the same way (their RemoteViews query cancels itself): the result stays as it was. */
   stopLoad(tabId: string, key: EntryKey): void {
     const run = this.runs.get(tabId), load = run?.loads.get(key)
-    if (!run || !load || load.stopping || !this.api.cancel) return
+    if (!run || !load || load.stopping || (!load.abort && !this.api.cancel)) return
     run.loads = new Map(run.loads).set(key, { ...load, stopping: true })
     this.schedule(tabId)
-    this.announce(tabId, 'Stopping the load: the result stays windowed in BigQuery.')
-    void this.api.cancel(load.queryId).catch(() => {})
+    this.announce(tabId, load.kind === 'sample' ? 'Stopping the sample.' : load.kind === 'rerun' ? 'Stopping the re-run: the result stays as it was.' : 'Stopping the load: the result stays windowed in BigQuery.')
+    if (load.abort) load.abort.abort(remoteStop)
+    else void this.api.cancel?.(load.queryId).catch(() => {})
+  }
+
+  /** Whether Load sample can start for this entry: a windowed BigQuery result of a finished run, with nothing loading or
+   *  running again over it. */
+  canLoadSample(tabId: string, key: EntryKey): boolean { return this.auxiliaryRefusal(tabId, key, 'sample') === undefined }
+
+  /** What Load sample's dialog needs of a result it can sample: its name, its rows (BigQuery's total), a row's projected size
+   *  in memory and the result memory free now. */
+  sampleSource(tabId: string, key: EntryKey): { readonly name: string; readonly resultId: number; readonly generation: number; readonly total: number; readonly projectedBytes?: number; readonly freeBytes?: number } | undefined {
+    const run = this.runs.get(tabId), set = run?.entries.get(key)
+    if (!run || !set || !this.canLoadSample(tabId, key)) return undefined
+    const snapshot = set.handle.getSnapshot(), memory = this.memory?.()
+    return {
+      name: distinctName(set, run.sets), resultId: set.descriptor.resultId, generation: set.descriptor.generation, total: snapshot.rowsTotal ?? snapshot.rowsAvailable, ...snapshot.projectedBytes === undefined ? {} : { projectedBytes: snapshot.projectedBytes },
+      ...memory && memory.globalBytes > 0 ? { freeBytes: Math.max(0, memory.globalBytes - memory.usedBytes) } : {}
+    }
+  }
+
+  /** Why a Load sample or Re-run cannot start for this entry ('' when there is nothing to say), or undefined when it can. */
+  private auxiliaryRefusal(tabId: string, key: EntryKey, kind: AuxiliaryKind): string | undefined {
+    const run = this.runs.get(tabId), set = run?.entries.get(key)
+    if (!run || !set || !this.remote || !this.api.remoteQuery || run.bare || this.disposed) return ''
+    const snapshot = set.handle.getSnapshot()
+    if (snapshot.state === 'lost' || snapshot.state === 'released') return snapshot.state === 'lost' ? unavailable : closedResults
+    if (snapshot.residence !== 'remote') return ''
+    if (run.status === 'running' || run.status === 'closed' || snapshot.state !== 'complete') return kind === 'sample' ? sampleWhileRunning : rerunWhileRunning
+    if (run.loads.has(key)) return busyWindowed
+    return undefined
+  }
+
+  /** Marks a Load sample or Re-run running over `key`, for its strip. */
+  private beginAuxiliary(tabId: string, run: Run, key: EntryKey, kind: AuxiliaryKind, abort: AbortController): void {
+    run.loads = new Map(run.loads).set(key, { queryId: '', stopping: false, kind, abort })
+    this.publishNow(tabId)
+  }
+
+  private endAuxiliary(tabId: string, run: Run, key: EntryKey, abort: AbortController): void {
+    if (run.loads.get(key)?.abort === abort) { const loads = new Map(run.loads); loads.delete(key); run.loads = loads }
+    if (this.runs.get(tabId) === run) this.schedule(tabId)
+  }
+
+  /**
+   * Load sample (results.remoteQuery `sample`, docs/bigquery.md › Load a sample): `rows` rows of a windowed BigQuery result
+   * of a finished run, its first ones (free) or a random sample (estimated and asked about first), read into a new result
+   * in memory. It stands after its source's group as a group of its own, named "Sample: 1,000 of 52,341,118 rows", where
+   * Pivot, Compare and Column Profile work. Its source's strip shows it running, with Stop; closing the source cancels it.
+   * Returns why it cannot start, or undefined (a failure is said in Messages).
+   */
+  async loadSample(tabId: string, key: EntryKey, rows: number, method: SampleMethod): Promise<string | undefined> {
+    const refused = this.auxiliaryRefusal(tabId, key, 'sample')
+    if (refused !== undefined) return refused || undefined
+    const run = this.runs.get(tabId)!, set = run.entries.get(key)!
+    const abort = new AbortController()
+    this.beginAuxiliary(tabId, run, key, 'sample', abort)
+    this.announce(tabId, method === 'first' ? 'Loading the first rows as a sample…' : 'Loading a random sample…')
+    let failure: string | undefined
+    try {
+      const descriptor = await this.remote!.sample(tabId, set.handle, rows, method, abort.signal)
+      if (this.runs.get(tabId) !== run || run.entries.get(key) !== set || this.disposed) { this.releaseDescriptor(descriptor); return undefined }
+      const snapshot = set.handle.getSnapshot()
+      const name = sampleName(descriptor.rowsStored, snapshot.rowsTotal ?? snapshot.rowsAvailable)
+      if (this.addSample(tabId, run, set, descriptor, name)) this.announce(tabId, `${name} loaded.`)
+    } catch (error) {
+      // A declined prompt or a Stop ran nothing worth an error (a Stop's lines are already in Messages).
+      if (!(error instanceof RemoteDeclined) && !abort.signal.aborted) failure = `Could not load a sample: ${error instanceof Error ? error.message : String(error)}`
+    } finally {
+      this.endAuxiliary(tabId, run, key, abort)
+    }
+    if (failure && this.runs.get(tabId) === run && run.entries.get(key) === set) {
+      this.addMessage(tabId, failure, 'error')
+      this.announce(tabId, failure)
+    }
+    return undefined
+  }
+
+  /**
+   * Re-run (results.remoteQuery `rerun`, docs/bigquery.md › Expiry): a windowed BigQuery result whose table expired runs its
+   * own statement again (a script child's alone), after its estimate and the cost prompts, and the new result takes its
+   * place: the same entry, number and name. Its strip shows it running, with Stop; closing the result cancels it. Returns
+   * why it cannot start, or undefined (a failure is said in Messages).
+   */
+  async rerun(tabId: string, key: EntryKey): Promise<string | undefined> {
+    const refused = this.auxiliaryRefusal(tabId, key, 'rerun')
+    if (refused !== undefined) return refused || undefined
+    const run = this.runs.get(tabId)!, set = run.entries.get(key)!
+    const abort = new AbortController()
+    this.beginAuxiliary(tabId, run, key, 'rerun', abort)
+    this.announce(tabId, 'Running the query again…')
+    let failure: string | undefined
+    try {
+      const descriptor = await this.remote!.rerun(tabId, set.handle, abort.signal)
+      if (this.runs.get(tabId) !== run || run.entries.get(key) !== set || this.disposed || run.status === 'running' || run.status === 'closed') { this.releaseDescriptor(descriptor); return undefined }
+      this.rerunInPlace(tabId, run, set, descriptor)
+      this.announce(tabId, `${run.sets.length > 1 ? distinctName(run.entries.get(key) ?? set, run.sets) : 'The result'} ran again.`)
+    } catch (error) {
+      if (!(error instanceof RemoteDeclined) && !abort.signal.aborted) failure = `Could not run the query again: ${error instanceof Error ? error.message : String(error)}`
+    } finally {
+      this.endAuxiliary(tabId, run, key, abort)
+    }
+    if (failure && this.runs.get(tabId) === run && run.entries.has(key)) {
+      this.addMessage(tabId, failure, 'error')
+      this.announce(tabId, failure)
+    }
+    return undefined
+  }
+
+  /** A result nothing will hold (its run or source went while it was made): released at once. */
+  private releaseDescriptor(descriptor: ResultDescriptor): void {
+    void this.client.release([{ generation: descriptor.generation, resultId: descriptor.resultId }]).catch(() => {})
+  }
+
+  /** Adds a sample after its source's group (its Table and Pivot), before the next group and the comparisons, as a Table of
+   *  a group of its own numbered after the run's highest, with the focus. Released, and false, when the run cannot take it. */
+  private addSample(tabId: string, run: Run, source: ResultSetEntry, descriptor: ResultDescriptor, label: string): boolean {
+    const key = setKey(descriptor)
+    if (run.setKeys.has(key)) return false
+    if (run.bare || run.status === 'running' || run.status === 'closed' || run.sets.length >= resultLimits.sets) { this.releaseDescriptor(descriptor); return false }
+    run.setKeys.add(key)
+    if (run.setsPublished) { run.sets = run.sets.slice(); run.setsPublished = false }
+    // Numbered once, for its life, as a derived entry is; its number is its group's too.
+    const number = ++run.numbered
+    const entry: ResultSetEntry = { key: this.mint(), ordinal: number, number, descriptor, handle: this.client.open(descriptor), label, sample: true }
+    const group = run.slots.get(source.key)?.group
+    let at = run.sets.indexOf(source) + 1
+    while (at > 0 && at < run.sets.length && group !== undefined && run.slots.get(run.sets[at].key)?.group === group && run.slots.get(run.sets[at].key)?.view === 'pivot') at++
+    if (at <= 0) at = run.sets.length
+    run.sets.splice(at, 0, entry)
+    run.entries.set(entry.key, entry)
+    run.slots.set(entry.key, { view: 'table', group: number, revision: 1, sources: [] })
+    run.shape = undefined
+    this.settle(run, descriptor)
+    run.emptied = false
+    run.view = 'results'
+    this.viewState(tabId).focused = entry.key
+    this.schedule(tabId)
+    return true
+  }
+
+  /**
+   * A rerun's result takes its source's place: the same entry key, number, ordinal, name and slot (its next revision). What
+   * named the old result's rows goes with it (its sort and filters, its views, its controller, a copy of it, its selection
+   * and scroll); column widths carry over by name. Published before the old result is released, after a Save of it in its
+   * file dialog ends.
+   */
+  private rerunInPlace(tabId: string, run: Run, old: ResultSetEntry, descriptor: ResultDescriptor): void {
+    const key = old.key, record = run.slots.get(key)
+    run.sorting.get(key)?.abort()
+    run.sorting.delete(key)
+    const sort = run.sorts.get(key)
+    // Views built in BigQuery are results of their own: closed with the old result.
+    for (const view of new Set([...run.held.get(key)?.views ?? [], ...sort?.view ? [sort.view] : []])) if (isRemoteView(view)) void view.close()
+    run.held.delete(key)
+    if (sort) {
+      for (const list of new Set([...sort.filters, ...sort.applied].flatMap(item => item.list ? [item.list] : []))) void list.close()
+      const sorts = new Map(run.sorts)
+      sorts.delete(key)
+      run.sorts = sorts
+    }
+    this.controllers.delete(key)
+    this.drawing.delete(key)
+    if (this.copying && this.runs.get(this.copying.tabId) === run && this.copying.job.entry === key) this.cancelRunning(this.copying)
+    run.setKeys.delete(setKey(old.descriptor))
+    if (run.settled.has(setKey(old.descriptor))) {
+      if (run.settledPublished) { run.settled = new Map(run.settled); run.settledPublished = false }
+      run.settled.delete(setKey(old.descriptor))
+    }
+    run.setKeys.add(setKey(descriptor))
+    const entry: ResultSetEntry = { ...old, descriptor, handle: this.client.open(descriptor) }
+    if (run.setsPublished) { run.sets = run.sets.slice(); run.setsPublished = false }
+    run.sets[run.sets.indexOf(old)] = entry
+    run.entries.set(key, entry)
+    if (record) run.slots.set(key, { ...record, revision: record.revision + 1 })
+    run.shape = undefined
+    const grids = this.views.get(tabId)?.grids, state = grids?.get(key)
+    if (grids && state) grids.set(key, carriedState(state, uniqueNames(old.descriptor.columns, descriptor.columns), descriptor.columns.length))
+    this.settle(run, descriptor)
+    run.emptied = false
+    this.publishNow(tabId)
+    this.releaseEntries(run, [old], [...this.saves.values()].flatMap(save => save.handle === old.handle && save.done ? [save.done] : []))
+    if (sort && (sort.keys.length > 0 || sort.filters.length > 0)) this.notify(tabId, `${distinctName(entry, run.sets)} ran again, so its sort and filters were removed.`)
   }
 
   /** A load's events: its residence switches (loading, or windowed again), and its set settling. Its messages come with
@@ -2320,7 +2519,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (!run) return
     run.subscription?.dispose()
     // A load ends with its result, which the backend stops on release: its events concern no one now.
-    for (const load of run.loads.values()) load.subscription.dispose()
+    // A sample or re-run is given up too (no reason: its lines are not this tab's now), and its result, if one comes, released.
+    for (const load of run.loads.values()) { load.subscription?.dispose(); load.abort?.abort() }
     this.drop(tabId, run, run.sets, run.planSets)
     this.runs.delete(tabId)
     this.operations.forget(tabId)
