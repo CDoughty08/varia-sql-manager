@@ -132,9 +132,10 @@ describe('the machine lock', () => {
     failHeartbeatRead = true
     rmSync(file)
     await vi.waitFor(() => expect(failedReads).toBeGreaterThanOrEqual(1), { timeout: 10_000, interval: 10 })
-    // Let several heartbeat ticks run after the transient read error clears: the owned file must stay on disk, never be unlinked as a leftover.
-    await new Promise(resolve => setTimeout(resolve, 60))
-    expect(existsSync(file)).toBe(true)
+    // A later heartbeat tick (which first goes through the leftovers) refreshes the same file: it was kept, not unlinked and re-created.
+    const recreated = statSync(file, { bigint: true })
+    await vi.waitFor(() => expect(statSync(file, { bigint: true }).mtimeNs).toBeGreaterThan(recreated.mtimeNs), { timeout: 10_000, interval: 10 })
+    expect(statSync(file, { bigint: true }).ino).toBe(recreated.ino)
     expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ pid: process.pid, label: 'heartbeat-wx' })
     expect(logs).toEqual([])
     lock.release()
@@ -333,7 +334,8 @@ describe('the machine lock', () => {
     const racingStat = (target: string, options: { bigint: true }) => {
       const result = statSync(target, options)
       // Simulate another waiter removing the old empty file and a new holder creating a fresh empty file before unlink.
-      if (target === file && !swapped && result.mtimeNs === BigInt(old.getTime()) * 1_000_000n) {
+      // Matches the aged file by age, not exact mtime: Linux and macOS do not round-trip a millisecond Date through utimes exactly.
+      if (target === file && !swapped && result.mtimeNs < BigInt(Date.now() - birthGraceMs) * 1_000_000n) {
         swapped = true
         return result
       }
