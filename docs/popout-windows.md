@@ -84,7 +84,7 @@ can move off the main window, onto another display.
   dialog window are the dialog's: `modalOpen` (`core/modal.ts`) holds the workbench's keys there and not in the main
   window. File › Connect or Tools › Options… while that dialog is open brings its window forward.
 - **Size and position.** Connect opens at 900 × 730 (at least 640 × 480) with a resizable connection-list rail
-  (`varia.connect.railWidth`), Options opens at 940 × 680 (at least 640 × 440), and both can be resized; the bounds they
+  (`varia.connect.railWidth`), Options opens at 960 × 700 (at least 640 × 440), and both can be resized; the bounds they
   were left at (`x`, `y`, `width`, `height`) are kept in `localStorage` (`varia.dialogWindow.<kind>`), a cache with no IPC,
   as the palette's history is. A stored size that would exceed the current screen falls back to the kind's default size,
   and an off-screen position falls back to centering on the main window. About has a fixed size and opens centred on

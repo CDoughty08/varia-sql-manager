@@ -17,6 +17,50 @@ function pageMatches(page: SettingPage, query: string, defs: readonly SettingDef
   const terms = [pagePath(page.id).map(node => node.title).join(' › '), page.description ?? '', ...page.provider ? providerTerms[page.provider] : [], ...page.layout ? layoutTerms[page.layout] ?? [] : []]
   return terms.some(text => has(text, query)) || defs.some(def => def.page === page.id && settingMatches(def, query))
 }
+export interface SearchPageResult {
+  readonly page: SettingPage
+  readonly path: string
+  readonly settings: readonly SettingDef[]
+  readonly matchTheme: boolean
+  readonly matchShortcuts: boolean
+  readonly matchedByPage: boolean
+  readonly count: number
+}
+export interface SearchAllResult {
+  readonly query: string
+  readonly pages: readonly SearchPageResult[]
+  readonly totalMatches: number
+  readonly shown: ReadonlySet<string>
+}
+/**
+ * Searches every visible Options page and returns each matching page together with its matched settings, theme/shortcuts
+ * match flags, match count, and ancestor page ids for the navigation tree. Undefined when the normalized query is empty.
+ */
+export function searchAllOptions(text: string, platform: Platform, defs: readonly SettingDef[] = settingDefs): SearchAllResult | undefined {
+  const query = normalizeQuery(text)
+  if (!query) return undefined
+  const visible = visibleSettings(platform, defs)
+  const pages: SearchPageResult[] = []
+  for (const page of settingPages) {
+    if (!page.layout) continue
+    const path = pagePath(page.id).map(node => node.title).join(' › ')
+    const matchedByPage = has(path, query) || has(page.description ?? '', query)
+    const matchTheme = page.provider === 'theme' && providerTerms.theme.some(term => has(term, query))
+    const matchShortcuts = page.layout === 'shortcuts' && (layoutTerms.shortcuts ?? []).some(term => has(term, query))
+    const pageDefs = visible.filter(def => def.page === page.id)
+    const matchedDefs = pageDefs.filter(def => settingMatches(def, query))
+    if (!matchedByPage && !matchTheme && !matchShortcuts && !matchedDefs.length) continue
+    const settings = matchedDefs.length ? matchedDefs : matchedByPage ? pageDefs : []
+    const count = matchedDefs.length + (matchTheme ? 1 : 0) + (matchShortcuts ? 1 : 0) || (matchedByPage ? Math.max(1, pageDefs.length) : 0)
+    pages.push({ page, path, settings, matchTheme, matchShortcuts, matchedByPage, count })
+  }
+  return {
+    query,
+    pages,
+    totalMatches: pages.reduce((sum, item) => sum + item.count, 0),
+    shown: new Set(pages.flatMap(item => pagePath(item.page.id).map(node => node.id)))
+  }
+}
 /**
  * The pages a query finds (their titles and paths, their settings' labels, descriptions and keywords, and their own
  * rows), with their ancestors so the tree can show them; undefined for an empty query, which filters nothing. Settings

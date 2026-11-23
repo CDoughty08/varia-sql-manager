@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom'
 import { changedConnectionDetails, connectionDetailLabels, connectionDetailsConfirmation as copy, type ConnectionDetails } from '../../shared/connection-targets'
 import { focusToReturn, returnFocusTo } from './core/focus'
 import { trapFocus } from './trap-focus'
+import DialogFooter from './kit/DialogFooter'
 
 interface Props {
   readonly current: ConnectionDetails
@@ -31,6 +32,10 @@ export default function ConnectionDetailsDialog({ current, selected, server, dat
       <p id="connection-details-effects" className="field-note">Name, color and environment appear on this Explorer connection and its attached query badges. Startup reconnect controls future automatic reconnect; an explicit Disconnect stays respected. Your SQL sessions stay open.</p>
       {notice && <p className="field-note" role="status">{notice}</p>}
     </div>
-    <div className="connection-footer"><span /><button className="primary" onClick={() => choose('selected')}>{copy.useSelected}</button><button onClick={() => choose('current')}>{copy.keepCurrent}</button><button onClick={() => choose('cancel')}>{copy.cancel}</button></div>
+    <DialogFooter wrap trailing={<>
+      <button className="primary" onClick={() => choose('selected')}>{copy.useSelected}</button>
+      <button onClick={() => choose('current')}>{copy.keepCurrent}</button>
+      <button onClick={() => choose('cancel')}>{copy.cancel}</button>
+    </>} />
   </div></div>
 }

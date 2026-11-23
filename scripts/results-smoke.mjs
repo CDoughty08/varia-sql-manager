@@ -765,7 +765,7 @@ try {
   // Options opens in a dialog window of its own, on the setting.
   const optionsWindow = await dialogWindow(application, 'Options')
   const optionsDialog = optionsWindow.getByRole('dialog', { name: 'Options', exact: true })
-  await expect(optionsDialog.getByRole('checkbox', { name: 'Discard results after execution', exact: true })).toBeFocused()
+  await expect(optionsDialog.getByRole('switch', { name: 'Discard results after execution', exact: true })).toBeFocused()
   await pressToClose(optionsWindow, 'Escape')
   await dialogClosed(optionsWindow, 'Options')
   await outputEmpty(page).getByRole('button', { name: 'Turn off Discard results', exact: true }).click()
