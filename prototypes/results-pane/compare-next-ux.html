@@ -630,7 +630,7 @@ function scriptText(m, target, scIn, colsIn) {
     if (identity) out.push(`SET IDENTITY_INSERT ${tgt} OFF;`)
   }
   if (sc.tx) out.push('COMMIT TRANSACTION;')
-  if (guarded) out.push('END TRY', 'BEGIN CATCH', 'IF @@TRANCOUNT > 0 ROLLBACK;', `SET IDENTITY_INSERT ${tgt} OFF;`, 'THROW;', 'END CATCH')
+  if (guarded) out.push('END TRY', 'BEGIN CATCH', 'IF @@TRANCOUNT > 0 ROLLBACK;', `BEGIN TRY SET IDENTITY_INSERT ${tgt} OFF; END TRY BEGIN CATCH END CATCH;`, 'THROW;', 'END CATCH')
   return out
 }
 function sceneScript() {

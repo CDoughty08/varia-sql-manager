@@ -853,9 +853,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
         Search Index** (`explorer.rebuildIndex` for the comparison's connection). Pressed, it stays in place,
         unavailable (`aria-disabled`, so it keeps the focus) while the build runs, the live region says "Rebuilding the
         search index for SQLDEV01…", and when the build finishes it says the line that follows;
-      - the connection has no index (Index on connect off): "SQLDEV01 has no search index yet, so its tables are not
-        suggested, the target's columns cannot be checked and SET IDENTITY_INSERT is not offered.", with **Build index**,
-        as Search Objects offers, which behaves as Rebuild Search Index does;
+      - the connection has no index (Index on connect off; the renderer's `ObjectSearchService` status, `state: 'none'`
+        in `src/shared/explorer/search.ts`, since without an index `explorer.scriptTarget` answers no suggestions and no
+        `state`, not an error, which would show the failed-lookup sentence): "SQLDEV01 has no search index yet, so its
+        tables are not suggested, the target's columns cannot be checked and SET IDENTITY_INSERT is not offered.", with
+        **Build index**, as Search Objects offers, which behaves as Rebuild Search Index does;
       - the database was skipped (the login cannot open it, say) and no earlier read of it is held: "Search Objects
         skipped Sales_Test, so the target's columns cannot be checked and SET IDENTITY_INSERT is not offered.", with no
         button, since a rebuild would skip it again;
@@ -1073,22 +1075,23 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     reads as if the target already matched. Either way Script is unavailable.
     - The preview asks the backend for its 30 lines (`results.scriptDiff` with `maxLines`) on opening, with or without a
       target and direction, and then 300 ms after the form last changed, cancelling the request before. Each answer
-      brings the Rows options' counts. It refuses only what those lines need (a truncated or U+FFFD value among them, or
-      a refusal known on opening); the rest are found on Script. A preview line over 2,000 characters (a long value's
-      literal) ends in "…", the preview's only cut; the script holds it whole. While it waits, the preview reads "--
-      Choose the target table and a direction to see the script." ("-- Choose a direction to see the script.", "--
-      Choose the target table to see the script." while only the target is missing, "-- Fix the target table's name to
-      see the script." while its name cannot be used), and after a refused answer "-- No preview: the reason is beside
-      Script." A request that fails instead (its deadline, or `TOO_LARGE` when the count's working memory does not fit)
-      is not a refusal. On opening, its sentence replaces "Reading the comparison…", with **Try again**, which takes the
-      focus, is described by the sentence, which the live region says, and sends the request again. Pressed, on opening
-      or later, Try again stays in place, unavailable (`aria-disabled`, so it keeps the focus) while the request runs,
-      and the live region says "Reading the comparison…" and then what the answer brings, the failure sentence again
-      when it fails again. Later, the preview reads "-- No preview: " and the sentence, with Try again under it; the
-      counts show nothing until an answer brings them, the summary reads "The preview could not be read." unless a
-      reason in the summary's order (Keyboard and screen readers) holds, and Script stays available only while none
-      does, since its own run says any failure. A backend loss is not such a failure: it releases the comparison, so the
-      closed state shows instead, on opening and later.
+      brings the Rows options' counts. It refuses only what those lines need (a truncated or U+FFFD value among them, a
+      key its collation cannot write exactly, `keyCollation`, or a refusal known on opening); the rest are found on
+      Script. A preview line over 2,000 characters (a long value's literal) ends in "…", the preview's only cut; the
+      script holds it whole. While it waits, the preview reads "-- Choose the target table and a direction to see the
+      script." ("-- Choose a direction to see the script.", "-- Choose the target table to see the script." while only
+      the target is missing, "-- Fix the target table's name to see the script." while its name cannot be used), and
+      after a refused answer "-- No preview: the reason is beside Script." A request that fails instead (its deadline,
+      or `TOO_LARGE` when the count's working memory does not fit) is not a refusal. On opening, its sentence replaces
+      "Reading the comparison…", with **Try again**, which takes the focus, is described by the sentence, which the live
+      region says, and sends the request again. Pressed, on opening or later, Try again stays in place, unavailable
+      (`aria-disabled`, so it keeps the focus) while the request runs, and the live region says "Reading the
+      comparison…" and then what the answer brings, the failure sentence again when it fails again. Later, the preview
+      reads "-- No preview: " and the sentence, with Try again under it; the counts show nothing until an answer brings
+      them, the summary reads "The preview could not be read." unless a reason in the summary's order (Keyboard and
+      screen readers) holds, and Script stays available only while none does, since its own run says any failure. A
+      backend loss is not such a failure: it releases the comparison, so the closed state shows instead, on opening and
+      later.
     - The counts and the summary are entries by kind in the chosen rows. All differences reads the diff's own counts.
       Rows in the grid and Selected rows are counted by the backend in a pass over the chosen rows, after one that marks
       them (so a look-alike's partner can be found among them), reserving the bit per stored row as Copy as Diff does;
@@ -1130,11 +1133,13 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       escape is never split.
   - `COMMIT TRANSACTION;`.
   - When the script turns SET IDENTITY_INSERT on, its body after `SET XACT_ABORT ON;` runs in `BEGIN TRY … END TRY BEGIN
-    CATCH IF @@TRANCOUNT > 0 ROLLBACK; SET IDENTITY_INSERT <target> OFF; THROW; END CATCH`: a rollback does not undo a
-    SET option, so a failed check or key violation would otherwise leave IDENTITY_INSERT on in the query window's
-    session, failing its next ordinary INSERT into the table and any other table's `SET IDENTITY_INSERT … ON`. Cancel or
-    a query timeout in the query window is an attention, which skips CATCH: XACT_ABORT still rolls the transaction back,
-    but IDENTITY_INSERT stays on, so the header adds "-- If you stop it while it runs, run SET IDENTITY_INSERT
+    CATCH IF @@TRANCOUNT > 0 ROLLBACK; BEGIN TRY SET IDENTITY_INSERT <target> OFF; END TRY BEGIN CATCH END CATCH; THROW;
+    END CATCH`: the OFF has a TRY of its own, so a login without ALTER, whose check THROWs before the ON is reached,
+    still sees the check's message, which THROW re-raises once the inner CATCH ends. A rollback does not undo a SET
+    option, so a failed check or key violation would otherwise leave IDENTITY_INSERT on in the query window's session,
+    failing its next ordinary INSERT into the table and any other table's `SET IDENTITY_INSERT … ON`. Cancel or a query
+    timeout in the query window is an attention, which skips CATCH: XACT_ABORT still rolls the transaction back, but
+    IDENTITY_INSERT stays on, so the header adds "-- If you stop it while it runs, run SET IDENTITY_INSERT
     [Sales_Test].[dbo].[Orders] OFF; in the same window." (Msg 545 otherwise).
   - The New Query Editor Window opens on the comparison's connection, as Script As does, and does not run.
 - **Generating:** the footer shows "Writing statements…" with progress in place of the summary, and the form is
@@ -1363,8 +1368,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     it wraps the INSERTs in `SET IDENTITY_INSERT`, and writes that, its TRY/CATCH body and the header's stop line only
     when the script holds at least one INSERT, since SET IDENTITY_INSERT needs ALTER on the table and an UPDATE-only
     script must not fail for a login that has only UPDATE; with it off it leaves the identity column out of the INSERTs,
-    and refuses (`INVALID_PARAMS`) when that column is a key; `identityInsert` on without `identity` is `INVALID_PARAMS`
-    in both zod and C#. `indexReasons?: { pair, reason: 'computed' | 'generated' | 'notInsertable' | 'notInTarget' }[]`
+    and refuses (`INVALID_PARAMS`) when that column is a key and the script holds an INSERT. While the form does not
+    show the option (INSERT unticked or without rows), the renderer sends `identityInsert` on, its starting value,
+    whenever it sends `identity`, so an UPDATE-only script on an identity-keyed table is never refused and a stale count
+    never drops the identity column from INSERTs unseen; `identityInsert` on without `identity` is `INVALID_PARAMS` in
+    both zod and C#. `indexReasons?: { pair, reason: 'computed' | 'generated' | 'notInsertable' | 'notInTarget' }[]`
     holds the pairs left out for a reason only the index knows (a computed or GENERATED ALWAYS column of the target, a
     target column of rowversion or timestamp, a column the target lacks), with distinct pairs, at most
     `limits.page.maxColumns`, each below the pair count and none in `columns`, checked in zod and C#, so the header's
@@ -1377,9 +1385,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     types, sql_variant, vector) follow from the recorded types. Script (no `maxLines`) requires `target` and `direction`
     (`INVALID_PARAMS` in both); a preview may leave either out, as the dialog's request on opening does before the form
     has them. Its answer has empty `text` and carries any of the four refusals known on opening (`asShown`, `keyType`,
-    `keyName`, `notColumns`), `differences`, `updates` and `softValues`, and, only with a `direction`, which decides
-    them (which rows are deleted, and the target side's values and collations), `deletes`, `inserts`, the look-alike
-    counts, `uncheckedUpdates` and `uncheckedDeletes`.
+    `keyName`, `notColumns`), `differences`, `updates`, `softValues`, `softValuesCut` and `selectedKeys` (Selected rows
+    and the Exact text line need them on opening), and, only with a `direction`, which decides them (which rows are
+    deleted, and the target side's values and collations), `deletes`, `inserts`, the look-alike counts,
+    `uncheckedUpdates` and `uncheckedDeletes`.
   - **Deadline and Cancel:** 120 s in `methodPolicies`, as the other result jobs. The dialog's Cancel cancels the request
     through the protocol's cancel, and the backend drops its chunks.
   - **Preview:** `maxLines?: number` (1–30) answers only the first lines, with `complete: false` when there are more,
@@ -1491,32 +1500,34 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     }`.
   - **Answer:** `{ suggestions: { database, schema, name, holds? }[], table?: { columns: { name, type, nullable,
     identity, computed, generated, hasDefault }[], columnsCut?, pairs: (number | null)[] }, state?, held? }`. `holds`
-    counts the compared names (those not in `ignored`, and not empty) a table holds, and only a suggestion from a read
-    with its columns has it; `state` and `held` describe the database of the sent `table` and come only with one, since
-    the first time's opening request and a suggestion-only request send none. `pairs` gives, for each sent name, the
-    index of the table's column it names, or null when the table lacks it, compared as `Objects()` compares names (the
-    database's case, and the dotted I of Turkish and Azeri collations), since a case-sensitive database's [ID] is not
-    its [id] and the renderer knows no collation; the dialog reads every fact for a pair through it (identity, computed,
-    generated, the type, and a column the table lacks). Suggestions are at most limit tables whose name holds the typed
-    text's last part, found as Search Objects' literal search finds a name (`SearchMatcher`, without case) by a scan of
-    each held read's tables, since `IndexLookup.Objects()` finds only exact names; a schema or database part typed must
-    equal that part, compared as `Objects()` compares, and empty text lists every table by rank. They are ranked with
-    those holding every compared column first, then by `holds`, those without `holds` last, the renderer putting the
-    query document's current database first among equals, then by name, leaving out history tables (subtypes `history`
-    and `ledgerHistory`), since an INSERT into one fails (Msg 13559), and dropped ledger tables (`droppedLedger`), which
-    refuse every change. An append-only ledger table, which refuses UPDATE and DELETE, is kept, since the index does not
-    record that kind; such a script fails and rolls back. `table` answers the sent `table` when the index holds it, so
-    two databases that both hold `dbo.Orders` are told apart, with at most 4,096 columns (`columnsCut` past that).
-    `state` is that database's state from `Database()` (ready, partial, building, skipped or absent), and `held` says
-    whether the index holds a read of it with its columns (`LookupDatabase.Held` set, `LookupGaps.ChildrenLeftOut` clear
-    and the held read not `FailedPart`, since a read that failed part way, kept when nothing was held before, can stop
-    before its columns), whatever `state` says: a read without definitions (`objectExplorer.search.definitions` off),
-    with a cut definition or without system objects is partial and still holds every column, a rebuild running over an
-    earlier read is building, and a failed read after an earlier one is skipped, each with that earlier read still
-    answering. The dialog keys every column fact on `held`, and `state` only picks the sentence: unless `held`, it
-    claims no column facts and says still indexing (building), skipped (skipped), indexed without columns (partial) or
-    the table unknown (absent); with `held` and a building or skipped `state`, the knows line adds that its facts are
-    from the last index.
+    counts the compared names (those not in `ignored`, and not empty) a table holds, counted in one pass over each
+    read's column entries by parent, not through `Columns()` per table, whose fallback when `Lookup()` is refused or
+    still being built (`TableLookup.ScanChildren`) would scan the whole read once per table, and only a suggestion from
+    a read with its columns has it; `state` and `held` describe the database of the sent `table` and come only with one,
+    since the first time's opening request and a suggestion-only request send none. `pairs` gives, for each sent name,
+    the index of the table's column it names, or null when the table lacks it, compared as `Objects()` compares names
+    (the database's case, and the dotted I of Turkish and Azeri collations), since a case-sensitive database's [ID] is
+    not its [id] and the renderer knows no collation; the dialog reads every fact for a pair through it (identity,
+    computed, generated, the type, and a column the table lacks). Suggestions are at most limit tables whose name holds
+    the typed text's last part, found as Search Objects' literal search finds a name (`SearchMatcher`, without case) by
+    a scan of each held read's tables, since `IndexLookup.Objects()` finds only exact names; a schema or database part
+    typed must equal that part, compared as `Objects()` compares, and empty text lists every table by rank. They are
+    ranked with those holding every compared column first, then by `holds`, those without `holds` last, the renderer
+    putting the query document's current database first among equals, then by name, leaving out history tables (subtypes
+    `history` and `ledgerHistory`), since an INSERT into one fails (Msg 13559), and dropped ledger tables
+    (`droppedLedger`), which refuse every change. An append-only ledger table, which refuses UPDATE and DELETE, is kept,
+    since the index does not record that kind; such a script fails and rolls back. `table` answers the sent `table` when
+    the index holds it, so two databases that both hold `dbo.Orders` are told apart, with at most 4,096 columns
+    (`columnsCut` past that). `state` is that database's state from `Database()` (ready, partial, building, skipped or
+    absent), and `held` says whether the index holds a read of it with its columns (`LookupDatabase.Held` set,
+    `LookupGaps.ChildrenLeftOut` clear and the held read not `FailedPart`, since a read that failed part way, kept when
+    nothing was held before, can stop before its columns), whatever `state` says: a read without definitions
+    (`objectExplorer.search.definitions` off), with a cut definition or without system objects is partial and still
+    holds every column, a rebuild running over an earlier read is building, and a failed read after an earlier one is
+    skipped, each with that earlier read still answering. The dialog keys every column fact on `held`, and `state` only
+    picks the sentence: unless `held`, it claims no column facts and says still indexing (building), skipped (skipped),
+    indexed without columns (partial) or the table unknown (absent); with `held` and a building or skipped `state`, the
+    knows line adds that its facts are from the last index.
   - **Tests:** a new offline suite in Program.cs's `offlineSuites` over a built index: ranking by compared columns held,
     three-part suggestions across two databases with the same schema and the sent `table` choosing between them, a
     table's identity, computed, generated, NOT NULL and default flags, history and dropped ledger tables left out, the
@@ -1548,7 +1559,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
 - **Tests:**
   - `DiffScriptChecks` goldens, a new offline suite in Program.cs's `offlineSuites`:
     - an UPDATE-only script with an identity key and `identityInsert` on, and one whose chosen rows have no inserts,
-      each with no SET IDENTITY_INSERT, TRY/CATCH body or stop line;
+      each with no SET IDENTITY_INSERT, TRY/CATCH body or stop line; an identity key with INSERT unticked and
+      `identityInsert` off accepted, with no SET IDENTITY_INSERT, and refused once INSERT is ticked with rows;
     - every SQL Server type in `sortKind`'s table, plus uniqueidentifier, with sql_variant, vector and CLR types
       refused;
     - an int key paired with a varchar key holding `1) SELECT 1; --`, both directions, refused as a key pair of
@@ -1574,8 +1586,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       past three;
     - an empty grid: `rows` with no ranges answers 0 for Selected rows and Rows in the grid, and the diff's counts for
       All differences, never `INVALID_PARAMS`;
-    - a preview with no target or direction: empty `text`, an opening refusal, `differences` for all three options,
-      `updates` and no delete, insert or look-alike counts; Script without either `INVALID_PARAMS`;
+    - a preview with no target or direction: empty `text`, an opening refusal, `selectedKeys`, `softValuesCut`,
+      `differences` for all three options, `updates` and no delete, insert or look-alike counts; Script without either
+      `INVALID_PARAMS`;
     - quoting, NULL keys, composite keys;
     - both directions, statement order, the row checks and their cut key text;
     - Two rows filtered by an old value, so only − halves are in the grid: the counts, the summary and the script agree;
@@ -1657,23 +1670,24 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     a two-part name resolved to a disconnected document's kept database, Script's destination sentence while
     disconnected, a connection lost while generating, the focus after Rebuild Search Index, a later Try again and a
     footer refusal's button go away, Enter and Escape in the columns' search field (Enter with no match doing nothing),
-    Script pressed inside the 300 ms wait before a lookup saying "Checking the target table…", Script waiting after Try
-    again, a reconnect and a finished build, an edit while disconnected leaving Script to the destination's rule, the
-    other-server warning winning over the moved line when both hold, the moved line for another connection to the same
-    server, SET IDENTITY_INSERT hidden while INSERT is unticked or has no rows, the not-connected warning said when the
-    connection drops and said again on activation, the preview's Try again while its request runs, the field rewritten
-    in three parts when the document's database or connection changes, the connection lines (now on another server, no
-    connection now) winning over the three-part line, the draft recording the document's connection, an ignored column
-    the target lacks left out of the ignored line, the failed lookup's Try again while it runs and failing again, a
-    disconnect while a lookup is pending showing the not-connected state, the focus staying on Cancel when a refusal
-    that replaced the form clears, a lookup held while the script is written, the no-connection sentence, the three-part
-    line for another database, the opening request carrying the draft's target with Script checking until it answers, a
-    failed lookup's Try again, the summary's order with a failed preview leaving Script unavailable while a reason
-    holds, the not-connected state after a connection lost while generating, the focus staying on Script when a footer
-    refusal clears and falling back to Target table, a two-part target in a database beside another holding the same
-    table, the key-column form of the truncation and U+FFFD refusals, closing while generating opening nothing, Enter in
-    Target table with nothing highlighted, the window over a popped-out Results pane, a cancelled generation giving way
-    to a closed or refused state, and the Clipboard announcement.
+    Script pressed inside the 300 ms wait before a lookup saying "Checking the target table…", the request sent while
+    SET IDENTITY_INSERT is hidden carrying `identityInsert` on, Script waiting after Try again, a reconnect and a
+    finished build, an edit while disconnected leaving Script to the destination's rule, the other-server warning
+    winning over the moved line when both hold, the moved line for another connection to the same server, SET
+    IDENTITY_INSERT hidden while INSERT is unticked or has no rows, the not-connected warning said when the connection
+    drops and said again on activation, the preview's Try again while its request runs, the field rewritten in three
+    parts when the document's database or connection changes, the connection lines (now on another server, no connection
+    now) winning over the three-part line, the draft recording the document's connection, an ignored column the target
+    lacks left out of the ignored line, the failed lookup's Try again while it runs and failing again, a disconnect
+    while a lookup is pending showing the not-connected state, the focus staying on Cancel when a refusal that replaced
+    the form clears, a lookup held while the script is written, the no-connection sentence, the three-part line for
+    another database, the opening request carrying the draft's target with Script checking until it answers, a failed
+    lookup's Try again, the summary's order with a failed preview leaving Script unavailable while a reason holds, the
+    not-connected state after a connection lost while generating, the focus staying on Script when a footer refusal
+    clears and falling back to Target table, a two-part target in a database beside another holding the same table, the
+    key-column form of the truncation and U+FFFD refusals, closing while generating opening nothing, Enter in Target
+    table with nothing highlighted, the window over a popped-out Results pane, a cancelled generation giving way to a
+    closed or refused state, and the Clipboard announcement.
   - Smoke: open the dialog window by role, script to a New Query Editor Window, and find `BEGIN TRANSACTION` in the
     focused editor. A frameless OS window can behave differently on Linux, so run it through `npm run test:smoke:wsl`
     before pushing.
@@ -1973,7 +1987,7 @@ In flight as of 2026-11-22. After each merges, open comparison branches merge ma
   - New commands and keys are engine-neutral except C4 (Q4).
 - **Connect in an OS window** has merged: `DialogWindow`, `popouts.ts` and `popout-windows.ts` hold its `connect` kind
   and `dialogWindowBounds`, which C4's kind builds on.
-- **SQL Server Agent** (docs/agent-plan.md, 0.11.0; AG-6b, AG-6c and AG-7 have merged, and its later lanes are in
+- **SQL Server Agent** (docs/agent-plan.md, 0.11.0; AG-6b, AG-6c, AG-7 and AG-8b have merged, and its later lanes are in
   flight) does not touch the results pipeline, but shares files with the comparison lanes. Both sides only append to
   them:
   - menus and keys: the commands catalogue, `menus.ts`, `tests/command-catalog.test.ts`, `context-keys.ts` and
