@@ -1,6 +1,7 @@
 import { useState, type KeyboardEvent } from 'react'
 import { useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
+import DialogFooter from '../kit/DialogFooter'
 import { trapFocus } from '../trap-focus'
 import { maxLineDigits, parseLineNumber, type GoToLineRequest } from './go-to-line'
 
@@ -45,9 +46,9 @@ export default function GoToLineDialog({ request }: { readonly request: GoToLine
         onChange={event => setText(event.target.value)} />
       {line === undefined && <p className="field-note" id="go-to-line-hint">{`Enter a number from 1 to ${request.lineCount}.`}</p>}
     </div>
-    <div className="connection-footer">
-      <span />
-      <button className="primary" type="submit" disabled={line === undefined}>OK</button><button type="button" onClick={close}>Cancel</button>
-    </div>
+    <DialogFooter trailing={<>
+      <button className="primary" type="submit" disabled={line === undefined}>OK</button>
+      <button type="button" onClick={close}>Cancel</button>
+    </>} />
   </form></div>
 }

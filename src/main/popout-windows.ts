@@ -203,6 +203,15 @@ export class PopoutWindows<W extends PopoutWindow<W>> {
   }
   /** The focused popout, if one is focused, with its own record of the user's input. */
   focused(): { window: W; activation: UserActivation } | undefined { return [...this.windows.values()].find(item => !item.window.isDestroyed() && item.window.isFocused()) }
+  /** The popout that most recently received trusted user input within the activation window, if any. */
+  recent(): { window: W; activation: UserActivation } | undefined {
+    let best: { window: W; activation: UserActivation } | undefined
+    for (const item of this.windows.values()) {
+      if (item.window.isDestroyed() || !item.activation.recent()) continue
+      if (!best || item.activation.sequence > best.activation.sequence) best = item
+    }
+    return best
+  }
   /**
    * Brings the popout the page opened as `name` to the top, restoring it if minimized, without activating it: keyboard focus
    * stays where the user is (Search Objects' Reveal, from its hits, into a popped-out Object Explorer). False when there is none.

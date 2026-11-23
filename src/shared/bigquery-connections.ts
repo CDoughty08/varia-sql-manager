@@ -43,9 +43,9 @@ export interface BigQueryConnectionProfile {
 export interface BigQueryLibraryView { readonly profiles: readonly BigQueryConnectionProfile[] }
 
 /** Save, a favourite star or a connect's history entry for a BigQuery connection. */
-export interface BigQueryProfileInput { id?: string; options: BigQueryConnectionOptions; favorite?: boolean; saved?: boolean; autoReconnect?: 'inherit' | 'on' | 'off' }
+export interface BigQueryProfileInput { id?: string; options: BigQueryConnectionOptions; favorite?: boolean; saved?: boolean; lastConnected?: string; autoReconnect?: 'inherit' | 'on' | 'off' }
 export const bigQueryProfileInputSchema = z.object({
-  id: z.uuid().optional(), options: savedOptionsSchema, favorite: z.boolean().optional(), saved: z.boolean().optional(), autoReconnect: connectionAutoReconnectSchema.optional()
+  id: z.uuid().optional(), options: savedOptionsSchema, favorite: z.boolean().optional(), saved: z.boolean().optional(), lastConnected: z.iso.datetime().optional(), autoReconnect: connectionAutoReconnectSchema.optional()
 }).strict()
 export const bigQueryEnvironmentInputSchema = z.object({ options: savedOptionsSchema, environment: environmentSchema.optional() }).strict()
 /** "Don't ask again for this connection" (docs/bigquery.md, Cost): the entry's cost-prompt choice, and nothing else, changes. */

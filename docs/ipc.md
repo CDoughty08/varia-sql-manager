@@ -298,6 +298,7 @@ noted where it matters.
 | `agent.profile` | invoke | unary: one login's SQL Server Agent facts ([SQL Server Agent](sql-server-agent.md)); SQL Server only | explorer, on its own slot per connection (never behind the tree's paging) | 15 s, budget 10 s from when it has the slot (`agentLimits.profileMs`). Main checks the answer (`agentProfileResultSchema`) |
 | `language.parse` | invoke (the job step editor's Parse) | unary | metadata | 15 s; ScriptDom's parser only, no connection, nothing runs. Takes `{ text }` of at most `parseChars`; answers `{ errors: [{ line, column, number, message }], truncated }` with at most `parseErrors` errors ([SQL Server Agent](sql-server-agent.md)) |
 | `agent.historyMessage` | invoke | unary: one job history row's whole message for the Log File Viewer ([SQL Server Agent](sql-server-agent.md)); SQL Server only | metadata (the actions path, read-only) | 45 s, budget 40 s (the describe budget). The answer's message is at most `historyMessageChars`; a row deleted since is `NOT_FOUND` |
+| `agent.counterValues` | invoke | unary: one performance counter's current value per instance for the alert document ([SQL Server Agent](sql-server-agent.md)); SQL Server only | metadata (the actions path, read-only) | 45 s, budget 40 s (the describe budget). At most `counterInstances` values, more set `truncated`; without VIEW SERVER STATE `PERMISSION_DENIED` |
 | `entra.cache.clear` | main only (`varia:entra-cache-clear`, after its confirmation) | unary | control | 10 s. Takes `{}` (unknown members refused); answers `{ cleared: true }` |
 | `results.setMemoryLimit` | main only (`ResultMemoryLimit`, `src/main/backend/result-memory.ts`) | unary | control | 10 s (note 3 below) |
 | `debug.results.synthesize` | `__variaTest` and tests only | unary | metadata | 120 s; only with `VARIA_BACKEND_TEST_HOOKS=1` |
@@ -1206,7 +1207,16 @@ and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residen
   snapshot gone (`VIEW_NOT_FOUND`), the source's table or a list's table expired (`REMOTE_EXPIRED`). `fallback: true`
   (emulator mode only, when the dry run answered `fallback`) runs the original query again around the view instead of
   reading the expired table. A failure, Stop, the timeout or the source's release keeps nothing.
-- **`bigquery.dryRun { connectionId, remote }`** estimates a `view` or `distinct` request (`remote` holds `resultId`,
+- **`results.remoteQuery` kinds `sample` and `rerun`** ([BigQuery's Load a sample](bigquery.md#load-a-sample)) take no
+  sort, filters or fallback, and record no job (they are auxiliary: the source's release cancels them). `sample { rows:
+  1 – 10,000,000, method: 'first' | 'random' }` answers a new derived result in memory: `first` reads the table's first
+  rows with `tabledata.list` (no job, free), `random` runs `TABLESAMPLE SYSTEM` over it (billed). A budget refusal part
+  way keeps the rows read and never stops the source. `rerun {}` runs the windowed result's own statement again (read with
+  `jobs.get`: a script child's alone) and answers its result, which the renderer puts in place of the source and releases
+  the source; only a query's own result, or a rerun's, from a job of one SELECT runs again (`INVALID_PARAMS` for a view,
+  value list or sample, or a script's job). Both answer `BUSY` as `load` does, and a sample of an expired table `REMOTE_EXPIRED`.
+- **`bigquery.dryRun { connectionId, remote }`** estimates a `view`, `distinct`, `sample` or `rerun` request (a first-rows
+  sample answers 0 bytes without asking BigQuery) (`remote` holds `resultId`,
   `generation` and the kind's fields, no query ID or fallback) with the query's parameters, on the result's own connection;
   main checks ownership as for `results.remoteQuery`. It answers `fallback: true` when the source's table is gone and
   emulator mode can run the original query again.
@@ -2555,7 +2565,7 @@ terminal for live probes. Display login text is never identity proof.
 | Code | Sentence |
 | --- | --- |
 | `BACKEND_LOST` | "The SQL backend stopped before answering. The request was not retried." |
-| `BACKEND_LOST` (`results.remoteQuery`) | "The SQL backend stopped during a query over a BigQuery result (Load into memory, a sort, a filter or a value list). It was not re-run, and the result is gone with the backend." |
+| `BACKEND_LOST` (`results.remoteQuery`) | "The SQL backend stopped during a query over a BigQuery result (Load into memory, a sort, a filter, a value list, a sample or a re-run). It was not re-run, and the result is gone with the backend." |
 | `BACKEND_LOST` (BigQuery `query.execute`, `query.attach`) | "The SQL backend stopped while this BigQuery query was running. A job still running carries on in BigQuery and is re-attached once the tab reconnects; a transaction open in its session stays open until the session ends." |
 | `BACKEND_LOST` (`query.execute`) | "The SQL backend stopped while this script was running. It was not re-run. Statements that finished before the failure may have taken effect; SQL Server rolls back the session's open transaction when it detects the closed connection." |
 | `BACKEND_LOST` (reload) | "The workbench was reloaded." |

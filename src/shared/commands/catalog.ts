@@ -7,6 +7,8 @@ import { scriptCommandEntries, scriptUnavailableHint } from '../scripting/catalo
 import { operationsCommandEntries } from '../ssis/operations.ts'
 import { jobActivityCommandEntries } from '../agent/jobs.ts'
 import { agentJobCommandEntries } from '../actions/agent-job.ts'
+import { agentAlertCommandEntries } from '../actions/agent-alert.ts'
+import { agentOperatorCommandEntries } from '../actions/agent-operator.ts'
 import { agentScheduleCommandEntries } from '../actions/agent-schedule.ts'
 import { agentProxyCommandEntries } from '../actions/agent-proxy.ts'
 import { logViewerCommandEntries } from '../agent/history.ts'
@@ -492,6 +494,9 @@ export const commandCatalog = {
   ...jobActivityCommandEntries(),
   // The SQL Server Agent job document (AG-6a): Open Job, New Job and the document's verbs, from src/shared/actions/agent-job.ts.
   ...agentJobCommandEntries(),
+  // The alert and operator documents and the Operators and notifications grid (AG-7): from src/shared/actions/agent-alert.ts and agent-operator.ts.
+  ...agentAlertCommandEntries(),
+  ...agentOperatorCommandEntries(),
   // The SQL Server Agent proxy and credential documents (AG-8b), from src/shared/actions/agent-proxy.ts.
   ...agentProxyCommandEntries(),
   ...logViewerCommandEntries(),
@@ -1235,6 +1240,13 @@ export const commandCatalog = {
   'output.loadIntoMemory': {
     title: 'Load Result into Memory', category: 'Query', icon: 'cloud-download', keywords: ['bigquery', 'windowed', 'load', 'memory', 'remote', 'rows', 'grid', 'result'], providers: ['bigquery'], methods: ['results.remoteQuery'],
     menus: [{ menu: 'output.tools', group: '2_view', order: 5, title: 'Load into Memory', mnemonic: 'i' }]
+  },
+  // Some rows of a windowed BigQuery result read into a new result in memory (results.remoteQuery `sample`): its first rows,
+  // free, or a random sample, billed after its estimate. The dialog asks how many and how. A comparison is never windowed,
+  // so its menu leaves it out (and Match Rows By keeps its M).
+  'output.loadSample': {
+    title: 'Load Sample…', category: 'Query', icon: 'beaker', keywords: ['bigquery', 'windowed', 'sample', 'tablesample', 'random', 'first', 'rows', 'memory', 'remote', 'grid', 'result'], providers: ['bigquery'], methods: ['results.remoteQuery'],
+    menus: [{ menu: 'output.tools', group: '2_view', order: 6, title: 'Load Sample…', mnemonic: 'm', when: '!resultsGridComparison' }]
   },
   'output.transposeSelectedRows': {
     title: 'Transpose Selected Rows', category: 'Query', icon: 'transpose', keywords: ['transpose', 'rotate', 'record', 'selected', 'rows', 'details', 'keep', 'grid'], providers: both,

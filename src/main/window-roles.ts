@@ -22,14 +22,24 @@ const zoomStep = 0.5
 const activationInputs: ReadonlySet<string> = new Set(['mouseDown', 'mouseUp', 'rawKeyDown', 'keyDown', 'keyUp', 'char', 'touchEnd', 'gestureTap'])
 /** How recent that input must be for Paste: a menu's Paste runs within milliseconds of the click or key that chose it. */
 export const userActivationMs = 1000
+let inputSequence = 0
+/** Monotonic sequence for ordering trusted input and window focus across windows. */
+export function nextActivationSequence(): number { return ++inputSequence }
+
 /**
  * When the user last clicked or pressed a key in the window, from the input main forwards to the page (`input-event`):
  * events the page dispatches itself never pass through main, so the page cannot fake one.
  */
 export class UserActivation {
   private last = Number.NEGATIVE_INFINITY
+  private seq = 0
   constructor(private readonly now: () => number = () => performance.now()) {}
-  note(type: string): void { if (activationInputs.has(type)) this.last = this.now() }
+  note(type: string): void {
+    if (!activationInputs.has(type)) return
+    this.last = this.now()
+    this.seq = nextActivationSequence()
+  }
+  get sequence(): number { return this.seq }
   recent(): boolean { return this.now() - this.last <= userActivationMs }
 }
 

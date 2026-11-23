@@ -29,6 +29,8 @@ import { restoreDescribeId, restoreLimits, type RestoreModel, type RestoreSource
 import { restoreFilesRequestSchema, restoreRequestSchema, restoreSourceSchema, type RestoreFilesRequest, type RestoreRequest } from './restore-schema.ts'
 import { agentPropertiesProblems, agentPropertiesRequestSchema, type AgentPropertiesModel, type AgentPropertiesRequest } from './agent-properties.ts'
 import { agentJobFields, agentJobSaveProblems, agentJobSaveSchema, type AgentJobDocumentModel, type AgentJobField, type AgentJobSave } from './agent-job.ts'
+import { addRecommendedAlertsRequestSchema, agentAlertSaveProblems, agentAlertSaveSchema, type AddRecommendedAlertsRequest, type AgentAlertDocumentModel, type AgentAlertSave } from './agent-alert.ts'
+import { agentOperatorSaveProblems, agentOperatorSaveSchema, notifyOperatorRequestSchema, type AgentOperatorDocumentModel, type AgentOperatorSave, type AgentOperatorsModel, type NotifyOperatorRequest } from './agent-operator.ts'
 import { scheduleSaveProblems, scheduleSaveSchema, type AgentScheduleSave, type AgentSchedulesModel } from './agent-schedule.ts'
 import {
   agentProxyFields, agentProxySaveProblems, agentProxySaveSchema, agentProxySaveSendsSecret, credentialFields, credentialSaveProblems, credentialSaveSchema, credentialSecretsSchema, proxyIdSchema,
@@ -87,6 +89,8 @@ export interface DeleteRequest {
   readonly dropMappedUsers?: boolean; readonly loginIdentity?: LoginIdentity; readonly identity?: DatabaseIdentity
   /** A job's (AG-2): the job Delete Object read, and whether sp_delete_job drops the schedules only it used. */
   readonly agentIdentity?: AgentIdentity; readonly deleteUnusedSchedule?: boolean
+  /** An alert's or operator's (AG-7): the id Delete Object read (sysalerts.id, sysoperators.id), and for an operator the operator its notifications move to. */
+  readonly agentObjectId?: number; readonly reassignTo?: string
   /** A proxy's (AG-8b): the proxy Delete Object read, so a proxy that took the name since is refused. */
   readonly proxyId?: number
 }
@@ -189,6 +193,16 @@ export interface AgentJobRequest {
   readonly action: 'agentJob'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly agentIdentity?: AgentIdentity
   readonly agentJob: AgentJobSave
 }
+/** The alert and operator documents' Save (AG-7, agent-alert.ts, agent-operator.ts): an existing one's changes by its name and the id its describe
+ *  read (`agentObjectId`, required on actions.execute), or New Alert and New Operator on the SQL Server Agent node (target `{ kind: 'agent' }`). */
+export interface AgentAlertRequest {
+  readonly action: 'agentAlert'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly agentObjectId?: number
+  readonly agentAlert: AgentAlertSave
+}
+export interface AgentOperatorRequest {
+  readonly action: 'agentOperator'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly agentObjectId?: number
+  readonly agentOperator: AgentOperatorSave
+}
 /** The Schedules document's and New › Schedule…'s save (AG-6c, agent-schedule.ts): one schedule created, changed, enabled, disabled or
  *  deleted on the SQL Server Agent node (target `{ kind: 'agent' }`), under the schedule's version guard. */
 export interface AgentScheduleRequest {
@@ -210,10 +224,11 @@ export interface CredentialRequest {
 /** One action: actions.script returns its script, actions.execute runs it. */
 export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest | CreateDatabaseRequest | AttachRequest | CreateLoginRequest | TakeOfflineRequest | BringOnlineRequest | DetachRequest
   | LoginStateRequest | UnlockRequest | LoginPropertiesRequest | TablePropertiesRequest | StartJobRequest | StopJobRequest | AgentPropertiesRequest | AgentJobRequest | AgentScheduleRequest
+  | AgentAlertRequest | AgentOperatorRequest
   | AgentProxyRequest | CredentialRequest
 /** actions.script and actions.execute also take a restore and a file restore, whose requests have shapes of their own (restore-schema.ts). */
-export type ActionScriptRequest = ActionRequest | RestoreRequest | RestoreFilesRequest
-export type ActionExecuteRequest = ActionRequest | RestoreRequest | RestoreFilesRequest | AgentServiceRequest | DeleteJobHistoryRequest
+export type ActionScriptRequest = ActionRequest | RestoreRequest | RestoreFilesRequest | AddRecommendedAlertsRequest
+export type ActionExecuteRequest = ActionRequest | RestoreRequest | RestoreFilesRequest | AgentServiceRequest | DeleteJobHistoryRequest | AddRecommendedAlertsRequest | NotifyOperatorRequest
 export type { RestoreFilesRequest, RestoreRequest } from './restore-schema.ts'
 export type { AgentPropertiesRequest } from './agent-properties.ts'
 export interface ActionCancelRequest { readonly requestIds: readonly string[] }
@@ -255,6 +270,10 @@ export interface DeleteTarget {
   readonly mappings?: LoginMappings
   /** A SQL Server Agent job (AG-2): the job it read, which the Delete request names. */
   readonly agentIdentity?: AgentIdentity
+  /** An alert or operator (AG-7): the id it read, which the Delete request names. */
+  readonly agentObjectId?: number
+  /** An operator (AG-7): the other operators its notifications can move to, and how many alerts and jobs notify it. */
+  readonly reassignChoices?: readonly string[]; readonly notifiedBy?: { readonly alerts: number; readonly jobs: number }
   /** A SQL Server Agent proxy (AG-8b): the proxy it read, which the Delete request names. */
   readonly proxyId?: number
 }
@@ -432,6 +451,12 @@ export interface ActionDescribeResult {
   readonly agentProperties?: AgentPropertiesModel
   /** agentJob (AG-6a): the job document's model (agent-job.ts); without a job for New Job. */
   readonly agentJobDocument?: AgentJobDocumentModel
+  /** agentAlert (AG-7): the alert document's model (agent-alert.ts); without an alert for New Alert. */
+  readonly agentAlertDocument?: AgentAlertDocumentModel
+  /** agentOperator (AG-7): the operator document's model; without an operator for New Operator. */
+  readonly agentOperatorDocument?: AgentOperatorDocumentModel
+  /** agentOperators (AG-7, the Agent node): the Operators and notifications grid. */
+  readonly agentOperators?: AgentOperatorsModel
   /** agentSchedules (AG-6c): the shared schedules, the jobs, which job uses which (sysadmin) and their usual durations; or one schedule's jobs. */
   readonly agentSchedules?: AgentSchedulesModel
   /** agentProxy (AG-8b): the proxy document's model (agent-proxy.ts); without a proxy for New Proxy. */
@@ -617,6 +642,15 @@ export const actionDescribeSchema = z.object({
       case 'agentJob':
         if (!(request.target.kind === 'agent' && Object.keys(request.target).length === 1)) for (const message of dialogTargetProblems(request.target, 'agentJob', 'agentJob')) issue(context, 'target', message)
         break
+      // The alert and operator documents (AG-7) describe their object, or the SQL Server Agent node for New Alert and New Operator.
+      case 'agentAlert':
+      case 'agentOperator':
+        if (!(request.target.kind === 'agent' && Object.keys(request.target).length === 1)) for (const message of dialogTargetProblems(request.target, request.dialog, request.dialog)) issue(context, 'target', message)
+        break
+      // The Operators and notifications grid reads the SQL Server Agent node.
+      case 'agentOperators':
+        if (!(request.target.kind === 'agent' && Object.keys(request.target).length === 1)) issue(context, 'target', 'Operators and notifications describe the SQL Server Agent node.')
+        break
       // The Schedules document reads the SQL Server Agent node's schedules.
       case 'agentSchedules':
         if (!(request.target.kind === 'agent' && Object.keys(request.target).length === 1)) issue(context, 'target', 'The Schedules document reads the SQL Server Agent node.')
@@ -664,13 +698,18 @@ const loginIdentitySchema = z.object({ sid: z.string().max(loginLimits.sidHex).r
 const deleteSchema = z.object({
   action: z.literal('delete'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), deleteHistory: z.boolean(),
   dropMappedUsers: z.boolean().optional(), loginIdentity: loginIdentitySchema.optional(), identity: identitySchema.optional(), agentIdentity: agentIdentitySchema.optional(),
-  deleteUnusedSchedule: z.boolean().optional(), proxyId: proxyIdSchema.optional()
+  deleteUnusedSchedule: z.boolean().optional(), agentObjectId: z.number().int().min(1).max(2_147_483_647).optional(), reassignTo: ident.optional(),
+  proxyId: proxyIdSchema.optional()
 }).strict()
 const loginStateSchema = z.object({ action: z.enum(['disable', 'enable']), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, loginIdentity: loginIdentitySchema.optional(), agentIdentity: agentIdentitySchema.optional() }).strict()
 // A step name: sysjobsteps.step_name is sysname.
 const startJobSchema = z.object({ action: z.literal('startJob'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, agentIdentity: agentIdentitySchema.optional(), stepName: ident.optional() }).strict()
 const stopJobSchema = z.object({ action: z.literal('stopJob'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, agentIdentity: agentIdentitySchema.optional() }).strict()
 const agentJobRequestSchema = z.object({ action: z.literal('agentJob'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, agentIdentity: agentIdentitySchema.optional(), agentJob: agentJobSaveSchema }).strict()
+// An alert's or operator's id (sysalerts.id, sysoperators.id are int).
+const agentObjectIdSchema = z.number().int().min(1).max(2_147_483_647)
+const agentAlertRequestSchema = z.object({ action: z.literal('agentAlert'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, agentObjectId: agentObjectIdSchema.optional(), agentAlert: agentAlertSaveSchema }).strict()
+const agentOperatorRequestSchema = z.object({ action: z.literal('agentOperator'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, agentObjectId: agentObjectIdSchema.optional(), agentOperator: agentOperatorSaveSchema }).strict()
 const agentScheduleRequestSchema = z.object({ action: z.literal('agentSchedule'), connectionId: z.uuid(), requestId: z.uuid(), target: z.object({ kind: z.literal('agent') }).strict(), agentSchedule: scheduleSaveSchema }).strict()
 const agentProxyRequestSchema = z.object({
   action: z.literal('agentProxy'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, proxyId: proxyIdSchema.optional(), agentProxy: agentProxySaveSchema, secrets: credentialSecretsSchema.optional()
@@ -867,6 +906,8 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
   stopJobSchema,
   agentPropertiesRequestSchema,
   agentJobRequestSchema,
+  agentAlertRequestSchema,
+  agentOperatorRequestSchema,
   agentScheduleRequestSchema,
   agentProxyRequestSchema,
   credentialRequestSchema
@@ -877,13 +918,16 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
   // included), the database it makes, or the server.
   // New Job is the job document's Save on the SQL Server Agent node.
   const newJob = request.action === 'agentJob' && request.target.kind === 'agent' && Object.keys(request.target).length === 1
+  // New Alert and New Operator (AG-7) are their documents' Save on the SQL Server Agent node, with no id.
+  const newAgentObject = (request.action === 'agentAlert' || request.action === 'agentOperator') && request.target.kind === 'agent' && Object.keys(request.target).length === 1
+  if ((request.action === 'agentAlert' || request.action === 'agentOperator') && newAgentObject && request.agentObjectId !== undefined) issue(context, 'agentObjectId', 'A new alert or operator has no id.')
   // New Proxy is the proxy document's Save on the SQL Server Agent node, New Credential the credential document's on the server (AG-8b).
   const newProxy = request.action === 'agentProxy' && request.target.kind === 'agent' && Object.keys(request.target).length === 1
   const newCredential = request.action === 'credential' && request.target.kind === 'server' && Object.keys(request.target).length === 1
   // A schedule's save runs on the SQL Server Agent node, whose schema already allows nothing else.
   // A proxy's id goes only with a proxy's actions.
   if ('proxyId' in request && request.proxyId !== undefined && request.target.kind !== 'agentProxy') issue(context, 'proxyId', 'Only a SQL Server Agent proxy has a proxy id.')
-  if (request.action !== 'createTable' && request.action !== 'createDatabase' && !isCreateAction(request.action) && !newJob && !newProxy && !newCredential && request.action !== 'agentSchedule') for (const message of dialogTargetProblems(request.target, request.action)) issue(context, 'target', message)
+  if (request.action !== 'createTable' && request.action !== 'createDatabase' && !isCreateAction(request.action) && !newJob && !newAgentObject && !newProxy && !newCredential && request.action !== 'agentSchedule') for (const message of dialogTargetProblems(request.target, request.action)) issue(context, 'target', message)
   switch (request.action) {
     case 'createDatabase':
       for (const problem of newDatabaseProblems(request.target.name, request.design)) issue(context, problem.field === 'name' ? 'target' : 'design', problem.message)
@@ -898,6 +942,8 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
       if (request.target.kind !== 'agentJob' && request.deleteUnusedSchedule !== undefined) issue(context, 'deleteUnusedSchedule', 'Only a job has schedules to delete.')
       if (request.target.kind !== 'login' && (request.dropMappedUsers !== undefined || request.loginIdentity !== undefined)) issue(context, 'dropMappedUsers', 'Only a login has mapped users and an identity to check.')
       if (request.target.kind !== 'database' && request.identity !== undefined) issue(context, 'identity', 'Only a database has an identity its describe read.')
+      if (request.agentObjectId !== undefined && request.target.kind !== 'agentAlert' && request.target.kind !== 'agentOperator') issue(context, 'agentObjectId', 'Only an alert or an operator has an Agent object id.')
+      if (request.reassignTo !== undefined && (request.target.kind !== 'agentOperator' || request.reassignTo === request.target.name)) issue(context, 'reassignTo', 'An operator\'s notifications move to another operator.')
       break
     case 'properties': {
       const count = plannedStatements(request.changes)
@@ -924,6 +970,12 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
     case 'agentJob':
       for (const problem of agentJobSaveProblems(request.agentJob, newJob)) issue(context, 'agentJob', problem)
       break
+    case 'agentAlert':
+      for (const problem of agentAlertSaveProblems(request.agentAlert, newAgentObject)) issue(context, 'agentAlert', problem)
+      break
+    case 'agentOperator':
+      for (const problem of agentOperatorSaveProblems(request.agentOperator, newAgentObject)) issue(context, 'agentOperator', problem)
+      break
     case 'agentSchedule':
       for (const problem of scheduleSaveProblems(request.agentSchedule)) issue(context, 'agentSchedule', problem)
       break
@@ -939,9 +991,12 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
  *  the secrets each needs and no others: New Login's password exactly for a SQL Server login (blank only with the password policy on, which
  *  lets the server decide), and none for a Windows login; and a login's Delete must name the login Delete Object read (`loginIdentity`),
  *  which binds DROP LOGIN and every DROP USER to that principal (Script runs nothing and may leave it out). C# Validate refuses the same. */
-export const actionExecuteRequestSchema = z.union([actionRequestSchema, restoreRequestSchema, restoreFilesRequestSchema, agentServiceRequestSchema, deleteJobHistoryRequestSchema]).superRefine((request, context) => {
-  // The Log File Viewer's Delete History (AG-5a) checks itself (agentHistoryDeleteSchema).
-  if (request.action === 'deleteJobHistory') return
+export const actionExecuteRequestSchema = z.union([actionRequestSchema, restoreRequestSchema, restoreFilesRequestSchema, agentServiceRequestSchema, deleteJobHistoryRequestSchema, addRecommendedAlertsRequestSchema, notifyOperatorRequestSchema]).superRefine((request, context) => {
+  // The Log File Viewer's Delete History (AG-5a), Add recommended alerts and Send test e-mail (AG-7) check themselves.
+  if (request.action === 'deleteJobHistory' || request.action === 'addRecommendedAlerts' || request.action === 'notifyOperator') return
+  // An existing alert's or operator's Save and Delete name the one its describe read (Script runs nothing and may leave it out).
+  if ((request.action === 'agentAlert' || request.action === 'agentOperator' || request.action === 'delete') && (request.target.kind === 'agentAlert' || request.target.kind === 'agentOperator')
+    && (request as { agentObjectId?: number }).agentObjectId === undefined) issue(context, 'agentObjectId', 'Saving or deleting an alert or operator needs the id it read.')
   if (request.action === 'delete' && request.target.kind === 'login' && request.loginIdentity === undefined) issue(context, 'loginIdentity', "A login's Delete needs the identity of the login it read.")
   // Every job verb names the job it read (AG-2's identity guard); Script runs nothing and may leave it out.
   if (request.target.kind === 'agentJob' && (request as { agentIdentity?: AgentIdentity }).agentIdentity === undefined) issue(context, 'agentIdentity', "A job's verb needs the identity of the job it read.")
@@ -966,7 +1021,7 @@ export const actionExecuteRequestSchema = z.union([actionRequestSchema, restoreR
 /** actions.script: the same requests, never with `secrets` (critic A3). Script never needs a password, so none crosses for it
  *  even once an action (New Login) accepts one on actions.execute; C# Validate refuses Secrets on every script too. */
 export const actionScriptRequestSchema = z.custom<unknown>(value => !(typeof value === 'object' && value !== null && Object.hasOwn(value, 'secrets')), 'Script never carries secrets.')
-  .pipe(z.union([actionRequestSchema, restoreRequestSchema, restoreFilesRequestSchema]))
+  .pipe(z.union([actionRequestSchema, restoreRequestSchema, restoreFilesRequestSchema, addRecommendedAlertsRequestSchema]))
 
 /** The bounds of a step (C#: ActionSteps.Bound clips to them). */
 export const actionStepSchema = z.object({

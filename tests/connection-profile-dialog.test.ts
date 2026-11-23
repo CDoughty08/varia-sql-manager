@@ -44,12 +44,12 @@ async function mount(initialAutoReconnect?: 'inherit' | 'on' | 'off', setup: {
   workbench.api.connect.mockImplementation(async (value, context) => { const options = value as ConnectionOptions; return { ok: true, value: { id: id(100), targetId: context!.targetId, server: options.server, database: options.database, generation: 1, serverVersion: '17', authentication: { principal: { provider: 'sqlserver', authentication: options.authentication, id: 'sid:fixture' } } } } })
   const original = Object.getOwnPropertyDescriptor(window, 'varia')
   Object.defineProperty(window, 'varia', { configurable: true, value: { ...workbench.api, loadConnectionLibrary, saveConnectionProfile } })
-  const onConnected = vi.fn<ComponentProps<typeof ConnectDialog>['onConnected']>(async () => {}), onClose = vi.fn()
+  const onConnected = vi.fn<ComponentProps<typeof ConnectDialog>['onConnected']>(async () => {}), onClose = vi.fn(), onAcceptRequest = vi.fn<NonNullable<ComponentProps<typeof ConnectDialog>['onAcceptRequest']>>()
   const theme = { ...workbench.theme, getSnapshot: () => workbench.theme.state, subscribe: () => () => {}, accent: (color?: string) => color }
   const renderer = { ...workbench, platform: 'win32', theme } as unknown as Workbench
   let key = 0
-  const reopen = async (preference = initialAutoReconnect) => {
-    await act(async () => root.render(createElement(WorkbenchProvider, { workbench: renderer, children: createElement(ConnectDialog, { key: ++key, initial: setup.initial ?? connectionDefaults('win32'), initialTargetId: setup.initialTargetId, initialAutoReconnect: preference, onConnected, onClose }) })))
+  const reopen = async (preference = initialAutoReconnect, extra: Partial<ComponentProps<typeof ConnectDialog>> = {}) => {
+    await act(async () => root.render(createElement(WorkbenchProvider, { workbench: renderer, children: createElement(ConnectDialog, { key: extra.raise !== undefined || extra.incomingRequest !== undefined ? key : ++key, initial: extra.initial ?? setup.initial ?? connectionDefaults('win32'), initialTargetId: extra.initialTargetId ?? setup.initialTargetId, initialAutoReconnect: preference, onAcceptRequest, onConnected, onClose, ...extra }) })))
   }
   cleanups.push(() => {
     act(() => root.unmount()); workbench.dispose(); host.remove()
@@ -69,11 +69,10 @@ async function mount(initialAutoReconnect?: 'inherit' | 'on' | 'off', setup: {
   }
   const select = () => host.querySelector<HTMLSelectElement>('#connect-auto-reconnect')!
   const preference = async (value: 'inherit' | 'on' | 'off') => {
-    if (button('Custom Properties').getAttribute('aria-expanded') !== 'true') await act(async () => button('Custom Properties').click())
     await act(async () => { select().value = value; select().dispatchEvent(new Event('change', { bubbles: true })) })
   }
   const releaseLibrary = async () => { await act(async () => held.resolve()) }
-  return { ...workbench, host, button, choose, select, preference, reopen, saveConnectionProfile, onConnected, closed: onClose, releaseLibrary, profiles: () => library.profiles }
+  return { ...workbench, host, button, choose, select, preference, reopen, saveConnectionProfile, onAcceptRequest, onConnected, closed: onClose, releaseLibrary, profiles: () => library.profiles }
 }
 
 describe('saved profile startup reconnect preference', () => {
@@ -276,7 +275,6 @@ describe('Reset and the form environment', () => {
     const server = () => view.host.querySelector<HTMLInputElement>('#connect-server')!
     const environment = () => view.host.querySelector<HTMLSelectElement>('#connect-environment')!
     await type(server(), 'sql-prod-01')
-    await act(async () => view.button('Custom Properties').click())
     expect(environment().value).toBe('Production')
     await act(async () => { environment().value = 'Staging'; environment().dispatchEvent(new Event('change', { bubbles: true })) })
     await act(async () => view.button('Reset').click())
@@ -290,7 +288,6 @@ describe('Reset and the form environment', () => {
 })
 
 const pick = async (view: Awaited<ReturnType<typeof mount>>, selector: string, value: string) => {
-  if (view.button('Custom Properties').getAttribute('aria-expanded') !== 'true') await act(async () => view.button('Custom Properties').click())
   const field = view.host.querySelector<HTMLSelectElement | HTMLInputElement>(selector)!
   await act(async () => {
     if (field instanceof HTMLInputElement) Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, value)
@@ -826,7 +823,6 @@ describe('closing with a new, unsaved connection', () => {
   it('does not offer to save back an entry the user removed while editing it', async () => {
     const view = await mount()
     await view.choose('Off profile')
-    if (view.button('Custom Properties').getAttribute('aria-expanded') !== 'true') await act(async () => view.button('Custom Properties').click())
     await type(view, '#connect-name', 'Edited')
     const remaining = view.profiles().filter(value => value.options.displayName !== 'Off profile')
     ;(window as unknown as { varia: VariaApi }).varia.removeConnectionProfile = vi.fn<VariaApi['removeConnectionProfile']>(async () => ({ ok: true, value: { library: { version: 1, profiles: remaining }, savedPasswords: [] } }))
@@ -834,5 +830,198 @@ describe('closing with a new, unsaved connection', () => {
     await act(async () => view.button('Cancel').click())
     expect(prompt()).toBeNull()
     expect(view.closed).toHaveBeenCalledOnce()
+  })
+})
+
+describe('Connect v2 sidebar deduplication, filter clear and Undo', () => {
+  it('deduplicates Favorites out of Recent Connections, clears filter via the clear button, and restores removed recent profiles with recency and password notice on Undo', async () => {
+    const fav = { ...profile('Primary Prod', 10, 'inherit'), lastConnected: '2026-11-12T10:00:00.000Z' }
+    const recentOnly: ConnectionProfile = {
+      ...profile('Staging Db', 11, 'inherit'),
+      options: { ...connectionDefaults('win32'), server: 'server-11', displayName: 'Staging Db', authentication: 'sql', username: 'reader' },
+      favorite: false, lastConnected: '2026-11-11T10:00:00.000Z'
+    }
+    const view = await mount(undefined, { profiles: [fav, recentOnly], savedPasswords: [recentOnly.id] })
+    const choices = () => [...view.host.querySelectorAll('.connection-choice strong')].map(el => el.textContent)
+    expect(choices()).toEqual(['Primary Prod', 'Staging Db'])
+    const filter = view.host.querySelector<HTMLInputElement>('.connection-filter')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(filter, 'Primary')
+      filter.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(choices()).toEqual(['Primary Prod'])
+    await act(async () => view.button('Clear filter').click())
+    expect(filter.value).toBe('')
+    expect(choices()).toEqual(['Primary Prod', 'Staging Db'])
+    ;(window as unknown as { varia: VariaApi }).varia.removeConnectionProfile = vi.fn<VariaApi['removeConnectionProfile']>(async () => ({ ok: true, value: { library: { version: 1, profiles: [fav] }, savedPasswords: [] } }))
+    await act(async () => view.button('Remove saved Staging Db').click())
+    expect(choices()).toEqual(['Primary Prod'])
+    view.saveConnectionProfile.mockResolvedValueOnce({ ok: true, value: { library: { version: 1, profiles: [fav, recentOnly] }, savedPasswords: [] } })
+    await act(async () => view.button('Undo').click())
+    const restoredCall = view.saveConnectionProfile.mock.calls.at(-1)?.[0] as ConnectionProfileInput
+    expect(restoredCall).toMatchObject({ registered: false, favorite: false, lastConnected: recentOnly.lastConnected, options: recentOnly.options })
+    expect(restoredCall.saved).toBeUndefined()
+    expect(view.host.textContent).toContain('The saved password was removed; enter it again to remember it.')
+  })
+
+  it('asks before an incoming Reconnect request drops unsaved edits, ignores requests while locked, and clears typed passwords on connection string paste', async () => {
+    const view = await mount()
+    await pick(view, '#connect-server', 'in-progress-server')
+    // Plain raise never clobbers edits.
+    await view.reopen(undefined, { raise: 2, initial: { ...connectionDefaults('win32'), server: 'ignored-on-raise' } })
+    expect(view.host.querySelector<HTMLInputElement>('#connect-server')!.value).toBe('in-progress-server')
+    // Incoming Reconnect with unsaved edits asks first; a second request while that prompt is open reports a busy notice instead of vanishing silently.
+    const reconnectTarget = { ...connectionDefaults('win32'), server: 'reconnected-server', authentication: 'sql' as const, username: 'reader' }
+    await view.reopen(undefined, { raise: 3, incomingRequest: { seq: 1, kind: 'reconnect', reconnecting: id(88), options: reconnectTarget, autoReconnect: 'off' } })
+    expect(prompt()?.textContent).toContain('Save in-progress-server to History?')
+    expect(view.onAcceptRequest).not.toHaveBeenCalled()
+    await view.reopen(undefined, { raise: 4, incomingRequest: { seq: 2, kind: 'monitor', pendingMonitor: true } })
+    expect(prompt()?.textContent).toContain('open Activity Monitor again')
+    expect(view.onAcceptRequest).not.toHaveBeenCalled()
+    await act(async () => promptButton('Cancel').click())
+    expect(view.host.querySelector<HTMLInputElement>('#connect-server')!.value).toBe('in-progress-server')
+    expect(view.onAcceptRequest).not.toHaveBeenCalled()
+    // Choosing Don't Save loads the requested target and notifies App via onAcceptRequest.
+    await view.reopen(undefined, { raise: 5, incomingRequest: { seq: 3, kind: 'reconnect', reconnecting: id(88), options: reconnectTarget, autoReconnect: 'off' } })
+    await act(async () => promptButton("Don't Save").click())
+    expect(view.onAcceptRequest).toHaveBeenCalledWith(expect.objectContaining({ seq: 3, kind: 'reconnect', reconnecting: id(88) }))
+    expect(view.host.querySelector<HTMLInputElement>('#connect-server')!.value).toBe('reconnected-server')
+    expect(view.select().value).toBe('off')
+    // While Connect is in flight (locked), a later F5 / reconnect request is ignored and shows a status notice so pendingExecute never switches tabs silently.
+    const inflight = deferred<Awaited<ReturnType<VariaApi['connect']>>>()
+    view.api.connect.mockImplementationOnce(() => inflight.promise)
+    await act(async () => view.button('Connect').click())
+    await view.reopen(undefined, { raise: 6, incomingRequest: { seq: 4, kind: 'execute', pendingExecute: 'tab-b', reconnecting: id(99), options: { ...connectionDefaults('win32'), server: 'prod-server' } } })
+    expect(view.onAcceptRequest).toHaveBeenCalledTimes(1)
+    expect(view.host.querySelector<HTMLInputElement>('#connect-server')!.value).toBe('reconnected-server')
+    expect(view.host.querySelector('.connect-outcome')?.textContent).toContain('run the query again')
+    await act(async () => view.button('Stop').click())
+    await act(async () => inflight.resolve({ ok: false, error: 'Cancelled', code: 'CANCELLED' }))
+    // Notice stays visible after Stop until the user interacts with the form again.
+    expect(view.host.querySelector('.connect-outcome')?.textContent).toContain('run the query again')
+    // Connection string paste clears typed passwords.
+    await pick(view, '#connect-password', 'old-secret')
+    expect(view.host.querySelector('.connect-outcome')?.textContent ?? '').not.toContain('run the query again')
+    await act(async () => view.button('Connection String').click())
+    const pasteBox = view.host.querySelector<HTMLTextAreaElement>('#connect-paste-string')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(pasteBox, 'Server=other-server;User ID=new_reader;')
+      pasteBox.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => view.button('Parse & Fill Form').click())
+    await act(async () => view.button('Connection Properties').click())
+    expect(view.host.querySelector<HTMLInputElement>('#connect-server')!.value).toBe('other-server')
+    expect(view.host.querySelector<HTMLInputElement>('#connect-password')!.value).toBe('')
+  })
+
+  it('prompts only for the server type an incoming request overwrites, preserving unsaved edits on the other type', async () => {
+    const view = await mount()
+    // Make an unsaved BigQuery edit while leaving SQL Server clean.
+    await act(async () => view.host.querySelector<HTMLButtonElement>('[data-server-type="bigquery"]')!.click())
+    await pick(view, '#connect-bq-project', 'unsaved-bq-project')
+    // Incoming SQL Server Reconnect only overwrites SQL Server, so it applies without asking about BigQuery.
+    const sqlTarget = { ...connectionDefaults('win32'), server: 'sql-reconnect-target', authentication: 'windows' as const }
+    await view.reopen(undefined, { raise: 2, incomingRequest: { seq: 1, kind: 'reconnect', reconnecting: id(77), options: sqlTarget } })
+    expect(prompt()).toBeNull()
+    expect(view.onAcceptRequest).toHaveBeenCalledWith(expect.objectContaining({ seq: 1, kind: 'reconnect', reconnecting: id(77) }))
+    expect(view.host.querySelector<HTMLInputElement>('#connect-server')!.value).toBe('sql-reconnect-target')
+    // Closing the dialog still asks about the untouched unsaved BigQuery edit.
+    await act(async () => view.button('Cancel').click())
+    expect(prompt()?.textContent).toContain('Save unsaved-bq-project to History?')
+    await act(async () => promptButton('Cancel').click())
+    // Switching back shows BigQuery's unsaved draft is intact.
+    expect(view.host.querySelector<HTMLInputElement>('#connect-bq-project')!.value).toBe('unsaved-bq-project')
+    // If SQL Server ALSO has unsaved edits, an incoming SQL Server Reconnect asks ONLY about SQL Server and keeps BigQuery intact.
+    await act(async () => view.host.querySelector<HTMLButtonElement>('[data-server-type="sqlserver"]')!.click())
+    await pick(view, '#connect-server', 'unsaved-sql-draft')
+    const sqlTarget2 = { ...connectionDefaults('win32'), server: 'sql-reconnect-target-2', authentication: 'windows' as const }
+    await view.reopen(undefined, { raise: 3, incomingRequest: { seq: 2, kind: 'reconnect', reconnecting: id(78), options: sqlTarget2 } })
+    expect(prompt()?.textContent).toContain('Save unsaved-sql-draft to History?')
+    await act(async () => promptButton("Don't Save").click())
+    // Must apply immediately without prompting about BigQuery's unsaved edit.
+    expect(prompt()).toBeNull()
+    expect(view.onAcceptRequest).toHaveBeenCalledWith(expect.objectContaining({ seq: 2, kind: 'reconnect', reconnecting: id(78) }))
+    expect(view.host.querySelector<HTMLInputElement>('#connect-server')!.value).toBe('sql-reconnect-target-2')
+  })
+
+  it('validates SQL Server Advanced numeric fields without polluting options, persisting errors across tabs', async () => {
+    const view = await mount()
+    const previewConnection = vi.fn<VariaApi['previewConnection']>(async () => ({ ok: true, value: { connectionString: 'Server=localhost;' } }))
+    ;(window as unknown as { varia: VariaApi }).varia.previewConnection = previewConnection
+    await act(async () => view.button('Advanced').click())
+    await pick(view, '#advanced-packetSize', '100')
+    expect(view.button('Connect').disabled).toBe(true)
+    expect(view.button('Save').disabled).toBe(true)
+    expect(view.button('Test Connection').disabled).toBe(true)
+    expect(view.button('Modified (0)').textContent).toBe('Modified (0)')
+    expect(view.host.querySelector('[role="alert"]')?.textContent).toContain('Packet size must be between 512 and 32767.')
+    // Switching tabs keeps the validation guard active and surfaces the warning in the outcome area.
+    await act(async () => view.button('Connection Properties').click())
+    expect(view.button('Connect').disabled).toBe(true)
+    expect(view.host.querySelector('.connect-outcome [role="alert"]')?.textContent).toContain('Packet size must be between 512 and 32767.')
+    // Connection String preview must not send invalid Advanced options to main.
+    await act(async () => view.button('Connection String').click())
+    await vi.waitFor(() => expect(view.host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Connection string preview"]')!.value).toContain('Packet size must be between 512 and 32767.'))
+    expect(previewConnection).not.toHaveBeenCalled()
+    // Switching back keeps the typed invalid text; fixing it re-enables Connect and commits the valid value.
+    await act(async () => view.button('Advanced').click())
+    expect(view.host.querySelector<HTMLInputElement>('#advanced-packetSize')!.value).toBe('100')
+    await pick(view, '#advanced-connectTimeout', '')
+    expect(view.button('Connect').disabled).toBe(true)
+    await pick(view, '#advanced-packetSize', '8192')
+    expect(view.button('Connect').disabled).toBe(true)
+    await pick(view, '#advanced-connectTimeout', '20')
+    expect(view.button('Connect').disabled).toBe(false)
+    expect(view.button('Modified (2)').textContent).toBe('Modified (2)')
+  })
+
+  it('uses connectionPickerColor, accurate saved-password wording, and live target subscription for the live dot', async () => {
+    const saved: ConnectionProfile = {
+      ...profile('Live Server', 30, 'inherit'),
+      options: { ...connectionDefaults('win32'), server: 'live-sql', displayName: 'Live Server', authentication: 'sql', username: 'reader', color: '#e66b73' }
+    }
+    const view = await mount(undefined, { profiles: [saved], savedPasswords: [saved.id] })
+    await view.choose('Live Server')
+    const picker = view.host.querySelector<HTMLInputElement>('#connect-color-custom')!
+    expect(picker.value).toMatch(/^#[\da-f]{6}$/i)
+    expect(view.host.textContent).toContain('Password saved (leave empty to keep using)')
+    expect(view.host.textContent).not.toContain('Saved in system keyring')
+    expect(view.host.querySelector('.connect-live-dot')).toBeNull()
+    // Updating connectionTargets reactively lights up the live dot.
+    const authentication = { principal: { provider: 'sqlserver' as const, authentication: 'sql' as const, id: 'sid:live' } }
+    await act(async () => {
+      const attempt = view.connections.beginConnect(saved.options, 1, id(300), detailsOf(saved.options, 'inherit'))!
+      view.connections.accept({ id: id(301), targetId: id(300), generation: 1, server: saved.options.server, database: saved.options.database, serverVersion: '17', authentication }, saved.options, id(300), authentication, attempt)
+    })
+    expect(view.host.querySelector('.connect-live-dot')).not.toBeNull()
+  })
+
+  it('keeps focus on a row star button after favoriting moves that row from Recent Connections into Favorites', async () => {
+    const recent = { ...profile('Recent Move', 21, 'inherit'), favorite: false, lastConnected: '2026-11-11T10:00:00.000Z' }
+    const view = await mount(undefined, { profiles: [recent] })
+    const star = view.button('Favorite Recent Move')
+    star.focus()
+    expect(document.activeElement).toBe(star)
+    await act(async () => star.click())
+    const moved = view.button('Unfavorite Recent Move')
+    expect(document.activeElement).toBe(moved)
+  })
+  it('parks focus on the dialog and restores it to Remove favorite after Add favorite completes asynchronously', async () => {
+    const saved = { ...profile('Deferred Fav', 22, 'inherit'), favorite: false, saved: true }
+    const view = await mount(undefined, { profiles: [saved] })
+    await view.choose('Deferred Fav')
+    const favButton = view.button('Add favorite')
+    favButton.getClientRects = () => [{} as DOMRect] as unknown as DOMRectList
+    favButton.focus()
+    expect(document.activeElement).toBe(favButton)
+    const pending = deferred<Awaited<ReturnType<VariaApi['saveConnectionProfile']>>>()
+    view.saveConnectionProfile.mockImplementationOnce(() => pending.promise)
+    await act(async () => favButton.click())
+    const dialogEl = view.host.querySelector<HTMLElement>('[role="dialog"]')!
+    expect(favButton.disabled).toBe(true)
+    expect(document.activeElement).toBe(dialogEl)
+    const updated = { ...saved, favorite: true }
+    await act(async () => pending.resolve({ ok: true, value: { library: { version: 1, profiles: [updated] }, savedPasswords: [] } }))
+    expect(document.activeElement).toBe(view.button('Remove favorite'))
   })
 })

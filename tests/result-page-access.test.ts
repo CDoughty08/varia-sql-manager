@@ -83,6 +83,9 @@ describe('result page access', () => {
       'SqlService.BigQueryResidence.cs: var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);',
       'SqlService.BigQueryViews.cs: var set = store.Find(resultId) ?? throw Unavailable(resultId);',
       'SqlService.BigQueryViews.cs: var set = store.Find(remote.ResultId) ?? throw Unavailable(remote.ResultId);',
+      // Load sample and Re-run want the windowed result itself (its job and table); a first-rows sample reads its table's
+      // pages with tabledata.list, never the store's.
+      'SqlService.BigQuerySample.cs: var set = store.Find(resultId) ?? throw Unavailable(resultId);',
       // A remote filter reads only the value list's table reference (ValueList), never its pages.
       'SqlService.BigQueryViews.cs: var held = store.Find(id) ?? throw ValueListClosed();'
     ].sort())

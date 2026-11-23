@@ -208,8 +208,14 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   expect(count(tableRowsBody, /\bSendRawAsync\(service, request, t\)/g)).toBe(1)
   expect(count(jobs.slice(jobs.indexOf('async Task<BigQueryPage> ResultsPageAsync('), jobs.indexOf('internal Task<BigQueryPage> TableRowsAsync(')), /\bSendRawAsync\(service, request, token\)/g)).toBe(1)
   // ...and Save Results As, which writes a windowed result's pages to the file as they come (SqlService.BigQueryExport.cs).
-  expect(uses(/\bTableRowsAsync\b/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'SqlService.BigQueryExport.cs', 'SqlService.BigQueryResidence.cs', 'SqlService.BigQueryViews.cs'])
+  // ...and Load sample's first rows (SqlService.BigQuerySample.cs), read into a new set of their own, each page reserved from
+  // the budget before its rows are kept and returned after (never into the windowed result).
+  expect(uses(/\bTableRowsAsync\b/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'SqlService.BigQueryExport.cs', 'SqlService.BigQueryResidence.cs', 'SqlService.BigQuerySample.cs', 'SqlService.BigQueryViews.cs'])
   expect(count(exporting, /\bbigQuery\.TableRowsAsync\(/g)).toBe(1)
+  const sample = files.find(({ file }) => file === 'SqlService.BigQuerySample.cs')!.code
+  expect(count(sample, /\bbigQuery\.TableRowsAsync\(/g)).toBe(1)
+  expect(sample).toMatch(/using var page = await bigQuery\.TableRowsAsync\([^;]*\);[\s\S]*?if \(!store\.TryReserve\(budget, charge, true, out var refusal\)\)[\s\S]*?finally \{ store\.Return\(budget, charge\); \}/)
+  expect(sample).not.toMatch(/\bRemoteResult\b|\.Seed\(|\.Demote\(|\.Promote\(/)
   // ...and one Storage Read session, read stream by stream: the allowlists name the file, these pin its calls.
   expect(count(exporting, /\bOpenReadSessionAsync\(/g)).toBe(1)
   expect(count(exporting, /\bReadRowsAsync\(/g)).toBe(1)

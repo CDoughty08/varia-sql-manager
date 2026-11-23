@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { advancedCount, advancedSummary, colorName, customSummary, listStep, rowTitle } from '../src/renderer/src/connect-form'
+import { advancedCount, advancedSummary, busyRequestNotice, clampConnectRailWidth, colorName, connectRailLimits, customSummary, listStep, nextConnectReconnecting, parseConnectionString, planConnectRequest, rowTitle, validateSqlAdvancedNumber } from '../src/renderer/src/connect-form'
 import EnvironmentTag from '../src/renderer/src/EnvironmentTag'
 import { advancedDefaults, advancedToStore } from '../src/shared/connections'
 import { connectionPresets } from '../src/shared/theme/connection-colors'
@@ -62,17 +62,19 @@ describe('Connect dialog v2 form', () => {
   })
   it('puts a saved row\'s name in its tooltip, since the narrow list cuts it short', () => {
     expect(rowTitle({ displayName: 'Production Finance Reporting Cluster Primary', server: 'prod-sql-01', database: 'FinanceDW' })).toBe('Production Finance Reporting Cluster Primary\nprod-sql-01 · FinanceDW')
-    expect(rowTitle({ displayName: '', server: 'localhost', database: '' })).toBe('localhost · <default>')
+    expect(rowTitle({ displayName: '', server: 'localhost', database: '' })).toBe('localhost')
   })
   it('keeps one bounded two-pane size, stacking the panes in a narrow window', () => {
-    expect(valueOf('.connection-modal.connect-dialog', 'width')).toBe('min(820px, calc(100vw - 40px))')
-    expect(valueOf('.connection-modal.connect-dialog', 'height')).toBe('min(520px, calc(100vh - 40px))')
+    expect(valueOf('.connection-modal.connect-dialog', 'width')).toBe('min(900px, calc(100vw - 40px))')
+    expect(valueOf('.connection-modal.connect-dialog', 'height')).toBe('min(730px, calc(100vh - 40px))')
     expect(valueOf('.connection-modal.connect-dialog', 'display')).toBe('grid')
-    expect(valueOf('.connection-modal.connect-dialog', 'grid-template-columns')).toBe('272px minmax(0, 1fr)')
-    // The panes are the grid's cells side by side; the actions are their sibling, outside every scroll, under the form.
+    expect(valueOf('.connection-modal.connect-dialog', 'grid-template-columns')).toBe('var(--connect-rail-width, 320px) 5px minmax(0, 1fr)')
+    // The panes are the grid's cells side by side with a 5px splitter; the actions are their sibling under the form.
     expect(valueOf('.connect-panes', 'display')).toBe('contents')
     expect(valueOf('.connect-sources-pane', 'grid-row')).toBe('2 / 4')
-    expect(valueOf('.connect-actions', 'grid-column')).toBe('2')
+    expect(valueOf('.connect-splitter', 'grid-column')).toBe('2')
+    expect(valueOf('.connect-splitter', 'grid-row')).toBe('2 / 4')
+    expect(valueOf('.connect-actions', 'grid-column')).toBe('3')
     expect(valueOf('.connect-actions', 'position')).toBeUndefined()
     // Both panes scroll on their own, and what sits under Connect is bounded, so Connect stays in view.
     expect(valueOf('.connect-sources-pane .connection-sources', 'min-height')).toBe('0')
@@ -82,18 +84,22 @@ describe('Connect dialog v2 form', () => {
     expect(valueOf('.environment-tag', 'flex')).toBe('none')
     expect(rules.filter(rule => rule.selector.includes('[data-place="list"]') && rule.declarations.some(declaration => declaration.property.startsWith('flex'))).map(rule => rule.selector)).toEqual(['.connect-sources-pane .environment-tag[data-place="list"][data-custom]'])
     expect(valueOf('.connect-form-scroll', 'overflow-y')).toBe('auto')
-    // The outcome sits above the footer, so Connect and Stop never move; together they keep at most half the dialog.
-    expect(valueOf('.connect-actions', 'max-height')).toBe('calc(min(520px, 100vh - 40px) / 2)')
+    // The outcome sits above the footer, so Connect and Stop never move; bounded against the viewport so an auto-sized track never collapses it.
+    expect(valueOf('.connect-actions', 'max-height')).toBeUndefined()
+    expect(valueOf('.connect-outcome', 'max-height')).toBe('min(260px, 35vh)')
     expect(valueOf('.connect-outcome', 'min-height')).toBe('0')
     expect(valueOf('.connect-outcome', 'overflow-y')).toBe('auto')
-    // Stacked (a narrow or zoomed window): one scroll, the list two rows tall, and Connect under the scroll, across the
-    // dialog. Sticky inside the form pane, it could not rise above that pane's top and left the view when scrolled up.
-    const stacked = ['@media (max-width: 760px)']
+    // Stacked (a narrow or zoomed window, via class or viewport media query): one scroll, splitter hidden, actions across.
+    expect(valueOf('.connection-modal.connect-dialog.is-stacked', 'grid-template-columns')).toBe('minmax(0, 1fr)')
+    expect(valueOf('.connection-modal.connect-dialog.is-stacked .connect-splitter', 'display')).toBe('none')
+    expect(valueOf('.connection-modal.connect-dialog.is-stacked .connect-actions', 'grid-column')).toBe('1')
+    const stacked = ['@media (max-width: 720px)']
     expect(valueOf('.connection-modal.connect-dialog', 'grid-template-columns', stacked)).toBe('minmax(0, 1fr)')
     expect(valueOf('.connect-panes', 'display', stacked)).toBe('flex')
     expect(valueOf('.connect-panes', 'flex-direction', stacked)).toBe('column')
     expect(valueOf('.connect-panes', 'overflow-y', stacked)).toBe('auto')
-    expect(valueOf('.connect-sources-pane .connection-sources', 'height', stacked)).toBe('136px')
+    expect(valueOf('.connect-splitter', 'display', stacked)).toBe('none')
+    expect(valueOf('.connect-sources-pane .connection-sources', 'height', stacked)).toBe('156px')
     expect(valueOf('.connect-form-scroll', 'overflow-y', stacked)).toBe('visible')
     expect(valueOf('.connect-actions', 'position', stacked)).toBeUndefined()
     expect(valueOf('.connect-actions', 'grid-column', stacked)).toBe('1')
@@ -103,6 +109,81 @@ describe('Connect dialog v2 form', () => {
     expect(valueOf('.ui-field:focus-visible, .ui-button:focus-visible', 'outline-offset')).toBe('calc(-1 * var(--varia-space-0))')
     expect(valueOf('.connect-sources-pane .browse-toolbar', 'flex-wrap')).toBeUndefined()
     expect(valueOf('.connect-sources-pane .browse-toolbar select', 'min-width')).toBe('0')
+  })
+  it('clamps the resizable saved-connections rail safely against the form minimum width', () => {
+    expect(connectRailLimits.defaultWidth).toBe(320)
+    expect(clampConnectRailWidth(undefined, 900)).toBe(320)
+    expect(clampConnectRailWidth(120, 900)).toBe(220)
+    expect(clampConnectRailWidth(380, 900)).toBe(380)
+    expect(clampConnectRailWidth(600, 900)).toBe(320)
+    expect(clampConnectRailWidth(460, 740)).toBe(320)
+  })
+  it('parses ADO.NET / SqlClient connection strings without importing passwords', () => {
+    const parsed = parseConnectionString('Server="tcp:sql.corp.local,1433";Initial Catalog=SalesLedger;User ID=reader;Password=super-secret;Encrypt=True;TrustServerCertificate=False;ApplicationIntent=ReadOnly;Connect Timeout=30;MultipleActiveResultSets=True;')
+    expect(parsed.passwordOmitted).toBe(true)
+    expect(parsed.patch).toEqual({ server: 'sql.corp.local,1433', database: 'SalesLedger', authentication: 'sql', username: 'reader', encrypt: 'mandatory', trustServerCertificate: false })
+    expect(parsed.patch).not.toHaveProperty('password')
+    expect(parsed.advancedPatch).toEqual({ applicationIntent: 'ReadOnly', connectTimeout: 30, multipleActiveResultSets: true })
+    expect(parsed.matchedCount).toBe(8)
+    expect(parseConnectionString('Data Source=localhost;Integrated Security=SSPI;Pwd=secret')).toEqual({
+      patch: { server: 'localhost', authentication: 'windows' },
+      advancedPatch: {},
+      matchedCount: 2,
+      passwordOmitted: true
+    })
+    expect(parseConnectionString('Server=az.database.windows.net;Authentication=Active Directory Interactive').patch).toEqual({
+      server: 'az.database.windows.net',
+      authentication: 'entraMfa'
+    })
+    // Strips control chars, enforces schema max lengths, and drops conflicting username on integrated auth.
+    expect(parseConnectionString('Server=tcp:host\x00name\n;Database=' + 'd'.repeat(200) + ';User ID=attacker;Integrated Security=SSPI').patch).toEqual({
+      server: 'hostname',
+      database: 'd'.repeat(128),
+      authentication: 'windows'
+    })
+    expect(parseConnectionString('Server=srv;TrustedConnection=Yes').patch).toEqual({ server: 'srv', authentication: 'windows' })
+    expect(parseConnectionString('Server=srv;Authentication=Active Directory Service Principal').patch).toEqual({ server: 'srv', authentication: 'entraServicePrincipal' })
+    expect(parseConnectionString('Server=srv;Authentication=Active Directory Managed Identity').patch).toEqual({ server: 'srv', authentication: 'entraManagedIdentity' })
+  })
+  it('preserves pending reconnect/execute state on plain raise and routes mid-session requests through ConnectDialog', () => {
+    const serverA = { server: 'srv-a', database: '', authentication: 'windows' as const, trustServerCertificate: false }
+    // Closed: opens immediately with the trigger's pending state.
+    expect(planConnectRequest(false, false, 1, { kind: 'execute', pendingExecute: 'tab-a', reconnecting: 'target-a', options: serverA })).toEqual({
+      action: 'open', reconnecting: 'target-a', options: serverA, pendingExecute: 'tab-a', pendingMonitor: false
+    })
+    // Already open + plain Connect button: raises only, never clearing reconnecting or pendingExecute.
+    expect(planConnectRequest(true, false, 2, { kind: 'open' })).toEqual({ action: 'raise' })
+    // Already open + F5 on another tab: emits an incoming request so App waits for ConnectDialog to accept it.
+    expect(planConnectRequest(true, false, 2, { kind: 'execute', pendingExecute: 'tab-b', reconnecting: 'target-b', targetId: 'target-b', options: serverA, autoReconnect: 'off' })).toEqual({
+      action: 'incoming',
+      request: { seq: 2, kind: 'execute', reconnecting: 'target-b', targetId: 'target-b', options: serverA, autoReconnect: 'off', pendingExecute: 'tab-b', pendingMonitor: false }
+    })
+    // Details review open: raises only with an ignoredKind for non-open triggers, never disrupting the handoff.
+    expect(planConnectRequest(true, true, 3, { kind: 'reconnect', reconnecting: 'target-b', options: serverA })).toEqual({ action: 'raise', ignoredKind: 'reconnect' })
+    expect(planConnectRequest(true, true, 4, { kind: 'open' })).toEqual({ action: 'raise' })
+    // Requests without server details (Activity Monitor, F5 on an unconnected tab) keep the current Reconnect target.
+    expect(nextConnectReconnecting('conn-lost-x', { options: undefined, reconnecting: undefined })).toBe('conn-lost-x')
+    expect(nextConnectReconnecting('conn-lost-x', { options: serverA, reconnecting: 'conn-lost-y' })).toBe('conn-lost-y')
+    expect(nextConnectReconnecting('conn-lost-x', { options: serverA, reconnecting: undefined })).toBeUndefined()
+    // Busy-request notices tell the user which action to retry.
+    expect(busyRequestNotice('execute')).toContain('run the query again')
+    expect(busyRequestNotice('monitor')).toContain('open Activity Monitor again')
+    expect(busyRequestNotice('reconnect')).toContain('select Reconnect again')
+  })
+  it('validates SQL Server Advanced numeric fields before they can enter options', () => {
+    expect(validateSqlAdvancedNumber('commandTimeout', '')).toEqual({ ok: true, value: undefined })
+    expect(validateSqlAdvancedNumber('commandTimeout', '0')).toEqual({ ok: true, value: 0 })
+    expect(validateSqlAdvancedNumber('commandTimeout', '86400')).toEqual({ ok: true, value: 86400 })
+    expect(validateSqlAdvancedNumber('commandTimeout', '86401').ok).toBe(false)
+    expect(validateSqlAdvancedNumber('commandTimeout', '1.5').ok).toBe(false)
+    expect(validateSqlAdvancedNumber('connectTimeout', '').ok).toBe(false)
+    expect(validateSqlAdvancedNumber('connectTimeout', '30')).toEqual({ ok: true, value: 30 })
+    expect(validateSqlAdvancedNumber('packetSize', '100').ok).toBe(false)
+    expect(validateSqlAdvancedNumber('packetSize', '512')).toEqual({ ok: true, value: 512 })
+    expect(validateSqlAdvancedNumber('packetSize', '32768').ok).toBe(false)
+    expect(validateSqlAdvancedNumber('connectRetryInterval', '0').ok).toBe(false)
+    expect(validateSqlAdvancedNumber('connectRetryInterval', '1')).toEqual({ ok: true, value: 1 })
+    expect(validateSqlAdvancedNumber('connectTimeout', '', true).ok).toBe(false)
   })
   it('marks only a custom environment label as one that may give way', () => {
     const html = (environment: string) => renderToStaticMarkup(createElement(EnvironmentTag, { environment, place: 'list' }))

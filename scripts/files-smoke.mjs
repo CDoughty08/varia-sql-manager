@@ -13,7 +13,7 @@ import { join, resolve } from 'node:path'
 import electronPath from 'electron'
 import { xvfbArgs } from './fixtures/xvfb.mjs'
 import { codePageName, legacyCodePage } from '../src/main/text-encoding.ts'
-import { activeDocument, backendReady, banner as bannerOf, caretStatus, documentTabs, encodingStatus, inputModeStatus, lineEndingStatus, outputStatus, part, queryBarButton, queryFact, queryFacts, queryStatus, readOnlyMark, readOnlyStatus, documentTab, selectOpenDocument, statusBar, toolbarButton, unsavedMark, expectEditorShown } from './fixtures/ui.mjs'
+import { activeDocument, backendReady, banner as bannerOf, caretStatus, connectDialogWindow, documentTabs, encodingStatus, inputModeStatus, lineEndingStatus, outputStatus, part, queryBarButton, queryFact, queryFacts, queryStatus, readOnlyMark, readOnlyStatus, documentTab, selectOpenDocument, statusBar, submitConnect, toolbarButton, unsavedMark, expectEditorShown } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'files-profile-'))
@@ -284,10 +284,10 @@ try {
   // status bar back below the query, with SSMS's state sentence, elapsed time and rows, place it on top, and switch
   // segments off.
   await toolbarButton(page, 'Connect').click()
-  await page.getByLabel('Server Name', { exact: true }).fill('server-a')
-  await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(page.getByRole('dialog')).toHaveCount(0)
+  const { window: connectWin, dialog: connectDialog } = await connectDialogWindow(application)
+  await connectDialog.getByLabel('Server Name', { exact: true }).fill('server-a')
+  await connectDialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
+  await submitConnect(connectWin, connectDialog)
   await expect(queryBar()).toHaveAttribute('role', 'status')
   await expect(queryBar().locator(part.queryStatusText)).toHaveText('Connected.')
   await expect(activeTab().locator(part.tabSid)).toHaveText('—')
@@ -348,11 +348,11 @@ try {
   /** Connects to the long server (a new query on it) and runs a query there. */
   async function connectAndRun(database) {
     await toolbarButton(page, 'Connect').click()
-    await page.getByLabel('Server Name', { exact: true }).fill(longServer)
-    await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
-    await page.getByLabel('Database Name', { exact: true }).fill(database)
-    await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
-    await expect(page.getByRole('dialog')).toHaveCount(0)
+    const { window: connectWin, dialog } = await connectDialogWindow(application)
+    await dialog.getByLabel('Server Name', { exact: true }).fill(longServer)
+    await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
+    await dialog.getByLabel('Database Name', { exact: true }).fill(database)
+    await submitConnect(connectWin, dialog)
     await expect(queryFact(page, 'database')).toHaveText(`Database: ${database || 'master'}`)
     await textbox().focus()
     await page.keyboard.insertText('-- varia-fake: sets=W1*10')

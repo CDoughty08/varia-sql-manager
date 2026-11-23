@@ -81,11 +81,13 @@ export default function Inspector({ row, draft, platform, onChange, capture }: P
           <span id={describedBy} className="shortcuts-muted">Tab leaves the box; every other key is recorded, Escape and Enter included. {platform === 'darwin' ? '⌘K' : 'Ctrl+K'} starts a two-part shortcut.</span>
         </div>
         <div className="shortcuts-field">
-          <span id="shortcuts-used-label">Shortcut currently used by:</span>
-          <ul className="shortcuts-used" aria-labelledby="shortcuts-used-label">
+          <div className="shortcuts-used-row">
+            <span id="shortcuts-used-label">Shortcut currently used by:</span>
+            {!used.length && <span className="shortcuts-muted">{verdict ? 'none' : '—'}</span>}
+          </div>
+          {used.length > 0 && <ul className="shortcuts-used" aria-labelledby="shortcuts-used-label">
             {used.map((rule, index) => <li key={index}>{commandDescriptor(rule.command).title} <span className="shortcuts-muted">({scopeTitle(ruleScope(rule))})</span></li>)}
-            {verdict && !used.length && <li className="shortcuts-muted">none</li>}
-          </ul>
+          </ul>}
         </div>
       </fieldset>
     </div>
