@@ -8,7 +8,7 @@ import { connectLive, liveColumns, liveRow, liveRowsSql } from './fixtures/live-
 import { stopIfLowMemory } from './fixtures/memory-load.mjs'
 import { enlargeOutput, pinStackedResults } from './fixtures/results-pane.mjs'
 import { within } from './fixtures/smoke.mjs'
-import { backendReady, documentTabs, gridCell, gridCellSelector, gridPart, jobNotice, matching, outputPane, outputStatus, part, resultGrid, resultGridSelector, statusBar, toolbarButton, transposedCell, transposedGridSelector, transposedName } from './fixtures/ui.mjs'
+import { backendReady, connectDialogWindow, documentTabs, gridCell, gridCellSelector, gridPart, jobNotice, matching, outputPane, outputStatus, part, resultGrid, resultGridSelector, statusBar, submitConnect, toolbarButton, transposedCell, transposedGridSelector, transposedName } from './fixtures/ui.mjs'
 import { xvfbArgs } from './fixtures/xvfb.mjs'
 
 // End-to-end results grid benchmarks (npm run bench:grid): the built app in test mode at 1600 × 1000 (or the screen, if
@@ -159,10 +159,10 @@ try {
   const taskSeconds = async () => (await cdp.send('Performance.getMetrics')).metrics.find(metric => metric.name === 'TaskDuration').value
   const heapBytes = async () => { await cdp.send('HeapProfiler.collectGarbage'); return (await cdp.send('Runtime.getHeapUsage')).usedSize }
   await toolbarButton(page, 'Connect').click()
-  await page.getByLabel('Server Name', { exact: true }).fill('server-a')
-  await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(page.getByRole('dialog')).toHaveCount(0)
+  const { window: connectWin, dialog } = await connectDialogWindow(app)
+  await dialog.getByLabel('Server Name', { exact: true }).fill('server-a')
+  await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
+  await submitConnect(connectWin, dialog)
   await enlargeOutput(page)
   // A first run compiles the grid's code paths; nothing is measured until the next one.
   step = 'warm-up'
@@ -563,7 +563,7 @@ try {
   if (live) {
     step = 'live copy'
     await launch(baseEnv)
-    await connectLive(page, expect)
+    await connectLive(app, page, expect)
     const eol = process.platform === 'win32' ? '\r\n' : '\n'
     const copyRows = 100_000
     const expected = Array.from({ length: copyRows }, (_, index) => liveRow(index + 1).map(value => value ?? 'NULL').join('\t')).join(eol)

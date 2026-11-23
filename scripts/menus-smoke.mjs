@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { dialogLifecycle, longRunRefusals, rendererWatchdog } from './fixtures/dialog-lifecycle.mjs'
 import { sessionPrompts } from './fixtures/session-prompts.mjs'
-import { activeDocumentName, activeMenuItem, anyResultGrid, resultGrid, backendReady, banner, documentTabFullyShown, documentTabs, documentTabSlots, slotTab, editorText as editorTextOf, errorMessages, explorerLabel, gridCell, gridPart, matching, memoryBreakdown, memoryIndicator, menuItemNames, messages as messagesOf, openMenus as openMenusOf, outputPane, outputView, paneMenuButton, paneTab, part, quickInput, searchBox, serverRows, statusBar, titleBar, toolbarButton, expectEditorShown } from './fixtures/ui.mjs'
+import { activeDocumentName, activeMenuItem, anyResultGrid, resultGrid, backendReady, banner, clickToClose, connectDialogWindow, dialogClosed, documentTabFullyShown, documentTabs, documentTabSlots, pressToClose, slotTab, editorText as editorTextOf, errorMessages, explorerLabel, gridCell, gridPart, matching, memoryBreakdown, memoryIndicator, menuItemNames, messages as messagesOf, openMenus as openMenusOf, outputPane, outputView, paneMenuButton, paneTab, part, quickInput, searchBox, serverRows, statusBar, submitConnect, titleBar, toolbarButton, expectEditorShown } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -51,7 +51,8 @@ const setPrimary = async text => {
  * Blink would paste), and the auxclicks.
  */
 const middleClick = async (locator, press) => {
-  await page.evaluate(() => {
+  const view = locator.page()
+  await view.evaluate(() => {
     const seen = window.__variaMiddleClick ??= { pastes: [], releases: [], auxclicks: 0 }
     if (!seen.listening) {
       seen.listening = true
@@ -64,7 +65,7 @@ const middleClick = async (locator, press) => {
   // Blink pastes PRIMARY while it handles the release, which the click awaits.
   if (press) await press(await locator.boundingBox())
   else await locator.click({ button: 'middle' })
-  return page.evaluate(() => { const { pastes, releases, auxclicks } = window.__variaMiddleClick; return { pastes, releases, auxclicks } })
+  return view.evaluate(() => { const { pastes, releases, auxclicks } = window.__variaMiddleClick; return { pastes, releases, auxclicks } })
 }
 const zoomLevel = () => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.getZoomLevel())
 const variable = key => page.evaluate(name => getComputedStyle(document.documentElement).getPropertyValue(name).trim(), '--varia-' + key.replaceAll('.', '-'))
@@ -733,7 +734,8 @@ try {
 
   // 10. Text fields in a dialog have their own menu above the dialog; the title-bar menus stay closed there.
   await choose('File', 'Connect to Server…')
-  const server = page.locator('#connect-server'), password = page.locator('#connect-password'), fieldMenu = menu('Text field')
+  const { window: connectWin, dialog: connectDialog } = await connectDialogWindow(application)
+  const server = connectWin.locator('#connect-server'), password = connectWin.locator('#connect-password'), fieldMenu = connectWin.getByRole('menu', { name: 'Text field', exact: true })
   await expect(server).toBeVisible()
   await server.fill('menus-server')
   await server.selectText()
@@ -742,7 +744,7 @@ try {
   // Outlined while the menu is open, since the field's selection does not show without focus.
   await expect(server).toHaveAttribute('data-menu-target', '')
   const fieldBox = await fieldMenu.boundingBox()
-  expect(await page.evaluate(({ x, y }) => !!document.elementFromPoint(x, y)?.closest('[role="menu"]'), { x: fieldBox.x + fieldBox.width / 2, y: fieldBox.y + fieldBox.height / 2 })).toBe(true)
+  expect(await connectWin.evaluate(({ x, y }) => !!document.elementFromPoint(x, y)?.closest('[role="menu"]'), { x: fieldBox.x + fieldBox.width / 2, y: fieldBox.y + fieldBox.height / 2 })).toBe(true)
   await fieldMenu.getByRole('menuitem', { name: 'Cut', exact: true }).click()
   await expect(server).toHaveValue('')
   await expect(server).toBeFocused()
@@ -756,28 +758,29 @@ try {
     expect(await middleClick(server)).toEqual({ pastes: [], releases: ['pointerup', 'mouseup'], auxclicks: 1 })
     await expect(server).toHaveValue('menus-server')
   }
-  await page.locator('#connect-auth').selectOption('sql')
+  await connectWin.locator('#connect-auth').selectOption('sql')
   await password.fill('hunter2')
   await password.selectText()
   await password.click({ button: 'right', force: true })
   await expect(fieldMenu.getByRole('menuitem', { name: 'Copy', exact: true })).toHaveAttribute('aria-disabled', 'true')
   await expect(fieldMenu.getByRole('menuitem', { name: 'Cut', exact: true })).toHaveAttribute('aria-disabled', 'true')
-  await page.keyboard.press('Escape')
+  await connectWin.keyboard.press('Escape')
   await expect(password).toBeFocused()
   await server.focus()
-  await page.keyboard.press('Shift+F10')
+  await connectWin.keyboard.press('Shift+F10')
   await expect(fieldMenu.getByRole('menuitem', { name: 'Undo', exact: true })).toBeFocused()
   // The menu takes Escape, so the dialog stays open.
-  await page.keyboard.press('Escape')
+  await connectWin.keyboard.press('Escape')
   await expect(server).toBeFocused()
-  await expect(page.getByRole('dialog', { name: 'Connect', exact: true })).toBeVisible()
+  await expect(connectDialog).toBeVisible()
   for (const key of ['F10', 'Alt+f']) {
-    await page.keyboard.press(key)
+    await connectWin.keyboard.press(key)
     await expect(openMenus(), key).toHaveCount(0)
+    await expect(openMenusOf(connectWin), key).toHaveCount(0)
     await expect(server, key).toBeFocused()
   }
-  await page.keyboard.press('Escape')
-  await expect(page.getByRole('dialog', { name: 'Connect', exact: true })).toHaveCount(0)
+  await pressToClose(connectWin, 'Escape')
+  await dialogClosed(connectWin, 'Connect')
   console.log('Menus checks: text field menus in a dialog, by mouse and Shift+F10, with password fields kept from the clipboard.')
 
   // 11. At the smallest window size, a menu opened near the bottom right corner flips to stay inside the window, as do
@@ -854,10 +857,10 @@ try {
   expect(await labels()).toEqual(['Connect…', 'Refresh'])
   await expect(explorerMenu.getByRole('menuitem', { name: 'Refresh', exact: true })).toHaveAttribute('aria-disabled', 'true')
   await explorerMenu.getByRole('menuitem', { name: 'Connect…', exact: true }).click()
-  await page.getByLabel('Server Name', { exact: true }).fill('server-a')
-  await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(page.getByRole('dialog')).toHaveCount(0)
+  const explorerConnect = await connectDialogWindow(application)
+  await explorerConnect.dialog.getByLabel('Server Name', { exact: true }).fill('server-a')
+  await explorerConnect.dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
+  await submitConnect(explorerConnect.window, explorerConnect.dialog)
   // A server: its own items, and New Query on its connection with focus in the new query.
   const serverA = await openExplorerRowMenu('server-a')
   expect(await labels()).toEqual(['Connect…', 'Disconnect', 'Disconnect and Remove from Explorer', 'Environment…', 'New Query', 'Activity Monitor', 'Search Objects…', 'Copy Name', 'Move Up', 'Move Down', 'Refresh'])
@@ -1013,10 +1016,10 @@ try {
   // 13. Query Output: the results grid selects cells as SSMS does and copies them through the backend as tab-separated
   // text, by its menu, its keys, and Edit › Copy; Messages keep text selection, with Select All and Copy in their menu.
   await choose('File', 'Connect to Server…')
-  await page.getByLabel('Server Name', { exact: true }).fill('server-b')
-  await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(page.getByRole('dialog')).toHaveCount(0)
+  const gridConnect = await connectDialogWindow(application)
+  await gridConnect.dialog.getByLabel('Server Name', { exact: true }).fill('server-b')
+  await gridConnect.dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
+  await submitConnect(gridConnect.window, gridConnect.dialog)
   await typeSql('SELECT Id, Name, Note FROM dbo.Notes -- MENUS_GRID_FIXTURE')
   await page.keyboard.press('F5')
   const grid = anyResultGrid(page).first(), outputMenu = menu('Query output'), eol = process.platform === 'win32' ? '\r\n' : '\n'
@@ -1115,10 +1118,10 @@ try {
   // 14. Every surface, twice: each menu opens by mouse or keyboard, Escape closes all of it, the outline goes, and focus
   // returns where it was. Then the table's menu, with its submenus open, is captured in Dark and Light.
   await toolbarButton(page, 'Connect').click()
-  await page.getByLabel('Server Name', { exact: true }).fill('server-a')
-  await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(page.getByRole('dialog')).toHaveCount(0)
+  const setupConnect = await connectDialogWindow(application)
+  await setupConnect.dialog.getByLabel('Server Name', { exact: true }).fill('server-a')
+  await setupConnect.dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
+  await submitConnect(setupConnect.window, setupConnect.dialog)
   await expandExplorerPath(page, ...ordersPath.slice(0, -1))
   await expandExplorerPath(page, 'server-a', 'Security', 'Logins')
   await expect(await row('server-a', 'Security', 'Logins', 'sa')).toBeVisible()
@@ -1149,6 +1152,7 @@ try {
   const dockTab = pane => page.locator('.dv-tab').filter({ has: paneTab(page, pane) })
   const fromEditor = open => async () => { await textbox().focus(); await open() }
   const findField = page.locator('.find-widget .monaco-findInput .input').first(), firstTab = documentTabs(page).getByRole('tab').first()
+  let menuView = page
   const surfaces = [
     ['File by mouse', fromEditor(() => tap(menubarItem('File'))), textbox()],
     ['Edit by Alt+E', fromEditor(() => page.keyboard.press('Alt+e')), textbox()],
@@ -1187,21 +1191,29 @@ try {
     ['the second result set\'s grid', async () => { await rightClick(cell(0, 0, planGrid)) }, planGrid],
     ['Messages', async () => { await tap(outputView(page, /^Messages/)); await rightClick(messages.locator('pre').first()) }, messages],
     ['the find widget\'s field', fromEditor(async () => { await page.keyboard.press('Control+F'); await expect(findField).toBeFocused(); await rightClick(findField, { force: false }) }), findField, () => page.keyboard.press('Escape')],
-    ['a dialog\'s field', async () => { await tap(toolbarButton(page, 'Connect')); await rightClick(page.locator('#connect-server')) },
-      page.locator('#connect-server'), async () => { await page.keyboard.press('Escape'); await expect(page.getByRole('dialog')).toHaveCount(0) }]
+    ['a dialog\'s field', async () => {
+      await tap(toolbarButton(page, 'Connect'))
+      const opened = await connectDialogWindow(application)
+      menuView = opened.window
+      await rightClick(menuView.locator('#connect-server'))
+    }, () => menuView.locator('#connect-server'), async () => {
+      await pressToClose(menuView, 'Escape')
+      await dialogClosed(menuView, 'Connect')
+      menuView = page
+    }]
   ]
   let opened = 0
   for (let round = 0; round < 2; round++) {
     for (const [label, open, restore, after] of surfaces) {
       await open()
-      await expect(openMenus().first(), label).toBeVisible()
+      await expect(openMenusOf(menuView).first(), label).toBeVisible()
       opened++
-      for (let presses = 0; presses < 5 && await openMenus().count(); presses++) await page.keyboard.press('Escape')
-      await expect(openMenus(), label).toHaveCount(0)
-      await expect(page.locator('[data-menu-target]'), label).toHaveCount(0)
+      for (let presses = 0; presses < 5 && await openMenusOf(menuView).count(); presses++) await menuView.keyboard.press('Escape')
+      await expect(openMenusOf(menuView), label).toHaveCount(0)
+      await expect(menuView.locator('[data-menu-target]'), label).toHaveCount(0)
       // A title-bar menu closes to its menubar button; one more Escape leaves the menubar.
       if (await inMenubar()) await page.keyboard.press('Escape')
-      if (restore) await expect(restore, label).toBeFocused()
+      if (restore) await expect(typeof restore === 'function' ? restore() : restore, label).toBeFocused()
       await after?.()
     }
   }
@@ -1289,27 +1301,28 @@ try {
   const popupMode = mode => application.evaluate((_electron, value) => { globalThis.variaPopupMode = value }, mode)
   /** Chooses an item of the latest popup as Electron does (roles get the focused window's contents) and closes it: Linux reports the choice first, macOS the close. */
   const pick = (id, order = 'choice first') => application.evaluate(({ BrowserWindow }, { id, order }) => {
-    const popup = globalThis.variaPopups.at(-1), window = BrowserWindow.getAllWindows()[0]
+    const popup = globalThis.variaPopups.at(-1), window = popup.options.window ?? BrowserWindow.getAllWindows()[0]
     const click = () => popup.menu.getMenuItemById(id).click(undefined, window, window.webContents)
     if (order === 'close first') { popup.options.callback(); click() } else { click(); popup.options.callback() }
   }, { id, order })
   // A text field in a dialog: Cut is Electron's role, acting on the field, which kept focus.
   await choose('File', 'Connect to Server…')
-  const nativeField = page.locator('#connect-server')
+  const nativeConnect = await connectDialogWindow(application)
+  const nativeField = nativeConnect.window.locator('#connect-server')
   await nativeField.fill('native-server')
   await nativeField.selectText()
   await nativeField.click({ button: 'right' })
   await expect.poll(async () => (await popups()).length).toBe(1)
   expect((await popups())[0].items).toEqual(['Undo', 'Redo', '---', 'Cut', 'Copy', 'Paste', 'Delete', '---', 'Select All'])
   await expect(openMenus()).toHaveCount(0)
+  await expect(openMenusOf(nativeConnect.window)).toHaveCount(0)
   await pick('edit.cut@input.context')
   await expect(nativeField).toHaveValue('')
   await expect.poll(clipboard).toBe('native-server')
   await expect(nativeField).toBeFocused()
   await nativeField.fill('server-a')
-  await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await nativeConnect.dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
+  await submitConnect(nativeConnect.window, nativeConnect.dialog)
   await expandExplorerPath(page, ...ordersPath.slice(0, -1))
   const nativeTree = explorerTree(page), nativeTable = await explorerRow(page, ...ordersPath)
   await expect(nativeTable).toBeVisible()
@@ -1431,8 +1444,7 @@ try {
     // The typed query makes exit ask about saving; answer Don't Save.
     await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
     await toolbarButton(page, 'Connect').click()
-    const connect = page.getByRole('dialog', { name: 'Connect', exact: true })
-    await expect(connect.getByText('Loading saved connections…')).toHaveCount(0)
+    const { window: liveConnectWin, dialog: connect } = await connectDialogWindow(application)
     await connect.getByLabel('Server Name', { exact: true }).fill(process.env.VARIA_TEST_SQL_SERVER)
     if (liveUser) {
       await connect.getByLabel('Authentication', { exact: true }).selectOption('sql')
@@ -1440,8 +1452,7 @@ try {
       await connect.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
     } else await connect.getByLabel('Authentication', { exact: true }).selectOption('windows')
     await connect.getByLabel('Trust server certificate', { exact: true }).check()
-    await connect.getByRole('button', { name: 'Connect', exact: true }).click()
-    await expect(connect).toHaveCount(0, { timeout: 30000 })
+    await submitConnect(liveConnectWin, connect, { timeout: 30000 })
     const liveServer = serverRows(page).first()
     await expect(liveServer).toBeVisible({ timeout: 30000 })
     const liveName = await explorerLabel(liveServer).textContent(), wait = { timeout: 30000 }

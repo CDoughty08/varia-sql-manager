@@ -1,5 +1,5 @@
 import { electron, expect } from './fixtures/smoke.mjs'
-import { activeDocumentName, backendReady, documentTab, errorBanner, statusSegment, editorGroupForDocument, editorGroups, editorHover, editorOverflowHosts, editorSurface, editorText, editorTextbox, editorWordPoint, floatingEditorGroups, movePane, paneMenuButton, part, peekCard, peekCardInEditor, dockPopoutBack, popoutDockButton, popoutTabs, queryDatabase, queryServer, suggestionItems, suggestionOption, suggestionWidget, toolbarButton, expectEditorShown } from './fixtures/ui.mjs'
+import { activeDocumentName, backendReady, connectDialogWindow, documentTab, errorBanner, statusSegment, editorGroupForDocument, editorGroups, editorHover, editorOverflowHosts, editorSurface, editorText, editorTextbox, editorWordPoint, floatingEditorGroups, movePane, paneMenuButton, part, peekCard, peekCardInEditor, dockPopoutBack, popoutDockButton, popoutTabs, queryDatabase, queryServer, submitConnect, suggestionItems, suggestionOption, suggestionWidget, toolbarButton, expectEditorShown } from './fixtures/ui.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { parseCalls } from './fixtures/call-log.mjs'
@@ -127,10 +127,10 @@ async function connectBigQuery() {
 }
 async function connect(server) {
   await toolbarButton(page, 'Connect').click()
-  await page.getByLabel('Server Name', { exact: true }).fill(server)
-  await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(page.getByRole('dialog')).toHaveCount(0)
+  const { window: connectWin, dialog } = await connectDialogWindow(application)
+  await dialog.getByLabel('Server Name', { exact: true }).fill(server)
+  await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
+  await submitConnect(connectWin, dialog)
   const selected = queryServer(page).locator('option').filter({ hasText: server })
   await expect(selected).toHaveCount(1)
   const connectionId = await selected.getAttribute('value')

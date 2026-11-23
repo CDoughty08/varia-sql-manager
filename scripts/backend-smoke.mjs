@@ -2,7 +2,7 @@ import { electron, expect, within } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { explorerRow } from './fixtures/explorer-tree.mjs'
-import { anyResultGrid, backendBanner, backendReady, connectionDot, errorMessages, explorerSearchBox, explorerLabel, explorerTree, gridCell as gridCellOf, lostServerRows, menuItemNames, messages as messagesOf, openMenus, outputStatus, outputView, queryStatus, statusBar as statusBarOf, queryBarButton, toolbarButton, expectEditorShown } from './fixtures/ui.mjs'
+import { anyResultGrid, backendBanner, backendReady, clickToClose, connectDialogWindow, connectionDot, dialogClosed, errorMessages, explorerSearchBox, explorerLabel, explorerTree, gridCell as gridCellOf, lostServerRows, menuItemNames, messages as messagesOf, openMenus, outputStatus, outputView, pressToClose, queryStatus, statusBar as statusBarOf, queryBarButton, submitConnect, toolbarButton, expectEditorShown } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 // Backend restarts end to end: the real backend's readiness and reload, a fake backend (tests/fixtures/backend.mjs)
@@ -73,9 +73,7 @@ const gridCell = (row, column) => gridCellOf(anyResultGrid(page), row, column).f
 const running = () => expect(outputStatus(page)).toContainText(/^Executing · /)
 async function connectDialog() {
   await toolbarButton(page, 'Connect').click()
-  const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
-  await expect(dialog.getByText('Loading saved connections…')).toHaveCount(0)
-  return dialog
+  return connectDialogWindow(app)
 }
 async function fillLogin(dialog, server, user, password) {
   await dialog.getByLabel('Server Name', { exact: true }).fill(server)
@@ -204,10 +202,9 @@ try {
   // 8. Live: a real session is lost with its backend, nothing is re-run, and Reconnect opens a new session.
   if (process.env.VARIA_TEST_SQL_SERVER) {
     step = 'live session loss'
-    let dialog = await connectDialog()
+    let { window: liveWin, dialog } = await connectDialog()
     await fillLogin(dialog, process.env.VARIA_TEST_SQL_SERVER, liveUser, process.env.VARIA_TEST_SQL_PASSWORD)
-    await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
-    await expect(dialog).toHaveCount(0, { timeout: 30000 })
+    await submitConnect(liveWin, dialog, { timeout: 30000 })
     await typeSql("CREATE TABLE #varia_session_marker (id int); SELECT OBJECT_ID('tempdb..#varia_session_marker') AS marker;")
     await execute().click()
     await expect(gridCell(0, 0)).not.toHaveText('NULL', { timeout: 30000 })
@@ -224,15 +221,15 @@ try {
     await expect(banner()).toContainText('1 connection was lost and 1 running query was stopped; nothing was re-run.')
     await expect(lostServerRows(page)).toContainText('(Disconnected · Backend restarted)')
     await lostServerRows(page).getByRole('button', { name: /^Reconnect/ }).click()
-    dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
+    ;({ window: liveWin, dialog } = await connectDialogWindow(app))
     await expect(dialog.getByLabel('Server Name', { exact: true })).toHaveValue(process.env.VARIA_TEST_SQL_SERVER)
     // Windows Authentication has no Password field; SQL Server Authentication's starts empty.
     if (liveUser) {
       await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue('')
       await dialog.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
     } else await expect(dialog.getByLabel('Password', { exact: true })).toHaveCount(0)
-    await dialog.getByRole('button', { name: liveUser ? 'Update Credentials and Reconnect' : 'Connect', exact: true }).click()
-    await expect(dialog).toHaveCount(0, { timeout: 30000 })
+    await clickToClose(dialog.getByRole('button', { name: liveUser ? 'Update Credentials and Reconnect' : 'Connect', exact: true }))
+    await dialogClosed(liveWin, 'Connect', { timeout: 30000 })
     await expect(lostServerRows(page)).toHaveCount(0)
     // SPIDs can be reused, so the old session's temporary table shows whether the session is new.
     await typeSql("SELECT OBJECT_ID('tempdb..#varia_session_marker') AS marker;")
@@ -251,10 +248,9 @@ try {
   const calls = async () => parseCalls(await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => ''))
   await launch({ VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control, VARIA_BACKEND_LIVENESS_MS: '2000' })
   await expect(backendReady(page, 'fake')).toHaveText('Ready')
-  let dialog = await connectDialog()
+  let { window: crashWin, dialog } = await connectDialog()
   await fillLogin(dialog, 'crash-server', 'reader', 'smoke-password-marker')
-  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(dialog).toHaveCount(0)
+  await submitConnect(crashWin, dialog)
   await expect(await explorerRow(page, 'crash-server')).toBeVisible()
   // A long action's progress (D1c): main checks the backend's action.progress EVENTs and pushes them to the window that sent the
   // request, at most 4 a second (each step's start at once, the latest held percent at the interval's end), with only the
@@ -317,16 +313,17 @@ try {
   // Enter on the lost row reconnects it, as its button does: the Connect dialog opens filled in from it.
   await explorerLabel(lostRow).click()
   await page.keyboard.press('Enter')
-  await expect(page.getByRole('dialog', { name: 'Connect', exact: true }).getByLabel('Server Name', { exact: true })).toHaveValue('crash-server')
-  await page.keyboard.press('Escape')
-  await expect(page.getByRole('dialog')).toHaveCount(0)
+  const enterReconnect = await connectDialogWindow(app)
+  await expect(enterReconnect.dialog.getByLabel('Server Name', { exact: true })).toHaveValue('crash-server')
+  await pressToClose(enterReconnect.window, 'Escape')
+  await dialogClosed(enterReconnect.window, 'Connect')
   // Execute is an explicit reconnect request for this remembered target; cancelling Connect runs nothing.
   await expect(execute()).toBeEnabled()
   await execute().click()
-  const executeReconnect = page.getByRole('dialog', { name: 'Connect', exact: true })
-  await expect(executeReconnect.getByLabel('Server Name', { exact: true })).toHaveValue('crash-server')
-  await executeReconnect.getByRole('button', { name: 'Cancel', exact: true }).click()
-  await expect(executeReconnect).toHaveCount(0)
+  const executeReconnectWin = await connectDialogWindow(app)
+  await expect(executeReconnectWin.dialog.getByLabel('Server Name', { exact: true })).toHaveValue('crash-server')
+  await clickToClose(executeReconnectWin.dialog.getByRole('button', { name: 'Cancel', exact: true }))
+  await dialogClosed(executeReconnectWin.window, 'Connect')
   await expect(queryStatus(page)).toContainText('Connection lost.')
   await expect(queryStatus(page)).toContainText('crash-server Disconnected')
   await expect(banner()).toContainText('The SQL backend stopped unexpectedly and was restarted. 1 connection was lost and 1 running query was stopped; nothing was re-run.')
@@ -347,13 +344,14 @@ try {
   await bannerInViewport()
   await page.screenshot({ path: resolve('artifacts', 'backend-restart.png') })
   await banner().getByRole('button', { name: 'Reconnect…', exact: true }).click()
-  dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
+  const bannerReconnect = await connectDialogWindow(app)
+  dialog = bannerReconnect.dialog
   await expect(dialog.getByLabel('Server Name', { exact: true })).toHaveValue('crash-server')
   await expect(dialog.getByLabel('Login', { exact: true })).toHaveValue('reader')
   await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue('')
   await dialog.getByLabel('Password', { exact: true }).fill('smoke-password-marker')
-  await dialog.getByRole('button', { name: 'Update Credentials and Reconnect', exact: true }).click()
-  await expect(dialog).toHaveCount(0)
+  await clickToClose(dialog.getByRole('button', { name: 'Update Credentials and Reconnect', exact: true }))
+  await dialogClosed(bannerReconnect.window, 'Connect')
   await expect(lostServerRows(page)).toHaveCount(0)
   await expect(await explorerRow(page, 'crash-server')).toHaveAttribute('aria-expanded', 'true')
   await expect(await explorerRow(page, 'crash-server')).toHaveAttribute('id', retainedRootId)

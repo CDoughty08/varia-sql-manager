@@ -72,7 +72,7 @@ internal static class AgentActionChecks
     {
         var failures = AgentSql.LintWrites().Where(item => item.Problems.Count > 0).Select(item => item.Name + ": " + string.Join(", ", item.Problems)).ToList();
         check(failures.Count == 0 && AgentSql.Writes.Count == 6, "every Agent write passes its lint, as do the job verbs' own reads" + (failures.Count == 0 ? "" : ": " + string.Join("; ", failures)));
-        check(ActionSql.Lint().Count(item => item.Name.StartsWith("agent ", StringComparison.Ordinal)) == AgentSql.Writes.Count + 2 + AgentSql.LintJobSaves().Count() + AgentSql.LintServerWrites().Count() + AgentSql.LintHistoryWrites().Count() + AgentSql.LintScheduleSaves().Count() + AgentSql.LintProxySaves().Count(), "the object actions' lint runs the Agent writes too, SQL Server Agent Properties', the job document's saves and Delete History's, the Schedules document's and the proxy document's included");
+        check(ActionSql.Lint().Count(item => item.Name.StartsWith("agent ", StringComparison.Ordinal)) == AgentSql.Writes.Count + 2 + AgentSql.LintJobSaves().Count() + AgentSql.LintServerWrites().Count() + AgentSql.LintHistoryWrites().Count() + AgentSql.LintObjectWrites().Count() + AgentSql.LintScheduleSaves().Count() + AgentSql.LintProxySaves().Count(), "the object actions' lint runs the Agent writes too, SQL Server Agent Properties', the job document's saves and Delete History's, the alert and operator batches, the Schedules document's and the proxy document's included");
         var start = AgentSql.StartJob.Text;
         string Call(string call) => AgentSql.Resolve + call + AgentSql.Check;
         var misses = new (string Text, string Problem)[]

@@ -1804,19 +1804,28 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .connection-footer > span { flex: 1; }
 .connection-footer > button:where(:not(.ui-button)) { min-width: 78px; border-color: var(--varia-button-border); }
 .connection-tabs { display: flex; gap: 12px; margin: 2px 0 10px; }
-.connection-tabs > button { border-radius: 0; border-bottom: 2px solid transparent; padding: 6px 0; }
+.connection-tabs > button { display: inline-flex; align-items: center; min-height: 0; border-radius: 0; border: 0; border-bottom: 2px solid transparent; padding: 6px 0; background: transparent; color: var(--varia-dialog-descriptionForeground); }
+.connection-tabs > button:hover:not(:disabled) { background: transparent; color: var(--varia-foreground); }
 .connection-tabs > button[aria-selected="true"] { color: var(--varia-panelTitle-activeForeground); border-bottom-color: var(--varia-panelTitle-activeBorder); transition: none; }
 .connection-filter { width: 100%; margin-bottom: 7px; }
 .connection-sources { height: 176px; overflow-y: auto; border-bottom: 1px solid var(--varia-dialog-separatorBackground); padding-bottom: 8px; }
 .connection-sources details { margin: 2px 0 8px; }
-.connection-sources summary { padding: 4px; cursor: pointer; color: var(--varia-settings-headerForeground); }
+.connection-sources summary { padding: 4px 2px; cursor: pointer; color: var(--varia-settings-headerForeground); font-size: var(--varia-size-xs); font-weight: 600; }
 .connection-empty { font-size: var(--varia-size-xs); padding: 2px 16px; color: var(--varia-dialog-descriptionForeground); }
 .connection-list-row { display: flex; align-items: center; border-radius: var(--varia-radius-sm); }
+.connection-list-row:not(.selected):hover { background: var(--varia-list-hoverBackground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
 .connection-list-row.selected { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); }
 .connection-choice { display: flex; align-items: center; flex: 1; gap: 8px; min-width: 0; text-align: left; padding: 6px 5px; }
+.connection-choice:hover:not(:disabled) { background: transparent; color: inherit; }
 .connection-choice > span:last-child { min-width: 0; flex: 1; }
 .connection-choice strong, .connection-choice small { display: block; font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .connection-choice small { color: var(--varia-dialog-descriptionForeground); font-size: var(--varia-size-xs); margin-top: 2px; }
+.connection-list-row.selected .connection-choice small { color: var(--varia-list-activeSelectionForeground); opacity: .88; }
+.connection-row-actions { display: flex; align-items: center; gap: 2px; padding-inline-end: var(--varia-space-1); flex-shrink: 0; opacity: 0; }
+.connection-list-row:hover .connection-row-actions { opacity: 1; transition: opacity var(--varia-motion-fast) var(--varia-motion-ease); }
+.connection-list-row:focus-within .connection-row-actions, .connection-list-row.selected .connection-row-actions { opacity: 1; }
+.connect-live-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; margin-inline-end: 6px; background: var(--varia-objectExplorer-connectedIndicator); }
+.connection-list-row.selected .connect-live-dot { outline: 1px solid var(--varia-list-activeSelectionForeground); }
 .connection-swatch { width: 3px; height: 26px; border-radius: 1px; flex-shrink: 0; }
 .favorite-button { color: var(--varia-connection-favoriteForeground); }
 .browse-toolbar { display: flex; align-items: center; gap: 9px; margin: 4px 0 8px; }
@@ -1842,13 +1851,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .advanced-action { display: flex; justify-content: flex-end; }
 .property-section { border: 0; border-top: 1px solid var(--varia-dialog-separatorBackground); padding: 9px 0 0; margin: 12px 0 0; min-width: 0; }
 .property-section legend { padding: 0 7px 0 0; color: var(--varia-settings-headerForeground); font-size: var(--varia-size-xs); }
-.connection-save-actions { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 10px; }
-.connection-save-actions .codicon { font-size: var(--varia-glyph-sm); }
-.connection-preview textarea { width: 100%; resize: vertical; font: var(--varia-size-sm)/1.6 var(--varia-font-mono); overflow-wrap: anywhere; }
-.advanced-backdrop { z-index: 20010; }
-.advanced-dialog { width: min(640px, calc(100vw - 40px)); }
-.advanced-dialog .property-row { grid-template-columns: 230px minmax(0, 1fr); }
-.advanced-dialog .field-note { margin-top: 16px; }
+.connection-preview textarea { width: 100%; resize: vertical; font: var(--varia-size-sm)/1.5 var(--varia-font-mono); overflow-wrap: anywhere; }
 .connect-inline-action { margin-inline-start: var(--varia-space-1); }
 .bq-account .field-note { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; overflow-wrap: anywhere; }
 .bq-unit { flex: 0 0 84px; width: 84px; }
@@ -1868,13 +1871,15 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .connect-error-details dl > div { display: contents; }
 .connect-error-details dt { color: var(--varia-descriptionForeground); }
 .connect-error-details dd { margin: 0; color: var(--varia-foreground); overflow-wrap: anywhere; user-select: text; }
-/* Connect v2: saved and discovered servers on the left, the form on the right, each scrolling on its own, so the dialog
-   keeps one size and Connect, with any error under it, never leaves the view. A grid, so the actions (a sibling of the
-   panes, outside every scroll) sit under the form beside the list, and span the dialog once the panes stack. */
-.connection-modal.connect-dialog { display: grid; grid-template-columns: 272px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; width: min(820px, calc(100vw - 40px)); height: min(520px, calc(100vh - 40px)); max-height: none; }
-.connect-dialog .connection-heading { grid-column: 1 / -1; padding: var(--varia-space-3) var(--varia-space-4); border-bottom: 1px solid var(--varia-dialog-separatorBackground); }
+/* Connect v2 OS window: resizable 320px left connections rail separated by a draggable splitter from the form pane and
+   bottom actions, expanding cleanly inside a dialog OS window (900x730 default) or over the backdrop fallback. */
+.connection-modal.connect-dialog { display: grid; grid-template-columns: var(--connect-rail-width, 320px) 5px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; width: min(900px, calc(100vw - 40px)); height: min(730px, calc(100vh - 40px)); max-height: none; overflow: hidden; }
+.connect-dialog .connection-heading, .connect-dialog .dialog-titlebar { grid-column: 1 / -1; }
+.connect-dialog .connection-heading { padding: var(--varia-space-3) var(--varia-space-4); border-bottom: 1px solid var(--varia-dialog-separatorBackground); }
 .connect-panes { display: contents; }
-.connect-sources-pane { grid-column: 1; grid-row: 2 / 4; display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: var(--varia-space-2) var(--varia-space-3) var(--varia-space-3); border-right: 1px solid var(--varia-dialog-separatorBackground); }
+.connect-sources-pane { grid-column: 1; grid-row: 2 / 4; display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: var(--varia-space-2) var(--varia-space-3) var(--varia-space-3); background: var(--varia-sideBar-background); }
+.connect-sources-top { display: flex; align-items: center; justify-content: space-between; gap: var(--varia-space-2); margin-bottom: var(--varia-space-2); }
+.connect-sources-top > .connection-tabs { margin: 0; gap: var(--varia-space-3); }
 .connect-sources-pane .connection-sources { flex: 1; height: auto; min-height: 0; border-bottom: 0; padding-bottom: 0; }
 /* A narrow pane: a long custom label gives way with the name, so both stay inside the row (its tooltip has the label
    whole). A preset's word (PROD, STAGING) keeps the base flex: none and stays whole: only the name gives way to it. */
@@ -1885,13 +1890,46 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .connect-sources-pane .connection-choice:focus-visible, .connect-sources-pane .discovered-server:focus-visible { outline-offset: -2px; }
 .connection-filter-box { position: relative; display: flex; align-items: center; margin-bottom: var(--varia-space-2); }
 .connection-filter-icon { position: absolute; inset-inline-start: var(--varia-space-2); color: var(--varia-icon-foreground); pointer-events: none; }
-.connection-filter-box > .connection-filter { width: 100%; margin: 0; padding-inline-start: 28px; }
-.connect-form-pane { grid-column: 2; grid-row: 2; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.connect-form-pane > .connection-property-tabs { flex: none; margin: 0; padding: var(--varia-space-2) var(--varia-space-4) 0; }
-.connect-form-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: var(--varia-space-2) var(--varia-space-4) var(--varia-space-3); }
-.connect-dialog .property-row { grid-template-columns: 152px minmax(0, 1fr); }
+.connection-filter-box > .connection-filter { width: 100%; margin: 0; padding-inline-start: 28px; padding-inline-end: 26px; }
+.connection-filter-clear { position: absolute; inset-inline-end: 2px; width: 20px; height: 20px; padding: 0; border: 0; color: var(--varia-icon-foreground); }
+.connect-splitter { position: relative; grid-column: 2; grid-row: 2 / 4; cursor: col-resize; touch-action: none; user-select: none; }
+.connect-splitter::after { content: ''; position: absolute; inset: 0 auto 0 50%; width: 1px; transform: translateX(-0.5px); background: var(--varia-dialog-separatorBackground); }
+.connect-splitter:hover::after, .connect-splitter.is-dragging::after, .connect-splitter:focus-visible::after { width: 2px; background: var(--varia-sash-hoverBorder); }
+.connect-splitter:hover::after { transition: width var(--varia-motion-fast) var(--varia-motion-ease), background-color var(--varia-motion-fast) var(--varia-motion-ease); }
+.connect-splitter:focus-visible { outline: none; }
+.connect-form-pane { grid-column: 3; grid-row: 2; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.connect-form-header { flex: none; display: flex; flex-direction: column; gap: var(--varia-space-2); padding: var(--varia-space-3) var(--varia-space-4) 0; border-bottom: 1px solid var(--varia-dialog-separatorBackground); }
+.connect-engine-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--varia-space-2); }
+.connect-engine-switch { display: inline-flex; padding: 2px; gap: 2px; border: 1px solid var(--varia-button-border); border-radius: var(--varia-radius-sm); background: var(--varia-sideBar-background); }
+.connect-engine-switch > button { border: 0; min-width: 92px; }
+.connect-header-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--varia-space-1); margin-inline-start: auto; }
+.connect-header-actions .codicon { font-size: var(--varia-glyph-sm); }
+.connect-form-header > .connection-property-tabs { flex: none; margin: 0; gap: var(--varia-space-4); }
+.connect-form-header > .connection-property-tabs > button { padding: var(--varia-space-1) 0 var(--varia-space-2); margin-bottom: -1px; }
+.connect-tab-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px; padding: 0 5px; margin-inline-start: 6px; border-radius: var(--varia-radius-pill); background: var(--varia-badge-background); color: var(--varia-badge-foreground); font-size: var(--varia-size-xs); font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
+.connect-form-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: var(--varia-space-3) var(--varia-space-4); }
+.connect-dialog .property-row { grid-template-columns: 164px minmax(0, 1fr); }
 .connect-dialog .property-row > label { font-size: var(--varia-size-sm); }
-.connect-dialog .connection-preview textarea { height: 220px; }
+.connect-pw-saved { display: inline-flex; align-items: center; gap: 5px; width: fit-content; max-width: 100%; padding: 2px 8px; border-radius: var(--varia-radius-sm); background: var(--varia-statusPill-successBackground); color: var(--varia-statusPill-successForeground); font-size: var(--varia-size-xs); font-weight: 500; }
+.connect-security-group { margin-top: var(--varia-space-3); }
+.connect-swatches { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.connect-swatch-btn { position: relative; width: 20px; height: 20px; padding: 0; border: 1px solid var(--varia-button-border); border-radius: 50%; flex: none; cursor: pointer; }
+.connect-swatch-btn:hover:not(:disabled) { transform: scale(1.1); transition: transform var(--varia-motion-fast) var(--varia-motion-ease); }
+.connect-swatch-btn.is-selected { outline: 2px solid var(--varia-focusBorder); outline-offset: 2px; }
+.connect-color-picker { width: 28px; height: 22px; padding: 1px; border-radius: var(--varia-radius-sm); cursor: pointer; }
+.connect-advanced-panel { display: flex; flex-direction: column; gap: var(--varia-space-3); }
+.connect-advanced-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: var(--varia-space-2); }
+.connect-advanced-toolbar > .field-note { margin-inline-end: auto; }
+.connect-advanced-filter { flex: 1 1 180px; margin-bottom: 0; }
+.connect-advanced-panel .property-section:first-of-type { margin-top: 0; }
+.connect-advanced-panel .property-row { grid-template-columns: 220px minmax(0, 1fr); }
+.connection-preview { display: flex; flex-direction: column; gap: var(--varia-space-2); }
+.connect-preview-header { display: flex; align-items: center; justify-content: space-between; gap: var(--varia-space-2); flex-wrap: wrap; }
+.connect-dialog .connection-preview textarea { height: 150px; min-height: 96px; }
+.connect-paste-box { display: flex; flex-direction: column; gap: var(--varia-space-2); margin-top: var(--varia-space-3); padding-top: var(--varia-space-3); border-top: 1px solid var(--varia-dialog-separatorBackground); }
+.connect-paste-box > label { font-size: var(--varia-size-xs); font-weight: 600; color: var(--varia-settings-headerForeground); }
+.connect-paste-box textarea { height: 96px; }
+.connect-paste-actions { display: flex; align-items: center; justify-content: space-between; gap: var(--varia-space-2); flex-wrap: wrap; }
 .connect-dialog .connection-footer { flex-wrap: wrap; align-items: end; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-4); }
 .connect-dialog .connection-footer > div { display: flex; gap: var(--varia-space-2); min-width: 0; max-width: 100%; }
 .connect-footer-end { margin-inline-start: auto; }
@@ -1904,33 +1942,30 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .connect-dialog .connection-footer button[data-reserve-label]::before { content: attr(data-reserve-label); visibility: hidden; }
 .connect-dialog .connection-footer button[data-reserve-busy-label]::after { content: attr(data-reserve-busy-label); visibility: hidden; }
 /* At Connect: busy, notices and the failure just above the footer, which stays put at the dialog's bottom, so Connect
-   and Stop never move under the pointer. Bounded to half the dialog, a long message scrolls here instead of pushing
-   Connect out. */
-.connect-actions { grid-column: 2; grid-row: 3; display: flex; flex-direction: column; min-width: 0; min-height: 0; max-height: calc(min(520px, 100vh - 40px) / 2); }
-.connect-outcome { flex: 0 1 auto; min-height: 0; overflow-y: auto; padding: var(--varia-space-2) var(--varia-space-4); border-top: 1px solid var(--varia-dialog-separatorBackground); }
+   and Stop never move under the pointer. Bounded against the viewport, a long message scrolls here instead of pushing
+   Connect out or shrinking an auto-sized grid track. */
+.connect-actions { grid-column: 3; grid-row: 3; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.connect-outcome { flex: 0 1 auto; max-height: min(260px, 35vh); min-height: 0; overflow-y: auto; padding: var(--varia-space-2) var(--varia-space-4); border-top: 1px solid var(--varia-dialog-separatorBackground); }
 .connect-outcome > .field-note { margin: 0; }
 .connect-tested { display: flex; flex-direction: column; gap: var(--varia-space-1); }
 .connect-tested > .field-note { display: flex; align-items: flex-start; gap: var(--varia-space-1); margin: 0; }
 .connect-tested > .field-note[data-tone="success"] [data-icon] { color: var(--varia-successForeground); }
 .connect-tested > .field-note[data-tone="warning"] [data-icon] { color: var(--varia-warningForeground); }
-.connect-dialog .advanced-action { align-items: center; gap: var(--varia-space-2); }
-.advanced-summary { color: var(--varia-dialog-descriptionForeground); font-size: var(--varia-size-xs); }
-.custom-properties-header { display: flex; align-items: center; gap: var(--varia-space-2); min-width: 0; }
-.custom-properties-toggle { display: inline-flex; flex: none; align-items: center; gap: var(--varia-space-1); padding: var(--varia-space-0) var(--varia-space-1) var(--varia-space-0) 0; color: var(--varia-settings-headerForeground); font-size: var(--varia-size-xs); }
-.custom-properties-summary { display: inline-flex; flex: 1; align-items: center; gap: 6px; min-width: 0; overflow: hidden; color: var(--varia-dialog-descriptionForeground); font-size: var(--varia-size-xs); }
-.custom-properties-summary .connection-swatch { width: 8px; height: 8px; border-radius: 50%; }
-.custom-properties-summary .environment-tag[data-place="list"] { margin-left: 0; }
-.custom-properties-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.connect-dialog .custom-properties > .property-grid { margin-top: var(--varia-space-2); }
-.connect-dialog .custom-properties > .property-grid[hidden] { display: none; }
-/* A narrow window (or a zoomed one) stacks the panes, saved servers above the form, in one scroll: nested scrolls would
-   leave each too little room. The list keeps two rows' height. Connect with its outcome stays under the scroll, across
-   the dialog, so scrolling back up to the list never takes it out of view. */
-@media (max-width: 760px) {
+/* A narrow window stacks the panes (saved servers above the form) in one scroll so neither is starved. */
+.connection-modal.connect-dialog.is-stacked { grid-template-columns: minmax(0, 1fr); }
+.connection-modal.connect-dialog.is-stacked .connect-panes { grid-column: 1; grid-row: 2; display: flex; flex-direction: column; min-height: 0; overflow-y: auto; }
+.connection-modal.connect-dialog.is-stacked .connect-splitter { display: none; }
+.connection-modal.connect-dialog.is-stacked .connect-sources-pane { flex: none; border-bottom: 1px solid var(--varia-dialog-separatorBackground); }
+.connection-modal.connect-dialog.is-stacked .connect-sources-pane .connection-sources { flex: none; height: 156px; }
+.connection-modal.connect-dialog.is-stacked .connect-form-pane { flex: 1 0 auto; min-height: auto; }
+.connection-modal.connect-dialog.is-stacked .connect-form-scroll { flex: none; min-height: auto; overflow-y: visible; }
+.connection-modal.connect-dialog.is-stacked .connect-actions { grid-column: 1; }
+@media (max-width: 720px) {
   .connection-modal.connect-dialog { grid-template-columns: minmax(0, 1fr); }
   .connect-panes { grid-column: 1; grid-row: 2; display: flex; flex-direction: column; min-height: 0; overflow-y: auto; }
-  .connect-sources-pane { flex: none; border-right: 0; border-bottom: 1px solid var(--varia-dialog-separatorBackground); }
-  .connect-sources-pane .connection-sources { flex: none; height: 136px; }
+  .connect-splitter { display: none; }
+  .connect-sources-pane { flex: none; border-bottom: 1px solid var(--varia-dialog-separatorBackground); }
+  .connect-sources-pane .connection-sources { flex: none; height: 156px; }
   .connect-form-pane { flex: 1 0 auto; min-height: auto; }
   .connect-form-scroll { flex: none; min-height: auto; overflow-y: visible; }
   .connect-actions { grid-column: 1; }
@@ -3447,6 +3482,49 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .agent-history-delete-older { display: flex; gap: var(--varia-space-1); padding-left: var(--varia-space-5); }
 .agent-history-delete-older > input { width: 72px; }
 .agent-history-delete-note { margin: var(--varia-space-2) 0 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); }
+/* SQL Server Agent alerts and operators (AG-7): the alert document's When / Then / Options, its operator chips with E, P and N toggles, the
+   operator document, and the Operators and notifications grid with its side pane. A pressed toggle, a changed cell and the selected operator
+   column read from colour and weight, and from the system colours in forced colours. */
+.agent-alert-raise, .agent-alert-condition, .agent-alert-include, .agent-alert-count, .agent-operator-email, .agent-operator-days { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1) var(--varia-space-2); }
+.agent-alert-condition > .property-input { flex: 1 1 120px; min-width: 0; }
+.agent-alert-condition > select.property-input { flex: 0 0 auto; }
+.agent-alert-wmi { margin: 0; padding: var(--varia-space-2); white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--varia-font-mono); font-size: var(--varia-size-sm); border: 1px solid var(--varia-widget-border); border-radius: var(--varia-radius-sm); }
+.agent-alert-counter-values { display: flex; flex-direction: column; gap: var(--varia-space-1); margin-top: var(--varia-space-2); }
+.agent-alert-counter-values .properties-table { width: auto; }
+.agent-alert-chips, .agent-alert-chip-list { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); }
+.agent-alert-chip { display: inline-flex; align-items: center; gap: var(--varia-space-1); padding: var(--varia-space-0) var(--varia-space-0) var(--varia-space-0) var(--varia-space-2); border: 1px solid var(--varia-widget-border); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); }
+.agent-alert-chip[data-new] { border-style: dashed; }
+.agent-alert-method { min-width: 20px; padding: 0 var(--varia-space-1); font-size: var(--varia-size-xs); line-height: 16px; background: transparent; color: var(--varia-descriptionForeground); border: 1px solid transparent; }
+.agent-alert-method[aria-pressed="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); font-weight: 600; }
+.agent-alert-new-operator { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); margin-top: var(--varia-space-2); }
+.agent-alert-new-operator > .property-input { flex: 1 1 140px; min-width: 0; }
+.agent-alert-new-operator > .field-note { flex-basis: 100%; margin: 0; }
+.agent-operator-duty .properties-table, .agent-operator-notifications .properties-table { width: auto; }
+.agent-operator-jobs { margin: var(--varia-space-1) 0 0; padding-left: var(--varia-space-4); font-size: var(--varia-size-sm); }
+.agent-operators-body { display: flex; align-items: flex-start; gap: var(--varia-space-3); min-height: 0; }
+.agent-operators-grid-wrap { flex: 1 1 auto; min-width: 0; max-height: 60vh; overflow: auto; }
+.agent-operators-grid { width: auto; border-collapse: collapse; }
+.agent-operators-grid thead th { position: sticky; top: 0; z-index: 1; background: var(--varia-editor-background); }
+.agent-operators-grid td, .agent-operators-grid th { padding: 0; text-align: center; }
+.agent-operators-grid tbody th { padding: 0 var(--varia-space-2); text-align: left; white-space: nowrap; font-weight: normal; }
+.agent-operators-grid tr[data-disabled] th { color: var(--varia-descriptionForeground); }
+.agent-operators-head, .agent-operators-cell { width: 100%; min-width: 40px; padding: var(--varia-space-0) var(--varia-space-1); background: transparent; border: 1px solid transparent; color: inherit; }
+.agent-operators-cell { font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); }
+.agent-operators-cell[aria-disabled="true"] { cursor: default; }
+.agent-operators-cell:hover:not([aria-disabled="true"]), .agent-operators-head:hover { background: var(--varia-list-hoverBackground); }
+.agent-operators-grid [data-selected] { background: var(--varia-list-inactiveSelectionBackground); }
+.agent-operators-head[aria-pressed="true"] { font-weight: 600; }
+.agent-operators-grid td[data-changed] .agent-operators-cell { border-color: var(--varia-warningForeground); font-weight: 600; }
+.agent-operators-side { flex: 0 0 260px; display: flex; flex-direction: column; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-3); border-left: 1px solid var(--varia-panel-border); }
+.agent-operators-side-actions, .agent-operators-tools { display: flex; flex-wrap: wrap; gap: var(--varia-space-1); margin: 0; }
+.agent-operators-jobs { margin-top: var(--varia-space-3); }
+.agent-recommended-list { margin: var(--varia-space-2) 0; padding: 0; list-style: none; max-height: 240px; overflow: auto; }
+.agent-recommended-list > li { padding: var(--varia-space-0) 0; }
+.agent-operator-reassign, .object-dialog-reassign { display: flex; align-items: center; gap: var(--varia-space-2); margin-top: var(--varia-space-2); }
+@media (forced-colors: active) {
+  .agent-alert-method[aria-pressed="true"], .agent-operators-grid [data-selected] { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+  .agent-operators-grid td[data-changed] .agent-operators-cell { border-color: Highlight; }
+}
 
 /* SQL Server Agent schedules (AG-6c): the job document's Schedules section, the shared schedule editor and the Schedules document. */
 .agent-schedules { display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); gap: var(--varia-space-4); min-height: 0; }

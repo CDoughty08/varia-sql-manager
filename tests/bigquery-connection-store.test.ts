@@ -168,6 +168,10 @@ describe('Connection library and history across both engines', () => {
     const removed = await library.remove(saved.bigQuery!.profiles[0]!.id)
     expect(removed.bigQuery?.profiles).toEqual([])
     expect(sql.remove).not.toHaveBeenCalled()
+    // Restoring a removed recent BigQuery entry preserves its original lastConnected instead of marking it saved-only.
+    const restored = await library.save({ options: gcloud(), favorite: false, lastConnected: '2026-11-10T10:00:00.000Z' })
+    expect(restored.bigQuery?.profiles).toEqual([expect.objectContaining({ options: gcloud(), favorite: false, lastConnected: '2026-11-10T10:00:00.000Z' })])
+    expect(restored.bigQuery?.profiles[0]?.saved).toBeUndefined()
   })
 
   it("keeps Don't ask again on the entry: a connect that does not name it keeps it, and Advanced Properties clears it", async () => {

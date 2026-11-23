@@ -235,7 +235,8 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
     // Job Activity Monitor's node opens its document (KindSpec.opens); the command is registered only behind agentEnabled.
     if (node?.kind === 'agentJobActivity') { run('agent.jobActivity', rowId); return }
     // A job opens its document (AG-6a), as SSMS opens Job Properties; Properties is refused without the release gate.
-    if (node?.kind === 'agentJob') { run('explorer.properties', rowId); return }
+    // So do alerts and operators (AG-7).
+    if (node?.kind === 'agentJob' || node?.kind === 'agentAlert' || node?.kind === 'agentOperator') { run('explorer.properties', rowId); return }
     // A proxy and a credential open their documents (AG-8b), behind the same gate.
     if (node?.kind === 'agentProxy' || node?.kind === 'credential') { run('explorer.properties', rowId); return }
     const verb = ssisDefaultVerb(node?.kind)
