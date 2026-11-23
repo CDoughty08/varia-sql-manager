@@ -238,6 +238,64 @@ describe('the machine lock', () => {
     retried.release()
   })
 
+  it('cleans up its own wx-created file when read-back hits transient EBUSY instead of self-deadlocking or taking a second slot', async () => {
+    const denyLink = () => { throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' }) }
+    // Exclusive mode: read-back and immediate cleanup both hit EBUSY (e.g. antivirus scan), then clear on the next poll.
+    let exclusiveReads = 0
+    const exclusiveLogs: string[] = []
+    const exclusiveLock = await acquire('exclusive', {
+      env: env(), dir, pollMs: 5, log: text => exclusiveLogs.push(text), label: 'scanner-exclusive',
+      fsOps: {
+        linkSync: denyLink,
+        readFileSync: (target, enc) => {
+          if (target === join(dir, 'exclusive.lock') && ++exclusiveReads <= 2) throw Object.assign(new Error('file busy'), { code: 'EBUSY' })
+          return readFileSync(target, enc)
+        }
+      }
+    })
+    held.push(exclusiveLock)
+    expect(exclusiveReads).toBeGreaterThanOrEqual(3)
+    expect(exclusiveLogs).toEqual([])
+    expect(readdirSync(dir)).toEqual(['exclusive.lock'])
+    exclusiveLock.release()
+    expect(readdirSync(dir)).toEqual([])
+
+    // Shared mode: transient EBUSY on shared-0.lock read-back cleans up shared-0.lock on the next poll instead of leaking it and grabbing shared-1.lock.
+    let sharedReads = 0
+    const sharedLogs: string[] = []
+    const sharedLock = await acquire('shared', {
+      env: env(), dir, slots: 2, pollMs: 5, log: text => sharedLogs.push(text), label: 'scanner-shared',
+      fsOps: {
+        linkSync: denyLink,
+        readFileSync: (target, enc) => {
+          if (target === join(dir, 'shared-0.lock') && ++sharedReads <= 2) throw Object.assign(new Error('file busy'), { code: 'EBUSY' })
+          return readFileSync(target, enc)
+        }
+      }
+    })
+    held.push(sharedLock)
+    expect(sharedReads).toBeGreaterThanOrEqual(3)
+    expect(sharedLogs).toEqual([])
+    expect(readdirSync(dir)).toEqual(['shared-0.lock'])
+    sharedLock.release()
+    expect(readdirSync(dir)).toEqual([])
+
+    // Persistent EACCES on read-back after wx write succeeds fails fast instead of waiting on itself.
+    const persistentLogs: string[] = []
+    await expect(acquire('exclusive', {
+      env: env(), dir, pollMs: 5, log: text => persistentLogs.push(text), label: 'unreadable-wx',
+      fsOps: {
+        linkSync: denyLink,
+        readFileSync: (target, enc) => {
+          if (target === join(dir, 'exclusive.lock')) throw Object.assign(new Error('permission denied'), { code: 'EACCES' })
+          return readFileSync(target, enc)
+        }
+      }
+    })).rejects.toThrow(/Could not access machine lock file .*exclusive\.lock.*EACCES.*VARIA_LOCK=off/)
+    expect(persistentLogs).toEqual([])
+    unlinkSync(join(dir, 'exclusive.lock'))
+  })
+
   it('checks file identity (inode/timestamps) before unlinking an aged empty file so a newly created empty file is never deleted', async () => {
     const file = join(dir, 'exclusive.lock')
     writeFileSync(file, '')

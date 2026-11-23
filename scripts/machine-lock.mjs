@@ -68,9 +68,6 @@ function parse(content) {
     return value && typeof value === 'object' && Number.isInteger(value.pid) ? value : null
   } catch { return null }
 }
-const readSafe = (file, ops = defaultFs) => {
-  try { return parse(ops.readFileSync(file, 'utf8')) } catch { return null }
-}
 
 /**
  * A holder refreshes its file's time every heartbeatMs; one older than staleMs belongs to a process that stopped, or to
@@ -127,7 +124,6 @@ function holder(file, isAlive, now = Date.now(), graceMs = birthGraceMs, ops = d
 function create(file, record, ops = defaultFs) {
   const payload = JSON.stringify(record)
   const staged = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}`
-  let hardLinkError = null
   try {
     ops.writeFileSync(staged, payload)
     try {
@@ -139,7 +135,6 @@ function create(file, record, ops = defaultFs) {
         if (busy(error)) return { ok: false, error }
         throw error
       }
-      hardLinkError = error
     } finally {
       try { ops.unlinkSync(staged) } catch { /* a scanner holds it; the name is unique, so it harms nothing */ }
     }
@@ -149,13 +144,20 @@ function create(file, record, ops = defaultFs) {
   }
   try {
     ops.writeFileSync(file, payload, { flag: 'wx' })
-    // Verify the file on disk still belongs to us in case a waiter unlinked it during a stalled birth or from an older worktree.
-    if (readSafe(file, ops)?.token === record.token) return { ok: true }
-    return { ok: false, busy: true }
   } catch (error) {
     if (error.code === 'EEXIST') return { ok: false, busy: true }
     if (busy(error)) return { ok: false, error }
-    throw error ?? hardLinkError
+    throw error
+  }
+  // Verify the file on disk still belongs to us in case a waiter unlinked it during a stalled birth or from an older worktree.
+  // Distinguish a read error from a token mismatch so a transient EBUSY never abandons our own live lock file on disk.
+  try {
+    const check = readText(file, ops)
+    if (check.ok) return parse(check.content)?.token === record.token ? { ok: true } : { ok: false, busy: true }
+    if (check.missing) return { ok: false, busy: true }
+    return { ok: false, error: check.error, cleanup: file }
+  } catch (error) {
+    return { ok: false, error, cleanup: file, fatal: true }
   }
 }
 
@@ -186,12 +188,16 @@ export async function acquire(mode, { label = basename(process.argv[1] ?? 'node'
   const drop = file => {
     let content
     try { content = ops.readFileSync(file, 'utf8') } catch (error) {
-      if (error.code === 'ENOENT') leftovers.delete(file)
-      else leftovers.add(file)
-      return
+      if (error.code === 'ENOENT') { leftovers.delete(file); return null }
+      leftovers.add(file)
+      return error
     }
-    if (parse(content)?.token !== record.token) { leftovers.delete(file); return }
-    try { ops.unlinkSync(file); leftovers.delete(file) } catch (error) { if (error.code === 'ENOENT') leftovers.delete(file); else leftovers.add(file) }
+    if (parse(content)?.token !== record.token) { leftovers.delete(file); return null }
+    try { ops.unlinkSync(file); leftovers.delete(file); return null } catch (error) {
+      if (error.code === 'ENOENT') { leftovers.delete(file); return null }
+      leftovers.add(file)
+      return error
+    }
   }
   let heartbeat
   const lost = new Set()
@@ -199,15 +205,20 @@ export async function acquire(mode, { label = basename(process.argv[1] ?? 'node'
     clearInterval(heartbeat)
     process.off('exit', release)
     for (const file of owned.splice(0)) drop(file)
-    for (const file of leftovers) drop(file)
+    for (const file of [...leftovers]) drop(file)
   }
   // A run killed outright (Ctrl+C with no handler, a closed terminal) skips this; its file is cleared as stale instead.
   process.once('exit', release)
   // A holder whose file was cleared as stale while it still ran (the machine slept past staleMs) takes it back if it can.
   heartbeat = setInterval(() => {
+    for (const file of [...leftovers]) drop(file)
     for (const file of owned) try { utimesSync(file, new Date(), new Date()) } catch {
       let back = false
-      try { back = create(file, record, ops).ok } catch { /* the directory is gone too */ }
+      try {
+        const attempt = create(file, record, ops)
+        back = attempt.ok
+        if (attempt.cleanup) drop(attempt.cleanup)
+      } catch { /* the directory is gone too */ }
       if (!back && !lost.has(file)) lost.add(file) && log(`The machine lock (${mode}) for ${label} was taken over while this run still held it.`)
     }
   }, beatMs)
@@ -243,13 +254,21 @@ export async function acquire(mode, { label = basename(process.argv[1] ?? 'node'
   try {
     for (;;) {
       signal?.throwIfAborted()
-      for (const file of leftovers) drop(file)
+      const leftoverErrors = new Map()
+      for (const file of [...leftovers]) {
+        const error = drop(file)
+        if (error) leftoverErrors.set(file, error)
+      }
       if (mode === 'exclusive') {
-        let pollError = null
-        if (!owned.includes(exclusive)) {
+        let pollError = leftoverErrors.has(exclusive) ? { error: leftoverErrors.get(exclusive), file: exclusive } : null
+        if (!owned.includes(exclusive) && !leftovers.has(exclusive)) {
           const attempt = create(exclusive, record, ops)
           if (attempt.ok) owned.push(exclusive)
-          else if (attempt.error) pollError = { error: attempt.error, file: exclusive }
+          else {
+            if (attempt.cleanup) drop(attempt.cleanup)
+            if (attempt.fatal) throw attempt.error
+            if (attempt.error) pollError = { error: attempt.error, file: exclusive }
+          }
         }
         if (owned.includes(exclusive)) {
           const { records, error } = sharedHolders()
@@ -257,6 +276,9 @@ export async function acquire(mode, { label = basename(process.argv[1] ?? 'node'
           if (error) { if (++ioErrors >= maxIoErrors) failAccess(error) }
           else ioErrors = 0
           report(records)
+        } else if (leftovers.has(exclusive)) {
+          // Our own wx-created file is still stuck busy on disk; retry cleanup on the next poll instead of waiting on ourselves.
+          if (pollError && ++ioErrors >= maxIoErrors) failAccess(pollError)
         } else {
           const state = holder(exclusive, isAlive, Date.now(), graceMs, ops)
           const accessError = state.error ? { error: state.error, file: exclusive } : pollError
@@ -272,6 +294,10 @@ export async function acquire(mode, { label = basename(process.argv[1] ?? 'node'
         } else if (writer.record) {
           ioErrors = 0
           report([writer.record])
+        } else if (leftovers.size > 0) {
+          // Clean up any stuck leftover slot of ours before claiming another slot so we never hold two slots at once.
+          const [file, error] = leftoverErrors.entries().next().value ?? []
+          if (error && ++ioErrors >= maxIoErrors) failAccess({ error, file })
         } else {
           let claimed = null, slotError = null
           for (const file of slotFiles) {
@@ -280,7 +306,10 @@ export async function acquire(mode, { label = basename(process.argv[1] ?? 'node'
             if (state.record) continue
             const attempt = create(file, record, ops)
             if (attempt.ok) { claimed = file; break }
+            if (attempt.cleanup) drop(attempt.cleanup)
+            if (attempt.fatal) throw attempt.error
             if (attempt.error) slotError ??= { error: attempt.error, file }
+            if (leftovers.size > 0) break
           }
           if (claimed) {
             ioErrors = 0
@@ -288,10 +317,12 @@ export async function acquire(mode, { label = basename(process.argv[1] ?? 'node'
             if (!holder(exclusive, isAlive, Date.now(), graceMs, ops).record) { owned.push(claimed); break }
             drop(claimed)
           } else {
-            const { records } = sharedHolders()
             if (slotError) { if (++ioErrors >= maxIoErrors) failAccess(slotError) }
             else ioErrors = 0
-            report(records)
+            if (leftovers.size === 0) {
+              const { records } = sharedHolders()
+              report(records)
+            }
           }
         }
       }
