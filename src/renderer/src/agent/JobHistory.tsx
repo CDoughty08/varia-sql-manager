@@ -83,11 +83,13 @@ function RunningView({ state, model, rows, usual, service }: {
 function RunDetail({ state, model, run, service }: { readonly state: JobDocumentState; readonly model: AgentJobDocumentModel; readonly run: JobHistoryRun; readonly service: JobDocumentService }) {
   const history = service.history
   const view = history.get(state.id)!
-  const steps = view.steps.filter(step => step.stepId > 0)
-  const outcomeRow = view.steps.find(step => step.stepId === 0)
+  // Rows read for another run (the one picked before) never describe this one.
+  const rows = view.stepsFor === historyRunKeyText(run.key) ? view.steps : []
+  const steps = rows.filter(step => step.stepId > 0)
+  const outcomeRow = rows.find(step => step.stepId === 0)
   const by = invokedBy(outcomeRow?.message ?? run.message)
   const usual = view.usual?.job
-  const chosen = view.steps.find(step => step.instance === view.step)
+  const chosen = rows.find(step => step.instance === view.step)
   const text = history.messageText(state.id)
   // Edit and Start at step act on the job as it is now: the step with the name history recorded, which a reorder may have moved.
   const current = chosen ? model.steps.find(step => step.name === chosen.name) : undefined

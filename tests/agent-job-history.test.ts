@@ -189,8 +189,12 @@ describe("the job document's History section", () => {
     const id = jobDocuments.openJob('c1', 'Nightly load')
     await settled()
     jobDocuments.history.attach(id, job)
-    await deliver({ 0: table(0, [runRow(20), runRow(19)]), 1: table(1, []), 3: table(3, []) })
+    await deliver({ 0: table(0, [runRow(20), runRow(19)]), 1: table(1, [stepRow(20, 0)]), 3: table(3, []) })
+    await deliver({ 1: table(1, [stepRow(20, 0)]) })
+    expect(jobDocuments.history.get(id)?.stepsFor).toBe(`${job}:20`)
     jobDocuments.history.selectRun(id, { job, instance: 19 })
+    // The newest run's rows go with the pick, so its outcome never shows under the picked run before that run's rows arrive.
+    expect(jobDocuments.history.get(id)).toMatchObject({ steps: [], stepsFor: undefined })
     expect(history()!.args.at(-1)).toEqual({ jobs: [job], usual: true, run: { job, instance: 19 } })
     // A newer run arrives: the picked one stays selected; its rows from a sample taken before the pick are not taken as its own.
     await deliver({ 0: table(0, [runRow(21), runRow(20), runRow(19)]), 1: table(1, [stepRow(20, 0)]) })

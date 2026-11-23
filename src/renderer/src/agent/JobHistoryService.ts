@@ -121,7 +121,7 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     const state = this.get(id)
     if (!state) return
     if (sameRun(state.selected, key)) { if (!state.pinned) this.patch(id, { pinned: true }); return }
-    this.patch(id, { selected: key, pinned: true, step: undefined, message: undefined })
+    this.patch(id, { selected: key, pinned: true, steps: [], stepsFor: undefined, step: undefined, message: undefined })
     this.sendArgs(id)
   }
   /** Shows a row's whole message in the detail. */
