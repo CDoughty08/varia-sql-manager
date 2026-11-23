@@ -200,6 +200,7 @@ describe('Create Job Like This: the document', () => {
     // Once created, the document is the new job's: the copy's source and its section go.
     await settled()
     expect(jobDocuments.get(id)?.source).toBeUndefined()
+    expect(jobDocuments.get(id)?.frame.section).toBe('general')
   })
   it('asks for a fresh preview when the copy changed after it, and Compare with source follows the edits', async () => {
     const { jobDocuments } = opened()

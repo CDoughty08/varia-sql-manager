@@ -130,7 +130,7 @@ function StepKeys({ state, model, editable, service, goTo, step, at }: Props & {
   return <div role="group" className="agent-copy-group" aria-label={`Step ${at + 1} ${step.name}`} data-warn={ssisMessages.length > 0 || undefined}>
     <h3>Step {at + 1} <strong>{step.name}</strong> · {stepTypeShort(step.subsystem)}</h3>
     <div className="properties-fields">
-      {stepKeyFields(step).map(field => <PropertyField key={field} id={`${id}-${field}`} label={keyLabels[field]} changed={stepKeyChanged(source, step, field)} labelFor={field !== 'command' || step.subsystem === 'CmdExec'}>
+      {stepKeyFields(step).map(field => <PropertyField key={field} id={`${id}-${field}`} label={keyLabels[field]} changed={stepKeyChanged(source, step, field)} labelFor={field === 'database' || (field === 'command' && step.subsystem === 'CmdExec')}>
         {value(field)}
       </PropertyField>)}
       {ssisMessages.length > 0 && <p className="field-note agent-copy-warn" role="note"><Icon name="warning" />{ssisMessages.join(' ')}

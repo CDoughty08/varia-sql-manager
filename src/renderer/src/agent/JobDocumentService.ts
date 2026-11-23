@@ -536,7 +536,8 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
       // The shared schedules and their jobs are read again when the section next asks: a save may have changed them.
       ...this.restartScheduleReads(id), scheduleSelected: undefined,
       // A read starts the document over: a copy's source and its Replace and Compare go with the draft (AG-6e).
-      source: undefined, replace: undefined, compareOpen: undefined, like: undefined
+      source: undefined, replace: undefined, compareOpen: undefined, like: undefined,
+      ...current.frame.section === jobCopySection ? { frame: { ...current.frame, section: jobSections[0]!.id } } : {}
     })
     this.options.documents.setDirty(id, false)
     if (like) void this.startCopy(id, like)
@@ -1048,8 +1049,10 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   /** A source schedule's Share, Copy or Leave out. */
   setCopySchedule(id: string, scheduleId: number, choice: CopyScheduleChoice): void {
     const state = this.get(id), records = state?.source?.model.schedules ?? []
-    const record = records.find(item => item.id === scheduleId)
-    if (!state?.draft || !record || !this.canEdit(id)) return
+    const read = records.find(item => item.id === scheduleId)
+    // Share names the schedule's version: the shared schedules as last read (a New Job's STALE reads them again), else the source's describe.
+    const record = (state?.shared?.state === 'ready' ? state.shared.model?.schedules.find(item => item.id === scheduleId) : undefined) ?? read
+    if (!state?.draft || !read || !record || !this.canEdit(id)) return
     const schedules = withCopyScheduleChoice(state.draft.schedules, records, record, choice)
     if (schedules !== state.draft.schedules) this.updateDraft(id, { schedules })
   }
