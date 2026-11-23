@@ -293,6 +293,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - Save writes it.
   - vitest:
     - the checklist (`compare-ignore.test.ts`), Automatic's label, memory by name across a swap;
+    - a `results-port.test.ts` case sending `ignore` and checking it reaches the backend request, and a `worker-core`
+      case for the rebuilt request, as C4 and C6 have;
     - the toggle's `when`, notice text and Dismiss; `outputGridOnColumn` and the two state keys for gutter, header, cell
       and keyboard menus, the keyboard ones through `targetFor` with a registered grid target, on a ? row
       (`comparisonRowHasPartner`) and on an ignored column; and through `targetFor`, a right-click on a ? row's number
@@ -869,19 +871,20 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
 
       The dialog asks `explorer.scriptTarget` again when that connection reconnects or its index build finishes (the
       progress `ObjectSearchService` follows), so the facts appear without retyping. Its first request goes out on
-      opening with the draft's target as `text` and `table` (the first time, empty text and no `table`, so the
-      suggestions show before anything is typed), and with a draft's target Script shows "Checking the target table…"
-      until it answers; so does each opening again, after Choose key columns… or for another comparison, so a remembered
-      target never scripts without its facts. Script waits while the lookup for the target it would send is pending: it
-      is unavailable, described "Checking the target table…", which pressing it says, so a suggestion picked with Enter
-      and Enter pressed again never scripts with the last name's facts. The renderer sends facts (`identity`,
-      `indexReasons`, SET IDENTITY_INSERT) only from an answer whose `table` is the target it sends. A lookup that fails
-      (its deadline, a backend error) leaves no facts: "Search Objects did not answer, so the target's columns cannot be
-      checked and SET IDENTITY_INSERT is not offered.", with **Try again** beside it, which asks again, and Script
-      available. Pressed, Try again stays in place, unavailable (`aria-disabled`, so it keeps the focus) while the
-      request runs, and the live region says "Checking the target table…" and then the line that follows, the failure
-      sentence again when it fails again. A disconnect while a lookup is pending, or after one failed, shows the
-      not-connected state instead, with no Try again.
+      opening (none while the comparison's connection is not open, which shows the not-connected state instead) with the
+      draft's target as `text` and `table` (the first time, empty text and no `table`, so the suggestions show before
+      anything is typed), and with a draft's target Script shows "Checking the target table…" until it answers; so does
+      each opening again, after Choose key columns… or for another comparison, so a remembered target never scripts
+      without its facts. Script waits from the moment the target changes until the answer for that target arrives, the
+      300 ms wait before the request included: it is unavailable, described "Checking the target table…", which pressing
+      it says, so a suggestion picked with Enter and Enter pressed again never scripts with the last name's facts. The
+      renderer sends facts (`identity`, `indexReasons`, SET IDENTITY_INSERT) only from an answer whose `table` is the
+      target it sends. A lookup that fails (its deadline, a backend error) leaves no facts: "Search Objects did not
+      answer, so the target's columns cannot be checked and SET IDENTITY_INSERT is not offered.", with **Try again**
+      beside it, which asks again, and Script available. Pressed, Try again stays in place, unavailable
+      (`aria-disabled`, so it keeps the focus) while the request runs, and the live region says "Checking the target
+      table…" and then the line that follows, the failure sentence again when it fails again. A disconnect while a
+      lookup is pending, or after one failed, shows the not-connected state instead, with no Try again.
   - **Direction**, naming the target as resolved ("The target table" before one is chosen):
     - "[Sales_Test].[dbo].[Orders] holds Result 1's rows: change them to Result 3's";
     - "[Sales_Test].[dbo].[Orders] holds Result 3's rows: change them to Result 1's".
@@ -1140,24 +1143,24 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   comparison invoked the window it says "The script for Result 1 → Result 3 was not written." before the new pair's
   form.
 - **Refused, with the reason in the dialog.** The first four are known when the dialog opens (its first preview request,
-  sent before the form has a target or direction, answers them): the refusal replaces the form below its first line (the
-  comparison and its match, so a refusal never hides which comparison it is about), the two become the window's
-  description, the live region says the refusal, and the focus moves to its first button (Keyboard and screen readers
-  below). One that arises while the dialog is open (the toolbar's Match set to Automatic, Compare Rows as Shown ticked)
-  replaces the form the same way: the live region says it, and the focus moves to its first button, or Cancel, without
-  activating the window. The rest are found on Script, or by the preview (above): they show in the footer in place of
-  the summary, with the refusal's button if it has one, so a form scrolled to Options still shows why; the window's live
-  region says the refusal, and Script, which keeps the focus when it was pressed, is marked unavailable
-  (`aria-disabled`). It is available again on any change the preview follows: the form, or the comparison's sort,
-  filters, chips, selection or a replace. When a refusal that replaced the form clears, after its own button or a
-  replace, the dialog's focused element becomes Target table, unless it is Cancel, which keeps it, so an Enter meant for
-  Cancel never presses Script (the window is activated only when Choose key columns… opens it again) and the live region
-  says the shipped sentence ("Comparison updated: matched by order_no, …"); a replace that fails says its sentence in
-  the dialog and keeps the refusal and its focus. While a replace the dialog started runs (its own button's, or one
-  applied in the Match menu Choose key columns… opened), the refusal reads "Updating the comparison…" with progress,
-  which becomes the window's description and the live region says, and its buttons are unavailable (`aria-disabled`, so
-  the pressed one keeps the focus); Cancel cancels the replace first, and the next Cancel closes the dialog. When
-  several apply, the first in this list shows. Each refusal says what to do:
+  which C# answers before anything else, with or without a target and direction, answers them): the refusal replaces the
+  form below its first line (the comparison and its match, so a refusal never hides which comparison it is about), the
+  two become the window's description, the live region says the refusal, and the focus moves to its first button
+  (Keyboard and screen readers below). One that arises while the dialog is open (the toolbar's Match set to Automatic,
+  Compare Rows as Shown ticked) replaces the form the same way: the live region says it, and the focus moves to its
+  first button, or Cancel, without activating the window. The rest are found on Script, or by the preview (above): they
+  show in the footer in place of the summary, with the refusal's button if it has one, so a form scrolled to Options
+  still shows why; the window's live region says the refusal, and Script, which keeps the focus when it was pressed, is
+  marked unavailable (`aria-disabled`). It is available again on any change the preview follows: the form, or the
+  comparison's sort, filters, chips, selection or a replace. When a refusal that replaced the form clears, after its own
+  button or a replace, the dialog's focused element becomes Target table, unless it is Cancel, which keeps it, so an
+  Enter meant for Cancel never presses Script (the window is activated only when Choose key columns… opens it again) and
+  the live region says the shipped sentence ("Comparison updated: matched by order_no, …"); a replace that fails says
+  its sentence in the dialog and keeps the refusal and its focus. While a replace the dialog started runs (its own
+  button's, or one applied in the Match menu Choose key columns… opened), the refusal reads "Updating the comparison…"
+  with progress, which becomes the window's description and the live region says, and its buttons are unavailable
+  (`aria-disabled`, so the pressed one keeps the focus); Cancel cancels the replace first, and the next Cancel closes
+  the dialog. When several apply, the first in this list shows. Each refusal says what to do:
   - a comparison of rows as shown (§ 6): "Result 1 is compared as shown, so rows its filters hide show as added or
     removed, and a script would insert or delete them. Compare whole results to script differences. To script only
     some rows, filter the comparison itself.", with **Compare whole results** ("Result 1 and Result 3 are compared as
@@ -1345,9 +1348,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     `columns` holds distinct pair indexes, at most `limits.page.maxColumns` in zod, each below the pair count (checked
     in C#). `identity` is the pair the index names as the target's identity column, one of `columns` (checked in both):
     only the renderer knows it, from Search Objects. `DiffScript` leaves it out of every SET. With `identityInsert` on
-    it wraps the INSERTs in `SET IDENTITY_INSERT`; with it off it leaves the identity column out of the INSERTs, and
-    refuses (`INVALID_PARAMS`) when that column is a key; `identityInsert` on without `identity` is `INVALID_PARAMS` in
-    both zod and C#. `indexReasons?: { pair, reason: 'computed' | 'generated' | 'notInsertable' | 'notInTarget' }[]`
+    it wraps the INSERTs in `SET IDENTITY_INSERT`, and writes that, its TRY/CATCH body and the header's stop line only
+    when the script holds at least one INSERT, since SET IDENTITY_INSERT needs ALTER on the table and an UPDATE-only
+    script must not fail for a login that has only UPDATE; with it off it leaves the identity column out of the INSERTs,
+    and refuses (`INVALID_PARAMS`) when that column is a key; `identityInsert` on without `identity` is `INVALID_PARAMS`
+    in both zod and C#. `indexReasons?: { pair, reason: 'computed' | 'generated' | 'notInsertable' | 'notInTarget' }[]`
     holds the pairs left out for a reason only the index knows (a computed or GENERATED ALWAYS column of the target, a
     target column of rowversion or timestamp, a column the target lacks), with distinct pairs, at most
     `limits.page.maxColumns`, each below the pair count and none in `columns`, checked in zod and C#, so the header's
@@ -1530,6 +1535,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   `providers: ['sqlserver']`, with Q4's hint on BigQuery). Regenerate the commands docs. No setting.
 - **Tests:**
   - `DiffScriptChecks` goldens, a new offline suite in Program.cs's `offlineSuites`:
+    - an UPDATE-only script with an identity key and `identityInsert` on, and one whose chosen rows have no inserts,
+      each with no SET IDENTITY_INSERT, TRY/CATCH body or stop line;
     - every SQL Server type in `sortKind`'s table, plus uniqueidentifier, with sql_variant, vector and CLR types
       refused;
     - an int key paired with a varchar key holding `1) SELECT 1; --`, both directions, refused as a key pair of
@@ -1638,18 +1645,19 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     a two-part name resolved to a disconnected document's kept database, Script's destination sentence while
     disconnected, a connection lost while generating, the focus after Rebuild Search Index, a later Try again and a
     footer refusal's button go away, Enter and Escape in the columns' search field (Enter with no match doing nothing),
-    the field rewritten in three parts when the document's database or connection changes, the connection lines (now on
-    another server, no connection now) winning over the three-part line, the draft recording the document's connection,
-    an ignored column the target lacks left out of the ignored line, the failed lookup's Try again while it runs and
-    failing again, a disconnect while a lookup is pending showing the not-connected state, the focus staying on Cancel
-    when a refusal that replaced the form clears, a lookup held while the script is written, the no-connection sentence,
-    the three-part line for another database, the opening request carrying the draft's target with Script checking until
-    it answers, a failed lookup's Try again, the summary's order with a failed preview leaving Script unavailable while
-    a reason holds, the not-connected state after a connection lost while generating, the focus staying on Script when a
-    footer refusal clears and falling back to Target table, a two-part target in a database beside another holding the
-    same table, the key-column form of the truncation and U+FFFD refusals, closing while generating opening nothing,
-    Enter in Target table with nothing highlighted, the window over a popped-out Results pane, a cancelled generation
-    giving way to a closed or refused state, and the Clipboard announcement.
+    Script pressed inside the 300 ms wait before a lookup saying "Checking the target table…", the field rewritten in
+    three parts when the document's database or connection changes, the connection lines (now on another server, no
+    connection now) winning over the three-part line, the draft recording the document's connection, an ignored column
+    the target lacks left out of the ignored line, the failed lookup's Try again while it runs and failing again, a
+    disconnect while a lookup is pending showing the not-connected state, the focus staying on Cancel when a refusal
+    that replaced the form clears, a lookup held while the script is written, the no-connection sentence, the three-part
+    line for another database, the opening request carrying the draft's target with Script checking until it answers, a
+    failed lookup's Try again, the summary's order with a failed preview leaving Script unavailable while a reason
+    holds, the not-connected state after a connection lost while generating, the focus staying on Script when a footer
+    refusal clears and falling back to Target table, a two-part target in a database beside another holding the same
+    table, the key-column form of the truncation and U+FFFD refusals, closing while generating opening nothing, Enter in
+    Target table with nothing highlighted, the window over a popped-out Results pane, a cancelled generation giving way
+    to a closed or refused state, and the Clipboard announcement.
   - Smoke: open the dialog window by role, script to a New Query Editor Window, and find `BEGIN TRANSACTION` in the
     focused editor. A frameless OS window can behave differently on Linux, so run it through `npm run test:smoke:wsl`
     before pushing.
