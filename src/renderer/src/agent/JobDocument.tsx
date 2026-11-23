@@ -168,8 +168,18 @@ function AlertsSection(props: SectionProps) {
     </table>}
     {own.error && <p className="property-field-error" role="alert"><Icon name="error" />{own.error}</p>}
     {!model.alertsEditable && alerts.length > 0 && <p className="field-note">{agentJobText.alertsReadOnly}</p>}
-    <p className="field-note">{agentJobText.alertsNewLater}</p>
+    <NewAlertForJob state={state} jobId={model.job.jobId} jobName={model.job.name} />
   </div>
+}
+
+/** New alert for this job (AG-7): New Alert with this job as its response. */
+function NewAlertForJob({ state, jobId, jobName }: { readonly state: JobDocumentState; readonly jobId: string; readonly jobName: string }) {
+  const { alertDocuments, documents, commands } = useWorkbench()
+  const connectionId = documents.get(state.id)?.connectionId
+  return <p className="agent-job-alerts-new">
+    <button type="button" disabled={!connectionId || !state.model?.sysadmin} title={agentJobText.alertsNewHint}
+      onClick={() => { try { if (connectionId) alertDocuments.openNew(connectionId, { jobId, jobName }) } catch (error) { commands.reportError(error instanceof Error ? error.message : 'New Alert could not open.') } }}><Icon name="add" />{agentJobText.alertsNew}</button>
+  </p>
 }
 
 /** New Job's start panel: Blank, or Copy an existing job (a pick of the jobs msdb lets the login see). */

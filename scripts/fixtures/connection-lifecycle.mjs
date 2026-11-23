@@ -6,8 +6,8 @@ import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { expandExplorerPath, explorerRow, explorerTree } from './explorer-tree.mjs'
 import {
-  activeDocumentName, backendReady, documentTab, documentTabs, editorTextbox, explorerLabel, outputStatus,
-  queryServer, queryStatus, resultGrid, selectOpenDocument, toolbarButton
+  activeDocumentName, backendReady, clickToClose, connectDialogWindow, dialogClosed, documentTab, documentTabs, editorTextbox, explorerLabel, outputStatus,
+  queryServer, queryStatus, resultGrid, selectOpenDocument, submitConnect, toolbarButton
 } from './ui.mjs'
 import { parseCalls } from './call-log.mjs'
 
@@ -45,28 +45,19 @@ export async function connectionLifecycle() {
   }
   async function open() {
     await toolbarButton(page, 'Connect').click()
-    const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
-    await expect(dialog).toBeVisible()
-    await expect(dialog.getByText('Loading saved connections…')).toHaveCount(0)
-    return dialog
-  }
-  async function custom(dialog) {
-    const button = dialog.getByRole('button', { name: 'Custom Properties', exact: true })
-    if (await button.getAttribute('aria-expanded') !== 'true') await button.click()
+    return connectDialogWindow(app)
   }
   async function connect({ server = 'lifecycle-main', username = 'reader', password = secret, name = 'Lifecycle production', environment = 'Production' } = {}) {
-    const dialog = await open()
+    const { window, dialog } = await open()
     await dialog.getByLabel('Server Name', { exact: true }).fill(server)
     await dialog.getByLabel('Database Name', { exact: true }).fill('AppData')
     await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
     await dialog.getByLabel('Login', { exact: true }).fill(username)
     await dialog.getByLabel('Password', { exact: true }).fill(password)
     await dialog.getByLabel('Remember password', { exact: true }).check()
-    await custom(dialog)
     await dialog.getByLabel('Name', { exact: true }).fill(name)
     await dialog.getByLabel('Environment', { exact: true }).selectOption(environment)
-    await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
-    return dialog
+    await submitConnect(window, dialog)
   }
   async function serverAction(name, action) {
     const row = await explorerRow(page, name)
@@ -83,11 +74,10 @@ export async function connectionLifecycle() {
   try {
     await launch()
     // Profile policy is saved independently of transport identity, and a prior draft never bleeds into another profile.
-    let policyDialog = await open()
+    let { window: policyWin, dialog: policyDialog } = await open()
     await policyDialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
     await policyDialog.getByLabel('Login', { exact: true }).fill('policy-reader')
     await policyDialog.getByLabel('Server Name', { exact: true }).fill('policy-one')
-    await custom(policyDialog)
     await policyDialog.getByLabel('Name', { exact: true }).fill('Policy one')
     await policyDialog.getByLabel('Reconnect on startup', { exact: true }).selectOption('off')
     await policyDialog.getByRole('button', { name: 'Add favorite', exact: true }).click()
@@ -95,10 +85,10 @@ export async function connectionLifecycle() {
     await policyDialog.getByLabel('Reconnect on startup', { exact: true }).selectOption('on')
     await policyDialog.getByRole('button', { name: 'Save', exact: true }).click()
     await expect(policyDialog.getByRole('button', { name: 'Cancel', exact: true })).toBeEnabled()
-    await policyDialog.getByRole('button', { name: 'Cancel', exact: true }).click()
-    policyDialog = await open()
+    await clickToClose(policyDialog.getByRole('button', { name: 'Cancel', exact: true }))
+    await dialogClosed(policyWin, 'Connect')
+    ;({ window: policyWin, dialog: policyDialog } = await open())
     await policyDialog.getByRole('button', { name: /^Policy one/ }).first().click()
-    await custom(policyDialog)
     await expect(policyDialog.getByLabel('Reconnect on startup', { exact: true })).toHaveValue('on')
     await policyDialog.getByRole('button', { name: 'Reset', exact: true }).click()
     await expect(policyDialog.getByLabel('Reconnect on startup', { exact: true })).toHaveValue('inherit')
@@ -116,9 +106,9 @@ export async function connectionLifecycle() {
     await expect(policyDialog.getByRole('button', { name: 'Remove saved Policy one', exact: true })).toHaveCount(0)
     await policyDialog.getByRole('button', { name: 'Remove saved Policy two', exact: true }).first().click()
     await expect(policyDialog.getByRole('button', { name: 'Remove saved Policy two', exact: true })).toHaveCount(0)
-    await policyDialog.getByRole('button', { name: 'Cancel', exact: true }).click()
-    let dialog = await connect()
-    await expect(dialog).toHaveCount(0)
+    await clickToClose(policyDialog.getByRole('button', { name: 'Cancel', exact: true }))
+    await dialogClosed(policyWin, 'Connect')
+    await connect()
     await expect(roots()).toHaveCount(1)
     const first = await activeDocumentName(page)
     await type('SELECT 1 AS lifecycle_first;')
@@ -130,15 +120,13 @@ export async function connectionLifecycle() {
     await type('SELECT 2 AS lifecycle_second;')
     const queryCount = await documentTabs(page).getByRole('tab').count()
     const opens = (await calls()).filter(call => call.method === 'connections.connect').length
-    dialog = await connect()
-    await expect(dialog).toHaveCount(0)
+    await connect()
     await expect(roots()).toHaveCount(1)
     expect(await documentTabs(page).getByRole('tab').count()).toBe(queryCount)
     expect((await calls()).filter(call => call.method === 'connections.connect')).toHaveLength(opens)
 
     // Details edited in Connect apply to the reused transport at once: no confirmation and no new backend connection.
-    dialog = await connect({ name: 'Lifecycle renamed', environment: 'Staging' })
-    await expect(dialog).toHaveCount(0)
+    await connect({ name: 'Lifecycle renamed', environment: 'Staging' })
     await expect(page.getByRole('dialog', { name: 'Use selected connection details?', exact: true })).toHaveCount(0)
     await expect(await explorerRow(page, 'Lifecycle renamed')).toBeVisible()
     await expect(roots()).toHaveCount(1)
@@ -150,29 +138,29 @@ export async function connectionLifecycle() {
     await labelling.getByRole('button', { name: 'OK', exact: true }).click()
     await expect(labelling).toHaveCount(0)
     for (const action of ['Cancel', 'Keep Current Details', 'Use Selected Details']) {
-      dialog = await open()
+      const { window: connectWin, dialog } = await open()
       await dialog.getByRole('button', { name: /^Lifecycle renamed/ }).first().click()
       await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
-      const confirmation = page.getByRole('dialog', { name: 'Use selected connection details?', exact: true })
+      const confirmation = connectWin.getByRole('dialog', { name: 'Use selected connection details?', exact: true })
       await expect(confirmation).toBeVisible()
       await expect(confirmation).toContainText('Staging')
-      if (action === 'Cancel') await page.screenshot({ path: resolve('artifacts', 'connections-details-confirmation.png') })
-      await confirmation.getByRole('button', { name: action, exact: true }).click()
       if (action === 'Cancel') {
+        await connectWin.screenshot({ path: resolve('artifacts', 'connections-details-confirmation.png') })
+        await confirmation.getByRole('button', { name: action, exact: true }).click()
         await expect(dialog).toBeVisible()
-        await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+        await clickToClose(dialog.getByRole('button', { name: 'Cancel', exact: true }))
+      } else {
+        await clickToClose(confirmation.getByRole('button', { name: action, exact: true }))
       }
-      await expect(dialog).toHaveCount(0)
+      await dialogClosed(connectWin, 'Connect')
       await expect(roots()).toHaveCount(1)
       await expect(await explorerRow(page, 'Lifecycle renamed')).toHaveAttribute('aria-label', action === 'Use Selected Details' ? /, Staging environment$/ : /, Test environment$/)
     }
     // Restore the original name for the disconnect prompt, still without another backend connection.
-    dialog = await connect()
-    await expect(dialog).toHaveCount(0)
+    await connect()
     await expect(await explorerRow(page, 'Lifecycle production')).toBeVisible()
     expect((await calls()).filter(call => call.method === 'connections.connect')).toHaveLength(opens)
-    dialog = await connect({ username: 'other-reader', name: 'Lifecycle reader', environment: 'Staging' })
-    await expect(dialog).toHaveCount(0)
+    await connect({ username: 'other-reader', name: 'Lifecycle reader', environment: 'Staging' })
     await expect(roots()).toHaveCount(2)
     // Ordinary connection reuse/creation never steals the current remembered query from another target.
     await selectOpenDocument(page, second)
@@ -180,8 +168,7 @@ export async function connectionLifecycle() {
     await serverAction('Lifecycle reader', 'New Query')
     const readerQuery = await activeDocumentName(page)
     await type('SELECT 3 AS reader_query;')
-    dialog = await connect({ server: 'password-check', username: 'reader', password: 'correct-horse-marker', name: 'Lifecycle retry', environment: 'Test' })
-    await expect(dialog).toHaveCount(0)
+    await connect({ server: 'password-check', username: 'reader', password: 'correct-horse-marker', name: 'Lifecycle retry', environment: 'Test' })
     await expect(roots()).toHaveCount(3)
 
     await serverAction('Lifecycle production', /^Disconnect(?:…)?$/)
@@ -210,10 +197,8 @@ export async function connectionLifecycle() {
     await expect(queryStatus(page)).toContainText('Disconnected')
     await page.screenshot({ path: resolve('artifacts', 'connections-retained-results.png') })
     await serverAction('Lifecycle production', /^Reconnect/)
-    dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
-    await expect(dialog).toBeVisible()
-    await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
-    await expect(dialog).toHaveCount(0)
+    const reconnect = await connectDialogWindow(app)
+    await submitConnect(reconnect.window, reconnect.dialog)
     await expect(queryServer(page).locator('option:checked')).not.toContainText('Disconnected')
     await expect(resultGrid(page)).toContainText('lifecycle-main')
     await serverAction('Lifecycle production', 'Disconnect and Remove from Explorer')
@@ -222,8 +207,7 @@ export async function connectionLifecycle() {
     await expect(queryServer(page).locator('option:checked')).toContainText('Lifecycle production')
     await expect(queryServer(page).locator('option:checked')).toContainText('Disconnected')
     await expect(resultGrid(page)).toContainText('lifecycle-main')
-    dialog = await connect()
-    await expect(dialog).toHaveCount(0)
+    await connect()
     await expect(roots()).toHaveCount(3)
     await expect(queryServer(page).locator('option:checked')).not.toContainText('Disconnected')
     await expect(resultGrid(page)).toContainText('lifecycle-main')

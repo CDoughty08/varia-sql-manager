@@ -190,6 +190,7 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'agent.profile': { kind: 'unary', lane: 'explorer', deadlineMs: 15_000 },
   // The Log File Viewer's whole message: the action service's read gates and DescribeBudget (TIMEOUT as a value) inside this deadline.
   'agent.historyMessage': { kind: 'unary', lane: 'metadata', deadlineMs: 45_000 },
+  'agent.counterValues': { kind: 'unary', lane: 'metadata', deadlineMs: 45_000 },
   'language.parse': { kind: 'unary', lane: 'metadata', deadlineMs: 15_000 },
   // Help › Clear Entra ID Token Cache: empties memory only, at once.
   'entra.cache.clear': control,

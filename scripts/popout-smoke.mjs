@@ -6,8 +6,8 @@ import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import {
-  backendReady, banner, explorerSearchBox, explorerTree, gridCell, movePane, openMenus, outputView, pane, paneTab, part, planCanvas, planViewer,
-  dockPopoutBack, popoutTab, popoutTabs, quickInput, resultGrid, toolbarButton, expectEditorShown
+  backendReady, banner, connectDialogWindow, explorerSearchBox, explorerTree, gridCell, movePane, openMenus, outputView, pane, paneTab, part, planCanvas, planViewer,
+  dockPopoutBack, popoutTab, popoutTabs, quickInput, resultGrid, submitConnect, toolbarButton, expectEditorShown
 } from './fixtures/ui.mjs'
 import { pinStackedResults } from './fixtures/results-pane.mjs'
 
@@ -78,10 +78,10 @@ const center = box => [box.x + box.width / 2, box.y + box.height / 2]
 try {
   await ready()
   await toolbarButton(page, 'Connect').click()
-  await page.getByLabel('Server Name', { exact: true }).fill('server-a')
-  await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(page.getByRole('dialog')).toHaveCount(0)
+  const { window: connectWin, dialog: connectDialog } = await connectDialogWindow(application)
+  await connectDialog.getByLabel('Server Name', { exact: true }).fill('server-a')
+  await connectDialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
+  await submitConnect(connectWin, connectDialog)
   await run('-- varia-fake: sets=W1*50')
   await expect(gridCell(resultGrid(page), 0, 1)).toHaveText(w1(0)[1])
 

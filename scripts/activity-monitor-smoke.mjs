@@ -10,7 +10,7 @@
 // probe fills the tiles, and Pause stops it.
 import { electron, expect, within } from './fixtures/smoke.mjs'
 import {
-  activityBanner, backendReady, bannerGlyph, documentActions, documentContent, documentFrame, documentTabs, documentTitle, explorerTree, gridCell, gridCellSelector, gridPart, livePill, outputPane, pane, quickInput, serverRows, staleBadge, tileCaptions, toolbarButton
+  activityBanner, backendReady, bannerGlyph, connectDialogWindow, documentActions, documentContent, documentFrame, documentTabs, documentTitle, explorerTree, gridCell, gridCellSelector, gridPart, livePill, outputPane, pane, quickInput, serverRows, staleBadge, submitConnect, tileCaptions, toolbarButton
 } from './fixtures/ui.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -67,16 +67,15 @@ async function menu(id) {
   }, id)
 }
 async function connect(server, password = 'activity-smoke-password', login = 'reader') {
-  const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
-  if (!await dialog.isVisible()) await toolbarButton(page, 'Connect').click()
-  await expect(dialog.getByText('Loading saved connections…')).toHaveCount(0)
+  const existing = await Promise.all(app.windows().map(async candidate => !candidate.isClosed() && await candidate.getByRole('dialog', { name: 'Connect', exact: true }).count().catch(() => 0)))
+  if (!existing.some(Boolean)) await toolbarButton(page, 'Connect').click()
+  const { window, dialog } = await connectDialogWindow(app)
   await dialog.getByLabel('Server Name', { exact: true }).fill(server)
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
   await dialog.getByLabel('Login', { exact: true }).fill(login)
   await dialog.getByLabel('Password', { exact: true }).fill(password)
   await dialog.getByLabel('Trust server certificate', { exact: true }).check()
-  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(dialog).toHaveCount(0)
+  await submitConnect(window, dialog)
 }
 /** The view's ticks stay where they are for `ms`: nothing is sampled. */
 async function stays(id, ms = 800) {
@@ -143,8 +142,6 @@ try {
   // With no server connected, the monitor asks for one, then opens on it: no query tab comes with it.
   const before = await queryTabs().allTextContents()
   await menu('activity.open')
-  // The monitor opens Connect itself; connect() would otherwise press the toolbar's Connect under its arriving backdrop.
-  await expect(page.getByRole('dialog', { name: 'Connect', exact: true })).toBeVisible()
   await connect('activity-server')
   await expect(queryTabs().filter({ hasText: 'activity-server - Activity Monitor' })).toHaveCount(1)
   expect((await queryTabs().allTextContents()).filter(name => !name.includes('Activity Monitor'))).toEqual(before)
@@ -777,12 +774,11 @@ try {
   await expect(livePill(monitor())).toHaveText('Stopped · backend unavailable')
   await expect.poll(async () => { const state = await backendState(); return state.status === 'ready' && state.generation > lostGeneration }, { timeout: 30000 }).toBe(true)
   await monitor().getByRole('button', { name: 'Reconnect…', exact: true }).click()
-  const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
+  const { window: reconnectWin, dialog } = await connectDialogWindow(app)
   await expect(dialog.getByLabel('Server Name', { exact: true })).toHaveValue('activity-server')
   await dialog.getByLabel('Login', { exact: true }).fill('another-reader')
   await dialog.getByLabel('Password', { exact: true }).fill('activity-smoke-password')
-  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(dialog).toHaveCount(0)
+  await submitConnect(reconnectWin, dialog)
   // A server-name match cannot move a monitor onto another account.
   await expect.poll(async () => (await viewOf(id)).status).toBe('lost')
   // Connecting the distinct account opens its query; the original monitor remains on its own stopped tab.
@@ -831,9 +827,8 @@ try {
     page.setDefaultTimeout(15000)
     page.on('pageerror', error => failures.push(error.message))
     await expect(backendReady(page)).toBeVisible({ timeout: 60000 })
-    const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
     await toolbarButton(page, 'Connect').click()
-    await expect(dialog.getByText('Loading saved connections…')).toHaveCount(0)
+    const { window: liveWin, dialog } = await connectDialogWindow(app)
     await dialog.getByLabel('Server Name', { exact: true }).fill(process.env.VARIA_TEST_SQL_SERVER)
     if (liveUser) {
       await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
@@ -841,8 +836,7 @@ try {
       await dialog.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD ?? '')
     } else await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
     await dialog.getByLabel('Trust server certificate', { exact: true }).check()
-    await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
-    await expect(dialog).toHaveCount(0, { timeout: 30000 })
+    await submitConnect(liveWin, dialog, { timeout: 30000 })
     // A menu command does nothing while a modal is open (a dialog the connect left behind), and the monitor opens only on a
     // live connection: click once the server's row shows it connected (its version) and nothing modal is left.
     await expect(explorerTree(page).getByRole('treeitem', { level: 1, name: /\(SQL Server \d/ })).toHaveCount(1, { timeout: 30000 })
