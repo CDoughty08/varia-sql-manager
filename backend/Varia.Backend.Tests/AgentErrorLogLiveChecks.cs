@@ -19,8 +19,9 @@ internal static class AgentErrorLogLiveChecks
 
         var before = await List();
         var archives = before.Logs.Select(log => log.Archive).ToList();
-        check(before.Error is null && archives is [0, ..] && archives.Skip(1).SequenceEqual(archives.Skip(1).Order()) && archives.Distinct().Count() == archives.Count,
-            "agent.errorLogs on a live server lists Current first and the archives in order: " + string.Join(",", archives) + " " + before.Error?.Code);
+        check(before.Error is null && archives is [0, ..] && archives.Skip(1).SequenceEqual(archives.Skip(1).Order()) && archives.Distinct().Count() == archives.Count
+            && (!before.Archives || before.Logs.All(log => log.Date is { Length: 19 })),
+            "agent.errorLogs on a live server lists Current first and the archives in order, each with its date (xp_enumerrorlogs sends it as text): " + string.Join(",", archives) + " " + before.Error?.Code);
         var rows = await RowsAsync(service, info, json, new AgentErrorLogLiveArgs([0], null, null));
         check(rows is not null && rows.All(cells => cells[1] == "Current" && cells[5] == "0" && cells[4]?.StartsWith("0:", StringComparison.Ordinal) == true),
             "agent.errorLog reads Current's rows through live.subscribe, each named Current and keyed by archive and place: " + rows?.Count);

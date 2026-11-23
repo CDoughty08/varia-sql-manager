@@ -104,7 +104,9 @@ internal sealed class AgentErrorLogReader(AgentErrorLogLiveArgs? args = null, Ag
         {
             var (clock, refused) = await Reader.ReadAsync(connection, prologue, [AgentSql.ServerClock], (_, _) => null, token).ConfigureAwait(false);
             if (!clock.TryGetValue(AgentSql.ServerClock.Id, out var time)) return Failed(refused[0]);
-            if (time.Rows.Count > 0 && time.Value(time.Rows[0], "server_now") is DateTime stamp) since = stamp.AddDays(-days);
+            if (time.Rows.Count == 0 || time.Value(time.Rows[0], "server_now") is not DateTime stamp)
+                return Failed(new AgentReadError(AgentSql.ServerClock.Id, "SQL_ERROR", 0, "The server's clock could not be read for the window."));
+            since = stamp.AddDays(-days);
         }
         var rows = new List<Entry>();
         var truncated = false;
@@ -115,13 +117,26 @@ internal sealed class AgentErrorLogReader(AgentErrorLogLiveArgs? args = null, Ag
                 (_, parameter) => parameter.Name switch { "@log" => log, "@search1" => now.Text, _ => null }, token).ConfigureAwait(false);
             if (!results.TryGetValue(statement.Id, out var result)) return Failed(refused[0]);
             truncated |= result.Truncated;
-            var place = 0;
-            foreach (var row in result.Rows)
+            // A row's key stays with it as Agent writes more lines: its place is counted from the log's oldest row read (xp_readerrorlog
+            // reads newest first, sp_readmierrorlog oldest first). A newest-first read that was cut has no oldest row, so its rows are
+            // keyed by their time and their place among the rows of that same time, counted from the oldest.
+            var count = result.Rows.Count;
+            var seen = new Dictionary<DateTime, int>();
+            var keys = new string[count];
+            for (var at = 0; at < count; at++)
             {
-                place++;
+                var index = managedInstance ? at : count - 1 - at;
+                if (managedInstance || !result.Truncated) { keys[index] = (at + 1).ToString(CultureInfo.InvariantCulture); continue; }
+                var stamp = result.Value(result.Rows[index], "LogDate") as DateTime? ?? DateTime.MinValue;
+                seen[stamp] = seen.GetValueOrDefault(stamp) + 1;
+                keys[index] = "t" + stamp.ToString("yyyyMMddHHmmssfff", CultureInfo.InvariantCulture) + "." + seen[stamp].ToString(CultureInfo.InvariantCulture);
+            }
+            for (var index = 0; index < count; index++)
+            {
+                var row = result.Rows[index];
                 var when = result.Value(row, "LogDate") as DateTime?;
                 if (since is { } start && when is { } at && at < start) continue;
-                rows.Add(new(log, place, when, Int(result.Value(row, "ErrorLevel")), Message(result.Value(row, "Text") as string)));
+                rows.Add(new(log, index + 1, keys[index], when, Int(result.Value(row, "ErrorLevel")), Message(result.Value(row, "Text") as string)));
             }
         }
         // Newest first across logs; within a second, a log's own order (newest first, or oldest first on Managed Instance).
@@ -131,7 +146,7 @@ internal sealed class AgentErrorLogReader(AgentErrorLogLiveArgs? args = null, Ag
         return new(null, [new(0, [.. ordered.Select(Row)], truncated ? 1 : 0)], [], Status: status);
     }
 
-    private sealed record Entry(int Archive, int Place, DateTime? When, int? Level, string? Message);
+    private sealed record Entry(int Archive, int Place, string Key, DateTime? When, int? Level, string? Message);
 
     private static LiveRow Row(Entry entry)
     {
@@ -139,7 +154,7 @@ internal sealed class AgentErrorLogReader(AgentErrorLogLiveArgs? args = null, Ag
         var archive = entry.Archive.ToString(CultureInfo.InvariantCulture);
         return new LiveRow([
             entry.When is { } when ? LiveCell.DateTime2(when, 0) : LiveCell.Null, LiveCell.Of(entry.Archive == 0 ? "Current" : "Archive #" + archive), LiveCell.Of(label),
-            LiveCell.Of(entry.Message), LiveCell.Of(archive + ":" + entry.Place.ToString(CultureInfo.InvariantCulture)), LiveCell.Of((long)entry.Archive),
+            LiveCell.Of(entry.Message), LiveCell.Of(archive + ":" + entry.Key), LiveCell.Of((long)entry.Archive),
             tone is null ? LiveCell.Null : LiveCell.Of(tone)
         ]);
     }

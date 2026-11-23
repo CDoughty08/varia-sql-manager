@@ -106,23 +106,33 @@ internal static class AgentErrorLogChecks
         check(sample.Sampled && sample.Errors.Count == 0 && ran.SequenceEqual(["errorLog:0", "errorLog:1"]) && searches.All(value => value is null) && sample.Tables[0].More == 0
             && rows.All(row => row.Length == spec.Tables[0].Columns.Count) && (sample.Status ?? []).Count == 0,
             "with no window the probe reads each checked log by archive number in archive order with no search text, building rows in the catalogue's column count: " + string.Join(", ", ran));
-        check(rows.Select(row => row[1] + ":" + row[2] + ":" + row[4]).SequenceEqual(["Current:Error:0:1", "Current:Warning:0:2", "Current:Information:0:3", "Archive #1:Information:1:1", "Archive #1:Error:1:2"])
+        check(rows.Select(row => row[1] + ":" + row[2] + ":" + row[4]).SequenceEqual(["Current:Error:0:3", "Current:Warning:0:2", "Current:Information:0:1", "Archive #1:Information:1:2", "Archive #1:Error:1:1"])
             && rows[0][6] == "error" && rows[1][6] == "warning" && rows[2][6] == "NULL" && rows[0][3] == "[298] SQLServer Error: 18456, Login failed." && rows[3][5] == "1",
-            "the checked logs' rows merge newest first, each named by its log, typed and toned by its level, keyed archive:place, its message without its line break: "
+            "the checked logs' rows merge newest first, each named by its log, typed and toned by its level, keyed archive:place counted from the oldest row, its message without its line break: "
             + string.Join(" | ", rows.Select(row => string.Join(",", row))));
         reader.Apply(new AgentErrorLogLiveArgs([0, 1], 2, "Login"));
         ran.Clear();
         searches.Clear();
         var windowed = await reader.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(), null, CancellationToken.None);
         check(ran.SequenceEqual(["clock", "errorLog:0", "errorLog:1"]) && searches.SequenceEqual(new object?[] { "Login", "Login" })
-            && windowed.Tables[0].Rows.Select(row => row.Cells[4].Text).SequenceEqual(["0:1", "0:2"]),
+            && windowed.Tables[0].Rows.Select(row => row.Cells[4].Text).SequenceEqual(["0:3", "0:2"]),
             "a window reads the server's clock first and keeps rows from its start; the message text goes to the log reader as its search argument");
+        // A line Agent writes later is a new row with a new key: the rows already listed keep theirs, so a selection stays on its row.
+        var grown = new AgentErrorLogReader(new([0])) { Reader = Fake([], [], (statement, archive) => statement.Id == "errorLog" && archive == 0
+            ? new(statement.Columns, [LogRow(1, 3, "[412] newer"), LogRow(5, 1, "[298] SQLServer Error: 18456, Login failed."), LogRow(60, 2, "[000] Request to stop job refused"), LogRow(3 * 24 * 60, 3, "[393] Waiting")], false) : null) };
+        var grownRows = (await grown.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(), null, CancellationToken.None)).Tables[0].Rows.Select(Texts).ToList();
+        check(grownRows.Select(row => row[4]).SequenceEqual(["0:4", "0:3", "0:2", "0:1"]) && grownRows[1][3] == rows[0][3],
+            "a new line in Current takes a new key and every row read before keeps its key: " + string.Join(",", grownRows.Select(row => row[4])));
+        var noClock = new AgentErrorLogReader(new([0], 1)) { Reader = Fake([], [], (statement, _) => statement.Id == "clock" ? new(statement.Columns, [], false) : null) };
+        var clockless = await noClock.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(), null, CancellationToken.None);
+        check(!clockless.Sampled && clockless.Errors is [{ Code: "SQL_ERROR" }], "a window whose clock read answers no row fails the sample rather than showing every row");
         var cap = (int)AgentCatalog.Current.Limit("logRows");
         var many = Enumerable.Range(0, cap + 5).Select(at => LogRow(at, 3, "row " + at)).ToList();
         var full = new AgentErrorLogReader(new([0, 1])) { Reader = Fake([], [], (statement, archive) => statement.Id == "errorLog" && archive == 0 ? new(statement.Columns, many.Take(cap).ToList(), true) : null) };
         var cut = await full.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(), null, CancellationToken.None);
-        check(cut.Tables[0].More == 1 && cut.Tables[0].Rows.Count == cap && cut.Tables[0].Rows[0].Cells[3].Text == "row 0",
-            "a log read past logRows marks the table cut, keeps the newest rows, and reads no later log once the cap is reached");
+        check(cut.Tables[0].More == 1 && cut.Tables[0].Rows.Count == cap && cut.Tables[0].Rows[0].Cells[3].Text == "row 0" && cut.Tables[0].Rows[0].Cells[4].Text?.StartsWith("0:t", StringComparison.Ordinal) == true
+            && cut.Tables[0].Rows.Select(row => row.Cells[4].Text).Distinct().Count() == cap,
+            "a log read past logRows marks the table cut, keeps the newest rows keyed by their time (it has no oldest row to count from), and reads no later log once the cap is reached");
         var ranMi = new List<string>();
         var mi = new AgentErrorLogReader(new([0])) { Reader = Fake(ranMi, [], oldestFirst: true), ManagedInstance = true };
         var miSample = await mi.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(), null, CancellationToken.None);
@@ -145,6 +155,10 @@ internal static class AgentErrorLogChecks
             [[2, new DateTime(2026, 10, 21, 21, 24, 0), 5222], [0, new DateTime(2026, 11, 22, 14, 31, 0), 15592], [1, new DateTime(2026, 11, 13, 7, 48, 0), 6174]], false)), null, CancellationToken.None);
         check(listed is { Archives: true, Error: null } && listed.Logs.Select(log => log.Archive + "@" + log.Date + "/" + log.Bytes).SequenceEqual(["0@2026-11-22T14:31:00/15592", "1@2026-11-13T07:48:00/6174", "2@2026-10-21T21:24:00/5222"]),
             "agent.errorLogs lists the logs in archive order, Current first, with their server-time dates and sizes");
+        // SQL Server sends Date as text in the US format with two spaces; it is server time as the dates above.
+        var texts = await service.ReadErrorLogsAsync(Listing(statement => new(statement.Columns, [[0, "11/22/2026  21:44", 204], [1, "garbage", 10]], false)), null, CancellationToken.None);
+        check(texts.Logs.Select(log => log.Date ?? "none").SequenceEqual(["2026-11-22T21:44:00", "none"]), "agent.errorLogs reads the Date text xp_enumerrorlogs sends, and lists a log whose date it cannot read with none: "
+            + string.Join(",", texts.Logs.Select(log => log.Date)));
         var linux = await service.ReadErrorLogsAsync(new AgentReader { TestRun = (_, _, _) => throw new AgentShapeException("NOT_SUPPORTED", AgentReader.MissingMessage) }, null, CancellationToken.None);
         check(linux is { Archives: false, Error: null, Logs: [{ Archive: 0, Date: null }] }, "where xp_enumerrorlogs returns no list (SQL Server on Linux) the current log is listed alone");
         var refused = await service.ReadErrorLogsAsync(new AgentReader { TestRun = (_, _, _) => throw ConnectionFailureChecks.Sql(229, 5, 14, "server", "The EXECUTE permission was denied on the object 'xp_enumerrorlogs'.") }, null, CancellationToken.None);

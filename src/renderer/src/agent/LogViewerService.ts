@@ -261,7 +261,15 @@ export class LogViewerService extends SnapshotStore<LogViewerSnapshot> implement
     }
     if (this.get(id)?.connectionId !== connectionId) return
     this.patch(id, { profile })
-    if (agentRoleOf(profile) === 'sysadmin') void this.readErrorLogs(id)
+    const role = agentRoleOf(profile)
+    if (role === 'sysadmin') { void this.readErrorLogs(id); return }
+    // A login below sysadmin cannot read the error logs and Select logs lists none for it to uncheck: a log checked by View Agent Log
+    // (from the palette) is unchecked, and the note says why.
+    const why = errorLogsUnavailable(role)
+    if (role !== 'unknown' && role !== 'profileFailed' && why && this.get(id)?.logs.length) {
+      this.patch(id, { logs: [], entry: undefined, note: why })
+      this.syncErrorLog(id)
+    }
   }
 
   /** The jobs list (table 2), after each sample: the sources, and a job named by its menu checked by its id. */

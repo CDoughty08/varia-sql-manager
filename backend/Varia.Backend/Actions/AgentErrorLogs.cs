@@ -68,6 +68,17 @@ internal sealed partial class ActionService
             error => new AgentErrorLogsResult([], false, watch.ElapsedMilliseconds, error), "Listing the error logs");
     }
 
+    /// <summary>xp_enumerrorlogs's Date as server time: text such as "11/22/2026  21:44" (what SQL Server sends), or a datetime; anything else is none.</summary>
+    internal static string? ErrorLogDate(object? value)
+    {
+        const string format = "yyyy-MM-dd'T'HH:mm:ss";
+        if (value is DateTime date) return date.ToString(format, CultureInfo.InvariantCulture);
+        if (value is not string text) return null;
+        var spaced = string.Join(' ', text.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        return DateTime.TryParseExact(spaced, ["MM/dd/yyyy HH:mm", "M/d/yyyy H:mm", "MM/dd/yyyy HH:mm:ss", "M/d/yyyy H:mm:ss"], CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed)
+            ? parsed.ToString(format, CultureInfo.InvariantCulture) : null;
+    }
+
     /// <summary>The logs in archive order, Current (0) first. No list at all (SQL Server on Linux) is Current alone with Archives false.</summary>
     internal async Task<AgentErrorLogsResult> ReadErrorLogsAsync(AgentReader reader, Microsoft.Data.SqlClient.SqlConnection? connection, CancellationToken token)
     {
@@ -75,7 +86,7 @@ internal sealed partial class ActionService
         if (errors is [{ Code: "NOT_SUPPORTED" }]) return new([new(0)], false, 0);
         if (!results.TryGetValue(AgentSql.ErrorLogs.Id, out var logs)) return new([], false, 0, HistoryReadError(errors[0]));
         var listed = logs.Rows.Select(row => new AgentErrorLogDto(Convert.ToInt32(logs.Value(row, "Archive #"), CultureInfo.InvariantCulture),
-                logs.Value(row, "Date") is DateTime date ? date.ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture) : null,
+                ErrorLogDate(logs.Value(row, "Date")),
                 logs.Value(row, "Log File Size (Byte)") is { } size and not DBNull ? Convert.ToInt64(size, CultureInfo.InvariantCulture) : null))
             .Where(log => log.Archive is >= 0 and <= AgentErrorLogArgs.MaxArchive).OrderBy(log => log.Archive).ToList();
         if (!listed.Any(log => log.Archive == 0)) listed.Insert(0, new(0));
