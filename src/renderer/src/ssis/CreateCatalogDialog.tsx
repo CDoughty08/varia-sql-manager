@@ -4,6 +4,7 @@ import { displayText } from '../../../shared/explorer/refs.ts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
 import StepList from '../kit/StepList'
+import DialogFooter from '../kit/DialogFooter'
 import { trapFocus } from '../trap-focus'
 import type { OpenCreateCatalog } from './CreateCatalogService'
 import { findInWindows, returnFocusTo } from '../core/focus'
@@ -101,11 +102,10 @@ function CreateCatalogForm({ open, close }: { open: OpenCreateCatalog; close(): 
     {/* A window close or Restart refused while Create Catalog runs: the dialog covers the command banner, so it says why
         here, outside the scroll, above Stop. */}
     {executing && open.refusal && <p className="connect-error create-catalog-refusal" role="alert">{open.refusal}</p>}
-    <div className="connection-footer">
-      <span />
+    <DialogFooter trailing={<>
       <button className="primary" type="submit" disabled={!fields}>OK</button>
       {executing ? <button type="button" disabled={open.stopping} onClick={() => ssisCatalog.stop()}>Stop</button>
         : <button type="button" onClick={close}>{open.phase === 'disconnected' ? 'Close' : 'Cancel'}</button>}
-    </div>
+    </>} />
   </form></div>
 }
