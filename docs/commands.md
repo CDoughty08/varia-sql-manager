@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (428)
+## Commands (430)
 
 ### File
 
@@ -442,6 +442,8 @@ keys it uses are listed below.
 | Stop Jobs | `agent.stopJobs` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
 | Enable Jobs | `agent.enableJobs` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
 | Disable Jobs | `agent.disableJobs` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
+| Change Job Owner… | `agent.changeJobOwner` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
+| Attach Schedule to Jobs… | `agent.attachJobSchedule` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
 | Open Job… | `agent.openJob` | Enter (`activeDocumentIsJobActivity && outputGridFocus`) | Enter (`activeDocumentIsJobActivity && outputGridFocus`) | ↩ (`activeDocumentIsJobActivity && outputGridFocus`) | `agentEnabled && backendReady && hasConnection` | — |
 | New Job… | `agent.newJob` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › New Job… |
 | Save Job | `agentJob.save` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentJob` | — |

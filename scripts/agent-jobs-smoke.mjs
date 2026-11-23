@@ -2,7 +2,8 @@
 // the smoke runs open the release gate): the Agent node's menu opens one live document per connection listing the jobs with
 // tiles and tones, a view chip and Clear filters narrow and restore the list through live.update, two selected jobs get Start
 // as one request each with a result line per job, the status bar follows the newest started job to its outcome, the Last run
-// chevron shows the selected job's last run in place, View history opens the Log File Viewer (AG-5a) with the selected job
+// chevron shows the selected job's last run in place, Change owner and Attach schedule (AG-3b) send one request per job from their
+// forms below the bulk bar (Escape closes one), View history opens the Log File Viewer (AG-5a) with the selected job
 // checked, whose sources, outcome filter, selected run, whole message and Delete History work against the fake history, closing
 // ends the view, and Enter on the Job Activity Monitor node opens it again. Screenshots in Dark and Light go to artifacts/.
 import { electron, expect } from './fixtures/smoke.mjs'
@@ -122,6 +123,53 @@ try {
   await lastRun.getByRole('button', { name: 'Hide the last run', exact: true }).click()
   await expect(lastRun).toHaveCount(0)
   console.log('Last run passed: the chevron shows the selected job\'s last run in place and hides it again.')
+
+  step = 'change owner'
+  // Two jobs selected: Change owner reads the logins, then sends one changeJobOwner per job with its own result line; Escape closes a form.
+  await jobCell('Nightly').click()
+  await page.keyboard.press('Shift+ArrowDown')
+  await expect(bulkBar()).toContainText('2 jobs selected')
+  await bulkBar().getByRole('button', { name: 'Change owner…', exact: true }).click()
+  const ownerForm = frame().getByRole('region', { name: 'Change the owner of 2 jobs', exact: true })
+  await expect(ownerForm).toContainText('Nightly, Backup')
+  await expect(ownerForm.getByRole('button', { name: 'Change owner', exact: true })).toBeDisabled()
+  await ownerForm.getByLabel('New owner', { exact: true }).press('Escape')
+  await expect(ownerForm).toHaveCount(0)
+  await bulkBar().getByRole('button', { name: 'Change owner…', exact: true }).click()
+  await ownerForm.getByLabel('New owner', { exact: true }).fill('ops')
+  await ownerForm.getByLabel('New owner', { exact: true }).press('Enter')
+  const ownerResults = frame().getByRole('log', { name: 'Change Job Owner results', exact: true })
+  await expect(ownerResults.getByRole('listitem').filter({ hasText: 'Owner set to ops' })).toHaveCount(2)
+  expect((await calls('actions.execute')).filter(call => call.action === 'changeJobOwner').map(call => ({ name: call.target.name, jobId: call.agentIdentity.jobId, owner: call.jobOwner }))).toEqual([
+    { name: 'Nightly', jobId: 'a1b2c3d4-0000-4000-8000-000000000001', owner: 'ops' }, { name: 'Backup', jobId: 'a1b2c3d4-0000-4000-8000-000000000002', owner: 'ops' }
+  ])
+  await frame().getByRole('region', { name: 'Change Job Owner', exact: true }).getByRole('button', { name: 'Close', exact: true }).click()
+  await expect(ownerResults).toHaveCount(0)
+  console.log('Change owner passed: the form reads the logins and sends one request per selected job; Escape closes it.')
+
+  step = 'attach schedule'
+  // All three jobs: Attach schedule picks a shared schedule (search, then its preview) and attaches it with one guarded save per job;
+  // Nightly already uses it, so Backup's and Purge's requests go, each under the same schedule guard (attaching leaves it as it is).
+  await jobCell('Nightly').click()
+  await page.keyboard.press('Shift+ArrowDown')
+  await page.keyboard.press('Shift+ArrowDown')
+  await expect(bulkBar()).toContainText('3 jobs selected')
+  await bulkBar().getByRole('button', { name: 'Attach schedule…', exact: true }).click()
+  const scheduleForm = frame().getByRole('region', { name: 'Attach a schedule to 3 jobs', exact: true })
+  await scheduleForm.getByRole('searchbox', { name: 'Search shared schedules', exact: true }).fill('nightly')
+  await scheduleForm.getByRole('list', { name: 'Shared schedules', exact: true }).getByRole('button', { name: /^Nightly 02:30/ }).click()
+  await expect(scheduleForm.getByRole('region', { name: 'Shared schedule Nightly 02:30', exact: true })).toContainText('Next 5 runs')
+  await page.screenshot({ path: 'artifacts/agent-jobs-attach-schedule.png' })
+  await scheduleForm.getByRole('button', { name: 'Attach schedule', exact: true }).click()
+  const attachResults = frame().getByRole('log', { name: 'Attach Schedule results', exact: true })
+  await expect(attachResults.getByRole('listitem').filter({ hasText: 'Done' })).toHaveCount(3)
+  await expect(attachResults.getByRole('listitem').filter({ hasText: 'Already uses this schedule' })).toHaveCount(1)
+  await expect(attachResults.getByRole('listitem').filter({ hasText: 'Attached Nightly 02:30' })).toHaveCount(2)
+  const attaches = (await calls('actions.execute')).filter(call => call.action === 'agentSchedule')
+  expect(attaches.map(call => call.agentSchedule)).toEqual(['2', '3'].map(job => ({ op: 'update', schedule: { id: 1, version: 2, modified: '2026-11-01T02:00:00.000' }, jobs: [{ jobId: `A1B2C3D4-0000-4000-8000-00000000000${job}`, version: 3, attach: true }] })))
+  await frame().getByRole('region', { name: 'Attach Schedule', exact: true }).getByRole('button', { name: 'Close', exact: true }).click()
+  await expect(attachResults).toHaveCount(0)
+  console.log('Attach schedule passed: the picked shared schedule is attached with one guarded save per job, skipping a job already on it.')
 
   step = 'history'
   // View history opens the Log File Viewer with the selected job checked; All jobs, the outcome filter, a run's rows and its
