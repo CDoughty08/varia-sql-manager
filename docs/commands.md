@@ -1104,7 +1104,7 @@ Click the ⋯ button at the end of the results toolbar (More results tools), or 
 | `2_view` | **T**ransposed | `output.transpose` | Always |
 | `2_view` | Choose **H**eaders… | `output.transposeChooseHeaders` | `resultsGridTransposed` |
 | `2_view` | Load **i**nto Memory | `output.loadIntoMemory` | Always |
-| `2_view` | Load Sa**m**ple… | `output.loadSample` | Always |
+| `2_view` | Load Sa**m**ple… | `output.loadSample` | `!resultsGridComparison` |
 | `3_show` | Column Pro**f**ile | `output.toggleColumnProfile` | Always |
 | `3_show` | Profile Selected Columns **O**nly | `output.toggleProfileSelectedColumns` | Always |
 | `3_show` | Row Si**z**e | `output.toggleRowSize` | Always |

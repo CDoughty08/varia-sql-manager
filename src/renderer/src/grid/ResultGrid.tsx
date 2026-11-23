@@ -60,6 +60,8 @@ export const windowedText = 'This result is windowed in BigQuery: rows are read 
 /** A windowed result too large for the result memory free now: Load into memory is not offered until there is room, and
  *  a sample is offered instead. */
 export const windowedFullText = 'This result is windowed in BigQuery: rows are read as you scroll. It is too large to load into the result memory free now; load a sample, or close other results to make room.'
+/** The same where no sample can be made (a Peek card, a grid of another window). */
+export const windowedNoRoomText = 'This result is windowed in BigQuery: rows are read as you scroll. It is too large to load into the result memory free now; close other results to make room.'
 /** What runs over a windowed result, as its strip shows it: a load into memory (`loading`), a sample (`sample`) or a re-run
  *  (`rerun`), each with its stopping state, or nothing (''). */
 export type LoadingState = '' | 'loading' | 'stopping' | 'sample' | 'sampleStopping' | 'rerun' | 'rerunStopping'
@@ -303,7 +305,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
   const needsRoom = useSyncExternalStore(loadSubscribe, () => results.loadNeedsRoom(tabId, key))
   const sampleable = useSyncExternalStore(results.subscribe, () => results.canLoadSample(tabId, key))
   const loadNote = lost ? undefined : loadingText(loading, snapshot)
-  const other = lost ? undefined : loadNote ?? (snapshot.incomplete ? incompleteText : truncation ?? highlightNote ?? (loadable ? windowedText : needsRoom ? windowedFullText : undefined))
+  const other = lost ? undefined : loadNote ?? (snapshot.incomplete ? incompleteText : truncation ?? highlightNote ?? (loadable ? windowedText : needsRoom ? sampleable ? windowedFullText : windowedNoRoomText : undefined))
   const note = cap && other ? `${cap} ${other}` : cap ?? other
   // A comparison's strip starts with links to its inputs: one goes to that grid (focused, so the stack scrolls to it).
   const rootEl = useRef<HTMLDivElement | null>(null), hadFocus = useRef(false)

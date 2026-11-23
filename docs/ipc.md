@@ -1206,10 +1206,10 @@ and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residen
   sort, filters or fallback, and record no job (they are auxiliary: the source's release cancels them). `sample { rows:
   1 – 10,000,000, method: 'first' | 'random' }` answers a new derived result in memory: `first` reads the table's first
   rows with `tabledata.list` (no job, free), `random` runs `TABLESAMPLE SYSTEM` over it (billed). A budget refusal part
-  way keeps the rows read and never stops the source. `rerun {}` runs the windowed result's own statement again (a script
-  child's alone, and a re-attached job's, read with `jobs.get`) and answers its result, which the renderer puts in place
-  of the source and releases the source; only a query's own result, or a rerun's, runs again (`INVALID_PARAMS` for a
-  view, value list or sample). Both answer `BUSY` as `load` does, and a sample of an expired table `REMOTE_EXPIRED`.
+  way keeps the rows read and never stops the source. `rerun {}` runs the windowed result's own statement again (read with
+  `jobs.get`: a script child's alone) and answers its result, which the renderer puts in place of the source and releases
+  the source; only a query's own result, or a rerun's, from a job of one SELECT runs again (`INVALID_PARAMS` for a view,
+  value list or sample, or a script's job). Both answer `BUSY` as `load` does, and a sample of an expired table `REMOTE_EXPIRED`.
 - **`bigquery.dryRun { connectionId, remote }`** estimates a `view`, `distinct`, `sample` or `rerun` request (a first-rows
   sample answers 0 bytes without asking BigQuery) (`remote` holds `resultId`,
   `generation` and the kind's fields, no query ID or fallback) with the query's parameters, on the result's own connection;

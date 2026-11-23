@@ -437,12 +437,14 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
 - **Expiry.** A destination table lasts about 24 hours: once it has expired, a read answers with the cached rows from the
   start of its window, and one that starts on rows not cached answers `REMOTE_EXPIRED`. The grid keeps the rows it has, and
   its strip says BigQuery no longer keeps the result and offers Re-run…: `results.remoteQuery` kind `rerun` runs the
-  result's own statement again in BigQuery (a script statement's alone, read with `jobs.get` as a re-attached job's is,
-  with the default dataset it ran with), after its estimate and the cost prompts, outside the tab's session, and the new
+  result's own statement again in BigQuery (read from its job with `jobs.get`, free, with the default dataset it ran
+  with: a script statement's alone), after its estimate and the cost prompts, outside the tab's session, and the new
   result replaces the old one in place, keeping its number, column widths and place; its sort and filters are removed
   (the screen reader hears so). While it runs the strip says so and offers Stop, which leaves the result as it was, and
   closing the result cancels it. Only a query's own result (or a re-run's) runs again: a view, value list or sample reads
-  a table that may be gone, so its query is run again from the editor. A cache hit's destination table is an older one, which may expire sooner, so a
+  a table that may be gone, so its query is run again from the editor. A result whose job BigQuery names a script, or
+  anything but one SELECT (a script whose statements were not listed), is refused with `INVALID_PARAMS`, so a script
+  never runs again whole. Outside the session, a statement that reads the tab's temp tables or variables fails as BigQuery says. A cache hit's destination table is an older one, which may expire sooner, so a
   windowed cache hit's caption adds "cached result: may expire early".
 - **What waits.** Search, profiles, pivots, row identities and comparisons of a windowed result (its sorts, filters and
   value lists run in BigQuery, below) answer "This result is windowed in BigQuery" (`REMOTE_RESULT`) for now; a request whose result switches to
@@ -502,7 +504,8 @@ them, and its note says what the sample costs and the result memory it needs (`L
   runs and nothing is billed, so there is no estimate or prompt.
 - **Random sample.** `SELECT * FROM` the result table `TABLESAMPLE SYSTEM (@percent PERCENT) LIMIT @rows`, the percent
   being the rows' share of the table with 10% to spare (BigQuery picks whole blocks, so a sample holds about that share,
-  and up to the rows asked). BigQuery bills only the blocks it reads: the dialog shows the dry run's estimate as the
+  and up to the rows asked; a small table may be one block, picked whole or not at all, and Messages says when the
+  sample holds fewer rows than asked). BigQuery bills only the blocks it reads: the dialog shows the dry run's estimate as the
   rows or method change, and Load goes through Cost › Before Execute's prompts as a sort does. Its job runs outside the
   tab's session and its rows and cost go to Messages.
 - **The result.** A new result in memory beside its source, named for what it holds ("Sample: 1,000,000 of 52,341,118
@@ -681,8 +684,8 @@ and TIME columns, writes BYTES base64-encoded twice and exits on ARRAY columns; 
   CONNECT. Its Residence part covers the decision and both settings, the block cache (sizes, LRU, budget, lanes,
   read-ahead per viewer, a jump, waits, expiry, rate limits), every reader's `REMOTE_RESULT`, the switch to windowed on
   a misestimate through REST and Arrow, Load into memory with its refusal and Stop, Load sample (first rows through
-  `tabledata.list` with no job, a random sample's SQL and estimate) and Re-run (a statement, a script statement's and a
-  re-attached job's text, cancel on close), and Copy and Save (the Copy limit,
+  `tabledata.list` with no job, a random sample's SQL and estimate, a short sample's note) and Re-run (a statement, a script
+  statement's and a re-attached job's text, a script's job refused, cancel on close), and Copy and Save (the Copy limit,
   transposed rows across blocks, expiry, release, Save through Storage Read and REST with Maximum rows and a resumed stream). `tests/bigquery-remote-results.test.ts`,
   `tests/results-port.test.ts` and `tests/result-client.test.ts` cover main's and the renderer's side.
   `tests/bigquery-credentials.test.ts`, `tests/bigquery-connection-store.test.ts` and

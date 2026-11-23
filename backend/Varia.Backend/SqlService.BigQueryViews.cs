@@ -228,6 +228,9 @@ internal sealed partial class SqlService
         var connection = window.Connection;
         if (bigQuery.Find(connection.Id) != connection) throw new RequestException("NOT_CONNECTED", "The connection was closed.");
         if (set.Budget.Executing) throw new RequestException("BUSY", "This result's query is still running. " + RemoteVerb(kind) + " once the query has finished.");
+        // A sample or rerun is read into the same budget a load is filling.
+        if (kind is "sample" or "rerun" && set.Budget.Loading)
+            throw new RequestException("BUSY", "Another result of this query is loading into memory. " + RemoteVerb(kind) + " once it has finished.");
         if (BudgetStopped(set.Budget) is { } stopped) throw stopped;
         var queryArgs = window.Args with
         {
@@ -292,11 +295,12 @@ internal sealed partial class SqlService
             else
             {
                 if (plan.Fallback) messages.Add("BigQuery no longer has the result's temporary table, so the original query runs again with the sort or filter around it.");
-                // A script child's or a re-attached job's statement is read from its job (free) before anything is billed.
+                // A rerun's statement is read from its job (free) before anything is billed.
                 if (plan.FromJob)
                 {
                     var (statement, from) = await StatementAsync(plan, token);
-                    queryArgs = queryArgs with { Sql = statement };
+                    // The window it opens keeps them, so its own rerun starts from what ran.
+                    queryArgs = queryArgs with { Sql = statement, Dataset = from };
                     dataset = from;
                 }
                 var job = new Job
@@ -378,7 +382,7 @@ internal sealed partial class SqlService
                     // The source released while the last rows came: nothing owns the new result (the catch releases it).
                     if (set.IsReleased) throw Unavailable(args.ResultId);
                     events.Closed(derived);
-                    messages.Add(distinct ? "The column's values were listed in BigQuery." : sample ? SampleSentence(derived, window.TotalRows)
+                    messages.Add(distinct ? "The column's values were listed in BigQuery." : sample ? SampleSentence(derived, window.TotalRows) + ShortSample(total, plan.SampleRows, window.TotalRows)
                         : total == 1 ? "(1 row affected)" : "(" + total.ToString(CultureInfo.InvariantCulture) + " rows affected)");
                 }
                 finally { page?.Dispose(); }

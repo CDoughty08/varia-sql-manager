@@ -37,16 +37,17 @@ internal sealed partial class SqlService
         // the rerun that replaced it) runs again.
         if (set.Derived && !set.Reran)
             throw new RequestException("INVALID_PARAMS", "Only a query's own result runs again in place. Run the query again for a sorted or filtered view, a value list or a sample.");
-        // A script child's text is the whole script's here, and a re-attached job's is not kept: theirs is read from the job.
-        var fromJob = window.Child || string.IsNullOrWhiteSpace(window.Args.Sql);
-        return new RemotePlan(set, window, fromJob ? "" : window.Args.Sql, [], false, null, false)
+        // The text kept here may be a whole script's (a script child's, or a script whose children were not listed) or none (a
+        // re-attached job's): the statement is always read from the job, which also says whether it was one SELECT.
+        return new RemotePlan(set, window, "", [], false, null, false)
         {
-            Kind = kind, FromJob = fromJob, Dataset = window.Args.Dataset ?? window.Connection.Options.Dataset
+            Kind = kind, FromJob = true, Dataset = window.Args.Dataset ?? window.Connection.Options.Dataset
         };
     }
 
-    /// <summary>A rerun's statement from its job (jobs.get, free): a script child's own statement, or a re-attached job's text,
-    /// and the default dataset it ran with when that was the billing project's.</summary>
+    /// <summary>A rerun's statement from its job (jobs.get, free): the statement that made the result (a script child's alone),
+    /// and the default dataset it ran with when that was the billing project's. Only one SELECT runs again: a script's job, or
+    /// any other statement, is refused before anything is billed.</summary>
     private async Task<(string Sql, string? Dataset)> StatementAsync(RemotePlan plan, CancellationToken token)
     {
         var window = plan.Window;
@@ -54,6 +55,10 @@ internal sealed partial class SqlService
         var query = job.Configuration?.Query;
         if (string.IsNullOrWhiteSpace(query?.Query))
             throw new RequestException("BACKEND_ERROR", "BigQuery did not say which statement made this result, so it cannot run again in place. Run the query again.");
+        // The emulator names no statement type; BigQuery names every job's.
+        var type = BigQueryService.StatementOf(job.Statistics);
+        if (type == "SCRIPT" || job.Statistics?.NumChildJobs > 0 || type is not (null or "SELECT"))
+            throw new RequestException("INVALID_PARAMS", "Only a single SELECT's result runs again in place, and this result came from a script. Run the query again.");
         var own = query.DefaultDataset is { DatasetId: { } dataset, ProjectId: var project } && (project is null || project == window.Project) && BqNames.IsDataset(dataset) ? dataset : null;
         return (query.Query, own ?? plan.Dataset);
     }
@@ -64,6 +69,13 @@ internal sealed partial class SqlService
     /// <summary>What a sample holds, in Messages: "The sample holds 1,000 of 52,341,118 rows."</summary>
     private static string SampleSentence(ResultSetBuffer sample, long total) =>
         "The sample holds " + sample.Describe().RowsStored.ToString("N0", CultureInfo.InvariantCulture) + " of " + total.ToString("N0", CultureInfo.InvariantCulture) + " rows.";
+
+    /// <summary>Why a random sample holds fewer rows than asked, when BigQuery's pick did: it takes whole blocks, so a small
+    /// table's sample may hold far fewer rows, or none.</summary>
+    internal static string ShortSample(long picked, int asked, long total) =>
+        picked >= Math.Min(asked, total) ? "" : picked == 0
+            ? " BigQuery's pick held no rows: TABLESAMPLE takes whole blocks, and a small table may have only one. Load the first rows instead, or ask for more."
+            : " BigQuery's pick held fewer rows than asked: TABLESAMPLE takes whole blocks, so a sample holds about its share of the table, not an exact count.";
 
     /// <summary>What a remote query does, as the start of a sentence ("Sort or filter it once the query has finished").</summary>
     private static string RemoteVerb(string kind) => kind switch

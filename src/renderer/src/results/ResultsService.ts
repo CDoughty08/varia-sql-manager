@@ -485,6 +485,7 @@ const loadWhileRunning = 'Load the result into memory once its query has finishe
 const sampleWhileRunning = 'Load a sample of the result once its query has finished.'
 const rerunWhileRunning = 'Run the result again once its query has finished.'
 const busyWindowed = 'This result is already loading or running again in BigQuery. Wait for it, or stop it first.'
+const sampleFull = `These results already show ${resultLimits.sets.toLocaleString('en-US')} sets, so no sample can be added. Close some results first.`
 // A view built while rows still arrived whose rebuild from every row was cancelled: nothing builds it again by itself.
 const partialView = 'The grid is sorted or filtered over only the rows that had arrived. Sort or filter it again to include every row, then save.'
 const saveCancelled = 'Saving was cancelled. The file was not written.'
@@ -920,6 +921,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (snapshot.residence !== 'remote') return ''
     if (run.status === 'running' || run.status === 'closed' || snapshot.state !== 'complete') return kind === 'sample' ? sampleWhileRunning : rerunWhileRunning
     if (run.loads.has(key)) return busyWindowed
+    if (kind === 'sample' && run.sets.length >= resultLimits.sets) return sampleFull
     return undefined
   }
 
@@ -954,7 +956,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       if (this.runs.get(tabId) !== run || run.entries.get(key) !== set || this.disposed) { this.releaseDescriptor(descriptor); return undefined }
       const snapshot = set.handle.getSnapshot()
       const name = sampleName(descriptor.rowsStored, snapshot.rowsTotal ?? snapshot.rowsAvailable)
-      if (this.addSample(tabId, run, set, descriptor, name)) this.announce(tabId, `${name} loaded.`)
+      const added = this.addSample(tabId, run, set, descriptor, name)
+      if (added) this.announce(tabId, `${added} loaded.`)
+      else failure = `Could not show the sample: ${sampleFull}`
     } catch (error) {
       // A declined prompt or a Stop ran nothing worth an error (a Stop's lines are already in Messages).
       if (!(error instanceof RemoteDeclined) && !abort.signal.aborted) failure = `Could not load a sample: ${error instanceof Error ? error.message : String(error)}`
@@ -1005,30 +1009,37 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   }
 
   /** Adds a sample after its source's group (its Table and Pivot), before the next group and the comparisons, as a Table of
-   *  a group of its own numbered after the run's highest, with the focus. Released, and false, when the run cannot take it. */
-  private addSample(tabId: string, run: Run, source: ResultSetEntry, descriptor: ResultDescriptor, label: string): boolean {
+   *  a group of its own numbered after the run's highest, with the focus: the name it is given. Released, and false, when the
+   *  run cannot take it. */
+  private addSample(tabId: string, run: Run, source: ResultSetEntry, descriptor: ResultDescriptor, label: string): string | false {
     const key = setKey(descriptor)
     if (run.setKeys.has(key)) return false
     if (run.bare || run.status === 'running' || run.status === 'closed' || run.sets.length >= resultLimits.sets) { this.releaseDescriptor(descriptor); return false }
     run.setKeys.add(key)
     if (run.setsPublished) { run.sets = run.sets.slice(); run.setsPublished = false }
-    // Numbered once, for its life, as a derived entry is; its number is its group's too.
-    const number = ++run.numbered
-    const entry: ResultSetEntry = { key: this.mint(), ordinal: number, number, descriptor, handle: this.client.open(descriptor), label, sample: true }
+    // Numbered once, for its life, as a derived entry is. Its group is the negative of its number: a group's ordinal is what
+    // highlights, the Column Profile, the focus, Pivot drafts and Compare follow into the next run, where the query's own
+    // results are numbered from 1, so a sample's state never passes to one of them.
+    const number = ++run.numbered, ordinal = -number
+    // Two samples of one size read apart by their numbers.
+    const named = run.sets.some(other => other.label === label) ? `${label} (${entryNumber({ number })})` : label
+    const entry: ResultSetEntry = { key: this.mint(), ordinal, number, descriptor, handle: this.client.open(descriptor), label: named, sample: true }
     const group = run.slots.get(source.key)?.group
     let at = run.sets.indexOf(source) + 1
-    while (at > 0 && at < run.sets.length && group !== undefined && run.slots.get(run.sets[at].key)?.group === group && run.slots.get(run.sets[at].key)?.view === 'pivot') at++
+    // After the source's Pivot and the samples made of it before (each a group of a negative ordinal, with its own Pivot).
+    const after = (key: EntryKey) => { const slot = run.slots.get(key); return slot?.group !== undefined && (slot.group === group && slot.view === 'pivot' || slot.group < 0) }
+    while (at > 0 && at < run.sets.length && group !== undefined && after(run.sets[at].key)) at++
     if (at <= 0) at = run.sets.length
     run.sets.splice(at, 0, entry)
     run.entries.set(entry.key, entry)
-    run.slots.set(entry.key, { view: 'table', group: number, revision: 1, sources: [] })
+    run.slots.set(entry.key, { view: 'table', group: ordinal, revision: 1, sources: [] })
     run.shape = undefined
     this.settle(run, descriptor)
     run.emptied = false
     run.view = 'results'
     this.viewState(tabId).focused = entry.key
     this.schedule(tabId)
-    return true
+    return named
   }
 
   /**
@@ -1060,7 +1071,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       run.settled.delete(setKey(old.descriptor))
     }
     run.setKeys.add(setKey(descriptor))
-    const entry: ResultSetEntry = { ...old, descriptor, handle: this.client.open(descriptor) }
+    // A name the query gave its result stays with it (the backend opens the rerun's set unnamed).
+    const named = old.descriptor.name !== undefined && descriptor.name === undefined ? { ...descriptor, name: old.descriptor.name } : descriptor
+    const entry: ResultSetEntry = { ...old, descriptor: named, handle: this.client.open(descriptor) }
     if (run.setsPublished) { run.sets = run.sets.slice(); run.setsPublished = false }
     run.sets[run.sets.indexOf(old)] = entry
     run.entries.set(key, entry)
@@ -2433,6 +2446,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       const key = entry.key
       run.sorting.get(key)?.abort()
       run.sorting.delete(key)
+      // A sample or re-run over the result is given up with it (no reason: its lines are not wanted now). The backend also
+      // cancels it on the release, but an estimate or a cost prompt still open would otherwise go on to send it.
+      const load = run.loads.get(key)
+      if (load?.abort) { load.abort.abort(); const loads = new Map(run.loads); loads.delete(key); run.loads = loads }
       // Releasing the result closes its views, but not one built in BigQuery: a result of its own, closed here.
       const sort = run.sorts.get(key)
       for (const view of new Set([...run.held.get(key)?.views ?? [], ...sort?.view ? [sort.view] : []])) if (isRemoteView(view)) void view.close()

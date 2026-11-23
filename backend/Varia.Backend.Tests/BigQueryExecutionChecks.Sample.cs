@@ -20,6 +20,7 @@ internal static partial class BigQueryExecutionChecks
         await RerunAsync(check);
         await AttachedRerunAsync(check);
         await ScriptChildRerunAsync(check);
+        await ScriptParentRerunAsync(check);
         await SampleRefusalsAsync(check);
         await SampleStopsAsync(check);
     }
@@ -51,6 +52,9 @@ internal static partial class BigQueryExecutionChecks
             "a random sample reads the result table with TABLESAMPLE SYSTEM, its percent and rows as parameters: " + sql + " " + string.Join(", ", parameters.Select(p => p.Name + "=" + p.ParameterValue.Value)));
         check(new[] { BigQuerySql.SampleOpen, BigQuerySql.SamplePercentParameter, BigQuerySql.SampleLimit, BigQuerySql.SampleRowsParameter }.All(BigQuerySql.ViewFragments.Contains),
             "the sample's fragments are in the linted view fragments");
+        check(SqlService.ShortSample(1000, 1000, 3000) == "" && SqlService.ShortSample(20, 1000, 20) == "" && SqlService.ShortSample(200, 1000, 3000).Contains("fewer rows than asked", StringComparison.Ordinal)
+            && SqlService.ShortSample(0, 1000, 3000).Contains("held no rows", StringComparison.Ordinal),
+            "a random sample that holds fewer rows than asked, or than the table has, says why");
     }
 
     static async Task FirstRowsSampleAsync(Action<bool, string> check)
@@ -107,7 +111,7 @@ internal static partial class BigQueryExecutionChecks
             && parameters.SequenceEqual(["percent:FLOAT64=36.666667", "rows:INT64=1000"]) && query["createSession"] is null && query["connectionProperties"] is null
             && body["configuration"]!["labels"]?["varia_client"]?.GetValue<string>() == "varia",
             $"a random sample runs TABLESAMPLE over the result table outside any session, into memory: {code} {message} {result?.Status} {set?.Residence} {set?.RowsStored} {InsertedSql(harness)} {string.Join(",", parameters)}");
-        check(Says(result, "The sample holds 200 of 3,000 rows.") && Says(result, "BigQuery job ") && result?.Job is not null,
+        check(Says(result, "The sample holds 200 of 3,000 rows. BigQuery's pick held fewer rows than asked") && Says(result, "BigQuery job ") && result?.Job is not null,
             "a random sample names its job and what it holds in Messages: " + Texts(result?.Messages ?? []));
         // Once the table has expired the estimate says so, and the run answers REMOTE_EXPIRED: TABLESAMPLE has no fallback.
         harness.Jobs.TableDataStatus = 404;
@@ -167,6 +171,14 @@ internal static partial class BigQueryExecutionChecks
         check(attached == "ok" && set is { Residence: "remote" } && code == "ok" && rerun?.Status == "completed" && harness.Jobs.InsertedIds.Count == inserts + 1
             && InsertedSql(harness) == "SELECT n, s FROM t" && query["defaultDataset"]?["datasetId"]?.GetValue<string>() == "varia_fixture",
             $"a re-attached result's rerun runs the job's own statement in its dataset: {attached} {attachMessage} {set?.Residence} {code} {message} {rerun?.Status} {rerun?.Error?.Message} {InsertedSql(harness)}");
+        // Its result keeps the statement and dataset that ran, so it runs again in its turn.
+        var again = rerun?.ResultSets.SingleOrDefault()?.ResultId ?? 0;
+        var (twice, twiceResult, _, twiceMessage) = await Run(harness, "results.remoteQuery", Rerun(again));
+        var second = harness.Jobs.InsertBodies.Last()["configuration"]!["query"]!;
+        check(twice == "ok" && twiceResult?.Status == "completed" && harness.Jobs.InsertedIds.Count == inserts + 2 && InsertedSql(harness) == "SELECT n, s FROM t"
+            && second["defaultDataset"]?["datasetId"]?.GetValue<string>() == "varia_fixture"
+            && harness.Service.Results.Find(again)?.Remote?.Source is SqlService.BigQueryWindow { Args: { Sql: "SELECT n, s FROM t", Dataset: "varia_fixture" } },
+            $"a re-attached result's rerun runs again with the same statement and dataset: {twice} {twiceMessage} {twiceResult?.Status} {twiceResult?.Error?.Message} {second.ToJsonString()}");
     }
 
     static async Task ScriptChildRerunAsync(Action<bool, string> check)
@@ -192,6 +204,29 @@ internal static partial class BigQueryExecutionChecks
             $"a statement BigQuery does not name is refused: {blank?.Status} {blank?.Error?.Code} {blank?.Error?.Message}");
     }
 
+    static async Task ScriptParentRerunAsync(Action<bool, string> check)
+    {
+        // A script whose child jobs were not listed leaves the whole script as its result's text: BigQuery's word that the job
+        // was a script refuses the rerun, so the script never runs again, and nothing is inserted or billed.
+        var jobs = Lines(3000);
+        jobs.StatementType = "SCRIPT";
+        using var harness = new Harness(jobs, new ResultStore(4L << 20, 32 * 1024));
+        await harness.ConnectAsync();
+        var (_, executed, executeMessage) = await harness.Execute("DECLARE x INT64 DEFAULT 1; SELECT n, s FROM t", Windowed);
+        var id = executed?.ResultSets.SingleOrDefault()?.ResultId ?? 0;
+        var inserts = harness.Jobs.InsertedIds.Count;
+        var (dry, _, dryMessage) = await harness.Call("bigquery.dryRun", RemoteDryRun(harness, Rerun(id)));
+        var (code, result, _, message) = await Run(harness, "results.remoteQuery", Rerun(id));
+        check(id != 0 && dry == "INVALID_PARAMS" && dryMessage.Contains("came from a script", StringComparison.Ordinal) && code == "ok"
+            && result is { Status: "failed", Error.Code: "INVALID_PARAMS" } && harness.Jobs.InsertedIds.Count == inserts,
+            $"a script's result is not run again in place: {executeMessage} {id} {dry} {dryMessage} {code} {message} {result?.Status} {result?.Error?.Code} {result?.Error?.Message} {harness.Jobs.InsertedIds.Count - inserts}");
+        // Nor is a statement that is not a SELECT.
+        jobs.StatementType = "CREATE_TABLE_AS_SELECT";
+        var (_, other, _, _) = await Run(harness, "results.remoteQuery", Rerun(id));
+        check(other is { Status: "failed", Error.Code: "INVALID_PARAMS" } && harness.Jobs.InsertedIds.Count == inserts,
+            $"a statement other than a SELECT is not run again in place: {other?.Status} {other?.Error?.Code}");
+    }
+
     static async Task SampleRefusalsAsync(Action<bool, string> check)
     {
         var (harness, id) = await WindowedAsync();
@@ -215,6 +250,14 @@ internal static partial class BigQueryExecutionChecks
         check(none == "INVALID_PARAMS" && zero == "INVALID_PARAMS" && tooMany == "INVALID_PARAMS" && method == "INVALID_PARAMS" && withSort == "INVALID_PARAMS"
             && rerunWithRows == "INVALID_PARAMS" && rerunView == "INVALID_PARAMS" && harness.Jobs.InsertedIds.Count == inserts,
             $"a malformed sample or rerun, or a rerun of a view, is refused before any job: {none} {zero} {tooMany} {method} {withSort} {rerunWithRows} {rerunView} {sampleView}");
+        // Never into a budget another result of the query is loading into.
+        var source = harness.Service.Results.Find(id)!;
+        var began = source.Budget.TryBeginLoad();
+        var (busySample, _, _, busyMessage) = await Run(harness, "results.remoteQuery", Sample(id, 10, "first"));
+        var (busyRerun, _, _, _) = await Run(harness, "results.remoteQuery", Rerun(id));
+        source.Budget.EndLoad();
+        check(began && busySample == "BUSY" && busyRerun == "BUSY" && busyMessage.Contains("loading into memory", StringComparison.Ordinal) && harness.Jobs.InsertedIds.Count == inserts,
+            $"a sample or rerun while another result of the query loads is refused: {began} {busySample} {busyRerun} {busyMessage}");
         var (dryView, _, _) = await harness.Call("bigquery.dryRun", RemoteDryRun(harness, Rerun(viewId)));
         check(dryView == "INVALID_PARAMS" && harness.Jobs.InsertedIds.Count == inserts, "a rerun of a view is refused at its estimate too: " + dryView);
         using var memory = new Harness(Lines(20));

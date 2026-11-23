@@ -149,7 +149,7 @@ describe('remote views of a sample and a rerun', () => {
   })
 })
 
-function serviceFixture(o: { total?: number } = {}) {
+function serviceFixture(o: { total?: number, name?: string } = {}) {
   const client = fakeResultClient(), events = new EventBus(), timers = manualTimers()
   const api = {
     copyResults: vi.fn<VariaApi['copyResults']>(), saveResults: vi.fn<VariaApi['saveResults']>(), cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(),
@@ -165,7 +165,7 @@ function serviceFixture(o: { total?: number } = {}) {
   const service = new ResultsService({ client, api, events, frame: callback => callback(), timers: timers.timers, remote: remote as unknown as RemoteViews, memory: () => ({ usedBytes: 1_000, globalBytes: 1_000_000 }) })
   const total = o.total ?? 52_341_118
   service.begin('t1', 'q1')
-  service.finish('t1', 'q1', { summary: summaryOf([windowed(1, total), descriptor(2, { index: 1, columns })]) })
+  service.finish('t1', 'q1', { summary: summaryOf([{ ...windowed(1, total), ...o.name ? { name: o.name } : {} }, descriptor(2, { index: 1, columns })]) })
   const key = service.getSnapshot().t1!.sets[0].key
   const tab = () => service.getSnapshot().t1!
   return { client, service, remote, key, tab, api, signals, answers, timers }
@@ -187,13 +187,28 @@ describe('Load sample in the results service', () => {
     const sets = f.tab().sets
     const sample = sets[1]
     expect(sets.map(set => set.descriptor.resultId)).toEqual([1, 60, 2])
-    expect(sample).toMatchObject({ label: 'Sample: 980 of 52,341,118 rows', sample: true, number: 3, ordinal: 3 })
+    expect(sample).toMatchObject({ label: 'Sample: 980 of 52,341,118 rows', sample: true, number: 3, ordinal: -3 })
     expect(entryName(sample)).toBe('Sample: 980 of 52,341,118 rows')
     expect(resultTitle(sample)).toBe('Sample: 980 of 52,341,118 rows')
-    expect(groupOf(f.tab(), sample.key)).toMatchObject({ ordinal: 3, table: { key: sample.key } })
+    // Its group is numbered below the query's own, so no state the next run carries by group reaches its results.
+    expect(groupOf(f.tab(), sample.key)).toMatchObject({ ordinal: -3, table: { key: sample.key } })
     expect(f.tab().focused).toBe(sample.key)
     expect(f.tab().loads).toBeUndefined()
     expect(f.service.canLoadSample('t1', f.key)).toBe(true)
+    f.service.dispose()
+  })
+  it('names a second sample of one size apart by its number, and puts it after the first', async () => {
+    const f = serviceFixture()
+    for (const id of [60, 61]) {
+      const loading = f.service.loadSample('t1', f.key, 1_000, 'first')
+      await vi.waitFor(() => expect(f.answers.length).toBe(id - 59))
+      f.answers.at(-1)!.resolve(descriptor(id, { columns, rowsStored: 1_000, rowsAvailable: 1_000, residence: 'memory' }))
+      expect(await loading).toBeUndefined()
+    }
+    const sets = f.tab().sets
+    expect(sets.map(set => set.descriptor.resultId)).toEqual([1, 60, 61, 2])
+    expect(sets.map(set => set.label)).toEqual([undefined, 'Sample: 1,000 of 52,341,118 rows', 'Sample: 1,000 of 52,341,118 rows (Result 4)', undefined])
+    expect(sets.map(set => set.ordinal)).toEqual([1, -3, -4, 2])
     f.service.dispose()
   })
   it('stops a sample through its signal, and says nothing of it', async () => {
@@ -216,6 +231,9 @@ describe('Load sample in the results service', () => {
     const loading = f.service.loadSample('t1', f.key, 1_000, 'first')
     await vi.waitFor(() => expect(f.signals.length).toBe(1))
     f.service.removeEntry('t1', f.key)
+    // Closing the source gives up its sample at once, whatever the backend still answers.
+    expect(f.signals[0].aborted).toBe(true)
+    expect(f.tab().loads).toBeUndefined()
     f.answers[0].resolve(descriptor(60, { columns, rowsStored: 1_000, rowsAvailable: 1_000 }))
     await loading
     expect(f.client.release).toHaveBeenCalledWith([{ generation: 1, resultId: 60 }])
@@ -261,6 +279,16 @@ describe('Re-run in the results service', () => {
     expect(f.tab().sets.map(set => set.descriptor.resultId)).toEqual([70, 2])
     await vi.waitFor(() => expect(f.client.release).toHaveBeenCalledWith([{ generation: 1, resultId: 1 }]))
     expect(f.tab().loads).toBeUndefined()
+    f.service.dispose()
+  })
+  it('keeps the name the query gave its result', async () => {
+    const f = serviceFixture({ total: 5_000, name: 'Open orders' })
+    const running = f.service.rerun('t1', f.key)
+    await vi.waitFor(() => expect(f.answers.length).toBe(1))
+    f.answers[0].resolve(windowed(70, 5_000))
+    expect(await running).toBeUndefined()
+    expect(f.tab().sets[0].descriptor).toMatchObject({ resultId: 70, name: 'Open orders' })
+    expect(entryName(f.tab().sets[0])).toBe('Open orders')
     f.service.dispose()
   })
   it('stops a re-run, leaving the result as it was', async () => {

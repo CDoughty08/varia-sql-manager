@@ -24,7 +24,7 @@ export default function LoadSampleDialog() {
 
 function Dialog({ request }: { readonly request: SampleRequest }) {
   const { sampleDialog, results, bigQueryCost, settings } = useWorkbench()
-  const rowsId = useId(), methodId = useId(), noteId = useId(), hintId = useId()
+  const rowsId = useId(), methodId = useId(), noteId = useId(), hintId = useId(), warningId = useId()
   const [text, setText] = useState(() => formatCount(defaultSampleRows(request.total, request.rowBytes, request.freeBytes)))
   const [method, setMethod] = useState<SampleMethod>('first')
   const [estimate, setEstimate] = useState<SampleEstimate | undefined>()
@@ -52,7 +52,7 @@ function Dialog({ request }: { readonly request: SampleRequest }) {
     void results.loadSample(tabId, request.key, rows, method).then(refused => { if (refused) results.announce(tabId, refused) })
   }
   return <SubDialog title="Load Sample" okLabel="Load" okDisabled={rows === undefined} onOk={ok} onCancel={() => sampleDialog.close()} className="load-sample-dialog"
-    describedBy={noteId} status={rows === undefined ? undefined : sampleStatus(method, rows, request.total)}>
+    describedBy={tooLarge ? `${noteId} ${warningId}` : noteId} status={rows === undefined ? undefined : sampleStatus(method, rows, request.total)}>
     <div className="property-grid">
       <div className="property-row"><label htmlFor={rowsId}>Rows</label>
         <span className="load-sample-rows">
@@ -68,8 +68,10 @@ function Dialog({ request }: { readonly request: SampleRequest }) {
           <option value="random">Random sample (bills the blocks read)</option>
         </select>
       </div>
-      <p className="field-note" id={noteId} aria-live="polite">{note}</p>
-      {tooLarge && <p className="field-note" data-tone="warning">The sample is larger than the result memory free, so it would stop early. Ask for fewer rows, or close other results first.</p>}
+      <p className="field-note" id={noteId}>{note}</p>
+      {/* Only a settled estimate is announced: the note itself changes with every figure typed. */}
+      <span className="visually-hidden" aria-live="polite">{estimate?.state === 'done' || estimate?.state === 'failed' ? sampleNote({ method, rows, rowBytes: undefined, freeBytes: undefined, prices, estimate }) : ''}</span>
+      {tooLarge && <p className="field-note" id={warningId} data-tone="warning" role="status">The sample is larger than the result memory free, so it would stop early. Ask for fewer rows, or close other results first.</p>}
     </div>
   </SubDialog>
 }
