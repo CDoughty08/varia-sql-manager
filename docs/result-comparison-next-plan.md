@@ -139,13 +139,13 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
 - **Notice buttons that remove their notice.** Every notice button that starts a replace whose comparison no longer
   shows its notice follows one rule: **Stop ignoring** (1), **Compare whole results**, the shipped filtered notice's
   **Compare rows as shown** and the memory refusal's (6), the shipped **Match by row position**, which has no focus
-  handling today, and a key match applied in the Match menu a notice's **Choose key columns…** opened, which returns the
-  focus to that button (`ComparisonToolbar`'s `focusBack`) before its replace lands. When the notice goes, the focus
-  moves as a Dismiss's does (`ComparisonToolbar`'s rule, which Show changes only follows today): to the notice that
-  takes its place, else the one before, else the toolbar's Tab stop; but only while the focus is still on that button or
-  was lost to the page when the notice went, so a replace that lands after the user moved on (into the grid, or to a
-  newer change) leaves the focus where it is. A replace that fails, is cancelled or does not start leaves the notice,
-  and the focus on its button.
+  handling today, and a match applied in the Match menu a notice's **Choose key columns…** opened (any mode, not only
+  key columns), which returns the focus to that button (`ComparisonToolbar`'s `focusBack`) before its replace lands.
+  When the notice goes, the focus moves as a Dismiss's does (`ComparisonToolbar`'s rule, which Show changes only follows
+  today): to the notice that takes its place, else the one before, else the toolbar's Tab stop; but only while the focus
+  is still on that button or was lost to the page when the notice went, so a replace that lands after the user moved on
+  (into the grid, or to a newer change) leaves the focus where it is. A replace that fails, is cancelled or does not
+  start leaves the notice, and the focus on its button.
 - **Inputs closed.** Features that read only the comparison work while an input is closed: Change details and Compare
   Values in Tab (except a soft cell's old value, below), Copy as Diff, Save as Diff, Script Differences (except its
   re-matching buttons), Search. Features that re-run it (Ignore, Compare Rows as Shown, Update, and every notice button
@@ -312,12 +312,12 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       and a `worker-core` case for the rebuilt request, as C4 and C6 have;
     - the toggle's `when`, notice text and Dismiss; the focus after Stop ignoring moving as a Dismiss's when its notice
       goes, staying on the button when the replace fails, and staying where the user moved it before the replace landed;
-      a key match applied from the Match menu a possible-match or nothing-paired notice's Choose key columns… opened
-      moving the focus the same way when that notice goes (`MatchMenuFrom`); `outputGridOnColumn` and the two state keys
-      for gutter, header, cell and keyboard menus, the keyboard ones through `targetFor` with a registered grid target,
-      on a ? row (`comparisonRowHasPartner`) and on an ignored column; and through `targetFor`, a right-click on a ?
-      row's number while the active cell is on a plain row, and on a plain row's number while it is on a ? row, each
-      keeping the clicked row's partner;
+      a match applied from the Match menu a possible-match or nothing-paired notice's Choose key columns… opened (key
+      columns, and Row position) moving the focus the same way when that notice goes (`MatchMenuFrom`);
+      `outputGridOnColumn` and the two state keys for gutter, header, cell and keyboard menus, the keyboard ones through
+      `targetFor` with a registered grid target, on a ? row (`comparisonRowHasPartner`) and on an ignored column; and
+      through `targetFor`, a right-click on a ? row's number while the active cell is on a plain row, and on a plain
+      row's number while it is on a ? row, each keeping the clicked row's partner;
     - sort keys and chips kept, and filters (a value filter, Keep Selected Rows) removed with "The comparison's filters
       were removed.", across Ignore and Stop ignoring, in the announcement's order; the lost-column notice and its
       plural;
@@ -901,16 +901,17 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
         did not fit the memory budget, so its columns cannot be checked and SET IDENTITY_INSERT is not offered.";
       - a ticked column the table lacks (compared, or ignored and ticked for INSERT): "[Sales_Test].[dbo].[Orders] has
         no column note in Search Objects' index, so a statement naming it would fail. Untick it, check the table, or
-        rebuild the search index." ("…has no columns note and memo…, so statements naming them would fail. Untick them,
-        …" for several; an aliased or joined column is the likely cause, Risks below). A key column cannot be unticked,
-        so one the table lacks has its own sentence: "Rows are matched by id, and [Sales_Test].[dbo].[Orders] has no
-        column id in Search Objects' index, so no statement could find its row. Choose other key columns, check the
-        table, or rebuild the search index.", with **Choose key columns…**. It names every key column and the missing
-        ones ("Rows are matched by id and region, and … has no column region …"; "…has no columns id and region…, so no
-        statement could find its rows." for several). With an input closed, Choose key columns… is unavailable and the
-        sentence drops "Choose other key columns, ". A key column also lacking is named there, not in the ticked-column
-        sentence, and when both apply the key sentence comes first, both in the one description and said once, as one
-        line;
+        rebuild the search index.", with **Rebuild Search Index**, as the table-unknown line has ("…has no columns note
+        and memo…, so statements naming them would fail. Untick them, …" for several; an aliased or joined column is the
+        likely cause, Risks below). A key column cannot be unticked, so one the table lacks has its own sentence: "Rows
+        are matched by id, and [Sales_Test].[dbo].[Orders] has no column id in Search Objects' index, so no statement
+        could find its row. Choose other key columns, check the table, or rebuild the search index.", with **Choose key
+        columns…** and **Rebuild Search Index**. It names every key column, joined as the strip joins them, and the
+        missing ones ("Rows are matched by id, region, and … has no column region …"; "…has no columns id and region…"
+        for several, "its row" either way). With an input closed, Choose key columns… is unavailable and the advice
+        reads "Check the table, or rebuild the search index.". A key column also lacking is named there, not in the
+        ticked-column sentence, and when both apply the key sentence comes first, both in the one description and said
+        once, as one line;
       - over 4,096 columns: "[Sales_Test].[dbo].[Orders] has more than 4,096 columns, so its columns are not checked and
         SET IDENTITY_INSERT is not offered." (the dialog uses no facts from a cut answer);
       - the comparison's connection is not open (Disconnect with Keep Tabs keeps the comparison, and the index is
@@ -1119,7 +1120,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     no difference, a sort) says nothing. A change is found from each answer's count and fingerprint for the option
     (`differences` and `differencesKey`, Technical sketch), so a filter moved to other rows of the same count is found
     too. In Two rows an entry is chosen when either of its halves is. The preview reads them as it shows, and Script
-    reads them again.
+    reads them again; its answer carries the same `differences` and `differencesKey`, and when the chosen option's
+    differ from those the form last showed (a grid change whose preview has not answered yet, or one made while the
+    window was in the background), the script is not used: the changed line shows and the Rows line takes the new count,
+    as for a change while it generates, so Script never writes rows the form did not show.
   - **Options:** Wrap in a transaction (on), Check each statement changes one row (on; Q2), with the line "UPDATEs also
     check that the row still holds the values they change from, DELETEs the values the comparison saw, and INSERTs that
     the row is not there yet." (Q11). While UPDATE is ticked and some chosen UPDATEs change only columns the check
@@ -1158,28 +1162,30 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     only in Result 3 stay."), so it never reads as if the target already matched. Either way Script is unavailable.
     - The preview asks the backend for its 30 lines (`results.scriptDiff` with `maxLines`) on opening, with or without a
       target and direction, and then 300 ms after the form last changed, cancelling the request before. Each answer
-      brings the Rows options' counts. It refuses only what those lines need (a truncated or unwritable value among
-      them: U+FFFD, a subnormal float, a value outside the target side's code page; a key its collation cannot write
-      exactly, `keyCollation`, or a refusal known on opening); the rest are found on Script. A preview line over 2,000
-      characters (a long value's literal) ends in "…", the preview's only cut; the script holds it whole. While it
-      waits, the preview reads "-- Choose the target table and a direction to see the script." ("-- Choose a direction
-      to see the script.", "-- Choose the target table to see the script." while only the target is missing, "-- Fix the
-      target table's name to see the script." while its name cannot be used), and after a refused answer "-- No preview:
-      the reason is beside Script." A request that fails instead (its deadline, or `TOO_LARGE` when the count's working
-      memory does not fit) is not a refusal. On opening, its sentence replaces "Reading the comparison…", with **Try
-      again**, which takes the focus, is described by the sentence, which the live region says, and sends the request
-      again. Pressed, on opening or later, Try again stays in place, unavailable (`aria-disabled`, so it keeps the
-      focus) while the request runs, the failure sentence gives way to "Reading the comparison…" (on opening with its
-      progress, later as the preview's text, "-- Reading the comparison…"), which the live region says, and then what
-      the answer brings shows and is said, the failure sentence again when it fails again. Later, the preview reads "--
-      No preview: " and the sentence, with Try again under it; everything the form draws from an answer hides until an
-      answer brings it again (the Rows and statement counts, the look-alike and not-looked-for lines, the line by Rows
-      after a replace's count (Rows below), the unchecked-UPDATEs, unchecked-DELETEs and Exact text lines, SET
-      IDENTITY_INSERT and its line), so no line shows numbers from an answer that no longer matches the form; the
-      summary reads "The preview could not be read, so its counts and warnings are not shown." unless a reason in the
-      summary's order (Keyboard and screen readers) holds, and Script stays available only while none does, since its
-      own run says any failure and the script's header carries those warnings (The script below). A backend loss is not
-      such a failure: it releases the comparison, so the closed state shows instead, on opening and later.
+      brings the Rows options' counts. It refuses the value refusals (a truncated or unwritable value: U+FFFD, a
+      subnormal float, a value outside the target side's code page; a key its collation cannot write exactly,
+      `keyCollation`) over every chosen row, counted and named in the counts pass, which already reads those cells for
+      `uncheckedUpdates`, so a sentence's count and rows are complete, and a refusal known on opening; the rest are
+      found on Script. A preview line over 2,000 characters (a long value's literal) ends in "…", the preview's only
+      cut; the script holds it whole. While it waits, the preview reads "-- Choose the target table and a direction to
+      see the script." ("-- Choose a direction to see the script.", "-- Choose the target table to see the script."
+      while only the target is missing, "-- Fix the target table's name to see the script." while its name cannot be
+      used), and after a refused answer "-- No preview: the reason is beside Script." A request that fails instead (its
+      deadline, or `TOO_LARGE` when the count's working memory does not fit) is not a refusal. On opening, its sentence
+      replaces "Reading the comparison…", with **Try again**, which takes the focus, is described by the sentence, which
+      the live region says, and sends the request again. Pressed, on opening or later, Try again stays in place,
+      unavailable (`aria-disabled`, so it keeps the focus) while the request runs, the failure sentence gives way to
+      "Reading the comparison…" (on opening with its progress, later as the preview's text, "-- Reading the
+      comparison…"), which the live region says, and then what the answer brings shows and is said, the failure sentence
+      again when it fails again. Later, the preview reads "-- No preview: " and the sentence, with Try again under it;
+      everything the form draws from an answer hides until an answer brings it again (the Rows and statement counts, the
+      look-alike and not-looked-for lines, the line by Rows after a replace's count (Rows below), the unchecked-UPDATEs,
+      unchecked-DELETEs and Exact text lines, SET IDENTITY_INSERT and its line), so no line shows numbers from an answer
+      that no longer matches the form; the summary reads "The preview could not be read, so its counts and warnings are
+      not shown." unless a reason in the summary's order (Keyboard and screen readers) holds, and Script stays available
+      only while none does, since its own run says any failure and the script's header carries those warnings (The
+      script below). A backend loss is not such a failure: it releases the comparison, so the closed state shows
+      instead, on opening and later.
     - The counts and the summary are entries by kind in the chosen rows. All differences reads the diff's own counts.
       Rows in the grid and Selected rows are counted by the backend in a pass over the chosen rows, after one that marks
       them (so a look-alike's partner can be found among them), reserving the bit per stored row as Copy as Diff does;
@@ -1314,9 +1320,13 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       cover the menu, and a dialog window cannot be hidden (`DialogWindow` only opens, focuses and closes one). When the
       menu closes on Apply, Cancel or Escape, the renderer opens the dialog again from the draft, where it opens (Where
       above), with the focus where an opening puts it (Keyboard and screen readers below), or on Cancel while the
-      replace Apply started runs, and the replace refreshes it. When it closes otherwise (a press outside, F6, the pane
-      hiding, the comparison closing), the dialog stays closed rather than take the focus back, and Script Differences
-      as T-SQL… opens it again from the draft;
+      replace Apply started runs, and the replace refreshes it. A reopening while that replace runs, whichever line's
+      Choose key columns… opened the menu (a refusal that replaced the form, one in the footer, or the
+      key-column-unknown line), shows the first line and "Updating the comparison…" in place of the form, with Script
+      unavailable and the focus on Cancel, which cancels the replace first; the opening preview goes out when the
+      replace lands, so no answer for the old comparison moves the focus or offers Script. When it closes otherwise (a
+      press outside, F6, the pane hiding, the comparison closing), the dialog stays closed rather than take the focus
+      back, and Script Differences as T-SQL… opens it again from the draft;
     - with an input closed, rows cannot be matched again, so the buttons are unavailable (`aria-disabled`, so they stay
       in the Tab order) and the sentence's last part becomes "…, and Result 1 is closed, so rows cannot be matched
       again." It gives no further advice: running the query again would run every statement in it again, including the
@@ -1328,10 +1338,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - a needed value truncated, or compared by its stored part: "3 values in note were not kept in full (rows id = 1002,
     1007 and 1 more), so the script would not be exact. Choose rows without them, or untick note." (Q3), the keys
     written as the THROW text is, each cut at 40 characters, a one-column key's values joined with ", " and a composite
-    key's with "; ", as Selected rows joins them, since its text holds commas ("rows id = 1002, region = 'EU'; id =
-    1007, region = 'US' and 1 more"). One value reads "1 value in note was not kept in full", and several columns "5
-    values in note and memo were not kept in full, … or untick those columns."; unticking says what it costs (Columns
-    above);
+    key's with "; ", since its text holds commas ("rows id = 1002, region = 'EU'; id = 1007, region = 'US' and 1 more").
+    One value reads "1 value in note was not kept in full", and several columns "5 values in note and memo were not kept
+    in full, … or untick those columns."; unticking says what it costs (Columns above);
   - a needed text value holding U+FFFD: "2 values in note cannot be written exactly (rows id = 1002 and 1007). Choose
     rows without them, or untick note.", with the same singular and several-column forms, and the keys written as the
     truncation refusal writes them, since these values are not marked in the grid. Stored pages already hold U+FFFD for
@@ -1371,7 +1380,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
 - **While it is open:**
   - A replace of the comparison refreshes the counts and keeps the draft. So does any change to the comparison's sort,
     filters, chips or selection: the counts, summary and preview follow the grid, as the preview follows the form, so
-    what Script writes is what the window shows.
+    what Script writes is what the window shows. An input closing while the comparison stays sends the preview again, as
+    a replace does, so a refusal's closed-input sentence (from the backend) replaces its open form; the live region says
+    it, and the focus stays on its button, now unavailable. The key-column-unknown line takes its closed-input form at
+    once.
   - A replace resets the selection and every filter but the chips, and can turn off a chip (shipped). When that changes
     the rows the chosen option holds, the Rows line says so with its cause and the new count, and the dialog's live
     region adds it after the shipped sentence: "The comparison's filters were removed, so Rows in the grid now holds 31
@@ -1892,11 +1904,16 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     summary's order with a failed preview leaving Script unavailable while a reason holds, the not-connected state after
     a connection lost while generating, the focus staying on Script when a footer refusal clears and falling back to
     Target table, a refusal found on Script kept through a sort and a selection change outside Selected rows and cleared
-    when the chosen option's differing entries change, a refusal the preview found kept through a grid click until an
-    answer no longer brings it and said again only when its sentence changes, a two-part target in a database beside
-    another holding the same table, the key-column form of the truncation and U+FFFD refusals, closing while generating
-    opening nothing, Enter in Target table with nothing highlighted, the window over a popped-out Results pane, a
-    cancelled generation giving way to a closed or refused state, and the Clipboard announcement.
+    when the chosen option's differing entries change, Script's answer differing from the form's last `differences` or
+    `differencesKey` writing nothing and showing the changed line, an input closing while open sending the preview again
+    and saying the closed-input sentence with the focus kept on the unavailable button, a reopening during a replace
+    from a footer refusal's or the key-column-unknown line's Choose key columns… showing "Updating the comparison…" with
+    the focus on Cancel and no opening preview until it lands, a preview value refusal counting rows past the 30 lines,
+    a refusal the preview found kept through a grid click until an answer no longer brings it and said again only when
+    its sentence changes, a two-part target in a database beside another holding the same table, the key-column form of
+    the truncation and U+FFFD refusals, closing while generating opening nothing, Enter in Target table with nothing
+    highlighted, the window over a popped-out Results pane, a cancelled generation giving way to a closed or refused
+    state, and the Clipboard announcement.
   - Smoke: open the dialog window by role, script to a New Query Editor Window, and find `BEGIN TRANSACTION` in the
     focused editor. A frameless OS window can behave differently on Linux, so run it through `npm run test:smoke:wsl`
     before pushing.
