@@ -772,10 +772,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
 - **Where:** **Script Differences as T-SQL…** in the Comparison submenu, More results tools and the palette. It opens an
   **OS dialog window** (N6): kind `scriptDiff`, titled "Script Differences as T-SQL" (main sets the kind's static title,
   `dialogWindowKinds`), 640 × 600 by default, at least 520 × 440, size remembered as Options' is, modeless. One is open
-  at a time, as Options is. It opens centred over the window that holds the comparison's Results pane (the main window,
-  or a popout on another display) and stays a child of the main window, as every dialog window is: parented to a popout,
-  it would close when the panel docks back. A popout clicked meanwhile can cover it; Script Differences as T-SQL… brings
-  it forward.
+  at a time, as Options is. It opens at its remembered bounds, else centred over the window that holds the comparison's
+  Results pane (the main window, or a popout on another display), as dialog windows open after Connect in an OS window
+  (`dialogWindowBounds`), and stays a child of the main window, as every dialog window is: parented to a popout, it
+  would close when the panel docks back. A popout clicked meanwhile can cover it; Script Differences as T-SQL… brings it
+  forward.
 - **The form:**
   - A first line names the comparison and how rows are matched: "Result 1 → Result 3 (SQLQuery3.sql), rows matched by
     key columns: id", and changes when another comparison invokes the dialog. A script is written only under Key
@@ -878,15 +879,19 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       changed entry) and Result 3's under `toOld`: whether an all-ASCII value is written plain, and whether one that is
       not is refused under a SQL_ collation (Literals below). A key pair whose two types are of different kinds is
       refused, and Q11's guards leave such a pair out. The kinds come from `sortKind`: numbers (integer, decimal, float,
-      boolean), text (text, json), dates and times (date, time, datetime, timestamp), binary (rowversion and timestamp
-      among it), and uniqueidentifier, which `sortKind` calls `other` and is told by its type name. So int pairs with
-      decimal, and int with varchar is refused. A key pair of one kind whose two recorded types differ (datetime against
-      datetime2(3), int against decimal) compares in the target side's type: a WHERE clause wraps the literal, still
-      written by its own column, in a CAST to the target side's recorded type, written as the typed casts are
-      (`CAST(CAST('2024-05-01T10:00:00.003' AS datetime2(3)) AS datetime)`). Without it the comparison runs in the
-      higher type and can miss the row (a datetime's .003 is .00333…), and the INSERT check would then let a duplicate
-      in. A CAST that overflows fails the script under XACT_ABORT, and one that rounds onto another key only makes a
-      check THROW.
+      boolean), text (text, json), dates and times (date, datetime, timestamp), times (time, since SQL Server refuses a
+      conversion between time and date), binary (rowversion and timestamp among it), and uniqueidentifier, which
+      `sortKind` calls `other` and is told by its type name. So int pairs with decimal, and int with varchar is refused.
+      A key pair of one kind whose two recorded types differ (datetime against datetime2(3), int against decimal)
+      compares in the target side's type: a WHERE clause wraps the literal, still written by its own column, in a CAST
+      to the target side's recorded type, written as the typed casts are (`CAST(CAST('2024-05-01T10:00:00.003' AS
+      datetime2(3)) AS datetime)`). Without it the comparison runs in the higher type and can miss the row (a datetime's
+      .003 is .00333…), and the INSERT check would then let a duplicate in. A CAST that overflows fails the script under
+      XACT_ABORT, and one that rounds onto another key only makes a check THROW. Text and binary pairs are never cast:
+      the text decisions already choose plain varchar or `N'…'` by the target's column, and a CAST of `N'…'` to varchar
+      converts through the database's default code page, not the column's, so a Cyrillic key in a Windows-collation
+      varchar column would no longer match; `=` already ignores differences of length and trailing spaces (text) or
+      trailing zero bytes (binary).
     - Identity: when the index says a ticked column is the target's identity, **SET IDENTITY_INSERT** is offered, ticked.
       An identity column is never SET, since SQL Server refuses that: when one that is not a key changed, a line says
       "id is an identity column, so its changes are not scripted". With SET IDENTITY_INSERT unticked, INSERTs leave the
@@ -919,16 +924,17 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - A **preview** of the first 30 lines (headed "Preview: first 30 lines" while the script is longer), a summary beside
     Script ("Deletes 2 rows, updates 5 rows and inserts 1 row in [Sales_Test].[dbo].[Orders] to match Result 3.", with
     singulars, naming only ticked statements and leaving out zero counts), and **Script** and **Cancel**. While an
-    unticked column has changes (the comparison's `columnChanges`), it says "updates up to 5 rows", since an UPDATE
-    whose changes are all in unticked columns is skipped. While a statement with rows is unticked, the summary adds what
-    stays, so "to match" never reads as a full sync: "DELETE is unticked, so 2 rows only in Result 1 stay." ("UPDATE is
-    unticked, so 5 changed rows stay as they are."; "INSERT is unticked, so 2 rows only in Result 3 are not added.").
-    While the chosen rows hold fewer differences than All differences, it adds that too: "Rows in the grid holds 5 of 40
-    differences; the other 35 stay as they are." ("Selected rows holds 1 of 40 differences; …"), and the announcement
-    after Script repeats the summary. When every count is 0, the summary is "The chosen rows have no differences to
-    script."; when only unticked statements have rows, it is "The ticked statements change no rows." with the stays
-    sentences ("DELETE is unticked, so 3 rows only in Result 3 stay."), so it never reads as if the target already
-    matched. Either way Script is unavailable.
+    unticked column, or a ticked identity column, has changes (the comparison's `columnChanges`), it says "updates up to
+    5 rows", since an UPDATE whose changes are all in unticked columns or the identity column, which is never SET, is
+    skipped. While a statement with rows is unticked, the summary adds what stays, so "to match" never reads as a full
+    sync: "DELETE is unticked, so 2 rows only in Result 1 stay." ("UPDATE is unticked, so 5 changed rows stay as they
+    are."; "INSERT is unticked, so 2 rows only in Result 3 are not added."). While the chosen rows hold fewer
+    differences than All differences, it adds that too: "Rows in the grid holds 5 of 40 differences; the other 35 stay
+    as they are." ("Selected rows holds 1 of 40 differences; …"), and the announcement after Script repeats the summary.
+    When every count is 0, the summary is "The chosen rows have no differences to script."; when only unticked
+    statements have rows, it is "The ticked statements change no rows." with the stays sentences ("DELETE is unticked,
+    so 3 rows only in Result 3 stay."), so it never reads as if the target already matched. Either way Script is
+    unavailable.
     - The preview asks the backend for its 30 lines (`results.scriptDiff` with `maxLines`) on opening, with or without a
       target and direction, and then 300 ms after the form last changed, cancelling the request before. Each answer
       brings the Rows options' counts. It refuses only what those lines need (a truncated or U+FFFD value among them, or
@@ -1080,7 +1086,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     columns.", with **Choose key columns…**;
   - no differences in the chosen rows: "The chosen rows have no differences to script.";
   - every UPDATE skipped because its changes are all in unticked columns, with no other statement left: "None of the
-    ticked columns changed in the chosen rows. Tick a changed column.";
+    ticked columns changed in the chosen rows. Tick a changed column."; when the ticked identity column changed too, or
+    alone: "Only id, an identity column, changed in the chosen rows, and an identity column is never SET.";
   - over 1,000,000 characters, a query window's execute limit: "The script would be about 2,400,000 characters. Scripts
     are limited to 1,000,000 characters, the most a query window runs. Choose fewer rows." (Q5).
 
@@ -1253,10 +1260,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   `SqlService.cs`).
 - **Renderer:**
   - The dialog is a `DialogWindow` of the new kind in `dialogWindowKinds` (`src/shared/popouts.ts`), which also widens
-    the `dialogWindowName` pattern (today `options|about`). `DialogWindow` takes the window to centre on, the one
-    holding the comparison's Results pane, where today it centres on the main window; the window stays the main window's
-    child. popout-windows.md § Dialog windows gains the kind and that rule, and its "At most four" follows `maxWindows`,
-    two per kind (eight once Connect's kind has landed too).
+    the `dialogWindowName` pattern (today `options|about`). `DialogWindow` takes the window to centre on when no
+    remembered bounds apply, the one holding the comparison's Results pane, where today it centres on the main window;
+    the window stays the main window's child. popout-windows.md § Dialog windows gains the kind and that rule, and its
+    "At most four" follows `maxWindows`, two per kind (eight once Connect's kind has landed too).
   - New Query Editor Window opens through the document service with the connection, as Script As's destination does.
   - Clipboard goes through the existing clipboard path.
   - The table suggestions read the Search Objects index, the single metadata source, and never query the server.
@@ -1269,7 +1276,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - an int key paired with a varchar key holding `1) SELECT 1; --`, both directions, refused as a key pair of
       different kinds, and such a pair left out of Q11's guards; an int key paired with a decimal key accepted; a
       datetime key paired with a datetime2(3) key, both directions, cast to the target side's type, its UPDATE matching
-      its row and its INSERT check finding an existing one;
+      its row and its INSERT check finding an existing one; a varchar key paired with an nvarchar key, both directions,
+      never cast; a date key paired with a time key refused;
     - a rowversion key accepted with INSERT unticked; a subnormal float as a key refused and as a guard left out;
     - the look-alike and soft counts for Rows in the grid and Selected rows; a refusal naming four long columns, cut;
     - the header's left-out line with Result 1 closed: one-sided, computed, unticked and identity columns;
@@ -1314,13 +1322,15 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - A **live round trip** (`VARIA_TEST_SQL_SCRATCH`): two scratch tables with every type (multi-line and
     control-character text, a value with 10,000 line breaks, an xml value stored with style 1, 17-digit floats, a
     subnormal real, a real key column, and a varchar key and guarded column under SQL_Latin1_General_CP1_CI_AS holding
-    'ss' beside 'ß' and 'ss' + CR beside 'ß' + CR, only the 'ss' rows changed, included), compare their SELECTs, script,
-    run the script on the target, then compare again and expect no differences. Run it in both directions, and under a
-    non-English language and DATEFORMAT. Then run a script of the wrong direction, once whole and once with only INSERT
-    ticked (with SET IDENTITY_INSERT, so its THROW comes inside the IDENTITY_INSERT body and exercises the CATCH), and
-    one whose deleted row was changed after the comparison, and expect the check's THROW, with the target unchanged and,
-    in the same session, an ordinary INSERT into the identity table succeeding (IDENTITY_INSERT was turned off). It is a
-    new live `Suite(...)` with a `LiveGroups.Suites` entry, and its CI seconds go in docs/ci.md's table.
+    'ss' beside 'ß' and 'ss' + CR beside 'ß' + CR, only the 'ss' rows changed, and a non-ASCII key in a
+    Windows-collation varchar column whose code page differs from the database default, included), compare their
+    SELECTs, script, run the script on the target, then compare again and expect no differences. Run it in both
+    directions, and under a non-English language and DATEFORMAT. Then run a script of the wrong direction, once whole
+    and once with only INSERT ticked (with SET IDENTITY_INSERT, so its THROW comes inside the IDENTITY_INSERT body and
+    exercises the CATCH), and one whose deleted row was changed after the comparison, and expect the check's THROW, with
+    the target unchanged and, in the same session, an ordinary INSERT into the identity table succeeding
+    (IDENTITY_INSERT was turned off). It is a new live `Suite(...)` with a `LiveGroups.Suites` entry, and its CI seconds
+    go in docs/ci.md's table.
   - vitest for the dialog: states, counts per direction, locked and unticked columns, warnings, the comparison replaced
     or closed while open, switching to another comparison, Enter and Escape in the suggestion list and on buttons, the
     draft memory, multipart target names, the Automatic and as-shown refusals and their buttons, the closed-input form
