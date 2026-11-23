@@ -72,8 +72,11 @@ When you narrow Object Explorer, the panel menu stays beside the title and the t
 Connect opens in its own resizable OS window (`900 × 730` by default) showing History or Browse in a resizable rail
 beside the form panes, and stacks when narrowed (`720 px` or less). Add favorite and Register server sit beside Server
 type in the right-pane header, **Reset** sits at the top of the connections rail, **Labels & Custom Properties** remain
-open on Connection Properties, **Advanced** opens inline with filtering and a count badge, and **Connection String**
-adds Copy and Parse & Fill Form. The footer keeps Test Connection beside Save, Connect and Cancel.
+open on Connection Properties, newly typed passwords offer a show/hide toggle (saved passwords never leave main and show
+an inline saved-password indicator instead), **Advanced** opens inline with filtering and a count badge, and **Connection
+String** adds Copy and Parse & Fill Form. Removing a History entry offers inline **Undo** (restoring its recency, though
+any remembered password was already removed and must be re-entered). The footer keeps Test Connection beside Save,
+Connect and Cancel.
 
 Equivalent connections share one root only after main verifies identity: account, credentials, submitted destination,
 initial database, TLS, advanced settings and execution policy. A saved profile or similar server name is not enough.

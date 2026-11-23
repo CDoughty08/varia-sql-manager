@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { advancedCount, advancedSummary, clampConnectRailWidth, colorName, connectRailLimits, customSummary, listStep, parseConnectionString, rowTitle } from '../src/renderer/src/connect-form'
+import { advancedCount, advancedSummary, clampConnectRailWidth, colorName, connectRailLimits, customSummary, listStep, parseConnectionString, planConnectRequest, rowTitle, validateSqlAdvancedNumber } from '../src/renderer/src/connect-form'
 import EnvironmentTag from '../src/renderer/src/EnvironmentTag'
 import { advancedDefaults, advancedToStore } from '../src/shared/connections'
 import { connectionPresets } from '../src/shared/theme/connection-colors'
@@ -144,6 +144,37 @@ describe('Connect dialog v2 form', () => {
     expect(parseConnectionString('Server=srv;TrustedConnection=Yes').patch).toEqual({ server: 'srv', authentication: 'windows' })
     expect(parseConnectionString('Server=srv;Authentication=Active Directory Service Principal').patch).toEqual({ server: 'srv', authentication: 'entraServicePrincipal' })
     expect(parseConnectionString('Server=srv;Authentication=Active Directory Managed Identity').patch).toEqual({ server: 'srv', authentication: 'entraManagedIdentity' })
+  })
+  it('preserves pending reconnect/execute state on plain raise and routes mid-session requests through ConnectDialog', () => {
+    const serverA = { server: 'srv-a', database: '', authentication: 'windows' as const, trustServerCertificate: false }
+    // Closed: opens immediately with the trigger's pending state.
+    expect(planConnectRequest(false, false, 1, { kind: 'execute', pendingExecute: 'tab-a', reconnecting: 'target-a', options: serverA })).toEqual({
+      action: 'open', reconnecting: 'target-a', options: serverA, pendingExecute: 'tab-a', pendingMonitor: false
+    })
+    // Already open + plain Connect button: raises only, never clearing reconnecting or pendingExecute.
+    expect(planConnectRequest(true, false, 2, { kind: 'open' })).toEqual({ action: 'raise' })
+    // Already open + F5 on another tab: emits an incoming request so App waits for ConnectDialog to accept it.
+    expect(planConnectRequest(true, false, 2, { kind: 'execute', pendingExecute: 'tab-b', reconnecting: 'target-b', targetId: 'target-b', options: serverA, autoReconnect: 'off' })).toEqual({
+      action: 'incoming',
+      request: { seq: 2, kind: 'execute', reconnecting: 'target-b', targetId: 'target-b', options: serverA, autoReconnect: 'off', pendingExecute: 'tab-b', pendingMonitor: false }
+    })
+    // Details review open: raises only, never disrupting the handoff.
+    expect(planConnectRequest(true, true, 3, { kind: 'reconnect', reconnecting: 'target-b', options: serverA })).toEqual({ action: 'raise' })
+  })
+  it('validates SQL Server Advanced numeric fields before they can enter options', () => {
+    expect(validateSqlAdvancedNumber('commandTimeout', '')).toEqual({ ok: true, value: undefined })
+    expect(validateSqlAdvancedNumber('commandTimeout', '0')).toEqual({ ok: true, value: 0 })
+    expect(validateSqlAdvancedNumber('commandTimeout', '86400')).toEqual({ ok: true, value: 86400 })
+    expect(validateSqlAdvancedNumber('commandTimeout', '86401').ok).toBe(false)
+    expect(validateSqlAdvancedNumber('commandTimeout', '1.5').ok).toBe(false)
+    expect(validateSqlAdvancedNumber('connectTimeout', '').ok).toBe(false)
+    expect(validateSqlAdvancedNumber('connectTimeout', '30')).toEqual({ ok: true, value: 30 })
+    expect(validateSqlAdvancedNumber('packetSize', '100').ok).toBe(false)
+    expect(validateSqlAdvancedNumber('packetSize', '512')).toEqual({ ok: true, value: 512 })
+    expect(validateSqlAdvancedNumber('packetSize', '32768').ok).toBe(false)
+    expect(validateSqlAdvancedNumber('connectRetryInterval', '0').ok).toBe(false)
+    expect(validateSqlAdvancedNumber('connectRetryInterval', '1')).toEqual({ ok: true, value: 1 })
+    expect(validateSqlAdvancedNumber('connectTimeout', '', true).ok).toBe(false)
   })
   it('marks only a custom environment label as one that may give way', () => {
     const html = (environment: string) => renderToStaticMarkup(createElement(EnvironmentTag, { environment, place: 'list' }))

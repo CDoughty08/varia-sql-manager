@@ -300,7 +300,8 @@ try {
   await dialog.getByLabel('Name', { exact: true }).fill('Development')
   await dialog.getByRole('button', { name: 'Red connection color', exact: true }).click()
   await expect(dialog.getByRole('button', { name: 'Red connection color', exact: true })).toHaveAttribute('aria-pressed', 'true')
-  await expect(dialog.getByLabel('Custom connection color', { exact: true })).toHaveValue('#e66b73')
+  // The custom picker shows the active theme's resolved preset colour (#e66767 in Varia Dark), not the stored identifier.
+  await expect(dialog.getByLabel('Custom connection color', { exact: true })).toHaveValue('#e66767')
   await dialog.getByRole('button', { name: 'Add favorite', exact: false }).click()
   await expect(dialog.getByRole('button', { name: 'Remove favorite', exact: false })).toBeEnabled()
   await dialog.getByRole('button', { name: 'Register server', exact: true }).click()

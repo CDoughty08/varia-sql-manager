@@ -268,4 +268,66 @@ describe('Connect dialog: BigQuery', () => {
     await view.set('#bq-max-bytes', '100')
     expect(view.button('Connect').disabled).toBe(false)
   })
+
+  it('keeps BigQuery Advanced validation errors and invalid drafts across tab switches instead of connecting with a prefix', async () => {
+    const view = await mount({ initial: { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' } })
+    await view.click('Advanced')
+    // Typing a valid prefix followed by an invalid suffix must keep Connect disabled even after switching tabs.
+    await view.set('#bq-impersonate', 'svc@proj.iam')
+    await view.set('#bq-impersonate', 'svc@proj.iam.')
+    expect(view.button('Connect').disabled).toBe(true)
+    await view.click('Connection Properties')
+    expect(view.button('Connect').disabled).toBe(true)
+    expect(view.button('Save').disabled).toBe(true)
+    expect(view.button('Test Connection').disabled).toBe(true)
+    expect(view.host.querySelector('.connect-outcome')?.textContent).toContain('service account as its email address')
+    await view.click('Advanced (1 set)')
+    expect(view.$<HTMLInputElement>('#bq-impersonate')!.value).toBe('svc@proj.iam.')
+    await view.set('#bq-impersonate', 'svc@proj.iam.gserviceaccount.com')
+    expect(view.button('Connect').disabled).toBe(false)
+  })
+
+  it('does not rewrite Maximum bytes billed amount or unit while typing', async () => {
+    const view = await mount({ initial: { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' } })
+    await view.click('Advanced')
+    await view.set('#bq-max-bytes', '1024')
+    expect(view.$<HTMLInputElement>('#bq-max-bytes')!.value).toBe('1024')
+    expect(view.$<HTMLSelectElement>('.bq-unit')!.value).toBe('GiB')
+    await view.set('#bq-max-bytes', '0.5')
+    expect(view.$<HTMLInputElement>('#bq-max-bytes')!.value).toBe('0.5')
+    expect(view.$<HTMLSelectElement>('.bq-unit')!.value).toBe('GiB')
+    await view.set('#bq-max-bytes', '1.3')
+    expect(view.$<HTMLInputElement>('#bq-max-bytes')!.value).toBe('1.3')
+    expect(view.$<HTMLSelectElement>('.bq-unit')!.value).toBe('GiB')
+  })
+
+  it('preserves pending Extra projects text across tab switches and includes it on Save/Connect', async () => {
+    const view = await mount({ initial: { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' } })
+    await view.click('Advanced')
+    await view.set('#bq-extra-project', 'bigquery-public-data')
+    await view.click('Connection Properties')
+    await view.click('Advanced')
+    expect(view.$<HTMLInputElement>('#bq-extra-project')!.value).toBe('bigquery-public-data')
+    await view.click('Connect')
+    expect(view.connect.mock.calls[0]![0]).toMatchObject({ extraProjects: ['bigquery-public-data'] })
+  })
+
+  it("resets BigQuery cost prompt back to asking when Reset Advanced runs on a saved Don't ask again entry", async () => {
+    const profile: BigQueryConnectionProfile = {
+      id: id(2),
+      options: { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', costPrompt: false, maximumBytesBilled: 50 * 2 ** 30 },
+      favorite: false, lastConnected: '2026-11-10T10:00:00.000Z'
+    }
+    const view = await mount({ bigQuery: [profile] })
+    const row = [...view.host.querySelectorAll<HTMLButtonElement>('.connection-choice')].find(value => value.textContent?.includes('varia-alpha'))!
+    await act(async () => row.click())
+    await view.click('Advanced (2 set)')
+    const box = () => [...view.host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find(input => input.parentElement?.textContent?.includes('cost threshold'))!
+    expect(box().checked).toBe(false)
+    await view.click('Reset Advanced')
+    expect(box().checked).toBe(true)
+    expect(view.$<HTMLInputElement>('#bq-max-bytes')!.value).toBe('')
+    await view.click('Save')
+    expect(view.api.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ options: expect.objectContaining({ costPrompt: true }) }))
+  })
 })

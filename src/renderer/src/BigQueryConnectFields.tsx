@@ -181,55 +181,68 @@ export function BigQueryConnectFields({ options, keyFileName, locked, lists, onC
 }
 
 const serviceAccountSchema = z.email().max(bigQueryLimits.serviceAccount)
+const impersonateFormatError = 'Enter the service account as its email address, such as name@project.iam.gserviceaccount.com.'
+
+/** Draft text for BigQuery's inline Advanced tab, kept by ConnectDialog so switching tabs never drops edits or errors. */
+export interface BigQueryAdvancedDraft {
+  readonly amount: string
+  readonly unit: ByteUnit
+  readonly impersonate: string
+  readonly adding: string
+  readonly extraError: string
+}
+/** Initialises BigQuery Advanced draft fields from loaded options (only on load/choose/reset, never while typing). */
+export function bigQueryAdvancedDraftFrom(options: Pick<BigQueryConnectionOptions, 'maximumBytesBilled' | 'impersonateServiceAccount'>): BigQueryAdvancedDraft {
+  const bytes = splitBytes(options.maximumBytesBilled)
+  return { amount: bytes.amount, unit: bytes.unit, impersonate: options.impersonateServiceAccount ?? '', adding: '', extraError: '' }
+}
+/** First validation problem in the BigQuery Advanced draft, or empty when every edited field is valid. */
+export function bigQueryAdvancedValidationError(draft: BigQueryAdvancedDraft): string {
+  const bytes = joinBytes(draft.amount, draft.unit)
+  if (!bytes.ok) return bytes.error
+  const impersonate = draft.impersonate.trim()
+  if (impersonate && !serviceAccountSchema.safeParse(impersonate).success) return impersonateFormatError
+  return draft.extraError
+}
+
 /** BigQuery's inline Advanced Properties tab panel: cost cap and prompt, impersonation, and extra read-only projects. */
-export function BigQueryAdvanced({ options, savedCostPrompt, projects, locked, onInvalid, onChange }: { options: BigQueryConnectionOptions; savedCostPrompt?: false; projects: readonly BigQueryProject[]; locked?: boolean; onInvalid?: (error: string) => void; onChange(patch: Partial<Pick<BigQueryConnectionOptions, 'maximumBytesBilled' | 'costPrompt' | 'impersonateServiceAccount' | 'extraProjects'>>): void }) {
-  const initialBytes = splitBytes(options.maximumBytesBilled)
-  const [amount, setAmount] = useState(initialBytes.amount)
-  const [unit, setUnit] = useState<ByteUnit>(initialBytes.unit)
-  const [impersonate, setImpersonate] = useState(options.impersonateServiceAccount ?? '')
-  const [adding, setAdding] = useState('')
-  const [error, setError] = useState('')
-  const onInvalidRef = useRef(onInvalid)
-  onInvalidRef.current = onInvalid
-  useEffect(() => { onInvalidRef.current?.(error) }, [error])
-  useEffect(() => () => { onInvalidRef.current?.('') }, [])
+export function BigQueryAdvanced({ options, savedCostPrompt, projects, locked, draft, onDraftChange, onChange }: {
+  options: BigQueryConnectionOptions
+  savedCostPrompt?: false
+  projects: readonly BigQueryProject[]
+  locked?: boolean
+  draft: BigQueryAdvancedDraft
+  onDraftChange(draft: BigQueryAdvancedDraft): void
+  onChange(patch: Partial<Pick<BigQueryConnectionOptions, 'maximumBytesBilled' | 'costPrompt' | 'impersonateServiceAccount' | 'extraProjects'>>): void
+}) {
+  const bytesResult = joinBytes(draft.amount, draft.unit)
+  const impersonateTrimmed = draft.impersonate.trim()
+  const impersonateError = impersonateTrimmed && !serviceAccountSchema.safeParse(impersonateTrimmed).success ? impersonateFormatError : ''
+  const error = (!bytesResult.ok ? bytesResult.error : '') || impersonateError || draft.extraError
   const asking = (options.costPrompt ?? savedCostPrompt) !== false
   const extra = options.extraProjects ?? []
 
-  // Sync draft text inputs when a different profile is loaded or Reset runs externally.
-  useEffect(() => {
-    const nextBytes = splitBytes(options.maximumBytesBilled)
-    setAmount(nextBytes.amount)
-    setUnit(nextBytes.unit)
-  }, [options.maximumBytesBilled])
-  useEffect(() => { setImpersonate(options.impersonateServiceAccount ?? '') }, [options.impersonateServiceAccount])
-
   function updateBytes(nextAmount: string, nextUnit: ByteUnit) {
-    setAmount(nextAmount)
-    setUnit(nextUnit)
+    onDraftChange({ ...draft, amount: nextAmount, unit: nextUnit })
     const parsed = joinBytes(nextAmount, nextUnit)
-    if (!parsed.ok) { setError(parsed.error); return }
-    setError('')
-    onChange({ maximumBytesBilled: parsed.bytes })
+    if (parsed.ok) onChange({ maximumBytesBilled: parsed.bytes })
   }
   function updateImpersonate(next: string) {
-    setImpersonate(next)
+    onDraftChange({ ...draft, impersonate: next })
     const trimmed = next.trim()
-    if (!trimmed) { setError(''); onChange({ impersonateServiceAccount: undefined }); return }
-    if (!serviceAccountSchema.safeParse(trimmed).success) { setError('Enter the service account as its email address, such as name@project.iam.gserviceaccount.com.'); return }
-    setError('')
-    onChange({ impersonateServiceAccount: trimmed })
+    if (!trimmed) onChange({ impersonateServiceAccount: undefined })
+    else if (serviceAccountSchema.safeParse(trimmed).success) onChange({ impersonateServiceAccount: trimmed })
   }
   function add() {
-    const parsed = parseExtraProjects([...extra, adding].join(' '), options.project)
-    if (!parsed.ok) { setError(parsed.error); return }
-    setError('')
-    setAdding('')
+    const parsed = parseExtraProjects([...extra, draft.adding].join(' '), options.project)
+    if (!parsed.ok) { onDraftChange({ ...draft, extraError: parsed.error }); return }
+    onDraftChange({ ...draft, adding: '', extraError: '' })
     onChange({ extraProjects: parsed.projects.length ? parsed.projects : undefined })
   }
   function resetAll() {
-    setAmount(''); setUnit('GiB'); setImpersonate(''); setAdding(''); setError('')
-    onChange({ maximumBytesBilled: undefined, costPrompt: undefined, impersonateServiceAccount: undefined, extraProjects: undefined })
+    onDraftChange({ amount: '', unit: 'GiB', impersonate: '', adding: '', extraError: '' })
+    // When the saved entry chose "Don't ask again" (costPrompt: false), explicit true is needed to turn the prompt back on.
+    onChange({ maximumBytesBilled: undefined, costPrompt: savedCostPrompt === false ? true : undefined, impersonateServiceAccount: undefined, extraProjects: undefined })
   }
   return <div className="connect-advanced-panel">
     <div className="connect-advanced-toolbar">
@@ -237,17 +250,17 @@ export function BigQueryAdvanced({ options, savedCostPrompt, projects, locked, o
       <button className="ui-button" data-control-variant="secondary" data-control-size="dense" type="button" disabled={locked} onClick={resetAll}>Reset Advanced</button>
     </div>
     <fieldset className="property-section"><legend>Cost</legend><div className="property-grid">
-      <div className="property-row"><label htmlFor="bq-max-bytes">Maximum bytes billed</label><div className="property-input-action"><input className="ui-field" id="bq-max-bytes" inputMode="decimal" maxLength={24} disabled={locked} placeholder="No limit" value={amount} aria-describedby="bq-max-bytes-note" onChange={event => updateBytes(event.target.value, unit)} /><select className="ui-field bq-unit" aria-label="Maximum bytes billed unit" disabled={locked} value={unit} onChange={event => updateBytes(amount, event.target.value as ByteUnit)}>{byteUnits.map(([name]) => <option key={name} value={name}>{name}</option>)}</select></div></div>
+      <div className="property-row"><label htmlFor="bq-max-bytes">Maximum bytes billed</label><div className="property-input-action"><input className="ui-field" id="bq-max-bytes" inputMode="decimal" maxLength={24} disabled={locked} placeholder="No limit" value={draft.amount} aria-invalid={!bytesResult.ok || undefined} aria-describedby="bq-max-bytes-note" onChange={event => updateBytes(event.target.value, draft.unit)} /><select className="ui-field bq-unit" aria-label="Maximum bytes billed unit" disabled={locked} value={draft.unit} onChange={event => updateBytes(draft.amount, event.target.value as ByteUnit)}>{byteUnits.map(([name]) => <option key={name} value={name}>{name}</option>)}</select></div></div>
       <p className="field-note" id="bq-max-bytes-note">Every query on this connection is sent with this cap, and BigQuery fails a query that would bill more, at no charge. Empty means no limit.</p>
       <div className="property-row"><span /><label className="checkbox-label"><input type="checkbox" checked={asking} disabled={locked} aria-describedby="bq-cost-prompt-note" onChange={event => onChange({ costPrompt: advancedCostPrompt(options, savedCostPrompt, event.target.checked) })} />Ask before running a query over the cost threshold</label></div>
       <p className="field-note" id="bq-cost-prompt-note">Tools › Options › Query Execution › BigQuery › Cost sets the threshold. Choosing "Don't ask again" in the prompt clears this.</p>
     </div></fieldset>
     <fieldset className="property-section"><legend>Identity</legend><div className="property-grid">
-      <div className="property-row"><label htmlFor="bq-impersonate">Impersonate service account</label><input className="ui-field" id="bq-impersonate" type="email" maxLength={bigQueryLimits.serviceAccount} disabled={locked} spellCheck={false} placeholder="name@project.iam.gserviceaccount.com" value={impersonate} aria-describedby="bq-impersonate-note" onChange={event => updateImpersonate(event.target.value)} /></div>
+      <div className="property-row"><label htmlFor="bq-impersonate">Impersonate service account</label><input className="ui-field" id="bq-impersonate" type="email" maxLength={bigQueryLimits.serviceAccount} disabled={locked} spellCheck={false} placeholder="name@project.iam.gserviceaccount.com" value={draft.impersonate} aria-invalid={!!impersonateError || undefined} aria-describedby="bq-impersonate-note" onChange={event => updateImpersonate(event.target.value)} /></div>
       <p className="field-note" id="bq-impersonate-note">Needs the Service Account Token Creator role on that account.</p>
     </div></fieldset>
     <fieldset className="property-section"><legend>Projects</legend><div className="property-grid">
-      <div className="property-row"><label htmlFor="bq-extra-project">Extra projects (read-only)</label><div className="property-input-action"><input className="ui-field" id="bq-extra-project" list="bq-extra-projects" maxLength={bigQueryLimits.project} spellCheck={false} autoComplete="off" placeholder="Project id" value={adding} disabled={locked || extra.length >= bigQueryLimits.extraProjects} onChange={event => setAdding(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); add() } }} /><button className="ui-button" data-control-variant="secondary" type="button" disabled={locked || !adding.trim()} onClick={add}>Add</button></div><datalist id="bq-extra-projects">{projects.filter(project => project.id !== options.project && !extra.includes(project.id)).map(project => <option key={project.id} value={project.id} label={project.friendlyName} />)}</datalist></div>
+      <div className="property-row"><label htmlFor="bq-extra-project">Extra projects (read-only)</label><div className="property-input-action"><input className="ui-field" id="bq-extra-project" list="bq-extra-projects" maxLength={bigQueryLimits.project} spellCheck={false} autoComplete="off" placeholder="Project id" value={draft.adding} aria-invalid={!!draft.extraError || undefined} disabled={locked || extra.length >= bigQueryLimits.extraProjects} onChange={event => onDraftChange({ ...draft, adding: event.target.value, extraError: '' })} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); add() } }} /><button className="ui-button" data-control-variant="secondary" type="button" disabled={locked || !draft.adding.trim()} onClick={add}>Add</button></div><datalist id="bq-extra-projects">{projects.filter(project => project.id !== options.project && !extra.includes(project.id)).map(project => <option key={project.id} value={project.id} label={project.friendlyName} />)}</datalist></div>
       {extra.length > 0 && <ul className="bq-extra-projects" aria-label="Extra projects">{extra.map(project => <li key={project}><span>{project}</span><button type="button" className="ui-button icon-button" aria-label={`Remove ${project}`} disabled={locked} onClick={() => onChange({ extraProjects: extra.filter(value => value !== project).length ? extra.filter(value => value !== project) : undefined })}><Icon name="close" /></button></li>)}</ul>}
       <p className="field-note">Listed for browsing and search. Queries still run, and bill, in {options.project.trim() || 'the connection\'s project'}.</p>
     </div></fieldset>

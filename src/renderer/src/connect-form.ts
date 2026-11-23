@@ -1,11 +1,105 @@
-import type { AdvancedConnectionOptions, ConnectionOptions } from '../../shared/contracts'
+import type { AdvancedConnectionOptions, ConnectionOptions, ProviderConnectionOptions } from '../../shared/contracts'
+import type { ConnectionDetails } from '../../shared/connection-targets'
 import { showsIdentity } from '../../shared/auth'
 import { advancedDefaults } from '../../shared/connections'
 import { environmentTag } from '../../shared/environments'
 import { connectionPresets } from '../../shared/theme/connection-colors'
 
+/**
+ * A request sent to an already-open modeless Connect window (Reconnect, F5 on a query tab, or Activity Monitor).
+ * App commits the request's pending state only when ConnectDialog accepts it via `onAcceptRequest`, so a busy connect
+ * never runs another tab's query against the wrong server and unsaved edits are never dropped without asking.
+ */
+export interface ConnectIncomingRequest {
+  readonly seq: number
+  readonly kind: 'reconnect' | 'execute' | 'monitor'
+  readonly reconnecting?: string
+  readonly targetId?: string
+  readonly options?: ProviderConnectionOptions
+  readonly autoReconnect?: ConnectionDetails['autoReconnect']
+  readonly pendingExecute?: string
+  readonly pendingMonitor?: boolean
+}
+export interface ConnectRequestTrigger {
+  readonly kind: 'open' | 'reconnect' | 'execute' | 'monitor'
+  readonly reconnecting?: string
+  readonly targetId?: string
+  readonly options?: ProviderConnectionOptions
+  readonly autoReconnect?: ConnectionDetails['autoReconnect']
+  readonly pendingExecute?: string
+}
+export type ConnectRequestPlan =
+  | { readonly action: 'open'; readonly reconnecting?: string; readonly options?: ProviderConnectionOptions; readonly pendingExecute?: string; readonly pendingMonitor: boolean }
+  | { readonly action: 'raise' }
+  | { readonly action: 'incoming'; readonly request: ConnectIncomingRequest }
+
+/**
+ * Decides how App handles a Connect / Reconnect / F5 / Activity Monitor trigger given whether Connect is already open
+ * and whether a details-review dialog is active. Plain Connect on an already-open window only raises it so any active
+ * reconnect target or pending execute stays intact; other triggers become incoming requests that ConnectDialog accepts
+ * only when idle and after confirming unsaved edits.
+ */
+export function planConnectRequest(open: boolean, reviewOpen: boolean, seq: number, trigger: ConnectRequestTrigger): ConnectRequestPlan {
+  if (!open) {
+    return {
+      action: 'open',
+      reconnecting: trigger.reconnecting,
+      options: trigger.options,
+      pendingExecute: trigger.pendingExecute,
+      pendingMonitor: trigger.kind === 'monitor'
+    }
+  }
+  if (trigger.kind === 'open' || reviewOpen) return { action: 'raise' }
+  return {
+    action: 'incoming',
+    request: {
+      seq,
+      kind: trigger.kind,
+      reconnecting: trigger.reconnecting,
+      targetId: trigger.targetId,
+      options: trigger.options,
+      autoReconnect: trigger.autoReconnect,
+      pendingExecute: trigger.pendingExecute,
+      pendingMonitor: trigger.kind === 'monitor'
+    }
+  }
+}
+
 /** Limits for Connect's resizable saved-connections rail; shared between CSS/layout and tests. */
 export const connectRailLimits = { defaultWidth: 320, minWidth: 220, maxWidth: 480, minFormWidth: 420, stackBelow: 720 } as const
+
+export interface SqlAdvancedNumericRule {
+  readonly key: keyof AdvancedConnectionOptions
+  readonly label: string
+  readonly min: number
+  readonly max: number
+  readonly optional?: boolean
+}
+/** Validation rules for SQL Server Advanced numeric fields, matching `advancedConnectionSchema`. */
+export const sqlAdvancedNumericRules: Readonly<Partial<Record<keyof AdvancedConnectionOptions, SqlAdvancedNumericRule>>> = {
+  commandTimeout: { key: 'commandTimeout', label: 'Command timeout (seconds)', min: 0, max: 86400, optional: true },
+  connectTimeout: { key: 'connectTimeout', label: 'Connect timeout (seconds)', min: 0, max: 3600 },
+  packetSize: { key: 'packetSize', label: 'Packet size', min: 512, max: 32767 },
+  connectRetryCount: { key: 'connectRetryCount', label: 'Connect retry count', min: 0, max: 255 },
+  connectRetryInterval: { key: 'connectRetryInterval', label: 'Connect retry interval (seconds)', min: 1, max: 60 }
+}
+/** Validates a raw numeric Advanced input before it can enter `options.advanced`. */
+export function validateSqlAdvancedNumber(key: keyof AdvancedConnectionOptions, raw: string, badInput = false): { ok: true; value: number | undefined } | { ok: false; error: string } {
+  const rule = sqlAdvancedNumericRules[key]
+  if (!rule) return { ok: true, value: undefined }
+  if (badInput) return { ok: false, error: `${rule.label} must be a whole number between ${rule.min} and ${rule.max}.` }
+  const text = raw.trim()
+  if (!text) {
+    if (rule.optional) return { ok: true, value: undefined }
+    return { ok: false, error: `${rule.label} is required (${rule.min}–${rule.max}).` }
+  }
+  if (!/^-?\d+$/.test(text)) return { ok: false, error: `${rule.label} must be a whole number between ${rule.min} and ${rule.max}.` }
+  const num = Number(text)
+  if (!Number.isSafeInteger(num) || num < rule.min || num > rule.max) {
+    return { ok: false, error: `${rule.label} must be between ${rule.min} and ${rule.max}.` }
+  }
+  return { ok: true, value: num }
+}
 
 /**
  * Clamps or safely restores the Connect rail width for a given dialog width so the form pane keeps at least

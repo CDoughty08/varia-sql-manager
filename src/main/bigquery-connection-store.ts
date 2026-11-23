@@ -116,6 +116,7 @@ export class BigQueryConnectionStore {
       if (keyPath) profile.keyPath = keyPath
       else delete profile.keyPath
       if (input.favorite !== undefined) profile.favorite = input.favorite
+      if (input.lastConnected !== undefined && !connected) { profile.lastConnected = input.lastConnected; delete profile.saved }
       if (input.saved && !profile.lastConnected) profile.saved = true
       if (input.autoReconnect !== undefined) profile.autoReconnect = input.autoReconnect
       if (connected) { profile.lastConnected = new Date().toISOString(); delete profile.saved }
