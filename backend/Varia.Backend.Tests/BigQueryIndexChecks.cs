@@ -62,7 +62,7 @@ internal static partial class BigQueryIndexChecks
                 .On("GET", Beta + "/datasets/[^/]+/(routines|models)", BigQueryFake.Fixture("index-empty"))
                 .On("GET", Beta + "/datasets/census/tables", BigQueryFake.Fixture("index-beta-tables"))
                 .On("GET", Beta + "/datasets/census/tables/[^/]+", BigQueryFake.Fixture("table-orders"));
-            Service = new SqlService(bigQuery: new BigQueryEnvironment(null, Fake.Factory, new SubjectTokens([])));
+            Service = new SqlService(CheckStores.Unprobed(), bigQuery: new BigQueryEnvironment(null, Fake.Factory, new SubjectTokens([])));
             Service.BigQuery.RetryDelay = TimeSpan.FromMilliseconds(1);
         }
 
@@ -216,6 +216,10 @@ internal static partial class BigQueryIndexChecks
         check(harness.Gets(Beta + "/datasets/census/tables/.+") == 0 && harness.Gets(Sales + "/tables/orders") == 1 && harness.Gets(Sales + "/tables/events_2026010[12]") == 0
             && harness.Gets(Sales + "/tables/events_20260103") == 1 && harness.Gets(Sales + "/models/.+") == 0,
             "pass 2 reads each billing-project table once (a shard group's newest shard only, no model), and the extra project not at all");
+        var detailReads = harness.Fake.Seen.Where(request => request.Method == "GET" && System.Text.RegularExpressions.Regex.IsMatch(request.Url, "/tables/[^/]+$")).ToList();
+        check(detailReads.Count > 0 && detailReads.All(request => System.Web.HttpUtility.ParseQueryString(request.Uri.Query) is var query && query["selectedFields"] is null
+                && query["fields"] == Varia.Backend.BigQuery.BigQueryService.IndexTableFields),
+            "pass 2 trims tables.get with a partial response (fields), never selectedFields, which would keep only columns of those names");
         var orders = await harness.Search("orders");
         var table = orders.Hits.FirstOrDefault(hit => hit.Label == "sales.orders");
         check(table is { Folder: "bqTables", Object: { Kind: "bqTable", Project: "varia-alpha", Dataset: "sales", Name: "orders", Database: null, Schema: null } }

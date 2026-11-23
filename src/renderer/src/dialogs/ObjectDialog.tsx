@@ -6,6 +6,7 @@ import { scriptDestinations, type ScriptDestination } from '../../../shared/scri
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
 import StepList from '../kit/StepList'
+import DialogFooter from '../kit/DialogFooter'
 import { trapFocus } from '../trap-focus'
 import { definitionOf } from './definitions'
 import { dialogEnter } from './dialog-keys'
@@ -287,10 +288,10 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
         })}
       </div>
     </div>
-    <div className="connection-footer">
-      <span className="object-dialog-blocked" id="object-dialog-blocked">{!busy && blocked}</span>
-      <DialogButtons phase={open.phase} busy={busy} blocked={blocked} closeRef={closeButton} stopRef={stopButton} onClose={close} onStop={() => dialogs.stop()} okLabel={okLabel} readOnly={!!readOnly} />
-    </div>
+    <DialogFooter
+      status={<span className="object-dialog-blocked" id="object-dialog-blocked">{!busy && blocked}</span>}
+      trailing={<DialogButtons phase={open.phase} busy={busy} blocked={blocked} closeRef={closeButton} stopRef={stopButton} onClose={close} onStop={() => dialogs.stop()} okLabel={okLabel} readOnly={!!readOnly} />}
+    />
   </form></div>
 }
 

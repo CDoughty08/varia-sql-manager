@@ -48,8 +48,10 @@ export const agentHistoryArgsSchema = z.object({
   outcome: z.enum(historyOutcomes).optional(),
   text: z.string().min(1).max(agentLimits.searchChars).optional(),
   step: z.number().int().min(0).max(historyMaxStep).optional(),
-  run: historyRunKeySchema.optional()
-}).strict()
+  run: historyRunKeySchema.optional(),
+  // The job document's History (AG-6d): the fourth table, its one job's usual durations.
+  usual: z.literal(true).optional()
+}).strict().refine(args => !args.usual || args.jobs?.length === 1, 'Usual durations are read for one checked job.')
 export type AgentHistoryArgs = z.infer<typeof agentHistoryArgsSchema>
 
 /** The viewer's filters as it holds them: checked jobs (undefined: All jobs), the window, outcome, message text, step and selected run. */

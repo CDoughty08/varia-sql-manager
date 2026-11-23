@@ -13,7 +13,8 @@ internal sealed partial class BigQueryService : IBigQueryIndexSource
 {
     /// <summary>One index read's own deadline, inside the build (a slower call is a TIMEOUT skip for its dataset).</summary>
     internal TimeSpan IndexCallBudget { get; set; } = TimeSpan.FromSeconds(30);
-    /// <summary>The fields tables.get returns for the index: what search, details and the editor need, never the rows or the full resource.</summary>
+    /// <summary>The fields tables.get returns for the index (a partial response, <c>fields</c>): what search, details and the editor
+    /// need, never the rows or the full resource. Not tables.get's <c>selectedFields</c>, which picks the table's columns by name.</summary>
     internal const string IndexTableFields = "type,creationTime,lastModifiedTime,numRows,numBytes,description,schema,timePartitioning,rangePartitioning,clustering,view,materializedView,cloneDefinition,snapshotDefinition";
 
     (string Billing, IReadOnlyList<string> Extra) IBigQueryIndexSource.Projects(string connectionId)
@@ -117,7 +118,7 @@ internal sealed partial class BigQueryService : IBigQueryIndexSource
         return IndexCallAsync(connection, t =>
         {
             var call = connection.Client.Service.Tables.Get(project, dataset, table);
-            call.SelectedFields = IndexTableFields;
+            call.Fields = IndexTableFields;
             return call.ExecuteAsync(t);
         }, token);
     }

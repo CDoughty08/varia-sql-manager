@@ -216,8 +216,9 @@ internal static partial class BigQuerySessionChecks
         await harness.Call("query.cancel", new JsonObject { ["queryId"] = args2["queryId"]!.GetValue<string>(), ["detach"] = true });
         await run2.WaitAsync(TimeSpan.FromSeconds(30));
         var behind = harness.Execute(tab, "SELECT 1");
-        await Task.Delay(100);
-        check(!behind.IsCompleted, "the next Execute waits behind a detached job");
+        // SESSION_BUSY: the Execute holds the session's queue, so it is waiting rather than not yet started.
+        var waits = await Poll(() => behind.IsCompleted || harness.State(tab).Result.Code == "SESSION_BUSY");
+        check(waits && !behind.IsCompleted, "the next Execute waits behind a detached job");
         bq.Release(bq.Jobs[job2]);
         var after = await behind.WaitAsync(TimeSpan.FromSeconds(30));
         check(after is { Code: "ok", Result.Status: "completed" } && Says(after.Result, "Waiting for BigQuery job"), $"it runs once the detached job is DONE: {after.Code} {after.Result?.Status}");
@@ -718,12 +719,23 @@ internal static partial class BigQuerySessionChecks
         var (args2, run2, job2) = await HeldAsync(harness, holder);
         await harness.Call("query.cancel", new JsonObject { ["queryId"] = args2["queryId"]!.GetValue<string>(), ["detach"] = true });
         await run2.WaitAsync(TimeSpan.FromSeconds(30));
+        // The detached job's background poll is a handle reaching BigQuery, which retries a failed abort at once: park it on
+        // a jobs.get the fake leaves unanswered, so the failure below is still counted when the check reads it.
+        var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        bq.AlsoHang = request =>
+        {
+            if (request.Method != "GET" || !request.Url.Contains("/jobs/" + job2, StringComparison.Ordinal)) return false;
+            parked.TrySetResult();
+            return true;
+        };
+        await parked.Task.WaitAsync(TimeSpan.FromSeconds(30));
         bq.AbortError = Failure("backendError", "BigQuery could not end the session.");
         var aborts = bq.Aborts.Count;
         var disconnected = await harness.Call("connections.disconnect", new JsonObject { ["connectionId"] = harness.ConnectionId });
         bq.AbortError = null;
         check(disconnected.Result is DisconnectResult { Disconnected: true, FailedAborts: 1 } && bq.Aborts.Skip(aborts).SequenceEqual(["sess-3"]) && harness.BigQuery.FailedAbortCount == 1,
             $"Disconnect ends the idle session, leaves the one holding a job and counts a failed abort: {disconnected.Result} {string.Join(",", bq.Aborts.Skip(aborts))}");
+        bq.AlsoHang = null;
         bq.Release(bq.Jobs[job2]);
 
         // The failed abort is retried once the next time a handle reaches BigQuery.
