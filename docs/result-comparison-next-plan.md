@@ -136,11 +136,14 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
 - **The fake backend** (`tests/fixtures/backend.mjs`, which smoke runs against) implements each change, or the smoke step
   moves to the real-server part. Its copy and save use the TypeScript text writer, which today writes no `(old)` columns
   for a comparison and never sees a cut tone, so C3 first brings it level with C#.
-- **Notice buttons that remove their notice.** **Stop ignoring** (1), **Compare whole results** and the shipped filtered
-  notice's **Compare rows as shown** (6) start a replace whose comparison no longer shows their notice. When it lands,
-  the focus moves as a Dismiss's does (`ComparisonToolbar`'s rule, which Show changes only follows today): to the notice
-  that takes its place, else the one before, else the toolbar's Tab stop. A replace that fails, is cancelled or does not
-  start leaves the notice, and the focus on its button.
+- **Notice buttons that remove their notice.** Every notice button that starts a replace whose comparison no longer
+  shows its notice follows one rule: **Stop ignoring** (1), **Compare whole results**, the shipped filtered notice's
+  **Compare rows as shown** and the memory refusal's (6), and the shipped **Match by row position**, which has no focus
+  handling today. When the notice goes, the focus moves as a Dismiss's does (`ComparisonToolbar`'s rule, which Show
+  changes only follows today): to the notice that takes its place, else the one before, else the toolbar's Tab stop; but
+  only while the focus is still on that button or was lost to the page when the notice went, so a replace that lands
+  after the user moved on (into the grid, or to a newer change) leaves the focus where it is. A replace that fails, is
+  cancelled or does not start leaves the notice, and the focus on its button.
 - **Inputs closed.** Features that read only the comparison work while an input is closed: Change details and Compare
   Values in Tab (except a soft cell's old value, below), Copy as Diff, Save as Diff, Script Differences (except its
   re-matching buttons), Search. Features that re-run it (Ignore, Compare Rows as Shown, Update, and the notices'
@@ -303,11 +306,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - a `results-port.test.ts` case sending `ignore` and checking it reaches the backend request, and a `worker-core`
       case for the rebuilt request, as C4 and C6 have;
     - the toggle's `when`, notice text and Dismiss; the focus after Stop ignoring moving as a Dismiss's when its notice
-      goes, and staying on the button when the replace fails; `outputGridOnColumn` and the two state keys for gutter,
-      header, cell and keyboard menus, the keyboard ones through `targetFor` with a registered grid target, on a ? row
-      (`comparisonRowHasPartner`) and on an ignored column; and through `targetFor`, a right-click on a ? row's number
-      while the active cell is on a plain row, and on a plain row's number while it is on a ? row, each keeping the
-      clicked row's partner;
+      goes, staying on the button when the replace fails, and staying where the user moved it before the replace landed;
+      `outputGridOnColumn` and the two state keys for gutter, header, cell and keyboard menus, the keyboard ones through
+      `targetFor` with a registered grid target, on a ? row (`comparisonRowHasPartner`) and on an ignored column; and
+      through `targetFor`, a right-click on a ? row's number while the active cell is on a plain row, and on a plain
+      row's number while it is on a ? row, each keeping the clicked row's partner;
     - sort keys and chips kept, and filters (a value filter, Keep Selected Rows) removed with "The comparison's filters
       were removed.", across Ignore and Stop ignoring, in the announcement's order; the lost-column notice and its
       plural;
@@ -879,7 +882,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
         in `src/shared/explorer/search.ts`, since without an index `explorer.scriptTarget` answers no suggestions and no
         `state`, not an error, which would show the failed-lookup sentence): "SQLDEV01 has no search index yet, so its
         tables are not suggested, the target's columns cannot be checked and SET IDENTITY_INSERT is not offered.", with
-        **Build index**, as Search Objects offers, which behaves as Rebuild Search Index does;
+        **Build index**, as Search Objects offers, which behaves as Rebuild Search Index does but says "Building the
+        search index for SQLDEV01…";
       - the database was skipped (the login cannot open it, say) and no earlier read of it is held: "Search Objects
         skipped Sales_Test, so the target's columns cannot be checked and SET IDENTITY_INSERT is not offered.", with no
         button, since a rebuild would skip it again;
@@ -890,7 +894,12 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
         did not fit the memory budget, so its columns cannot be checked and SET IDENTITY_INSERT is not offered.";
       - a ticked column the table lacks (compared, or ignored and ticked for INSERT): "[Sales_Test].[dbo].[Orders] has
         no column note in Search Objects' index, so a statement naming it would fail. Untick it, check the table, or
-        rebuild the search index." (an aliased or joined column is the likely cause, Risks below);
+        rebuild the search index." ("…has no columns note and memo…, so statements naming them would fail. Untick them,
+        …" for several; an aliased or joined column is the likely cause, Risks below). A key column cannot be unticked,
+        so one the table lacks has its own sentence: "Rows are matched by id, and [Sales_Test].[dbo].[Orders] has no
+        column id in Search Objects' index, so no statement could find its row. Choose other key columns, check the
+        table, or rebuild the search index.", with **Choose key columns…** (unavailable while an input is closed), and a
+        key column also lacking is named there, not in the ticked-column sentence;
       - over 4,096 columns: "[Sales_Test].[dbo].[Orders] has more than 4,096 columns, so its columns are not checked and
         SET IDENTITY_INSERT is not offered." (the dialog uses no facts from a cut answer);
       - the comparison's connection is not open (Disconnect with Keep Tabs keeps the comparison, and the index is
@@ -1137,22 +1146,22 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     only in Result 3 stay."), so it never reads as if the target already matched. Either way Script is unavailable.
     - The preview asks the backend for its 30 lines (`results.scriptDiff` with `maxLines`) on opening, with or without a
       target and direction, and then 300 ms after the form last changed, cancelling the request before. Each answer
-      brings the Rows options' counts. It refuses only what those lines need (a truncated or U+FFFD value among them, a
-      key its collation cannot write exactly, `keyCollation`, or a refusal known on opening); the rest are found on
-      Script. A preview line over 2,000 characters (a long value's literal) ends in "…", the preview's only cut; the
-      script holds it whole. While it waits, the preview reads "-- Choose the target table and a direction to see the
-      script." ("-- Choose a direction to see the script.", "-- Choose the target table to see the script." while only
-      the target is missing, "-- Fix the target table's name to see the script." while its name cannot be used), and
-      after a refused answer "-- No preview: the reason is beside Script." A request that fails instead (its deadline,
-      or `TOO_LARGE` when the count's working memory does not fit) is not a refusal. On opening, its sentence replaces
-      "Reading the comparison…", with **Try again**, which takes the focus, is described by the sentence, which the live
-      region says, and sends the request again. Pressed, on opening or later, Try again stays in place, unavailable
-      (`aria-disabled`, so it keeps the focus) while the request runs, the failure sentence gives way to "Reading the
-      comparison…" (on opening with its progress, later as the preview's text, "-- Reading the comparison…"), which the
-      live region says, and then what the answer brings shows and is said, the failure sentence again when it fails
-      again. Later, the preview reads "-- No preview: " and the sentence, with Try again under it; everything the form
-      draws from an answer hides until an answer brings it again (the Rows and statement counts, the look-alike and
-      not-looked-for lines, the line by Rows after a replace's count (Rows below), the unchecked-UPDATEs,
+      brings the Rows options' counts. It refuses only what those lines need (a truncated, U+FFFD or code-page value
+      among them, a key its collation cannot write exactly, `keyCollation`, or a refusal known on opening); the rest are
+      found on Script. A preview line over 2,000 characters (a long value's literal) ends in "…", the preview's only
+      cut; the script holds it whole. While it waits, the preview reads "-- Choose the target table and a direction to
+      see the script." ("-- Choose a direction to see the script.", "-- Choose the target table to see the script."
+      while only the target is missing, "-- Fix the target table's name to see the script." while its name cannot be
+      used), and after a refused answer "-- No preview: the reason is beside Script." A request that fails instead (its
+      deadline, or `TOO_LARGE` when the count's working memory does not fit) is not a refusal. On opening, its sentence
+      replaces "Reading the comparison…", with **Try again**, which takes the focus, is described by the sentence, which
+      the live region says, and sends the request again. Pressed, on opening or later, Try again stays in place,
+      unavailable (`aria-disabled`, so it keeps the focus) while the request runs, the failure sentence gives way to
+      "Reading the comparison…" (on opening with its progress, later as the preview's text, "-- Reading the
+      comparison…"), which the live region says, and then what the answer brings shows and is said, the failure sentence
+      again when it fails again. Later, the preview reads "-- No preview: " and the sentence, with Try again under it;
+      everything the form draws from an answer hides until an answer brings it again (the Rows and statement counts, the
+      look-alike and not-looked-for lines, the line by Rows after a replace's count (Rows below), the unchecked-UPDATEs,
       unchecked-DELETEs and Exact text lines, SET IDENTITY_INSERT and its line), so no line shows numbers from an answer
       that no longer matches the form; the summary reads "The preview could not be read, so its counts and warnings are
       not shown." unless a reason in the summary's order (Keyboard and screen readers) holds, and Script stays available
@@ -1242,16 +1251,19 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   first button, or Cancel, without activating the window. The rest are found on Script, or by the preview (above): they
   show in the footer in place of the summary, with the refusal's button if it has one, so a form scrolled to Options
   still shows why; the window's live region says the refusal, and Script, which keeps the focus when it was pressed, is
-  marked unavailable (`aria-disabled`). It is available again on any change the preview follows: the form, or the
-  comparison's sort, filters, chips, selection or a replace. When a refusal that replaced the form clears, after its own
-  button or a replace, the dialog's focused element becomes Target table, unless it is Cancel, which keeps it, so an
-  Enter meant for Cancel never presses Script (the window is activated only when Choose key columns… opens it again) and
-  the live region says the shipped sentence ("Comparison updated: matched by order_no, …"); a replace that fails says
-  its sentence in the dialog and keeps the refusal and its focus. While a replace the dialog started runs (its own
-  button's, or one applied in the Match menu Choose key columns… opened), the refusal reads "Updating the comparison…"
-  with progress, which becomes the window's description and the live region says, and its buttons are unavailable
-  (`aria-disabled`, so the pressed one keeps the focus); Cancel cancels the replace first, and the next Cancel closes
-  the dialog. When several apply, the first in this list shows. Each refusal says what to do:
+  marked unavailable (`aria-disabled`). A refusal found on Script clears, and Script is available again, on any change
+  the preview follows: the form, or the comparison's sort, filters, chips, selection or a replace. One the preview found
+  stays, with Script unavailable, until an answer no longer brings it, a replace clears it or a failed preview hides it
+  (Script then finds it again), and the live region says it again only when its sentence changes, so a click in the grid
+  never makes it flicker. When a refusal that replaced the form clears, after its own button or a replace, the dialog's
+  focused element becomes Target table, unless it is Cancel, which keeps it, so an Enter meant for Cancel never presses
+  Script (the window is activated only when Choose key columns… opens it again) and the live region says the shipped
+  sentence ("Comparison updated: matched by order_no, …"); a replace that fails says its sentence in the dialog and
+  keeps the refusal and its focus. While a replace the dialog started runs (its own button's, or one applied in the
+  Match menu Choose key columns… opened), the refusal reads "Updating the comparison…" with progress, which becomes the
+  window's description and the live region says, and its buttons are unavailable (`aria-disabled`, so the pressed one
+  keeps the focus); Cancel cancels the replace first, and the next Cancel closes the dialog. When several apply, the
+  first in this list shows. Each refusal says what to do:
   - a comparison of rows as shown (§ 6): "Result 1 is compared as shown, so rows its filters hide show as added or
     removed, and a script would insert or delete them. Compare whole results to script differences. To script only
     some rows, filter the comparison itself.", with **Compare whole results** ("Result 1 and Result 3 are compared as
@@ -1320,10 +1332,12 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     without them.";
   - a value to SET or INSERT that the target side's code page cannot hold, when that side's column is char, varchar or
     text under a collation that is not UTF-8 (an nvarchar '中' paired with a Latin1 varchar column, or two varchar
-    columns of different code pages, as the same query against two databases gives): the same `unwritable` refusal and
-    sentence ("1 value in note cannot be written exactly (row id = 1004)."), `keyUnwritable` for an INSERT's key value,
-    since SQL Server stores '?' or a near letter there without an error, and every check would still pass. `DiffScript`
-    encodes each such value in that side's recorded code page (`ResultCollation.CodePage`) with an exception fallback.
+    columns of different code pages, as the same query against two databases gives): the `unwritable` refusal with a
+    sentence naming the cause ("1 value in note holds characters that note's code page, windows-1252, cannot store (row
+    id = 1004). Choose rows without them, or untick note.", the U+FFFD forms otherwise), `keyUnwritable` for an INSERT's
+    key value, since SQL Server stores '?' or a near letter there without an error, and every check would still pass.
+    `DiffScript` encodes each such value in that side's recorded code page (`ResultCollation.CodePage`) with an
+    exception fallback; a side with no recorded collation refuses values that are not all ASCII, as the WHERE rule does.
     WHERE values come from the target side's own column, so they always fit;
   - a key value of a char or varchar column with a SQL_ collation that is not all ASCII (Literals below): "2 key values
     in code cannot be matched exactly under its collation ('Straße' and 1 more). Choose rows without them, or other key
@@ -1413,10 +1427,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - When the focused control goes away, the focus moves to a fixed place and the live region says the line that replaced
     it: from Rebuild Search Index or Build index when the build ends, to Target table; from the opening Try again when
     an answer arrives, where the first answer places it (above); from a later Try again when an answer arrives, to the
-    preview; from a footer refusal's button when the refusal clears (a change the preview follows, or a replace), to
-    Script, and a focus already on Script stays there; from SET IDENTITY_INSERT when a failed preview hides it, to the
-    preview's Try again, the failure sentence being the line said; from any other control that goes away (SET
-    IDENTITY_INSERT or Rebuild Search Index when the connection drops, a failed lookup's Try again), to Target table.
+    preview; from a footer refusal's button when the refusal clears (as above), to Script, and a focus already on Script
+    stays there; from SET IDENTITY_INSERT when a failed preview hides it, to the preview's Try again, the failure
+    sentence being the line said; from any other control that goes away (SET IDENTITY_INSERT or Rebuild Search Index
+    when the connection drops, a failed lookup's Try again), to Target table.
   - Enter on a button presses that button. In the columns' search field it moves to the first match in the list, and
     with no match does nothing. In the target box, while the suggestion list is open, it picks the highlighted
     suggestion, or with none highlighted closes the list and keeps the typed name; it never presses Script while the
@@ -1744,7 +1758,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       U+FFFD refusal;
     - an nvarchar value outside a Latin1 varchar target side's code page refused as `unwritable` in a SET and an INSERT
       and as `keyUnwritable` in an INSERT's key, a varchar value of another code page likewise, and a UTF-8 varchar
-      target side taking any value;
+      target side taking any value; the code-page sentence naming the code page, and a side with no recorded collation
+      refusing a value that is not all ASCII;
     - a value with CR, LF, NUL and U+2028, and one over 4,000 characters with line breaks, written with `NCHAR` joins and
       the `nvarchar(max)` cast; a key with those characters in its THROW message, and one with a quote straddling the
       200-point cut;
@@ -1823,40 +1838,42 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     identity sentences, the unticked line's DELETE clause, the unchecked-UPDATEs line, Selected rows' keys and its
     sentence said only when the differing entries change, the key-name refusal's button, the look-alike lines for rows
     whose look-alike is not chosen, the column list as one Tab stop with its search field, the index sentences (the
-    table unknown with Rebuild Search Index, still indexing, indexed without columns, a column unknown, over 4,096
-    columns) and the request again when the index build finishes, the unchecked lines hidden while their statement is
-    unticked, the remembered-direction line and its hiding once the direction changes, the not-connected state (no
-    request, New Query Editor Window unavailable, the facts back on reconnect), Rebuild Search Index keeping the focus,
-    saying the rebuild and building the comparison's connection (not the active document's), the no-index and skipped
-    sentences, the document's database first among equal suggestions, the locked SET IDENTITY_INSERT's description, a
-    temporal table's period columns locked as generated, an ignored expression column the target lacks starting unticked
-    with its reason and warning once ticked again, a target rowversion column paired with a binary(8) column locked as
-    not insertable, the knows line from a held read while a rebuild runs and after a definitions-off read, a two-part
-    name kept when the document's database changes (the line, said and said again on activation), Script waiting for a
-    pending lookup ("Checking the target table…") and facts sent only from the answer for the sent target, a failed
-    lookup's sentence, a two-part name resolved to a disconnected document's kept database, Script's destination
-    sentence while disconnected, a connection lost while generating, the focus after Rebuild Search Index, a later Try
-    again and a footer refusal's button go away, Enter and Escape in the columns' search field (Enter with no match
-    doing nothing), Script pressed inside the 300 ms wait before a lookup saying "Checking the target table…", the
-    request sent while SET IDENTITY_INSERT is hidden carrying the value kept for the script (on by default, off after an
-    untick, on for a key identity), SET IDENTITY_INSERT unticked, hidden and offered again still unticked, hidden before
-    an answer gives INSERT's count (no direction, a failed preview), Rows and the options kept across the Choose key
-    columns… round trip, Script waiting after Try again, a reconnect and a finished build, an edit while disconnected
-    leaving Script to the destination's rule, the other-server warning winning over the moved line when both hold, the
-    moved line for another connection to the same server, SET IDENTITY_INSERT hidden while INSERT is unticked or has no
-    rows, the not-connected warning said when the connection drops and said again on activation, the preview's Try again
-    while its request runs, the field rewritten in three parts when the document's database or connection changes, the
-    connection lines (now on another server, no connection now) winning over the three-part line, the draft recording
-    the document's connection, an ignored column the target lacks left out of the ignored line, the failed lookup's Try
-    again while it runs and failing again, a disconnect while a lookup is pending showing the not-connected state, the
-    focus staying on Cancel when a refusal that replaced the form clears, a lookup held while the script is written, the
-    no-connection sentence, the three-part line for another database, the opening request carrying the draft's target
-    with Script checking until it answers, a failed lookup's Try again, the summary's order with a failed preview
-    leaving Script unavailable while a reason holds, the not-connected state after a connection lost while generating,
-    the focus staying on Script when a footer refusal clears and falling back to Target table, a two-part target in a
-    database beside another holding the same table, the key-column form of the truncation and U+FFFD refusals, closing
-    while generating opening nothing, Enter in Target table with nothing highlighted, the window over a popped-out
-    Results pane, a cancelled generation giving way to a closed or refused state, and the Clipboard announcement.
+    table unknown with Rebuild Search Index, still indexing, indexed without columns, a column unknown and its plural, a
+    key column unknown with Choose key columns…, over 4,096 columns) and the request again when the index build
+    finishes, the unchecked lines hidden while their statement is unticked, the remembered-direction line and its hiding
+    once the direction changes, the not-connected state (no request, New Query Editor Window unavailable, the facts back
+    on reconnect), Rebuild Search Index keeping the focus, saying the rebuild and building the comparison's connection
+    (not the active document's), the no-index and skipped sentences, the document's database first among equal
+    suggestions, the locked SET IDENTITY_INSERT's description, a temporal table's period columns locked as generated, an
+    ignored expression column the target lacks starting unticked with its reason and warning once ticked again, a target
+    rowversion column paired with a binary(8) column locked as not insertable, the knows line from a held read while a
+    rebuild runs and after a definitions-off read, a two-part name kept when the document's database changes (the line,
+    said and said again on activation), Script waiting for a pending lookup ("Checking the target table…") and facts
+    sent only from the answer for the sent target, a failed lookup's sentence, a two-part name resolved to a
+    disconnected document's kept database, Script's destination sentence while disconnected, a connection lost while
+    generating, the focus after Rebuild Search Index, a later Try again and a footer refusal's button go away, Enter and
+    Escape in the columns' search field (Enter with no match doing nothing), Script pressed inside the 300 ms wait
+    before a lookup saying "Checking the target table…", the request sent while SET IDENTITY_INSERT is hidden carrying
+    the value kept for the script (on by default, off after an untick, on for a key identity), SET IDENTITY_INSERT
+    unticked, hidden and offered again still unticked, hidden before an answer gives INSERT's count (no direction, a
+    failed preview), Rows and the options kept across the Choose key columns… round trip, Script waiting after Try
+    again, a reconnect and a finished build, an edit while disconnected leaving Script to the destination's rule, the
+    other-server warning winning over the moved line when both hold, the moved line for another connection to the same
+    server, SET IDENTITY_INSERT hidden while INSERT is unticked or has no rows, the not-connected warning said when the
+    connection drops and said again on activation, the preview's Try again while its request runs, the field rewritten
+    in three parts when the document's database or connection changes, the connection lines (now on another server, no
+    connection now) winning over the three-part line, the draft recording the document's connection, an ignored column
+    the target lacks left out of the ignored line, the failed lookup's Try again while it runs and failing again, a
+    disconnect while a lookup is pending showing the not-connected state, the focus staying on Cancel when a refusal
+    that replaced the form clears, a lookup held while the script is written, the no-connection sentence, the three-part
+    line for another database, the opening request carrying the draft's target with Script checking until it answers, a
+    failed lookup's Try again, the summary's order with a failed preview leaving Script unavailable while a reason
+    holds, the not-connected state after a connection lost while generating, the focus staying on Script when a footer
+    refusal clears and falling back to Target table, a refusal the preview found kept through a grid click until an
+    answer no longer brings it and said again only when its sentence changes, a two-part target in a database beside
+    another holding the same table, the key-column form of the truncation and U+FFFD refusals, closing while generating
+    opening nothing, Enter in Target table with nothing highlighted, the window over a popped-out Results pane, a
+    cancelled generation giving way to a closed or refused state, and the Clipboard announcement.
   - Smoke: open the dialog window by role, script to a New Query Editor Window, and find `BEGIN TRANSACTION` in the
     focused editor. A frameless OS window can behave differently on Linux, so run it through `npm run test:smoke:wsl`
     before pushing.
@@ -1868,8 +1885,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     session until the header's OFF line is run; the next ordinary INSERT into the table fails (Msg 545), which is safe.
   - varbinary keys that differ only by trailing zero bytes are two keys to the diff but one to SQL Server (`0x01 =
     0x0100`); the row checks THROW, so it fails safely.
-  - A target char column whose collation lacks a character stores `?`, as any assignment would. The index does not know
-    the target's collations, so the dialog cannot warn.
+  - The code-page refusal checks the target side's recorded collation, which is the result column's. A target char
+    column whose collation differs from that column's can still store `?`, as any assignment would: the index does not
+    know the target's collations, so the dialog cannot warn.
   - All-ASCII char and varchar keys are written plain, so they seek. A key that is not all ASCII is refused under a SQL_
     collation, and written `N'…'` under a Windows one, which converts the column and scans: slow on a large target, but
     exact. The target is assumed to share the result column's collation, since the index does not know collations; if
@@ -2070,8 +2088,9 @@ would leave out the sort, and "Rows" is already the toolbar's All rows / Changes
     out-of-date comparison and saying so, and a build with nothing to apply recorded whole, its choice Whole result, so
     a later Layout after a filter still reads whole results; the grid menu on a comparison that is not the focused one,
     its Compare Rows as Shown tick and Update Comparison following that comparison's state; the focus after the notices'
-    Compare whole results and Compare rows as shown moving as a Dismiss's when the notice goes, and staying when the
-    replace fails.
+    Compare whole results and Compare rows as shown (the filtered notice's and the memory refusal's) and Match by row
+    position moving as a Dismiss's when the notice goes, staying when the replace fails, and staying where the user
+    moved it before the replace landed.
   - The fake backend reads views. A `results-smoke.mjs` step: filter an input, Compare rows as shown, change the filter,
     see Out of date, Update.
   - Whichever of C3 and C6 lands second: a shared golden for both writers with one side read as shown ("(as shown)" in
