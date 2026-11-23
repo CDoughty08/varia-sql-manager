@@ -79,8 +79,12 @@ describe('result page access', () => {
       // Copy and Save find their set through ResultJobs.Lease and route a windowed one to its block cache or its remote
       // table (pinned below).
       'Results/ResultJobs.cs: var set = store.Find(resultId);',
-      // Load into memory is the one request that wants the windowed result.
-      'SqlService.BigQueryResidence.cs: var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);'
+      // Load into memory, a sort, filter or value list in BigQuery and their estimates want the windowed result itself.
+      'SqlService.BigQueryResidence.cs: var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);',
+      'SqlService.BigQueryViews.cs: var set = store.Find(resultId) ?? throw Unavailable(resultId);',
+      'SqlService.BigQueryViews.cs: var set = store.Find(remote.ResultId) ?? throw Unavailable(remote.ResultId);',
+      // A remote filter reads only the value list's table reference (ValueList), never its pages.
+      'SqlService.BigQueryViews.cs: var held = store.Find(id) ?? throw ValueListClosed();'
     ].sort())
     // Nor does a reader reach a set around Find: no listing of the store's sets, and no store under another name.
     // A store held under a name the Find scan does not know: an alias, or a parameter, field or property of type ResultStore.

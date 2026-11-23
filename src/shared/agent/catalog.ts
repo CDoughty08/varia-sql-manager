@@ -348,16 +348,47 @@ export const agentLimits = {
   retentionJobs: 200,
   /** Ages, in whole days, the describe counts history rows by (older rows count in the last), so "Delete old history now" can say about how many rows it removes. */
   historyAgeDays: 400,
+  /** The proxy document (AG-8b): subsystems one proxy save may grant or revoke (msdb lists about a dozen). */
+  proxySubsystems: 32,
+  /** Principals one proxy save may grant or revoke, and the most a proxy's Principals list shows. */
+  proxyPrincipals: 64,
+  /** Logins, msdb roles and server roles the proxy document's principal picker lists; the name can still be typed. */
+  principalChoices: 1_000,
+  /** Job steps the proxy document's References and the credential document's Used by list; more set `truncated`. */
+  proxyReferences: 500,
+  /** Credentials the proxy document's credential picker lists, by name; more set `truncated`. */
+  credentials: 1_000,
+  /** Proxies the credential document's Used by lists. */
+  credentialProxies: 100,
+  /** Characters of a credential's identity (`sys.credentials.credential_identity` is nvarchar(4000)). */
+  credentialIdentityChars: 128,
+  /** UTF-16 code units of a credential's secret (CREATE CREDENTIAL's SECRET); not a login password, so it has its own bound. */
+  credentialSecretChars: 4_000,
+  /** Cryptographic providers New Credential lists (`sys.cryptographic_providers`). */
+  cryptographicProviders: 64,
   /** The most days, weeks or months "Delete old history now" goes back: 999 months stays inside `datetime`, so the cut-off is never NULL. */
-  purgeCount: 999
+  purgeCount: 999,
+  /** The job document's Steps (AG-6b): characters of one step's command (`sysjobsteps.command` is nvarchar(max); this keeps a save's request
+   *  bounded), of all the steps' commands in one save, and of an output file path (`output_file_name` is nvarchar(200)). */
+  stepCommandChars: 100_000,
+  stepCommandTotalChars: 1_000_000,
+  stepOutputChars: 200,
+  /** A step's Retry attempts and Retry interval (minutes), as SSMS's step dialog bounds them. */
+  stepRetries: 9_999,
+  stepRetryMinutes: 9_999,
+  /** Characters the step editor's Parse sends (`language.parse`), as the language service bounds a document. */
+  parseChars: 250_000,
+  /** Errors one Parse reports; more set `truncated`. */
+  parseErrors: 100
 } as const
 export type AgentLimit = keyof typeof agentLimits
 
 /** THROW states carry a save's call index, 1 to 255, so a save's calls stay below this, guards included. */
 export const agentCallIndexLimit = 255
-/** The most calls one job save can make at its caps: per step a temporary rename and a final update (or an add and an
- *  update), per schedule an attach or detach plus an add, per removed alert its guard and its detach, and the job's own calls and guards. */
-export const agentJobSaveCalls = agentLimits.stepsPerJob * 2 + agentLimits.schedulesPerJob * 2 + agentLimits.jobAlerts * 2 + 8
+/** The most calls one job save can make at its caps: per step a delete, or a temporary rename and a final update, or an add and an
+ *  update (AG-6b's planner: deleting every described step and adding as many is three calls a step), per schedule an attach or detach plus
+ *  an add, per removed alert its guard and its detach, and the job's own calls and guards. */
+export const agentJobSaveCalls = agentLimits.stepsPerJob * 3 + agentLimits.schedulesPerJob * 2 + agentLimits.jobAlerts * 2 + 8
 
 // --- Procedures -----------------------------------------------------------------------------------------------------
 
@@ -412,6 +443,9 @@ export const masterReadShapes: readonly MasterReadShape[] = [
   { name: 'xp_servicecontrol', shape: "EXEC @rc = master.dbo.xp_servicecontrol N'QueryState', N'SQLServerAgent';", who: 'sysadmin' }
 ]
 
+/** The timing arguments sp_add_schedule, sp_update_schedule and sp_add_jobschedule share, in sysschedules' column order. */
+export const scheduleTimingArguments = ['@freq_type', '@freq_interval', '@freq_subday_type', '@freq_subday_interval', '@freq_relative_interval', '@freq_recurrence_factor',
+  '@active_start_date', '@active_end_date', '@active_start_time', '@active_end_time'] as const
 export type AgentLane = 'AG-2' | 'AG-5b' | 'AG-6a' | 'AG-6b' | 'AG-6c' | 'AG-7' | 'AG-8a' | 'AG-8b'
 export interface WriteProcedure {
   readonly name: string
@@ -429,7 +463,9 @@ export const writeProcedures: readonly WriteProcedure[] = [
   { name: 'sp_stop_job', lane: 'AG-2', database: 'msdb', arguments: ['@job_id'] },
   // The job document (AG-6a) adds the General and Notifications arguments; sp_update_job leaves an argument it is not passed as it is.
   { name: 'sp_update_job', lane: 'AG-2', database: 'msdb', arguments: ['@job_id', '@enabled', '@new_name', '@description', '@category_name', '@owner_login_name', '@notify_level_eventlog', '@notify_level_email',
-    '@notify_level_netsend', '@notify_level_page', '@notify_email_operator_name', '@notify_netsend_operator_name', '@notify_page_operator_name', '@delete_level'] },
+    '@notify_level_netsend', '@notify_level_page', '@notify_email_operator_name', '@notify_netsend_operator_name', '@notify_page_operator_name', '@delete_level',
+    // The step save (AG-6b) sets the Start step last, in a call of its own, once the steps are in place.
+    '@start_step_id'] },
   { name: 'sp_delete_job', lane: 'AG-2', database: 'msdb', arguments: ['@job_id', '@delete_history', '@delete_unused_schedule'] },
   // Agent Properties' server-wide purge (AG-8a) passes only @oldest_date (its lint refuses @job_id); Delete History (AG-5a) passes @job_id,
   // and @oldest_date for "older than", with its own template and lint (AgentSql.LintHistoryDelete).
@@ -440,15 +476,24 @@ export const writeProcedures: readonly WriteProcedure[] = [
   { name: 'sp_add_jobserver', lane: 'AG-6a', database: 'msdb', arguments: ['@job_id'] },
   // The job's Alerts section's Remove (sysadmin): the alert by name, its job set to none (the zero uniqueidentifier). AG-7 adds its own arguments.
   { name: 'sp_update_alert', lane: 'AG-6a', database: 'msdb', arguments: ['@name', '@job_id'] },
-  { name: 'sp_add_jobstep', lane: 'AG-6b', database: 'msdb' },
-  { name: 'sp_update_jobstep', lane: 'AG-6b', database: 'msdb' },
-  { name: 'sp_delete_jobstep', lane: 'AG-6b', database: 'msdb' },
-  { name: 'sp_add_jobschedule', lane: 'AG-6c', database: 'msdb' },
-  { name: 'sp_attach_schedule', lane: 'AG-6c', database: 'msdb' },
-  { name: 'sp_detach_schedule', lane: 'AG-6c', database: 'msdb' },
-  { name: 'sp_add_schedule', lane: 'AG-6c', database: 'msdb' },
-  { name: 'sp_update_schedule', lane: 'AG-6c', database: 'msdb' },
-  { name: 'sp_delete_schedule', lane: 'AG-6c', database: 'msdb' },
+  // The step save planner (AG-6b, src/shared/agent/steps.ts): New Job's steps are added whole; an existing job's new steps are inserted at
+  // their final id under a temporary name, then every step's whole content is written. @proxy_name only ever clears the proxy (N'').
+  { name: 'sp_add_jobstep', lane: 'AG-6b', database: 'msdb', arguments: ['@job_id', '@step_id', '@step_name', '@subsystem', '@command', '@cmdexec_success_code', '@on_success_action',
+    '@on_success_step_id', '@on_fail_action', '@on_fail_step_id', '@server', '@database_name', '@database_user_name', '@retry_attempts', '@retry_interval', '@os_run_priority',
+    '@output_file_name', '@flags', '@proxy_id', '@proxy_name'] },
+  { name: 'sp_update_jobstep', lane: 'AG-6b', database: 'msdb', arguments: ['@job_id', '@step_id', '@step_name', '@subsystem', '@command', '@cmdexec_success_code', '@on_success_action',
+    '@on_success_step_id', '@on_fail_action', '@on_fail_step_id', '@server', '@database_name', '@database_user_name', '@retry_attempts', '@retry_interval', '@os_run_priority',
+    '@output_file_name', '@flags', '@proxy_id', '@proxy_name'] },
+  { name: 'sp_delete_jobstep', lane: 'AG-6b', database: 'msdb', arguments: ['@job_id', '@step_id'] },
+  // Schedules (AG-6c): the job's save adds (sp_add_jobschedule), attaches, detaches and changes them; the Schedules document's save creates
+  // (sp_add_schedule, the new id an OUTPUT), changes, deletes (never @force_delete) and attaches or detaches jobs. Each guarded batch has its
+  // own lint (AgentSql.LintJobSave, AgentSql.LintScheduleSave); the one-call write lint refuses them all.
+  { name: 'sp_add_jobschedule', lane: 'AG-6c', database: 'msdb', arguments: ['@job_id', '@name', '@enabled', ...scheduleTimingArguments] },
+  { name: 'sp_attach_schedule', lane: 'AG-6c', database: 'msdb', arguments: ['@job_id', '@schedule_id'] },
+  { name: 'sp_detach_schedule', lane: 'AG-6c', database: 'msdb', arguments: ['@job_id', '@schedule_id', '@delete_unused_schedule'] },
+  { name: 'sp_add_schedule', lane: 'AG-6c', database: 'msdb', arguments: ['@schedule_name', '@enabled', ...scheduleTimingArguments, '@schedule_id'] },
+  { name: 'sp_update_schedule', lane: 'AG-6c', database: 'msdb', arguments: ['@schedule_id', '@new_name', '@enabled', ...scheduleTimingArguments] },
+  { name: 'sp_delete_schedule', lane: 'AG-6c', database: 'msdb', arguments: ['@schedule_id'] },
   { name: 'sp_add_operator', lane: 'AG-7', database: 'msdb' },
   { name: 'sp_update_operator', lane: 'AG-7', database: 'msdb' },
   { name: 'sp_delete_operator', lane: 'AG-7', database: 'msdb' },
@@ -458,13 +503,15 @@ export const writeProcedures: readonly WriteProcedure[] = [
   { name: 'sp_update_notification', lane: 'AG-7', database: 'msdb' },
   { name: 'sp_delete_notification', lane: 'AG-7', database: 'msdb' },
   { name: 'sp_set_sqlagent_properties', lane: 'AG-8a', database: 'msdb', arguments: ['@sqlserver_restart', '@monitor_autostart', '@jobhistory_max_rows', '@jobhistory_max_rows_per_job'] },
-  { name: 'sp_add_proxy', lane: 'AG-8b', database: 'msdb' },
-  { name: 'sp_update_proxy', lane: 'AG-8b', database: 'msdb' },
-  { name: 'sp_delete_proxy', lane: 'AG-8b', database: 'msdb' },
-  { name: 'sp_grant_proxy_to_subsystem', lane: 'AG-8b', database: 'msdb' },
-  { name: 'sp_revoke_proxy_from_subsystem', lane: 'AG-8b', database: 'msdb' },
-  { name: 'sp_grant_login_to_proxy', lane: 'AG-8b', database: 'msdb' },
-  { name: 'sp_revoke_login_from_proxy', lane: 'AG-8b', database: 'msdb' },
+  // The proxy document (AG-8b): New Proxy's @proxy_id is the OUTPUT the batch's later calls use; a principal is granted by the argument of
+  // its kind (a login, a fixed server role or an msdb role) and revoked by name. Rename and Delete resolve the proxy by name and id first.
+  { name: 'sp_add_proxy', lane: 'AG-8b', database: 'msdb', arguments: ['@proxy_name', '@enabled', '@description', '@credential_name', '@proxy_id'] },
+  { name: 'sp_update_proxy', lane: 'AG-8b', database: 'msdb', arguments: ['@proxy_id', '@credential_name', '@new_name', '@enabled', '@description'] },
+  { name: 'sp_delete_proxy', lane: 'AG-8b', database: 'msdb', arguments: ['@proxy_id'] },
+  { name: 'sp_grant_proxy_to_subsystem', lane: 'AG-8b', database: 'msdb', arguments: ['@proxy_id', '@subsystem_id'] },
+  { name: 'sp_revoke_proxy_from_subsystem', lane: 'AG-8b', database: 'msdb', arguments: ['@proxy_id', '@subsystem_id'] },
+  { name: 'sp_grant_login_to_proxy', lane: 'AG-8b', database: 'msdb', arguments: ['@proxy_id', '@login_name', '@fixed_server_role', '@msdb_role'] },
+  { name: 'sp_revoke_login_from_proxy', lane: 'AG-8b', database: 'msdb', arguments: ['@proxy_id', '@name'] },
   { name: 'sp_cycle_agent_errorlog', lane: 'AG-5b', database: 'msdb' }
 ]
 

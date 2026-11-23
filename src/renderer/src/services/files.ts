@@ -8,7 +8,7 @@ import type { QueryService } from './queries'
 import { requireKeptPins, type KeptSession } from './session'
 import { quitStoppingNotes, sessionCloseNoteText, type SessionCloseNote } from '../../../shared/sessions'
 
-type FileApi = Pick<VariaApi, 'openSqlFiles' | 'saveSqlFile' | 'releaseSqlFile' | 'confirmClose' | 'closeWindow' | 'closeWindowCancelled'>
+type FileApi = Pick<VariaApi, 'openSqlFiles' | 'saveSqlFile' | 'releaseSqlFile' | 'confirmClose' | 'closeWindow' | 'closeWindowCancelled'> & Partial<Pick<VariaApi, 'keepJobsAtQuit'>>
   & Partial<Pick<VariaApi, 'openRecentFile' | 'checkSqlFiles' | 'reloadSqlFile' | 'keepSqlFile' | 'confirmReload' | 'keepSession'>>
 export interface FileServiceOptions {
   /** Tools › Options › Environment › Documents › Reload modified files unless there are unsaved changes. */
@@ -37,7 +37,7 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
   private checking: Promise<void> | undefined
   /** True once the exit flow has confirmed all documents and asked main to close the window. */
   exiting = false
-  constructor(private documents: DocumentService, private queries: Pick<QueryService, 'isRunning' | 'mayHaveTransaction' | 'confirmSessions'> & Partial<Pick<QueryService, 'sessionNote'>>, private api: FileApi, private readonly options: FileServiceOptions = {}) {
+  constructor(private documents: DocumentService, private queries: Pick<QueryService, 'isRunning' | 'mayHaveTransaction' | 'confirmSessions'> & Partial<Pick<QueryService, 'sessionNote' | 'holdsJob' | 'restoredCancelsSettled'>>, private api: FileApi, private readonly options: FileServiceOptions = {}) {
     super({ error: '', kind: 'error' })
   }
   canRun(): boolean { return !this.disposed && !this.documents.getSnapshot().busy }
@@ -250,7 +250,7 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
     // A table designer that is saving cannot close until its save ends or is stopped.
     if (refusal) throw new Error(refusal)
     if (!document?.dirty) return true
-    const revision = this.documents.revision(id), noun = document.kind === 'tableDesigner' ? 'table' : document.kind === 'databaseProperties' ? 'database properties' : document.kind === 'tableProperties' ? 'table properties' : document.kind === 'agentJob' ? 'job' : 'query'
+    const revision = this.documents.revision(id), noun = document.kind === 'tableDesigner' ? 'table' : document.kind === 'databaseProperties' ? 'database properties' : document.kind === 'tableProperties' ? 'table properties' : document.kind === 'agentJob' ? 'job' : document.kind === 'agentSchedules' ? 'schedule' : document.kind === 'agentProxy' ? 'proxy' : document.kind === 'credential' ? 'credential' : 'query'
     const decision = unwrap(await this.api.confirmClose(document.name))
     if (this.disposed || decision === 'cancel') return false
     if (!this.documents.get(id)) return true
@@ -318,13 +318,15 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
   async closeMany(ids: readonly string[]): Promise<void> {
     const wanted = new Set(ids)
     await this.perform(async () => {
-      const asked = new Set(ids.filter(id => !this.queries.isRunning(id)))
+      // A BigQuery query holding a job (running, or left running) stays open, as a running query does.
+      const holding = new Set((await Promise.all(ids.map(async id => await this.queries.holdsJob?.(id) ? [id] : []))).flat())
+      const asked = new Set(ids.filter(id => !this.queries.isRunning(id) && !holding.has(id)))
       const plan = await this.queries.confirmSessions('closeAll', [...asked])
       if (!plan || this.disposed) return
       let running = 0, unasked = 0
       for (const { id } of this.documents.getSnapshot().documents.filter(document => wanted.has(document.id))) {
         if (!this.documents.get(id)) continue
-        if (this.queries.isRunning(id)) { running++; continue }
+        if (this.queries.isRunning(id) || holding.has(id) && await this.queries.holdsJob?.(id)) { running++; continue }
         if (!asked.has(id) && await this.queries.mayHaveTransaction(id)) { unasked++; continue }
         if (!await this.confirmClose(id) || this.disposed) return
         // The query may have closed while its prompt was open.
@@ -372,7 +374,14 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
         if (this.disposed) return
         if (this.documents.get(document.id)) approved.set(document.id, this.documents.revision(document.id))
       }
-      const plan = await this.queries.confirmSessions('exit', [...approved.keys()])
+      // A kept BigQuery tab's job keeps running and re-attaches at the next start (docs/bigquery.md, Quitting Varia leaves
+      // jobs running): it is not asked about, and its session is not ended. Main keeps the kept tabs' records meanwhile.
+      const keptQueries = [...kept ?? []].flatMap(id => { const document = this.documents.get(id); return document && !document.kind && document.provider === 'bigquery' ? [document] : [] })
+      const keys = keptQueries.flatMap(document => document.jobKey ? [document.jobKey] : [])
+      if (keys.length && this.api.keepJobsAtQuit) { const held = await this.api.keepJobsAtQuit(keys); if (!held.ok) throw new Error(held.error) }
+      const keptHolding = new Set((await Promise.all(keptQueries.map(async document => await this.queries.holdsJob?.(document.id) ? [document.id] : []))).flat())
+      if (this.disposed) return
+      const plan = await this.queries.confirmSessions('exit', [...approved.keys()].filter(id => !keptHolding.has(id)))
       if (!plan || this.disposed) return
       refuse()
       await beforeClose()
@@ -399,7 +408,11 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
         for (const [id, note] of stopping) this.queries.sessionNote?.(id, note)
         throw error
       }
+      // Cancel the job for jobs the backend does not follow goes through main: the quit waits for it, and stays open when it
+      // reported something (a commit before the cancel, a job not cancelled) that a closing app could not show.
+      const cancelSaid = await this.queries.restoredCancelsSettled?.()
       if (this.disposed) return
+      if (cancelSaid && !stopping.length) throw new Error('Varia SQL Manager stayed open so you can read what became of the cancelled BigQuery jobs; close it again to quit.')
       if (stopping.length) {
         for (const [id, note] of stopping) this.queries.sessionNote?.(id, note)
         throw new Error(`Varia SQL Manager stayed open so you can read this; close it again to quit. ${stopping.map(([id, note]) => sessionCloseNoteText(this.documents.get(id)?.name ?? 'A query', note)).join(' ')}`)

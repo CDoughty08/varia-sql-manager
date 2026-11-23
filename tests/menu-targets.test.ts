@@ -302,3 +302,13 @@ describe('menu target service', () => {
     expect(service.refresh(tab)).toBe(tab)
   })
 })
+
+describe("a comparison grid's row menu", () => {
+  it('passes whether the row it opened on has a possible match, else leaves the focused grid\'s to the state', () => {
+    const base = { kind: 'output', tabId: 't1', view: 'grid', entry: 'e1', resultKind: 'diff', selectedText: '', element: {} as HTMLElement } as const
+    expect(argsFor({ ...base, row: 2, rowHasPartner: true }).state).toMatchObject({ comparisonRowHasPartner: true })
+    expect(argsFor({ ...base, row: 2 }).state).toMatchObject({ comparisonRowHasPartner: false })
+    expect(argsFor(base).state).not.toHaveProperty('comparisonRowHasPartner')
+    expect(argsFor({ ...base, resultKind: 'rows', row: 2 }).state).not.toHaveProperty('comparisonRowHasPartner')
+  })
+})

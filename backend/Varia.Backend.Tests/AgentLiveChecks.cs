@@ -217,6 +217,8 @@ internal static class AgentLiveChecks
             await AgentActionLiveChecks.JobVerbsAsync(check, service, info, json, job, id, sql);
             // New Job's save reuses the deleted job's name, so a dead run's job is still swept as stale.
             await AgentJobDocumentLiveChecks.CreateAsync(check, service, info, json, job, sql);
+            // Proxies and credentials (AG-8b) on their own scratch proxy and credential.
+            await AgentProxyLiveChecks.RunAsync(check, service, info, json, scratch, sql);
         }
         finally { await sql("EXEC msdb.dbo.sp_delete_job @job_id = '" + id.ToString("D") + "', @delete_history = 1, @delete_unused_schedule = 1;", "msdb"); }
     }

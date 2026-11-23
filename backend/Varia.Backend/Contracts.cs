@@ -44,12 +44,15 @@ internal sealed record TableArgs(string ConnectionId, string Database, string Sc
 /// (the connection's when left out), which SQL Server refuses.</summary>
 internal sealed record QueryArgs(string ConnectionId, string SessionId, string? Database, string Sql, string QueryId, int MaxRows, int TimeoutSeconds, int StartLine = 1, int MaxResultSets = 10,
     bool StopOnError = false, bool IncludeActualPlan = false, bool IncludeClientStatistics = false, bool IncludeLivePlan = false, bool DiscardResults = false, string? Dataset = null,
-    long? MaximumBytesBilled = null, bool? Prices = null, int StartColumn = 1, string? Residence = null, int? WindowCacheMiB = null, BigQuery.BigQueryPreviewTarget? Preview = null);
+    long? MaximumBytesBilled = null, bool? Prices = null, int StartColumn = 1, string? Residence = null, int? WindowCacheMiB = null, BigQuery.BigQueryPreviewTarget? Preview = null,
+    string? JobKey = null);
 /// <summary>query.session.close: Transaction "commit" commits the session's open transaction first; "rollback" is a plain close,
 /// since SQL Server rolls back what a closed session left open. AbortOnRefusedCommit (default true) lets a BigQuery commit
 /// refused on an unchecked session fall through to ending the session (docs/bigquery.md, Sessions); SQL Server ignores it,
 /// since its failed commit keeps the session either way.</summary>
-internal sealed record SessionArgs(string SessionId, string? Transaction = null, bool? AbortOnRefusedCommit = null);
+/// KeepJob (Leave it running) detaches a BigQuery job still running and leaves its session; CancelJob (Cancel the job) cancels
+/// it, waits for its DONE and ends the session (docs/bigquery.md, Re-attaching to jobs). SQL Server refuses both.
+internal sealed record SessionArgs(string SessionId, string? Transaction = null, bool? AbortOnRefusedCommit = null, bool? KeepJob = null, bool? CancelJob = null);
 /// <summary>query.session.close's answer: Closed says a session was ended; Note, a BigQuery close's fixed code (with
 /// BigQuery's message or the job id it names), tells what became of a commit or of the session's end.</summary>
 internal sealed record SessionCloseResult(bool Closed, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] SessionCloseNote? Note = null);
@@ -57,7 +60,11 @@ internal sealed record SessionCloseResult(bool Closed, [property: JsonIgnore(Con
 /// turns each into text).</summary>
 internal sealed record SessionCloseNote(string Code, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Message = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? JobId = null);
-internal sealed record CancelArgs(string QueryId);
+/// <summary>query.cancel. Detach (BigQuery only) ends the request with status detached and leaves its job running in
+/// BigQuery, holding the tab's session (Close Results' Leave it running).</summary>
+internal sealed record CancelArgs(string QueryId, bool? Detach = null);
+/// <summary>connections.disconnect's answer: FailedAborts counts the idle BigQuery sessions whose ABORT_SESSION failed.</summary>
+internal sealed record DisconnectResult(bool Disconnected, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? FailedAborts = null);
 /// <summary>A database, or for BigQuery a dataset with its location (absent when BigQuery names none).</summary>
 internal sealed record DatabaseInfo(string Name, bool IsSystem, bool IsSnapshot, string? Location = null);
 internal enum BigQueryDecimalKind { None, Numeric, BigNumeric }
@@ -154,14 +161,26 @@ internal sealed record SessionStateArgs(string SessionId);
 /// <summary>query.session.state: an idle session's @@TRANCOUNT, read on demand before it ends. Checked is false when the
 /// session's SET options (SHOWPLAN_*, NOEXEC, PARSEONLY, FMTONLY) kept the SELECT from returning it; TransactionCount is
 /// then 0 and the session may hold a transaction.</summary>
-internal sealed record SessionState(int TransactionCount, bool Checked);
+/// <summary>Job (BigQuery only): "running" while the tab's session holds a job running or detached in BigQuery, else "none".</summary>
+internal sealed record SessionState(int TransactionCount, bool Checked, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Job = null);
 /// <summary>results.read: ViewId reads through a view of the result (results.view), FirstRow then counting view positions.</summary>
 /// <summary>Viewer (1 to 2^31 - 1) names the grid, popout or Transpose reading, so a windowed result reads ahead for each apart.</summary>
 internal sealed record ResultsReadArgs(uint ResultId, long FirstRow, int MaxRows, uint? ViewId = null, uint? Viewer = null);
 internal sealed record ResultsReadResult(long NextRow, long RowsAvailable, bool Complete, int Pages, int Rows);
 /// <summary>results.remoteQuery: a query over a windowed BigQuery result (docs/ipc.md). QueryId is its own, for query.cancel;
-/// Generation is the source result's, which main checks before sending; Kind is "load" (Load into memory) for now.</summary>
-internal sealed record RemoteQueryArgs(string QueryId, uint ResultId, int Generation, string Kind);
+/// Generation is the source result's, which main checks before sending. Kind "load" (Load into memory) takes nothing more;
+/// "view" (a sort or filter) takes 0 to 16 Sort keys and 0 to 16 Filters, at least one of either; "distinct" (a value list)
+/// takes the Column, the other columns' Filters and, optionally, the Kept filters whose rows tick its values. JobKey (load only)
+/// records its job for re-attaching. Fallback runs the original query again when its result table expired (BigQueryViewSql.CanFallBack).</summary>
+internal sealed record RemoteQueryArgs(string QueryId, uint ResultId, int Generation, string Kind, RemoteSortArgs[]? Sort = null, RemoteFilterArgs[]? Filters = null,
+    int? Column = null, RemoteFilterArgs[]? Kept = null, bool? Fallback = null, string? JobKey = null);
+/// <summary>One sort key of a remote view: a column of the windowed result, ascending (NULL first) or descending (NULL last).</summary>
+internal sealed record RemoteSortArgs(int Column, bool Descending);
+/// <summary>One filter of a remote view or value list (results.view's ViewFilter, its values in a value list): Op "in" or
+/// "notIn" keeps or drops the values at Rows of the value list List (a result a distinct query made for this column), and
+/// NULL when Nulls says; "between" keeps the values from Rows[0]'s to Rows[1]'s of List; "groups" keeps what the ticks of
+/// SnapshotId, a value list snapshot of List, keep. "in" and "notIn" with no Rows name no list.</summary>
+internal sealed record RemoteFilterArgs(string Op, int Column, uint? List = null, int[]? Rows = null, bool? Nulls = null, uint? SnapshotId = null);
 internal sealed record ResultsCloseArgs(uint[] ResultIds);
 internal sealed record ResultsCloseResult(int Closed, long UsedBytes);
 /// <summary>results.visibility: the results whose grids are shown in any window now, at most ResultVisibility.MaxResults
@@ -520,7 +539,7 @@ internal sealed record ScriptResult(string? Text, string Database, List<string> 
 /// reads too (Login Properties' User Mapping, D2c), and Securable the one securable loginEffective reads as the login (Login Properties'
 /// Securables page, D2d); no other describe takes either.</summary>
 internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId, string Dialog, ObjectRefDto Target, ServerFilesArgsDto? Files = null, RestoreSourceDto? Restore = null,
-    AttachDescribeArgsDto? Attach = null, string? Login = null, SecurableRefDto? Securable = null);
+    AttachDescribeArgsDto? Attach = null, string? Login = null, SecurableRefDto? Securable = null, int? Schedule = null);
 /// <summary>A securable of a login's Securables page (src/shared/actions/securables.ts SecurableRef, D2d): a catalogue type, and a name
 /// (at most 128 UTF-16 units) exactly when it is not the server.</summary>
 internal sealed record SecurableRefDto(string Type, string? Name = null);
@@ -605,15 +624,59 @@ internal sealed record ActionArgs(string Action, string ConnectionId, string Req
     bool? DropConnections = null, RestoreFilesOptionsDto? RestoreFiles = null, List<UserMappingDto>? Mappings = null, bool? UpdateStatistics = null, bool? DetachOffline = null, LoginIdentityDto? LoginIdentity = null,
     bool? DropMappedUsers = null, string? Mode = null, LoginChangesDto? LoginChanges = null, List<PermissionDto>? Permissions = null, TableChangesDto? TableChanges = null,
     AgentIdentityDto? AgentIdentity = null, string? StepName = null, bool? DeleteUnusedSchedule = null,
-    AgentPropertiesChangesDto? AgentProperties = null, AgentHistoryPurgeDto? AgentPurge = null, AgentHistoryDeleteDto? AgentHistory = null, AgentJobSaveDto? AgentJob = null);
+    AgentPropertiesChangesDto? AgentProperties = null, AgentHistoryPurgeDto? AgentPurge = null, AgentHistoryDeleteDto? AgentHistory = null, AgentJobSaveDto? AgentJob = null,
+    AgentScheduleSaveDto? AgentSchedule = null, AgentProxySaveDto? AgentProxy = null, CredentialSaveDto? Credential = null, int? ProxyId = null);
+/// <summary>The proxy document's Save (AG-8b, src/shared/actions/agent-proxy.ts AgentProxySave): an existing proxy's changes (the request's
+/// ProxyId names it), or New Proxy's name and credential (an existing one, or NewCredential, created first in the same transaction, whose secret
+/// is the request's Secrets.Secret). Subsystems are syssubsystems ids; principals are granted by kind and revoked by name.</summary>
+internal sealed record AgentProxySaveDto(string? Name = null, bool? Enabled = null, string? Description = null, string? Credential = null, NewCredentialDto? NewCredential = null,
+    List<int>? GrantSubsystems = null, List<int>? RevokeSubsystems = null, List<ProxyPrincipalDto>? GrantPrincipals = null, List<string>? RevokePrincipals = null);
+internal sealed record NewCredentialDto(string Name, string Identity);
+/// <summary>A principal that may use a proxy: Kind is login, serverRole or msdbRole.</summary>
+internal sealed record ProxyPrincipalDto(string Name, string Kind);
+/// <summary>The credential document's Save (AG-8b): New Credential's Name, Identity and Provider, or an existing credential's Id and Modified
+/// (yyyy-MM-ddTHH:mm:ss.fff, the STALE guard) with its Identity. The secret is the request's Secrets.Secret, always sent with the identity.</summary>
+internal sealed record CredentialSaveDto(string Identity, int? Id = null, string? Modified = null, string? Name = null, string? Provider = null);
 /// <summary>The job document's Save (AG-6a, src/shared/actions/agent-job.ts AgentJobSave). An existing job's carries the Version and Modified
 /// (yyyy-MM-ddTHH:mm:ss.fff) its describe read, which the STALE guard compares, and only what changed; New Job's (target the Agent node) every
 /// field it sets and no version. A notification goes as its level (0 to 3) and operator together, the operator '' exactly with level 0.
 /// RemoveAlerts (at most agentLimits.jobAlerts) detaches alerts from the job, each guarded by its id still running this job.</summary>
 internal sealed record AgentJobSaveDto(int? Version = null, string? Modified = null, string? Name = null, bool? Enabled = null, string? Description = null, string? Category = null,
     string? Owner = null, int? EmailLevel = null, string? EmailOperator = null, int? PageLevel = null, string? PageOperator = null, int? NetSendLevel = null, string? NetSendOperator = null,
-    int? EventLogLevel = null, int? DeleteLevel = null, List<AgentAlertRefDto>? RemoveAlerts = null);
+    int? EventLogLevel = null, int? DeleteLevel = null, List<AgentAlertRefDto>? RemoveAlerts = null, AgentStepsSaveDto? Steps = null, AgentJobSchedulesSaveDto? Schedules = null);
 internal sealed record AgentAlertRefDto(int Id, string Name);
+/// <summary>The steps' save (AG-6b, src/shared/agent/steps.ts AgentStepsSave), in the order the batch calls it: Deletes (described ids, highest
+/// first), Temporary (every surviving step's temporary name at its id after the deletes), Adds (new steps at their final ids, ascending, under
+/// temporary names), Writes (each step's whole content into its final id; New Job's are its sp_add_jobstep calls, ids 1..n), StartStepId.</summary>
+internal sealed record AgentStepsSaveDto(List<int>? Deletes = null, List<AgentStepNameDto>? Temporary = null, List<AgentStepNameDto>? Adds = null, List<AgentStepWriteDto>? Writes = null,
+    int? StartStepId = null);
+internal sealed record AgentStepNameDto(int Id, string Name);
+/// <summary>language.parse (AG-6b, src/shared/agent/parse.ts): the job step editor's Parse of one T-SQL text.</summary>
+internal sealed record LanguageParseArgs(string Text);
+internal sealed record LanguageParseError(int Line, int Column, int Number, string Message);
+internal sealed record LanguageParseResult(IReadOnlyList<LanguageParseError> Errors, bool Truncated);
+/// <summary>One step's whole content (src/shared/agent/steps.ts AgentStepWrite): strings '' for none, ProxyId 0 for the service account.</summary>
+internal sealed record AgentStepWriteDto(int Id, string Name, string Subsystem, string Command, string DatabaseName, string DatabaseUserName, int OnSuccessAction, int OnSuccessStepId,
+    int OnFailAction, int OnFailStepId, int RetryAttempts, int RetryInterval, string OutputFileName, int Flags, int CmdexecSuccessCode, int ProxyId, string Server, int OsRunPriority);
+/// <summary>A schedule's timing as sysschedules stores it (src/shared/agent/schedule.ts AgentScheduleTiming); ActionService.ScheduleTimingValid
+/// refuses what sp_verify_schedule would.</summary>
+internal sealed record AgentScheduleTimingDto(int FreqType, int FreqInterval, int FreqSubdayType, int FreqSubdayInterval, int FreqRelativeInterval, int FreqRecurrenceFactor,
+    int ActiveStartDate, int ActiveEndDate, int ActiveStartTime, int ActiveEndTime);
+/// <summary>A schedule a save names with the version_number and date_modified (yyyy-MM-ddTHH:mm:ss.fff) its describe read: the guard checks both.</summary>
+internal sealed record AgentScheduleGuardDto(int Id, int Version, string Modified);
+/// <summary>A schedule's change in a job's save (Id, Version, Modified: its guard) or a new one (no guard): only what changed, the whole
+/// timing whenever any of it changes.</summary>
+internal sealed record AgentScheduleChangeDto(int? Id = null, int? Version = null, string? Modified = null, string? Name = null, bool? Enabled = null, AgentScheduleTimingDto? Timing = null);
+internal sealed record AgentScheduleDetachDto(int Id, bool DeleteUnused);
+/// <summary>The job document's Schedules section in a job's save (AG-6c, src/shared/actions/agent-schedule.ts AgentJobSchedulesSave): detach,
+/// update, attach, add, each at most agentLimits.schedulesPerJob.</summary>
+internal sealed record AgentJobSchedulesSaveDto(List<AgentScheduleDetachDto>? Detach = null, List<AgentScheduleChangeDto>? Update = null, List<AgentScheduleGuardDto>? Attach = null,
+    List<AgentScheduleChangeDto>? Add = null);
+/// <summary>The Schedules document's save (AG-6c, agent-schedule.ts AgentScheduleSave): Op create, update, enable, disable or delete; Schedule its guard
+/// (not for create); Jobs (at most agentLimits.scheduleJobChanges) each attached or detached under its job's version_number.</summary>
+internal sealed record AgentScheduleSaveDto(string Op, AgentScheduleGuardDto? Schedule = null, string? Name = null, bool? Enabled = null, AgentScheduleTimingDto? Timing = null,
+    List<AgentScheduleJobChangeDto>? Jobs = null);
+internal sealed record AgentScheduleJobChangeDto(string JobId, int Version, bool Attach);
 /// <summary>SQL Server Agent Properties' changes (AG-8a, src/shared/actions/agent-properties.ts): only the settings that differ, each an
 /// sp_set_sqlagent_properties argument; HistoryMaxRows -1 is no limit (and takes no rows per job), else 2 to agentLimits.historyMaxRows.</summary>
 internal sealed record AgentPropertiesChangesDto(bool? SqlserverRestart = null, bool? MonitorAutostart = null, int? HistoryMaxRows = null, int? HistoryMaxRowsPerJob = null);
@@ -696,11 +759,12 @@ internal sealed class ActionDesignConverter : JsonConverter<ActionDesign>
 /// <summary>Passwords an action needs (New Login and Login Properties, later): only actions.execute carries them, which is
 /// sensitive as a whole (its frame is zeroed once read); Validate refuses them on actions.script and on every other action.
 /// Never logged, echoed or persisted; ActionService.Validate bounds them. The record never prints them, so neither does an ActionArgs.</summary>
-internal sealed record LoginSecretsDto(string? Password = null, string? OldPassword = null)
+internal sealed record LoginSecretsDto(string? Password = null, string? OldPassword = null, string? Secret = null)
 {
     private bool PrintMembers(System.Text.StringBuilder builder)
     {
-        builder.Append("Password = ").Append(Password is null ? "null" : "<redacted>").Append(", OldPassword = ").Append(OldPassword is null ? "null" : "<redacted>");
+        builder.Append("Password = ").Append(Password is null ? "null" : "<redacted>").Append(", OldPassword = ").Append(OldPassword is null ? "null" : "<redacted>")
+            .Append(", Secret = ").Append(Secret is null ? "null" : "<redacted>");
         return true;
     }
 }
@@ -758,7 +822,7 @@ internal sealed record BlockerDto(int SessionId, string? Program, string? Host, 
 /// (D4c): Login, its facts with what it owns, and Mappings, the database users mapped to it.</summary>
 internal sealed record DeleteTargetDto(string Name, string Type, string? Owner, List<ActionWarningDto> Warnings, bool DependentsTruncated, bool? IsSnapshot = null, int? Sessions = null,
     int? WithTransaction = null, List<BlockerDto>? Blockers = null, bool? BlockersTruncated = null, string? CloseConnectionsNote = null, List<string>? TransactionTabs = null,
-    LoginFactsDto? Login = null, LoginMappingsDto? Mappings = null, DatabaseIdentityDto? Identity = null, AgentIdentityDto? AgentIdentity = null);
+    LoginFactsDto? Login = null, LoginMappingsDto? Mappings = null, DatabaseIdentityDto? Identity = null, AgentIdentityDto? AgentIdentity = null, int? ProxyId = null);
 /// <summary>Database Properties' General page; sizes in MB, dates as ISO 8601, a backup of "None" when msdb has no history.</summary>
 internal sealed record DatabaseGeneralDto(string Name, string Status, bool Standby, string? Owner, string Created, double SizeMb, double? SpaceAvailableMb = null, int? Users = null,
     string? LastBackup = null, string? LastLogBackup = null, string? Collation = null, double? MemoryAllocatedMb = null, double? MemoryUsedMb = null, int? Id = null);
@@ -796,17 +860,46 @@ internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long 
     RenameDatabaseDto? RenameDatabase = null, LoginFactsDto? Login = null, LoginLockFactsDto? Lock = null,
     LoginPropertiesDto? LoginProperties = null, EffectivePermissionsDto? EffectivePermissions = null, WindowsPrincipalDto? WindowsPrincipal = null,
     TablePropertiesDto? TableProperties = null, AgentJobFactsDto? AgentJob = null, AgentServiceFactsDto? AgentService = null, AgentPropertiesDto? AgentProperties = null,
-    AgentJobDocumentDto? AgentJobDocument = null);
+    AgentJobDocumentDto? AgentJobDocument = null, AgentSchedulesDto? AgentSchedules = null, AgentProxyDocumentDto? AgentProxyDocument = null, CredentialDocumentDto? CredentialDocument = null);
+/// <summary>The proxy document's describe (AG-8b, src/shared/actions/agent-proxy.ts AgentProxyDocumentModel).</summary>
+internal sealed record AgentProxyDocumentDto(AgentProxyRecordDto? Proxy, string Platform, List<ProxySubsystemDto> Subsystems, List<ProxyCredentialDto> Credentials, bool CredentialsTruncated,
+    bool CanCreateCredential, List<ProxyPrincipalDto> PrincipalChoices, List<ProxyReferenceDto>? References = null, bool? ReferencesTruncated = null,
+    bool? PrincipalsTruncated = null);
+internal sealed record AgentProxyRecordDto(int Id, string Name, bool Enabled, string Description, string Credential, List<int> Subsystems, List<ProxyPrincipalDto> Principals, string? CredentialIdentity = null);
+internal sealed record ProxySubsystemDto(int Id, string Name);
+internal sealed record ProxyCredentialDto(string Name, string Identity);
+internal sealed record ProxyReferenceDto(string Job, int StepId, string Step, string Subsystem);
+/// <summary>The credential document's describe (AG-8b, CredentialDocumentModel). The secret is never read.</summary>
+internal sealed record CredentialDocumentDto(CredentialRecordDto? Credential, string Platform, List<string> Providers, string? ReadOnly = null, List<CredentialUseDto>? UsedBy = null, bool? UsedByTruncated = null);
+internal sealed record CredentialRecordDto(int Id, string Name, string Identity, string Created, string Modified, string? Provider = null);
+internal sealed record CredentialUseDto(string Proxy, List<string> Subsystems, List<CredentialStepDto> Steps);
+internal sealed record CredentialStepDto(string Job, int StepId, string Step);
 /// <summary>The job document's describe (AG-6a, src/shared/actions/agent-job.ts AgentJobDocumentModel). Job is null for New Job; Operators null
 /// when the login may not read them; Owners for sysadmin only; Alerts null where the section is hidden (below SQLAgentOperatorRole, or a
 /// platform without alerts).</summary>
 internal sealed record AgentJobDocumentDto(AgentJobRecordDto? Job, string Login, bool Sysadmin, string Platform, List<string> Categories, List<AgentJobStepRowDto> Steps, bool AlertsEditable,
     AgentJobMailDto Mail, string? ReadOnly = null, List<AgentJobOperatorDto>? Operators = null, List<string>? Owners = null, List<AgentJobAlertDto>? Alerts = null,
-    List<string>? Jobs = null, List<string>? JobIds = null);
+    List<string>? Jobs = null, List<string>? JobIds = null, List<string>? Subsystems = null, List<AgentJobProxyDto>? Proxies = null, List<string>? Databases = null,
+    bool? StepsTruncated = null, List<AgentScheduleRecordDto>? Schedules = null, string? Now = null);
+/// <summary>A proxy the step editor's Run as offers (AG-6b): the step types sp_help_proxy @subsystem_name lists it for.</summary>
+internal sealed record AgentJobProxyDto(int Id, string Name, bool Enabled, List<string> Subsystems, string? Identity = null);
+/// <summary>A schedule as sp_help_schedule or sp_help_jobschedule list it (agent-schedule.ts AgentScheduleRecord), with its owner, version and
+/// modified date from sysschedules_localserver_view where that lists it.</summary>
+internal sealed record AgentScheduleRecordDto(int Id, string Name, bool Enabled, int FreqType, int FreqInterval, int FreqSubdayType, int FreqSubdayInterval, int FreqRelativeInterval,
+    int FreqRecurrenceFactor, int ActiveStartDate, int ActiveEndDate, int ActiveStartTime, int ActiveEndTime, int JobCount, string? Owner = null, int? Version = null, string? Modified = null);
+/// <summary>The Schedules describe (AG-6c, agent-schedule.ts AgentSchedulesModel).</summary>
+internal sealed record AgentSchedulesDto(string Login, bool Sysadmin, string Platform, string Now, List<AgentScheduleRecordDto> Schedules, bool? IdleDefined = null, bool? Truncated = null,
+    List<AgentScheduleJobDto>? Jobs = null, List<AgentScheduleLinkDto>? Links = null, List<AgentJobDurationDto>? Durations = null, List<AgentScheduleJobDto>? ScheduleJobs = null);
+internal sealed record AgentScheduleJobDto(string Id, string Name, bool Enabled, string Owner, int Version);
+internal sealed record AgentScheduleLinkDto(int ScheduleId, string JobId);
+internal sealed record AgentJobDurationDto(string JobId, int Seconds);
 internal sealed record AgentJobRecordDto(string JobId, string Name, bool Enabled, string Description, string Category, string Owner, int EmailLevel, string EmailOperator, int PageLevel,
     string PageOperator, int NetSendLevel, string NetSendOperator, int EventLogLevel, int DeleteLevel, string Created, string Modified, int Version, int StartStepId,
     string? LastRun = null, int? LastOutcome = null);
-internal sealed record AgentJobStepRowDto(int Id, string Name, string Subsystem);
+/// <summary>A step as sp_help_jobstep reads it: AG-6a's id, name and type, and AG-6b's whole content.</summary>
+internal sealed record AgentJobStepRowDto(int Id, string Name, string Subsystem, string? Command = null, int? Flags = null, int? CmdexecSuccessCode = null, int? OnSuccessAction = null,
+    int? OnSuccessStepId = null, int? OnFailAction = null, int? OnFailStepId = null, string? Server = null, string? DatabaseName = null, string? DatabaseUserName = null,
+    int? RetryAttempts = null, int? RetryInterval = null, int? OsRunPriority = null, string? OutputFileName = null, int? ProxyId = null, bool? CommandTruncated = null);
 internal sealed record AgentDutyHoursDto(int Start, int End);
 internal sealed record AgentJobOperatorDto(string Name, bool Enabled, bool Email, bool Pager, bool NetSend, int PagerDays, AgentDutyHoursDto Weekday, AgentDutyHoursDto Saturday, AgentDutyHoursDto Sunday);
 internal sealed record AgentJobAlertDto(int Id, string Name, bool Enabled, int Severity, int MessageId);

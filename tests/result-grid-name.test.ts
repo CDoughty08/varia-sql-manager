@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// A results grid's name (docs/result-comparison-ux-plan.md D8): an original result's grid is "Result N of M", and a
+// A results grid's name: an original result's grid is "Result N of M", and a
 // comparison's or a Pivot's is its own name, never the number Varia gave it ("Result 3 of 4"). The real ResultGrid is
 // mounted; GridView records the options it is built with, which name the grid's accessible label.
 import { afterEach, describe, expect, it, vi } from 'vitest'

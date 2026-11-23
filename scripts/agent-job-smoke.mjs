@@ -2,12 +2,15 @@
 // the smoke runs open the release gate): double-click and Enter in Job Activity Monitor open one tab per job with its live state, an
 // edit counts on Save, Save sends one agentJob action carrying the version it read, a save that loses the race (the job-save-race
 // control file) opens the field-by-field compare whose Reload and keep my changes saves on the next try, Start once at step sends the
-// chosen step, and New Job from the palette copies an existing job and creates it. Screenshots in Dark and Light go to artifacts/.
+// chosen step, Steps reorders, parses, deletes with Undo and saves the renumbering (AG-6b), and New Job from the palette copies an existing
+// job and creates it. The Schedules section (AG-6c) adds a new schedule from a preset and attaches a shared one found by search, both sent
+// with the job's Save; the Schedules document (Manage Schedules) saves the Enabled box at once and a rename under the schedule's guard, and
+// the Agent node's New › Schedule… creates one. Screenshots in Dark and Light go to artifacts/.
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { chooseExplorerMenuItem } from './fixtures/explorer-tree.mjs'
-import { connectDialogWindow, documentFrame, documentState, documentTab, documentVerb, gridPart, liveGrid, quickInputRows, statusBar, submitConnect, toolbarButton } from './fixtures/ui.mjs'
+import { closeDocumentButton, connectDialogWindow, documentFrame, documentState, documentTab, documentVerb, gridPart, liveGrid, quickInputRows, statusBar, submitConnect, toolbarButton } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -96,6 +99,64 @@ try {
   expect(accepted.agentJob.version).toBe(refused.agentJob.version + 1)
   console.log('Stale passed: a lost race opens the compare, and Reload and keep my changes saves on the next try.')
 
+  step = 'schedules'
+  // The Schedules section: New schedule from a preset with its sentence and next runs, and a shared schedule found by search and attached.
+  const section = job('Nightly').getByRole('group', { name: /^Schedules/ })
+  await expect(section.getByRole('button', { name: /Nightly 02:30/ })).toBeVisible()
+  await section.getByRole('button', { name: 'New schedule', exact: true }).click()
+  // A schedule that blocks Save says so on its row and under the list, even while another is selected.
+  await section.getByRole('button', { name: /Nightly 02:30/ }).click()
+  await expect(section.getByRole('button', { name: /needs a fix before Save/ })).toBeVisible()
+  await expect(section.getByText('(no name): The schedule needs a name.', { exact: true })).toBeVisible()
+  await section.getByRole('button', { name: /needs a fix before Save/ }).click()
+  await section.getByLabel('Name', { exact: true }).fill('Weekly reports')
+  await section.getByRole('button', { name: 'Weekdays at…', exact: true }).click()
+  await expect(section.getByText('Occurs every week on Monday, Tuesday, Wednesday, Thursday, Friday at 00:00.', { exact: false })).toBeVisible()
+  await expect(section.getByRole('region', { name: 'Next 5 runs', exact: true }).getByRole('listitem')).toHaveCount(5)
+  await section.getByRole('searchbox', { name: 'Search shared schedules', exact: true }).fill('quarter')
+  await section.getByRole('list', { name: 'Shared schedules', exact: true }).getByRole('button', { name: /Quarter end/ }).click()
+  await section.getByRole('region', { name: 'Shared schedule Quarter end', exact: true }).getByRole('button', { name: 'Attach to this job', exact: true }).click()
+  await page.screenshot({ path: 'artifacts/agent-job-schedules.png' })
+  await verb('Nightly', 'Save · 2 changes').click()
+  await expect(job('Nightly').getByRole('status').filter({ hasText: 'The job was saved.' })).toBeVisible()
+  expect((await saves()).at(-1).agentJob.schedules).toMatchObject({ attach: [{ id: 2, version: 1 }], add: [{ name: 'Weekly reports', enabled: true, timing: { freqType: 8, freqInterval: 62 } }] })
+  await expect(section.getByRole('button', { name: /Weekly reports/ })).toBeVisible()
+  console.log('Schedules passed: a preset fills a new schedule, a search finds a shared one to attach, and both go with the job\'s Save.')
+
+  step = 'schedules document'
+  // Manage Schedules from the palette: the Enabled box saves at once, and the selected schedule's rename saves under its guard.
+  const scheduleSaves = async () => (await calls('actions.execute')).filter(call => call.action === 'agentSchedule')
+  await page.keyboard.press('F1')
+  await page.keyboard.type('Manage Schedules')
+  await quickInputRows(page).filter({ hasText: 'Manage Schedules' }).first().click()
+  await expect(documentTab(page, 'Schedules')).toHaveAttribute('aria-selected', 'true')
+  const grid = page.getByRole('table', { name: 'Schedules', exact: true })
+  await expect(grid.getByRole('button', { name: 'Weekly reports', exact: true })).toBeVisible()
+  await grid.getByRole('checkbox', { name: 'Enabled: Nightly 02:30', exact: true }).click()
+  await expect.poll(async () => (await scheduleSaves()).at(-1)).toMatchObject({ target: { kind: 'agent' }, agentSchedule: { op: 'disable', schedule: { id: 1, version: 2 } } })
+  await expect(grid.getByRole('checkbox', { name: 'Enabled: Nightly 02:30', exact: true })).not.toBeChecked()
+  await grid.getByRole('button', { name: 'Quarter end', exact: true }).click()
+  const detail = page.getByRole('region', { name: 'Schedule Quarter end', exact: true })
+  await detail.getByLabel('Name', { exact: true }).fill('Quarter close')
+  await detail.getByRole('button', { name: 'Save · 1 change', exact: true }).click()
+  await expect(page.getByRole('status').filter({ hasText: 'Saved Quarter close.' })).toBeVisible()
+  expect((await scheduleSaves()).at(-1)).toMatchObject({ agentSchedule: { op: 'update', schedule: { id: 2 }, name: 'Quarter close' } })
+  await page.screenshot({ path: 'artifacts/agent-schedules-dark.png' })
+  // With every change saved the tab closes at once, and New › Schedule… opens it again on a new schedule; Create adds it.
+  await closeDocumentButton(page, 'Schedules').click()
+  await expect(documentTab(page, 'Schedules')).toHaveCount(0)
+  await chooseExplorerMenuItem(page, ['server-a', 'SQL Server Agent'], ['New', 'Schedule…'])
+  const created = page.getByRole('region', { name: 'New schedule', exact: true })
+  // New schedule puts the caret in its Name, not in the filter, once the first read draws it.
+  await expect(created.getByLabel('Name', { exact: true })).toBeFocused()
+  await created.getByLabel('Name', { exact: true }).fill('Ad hoc')
+  await created.getByRole('button', { name: 'Create', exact: true }).click()
+  await expect(page.getByRole('status').filter({ hasText: 'Created Ad hoc.' })).toBeVisible()
+  expect((await scheduleSaves()).at(-1)).toMatchObject({ agentSchedule: { op: 'create', name: 'Ad hoc', enabled: true } })
+  await expect(page.getByRole('region', { name: 'Schedule Ad hoc', exact: true })).toBeVisible()
+  await documentTab(page, 'Job Properties - Nightly').click()
+  console.log('Schedules document passed: Enabled saves at once, a rename saves under its guard, and New › Schedule… creates one.')
+
   step = 'start at step'
   // Start once at step lists the steps and sends the chosen one; the header shows the run.
   await job('Nightly').getByRole('button', { name: 'Start once at step', exact: true }).click()
@@ -105,6 +166,45 @@ try {
   await expect(documentState(job('Nightly'))).toContainText('Running', { timeout: 30000 })
   await expect(documentState(job('Nightly'))).toContainText('Idle · Last run succeeded', { timeout: 45000 })
   console.log('Start at step passed: the step menu sends the chosen step and the header follows the run.')
+
+  step = 'steps'
+  // Steps (AG-6b): pick a step, point its failure at another, move a step to the top (its targets follow), Parse, delete with Undo, and
+  // Save sends the planner's renumbering with the Start step.
+  const list = job('Nightly').getByRole('listbox', { name: 'Steps', exact: true })
+  await expect(list.getByRole('option')).toHaveCount(3)
+  await list.getByRole('option', { name: /Rebuild indexes/ }).click()
+  const editor = job('Nightly').getByRole('group', { name: 'Step 2: Rebuild indexes', exact: true })
+  await expect(editor.getByLabel('Step name', { exact: true })).toHaveValue('Rebuild indexes')
+  await editor.getByLabel('On failure', { exact: true }).selectOption({ label: 'Go to step 3: Update statistics' })
+  await list.getByRole('option', { name: /Update statistics/ }).click()
+  const moved = job('Nightly').getByRole('group', { name: 'Step 3: Update statistics', exact: true })
+  await moved.getByRole('button', { name: 'Move up', exact: true }).click()
+  await job('Nightly').getByRole('group', { name: 'Step 2: Update statistics', exact: true }).getByRole('button', { name: 'Move up', exact: true }).click()
+  await expect(list.getByRole('option').first()).toContainText('Update statistics')
+  // Rebuild indexes is step 3 now and still goes to Update statistics, step 1.
+  await expect(list.getByRole('option').nth(2)).toContainText('Step 1')
+  const top = job('Nightly').getByRole('group', { name: 'Step 1: Update statistics', exact: true })
+  await top.getByRole('button', { name: 'Parse', exact: true }).click()
+  await expect(top.getByRole('status')).toContainText('Commands completed successfully.')
+  expect((await calls('language.parse')).at(-1)).toMatchObject({ text: '-- Update statistics\nSELECT 3;' })
+  await top.getByRole('button', { name: 'Make Start step', exact: true }).click()
+  await list.getByRole('option', { name: /Check integrity/ }).click()
+  await job('Nightly').getByRole('group', { name: 'Step 2: Check integrity', exact: true }).getByRole('button', { name: 'Delete', exact: true }).click()
+  await expect(list.getByRole('option')).toHaveCount(2)
+  await expect(job('Nightly').getByRole('status').filter({ hasText: "Deleted step 2 'Check integrity'." })).toBeVisible()
+  await page.screenshot({ path: 'artifacts/agent-job-steps.png' })
+  await job('Nightly').getByRole('button', { name: 'Undo', exact: true }).click()
+  await expect(list.getByRole('option')).toHaveCount(3)
+  await job('Nightly').getByRole('group', { name: 'Nightly actions', exact: true }).getByRole('button', { name: /^Save · [0-9]+ changes$/ }).click()
+  await expect(job('Nightly').getByRole('status').filter({ hasText: 'The job was saved.' })).toBeVisible()
+  const stepsSave = (await saves()).at(-1).agentJob.steps
+  expect(stepsSave.temporary).toHaveLength(3)
+  expect(stepsSave.writes.map(write => write.name)).toEqual(['Update statistics', 'Check integrity', 'Rebuild indexes'])
+  expect(stepsSave.writes[2]).toMatchObject({ onFailAction: 4, onFailStepId: 1 })
+  expect(stepsSave.startStepId).toBe(1)
+  await expect(list.getByRole('option').first()).toContainText('Start step')
+  await expect(list.getByRole('option').first()).toContainText('Update statistics')
+  console.log('Steps passed: targets follow a move, Parse reports, Delete undoes, and Save renumbers the steps with the Start step.')
 
   step = 'new job'
   // New Job from the palette: Copy an existing job fills General and Notifications; Create adds the job.

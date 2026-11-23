@@ -123,7 +123,7 @@ export interface ContextInputs {
   readonly resultsTurned?: Readonly<Record<string, unknown>>
   /** The tabs whose focused results grid is a comparison, and whether its inputs are open (`ResultsService.comparing`). */
   readonly resultsComparing?: Readonly<Record<string, { readonly inputsOpen: boolean }>>
-  readonly comparisonToggles?: Readonly<Record<string, { readonly exact: boolean; readonly oneRow: boolean; readonly changesOnly: boolean }>>
+  readonly comparisonToggles?: Readonly<Record<string, { readonly exact: boolean; readonly oneRow: boolean; readonly changesOnly: boolean; readonly partner?: boolean }>>
   readonly scriptingRunning?: boolean
   /** The editor types over text (OVR). */
   readonly overtype?: boolean
@@ -176,6 +176,7 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     resultsColumnProfile: !!inputs.resultsColumnProfile, resultsProfileSelectedOnly: !!inputs.resultsProfileSelectedOnly, resultsRowSize: !!inputs.resultsRowSize, resultsTabs: inputs.resultsLayout === 'tabs', resultsGridTransposed: !!active && !!inputs.resultsTurned?.[active.id],
     resultsGridComparison: !!active && !!inputs.resultsComparing?.[active.id], comparisonInputsOpen: !!active && !!inputs.resultsComparing?.[active.id]?.inputsOpen,
     comparisonExactText: !!active && !!inputs.comparisonToggles?.[active.id]?.exact, comparisonOneRow: !!active && !!inputs.comparisonToggles?.[active.id]?.oneRow, comparisonChangesOnly: !!active && !!inputs.comparisonToggles?.[active.id]?.changesOnly,
+    comparisonRowHasPartner: !!active && !!inputs.comparisonToggles?.[active.id]?.partner,
     hasBookmarks: Object.values(inputs.bookmarks ?? {}).some(count => count > 0), activeDocumentHasBookmarks: !!active && (inputs.bookmarks?.[active.id] ?? 0) > 0,
     anyDocumentDirty: documents.documents.some(document => document.dirty), editorOvertype: !!inputs.overtype, hasRecentFiles: !!inputs.recentFiles, hasRecoveryFiles: !!inputs.recoveryFiles,
     // A query's engine follows its connection; every other document is SQL Server's.
@@ -185,8 +186,8 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     activeDocumentIsNewDatabase: active?.kind === 'newDatabase', newDatabaseCreatable: !!newDatabase?.creatable, newDatabaseCreating: !!newDatabase?.creating,
     activeDocumentIsRestore: active?.kind === 'restoreDatabase', restoreRunnable: !!restore?.runnable, restoreRunning: !!restore?.running, restoreRefreshable: !!restore?.refreshable,
     activeDocumentIsActivityMonitor: active?.kind === 'activityMonitor', activeDocumentIsPeek: active?.kind === 'peek', activityPaused: !!monitor?.paused, activitySplit: !!monitor?.split,
-    activeDocumentIsJobActivity: active?.kind === 'agentJobActivity', activeDocumentIsAgentJob: active?.kind === 'agentJob',
-    activeDocumentIsLogViewer: active?.kind === 'agentLogViewer',
+    activeDocumentIsJobActivity: active?.kind === 'agentJobActivity', activeDocumentIsAgentJob: active?.kind === 'agentJob', activeDocumentIsAgentProxy: active?.kind === 'agentProxy', activeDocumentIsCredential: active?.kind === 'credential',
+    activeDocumentIsLogViewer: active?.kind === 'agentLogViewer', activeDocumentIsAgentSchedules: active?.kind === 'agentSchedules',
     activeDocumentIsSsisOperations: active?.kind === 'ssisOperations', ssisOperationStoppable: !!operations?.stoppable, ssisOperationsPaused: !!operations?.paused, ssisOperationsRefreshable: !!operations?.refreshable, ssisOperationsPausable: !!operations?.pausable,
     designerEditable: !!designer?.editable, designerRowSelected: !!designer?.rowSelected, designerPrimaryKeyRemovable: !!designer?.keyRemovable, designerSaving: !!inputs.designer?.saving, multipleDocuments: documents.documents.length > 1, multipleEditorGroups: groups.length > 1,
     activeDocumentFloating: !!activeGroup?.floating, documentBusy: documents.busy,
@@ -228,8 +229,9 @@ export interface ContextKeyOptions {
   readonly resultsTurned?: ExternalStore<Readonly<Record<string, unknown>>>
   /** The tabs whose focused results grid is a comparison (`resultsGridComparison`, `comparisonInputsOpen`). */
   readonly resultsComparing?: ExternalStore<Readonly<Record<string, { readonly inputsOpen: boolean }>>>
-  /** The state of each tab's focused comparison (`comparisonExactText`, `comparisonOneRow`, `comparisonChangesOnly`). */
-  readonly comparisonToggles?: ExternalStore<Readonly<Record<string, { readonly exact: boolean; readonly oneRow: boolean; readonly changesOnly: boolean }>>>
+  /** The state of each tab's focused comparison (`comparisonExactText`, `comparisonOneRow`, `comparisonChangesOnly`,
+   *  `comparisonRowHasPartner`). */
+  readonly comparisonToggles?: ExternalStore<Readonly<Record<string, { readonly exact: boolean; readonly oneRow: boolean; readonly changesOnly: boolean; readonly partner?: boolean }>>>
   /** Whether a Script As request is running (`scriptingRunning`). */
   readonly scripting?: ExternalStore<boolean>
   readonly bookmarks?: ExternalStore<BookmarkSnapshot>

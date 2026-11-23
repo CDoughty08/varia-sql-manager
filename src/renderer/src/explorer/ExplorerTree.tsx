@@ -236,6 +236,8 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
     if (node?.kind === 'agentJobActivity') { run('agent.jobActivity', rowId); return }
     // A job opens its document (AG-6a), as SSMS opens Job Properties; Properties is refused without the release gate.
     if (node?.kind === 'agentJob') { run('explorer.properties', rowId); return }
+    // A proxy and a credential open their documents (AG-8b), behind the same gate.
+    if (node?.kind === 'agentProxy' || node?.kind === 'credential') { run('explorer.properties', rowId); return }
     const verb = ssisDefaultVerb(node?.kind)
     if (verb) run(ssisVerbSpecs[verb].command, rowId)
   }, [explorer, run])

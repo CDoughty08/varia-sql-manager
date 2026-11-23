@@ -49,6 +49,34 @@ internal static class GoogleSqlScanner
         return false;
     }
 
+    /// <summary>Words that make a query's rows differ from run to run, or name what only its session or script held: the
+    /// clock, random values, the caller, sampling, an arbitrary row, a LIMIT (which rows it keeps may change), and
+    /// statements other than one query. Temp tables are refused by the caller, which falls back only outside a session.</summary>
+    static readonly HashSet<string> Unstable = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CURRENT_DATE", "CURRENT_DATETIME", "CURRENT_TIME", "CURRENT_TIMESTAMP", "RAND", "GENERATE_UUID", "SESSION_USER", "TABLESAMPLE",
+        "ANY_VALUE", "LIMIT", "_SESSION", "DECLARE", "SET", "BEGIN", "CALL", "EXECUTE", "CREATE", "INSERT", "UPDATE", "DELETE", "MERGE", "TRUNCATE", "DROP", "ALTER", "EXPORT", "LOAD"
+    };
+
+    /// <summary>Whether <paramref name="sql"/> is one query (SELECT, WITH, FROM for pipe syntax, or one in parentheses) that
+    /// the scanner finds deterministic: none of <see cref="Unstable"/>'s words, no query parameter or variable (<c>@</c>), and
+    /// no statement after it. When unsure it answers no: running the original query again for a sort or filter is only
+    /// right when it gives the same rows (docs/bigquery.md, Sort and filter in BigQuery).</summary>
+    public static bool IsDeterministicQuery(string sql)
+    {
+        var tokens = Tokens(sql);
+        var first = tokens.FindIndex(token => token.Kind != Kind.Open);
+        if (first < 0 || tokens[first].Kind != Kind.Word || !(Is(sql, tokens[first], "SELECT") || Is(sql, tokens[first], "WITH") || Is(sql, tokens[first], "FROM"))) return false;
+        for (var i = 0; i < tokens.Count; i++)
+        {
+            var token = tokens[i];
+            if (token.Kind == Kind.Semicolon && tokens.Skip(i + 1).Any(next => next.Kind != Kind.Semicolon)) return false;
+            if (token.Kind == Kind.Other && token.Length == 1 && sql[token.Start] == '@') return false;
+            if (token.Kind == Kind.Word && Unstable.Contains(sql.Substring(token.Start, token.Length))) return false;
+        }
+        return true;
+    }
+
     static bool Is(string sql, Token token, string word) => token.Length == word.Length && string.Compare(sql, token.Start, word, 0, word.Length, StringComparison.OrdinalIgnoreCase) == 0;
 
     /// <summary>Words and parentheses with their depth; strings, identifiers in backticks and comments are skipped, and

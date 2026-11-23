@@ -231,9 +231,11 @@ Sections: **Prompt** (Execute asks before running only in these cases), **Limit*
 
 ### Query Execution › BigQuery › Sessions
 
-Each BigQuery query tab runs in its own BigQuery session, created by its first execution at no charge, so temporary tables, variables and transactions carry across executions. Temporary tables are billed as storage until the session ends: when the tab closes or disconnects, or after 24 hours idle (7 days at most). Not in SSMS.
+Each BigQuery query tab runs in its own BigQuery session, created by its first execution at no charge, so temporary tables, variables and transactions carry across executions. Temporary tables are billed as storage until the session ends: when the tab closes or disconnects (unless a job in it is left running), or after 24 hours idle (7 days at most). Not in SSMS.
 
-_No settings yet._
+| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `queryExecution.bigQuery.closeRunningJob` | When a closing query holds a running job | One of `ask` (Ask), `cancel` (Cancel the job), `leave` (Leave it running) | Ask |  | All | At once | What closing, Change Connection, disconnecting, switching location or Close Results does with a BigQuery query's running job. Ask offers Cancel the job, Leave it running or Don't close, and "Remember my choice" in that prompt sets this. Quitting always asks about tabs that will not be restored, listing the job ids; tabs hot exit keeps leave their jobs running. A job left running finishes in BigQuery, where its job history lists it. A prompt that also lists other executing queries asks anyway, with "Leave BigQuery jobs running" checked when this is Leave it running. Not in SSMS. |
 
 ### Query Results › SQL Server › Results to Grid
 
@@ -396,4 +398,4 @@ Sections: **Object Explorer**, **Operations** (The Operations view of the SSIS C
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (134 today).
+A patch holds at most one entry per setting (135 today).

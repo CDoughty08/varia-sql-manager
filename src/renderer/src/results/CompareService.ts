@@ -4,10 +4,12 @@ import { pairColumns, type ColumnPairing } from './compare-pairing'
 import { DerivedJobs } from './derived-jobs'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import type { DiffKindName, DiffLayout, DiffMatch, DiffMatchUsed, ResultColumn, ResultsDiffResult } from '../../../shared/contracts'
-import type { EntryKey, ResultSetEntry, ResultsService, SourceRef, TabResults } from './ResultsService'
+import type { DiffGridControls, EntryKey, ResultSetEntry, ResultsService, SourceRef, TabResults } from './ResultsService'
 import { comparedNames, comparisonColumns, comparisonName, entryNumber, entryOf, resultLimits, setKey, slotOf } from './ResultsService'
 import { ResultError } from './ResultClient'
 import { formatCount } from './status'
+import { landingFor, noneShownText, noPartnerText, partnerHiddenText, partnerKind, positionText, rowUnits, stepWithin, type DiffUnit } from '../grid/diff-navigation'
+import type { ResultHandle } from './ResultClient'
 
 /** What a diff set compared, for its grid's strip. */
 export interface CompareInfo {
@@ -56,6 +58,12 @@ export interface CompareInfo {
   readonly nothingPaired: boolean
   /** In Changes only, the unchanged entries omitted after the last stored row. */
   readonly trailingHidden: number
+  /** Up to 512 even buckets of the stored rows, each the bits of the kinds in it (1 changed, 2 added, 4 removed): the
+   *  overview strip beside the grid's scroll bar. */
+  readonly overview: readonly number[]
+  /** The change units over every stored row (each changed cell listed, each added or removed row): what Previous and Next
+   *  Difference step through. */
+  readonly units: number
   /** The inputs' stored rows when compared (old, then new): Match by row position is offered only when they are equal. */
   readonly leftRows: number
   readonly rightRows: number
@@ -111,7 +119,12 @@ export interface CompareSnapshot {
   readonly actionable: Readonly<Record<string, ActionableNotice>>
   /** The open match menu: the comparison it changes, and what opened it (the toolbar's Match, ⋯ or a notice). */
   readonly matchMenu?: { readonly tabId: string; readonly key: EntryKey; readonly from: MatchMenuFrom }
+  /** Where Previous or Next Difference last landed in each comparison ("Change 2 of 31"), by its entry key. */
+  readonly positions: ReadonlyMap<EntryKey, DiffPosition>
 }
+/** Where moving between a comparison's differences last landed: the result (its set key) and the handle (the comparison's,
+ *  or its sorted or filtered view) it counted in, so a replace or another view shows it no more, and what it says. */
+export interface DiffPosition { readonly set: string; readonly handle: ResultHandle; readonly row: number; readonly text: string }
 /** A first run refused for memory (DIFF_ROWS_TOO_LARGE), said in the results area until it is acted on, dismissed, either
  *  input closes, the query runs again or a comparison of the pair is shown: its button runs it again with Changes only. */
 export interface ActionableNotice {
@@ -141,13 +154,15 @@ export const contextOf = (rows: CompareRows): number => rows === 'all' ? -1 : 0
 /** What a comparison is asked for besides its two inputs (its identity): its state, which a replace changes in place (D9). */
 export interface CompareOptions { readonly exact: boolean; readonly layout?: DiffLayout; readonly match?: DiffMatch; readonly context?: number }
 /** The focused comparison's state that the ⋯ menu's toggles show. */
-export interface ComparisonToggles { readonly exact: boolean; readonly oneRow: boolean; readonly changesOnly: boolean }
+export interface ComparisonToggles { readonly exact: boolean; readonly oneRow: boolean; readonly changesOnly: boolean; readonly partner: boolean }
 /** A change to a comparison, which replaces it in place: another layout, Exact text, sides, match or rows (`context`). */
 export interface CompareChange { readonly layout?: DiffLayout; readonly exact?: boolean; readonly swap?: boolean; readonly match?: DiffMatch; readonly context?: number }
 /** A Table the picker offers, with how its columns pair with the active Table's (the target as the old side). */
 export interface CompareTarget { readonly entry: ResultSetEntry; readonly pairing: ColumnPairing }
 
 const maxPairs = wire.page.maxColumns - 4
+/** Moves between differences one comparison queues behind the one running (a held Alt+F5); more presses wait for them. */
+const maxQueuedMoves = 4
 
 /** A comparison's identity: its ordered pair of inputs, old then new (D9). Its options (layout, rows, match, exact text)
  *  are its state, so the run shows one comparison per ordered pair, and one first run of it at a time. */
@@ -185,7 +200,10 @@ interface Running {
   cancelled?: boolean
 }
 
-type Results = Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'addSet' | 'replaceComparison' | 'discard' | 'notify' | 'focusEntry' | 'operations' | 'sortOf' | 'setKindFilter' | 'comparing'>
+type Results = Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'addSet' | 'replaceComparison' | 'discard' | 'notify' | 'focusEntry' | 'operations' | 'sortOf' | 'setKindFilter' | 'comparing'> & Partial<Pick<ResultsService, 'diffControls'>>
+/** A move between a comparison's differences: its entry and details, its mounted grid, the handle the grid shows, and the
+ *  signal a newer move aborts. */
+interface DiffTarget { readonly entry: ResultSetEntry; readonly grid: DiffGridControls; readonly handle: ResultHandle; readonly info: CompareInfo; readonly abort: AbortController }
 /** Carries a comparison's highlights over a replace (HighlightsService.carry): `prune` drops those whose entry it no longer
  *  has, said through `pruned`. */
 export type CarryHighlights = (tabId: string, key: EntryKey, o: { readonly prune: boolean; readonly pruned: (count: number) => void }) => void
@@ -232,9 +250,17 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
   private readonly togglesStore = new (class extends SnapshotStore<Readonly<Record<string, ComparisonToggles>>> { set(value: Readonly<Record<string, ComparisonToggles>>) { this.publish(value) } clear() { this.clearListeners() } })({})
   readonly toggles: ExternalStore<Readonly<Record<string, ComparisonToggles>>> = this.togglesStore
   private readonly unsubscribeFocus: () => void
+  /** Each comparison grid's active row and its tone (GridView's onDiffRow), with the result it was read from. */
+  private readonly activeRows = new Map<EntryKey, { readonly set: string; readonly row: number; readonly tone: string | null }>()
+  /** The move between differences in flight per comparison: a newer one gives it up. */
+  /** The move running in each comparison, with the result it reads: given up when that result is replaced or goes, so the
+   *  moves queued behind it are not held by an answer that no longer applies. */
+  private readonly navigating = new Map<EntryKey, { readonly tabId: string; readonly set: string; readonly abort: AbortController }>()
+  /** Each comparison's moves between differences, run one after another so a quick repeat starts where the last landed. */
+  private readonly moves = new Map<EntryKey, { readonly done: Promise<void>; readonly waiting: number }>()
 
   constructor(results: Results, o: { jobs?: DerivedJobs; adding?: (tabId: string) => number; layout?: () => DiffLayout; rows?: () => CompareRows; carry?: CarryHighlights } = {}) {
-    super({ info: new Map(), pickers: {}, running: {}, notices: new Map(), announcements: new Map(), refused: new Set(), dismissed: new Map(), actionable: {} })
+    super({ info: new Map(), pickers: {}, running: {}, notices: new Map(), announcements: new Map(), refused: new Set(), dismissed: new Map(), actionable: {}, positions: new Map() })
     this.results = results
     this.jobs = o.jobs ?? new DerivedJobs()
     this.elsewhere = o.adding ?? (() => 0)
@@ -255,7 +281,8 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
       const entry = slotOf(this.results.getSnapshot()[tabId], item.entry)?.entry, state = this.stateOf(tabId, entry)
       if (!state) continue
       const was = current[tabId], exact = state.exact, oneRow = state.layout === 'entry', changesOnly = state.context === 0
-      next[tabId] = was && was.exact === exact && was.oneRow === oneRow && was.changesOnly === changesOnly ? was : { exact, oneRow, changesOnly }
+      const partner = !!partnerKind(this.activeRowOf(tabId, item.entry)?.tone)
+      next[tabId] = was && was.exact === exact && was.oneRow === oneRow && was.changesOnly === changesOnly && was.partner === partner ? was : { exact, oneRow, changesOnly, partner }
       if (next[tabId] !== was) changed = true
     }
     if (changed || Object.keys(current).length !== Object.keys(next).length) this.togglesStore.set(next)
@@ -265,6 +292,10 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
    *  again (or runs), its Table closed, or the tab's results went. A target that closed leaves it with nothing picked. */
   private sync(): void {
     const snapshot = this.results.getSnapshot()
+    for (const [key, move] of this.navigating) {
+      const entry = entryOf(snapshot[move.tabId]?.sets, key)
+      if (!entry || setKey(entry.descriptor) !== move.set) { move.abort.abort(); this.navigating.delete(key) }
+    }
     for (const [tabId, items] of this.inFlight) {
       const tab = snapshot[tabId]
       for (const item of items.values()) {
@@ -296,10 +327,13 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     // announcement once no run shows its entry.
     const info = this.getSnapshot().info, kept = info.size ? this.shown(info) : info
     if (kept.size !== info.size) this.publish({ ...this.getSnapshot(), info: kept })
-    const { notices, announcements, refused, dismissed, matchMenu } = this.getSnapshot()
-    if (notices.size || announcements.size || this.spoken.size || refused.size || dismissed.size || matchMenu) {
+    const { notices, announcements, refused, dismissed, matchMenu, positions } = this.getSnapshot()
+    if (notices.size || announcements.size || this.spoken.size || refused.size || dismissed.size || matchMenu || positions.size || this.activeRows.size) {
       const keys = new Set(Object.values(snapshot).flatMap(run => run.comparisons.map(slot => slot.key)))
       for (const key of this.spoken.keys()) if (!keys.has(key)) this.spoken.delete(key)
+      for (const key of this.activeRows.keys()) if (!keys.has(key)) this.activeRows.delete(key)
+      const nextPositions = shownOnly(positions, keys)
+      if (nextPositions !== positions) this.publish({ ...this.getSnapshot(), positions: nextPositions })
       const nextNotices = shownOnly(notices, keys), nextAnnouncements = shownOnly(announcements, keys), nextDismissed = shownOnly(dismissed, keys)
       const nextRefused = [...refused].every(key => keys.has(key)) ? refused : new Set([...refused].filter(key => keys.has(key)))
       for (const key of this.refusedChanges.keys()) if (!keys.has(key)) this.refusedChanges.delete(key)
@@ -802,6 +836,162 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     this.publish({ ...this.getSnapshot(), dismissed })
   }
 
+  /** A comparison grid's active row and its tone, once read (GridView's onDiffRow, with the set key of the result it
+   *  shows): Go to Possible Match is offered while the row has a possible match (`comparisonRowHasPartner`). */
+  activeRow(tabId: string, key: EntryKey, set: string, row: number, tone: string | null): void {
+    const was = this.activeRows.get(key)
+    if (was && was.set === set && was.row === row && was.tone === tone) return
+    this.activeRows.set(key, { set, row, tone })
+    // "Change 2 of 31" describes the row a move landed on; once the active cell leaves it the toolbar shows the total again.
+    const position = this.getSnapshot().positions.get(key)
+    if (position && (position.set !== set || position.row !== row)) {
+      const positions = new Map(this.getSnapshot().positions)
+      positions.delete(key)
+      this.publish({ ...this.getSnapshot(), positions })
+    }
+    if (this.results.comparing.getSnapshot()[tabId]?.entry === key) this.refreshToggles()
+  }
+  /** A comparison's active row, as its grid last said for the result it shows now. */
+  private activeRowOf(tabId: string, key: EntryKey): { readonly row: number; readonly tone: string | null } | undefined {
+    const entry = entryOf(this.results.getSnapshot()[tabId]?.sets, key), row = this.activeRows.get(key)
+    return entry && row && row.set === setKey(entry.descriptor) ? row : undefined
+  }
+  /** Why Go to Possible Match is unavailable on a comparison's active row although it has a possible match: while only the
+   *  chips filter the comparison, its partner's kind (added for a removed row, removed for an added one) is known to be
+   *  hidden when its chip is not pressed. Under other filters only results.diffSeek can tell (it answers `hidden`). */
+  partnerUnavailable(tabId: string, key: EntryKey, row?: number): string | undefined {
+    const tone = row === undefined ? this.activeRowOf(tabId, key)?.tone : this.results.diffControls?.(tabId, key)?.tone(row)
+    const kind = partnerKind(tone), filters = this.results.sortOf(tabId, key)?.filters ?? []
+    if (!kind || filters.length === 0 || filters.some(item => item.filter.op !== 'kind')) return undefined
+    return this.pressedKinds(tabId, key).includes(kind) ? undefined : partnerHiddenText
+  }
+  /** Where moving between a comparison's differences last landed, while its grid shows `handle` of the result it counted in. */
+  positionOf(entry: Pick<ResultSetEntry, 'key' | 'descriptor'>, handle: ResultHandle): string | undefined {
+    const position = this.getSnapshot().positions.get(entry.key)
+    return position && position.set === setKey(entry.descriptor) && position.handle === handle ? position.text : undefined
+  }
+
+  /**
+   * Go to Next or Previous Difference on a comparison's mounted grid: from its active cell to the next or previous change
+   * unit, wrapping round, in the order the grid shows (its view's, when sorted or filtered). Moving between one row's own
+   * units (its listed changed cells, then a cut row's whole row) reads the row's tone; leaving the row asks results.diffSeek,
+   * which steps by row. An added or removed row's unit, and a cut row's, select the row with its first column active. The
+   * live region says "Change 2 of 31" (counted among the rows shown, "… shown" under a filter), as the toolbar does.
+   * `focus` (the keys, the palette and menus) gives the grid the focus; the toolbar's buttons keep it.
+   */
+  navigate(tabId: string, key: EntryKey, direction: 'next' | 'previous', o: { readonly focus?: boolean } = {}): Promise<void> {
+    // A held key queues at most a few moves; past that, presses wait for the moves already queued.
+    return this.enqueue(key, () => this.move(tabId, key, direction, o), true)
+  }
+  /** Runs a comparison's moves (and Go to Possible Match) one after another; `capped` drops one past maxQueuedMoves. */
+  private enqueue(key: EntryKey, run: () => Promise<void>, capped: boolean): Promise<void> {
+    const queued = this.moves.get(key)
+    if (capped && queued && queued.waiting >= maxQueuedMoves) return queued.done
+    // A run never rejects (its failures are said), and the chain catches anyway so one failure cannot stop those queued behind.
+    const done = (queued?.done ?? Promise.resolve()).then(run).catch(() => {})
+    this.moves.set(key, { done, waiting: (queued?.waiting ?? 0) + 1 })
+    void done.finally(() => {
+      const now = this.moves.get(key)
+      if (now?.done === done) this.moves.delete(key)
+      else if (now) this.moves.set(key, { ...now, waiting: now.waiting - 1 })
+    })
+    return done
+  }
+  private async move(tabId: string, key: EntryKey, direction: 'next' | 'previous', o: { readonly focus?: boolean }): Promise<void> {
+    const target = this.diffTarget(tabId, key)
+    if (!target) return
+    const { entry, grid, handle, info, abort } = target, columns = info.pairs
+    try {
+      const shown = this.viewFiltered(tabId, key, entry, handle)
+      let active = grid.active()
+      // Just landed on a row whose tile is still loading (a quick repeat): its tone says whether the move stays in the row.
+      if (active && active.tone === undefined) {
+        await grid.toneWhenRead(active.row, abort.signal)
+        if (!this.stillShown(tabId, key, target)) return
+        active = grid.active()
+      }
+      let landed: { readonly row: number; readonly first: DiffUnit; readonly settle?: (tone: string | null) => DiffUnit; readonly index: number; readonly total: number } | undefined
+      if (active && active.tone !== undefined) {
+        const units = rowUnits(active.tone, columns), step = stepWithin(units, active, direction)
+        if (step !== undefined) {
+          // The seek from the row before answers the row's first unit's number, which its other units count on from.
+          const start = await handle.diffSeek({ from: active.row - 1, direction: 'next' }, abort.signal)
+          if ('row' in start && start.row === active.row) landed = { row: active.row, first: units.units[step], index: start.index + step, total: start.total }
+        }
+      }
+      if (!landed) {
+        const answer = await handle.diffSeek({ from: active?.row ?? -1, direction }, abort.signal)
+        if (abort.signal.aborted) return
+        if (!('row' in answer)) { this.say(key, undefined, shown ? noneShownText : 'No differences'); return }
+        landed = { row: answer.row, first: { column: answer.column, whole: false }, settle: tone => landingFor(tone, answer.column, direction, columns), index: answer.index, total: answer.total }
+      }
+      if (!this.stillShown(tabId, key, target)) return
+      grid.land(landed.row, landed.first, landed.settle, !!o.focus)
+      const text = positionText(landed.index, landed.total, shown)
+      this.publishPosition(key, entry, handle, landed.row, text)
+      this.say(key, undefined, text)
+    } catch (error) {
+      // Given up, or the comparison (or its view) went: there is nothing to move in. Any other failure is said.
+      this.sayFailure(tabId, key, target, error)
+    } finally {
+      if (this.navigating.get(key)?.abort === abort) this.navigating.delete(key)
+    }
+  }
+
+  /**
+   * Go to Possible Match: selects the row a removed or added row looks like (D5), from results.diffSeek's change index, and
+   * scrolls to it; `row` is a menu's row, else the active one. A partner a filter hides is said in the live region.
+   */
+  goToPossibleMatch(tabId: string, key: EntryKey, o: { readonly row?: number; readonly focus?: boolean } = {}): Promise<void> {
+    // After any move queued before it (never dropped): asked for a row, it goes there once they have landed.
+    return this.enqueue(key, () => this.partnerMove(tabId, key, o), false)
+  }
+  private async partnerMove(tabId: string, key: EntryKey, o: { readonly row?: number; readonly focus?: boolean }): Promise<void> {
+    const target = this.diffTarget(tabId, key)
+    if (!target) return
+    const { entry, grid, handle, abort } = target, row = o.row ?? grid.active()?.row
+    try {
+      if (row === undefined) return
+      const answer = await handle.diffSeek({ partnerOf: row }, abort.signal)
+      if (!this.stillShown(tabId, key, target)) return
+      if ('hidden' in answer) this.say(key, undefined, partnerHiddenText)
+      else if ('none' in answer) this.say(key, undefined, noPartnerText)
+      else {
+        grid.land(answer.row, { column: 0, whole: true }, undefined, !!o.focus)
+        this.publishPosition(key, entry, handle, answer.row, positionText(answer.index, answer.total, this.viewFiltered(tabId, key, entry, handle)))
+      }
+    } catch (error) {
+      this.sayFailure(tabId, key, target, error)
+    } finally {
+      if (this.navigating.get(key)?.abort === abort) this.navigating.delete(key)
+    }
+  }
+  private publishPosition(key: EntryKey, entry: ResultSetEntry, handle: ResultHandle, row: number, text: string): void {
+    this.publish({ ...this.getSnapshot(), positions: new Map(this.getSnapshot().positions).set(key, { set: setKey(entry.descriptor), handle, row, text }) })
+  }
+  /** A move that failed while its grid still shows what it asked about (not given up, not released) says why. */
+  private sayFailure(tabId: string, key: EntryKey, target: DiffTarget, error: unknown): void {
+    if (!this.stillShown(tabId, key, target)) return
+    this.say(key, undefined, `Could not move to the difference: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  /** A comparison's mounted grid and what a move in it reads (moves run one at a time, so none is in flight there). */
+  private diffTarget(tabId: string, key: EntryKey): DiffTarget | undefined {
+    const entry = entryOf(this.results.getSnapshot()[tabId]?.sets, key), grid = this.results.diffControls?.(tabId, key)
+    const info = entry ? this.getSnapshot().info.get(setKey(entry.descriptor)) : undefined
+    if (!entry || !grid || !info) return undefined
+    const abort = new AbortController()
+    this.navigating.set(key, { tabId, set: setKey(entry.descriptor), abort })
+    return { entry, grid, handle: grid.handle(), info, abort }
+  }
+  /** Whether a move's answer still applies: not given up, the same grid showing the same handle. */
+  private stillShown(tabId: string, key: EntryKey, target: DiffTarget): boolean {
+    return !target.abort.signal.aborted && this.results.diffControls?.(tabId, key) === target.grid && target.grid.handle() === target.handle
+  }
+  /** Whether the grid shows a filtered view of the comparison (a chip included), whose counts are then said "… shown". */
+  private viewFiltered(tabId: string, key: EntryKey, entry: ResultSetEntry, handle: ResultHandle): boolean {
+    return handle !== entry.handle && (this.results.sortOf(tabId, key)?.applied.length ?? 0) > 0
+  }
+
   /** The kinds a comparison's chips have pressed: its kind filter's, less `same`, which no chip sends (D11). */
   pressedKinds(tabId: string, key: EntryKey): readonly DiffKindName[] {
     const filter = this.results.sortOf(tabId, key)?.filters.find(item => item.filter.op === 'kind')?.filter
@@ -975,6 +1165,7 @@ function compareInfoOf(from: ResultSetEntry, to: ResultSetEntry, fromName: strin
     exact: options.exact, same: result.same, changed: result.changed, added: result.added, removed: result.removed,
     soft: result.soft, leftOnly: result.leftOnly, rightOnly: result.rightOnly, approximate: result.approximate,
     repeated: result.repeated, possible: result.possible, possibleSkipped: result.possibleSkipped, nothingPaired: result.nothingPaired, trailingHidden: result.trailingHidden,
+    overview: result.overview, units: result.units,
     // The handles' counts: an entry keeps the descriptor it opened with, before any row was stored.
     leftRows: from.handle.getSnapshot().rowsStored, rightRows: to.handle.getSnapshot().rowsStored,
     inputRows: Math.max(from.handle.getSnapshot().rowsStored, to.handle.getSnapshot().rowsStored)

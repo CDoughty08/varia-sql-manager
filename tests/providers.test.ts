@@ -113,6 +113,10 @@ describe('targets and tab records', () => {
     expect(storedSessionSchema.safeParse({ ...session, documents: [{ ...document, provider: 'bigquery', database: 'd'.repeat(1025) }] }).success).toBe(false)
     expect(storedSessionSchema.safeParse({ ...session, documents: [{ ...document, database: 'd'.repeat(129) }] }).success).toBe(false)
     expect(storedSessionSchema.safeParse({ ...session, documents: [{ ...document, provider: 'postgresql' }] }).success).toBe(false)
+    // A BigQuery tab's job key (docs/bigquery.md, Re-attaching to jobs) is a uuid, in version 3 only.
+    expect(storedSessionSchema.safeParse({ ...session, documents: [{ ...document, provider: 'bigquery', jobKey: randomUUID() }] }).success).toBe(true)
+    expect(storedSessionSchema.safeParse({ ...session, documents: [{ ...document, provider: 'bigquery', jobKey: 'not-a-key' }] }).success).toBe(false)
+    expect(storedSessionSchema.safeParse({ version: 2, savedAt: '2026-11-01T10:00:00.000Z', activeIndex: 0, documents: [{ ...document, jobKey: randomUUID() }] }).success).toBe(false)
     const v2 = storedSessionSchema.parse({ version: 2, savedAt: '2026-11-01T10:00:00.000Z', activeIndex: 0, documents: [document] })
     expect(v2.version).toBe(3)
     expect(providerOf(v2.documents[0] as { provider?: 'sqlserver' })).toBe('sqlserver')

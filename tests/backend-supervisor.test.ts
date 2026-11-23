@@ -130,6 +130,18 @@ describe('BackendSupervisor over the fake backend process', () => {
 })
 
 describe('BackendSupervisor restarts', () => {
+  it('tells a BigQuery run lost with the backend that its job carries on', async () => {
+    const { value, backends } = simulated({ deps: { policy: { breakerLosses: 10 } } })
+    const connected = await value.request('connections.connect', { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', credential: { source: 'metadata' } } as never) as { id: string }
+    backends[0].answer = false
+    const run = failure(value.request('query.execute', { ...query('tab-1'), connectionId: connected.id } as never))
+    const attach = failure(value.request('query.attach', { connectionId: connected.id } as never))
+    await settle()
+    backends[0].exit(1)
+    expect(await run).toMatchObject({ code: 'BACKEND_LOST', message: sentences.lostBigQuery })
+    expect(await attach).toMatchObject({ code: 'BACKEND_LOST', message: sentences.lostBigQuery })
+    expect(sentences.lostBigQuery).not.toContain('SQL Server')
+  })
   it('replaces an exited backend after 0, 1 and 2 s, losing its connections and running queries', async () => {
     const { value, advance, statuses, states, backends } = simulated({ deps: { policy: { breakerLosses: 10 } } })
     const connection = await value.request('connections.connect', options)
@@ -140,6 +152,7 @@ describe('BackendSupervisor restarts', () => {
     await settle()
     backends[0].exit(1)
     expect(await script).toMatchObject({ code: 'BACKEND_LOST', message: sentences.lostQuery })
+    expect(sentences.lostQuery).toContain('SQL Server rolls back')
     expect(states.at(-1)).toEqual({ status: 'restarting', generation: 1, retryInMs: 0, lost: { generation: 1, reason: 'exit', connections: 1, queries: 1 } })
     expect(value.connectionCount()).toBe(0)
     expect(value.isLostConnection(connection.id)).toBe(true)
@@ -262,6 +275,84 @@ describe('BackendSupervisor restarts', () => {
     await value.request('query.execute', { ...query('tab-1'), connectionId: 'new' })
     await value.request('query.session.close', { sessionId: 'tab-1' })
     expect(backends[1].requests.map(request => request.method)).toEqual(['query.execute', 'query.session.close'])
+  })
+  it('ends idle BigQuery sessions before a restart and a stop, with the kept tab job keys, and only when a BigQuery handle is open', async () => {
+    const failed: number[] = []
+    let keep: readonly string[] | undefined
+    const { value, advance, backends } = simulated({ configure: backend => { backend.failedAborts = 2 }, deps: { keepJobKeys: () => keep, onFailedAborts: count => failed.push(count) } })
+    const sqlServer = await value.request('connections.connect', options)
+    // No BigQuery handle: a restart sends nothing first.
+    await value.restart('manual')
+    await advance(0)
+    expect(backends[0].requests.map(request => request.method)).toEqual(['connections.connect'])
+    await value.request('connections.connect', { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', credential: { source: 'metadata' } } as never)
+    await value.restart('reload')
+    await advance(0)
+    expect(backends[1].requests.map(request => [request.method, request.params])).toEqual([['connections.connect', expect.anything()], ['bigquery.endIdleSessions', {}]])
+    expect(failed).toEqual([2])
+    expect(backends[1].alive).toBe(false)
+    expect(sqlServer.id).toBeTruthy()
+    // A quit keeps two tabs: their keys go with the stop's call, which reaches the backend before stdin ends.
+    await value.request('connections.connect', { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', credential: { source: 'metadata' } } as never)
+    keep = ['11111111-1111-4111-8111-111111111111']
+    await value.stop()
+    expect(backends[2].requests.at(-1)).toEqual(expect.objectContaining({ method: 'bigquery.endIdleSessions', params: { keepJobKeys: keep } }))
+    // A stop's failures cannot be shown.
+    expect(failed).toEqual([2])
+  })
+  it('joins a second restart to one waiting for endIdleSessions, launching one backend, and skips the wait for a hung backend', async () => {
+    const { value, advance, backends } = simulated({ configure: backend => { backend.held.add('bigquery.endIdleSessions') } })
+    const connected = await value.request('connections.connect', { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', credential: { source: 'metadata' } } as never) as { id: string }
+    await value.request('query.execute', { connectionId: connected.id, sessionId: '33333333-3333-4333-8333-333333333333', queryId: '44444444-4444-4444-8444-444444444444', sql: 'SELECT 1', maxRows: 1, maxResultSets: 1 } as never)
+    const first = value.restart('manual')
+    await advance(0)
+    const ending = backends[0].requests.find(request => request.method === 'bigquery.endIdleSessions')!
+    expect(ending).toBeDefined()
+    // A Reload while the aborts run: it waits for the same restart.
+    const second = value.restart('reload')
+    await advance(0)
+    expect(backends).toHaveLength(1)
+    // A tab closing meanwhile reaches its session in the generation being ended (Cancel the job is carried out there).
+    const closing = value.request('query.session.close', { sessionId: '33333333-3333-4333-8333-333333333333', cancelJob: true } as never)
+    await advance(0)
+    expect(backends[0].requests.at(-1)).toEqual(expect.objectContaining({ method: 'query.session.close', params: { sessionId: '33333333-3333-4333-8333-333333333333', cancelJob: true } }))
+    await expect(closing).resolves.toEqual({ closed: true })
+    // So does Stop (or Leave it running) on a run of that generation.
+    const stopping = value.request('query.cancel', { queryId: '44444444-4444-4444-8444-444444444444' } as never)
+    await advance(0)
+    expect(backends[0].requests.at(-1)).toEqual(expect.objectContaining({ method: 'query.cancel' }))
+    expect(backends).toHaveLength(1)
+    void stopping.catch(() => undefined)
+    // A Stop for a run queued for the next backend waits for it rather than reach the old one; so does a run on a new
+    // connection, while one on the old backend's connection is lost with it.
+    const newConnection = value.request('connections.connect', { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', credential: { source: 'metadata' } } as never)
+    const oldRun = failure(value.request('query.execute', { connectionId: connected.id, sessionId: '66666666-6666-4666-8666-666666666666', queryId: '77777777-7777-4777-8777-777777777777', sql: 'SELECT 1', maxRows: 1, maxResultSets: 1 } as never))
+    const queued = value.request('query.cancel', { queryId: '55555555-5555-4555-8555-555555555555' } as never)
+    await advance(0)
+    expect(backends[0].requests.filter(request => request.method === 'query.cancel')).toHaveLength(1)
+    void queued.catch(() => undefined)
+    // A Restart Backend that joins it still resets the crash breaker.
+    const breaker = value as unknown as { attempts: number, losses: number[] }
+    breaker.attempts = 3; breaker.losses = [1, 2]
+    const third = value.restart('manual')
+    expect([breaker.attempts, breaker.losses]).toEqual([0, []])
+    backends[0].respond(ending)
+    await Promise.all([first, second, third])
+    await advance(0)
+    expect(backends).toHaveLength(2)
+    expect(await oldRun).toMatchObject({ code: 'CONNECTION_LOST' })
+    await newConnection
+    await advance(0)
+    expect(backends[1].requests.map(request => request.method)).toEqual(expect.arrayContaining(['connections.connect', 'query.cancel']))
+    expect(backends[1].requests.map(request => request.method)).not.toContain('query.execute')
+    expect(value.state).toMatchObject({ status: 'ready', generation: 2 })
+    // An unresponsive backend is restarted at once, without asking it to end sessions.
+    await value.request('connections.connect', { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', credential: { source: 'metadata' } } as never)
+    ;(value as unknown as { snapshot: unknown }).snapshot = { status: 'unresponsive', generation: 2, silentMs: 30_000 }
+    await value.restart('manual')
+    await advance(0)
+    expect(backends[1].requests.map(request => request.method)).not.toContain('bigquery.endIdleSessions')
+    expect(backends).toHaveLength(3)
   })
   it('stop closes stdin, then kills a backend that does not exit within the grace period', async () => {
     const { value, advance, last } = simulated({ configure: backend => { backend.exitOnEnd = false } })

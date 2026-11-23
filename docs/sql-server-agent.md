@@ -4,8 +4,8 @@ SQL Server Agent support is planned for 0.11.0 ([docs/agent-plan.md](agent-plan.
 [docs/agent-ui-rethink.md](agent-ui-rethink.md)). Behind the release gate (below) Object Explorer shows the SQL Server Agent node, a job's New Job…, View History, Start Job at Step…, Stop
 Job, Enable, Disable, Rename, Delete and Properties, and the Agent node's Start, Stop, Restart and Properties; Search Objects finds jobs, alerts
 and operators, Script As scripts jobs, alerts, operators and proxies, Job Activity Monitor follows the jobs live, the
-Log File Viewer reads and deletes job history, and the job document edits a job's General, Notifications, Targets and Alerts or creates a job. Its Steps and Schedules sections arrive in
-later lanes, behind the same gate until 0.11.0.
+Log File Viewer reads and deletes job history, the job document edits a job's General, Steps, Schedules, Notifications, Targets and Alerts or creates a job, and
+the Schedules document manages the shared schedules, behind the same gate until 0.11.0.
 
 ## How it works
 
@@ -82,6 +82,25 @@ later lanes, behind the same gate until 0.11.0.
   can send, read through `sysmail_help_profile_sp` where the login may, and an operator's missing address or pager duty hours
   as warnings), **Targets** (this server only; multi-server targets come later) and **Alerts** (the alerts that run the job;
   Remove for sysadmin only, since msdb grants `sp_update_alert` to no Agent role; New Alert comes with the Alerts lane).
+  **Steps** is a master/detail page: the list shows each step's number, type and where it goes on success and on failure, marks
+  the Start step, and reorders by drag or Move up and Move down; go-to targets follow the step they name, since the draft keys
+  steps rather than numbering them. Delete acts at once and its banner names the steps that went to the deleted one and now quit
+  reporting failure (as SSMS does), with Undo putting all of it back. The editor shows the step's name and type, then the
+  type's fields: T-SQL in a Monaco editor that completes against the step's database, with **Parse** (`language.parse`,
+  ScriptDom's parser in the backend on a large-stack thread, nothing runs; text nested more than 128 parentheses deep is
+  reported too deep to parse) and **Open in query window** (a new query tab on the job's connection and the
+  step's database); PowerShell and CmdExec in their own editors, with Run as (the SQL Server Agent service account or a
+  proxy granted to the step's type, `sp_help_proxy @subsystem_name`) and CmdExec's success exit code; SSIS on one scroll, with
+  the package picked inline from SSISDB's folders, projects and packages (or SQL Server and file system sources), its
+  parameters, environment, 32-bit runtime and logging; Analysis Services Command and Query with the Server they run on. On success and On failure choose next step, quit with success, quit
+  with failure or go to a named step; More options (retries, output file and its append, log to table, history output)
+  stays folded with a one-line summary. Problems block only what msdb refuses (a missing name, a go-to past the
+  last step, a proxy not granted to the type) and warn on the rest. The describe reads at most 50 steps and each command up to
+  100,000 characters (1,000,000 for all of them): a longer job lists its first 50 steps read-only, and a cut command only warns
+  until the steps are part of a save, which it then blocks, so Varia never writes a cut command or a renumbering it could not see.
+  Reload and keep my changes matches steps by name: steps you did not touch take the job's version now (another session's renames,
+  deletes, inserts and Start step stand), your edits land on the step you edited at its current number, and the compare's Steps row
+  says what each side added, deleted, edited or reordered.
   Another owner's job below sysadmin opens read-only with the reason. Edits mark the tab dirty, Save counts them ("Save · 2
   changes"), closing asks to save, and Problems warn and only block what msdb would refuse (a missing name, owner or operator).
   **Save** sends only what changed with the version and modified date the describe read, as one batch in one transaction:
@@ -94,7 +113,81 @@ later lanes, behind the same gate until 0.11.0.
   `GOTO QuitWithRollback`) by name with literal values. **New Job** (a Jobs folder's or job's menu, or the palette) opens a
   start panel: Blank job, or Copy an existing job, which fills General and Notifications from the job picked ("Copy of …");
   nothing is created until Create, which runs `sp_add_job` and `sp_add_jobserver` in one transaction. The save batches have
-  their own exact-shape lint, `AgentSql.LintJobSave`. Pager duty against the job's schedules comes with the Schedules lane.
+  their own exact-shape lint, `AgentSql.LintJobSave`. **Steps** save inside the same transaction after the job and its
+  alerts, in the planner's order (`planAgentSteps`, `src/shared/agent/steps.ts`): deleted steps highest id first, every
+  surviving step renamed to a temporary `__varia_step_<32 hex>` name at its id (with neutral T-SQL content, since
+  `sp_update_jobstep` re-checks every argument it is not given against the stored step), new steps inserted at their final ids under
+  temporary names, then each step's whole content written into its final id (`sp_update_jobstep` with every argument), and
+  `sp_update_job @start_step_id` last when the Start step moved. Writing whole contents by id means a swap or rotation never
+  depends on msdb's renumbering of go-tos, and the temporary names keep `sp_verify_jobstep`'s unique-name check (14261) from
+  refusing a step that takes another's old name. New Job's steps are its `sp_add_jobstep` calls between `sp_add_job` and
+  `sp_add_jobserver`. A refused step call lands on Steps ("Saving step 2 was refused"). The Schedules section's calls follow the steps (below).
+  Pager duty is not yet checked against the job's schedules.
+- **Schedules** (`src/shared/agent/schedule.ts` for the encoding, sentences, presets, runs and free-slot check;
+  `src/shared/actions/agent-schedule.ts` for the saves). The job document's **Schedules** section lists the job's schedules, each
+  with its short "when" and whether other jobs share it, and edits the selected one in place with SSMS's own fields (Occurs,
+  Daily frequency, Duration; an ending time of 00:00 is 23:59:59, as msdb stores it; past SSMS's own limits, such as every 365 days, which msdb accepts, the editor warns instead of refusing, and a job's schedule as read is checked only once it is changed), preset chips that only fill those fields ("Every day at…", "Weekdays at…", "Weekly on…", "Every N
+  minutes", "Monthly on day…", and under More… agent start, CPU idle and one time; Managed Instance offers no CPU idle and refuses a schedule set to it, and an idle schedule warns where Agent has no idle CPU condition), SSMS's sentence, the next five runs in server
+  time (the describe reads the server's clock; disabled, agent-start and idle schedules say why they have none) and, for
+  sysadmin, a **free-slot check**: this schedule's next runs, each lasting the job's usual duration (the median of its last 10
+  successful runs from `sp_help_jobhistory`, or a minute when it has none; a run is at least a second, so two starting together clash), against the runs of every other enabled job's
+  schedules lasting theirs. A schedule shared with other jobs names them and says a change moves them too, with **Copy for this
+  job only** (detach the shared one as read, add a copy that keeps the edits); one the login neither owns nor may change
+  (below sysadmin) is read-only with Copy, and one msdb hides from the login (another login's, below SQLAgentReaderRole) can be neither removed nor copied, since `sp_detach_schedule` could not find it. **Add** searches the shared schedules the login can see (any owner's: msdb's `sp_attach_schedule` asks only for the job's owner) by name or by when they run ("night", "every
+  15 minutes", "sunday"); a match shows a preview (sentence, owner, next runs, the jobs that use it) with Attach, and New
+  schedule starts from SSMS's defaults, named from the search. **Remove** marks the job's schedule removed with Undo and a
+  choice: detach it and keep the schedule, or (its owner and sysadmin) detach it and delete it when no job uses it. Nothing
+  reaches the server until the job's Save, which runs the schedule calls last in the job's transaction in a fixed order:
+  `sp_detach_schedule` (with `@delete_unused_schedule` for delete, so msdb deletes only an unused schedule, jobs the login cannot
+  see included, and never fails the save over it), a guarded `sp_attach_schedule` for each picked one, a guarded
+  `sp_update_schedule` for each edited one (after the attach, which leaves the schedule's version as it is, so a picked schedule
+  edited in the same save passes both guards), and `sp_add_jobschedule` for each new one. Each guard compares the schedule's
+  `version_number` and `date_modified` (`sysschedules_localserver_view`, `UPDLOCK, HOLDLOCK`) and THROWs 50011 with the call's
+  index, so a schedule changed since it was read is `STALE` on the Schedules field and nothing commits. A new job has nothing to
+  compare: its attached schedules are read again and take the new versions, keeping your edits, and the next Save names them.
+- **Schedules document** (Manage Schedules on the Jobs folder's menu and the palette; New › Schedule… on the Agent node). One
+  document per connection replaces SSMS's Manage Schedules dialog: a grid of the shared schedules (name, when, Enabled, how many
+  jobs, owner) with All, Unused and Disabled views and a filter that matches schedule names, job names (sysadmin, whose read has the links) and when schedules run, and
+  beside it the selected schedule's editor (the same one as the job document's), the jobs that use it with Detach and Attach a
+  job (only jobs the login owns, or any for sysadmin, as msdb allows, on any schedule the login can see; another login's schedule takes only these job changes), and Save. Edits are kept per schedule until saved, each guarded by the schedule as its edit began, so neither Refresh nor
+  the read after another save lets it pass over someone else's change; a STALE save reads again and shows their change with the
+  user's on top, for the user to save again. Closing the tab with unsaved ones asks Save / Don't Save; Save (and File › Save) saves each changed schedule in turn and stops at the first refused. Only a save under way stops the close. The grid's **Enabled** box saves at once. New schedule and Duplicate edit a draft that
+  Create adds; Delete asks inline and never forces, so msdb refuses one a job uses (`IN_USE`, 14372), saying how many jobs.
+  Every change is the `agentSchedule` object action on the Agent node with `op` `create` (`sp_add_schedule` with the new id as
+  an OUTPUT local, then guarded `sp_attach_schedule`s), `update` (the guard, `sp_update_schedule` with what changed, then guarded
+  attaches and `sp_detach_schedule`s), `enable`, `disable` or `delete` (`sp_delete_schedule` without `@force_delete`), one
+  transaction each with the guard above and each job's `version_number` checked before it is attached or detached. Below
+  sysadmin, `sysjobschedules` is closed, so a schedule's jobs are read when it is selected (`sp_help_jobs_in_schedule`, which
+  shows SQLAgentUserRole only its own jobs) and Unused counts every job, the unseen included. The saves have their own
+  exact-shape lint, `AgentSql.LintScheduleSave`, which also refuses `@force_delete`.
+- **Proxies and credentials** (`agentProxy`, `credential`, object actions, docs/object-actions.md). A proxy's document ("Proxy
+  Account Properties - FileShareWriter") opens from a proxy's node (Enter, double-click or Properties); **New Proxy…** from the
+  Proxies folder, a subsystem's folder (the proxy starts active to it), Unassigned Proxies or a proxy, and **Proxy…** from the
+  SQL Server Agent node's New submenu (SQL Server only: Managed Instance has no proxies). Only sysadmin reads or changes
+  proxies; below it the describe answers `PERMISSION_DENIED`. One screen: **Proxy** (name, the credential, description,
+  enabled), **Subsystems** (every subsystem but T-SQL), **Principals** (logins, msdb roles and server roles that may use it
+  besides sysadmin, picked or typed) and **References** (the job steps that run as it). The credential is picked, or created
+  in place (name, identity, password and its confirmation) for a login with ALTER ANY CREDENTIAL. **Save** sends only what
+  changed under the `proxy_id` the describe read (a proxy renamed or replaced since is `NOT_FOUND`) in two batches: first, in
+  one transaction, CREATE CREDENTIAL when the save makes one, `sp_add_proxy` or `sp_update_proxy`, and the subsystem grants and
+  revokes; then, without a transaction, the principal grants and revokes, because msdb checks a principal that is not a login
+  with `EXECUTE AS LOGIN` inside TRY/CATCH, which dooms any open transaction (3930). A refused first batch changes nothing and
+  keeps the draft; a refused second batch leaves the rest saved, so the document reads the proxy again and shows which
+  principal was refused. msdb ignores a grant to a sysadmin member, who may use every proxy anyway. A **credential's
+  document** ("Credential Properties - …", Security › Credentials, on SQL Server and Managed Instance; New Credential… on the
+  folder or a credential) shows its name, identity, creation and modification dates, and **Used by** (the proxies that run as
+  it with their subsystems, then their job steps; sysadmin only). SQL Server never returns a secret, so the password starts
+  empty behind **Change identity and password**, and Save sends the identity and the password together (ALTER CREDENTIAL sets
+  both) behind a STALE guard on the credential's id, name and `modify_date`. Without ALTER ANY CREDENTIAL it opens read-only.
+  New Credential lists the server's enabled cryptographic providers when it has any. **Secrets**: the password fields are
+  uncontrolled; what is typed lives only in the renderer's per-document secret slot (a snapshot learns only whether it is
+  set, confirmed, well formed and within `credentialSecretChars`), travels only in that one `actions.execute`'s
+  `secrets.secret`, and the slot is emptied after Save, on Reload, when the proxy goes back to an existing credential, when
+  the change is unchecked and when the tab closes. The backend builds the statement on the server from parameters (the name
+  through `QUOTENAME`, the identity and secret quoted by a binary-collation `REPLACE`), never logs it, scrubs it from any
+  error text, and Script writes `<secret>` in its place. **Rename** and **Delete** of a proxy are the object actions' (Delete
+  Object reads the proxy's id; Rename from the tree finds it by name). Each batch has an exact-shape lint
+  (`AgentSql.LintProxySave`, `CredentialSql.Lint`).
 - **Log File Viewer** (`agent.history`, docs/live.md). Job › View History, the Agent node's and the Jobs folder's View
   History, Job Activity Monitor's View history (the selected jobs) and the palette's SQL Server Agent: View History open one
   document per connection ("Log File Viewer - server"), focused if open with its sources replaced. **Select logs** lists every
@@ -249,13 +342,22 @@ the scratch job. The `agent-jobs` smoke suite drives Job Activity Monitor agains
 a view chip, Start on two jobs with the status bar following them, the Last run chevron and reopening it from its node.
 
 `AgentJobDocumentChecks` checks the job document's planner offline: the save lint and its near misses, each save's batch, the
-validation, the error mapping onto fields and the script's shape. In the Agent live suite, `AgentJobDocumentLiveChecks`
+validation, the error mapping onto fields and the script's shape, and the steps' planner shapes (renumbered, New Job's, the
+Start step alone), their lint near misses and validation, and `language.parse`'s bounds. In the Agent live suite, `AgentJobDocumentLiveChecks`
 describes the scratch job, saves it under the STALE guard and is refused STALE on an older version, fails a later call and
 checks nothing committed, renames it to a hostile name and back, runs the script back against msdb, detaches a scratch alert
-(Windows), and after the job verbs delete the job creates it again through New Job. The `agent-job` smoke suite opens jobs from
+(Windows), and after the job verbs delete the job creates it again through New Job, then adds two steps, swaps them and
+deletes one, reading `sysjobsteps` back after each save. The `agent-job` smoke suite opens jobs from
 Job Activity Monitor (double-click and Enter), saves an edit and a removed alert, loses a save to another session's (the fake
-backend's `job-save-race` control file) and saves after Reload and keep my changes, starts the job once at a step, and creates
-a job by copying another from New Job.
+backend's `job-save-race` control file) and saves after Reload and keep my changes, starts the job once at a step, reorders, parses,
+deletes and undoes steps on Steps and saves them, and creates a job by copying another from New Job.
+
+`AgentScheduleChecks` checks the schedules offline: the schedule saves' lint and its near misses (a missing guard, `@force_delete`,
+a write out of order), each save's batch for the job document and the Schedules document, the timing rules that mirror
+`timingProblem`, the validation, the error mapping onto the Schedules field, the script and the describe's records, jobs and
+median durations. The `agent-job` smoke suite adds a schedule from a preset and attaches a shared one found by search on the job
+document, then, in the Schedules document, saves an Enabled box at once and a rename under the guard, and creates a schedule
+from the Agent node's New › Schedule….
 
 `AgentHistoryChecks` checks the `agent.history` reader offline over a fake runner (the statements each source and window
 reads, grouping into runs with In progress, Unknown and Agent XPs off, the filters regrouping without SQL, truncation and each
@@ -489,21 +591,21 @@ Writes (from AG-2) call only these, each followed by a return-code check:
 | --- | --- | --- |
 | `msdb.dbo.sp_start_job` | `@job_id`, `@step_name` | AG-2 |
 | `msdb.dbo.sp_stop_job` | `@job_id` | AG-2 |
-| `msdb.dbo.sp_update_job` | `@job_id`, `@enabled`, `@new_name`, `@description`, `@category_name`, `@owner_login_name`, `@notify_level_eventlog`, `@notify_level_email`, `@notify_level_netsend`, `@notify_level_page`, `@notify_email_operator_name`, `@notify_netsend_operator_name`, `@notify_page_operator_name`, `@delete_level` | AG-2 |
+| `msdb.dbo.sp_update_job` | `@job_id`, `@enabled`, `@new_name`, `@description`, `@category_name`, `@owner_login_name`, `@notify_level_eventlog`, `@notify_level_email`, `@notify_level_netsend`, `@notify_level_page`, `@notify_email_operator_name`, `@notify_netsend_operator_name`, `@notify_page_operator_name`, `@delete_level`, `@start_step_id` | AG-2 |
 | `msdb.dbo.sp_delete_job` | `@job_id`, `@delete_history`, `@delete_unused_schedule` | AG-2 |
 | `msdb.dbo.sp_purge_jobhistory` | `@oldest_date`, `@job_id` | AG-8a |
 | `msdb.dbo.sp_add_job` | `@job_name`, `@enabled`, `@description`, `@category_name`, `@owner_login_name`, `@notify_level_eventlog`, `@notify_level_email`, `@notify_level_netsend`, `@notify_level_page`, `@notify_email_operator_name`, `@notify_netsend_operator_name`, `@notify_page_operator_name`, `@delete_level`, `@job_id` | AG-6a |
 | `msdb.dbo.sp_add_jobserver` | `@job_id` | AG-6a |
 | `msdb.dbo.sp_update_alert` | `@name`, `@job_id` | AG-6a |
-| `msdb.dbo.sp_add_jobstep` | later lanes | AG-6b |
-| `msdb.dbo.sp_update_jobstep` | later lanes | AG-6b |
-| `msdb.dbo.sp_delete_jobstep` | later lanes | AG-6b |
-| `msdb.dbo.sp_add_jobschedule` | later lanes | AG-6c |
-| `msdb.dbo.sp_attach_schedule` | later lanes | AG-6c |
-| `msdb.dbo.sp_detach_schedule` | later lanes | AG-6c |
-| `msdb.dbo.sp_add_schedule` | later lanes | AG-6c |
-| `msdb.dbo.sp_update_schedule` | later lanes | AG-6c |
-| `msdb.dbo.sp_delete_schedule` | later lanes | AG-6c |
+| `msdb.dbo.sp_add_jobstep` | `@job_id`, `@step_id`, `@step_name`, `@subsystem`, `@command`, `@cmdexec_success_code`, `@on_success_action`, `@on_success_step_id`, `@on_fail_action`, `@on_fail_step_id`, `@server`, `@database_name`, `@database_user_name`, `@retry_attempts`, `@retry_interval`, `@os_run_priority`, `@output_file_name`, `@flags`, `@proxy_id`, `@proxy_name` | AG-6b |
+| `msdb.dbo.sp_update_jobstep` | `@job_id`, `@step_id`, `@step_name`, `@subsystem`, `@command`, `@cmdexec_success_code`, `@on_success_action`, `@on_success_step_id`, `@on_fail_action`, `@on_fail_step_id`, `@server`, `@database_name`, `@database_user_name`, `@retry_attempts`, `@retry_interval`, `@os_run_priority`, `@output_file_name`, `@flags`, `@proxy_id`, `@proxy_name` | AG-6b |
+| `msdb.dbo.sp_delete_jobstep` | `@job_id`, `@step_id` | AG-6b |
+| `msdb.dbo.sp_add_jobschedule` | `@job_id`, `@name`, `@enabled`, `@freq_type`, `@freq_interval`, `@freq_subday_type`, `@freq_subday_interval`, `@freq_relative_interval`, `@freq_recurrence_factor`, `@active_start_date`, `@active_end_date`, `@active_start_time`, `@active_end_time` | AG-6c |
+| `msdb.dbo.sp_attach_schedule` | `@job_id`, `@schedule_id` | AG-6c |
+| `msdb.dbo.sp_detach_schedule` | `@job_id`, `@schedule_id`, `@delete_unused_schedule` | AG-6c |
+| `msdb.dbo.sp_add_schedule` | `@schedule_name`, `@enabled`, `@freq_type`, `@freq_interval`, `@freq_subday_type`, `@freq_subday_interval`, `@freq_relative_interval`, `@freq_recurrence_factor`, `@active_start_date`, `@active_end_date`, `@active_start_time`, `@active_end_time`, `@schedule_id` | AG-6c |
+| `msdb.dbo.sp_update_schedule` | `@schedule_id`, `@new_name`, `@enabled`, `@freq_type`, `@freq_interval`, `@freq_subday_type`, `@freq_subday_interval`, `@freq_relative_interval`, `@freq_recurrence_factor`, `@active_start_date`, `@active_end_date`, `@active_start_time`, `@active_end_time` | AG-6c |
+| `msdb.dbo.sp_delete_schedule` | `@schedule_id` | AG-6c |
 | `msdb.dbo.sp_add_operator` | later lanes | AG-7 |
 | `msdb.dbo.sp_update_operator` | later lanes | AG-7 |
 | `msdb.dbo.sp_delete_operator` | later lanes | AG-7 |
@@ -513,13 +615,13 @@ Writes (from AG-2) call only these, each followed by a return-code check:
 | `msdb.dbo.sp_update_notification` | later lanes | AG-7 |
 | `msdb.dbo.sp_delete_notification` | later lanes | AG-7 |
 | `msdb.dbo.sp_set_sqlagent_properties` | `@sqlserver_restart`, `@monitor_autostart`, `@jobhistory_max_rows`, `@jobhistory_max_rows_per_job` | AG-8a |
-| `msdb.dbo.sp_add_proxy` | later lanes | AG-8b |
-| `msdb.dbo.sp_update_proxy` | later lanes | AG-8b |
-| `msdb.dbo.sp_delete_proxy` | later lanes | AG-8b |
-| `msdb.dbo.sp_grant_proxy_to_subsystem` | later lanes | AG-8b |
-| `msdb.dbo.sp_revoke_proxy_from_subsystem` | later lanes | AG-8b |
-| `msdb.dbo.sp_grant_login_to_proxy` | later lanes | AG-8b |
-| `msdb.dbo.sp_revoke_login_from_proxy` | later lanes | AG-8b |
+| `msdb.dbo.sp_add_proxy` | `@proxy_name`, `@enabled`, `@description`, `@credential_name`, `@proxy_id` | AG-8b |
+| `msdb.dbo.sp_update_proxy` | `@proxy_id`, `@credential_name`, `@new_name`, `@enabled`, `@description` | AG-8b |
+| `msdb.dbo.sp_delete_proxy` | `@proxy_id` | AG-8b |
+| `msdb.dbo.sp_grant_proxy_to_subsystem` | `@proxy_id`, `@subsystem_id` | AG-8b |
+| `msdb.dbo.sp_revoke_proxy_from_subsystem` | `@proxy_id`, `@subsystem_id` | AG-8b |
+| `msdb.dbo.sp_grant_login_to_proxy` | `@proxy_id`, `@login_name`, `@fixed_server_role`, `@msdb_role` | AG-8b |
+| `msdb.dbo.sp_revoke_login_from_proxy` | `@proxy_id`, `@name` | AG-8b |
 | `msdb.dbo.sp_cycle_agent_errorlog` | later lanes | AG-5b |
 
 msdb error numbers the actions map (AG-2 onward; reads map 15281 to `AGENT_DISABLED` instead):
@@ -568,6 +670,22 @@ msdb error numbers the actions map (AG-2 onward; reads map 15281 to `AGENT_DISAB
 | `retentionDays` | 7 | The days of history "What this keeps" measures each job's rate over |
 | `retentionJobs` | 200 | Jobs "What this keeps" lists, those with the most rows first; more set `truncated` |
 | `historyAgeDays` | 400 | Whole days of age the purge's row estimate counts separately (older rows count together) |
+| `proxySubsystems` | 32 | Subsystems one proxy save may grant or revoke (AG-8b) |
+| `proxyPrincipals` | 64 | Principals one proxy save may grant or revoke, and the most a proxy's Principals list shows |
+| `principalChoices` | 1,000 | Logins, msdb roles and server roles the proxy document's principal picker lists (a name can still be typed) |
+| `proxyReferences` | 500 | Job steps a proxy's References and a credential's Used by list; more set `truncated` |
+| `credentials` | 1,000 | Credentials the proxy document's credential picker lists; more set `truncated` |
+| `credentialProxies` | 100 | Proxies a credential's Used by lists |
+| `credentialIdentityChars` | 128 | Characters of a credential's identity (CREATE and ALTER CREDENTIAL refuse more, error 15540) |
+| `credentialSecretChars` | 4,000 | UTF-16 code units of a credential's secret (its own bound: a credential secret is not a login password) |
+| `cryptographicProviders` | 64 | Cryptographic providers New Credential lists (`sys.cryptographic_providers`) |
 | `purgeCount` | 999 | The most days, weeks or months "Delete old history now" goes back (999 months stays inside `datetime`) |
+| `stepCommandChars` | 100,000 | Characters of one step's command in a job save |
+| `stepCommandTotalChars` | 1,000,000 | Characters of all the steps' commands in one job save |
+| `stepOutputChars` | 200 | Characters of a step's output file path (`sysjobsteps.output_file_name`) |
+| `stepRetries` | 9,999 | A step's largest Retry attempts |
+| `stepRetryMinutes` | 9,999 | A step's largest Retry interval, in minutes |
+| `parseChars` | 250,000 | Characters the step editor's Parse sends (`language.parse`) |
+| `parseErrors` | 100 | Errors one Parse reports; more set `truncated` |
 
-A job save makes at most 204 calls at these caps, below the 255 a THROW state can number.
+A job save makes at most 254 calls at these caps, below the 255 a THROW state can number.

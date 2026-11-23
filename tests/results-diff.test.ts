@@ -271,7 +271,7 @@ describe('result diffs', () => {
   })
 
   it('says when values were compared by their stored prefix', () => {
-    const info = { left: 'e1', right: 'e2', leftNumber: 1, rightNumber: 2, match: { mode: 'auto' as const, columns: ['Id'] }, layout: 'unified' as const, pairs: 1, columnChanges: [], exact: false, same: 1, changed: 0, added: 0, removed: 0, soft: 0, leftOnly: [], rightOnly: [], approximate: true, repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, trailingHidden: 0, leftRows: 1, rightRows: 1 }
+    const info = { left: 'e1', right: 'e2', leftNumber: 1, rightNumber: 2, match: { mode: 'auto' as const, columns: ['Id'] }, layout: 'unified' as const, pairs: 1, columnChanges: [], exact: false, same: 1, changed: 0, added: 0, removed: 0, soft: 0, leftOnly: [], rightOnly: [], approximate: true, repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, trailingHidden: 0, overview: [], units: 0, leftRows: 1, rightRows: 1 }
     // The strip says what was compared; the notice strip says the rest.
     expect(compareText(info)).toBe('Result 1 → Result 2, rows matched by Id: 0 changed rows, 0 added rows, 0 removed rows, 1 unchanged.')
     expect(comparisonNotices(info).map(notice => notice.kind)).toEqual(['approximate', 'empty'])

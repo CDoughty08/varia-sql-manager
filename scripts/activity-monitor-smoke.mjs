@@ -841,6 +841,9 @@ try {
     // live connection: click once the server's row shows it connected (its version) and nothing modal is left.
     await expect(explorerTree(page).getByRole('treeitem', { level: 1, name: /\(SQL Server \d/ })).toHaveCount(1, { timeout: 30000 })
     await expect(page.locator('[aria-modal="true"]')).toHaveCount(0)
+    // The command's precondition and live-connection check can trail the row's version; the toolbar button is enabled by the
+    // same check, so a click once it is enabled cannot fall through as a no-op.
+    await expect(toolbarButton(page, 'Activity Monitor')).toBeEnabled({ timeout: 30000 })
     await menu('activity.open')
     try { await expect(queryTabs().filter({ hasText: 'Activity Monitor' })).toHaveCount(1) } catch (error) {
       // Each way activity.open can end without a tab leaves a trace: the Connect dialog again, the server picker, a banner.

@@ -1,4 +1,4 @@
-import type { ApiResult, RecoveryEntry, SqlFile, VariaApi } from '../../../shared/contracts'
+import type { ApiResult, RecoveredDocument, RecoveryEntry, SqlFile, VariaApi } from '../../../shared/contracts'
 import { recoveryLimits } from '../../../shared/files/recovery'
 import type { SettingsValues } from '../../../shared/settings/catalog'
 import { SnapshotStore } from '../core/store'
@@ -22,6 +22,8 @@ export interface RecoveryServiceOptions {
   readonly warn: (message: string) => void
   readonly timers?: Timers
   readonly newId?: () => string
+  /** A recovered BigQuery query's jobs, to re-attach to once it connects (QueryService.restoreJobs). */
+  readonly restoredJobs?: (tabId: string, jobs: NonNullable<RecoveredDocument['jobs']>) => void
 }
 /** When a copy was saved, as the Recover dialog says it: "just now", "5 minutes ago", "yesterday", "3 days ago". */
 export function savedAgo(savedAt: string, now: number = Date.now()): string {
@@ -34,7 +36,7 @@ export function savedAgo(savedAt: string, now: number = Date.now()): string {
   return format.format(Math.round(seconds / 86_400), 'day')
 }
 /** A query's record, and the model version and engine it holds (none until a write succeeded). */
-interface Kept { readonly id: string; version?: number; provider?: string }
+interface Kept { readonly id: string; version?: number; provider?: string; jobKey?: string }
 const minuteMs = 60_000
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 const failed = (error: unknown) => error instanceof Error ? error.message : 'The operation failed.'
@@ -94,7 +96,7 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
   /** Resumes a copy main verified against a pin that just reopened. Future edits replace it and closing removes it. */
   resume(tabId: string, id: string): void {
     const document = this.options.documents.get(tabId)
-    this.kept.set(tabId, { id, version: this.options.documents.getModel(tabId)?.getAlternativeVersionId(), provider: document && !document.kind ? document.provider : undefined })
+    this.kept.set(tabId, { id, version: this.options.documents.getModel(tabId)?.getAlternativeVersionId(), provider: document && !document.kind ? document.provider : undefined, jobKey: document && !document.kind ? document.jobKey : undefined })
   }
 
   /**
@@ -116,8 +118,9 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
     // A table designer, Database Properties, SSIS properties, an Activity Monitor or Operations has no model: AutoRecover keeps text only.
     if (!document?.dirty || !model || isCustomKind(document.kind)) return
     // Moving a query to another engine changes no text, but the copy must still reopen in the new language.
-    const version = model.getAlternativeVersionId(), current = this.kept.get(tabId), provider = !document.kind ? document.provider : undefined
-    if (current?.version === version && current.provider === provider) return
+    const version = model.getAlternativeVersionId(), current = this.kept.get(tabId), provider = !document.kind ? document.provider : undefined, jobKey = provider === 'bigquery' ? document.jobKey : undefined
+    // A job key given since the last copy must reach it too, so a recovered copy re-attaches to the tab's jobs.
+    if (current?.version === version && current.provider === provider && current.jobKey === jobKey) return
     // Kept before the write, so a save or close meanwhile deletes the copy after it is written.
     const kept: Kept = current ?? { id: this.options.newId?.() ?? crypto.randomUUID() }
     this.kept.set(tabId, kept)
@@ -129,10 +132,11 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
         id: kept.id, name: document.name.slice(0, recoveryLimits.nameChars), kind: !document.kind || isCustomKind(document.kind) ? 'sql' : document.kind, ...document.file ? { fileId: document.file.id } : {},
         eol: model.getEOL() === '\r\n' ? 'crlf' : 'lf', ...server ? { server: server.slice(0, recoveryLimits.serverChars) } : {},
         ...server && document.database ? { database: document.database.slice(0, bigQuery ? recoveryLimits.datasetChars : recoveryLimits.databaseChars) } : {},
-        ...bigQuery ? { provider: 'bigquery' as const } : {}, text: model.getValue()
+        ...bigQuery ? { provider: 'bigquery' as const, ...jobKey ? { jobKey } : {} } : {}, text: model.getValue()
       }))
       kept.version = version
       kept.provider = provider
+      kept.jobKey = jobKey
     } catch (error) { this.warnOnce(`AutoRecover could not save ${document.name}: ${failed(error)}`) }
   }
   /** A query that has no unsaved changes any more, or closed, needs no copy. */
@@ -190,8 +194,9 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
           let taken
           try { taken = unwrap(await this.options.api.takeRecovery(id)) } catch (error) { problems.push(failed(error)); continue }
           if (taken.file) files.push(taken.file)
-          const document = this.options.documents.restore(taken.name, taken.text, taken.kind, taken.eol, taken.file, taken.provider)
+          const document = this.options.documents.restore(taken.name, taken.text, taken.kind, taken.eol, taken.file, taken.provider, taken.jobKey)
           this.resume(document.id, id)
+          if (taken.jobs?.length) this.options.restoredJobs?.(document.id, taken.jobs)
         }
       } finally { await this.options.files.release(files) }
       if (problems.length) throw new Error(problems.join(' '))

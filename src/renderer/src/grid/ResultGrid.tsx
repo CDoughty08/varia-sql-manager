@@ -8,6 +8,7 @@ import type { ResultHandle } from '../results/ResultClient'
 import { capStripText, entryName, entryNumber, filteredColumns, groupOf, pivotOutOfDate, queryName, setKey, slotOf, type EntryKey, type GridSort, type ResultSetEntry } from '../results/ResultsService'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { resultsFilterSource } from '../results/ColumnFilterPopover'
+import { remoteHeader } from '../results/remote-views'
 import { compareDetails, compareSources, compareText, type CompareInfo } from '../results/CompareService'
 import { highlightText } from '../results/HighlightsService'
 import ComparisonToolbar from '../results/ComparisonToolbar'
@@ -183,7 +184,9 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
       onWide: wide => latest.current.onWide?.(key, wide),
       onOpenValue: (row, column) => { void commands.execute('output.openValue', { tabId, cell: { entry: key, row, column } }, 'keybinding') },
       // Find Next onto a match in a row the transposed grid does not draw: the toolbar says so.
-      onBeyondCap: row => results.beyondCap(tabId, row)
+      onBeyondCap: row => results.beyondCap(tabId, row),
+      // A comparison's active row and its tone: whether Go to Possible Match is offered (comparisonRowHasPartner).
+      ...compared ? { onDiffRow: (row: number, tone: string | null) => compare.activeRow(tabId, key, setKey(entry.descriptor), row, tone) } : {}
     })
     viewRef.current = view
     view.setMarks(now.marks)
@@ -191,7 +194,9 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
       selectAll: () => view.selectAll(), repaint: () => view.repaint(), fitColumn: column => view.fitColumn(column),
       fitDrawn: row => { if (row === undefined) view.fitNames(); else view.fitRow(row) },
       filterColumn: column => apiRef.current?.openFunnel(column),
-      selectColumn: column => view.selectColumn(column)
+      selectColumn: column => view.selectColumn(column),
+      // Previous and Next Difference and Go to Possible Match move in what the grid shows: its view's positions, once swapped.
+      ...entry.descriptor.kind === 'diff' && !now.turnedView ? { diff: { active: () => view.diffActive(), handle: () => shownRef.current.handle, land: (row, first, settle, focus) => view.landDiff(row, first, settle, focus), tone: row => view.diffTone(row), toneWhenRead: (row, signal) => view.toneWhenRead(row, signal) } } : {}
     })
     // Closing and opening the pane within one frame moves the grid without resizing it, and the move drops the scroller's
     // offsets: the frame this asks for writes them back (GridView's offsetsDropped), and a press before it keeps them.
@@ -249,9 +254,15 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
     if (!compared) return
     const shown = shownRef.current.handle === entry.handle && !sort?.keys.length && !sort?.filters.length
     viewRef.current?.setDiffGaps({ shown, trailing: compared.trailingHidden })
+    // The overview strip maps the comparison's stored rows, so it shows only over them in their own order, as the rules do.
+    viewRef.current?.setOverview({ buckets: compared.overview, shown })
   }, [compared, sort, target, swaps, tabId, entry, turnedView])
   const source = useMemo(() => resultsFilterSource(results, tabId, key), [results, tabId, key])
-  const funnels = useMemo<GridFunnels>(() => ({ source, filtered, columnName: column => entry.descriptor.columns[column]?.name }), [source, filtered, entry])
+  // A windowed BigQuery result sorts and filters in BigQuery: its tooltips say so, and columns BigQuery cannot order have
+  // no funnel and a sort button that says why.
+  const windowed = snapshot.residence === 'remote'
+  const header = useMemo(() => windowed ? remoteHeader(entry.descriptor.columns) : undefined, [windowed, entry])
+  const funnels = useMemo<GridFunnels>(() => ({ source, filtered, ...header ?? {}, columnName: column => entry.descriptor.columns[column]?.name }), [source, filtered, header, entry])
   const onApi = useCallback((api: GridShellApi | undefined) => { apiRef.current = api }, [])
   const setRootEl = useCallback((element: HTMLDivElement | null) => { rootEl.current = element }, [])
   const lost = snapshot.state === 'lost'
