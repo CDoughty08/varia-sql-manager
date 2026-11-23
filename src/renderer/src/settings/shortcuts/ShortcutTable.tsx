@@ -88,9 +88,9 @@ export default function ShortcutTable({ groups, platform, selected, onSelect, on
       const key = selectionKey(selection), isSelected = key === current
       const changed = byPlatform ? row.changed : binding?.source === 'user' || binding?.source === 'removed'
       // Copy writes a row as shown, its command by title alone and its keys as text (data-copy, grid/row-copy.ts).
-      const command = <td className="shortcuts-command" title={`${row.title}\n${row.id}`} data-copy={row.title}>
-        {changed ? <span className="shortcuts-dot" role="img" aria-label="Changed" title="Changed: saved when you choose OK" /> : <span className="shortcuts-nodot" />}
-        {match.first ? <><span className="shortcuts-command-title">{row.title}</span><span className="shortcuts-muted shortcuts-command-id">{row.id}</span></> : <span className="shortcuts-muted">{row.title}</span>}
+      const command = <td className="shortcuts-command" title={`${row.title} (${row.id})`} data-copy={row.title}>
+        {changed ? <span className="shortcuts-dot" role="img" aria-label="Changed" title="Changed: saved when you choose OK or Apply" /> : <span className="shortcuts-nodot" />}
+        {match.first ? <span className="shortcuts-command-title">{row.title}</span> : <span className="shortcuts-muted">{row.title}</span>}
       </td>
       const source = <td className="shortcuts-source-cell">
         <SourceChip source={binding?.source ?? (row.lock ? row.lock.source : 'unbound')} lock={row.lock?.reason} />

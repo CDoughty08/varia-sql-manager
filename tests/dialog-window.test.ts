@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, createElement, StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import DialogWindow, { centredBounds, closesDialogWindow, DialogHeading, dialogWindowBounds, dialogWindowSize, rememberDialogWindowBounds, rememberDialogWindowSize } from '../src/renderer/src/popouts/DialogWindow'
+import { preparePopoutDocument } from '../src/renderer/src/popouts/popout-document'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import { modalOpen, openModal } from '../src/renderer/src/core/modal'
@@ -54,7 +55,7 @@ describe('dialog window sizes', () => {
     expect(dialogWindowSize('options', screen, JSON.stringify({ width: 1200, height: 800 }))).toEqual({ width: 1200, height: 800 })
     expect(dialogWindowSize('options', screen, JSON.stringify({ width: 10, height: 10 }))).toEqual({ width: minWidth, height: minHeight })
     // An oversized stored size resets safely to the kind's default (fitted to the screen), rather than expanding full screen.
-    expect(dialogWindowSize('options', { width: 1024, height: 700 }, JSON.stringify({ width: 4000, height: 4000 }))).toEqual({ width: 940, height: 668 })
+    expect(dialogWindowSize('options', { width: 1024, height: 700 }, JSON.stringify({ width: 4000, height: 4000 }))).toEqual({ width: 960, height: 668 })
     for (const damaged of ['{', '"x"', JSON.stringify({ width: 'wide', height: 700 }), JSON.stringify({ width: 1.5, height: 700 })]) expect(dialogWindowSize('options', screen, damaged)).toEqual({ width, height })
     // About cannot be resized, so a stored size never applies to it.
     expect(dialogWindowSize('about', screen, JSON.stringify({ width: 900, height: 900 }))).toEqual({ width: dialogWindowKinds.about.width, height: dialogWindowKinds.about.height })
@@ -92,7 +93,7 @@ describe('DialogWindow', () => {
     const [, name, features] = view.open.mock.calls[0] as [string, string, string]
     expect(name).toMatch(dialogWindowName)
     expect(name.startsWith('varia-dialog-options-')).toBe(true)
-    expect(features).toMatch(/^left=-?\d+,top=-?\d+,width=940,height=680$/)
+    expect(features).toMatch(/^left=-?\d+,top=-?\d+,width=960,height=700$/)
     expect(view.attachWindow).toHaveBeenCalledWith(view.fake.child)
     const doc = view.fake.child.document
     expect(view.host.querySelector('[role="dialog"]')).toBeNull()
@@ -256,5 +257,29 @@ describe('DialogWindow', () => {
       vi.spyOn(windows, 'activeDocument').mockReturnValue(document)
       expect(openModal()).toBe(other)
     } finally { other.remove() }
+  })
+})
+
+describe('preparePopoutDocument', () => {
+  it('writes an HTML5 doctype when the child document opens in BackCompat mode and skips when already CSS1Compat', () => {
+    const quirksDoc = document.implementation.createHTMLDocument('')
+    Object.defineProperty(quirksDoc, 'compatMode', { value: 'BackCompat', configurable: true })
+    const open = vi.fn(), write = vi.fn(), close = vi.fn()
+    Object.assign(quirksDoc, { open, write, close })
+    const quirksFrame = preparePopoutDocument({ document: quirksDoc, closed: false } as unknown as Window, document, 'Options')
+    quirksFrame.dispose()
+    expect(open).toHaveBeenCalledTimes(1)
+    expect(write).toHaveBeenCalledWith('<!doctype html><html><head><meta charset="UTF-8"></head><body></body></html>')
+    expect(close).toHaveBeenCalledTimes(1)
+
+    const standardsDoc = document.implementation.createHTMLDocument('')
+    Object.defineProperty(standardsDoc, 'compatMode', { value: 'CSS1Compat', configurable: true })
+    const sOpen = vi.fn(), sWrite = vi.fn(), sClose = vi.fn()
+    Object.assign(standardsDoc, { open: sOpen, write: sWrite, close: sClose })
+    const standardsFrame = preparePopoutDocument({ document: standardsDoc, closed: false } as unknown as Window, document, 'Options')
+    standardsFrame.dispose()
+    expect(sOpen).not.toHaveBeenCalled()
+    expect(sWrite).not.toHaveBeenCalled()
+    expect(sClose).not.toHaveBeenCalled()
   })
 })

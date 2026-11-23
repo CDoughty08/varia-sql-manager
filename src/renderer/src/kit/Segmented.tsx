@@ -27,6 +27,8 @@ interface Props extends Pick<AriaAttributes, 'aria-describedby' | 'aria-invalid'
   readonly segments: readonly Segment[]
   readonly value: string
   readonly onChange: (value: string) => void
+  readonly onFocus?: () => void
+  readonly dataSetting?: string
   readonly disabled?: boolean
   /** Marks a value that differs from what was read (`data-changed`). */
   readonly changed?: boolean
@@ -37,7 +39,7 @@ interface Props extends Pick<AriaAttributes, 'aria-describedby' | 'aria-invalid'
  * they move, as radio buttons do. The chosen segment is filled, outlined and bold, so the choice is not colour alone. A
  * value no segment has (one SQL Server reports that the list does not offer) leaves none chosen.
  */
-export default function Segmented({ id, labelledBy, segments, value, onChange, disabled, changed, ...aria }: Props) {
+export default function Segmented({ id, labelledBy, segments, value, onChange, onFocus, dataSetting, disabled, changed, ...aria }: Props) {
   const group = useRef<HTMLDivElement>(null)
   const chosen = segments.findIndex(segment => segment.value === value)
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -49,8 +51,9 @@ export default function Segmented({ id, labelledBy, segments, value, onChange, d
     if (segments[next].value !== value) onChange(segments[next].value)
     group.current?.querySelectorAll<HTMLElement>('[role="radio"]')[next]?.focus()
   }
-  return <div ref={group} id={id} className="segmented" role="radiogroup" aria-labelledby={labelledBy} aria-disabled={disabled || undefined} data-changed={changed || undefined} {...aria} onKeyDown={keyDown}>
+  return <div ref={group} id={id} className="segmented" role="radiogroup" aria-labelledby={labelledBy} aria-disabled={disabled || undefined} data-changed={changed || undefined} {...aria} onFocusCapture={onFocus} onKeyDown={keyDown}>
     {segments.map((segment, index) => <button key={segment.value} type="button" role="radio" className="segmented-option" aria-checked={index === chosen} disabled={disabled}
+      {...index === 0 && dataSetting ? { 'data-setting': dataSetting } : {}}
       tabIndex={index === (chosen < 0 ? 0 : chosen) ? 0 : -1} onClick={() => { if (segment.value !== value) onChange(segment.value) }}>{segment.label}</button>)}
   </div>
 }
