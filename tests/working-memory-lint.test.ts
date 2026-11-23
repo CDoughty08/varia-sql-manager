@@ -124,8 +124,9 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   // (Bare names throughout: a method group or a space before the parenthesis is a call all the same.)
   // A job's results are read where a query's own rows are (its first page, a script's statements, its pages under the
   // budget), by Load into memory (RemoteLoadAsync) and by a sort, filter or value list's own job (RemoteDerivedAsync, the
-  // new result's rows, never the windowed one's): nowhere else reads a windowed result's rows around the cache.
-  expect(uses(/\bQueryResultsAsync\b/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'BigQuery/BigQueryService.Script.cs', ...Array(3).fill('SqlService.BigQueryExecution.cs'), 'SqlService.BigQueryResidence.cs', 'SqlService.BigQueryViews.cs'])
+  // new result's rows, never the windowed one's): nowhere else reads a windowed result's rows around the cache. The search
+  // index's billed bulk read (BigQueryService.Bulk.cs) reads only its own INFORMATION_SCHEMA jobs' rows, into the index budget.
+  expect(uses(/\bQueryResultsAsync\b/g).sort()).toEqual(['BigQuery/BigQueryService.Bulk.cs', 'BigQuery/BigQueryService.Jobs.cs','BigQuery/BigQueryService.Script.cs', ...Array(3).fill('SqlService.BigQueryExecution.cs'), 'SqlService.BigQueryResidence.cs', 'SqlService.BigQueryViews.cs'])
   const load = residence.indexOf('private async Task<QueryResult> RemoteLoadAsync(')
   expect(load).toBeGreaterThan(0)
   expect(residence.indexOf('bigQuery.QueryResultsAsync(')).toBeGreaterThan(load)
