@@ -182,7 +182,7 @@ internal sealed partial class SqlService
         if (plan.Kind == "rerun")
         {
             // A rerun reads what its statement reads, not the result table, so whether that expired does not matter.
-            if (plan.FromJob) (sql, dataset) = await StatementAsync(plan, token);
+            if (plan.FromJob) (sql, dataset, _) = await StatementAsync(plan, token);
         }
         else if (await TableGoneAsync(connection, window.Table, token))
         {
@@ -239,7 +239,8 @@ internal sealed partial class SqlService
             // its own LIMIT and is always read into memory.
             MaxRows = distinct || sample ? 0 : window.Args.MaxRows, Residence = distinct || sample ? "memory" : window.Args.Residence
         };
-        var timeout = window.Args.TimeoutSeconds;
+        // The query's timeout bounds a job; a first-rows sample runs none, and Stop ends its free reads.
+        var timeout = plan.FirstRows ? 0 : window.Args.TimeoutSeconds;
         using var cancellation = timeout == 0 ? new CancellationTokenSource() : new CancellationTokenSource(TimeSpan.FromSeconds(timeout));
         var running = new RunningQuery(connection.Id, args.QueryId, cancellation);
         if (!Register(args.QueryId, running)) throw new RequestException("DUPLICATE_QUERY", "This query is already running.");
@@ -298,10 +299,11 @@ internal sealed partial class SqlService
                 // A rerun's statement is read from its job (free) before anything is billed.
                 if (plan.FromJob)
                 {
-                    var (statement, from) = await StatementAsync(plan, token);
+                    var (statement, from, session) = await StatementAsync(plan, token);
                     // The window it opens keeps them, so its own rerun starts from what ran.
                     queryArgs = queryArgs with { Sql = statement, Dataset = from };
                     dataset = from;
+                    if (session) messages.Add(RerunOutsideSession);
                 }
                 var job = new Job
                 {

@@ -605,6 +605,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   readonly selections: ExternalStore<number> = this.selectionStore
   private scheduled = false
   private disposed = false
+  /** The last sample group handed out (negative, counting down), never reused in this window. */
+  private sampleGroup = 0
   private announcedCount = 0
   /** Residence switches said by tab whose announcement has not been read out yet: the run's end, within the live region's
    *  delay, would replace it, so it says them too. */
@@ -983,8 +985,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (refused !== undefined) return refused || undefined
     const run = this.runs.get(tabId)!, set = run.entries.get(key)!
     const abort = new AbortController()
+    // The strip's status says it is running again (loadingText), so nothing more is announced.
     this.beginAuxiliary(tabId, run, key, 'rerun', abort)
-    this.announce(tabId, 'Running the query again…')
     let failure: string | undefined
     try {
       const descriptor = await this.remote!.rerun(tabId, set.handle, abort.signal)
@@ -1017,10 +1019,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (run.bare || run.status === 'running' || run.status === 'closed' || run.sets.length >= resultLimits.sets) { this.releaseDescriptor(descriptor); return false }
     run.setKeys.add(key)
     if (run.setsPublished) { run.sets = run.sets.slice(); run.setsPublished = false }
-    // Numbered once, for its life, as a derived entry is. Its group is the negative of its number: a group's ordinal is what
-    // highlights, the Column Profile, the focus, Pivot drafts and Compare follow into the next run, where the query's own
-    // results are numbered from 1, so a sample's state never passes to one of them.
-    const number = ++run.numbered, ordinal = -number
+    // Numbered once, for its life, as a derived entry is. Its group is negative and never handed out again: a group's ordinal
+    // is what highlights, the Column Profile, the focus, Pivot drafts and Compare follow into the next run, where the query's
+    // own results are numbered from 1 and later samples get groups of their own, so a sample's state passes to nothing.
+    const number = ++run.numbered, ordinal = --this.sampleGroup
     // Two samples of one size read apart by their numbers.
     const named = run.sets.some(other => other.label === label) ? `${label} (${entryNumber({ number })})` : label
     const entry: ResultSetEntry = { key: this.mint(), ordinal, number, descriptor, handle: this.client.open(descriptor), label: named, sample: true }

@@ -11,7 +11,16 @@ export interface SampleRequest {
 
 /** Load sample's dialog (docs/bigquery.md, Load a sample); App mounts it while a request is set. */
 export class SampleDialogService extends SnapshotStore<{ readonly request?: SampleRequest }> {
-  constructor(private readonly results: Pick<ResultsService, 'sampleSource'>) { super({}) }
+  private readonly unsubscribe: () => void
+  constructor(private readonly results: Pick<ResultsService, 'sampleSource' | 'subscribe'>) {
+    super({})
+    // Closed once its result can no longer be sampled (closed, its tab closed or run again, the backend lost), so Load never
+    // goes quietly nowhere.
+    this.unsubscribe = results.subscribe(() => {
+      const request = this.getSnapshot().request
+      if (request && !this.results.sampleSource(request.tabId, request.key)) this.close()
+    })
+  }
   /** Opens the dialog for a windowed result that can be sampled now; false (nothing opens) otherwise. */
   open(tabId: string, key: EntryKey): boolean {
     const source = this.results.sampleSource(tabId, key)
@@ -21,5 +30,5 @@ export class SampleDialogService extends SnapshotStore<{ readonly request?: Samp
     return true
   }
   close(): void { if (this.getSnapshot().request) this.publish({}) }
-  dispose(): void { this.publish({}); this.clearListeners() }
+  dispose(): void { this.unsubscribe(); this.publish({}); this.clearListeners() }
 }

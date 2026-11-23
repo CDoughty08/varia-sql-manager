@@ -9,7 +9,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { startBigQueryRest } from './fixtures/bigquery-rest.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
-import { backendReady, editorTextbox, gridCell, gridPart, moreResultsTools, outputStatus, resultGrid, resultsToolsMenu, toolbarButton } from './fixtures/ui.mjs'
+import { backendReady, editorTextbox, gridCell, gridPart, moreResultsTools, outputStatus, resultGrid, resultIdOf, resultsToolsMenu, toolbarButton } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'bigquery-results-profile-'))
@@ -107,10 +107,13 @@ try {
   await page.keyboard.press('Control+End')
   await expect(strip('Result 1')).toContainText('BigQuery no longer keeps this result', { timeout: 30000 })
   const rerun = strip('Result 1').getByRole('button', { name: 'Re-run…', exact: true })
+  const before = await resultIdOf(resultGrid(page, 'Result 1'))
   await rerun.click()
-  await expect(strip('Result 1')).not.toContainText('BigQuery no longer keeps this result', { timeout: 30000 })
-  expect(fake.inserted.length).toBe(jobs + 2)
+  // The strip says it runs again at once: wait for the new job and for the grid to show the new result.
+  await expect.poll(() => fake.inserted.length, { timeout: 30000 }).toBe(jobs + 2)
   expect(fake.inserted.at(-1).query).toBe('SELECT n, s FROM t')
+  await expect.poll(() => resultIdOf(resultGrid(page, 'Result 1')), { timeout: 30000 }).not.toBe(before)
+  await expect(strip('Result 1')).not.toContainText(/BigQuery no longer keeps this result|Running the query again/, { timeout: 30000 })
   await gridCell(resultGrid(page, 'Result 1'), 0, 0).click()
   await page.keyboard.press('Control+End')
   await expect(gridCell(resultGrid(page, 'Result 1'), 59_999, 1)).toHaveText('row 59999', { timeout: 30000 })

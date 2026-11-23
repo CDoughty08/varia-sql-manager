@@ -52,6 +52,12 @@ internal static partial class BigQueryExecutionChecks
             "a random sample reads the result table with TABLESAMPLE SYSTEM, its percent and rows as parameters: " + sql + " " + string.Join(", ", parameters.Select(p => p.Name + "=" + p.ParameterValue.Value)));
         check(new[] { BigQuerySql.SampleOpen, BigQuerySql.SamplePercentParameter, BigQuerySql.SampleLimit, BigQuerySql.SampleRowsParameter }.All(BigQuerySql.ViewFragments.Contains),
             "the sample's fragments are in the linted view fragments");
+        var tiny = new List<QueryParameter>();
+        BigQueryViewSql.Sample(ViewTable, 1000, 1_100_000_000, tiny);
+        var floor = new List<QueryParameter>();
+        BigQueryViewSql.Sample(ViewTable, 1, 1_000_000_000_000, floor);
+        check(tiny[0].ParameterValue.Value == "0.000101" && floor[0].ParameterValue.Value == "0.000001",
+            $"a small percent is written in plain decimals, never in exponent form: {tiny[0].ParameterValue.Value} {floor[0].ParameterValue.Value}");
         check(SqlService.ShortSample(1000, 1000, 3000) == "" && SqlService.ShortSample(20, 1000, 20) == "" && SqlService.ShortSample(200, 1000, 3000).Contains("fewer rows than asked", StringComparison.Ordinal)
             && SqlService.ShortSample(0, 1000, 3000).Contains("held no rows", StringComparison.Ordinal),
             "a random sample that holds fewer rows than asked, or than the table has, says why");
@@ -142,11 +148,14 @@ internal static partial class BigQueryExecutionChecks
             && InsertedSql(harness) == "SELECT n, s FROM t" && query["defaultDataset"]?["datasetId"]?.GetValue<string>() == "varia_fixture" && query["createSession"] is null
             && query["connectionProperties"] is null && result.Job is not null,
             $"a rerun runs the result's own statement in its dataset, outside the session, into a result of its own: {code} {message} {result?.Status} {set?.Residence} {set?.RowsAvailable} {stored?.Reran} {InsertedSql(harness)} {query.ToJsonString()}");
-        // A rerun's result runs again in its turn.
+        check(!Says(result, "outside the tab's session"), "a rerun of a job that ran in no session says nothing of one: " + Texts(result?.Messages ?? []));
+        // A rerun's result runs again in its turn; one whose job ran in a session says what does not carry over.
         if (set is null) return;
+        harness.Jobs.Statistics = new JsonObject { ["sessionInfo"] = new JsonObject { ["sessionId"] = "session-1" } };
         var (again, againResult, _, againMessage) = await Run(harness, "results.remoteQuery", Rerun(set.ResultId));
-        check(again == "ok" && againResult?.Status == "completed" && InsertedSql(harness) == "SELECT n, s FROM t",
-            $"a rerun's result runs again: {again} {againMessage} {againResult?.Status} {InsertedSql(harness)}");
+        harness.Jobs.Statistics = null;
+        check(again == "ok" && againResult?.Status == "completed" && InsertedSql(harness) == "SELECT n, s FROM t" && Says(againResult, SqlService.RerunOutsideSession),
+            $"a rerun's result runs again, saying a session's settings did not carry over: {again} {againMessage} {againResult?.Status} {InsertedSql(harness)} {Texts(againResult?.Messages ?? [])}");
         // The release of the result it replaces leaves it standing.
         await harness.Call("results.close", new JsonObject { ["resultIds"] = new JsonArray(id) });
         check(harness.Service.Results.Find(set.ResultId) is { IsRemote: true }, "a rerun's result outlives the source it replaces, which the renderer closes once it shows the new one");

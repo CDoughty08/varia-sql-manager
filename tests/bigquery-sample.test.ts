@@ -187,11 +187,11 @@ describe('Load sample in the results service', () => {
     const sets = f.tab().sets
     const sample = sets[1]
     expect(sets.map(set => set.descriptor.resultId)).toEqual([1, 60, 2])
-    expect(sample).toMatchObject({ label: 'Sample: 980 of 52,341,118 rows', sample: true, number: 3, ordinal: -3 })
+    expect(sample).toMatchObject({ label: 'Sample: 980 of 52,341,118 rows', sample: true, number: 3, ordinal: -1 })
     expect(entryName(sample)).toBe('Sample: 980 of 52,341,118 rows')
     expect(resultTitle(sample)).toBe('Sample: 980 of 52,341,118 rows')
     // Its group is numbered below the query's own, so no state the next run carries by group reaches its results.
-    expect(groupOf(f.tab(), sample.key)).toMatchObject({ ordinal: -3, table: { key: sample.key } })
+    expect(groupOf(f.tab(), sample.key)).toMatchObject({ ordinal: -1, table: { key: sample.key } })
     expect(f.tab().focused).toBe(sample.key)
     expect(f.tab().loads).toBeUndefined()
     expect(f.service.canLoadSample('t1', f.key)).toBe(true)
@@ -208,7 +208,33 @@ describe('Load sample in the results service', () => {
     const sets = f.tab().sets
     expect(sets.map(set => set.descriptor.resultId)).toEqual([1, 60, 61, 2])
     expect(sets.map(set => set.label)).toEqual([undefined, 'Sample: 1,000 of 52,341,118 rows', 'Sample: 1,000 of 52,341,118 rows (Result 4)', undefined])
-    expect(sets.map(set => set.ordinal)).toEqual([1, -3, -4, 2])
+    expect(sets.map(set => set.ordinal)).toEqual([1, -1, -2, 2])
+    f.service.dispose()
+  })
+  it('never gives a later run’s sample the group of an earlier one', async () => {
+    const f = serviceFixture()
+    const first = f.service.loadSample('t1', f.key, 10, 'first')
+    await vi.waitFor(() => expect(f.answers.length).toBe(1))
+    f.answers[0].resolve(descriptor(60, { columns, rowsStored: 10, rowsAvailable: 10, residence: 'memory' }))
+    await first
+    expect(f.tab().sets[1].ordinal).toBe(-1)
+    f.service.begin('t1', 'q2')
+    f.service.finish('t1', 'q2', { summary: summaryOf([{ ...windowed(3), index: 0 }, descriptor(4, { index: 1, columns })]) })
+    const again = f.service.loadSample('t1', f.tab().sets.find(set => set.descriptor.resultId === 3)!.key, 10, 'first')
+    await vi.waitFor(() => expect(f.answers.length).toBe(2))
+    f.answers[1].resolve(descriptor(61, { columns, rowsStored: 10, rowsAvailable: 10, residence: 'memory' }))
+    await again
+    expect(f.tab().sets.map(set => [set.descriptor.resultId, set.ordinal])).toEqual([[3, 1], [61, -2], [4, 2]])
+    f.service.dispose()
+  })
+  it('closes the dialog once its result can no longer be sampled', () => {
+    const f = serviceFixture()
+    const dialog = new SampleDialogService(f.service)
+    expect(dialog.open('t1', f.key)).toBe(true)
+    expect(dialog.getSnapshot().request).toMatchObject({ key: f.key, total: 52_341_118 })
+    f.service.removeEntry('t1', f.key)
+    expect(dialog.getSnapshot().request).toBeUndefined()
+    dialog.dispose()
     f.service.dispose()
   })
   it('stops a sample through its signal, and says nothing of it', async () => {
@@ -310,7 +336,7 @@ describe('Re-run in the results service', () => {
 describe('Load sample\'s dialog', () => {
   it('opens for a result that can be sampled, with what it needs, and not otherwise', () => {
     const source = { name: 'Result 1', resultId: 1, generation: 1, total: 5_000, projectedBytes: 500_000, freeBytes: 10_000 }
-    const results = { sampleSource: vi.fn((_tabId: string, key: string) => key === 'k1' ? source : undefined) }
+    const results = { sampleSource: vi.fn((_tabId: string, key: string) => key === 'k1' ? source : undefined), subscribe: () => () => {} }
     const dialog = new SampleDialogService(results)
     expect(dialog.open('t1', 'k2')).toBe(false)
     expect(dialog.getSnapshot().request).toBeUndefined()

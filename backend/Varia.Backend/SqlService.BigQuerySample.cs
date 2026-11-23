@@ -48,20 +48,25 @@ internal sealed partial class SqlService
     /// <summary>A rerun's statement from its job (jobs.get, free): the statement that made the result (a script child's alone),
     /// and the default dataset it ran with when that was the billing project's. Only one SELECT runs again: a script's job, or
     /// any other statement, is refused before anything is billed.</summary>
-    private async Task<(string Sql, string? Dataset)> StatementAsync(RemotePlan plan, CancellationToken token)
+    private async Task<(string Sql, string? Dataset, bool Session)> StatementAsync(RemotePlan plan, CancellationToken token)
     {
         var window = plan.Window;
         var job = await bigQuery.GetJobAsync(window.Connection, window.Project, window.JobId, window.Location, token);
         var query = job.Configuration?.Query;
         if (string.IsNullOrWhiteSpace(query?.Query))
             throw new RequestException("BACKEND_ERROR", "BigQuery did not say which statement made this result, so it cannot run again in place. Run the query again.");
-        // The emulator names no statement type; BigQuery names every job's.
+        // The emulator names no statement type; BigQuery names every job's, so a job it does not name as one SELECT is refused.
         var type = BigQueryService.StatementOf(job.Statistics);
-        if (type == "SCRIPT" || job.Statistics?.NumChildJobs > 0 || type is not (null or "SELECT"))
+        if (type == "SCRIPT" || job.Statistics?.NumChildJobs > 0)
             throw new RequestException("INVALID_PARAMS", "Only a single SELECT's result runs again in place, and this result came from a script. Run the query again.");
+        if (type != "SELECT" && !(type is null && bigQuery.Environment.Emulator))
+            throw new RequestException("INVALID_PARAMS", "Only a single SELECT's result runs again in place, and BigQuery does not name this result's statement a SELECT. Run the query again.");
         var own = query.DefaultDataset is { DatasetId: { } dataset, ProjectId: var project } && (project is null || project == window.Project) && BqNames.IsDataset(dataset) ? dataset : null;
-        return (query.Query, own ?? plan.Dataset);
+        return (query.Query, own ?? plan.Dataset, job.Statistics?.SessionInfo?.SessionId is { Length: > 0 });
     }
+
+    /// <summary>What a rerun of a job that ran in a session cannot carry over, in Messages.</summary>
+    internal const string RerunOutsideSession = "The statement ran again outside the tab's session: session settings such as @@dataset_id, temp tables and the changes of a transaction that was open do not carry over, so its rows may differ.";
 
     /// <summary>Why a sample was not made: the store had no room for its set.</summary>
     internal const string SampleRoom = "There is not enough result memory for this sample. Close other results, or ask for fewer rows.";

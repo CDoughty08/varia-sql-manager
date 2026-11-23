@@ -2282,6 +2282,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .load-sample-dialog .property-row { grid-template-columns: 96px minmax(0, 1fr); }
 .load-sample-rows { display: flex; align-items: center; gap: var(--varia-space-2); min-width: 0; color: var(--varia-dialog-descriptionForeground); }
 .load-sample-rows input { width: 120px; flex: none; }
+.load-sample-dialog .field-note[data-tone="warning"] { color: var(--varia-warningForeground); }
 .bigquery-cost-sentence { margin: 0; }
 .bigquery-cost-prompt .link-button { padding: 0; border: 0; background: none; color: var(--varia-list-highlightForeground); font: inherit; text-decoration: underline; cursor: pointer; }
 @media (forced-colors: active) { .bigquery-cost-prompt .link-button { color: LinkText; } }

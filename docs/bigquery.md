@@ -444,7 +444,9 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
   closing the result cancels it. Only a query's own result (or a re-run's) runs again: a view, value list or sample reads
   a table that may be gone, so its query is run again from the editor. A result whose job BigQuery names a script, or
   anything but one SELECT (a script whose statements were not listed), is refused with `INVALID_PARAMS`, so a script
-  never runs again whole. Outside the session, a statement that reads the tab's temp tables or variables fails as BigQuery says. A cache hit's destination table is an older one, which may expire sooner, so a
+  never runs again whole. It runs outside the session, so a statement that reads the tab's temp tables or variables fails
+  as BigQuery says, and session settings (`@@dataset_id`) and an open transaction's changes do not carry over: its rows
+  may differ, and when the job ran in a session Messages says so. A cache hit's destination table is an older one, which may expire sooner, so a
   windowed cache hit's caption adds "cached result: may expire early".
 - **What waits.** Search, profiles, pivots, row identities and comparisons of a windowed result (its sorts, filters and
   value lists run in BigQuery, below) answer "This result is windowed in BigQuery" (`REMOTE_RESULT`) for now; a request whose result switches to
@@ -501,7 +503,7 @@ them, and its note says what the sample costs and the result memory it needs (`L
 `SqlService.BigQuerySample.cs`; the protocol is `results.remoteQuery`'s `sample` kind in docs/ipc.md).
 
 - **First rows (free).** `tabledata.list` reads the first rows of the result table, as the grid's blocks are read: no job
-  runs and nothing is billed, so there is no estimate or prompt.
+  runs and nothing is billed, so there is no estimate or prompt, and the query's timeout does not apply (Stop does).
 - **Random sample.** `SELECT * FROM` the result table `TABLESAMPLE SYSTEM (@percent PERCENT) LIMIT @rows`, the percent
   being the rows' share of the table with 10% to spare (BigQuery picks whole blocks, so a sample holds about that share,
   and up to the rows asked; a small table may be one block, picked whole or not at all, and Messages says when the
@@ -514,7 +516,8 @@ them, and its note says what the sample costs and the result memory it needs (`L
   column profile). It reads the table, so it is refused with `REMOTE_EXPIRED` once the table has expired.
 - **Auxiliary.** A sample, like a re-run, runs no job history record and is never left running: Stop on the source's
   strip or closing the source cancels it. One runs at a time per result, never while its query still runs or another
-  result of the query loads (`BUSY`).
+  result of the query loads (`BUSY`). A Load into memory started beside a running sample shares its budget, so it may
+  stay windowed until the sample ends and it is loaded again.
 
 ### Cost
 

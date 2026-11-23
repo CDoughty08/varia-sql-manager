@@ -89,7 +89,7 @@ internal static class BigQueryViewSql
         parameters.Add(new QueryParameter
         {
             Name = BigQuerySql.SamplePercentParameter, ParameterType = new QueryParameterType { Type = "FLOAT64" },
-            ParameterValue = new QueryParameterValue { Value = SamplePercent(rows, total).ToString("R", System.Globalization.CultureInfo.InvariantCulture) }
+            ParameterValue = new QueryParameterValue { Value = SamplePercent(rows, total).ToString("0.######", System.Globalization.CultureInfo.InvariantCulture) }
         });
         parameters.Add(new QueryParameter
         {
