@@ -644,7 +644,8 @@ internal sealed record ActionArgs(string Action, string ConnectionId, string Req
     AgentIdentityDto? AgentIdentity = null, string? StepName = null, bool? DeleteUnusedSchedule = null,
     AgentPropertiesChangesDto? AgentProperties = null, AgentHistoryPurgeDto? AgentPurge = null, AgentHistoryDeleteDto? AgentHistory = null, AgentJobSaveDto? AgentJob = null,
     AgentAlertSaveDto? AgentAlert = null, AgentOperatorSaveDto? AgentOperator = null, AgentRecommendedDto? AgentRecommended = null, int? AgentObjectId = null, string? ReassignTo = null,
-    AgentScheduleSaveDto? AgentSchedule = null, AgentProxySaveDto? AgentProxy = null, CredentialSaveDto? Credential = null, int? ProxyId = null);
+    AgentScheduleSaveDto? AgentSchedule = null, AgentProxySaveDto? AgentProxy = null, CredentialSaveDto? Credential = null, int? ProxyId = null,
+    string? JobOwner = null);
 /// <summary>The alert document's Save (AG-7, src/shared/actions/agent-alert.ts AgentAlertSave): an existing alert's changed arguments, New Alert's every one
 /// it sets. NewOperators are created first and Notifications applied last, each one msdb call.</summary>
 internal sealed record AgentAlertSaveDto(string? Name = null, bool? Enabled = null, int? MessageId = null, int? Severity = null, string? Database = null, string? Keyword = null,

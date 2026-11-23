@@ -3685,6 +3685,11 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
   .agent-proxy-new-credential .link-button { color: LinkText; }
   .agent-proxy-chip[data-changed], .agent-proxy-checks label[data-changed] { outline: 1px solid Highlight; }
 }
+/* Job Activity Monitor's Change owner and Attach schedule forms (AG-3b). */
+.agent-bulk-form-body { display: flex; flex-direction: column; gap: var(--varia-space-1); padding: 0 var(--varia-space-2) var(--varia-space-2); font-size: var(--varia-size-sm); }
+.agent-bulk-form-body > .property-input { max-width: 360px; }
+.agent-bulk-form-buttons { display: flex; gap: var(--varia-space-2); margin: var(--varia-space-1) 0 0; }
+.agent-bulk-schedules { max-height: 280px; overflow: auto; }
 
 /* The job document's History section (AG-6d): the run durations' bars with the usual time, the runs beside the selected run's detail, and the live run view. */
 .agent-history { display: flex; flex-direction: column; gap: var(--varia-space-2); }

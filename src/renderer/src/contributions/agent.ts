@@ -1,4 +1,4 @@
-import { agentBulkCommands, agentBulkVerbs } from '../../../shared/agent/jobs'
+import { agentBulkCommands, agentBulkFormVerbs, agentBulkVerbs } from '../../../shared/agent/jobs'
 import type { LogViewerOpen } from '../agent/LogViewerService'
 import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
@@ -147,6 +147,12 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
       when: args => { const id = monitorOf(args); return !!id && jobActivity.canBulk(id) },
       unavailable: args => { const id = monitorOf(args); return id ? jobActivity.bulkUnavailable(id) : undefined },
       run: async args => { const id = monitorOf(args); if (id) await jobActivity.runBulk(id, verb) }
+    })),
+    // AG-3b: Change owner and Attach schedule open their form for the selected jobs.
+    ...agentBulkFormVerbs.map(verb => commands.register(agentBulkCommands[verb], {
+      when: args => { const id = monitorOf(args); return !!id && jobActivity.canBulk(id) },
+      unavailable: args => { const id = monitorOf(args); return id ? jobActivity.bulkUnavailable(id) : undefined },
+      run: async args => { const id = monitorOf(args); if (id) await jobActivity.openForm(id, verb) }
     }))
     ,
     commands.register('agent.openJob', {

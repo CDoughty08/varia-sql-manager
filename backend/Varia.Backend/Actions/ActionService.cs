@@ -565,6 +565,7 @@ internal sealed partial class ActionService : IDisposable
         if (AgentServiceActions.Contains(args.Action)) return ExecuteAgentServiceAsync(args, token);
         if (args.Action == DeleteJobHistoryAction) return ExecuteAgentHistoryAsync(args, token);
         if (args.Action == RecycleErrorLogAction) return ExecuteRecycleErrorLogAsync(args, token);
+        if (args.Action == ChangeJobOwnerAction) return ExecuteChangeJobOwnerAsync(args, target, token);
         if (args.Action is "agentAlert" or "agentOperator" or AddRecommendedAlertsAction or NotifyOperatorAction || target.Kind is "agentAlert" or "agentOperator") return ExecuteAgentObjectRequestAsync(args, target, token);
         // Managed Instance refuses sp_set_sqlagent_properties (41905): refused before any connection opens, as the dialog opens read-only there.
         if (args.Action == "agentProperties" && AgentPropertiesRefusal(args) is { } agentRefused) return Task.FromResult(new ActionExecuteResult([], [], 0, agentRefused));

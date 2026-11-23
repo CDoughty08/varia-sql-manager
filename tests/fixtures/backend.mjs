@@ -1865,7 +1865,7 @@ function agentJobsSample(live, probe) {
   }
   const tone = job => agentRunning(job) ? 'running' : job.outcome === 0 ? 'error' : job.enabled ? null : 'muted'
   const row = job => [job.name, job.enabled ? 'Yes' : 'No', agentRunning(job) ? 'Executing' : 'Idle', agentRunning(job) ? `1 (Step 1) of ${job.steps}` : null, agentOutcomes[job.outcome] ?? 'Unknown',
-    job.lastRun, agentRunning(job) ? '00:00:05' : null, job.enabled ? '2026-11-16 02:30:00' : null, job.category, 'Yes', job.enabled ? 'Yes' : 'No', 'sa', job.id.toUpperCase(), job.created, tone(job)]
+    job.lastRun, agentRunning(job) ? '00:00:05' : null, job.enabled ? '2026-11-16 02:30:00' : null, job.category, 'Yes', job.enabled ? 'Yes' : 'No', agentJobDoc(job).owner, job.id.toUpperCase(), job.created, tone(job)]
   const kept = { running: agentRunning, failed: job => job.outcome === 0, disabled: job => !job.enabled }[probe.view] ?? (() => true)
   const jobs = storeResult({ columns: agentTextColumns(0), rows: agentJobs.filter(kept).map(row) }, 0)
   const expanded = agentJobs.find(job => job.id === live.args.expand?.toLowerCase())
@@ -2065,7 +2065,7 @@ const agentScheduleLinks = [{ scheduleId: 1, jobId: 'a1b2c3d4-0000-4000-8000-000
 const scheduleRecord = schedule => ({ ...schedule, jobCount: agentScheduleLinks.filter(link => link.scheduleId === schedule.id).length })
 const agentScheduleStamp = () => new Date().toISOString().slice(0, 23)
 function agentSchedulesDescribe(params) {
-  const jobs = agentJobs.map(job => ({ id: job.id.toUpperCase(), name: job.name, enabled: job.enabled, owner: 'sa', version: agentJobDoc(job).version }))
+  const jobs = agentJobs.map(job => ({ id: job.id.toUpperCase(), name: job.name, enabled: job.enabled, owner: agentJobDoc(job).owner, version: agentJobDoc(job).version }))
   if (params.schedule !== undefined) return { agentSchedules: { login: 'sa', sysadmin: true, platform: 'windows', now: '2026-11-22T14:30:00', schedules: [], scheduleJobs: jobs.filter(job => agentScheduleLinks.some(link => link.scheduleId === params.schedule && link.jobId === job.id.toLowerCase())) }, elapsedMs: 1 }
   return { agentSchedules: { login: 'sa', sysadmin: true, platform: 'windows', now: '2026-11-22T14:30:00', idleDefined: false, schedules: agentSchedules.map(scheduleRecord), jobs,
     links: agentScheduleLinks.map(link => ({ scheduleId: link.scheduleId, jobId: link.jobId.toUpperCase() })), durations: [{ jobId: agentJobs[0].id.toUpperCase(), seconds: 1080 }] }, elapsedMs: 1 }
@@ -2098,7 +2098,8 @@ function agentScheduleSave(params) {
   if (save.op === 'enable' || save.op === 'disable') schedule.enabled = save.op === 'enable'
   else Object.assign(schedule, save.name !== undefined ? { name: save.name } : {}, save.enabled !== undefined ? { enabled: save.enabled } : {}, save.timing ?? {})
   linkJobs(schedule.id, save.jobs)
-  Object.assign(schedule, { version: schedule.version + 1, modified: agentScheduleStamp() })
+  // sp_attach_schedule and sp_detach_schedule leave sysschedules as it is: only a change to the schedule itself moves its guard.
+  if (save.op !== 'update' || save.name !== undefined || save.enabled !== undefined || save.timing) Object.assign(schedule, { version: schedule.version + 1, modified: agentScheduleStamp() })
   return { steps: [{ status: 'done', title: 'Save the schedule' }], messages: [], elapsedMs: 1 }
 }
 /** A job save's schedules (detach, guarded update, guarded attach, add), as the backend runs them in the job's transaction. */
@@ -2232,7 +2233,12 @@ function agentJobVerb(params) {
     Object.assign(run, { stopped: true, samples: 2 })
   }
   if (params.action === 'enable' || params.action === 'disable') job.enabled = params.action === 'enable'
-  return { steps: [{ status: 'done', title: { startJob: 'Start the job', stopJob: 'Stop the job', enable: 'Enable the job', disable: 'Disable the job' }[params.action] ?? 'Done' }], messages: [], elapsedMs: 1 }
+  // Job Activity Monitor's Change owner (AG-3b): msdb's 14262 for a login it does not know.
+  if (params.action === 'changeJobOwner') {
+    if (params.jobOwner === 'Nobody') return refused('NOT_FOUND', `The specified @owner_login_name ('${params.jobOwner}') does not exist.`)
+    agentJobDoc(job).owner = params.jobOwner
+  }
+  return { steps: [{ status: 'done', title: { startJob: 'Start the job', stopJob: 'Stop the job', enable: 'Enable the job', disable: 'Disable the job', changeJobOwner: "Change the job's owner" }[params.action] ?? 'Done' }], messages: [], elapsedMs: 1 }
 }
 
 // The SSIS Catalog's objects in the explorer fixture, as ssis.describe reads them: the folder Finance, its project Loads (the
