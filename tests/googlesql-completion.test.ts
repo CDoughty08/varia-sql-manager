@@ -388,6 +388,18 @@ describe('completion from the index', () => {
     expect(performance.now() - timed).toBeLessThan(3000)
   })
 
+  it('reads huge FROM lists, quoted paths and qualified stars without throwing, in bounded time', async () => {
+    const timed = performance.now()
+    const many = 'SELECT  FROM ' + 'a,'.repeat(124000) + 'a'
+    expect(readGoogleSqlCompletion(many, 7).scope.sources.length).toBe(124001)
+    expect(readGoogleSqlHover(many, many.length - 1)).toBeDefined()
+    const path = '`' + 'a.'.repeat(124000) + 'a`'
+    for (const text of [`SELECT * FROM (SELECT ${path}) q WHERE `, `SELECT * FROM UNNEST(${path}) WHERE `, `SELECT * FROM x.${path} WHERE `]) expect(() => readGoogleSqlCompletion(text, text.length)).not.toThrow()
+    const qualified = `WITH c AS (SELECT ${Array(30000).fill('zz.*').join(', ')} FROM ${Array.from({ length: 10000 }, (_, index) => `t a${index}`).join(', ')}) SELECT  FROM c`
+    readGoogleSqlCompletion(qualified, qualified.length - ' FROM c'.length)
+    expect(performance.now() - timed).toBeLessThan(3000)
+  })
+
   it('bounds UNNESTs and stars nested together, and says a bare name past a cut source is not final', async () => {
     const levels = Array.from({ length: 256 }, (_, index) => {
       const k = index + 1

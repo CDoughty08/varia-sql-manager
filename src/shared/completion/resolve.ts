@@ -175,7 +175,7 @@ export class ScopeResolver {
       asks.push(prefixes.length ? { path, prefix: prefixes[0] } : { path })
       for (const prefix of prefixes.slice(1)) more.push({ path, prefix })
     }
-    asks.push(...more)
+    for (const ask of more) asks.push(ask)
     const kept = asks.slice(0, Math.max(0, languageLookupLimits.requests - extra.length))
     this.cut = dropped || kept.length < asks.length
     // Each request gets its share of the answer's total, so a later one is not left with nothing.

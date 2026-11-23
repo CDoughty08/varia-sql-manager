@@ -255,7 +255,7 @@ class BlockReader {
       const first = dashed(toks, run, at)
       const parts = [...first.parts]
       at = first.next
-      while (isPunct(toks[run[at]], '.') && isName(toks[run[at + 1]])) { parts.push(...partsOf(toks[run[at + 1]])); at += 2 }
+      while (isPunct(toks[run[at]], '.') && isName(toks[run[at + 1]])) { for (const part of partsOf(toks[run[at + 1]])) parts.push(part); at += 2 }
       // A table-valued function's columns are not indexed.
       if (isPunct(toks[run[at]], '(') && !target) return { next: at + 1 }
       source = { kind: 'object', name: parts.at(-1)!, parts, span: { start: token.start, end: toks[run[at - 1]].end } }
@@ -305,6 +305,15 @@ class BlockReader {
     const starred = new Set<ScopeSource>()
     const star = (source: ScopeSource) => { if (!starred.has(source)) { starred.add(source); stars.push(source) } }
     let everyStarred = false
+    // The sources by name (the first of each), built the first time an `alias.*` asks.
+    let names: Map<string, ScopeSource> | undefined
+    const byName = () => {
+      if (!names) {
+        names = new Map()
+        for (const source of sources) if (source.name && !names.has(source.name.toLowerCase())) names.set(source.name.toLowerCase(), source)
+      }
+      return names
+    }
     let item: Tok[] = []
     const finish = () => {
       if (!item.length) return
@@ -316,7 +325,7 @@ class BlockReader {
       }
       else if (starAt > 1 && isPunct(item[starAt - 1], '.')) {
         const chain = chainOf(item.slice(0, starAt - 1))
-        const named = chain?.length === 1 ? sources.find(source => source.name?.toLowerCase() === chain[0].toLowerCase()) : undefined
+        const named = chain?.length === 1 ? byName().get(chain[0].toLowerCase()) : undefined
         if (named) star(named)
       } else if (isWord(before, 'AS') && isName(last)) columns.push(partsOf(last).join('.'))
       else {
@@ -375,7 +384,7 @@ function chainOf(tokens: readonly Tok[]): string[] | undefined {
   for (let index = 0; index < tokens.length; index++) {
     const token = tokens[index]
     if (index % 2 === 0 ? !isName(token) : !isPunct(token, '.')) return
-    if (index % 2 === 0) parts.push(...partsOf(token))
+    if (index % 2 === 0) for (const part of partsOf(token)) parts.push(part)
   }
   return parts
 }
@@ -404,7 +413,7 @@ function scopeAt(statement: Statement, open: number, offset: number): QueryScope
   blocks.forEach((block, depth) => {
     const body = bodies.get(block)!
     const run = depth === 0 ? body.find(segment => segment.length && end(segment) >= offset) ?? body.at(-1) : body.find(segment => segment.includes(blocks[depth - 1]))
-    if (run) sources.push(...reader.sources(run, offset).map(source => resolveCte(source, name => named.get(name))))
+    if (run) for (const source of reader.sources(run, offset)) sources.push(resolveCte(source, name => named.get(name)))
   })
   return { sources, ctes: visible }
 }
@@ -563,7 +572,7 @@ export function readGoogleSqlHover(text: string, offset: number): HoverRead | un
         index = parts.length + Math.min(own.length - 1, inner.split('.').length - 1)
       } else index = parts.length
     }
-    parts.push(...own)
+    for (const part of own) parts.push(part)
   }
   if (dashedObject) first = lo
   const open = statement.parentAt(toks[first].start)
