@@ -18,6 +18,8 @@ internal sealed partial class ActionService
 {
     internal static readonly IReadOnlySet<string> AgentServiceActions = new HashSet<string>(["startAgent", "stopAgent", "restartAgent"], StringComparer.Ordinal);
     private static readonly IReadOnlySet<string> JobVerbs = new HashSet<string>(["startJob", "stopJob", "disable", "enable", "rename", "delete"], StringComparer.Ordinal);
+    /// <summary>Job Activity Monitor's bulk Change owner (AG-3b): no catalogue action and no tree verb, one job per request.</summary>
+    internal const string ChangeJobOwnerAction = "changeJobOwner";
 
     internal const string NeedsWindowsMessage = "Starting and stopping SQL Server Agent needs Varia on Windows.";
     internal const string LinuxServiceMessage = "On Linux, use systemctl on the server.";
@@ -33,13 +35,26 @@ internal sealed partial class ActionService
     private ObjectRefDto? ValidateAgent(ActionArgs args, bool script)
     {
         var service = AgentServiceActions.Contains(args.Action);
-        var job = args.Target?.Kind == "agentJob" || args.Action is "startJob" or "stopJob";
+        var job = args.Target?.Kind == "agentJob" || args.Action is "startJob" or "stopJob" or ChangeJobOwnerAction;
         if (!service && !job)
         {
             if (args.AgentIdentity is not null || args.StepName is not null || args.DeleteUnusedSchedule is not null) throw Invalid("only a job's verbs take agentIdentity, stepName and deleteUnusedSchedule.");
+            if (args.JobOwner is not null) throw Invalid("only changeJobOwner takes jobOwner.");
             return null;
         }
         var bare = new ActionArgs(args.Action, args.ConnectionId, args.RequestId, args.Target!);
+        // zod: bulk.ts changeJobOwnerRequestSchema. Rename is the job row's verb its target must offer; it has no script.
+        if (args.Action == ChangeJobOwnerAction)
+        {
+            if (script) throw Invalid(args.Action + " has no script.");
+            if (args.Target?.Kind != "agentJob") throw Invalid("target.");
+            var owned = Target(args.Target, "rename");
+            if (args.AgentIdentity is not { } ownerIdentity || !AgentJobId(ownerIdentity.JobId)) throw Invalid("agentIdentity.");
+            if (!ExplorerRefs.Ident(args.JobOwner)) throw Invalid("jobOwner.");
+            if (args with { AgentIdentity = null, JobOwner = null } != bare) throw Invalid(args.Action + " takes only the job, its identity and jobOwner.");
+            return owned;
+        }
+        if (args.JobOwner is not null) throw Invalid("only changeJobOwner takes jobOwner.");
         if (service)
         {
             if (script) throw Invalid(args.Action + " has no script.");
@@ -156,8 +171,21 @@ internal sealed partial class ActionService
         "enable" => (AgentSql.SetEnabled, "Enable the job", [(byte)1]),
         "rename" => (AgentSql.RenameJob, "Rename the job", [args.NewName]),
         "delete" => (AgentSql.DeleteJob, "Delete the job", [args.DeleteHistory == true, args.DeleteUnusedSchedule != false]),
+        ChangeJobOwnerAction => (AgentSql.ChangeOwner, "Change the job's owner", [args.JobOwner]),
         _ => throw new InvalidOperationException("Not a job verb.")
     };
+
+    /// <summary>Change owner's run (AG-3b): AG-2's job write on the execute gate, refused on an engine without Agent before anything opens. It is
+    /// no catalogue action, so the runner is given none (as Send test e-mail).</summary>
+    private Task<ActionExecuteResult> ExecuteChangeJobOwnerAsync(ActionArgs args, ObjectRefDto target, CancellationToken token)
+    {
+        var watch = Stopwatch.StartNew();
+        var engine = host.Profile(args.ConnectionId).Explorer(explorer).ServerEngine;
+        if (!Serves("startJob", engine)) return Task.FromResult(new ActionExecuteResult([], [], 0, Error("NOT_SUPPORTED", EngineMessage(engine))));
+        return RunAsync(args.ConnectionId, args.RequestId, null, read: false, null, token,
+            async (connection, profile, band, job) => await ExecuteAgentJobAsync(connection, args, target, job) with { ElapsedMs = watch.ElapsedMilliseconds },
+            error => new ActionExecuteResult([], [], watch.ElapsedMilliseconds, error));
+    }
 
     private async Task<ActionExecuteResult> ExecuteAgentJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, CancellationToken token)
     {
