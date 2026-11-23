@@ -127,9 +127,10 @@ internal static partial class BigQueryIndexChecks
             "a shard outside the group's range, or the prefix in another case, names no group");
         var salesRead = held.Single(read => read.Database == "varia-alpha" && read.Dataset == "sales");
         salesRead.ChildrenLeftOut = true;
-        var cut = (await Lookup(PathRequest("varia-alpha", "sales", "orders"))).Answers[0];
+        var cut = (await Lookup(PathRequest("varia-alpha", "sales", "orders"), PathRequest("varia-alpha", "sales", "to_cents"))).Answers;
         salesRead.ChildrenLeftOut = false;
-        check(cut.Object is { Detailed: false } && cut.State == "partial", "a table whose dataset's columns were left out is not detailed, and its dataset is partial");
+        check(cut[0].Object is { Detailed: false } && cut[0].State == "partial" && cut[1].Object is { Detailed: true },
+            "a table whose dataset's columns were left out is not detailed, and its dataset is partial; a routine's signature keeps it detailed");
         var census = (await Lookup(PathRequest("varia-beta", "census", "population"))).Answers[0];
         check(census is { State: "partial", Object: { Detailed: false }, Items.Count: 0 }, "an object of a project read by name only has no details and no columns");
         var missing = (await Lookup(PathRequest("varia-alpha", "sales", "nothing"), PathRequest("varia-alpha", "nothing", "t"))).Answers;

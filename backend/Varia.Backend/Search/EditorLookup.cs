@@ -101,7 +101,8 @@ internal static class EditorLookup
                 var facts = BigQueryLookup.Facts(entry);
                 // Columns the budget left out make the object's details incomplete, whatever its facts say.
                 // A model has no columns for the second pass to read: outside a project read by name only, it is as detailed as it gets.
-                var detailed = (facts?.Detailed == true || entry.Kind == "bqModel" && !lookup.NamesOnly(dataset.Project)) && dataset.Held?.ChildrenLeftOut != true;
+                // Columns left out take a table's detail; a routine's signature is not a child and stays.
+                var detailed = (facts?.Detailed == true || entry.Kind == "bqModel" && !lookup.NamesOnly(dataset.Project)) && (entry.Kind == "bqRoutine" || dataset.Held?.ChildrenLeftOut != true);
                 var shown = new LanguageLookupObject(entry.Name, entry.Kind, entry.Subtype, detailed, facts?.Rows, facts?.Bytes, facts?.Partitioning, facts?.Clustering,
                     facts?.Signature, BigQueryLookup.Shards(entry), facts?.ColumnsCut == true ? true : null, entry.Table.Modified(entry.At));
                 var details = request.Details == true;

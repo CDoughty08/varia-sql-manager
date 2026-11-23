@@ -52,13 +52,12 @@ export function childrenOf(columns: readonly ScopeColumn[], parent: readonly str
   })
 }
 
-/** How many WITH queries or subqueries deep a `*` is followed for columns: past it a source gives none (a long chain of WITH
- *  queries, each reading the last through `*`, would otherwise recurse once per query). */
-/** How many select-list reads and `*` columns merged one resolver does: past it the rest come back cut short (a web of WITH
- *  queries over wide tables could otherwise take seconds, each read again at each depth the star budget cuts it at). */
+/** How many select-list reads, `*` columns merged and columns an UNNEST reads through one resolver does: past it the rest come
+ *  back cut short (a web of WITH queries over wide tables, or thousands of UNNESTs of a wide one, could otherwise take seconds). */
 const work = 1_000_000
 
-/** unnestHops: how many UNNESTs deep a prefix is mapped; narrowPrefixes: prefixes per object in one second ask (each is a request);
+/** starHops: how many WITH queries or subqueries deep a `*` is followed for columns: past it a source gives none (a long chain of
+ *  WITH queries, each reading the last through `*`, would otherwise recurse once per query); unnestHops: how many UNNESTs deep a prefix is mapped; narrowPrefixes: prefixes per object in one second ask (each is a request);
  *  narrowUnnests: UNNEST sources whose element fields a second ask covers; fieldSources: sources a bare column name is looked for
  *  in (an UNNEST of a bare name reads them, and each may be an UNNEST of a bare name). */
 export const resolverLimits = { starHops: 64, unnestHops: 8, narrowPrefixes: 4, narrowUnnests: 16, fieldSources: 64, work } as const
@@ -247,10 +246,12 @@ export class ScopeResolver {
       case 'cte': { const shape = this.cte(source.cte); return shape ? this.shape(shape, hops) : { columns: [], truncated: false } }
       case 'derived': return this.shape(source.shape, hops)
       case 'unnest': {
+        if (this.spent > resolverLimits.work) return { columns: [], truncated: true, budget: true }
         // UNNEST(hits) AS hits: the path names what the source reads, not the source itself.
         const field = await this.field(source.path, source)
         // Not found: it may lie past what a table cut short gave.
         if (!field) return { columns: [], truncated: this.cutShort().size > 0 }
+        this.spent += 1 + field.columns.columns.length
         const prefix = field.path.length
         return { truncated: field.columns.truncated, columns: childrenAndBelow(field.columns.columns, field.path).map(column => ({ ...column, path: column.path.split('.').slice(prefix).join('.') })) }
       }

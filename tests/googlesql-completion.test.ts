@@ -39,7 +39,9 @@ const index: Record<string, Record<string, Record<string, FakeObject>>> = {
   },
   'varia-beta': { census: { people: { kind: 'bqTable', columns: [{ name: 'name', type: 'STRING' }] } } },
   // A table wider than one answer's share.
-  'varia-wide': { lab: Object.fromEntries(['wide', 'wide2', 'wide3', 'wide4'].map(name => [name, { kind: 'bqTable', columns: wideColumns }])) }
+  'varia-wide': { lab: { ...Object.fromEntries(['wide', 'wide2', 'wide3', 'wide4'].map(name => [name, { kind: 'bqTable', columns: wideColumns }])),
+    // Wide, but within one answer's share: it comes back whole.
+    whole: { kind: 'bqTable', columns: wideColumns.slice(0, 1900) } } }
 }
 const keeps = (request: LanguageLookupPath, name: string) => request.exact ? name.toLowerCase() === request.prefix!.toLowerCase() : name.toLowerCase().startsWith((request.prefix ?? '').toLowerCase())
 function answer(request: LanguageLookupPath): LanguageLookupAnswer {
@@ -340,7 +342,8 @@ describe('completion from the index', () => {
   })
 
   it('bounds the work of a web of WITH queries over a wide table, nearest listed first, and says the list is cut short', async () => {
-    const wide = '`varia-wide.lab.wide`'
+    // A table that comes back whole: only the cap can make the list incomplete.
+    const wide = '`varia-wide.lab.whole`'
     const web = 'WITH ' + Array.from({ length: 522 }, (_, index) => `c${index} AS (SELECT * FROM ${wide} w${Array.from({ length: Math.min(8, index) }, (_, back) => `, c${index - 1 - back} a${back}`).join('')})`).join(', ') + ' SELECT c00| FROM c521'
     const timed = performance.now()
     const list = await complete(web)
@@ -350,6 +353,12 @@ describe('completion from the index', () => {
     // UNNESTs past the cap over a table that was not cut short leave the list final.
     const plain = await complete('SELECT cu| FROM sales.orders o, `varia-wide.lab.wide` w' + Array.from({ length: 18 }, (_, index) => `, UNNEST(o.items) u${index}`).join(''))
     expect(plain.incomplete).toBe(false)
+    // Thousands of UNNESTs through a WITH query of many named columns count against the cap too.
+    const named = Array.from({ length: 20000 }, (_, index) => `x${index}`).join(', ')
+    const unnests = `WITH c AS (SELECT ${named} FROM sales.orders) SELECT q| FROM \`varia-wide.lab.wide\` w, c` + Array.from({ length: 6000 }, (_, index) => `, UNNEST(c.ab) u${index}`).join('')
+    const started = performance.now()
+    expect((await complete(unnests)).incomplete).toBe(true)
+    expect(performance.now() - started).toBeLessThan(2000)
   })
 
   it('says the list is not final when an UNNEST\'s prefix went unasked', async () => {
