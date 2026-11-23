@@ -568,12 +568,17 @@ ${scheduleId}`, pending = this.jobReads.get(key)
   private readRestored(): void {
     for (const state of Object.values(this.getSnapshot().documents)) {
       if (!state.restored || !this.live(state.id) || this.requests.get(state.id)?.size) continue
-      const model = state.model
+      const model = state.model, kept = Object.keys(state.drafts).filter(key => key !== newScheduleKey)
       this.patch(state.id, { phase: 'loading', restored: undefined, error: undefined, notice: undefined })
       void this.describe(state.id, keptAgentText.reread('schedules')).then(landed => {
         const after = this.get(state.id)
         if (!landed && after && after.model === model && !this.live(state.id)) this.patch(state.id, { restored: true, ...after.phase === 'loading' ? { phase: 'ready' as const } : {} })
-        else if (landed) this.dirtyChanged(state.id)
+        else if (landed && after) {
+          // Drafts of schedules deleted on the server since are dropped by the read; the notice says so rather than claiming them restored.
+          const gone = kept.filter(key => !(key in after.drafts)).length
+          if (gone) this.patch(state.id, { notice: keptAgentText.schedulesGone(gone) })
+          this.dirtyChanged(state.id)
+        }
       })
     }
   }

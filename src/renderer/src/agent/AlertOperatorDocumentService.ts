@@ -192,6 +192,8 @@ export class AlertOperatorDocumentService<M, D> extends SnapshotStore<AgentObjec
   private readonly registration: Disposable
   private readonly unsubscribe: (() => void)[]
   private readonly requests = new Map<string, { readonly id: string; readonly kind: 'describe' | 'save'; readonly connectionId?: string; dropped: boolean }>()
+  /** The connection each reopened document last tried its first read on (AG-6g), so a failed read is tried again only on a new connection. */
+  private readonly rereadOn = new Map<string, string>()
   private readonly previews = new Map<string, string>()
   private readonly previewTimers = new Map<string, unknown>()
   private readonly saving = new Map<string, Promise<boolean>>()
@@ -320,7 +322,7 @@ export class AlertOperatorDocumentService<M, D> extends SnapshotStore<AgentObjec
 
   canSave(id: string): boolean {
     const state = this.get(id)
-    if (!state?.model || state.draft === undefined || state.unread || !this.canEdit(id) || !this.live(id)) return false
+    if (!state?.model || state.draft === undefined || state.unread || state.restored || !this.canEdit(id) || !this.live(id)) return false
     const problems = this.problems(id)
     return (!this.spec.exists(state.model) || state.changes > 0) && !problems.some(problem => problem.severity === 'error')
   }
@@ -341,7 +343,7 @@ export class AlertOperatorDocumentService<M, D> extends SnapshotStore<AgentObjec
     if (this.spec.exists(state.model) && state.changes === 0) return true
     if (!this.live(id)) { this.patch(id, { error: fallback('CONNECTION_LOST', agentObjectText.disconnected(this.spec.noun)) }); return false }
     if (!this.canSave(id)) {
-      const blocker = state.unread ? agentObjectText.reloadFirst(this.spec.noun) : this.problems(id).find(problem => problem.severity === 'error')?.message
+      const blocker = state.unread ? agentObjectText.reloadFirst(this.spec.noun) : state.restored ? keptAgentText.notReread(this.spec.noun) : this.problems(id).find(problem => problem.severity === 'error')?.message
       if (blocker) this.patch(id, { error: fallback('SQL_ERROR', blocker) })
       return false
     }
@@ -556,13 +558,17 @@ export class AlertOperatorDocumentService<M, D> extends SnapshotStore<AgentObjec
   /** Reopened documents whose target is now connected read their object again, keeping the draft. */
   private readRestored(): void {
     for (const state of Object.values(this.getSnapshot().documents)) {
-      if (!state.restored || !state.model || state.draft === undefined || state.base === undefined || !this.live(state.id) || this.requests.has(state.id)) continue
+      const connectionId = this.options.documents.get(state.id)?.connectionId
+      if (!state.restored || !state.model || state.draft === undefined || state.base === undefined || !connectionId || !this.live(state.id) || this.requests.has(state.id) || this.rereadOn.get(state.id) === connectionId) continue
+      this.rereadOn.set(state.id, connectionId)
       const kept = { model: state.model, base: state.base, draft: state.draft }
       this.patch(state.id, { phase: 'loading', restored: undefined, error: undefined, notice: undefined })
       void this.describe(state.id, undefined, 'save', kept).finally(() => {
-        // A read the connection's loss dropped leaves the document as kept, to read again at the next connect.
+        // A read that did not land (the connection lost, or a refusal or failure while connected) leaves the document as kept: Save
+        // waits, since the draft is still on last session's read, and the next connection reads again.
         const after = this.get(state.id)
-        if (after && after.model === kept.model && !this.live(state.id)) this.patch(state.id, { restored: true, ...after.phase === 'loading' ? { phase: 'ready' as const } : {} })
+        if (after && after.model === kept.model) this.patch(state.id, { restored: true, ...after.phase === 'loading' ? { phase: 'ready' as const } : {} })
+        else this.rereadOn.delete(state.id)
       })
     }
   }

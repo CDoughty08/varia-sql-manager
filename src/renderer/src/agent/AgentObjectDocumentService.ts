@@ -101,6 +101,8 @@ export abstract class AgentObjectDocumentService<Model, Draft, Field extends str
   private readonly registration: Disposable
   private readonly unsubscribe: (() => void)[]
   private readonly requests = new Map<string, { readonly id: string; readonly kind: 'describe' | 'save'; readonly connectionId?: string; dropped: boolean }>()
+  /** The connection each reopened document last tried its first read on (AG-6g), so a failed read is tried again only on a new connection. */
+  private readonly rereadOn = new Map<string, string>()
   private readonly previews = new Map<string, string>()
   private readonly previewTimers = new Map<string, unknown>()
   private readonly saving = new Map<string, Promise<boolean>>()
@@ -256,7 +258,7 @@ export abstract class AgentObjectDocumentService<Model, Draft, Field extends str
 
   canSave(id: string): boolean {
     const state = this.get(id)
-    if (!state?.model || !state.draft || !this.canEdit(id) || !this.live(id)) return false
+    if (!state?.model || !state.draft || state.restored || !this.canEdit(id) || !this.live(id)) return false
     return (!this.hasObject(state.model) || state.changes > 0) && savable(this.problems(id)) && !!this.buildSave(state.model, state.draft)
   }
   save(id: string): Promise<boolean> {
@@ -271,6 +273,7 @@ export abstract class AgentObjectDocumentService<Model, Draft, Field extends str
     const state = this.get(id)
     if (!state?.model || !state.draft) return false
     if (!this.live(id)) { this.patch(id, { error: fallback('CONNECTION_LOST', this.text.disconnected) }); return false }
+    if (state.restored) { this.patch(id, { error: fallback('SQL_ERROR', keptAgentText.notReread(this.noun)) }); return false }
     if (!this.canSave(id)) return false
     const built = this.buildSave(state.model, state.draft)
     if (!built) return true
@@ -427,13 +430,17 @@ export abstract class AgentObjectDocumentService<Model, Draft, Field extends str
   /** Reopened documents whose target is now connected read their object again, keeping the draft. */
   private readRestored(): void {
     for (const state of Object.values(this.getSnapshot().documents)) {
-      if (!state.restored || !state.model || state.draft === undefined || !this.live(state.id) || this.requests.has(state.id)) continue
+      const connectionId = this.options.documents.get(state.id)?.connectionId
+      if (!state.restored || !state.model || state.draft === undefined || !connectionId || !this.live(state.id) || this.requests.has(state.id) || this.rereadOn.get(state.id) === connectionId) continue
+      this.rereadOn.set(state.id, connectionId)
       const kept = { model: state.model, draft: state.draft }
       this.patch(state.id, { phase: 'loading', restored: undefined, error: undefined, notice: undefined })
       void this.describe(state.id, undefined, kept).finally(() => {
-        // A read the connection's loss dropped leaves the document as kept, to read again at the next connect.
+        // A read that did not land (the connection lost, or a refusal or failure while connected) leaves the document as kept: Save
+        // waits, since the draft is still on last session's read, and the next connection reads again.
         const after = this.get(state.id)
-        if (after && after.model === kept.model && !this.live(state.id)) this.patch(state.id, { restored: true, ...after.phase === 'loading' ? { phase: 'ready' as const } : {} })
+        if (after && after.model === kept.model) this.patch(state.id, { restored: true, ...after.phase === 'loading' ? { phase: 'ready' as const } : {} })
+        else this.rereadOn.delete(state.id)
       })
     }
   }

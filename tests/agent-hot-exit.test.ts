@@ -261,6 +261,46 @@ describe('hot exit for SQL Server Agent documents', () => {
     expect(f.schedules.draft(document.id)?.fields.name).toBe('Month end')
     expect(f.documents.get(document.id)?.dirty).toBe(true)
   })
+  it('keeps a reopened proxy whose first read failed on last session\'s read: Save waits, and the next connection reads it again', async () => {
+    const first = bench()
+    first.accept(uuid(50))
+    const id = first.proxyDocuments.openProxy(uuid(50), 'FileShareWriter')
+    await settled()
+    first.proxyDocuments.updateDraft(id, { description: 'Mine' })
+    const state = first.documents.keepCustom(id)!
+    const f = bench()
+    const document = f.documents.reopenKept('agentProxy', { name: 'Proxy Account Properties - FileShareWriter', state, targetId })
+    f.api.describeObject.mockImplementationOnce(async () => ({ ok: false, error: 'The read timed out.' }))
+    f.accept(uuid(60))
+    f.targets.attachTarget(targetId, uuid(60))
+    await settled()
+    expect(f.proxyDocuments.get(document.id)).toMatchObject({ phase: 'ready', restored: true, draft: { description: 'Mine' } })
+    expect(f.proxyDocuments.canSave(document.id)).toBe(false)
+    expect(await f.proxyDocuments.save(document.id)).toBe(false)
+    expect(f.api.executeObjectAction).not.toHaveBeenCalled()
+    // Other changes do not read it again on the same connection.
+    f.documents.update(document.id, { database: 'msdb' })
+    await settled()
+    expect(f.api.describeObject).toHaveBeenCalledTimes(1)
+    f.connections.remove(uuid(60))
+    f.accept(uuid(61), 2)
+    f.targets.attachTarget(targetId, uuid(61))
+    await settled()
+    expect(f.api.describeObject).toHaveBeenCalledTimes(2)
+    expect(f.proxyDocuments.get(document.id)).toMatchObject({ phase: 'ready', draft: { description: 'Mine' }, notice: keptAgentText.reread('proxy') })
+    expect(f.proxyDocuments.get(document.id)?.restored).toBeUndefined()
+    expect(f.proxyDocuments.canSave(document.id)).toBe(true)
+  })
+  it('says when a kept schedule draft was dropped because its schedule was deleted on the server', async () => {
+    const state = encodeKeptState({ version: 1, kind: 'agentSchedules', target: { kind: 'agent' }, server: 'server-a', model: schedulesModel() as unknown as Record<string, unknown>,
+      draft: { 9: { fields: { name: 'Gone' }, jobs: [] } }, extra: { view: 'all', filter: '' } })!
+    const f = bench()
+    const document = f.documents.reopenKept('agentSchedules', { name: 'Schedules', state, targetId })
+    f.accept(uuid(60))
+    f.targets.attachTarget(targetId, uuid(60))
+    await settled()
+    expect(f.schedules.get(document.id)).toMatchObject({ phase: 'ready', notice: keptAgentText.schedulesGone(1) })
+  })
 })
 
 describe('AutoRecover for SQL Server Agent documents', () => {

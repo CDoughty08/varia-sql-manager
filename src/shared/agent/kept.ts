@@ -126,6 +126,8 @@ export const keptAgentText = {
   reread: (noun: string) => `Your unsaved changes were restored on the ${noun} as read now.`,
   conflicts: (noun: string) => `Your unsaved changes were restored on the ${noun} as read now. It was also changed on the server since, and where you both changed a value yours is kept: check it before saving.`,
   jobChanged: 'Your unsaved changes were kept from the last session, and the job was changed on the server since. Compare them, then reload keeping your changes or discard them.',
+  notReread: (noun: string) => `Your unsaved changes are still on the ${noun} as it was last session. Connect again to read it now before saving.`,
+  schedulesGone: (count: number) => `Your unsaved changes were restored on the schedules as read now, except ${count === 1 ? 'one schedule that was' : `${count} schedules that were`} deleted on the server since.`,
   unavailable: 'SQL Server Agent documents kept from the last session are not reopened while SQL Server Agent support is off.',
   unreadable: (name: string) => `${name} could not be reopened: what was kept of it is not a document this version can read.`
 } as const
