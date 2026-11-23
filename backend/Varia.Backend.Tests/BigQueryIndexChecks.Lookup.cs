@@ -107,6 +107,9 @@ internal static partial class BigQueryIndexChecks
             [new ObjectIndexSkip("census", "PERMISSION_DENIED", "x", Project: "varia-beta")], building: false, built: true, new IndexBudget(1 << 20));
         check(unread.ProjectState("varia-beta") == LookupState.Partial && unread.Dataset("varia-beta", "census").State == LookupState.Skipped,
             "a project listed but with no dataset read, because the reads failed, is partial");
+        var early = new BigQueryLookup("varia-alpha", ["varia-beta"], [.. held.Where(read => read.Database != "varia-beta")], ["varia-beta"],
+            [new ObjectIndexSkip("census", "PERMISSION_DENIED", "x", Project: "varia-beta")], building: true, built: false, new IndexBudget(1 << 20));
+        check(early.ProjectState("varia-beta") == LookupState.Building, "a project whose first dataset failed while the build still runs is building");
         static BigQueryShardsDto Group(string prefix) => new(prefix, 2, "20260101", "20260102");
         (string, BigQueryShardsDto?)[] ga4 = [("events_20260102", Group("events_")), ("events_intraday_20260102", Group("events_intraday_")), ("orders", null)];
         check(BigQueryLookup.PickShardGroup("events_*", ga4) == 0 && BigQueryLookup.PickShardGroup("events_intraday_*", ga4) == 1 && BigQueryLookup.PickShardGroup("events_i*", ga4) == 1

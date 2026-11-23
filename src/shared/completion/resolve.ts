@@ -7,7 +7,25 @@ import type { CompletionDialect, IndexLookup, QueryScope, QueryShape, ScopeSourc
 /** A column or nested field a source gives: its full path (address.city), with what the index knows of it. */
 export interface ScopeColumn { readonly path: string; readonly type?: string; readonly nullable?: boolean; readonly description?: string }
 /** A source's columns as far as they are known; `truncated` when the index holds more than came back. */
-export interface SourceColumns { readonly columns: readonly ScopeColumn[]; readonly truncated: boolean; readonly object?: LanguageLookupObject; readonly path?: readonly string[] }
+export interface SourceColumns {
+  readonly columns: readonly ScopeColumn[]; readonly truncated: boolean; readonly object?: LanguageLookupObject; readonly path?: readonly string[]
+  /** Cut by the star budget: no cache keeps it, so a nearer reader of the same source or select list still gets its columns. */
+  readonly budget?: true
+}
+
+/** Each column set's top-level names (address for address.city), lowercased: a bare name is looked for once per set, not per path. */
+const heads = new WeakMap<SourceColumns, ReadonlySet<string>>()
+function headsOf(columns: SourceColumns): ReadonlySet<string> {
+  let found = heads.get(columns)
+  if (!found) {
+    found = new Set(columns.columns.map(column => column.path.split('.', 1)[0].toLowerCase()))
+    heads.set(columns, found)
+  }
+  return found
+}
+
+/** What a source met again while it is read gives: one value, so callers that skip repeats skip it, and no cache keeps it. */
+const unread: SourceColumns = Object.freeze({ columns: Object.freeze([] as ScopeColumn[]), truncated: false })
 
 /** Names compare as GoogleSQL compares column names and aliases: without case. */
 export const sameName = (left: string, right: string): boolean => left === right || left.toLowerCase() === right.toLowerCase()
@@ -28,7 +46,10 @@ export function childrenOf(columns: readonly ScopeColumn[], parent: readonly str
 
 /** How many WITH queries or subqueries deep a `*` is followed for columns: past it a source gives none (a long chain of WITH
  *  queries, each reading the last through `*`, would otherwise recurse once per query). */
-export const resolverLimits = { starHops: 64, unnestHops: 8 } as const
+/** unnestHops: how many UNNESTs deep a prefix is mapped; narrowPrefixes: prefixes per object in one second ask (each is a request);
+ *  narrowUnnests: UNNEST sources whose element fields a second ask covers; fieldSources: sources a bare column name is looked for
+ *  in (an UNNEST of a bare name reads them, and each may be an UNNEST of a bare name). */
+export const resolverLimits = { starHops: 64, unnestHops: 8, narrowPrefixes: 4, narrowUnnests: 16, fieldSources: 64 } as const
 
 /** The column at a field path, case ignored. */
 export function columnAt(columns: readonly ScopeColumn[], path: readonly string[]): ScopeColumn | undefined {
@@ -63,9 +84,6 @@ export function narrowing(paths: ReadonlySet<string>, prefixes: readonly string[
   return new Map([...paths].map(path => [path, kept]))
 }
 
-/** At most this many prefixes per object in one second ask (each is a request of its own). */
-const narrowPrefixes = 4
-
 /** Two answers for one object (asked by different prefixes) as one. */
 function merged(had: LanguageLookupAnswer, more: LanguageLookupAnswer): LanguageLookupAnswer {
   const names = new Set(had.items.map(item => item.name))
@@ -80,6 +98,8 @@ export class ScopeResolver {
   /** A select list's columns, shared by every source that reads it (each name of a WITH query). */
   private readonly shapes = new Map<QueryShape, Promise<SourceColumns>>()
   private readonly shaping = new Set<QueryShape>()
+  /** The scope's sources by name (lowercased), nearest first. */
+  private named?: Map<string, ScopeSource[]>
   private readonly ctes = new Map<string, QueryShape>()
   /** Sources being read: one met again while it is read (a WITH query that reads itself) gives no columns. */
   private readonly reading = new Set<ScopeSource>()
@@ -119,13 +139,16 @@ export class ScopeResolver {
       }
       level = next
     }
-    // One request per object, or per prefix of an object asked again; past the request cap the rest go unasked.
+    // One request per object (by its first prefix when asked again), then the further prefixes: past the request cap those go
+    // unasked before any object does.
     const asks: { path: string[]; prefix?: string }[] = []
+    const more: { path: string[]; prefix: string }[] = []
     for (const path of paths.values()) {
-      const prefixes = this.narrow?.get(key(path))?.slice(0, narrowPrefixes)
-      if (prefixes?.length) for (const prefix of prefixes) asks.push({ path, prefix })
-      else asks.push({ path })
+      const prefixes = this.narrow?.get(key(path))?.slice(0, resolverLimits.narrowPrefixes) ?? []
+      asks.push(prefixes.length ? { path, prefix: prefixes[0] } : { path })
+      for (const prefix of prefixes.slice(1)) more.push({ path, prefix })
     }
+    asks.push(...more)
     const kept = asks.slice(0, Math.max(0, languageLookupLimits.requests - extra.length))
     this.cut = kept.length < asks.length
     // Each request gets its share of the answer's total, so a later one is not left with nothing.
@@ -151,14 +174,17 @@ export class ScopeResolver {
     return new Set([...this.answers].filter(([, answer]) => answer.truncated && answer.object).map(([path]) => path))
   }
 
-  /** The prefix a field path written on `source` means on the object beneath it: through an UNNEST, the array's path first
-   *  (i.alpha over UNNEST(w.zrec) is zrec.alpha); through `*`, the same names. */
-  async prefixThrough(source: ScopeSource, path: readonly string[], typed: string, depth = 0): Promise<string> {
+  /** The prefix a field path written on `source` means on the object beneath it, and that object (its path's key) when known:
+   *  through an UNNEST, the array's path first (i.alpha over UNNEST(w.zrec) is zrec.alpha; over UNNEST(zrec) not yet found, the
+   *  same); through `*`, the same names. */
+  async prefixThrough(source: ScopeSource, path: readonly string[], typed: string, depth = 0): Promise<{ prefix: string; object?: string }> {
     if (source.kind === 'unnest' && depth < resolverLimits.unnestHops) {
       const inner = await this.field(source.path, source)
       if (inner) return this.prefixThrough(inner.source, [...inner.path, ...path], typed, depth + 1)
+      return { prefix: [...source.path, ...path, typed].join('.') }
     }
-    return [...path, typed].join('.')
+    const objectPath = source.kind === 'object' ? this.dialect.objectPath(source.parts) : undefined
+    return { prefix: [...path, typed].join('.'), ...objectPath ? { object: key(objectPath) } : {} }
   }
 
   /** Every source's columns, read one after another: a source read while another is still being read would meet it in `reading`
@@ -172,13 +198,15 @@ export class ScopeResolver {
   /** A source's columns: the index's for an object, the select list's (with `*` expanded) for a WITH query or subquery. The grammar
    *  has already said which names are WITH queries (kind cte); an object is always the index's. */
   columns(source: ScopeSource, hops = 0): Promise<SourceColumns> {
-    if (this.reading.has(source)) return Promise.resolve({ columns: [], truncated: false })
+    if (this.reading.has(source)) return Promise.resolve(unread)
     let found = this.cache.get(source)
     if (!found) {
-      // Past the budget nothing is kept, so a nearer reader of the same source still gets its columns.
-      if (hops > resolverLimits.starHops) return Promise.resolve({ columns: [], truncated: true })
+      if (hops > resolverLimits.starHops) return Promise.resolve({ columns: [], truncated: true, budget: true })
       this.reading.add(source)
-      found = this.read(source, hops).finally(() => this.reading.delete(source))
+      found = this.read(source, hops).then(given => {
+        if (given === unread || given.budget) this.cache.delete(source)
+        return given
+      }).finally(() => this.reading.delete(source))
       this.cache.set(source, found)
     }
     return found
@@ -203,7 +231,8 @@ export class ScopeResolver {
       case 'unnest': {
         // UNNEST(hits) AS hits: the path names what the source reads, not the source itself.
         const field = await this.field(source.path, source)
-        if (!field) return { columns: [], truncated: false }
+        // Not found: it may lie past what a table cut short gave.
+        if (!field) return { columns: [], truncated: this.cutShort().size > 0 }
         const prefix = field.path.length
         return { truncated: field.columns.truncated, columns: childrenAndBelow(field.columns.columns, field.path).map(column => ({ ...column, path: column.path.split('.').slice(prefix).join('.') })) }
       }
@@ -212,11 +241,14 @@ export class ScopeResolver {
 
   /** A select list's columns, read once however many sources name it; one met again while it is read gives none. */
   private shape(shape: QueryShape, hops: number): Promise<SourceColumns> {
-    if (this.shaping.has(shape)) return Promise.resolve({ columns: [], truncated: false })
+    if (this.shaping.has(shape)) return Promise.resolve(unread)
     let found = this.shapes.get(shape)
     if (!found) {
       this.shaping.add(shape)
-      found = this.readShape(shape, hops).finally(() => this.shaping.delete(shape))
+      found = this.readShape(shape, hops).then(given => {
+        if (given.budget) this.shapes.delete(shape)
+        return given
+      }).finally(() => this.shaping.delete(shape))
       this.shapes.set(shape, found)
     }
     return found
@@ -227,9 +259,11 @@ export class ScopeResolver {
     const columns: ScopeColumn[] = shape.columns.map(path => ({ path }))
     const known = new Set(columns.map(column => column.path.toLowerCase()))
     let truncated = false
+    let budget = false
     for (const star of shape.stars) {
       const given = await this.columns(star, hops + 1)
       truncated ||= given.truncated
+      budget ||= given.budget === true
       for (const column of given.columns) {
         const name = column.path.toLowerCase()
         if (known.has(name)) continue
@@ -237,24 +271,35 @@ export class ScopeResolver {
         columns.push(column)
       }
     }
-    return { columns, truncated }
+    return { columns, truncated, ...budget ? { budget: true as const } : {} }
   }
 
   /** What a written chain names, for member completion, UNNEST and hover: a source by its name then a field path in it, else a
    *  column (and fields) of a source in reach, nearest first. */
   async field(parts: readonly string[], except?: ScopeSource): Promise<{ source: ScopeSource; path: string[]; columns: SourceColumns } | undefined> {
     if (!parts.length) return
-    const named = this.scope.sources.find(source => source !== except && source.name !== undefined && sameName(source.name, parts[0]))
+    if (!this.named) {
+      this.named = new Map()
+      for (const source of this.scope.sources) {
+        if (source.name === undefined) continue
+        const name = source.name.toLowerCase()
+        const list = this.named.get(name)
+        if (list) list.push(source)
+        else this.named.set(name, [source])
+      }
+    }
+    const named = this.named.get(parts[0].toLowerCase())?.find(source => source !== except)
     if (named) return { source: named, path: parts.slice(1), columns: await this.columns(named) }
     const seen = new Set<SourceColumns>()
+    let looked = 0
     for (const source of this.scope.sources) {
       if (source === except) continue
+      if (looked++ >= resolverLimits.fieldSources) break
       const columns = await this.columns(source)
       if (seen.has(columns)) continue
       seen.add(columns)
-      // A narrowed answer holds a STRUCT's fields (zrec.a) without the STRUCT itself.
-      const below = parts[0].toLowerCase() + '.'
-      if (columnAt(columns.columns, [parts[0]]) || columns.columns.some(column => column.path.toLowerCase().startsWith(below))) return { source, path: [...parts], columns }
+      // By its top-level name: a narrowed answer holds a STRUCT's fields (zrec.a) without the STRUCT itself.
+      if (headsOf(columns).has(parts[0].toLowerCase())) return { source, path: [...parts], columns }
     }
   }
 }

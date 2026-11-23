@@ -3,7 +3,7 @@
 // keywords; a dotted name lists an alias's columns or a STRUCT's fields. Nothing here knows an engine.
 import { languageLookupLimits, type LanguageLookupPath } from '../language-lookup'
 import type { CompletionDialect, CompletionItem, CompletionKind, CompletionList, CompletionRead, DialectFunction, IndexLookup } from './model'
-import { ScopeResolver, boundedLookup, childrenOf, narrowing, sameName, type ScopeColumn } from './resolve'
+import { ScopeResolver, boundedLookup, childrenOf, narrowing, resolverLimits, sameName, type ScopeColumn } from './resolve'
 
 /** Groups order the list ahead of the editor's fuzzy score among equals: what the scope gives first, the dialect's words last. */
 const group: Readonly<Record<CompletionKind, string>> = { column: '1', field: '1', alias: '2', cte: '2', table: '3', view: '3', routine: '4', model: '4', container: '5', function: '6', keyword: '7' }
@@ -47,9 +47,9 @@ export async function completeFromIndex(read: CompletionRead, dialect: Completio
       const cutShort = resolver.cutShort()
       const namespace = site.qualifier.length === 1 && [...dialect.functionNamespaces, ...dialect.anyFunctionPrefixes].some(name => sameName(name, site.qualifier[0]))
       if (cutShort.size && (field ? field.columns.truncated : !namespace)) {
-        const prefix = field ? await resolver.prefixThrough(field.source, field.path, word.typed) : [...site.qualifier, word.typed].join('.')
+        const { prefix, object } = field ? await resolver.prefixThrough(field.source, field.path, word.typed) : { prefix: [...site.qualifier, word.typed].join('.'), object: undefined }
         if (prefix) {
-          resolver = new ScopeResolver(scope, dialect, lookup, narrowing(cutShort, [prefix]))
+          resolver = new ScopeResolver(scope, dialect, lookup, object && cutShort.has(object) ? new Map([[object, [prefix]]]) : narrowing(cutShort, [prefix]))
           await resolver.load()
           field = await resolver.field(site.qualifier) ?? field
         }
@@ -75,10 +75,14 @@ export async function completeFromIndex(read: CompletionRead, dialect: Completio
       let given = await resolver.all(scope.sources)
       const cutShort = resolver.cutShort()
       if (word.typed && cutShort.size) {
-        // The typed names, and an UNNEST's element fields that start with them (UNNEST(w.items) asks items.<typed>).
-        const prefixes = [word.typed]
-        for (const source of scope.sources) if (source.kind === 'unnest') prefixes.push(await resolver.prefixThrough(source, [], word.typed))
-        resolver = new ScopeResolver(scope, dialect, lookup, narrowing(cutShort, prefixes))
+        // The typed names, and an UNNEST's element fields that start with them (UNNEST(w.items) asks w's table for items.<typed>).
+        const plan = new Map([...cutShort].map(path => [path, [word.typed]]))
+        const unnests = scope.sources.filter(source => source.kind === 'unnest').slice(0, resolverLimits.narrowUnnests)
+        for (const source of unnests) {
+          const { prefix, object } = await resolver.prefixThrough(source, [], word.typed)
+          for (const [path, prefixes] of plan) if (prefix && (!object || object === path) && !prefixes.includes(prefix)) prefixes.push(prefix)
+        }
+        resolver = new ScopeResolver(scope, dialect, lookup, plan)
         await resolver.load()
         given = await resolver.all(scope.sources)
       }

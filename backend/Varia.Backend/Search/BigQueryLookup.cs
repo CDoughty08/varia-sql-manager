@@ -61,7 +61,7 @@ internal sealed class BigQueryLookup
             return listing || skips.Any(skip => skip.Project == known && skip.Database != "" && !held.ContainsKey(skip.Database)) ? LookupState.Partial : LookupState.Ready;
         if (listing) return LookupState.Skipped;
         // Listed, but every dataset's read failed (or was refused for the budget): none answers.
-        if (skips.Any(skip => skip.Project == known && skip.Database != "")) return LookupState.Partial;
+        if (skips.Any(skip => skip.Project == known && skip.Database != "")) return building ? LookupState.Building : LookupState.Partial;
         return building ? LookupState.Building : Index == "none" ? LookupState.Absent : LookupState.Ready;
     }
 

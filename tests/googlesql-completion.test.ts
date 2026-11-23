@@ -18,6 +18,8 @@ const names = (sources: readonly ScopeSource[]) => sources.map(source => source.
 
 // A fake index with the backend's language.lookup semantics (EditorLookup.cs): projects, datasets, objects, columns by field path.
 interface FakeObject { kind: string; subtype?: string; rows?: number; bytes?: number; partitioning?: string; clustering?: string; signature?: string; columns?: { name: string; type: string; nullable?: boolean; description?: string; record?: boolean }[] }
+const wideColumns = [...Array.from({ length: 2500 }, (_, index) => ({ name: `c${String(index).padStart(4, '0')}`, type: 'INT64' })),
+  { name: 'zrec', type: 'STRUCT', record: true }, { name: 'zrec.alpha', type: 'STRING' }, { name: 'zrec.beta', type: 'STRING' }]
 const index: Record<string, Record<string, Record<string, FakeObject>>> = {
   'varia-alpha': {
     sales: {
@@ -37,8 +39,7 @@ const index: Record<string, Record<string, Record<string, FakeObject>>> = {
   },
   'varia-beta': { census: { people: { kind: 'bqTable', columns: [{ name: 'name', type: 'STRING' }] } } },
   // A table wider than one answer's share.
-  'varia-wide': { lab: { wide: { kind: 'bqTable', columns: [...Array.from({ length: 2500 }, (_, index) => ({ name: `c${String(index).padStart(4, '0')}`, type: 'INT64' })),
-    { name: 'zrec', type: 'STRUCT', record: true }, { name: 'zrec.alpha', type: 'STRING' }, { name: 'zrec.beta', type: 'STRING' }] } } }
+  'varia-wide': { lab: Object.fromEntries(['wide', 'wide2', 'wide3', 'wide4'].map(name => [name, { kind: 'bqTable', columns: wideColumns }])) }
 }
 const keeps = (request: LanguageLookupPath, name: string) => request.exact ? name.toLowerCase() === request.prefix!.toLowerCase() : name.toLowerCase().startsWith((request.prefix ?? '').toLowerCase())
 function answer(request: LanguageLookupPath): LanguageLookupAnswer {
@@ -317,6 +318,20 @@ describe('completion from the index', () => {
     const log: LanguageLookupPath[][] = []
     expect((await complete('SELECT SAFE.| FROM `varia-wide.lab.wide`', fakeLookup(log))).items.length).toBeGreaterThan(0)
     expect(log).toHaveLength(1)
+    // An UNNEST of a bare name past the share, and many UNNESTs over several wide tables beside a narrow one.
+    expect((await complete('SELECT al| FROM `varia-wide.lab.wide`, UNNEST(zrec) AS i')).labels('column')).toContain('alpha')
+    expect((await complete('SELECT i.al| FROM `varia-wide.lab.wide`, UNNEST(zrec) i')).labels('column')).toContain('alpha')
+    const many = await complete('SELECT id| FROM `varia-wide.lab.wide` a, `varia-wide.lab.wide2` b, `varia-wide.lab.wide3` c, `varia-wide.lab.wide4` d, UNNEST(a.zrec) u1, UNNEST(b.zrec) u2, UNNEST(c.zrec) u3, sales.orders o')
+    expect(many.labels('column')).toContain('customer')
+  })
+
+  it('keeps a WITH query cut short deep in a chain from standing for it nearer the top, and reads many bare UNNESTs quickly', async () => {
+    const chain = 'WITH ' + Array.from({ length: 70 }, (_, index) => `w${index} AS (SELECT * FROM ${index ? `w${index - 1}` : 'sales.orders'})`).join(', ') + ' SELECT  FROM w69, w5'
+    expect((await complete(chain.replace('SELECT  FROM', 'SELECT | FROM'))).labels('column')).toContain('customer')
+    const timed = performance.now()
+    const bare = 'SELECT c24| FROM `varia-wide.lab.wide` w' + ', UNNEST(zrec) u'.repeat(11000)
+    await complete(bare)
+    expect(performance.now() - timed).toBeLessThan(3000)
   })
 
   it('lists an UNNEST alias\'s element fields beside the table it reads', async () => {
