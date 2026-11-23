@@ -531,9 +531,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   `worker-core.ts`, and `cell()`, which cuts the text through `cellSlice` and answers `cut` and the full length apart
   from the stored `truncated` flag (which `cellText` would otherwise merge with the cut), carried through the worker's
   cell answer and `CellValue`, so the card can say "Showing the first 4,000 of 150,000 characters" and still tell a long
-  XML value from one stored truncated at 2,097,152; a cut value skips formatting, as a truncated one does. A worker test
-  checks that a 200,000-character value comes back cut at 100,001 with `cut`, its length and `truncated` false, and a
-  stored-truncated one with `truncated`.
+  XML value from one stored truncated at 2,097,152; a cut value skips formatting, as a truncated one does. The length is
+  in UTF-16 units, counted from the UTF-8 bytes (`utf8Prefix` decodes only a prefix), and a binary cell's is its text
+  form's (2 + 2 × bytes). A worker test checks that a 200,000-character value of non-ASCII text (a two-byte character
+  and an astral one) comes back cut at 100,001 with `cut`, its UTF-16 length and `truncated` false, a stored-truncated
+  one with `truncated`, and a binary cell's length.
   - The card reads at most 100,001 characters a side; Compare Values in Tab reads whole values.
   - The **new value** is the data column at the grid's position.
   - The **old value** depends on the cell:
@@ -793,7 +795,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     without checking it was reserved and the new half's list is C3's;
   - `results-jobs`: Save as Diff to `orders.txt` writes diff, and leaves the remembered last format alone; a
     `validation` case and a C# check refusing a diff copy or save with `names` missing or a 261-character name, and a
-    check that Copy's too-large sentence for `diff` ends "Use Save as Diff… instead." in main and in C#;
+    check that Copy's too-large sentence for `diff` ends "Use Save as Diff… instead." in main, in C# and in the fake
+    backend (`tests/fixtures/backend.mjs`), which has its own copy;
   - smoke: a clipboard read-back through the fake backend (needs an unlocked screen).
 - **Risks:** low for the format, which changes nothing existing. Bringing the TypeScript writer level touches the fake
   backend's comparison Save, which smoke reads.
@@ -833,8 +836,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - A first line names the comparison and how rows are matched: "Result 1 → Result 3 (SQLQuery3.sql), rows matched by
     id" ("rows matched automatically by order_no" under Automatic, "rows matched automatically by whole rows" when it
     fell back, "rows matched by whole rows", "rows matched by position"), in Copy as Diff's match-line words, so the two
-    exports name one match alike, and changes when another comparison invokes the dialog. A script is written only under
-    Key columns the user chose (below).
+    exports name one match alike (the strip keeps its shipped "whole rows matched", which the exports' longer lines read
+    better without), and changes when another comparison invokes the dialog. A script is written only under Key columns
+    the user chose (below).
   - **Target table:** `[database.]schema.table`, each part 1 to 128 characters, parsed as SQL Server parses a multipart
     name: parts plain, bracketed (`[my.schema].Orders`, with `]]` inside brackets) or double-quoted. One part is refused
     ("Name the schema too, such as dbo.Orders."), and so are four ("A linked server cannot be the target. Name the table
@@ -1129,15 +1133,18 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     no difference, a sort) says nothing. A change is found from each answer's count and fingerprint for the option
     (`differences` and `differencesKey`, Technical sketch), so a filter moved to other rows of the same count is found
     too. In Two rows an entry is chosen when either of its halves is. The preview reads them as it shows, and Script
-    reads them again. After a change in the comparison (its filters, chips, selection or a replace; a sort changes no
-    rows), Script waits until the preview for it answers, as it waits for a lookup: unavailable, described "Reading the
-    comparison…", which pressing it says, so it writes only rows whose counts and warnings the form shows. A failed
-    preview ends the wait, and Script is available then, as the failed-preview rule says. As a safety net, Script's
-    answer carries the same `differences` and `differencesKey`: when the chosen option's differ from the latest
-    successful preview answer's, the script is not used, the changed line shows ("…was not written." alone, since Script
-    waits again for the preview the renderer asks at once), and the Rows line takes the new count. While the latest
-    preview has failed there is no answer to check against, and Script writes, its header naming the rows and carrying
-    the warnings.
+    reads them again. After a change that can alter what it writes, Script waits until the preview for it answers, as it
+    waits for a lookup: unavailable, described "Reading the comparison…", which pressing it says, so it writes only what
+    the form's counts and warnings describe. Those changes are any change in the form, from the moment it is made (the
+    300 ms wait included), and in the comparison a replace, chips or filters under Rows in the grid, and the selection
+    (or a filter that changes it) under Selected rows, the cases a generation is cancelled for. A sort, a click in the
+    grid outside Selected rows, or a chip under All differences sends a preview for the other options' counts but leaves
+    Script and the summary as they are. A failed preview ends the wait, and Script is available then, as the
+    failed-preview rule says. As a safety net, Script's answer carries the same `differences` and `differencesKey`: when
+    the chosen option's differ from the latest preview answer's, when that answer succeeded, the script is not used, the
+    changed line shows ("…was not written." alone, since Script waits again for the preview the renderer asks at once),
+    and the Rows line takes the new count. While the latest preview has failed there is no answer to check against, and
+    Script writes, its header naming the rows and carrying the warnings.
   - **Options:** Wrap in a transaction (on), Check each statement changes one row (on; Q2), with the line "UPDATEs also
     check that the row still holds the values they change from, DELETEs the values the comparison saw, and INSERTs that
     the row is not there yet." (Q11). While UPDATE is ticked and some chosen UPDATEs change only columns the check
@@ -1343,9 +1350,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       unavailable and the focus on Cancel, which cancels the replace first; the opening preview goes out when the
       replace ends, however it ends (landed, failed or cancelled; a failure's sentence is said first), so no answer for
       the old comparison moves the focus or offers Script while it runs, and the answer places the focus as an opening
-      does (after a failure, the unchanged refusal's first button). When it closes otherwise (a press outside, F6, the
-      pane hiding, the comparison closing), the dialog stays closed rather than take the focus back, and Script
-      Differences as T-SQL… opens it again from the draft;
+      does: on a refusal that replaced the form, its first button, otherwise Target table (a footer refusal, the
+      key-column-unknown line, or a refusal found on Script, which the draft does not keep); when the dialog's own
+      Cancel ended the replace, the focus stays on Cancel, so a second press closes the dialog instead of reopening the
+      Match menu. When it closes otherwise (a press outside, F6, the pane hiding, the comparison closing), the dialog
+      stays closed rather than take the focus back, and Script Differences as T-SQL… opens it again from the draft;
     - with an input closed, rows cannot be matched again, so the buttons are unavailable (`aria-disabled`, so they stay
       in the Tab order) and the sentence's last part becomes "…, and Result 1 is closed, so rows cannot be matched
       again." It gives no further advice: running the query again would run every statement in it again, including the
@@ -1925,19 +1934,21 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     summary's order with a failed preview leaving Script unavailable while a reason holds, the not-connected state after
     a connection lost while generating, the focus staying on Script when a footer refusal clears and falling back to
     Target table, a refusal found on Script kept through a sort and a selection change outside Selected rows and cleared
-    when the chosen option's differing entries change, Script waiting ("Reading the comparison…") after a grid change
-    until its preview answers and not after a failed one, Script's answer differing from the latest successful preview's
-    `differences` or `differencesKey` writing nothing and showing the changed line without "Script again", Script
-    writing unchecked while the latest preview has failed, an input closing while open sending the preview again, saying
-    the closed-input sentence with the focus kept on the unavailable button and clearing a refusal found on Script, a
-    reopening during a replace from any Choose key columns… showing "Updating the comparison…" with the focus on Cancel
-    and its opening preview sent when the replace ends, however it ends (a failure said first, the focus then on the
-    refusal's first button), a preview value refusal counting rows past the 30 lines, a refusal the preview found kept
-    through a grid click until an answer no longer brings it and said again only when its sentence changes, a two-part
-    target in a database beside another holding the same table, the key-column form of the truncation and U+FFFD
-    refusals, closing while generating opening nothing, Enter in Target table with nothing highlighted, the window over
-    a popped-out Results pane, a cancelled generation giving way to a closed or refused state, and the Clipboard
-    announcement.
+    when the chosen option's differing entries change, Script waiting ("Reading the comparison…") after a change that
+    can alter what it writes (a form change, a replace, chips or filters under Rows in the grid, the selection under
+    Selected rows) until its preview answers, and not after a sort, a click outside Selected rows or a failed preview,
+    Script's answer differing from the latest preview's, when it succeeded, `differences` or `differencesKey` writing
+    nothing and showing the changed line without "Script again", Script writing unchecked while the latest preview has
+    failed, an input closing while open sending the preview again, saying the closed-input sentence with the focus kept
+    on the unavailable button and clearing a refusal found on Script, a reopening during a replace from any Choose key
+    columns… showing "Updating the comparison…" with the focus on Cancel and its opening preview sent when the replace
+    ends, however it ends (a failure said first; the focus then on a refusal that replaced the form's first button, else
+    Target table, and kept on Cancel when Cancel ended the replace), a preview value refusal counting rows past the 30
+    lines, a refusal the preview found kept through a grid click until an answer no longer brings it and said again only
+    when its sentence changes, a two-part target in a database beside another holding the same table, the key-column
+    form of the truncation and U+FFFD refusals, closing while generating opening nothing, Enter in Target table with
+    nothing highlighted, the window over a popped-out Results pane, a cancelled generation giving way to a closed or
+    refused state, and the Clipboard announcement.
   - Smoke: open the dialog window by role, script to a New Query Editor Window, and find `BEGIN TRANSACTION` in the
     focused editor. A frameless OS window can behave differently on Linux, so run it through `npm run test:smoke:wsl`
     before pushing.
