@@ -233,7 +233,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
 
   It also goes through `worker-core.ts`'s member-by-member rebuild. The backend refuses an index not below the pair
   count, an ignored key of a `columns` match, or every pair ignored, with `INVALID_PARAMS` and the sentences above. The
-  answer is unchanged: the renderer knows the names.
+  answer gains no new member; only its descriptor columns gain `ignored` (below), since the renderer knows the names.
 - **Stored shape:** an ignored pair stays a data column. Its descriptor column gets `ignored: true`, a new optional
   member of `ResultColumn`. `CompareService` knows the names, but `GridView`, the results worker and Save read a
   comparison's columns only from its descriptor, as they read the hidden roles, so the flag travels there rather than
@@ -809,9 +809,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     of the name is at most 128 characters."; an unclosed bracket or quote "Close the bracket or quote in the name." The
     field is checked as it changes, and its sentence shows once it loses focus or on Script. Empty the first time, with
     suggestions from Search Objects' index for the comparison's connection (tables holding every compared column first,
-    then by how many they hold, then the query document's current database first, then by name, history tables left out,
-    none highlighted until an arrow key moves to one, so Enter never picks one unchosen), and Script waits for it
-    ("Choose the target table."); after that, the pair's remembered draft.
+    then by how many they hold, then the query document's current database first, then by name, history and dropped
+    ledger tables left out, none highlighted until an arrow key moves to one, so Enter never picks one unchosen), and
+    Script waits for it ("Choose the target table."); after that, the pair's remembered draft.
     - **Database.** A two-part name is resolved to the query document's current database when it is typed or picked,
       while the document is on the comparison's connection: its target is the comparison's server, connected or not,
       since Disconnect with Keep Tabs keeps the document's database (connections-explorer.md), and a document a
@@ -1365,9 +1365,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     }`. `differences` is each Rows option's count of entries that are not `same`, which the options show beside their
     names and the "N of M differences" sentences read (`grid` is `all` when no view is sent). `uncheckedUpdates` is the
     chosen UPDATEs whose every SET column Q11 leaves out, so their WHERE checks only the keys, counted in the counts
-    pass by value, so a preview and Script agree: by type alone for a column Q11 always leaves out, and from the old
-    value for one whose type leaves it to the value (char or varchar under a SQL_ collation or with none recorded, a
-    value marked truncated, U+FFFD, a subnormal float), reading only those cells. Its sentence is the backend's, as a
+    pass by value, so a preview and Script agree: by type alone for a column Q11 always leaves out, and from the value
+    the target holds now (Result 1's under `toNew`, Result 3's under `toOld`), judged by that side's column type and
+    collation, for one whose type leaves it to the value (char or varchar under a SQL_ collation or with none recorded,
+    a value marked truncated, U+FFFD, a subnormal float), reading only those cells. Its sentence is the backend's, as a
     refusal's is, since only the backend knows the reasons: it names at most three columns, then "and 2 more", each cut
     at 60 characters with its reason (the type, as "note: xml"; "id: int and varchar in the two results"; or by value,
     "code: values not all ASCII under its SQL_ collation", "memo: values not kept in full", "note: values that cannot be
@@ -1473,30 +1474,32 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     equal that part, compared as `Objects()` compares, and empty text lists every table by rank. They are ranked with
     those holding every compared column first, then by `holds`, those without `holds` last, the renderer putting the
     query document's current database first among equals, then by name, leaving out history tables (subtypes `history`
-    and `ledgerHistory`), since an INSERT into one fails (Msg 13559). `table` answers the sent `table` when the index
-    holds it, so two databases that both hold `dbo.Orders` are told apart, with at most 4,096 columns (`columnsCut` past
-    that). `state` is that database's state from `Database()` (ready, partial, building, skipped or absent), and `held`
-    says whether the index holds a read of it with its columns (`LookupDatabase.Held` set, `LookupGaps.ChildrenLeftOut`
-    clear and the held read not `FailedPart`, since a read that failed part way, kept when nothing was held before, can
-    stop before its columns), whatever `state` says: a read without definitions (`objectExplorer.search.definitions`
-    off), with a cut definition or without system objects is partial and still holds every column, a rebuild running
-    over an earlier read is building, and a failed read after an earlier one is skipped, each with that earlier read
-    still answering. The dialog keys every column fact on `held`, and `state` only picks the sentence: unless `held`, it
+    and `ledgerHistory`), since an INSERT into one fails (Msg 13559), and dropped ledger tables (`droppedLedger`), which
+    refuse every change. An append-only ledger table, which refuses UPDATE and DELETE, is kept, since the index does not
+    record that kind; such a script fails and rolls back. `table` answers the sent `table` when the index holds it, so
+    two databases that both hold `dbo.Orders` are told apart, with at most 4,096 columns (`columnsCut` past that).
+    `state` is that database's state from `Database()` (ready, partial, building, skipped or absent), and `held` says
+    whether the index holds a read of it with its columns (`LookupDatabase.Held` set, `LookupGaps.ChildrenLeftOut` clear
+    and the held read not `FailedPart`, since a read that failed part way, kept when nothing was held before, can stop
+    before its columns), whatever `state` says: a read without definitions (`objectExplorer.search.definitions` off),
+    with a cut definition or without system objects is partial and still holds every column, a rebuild running over an
+    earlier read is building, and a failed read after an earlier one is skipped, each with that earlier read still
+    answering. The dialog keys every column fact on `held`, and `state` only picks the sentence: unless `held`, it
     claims no column facts and says still indexing (building), skipped (skipped), indexed without columns (partial) or
     the table unknown (absent); with `held` and a building or skipped `state`, the knows line adds that its facts are
     from the last index.
   - **Tests:** a new offline suite in Program.cs's `offlineSuites` over a built index: ranking by compared columns held,
     three-part suggestions across two databases with the same schema and the sent `table` choosing between them, a
-    table's identity, computed, generated, NOT NULL and default flags, history tables left out, the 4,096-column cut, a
-    database read without its columns, no index, `held` with `state` partial for a read without definitions, one with a
-    cut definition and one without system objects, `held` with `state` building for a rebuild running over a held read
-    and skipped for a failed read after one, a name typed as a fragment, with a schema part and with a database part,
-    `pairs` for a name differing only by case in a case-sensitive database and in a case-insensitive one, an ignored
-    name the table lacks (null, and not counted in `holds`), an unnamed pair (null, not counted in `holds`), a read kept
-    after failing part way (not `held`), `state`, `held` and `holds` absent without a sent `table` or for a read without
-    columns, and `LaneOf` naming the method as Explorer; vitest for the schema's bounds against `objectSearchLimits` (an
-    empty name accepted), a request sent while one runs (the first cancelled through `explorerCancel`, no
-    `DUPLICATE_REQUEST`), and the dialog's index line from a fake answer.
+    table's identity, computed, generated, NOT NULL and default flags, history and dropped ledger tables left out, the
+    4,096-column cut, a database read without its columns, no index, `held` with `state` partial for a read without
+    definitions, one with a cut definition and one without system objects, `held` with `state` building for a rebuild
+    running over a held read and skipped for a failed read after one, a name typed as a fragment, with a schema part and
+    with a database part, `pairs` for a name differing only by case in a case-sensitive database and in a
+    case-insensitive one, an ignored name the table lacks (null, and not counted in `holds`), an unnamed pair (null, not
+    counted in `holds`), a read kept after failing part way (not `held`), `state`, `held` and `holds` absent without a
+    sent `table` or for a read without columns, and `LaneOf` naming the method as Explorer; vitest for the schema's
+    bounds against `objectSearchLimits` (an empty name accepted), a request sent while one runs (the first cancelled
+    through `explorerCancel`, no `DUPLICATE_REQUEST`), and the dialog's index line from a fake answer.
 - **Renderer:**
   - The dialog is a `DialogWindow` of the new kind in `dialogWindowKinds` (`src/shared/popouts.ts`), which also widens
     the `dialogWindowName` pattern (today `options|about|connect`). `DialogWindow` takes the window to open over, the
@@ -1535,8 +1538,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       `INVALID_PARAMS` in both;
     - `uncheckedDeletes` for a DELETE whose only ticked compared column is xml; neither in an answer without a
       direction; `uncheckedUpdates` alike in a preview and in Script (an UPDATE changing only an xml column, one
-      changing only non-ASCII varchar under a SQL_ collation, and one with an ASCII value there, which is checked);
-      `selectedKeys` for one to three entries and none past three;
+      changing only non-ASCII varchar under a SQL_ collation, and one with an ASCII value there, which is checked; under
+      `toOld` too, with the SQL_-collated varchar on only one side); `selectedKeys` for one to three entries and none
+      past three;
     - an empty grid: `rows` with no ranges answers 0 for Selected rows and Rows in the grid, and the diff's counts for
       All differences, never `INVALID_PARAMS`;
     - a preview with no target or direction: empty `text`, an opening refusal, `differences` for all three options,
@@ -1587,6 +1591,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     the target unchanged and, in the same session, an ordinary INSERT into the identity table succeeding
     (IDENTITY_INSERT was turned off). It is a new live `Suite(...)` with a `LiveGroups.Suites` entry, and its CI seconds
     go in docs/ci.md's table.
+  - vitest: a `results-port.test.ts` case sending every new `results.scriptDiff` member (`viewId`, `identity`,
+    `indexReasons`, `maxLines`, `rowsChoice`) and checking each reaches the backend request, as the diff layout's case
+    does, and a `worker-core` case for the rebuilt request.
   - vitest for the dialog: states, counts per direction, locked and unticked columns, warnings, the comparison replaced
     or closed while open, switching to another comparison, Enter and Escape in the suggestion list and on buttons, the
     draft memory, multipart target names, the Automatic and as-shown refusals and their buttons, the closed-input form
@@ -1827,11 +1834,13 @@ would leave out the sort, and "Rows" is already the toolbar's All rows / Changes
 - **Tests:**
   - `DiffChecks`: view reads (filtered, sorted, Row position over view order, packed inputs through the inverse), stored
     row numbers, refusals, working memory counted, and a view closed mid-run answering `VIEW_NOT_FOUND`.
-  - vitest: the popover choice and counts, memory, `comparisonOutOfDate` (filters changed, same filters, sort only under
-    key and under Row position, Keep Selected Rows), Update dropping "(as shown)", other changes updating an out-of-date
-    comparison and saying so, and a build with nothing to apply recorded whole, its choice Whole result, so a later
-    Layout after a filter still reads whole results; the grid menu on a comparison that is not the focused one, its
-    Compare Rows as Shown tick and Update Comparison following that comparison's state.
+  - vitest: a `results-port.test.ts` case sending `leftView` and `rightView` and checking both reach the backend
+    request, and a `worker-core` case for the view ids, since a dropped member would compare whole results under an "(as
+    shown)" caption; the popover choice and counts, memory, `comparisonOutOfDate` (filters changed, same filters, sort
+    only under key and under Row position, Keep Selected Rows), Update dropping "(as shown)", other changes updating an
+    out-of-date comparison and saying so, and a build with nothing to apply recorded whole, its choice Whole result, so
+    a later Layout after a filter still reads whole results; the grid menu on a comparison that is not the focused one,
+    its Compare Rows as Shown tick and Update Comparison following that comparison's state.
   - The fake backend reads views. A `results-smoke.mjs` step: filter an input, Compare rows as shown, change the filter,
     see Out of date, Update.
   - Whichever of C3 and C6 lands second: a shared golden for both writers with one side read as shown ("(as shown)" in
