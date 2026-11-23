@@ -112,8 +112,24 @@ alerts, operators and who is notified, behind the same gate until 0.11.0.
   compare of what the server and you changed, a field changed by both first with a choice each, offering Reload and keep my
   changes or Discard mine and reload. The Script drawer shows SSMS's shape (`BEGIN TRANSACTION`, each call followed by
   `GOTO QuitWithRollback`) by name with literal values. **New Job** (a Jobs folder's or job's menu, or the palette) opens a
-  start panel: Blank job, or Copy an existing job, which fills General and Notifications from the job picked ("Copy of …");
-  nothing is created until Create, which runs `sp_add_job` and `sp_add_jobserver` in one transaction. The save batches have
+  start panel: Blank job, or Copy an existing job, which opens Create Job Like This on the job picked (below);
+  nothing is created until Create, which runs `sp_add_job` and `sp_add_jobserver` in one transaction.
+  **Create Job Like This…** (AG-6e; a job's menu after New Job…, Job Activity Monitor's bar for the one job selected, the palette, which
+  copies the active job document or asks for a job, and New Job's Copy an existing job) opens New Job filled from the job's describe
+  ("Copy of …"): General, Notifications and every step with its flow, retries, output and logging, each step new to msdb (its
+  `sp_add_jobstep`). It is saved disabled unless Enable when saved is ticked, owned by the login (sysadmin keeps the source's owner and
+  may change it), and each schedule is shared (`sp_attach_schedule` under its version guard) by default, or copied as a new schedule
+  (`sp_add_jobschedule`, named "… (copy)"), or left out; a schedule whose version could not be read can only be copied. History and the
+  alerts that run the source are not copied: an alert runs one job. A **Changes from source** section leads the document: Replace
+  across the copy (one find and replace over the job's and steps' names, step commands, which hold SSIS package paths, output file
+  paths and copied schedules' names, never a shared schedule's; a preview lists each match, ticked until unticked, and an edit since
+  the preview asks for a new one), Name, Owner and Enable when saved, each step's key fields (a T-SQL step's database and command, an
+  SSIS step's package and environment, any other type's command) with Edit command and Change package going to Steps, and an SSIS
+  step whose package differs from the source's reads that package so its required parameters without a value show with Set it now;
+  each schedule's Share, Copy or Leave out; then what else is copied and what is not. Fields that differ from the source are marked
+  Changed, and **Compare with source** in the banner lists every difference (the job's fields, each step added, removed, moved or
+  edited, and each schedule copied, left out or new). The copy saves through New Job's own save; no backend write was added. A source
+  with more steps than Varia reads (`stepsPerJob`) cannot be copied from here (Script Job As › CREATE copies it whole). The save batches have
   their own exact-shape lint, `AgentSql.LintJobSave`. **Steps** save inside the same transaction after the job and its
   alerts, in the planner's order (`planAgentSteps`, `src/shared/agent/steps.ts`): deleted steps highest id first, every
   surviving step renamed to a temporary `__varia_step_<32 hex>` name at its id (with neutral T-SQL content, since
