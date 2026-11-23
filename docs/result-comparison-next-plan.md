@@ -180,7 +180,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   grid-menu origin, and C4 adds a Script Differences one). Apply, Escape or Cancel returns the focus to where it was:
   the active cell, from the grid menu.
 - **The checklist** is the Match menu's: the paired columns with their types, searchable, arrows to move, Space to tick,
-  Apply or Cancel. A ticked column is ignored.
+  Apply or Cancel. A note under it says what ignoring does: "A ticked column is ignored: it stays in the grid, muted,
+  but its differences are not counted, coloured or stepped through. Remembered for Result 1 → Result 3."
   - Under **Key columns**, the key columns are listed but unavailable ("Rows are matched by this column, so it cannot be ignored.").
   - Under **Automatic**, the chosen key is tickable, labelled "Chosen automatically: ignoring it matches rows another
     way". Rows are matched again without it: by another key, or by whole rows when none is left.
@@ -633,9 +634,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   always included so each line identifies its row.
   - Without key columns (Row position, Whole rows, or Automatic that fell back to whole rows), each line instead starts
     with its row's stored number in its own input, the gutter's number (`-4`, `+4`; an unchanged line takes its number
-    in the new input). Under Automatic the match line says so (`# rows matched automatically by id`), as Script
-    Differences' first line does. The header names the match and says so (`# rows matched by whole rows; lines start
-    with row numbers`, with any `ignored: …` before that last part), and the column line starts with `row`.
+    in the new input). Under Automatic the match line says so (`# rows matched automatically by id`, and `# rows matched
+    automatically by whole rows; lines start with row numbers` when it fell back), as Script Differences' first line
+    does. The header names the match and says so (`# rows matched by whole rows; lines start with row numbers`, with any
+    `ignored: …` before that last part), and the column line starts with `row`.
   - **Save as Diff…** (Q1) writes the same text for every row the grid shows, with every column it shows but ignored
     ones, to a file. While chips or filters narrow the grid, its header says so (`# the comparison shows 12 of 40
     differences`), counted in a first pass over the view, so a saved diff with the ~ chip pressed is not read as having
@@ -807,9 +809,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     of the name is at most 128 characters."; an unclosed bracket or quote "Close the bracket or quote in the name." The
     field is checked as it changes, and its sentence shows once it loses focus or on Script. Empty the first time, with
     suggestions from Search Objects' index for the comparison's connection (tables holding every compared column first,
-    then by how many they hold and by name, history tables left out, none highlighted until an arrow key moves to one,
-    so Enter never picks one unchosen), and Script waits for it ("Choose the target table."); after that, the pair's
-    remembered draft.
+    then by how many they hold, then the query document's current database first, then by name, history tables left out,
+    none highlighted until an arrow key moves to one, so Enter never picks one unchosen), and Script waits for it
+    ("Choose the target table."); after that, the pair's remembered draft.
     - **Database.** A two-part name is in the query document's current database while the document is on the
       comparison's connection, and a line under the field always names the server and the database the script will
       change ("In Sales_Test on SQLDEV01, SQLQuery3.sql's database"). Once the document has moved to another connection,
@@ -825,29 +827,42 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       identity column then fails and rolls the script back (Msg 544):
       - the index lacks the table: "Search Objects does not know [Sales_Test].[dbo].[Orders], so its columns cannot be
         checked and SET IDENTITY_INSERT is not offered. Check the name, or rebuild the search index.", with **Rebuild
-        Search Index** (`explorer.rebuildIndex` for the comparison's connection);
+        Search Index** (`explorer.rebuildIndex` for the comparison's connection). Pressed, it stays in place,
+        unavailable (`aria-disabled`, so it keeps the focus) while the build runs, the live region says "Rebuilding the
+        search index for SQLDEV01…", and when the build finishes it says the line that follows;
+      - the connection has no index (Index on connect off): "SQLDEV01 has no search index yet, so its tables are not
+        suggested, the target's columns cannot be checked and SET IDENTITY_INSERT is not offered.", with **Build index**,
+        as Search Objects offers, which behaves as Rebuild Search Index does;
+      - the database was skipped (the login cannot open it, say): "Search Objects skipped Sales_Test, so the target's
+        columns cannot be checked and SET IDENTITY_INSERT is not offered.", with no button, since a rebuild would skip
+        it again;
       - the database is still being indexed: "Search Objects is still indexing Sales_Test, so its columns cannot be
         checked yet.";
       - the database was indexed without its columns: "Search Objects holds no columns for Sales_Test, since its index
         did not fit the memory budget, so its columns cannot be checked and SET IDENTITY_INSERT is not offered.";
       - a compared column the table lacks: "[Sales_Test].[dbo].[Orders] has no column note in Search Objects' index, so
         a statement naming it would fail. Check the table, or rebuild the search index.";
-      - over 4,096 columns: "[Sales_Test].[dbo].[Orders] has more than 4,096 columns, so its columns are not checked."
+      - over 4,096 columns: "[Sales_Test].[dbo].[Orders] has more than 4,096 columns, so its columns are not checked.";
+      - the comparison's connection is not open (Disconnect with Keep Tabs keeps the comparison, and the index is
+        dropped on disconnect): "SQLDEV01 is not connected, so the target's columns cannot be checked and SET
+        IDENTITY_INSERT is not offered.", with no suggestions and no request, the line under the field naming only the
+        server, and New Query Editor Window unavailable (Destination below) while Clipboard stays available, since the
+        script reads only the comparison. Reconnecting brings the facts back as a finished build does.
 
-      The dialog asks `explorer.scriptTarget` again when that connection's index build finishes (the progress
-      `ObjectSearchService` follows), so the facts appear without retyping. Its first request goes out on opening, with
-      empty text, so the first time's suggestions show before anything is typed.
+      The dialog asks `explorer.scriptTarget` again when that connection reconnects or its index build finishes (the
+      progress `ObjectSearchService` follows), so the facts appear without retyping. Its first request goes out on
+      opening, with empty text, so the first time's suggestions show before anything is typed.
   - **Direction**, naming the target as resolved ("The target table" before one is chosen):
     - "[Sales_Test].[dbo].[Orders] holds Result 1's rows: change them to Result 3's";
     - "[Sales_Test].[dbo].[Orders] holds Result 3's rows: change them to Result 1's".
 
     Neither is picked the first time, and Script waits for one ("Choose a direction.", after "Choose the target
     table."): both jobs above need the second, so no default fits. After that the pair's draft remembers it, and a line
-    says so ("Remembered from the last script for Result 1 and Result 3."), since a batch whose two SELECTs swapped
-    keeps their names and columns, which the draft cannot tell apart. The script is written for the chosen direction,
-    and the comparison is not swapped. The summary names the end state, and Q11's check stops a wrong direction when the
-    script runs, except in an UPDATE that changes only columns the check cannot compare, which a line names (Options
-    below).
+    says so ("Remembered from the last script for Result 1 and Result 3.") while the direction is the one the draft
+    supplied on opening, since a batch whose two SELECTs swapped keeps their names and columns, which the draft cannot
+    tell apart. The script is written for the chosen direction, and the comparison is not swapped. The summary names the
+    end state, and Q11's check stops a wrong direction when the script runs, except in an UPDATE that changes only
+    columns the check cannot compare, which a line names (Options below).
   - **Statements:** DELETE (n), UPDATE (n) and INSERT (n), each a checkbox with its count for the direction, shown once
     one is picked. The first time UPDATE and INSERT are ticked and DELETE is not, since a row missing from a result is
     often one the query left out; the draft remembers the ticks. While DELETE is ticked, a line says "DELETEs fire the
@@ -944,11 +959,13 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       converts through the database's default code page, not the column's, so a Cyrillic key in a Windows-collation
       varchar column would no longer match; `=` already ignores differences of length and trailing spaces (text) or
       trailing zero bytes (binary).
-    - Identity: when the index says a ticked column is the target's identity, **SET IDENTITY_INSERT** is offered, ticked.
-      An identity column is never SET, since SQL Server refuses that: when one that is not a key changed, a line says
-      "id is an identity column, so its changes are not scripted". With SET IDENTITY_INSERT unticked, INSERTs leave the
-      identity column out, and a line says "Inserted rows get new id values from the target."; when the identity column
-      is a key column, it cannot be unticked, since the inserted rows would no longer match their keys.
+    - Identity: when the index says a ticked column is the target's identity, **SET IDENTITY_INSERT** is offered,
+      ticked. An identity column is never SET, since SQL Server refuses that: when one that is not a key changed, a line
+      says "id is an identity column, so its changes are not scripted". With SET IDENTITY_INSERT unticked, INSERTs leave
+      the identity column out, and a line says "Inserted rows get new id values from the target."; when the identity
+      column is a key column, it cannot be unticked, since the inserted rows would no longer match their keys: it is
+      `aria-disabled` and focusable, described by "id is the key and the target's identity column, so SET
+      IDENTITY_INSERT stays on."
     - With Exact text off, values that differ only by collation are equal to the comparison, so they are not scripted. A
       line says so when there are any: "12 values differ only by collation and are not scripted. Turn on Exact text to
       include them."
@@ -979,7 +996,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     transaction warns "Without a transaction, statements before a failure stay applied.", since a failed check, a key
     violation or a trigger's error all leave earlier statements in place. Turning off the checks warns "Without the
     checks, a statement runs even when its row is missing, repeated, changed or already there, and nothing says so."
-  - **Destination:** New Query Editor Window (default) or Clipboard.
+  - **Destination:** New Query Editor Window (default) or Clipboard. While the comparison's connection is not open, New
+    Query Editor Window is unavailable, with its reason as the destination's description ("SQLDEV01 is not connected, so
+    a query window cannot open on it. Choose Clipboard, or reconnect."), and Script waits for Clipboard; the choice is
+    not changed for the user.
   - A **preview** of the first 30 lines (headed "Preview: first 30 lines" while the script is longer), a summary beside
     Script ("Deletes 2 rows, updates 5 rows and inserts 1 row in [Sales_Test].[dbo].[Orders] to match Result 3.", with
     singulars, naming only ticked statements and leaving out zero counts), and **Script** and **Cancel**. While an
@@ -1126,12 +1146,12 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       replace Apply started runs, and the replace refreshes it. When it closes otherwise (a press outside, F6, the pane
       hiding, the comparison closing), the dialog stays closed rather than take the focus back, and Script Differences
       as T-SQL… opens it again from the draft;
-    - with an input closed, rows cannot be matched again, so the buttons are unavailable and the sentence's last part
-      becomes "…, and Result 1 is closed, so rows cannot be matched again." It gives no further advice: running the
-      query again would run every statement in it again, including the UPDATE the script was meant to repair. The
-      xml-key and key-name refusals take the same form, the repeated-key refusal keeps only "Choose rows without a
-      repeated key.", the key-collation refusal keeps only "Choose rows without them.", and the as-shown refusal does
-      the same: "Result 1 is closed, so the comparison cannot be rebuilt."
+    - with an input closed, rows cannot be matched again, so the buttons are unavailable (`aria-disabled`, so they stay
+      in the Tab order) and the sentence's last part becomes "…, and Result 1 is closed, so rows cannot be matched
+      again." It gives no further advice: running the query again would run every statement in it again, including the
+      UPDATE the script was meant to repair. The xml-key and key-name refusals take the same form, the repeated-key
+      refusal keeps only "Choose rows without a repeated key.", the key-collation refusal keeps only "Choose rows
+      without them.", and the as-shown refusal does the same: "Result 1 is closed, so the comparison cannot be rebuilt."
   - chosen rows with a repeated key (≈): "12 rows share a key, so a statement could change several rows. Choose key
     columns that are unique, or rows without a repeated key.", with **Choose key columns…**;
   - a needed value truncated, or compared by its stored part: "3 values in note were not kept in full (rows id = 1002,
@@ -1381,13 +1401,14 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     compared columns' names, at most `limits.page.maxColumns`, each 1–128 characters), limit (1–20) }`.
   - **Answer:** `{ suggestions: { database, schema, name, holds }[], table?: { columns: { name, type, nullable,
     identity, computed, generated, hasDefault }[], columnsCut? }, state }`. Suggestions are at most limit tables whose
-    name matches `text`, those holding every compared column first, then by `holds` and name, leaving out history
-    tables (subtypes `history` and `ledgerHistory`), since an INSERT into one fails (Msg 13559). `table` answers the
-    sent `table` when the index holds it, so two databases that both hold `dbo.Orders` are told apart, with at most
-    4,096 columns (`columnsCut` past that). `state` is that database's index state from `Database()`: ready, building,
-    skipped, absent, or partial with `LookupGaps.ChildrenLeftOut` (a database whose index would not fit the memory
-    budget, read again without its columns). Unless it is ready and holds the columns, the dialog claims no column
-    facts, ranks no suggestions by `holds`, and warns as for a table the index lacks.
+    name matches `text`, those holding every compared column first, then by `holds`, the renderer putting the query
+    document's current database first among equals, then by name, leaving out history tables (subtypes `history` and
+    `ledgerHistory`), since an INSERT into one fails (Msg 13559). `table` answers the sent `table` when the index holds
+    it, so two databases that both hold `dbo.Orders` are told apart, with at most 4,096 columns (`columnsCut` past
+    that). `state` is that database's index state from `Database()`: ready, building, skipped, absent, or partial with
+    `LookupGaps.ChildrenLeftOut` (a database whose index would not fit the memory budget, read again without its
+    columns). Unless it is ready and holds the columns, the dialog claims no column facts, ranks no suggestions by
+    `holds`, and warns as for a table the index lacks.
   - **Tests:** a new offline suite in Program.cs's `offlineSuites` over a built index: ranking by compared columns held,
     three-part suggestions across two databases with the same schema and the sent `table` choosing between them, a
     table's identity, computed, generated, NOT NULL and default flags, history tables left out, the 4,096-column cut, a
@@ -1499,7 +1520,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     key-name refusal's button, the look-alike lines for rows whose look-alike is not chosen, the column list as one Tab
     stop with its search field, the index sentences (the table unknown with Rebuild Search Index, still indexing,
     indexed without columns, a column unknown, over 4,096 columns) and the request again when the index build finishes,
-    the unchecked lines hidden while their statement is unticked, the remembered-direction line, a temporal table's
+    the unchecked lines hidden while their statement is unticked, the remembered-direction line and its hiding once the
+    direction changes, the not-connected state (no request, New Query Editor Window unavailable, the facts back on
+    reconnect), Rebuild Search Index keeping the focus and saying the rebuild, the no-index and skipped sentences, the
+    document's database first among equal suggestions, the locked SET IDENTITY_INSERT's description, a temporal table's
     period columns locked as generated, a two-part target in a database beside another holding the same table, the
     key-column form of the truncation and U+FFFD refusals, closing while generating opening nothing, Enter in Target
     table with nothing highlighted, the window over a popped-out Results pane, a cancelled generation giving way to a
