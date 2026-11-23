@@ -16,6 +16,13 @@ const styleSelector = 'style, link[rel="stylesheet"]'
 
 export function preparePopoutDocument(child: Window, main: Document, title: string): PopoutDocument {
   const doc = child.document
+  // Same-origin about:blank windows open without a doctype (BackCompat / quirks mode), where Chromium adds UA quirks
+  // such as a 1em bottom margin on <form> and un-inherited 16px table typography. Write an HTML5 doctype before mounting.
+  if (doc.compatMode !== 'CSS1Compat' && typeof doc.open === 'function' && typeof doc.write === 'function' && typeof doc.close === 'function') {
+    doc.open()
+    doc.write('<!doctype html><html><head><meta charset="UTF-8"></head><body></body></html>')
+    doc.close()
+  }
   const head = doc.head ?? doc.documentElement.appendChild(doc.createElement('head'))
   const body = doc.body ?? doc.documentElement.appendChild(doc.createElement('body'))
   if (!doc.querySelector('meta[charset]')) { const meta = doc.createElement('meta'); meta.setAttribute('charset', 'UTF-8'); head.prepend(meta) }

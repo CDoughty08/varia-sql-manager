@@ -120,6 +120,26 @@ try {
   expect(await controlShape(search())).toEqual(standardControl)
   expect(await searchIconFits(search())).toBe(true)
   await expect(search()).toHaveCSS('outline-offset', '-2px')
+  const footerMetrics = await options.evaluate(() => {
+    const box = document.querySelector('[role="dialog"]').getBoundingClientRect()
+    const buttons = [...document.querySelectorAll('[role="dialog"] button')]
+    const reset = buttons.find(item => item.textContent?.trim() === 'Reset Page')?.getBoundingClientRect()
+    const cancel = buttons.find(item => item.textContent?.trim() === 'Cancel')?.getBoundingClientRect()
+    return {
+      compatMode: document.compatMode,
+      dialogBottomGap: innerHeight - box.bottom,
+      leftGap: reset?.left,
+      bottomGapLeft: reset ? innerHeight - reset.bottom : null,
+      rightGap: cancel ? innerWidth - cancel.right : null,
+      bottomGapRight: cancel ? innerHeight - cancel.bottom : null
+    }
+  })
+  expect(footerMetrics.compatMode).toBe('CSS1Compat')
+  expect(Math.abs(footerMetrics.dialogBottomGap)).toBeLessThan(1)
+  expect(Math.abs(footerMetrics.leftGap - 8)).toBeLessThan(1)
+  expect(Math.abs(footerMetrics.rightGap - 8)).toBeLessThan(1)
+  expect(Math.abs(footerMetrics.bottomGapLeft - 8)).toBeLessThan(1)
+  expect(Math.abs(footerMetrics.bottomGapRight - 8)).toBeLessThan(1)
   await expect(heading()).toHaveText('Environment › General')
   await expect(node('General').first()).toHaveAttribute('aria-selected', 'true')
   const themeModeGroup = dialog().getByRole('radiogroup', { name: 'Color theme mode', exact: true })

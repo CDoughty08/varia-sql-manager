@@ -172,7 +172,8 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
    and coloured like it, with its own close button; macOS's traffic lights sit at its start. */
 .popout-body.dialog-window-body { background: var(--varia-editorWidget-background); }
 .dialog-window-root { height: 100%; display: flex; flex-direction: column; min-height: 0; }
-.dialog-window-root > .connection-modal[role="dialog"] { flex: 1; width: 100%; height: auto; max-height: none; min-height: 0; border: 0; border-radius: 0; box-shadow: none; animation: none; }
+.dialog-window-root > .connection-modal[role="dialog"] { flex: 1; width: 100%; height: auto; max-height: none; min-height: 0; margin: 0; border: 0; border-radius: 0; box-shadow: none; animation: none; }
+.dialog-window-root > .connection-modal[role="dialog"] > .connection-scroll { flex: 1; }
 .dialog-titlebar { flex-shrink: 0; display: flex; align-items: center; height: env(titlebar-area-height, var(--varia-header)); padding: 0 var(--varia-space-3); background: var(--varia-titleBar-activeBackground); color: var(--varia-titleBar-activeForeground); border-bottom: 1px solid var(--varia-titleBar-border); user-select: none; -webkit-app-region: drag; }
 :root[data-window-focus="inactive"] .dialog-titlebar { background: var(--varia-titleBar-inactiveBackground); color: var(--varia-titleBar-inactiveForeground); }
 .dialog-titlebar:not([data-platform="darwin"]) { height: var(--varia-header); padding-right: 0; }

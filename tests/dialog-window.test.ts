@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, createElement, StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import DialogWindow, { centredBounds, closesDialogWindow, DialogHeading, dialogWindowSize, rememberDialogWindowSize } from '../src/renderer/src/popouts/DialogWindow'
+import { preparePopoutDocument } from '../src/renderer/src/popouts/popout-document'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import { modalOpen, openModal } from '../src/renderer/src/core/modal'
@@ -237,5 +238,29 @@ describe('DialogWindow', () => {
       vi.spyOn(windows, 'activeDocument').mockReturnValue(document)
       expect(openModal()).toBe(other)
     } finally { other.remove() }
+  })
+})
+
+describe('preparePopoutDocument', () => {
+  it('writes an HTML5 doctype when the child document opens in BackCompat mode and skips when already CSS1Compat', () => {
+    const quirksDoc = document.implementation.createHTMLDocument('')
+    Object.defineProperty(quirksDoc, 'compatMode', { value: 'BackCompat', configurable: true })
+    const open = vi.fn(), write = vi.fn(), close = vi.fn()
+    Object.assign(quirksDoc, { open, write, close })
+    const quirksFrame = preparePopoutDocument({ document: quirksDoc, closed: false } as unknown as Window, document, 'Options')
+    quirksFrame.dispose()
+    expect(open).toHaveBeenCalledTimes(1)
+    expect(write).toHaveBeenCalledWith('<!doctype html><html><head><meta charset="UTF-8"></head><body></body></html>')
+    expect(close).toHaveBeenCalledTimes(1)
+
+    const standardsDoc = document.implementation.createHTMLDocument('')
+    Object.defineProperty(standardsDoc, 'compatMode', { value: 'CSS1Compat', configurable: true })
+    const sOpen = vi.fn(), sWrite = vi.fn(), sClose = vi.fn()
+    Object.assign(standardsDoc, { open: sOpen, write: sWrite, close: sClose })
+    const standardsFrame = preparePopoutDocument({ document: standardsDoc, closed: false } as unknown as Window, document, 'Options')
+    standardsFrame.dispose()
+    expect(sOpen).not.toHaveBeenCalled()
+    expect(sWrite).not.toHaveBeenCalled()
+    expect(sClose).not.toHaveBeenCalled()
   })
 })
