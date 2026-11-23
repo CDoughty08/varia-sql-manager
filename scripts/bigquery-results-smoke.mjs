@@ -47,7 +47,9 @@ try {
   // Connect opens in its own window (or over the main one where it cannot).
   await toolbarButton(page, 'Connect').click()
   const { window: connectWindow, dialog: connect } = await connectDialogWindow(application)
-  await connect.getByLabel('Server type', { exact: true }).selectOption('bigquery')
+  const bigQueryType = connect.getByRole('group', { name: 'Server type', exact: true }).getByRole('button', { name: 'BigQuery', exact: true })
+  await bigQueryType.click()
+  await expect(bigQueryType).toHaveAttribute('aria-pressed', 'true')
   await expect(connect.getByText(/^Emulator account /)).toBeVisible({ timeout: 20000 })
   await connect.getByLabel('Project', { exact: true }).fill(fake.project)
   await connect.getByLabel('Default dataset', { exact: true }).fill(fake.dataset)
