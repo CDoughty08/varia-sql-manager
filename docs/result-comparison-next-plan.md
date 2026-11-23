@@ -1528,20 +1528,20 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     typed must equal that part, compared as `Objects()` compares, and empty text lists every table by rank. They are
     ranked with those holding every compared column first, then by `holds`, those without `holds` last, the renderer
     putting the query document's current database first among equals, then by name, leaving out history tables (subtypes
-    `history` and `ledgerHistory`), since an INSERT into one fails (Msg 13559), and dropped ledger tables
-    (`droppedLedger`), which refuse every change. An append-only ledger table, which refuses UPDATE and DELETE, is kept,
-    since the index does not record that kind; such a script fails and rolls back. `table` answers the sent `table` when
-    the index holds it, so two databases that both hold `dbo.Orders` are told apart, with at most 4,096 columns
-    (`columnsCut` past that). `state` is that database's state from `Database()` (ready, partial, building, skipped or
-    absent), and `held` says whether the index holds a read of it with its columns (`LookupDatabase.Held` set,
-    `LookupGaps.ChildrenLeftOut` clear and the held read not `FailedPart`, since a read that failed part way, kept when
-    nothing was held before, can stop before its columns), whatever `state` says: a read without definitions
-    (`objectExplorer.search.definitions` off), with a cut definition or without system objects is partial and still
-    holds every column, a rebuild running over an earlier read is building, and a failed read after an earlier one is
-    skipped, each with that earlier read still answering. The dialog keys every column fact on `held`, and `state` only
-    picks the sentence: unless `held`, it claims no column facts and says still indexing (building), skipped (skipped),
-    indexed without columns (partial) or the table unknown (absent); with `held` and a building or skipped `state`, the
-    knows line adds that its facts are from the last index.
+    `history` and `ledgerHistory`), since an INSERT into one fails (Msg 13559, or 37361 for a ledger history table), and
+    dropped ledger tables (`droppedLedger`), which refuse every change. An append-only ledger table, which refuses
+    UPDATE and DELETE, is kept, since the index does not record that kind; such a script fails and rolls back. `table`
+    answers the sent `table` when the index holds it, so two databases that both hold `dbo.Orders` are told apart, with
+    at most 4,096 columns (`columnsCut` past that). `state` is that database's state from `Database()` (ready, partial,
+    building, skipped or absent), and `held` says whether the index holds a read of it with its columns
+    (`LookupDatabase.Held` set, `LookupGaps.ChildrenLeftOut` clear and the held read not `FailedPart`, since a read that
+    failed part way, kept when nothing was held before, can stop before its columns), whatever `state` says: a read
+    without definitions (`objectExplorer.search.definitions` off), with a cut definition or without system objects is
+    partial and still holds every column, a rebuild running over an earlier read is building, and a failed read after an
+    earlier one is skipped, each with that earlier read still answering. The dialog keys every column fact on `held`,
+    and `state` only picks the sentence: unless `held`, it claims no column facts and says still indexing (building),
+    skipped (skipped), indexed without columns (partial) or the table unknown (absent); with `held` and a building or
+    skipped `state`, the knows line adds that its facts are from the last index.
   - **Tests:** a new offline suite in Program.cs's `offlineSuites` over a built index: ranking by compared columns held,
     three-part suggestions across two databases with the same schema and the sent `table` choosing between them, a
     table's identity, computed, generated, NOT NULL and default flags, history and dropped ledger tables left out, the
@@ -1647,8 +1647,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     and once with only INSERT ticked (with SET IDENTITY_INSERT, so its THROW comes inside the IDENTITY_INSERT body and
     exercises the CATCH), and one whose deleted row was changed after the comparison, and expect the check's THROW, with
     the target unchanged and, in the same session, an ordinary INSERT into the identity table succeeding
-    (IDENTITY_INSERT was turned off). It is a new live `Suite(...)` with a `LiveGroups.Suites` entry, and its CI seconds
-    go in docs/ci.md's table.
+    (IDENTITY_INSERT was turned off). Run one failing-check script with SET IDENTITY_INSERT as a scratch-database user
+    without ALTER on the table (`EXECUTE AS USER`), whose check THROWs before the ON and whose CATCH's OFF fails too,
+    and expect the check's own message, so the CATCH's inner TRY is checked by behaviour and not only by the golden's
+    text. It is a new live `Suite(...)` with a `LiveGroups.Suites` entry, and its CI seconds go in docs/ci.md's table.
   - vitest: a `results-port.test.ts` case sending every new `results.scriptDiff` member (`viewId`, `identity`,
     `indexReasons`, `maxLines`, `rowsChoice`) and checking each reaches the backend request, as the diff layout's case
     does, and a `worker-core` case for the rebuilt request.
@@ -1979,16 +1981,16 @@ When the last lane ships, this plan folds into the area docs and is deleted.
 
 - C1 and C2 can run in parallel: they touch search and `ResultDiff`.
 - C3 and C5 can run in parallel after C2: they touch the writer and the grid's card. Both append to the submenu and
-  change `DiffIndex.cs` and architecture.md's change-index bullet (C3's cut lists in both layouts, C5's look-alike
-  bitsets, both charged there), and C5 also changes `diffSeek`'s answer across the results-path files, which C3, C4 and
-  C6 append to as well.
+  change `ResultDiff.cs`, `DiffIndex.cs` and architecture.md's change-index bullet (C3's cut lists in both layouts, C5's
+  look-alike bitsets, both charged there), and C5 also changes `diffSeek`'s answer across the results-path files, which
+  C3, C4 and C6 append to as well.
 - C6 can start after C2, and C4 after C3, whose recorded match it reads for its keys and its refusal. They can then be
   built in parallel, but both append to the results-path files (contracts.ts, port-messages.ts, results-port.ts,
-  worker-protocol.ts, worker-core.ts, `ResultClient.ts`, `SqlService.cs`, `Contracts.cs` and the fake backend), so the
-  second to land merges main first. Whichever of them lands second also adds Script Differences' refusal of a comparison
-  of rows as shown, and whichever of C3 and C6 lands second, Copy as Diff's as-shown header lines. C4 is listed last
-  because it is the largest and riskiest lane, and its "script back a bad UPDATE" job is worth most once cross-run
-  comparison (N5) lands.
+  worker-protocol.ts, worker-core.ts, `ResultClient.ts`, `SqlService.cs`, `Contracts.cs` and the fake backend) and
+  change `ResultDiff.cs` (C4's exact-value check, C6's view reads), so the second to land merges main first. Whichever
+  of them lands second also adds Script Differences' refusal of a comparison of rows as shown, and whichever of C3 and
+  C6 lands second, Copy as Diff's as-shown header lines. C4 is listed last because it is the largest and riskiest lane,
+  and its "script back a bad UPDATE" job is worth most once cross-run comparison (N5) lands.
 
 ## Coordination with in-flight work
 
