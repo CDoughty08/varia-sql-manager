@@ -119,7 +119,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     (`fixtures/menus-context.*.txt`), pinning Comparison's S and Then Sort Descending's N, and a comparison's More
     results tools: keyless means keyless in that static assignment, but menus assign keys at run time among the items
     shown, and a comparison hides Choose Headers…, so there Show Change Details takes its H. Each lane that adds to More
-    results tools (C2 to C6) updates `results-toolbar-fold.test.ts`'s pinned `output.tools` list.
+    results tools (C2 to C6, and C5b) updates `results-toolbar-fold.test.ts`'s pinned `output.tools` list.
 - **Engine-neutral.** Commands, context keys and settings declare both providers, except Script Differences (Q4).
   Result-naming methods are declared for both engines in `methods.ts` and checked in C#. New protocol members are optional
   fields of existing v2 shapes, and C4's one new method is offered through HELLO as every method is, so the protocol
@@ -268,8 +268,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     navigation work's `comparisonRowHasPartner` is: `core/contextkeys.ts` computes them for the focused grid's active
     cell, and in the grid menu `argsFor` (`menus/targets.ts`) overrides them with the column the menu opened on.
     `argsFor` reads only the target, so `GridView.targetOf` adds that column's ignored and ignorable facts to
-    `GridTarget`, as `partner` carries the row's partner for `comparisonRowHasPartner`. The second is Ignore This
-    Column's `precondition`, true on a column already ignored so the checkbox can be unticked. Its handler's
+    `GridTarget`, as `partner` carries the row's partner for `comparisonRowHasPartner`. A keyboard menu has no clicked
+    cell, and `targetFor`'s anchor fill takes only `column` and `row` from the anchor's `outputCell` today, so it drops
+    `partner` (Go to Possible Match is unavailable from Shift+F10 on a ? row) and would drop the new facts; C2 makes the
+    fill take the anchor cell's whole grid target (`partner` as `rowHasPartner`, and the column facts). The second is
+    Ignore This Column's `precondition`, true on a column already ignored so the checkbox can be unticked. Its handler's
     `unavailable()` gives the reason for the case at hand (the key column, the last compared column, or an input
     closed), so `unavailableHint` is only the fallback;
   - icon `eye-closed` in `src/shared/icons.ts`.
@@ -287,8 +290,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - Save writes it.
   - vitest:
     - the checklist (`compare-ignore.test.ts`), Automatic's label, memory by name across a swap;
-    - the toggle's `when`, notice text and Dismiss; `outputGridOnColumn` and the two state keys for gutter, header,
-      cell and keyboard menus;
+    - the toggle's `when`, notice text and Dismiss; `outputGridOnColumn` and the two state keys for gutter, header, cell
+      and keyboard menus, the keyboard ones through `targetFor` with a registered grid target, on a ? row
+      (`comparisonRowHasPartner`) and on an ignored column;
     - sort keys and chips kept, and filters (a value filter, Keep Selected Rows) removed with "The comparison's filters
       were removed.", across Ignore and Stop ignoring, in the announcement's order; the lost-column notice and its
       plural;
@@ -873,7 +877,13 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       refused, and Q11's guards leave such a pair out. The kinds come from `sortKind`: numbers (integer, decimal, float,
       boolean), text (text, json), dates and times (date, time, datetime, timestamp), binary (rowversion and timestamp
       among it), and uniqueidentifier, which `sortKind` calls `other` and is told by its type name. So int pairs with
-      decimal, and int with varchar is refused.
+      decimal, and int with varchar is refused. A key pair of one kind whose two recorded types differ (datetime against
+      datetime2(3), int against decimal) compares in the target side's type: a WHERE clause wraps the literal, still
+      written by its own column, in a CAST to the target side's recorded type, written as the typed casts are
+      (`CAST(CAST('2024-05-01T10:00:00.003' AS datetime2(3)) AS datetime)`). Without it the comparison runs in the
+      higher type and can miss the row (a datetime's .003 is .00333…), and the INSERT check would then let a duplicate
+      in. A CAST that overflows fails the script under XACT_ABORT, and one that rounds onto another key only makes a
+      check THROW.
     - Identity: when the index says a ticked column is the target's identity, **SET IDENTITY_INSERT** is offered, ticked.
       An identity column is never SET, since SQL Server refuses that: when one that is not a key changed, a line says
       "id is an identity column, so its changes are not scripted". With SET IDENTITY_INSERT unticked, INSERTs leave the
@@ -1153,11 +1163,15 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     names as the target's identity column, one of `columns` (checked in both): only the renderer knows it, from Search
     Objects. `DiffScript` leaves it out of every SET. With `identityInsert` on it wraps the INSERTs in `SET
     IDENTITY_INSERT`; with it off it leaves the identity column out of the INSERTs, and refuses (`INVALID_PARAMS`) when
-    that column is a key; `identityInsert` on without `identity` is `INVALID_PARAMS` in both zod and C#. Script (no
-    `maxLines`) requires `target` and `direction` (`INVALID_PARAMS` in both); a preview may leave either out, as the
-    dialog's request on opening does before the form has them. Its answer has empty `text` and carries any of the four
-    refusals known on opening (`asShown`, `keyType`, `keyName`, `notColumns`), `differences`, `updates` and
-    `softValues`, and, only with a `direction`, which decides them, `deletes`, `inserts` and the look-alike counts.
+    that column is a key; `identityInsert` on without `identity` is `INVALID_PARAMS` in both zod and C#. `computed?:
+    number[]` holds the pairs the index names as computed columns of the target (distinct, at most
+    `limits.page.maxColumns`, each below the pair count, none in `columns`), so the header's left-out line says
+    "(computed)" rather than "(unticked)"; the other locked reasons (rowversion, CLR types, sql_variant, vector) follow
+    from the recorded types. Script (no `maxLines`) requires `target` and `direction` (`INVALID_PARAMS` in both); a
+    preview may leave either out, as the dialog's request on opening does before the form has them. Its answer has empty
+    `text` and carries any of the four refusals known on opening (`asShown`, `keyType`, `keyName`, `notColumns`),
+    `differences`, `updates` and `softValues`, and, only with a `direction`, which decides them, `deletes`, `inserts`
+    and the look-alike counts.
   - **Deadline and Cancel:** 120 s in `methodPolicies`, as the other result jobs. The dialog's Cancel cancels the request
     through the protocol's cancel, and the backend drops its chunks.
   - **Preview:** `maxLines?: number` (1–30) answers only the first lines, with `complete: false` when there are more,
@@ -1211,9 +1225,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       side), as `Previous` already does.
     - A cut tone lists only the first changed cells, so `DiffScript` takes an entry's changed pairs (its SET columns
       and Q11's) from the change index's full list whenever the tone was cut, which C3 keeps in both layouts (§ 4a).
-    - Two more records on the diff set, written in `DiffWritten` beside the match C3 records: Result 1's column type
-      and collation per pair (Columns above, Literals), and whether the inputs were BigQuery results (`residence` set),
-      for the refusal.
+    - Three more records on the diff set, written in `DiffWritten` beside the match C3 records: Result 1's column type
+      and collation per pair (Columns above, Literals); whether the inputs were BigQuery results (`residence` set), for
+      the refusal; and the names of columns only one result has, as the diff answer's `OneSided` lists them (at most
+      `MaxDiffColumnNames` a side), for the header's left-out line, which must be written while Result 1 is closed.
   - Names are bracket-quoted by the existing shared `ScriptFormatter.Quote`, unchanged: it has many callers (Script As,
     restore, the alter and DML templates among them), so a control character in a target name (NUL and line breaks
     among them) is refused by the request's zod schema and by C#'s request validation instead.
@@ -1241,9 +1256,12 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - every SQL Server type in `sortKind`'s table, plus uniqueidentifier, with sql_variant, vector and CLR types
       refused;
     - an int key paired with a varchar key holding `1) SELECT 1; --`, both directions, refused as a key pair of
-      different kinds, and such a pair left out of Q11's guards; an int key paired with a decimal key accepted;
+      different kinds, and such a pair left out of Q11's guards; an int key paired with a decimal key accepted; a
+      datetime key paired with a datetime2(3) key, both directions, cast to the target side's type, its UPDATE matching
+      its row and its INSERT check finding an existing one;
     - a rowversion key accepted with INSERT unticked; a subnormal float as a key refused and as a guard left out;
     - the look-alike and soft counts for Rows in the grid and Selected rows; a refusal naming four long columns, cut;
+    - the header's left-out line with Result 1 closed: one-sided, computed, unticked and identity columns;
     - `uncheckedUpdates` by column type in a preview and by value in Script (an UPDATE changing only an xml column, and
       one changing only non-ASCII varchar under a SQL_ collation); `selectedKeys` for one to three entries and none
       past three;
@@ -1548,8 +1566,10 @@ would leave out the sort, and "Rows" is already the toolbar's All rows / Changes
 
 Each lane runs `npm run check` and regenerates the catalogues it changes, in the same PR. It updates:
 - results-tools.md § Comparisons;
-- the architecture.md Comparisons and Rows bullets, including the diffs bullet's sentence that hidden columns are
-  never copied or searched, which C1 (search reads `old` columns) and C3 (Copy as Diff reads previous values) narrow;
+- the architecture.md Comparisons and Rows bullets, including the diffs bullet's sentence that hidden columns are never
+  copied or searched, which C1 (search reads `old` columns) and C3 (Copy as Diff reads previous values) narrow, and the
+  derived-results bullet's rule that a copied exact value is kept when its own column holds exact values, which C4 keys
+  on the source column instead;
 - ipc.md (Result diffs, Limits, the method table) where the protocol changes;
 - the results guide (`help/guides/results.tsx`, with live `CommandRef`s), or records why there is no guide impact;
 - CHANGELOG Unreleased.
