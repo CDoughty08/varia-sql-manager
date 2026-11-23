@@ -370,21 +370,23 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     catalogue key, and it reaches the card only through the focused grid: a card that opened while the focus was
     elsewhere could not be dismissed without moving the pointer. With the focus elsewhere, the grid's own tooltip shows,
     as today. Over that cell the card replaces the tooltip and repeats its truncation sentence.
-  - **By key**, **Show Change Details** (Ctrl+I, ⌘I on macOS; Q8), the Comparison submenu or the palette opens it
-    on the active cell. From the palette or More results tools, where the focus is elsewhere, it first shows the
-    pane and focuses the comparison's grid on that cell, so Escape and Tab reach the card. From the grid menu it opens
-    on the cell the menu was opened on (from a header, the active row's cell in that column; from a ? row's gutter,
-    the look-alike card; from any other gutter, that row's cell in the active cell's column), passed through `argsFor`
-    as
-    Ignore This Column's column is: a right press inside a selection keeps the active cell elsewhere. Opened on a cell
-    that is not the active cell, the card describes that cell, which gets `aria-details`, and does not follow; it
-    closes when the active cell moves. It is available on any comparison cell; cells with nothing to mark open the
-    short cards below.
+  - **By key**, **Show Change Details** (Ctrl+I, ⌘I on macOS; Q8), the Comparison submenu or the palette opens it on the
+    active cell. From the palette or More results tools, where the focus is elsewhere, it first shows the pane and
+    focuses the comparison's grid on that cell, so Escape and Tab reach the card. From the grid menu it opens on the
+    cell the menu was opened on (from a header, the active row's cell in that column; from a ? row's gutter, the
+    look-alike card; from any other gutter, that row's cell in the active cell's column), passed through `argsFor` as
+    Ignore This Column's column is: a right press inside a selection keeps the active cell elsewhere. Opened on the
+    active cell (a right press on it, Shift+F10 or the Menu key), it is a card opened by key. Opened on a cell that is
+    not the active cell, the card describes that cell, which gets `aria-details`; it has its close button, is the next
+    Tab stop and says the opening announcement, but does not follow, and closes when the active cell moves (Alt+F5
+    included), as a hover card does. It is available on any comparison cell; cells with nothing to mark open the short
+    cards below.
   - The card is a non-modal dialog named "Change details: note" ("Possible match" for the look-alike card) that does not
     take focus. Opened by key, it stays open, with a close button (✕, "Close change details"), and the live region says
     the card's name (which holds the column) and its summary, then "Tab to read it, Escape to close.": "Change details:
-    note, 2 edits: '9' became '10', and 1 more. Tab to read it, Escape to close." (a summary joins the name lower case:
-    "Change details: note, equal by collation: case-insensitive, …"); on a ? row, whose card describes the
+    note, 2 edits: '9' became '10', and 1 more. Tab to read it, Escape to close." (a summary joins the name with its
+    first word lower case, except NULL and quoted text: "Change details: note, equal by collation: case-insensitive,
+    …"); on a ? row, whose card describes the
     whole row, "Possible match: removed row, looks like row 9 in Result 3: 4 of 5 compared columns equal. Tab to read
     it, Escape to close." The active cell gets `aria-details` pointing at it. The message waits for the summary, which
     needs a read and the worker's diff, up to 500 ms; past that it says the name with "reading…" ("Change details: note,
@@ -407,10 +409,14 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     "change" is a navigation unit and an "edit" a run of characters, so
     the two words never share a sentence's meaning.
   - Moves by arrow keys add nothing to the live region: the cell's own name already speaks.
+  - A move never strands the focus: the footer keeps **Compare Values in Tab** on every card (unavailable, with its
+    hint, where it does not apply), and when a move removes the focused control (Go to Possible Match, which only
+    look-alike cards have), the focus moves to the card's body.
   - Follow mode ends on Escape, on focus leaving the grid and card, or on a replace of the comparison, and the card
     closes with it: a card left open would go stale, and Escape could no longer reach it.
   - While a card opened by key shows, hover opens none. Ctrl+I always opens a card by key for the active cell: any card
-    not opened by key (a hover card, on the active cell or another, or one the grid menu opened) is replaced by one,
+    not opened by key (a hover card, on the active cell or another, or one the grid menu opened on another cell) is
+    replaced by one,
     with follow mode, its close button and the opening announcement. A second Ctrl+I on a card opened by key moves the
     focus into it, as VS Code's Show or Focus Hover does.
 - **Card content:**
@@ -420,7 +426,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     "'y' was added". The same summary is what the live region says, so:
     - a quoted run is cut at 40 characters with "…";
     - a run made only of whitespace is named, not quoted: "a space was added", "2 line breaks were removed",
-      "a tab became a space";
+      "a tab became a space"; CRLF counts as one line break, and a mixed run names its parts ("a line break and 4
+      spaces were added");
     - a change from or to NULL is not an edit: "NULL became 'Net 30'.", "'Net 30' became NULL."
   - **− Old** and **+ New**, wrapped in the mono font. A value up to 4,000 characters shows whole. A longer one shows a
     window of context around each edit, joined by "…", so an edit at character 50,000 still shows ("Showing 3 edits in
@@ -760,7 +767,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     the script could not name) "Name each part, such as Sales_Test.dbo.Orders."; a part over 128 characters "Each part
     of the name is at most 128 characters."; an unclosed bracket or quote "Close the bracket or quote in the name." The
     field is checked as it changes, and its sentence shows once it loses focus or on Script. Empty the first time, with
-    suggestions from Search Objects' index for the comparison's connection, and Script waits for it ("Choose the target
+    suggestions from Search Objects' index for the comparison's connection (tables holding every compared column
+    first, then by name, none highlighted until an arrow key moves to one, so Enter never picks one unchosen), and
+    Script waits for it ("Choose the target
     table."); after that, the pair's remembered draft.
     - **Database.** A two-part name is in the query document's current database while the document is on the
       comparison's connection, and a line under the field always names the server and the database the script will
@@ -882,7 +891,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - The preview asks the backend for its 30 lines (`results.scriptDiff` with `maxLines`), 300 ms after the form last
       changed, cancelling the request before. It refuses only what those lines need (a truncated or U+FFFD value among
       them, or a refusal known on opening); the rest are found on Script. A preview line over 2,000 characters (a long
-      value's literal) ends in "…", the preview's only cut; the script holds it whole.
+      value's literal) ends in "…", the preview's only cut; the script holds it whole. While it waits, the preview reads
+      "-- Choose the target table and a direction to see the script." ("-- Choose a direction …", "-- Name the target
+      table …"), and after a refused answer "-- No preview: the reason is beside Script."
     - The counts and the summary are entries by kind in the chosen rows. All differences reads the diff's own counts.
       Rows in the grid and Selected rows are counted by the backend in one pass over the chosen rows, reserving the bit
       per stored row as Copy as Diff does; in Two rows an entry is chosen when either half is (a value filter on an old
@@ -893,7 +904,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
 - **The script:**
   - A header of `--` lines names the comparison, the match and any ignored columns, the server and database, the
     direction, the rows chosen ("N of M differences" while they are fewer than All differences) and any statement left
-    out ("-- Rows in the grid: 5 of 40 differences. Not included: DELETE (2 rows)."), and
+    out ("-- Rows in the grid: 5 of 40 differences. Not included: DELETE (2 rows)."), what else it leaves out, as the
+    form's lines say ("-- Left out: note (unticked); changes to id (identity column); note2 (only in Result 1); 12
+    values that differ only by collation (Exact text off)."), so a reviewer reading only the script never takes it for
+    a full sync, and
     the time, and says "Review it before you run it. Varia does not run it for you. It leaves XACT_ABORT
     on." Every name in it (results, the query document, key columns, server, database, target) has its control
     characters escaped (`\t`, `\r`, `\n`, and `\uXXXX` for the others, U+2028 and U+2029) and nothing else, so a
@@ -982,10 +996,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       dialog stays closed rather than take the focus back, and Script Differences as T-SQL… opens it again from the
       draft;
     - with an input closed, rows cannot be matched again, so the buttons are unavailable and the sentence's last part
-      becomes "…, and Result 1 is closed, so rows cannot be matched again. Run the query again to script differences."
+      becomes "…, and Result 1 is closed, so rows cannot be matched again." It gives no further advice: running the
+      query again would run every statement in it again, including the UPDATE the script was meant to repair.
       The xml-key refusal takes the same form, the repeated-key refusal keeps only "Choose rows without a repeated
       key.", the key-collation refusal keeps only "Choose rows without them.", and the as-shown refusal does the same:
-      "Result 1 is closed, so the comparison cannot be rebuilt. Run the query again to script differences."
+      "Result 1 is closed, so the comparison cannot be rebuilt."
   - chosen rows with a repeated key (≈): "12 rows share a key, so a statement could change several rows. Choose key
     columns that are unique, or rows without a repeated key.", with **Choose key columns…**;
   - a needed value truncated, or compared by its stored part: "3 values in note were not kept in full (rows id = 1002,
@@ -1038,7 +1053,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     choice made for one script never carries over unseen to a later one, whose lines would sit below the fold. The
     Choose key columns… round trip is the same script, so its reopen keeps them as they were.
   - Invoked from another comparison, the open window switches to it, with that pair's draft, and is activated with
-    the focus and description it has on opening; the first pair's draft stays remembered.
+    the focus and description it has on opening; the first pair's draft stays remembered. A switch is an opening for
+    the per-script choices: Rows goes back to Rows in the grid and the three options back on.
   - It works while an input is closed: the script reads only the comparison.
 - **Keyboard and screen readers:** a labelled form in its own window, Tab order top to bottom. Its sentences are
   descriptions (`aria-describedby`), so Tab reads them: the summary, with its stays and "N of M differences"
@@ -1219,7 +1235,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     of the key refusals, refusals said in the live region, Cancel while generating, the comparison changing while it
     generates, the INSERT line for target columns the result lacks, the refusal's buttons chosen by `kind`, the form's
     descriptions, Script focusable while unavailable, the safety options and Rows starting fresh each time, the server
-    line and a two-part name after Change Connection, and the Clipboard announcement.
+    line and a two-part name after Change Connection, a switch to another comparison resetting the per-script choices,
+    the header's left-out line, the preview's waiting and refused states, suggestions unhighlighted, and the Clipboard
+    announcement.
   - Smoke: open the dialog window by role, script to a New Query Editor Window, and find `BEGIN TRANSACTION` in the
     focused editor. A frameless OS window can behave differently on Linux, so run it through `npm run test:smoke:wsl`
     before pushing.
@@ -1335,8 +1353,11 @@ would leave out the sort, and "Rows" is already the toolbar's All rows / Changes
   - The sides bar marks a side read as shown with a funnel and "120 of 5,000", its tooltip listing the filters and sort.
   - The name reads "Differences: Result 1 (as shown) → Result 3". A side gets "(as shown)" when it has filters, or, under
     Row position, a sort, since then its order decides the pairing. That is the one meaning of "read as shown": the
-    diff set records it per side, Script Differences refuses only then, and with Compare each result on but no side
-    read as shown (its filters removed, or a remembered choice with nothing to apply) there is no notice.
+    diff set records it per side, and Script Differences refuses only then. A build with nothing to apply (a
+    remembered As shown choice while no side has filters or, under Row position, a sort, or an Update after the filters
+    were removed) records `inputs: 'whole'`: a whole-results comparison, with no notice, `comparisonAsShown` false, and
+    never out of date. The pair memory keeps the choice, which takes effect at the next build with something to
+    apply.
   - A notice with **Compare whole results**: "Compared as shown: Result 1 shows 120 of 5,000 rows." For a side read
     only in its sorted order (Row position) it says "Result 1 is read in its sorted order", and two sides join with
     "; ".
@@ -1399,9 +1420,9 @@ would leave out the sort, and "Rows" is already the toolbar's All rows / Changes
   - Staleness is a pure `comparisonOutOfDate`, beside `pivotOutOfDate` (ResultsService). It compares the recorded filters
     with `shownFilters`, and the recorded sort keys only under Row position. No events are needed.
   - The caption and dot reuse the Pivot's components.
-  - Context keys: `comparisonAsShown`, `comparisonOutOfDate`, and `comparisonInputsShowable` (an input has filters or,
-    under Row position, a sort), Compare Rows as Shown's `precondition` while unticked; all three are state keys, as
-    `precondition` and `toggled` require.
+  - Context keys: `comparisonAsShown` (a side read as shown, as the comparison recorded at build),
+    `comparisonOutOfDate`, and `comparisonInputsShowable` (an input has filters or, under Row position, a sort), Compare
+    Rows as Shown's `precondition` while unticked; all three are state keys, as `precondition` and `toggled` require.
 - **Catalogues:** commands `output.compareAsShown` ("Compare Rows as Shown", `toggled: comparisonAsShown`) and
   `output.compareUpdate` ("Update Comparison", `when: comparisonAsShown`), in the submenu, More results tools'
   `6_compareactions` and the palette. No setting (Q9).
