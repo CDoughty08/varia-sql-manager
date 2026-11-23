@@ -20,6 +20,45 @@ internal static class AgentHistoryChecks
         Validation(check);
         await ReaderAsync(check);
         await FailuresAsync(check);
+        await UsualAsync(check);
+    }
+
+    /// <summary>The job document's History (AG-6d): args.usual for one job, and the usual durations table.</summary>
+    private static async Task UsualAsync(Action<bool, string> check)
+    {
+        var catalog = AgentCatalog.Current;
+        bool Refused(AgentHistoryLiveArgs args)
+        {
+            try { AgentHistoryArgs.Check(args, catalog); return false; }
+            catch (RequestException error) when (error.Code == "INVALID_PARAMS") { return true; }
+        }
+        var id = Nightly.ToString();
+        check(!Refused(new([id], Usual: true)) && Refused(new(Usual: true)) && Refused(new([], Usual: true)) && Refused(new([id, Backup.ToString()], Usual: true)) && Refused(new([id], Usual: false)),
+            "agent.history's usual durations are asked for one checked job, as main's schema does");
+        check(AgentHistoryReader.Median([5]) == 5 && AgentHistoryReader.Median([9, 1, 5]) == 5 && AgentHistoryReader.Median([1, 2]) == 2 && AgentHistoryReader.Median([10, 20, 30, 40]) == 25,
+            "the median is the middle value, or the two middle values' mean rounded half up");
+        // Twelve succeeded runs of growing duration (newest longest), one failed run and one with a retried step: the usual times come from the
+        // newest ten succeeded runs only, a step's rows in a run added up.
+        var rows = new List<AgentHistoryRow>();
+        var instance = 0;
+        AgentHistoryRow At(int step, int status, int day, int duration) => new(++instance, Nightly, step, step == 0 ? null : "Step " + step, 0, 0, "m", status, Day.AddDays(day), duration, 0);
+        for (var day = 0; day < 12; day++) { rows.Add(At(1, 1, day, 10 + day)); rows.Add(At(2, 1, day, 100)); rows.Add(At(0, 1, day, 110 + day)); }
+        rows.Add(At(1, 1, 12, 5)); rows.Add(At(1, 1, 12, 7)); rows.Add(At(2, 1, 12, 100)); rows.Add(At(0, 1, 12, 112));
+        rows.Add(At(1, 0, 13, 1)); rows.Add(At(0, 0, 13, 1));
+        var runs = AgentHistoryReader.Group(rows, new Dictionary<Guid, AgentHistoryJobState>(), AgentOrphanLabel.Unknown);
+        var usual = AgentHistoryReader.UsualRows(runs).Select(Texts).ToList();
+        // Newest ten succeeded: day 12 (job 112 s, step 1 12 s) and days 3 to 11 (job 113..121 s, step 1 13..21 s); durations are hhmmss, so 112 is 1:12.
+        var jobSeconds = new long[] { 72, 73, 74, 75, 76, 77, 78, 79, 80, 81 };
+        check(usual.Select(row => row[0]).SequenceEqual(["0", "1", "2"]) && usual.All(row => row[2] == "10") && usual[0][1] == AgentHistoryReader.Median([.. jobSeconds]).ToString(System.Globalization.CultureInfo.InvariantCulture)
+            && usual[1][1] == AgentHistoryReader.Median([12, 13, 14, 15, 16, 17, 18, 19, 20, 21]).ToString(System.Globalization.CultureInfo.InvariantCulture) && usual[2][1] == "60",
+            "the usual durations are the median of the newest ten succeeded runs, for the job and each step (a retried step's rows added up): " + string.Join(" | ", usual.Select(row => string.Join(",", row))));
+        var ran = new List<string>();
+        var reader = new AgentHistoryReader(new([id], Usual: true)) { Reader = Fake(ran), TestService = () => (1, 4) };
+        var sample = await reader.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(), null, CancellationToken.None);
+        var plain = await new AgentHistoryReader(new([id])) { Reader = Fake([]), TestService = () => (1, 4) }.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(), null, CancellationToken.None);
+        check(sample.Tables.Count == 4 && sample.Tables[3].Table == 3 && sample.Tables[3].Rows.Select(Texts).Select(row => row[0] + ":" + row[1] + ":" + row[2]).SequenceEqual(["0:5:1", "1:5:1"])
+            && plain.Tables.Count == 4 && plain.Tables[3].Rows.Count == 0,
+            "with args.usual the fourth table holds the checked job's usual durations; without it the table is sent empty");
     }
 
     private static void Args(Action<bool, string> check)
@@ -295,8 +334,8 @@ internal static class AgentHistoryChecks
         }
         var partial = new AgentHistoryReader { Reader = Fake([], statement => statement.Id == "historyAll" ? throw ConnectionFailureChecks.Sql(15281, 1, 16, "server", "SQL Server blocked access to procedure 'dbo.sp_help_jobhistory' of component 'Agent XPs'.") : null), TestService = () => (1, 4) };
         var some = await partial.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(), null, CancellationToken.None);
-        check(some.Sampled && some.Tables[0].Rows.Count == 0 && some.Tables[1].Rows.Count == 0 && some.Tables[2].Rows.Count == 2 && some.Errors is [{ Code: "AGENT_DISABLED", Tables: [0, 1] }],
-            "a refused history read leaves the runs and steps empty with its error (naming those tables) and still lists the jobs");
+        check(some.Sampled && some.Tables[0].Rows.Count == 0 && some.Tables[1].Rows.Count == 0 && some.Tables[2].Rows.Count == 2 && some.Errors is [{ Code: "AGENT_DISABLED", Tables: [0, 1, 3] }] && some.Tables[3].Rows.Count == 0,
+            "a refused history read leaves the runs, steps and usual durations empty with its error (naming those tables) and still lists the jobs");
         var capped = new AgentHistoryReader { Reader = Fake([], statement => statement.Id == "historyAll" ? new(statement.Columns, [.. History.Select(row => HistoryRow(statement, row))], true) : null), TestService = () => (1, 4) };
         var cut = await capped.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(), null, CancellationToken.None);
         check(cut.Tables[0].More == 1, "a history read past historyRows marks the runs table truncated");

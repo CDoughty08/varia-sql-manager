@@ -82,7 +82,8 @@ import { messagesContribution } from '../contributions/messages'
 import { highlightsContribution } from '../contributions/highlights'
 import { pivotContribution } from '../contributions/pivot'
 import { transposeContribution } from '../contributions/transpose'
-import { loadIntoMemoryContribution } from '../contributions/load-into-memory'
+import { loadIntoMemoryContribution, loadSampleContribution } from '../contributions/load-into-memory'
+import { SampleDialogService } from '../results/sample-dialog'
 import { plansContribution } from '../contributions/plans'
 import { compareContribution } from '../contributions/compare'
 import { scriptingContribution } from '../contributions/scripting'
@@ -215,6 +216,8 @@ export interface Workbench extends Disposable {
   readonly bookmarks: BookmarkService
   /** The query editor's dialogs (Go To Line). */
   readonly editorDialogs: EditorDialogs
+  /** Load sample's dialog for a windowed BigQuery result. */
+  readonly sampleDialog: SampleDialogService
   /** The editor caret's Ln, Col and Ch and the line ending, for the IDE status bar. */
   readonly editorStatus: EditorStatusService
   /** Insert or overtype (the Insert key). */
@@ -385,6 +388,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     // Sorted grids follow Sort text by as it changes, from the toolbar, the palette or Options.
     onSortTextChange: listener => settings.subscribe(listener) })
   const highlights = new HighlightsService(results)
+  const sampleDialog = new SampleDialogService(results)
   // The window's places for derived results built in the backend, shared by Pivot builds and comparisons: four at once.
   const derivedJobs = new DerivedJobs()
   // Each counts the other's new results in flight against a run's 1,000.
@@ -736,6 +740,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     shellOptions,
     bookmarks,
     editorDialogs,
+    sampleDialog,
     editorStatus,
     inputMode,
     tabRename,
@@ -881,6 +886,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       shellOptions.dispose()
       bookmarks.dispose()
       editorDialogs.dispose()
+      sampleDialog.dispose()
       editorStatus.dispose()
       inputMode.dispose()
       panes.dispose()
@@ -916,6 +922,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     pivotContribution(workbench),
     transposeContribution(workbench),
     loadIntoMemoryContribution(workbench),
+    loadSampleContribution(workbench),
     plansContribution(workbench, api),
     paletteContribution(workbench),
     themeContribution(workbench, api),

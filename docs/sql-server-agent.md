@@ -4,7 +4,7 @@ SQL Server Agent support is planned for 0.11.0 ([docs/agent-plan.md](agent-plan.
 [docs/agent-ui-rethink.md](agent-ui-rethink.md)). Behind the release gate (below) Object Explorer shows the SQL Server Agent node, a job's New Job…, View History, Start Job at Step…, Stop
 Job, Enable, Disable, Rename, Delete and Properties, and the Agent node's Start, Stop, Restart and Properties; Search Objects finds jobs, alerts
 and operators, Script As scripts jobs, alerts, operators and proxies, Job Activity Monitor follows the jobs live, the
-Log File Viewer reads and deletes job history, the job document edits a job's General, Steps, Schedules, Notifications, Targets and Alerts or creates a job,
+Log File Viewer reads and deletes job history, the job document edits a job's General, Steps, Schedules, Notifications, Targets and Alerts or creates a job and shows its History live,
 the Schedules document manages the shared schedules, and the alert and operator documents and the Operators and notifications grid edit and create
 alerts, operators and who is notified, behind the same gate until 0.11.0.
 
@@ -146,6 +146,27 @@ alerts, operators and who is notified, behind the same gate until 0.11.0.
   `version_number` and `date_modified` (`sysschedules_localserver_view`, `UPDLOCK, HOLDLOCK`) and THROWs 50011 with the call's
   index, so a schedule changed since it was read is `STALE` on the Schedules field and nothing commits. A new job has nothing to
   compare: its attached schedules are read again and take the new versions, keeping your edits, and the next Save names them.
+- **History** (AG-6d; `src/shared/agent/job-history.ts` for the rules, `JobHistoryService` and `JobHistory.tsx` in the renderer). The job
+  document's last section shows the job's own runs in place, as SSMS's View History shows them in the Log File Viewer: a bar per run for the
+  newest 14 finished runs with the job's **usual** time as a line ("usual 18 min": the median of its newest 10 succeeded runs, whatever
+  the filter), the runs newest first with All and Failed, and beside them the selected run (the newest until another is picked): its
+  start in server time, its duration against the usual one, who invoked it and its outcome (both from msdb's job outcome message),
+  and its steps with outcome, duration and retries. The run's last failed step opens with its whole message (agent.historyMessage
+  where the grid's copy was cut), with Copy, **Edit step** (the step of that name as the job is now) and **Start at step**. A step
+  whose message names an SSIS Catalog execution ("Execution ID: 48213", which a failed catalog step writes) has an **SSIS execution**
+  link that opens a query window, not run, over `SSISDB.catalog.event_messages` for that execution, errors first, where the real error
+  usually is. While the job runs, the section starts with the run view: the elapsed time from the run's start and the server's clock
+  (the header's `agent.jobs.watched` probe; no elapsed time where the start is unreadable, never a guess) against the usual time as a
+  bar, each step's state (finished steps as their rows say, the step Agent reports as current Executing or Between retries, the rest
+  Waiting; with this run not selected under All, or its rows not read yet, the others show — rather than a guess) with this run's and
+  the usual time, and Stop. A step or the run ending reads History again at once while it shows. Saved edits apply from the next run, which the run view says. The section
+  is one `agent.history` view (one checked job, `usual: true`, so the probe adds a fourth table of the usual durations for the job
+  and each step, a step's rows in a run added up) opened when the section first shows (on its connection's return when it shows
+  disconnected); it runs while the document is the active one with History open, pauses while the document is hidden or the section
+  collapsed, and runs nothing between samples: the backend schedules every read. The watched clock redraws the document only while
+  History shows. A New Job has no History until it is
+  saved. All jobs' history in Log File Viewer opens the viewer with this job checked. The bars are plain elements with one
+  accessible name, not a ChartView chart: runs are not samples of a series.
 - **Schedules document** (Manage Schedules on the Jobs folder's menu and the palette; New › Schedule… on the Agent node). One
   document per connection replaces SSMS's Manage Schedules dialog: a grid of the shared schedules (name, when, Enabled, how many
   jobs, owner) with All, Unused and Disabled views and a filter that matches schedule names, job names (sysadmin, whose read has the links) and when schedules run, and
@@ -402,9 +423,14 @@ reads, grouping into runs with In progress, Unknown and Agent XPs off, the filte
 refusal), Delete History's validation and lint with near misses, and `agent.historyMessage`'s fallback. In the Agent live suite
 with `VARIA_TEST_SQL_SCRATCH=1`, `AgentHistoryLiveChecks` reads the scratch job's run and its steps through `live.subscribe`,
 reads a message, and runs Delete History on it and a second scratch job (older than 30 days keeps the run, all deletes it).
-The `agent-jobs` smoke suite opens the Log File Viewer from Job Activity Monitor and drives All jobs, the Failed outcome, a
+With args.usual the same checks cover the usual durations (the median, the newest 10 succeeded runs only, a retried step's
+rows added up, the table sent empty without it), and the live suite reads the scratch job's. `tests/agent-job-history.test.ts` covers the
+History section's rules (durations, the outcome message, the SSIS execution link and its query, the bars, each step's state while the job
+runs, the elapsed time) and its service against a fake view (opening once, following the newest run, a picked run kept, the failed
+step's whole message, Copy, Failed, refusals). The `agent-jobs` smoke suite opens the Log File Viewer from Job Activity Monitor and drives All jobs, the Failed outcome, a
 run's steps and message, and Delete History, then checks Current, selects a log row and runs Recycle (Enter on its
-confirmation cancels). `AgentErrorLogChecks` checks the error log args, the reader's merge, cap and failures against a fake
+confirmation cancels). The `agent-job` smoke suite opens a job's History section.
+`AgentErrorLogChecks` checks the error log args, the reader's merge, cap and failures against a fake
 reader, the list's fallbacks, Recycle's validation and its lint with near misses offline; in the Agent live suite with
 `VARIA_TEST_SQL_SCRATCH=1`, `AgentErrorLogLiveChecks` lists the logs, reads Current and recycles the server's Agent error log
 (Current becomes Archive #1 and the new Current gets Agent's 412 line), or expects `AGENT_STOPPED` with Agent stopped.
