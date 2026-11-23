@@ -12,6 +12,7 @@ import { activityLiveArgsSchema } from '../activity/schema'
 import { ssisOperationsArgsSchema } from '../ssis/schema'
 import { agentJobsArgsSchema } from '../agent/jobs'
 import { agentHistoryArgsSchema } from '../agent/history'
+import { agentErrorLogArgsSchema } from '../agent/error-log'
 import { liveProbes, liveSources, type LiveProbeId, type LiveProbeSpec, type LiveSourceId, type LiveTableSpec, type LiveSourceSpec } from './catalog'
 
 const L = limits.live
@@ -58,7 +59,9 @@ export const liveArgsSchemas = {
   // list's column value filters. Each args replaces the last whole.
   'agent.jobs': agentJobsArgsSchema,
   // SQL Server Agent's job history (AG-5a): the Log File Viewer's filters and its selected run. Each args replaces the last whole.
-  'agent.history': agentHistoryArgsSchema
+  'agent.history': agentHistoryArgsSchema,
+  // SQL Server Agent's error logs (AG-5b): the Log File Viewer's checked logs and its window and text filters.
+  'agent.errorLog': agentErrorLogArgsSchema
 } as const satisfies { readonly [S in LiveSourceId]: z.ZodType }
 export type LiveArgs = z.infer<typeof liveArgsSchemas[LiveSourceId]>
 

@@ -29,6 +29,7 @@ import type { SsisCatalogSetupRequest, SsisCatalogSetupResult, SsisDescribeReque
 import type { AgentProfileRequest, AgentProfileResult } from './agent/profile.ts'
 import type { AgentHistoryMessageRequest, AgentHistoryMessageResult } from './agent/history.ts'
 import type { AgentCounterValuesRequest, AgentCounterValuesResult } from './actions/agent-alert.ts'
+import type { AgentErrorLogsRequest, AgentErrorLogsResult } from './agent/error-log.ts'
 import type { LanguageParseRequest, LanguageParseResult } from './agent/parse.ts'
 import type { SettingsLoad, SettingsPatch, SettingsState } from './settings/schema'
 import type { RunningJobRequest, SessionAnswer, SessionCloseOptions, SessionCloseResult, SessionEnd, SessionPromptRequest } from './sessions.ts'
@@ -740,6 +741,7 @@ export interface RpcMethods {
   'agent.profile': { params: AgentProfileRequest; result: AgentProfileResult }
   'agent.historyMessage': { params: AgentHistoryMessageRequest; result: AgentHistoryMessageResult }
   'agent.counterValues': { params: AgentCounterValuesRequest; result: AgentCounterValuesResult }
+  'agent.errorLogs': { params: AgentErrorLogsRequest; result: AgentErrorLogsResult }
   'language.parse': { params: LanguageParseRequest; result: LanguageParseResult }
 }
 export type RpcMethod = keyof RpcMethods
@@ -1015,6 +1017,7 @@ export interface VariaApi {
   agentProfile(params: AgentProfileRequest): Promise<ApiResult<AgentProfileResult>>
   agentHistoryMessage(params: AgentHistoryMessageRequest): Promise<ApiResult<AgentHistoryMessageResult>>
   agentCounterValues(params: AgentCounterValuesRequest): Promise<ApiResult<AgentCounterValuesResult>>
+  agentErrorLogs(params: AgentErrorLogsRequest): Promise<ApiResult<AgentErrorLogsResult>>
   /** The job step editor's Parse (AG-6b): ScriptDom only, no connection. */
   languageParse(params: LanguageParseRequest): Promise<ApiResult<LanguageParseResult>>
   /** Cancels SSIS requests by their `requestId`s (1–64); `cancelled` counts those still running. A request cancelled this way

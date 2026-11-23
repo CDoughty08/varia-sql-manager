@@ -580,7 +580,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   })
   const logViewer = new LogViewerService({
     api, documents, panes, groups: editorGroups, live, connections, targetIdOf,
-    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-history="${CSS.escape(id)}"] [role="grid"]`)?.focus())
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-history="${CSS.escape(id)}"] [role="grid"]`)?.focus()),
+    // A Recycle renames every Agent error log: Object Explorer's Error Logs folder of that server, if listed, reloads.
+    recycled: connectionId => { const folder = explorer.folderNode(connectionId, { kind: 'agent' }, 'agentErrorLogs'); if (folder !== undefined) explorer.reconcile(folder) }
   })
   const objectSearch = new ObjectSearchService({
     api, documents, connections, settings, targetIdOf, events, agentEnabled: api.agentPreview,

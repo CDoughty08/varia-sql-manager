@@ -539,7 +539,8 @@ export const writeProcedures: readonly WriteProcedure[] = [
   { name: 'sp_revoke_proxy_from_subsystem', lane: 'AG-8b', database: 'msdb', arguments: ['@proxy_id', '@subsystem_id'] },
   { name: 'sp_grant_login_to_proxy', lane: 'AG-8b', database: 'msdb', arguments: ['@proxy_id', '@login_name', '@fixed_server_role', '@msdb_role'] },
   { name: 'sp_revoke_login_from_proxy', lane: 'AG-8b', database: 'msdb', arguments: ['@proxy_id', '@name'] },
-  { name: 'sp_cycle_agent_errorlog', lane: 'AG-5b', database: 'msdb' },
+  // Recycle (AG-5b, sysadmin): no arguments; Agent itself renames the logs.
+  { name: 'sp_cycle_agent_errorlog', lane: 'AG-5b', database: 'msdb', arguments: [] },
   // Send test e-mail (AG-7, sysadmin): one message to an operator through SQL Server Agent's own Database Mail profile.
   { name: 'sp_notify_operator', lane: 'AG-7', database: 'msdb', arguments: ['@profile_name', '@name', '@subject', '@body'] }
 ]

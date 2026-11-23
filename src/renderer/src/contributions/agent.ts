@@ -14,7 +14,9 @@ import { serverItems } from './query'
  * verbs act on the monitor whose header or bar runs them (`tabId`), else the active document. View History (AG-5a) opens the Log
  * File Viewer, one per connection, on the same server: a job's menu checks that job, Job Activity Monitor (its tab active or its
  * bar's button) the jobs selected there, and the Agent node, the Jobs folder and the palette every job. Refresh History and
- * Delete History act on the viewer whose header runs them, else the active document.
+ * Delete History act on the viewer whose header runs them, else the active document. The Error Logs folder's and its logs' View Agent Log
+ * (AG-5b) opens the viewer on that log (Current from the folder) with no job checked, and their Recycle opens it on Current with Recycle's
+ * confirmation; Recycle from the palette or the viewer's header asks in the viewer it runs on.
  */
 export function agentContribution({ commands, jobActivity, logViewer, documents, connections, explorer, quickInput, jobDocuments, schedules }: Pick<Workbench, 'commands' | 'jobActivity' | 'logViewer' | 'documents' | 'connections' | 'explorer' | 'quickInput' | 'jobDocuments' | 'schedules'>,
   options: { readonly agentEnabled?: boolean } = {}): Disposable {
@@ -39,6 +41,13 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
     return monitor?.selected.length ? { jobs: monitor.selected.map(job => job.id) } : {}
   }
   const viewerOf = (args?: CommandArgs): string | undefined => { const id = args?.tabId ?? documents.getSnapshot().activeId; return logViewer.get(id) ? id : undefined }
+  /** The error log an Error Logs menu names: a log node's archive number, else Current (the folder). */
+  const errorLogOf = (args?: CommandArgs): number => {
+    const node = explorerNodeOf(args)
+    const archive = node?.kind === 'agentErrorLog' && node.ref.type === 'object' ? Number(node.ref.object.name) : 0
+    return Number.isInteger(archive) && archive >= 0 ? archive : 0
+  }
+  const onErrorLogs = (args?: CommandArgs): boolean => { const node = explorerNodeOf(args); return !!node && (node.kind === 'agentErrorLog' || (node.kind === 'folder' && node.folder === 'agentErrorLogs')) }
   const monitorOf = (args?: CommandArgs): string | undefined => { const id = args?.tabId ?? documents.getSnapshot().activeId; return jobActivity.get(id) ? id : undefined }
   // The job document (AG-6a): Open Job and New Job on a server picked as Job Activity Monitor's is, and the document's verbs on the
   // job document whose header runs them, else the active one.
@@ -102,6 +111,24 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
         if (choices.length === 1) return openHistory(choices[0].id, where)
         if (!choices.length) { commands.reportError('Connect to a SQL Server first.'); return }
         quickInput.show({ ariaLabel: 'View History', placeholder: 'Select a server', noun: 'servers', items: serverItems(choices), onDidAccept: item => openHistory(item.id, where) })
+      }
+    }),
+    commands.register('agent.viewAgentLog', {
+      when: args => { const node = explorerNodeOf(args); return !node || (!node.lost && connections.isLiveSqlServer(node.connectionId)) },
+      run: args => withServer(args, 'View Agent Log', connectionId => openHistory(connectionId, { errorLog: errorLogOf(args) }))
+    }),
+    commands.register('agent.recycleErrorLog', {
+      when: args => {
+        const node = explorerNodeOf(args)
+        if (node) return !node.lost && connections.isLiveSqlServer(node.connectionId)
+        const id = viewerOf(args)
+        return id ? logViewer.canRecycle(id) : connections.liveSqlServer().length > 0
+      },
+      unavailable: args => { const id = explorerNodeOf(args) ? undefined : viewerOf(args); return id ? logViewer.recycleUnavailable(id) : undefined },
+      run: args => {
+        const id = explorerNodeOf(args) ? undefined : viewerOf(args)
+        if (id) return logViewer.askRecycle(id)
+        withServer(args, 'Recycle Agent Error Log', connectionId => openHistory(connectionId, { errorLog: onErrorLogs(args) ? errorLogOf(args) : 0, recycle: true }))
       }
     }),
     commands.register('agent.refreshHistory', {

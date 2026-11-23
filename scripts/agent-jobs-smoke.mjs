@@ -3,8 +3,8 @@
 // tiles and tones, a view chip and Clear filters narrow and restore the list through live.update, two selected jobs get Start
 // as one request each with a result line per job, the status bar follows the newest started job to its outcome, the Last run
 // chevron shows the selected job's last run in place, View history opens the Log File Viewer (AG-5a) with the selected job
-// checked, whose sources, outcome filter, selected run, whole message and Delete History work against the fake history, closing
-// ends the view, and Enter on the Job Activity Monitor node opens it again. Screenshots in Dark and Light go to artifacts/.
+// checked, whose sources, outcome filter, selected run, whole message and Delete History work against the fake history, the
+// SQL Server Agent error log (AG-5b) shows its rows and a row's message and Recycle asks first (Enter cancels), closing ends the view, and Enter on the Job Activity Monitor node opens it again. Screenshots in Dark and Light go to artifacts/.
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
@@ -163,9 +163,37 @@ try {
   await expect(viewer().getByRole('status').filter({ hasText: 'Deleted the history of 3 jobs.' })).toBeVisible()
   expect((await calls('actions.execute')).filter(call => call.action === 'deleteJobHistory').at(-1)).toMatchObject({ target: { kind: 'agent' }, agentHistory: { all: true } })
   await expect.poll(runs).toEqual([])
+  console.log("History passed: View history opens the Log File Viewer on the selected job; sources, filters, each run's rows and message, and Delete History work.")
+
+  step = 'error logs'
+  // Select logs lists the Agent error logs (sysadmin); Current's rows show newest first with a row's whole message, and Recycle
+  // asks first: Enter on its focused Cancel recycles nothing, Recycle starts a new Current.
+  const errorLogs = sources.getByRole('list', { name: 'SQL Server Agent error logs', exact: true })
+  await errorLogs.getByRole('checkbox', { name: 'Current - 2026-11-22 14:31', exact: true }).check()
+  const agentLog = liveGrid(page, 'Agent log')
+  await expect(agentLog).toContainText('Step 2 of job Nightly failed')
+  expect((await calls('live.subscribe')).find(call => call.source === 'agent.errorLog')).toMatchObject({ args: { logs: [0], days: 7 }, probes: [{ probe: 'agent.errorLog.read' }] })
+  await agentLog.locator(gridPart.row, { has: page.locator(gridPart.cell, { hasText: /^Warning$/ }) }).locator(gridPart.cell).nth(1).click()
+  await expect(viewer().getByRole('region', { name: 'Log row details', exact: true })).toContainText('SQLServerAgent is running as a non-sysadmin account')
+  await page.screenshot({ path: 'artifacts/agent-error-log-dark.png' })
+  const recycleCalls = async () => (await calls('actions.execute')).filter(call => call.action === 'recycleAgentErrorLog')
+  await viewer().getByRole('button', { name: 'Recycle…', exact: true }).click()
+  const recycle = page.getByRole('alertdialog', { name: 'Recycle SQL Server Agent Error Log', exact: true })
+  await expect(recycle).toContainText('the oldest archive is deleted')
+  await expect(recycle.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(recycle).toHaveCount(0)
+  expect(await recycleCalls()).toEqual([])
+  await viewer().getByRole('button', { name: 'Recycle…', exact: true }).click()
+  await recycle.getByRole('button', { name: 'Recycle', exact: true }).click()
+  await expect(recycle).toHaveCount(0)
+  await expect(viewer().getByRole('status').filter({ hasText: 'Started a new SQL Server Agent error log' })).toBeVisible()
+  expect((await recycleCalls()).at(-1)).toMatchObject({ target: { kind: 'agent' } })
+  await expect(agentLog).toContainText('Errorlog has been reinitialized')
+  await expect(errorLogs.getByRole('checkbox', { name: 'Archive #1 - 2026-11-22 14:31', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Close Log File Viewer - server-a', exact: true }).click()
   await expect(documentTab(page, tabName)).toHaveAttribute('aria-selected', 'true')
-  console.log("History passed: View history opens the Log File Viewer on the selected job; sources, filters, each run's rows and message, and Delete History work.")
+  console.log('Error logs passed: the Agent error log shows its rows and a row's message, and Recycle asks first and starts a new log.')
 
   step = 'light'
   await page.evaluate(() => window.varia.setThemePreference({ mode: 'light' }))

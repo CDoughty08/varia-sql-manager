@@ -711,6 +711,12 @@ internal sealed record AgentHistoryDeleteDto(List<string>? Jobs, bool? All = nul
 internal sealed record AgentHistoryMessageArgs(string ConnectionId, string RequestId, string JobId, int InstanceId);
 /// <summary>The row's message (null when the row has none), or why it could not be read.</summary>
 internal sealed record AgentHistoryMessageResult(string? Message, long ElapsedMs, ActionError? Error = null);
+/// <summary>agent.errorLogs (AG-5b): the Log File Viewer's SQL Server Agent error logs.</summary>
+internal sealed record AgentErrorLogsArgs(string ConnectionId, string RequestId);
+/// <summary>One error log: its archive number (0 is Current), its date (server time, yyyy-MM-ddTHH:mm:ss) and size, where listed.</summary>
+internal sealed record AgentErrorLogDto(int Archive, string? Date = null, long? Bytes = null);
+/// <summary>The logs in archive order; Archives is false where the server lists none (Current alone).</summary>
+internal sealed record AgentErrorLogsResult(List<AgentErrorLogDto> Logs, bool Archives, long ElapsedMs, ActionError? Error = null);
 /// <summary>A SQL Server Agent job's verbs (AG-2: startJob, stopJob, a job's disable, enable, rename and delete) name the job they act on by
 /// its sysjobs job_id, as the tree lists it; the batch refuses a job that has taken the name since.
 /// startJob may name a StepName (sysname); a job's delete may set DeleteUnusedSchedule. startAgent, stopAgent and restartAgent take only the
