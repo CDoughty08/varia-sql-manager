@@ -193,7 +193,7 @@ try {
   await expect(errorLogs.getByRole('checkbox', { name: 'Archive #1 - 2026-11-22 14:31', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Close Log File Viewer - server-a', exact: true }).click()
   await expect(documentTab(page, tabName)).toHaveAttribute('aria-selected', 'true')
-  console.log('Error logs passed: the Agent error log shows its rows and a row's message, and Recycle asks first and starts a new log.')
+  console.log("Error logs passed: the Agent error log shows its rows and a row's message, and Recycle asks first and starts a new log.")
 
   step = 'light'
   await page.evaluate(() => window.varia.setThemePreference({ mode: 'light' }))
