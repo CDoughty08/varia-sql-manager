@@ -158,7 +158,7 @@ export class ScopeResolver {
           if (path && !paths.has(key(path))) paths.set(key(path), [...path])
         } else if (source.kind === 'cte' || source.kind === 'derived') {
           const shape = source.kind === 'cte' ? this.cte(source.cte) : source.shape
-          if (shape && !seen.has(shape)) { seen.add(shape); next.push(...shape.stars) }
+          if (shape && !seen.has(shape)) { seen.add(shape); for (const star of shape.stars) next.push(star) }
         }
       }
       level = next

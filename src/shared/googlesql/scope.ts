@@ -204,17 +204,23 @@ class BlockReader {
       if (!isWord(token, 'FROM') && !using) continue
       if (isWord(lead, 'DELETE') && at <= 1) continue
       const items: ScopeSource[] = []
+      // The items' names so far, lowercased: implicit unnest asks of each new item whether it starts with one.
+      const names = new Set<string>()
       let next = at + 1
       while (next < run.length) {
         const word = toks[run[next]]
         if (word.kind === 'word' && (fromEnd.has(word.upper) || word.upper === 'FROM')) break
         if (isPunct(word, ',') || (word.kind === 'word' && joinWords.has(word.upper))) { next++; continue }
         const read = this.item(run, next)
-        if (read.source) items.push(implicitUnnest(read.source, items))
+        if (read.source) {
+          const source = implicitUnnest(read.source, names)
+          items.push(source)
+          if (source.name) names.add(source.name.toLowerCase())
+        }
         next = this.skipCondition(run, Math.max(read.next, next + 1))
         if (using) break
       }
-      out.push(...items)
+      for (const source of items) out.push(source)
       // The scan goes on from where the items ended, so text with many FROMs is read once.
       at = next - 1
     }
@@ -295,16 +301,23 @@ class BlockReader {
     if (isWord(toks[run[at]], 'AS') && isWord(toks[run[at + 1]], 'STRUCT', 'VALUE')) at += 2
     if (isWord(toks[run[at]], 'DISTINCT', 'ALL')) at++
     const columns: string[] = [], stars: ScopeSource[] = []
+    // Each source is a star's once, however many times `*` names it (SELECT *, *, t.*).
+    const starred = new Set<ScopeSource>()
+    const star = (source: ScopeSource) => { if (!starred.has(source)) { starred.add(source); stars.push(source) } }
+    let everyStarred = false
     let item: Tok[] = []
     const finish = () => {
       if (!item.length) return
       const last = item.at(-1)!, before = item.at(-2)
       const starAt = item.findIndex(token => isPunct(token, '*'))
-      if (starAt === 0) stars.push(...sources)
+      if (starAt === 0) {
+        if (!everyStarred) for (const source of sources) star(source)
+        everyStarred = true
+      }
       else if (starAt > 1 && isPunct(item[starAt - 1], '.')) {
         const chain = chainOf(item.slice(0, starAt - 1))
         const named = chain?.length === 1 ? sources.find(source => source.name?.toLowerCase() === chain[0].toLowerCase()) : undefined
-        if (named) stars.push(named)
+        if (named) star(named)
       } else if (isWord(before, 'AS') && isName(last)) columns.push(partsOf(last).join('.'))
       else {
         const chain = chainOf(item)
@@ -325,10 +338,9 @@ class BlockReader {
 }
 
 /** `FROM orders o, o.items AS item`: a path that starts with an earlier item's name is that item's array, not a table. */
-function implicitUnnest(source: ScopeSource, earlier: readonly ScopeSource[]): ScopeSource {
+function implicitUnnest(source: ScopeSource, earlier: ReadonlySet<string>): ScopeSource {
   if (source.kind !== 'object' || source.parts.length < 2) return source
-  const head = source.parts[0].toLowerCase()
-  return earlier.some(item => item.name?.toLowerCase() === head) ? { kind: 'unnest', name: source.name, path: source.parts } : source
+  return earlier.has(source.parts[0].toLowerCase()) ? { kind: 'unnest', name: source.name, path: source.parts } : source
 }
 
 /** Whether a token can be a piece of a dashed name (a word or a number). */

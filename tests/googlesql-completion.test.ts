@@ -377,6 +377,17 @@ describe('completion from the index', () => {
     expect(await hoverFromIndex(readGoogleSqlHover(text, 'SELECT u2999.'.length)!, dialect, fakeLookup())).toBeUndefined()
   })
 
+  it('reads a star repeated over many sources, and many dotted FROM items, in bounded time', async () => {
+    const stars = `WITH c AS (SELECT ${Array(10000).fill('*').join(',')} FROM ${Array(20000).fill('sales.orders').join(',')}) SELECT | FROM c`
+    const dotted = 'SELECT | FROM sales.orders o0' + ', x.y z'.repeat(35000)
+    const timed = performance.now()
+    const read = readGoogleSqlCompletion(stars, stars.indexOf('| FROM c'))
+    expect(read.scope.ctes[0].shape.stars.length).toBeLessThanOrEqual(20000)
+    expect((await complete(stars)).labels('column')).toContain('customer')
+    await complete(dotted)
+    expect(performance.now() - timed).toBeLessThan(3000)
+  })
+
   it('bounds UNNESTs and stars nested together, and says a bare name past a cut source is not final', async () => {
     const levels = Array.from({ length: 256 }, (_, index) => {
       const k = index + 1

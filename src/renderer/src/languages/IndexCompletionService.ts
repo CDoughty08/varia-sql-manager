@@ -55,7 +55,8 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
         const target = this.target(model)
         if (!target || token.isCancellationRequested) return { suggestions: [] }
         const text = model.getValue(), offset = model.getOffsetAt(position), version = model.getVersionId()
-        const read = readGoogleSqlCompletion(text, offset)
+        let read: ReturnType<typeof readGoogleSqlCompletion>
+        try { read = readGoogleSqlCompletion(text, offset) } catch { return { incomplete: true, suggestions: [] } }
         if (read.site.kind === 'none') return { suggestions: [] }
         // A failure is a value: an empty list the editor asks for again, never a rejection.
         const list = await completeFromIndex(read, target.dialect, this.lookup(target)).catch(() => ({ items: [], incomplete: true }))
@@ -72,7 +73,8 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
         const target = this.target(model)
         if (!target || token.isCancellationRequested) return null
         const version = model.getVersionId()
-        const read = readGoogleSqlHover(model.getValue(), model.getOffsetAt(position))
+        let read: ReturnType<typeof readGoogleSqlHover>
+        try { read = readGoogleSqlHover(model.getValue(), model.getOffsetAt(position)) } catch { return null }
         if (!read) return null
         const hover = await hoverFromIndex(read, target.dialect, this.lookup(target)).catch(() => undefined)
         if (!hover || token.isCancellationRequested || model.isDisposed() || model.getVersionId() !== version) return null
