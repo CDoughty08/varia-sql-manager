@@ -1318,6 +1318,13 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     `keyUnwritable`, so the dialog picks the button by kind), end "Choose rows without them, or other key columns." and
     offer **Choose key columns…**, as the key-collation refusal does; with an input closed they keep only "Choose rows
     without them.";
+  - a value to SET or INSERT that the target side's code page cannot hold, when that side's column is char, varchar or
+    text under a collation that is not UTF-8 (an nvarchar '中' paired with a Latin1 varchar column, or two varchar
+    columns of different code pages, as the same query against two databases gives): the same `unwritable` refusal and
+    sentence ("1 value in note cannot be written exactly (row id = 1004)."), `keyUnwritable` for an INSERT's key value,
+    since SQL Server stores '?' or a near letter there without an error, and every check would still pass. `DiffScript`
+    encodes each such value in that side's recorded code page (`ResultCollation.CodePage`) with an exception fallback.
+    WHERE values come from the target side's own column, so they always fit;
   - a key value of a char or varchar column with a SQL_ collation that is not all ASCII (Literals below): "2 key values
     in code cannot be matched exactly under its collation ('Straße' and 1 more). Choose rows without them, or other key
     columns.", with **Choose key columns…**;
@@ -1455,12 +1462,17 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     escapes each one's control characters), direction?: 'toNew' | 'toOld', columns: number[], identity?: number,
     statements: { delete, update, insert }, transaction, checkRows, identityInsert, rowsChoice: 'all' | 'grid' |
     'selected' (the rows the script takes, and the header's words), maxLines? }`. Whatever Rows chooses, the renderer
-    sends `rows` (the selection) and, while the grid has one, `viewId`, so every answer counts every Rows option.
-    `columns` holds distinct pair indexes, at most `limits.page.maxColumns` in zod, each below the pair count (checked
-    in C#). `identity` is the pair the index names as the target's identity column, ticked or not (below
-    `limits.page.maxColumns` in zod, below the pair count in C#), so the header can name an unticked one: only the
-    renderer knows it, from Search Objects. `identityInsert` applies only while `identity` is in `columns`, and is
-    ignored otherwise. `DiffScript` leaves it out of every SET. With `identityInsert` on it wraps the INSERTs in `SET
+    sends `rows` (the selection) and, while the grid has one, `viewId`, so every answer counts every Rows option. The
+    dialog holds the view each request sends (`ResultsService.holdView`, as a Pivot build holds its Table's view) until
+    that request answers, so a sort meanwhile, which builds a new view without `replaces` and closes the old one unless
+    it is held, never closes the view being read. `DiffScript` checks `store.HasView` again after its passes, as search
+    and pivot do, and answers `VIEW_NOT_FOUND`, which can then come only from the backend evicting views past a result's
+    8: the dialog takes it as a change of the chosen rows, so a preview asks once more with the current view and Script
+    shows the changed line. `columns` holds distinct pair indexes, at most `limits.page.maxColumns` in zod, each below
+    the pair count (checked in C#). `identity` is the pair the index names as the target's identity column, ticked or
+    not (below `limits.page.maxColumns` in zod, below the pair count in C#), so the header can name an unticked one:
+    only the renderer knows it, from Search Objects. `identityInsert` applies only while `identity` is in `columns`, and
+    is ignored otherwise. `DiffScript` leaves it out of every SET. With `identityInsert` on it wraps the INSERTs in `SET
     IDENTITY_INSERT`, and writes that, its TRY/CATCH body and the header's stop line only when the script holds at least
     one INSERT, since SET IDENTITY_INSERT needs ALTER on the table and an UPDATE-only script must not fail for a login
     that has only UPDATE; with it off it leaves the identity column out of the INSERTs, and refuses (`INVALID_PARAMS`)
@@ -1503,43 +1515,44 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     entry's identity as `RowIdentity.Entries` builds it (its input result ids and rows, ordered by input, not by old and
     new, and shared by both halves of a changed entry), so it stays the same through a layout switch, an All rows or
     Changes only switch, a swap and a move between an entry's halves, and changes when other rows are chosen at the same
-    count. `grid` and `selected` are added in the same counting pass; `all` is found once per diff set and cached, since
-    the set never changes. It is a hex string, so it is exact across the port. `uncheckedUpdates` is the chosen UPDATEs
-    whose every SET column Q11 leaves out, so their WHERE checks only the keys, counted in the counts pass by value, so
-    a preview and Script agree: by type alone for a column Q11 always leaves out, and from the value the target holds
-    now (Result 1's under `toNew`, Result 3's under `toOld`), judged by that side's column type and collation, for one
-    whose type leaves it to the value (char or varchar under a SQL_ collation or with none recorded, a value marked
-    truncated, U+FFFD, a subnormal float), reading only those cells. Its sentence is the backend's, as a refusal's is,
-    since only the backend knows the reasons: it names at most three columns, then "and 2 more", each cut at 60
-    characters with its reason (the type, as "note: xml"; "id: int and varchar in the two results"; or by value, "code:
-    values not all ASCII under its SQL_ collation", "memo: values not kept in full", "note: values that cannot be
-    written exactly", "ratio: values too small to write exactly"), within 1,000 characters. `uncheckedDeletes` is
-    counted and worded the same way, over the chosen DELETEs whose ticked, compared columns (at least one) Q11 all
-    leaves out, so their WHERE checks only the keys. `selectedKeys` holds the key text of Selected rows' entries that
-    differ (each as the row checks write it, `id = 1002`, cut at 60 characters) while there are at most three. The
-    look-alike counts are the chosen rows to delete and to insert that have a look-alike (`DiffIndex.Poss`) among the
-    chosen rows, and `lookAlikeDeletesAlone` and `lookAlikeInsertsAlone` those whose look-alike the chosen rows leave
-    out, told apart by the same reserved bit per stored row, which the marking pass sets for every chosen row before the
-    counting pass reads a partner's, and `softValues` the chosen rows' soft values in ticked columns, counted in the
-    same pass as the counts and `differences`, so the look-alike and Exact text lines describe the chosen rows, not the
-    whole diff. Past a cut tone the change index keeps only changed pairs, so a cut entry's later soft values are not
-    counted, and `softValuesCut` says so, turning the Exact text line's and the header's count into "at least 12
-    values". A refusal is an answer, not an error, with empty `text`: `refusal: { kind, sentence }`, `kind` one of
-    `asShown`, `keyType`, `keyName`, `notColumns`, `repeatedKey`, `truncated`, `keyTruncated`, `unwritable`,
-    `keyUnwritable`, `keyCollation`, `noDifferences`, `noTickedChange` and `tooLarge`, and the sentence at most 1,000
-    characters, both bounded in the answer schema. Every refusal's sentence, closed-input forms included, is the
-    backend's (naming at most three columns, then "and 2 more", each cut at 60 characters, so it stays within its
-    1,000), which holds the counts, names and sample values and knows when an input's result was released; the dialog
-    chooses only the refusal's buttons and their availability, by `kind` and the comparison's own facts (`notColumns`
-    covers Row position, Whole rows, Automatic's fallback and Automatic with a key, so whether to offer **Use order_no
-    as key columns** comes from the comparison's match, the key's type and whether nothing paired (`nothingPaired`),
-    which the renderer holds, `CompareService`), and never parses the sentence. Past 1,000,000 characters, estimated
-    first, it refuses with `tooLarge`, well inside the 16 MiB response limit. In a preview the counts are the chosen
-    rows' entries by kind; after Script they are the script's own statements, which can be lower (Counts above). The
-    backend itself refuses a comparison whose match is not a `columns` match, so Automatic's choice can never be
-    scripted by accident (Use order_no as key columns replaces the comparison with that `columns` match first), and a
-    comparison of rows as shown. Both read the diff set's records (C3's match and C6's as-shown flags), and the WHERE
-    clauses take the recorded key pairs, so the params carry no key columns.
+    count. `grid` and `selected` are added in the same counting pass, each option marking its chosen rows in its own
+    reserved bit per stored row (Budget below); `all` is found once per diff set and cached, since the set never
+    changes. It is a hex string, so it is exact across the port. `uncheckedUpdates` is the chosen UPDATEs whose every
+    SET column Q11 leaves out, so their WHERE checks only the keys, counted in the counts pass by value, so a preview
+    and Script agree: by type alone for a column Q11 always leaves out, and from the value the target holds now (Result
+    1's under `toNew`, Result 3's under `toOld`), judged by that side's column type and collation, for one whose type
+    leaves it to the value (char or varchar under a SQL_ collation or with none recorded, a value marked truncated,
+    U+FFFD, a subnormal float), reading only those cells. Its sentence is the backend's, as a refusal's is, since only
+    the backend knows the reasons: it names at most three columns, then "and 2 more", each cut at 60 characters with its
+    reason (the type, as "note: xml"; "id: int and varchar in the two results"; or by value, "code: values not all ASCII
+    under its SQL_ collation", "memo: values not kept in full", "note: values that cannot be written exactly", "ratio:
+    values too small to write exactly"), within 1,000 characters. `uncheckedDeletes` is counted and worded the same way,
+    over the chosen DELETEs whose ticked, compared columns (at least one) Q11 all leaves out, so their WHERE checks only
+    the keys. `selectedKeys` holds the key text of Selected rows' entries that differ (each as the row checks write it,
+    `id = 1002`, cut at 60 characters) while there are at most three. The look-alike counts are the chosen rows to
+    delete and to insert that have a look-alike (`DiffIndex.Poss`) among the chosen rows, and `lookAlikeDeletesAlone`
+    and `lookAlikeInsertsAlone` those whose look-alike the chosen rows leave out, told apart by the chosen option's
+    reserved bit, which the marking pass sets for every chosen row before the counting pass reads a partner's, and
+    `softValues` the chosen rows' soft values in ticked columns, counted in the same pass as the counts and
+    `differences`, so the look-alike and Exact text lines describe the chosen rows, not the whole diff. Past a cut tone
+    the change index keeps only changed pairs, so a cut entry's later soft values are not counted, and `softValuesCut`
+    says so, turning the Exact text line's and the header's count into "at least 12 values". A refusal is an answer, not
+    an error, with empty `text`: `refusal: { kind, sentence }`, `kind` one of `asShown`, `keyType`, `keyName`,
+    `notColumns`, `repeatedKey`, `truncated`, `keyTruncated`, `unwritable`, `keyUnwritable`, `keyCollation`,
+    `noDifferences`, `noTickedChange` and `tooLarge`, and the sentence at most 1,000 characters, both bounded in the
+    answer schema. Every refusal's sentence, closed-input forms included, is the backend's (naming at most three
+    columns, then "and 2 more", each cut at 60 characters, so it stays within its 1,000), which holds the counts, names
+    and sample values and knows when an input's result was released; the dialog chooses only the refusal's buttons and
+    their availability, by `kind` and the comparison's own facts (`notColumns` covers Row position, Whole rows,
+    Automatic's fallback and Automatic with a key, so whether to offer **Use order_no as key columns** comes from the
+    comparison's match, the key's type and whether nothing paired (`nothingPaired`), which the renderer holds,
+    `CompareService`), and never parses the sentence. Past 1,000,000 characters, estimated first, it refuses with
+    `tooLarge`, well inside the 16 MiB response limit. In a preview the counts are the chosen rows' entries by kind;
+    after Script they are the script's own statements, which can be lower (Counts above). The backend itself refuses a
+    comparison whose match is not a `columns` match, so Automatic's choice can never be scripted by accident (Use
+    order_no as key columns replaces the comparison with that `columns` match first), and a comparison of rows as shown.
+    Both read the diff set's records (C3's match and C6's as-shown flags), and the WHERE clauses take the recorded key
+    pairs, so the params carry no key columns.
 - **Backend `Results/DiffScript.cs`:** literals by the column's `dataType`, precision and scale:
 
   | Type | Literal |
@@ -1547,7 +1560,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   | Integers; decimal, numeric, money, smallmoney | As stored; decimals exactly |
   | float, real | Stored as G15 and G7 text: that text when it reads back as the value, else the exact value kept beside it (`PageLengths.TryExact`, in CellLengths.cs), written round-trip. Always with an exponent (`3.0000000000000004E-1`, `1E0`): without one, T-SQL reads the text as a numeric literal, whose conversion to float may not round correctly. A real is written as its value widened to double, in that double's round-trip text (0.1 as `1.0000000149011612E-1`): a literal is a float, and comparing it with a real column widens the real, so the shorter `1E-1` would find no row as a key or in Q11's guard, while the widened value is exact both compared and assigned, with no decimal → double → real double rounding. A non-zero float smaller in magnitude than 2.2250738585072014E-308 (subnormal: SQL Server stores one that arithmetic produces, but reads its literal as 0) is refused as a value that cannot be written exactly; a real widened to double is never subnormal |
   | bit | 0 or 1 |
-  | char, varchar, text; nchar, nvarchar, ntext | `N'…'` with `''` escaping. A non-N literal is read in the database's default code page, so even char columns get `N'…'`, converted to the column's collation on assignment. CR, LF, U+0085, U+2028, U+2029 and every other control character but tab are written as `NCHAR(n)` joins (`N'a' + NCHAR(13) + NCHAR(10) + N'b'`): the query window's model normalizes line breaks and the clipboard may convert them. A joined value over 4,000 characters starts with `CAST(N'…' AS nvarchar(max))`, since joining shorter strings stops at 4,000. A value that would need more than 64 joins (pretty-printed JSON or XML, a long multi-line note) is written instead as one exact term, `CAST(0x<its UTF-16LE bytes> AS nvarchar(max))`: a chain of thousands of `+` terms risks SQL Server's nesting and expression limits (errors 191, 8631, 8632), which would fail the statement and roll the script back. The size estimate counts its 4 hex digits a code unit. In a WHERE clause (keys, Q11's guard, the INSERT check) a char or varchar value that is all ASCII is written in a plain form instead, varchar end to end: `'…'`, its control characters joined with `CHAR(n)` (an `NCHAR` term would make the whole expression nvarchar again), a joined value over 8,000 characters started with `CAST('…' AS varchar(max))` (non-max varchar joins stop at 8,000), and past 64 joins `CAST(0x<its ASCII bytes> AS varchar(max))`: ASCII has the same bytes in every code page, and the comparison then follows the column's own collation, while under a SQL_ collation a varchar column compared with `N'…'` follows Unicode rules, so `N'ss'` also matches a stored 'ß'. A value that is not all ASCII from a column with a SQL_ collation (`ResultCollation.SortId` ≠ 0), or with no recorded collation (`SqlClientCollation.Of` can answer none), cannot be matched exactly: as a key it is refused, and Q11's guard leaves it out. Under a Windows collation it is written `N'…'`, which compares by the same rules |
+  | char, varchar, text; nchar, nvarchar, ntext | `N'…'` with `''` escaping. A non-N literal is read in the database's default code page, so even char columns get `N'…'`, converted to the column's collation on assignment. A SET or INSERT value the target side's code page cannot hold is refused instead (Refused above), since that conversion stores '?' without an error. CR, LF, U+0085, U+2028, U+2029 and every other control character but tab are written as `NCHAR(n)` joins (`N'a' + NCHAR(13) + NCHAR(10) + N'b'`): the query window's model normalizes line breaks and the clipboard may convert them. A joined value over 4,000 characters starts with `CAST(N'…' AS nvarchar(max))`, since joining shorter strings stops at 4,000. A value that would need more than 64 joins (pretty-printed JSON or XML, a long multi-line note) is written instead as one exact term, `CAST(0x<its UTF-16LE bytes> AS nvarchar(max))`: a chain of thousands of `+` terms risks SQL Server's nesting and expression limits (errors 191, 8631, 8632), which would fail the statement and roll the script back. The size estimate counts its 4 hex digits a code unit. In a WHERE clause (keys, Q11's guard, the INSERT check) a char or varchar value that is all ASCII is written in a plain form instead, varchar end to end: `'…'`, its control characters joined with `CHAR(n)` (an `NCHAR` term would make the whole expression nvarchar again), a joined value over 8,000 characters started with `CAST('…' AS varchar(max))` (non-max varchar joins stop at 8,000), and past 64 joins `CAST(0x<its ASCII bytes> AS varchar(max))`: ASCII has the same bytes in every code page, and the comparison then follows the column's own collation, while under a SQL_ collation a varchar column compared with `N'…'` follows Unicode rules, so `N'ss'` also matches a stored 'ß'. A value that is not all ASCII from a column with a SQL_ collation (`ResultCollation.SortId` ≠ 0), or with no recorded collation (`SqlClientCollation.Of` can answer none), cannot be matched exactly: as a key it is refused, and Q11's guard leaves it out. Under a Windows collation it is written `N'…'`, which compares by the same rules |
   | date, time(n), datetime2(n), datetimeoffset(n) | ISO 8601 text in a `CAST('…' AS <type>)` of the column's own type and precision |
   | datetime, smalldatetime | `CAST('yyyy-MM-ddTHH:mm:ss.fff' AS <type>)`: the stored `yyyy-MM-dd HH:mm:ss` form depends on DATEFORMAT and language, the `T` form does not |
   | uniqueidentifier | Quoted |
@@ -1574,10 +1587,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     offline lint pins that `DiffScript` output never reaches a `SqlCommand`, as ScriptPipeline never executes DDL.
 - **Budget:** the text is built in 1 MiB chunks charged as working memory (2 bytes a character, at most 2 MB) and
   released after the answer. Rows are read through `RowAccess`, with no copies. Rows in the grid and Selected rows read
-  through a view, so pairing a changed entry's halves takes the same bit per stored row as Copy as Diff, reserved first.
-  `SqlService`'s dispatch hands the job to `DiffScript`, as copy and export go to `ResultJobs`, so the reservations live
-  there and `DiffScriptChecks` refusal checks on a low budget pin them (the lint's reservation checks read only
-  `SqlService.cs`).
+  through a view, so pairing a changed entry's halves takes a bit per stored row, as Copy as Diff does; the dialog
+  counts both options in one pass, so it reserves two bits per stored row, one for each, first, and the low-budget
+  refusal check pins both. `SqlService`'s dispatch hands the job to `DiffScript`, as copy and export go to `ResultJobs`,
+  so the reservations live there and `DiffScriptChecks` refusal checks on a low budget pin them (the lint's reservation
+  checks read only `SqlService.cs`).
 - **New method `explorer.scriptTarget`, on the explorer lane.** No method gives the renderer what the target field
   needs: `explorer.search` hits carry an object, label, range and subtype (`src/shared/explorer/search.ts`), and
   `tables.columns` asks the server for names and types. The index already holds each column's type, nullability,
@@ -1669,12 +1683,13 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - `differencesKey` changing for a filter moved to other rows of the same count, and not for a sort of the same rows,
       a One row and Two rows switch, an All rows and Changes only switch, a swap, or Selected rows moving between the
       two halves of one entry;
+    - a view closed mid-run answering `VIEW_NOT_FOUND`;
     - a one-sided column the target holds named once in the header, as only in its result, and not again among the
       columns INSERTs leave out;
     - an unticked identity column named "id (unticked)" in the header's left-out line of a script without INSERTs,
       and an ignored identity column taking the identity form;
-    - an unticked identity column named in the header's left-out line ("id (unticked: new values from the target)"),
-      with `identityInsert` ignored, and `identity` past the pair count `INVALID_PARAMS`;
+    - an unticked identity column named in the header's left-out line of a script with INSERTs ("id (unticked: new
+      values from the target)"), with `identityInsert` ignored, and `identity` past the pair count `INVALID_PARAMS`;
     - the not-looked-for header line from the recorded `PossibleSkipped`; the Automatic no-pairs refusal only with the
       recorded `NothingPaired`, and the plain Automatic one for a Changes-only comparison whose paired rows are all
       unchanged and come after the last difference;
@@ -1727,6 +1742,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - the refusals, a match that is not `columns`, and a comparison of rows as shown;
     - a lone surrogate read through `PageBuilder`, and a `_UTF8` value SqlClient could not decode, each reaching the
       U+FFFD refusal;
+    - an nvarchar value outside a Latin1 varchar target side's code page refused as `unwritable` in a SET and an INSERT
+      and as `keyUnwritable` in an INSERT's key, a varchar value of another code page likewise, and a UTF-8 varchar
+      target side taking any value;
     - a value with CR, LF, NUL and U+2028, and one over 4,000 characters with line breaks, written with `NCHAR` joins and
       the `nvarchar(max)` cast; a key with those characters in its THROW message, and one with a quote straddling the
       200-point cut;
@@ -1752,15 +1770,17 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     subnormal real, a real key column, and a varchar key and guarded column under SQL_Latin1_General_CP1_CI_AS holding
     'ss' beside 'ß' and 'ss' + CR beside 'ß' + CR, only the 'ss' rows changed, and a non-ASCII key in a
     Windows-collation varchar column whose code page differs from the database default, included), compare their
-    SELECTs, script, run the script on the target, then compare again and expect no differences. Run it in both
-    directions, and under a non-English language and DATEFORMAT. Then run a script of the wrong direction, once whole
-    and once with only INSERT ticked (with SET IDENTITY_INSERT, so its THROW comes inside the IDENTITY_INSERT body and
-    exercises the CATCH), and one whose deleted row was changed after the comparison, and expect the check's THROW, with
-    the target unchanged and, in the same session, an ordinary INSERT into the identity table succeeding
-    (IDENTITY_INSERT was turned off). Run one failing-check script with SET IDENTITY_INSERT as a scratch-database user
-    without ALTER on the table (`EXECUTE AS USER`), whose check THROWs before the ON and whose CATCH's OFF fails too,
-    and expect the check's own message, so the CATCH's inner TRY is checked by behaviour and not only by the golden's
-    text. It is a new live `Suite(...)` with a `LiveGroups.Suites` entry, and its CI seconds go in docs/ci.md's table.
+    SELECTs, script, run the script on the target, then compare again and expect no differences. A third table pairs an
+    nvarchar column holding '中' with a Latin1_General varchar target column, and expects the `unwritable` refusal, since
+    an INSERT there stores '?' without an error. Run it in both directions, and under a non-English language and
+    DATEFORMAT. Then run a script of the wrong direction, once whole and once with only INSERT ticked (with SET
+    IDENTITY_INSERT, so its THROW comes inside the IDENTITY_INSERT body and exercises the CATCH), and one whose deleted
+    row was changed after the comparison, and expect the check's THROW, with the target unchanged and, in the same
+    session, an ordinary INSERT into the identity table succeeding (IDENTITY_INSERT was turned off). Run one
+    failing-check script with SET IDENTITY_INSERT as a scratch-database user without ALTER on the table (`EXECUTE AS
+    USER`), whose check THROWs before the ON and whose CATCH's OFF fails too, and expect the check's own message, so the
+    CATCH's inner TRY is checked by behaviour and not only by the golden's text. It is a new live `Suite(...)` with a
+    `LiveGroups.Suites` entry, and its CI seconds go in docs/ci.md's table.
   - vitest: a `results-port.test.ts` case sending every new `results.scriptDiff` member (`viewId`, `identity`,
     `indexReasons`, `maxLines`, `rowsChoice`) and checking each reaches the backend request, as the diff layout's case
     does, a case sending an answer with every optional member (`differencesKey`, the look-alike counts,
@@ -1792,9 +1812,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     option's differing entries (a replace with its cause, any other change in the plain form, All differences and a
     same-count change found by `differencesKey` included), a swap while open inverting the form's direction and
     relabelling it, a swap of differently ordered columns keeping `identity` and `indexReasons` on the same named
-    columns, index warnings shown and said only once the suggestion list closes, a held warning dropped when the name
-    changed, an opening warning not said over the focus landing on Target table, the index line in the replay, and
-    replayed as it stands, cleared by a change in the form, Script or a switch, its count dropped after a failed
+    columns, a sort while Script runs still writing the script from the held view, a `VIEW_NOT_FOUND` taken as a change
+    of the chosen rows, index warnings shown and said only once the suggestion list closes, a held warning dropped when
+    the name changed, an opening warning not said over the focus landing on Target table, the index line in the replay,
+    and replayed as it stands, cleared by a change in the form, Script or a switch, its count dropped after a failed
     preview, the changed line cleared the same way, the unticked line's sentences per kind of column, an unticked
     identity column's INSERT clause, closing during a replace leaving it running, the remembered position kept per
     holder while it is on a display, Script's description while generating, the stop sentence and Script available after
@@ -2003,7 +2024,8 @@ would leave out the sort, and "Rows" is already the toolbar's All rows / Changes
   - Closing a view returns its charge at once (`ResultStore.CloseViews`, and `AddView`'s eviction), so the diff does not
     keep a closed view's order uncharged. As search, profile, distinct and pivot do, it checks `store.HasView` again
     after its read and answers `VIEW_NOT_FOUND` when a view closed meanwhile, which the renderer's one re-ask below
-    covers.
+    covers. The renderer holds both input views (`ResultsService.holdView`) until the diff answers, so a sort of an
+    input meanwhile never closes them, and the re-ask covers only the backend evicting a view past a result's 8.
   - A view of another result, or a closed one, answers `VIEW_NOT_FOUND`. A result keeps at most 8 views, so a view
     closed meanwhile is re-asked by the renderer, once; a second `VIEW_NOT_FOUND` is the comparison's failure.
   - A remote view answers `REMOTE_RESULT`, BQ-3c-1's case.
@@ -2039,7 +2061,8 @@ would leave out the sort, and "Rows" is already the toolbar's All rows / Changes
   `6_compareactions` and the palette. No setting (Q9).
 - **Tests:**
   - `DiffChecks`: view reads (filtered, sorted, Row position over view order, packed inputs through the inverse), stored
-    row numbers, refusals, working memory counted, and a view closed mid-run answering `VIEW_NOT_FOUND`.
+    row numbers, refusals, working memory counted, and a view closed mid-run answering `VIEW_NOT_FOUND`; vitest: both
+    input views held until the diff answers, a sort of an input during the diff still reading the held views.
   - vitest: a `results-port.test.ts` case sending `leftView` and `rightView` and checking both reach the backend
     request, and a `worker-core` case for the view ids, since a dropped member would compare whole results under an "(as
     shown)" caption; the popover choice and counts, memory, `comparisonOutOfDate` (filters changed, same filters, sort
