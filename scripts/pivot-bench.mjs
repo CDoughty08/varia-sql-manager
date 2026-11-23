@@ -196,7 +196,7 @@ try {
   client = await page.context().newCDPSession(page)
   await client.send('Performance.enable')
   step = 'connect'
-  await connectLive(page, expect)
+  await connectLive(app, page, expect)
 
   // The reported shape: two results of one int column with repeats and NULLs, a Count of rows by that column.
   await pivotCase('reported', narrow(reported, 40) + '\n' + narrow(reported, 40), 2, 'status', { detail: `2 results of ${reported.toLocaleString('en-US')} rows, 40 values and NULL` })

@@ -2,7 +2,7 @@
 // text, datetime2(7), decimal, uniqueidentifier, a longer text, bit and an int that is NULL in every fifth row, with the
 // text SSMS shows for each, so a copy or a saved file can be compared exactly. The rows come from a cross join every
 // version from 2016 has (about 2,600² rows on SQL Server 2022), cheap for the server to produce.
-import { toolbarButton } from './ui.mjs'
+import { connectDialogWindow, submitConnect, toolbarButton } from './ui.mjs'
 
 export const liveColumns = ['id', 'name', 'created', 'amount', 'key', 'note', 'active', 'score']
 
@@ -23,11 +23,10 @@ export function liveRow(n) {
 }
 
 /** Fills the Connect dialog for VARIA_TEST_SQL_SERVER (SQL authentication when a test login is set) and connects. */
-export async function connectLive(page, expect) {
+export async function connectLive(application, page, expect) {
   const user = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
   await toolbarButton(page, 'Connect').click()
-  const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
-  await expect(dialog.getByText('Loading saved connections…')).toHaveCount(0)
+  const { window, dialog } = await connectDialogWindow(application)
   await dialog.getByLabel('Server Name', { exact: true }).fill(process.env.VARIA_TEST_SQL_SERVER)
   if (user) {
     await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
@@ -35,6 +34,5 @@ export async function connectLive(page, expect) {
     await dialog.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
   } else await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
   await dialog.getByLabel('Trust server certificate', { exact: true }).check()
-  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(dialog).toHaveCount(0, { timeout: 30000 })
+  await submitConnect(window, dialog, { timeout: 30000 })
 }

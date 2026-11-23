@@ -2,7 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { activeDocumentName, backendReady, caretStatus, closeDocumentButton, documentTab, documentTabFullyShown, documentTabs, editorGroups, editorGroupTabs, editorTextbox, emptyQueryStripPoint, environmentPill, floatingEditorGroups, inputModeStatus, menubar, newQueryInGroupButton, part, partiallyVisibleDocumentTab, pinDocumentButton, planCanvas, planViewer, queryBarButton, queryScope, queryServer, quickInput, quickInputActive, selectOpenDocument, tabNameBox, tabShelf, tabShelfRows, tabStackFeedback, tabStackScrollTop, toolbarButton, unsavedMark, expectEditorShown } from './fixtures/ui.mjs'
+import { activeDocumentName, backendReady, caretStatus, closeDocumentButton, connectDialogWindow, documentTab, documentTabFullyShown, documentTabs, editorGroups, editorGroupTabs, editorTextbox, emptyQueryStripPoint, environmentPill, floatingEditorGroups, inputModeStatus, menubar, newQueryInGroupButton, part, partiallyVisibleDocumentTab, pinDocumentButton, planCanvas, planViewer, queryBarButton, queryScope, queryServer, quickInput, quickInputActive, selectOpenDocument, submitConnect, tabNameBox, tabShelf, tabShelfRows, tabStackFeedback, tabStackScrollTop, toolbarButton, unsavedMark, expectEditorShown } from './fixtures/ui.mjs'
 
 // SSMS's editing commands in the real query editor, over the fake backend (no SQL Server): Comment and Uncomment
 // Selection, Make Uppercase and Lowercase, Increase and Decrease Line Indent from Edit › Advanced, Go To Line, Bookmarks
@@ -1235,14 +1235,11 @@ try {
   await page.keyboard.press('Control+N')
   await expect(documentTabs(page).getByRole('tab')).toHaveCount(dockedQueries + 1)
   await toolbarButton(page, 'Connect').click()
-  const connectDialog = page.getByRole('dialog', { name: 'Connect', exact: true })
+  const { window: connectWin, dialog: connectDialog } = await connectDialogWindow(application)
   await connectDialog.getByLabel('Server Name', { exact: true }).fill('narrow-tab-server')
   await connectDialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  const customProperties = connectDialog.getByRole('button', { name: 'Custom Properties', exact: true })
-  if (await customProperties.getAttribute('aria-expanded') !== 'true') await customProperties.click()
   await connectDialog.getByLabel('Environment', { exact: true }).selectOption('Production')
-  await connectDialog.getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(connectDialog).toHaveCount(0)
+  await submitConnect(connectWin, connectDialog)
   const narrowName = await activeDocumentName(page), narrowTab = documentTab(page, narrowName)
   await expect(environmentPill(narrowTab, 'tab')).toHaveText('PROD')
   await setText('SELECT 1')

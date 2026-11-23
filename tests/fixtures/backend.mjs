@@ -37,6 +37,9 @@
 //   ignore-eof-<generation>  the same for that generation only
 //   spawns.jsonl        one { pid } line per process started
 //   cancels.jsonl       one { method } line per entra-wait request a CANCEL frame ended
+// A BigQuery connect (provider bigquery; main sends it only in emulator mode, VARIA_TEST_BIGQUERY_ENDPOINT, so no credential is
+// involved) answers as the emulator's anonymous account, lists the datasets of bigQueryIndex, and language.lookup answers from
+// that fixed index (project varia-fake, datasets sales and staging) as the real backend's BigQueryLookup does.
 // Server 'entra-wait' connects (and lists databases) as a Microsoft Entra MFA sign-in waiting for the browser does: only a
 // CANCEL frame (the Connect dialog's Stop) ends it, answered CANCELLED.
 // live.subscribe for debug.synthetic (docs/ipc.md, Live subscriptions) runs as the real backend's test source does, with
@@ -336,6 +339,40 @@ const workbenchDatabases = [
 // With the spaced-databases cue, names that differ only in their spaces, as SQL Server allows: a list that took an
 // option's text, whose spaces are collapsed and trimmed, would name another database or none.
 const spacedDatabases = ['Sales  2024', 'Sales 2024', ' lead', 'tab\there'].map(name => ({ name, isSystem: false, isSnapshot: false }))
+// BigQuery's fake Search Objects index for language.lookup: project → dataset → object, columns by field path in schema order.
+const bigQueryIndex = {
+  'varia-fake': {
+    sales: {
+      orders: { kind: 'bqTable', rows: 1200, bytes: 5 * 1024 * 1024, partitioning: 'DAY on placed', columns: [
+        { name: 'id', type: 'INT64', nullable: false }, { name: 'customer', type: 'STRING', nullable: true }, { name: 'placed', type: 'TIMESTAMP', nullable: true },
+        { name: 'address', type: 'STRUCT', subtype: 'struct', nullable: true }, { name: 'address.city', type: 'STRING', nullable: true }] },
+      customers: { kind: 'bqTable', rows: 40, bytes: 4096, columns: [{ name: 'id', type: 'INT64', nullable: false }, { name: 'name', type: 'STRING', nullable: true }] },
+      daily: { kind: 'bqView', columns: [{ name: 'day', type: 'DATE', nullable: true }, { name: 'total', type: 'NUMERIC', nullable: true }] }
+    },
+    staging: {}
+  }
+}
+const bigQueryNamed = (names, name) => names.find(entry => entry === name) ?? names.find(entry => entry.toLowerCase() === name.toLowerCase())
+function bigQueryLookup(request) {
+  const [projectName, datasetName, objectName] = request.path
+  const keep = name => request.prefix === undefined || (request.exact ? name.toLowerCase() === request.prefix.toLowerCase() : name.toLowerCase().startsWith(request.prefix.toLowerCase()))
+  const answer = (path, entries, object) => {
+    const kept = entries.filter(entry => keep(entry.name)), limit = request.limit ?? 500
+    return { state: 'ready', path, items: kept.slice(0, limit), truncated: kept.length > limit, ...object ? { object } : {} }
+  }
+  if (projectName === undefined) return answer([], Object.keys(bigQueryIndex).map(name => ({ name, kind: 'bqProject' })))
+  const project = bigQueryNamed(Object.keys(bigQueryIndex), projectName)
+  if (!project) return { state: 'absent', path: request.path, items: [], truncated: false }
+  if (datasetName === undefined) return answer([project], Object.keys(bigQueryIndex[project]).sort().map(name => ({ name, kind: 'bqDataset' })))
+  const dataset = bigQueryNamed(Object.keys(bigQueryIndex[project]), datasetName)
+  if (!dataset) return { state: 'absent', path: request.path, items: [], truncated: false }
+  const objects = bigQueryIndex[project][dataset]
+  if (objectName === undefined) return answer([project, dataset], Object.keys(objects).sort().map(name => ({ name, kind: objects[name].kind })))
+  const name = bigQueryNamed(Object.keys(objects), objectName)
+  if (!name) return { state: 'ready', path: [project, dataset], items: [], truncated: false }
+  const { columns, kind, ...facts } = objects[name]
+  return answer([project, dataset, name], columns.map(column => ({ ...column, kind: 'bqColumn' })), { name, kind, detailed: true, ...facts })
+}
 const databaseRows = async () => await controlled('spaced-databases') ? [...workbenchDatabases, ...spacedDatabases] : workbenchDatabases
 const serverRoles = ['##MS_DatabaseConnector##', '##MS_LoginManager##', 'bulkadmin', 'dbcreator', 'public', 'securityadmin', 'serveradmin', 'sysadmin']
 // Object Explorer's fixture tree (explorer.children), on a SQL Server 2022 box: the catalogue's static folders, and
@@ -1856,6 +1893,50 @@ function agentJobDoc(job) {
   if (!agentJobDocs.has(job.id)) agentJobDocs.set(job.id, { description: `${job.name} maintenance.`, owner: 'sa', emailLevel: 2, emailOperator: 'DBA Team', pageLevel: 0, pageOperator: '', netSendLevel: 0, netSendOperator: '', eventLogLevel: 2, deleteLevel: 0, version: 3, modified: '2026-11-10T09:15:30.120', alerts: [{ id: 7, name: `${job.name} failed`, enabled: true, severity: 0, messageId: 50001 }] })
   return agentJobDocs.get(job.id)
 }
+// Alerts and operators (AG-7) on the fake server: two operators, one alert notifying DBA Team by e-mail. A save applies its notification
+// changes and new alerts, and every document reads the lists again.
+const agentMail = { checked: true, xps: true, profiles: 1, sysadmin: true, useDatabaseMail: true, agentProfile: 'Varia Mail' }
+const day = { start: 80000, end: 180000 }
+const agentOperatorRows = [
+  { id: 1, name: 'DBA Team', enabled: true, email: 'dba@example.test', pager: 'dba-pager@example.test', netSend: '', pagerDays: 62, weekday: day, saturday: day, sunday: day },
+  { id: 2, name: 'On Call', enabled: true, email: 'oncall@example.test', pager: '', netSend: '', pagerDays: 127, weekday: day, saturday: day, sunday: day }
+]
+const agentAlertRows = [{ id: 21, name: 'Severity 017', enabled: true, kind: 'event', messageId: 0, severity: 17, delay: 60, includeIn: 1, message: '', jobId: '', jobName: '', database: '', keyword: '' }]
+const agentNotifications = [{ alertId: 21, operatorId: 1, methods: 1 }]
+const alertRow = alert => ({ id: alert.id, name: alert.name, enabled: alert.enabled, kind: alert.kind, messageId: alert.messageId, severity: alert.severity })
+const agentObjectsBase = () => ({ login: 'sa', sysadmin: true, platform: 'windows', mail: agentMail })
+function agentAlertDocument(params) {
+  const alert = params.target.kind === 'agent' ? undefined : agentAlertRows.find(row => row.name === params.target.name)
+  if (params.target.kind !== 'agent' && !alert) return { elapsedMs: 1, error: { code: 'NOT_FOUND', message: `The alert ${params.target.name} no longer exists.`, retryable: false } }
+  const operators = agentOperatorRows.map(row => ({ name: row.name, enabled: row.enabled, email: !!row.email, pager: !!row.pager, netSend: false, pagerDays: row.pagerDays, weekday: row.weekday, saturday: row.saturday, sunday: row.sunday }))
+  return { agentAlertDocument: {
+    ...agentObjectsBase(), operators, databases: ['master', 'Sales'], jobs: agentJobs.map(job => ({ id: job.id, name: job.name })),
+    notifications: alert ? agentNotifications.filter(row => row.alertId === alert.id).map(row => ({ operator: agentOperatorRows.find(op => op.id === row.operatorId).name, methods: row.methods })) : [],
+    ...alert ? { alert: { ...alert, condition: '', wmiNamespace: '', wmiQuery: '', occurrences: 0 } } : {}
+  }, elapsedMs: 1 }
+}
+function agentOperatorDocument(params) {
+  const operator = params.target.kind === 'agent' ? undefined : agentOperatorRows.find(row => row.name === params.target.name)
+  return { agentOperatorDocument: { ...agentObjectsBase(), alerts: agentAlertRows.map(alertRow), notifications: agentNotifications, jobs: [], ...operator ? { operator } : {} }, elapsedMs: 1 }
+}
+const agentOperatorsGrid = () => ({ agentOperators: { ...agentObjectsBase(), operators: agentOperatorRows, alerts: agentAlertRows.map(alertRow), notifications: agentNotifications, jobs: [] }, elapsedMs: 1 })
+function agentObjectSave(params) {
+  if (params.action === 'agentAlert') {
+    const save = params.agentAlert
+    let alert = agentAlertRows.find(row => row.id === params.agentObjectId)
+    if (!alert) { alert = { id: 21 + agentAlertRows.length, name: save.name, enabled: true, kind: 'event', messageId: save.messageId ?? 0, severity: save.severity ?? 0, delay: save.delay ?? 60, includeIn: save.includeIn ?? 1, message: save.message ?? '', jobId: save.jobId ?? '', jobName: agentJobs.find(job => job.id === save.jobId)?.name ?? '', database: '', keyword: '' }; agentAlertRows.push(alert) }
+    else Object.assign(alert, Object.fromEntries(Object.entries(save).filter(([key]) => key in alert)))
+    for (const change of save.notifications ?? []) {
+      const operator = agentOperatorRows.find(row => row.name === change.name)
+      if (!operator) continue
+      const at = agentNotifications.findIndex(row => row.alertId === alert.id && row.operatorId === operator.id)
+      if (change.change === 'delete') { if (at >= 0) agentNotifications.splice(at, 1) }
+      else if (at >= 0) agentNotifications[at].methods = change.methods
+      else agentNotifications.push({ alertId: alert.id, operatorId: operator.id, methods: change.methods })
+    }
+  }
+  return { steps: [], messages: [], elapsedMs: 1 }
+}
 // Each job's steps with their whole content (AG-6b), kept per job so a steps save renumbers them as msdb would.
 const agentStepContent = (id, name) => ({ id, name, subsystem: 'TSQL', command: `-- ${name}\nSELECT ${id};`, flags: 0, cmdexecSuccessCode: 0, onSuccessAction: 3, onSuccessStepId: 0, onFailAction: 2, onFailStepId: 0,
   server: '', databaseName: 'master', databaseUserName: '', retryAttempts: 0, retryInterval: 0, osRunPriority: 0, outputFileName: '', proxyId: 0 })
@@ -2046,7 +2127,7 @@ function agentJobScheduleSave(jobId, save) {
 const historyColumns = table => liveProbes['agent.history.list'].tables[table].columns.map(spec => ({ name: spec.name, dataType: spec.dataType, wire: 'text', nullable: true, ...spec.role ? { role: spec.role } : {} }))
 const agentHistory = [
   { job: agentJobs[0].id, instance: 12, outcome: 0, date: '2026-11-15 02:30:00', message: 'The job failed.  The Job was invoked by Schedule 1 (Nightly).  The last step to run was step 2 (Load).',
-    steps: [{ instance: 10, id: 1, name: 'Truncate', outcome: 1, message: 'Executed as user: sa. The step succeeded.' }, { instance: 11, id: 2, name: 'Load', outcome: 0, message: 'Executed as user: sa. Violation of PRIMARY KEY constraint. The step failed.' }] },
+    steps: [{ instance: 10, id: 1, name: 'Truncate', outcome: 1, message: 'Executed as user: sa. The step succeeded.' }, { instance: 11, id: 2, name: 'Load', outcome: 0, message: 'Executed as user: sa. Violation of PRIMARY KEY constraint. Package execution on IS Server failed. Execution ID: 48213, Execution Status:4. The step failed.' }] },
   { job: agentJobs[0].id, instance: 8, outcome: 1, date: '2026-11-14 02:30:00', message: 'The job succeeded.  The Job was invoked by Schedule 1 (Nightly).',
     steps: [{ instance: 6, id: 1, name: 'Truncate', outcome: 1, message: 'Executed as user: sa. The step succeeded.' }, { instance: 7, id: 2, name: 'Load', outcome: 1, message: 'Executed as user: sa. The step succeeded.' }] },
   { job: agentJobs[1].id, instance: 5, outcome: 1, date: '2026-11-15 01:00:00', message: 'The job succeeded.  The Job was invoked by User sa.',
@@ -2071,10 +2152,14 @@ function agentHistorySample(live, probe) {
   const stepRow = (step, run) => [String(step.id), step.name, agentOutcomes[step.outcome], run.date, '00:00:01', '0', '0', '0', step.message, String(step.instance), run.job.toUpperCase(), historyTones[step.outcome] ?? null]
   const steps = storeResult({ columns: historyColumns(1), rows: selected ? [stepRow({ id: 0, name: '(Job outcome)', outcome: selected.outcome, message: selected.message, instance: selected.instance }, selected), ...selected.steps.map(step => stepRow(step, selected))] : [] }, 0)
   const jobs = storeResult({ columns: historyColumns(2), rows: [...agentJobs].sort((a, b) => a.name.localeCompare(b.name)).map(job => [job.id.toUpperCase(), job.name, 'sa', agentRunning(job) ? 'Yes' : 'No', job.enabled ? 'Yes' : 'No']) }, 0)
+  // The job document's History (AG-6d) asks for one job's usual durations: every run here takes 2 s and each step 1 s.
+  const succeeded = args.usual ? agentHistory.filter(run => named(run) && run.outcome === 1) : []
+  const usualSteps = [...new Set(succeeded.flatMap(run => run.steps.map(step => step.id)))].sort((a, b) => a - b)
+  const usual = storeResult({ columns: historyColumns(3), rows: succeeded.length ? [['0', '2', String(succeeded.length)], ...usualSteps.map(id => [String(id), '1', String(succeeded.length)])] : [] }, 0)
   // Each table keeps its last two revisions and retires its own older ones, as the backend does.
-  live.revisions.push(runs.resultId, steps.resultId, jobs.resultId)
-  live.historyRevisions ??= [[], [], []]
-  const retiredOf = [runs, steps, jobs].map((result, table) => {
+  live.revisions.push(runs.resultId, steps.resultId, jobs.resultId, usual.resultId)
+  live.historyRevisions ??= [[], [], [], []]
+  const retiredOf = [runs, steps, jobs, usual].map((result, table) => {
     const list = live.historyRevisions[table]
     list.push(result.resultId)
     const gone = list.length > 2 ? list.splice(0, list.length - 2) : []
@@ -2085,7 +2170,7 @@ function agentHistorySample(live, probe) {
   const tracked = track && { seq: track.seq, rows: track.keys.map(wanted => kept.findIndex(run => key(run) === wanted.toLowerCase())) }
   return {
     status: [{ id: 'historyMaxRows', value: 1000 }, { id: 'historyMaxRowsPerJob', value: 100 }],
-    tables: [runs, steps, jobs].map((result, table) => ({ table, descriptor: describe(result), revision: n, ...(retiredOf[table].length ? { retired: retiredOf[table] } : {}), ...(table === 0 && tracked ? { tracked } : {}) }))
+    tables: [runs, steps, jobs, usual].map((result, table) => ({ table, descriptor: describe(result), revision: n, ...(retiredOf[table].length ? { retired: retiredOf[table] } : {}), ...(table === 0 && tracked ? { tracked } : {}) }))
   }
 }
 function agentHistoryMessage(params) {
@@ -2191,6 +2276,11 @@ async function workbench(id, method, params, credit) {
   }
   switch (method) {
     case 'system.health': return respond(id, { protocolVersion: 2, runtime: 'fake', platform: process.platform, smoVersion: 'fake', sqlClientVersion: 'fake' })
+    case 'bigquery.account': return respond(id, { kind: 'emulator', account: 'Anonymous (emulator)' })
+    case 'language.lookup': {
+      if (!workbenchConnections.get(params.connectionId)?.bigQuery) return fail(id, 'UNSUPPORTED_PROVIDER', 'language.lookup needs a BigQuery connection.')
+      return respond(id, { index: 'ready', answers: params.requests.map(bigQueryLookup) })
+    }
     case 'language.status': {
       if (await controlled('language-status-fail')) return fail(id, 'BACKEND_UNAVAILABLE', 'SQL language provider availability check failed.')
       const configured = await controlled('language-enabled')
@@ -2263,6 +2353,11 @@ async function workbench(id, method, params, credit) {
       return respond(id, { version: '', build: '', notices: [], statements: [] })
     }
     case 'connections.connect': {
+      if (params.provider === 'bigquery') {
+        const info = { id: crypto.randomUUID(), server: params.project, database: params.dataset ?? '', serverVersion: 'BigQuery', login: 'Anonymous (emulator)', principalId: 'bigquery:anonymous:emulator', providerId: 'bigquery', ...params.displayName ? { displayName: params.displayName } : {} }
+        workbenchConnections.set(info.id, { ...info, bigQuery: true })
+        return respond(id, info)
+      }
       if (params.server === 'entra-wait') return entraWait(id, method)
       if (params.server === 'password-check' && !params.trustServerCertificate && await controlled('untrusted-certificate')) {
         return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: 'The certificate chain was issued by an authority that is not trusted.', details: { number: -2146893019, state: 0, class: 20, server: params.server, reason: 'certificate' } } })
@@ -2279,6 +2374,7 @@ async function workbench(id, method, params, credit) {
       return respond(id, info)
     }
     case 'connections.databases':
+      if (params.provider === 'bigquery') return respond(id, Object.keys(bigQueryIndex[params.project] ?? {}).sort().map(name => ({ name, isSystem: false, isSnapshot: false })))
       if (params.server === 'entra-wait') return entraWait(id, method)
       if (params.server === 'password-check' && (params.password !== 'correct-horse-marker' || await controlled('reject-passwords'))) return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: "Login failed for user 'reader'.", details: { number: 18456, state: 8, class: 14, server: params.server } } })
       return respond(id, await databaseRows())
@@ -2529,6 +2625,9 @@ async function workbench(id, method, params, credit) {
           // As the backend answers a job msdb no longer has: an error in the result, not a failed request.
           return respond(id, value ?? { elapsedMs: 1, error: { code: 'NOT_FOUND', message: `The job ${params.target.name} no longer exists.`, retryable: false } })
         }
+        case 'agentAlert': return respond(id, agentAlertDocument(params))
+        case 'agentOperator': return respond(id, agentOperatorDocument(params))
+        case 'agentOperators': return respond(id, agentOperatorsGrid())
         // The Schedules document and the job document's Schedules section (AG-6c).
         case 'agentSchedules': return respond(id, agentSchedulesDescribe(params))
         case 'agentProxy': return respond(id, agentProxyDocument(params))
@@ -2553,6 +2652,8 @@ QuitWithRollback:
 EndSave:
 GO
 `, database: 'msdb', warnings: [] })
+        case 'agentAlert':
+        case 'agentOperator': return respond(id, { text: 'USE [msdb]\nGO\nEXEC msdb.dbo.sp_update_alert @name = N\'Severity 017\'\nGO\n', database: 'msdb', warnings: [] })
         // The proxy and Credential documents' scripts write <secret>; the request never carries one.
         case 'agentProxy': return respond(id, { text: `USE [msdb]\nGO\nEXEC msdb.dbo.sp_${params.target.kind === 'agent' ? 'add' : 'update'}_proxy @proxy_name=N'${params.agentProxy.name ?? params.target.name}'\nGO\n`, database: 'msdb', warnings: [] })
         case 'credential': return respond(id, { text: `USE [master]\nGO\n${params.target.kind === 'server' ? 'CREATE' : 'ALTER'} CREDENTIAL [${params.credential.name ?? params.target.name}] WITH IDENTITY = N'${params.credential.identity}', SECRET = <secret>\nGO\n`, database: 'master', warnings: [] })
@@ -2568,6 +2669,7 @@ GO
       if (params.action === 'credential') return respond(id, credentialSave(params))
       if (params.target?.kind === 'agentJob') return respond(id, agentJobVerb(params))
       if (params.action === 'deleteJobHistory') return respond(id, agentDeleteHistory(params))
+      if (params.action === 'agentAlert' || params.action === 'agentOperator' || params.action === 'notifyOperator' || params.action === 'addRecommendedAlerts') return respond(id, agentObjectSave(params))
       for (const [step, percent] of [[0, 25], [0, 100], [0, 101], [1, 40]]) write(FrameKind.EVENT, id, 0, { type: 'action.progress', step, percent })
       return respond(id, { steps: [{ status: 'done', title: 'Drop the object' }], messages: [], elapsedMs: 1 })
     case 'tables.columns': return respond(id, { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false })

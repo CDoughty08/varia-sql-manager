@@ -12,6 +12,11 @@ export const bigQuerySettings = [
     description: 'After a pause in typing, a free BigQuery dry run marks the query\'s error at its line and column and updates the estimate beside Execute. A dry run sends the query text to Google, as Execute does; it runs nothing and bills nothing. Off, Execute still dry-runs the query for its estimate.'
   },
   {
+    key: 'textEditor.googleSql.bulkIndex', page: 'textEditor.googleSql.general', label: 'Read the search index’s details with billed INFORMATION_SCHEMA queries', type: 'boolean', default: false, varia: true,
+    keywords: ['bigquery', 'index', 'search objects', 'information_schema', 'bulk', 'metadata', 'columns', 'cost'],
+    description: 'A full build of a BigQuery connection\'s Search Objects index reads columns, view text and routine bodies with three region-scoped INFORMATION_SCHEMA queries per location instead of one free call per object, which is faster for large projects. BigQuery bills each query at least 10 MiB per view it reads, never from cache, so every build first makes a free estimate and goes through the cost prompts as Execute does: it asks when the estimate is above the threshold or may be low, and the build\'s queries together never bill more than the estimate. Off, the index reads only free metadata calls.'
+  },
+  {
     key: 'queryExecution.bigQuery.costPrompt', page: 'queryExecution.bigQuery.cost', group: 'Prompt', label: 'Ask before running a query that processes more than the threshold', type: 'boolean', default: true, varia: true,
     applies: 'nextExecution', keywords: ['bigquery', 'cost', 'bytes', 'estimate', 'confirm'],
     description: 'Execute dry-runs a BigQuery query first (free) and asks before running one estimated to process more than the threshold. A connection where you chose "Don\'t ask again" in the prompt never asks; its Advanced Properties turn the prompt back on.'

@@ -7,7 +7,10 @@ import { scriptCommandEntries, scriptUnavailableHint } from '../scripting/catalo
 import { operationsCommandEntries } from '../ssis/operations.ts'
 import { jobActivityCommandEntries } from '../agent/jobs.ts'
 import { agentJobCommandEntries } from '../actions/agent-job.ts'
+import { agentAlertCommandEntries } from '../actions/agent-alert.ts'
+import { agentOperatorCommandEntries } from '../actions/agent-operator.ts'
 import { agentScheduleCommandEntries } from '../actions/agent-schedule.ts'
+import { createFromCommandEntries } from '../agent/create-from.ts'
 import { agentProxyCommandEntries } from '../actions/agent-proxy.ts'
 import { logViewerCommandEntries } from '../agent/history.ts'
 import type { IconId } from '../icons.ts'
@@ -470,7 +473,11 @@ export const commandCatalog = {
   },
   'explorer.newQuery': {
     title: 'New Query', category: 'Object Explorer', icon: 'new-file', precondition: '!documentBusy', unavailableHint: 'Select a server or database in Object Explorer.', providers: both,
-    menus: [{ menu: 'explorer.context', group: '1_query', order: 2, mnemonic: 'q', when: "(explorerNode == 'server' && !explorerServerLost) || explorerNode == 'database'" }]
+    menus: [
+      { menu: 'explorer.context', group: '1_query', order: 2, mnemonic: 'q', when: "(explorerNode == 'server' && !explorerServerLost) || explorerNode == 'database'" },
+      // A BigQuery Search Objects result: a GoogleSQL query on its connection, in its dataset when that is in the billing project.
+      { menu: 'search.hit.context', group: '1_query', order: 1, mnemonic: 'q', when: 'searchHitBigQuery' }
+    ]
   },
   // Select Top 1000 Rows, Rename and Delete: generated from src/shared/actions/catalog.ts. Each acts on its menu's node,
   // else the selection; explorer.selectTopRows keeps PR4's id.
@@ -492,11 +499,16 @@ export const commandCatalog = {
   ...jobActivityCommandEntries(),
   // The SQL Server Agent job document (AG-6a): Open Job, New Job and the document's verbs, from src/shared/actions/agent-job.ts.
   ...agentJobCommandEntries(),
+  // The alert and operator documents and the Operators and notifications grid (AG-7): from src/shared/actions/agent-alert.ts and agent-operator.ts.
+  ...agentAlertCommandEntries(),
+  ...agentOperatorCommandEntries(),
   // The SQL Server Agent proxy and credential documents (AG-8b), from src/shared/actions/agent-proxy.ts.
   ...agentProxyCommandEntries(),
   ...logViewerCommandEntries(),
   // The Schedules document (AG-6c): Manage Schedules, New Schedule… and the document's verbs, from src/shared/actions/agent-schedule.ts.
   ...agentScheduleCommandEntries(),
+  // Create Job Like This (AG-6e): from src/shared/agent/create-from.ts.
+  ...createFromCommandEntries(),
   // Script as › <verb> To › <destination>: 30 commands generated from src/shared/scripting/catalog.ts, which keep the
   // table menu's explorer.scriptCreateTo* ids. Each acts on its menu's node, else the selection.
   ...scriptCommandEntries(),
@@ -561,7 +573,7 @@ export const commandCatalog = {
     precondition: "backendReady && explorerSelectionKind == 'bqTable' && !documentBusy", unavailableHint: 'Select a BigQuery table in Object Explorer.',
     menus: [
       { menu: 'explorer.context', group: '1_query', order: 1, mnemonic: 'w', when: "explorerNode == 'bqTable' && !explorerServerLost" },
-      { menu: 'search.hit.context', group: '1_query', order: 1, mnemonic: 'p', when: "explorerSelectionKind == 'bqTable'" }
+      { menu: 'search.hit.context', group: '1_query', order: 2, mnemonic: 'p', when: "explorerSelectionKind == 'bqTable'" }
     ]
   },
   // BigQuery's Properties: a table-like object's facts from tables.get in a read-only document tab.
@@ -1272,6 +1284,13 @@ export const commandCatalog = {
   'output.loadIntoMemory': {
     title: 'Load Result into Memory', category: 'Query', icon: 'cloud-download', keywords: ['bigquery', 'windowed', 'load', 'memory', 'remote', 'rows', 'grid', 'result'], providers: ['bigquery'], methods: ['results.remoteQuery'],
     menus: [{ menu: 'output.tools', group: '2_view', order: 5, title: 'Load into Memory', mnemonic: 'i' }]
+  },
+  // Some rows of a windowed BigQuery result read into a new result in memory (results.remoteQuery `sample`): its first rows,
+  // free, or a random sample, billed after its estimate. The dialog asks how many and how. A comparison is never windowed,
+  // so its menu leaves it out (and Match Rows By keeps its M).
+  'output.loadSample': {
+    title: 'Load Sample…', category: 'Query', icon: 'beaker', keywords: ['bigquery', 'windowed', 'sample', 'tablesample', 'random', 'first', 'rows', 'memory', 'remote', 'grid', 'result'], providers: ['bigquery'], methods: ['results.remoteQuery'],
+    menus: [{ menu: 'output.tools', group: '2_view', order: 6, title: 'Load Sample…', mnemonic: 'm', when: '!resultsGridComparison' }]
   },
   'output.transposeSelectedRows': {
     title: 'Transpose Selected Rows', category: 'Query', icon: 'transpose', keywords: ['transpose', 'rotate', 'record', 'selected', 'rows', 'details', 'keep', 'grid'], providers: both,

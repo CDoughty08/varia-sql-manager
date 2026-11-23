@@ -621,9 +621,11 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
   (`SearchPanel`, `ObjectSearchService`), and the header's Search (Ctrl+Q) lists objects only from it (`quickSearch`);
   the tree has no filter of loaded rows. Regex runs only `NonBacktracking` with a match timeout; an unreadable database is
   a skipped value. Never log names, definitions or search text. A BigQuery connection's index (`ObjectSearchService.BigQuery`,
-  `BigQueryIndex.cs`) is the same per-connection index and budget, one read per dataset (`DatabaseIndex.Dataset`), built only
-  from free REST metadata calls (`IBigQueryIndexSource`, through the per-principal limiter) and never a job; DDL marks
-  datasets stale for the next `stale` build (`MarkStale`).
+  `BigQueryIndex.cs`) is the same per-connection index and budget, one read per dataset (`DatabaseIndex.Dataset`), built
+  from free REST metadata calls (`IBigQueryIndexSource`, through the per-principal limiter); DDL marks datasets stale for
+  the next `stale` build (`MarkStale`). Its only jobs are the opt-in billed bulk path (`BigQueryBulk.cs`,
+  `BigQueryService.Bulk.cs`): a full build's `bulk` locations exist only after `bigquery.indexEstimate` and the renderer's
+  cost prompts, and the rows must fill the same entries pass 2 would (`BigQueryIndexChecks.Bulk`).
 - **Script As.** Verbs, titles, URN types and preflight ids live only in `src/shared/scripting/catalog.ts`, options only in
   `options.ts` (regenerate `docs/scripting.md` and embedded `Scripting/scripting-catalog.json`). Its own pool
   (`READ COMMITTED`, `LOCK_TIMEOUT 10000`, database context restored before pooling); SMO only through `ScriptPipeline`
@@ -728,12 +730,13 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
   STRING parameter), held to constant text by `BigQuerySessionChecks`; a session id is kept only when `BigQuerySql.SessionId`
   accepts it, and never leaves the backend.
 - **BigQuery names** (`BqNames`, docs/bigquery.md#object-explorer). BigQuery has no `QUOTENAME` and no identifier parameters,
-  so an object's name reaches SQL text (Script As' templates and CREATE's `INFORMATION_SCHEMA` qualifier) only through
+  so an object's name reaches SQL text (Script As' templates, CREATE's `INFORMATION_SCHEMA` qualifier and the bulk index's
+  region qualifier, `BqNames.RegionPath`) only through
   `BqNames`: its kind's rule, the same as `src/shared/bigquery/names.ts`, then backticks with backslashes and backticks
   escaped; a refused name throws `INVALID_PARAMS` first, and values stay parameters. `BigQueryExplorerChecks` renders every
-  template with hostile names. Object Explorer, Preview Rows and Properties read only BigQuery's free REST metadata calls,
-  through the per-principal limiter (`BigQueryRateLimiter`), and never run a job; Script As › CREATE's billed query goes
-  through the cost prompts first.
+  template with hostile names. Object Explorer, Preview Rows, Properties and Search Objects' details pane read only BigQuery's
+  free REST metadata calls, through the per-principal limiter (`BigQueryRateLimiter`), and never run a job; Script As ›
+  CREATE's billed query, the details pane's Show CREATE Statement and the bulk index go through the cost prompts first.
 - **Dry runs send query text.** `bigquery.dryRun` sends a BigQuery tab's editor text to Google without running it. It is
   the one path that does so automatically, without a user action: after an editing pause, for diagnostics and the estimate
   beside Execute (`BigQueryCostService`). It runs only for a connected BigQuery tab, only after the user edits or executes

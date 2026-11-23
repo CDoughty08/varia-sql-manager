@@ -5,12 +5,14 @@
 // chosen step, Steps reorders, parses, deletes with Undo and saves the renumbering (AG-6b), and New Job from the palette copies an existing
 // job and creates it. The Schedules section (AG-6c) adds a new schedule from a preset and attaches a shared one found by search, both sent
 // with the job's Save; the Schedules document (Manage Schedules) saves the Enabled box at once and a rename under the schedule's guard, and
-// the Agent node's New › Schedule… creates one. Screenshots in Dark and Light go to artifacts/.
+// the Agent node's New › Schedule… creates one. Alerts and operators (AG-7): the new job's New alert for this job creates an alert that runs
+// it and notifies an operator, and the palette's Operators and Notifications grid saves a changed cell as one agentAlert action and sends a
+// test e-mail through the fake backend (nothing is sent). Screenshots in Dark and Light go to artifacts/.
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { chooseExplorerMenuItem } from './fixtures/explorer-tree.mjs'
-import { closeDocumentButton, documentFrame, documentState, documentTab, documentVerb, gridPart, liveGrid, quickInputRows, statusBar, toolbarButton } from './fixtures/ui.mjs'
+import { closeDocumentButton, connectDialogWindow, documentFrame, documentState, documentTab, documentVerb, gridPart, liveGrid, quickInputRows, statusBar, submitConnect, toolbarButton } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -36,12 +38,10 @@ const calls = async method => parseCalls(await readFile(resolve(control, 'calls.
 const saves = async () => (await calls('actions.execute')).filter(call => call.action === 'agentJob')
 async function connect(server) {
   await toolbarButton(page, 'Connect').click()
-  const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
-  await expect(dialog.getByText('Loading saved connections…')).toHaveCount(0)
+  const { window, dialog } = await connectDialogWindow(app)
   await dialog.getByLabel('Server Name', { exact: true }).fill(server)
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(dialog).toHaveCount(0, { timeout: 30000 })
+  await submitConnect(window, dialog, { timeout: 30000 })
 }
 
 try {
@@ -69,6 +69,35 @@ try {
   await documentTab(page, 'Job Properties - Nightly').click()
   await page.screenshot({ path: 'artifacts/agent-job-dark.png' })
   console.log('Open passed: double-click and Enter in Job Activity Monitor open one tab per job with its live state and alerts.')
+
+  step = 'history'
+  // History (AG-6d): one agent.history view of this job with its usual durations; the newest run is selected with its failed step's
+  // message open, and the step's SSIS execution link opens the catalog's messages in a query window (not run).
+  await job('Nightly').getByRole('button', { name: 'History', exact: true }).click()
+  const history = job('Nightly').getByRole('group', { name: 'History', exact: true })
+  await expect(history.getByRole('list', { name: 'Runs', exact: true }).getByRole('button')).toHaveCount(2)
+  await expect(history.getByRole('button', { name: /Failed at step 2/ })).toHaveAttribute('aria-pressed', 'true')
+  await expect(history.getByRole('img', { name: /^Durations of the last 2 runs, 1 failed; usual 2 s$/ })).toBeVisible()
+  expect((await calls('live.subscribe')).find(call => call.source === 'agent.history')).toMatchObject({ args: { jobs: ['a1b2c3d4-0000-4000-8000-000000000001'], usual: true } })
+  await expect(history.getByRole('region', { name: 'Step 2 message', exact: true })).toContainText('Violation of PRIMARY KEY constraint.')
+  await expect(history.getByRole('table', { name: 'Steps of the selected run', exact: true })).toContainText('Truncate')
+  await history.getByRole('button', { name: 'SSIS execution 48213', exact: true }).click()
+  await expect(documentTab(page, 'SSIS execution 48213.sql')).toHaveAttribute('aria-selected', 'true')
+  await closeDocumentButton(page, 'SSIS execution 48213.sql').click()
+  await documentTab(page, 'Job Properties - Nightly').click()
+  // Failed lists only the failed run; an older run picked shows its own steps and no failed message.
+  await history.getByRole('radio', { name: 'Failed', exact: true }).click()
+  await expect(history.getByRole('list', { name: 'Runs', exact: true }).getByRole('button')).toHaveCount(1)
+  await history.getByRole('radio', { name: 'All', exact: true }).click()
+  await history.getByRole('button', { name: /Succeeded/ }).click()
+  await expect(history.getByRole('region', { name: 'Step 2 message', exact: true })).toHaveCount(0)
+  const picked = history.getByRole('group', { name: 'Run of 2026-11-14 02:30:00', exact: true })
+  await expect(picked.getByRole('table', { name: 'Steps of the selected run', exact: true })).toBeVisible()
+  await expect(picked).toContainText('The job succeeded.')
+  await expect(picked).not.toContainText('The job failed.')
+  await page.screenshot({ path: 'artifacts/agent-job-history-dark.png' })
+  await job('Nightly').getByRole('button', { name: 'General', exact: true }).click()
+  console.log('History passed: the job\'s runs with the usual time, the failed step\'s message open, the SSIS execution link and the Failed filter.')
 
   step = 'save'
   // An edit counts on Save; Save sends only what changed with the version it read, then reads the job again.
@@ -220,18 +249,91 @@ try {
   await quickInputRows(page).filter({ hasText: 'Backup' }).click()
   const draft = documentFrame(page, 'Copy of Backup')
   await expect(draft.getByLabel('Description', { exact: true })).toHaveValue('Backup maintenance.')
-  await draft.getByLabel('Name', { exact: true }).fill('Backup weekly')
+  // Copy an existing job opens Create Job Like This (AG-6e): Changes from source holds a Name of its own beside General's.
+  await draft.getByRole('group', { name: 'Job', exact: true }).getByLabel('Name', { exact: true }).fill('Backup weekly')
   await documentVerb(documentFrame(page, 'Backup weekly'), 'Backup weekly', 'Create').click()
   await expect(documentTab(page, 'Job Properties - Backup weekly')).toHaveAttribute('aria-selected', 'true')
   await expect(documentFrame(page, 'Backup weekly').getByRole('status').filter({ hasText: 'The job was created.' })).toBeVisible()
   expect((await saves()).at(-1)).toMatchObject({ target: { kind: 'agent' }, agentJob: { name: 'Backup weekly', description: 'Backup maintenance.', emailLevel: 2, emailOperator: 'DBA Team' } })
   expect((await saves()).at(-1).agentJob.version).toBeUndefined()
 
+  console.log('New Job passed: the palette opens New Job, Copy an existing job fills it, and Create adds the job.')
+
+  step = 'new alert'
+  // The job document's Alerts section opens New Alert with the job as its response; Create sends one agentAlert action on the Agent node.
+  await documentFrame(page, 'Backup weekly').getByRole('button', { name: 'New alert for this job…', exact: true }).click()
+  await expect(documentTab(page, 'New Alert')).toHaveAttribute('aria-selected', 'true')
+  await documentFrame(page, 'New Alert').getByLabel('Name', { exact: true }).fill('Backup weekly late')
+  const alert = documentFrame(page, 'Backup weekly late')
+  await alert.getByLabel('Add an operator', { exact: true }).selectOption('DBA Team')
+  await expect(alert.getByRole('listitem').filter({ hasText: 'DBA Team' })).toBeVisible()
+  await documentVerb(alert, 'Backup weekly late', 'Create').click()
+  await expect(documentTab(page, 'Alert Properties - Backup weekly late')).toHaveAttribute('aria-selected', 'true')
+  await expect(alert.getByRole('status').filter({ hasText: 'The alert was created.' })).toBeVisible()
+  const alertSave = (await calls('actions.execute')).filter(call => call.action === 'agentAlert').at(-1)
+  expect(alertSave).toMatchObject({ target: { kind: 'agent' }, agentAlert: { name: 'Backup weekly late', severity: 17, notifications: [{ name: 'DBA Team', methods: 1, change: 'add' }] } })
+  expect(alertSave.agentAlert.jobId).toBeTruthy()
+  expect(alertSave.agentObjectId).toBeUndefined()
+  await page.screenshot({ path: 'artifacts/agent-alert-dark.png' })
+  console.log('New alert passed: the job document opens New Alert for the job, and Create adds it with its operator.')
+
+  step = 'operators grid'
+  // The palette opens the grid; a cell click cycles its methods, Save sends that alert's change with its id, and Send test e-mail runs at once.
+  await page.keyboard.press('F1')
+  await expect(page.getByRole('combobox', { name: 'Command Palette', exact: true })).toBeFocused()
+  await page.keyboard.type('Operators and Notifications')
+  await quickInputRows(page).filter({ hasText: 'Operators and Notifications…' }).first().click()
+  await expect(documentTab(page, 'Operators and Notifications')).toHaveAttribute('aria-selected', 'true')
+  const operators = documentFrame(page, 'Operators and notifications')
+  await operators.getByRole('button', { name: 'Severity 017, On Call: not notified', exact: true }).click()
+  await expect(operators.getByRole('button', { name: 'Severity 017, On Call: E-mail', exact: true })).toBeVisible()
+  await documentVerb(operators, 'Operators and notifications', 'Save · 1 change').click()
+  await expect(operators.getByRole('status').filter({ hasText: 'The notifications were saved.' })).toBeVisible()
+  expect((await calls('actions.execute')).filter(call => call.action === 'agentAlert').at(-1)).toMatchObject({ target: { kind: 'agentAlert', name: 'Severity 017' }, agentObjectId: 21,
+    agentAlert: { notifications: [{ name: 'On Call', methods: 1, change: 'add' }] } })
+  await operators.getByRole('button', { name: 'DBA Team', exact: true }).click()
+  await operators.getByRole('button', { name: 'Send test e-mail', exact: true }).click()
+  await expect(operators.getByRole('status').filter({ hasText: 'Test e-mail queued for DBA Team.' })).toBeVisible()
+  expect((await calls('actions.execute')).filter(call => call.action === 'notifyOperator').at(-1)).toMatchObject({ target: { kind: 'agentOperator', name: 'DBA Team' }, agentObjectId: 1 })
+  await page.screenshot({ path: 'artifacts/agent-operators-dark.png' })
+  console.log('Operators grid passed: a changed cell saves as its alert\'s change, and Send test e-mail names the operator by id.')
+
+  step = 'create like'
+  // Create Job Like This… on Job Activity Monitor's bar (AG-6e): New Job filled from Backup with Changes from source first, saved disabled.
+  // Replace across the copy previews each match and replaces only the ticked ones; Compare with source lists the differences; Create
+  // sends New Job's own save with the copied steps.
+  // By now the tab strip overflows, so the monitor comes forward through its own command (one per connection).
+  await chooseExplorerMenuItem(page, ['server-a', 'SQL Server Agent'], 'Job Activity Monitor')
+  await expect(documentTab(page, 'Job Activity Monitor - server-a')).toHaveAttribute('aria-selected', 'true')
+  await jobCell('Backup').click()
+  await page.getByRole('toolbar', { name: 'Selected jobs', exact: true }).getByRole('button', { name: 'Create Job Like This…', exact: true }).click()
+  const like = documentFrame(page, 'Copy of Backup')
+  await expect(like.getByRole('navigation', { name: 'Sections', exact: true }).getByRole('button').first()).toContainText('Changes from source')
+  await expect(like.getByRole('group', { name: 'Job', exact: true }).getByRole('checkbox', { name: 'Enable when saved', exact: true })).not.toBeChecked()
+  await expect(like.getByRole('group', { name: /^Step 1 / })).toContainText('Database')
+  await like.getByLabel('Find', { exact: true }).fill('Backup')
+  await like.getByLabel('Replace with', { exact: true }).fill('Archive')
+  await like.getByRole('button', { name: 'Preview', exact: true }).click()
+  const matches = like.getByRole('list', { name: 'Matches', exact: true }).getByRole('checkbox')
+  await expect(matches).toHaveCount(1)
+  await like.getByRole('button', { name: 'Replace 1 match', exact: true }).click()
+  const archive = documentFrame(page, 'Copy of Archive')
+  await expect(archive.getByRole('status').filter({ hasText: 'Replaced 1 match.' })).toBeVisible()
+  await archive.getByRole('button', { name: 'Compare with source', exact: true }).click()
+  await expect(archive.getByRole('table', { name: 'Compare with source', exact: true })).toContainText('Copy of Archive')
+  await page.screenshot({ path: 'artifacts/agent-job-create-like-dark.png' })
+  await documentVerb(archive, 'Copy of Archive', 'Create').click()
+  await expect(documentTab(page, 'Job Properties - Copy of Archive')).toHaveAttribute('aria-selected', 'true')
+  const likeSave = (await saves()).at(-1)
+  expect(likeSave).toMatchObject({ target: { kind: 'agent' }, agentJob: { name: 'Copy of Archive', enabled: false, description: 'Backup maintenance.' } })
+  expect(likeSave.agentJob.steps.writes.map(write => write.name)).toEqual(['Check integrity', 'Rebuild indexes'])
+  expect(likeSave.agentIdentity).toBeUndefined()
+  console.log('Create like passed: Job Activity Monitor opens a copy with Changes from source, Replace previews and applies, and Create saves it disabled with its steps.')
+
   step = 'light'
   await page.evaluate(() => window.varia.setThemePreference({ mode: 'light' }))
   await page.screenshot({ path: 'artifacts/agent-job-light.png' })
   await page.evaluate(() => window.varia.setThemePreference({ mode: 'dark' }))
-  console.log('New Job passed: the palette opens New Job, Copy an existing job fills it, and Create adds the job.')
 
   if (failures.length) throw new Error('Page errors: ' + failures.join(' | '))
   console.log('Job document suite passed.')

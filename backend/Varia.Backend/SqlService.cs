@@ -38,9 +38,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
         "ssis.describe", "ssis.execute", "ssis.catalogSetup",
-        "bigquery.account", "bigquery.projects", "bigquery.dryRun", "bigquery.properties", "agent.profile", "agent.historyMessage", "results.remoteQuery",
+        "bigquery.account", "bigquery.projects", "bigquery.dryRun", "bigquery.properties", "bigquery.indexEstimate", "agent.profile", "agent.historyMessage", "agent.counterValues", "results.remoteQuery",
         "query.attach", "bigquery.endIdleSessions", "bigquery.cancelJobs",
-        "results.diffSeek", "language.parse"
+        "results.diffSeek", "language.parse", "language.lookup"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
     public const string SynthesizeMethod = "debug.results.synthesize";
@@ -542,6 +542,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "bigquery.projects" => await bigQuery.ProjectsAsync(Read<BigQueryProjectsArgs>(parameters, json), Token(context)),
         "bigquery.dryRun" => await BigQueryDryRunAsync(Read<BigQueryDryRunArgs>(parameters, json), Token(context)),
         "bigquery.properties" => await bigQuery.PropertiesAsync(Read<BigQueryPropertiesArgs>(parameters, json), Token(context)),
+        "bigquery.indexEstimate" => await bigQuery.IndexEstimateAsync(Read<BigQueryIndexEstimateArgs>(parameters, json), Token(context)),
         "language.status" => GetLanguageStatus(parameters, json),
         "language.complete" => await language.CompleteAsync(Read<LanguageRequest>(parameters, json), Token(context)),
         "language.hover" => (object?)await language.HoverAsync(Read<LanguageRequest>(parameters, json), Token(context)) ?? null!,
@@ -613,14 +614,25 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "activity.kill" => await sessionActions.KillAsync(Read<ActivityKillArgs>(parameters, json), Token(context)),
         "agent.profile" => await explorer.AgentProfileAsync(Read<AgentProfileArgs>(parameters, json), Token(context)),
         "agent.historyMessage" => await actions.HistoryMessageAsync(Read<AgentHistoryMessageArgs>(parameters, json), Token(context)),
+        "agent.counterValues" => await actions.CounterValuesAsync(Read<AgentCounterValuesArgs>(parameters, json), Token(context)),
         "language.parse" => await StepParser.ParseAsync(Read<LanguageParseArgs>(parameters, json), Token(context)),
+        "language.lookup" => LookupIndex(Read<LanguageLookupArgs>(parameters, json)),
         SynthesizeMethod when hooks => Synthesize(Read<SynthesizeArgs>(parameters, json), Token(context)),
         _ => throw new RequestException("METHOD_NOT_FOUND", "Unsupported backend method.")
     };
 
+    /// <summary>language.lookup: the editor's completion and hover read a BigQuery connection's index in process, from one snapshot
+    /// (CheckProvider has refused any handle BigQuery does not own, a closed one included, with UNSUPPORTED_PROVIDER).</summary>
+    private LanguageLookupResult LookupIndex(LanguageLookupArgs args)
+    {
+        EditorLookup.Validate(args);
+        var (billing, extras) = ((IBigQueryIndexSource)bigQuery).Projects(args.ConnectionId);
+        return EditorLookup.Answer(search.LookupBigQuery(args.ConnectionId, billing, extras), args);
+    }
+
     /// <summary>explorer.index for SQL Server: BigQuery's refresh options are refused.</summary>
-    private static ObjectIndexArgs SqlServerIndexArgs(ObjectIndexArgs args) => args.ExtraDetails is null && args.Scope is null && args.Stale is null ? args
-        : throw new RequestException("INVALID_PARAMS", "Invalid object index request: extraDetails, scope and stale are BigQuery's.");
+    private static ObjectIndexArgs SqlServerIndexArgs(ObjectIndexArgs args) => args.ExtraDetails is null && args.Scope is null && args.Stale is null && args.Bulk is null ? args
+        : throw new RequestException("INVALID_PARAMS", "Invalid object index request: extraDetails, scope, stale and bulk are BigQuery's.");
 
     private static T Read<T>(JsonElement value, JsonSerializerOptions json) => value.Deserialize<T>(json)
         ?? throw new RequestException("INVALID_PARAMS", "Parameters are required.");
@@ -3411,6 +3423,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         actions.Dispose();
         ssis.Dispose();
         ssisActions.Dispose();
+        // Disposal is a stop too, so it never cancels a BigQuery job, also without the host's BeginShutdown first: a request
+        // cancelled while still holding its job would send a jobs.cancel that races the client's disposal below.
+        BeginShutdown();
         CancelAll();
         bigQuery.Dispose();
         foreach (var session in sessions.Values) session.Close();

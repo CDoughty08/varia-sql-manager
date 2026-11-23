@@ -1,6 +1,9 @@
 import { useEffect, useRef, type RefObject } from 'react'
 
-const canTakeFocus = (element: HTMLElement) => !(element as HTMLButtonElement).disabled && !element.closest('[inert], [hidden]') && element.getClientRects().length > 0
+const isInertOrDisabled = (element: HTMLElement) => !!(element as HTMLButtonElement).disabled || !!element.closest('[inert], [hidden]')
+const canTakeFocus = (element: HTMLElement) => !isInertOrDisabled(element) && element.getClientRects().length > 0
+const resolveDialog = (dialog: RefObject<HTMLElement | null> | HTMLElement | null): HTMLElement | null =>
+  dialog && 'current' in dialog ? dialog.current : dialog
 
 /**
  * Keeps keyboard focus inside a modal dialog, where its Escape and Tab handlers are. The dialog needs `tabIndex={-1}`,
@@ -9,7 +12,8 @@ const canTakeFocus = (element: HTMLElement) => !(element as HTMLButtonElement).d
  * leaves for nowhere, focus goes back to that control once it can take focus again, meanwhile to the dialog itself.
  * `held` (a dialog open over this one) leaves focus alone.
  */
-export function useKeepFocus(dialog: RefObject<HTMLElement | null>, held: boolean): void {
+export function useKeepFocus(dialog: RefObject<HTMLElement | null> | HTMLElement | null, held: boolean): void {
+  const current = resolveDialog(dialog)
   // The control inside the dialog that last had focus, and the one to give it back to while the dialog holds it.
   const last = useRef<HTMLElement | null>(null)
   const wanted = useRef<HTMLElement | null>(null)
@@ -18,12 +22,13 @@ export function useKeepFocus(dialog: RefObject<HTMLElement | null>, held: boolea
   heldNow.current = held
   const restore = useRef(() => {})
   restore.current = () => {
-    const element = dialog.current
+    const element = resolveDialog(dialog)
     if (!element || heldNow.current || element.inert || !element.isConnected) return
     const doc = element.ownerDocument, active = doc.activeElement
-    const lost = !active || active === doc.body
+    const activeDisabled = !!active && active !== element && element.contains(active) && isInertOrDisabled(active as HTMLElement)
+    const lost = !active || active === doc.body || activeDisabled
     if (!lost && !(active === element && wanted.current)) return
-    const target = wanted.current ?? last.current
+    const target = wanted.current ?? (activeDisabled ? active as HTMLElement : last.current)
     if (target?.isConnected && element.contains(target) && canTakeFocus(target)) {
       target.focus({ preventScroll: true })
       if (doc.activeElement === target) { wanted.current = null; return }
@@ -34,25 +39,24 @@ export function useKeepFocus(dialog: RefObject<HTMLElement | null>, held: boolea
     wanted.current = target?.isConnected ? target : null
   }
   useEffect(() => {
-    const element = dialog.current
-    if (!element) return
+    if (!current) return
     const focusIn = (event: FocusEvent) => {
       const target = event.target as HTMLElement
-      if (target !== element) { last.current = target; wanted.current = null }
+      if (target !== current) { last.current = target; wanted.current = null }
       else if (!parking.current) wanted.current = null
     }
     // A control disabled or removed while focused blurs with no new target; restore once the change has been drawn.
     let frame = 0
-    const view = element.ownerDocument.defaultView
+    const view = current.ownerDocument.defaultView
     const focusOut = (event: FocusEvent) => {
       if (event.relatedTarget || !view) return
       view.cancelAnimationFrame(frame)
       frame = view.requestAnimationFrame(() => restore.current())
     }
-    element.addEventListener('focusin', focusIn)
-    element.addEventListener('focusout', focusOut)
-    return () => { element.removeEventListener('focusin', focusIn); element.removeEventListener('focusout', focusOut); view?.cancelAnimationFrame(frame) }
-  }, [dialog])
+    current.addEventListener('focusin', focusIn)
+    current.addEventListener('focusout', focusOut)
+    return () => { current.removeEventListener('focusin', focusIn); current.removeEventListener('focusout', focusOut); view?.cancelAnimationFrame(frame) }
+  }, [current])
   // Each render may have disabled, re-enabled or removed the focused control.
   useEffect(() => restore.current())
 }

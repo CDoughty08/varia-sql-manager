@@ -39,6 +39,11 @@ internal static partial class BigQueryExecutionChecks
         public string StatementType = "SELECT";
         /// <summary>A script (statementType SCRIPT) whose one SELECT child, child_1, answers these rows: jobs.list names it.</summary>
         public bool ScriptChild;
+        /// <summary>The script child's own statement, as jobs.get answers it (configuration.query.query); set, the child is
+        /// known to jobs.get even once ScriptChild is off.</summary>
+        public string? ChildQuery;
+        /// <summary>Each inserted job's configuration.query, which jobs.get answers back (its query text and default dataset).</summary>
+        readonly ConcurrentDictionary<string, JsonNode> insertedQueries = new();
         public long? DmlAffected;
         public string? DdlOperation;
         public JsonNode? Statistics;
@@ -61,6 +66,8 @@ internal static partial class BigQueryExecutionChecks
         /// <summary>The job's destination table (configuration.query.destinationTable), and what tables.get says of it.</summary>
         public JsonObject? Destination;
         public long? TableBytes;
+        /// <summary>tables.get's type (TABLE, VIEW, ...); none, as the emulator, when null.</summary>
+        public string? TableType;
         public readonly ConcurrentQueue<string> InsertedIds = new();
         public readonly ConcurrentQueue<JsonNode> InsertBodies = new();
         public readonly ConcurrentQueue<Uri> Reads = new();
@@ -141,6 +148,7 @@ internal static partial class BigQueryExecutionChecks
             var id = body["jobReference"]?["jobId"]?.GetValue<string>() ?? "";
             InsertBodies.Enqueue(body);
             InsertedIds.Enqueue(id);
+            if (body["configuration"]?["query"] is { } inserted) insertedQueries[id] = inserted.DeepClone();
             if (InsertReplies.TryDequeue(out var reply))
             {
                 if (reply is null) throw new HttpRequestException("The connection was reset.");
@@ -155,7 +163,9 @@ internal static partial class BigQueryExecutionChecks
         {
             var table = new JsonObject { ["kind"] = "bigquery#table", ["tableReference"] = Destination?.DeepClone(), ["numRows"] = Rows.Count.ToString(System.Globalization.CultureInfo.InvariantCulture) };
             if (TableBytes is { } bytes) table["numBytes"] = bytes.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            return Destination is null ? BigQueryFake.Fixture("error-not-found", 404) : new(200, table.ToJsonString());
+            if (TableType is not null) table["type"] = TableType;
+            // An expired table is gone from tables.get as from tabledata.list.
+            return Destination is null || TableDataStatus == 404 ? BigQueryFake.Fixture("error-not-found", 404) : new(200, table.ToJsonString());
         }
 
         JsonObject Job(string id, string state, JsonNode? error, JsonNode? statistics)
@@ -186,7 +196,7 @@ internal static partial class BigQueryExecutionChecks
         {
             var id = Id(request);
             bool known;
-            lock (Created) known = Created.Contains(id) || ScriptChild && id == ChildId;
+            lock (Created) known = Created.Contains(id) || (ScriptChild || ChildQuery is not null) && id == ChildId;
             if (!known) return BigQueryFake.Fixture("error-not-found", 404);
             var query = new JsonObject { ["statementType"] = ScriptChild && id == ChildId ? "SELECT" : StatementType };
             if (DmlAffected is { } dml) query["numDmlAffectedRows"] = dml.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -194,7 +204,15 @@ internal static partial class BigQueryExecutionChecks
             var statistics = Statistics?.DeepClone().AsObject() ?? new JsonObject();
             if (statistics["query"] is JsonObject given) foreach (var (name, value) in query) given[name] ??= value?.DeepClone();
             else statistics["query"] = query;
-            return new(200, Job(id, "DONE", Failure, statistics).ToJsonString());
+            var job = Job(id, "DONE", Failure, statistics);
+            var configuration = job["configuration"]!["query"]!;
+            if (id == ChildId && ChildQuery is not null) configuration["query"] = ChildQuery;
+            else if (insertedQueries.TryGetValue(id, out var inserted))
+            {
+                if (inserted["query"] is { } text) configuration["query"] = text.DeepClone();
+                if (inserted["defaultDataset"] is { } dataset) configuration["defaultDataset"] = dataset.DeepClone();
+            }
+            return new(200, job.ToJsonString());
         }
 
         BigQueryFake.Reply Results(BigQueryFake.Request request)
@@ -248,7 +266,7 @@ internal static partial class BigQueryExecutionChecks
             Jobs = jobs;
             Fake = jobs.Fake();
             var settings = new BigQueryEnvironment(new Uri("http://localhost:9050/"), Fake.Factory, new SubjectTokens([]), Storage: storage is null ? null : _ => storage);
-            Service = new SqlService(store: store, bigQuery: environment is null ? settings : environment(settings));
+            Service = new SqlService(store: store ?? CheckStores.Unprobed(), bigQuery: environment is null ? settings : environment(settings));
             Service.BigQuery.RetryDelay = TimeSpan.FromMilliseconds(1);
             Service.BigQuery.ChildPollMs = 50;
         }

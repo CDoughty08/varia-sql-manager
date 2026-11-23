@@ -475,7 +475,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     const building = ordinal === undefined ? undefined : this.running.get(tabId)?.get(ordinal), failed = ordinal === undefined ? undefined : this.errors.get(tabId)?.get(ordinal)?.text
     const live = building?.queryId === tab.queryId ? building : undefined
     return {
-      open, source: group?.table.key, ...ordinal === undefined ? {} : { sourceName: group ? distinctName(group.table.entry, tab.sets) : entryNumber({ number: ordinal }) }, ...group?.pivot ? { pivot: group.pivot.key } : {},
+      open, source: group?.table.key, ...ordinal === undefined ? {} : { sourceName: group ? distinctName(group.table.entry, tab.sets) : ordinal < 0 ? 'The sample' : entryNumber({ number: ordinal }) }, ...group?.pivot ? { pivot: group.pivot.key } : {},
       draft: this.draftOf(tabId, ordinal, group?.table.entry.descriptor.columns), running: !!live,
       ...live?.queued ? { queued: live.queued } : {}, ...failed ? { error: failed } : {}
     }

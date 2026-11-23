@@ -62,7 +62,7 @@ import { windowControls } from '../shared/theme/metrics'
 import { AppearanceService, windowChromeFor } from './appearance'
 import { applicationMenuTemplate, dispatchApplicationCommand, type ApplicationMenuActions } from './application-menu'
 import { NativeMenuBridge } from './native-menu'
-import { rendererRoleSchema, runRole, UserActivation } from './window-roles'
+import { nextActivationSequence, rendererRoleSchema, runRole, UserActivation } from './window-roles'
 import { installPermissionHandlers } from './permissions'
 import { PopoutWindows, settledNativeTheme } from './popout-windows'
 import { closeAction, holdsSessionEnd, mergeCloseIntent, type CloseIntent } from './close-intent'
@@ -177,6 +177,7 @@ let backendStopped = false
 let windowActive = true
 // The user's last click or key press in the window: the page may run Paste only just after one.
 let userActivation = new UserActivation()
+let mainFocusSeq = 0
 // The page's popped-out panels, each in its own window (popout-windows.ts). While one is open, the main page keeps its
 // timers and frames running when its own window is minimized or hidden: the popouts' content runs in it.
 const popouts = new PopoutWindows<BrowserWindow>({
@@ -187,9 +188,13 @@ const popouts = new PopoutWindows<BrowserWindow>({
   changed: open => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.setBackgroundThrottling(open === 0 && process.env.VARIA_SMOKE_TEST !== '1') },
   parent: () => mainWindow ?? undefined
 })
-/** The window the user is working in: a focused popout, else the main window. */
+/** The window the user is working in: a focused popout, else a popout with newer input than main, else the main window. */
 function activeWindow(): { window: BrowserWindow; activation: UserActivation } | undefined {
-  return popouts.focused() ?? (mainWindow ? { window: mainWindow, activation: userActivation } : undefined)
+  const focused = popouts.focused()
+  if (focused) return focused
+  const recent = popouts.recent()
+  if (recent && (!mainWindow || (recent.activation.sequence > userActivation.sequence && recent.activation.sequence > mainFocusSeq))) return recent
+  return mainWindow ? { window: mainWindow, activation: userActivation } : undefined
 }
 let layouts: LayoutStore
 let appearance: AppearanceService
@@ -350,7 +355,7 @@ let rendererUnresponsive = false
 // comes from the focused window. Hidden smoke windows are never focused, so their menus need a click or key: no bypass.
 const menuStyle = menuStyleFor(process.platform, process.env)
 const contextMenus = new ContextMenuPopups<BrowserWindow>({
-  style: menuStyle, platform: process.platform, userCanAct: () => !!mainWindow?.isFocused() || userActivation.recent() || !!popouts.focused(), build: template => Menu.buildFromTemplate(template),
+  style: menuStyle, platform: process.platform, userCanAct: () => !!mainWindow?.isFocused() || userActivation.recent() || !!popouts.focused() || !!popouts.recent(), build: template => Menu.buildFromTemplate(template),
   title: (id, title) => menuTitle(id, title), rules: shortcutRules
 })
 // Files named on the command line, from a second instance, by macOS (open-file) or by a drop, until the page takes them.
@@ -771,6 +776,7 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
     window.on('focus', () => activate(true))
     window.on('blur', () => activate(false))
   }
+  window.on('focus', () => { mainFocusSeq = nextActivationSequence() })
   // The page may open only its own popout and dialog windows: same-origin about:blank children with Varia's names, on a display.
   contents.setWindowOpenHandler(details => popouts.open(details, { ...appearance.windowChrome(), show: process.env.VARIA_SMOKE_TEST !== '1' }))
   contents.on('did-create-window', (child, details) => popouts.adopt(child, details.frameName))
@@ -780,6 +786,7 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
   // Chromium's own zoom (Ctrl+wheel, a pinch) in the main window reaches the popouts too.
   contents.on('zoom-changed', () => setImmediate(() => { if (!contents.isDestroyed()) popouts.zoom(contents.getZoomLevel()) }))
   contents.on('will-navigate', event => event.preventDefault())
+  mainFocusSeq = 0
   const activation = userActivation = new UserActivation()
   contents.on('input-event', (_event, input) => activation.note(input.type))
   installPermissionHandlers(contents.session, () => mainWindow?.webContents)
@@ -1279,7 +1286,7 @@ app.whenReady().then(async () => {
       event.returnValue = failure(error, 'The queries could not be kept.')
     }
   })
-  handle('varia:context-menu', value => { const target = activeWindow(); if (!target) throw new Error('The window is unavailable.'); return contextMenus.show(value, target.window) })
+  handle('varia:context-menu', value => { const target = activeWindow(); if (!target || !mainWindow) throw new Error('The window is unavailable.'); return contextMenus.show(value, target.window, mainWindow) })
   // `context` (ConnectContext) only for connections.connect and .databases: the history entry whose remembered
   // password main may fill in (connection-requests.ts), and whether to remember the password.
   ipcMain.handle('varia:request', async (event, method: string, params: unknown, context: unknown): Promise<ApiResult<unknown>> => {

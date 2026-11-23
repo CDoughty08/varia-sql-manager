@@ -125,10 +125,10 @@ internal sealed record BigQueryJobSummary(string Project, string JobId, string? 
 /// whose query is estimated (docs/bigquery.md, Sort and filter in BigQuery).</summary>
 internal sealed record BigQueryDryRunArgs(string ConnectionId, string? Sql = null, string? Dataset = null, RemoteDryRunArgs? Remote = null);
 
-/// <summary>A results.remoteQuery request (view or distinct) to estimate, without its query ID; the answer says whether running
-/// it would fall back to the original query (BigQueryDryRunResult.Fallback).</summary>
+/// <summary>A results.remoteQuery request (view, distinct, sample or rerun) to estimate, without its query ID; the answer says
+/// whether running it would fall back to the original query (BigQueryDryRunResult.Fallback).</summary>
 internal sealed record RemoteDryRunArgs(uint ResultId, int Generation, string Kind, RemoteSortArgs[]? Sort = null, RemoteFilterArgs[]? Filters = null,
-    int? Column = null, RemoteFilterArgs[]? Kept = null);
+    int? Column = null, RemoteFilterArgs[]? Kept = null, int? Rows = null, string? Method = null);
 
 /// <summary>bigquery.dryRun's answer: the bytes the query would process, why the figure may be low, the statement type, and
 /// whether emulator mode faked it; for a remote request, Fallback when its result table expired, so the figure is the original
@@ -138,13 +138,19 @@ internal sealed record BigQueryDryRunResult(long BytesProcessed, string? Incompl
 /// <summary>query.execute's Preview Rows target (docs/bigquery.md, Preview Rows): the table whose first rows tabledata.list reads
 /// instead of running the query text, which is the SELECT the tab shows. BigQuery handles only.</summary>
 internal sealed record BigQueryPreviewTarget(string Project, string Dataset, string Table);
-/// <summary>bigquery.properties: a table-like object's facts from tables.get (docs/bigquery.md, Properties).</summary>
+/// <summary>bigquery.properties: a table-like object's facts from tables.get, or a routine's from routines.get (docs/bigquery.md,
+/// Properties; Search Objects' details pane asks for routines too).</summary>
 internal sealed record BigQueryPropertiesArgs(string ConnectionId, string RequestId, string Kind, string Project, string Dataset, string Name);
 internal sealed record BigQueryFact(string Label, string Value);
 internal sealed record BigQueryFactGroup(string Title, List<BigQueryFact> Facts);
-/// <summary>Type: tables.get's type in words ("table", "snapshot", "view"…). Groups: Table, Storage, Layout, History, in that
-/// order, each left out when it has no facts.</summary>
-internal sealed record BigQueryProperties(string Name, string Type, List<BigQueryFactGroup> Groups, long ElapsedMs);
+/// <summary>A column or nested field as the details pane lists it: its path, type text and description.</summary>
+internal sealed record BigQueryColumnFact(string Name, string Type, string? Description = null);
+/// <summary>Type: tables.get's type in words ("table", "snapshot", "view"…) or the routine's. Groups: Table, Storage, Layout, History
+/// (a routine's: Routine, History), in that order, each left out when it has no facts. Definition: a view's or materialized view's
+/// query, or a routine's body, cut at 1,000,000 characters (DefinitionCut). Columns: the first 1,000 columns and nested fields
+/// (ColumnsCut when there were more).</summary>
+internal sealed record BigQueryProperties(string Name, string Type, List<BigQueryFactGroup> Groups, long ElapsedMs, string? Definition = null, bool? DefinitionCut = null,
+    List<BigQueryColumnFact>? Columns = null, bool? ColumnsCut = null);
 
 /// <summary>
 /// query.attach (docs/bigquery.md, Re-attaching to jobs): re-attaches the tab <c>SessionId</c> to a job a previous run (or

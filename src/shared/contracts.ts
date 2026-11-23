@@ -17,7 +17,8 @@ import type { ErrorCode, ErrorReason } from './ipc/wire/protocol'
 import type { AuthenticationMode, BigQueryAuthenticationMode } from './auth'
 import type { ProviderId } from './providers'
 import type { ExplorerChildrenParams, ExplorerNodeRef } from './explorer/refs.ts'
-import type { ObjectIndexParams, ObjectIndexProgress, ObjectIndexResult, ObjectSearchParams, ObjectSearchResult } from './explorer/search.ts'
+import type { BigQueryIndexEstimateRequest, BigQueryIndexEstimateResult, ObjectIndexParams, ObjectIndexProgress, ObjectIndexResult, ObjectSearchParams, ObjectSearchResult } from './explorer/search.ts'
+import type { LanguageLookupRequest, LanguageLookupResult } from './language-lookup.ts'
 import type { ExplorerIcon, NodeStatus, NodeSubtype } from './explorer/catalog.ts'
 import type { PeekDefinitionParams, PeekDefinitionResult, PeekDependenciesParams, PeekDependenciesResult, PeekParams, PeekResult } from './explorer/peek.ts'
 import type { DependenciesParams, DependenciesResult } from './explorer/dependencies.ts'
@@ -29,6 +30,7 @@ import type { ActionDescribeRequest, ActionDescribeResult, ActionExecuteRequest,
 import type { SsisCatalogSetupRequest, SsisCatalogSetupResult, SsisDescribeRequest, SsisDescribeResult, SsisExecuteRequest, SsisExecuteResult } from './ssis/schema.ts'
 import type { AgentProfileRequest, AgentProfileResult } from './agent/profile.ts'
 import type { AgentHistoryMessageRequest, AgentHistoryMessageResult } from './agent/history.ts'
+import type { AgentCounterValuesRequest, AgentCounterValuesResult } from './actions/agent-alert.ts'
 import type { LanguageParseRequest, LanguageParseResult } from './agent/parse.ts'
 import type { SettingsLoad, SettingsPatch, SettingsState } from './settings/schema'
 import type { RunningJobRequest, SessionAnswer, SessionCloseOptions, SessionCloseResult, SessionEnd, SessionPromptRequest } from './sessions.ts'
@@ -686,6 +688,7 @@ export interface RpcMethods {
   'bigquery.projects': { params: BigQueryCredentialParams & { pageToken?: string }; result: BigQueryProjectList }
   'bigquery.dryRun': { params: BigQueryDryRunRequest; result: BigQueryDryRunResult }
   'bigquery.properties': { params: BigQueryPropertiesRequest; result: BigQueryProperties }
+  'bigquery.indexEstimate': { params: BigQueryIndexEstimateRequest; result: BigQueryIndexEstimateResult }
   'connections.identity': { params: Record<string, never>; result: IntegratedIdentity }
   'databases.list': { params: { connectionId: string }; result: DatabaseInfo[] }
   'tables.columns': { params: { connectionId: string; database: string; schema: string; name: string }; result: TableColumns }
@@ -739,7 +742,9 @@ export interface RpcMethods {
   /** What this login may do with SQL Server Agent (roles, permissions, Agent XPs, platform), read in msdb on the Object Explorer pool. */
   'agent.profile': { params: AgentProfileRequest; result: AgentProfileResult }
   'agent.historyMessage': { params: AgentHistoryMessageRequest; result: AgentHistoryMessageResult }
+  'agent.counterValues': { params: AgentCounterValuesRequest; result: AgentCounterValuesResult }
   'language.parse': { params: LanguageParseRequest; result: LanguageParseResult }
+  'language.lookup': { params: LanguageLookupRequest; result: LanguageLookupResult }
 }
 export type RpcMethod = keyof RpcMethods
 /** results.visibility: distinct result ids of the backend's current generation, at most limits.visibility.maxResults.
@@ -964,6 +969,8 @@ export interface VariaApi {
    *  cost prompts and dry-run diagnostics). It sends the text to Google. */
   bigQueryDryRun(params: BigQueryDryRunRequest): Promise<ApiResult<BigQueryDryRunResult>>
   bigQueryProperties(params: BigQueryPropertiesRequest): Promise<ApiResult<BigQueryProperties>>
+  /** The billed bulk index path's estimate: free dry runs of each location's INFORMATION_SCHEMA queries (docs/object-search.md, Bulk index). */
+  bigQueryIndexEstimate(params: BigQueryIndexEstimateRequest): Promise<ApiResult<BigQueryIndexEstimateResult>>
   /** "Don't ask again for this connection" (docs/bigquery.md, Cost): sets the saved BigQuery entry's cost-prompt choice;
    *  resolves whether the entry holds it. */
   setBigQueryCostPrompt(input: { options: BigQueryConnectionOptions; costPrompt: boolean }): Promise<ApiResult<boolean>>
@@ -1013,8 +1020,11 @@ export interface VariaApi {
   /** Reads what this login may do with SQL Server Agent on a server, or why it cannot (`result.error`). */
   agentProfile(params: AgentProfileRequest): Promise<ApiResult<AgentProfileResult>>
   agentHistoryMessage(params: AgentHistoryMessageRequest): Promise<ApiResult<AgentHistoryMessageResult>>
+  agentCounterValues(params: AgentCounterValuesRequest): Promise<ApiResult<AgentCounterValuesResult>>
   /** The job step editor's Parse (AG-6b): ScriptDom only, no connection. */
   languageParse(params: LanguageParseRequest): Promise<ApiResult<LanguageParseResult>>
+  /** The Search Objects index by path, for the editor's completion and hover (BigQuery connections; src/shared/language-lookup.ts). */
+  languageLookup(params: LanguageLookupRequest): Promise<ApiResult<LanguageLookupResult>>
   /** Cancels SSIS requests by their `requestId`s (1–64); `cancelled` counts those still running. A request cancelled this way
    *  answers `CANCELLED`. */
   cancelSsis(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>

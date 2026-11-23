@@ -47,14 +47,13 @@ from Microsoft's documentation, so Varia keeps its own.
 - Activity Monitor (`activityMonitor`)
 - SQL Server Integration Services (`integrationServices`)
 
-A node without a page id is a category: selecting it shows its first page. The search box (Ctrl+E, ⌘E on macOS) matches
-page titles, setting labels, descriptions and keywords.
+A node without a page id is a category: selecting it shows its first page. Drag the navigation splitter (or resize with keyboard arrows) to adjust the rail width. The search box (Ctrl+E, ⌘E on macOS) searches across every page into grouped **Search Results** with match highlighting, and **Modified** filters to customized rows with per-row reset. Use **Apply** to save without closing, **OK** to save and close, or **Reset Page** to restore the active page's defaults; closing with unsaved changes asks before discarding.
 
 ## Settings
 
 ### Environment › General
 
-Its first row is a note: Color theme: View › Theme (stored in `appearance.json`).
+Includes Color theme mode cards (Dark, Light, Follow System) and the active palette selector, with live preview (stored in `appearance.json`).
 
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -155,7 +154,7 @@ Sections: **Settings**, **Display**.
 
 ### Text Editor › Editor Tab and Status Bar
 
-The query window's status bar: where it is, and what it shows. A property grid: True/False lists, values that differ from their default in bold.
+The query window's status bar: where it is, and what it shows. A property grid: 1-click True/False switches, values that differ from their default in bold with per-row reset.
 
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -202,6 +201,7 @@ BigQuery query tabs. Not in SSMS.
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `textEditor.googleSql.dryRunDiagnostics` | Check queries with a dry run while editing | Boolean | True |  | All | At once | After a pause in typing, a free BigQuery dry run marks the query's error at its line and column and updates the estimate beside Execute. A dry run sends the query text to Google, as Execute does; it runs nothing and bills nothing. Off, Execute still dry-runs the query for its estimate. Not in SSMS. |
+| `textEditor.googleSql.bulkIndex` | Read the search index’s details with billed INFORMATION_SCHEMA queries | Boolean | False |  | All | At once | A full build of a BigQuery connection's Search Objects index reads columns, view text and routine bodies with three region-scoped INFORMATION_SCHEMA queries per location instead of one free call per object, which is faster for large projects. BigQuery bills each query at least 10 MiB per view it reads, never from cache, so every build first makes a free estimate and goes through the cost prompts as Execute does: it asks when the estimate is above the threshold or may be low, and the build's queries together never bill more than the estimate. Off, the index reads only free metadata calls. Not in SSMS. |
 
 ### Query Execution › SQL Server › General
 
@@ -278,7 +278,7 @@ Where the rows of a BigQuery result live: in memory, as with SQL Server, or wind
 
 ### SQL Server Object Explorer › Commands
 
-A property grid: True/False lists, values that differ from their default in bold.
+A property grid: 1-click True/False switches, values that differ from their default in bold with per-row reset.
 
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -290,7 +290,7 @@ A property grid: True/False lists, values that differ from their default in bold
 
 ### SQL Server Object Explorer › Scripting
 
-A property grid: True/False lists, values that differ from their default in bold.
+A property grid: 1-click True/False switches, values that differ from their default in bold with per-row reset.
 
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -398,4 +398,4 @@ Sections: **Object Explorer**, **Operations** (The Operations view of the SSIS C
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (135 today).
+A patch holds at most one entry per setting (136 today).

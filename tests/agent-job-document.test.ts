@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  agentJobChangeCount, agentJobCommandEntries, agentJobCompare, agentJobProblems, agentJobSavable, agentJobSave, agentJobSaveProblems, agentJobSaveSchema, agentJobTabName, copiedAgentJobDraft, type AgentJobSave,
+  agentJobChangeCount, agentJobCommandEntries, agentJobCompare, agentJobProblems, agentJobSavable, agentJobSave, agentJobSaveProblems, agentJobSaveSchema, agentJobTabName, type AgentJobSave,
   initialAgentJobDraft, pagerDuty, rebaseAgentJobDraft, uncategorizedCategory, type AgentJobDocumentModel, type AgentJobOperator, type AgentJobRecord
 } from '../src/shared/actions/agent-job'
 import { actionMenuState, dialogSpecs } from '../src/shared/actions/catalog'
 import type { ActionDescribeResult, ActionExecuteResult, ActionRequest } from '../src/shared/actions/schema'
 import { agentLimits } from '../src/shared/agent/catalog'
+import { createFromDraft } from '../src/shared/agent/create-from'
 import { commandDescriptor } from '../src/shared/commands/catalog'
 import type { ApiResult } from '../src/shared/contracts'
 import { jobDocumentText, jobLive } from '../src/renderer/src/agent/JobDocumentService'
@@ -90,7 +91,7 @@ describe("the job document's shared rules", () => {
     expect(rows.map(row => [row.field, row.conflict])).toEqual([['description', true], ['category', false], ['enabled', false]])
     expect(rebaseAgentJobDraft(opened, current, draft)).toMatchObject({ description: 'Mine', category: 'Database Maintenance', enabled: false })
     expect(rebaseAgentJobDraft(opened, current, draft, new Set(['description']))).toMatchObject({ description: 'Theirs', enabled: false })
-    expect(copiedAgentJobDraft(opened, 'dana', false)).toMatchObject({ name: 'Copy of Nightly load', owner: 'dana', emailOperator: 'DBA', removeAlerts: [] })
+    expect(createFromDraft(opened, 'dana', false)).toMatchObject({ name: 'Copy of Nightly load', owner: 'dana', emailOperator: 'DBA', enabled: false, removeAlerts: [] })
   })
   it('keeps every command behind the release gate, and Properties on a job a document', () => {
     for (const [id, entry] of Object.entries(agentJobCommandEntries())) expect(entry.precondition, id).toContain('agentEnabled')

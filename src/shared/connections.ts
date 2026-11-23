@@ -120,8 +120,8 @@ export interface ConnectionLibrary { version: 1; profiles: ConnectionProfile[] }
  *  options' typed password under the entry, which main does only for a password Save's check just signed in with
  *  (connections.databases with `remember`). `forgetPassword`: Save forgets the passwords remembered for the entry and its
  *  credentials, as Connect with Remember password unchecked does. */
-export interface ConnectionProfileInput { id?: string; options: ConnectionOptions; favorite?: boolean; registered?: boolean; saved?: boolean; rememberPassword?: boolean; forgetPassword?: boolean; autoReconnect?: 'inherit' | 'on' | 'off' }
-export const connectionProfileInputSchema = z.object({ id: z.uuid().optional(), options: connectionOptionsSchema, favorite: z.boolean().optional(), registered: z.boolean().optional(), saved: z.boolean().optional(), rememberPassword: z.boolean().optional(), forgetPassword: z.boolean().optional(), autoReconnect: connectionAutoReconnectSchema.optional() }).strict()
+export interface ConnectionProfileInput { id?: string; options: ConnectionOptions; favorite?: boolean; registered?: boolean; saved?: boolean; lastConnected?: string; rememberPassword?: boolean; forgetPassword?: boolean; autoReconnect?: 'inherit' | 'on' | 'off' }
+export const connectionProfileInputSchema = z.object({ id: z.uuid().optional(), options: connectionOptionsSchema, favorite: z.boolean().optional(), registered: z.boolean().optional(), saved: z.boolean().optional(), lastConnected: z.iso.datetime().optional(), rememberPassword: z.boolean().optional(), forgetPassword: z.boolean().optional(), autoReconnect: connectionAutoReconnectSchema.optional() }).strict()
   .refine(value => !(value.rememberPassword && value.forgetPassword), 'Save cannot remember and forget a password at once.')
 /** Set Connection Environment: the live connection's options name its entry (by connectionKey), and only the entry's label
  *  changes; `environment` absent is None. */

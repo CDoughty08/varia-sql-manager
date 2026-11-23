@@ -125,6 +125,20 @@ the reads held when it is made:
 - A lookup is a snapshot: make one per request. One kept across a rebuild or a disconnect keeps the reads it holds alive
   outside the memory budget.
 
+A BigQuery connection's index answers through `LookupBigQuery` instead (`BigQueryLookup`), which the editor reaches over
+`language.lookup` ([Completion from the index](language-services.md#completion-from-the-index)): the connection's
+projects (billing first, extra projects marked when read by name only), a project's datasets, a dataset's objects (a
+sharded group as its newest shard, a routine with its signature) and an object's facts and columns by field path in
+schema order. Projects, datasets and objects match exactly, else the one name that differs only in case; a wildcard
+(`events_*`, `events_2026*`) or a shard within a date-sharded group's range answers with the group's newest shard; the
+prefix matches with case, a group the wildcard covers whole wins over the tables and groups it only begins
+(`events_summary`, `events_intraday_`), and otherwise a wildcard that begins two groups, or a group and a plain table,
+answers nothing. A dataset's state is `Ready`,
+`Partial` (children left out, its project read by name only, its details skipped, or a later read failed with an earlier
+one kept), `Building`, `Skipped` or `Absent`; a project is `Partial` when its dataset listing failed after earlier reads or
+a listed dataset's read failed.
+States come from the build's skip list, which keeps the first 255 skips and the latest.
+
 ### Failures and skipped databases
 
 - A failing statement (a catalog view the login may not read, or an edition lacks) lists the server or database as
@@ -285,6 +299,13 @@ child's parent) show at once; reads start once the selection has rested 80 ms.
 - Tables and views also show Columns: Peek's Columns list, which comes with the properties (no read of its own), as a card
   grid with Peek's columns (Name, Type, Nullable, Key, Identity, Computed, Default, Definition) that selects, sorts and
   copies as a results grid does. Up to 1,024 columns are listed; a note says when there are more.
+- BigQuery hits read only `bigquery.properties` (`tables.get`, or `routines.get` for a routine), which is free: the facts in
+  the strip (location, description, labels, rows, sizes, partitioning, clustering, created and changed), a view's or
+  materialized view's text or a routine's body as the definition, and a table's Columns (Name, Type, Description: up to
+  1,000 columns and nested fields by path, descriptions cut at 1,024 characters). A table's CREATE statement comes from
+  a billed `INFORMATION_SCHEMA.TABLES` query, so selecting a table never reads it: Show CREATE Statement runs its free
+  estimate, then the cost prompts, then the read under the cap they set (as Script As does). Models, datasets and columns
+  show their place only.
 - Header: Script to New Query, Refresh (never takes a kept script) and Hide. The Details pane button beside the result
   count hides and shows it in every tab. A hidden pane reads nothing; a new hit, closed tab, hidden pane or lost server
   cancels the reads. Object Explorer's own search has no details pane.
@@ -354,6 +375,42 @@ dropped the same way, from BigQuery's free metadata calls only: no job runs and 
 - **Limits** (`objectSearchLimits.bigQuery`, `BigQueryIndexLimits`): 500 pages of 1,000 per listing, 10,000 columns per
   table, and 1,024 characters of each column description or routine signature.
 
+### Billed bulk index
+
+Options › Text Editor › GoogleSQL › General › Read the search index's details with billed INFORMATION_SCHEMA queries
+(`textEditor.googleSql.bulkIndex`, off by default) replaces most of pass 2's per-object calls with three region-scoped
+queries per location, which is faster for projects with thousands of objects:
+
+- `INFORMATION_SCHEMA.COLUMN_FIELD_PATHS` joined with `COLUMNS` and `TABLES` (columns and nested fields with types,
+  descriptions, order and nullability, and whether a table is a clone or snapshot), `VIEWS` (view text) and `ROUTINES`
+  (routine bodies). With definitions off (`objectExplorer.search.definitions`), only the column query runs.
+- **Cost.** BigQuery bills each query at least 10 MiB for every INFORMATION_SCHEMA view it reads (the column query reads
+  three) and never answers them from cache. So a full build first asks `bigquery.indexEstimate`: the locations of the
+  billing project's datasets (and the extra projects' when their schemas are indexed), up to 64, each query dry-run
+  free, each counted as every view's floor plus its bytes. The estimate then goes through the same cost prompts as
+  Execute, which ask only above the cost threshold or when the estimate may be low. The estimate shown is the build's
+  budget: a location's queries run one at a time, each capped at what is left of the budget less the later queries'
+  floors (or at the connection's or Options' maximum bytes billed, Query Execution › BigQuery › Cost, when lower). The
+  whole cap leaves the budget when the query starts, and only once it is done, finished or failed, does what it did not
+  bill (its cap less BigQuery's billed bytes for the job) return; when that cannot be read, the whole cap stays charged.
+  So the build never bills more than the estimate. A query over its cap fails without being billed, and a location the
+  rest of the budget or the cap cannot cover is not started; either way its datasets are read with the free calls. The
+  status says "Estimating the billed INFORMATION_SCHEMA read of the index's details…" meanwhile; Stop, a newer build or
+  a disconnect ends it.
+- **The same entries.** The rows fill exactly the entries pass 2's `tables.get` and `routines.get` would (the offline
+  checks compare them), with the same limits. Objects the rows do not cover still use the free calls: materialized
+  views' text, routines without a body, objects dropped or created again after the listing (or not yet in
+  INFORMATION_SCHEMA), and every dataset in a location whose queries failed, and a dataset whose rows pass 8 million
+  characters. Bulk-read objects carry no row count, size, partitioning, clustering, routine signature or last change in
+  the index (a table's hit shows its creation date); the details pane reads those live.
+- **When it runs.** Only full builds (indexing on connect, Rebuild Search Index, Refresh on the connection's node); a
+  refresh of a project, dataset or DDL change uses the free calls. A declined prompt or a failed estimate builds with
+  the free calls only. The next build reads bulk-read objects again rather than reuse them. The index line says
+  how many locations were read with INFORMATION_SCHEMA, and when a location's read failed (with BigQuery's reason), that
+  its details were read with free calls instead.
+- **SQL.** The text is constant but for the region qualifier (`` `project`.`region-us` ``), which `BqNames.RegionPath`
+  builds from a checked project and location; there are no other values. The offline lint renders every template.
+
 Searching and hits:
 
 - **Kinds.** Datasets, tables, views, materialized views, external tables, routines, models and columns. Tables,
@@ -366,8 +423,10 @@ Searching and hits:
 - **A hit's row** shows its name without the dataset, and the project, dataset and folder, then a column's type or a
   sharded table's shards. Reveal walks project › dataset › folder › object (a column through its table and the record
   columns above it).
-- **Its menu** has Preview Rows (tables), Script As and Copy (Name, and Fully Qualified Name: the backtick-quoted path).
-  The details pane shows a table's, view's or routine's script.
+- **Its menu** has New Query (a GoogleSQL query tab on the hit's connection, in its dataset when that is in the billing
+  project), Preview Rows (tables), Script As and Copy (Name, and Fully Qualified Name: the backtick-quoted path). The
+  details pane shows its free facts, a view's text or a routine's body, and a table's columns ([The details
+  pane](#the-details-pane)).
 
 ## Protocol
 
