@@ -568,19 +568,28 @@ internal static class BigQueryJobHistoryChecks
         await SampleAsync(follower);
         // Its second page hangs in the first sample until the budget's cancellation cuts it, whatever the runner's speed.
         var cutting = true;
-        slow.Fake.Hang = request => cutting && request.Uri.Query.Contains("pageToken=o2", StringComparison.Ordinal);
+        var hangs = 0;
+        slow.Fake.Hang = request => cutting && request.Uri.Query.Contains("pageToken=o2", StringComparison.Ordinal) && Interlocked.Increment(ref hangs) > 0;
         slow.Fake.On("GET", Jobs, request =>
         {
             var query = request.Uri.Query;
             if (!query.Contains("stateFilter=", StringComparison.Ordinal) || query.Contains("pageToken=o2", StringComparison.Ordinal)) return BigQueryFake.Text("""{"kind":"bigquery#jobList"}""");
             return BigQueryFake.Text("""{"kind":"bigquery#jobList","nextPageToken":"o2"}""");
         }).On("GET", Jobs + "/varia_running", _ => new BigQueryFake.Reply(200, JsonNode.Parse(Timed("jobs-list", slow.Now).Replace("\"RUNNING\"", "\"DONE\""))!["jobs"]![0]!.ToJsonString()));
+        // Two samples cut there: in the second the refresh answers first, then the open listing's first request is cut.
+        await follower.SampleAsync([Due(3000)], CancellationToken.None);
         await follower.SampleAsync([Due(3000)], CancellationToken.None);
         cutting = false;
         var settled = await SampleAsync(follower);
         var open = slow.Listings().Where(query => query.Contains("stateFilter=", StringComparison.Ordinal)).ToList();
+        // An o2 request right after another o2 request opened its sample's open listing (the one before it was cut).
+        static int Stuck(List<string> requests) => requests.Skip(1).Take(requests.Count - 2)
+            .Where((query, index) => query.Contains("pageToken=o2", StringComparison.Ordinal) && requests[index].Contains("pageToken=o2", StringComparison.Ordinal)).Count();
         check(settled.Errors.Count == 0 && Status(settled, "open") is 0 && slow.Gets("varia_running") == 1
-            && open.Count(query => !query.Contains("pageToken=", StringComparison.Ordinal)) == 1 && open.Count(query => query.Contains("pageToken=o2", StringComparison.Ordinal)) == 2,
+            && open.Count(query => !query.Contains("pageToken=", StringComparison.Ordinal)) == 1 && open.Count(query => query.Contains("pageToken=o2", StringComparison.Ordinal)) == hangs + 1
+            // A cut page that was its listing's first request that sample made no progress, though the refresh before it
+            // answered: each such cut asks for a quarter of the jobs a page after.
+            && int.Parse(Regex.Match(open[^1], "maxResults=(\\d+)").Groups[1].Value) == 100 / (int)Math.Pow(4, Stuck(open)),
             "the open jobs' listing goes on from its page in the next sample, and a job it left out is read once it is whole: " + string.Join(" | ", open));
     }
 

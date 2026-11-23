@@ -285,6 +285,21 @@ describe('Job History documents', () => {
     await pane
     expect(service.get(id)?.details).toMatchObject({ jobId: 'job_1', loading: false, value: { job: { sql: 'SELECT 42' } } })
   })
+  it('drop a details answer still on its way when the scope changes', async () => {
+    const { service, grid, api } = history()
+    const id = service.open('bq1')
+    service.attachGrid(id, grid as unknown as LiveGrid)
+    grid.select(cells())
+    await settled()
+    let answer!: (value: { ok: true; value: JobHistoryDetails }) => void
+    api.bigQueryJob.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    const pane = service.toggleDetails(id)
+    await vi.waitFor(() => expect(api.bigQueryJob).toHaveBeenCalled())
+    service.setScope(id, 'all')
+    answer({ ok: true, value: details() })
+    await pane
+    expect(service.get(id)?.details).toBeUndefined()
+  })
   it('cancel a running job only after asking, and remember a refused cancel of another user\'s job', async () => {
     const { service, grid, api, handle, context } = history({ })
     const id = service.open('bq1')

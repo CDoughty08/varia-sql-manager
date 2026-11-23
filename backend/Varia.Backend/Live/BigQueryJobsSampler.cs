@@ -36,6 +36,9 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
     /// <summary>Jobs a page asks for: a quarter after each stalled sample (a page too slow for the time budget, as long query
     /// texts on a slow link make it, would otherwise never land), doubling back after each sample that finished.</summary>
     private int pageSize = BigQueryJobHistory.PageJobs;
+    /// <summary>A listing's request is in flight before any page of that listing landed this sample: if the budget's
+    /// cancellation cuts it, that listing made no progress, whatever other listings read, and the page size shrinks.</summary>
+    private bool stuck;
     internal const int StallsBeforeTimeout = 3;
 
     /// <summary>What one listing holds: the top-level jobs by id, which of them are the principal's (All users), how far the
@@ -130,6 +133,7 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
             var loading = false;
             LiveProbeError? failure = null;
             var answered = answers;
+            stuck = false;
             try
             {
                 loading = !await RefreshAsync(connection, view, item.BudgetMs, budget.Token);
@@ -141,7 +145,8 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
                 loading = true;
                 // Every stalled sample past the threshold fails, so the schedule's back-off grows; an answer starts the count again.
                 stalls = answers == answered ? stalls + 1 : 0;
-                if (stalls > 0) pageSize = Math.Max(1, pageSize / 4);
+                // Also when another listing answered first (the refresh before the open jobs' listing): the cut one is stuck.
+                if (stalls > 0 || stuck) pageSize = Math.Max(1, pageSize / 4);
                 if (stalls >= StallsBeforeTimeout)
                 {
                     failure = LiveErrors.Create(Probe, "TIMEOUT", "BigQuery did not answer the job listing within the refresh's time budget, several times in a row.");
@@ -280,17 +285,21 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
         Func<int> left, Action<long> spend, bool first)
     {
         var size = pageSize;
+        var landed = false;
         while (true)
         {
             token.ThrowIfCancellationRequested();
             if (left() <= 0) return false;
             HistoryPage? page;
+            stuck = !landed;
             try { page = await ListPageAsync(connection, state, listing, pageToken, size, left(), token); }
             catch (BigQueryOverLimit)
             {
-                if (size > 1 && left() >= BigQueryJobHistory.JobBytes) { size = Math.Max(1, size / 4); continue; }
+                // Kept for the samples after (doubling back as they finish), so each does not download the large page again.
+                if (size > 1 && left() >= BigQueryJobHistory.JobBytes) { size = pageSize = Math.Max(1, size / 4); continue; }
                 return false;
             }
+            (stuck, landed) = (false, true);
             if (page is null) return true;
             spend(page.Bytes);
             foreach (var place in page.Unreachable) state.Reporting.Add(place);
@@ -387,17 +396,20 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
             state.OpenIds.UnionWith(held.Select(job => job.Id));
         }
         var size = pageSize;
+        var landed = false;
         while (true)
         {
             if (left() <= 0) return false;
             HistoryPage? page;
+            stuck = !landed;
             try { page = await ListPageAsync(connection, state, state.Open, state.OpenToken, size, left(), token); }
             catch (BigQueryOverLimit)
             {
                 // Pages of long query texts: fewer jobs a page, as the listing does.
-                if (size > 1 && left() >= BigQueryJobHistory.JobBytes) { size = Math.Max(1, size / 4); continue; }
+                if (size > 1 && left() >= BigQueryJobHistory.JobBytes) { size = pageSize = Math.Max(1, size / 4); continue; }
                 return false;
             }
+            (stuck, landed) = (false, true);
             if (page is null) { EndOpen(state); return true; }
             spend(page.Bytes);
             state.OpenUnreachable.UnionWith(page.Unreachable);
