@@ -851,8 +851,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       holds a read of that database with its columns, whatever else that read left out (definitions, cut definitions,
       system objects); while a rebuild runs over that read, or after a later read of the database failed, the line adds
       "These are from Search Objects' last index of Sales_Test." It warns, never refuses, when it cannot, naming what
-      that costs, since without the index the dialog cannot offer SET IDENTITY_INSERT and an INSERT into an identity
-      column then fails and rolls the script back (Msg 544):
+      that costs, since without the index the dialog cannot offer SET IDENTITY_INSERT or leave the identity column out
+      of UPDATEs, so an INSERT into an identity column then fails and rolls the script back (Msg 544), and so does an
+      UPDATE that changes it (Msg 8102):
       - the index lacks the table: "Search Objects does not know [Sales_Test].[dbo].[Orders], so its columns cannot be
         checked and SET IDENTITY_INSERT is not offered. Check the name, or rebuild the search index.", with **Rebuild
         Search Index** (`explorer.rebuildIndex` for the comparison's connection). Pressed, it stays in place,
@@ -1784,12 +1785,16 @@ after Q4.
   - Previous-value columns are NULL in every unchanged and soft cell, and NULL never matches, so no tone lookup is needed.
   - `PageFilter` skips hidden columns today, so it builds filters for the previous-value columns too, or packed
     comparison pages could no longer be skipped.
-- **Renderer:** the live region reads `matchOld`. The old value they name is read from the hidden
-  previous-value column through the window read the gutter already uses for hidden columns.
+- **Renderer:** the live region reads `matchOld`. The search service keeps a run as a `GridRun` (`search.ts`) that
+  copies the answer's fields by name, so `GridRun` gains `matchOld`, copied both where a run is first built
+  (`gridRun()`) and where F3 or Next fetches the next run (`ensureRun()`), so a fetched run replaces it, a missing one
+  meaning none. The old value they name is read from the hidden previous-value column through the window read the gutter
+  already uses for hidden columns.
 - **Tests:**
   - `ResultSearcher` checks: an old-only hit, both sides deduplicated, order kept, a cut row's old value, NULL old values,
     view order, page skipping with the new filters.
-  - vitest for the status text.
+  - vitest for the status text, and one with a small `maxMatches` stepping with Next past the first run: the old-value
+    suffix follows the new run's indexes, and is gone when the new run has none.
   - The fake backend's search implements it. A `results-smoke.mjs` step searches an old value in One row.
 - **Risks:** a wide comparison's search reads up to twice the columns of the same pages, inside search's existing
   reservations.
