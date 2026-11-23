@@ -2,6 +2,7 @@
 // the backend re-checks it against the catalogue and the subtype it derives itself in the action's own connection.
 import { z } from 'zod'
 import { deleteJobHistoryRequestSchema, type DeleteJobHistoryRequest } from '../agent/history.ts'
+import { changeJobOwnerRequestSchema, type ChangeJobOwnerRequest } from '../agent/bulk.ts'
 import { backendConnectionBindingChangeSchema } from '../connection-binding-receipts.ts'
 import { boundedRecord } from '../zod-bounds.ts'
 import { kindSpecs } from '../explorer/catalog.ts'
@@ -229,6 +230,7 @@ export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | 
 /** actions.script and actions.execute also take a restore and a file restore, whose requests have shapes of their own (restore-schema.ts). */
 export type ActionScriptRequest = ActionRequest | RestoreRequest | RestoreFilesRequest | AddRecommendedAlertsRequest
 export type ActionExecuteRequest = ActionRequest | RestoreRequest | RestoreFilesRequest | AgentServiceRequest | DeleteJobHistoryRequest | AddRecommendedAlertsRequest | NotifyOperatorRequest
+  | ChangeJobOwnerRequest
 export type { RestoreFilesRequest, RestoreRequest } from './restore-schema.ts'
 export type { AgentPropertiesRequest } from './agent-properties.ts'
 export interface ActionCancelRequest { readonly requestIds: readonly string[] }
@@ -991,9 +993,11 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
  *  the secrets each needs and no others: New Login's password exactly for a SQL Server login (blank only with the password policy on, which
  *  lets the server decide), and none for a Windows login; and a login's Delete must name the login Delete Object read (`loginIdentity`),
  *  which binds DROP LOGIN and every DROP USER to that principal (Script runs nothing and may leave it out). C# Validate refuses the same. */
-export const actionExecuteRequestSchema = z.union([actionRequestSchema, restoreRequestSchema, restoreFilesRequestSchema, agentServiceRequestSchema, deleteJobHistoryRequestSchema, addRecommendedAlertsRequestSchema, notifyOperatorRequestSchema]).superRefine((request, context) => {
+export const actionExecuteRequestSchema = z.union([actionRequestSchema, restoreRequestSchema, restoreFilesRequestSchema, agentServiceRequestSchema, deleteJobHistoryRequestSchema, addRecommendedAlertsRequestSchema, notifyOperatorRequestSchema, changeJobOwnerRequestSchema]).superRefine((request, context) => {
   // The Log File Viewer's Delete History (AG-5a), Add recommended alerts and Send test e-mail (AG-7) check themselves.
   if (request.action === 'deleteJobHistory' || request.action === 'addRecommendedAlerts' || request.action === 'notifyOperator') return
+  // Job Activity Monitor's Change owner (AG-3b) checks itself: its schema requires the job's identity.
+  if (request.action === 'changeJobOwner') return
   // An existing alert's or operator's Save and Delete name the one its describe read (Script runs nothing and may leave it out).
   if ((request.action === 'agentAlert' || request.action === 'agentOperator' || request.action === 'delete') && (request.target.kind === 'agentAlert' || request.target.kind === 'agentOperator')
     && (request as { agentObjectId?: number }).agentObjectId === undefined) issue(context, 'agentObjectId', 'Saving or deleting an alert or operator needs the id it read.')

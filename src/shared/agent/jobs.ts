@@ -133,11 +133,16 @@ export function viewCount(series: AgentJobViewSpec['series'], counts: readonly (
 
 export type AgentBulkVerb = 'startJob' | 'stopJob' | 'enable' | 'disable'
 export const agentBulkVerbs: readonly AgentBulkVerb[] = ['startJob', 'stopJob', 'enable', 'disable']
-export const agentBulkTitles: { readonly [V in AgentBulkVerb]: { readonly button: string; readonly dialog: string; readonly line: string } } = {
+/** The bulk verbs that ask for a value first (AG-3b, src/shared/agent/bulk.ts): a login for Change owner, a shared schedule for Attach schedule. */
+export type AgentBulkFormVerb = 'changeOwner' | 'attachSchedule'
+export const agentBulkFormVerbs: readonly AgentBulkFormVerb[] = ['changeOwner', 'attachSchedule']
+export const agentBulkTitles: { readonly [V in AgentBulkVerb | AgentBulkFormVerb]: { readonly button: string; readonly dialog: string; readonly line: string } } = {
   startJob: { button: 'Start', dialog: 'Start Jobs', line: 'Start' },
   stopJob: { button: 'Stop', dialog: 'Stop Jobs', line: 'Stop' },
   enable: { button: 'Enable', dialog: 'Enable Jobs', line: 'Enable' },
-  disable: { button: 'Disable', dialog: 'Disable Jobs', line: 'Disable' }
+  disable: { button: 'Disable', dialog: 'Disable Jobs', line: 'Disable' },
+  changeOwner: { button: 'Change owner…', dialog: 'Change Job Owner', line: 'Change owner' },
+  attachSchedule: { button: 'Attach schedule…', dialog: 'Attach Schedule', line: 'Attach schedule' }
 }
 /** Why a bulk verb is not offered for a selection, or undefined when it is. */
 export function bulkUnavailable(selected: number): string | undefined {
@@ -258,13 +263,16 @@ export const jobActivityTitle = 'Job Activity Monitor'
 export const jobActivityTabName = (server: string): string => `${jobActivityTitle} - ${server}`
 
 export type JobActivityCommandId = 'agent.jobActivity' | 'agent.refreshJobs' | 'agent.startJobs' | 'agent.stopJobs' | 'agent.enableJobs' | 'agent.disableJobs'
+  | 'agent.changeJobOwner' | 'agent.attachJobSchedule'
 /** Each bulk verb's command. */
-export const agentBulkCommands: { readonly [V in AgentBulkVerb]: JobActivityCommandId } = { startJob: 'agent.startJobs', stopJob: 'agent.stopJobs', enable: 'agent.enableJobs', disable: 'agent.disableJobs' }
+export const agentBulkCommands: { readonly [V in AgentBulkVerb | AgentBulkFormVerb]: JobActivityCommandId } = {
+  startJob: 'agent.startJobs', stopJob: 'agent.stopJobs', enable: 'agent.enableJobs', disable: 'agent.disableJobs', changeOwner: 'agent.changeJobOwner', attachSchedule: 'agent.attachJobSchedule'
+}
 /** A command catalogue entry, in the shape of `CommandDescriptor`. */
 export interface JobActivityCommandEntry {
   readonly title: string
   readonly category: 'SQL Server Agent'
-  readonly icon: 'agent-activity' | 'refresh' | 'play' | 'debug-stop' | 'pass' | 'circle-slash'
+  readonly icon: 'agent-activity' | 'refresh' | 'play' | 'debug-stop' | 'pass' | 'circle-slash' | 'person' | 'agent-schedule'
   readonly keywords: readonly string[]
   readonly precondition: string
   readonly unavailableHint: string
@@ -277,7 +285,7 @@ const openJobActivity = 'Open Job Activity Monitor first (SQL Server Agent: Job 
  * which act on the jobs selected in the active monitor.
  */
 export function jobActivityCommandEntries(): { readonly [K in JobActivityCommandId]: JobActivityCommandEntry } {
-  const bulk = (verb: AgentBulkVerb, icon: JobActivityCommandEntry['icon'], keywords: readonly string[]): JobActivityCommandEntry => ({
+  const bulk = (verb: AgentBulkVerb | AgentBulkFormVerb, icon: JobActivityCommandEntry['icon'], keywords: readonly string[]): JobActivityCommandEntry => ({
     title: agentBulkTitles[verb].dialog, category: 'SQL Server Agent', icon, keywords: ['agent', 'job', 'jobs', ...keywords],
     precondition: 'agentEnabled && backendReady && activeDocumentIsJobActivity', unavailableHint: 'Select jobs in Job Activity Monitor first.'
   })
@@ -294,6 +302,9 @@ export function jobActivityCommandEntries(): { readonly [K in JobActivityCommand
     'agent.startJobs': bulk('startJob', 'play', ['start', 'run', 'execute']),
     'agent.stopJobs': bulk('stopJob', 'debug-stop', ['stop', 'cancel']),
     'agent.enableJobs': bulk('enable', 'pass', ['enable']),
-    'agent.disableJobs': bulk('disable', 'circle-slash', ['disable'])
+    'agent.disableJobs': bulk('disable', 'circle-slash', ['disable']),
+    // AG-3b: each asks for its value in the monitor, then sends one request per job.
+    'agent.changeJobOwner': { ...bulk('changeOwner', 'person', ['owner', 'login', 'change', 'bulk']), title: 'Change Job Owner…' },
+    'agent.attachJobSchedule': { ...bulk('attachSchedule', 'agent-schedule', ['schedule', 'attach', 'shared', 'bulk']), title: 'Attach Schedule to Jobs…' }
   }
 }

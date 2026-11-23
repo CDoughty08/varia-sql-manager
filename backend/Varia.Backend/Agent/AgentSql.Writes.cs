@@ -36,8 +36,10 @@ internal static partial class AgentSql
     public static readonly AgentWrite SetEnabled = Write("setEnabled", "sp_update_job", new AgentParameter("@enabled", SqlDbType.TinyInt));
     public static readonly AgentWrite RenameJob = Write("renameJob", "sp_update_job", new AgentParameter("@new_name", SqlDbType.NVarChar, 128));
     public static readonly AgentWrite DeleteJob = Write("deleteJob", "sp_delete_job", new AgentParameter("@delete_history", SqlDbType.Bit), new AgentParameter("@delete_unused_schedule", SqlDbType.Bit));
+    /// <summary>Job Activity Monitor's bulk Change owner (AG-3b), one job per request; msdb lets only sysadmin pass it (14515).</summary>
+    public static readonly AgentWrite ChangeOwner = Write("changeOwner", "sp_update_job", new AgentParameter("@owner_login_name", SqlDbType.NVarChar, 128));
 
-    public static IReadOnlyList<AgentWrite> Writes { get; } = [StartJob, StartJobAtStep, StopJob, SetEnabled, RenameJob, DeleteJob];
+    public static IReadOnlyList<AgentWrite> Writes { get; } = [StartJob, StartJobAtStep, StopJob, SetEnabled, RenameJob, DeleteJob, ChangeOwner];
 
     /// <summary>A job by name, for Delete Object, Start Job at Step and the job document: its immutable job id, its date_created to the second (shown, not compared), whether it is
     /// enabled, and its owner where the login may see that principal. sysjobs_view filters by role itself.</summary>

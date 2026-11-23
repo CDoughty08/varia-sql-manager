@@ -70,7 +70,17 @@ alerts, operators and who is notified, behind the same gate until 0.11.0.
   show, or that no finished run is among those rows; a job that left the list says so).
   Start, Stop, Enable and Disable act on the selected jobs (at most `startJobs`), one AG-2 request per job in turn with
   the job's identity from the list, and list one result line per job; Stop on that list sends no more. A login msdb
-  refuses sees "No access to SQL Server Agent" with the roles that grant it; Agent stopped or Agent XPs off is a banner,
+  refuses sees "No access to SQL Server Agent" with the roles that grant it; Change owner… and Attach schedule… (AG-3b)
+  open a form below the bulk bar for the jobs selected then. Change owner reads New Job's describe for the logins (a login
+  that is not sysadmin is told msdb lets only sysadmin change an owner, and Change stays off) and sends one `changeJobOwner`
+  per job: AG-2's identity guard, then `sp_update_job @owner_login_name` as a parameter (`AgentSql.ChangeOwner`, under the
+  write lint); a job the list already shows with that owner gets "Already owned by …" and no request. Attach schedule reads
+  the Schedules describe and picks a shared schedule as the job document's Schedules section does (search by name or by
+  when, its sentence, owner and next five runs), then sends one `agentSchedule` update per job with the schedule's guard
+  and that job's `version_number` guard and the one job attach (AG-6c's save; `sp_attach_schedule` leaves the schedule's
+  version and date as they are, so every job's request passes the same guard); a job sysadmin's links show already on the
+  schedule gets "Already uses this schedule" and no request, and one the read did not list fails its line unsent. Each
+  result is its own line, a refusal fails only that job, and Stop and Escape (which closes a form) work as for Start; Agent stopped or Agent XPs off is a banner,
   a note below the list says Status is msdb's last reading, and the list refreshes once Agent runs again. Double-click,
   Enter or Open on the selected job opens its job document.
 - **Job document** (`agentJob`, object actions, docs/object-actions.md). One tab per job ("Job Properties - Nightly"), opened
@@ -419,7 +429,11 @@ its step that runs as a proxy comes without the proxy and with the warning).
 `AgentJobsChecks` checks the `agent.jobs` reader offline over a fake runner (rows, tones, views, filters, the last run,
 the watched slots, the service probe and each refusal) and, in the Agent live suite, subscribes to all three probes on
 the scratch job. The `agent-jobs` smoke suite drives Job Activity Monitor against the fake backend's jobs: opening it,
-a view chip, Start on two jobs with the status bar following them, the Last run chevron and reopening it from its node.
+a view chip, Start on two jobs with the status bar following them, the Last run chevron, Change owner on two jobs (and
+Escape closing its form), Attach schedule on three jobs with one already on the schedule, and reopening it from its node.
+`tests/agent-job-bulk.test.ts` covers the two forms' requests, the skipped and unsent jobs, a refusal failing one line, a
+login below sysadmin and a read that fails or answers after its form closed; `AgentActionChecks.ChangeOwner` covers the
+backend's validation and write.
 
 `AgentJobDocumentChecks` checks the job document's planner offline: the save lint and its near misses, each save's batch, the
 validation, the error mapping onto fields and the script's shape, and the steps' planner shapes (renumbered, New Job's, the
@@ -751,7 +765,7 @@ msdb error numbers the actions map (AG-2 onward; reads map 15281 to `AGENT_DISAB
 | `ownerLogins` | 1,000 | Logins the job document's owner picker lists (sysadmin; the owner can still be typed) |
 | `scheduleJobChanges` | 64 | Jobs one schedule save may attach or detach |
 | `lastRunRows` | 202 | History rows Job Activity Monitor's last run reads, newest first, before it cancels the rest |
-| `startJobs` | 100 | Jobs one Start, Stop, Enable or Disable from Job Activity Monitor may name |
+| `startJobs` | 100 | Jobs one Start, Stop, Enable, Disable, Change owner or Attach schedule from Job Activity Monitor may name |
 | `watchedJobs` | 3 | Jobs the status bar follows with live progress |
 | `serviceStatementMs` | 30,000 | One service Start or Stop statement, in ms |
 | `serviceWaitMs` | 60,000 | How long a Start or Stop waits for the service's new state, in ms |

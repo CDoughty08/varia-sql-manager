@@ -2,14 +2,17 @@
 // msdb lets the login see, live. The backend reads and filters the jobs (the agent.jobs source); this service owns each
 // document's view chip, filter box and column value filters, the expanded job whose last run shows in place, the grid's kept
 // state and selection, the tiles' counts, Agent's state from the service probe, and the bulk verbs (Start, Stop, Enable,
-// Disable), which send one AG-2 job verb per selected job, one after another, each with its own result line. Failures are
-// values in the snapshot; nothing throws into React.
+// Disable), which send one AG-2 job verb per selected job, one after another, each with its own result line. Change owner and Attach
+// schedule (AG-3b) first ask for a login or a shared schedule in a form below the bulk bar, then go the same way. Failures are values
+// in the snapshot; nothing throws into React.
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import type { ActionExecuteResult } from '../../../shared/actions/schema'
+import type { AgentSchedulesModel } from '../../../shared/actions/agent-schedule'
+import { agentBulkText, attachPlan, ownerPlan, ownerUnavailable, type BulkJobPlan } from '../../../shared/agent/bulk'
 import { agentLimits } from '../../../shared/agent/catalog'
 import {
   agentAvailability, agentBulkTitles, agentJobFilterLimits, agentJobTextColumns, agentJobsProbe, agentJobsSource, agentServiceProbe, bulkUnavailable, jobActivityTabName,
-  type AgentAvailability, type AgentBulkVerb, type AgentJobColumnFilter, type AgentJobsArgs, type AgentJobView, type AgentServiceSample
+  type AgentAvailability, type AgentBulkFormVerb, type AgentBulkVerb, type AgentJobColumnFilter, type AgentJobsArgs, type AgentJobView, type AgentServiceSample
 } from '../../../shared/agent/jobs'
 import { liveProbes } from '../../../shared/live/catalog'
 import type { LiveFacet } from '../../../shared/live/schema'
@@ -36,11 +39,19 @@ export interface SelectedJob {
   readonly status: string
   /** Its last run's start as the grid shows it (yyyy-MM-dd HH:mm:ss, server time), or '' when it never ran. */
   readonly lastRun: string
+  /** Its owner as the grid shows it ('' where msdb hides the login); Change owner skips a job that already has the one chosen. */
+  readonly owner?: string
 }
 export type BulkLineState = 'waiting' | 'running' | 'done' | 'failed' | 'skipped'
 export interface BulkLine { readonly id: string; readonly name: string; readonly state: BulkLineState; readonly message?: string }
 /** A bulk verb's run: one line per job, in the order they go; Stop sends no more after the one on its way. */
-export interface BulkRun { readonly verb: AgentBulkVerb; readonly lines: readonly BulkLine[]; readonly running: boolean; readonly stopping: boolean }
+export interface BulkRun { readonly verb: BulkRunVerb; readonly lines: readonly BulkLine[]; readonly running: boolean; readonly stopping: boolean }
+export type BulkRunVerb = AgentBulkVerb | AgentBulkFormVerb
+/** Change owner's or Attach schedule's form (AG-3b): the jobs selected when it opened, what its read found, and the value chosen. */
+interface BulkFormBase { readonly key: string; readonly jobs: readonly SelectedJob[]; readonly state: 'loading' | 'ready' | 'failed'; readonly error?: string }
+export interface OwnerForm extends BulkFormBase { readonly verb: 'changeOwner'; readonly owner: string; readonly sysadmin?: boolean; readonly owners?: readonly string[] }
+export interface ScheduleForm extends BulkFormBase { readonly verb: 'attachSchedule'; readonly search: string; readonly picked?: number; readonly model?: AgentSchedulesModel }
+export type BulkForm = OwnerForm | ScheduleForm
 
 export interface JobActivityState {
   readonly id: string
@@ -59,6 +70,7 @@ export interface JobActivityState {
   /** The selection holds more rows than a bulk verb may take (agentLimits.startJobs): only that many were read. */
   readonly overCap: boolean
   readonly bulk?: BulkRun
+  readonly form?: BulkForm
   /** The tiles' counts from the last list sample, in the probe's series order (null where none yet). */
   readonly counts?: readonly (number | null)[]
   readonly service?: AgentServiceSample
@@ -70,7 +82,7 @@ export interface JobActivitySnapshot { readonly documents: Readonly<Record<strin
 export interface JobActivityEnd { readonly code?: string; readonly message: string; readonly denied: boolean }
 
 export interface JobActivityServiceOptions extends CustomDocumentTargetOptions {
-  readonly api: Pick<VariaApi, 'executeObjectAction'>
+  readonly api: Pick<VariaApi, 'executeObjectAction' | 'describeObject'>
   readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'activate' | 'getSnapshot' | 'subscribe'>
   readonly panes: Pick<PaneService, 'getSnapshot' | 'subscribe'>
   readonly groups?: Pick<EditorGroupService, 'getSnapshot' | 'subscribe'>
@@ -85,8 +97,8 @@ export interface JobActivityServiceOptions extends CustomDocumentTargetOptions {
 export const jobActivityText = {
   denied: "This login cannot read SQL Server Agent's jobs: msdb grants them to sysadmin and to members of SQLAgentUserRole, SQLAgentReaderRole and SQLAgentOperatorRole.",
   failed: 'Job Activity Monitor stopped reading the jobs.',
-  bulkDone: (verb: AgentBulkVerb, done: number, total: number) => `${agentBulkTitles[verb].line}: ${done} of ${total} ${total === 1 ? 'job' : 'jobs'} done.`,
-  lineDone: { startJob: 'Start requested', stopJob: 'Stop requested', enable: 'Enabled', disable: 'Disabled' } satisfies { readonly [V in AgentBulkVerb]: string },
+  bulkDone: (verb: BulkRunVerb, done: number, total: number) => `${agentBulkTitles[verb].line}: ${done} of ${total} ${total === 1 ? 'job' : 'jobs'} done.`,
+  lineDone: { startJob: 'Start requested', stopJob: 'Stop requested', enable: 'Enabled', disable: 'Disabled', changeOwner: 'Owner changed', attachSchedule: 'Attached' } satisfies { readonly [V in BulkRunVerb]: string },
   skipped: 'Not sent: Stop',
   lost: 'The connection closed; the outcome is unknown.'
 } as const
@@ -119,7 +131,7 @@ export function pillNote(availability: AgentAvailability, end: JobActivityEnd | 
 }
 
 /** A result line's words for one job's verb. */
-export function bulkLine(verb: AgentBulkVerb, result: ApiResult<ActionExecuteResult> | undefined, thrown?: unknown): Pick<BulkLine, 'state' | 'message'> {
+export function bulkLine(verb: BulkRunVerb, result: ApiResult<ActionExecuteResult> | undefined, thrown?: unknown): Pick<BulkLine, 'state' | 'message'> {
   if (thrown !== undefined) return { state: 'failed', message: thrown instanceof Error ? thrown.message : String(thrown) }
   if (!result) return { state: 'failed', message: jobActivityText.lost }
   if (!result.ok) return { state: 'failed', message: result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST' ? jobActivityText.lost : result.error }
@@ -243,7 +255,7 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
   private following(): void {
     for (const state of Object.values(this.getSnapshot().documents)) {
       const connectionId = this.options.documents.get(state.id)?.connectionId
-      if (connectionId !== state.connectionId) this.patch(state.id, { connectionId, selected: [], overCap: false })
+      if (connectionId !== state.connectionId) this.patch(state.id, { connectionId, selected: [], overCap: false, form: undefined })
     }
   }
 
@@ -367,7 +379,7 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
         const window = await table.handle.getWindow(rows[at], end - at + 1, { colStart: 0, colEnd: readColumns, display: false })
         for (let row = 0; row < window.count; row++) {
           const cell = (column: string) => window.text[row * readColumns + columnIndex[column]] ?? ''
-          if (cell('jobId')) selected.push({ id: cell('jobId').toLowerCase(), name: cell('name'), status: cell('status'), lastRun: cell('lastRun') })
+          if (cell('jobId')) selected.push({ id: cell('jobId').toLowerCase(), name: cell('name'), status: cell('status'), lastRun: cell('lastRun'), owner: cell('owner') })
         }
         at = end + 1
       }
@@ -398,7 +410,24 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
     const state = this.get(id)
     if (!state?.connectionId || !this.canBulk(id)) return
     const connectionId = state.connectionId
-    const jobs = [...state.selected]
+    await this.runLines(id, verb, connectionId, [...state.selected], async job => {
+      const requestId = this.newId()
+      const target = { kind: 'agentJob' as const, name: job.name }
+      const agentIdentity = { jobId: job.id }
+      // When the request left (monotonic): the status bar dates the Start in server time from it.
+      const sentAt = performance.now()
+      const result = await this.options.api.executeObjectAction(verb === 'startJob' ? { action: 'startJob', connectionId, requestId, target, agentIdentity }
+        : verb === 'stopJob' ? { action: 'stopJob', connectionId, requestId, target, agentIdentity }
+        : { action: verb, connectionId, requestId, target, agentIdentity })
+      const outcome = bulkLine(verb, result)
+      if (verb === 'startJob' && outcome.state === 'done') this.options.started?.(connectionId, job, sentAt)
+      return outcome
+    })
+  }
+
+  /** The jobs one after another, each sent by `send` (or decided by it without a request) as its own result line; Stop, closing the
+   *  document or losing the connection sends no more. */
+  private async runLines(id: string, verb: BulkRunVerb, connectionId: string, jobs: readonly SelectedJob[], send: (job: SelectedJob) => Promise<Pick<BulkLine, 'state' | 'message'>>): Promise<void> {
     let lines: BulkLine[] = jobs.map(job => ({ id: job.id, name: job.name, state: 'waiting' }))
     const publish = (running: boolean) => this.patch(id, { bulk: { verb, lines, running, stopping: running && !!this.get(id)?.bulk?.stopping } })
     publish(true)
@@ -411,26 +440,107 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
       }
       lines = lines.map((line, at) => at === index ? { ...line, state: 'running' } : line)
       publish(true)
-      const requestId = this.newId()
-      const target = { kind: 'agentJob' as const, name: job.name }
-      const agentIdentity = { jobId: job.id }
-      let result: ApiResult<ActionExecuteResult> | undefined, thrown: unknown
-      // When the request left (monotonic): the status bar dates the Start in server time from it.
-      const sentAt = performance.now()
-      try {
-        result = await this.options.api.executeObjectAction(verb === 'startJob' ? { action: 'startJob', connectionId, requestId, target, agentIdentity }
-          : verb === 'stopJob' ? { action: 'stopJob', connectionId, requestId, target, agentIdentity }
-          : { action: verb, connectionId, requestId, target, agentIdentity })
-      } catch (failure) { thrown = failure }
-      const outcome = bulkLine(verb, result, thrown)
+      let outcome: Pick<BulkLine, 'state' | 'message'>
+      try { outcome = await send(job) } catch (failure) { outcome = bulkLine(verb, undefined, failure) }
       lines = lines.map((line, at) => at === index ? { ...line, ...outcome } : line)
-      if (verb === 'startJob' && outcome.state === 'done') this.options.started?.(connectionId, job, sentAt)
     }
     if (!this.get(id)) return
     publish(false)
     // The rows change on their own from the live view; reading now shows the verbs' effect at once.
     this.handles.get(id)?.refresh()
   }
+
+  // --- Change owner and Attach schedule (AG-3b) ------------------------------------------------------------------------------
+
+  /** Opens Change owner's or Attach schedule's form for the jobs selected now, and reads what it offers: New Job's describe (whether the login
+   *  is sysadmin, and the logins) or the Schedules describe (the shared schedules with their guards, the jobs' versions and, for sysadmin,
+   *  which job uses which). A form opened again replaces the last; a read for one replaced or closed is dropped. */
+  async openForm(id: string, verb: AgentBulkFormVerb): Promise<void> {
+    await this.settledSelection(id)
+    const state = this.get(id)
+    if (!state?.connectionId || !this.canBulk(id)) return
+    const connectionId = state.connectionId
+    const key = this.newId(), jobs = [...state.selected]
+    this.patch(id, { form: verb === 'changeOwner' ? { verb, key, jobs, state: 'loading', owner: '' } : { verb, key, jobs, state: 'loading', search: '' } })
+    const requestId = this.newId()
+    let failure: string | undefined, value: Awaited<ReturnType<VariaApi['describeObject']>> | undefined
+    try {
+      value = await this.options.api.describeObject({ connectionId, requestId, dialog: verb === 'changeOwner' ? 'agentJob' : 'agentSchedules', target: { kind: 'agent' } })
+    } catch (thrown) { failure = thrown instanceof Error ? thrown.message : String(thrown) }
+    const form = this.get(id)?.form
+    if (form?.key !== key) return
+    if (value && !value.ok) failure = value.error
+    else if (value?.value.error) failure = value.value.error.message
+    const read = value?.ok ? value.value : undefined
+    if (failure !== undefined || !read) { this.patch(id, { form: { ...form, state: 'failed', error: failure ?? agentBulkText.readFailed } }); return }
+    if (form.verb === 'changeOwner') {
+      const model = read.agentJobDocument
+      this.patch(id, { form: model ? { ...form, state: 'ready', sysadmin: model.sysadmin, ...model.owners ? { owners: model.owners } : {} } : { ...form, state: 'failed', error: agentBulkText.readFailed } })
+    } else {
+      const model = read.agentSchedules
+      this.patch(id, { form: model ? { ...form, state: 'ready', model } : { ...form, state: 'failed', error: agentBulkText.readFailed } })
+    }
+  }
+  setFormOwner(id: string, owner: string): void {
+    const form = this.get(id)?.form
+    if (form?.verb === 'changeOwner' && form.owner !== owner) this.patch(id, { form: { ...form, owner } })
+  }
+  setFormSearch(id: string, search: string): void {
+    const form = this.get(id)?.form
+    if (form?.verb === 'attachSchedule' && form.search !== search) this.patch(id, { form: { ...form, search } })
+  }
+  pickFormSchedule(id: string, schedule: number | undefined): void {
+    const form = this.get(id)?.form
+    if (form?.verb !== 'attachSchedule' || form.picked === schedule) return
+    const { picked: _picked, ...rest } = form
+    this.patch(id, { form: schedule === undefined ? rest : { ...rest, picked: schedule } })
+  }
+  /** Cancel: the form closes and focus goes back to the grid. */
+  closeForm(id: string): void {
+    if (!this.get(id)?.form) return
+    this.patch(id, { form: undefined })
+    this.options.focus?.(id)
+  }
+  /** Why the form's Change or Attach is not offered now, or undefined when it is. */
+  formUnavailable(id: string): string | undefined {
+    const state = this.get(id), form = state?.form
+    if (!state || !form) return 'Open Change owner or Attach schedule first.'
+    if (!this.live(id)) return 'Connect to the server first.'
+    if (state.bulk?.running) return 'A bulk action is running in this monitor.'
+    if (form.state === 'loading') return 'Reading…'
+    if (form.state === 'failed') return form.error ?? agentBulkText.readFailed
+    if (form.verb === 'changeOwner') return ownerUnavailable(form)
+    const record = form.picked === undefined ? undefined : form.model?.schedules.find(item => item.id === form.picked)
+    if (!record) return agentBulkText.scheduleNone
+    if (record.version === undefined || !record.modified) return agentBulkText.scheduleUnguarded
+    return undefined
+  }
+  /** Change or Attach: the form closes (focus back to the grid) and its jobs go one request each, every result its own line, as the other bulk verbs. */
+  async submitForm(id: string): Promise<void> {
+    const state = this.get(id), form = state?.form
+    if (!state?.connectionId || !form || this.formUnavailable(id)) return
+    const connectionId = state.connectionId
+    this.patch(id, { form: undefined })
+    // The form held focus; the grid takes it back, as after Cancel.
+    this.options.focus?.(id)
+    const run = async <T>(plan: BulkJobPlan<T>, sendIt: (value: T) => Promise<ApiResult<ActionExecuteResult>>, done: string): Promise<Pick<BulkLine, 'state' | 'message'>> => {
+      if (!('send' in plan)) return plan
+      const outcome = bulkLine(form.verb, await sendIt(plan.send))
+      return outcome.state === 'done' ? { ...outcome, message: done } : outcome
+    }
+    if (form.verb === 'changeOwner') {
+      const owner = form.owner.trim()
+      await this.runLines(id, form.verb, connectionId, form.jobs, job => run(ownerPlan(job, owner), jobOwner => this.options.api.executeObjectAction({
+        action: 'changeJobOwner', connectionId, requestId: this.newId(), target: { kind: 'agentJob', name: job.name }, agentIdentity: { jobId: job.id }, jobOwner
+      }), agentBulkText.ownerDone(owner)))
+      return
+    }
+    const record = form.model!.schedules.find(item => item.id === form.picked)!
+    await this.runLines(id, form.verb, connectionId, form.jobs, job => run(attachPlan(job.id, record, form.model?.jobs, form.model?.links), agentSchedule => this.options.api.executeObjectAction({
+      action: 'agentSchedule', connectionId, requestId: this.newId(), target: { kind: 'agent' }, agentSchedule
+    }), agentBulkText.scheduleDone(record.name)))
+  }
+
   /** Stop: no job after the one on its way gets its verb. */
   stopBulk(id: string): void {
     const bulk = this.get(id)?.bulk
