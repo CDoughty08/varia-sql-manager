@@ -63,6 +63,13 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
         /// <summary>All users: a My jobs listing the budget stopped while classifying, and where it goes on next time.</summary>
         public HistoryListing? Classifying { get; set; }
         public string? ClassifyToken { get; set; }
+        /// <summary>The open jobs' listing under way (FinishedAsync), resumed from its page next time: the jobs it was asked
+        /// about, those it has listed so far, and the locations it could not read. Missing jobs count as finished only once it is whole.</summary>
+        public HistoryListing? Open { get; set; }
+        public string? OpenToken { get; set; }
+        public HashSet<string> OpenIds { get; } = new(StringComparer.Ordinal);
+        public HashSet<string> OpenSeen { get; } = new(StringComparer.Ordinal);
+        public HashSet<string> OpenUnreachable { get; } = new(StringComparer.OrdinalIgnoreCase);
         /// <summary>The jobs the window under way classifies: those held when it began, since an earlier page went by before a
         /// job listed later was held.</summary>
         public HashSet<string>? ClassifyIds { get; set; }
@@ -128,10 +135,10 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
             catch (OperationCanceledException) when (!token.IsCancellationRequested)
             {
                 loading = true;
+                // Every stalled sample past the threshold fails, so the schedule's back-off grows; an answer starts the count again.
                 stalls = answers == answered ? stalls + 1 : 0;
                 if (stalls >= StallsBeforeTimeout)
                 {
-                    stalls = 0;
                     failure = LiveErrors.Create(Probe, "TIMEOUT", "BigQuery did not answer the job listing within the refresh's time budget, several times in a row.");
                 }
             }
@@ -365,41 +372,43 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
     private async Task<bool> FinishedAsync(BigQueryConnection connection, View state, HistoryListing listing, CancellationToken token, Func<int> left, Action<long> spend)
     {
         var held = state.Held.Values.Where(job => job.Open).ToList();
-        if (held.Count == 0) return true;
-        var open = held.Select(job => job.Id).ToHashSet(StringComparer.Ordinal);
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        // Over the held open jobs' own window: an open job created before the oldest of them is new, and the refresh lists it.
-        var start = listing.MinCreated ?? 0;
-        var oldest = held.All(job => job.Created is not null) ? held.Min(job => job.Created!.Value) : start;
-        var openListing = listing with { States = ["pending", "running"], MinCreated = Math.Max(start, oldest) };
-        var unreachable = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        string? pageToken = null;
+        if (held.Count == 0 && state.Open is null) return true;
+        if (state.Open is null)
+        {
+            // Over the held open jobs' own window: an open job created before the oldest of them is new, and the refresh lists it.
+            var start = listing.MinCreated ?? 0;
+            var oldest = held.All(job => job.Created is not null) ? held.Min(job => job.Created!.Value) : start;
+            state.Open = listing with { States = ["pending", "running"], MinCreated = Math.Max(start, oldest) };
+            state.OpenIds.UnionWith(held.Select(job => job.Id));
+        }
         var size = BigQueryJobHistory.PageJobs;
         while (true)
         {
             if (left() <= 0) return false;
             HistoryPage? page;
-            try { page = await ListPageAsync(connection, state, openListing, pageToken, size, left(), token); }
+            try { page = await ListPageAsync(connection, state, state.Open, state.OpenToken, size, left(), token); }
             catch (BigQueryOverLimit)
             {
                 // Pages of long query texts: fewer jobs a page, as the listing does.
                 if (size > 1 && left() >= BigQueryJobHistory.JobBytes) { size = Math.Max(1, size / 4); continue; }
                 return false;
             }
-            if (page is null) return true;
+            if (page is null) { EndOpen(state); return true; }
             spend(page.Bytes);
-            unreachable.UnionWith(page.Unreachable);
+            state.OpenUnreachable.UnionWith(page.Unreachable);
             foreach (var job in page.Items)
             {
-                seen.Add(job.Id);
+                state.OpenSeen.Add(job.Id);
                 Merge(state, job);
             }
-            pageToken = page.Next;
-            if (pageToken is null) break;
+            // Kept as each page lands, so a listing larger than one sample goes on from here rather than start again.
+            state.OpenToken = page.Next;
+            if (state.OpenToken is null) break;
         }
-        // Missing from the answer is finished, unless its location could not be read: it stays open till the next sample.
-        var finished = open.Where(id => !seen.Contains(id) && state.Held.TryGetValue(id, out var job) && job.Open && (job.Location is null || !unreachable.Contains(job.Location)))
-            .Select(id => state.Held[id]).ToList();
+        // Missing from the whole answer is finished, unless its location could not be read: it stays open till the next listing.
+        var finished = state.OpenIds.Where(id => !state.OpenSeen.Contains(id) && state.Held.TryGetValue(id, out var job) && job.Open
+            && (job.Location is null || !state.OpenUnreachable.Contains(job.Location))).Select(id => state.Held[id]).ToList();
+        EndOpen(state);
         if (finished.Count == 0) return true;
         var others = new List<HistoryJob>();
         var reads = 0;
@@ -433,7 +442,7 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
         foreach (var other in others)
         {
             var window = listing with { States = ["done"], MinCreated = other.Created ?? 0, MaxCreated = (other.Created ?? 0) + 1 };
-            pageToken = null;
+            string? pageToken = null;
             size = BigQueryJobHistory.PageJobs;
             while (true)
             {
@@ -453,6 +462,14 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
             }
         }
         return true;
+    }
+
+    private static void EndOpen(View state)
+    {
+        (state.Open, state.OpenToken) = (null, null);
+        state.OpenIds.Clear();
+        state.OpenSeen.Clear();
+        state.OpenUnreachable.Clear();
     }
 
     /// <summary>Which held jobs are the principal's, from minimal My jobs listings: All users lists the creation window of those

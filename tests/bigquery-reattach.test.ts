@@ -213,6 +213,14 @@ describe('a run after Leave it running', () => {
 })
 
 describe('re-attaching restored tabs', () => {
+  it("opens a job's results without taking over its session when Job History asks (adopt false), and adopts otherwise", async () => {
+    const f = fixture()
+    f.documents.update(f.tab.id, { jobKey: '6f2b8f84-2b7c-4b55-9c55-9d6f8c2a1b10' })
+    f.queries.restoreJobs(f.tab.id, [job('job_seen', { state: 'done', adopt: false })])
+    await settle(); await settle(); await settle()
+    expect(f.queryApi.attach).toHaveBeenCalledTimes(1)
+    expect(f.queryApi.attach.mock.calls[0][0]).toMatchObject({ jobId: 'job_seen', adoptSession: false })
+  })
   it("re-attaches a connected tab's newest job, adopting its session with the record's transaction, and never an older one over its results", async () => {
     const f = fixture()
     f.documents.update(f.tab.id, { jobKey: '6f2b8f84-2b7c-4b55-9c55-9d6f8c2a1b10' })

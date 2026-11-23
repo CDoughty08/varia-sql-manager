@@ -254,7 +254,8 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     if (!state) return
     if (value('allUsersDenied') === 1 && state.filters.scope === 'all' && state.connectionId) {
       this.refuse(state.connectionId, { all: jobHistoryText.allUsersRefused })
-      this.patch(id, { status, notice: { tone: 'info', text: jobHistoryText.allUsersDenied(), code: 'PERMISSION_DENIED' } })
+      // As a manual switch to My jobs does: another user's expanded script or open details go with All users.
+      this.patch(id, { status, notice: { tone: 'info', text: jobHistoryText.allUsersDenied(), code: 'PERMISSION_DENIED' }, expanded: [], details: undefined })
       this.setFilters(id, { ...state.filters, scope: 'mine' })
       return
     }
@@ -274,12 +275,12 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     if (this.pending.length) {
       const waiting = this.pending.filter(item => this.now() - item.at < jobHistoryPendingMs)
       this.pending = []
-      // One that fails to open waits for the next change rather than take the others with it; its error is still reported.
+      // One that fails to open is reported once and dropped, without taking the others with it.
       let failure: unknown
       for (const item of waiting) {
         const connection = this.liveFor(item.project)
         if (!connection) { this.pending.push(item); continue }
-        try { this.open(connection.id, item.jobs) } catch (error) { this.pending.push(item); failure ??= error }
+        try { this.open(connection.id, item.jobs) } catch (error) { failure ??= error }
       }
       if (failure !== undefined) { this.publishContext(); throw failure }
     }

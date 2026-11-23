@@ -450,6 +450,8 @@ internal sealed class LiveSubscription : IDisposable
                 else if (sample is not null || error.Code == "BUDGET") retry = (int)Math.Max(0, probe.DueAt - now);
                 else
                 {
+                    // A failing probe is not idle: its retry counts from the asked interval, never the idle one.
+                    probe.Idle = false;
                     probe.Failures++;
                     retry = Retry(probe);
                     probe.DueAt = item.TakenAt + retry;

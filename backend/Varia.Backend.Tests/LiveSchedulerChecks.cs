@@ -451,8 +451,11 @@ internal static class LiveSchedulerChecks
             subscription.Complete(running, Sample("fx.idle"), taken + 600);
             var asked = probe.DueAt;
             subscription.Complete(subscription.TakeDue(asked), Sample("fx.idle"), asked + 5);
-            check(probe.Idle && asked == taken + 1000 && probe.DueAt == asked + 60_000,
-                $"a refresh asked for while a sample runs survives that sample turning the probe idle ({asked - taken} ms), then the idle interval holds");
+            var idleSlot = probe.DueAt;
+            var failing = subscription.TakeDue(idleSlot);
+            subscription.Complete(failing, Error("fx.idle", "SQL_ERROR"), idleSlot + 5);
+            check(asked == taken + 1000 && idleSlot == asked + 60_000 && !probe.Idle && probe.DueAt == idleSlot + 5000,
+                $"a refresh asked for while a sample runs survives that sample turning the probe idle ({asked - taken} ms), then the idle interval holds, and a failure retries at the asked interval ({probe.DueAt - idleSlot} ms)");
         }
 
         // Error back-off: the first failure retries at the interval, then doubles up to 60 s (jitter at its centre here).

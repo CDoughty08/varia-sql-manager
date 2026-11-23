@@ -5,6 +5,7 @@ import {
   jobHistoryDetailsSchema, qualifiedJobId, type JobHistoryDetails, type JobHistoryRow
 } from '../src/shared/bigquery/history'
 import { jobsByProject } from '../src/shared/bigquery/jobs'
+import { optionsAllow } from '../src/shared/ipc/methods'
 import { liveArgsSchemas } from '../src/shared/live/schema'
 import { commandDescriptor } from '../src/shared/commands/catalog'
 import { compileWhen, evaluateWhen } from '../src/shared/commands/when'
@@ -23,6 +24,13 @@ afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 const row = (patch: Partial<JobHistoryRow> = {}): JobHistoryRow => ({ jobId: 'job_1', location: 'US', state: 'done', type: 'query', mine: true, hidden: false, children: 0, ...patch })
 
 describe('Job History rules', () => {
+  it('let main forward a live source only on the engines it serves', () => {
+    expect(optionsAllow('live.subscribe', 'bigquery', { source: 'bigquery.jobs' })).toBe(true)
+    expect(optionsAllow('live.subscribe', 'sqlserver', { source: 'activity' })).toBe(true)
+    expect(optionsAllow('live.subscribe', 'bigquery', { source: 'activity' })).toBe(false)
+    expect(optionsAllow('live.subscribe', 'sqlserver', { source: 'bigquery.jobs' })).toBe(false)
+    expect(optionsAllow('live.subscribe', 'bigquery', { source: 'nope' })).toBe(false)
+  })
   it('names jobs as BigQuery does and copies the console link as text', () => {
     expect(qualifiedJobId('varia-alpha', 'job_1', 'EU')).toBe('varia-alpha:EU.job_1')
     expect(qualifiedJobId('varia-alpha', 'job_1')).toBe('varia-alpha:job_1')

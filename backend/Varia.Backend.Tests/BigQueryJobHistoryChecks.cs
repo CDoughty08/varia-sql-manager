@@ -554,9 +554,29 @@ internal static class BigQueryJobHistoryChecks
         stalled.Fake.Hang = request => request.Uri.AbsolutePath.EndsWith("/jobs", StringComparison.Ordinal);
         using var waiting = stalled.Sampler(new("mine", Hours: 24));
         var cut = new List<LiveSampleBatch>();
-        for (var n = 0; n < BigQueryJobsSampler.StallsBeforeTimeout; n++) cut.Add(await waiting.SampleAsync([Due(1000)], CancellationToken.None));
-        check(cut[..^1].All(batch => batch.Errors.Count == 0 && Status(batch, "loading") is 1) && cut[^1].Errors is [{ Code: "TIMEOUT" }],
-            $"samples the budget cuts before any answer fail with TIMEOUT after {BigQueryJobsSampler.StallsBeforeTimeout}, not load for ever");
+        for (var n = 0; n <= BigQueryJobsSampler.StallsBeforeTimeout; n++) cut.Add(await waiting.SampleAsync([Due(1000)], CancellationToken.None));
+        check(cut[..^2].All(batch => batch.Errors.Count == 0 && Status(batch, "loading") is 1) && cut[^2].Errors is [{ Code: "TIMEOUT" }] && cut[^1].Errors is [{ Code: "TIMEOUT" }],
+            $"samples the budget cuts before any answer fail with TIMEOUT from the {BigQueryJobsSampler.StallsBeforeTimeout}rd on, each one after, so the back-off grows");
+
+        // The open jobs' listing goes on from its page next time: a finished job is read once that listing is whole, and its
+        // first page is never asked again (a slow first page stops the first sample past the soft deadline).
+        using var slow = new Harness();
+        await slow.ConnectAsync(key);
+        using var follower = slow.Sampler(new("mine", Hours: 24));
+        await SampleAsync(follower);
+        slow.Fake.On("GET", Jobs, request =>
+        {
+            var query = request.Uri.Query;
+            if (!query.Contains("stateFilter=", StringComparison.Ordinal) || query.Contains("pageToken=o2", StringComparison.Ordinal)) return BigQueryFake.Text("""{"kind":"bigquery#jobList"}""");
+            Thread.Sleep(900);
+            return BigQueryFake.Text("""{"kind":"bigquery#jobList","nextPageToken":"o2"}""");
+        }).On("GET", Jobs + "/varia_running", _ => new BigQueryFake.Reply(200, JsonNode.Parse(Timed("jobs-list", slow.Now).Replace("\"RUNNING\"", "\"DONE\""))!["jobs"]![0]!.ToJsonString()));
+        await follower.SampleAsync([Due(1000)], CancellationToken.None);
+        var settled = await SampleAsync(follower);
+        var open = slow.Listings().Where(query => query.Contains("stateFilter=", StringComparison.Ordinal)).ToList();
+        check(settled.Errors.Count == 0 && Status(settled, "open") is 0 && slow.Gets("varia_running") == 1
+            && open.Count(query => !query.Contains("pageToken=", StringComparison.Ordinal)) == 1 && open.Count(query => query.Contains("pageToken=o2", StringComparison.Ordinal)) == 1,
+            "the open jobs' listing goes on from its page in the next sample, and a job it left out is read once it is whole: " + string.Join(" | ", open));
     }
 
     /// <summary>BigQuery's refusals reach the probe as their liveErrorCodes.</summary>
