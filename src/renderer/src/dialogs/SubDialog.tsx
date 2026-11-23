@@ -1,7 +1,9 @@
 import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { trapFocus } from '../trap-focus'
-import { focusToReturn, returnFocusTo } from '../core/focus'
+import { focusToReturn, isElement, returnFocusTo } from '../core/focus'
+import DialogFooter from '../kit/DialogFooter'
+import { useDialogWindow } from '../popouts/DialogWindow'
 
 export interface SubDialogProps {
   readonly title: string
@@ -33,22 +35,25 @@ export interface SubDialogProps {
  * to where it was.
  */
 export default function SubDialog({ title, okLabel = 'OK', cancelLabel = 'Cancel', okDisabled, onOk, onCancel, initialFocus, className, status, destructive, alternative, alert, describedBy, children }: SubDialogProps) {
+  const { ownerDocument } = useDialogWindow()
   const titleId = useId()
   const form = useRef<HTMLFormElement>(null)
   const cancel = useRef<HTMLButtonElement>(null)
   // Read while rendering, before the dialog takes focus.
   const returnFocus = useRef(focusToReturn())
   useEffect(() => {
-    const target = (destructive || alert ? cancel.current : null) ?? (initialFocus ? document.getElementById(initialFocus) : null) ?? form.current?.querySelector<HTMLElement>('input:not(:disabled), select:not(:disabled), button:not(:disabled)')
+    const doc = form.current?.ownerDocument ?? ownerDocument
+    const target = (destructive || alert ? cancel.current : null) ?? (initialFocus ? doc.getElementById(initialFocus) : null) ?? form.current?.querySelector<HTMLElement>('input:not(:disabled), select:not(:disabled), button:not(:disabled)')
     target?.focus()
     const previous = returnFocus.current
     return () => returnFocusTo(previous)
-  }, [initialFocus, destructive, alert])
+  }, [initialFocus, destructive, alert, ownerDocument])
   // OK disabled while its work runs (Killing…) drops focus to the page: keep it in the dialog, where Tab and Escape work.
   useEffect(() => {
-    const active = document.activeElement
-    if (okDisabled && form.current && (!active || active === document.body)) form.current.focus()
-  }, [okDisabled])
+    const doc = form.current?.ownerDocument ?? ownerDocument
+    const active = doc.activeElement
+    if (okDisabled && form.current && (!active || active === doc.body)) form.current.focus()
+  }, [okDisabled, ownerDocument])
   const keyDown = (event: KeyboardEvent<HTMLFormElement>) => {
     // A portal's events still bubble to the dialog it opened over, which must not also act on them.
     event.stopPropagation()
@@ -57,21 +62,23 @@ export default function SubDialog({ title, okLabel = 'OK', cancelLabel = 'Cancel
     else if (event.key === 'Enter') {
       // A button presses itself and a drop-down list opens; a list box (Select Database Owner's) chooses, as OK does.
       // A destructive OK runs only from its own button.
-      if (event.target instanceof HTMLButtonElement || (event.target instanceof HTMLSelectElement && event.target.size <= 1) || destructive || alert) return
+      if (isElement(event.target) && (event.target.tagName === 'BUTTON' || (event.target.tagName === 'SELECT' && (event.target as HTMLSelectElement).size <= 1)) || destructive || alert) return
       event.preventDefault()
       if (!okDisabled) onOk()
     }
   }
-  // In a portal: a form cannot hold another form.
+  // In a portal of the active window's document: a form cannot hold another form, and a dialog OS window keeps its own document.
   return createPortal(<div className="modal-backdrop sub-dialog-backdrop"><form ref={form} className={className ? `connection-modal sub-dialog ${className}` : 'connection-modal sub-dialog'} role={alert ? 'alertdialog' : 'dialog'} aria-modal="true" aria-labelledby={titleId} aria-describedby={describedBy} noValidate tabIndex={-1}
     onSubmit={event => { event.preventDefault(); event.stopPropagation(); if (!okDisabled) onOk() }} onKeyDown={keyDown}>
     <div className="connection-heading"><h2 id={titleId}>{title}</h2></div>
     <div className="sub-dialog-body">{children}</div>
-    <div className="connection-footer">
-      <span className="sub-dialog-status">{status}</span>
-      <button className={destructive ? 'danger' : 'primary'} type="submit" disabled={okDisabled}>{okLabel}</button>
-      {alternative && <button type="button" onClick={alternative.run}>{alternative.label}</button>}
-      <button type="button" ref={cancel} onClick={onCancel}>{cancelLabel}</button>
-    </div>
-  </form></div>, document.body)
+    <DialogFooter
+      status={<span className="sub-dialog-status">{status}</span>}
+      trailing={<>
+        <button className={destructive ? 'danger' : 'primary'} type="submit" disabled={okDisabled}>{okLabel}</button>
+        {alternative && <button type="button" onClick={alternative.run}>{alternative.label}</button>}
+        <button type="button" ref={cancel} onClick={onCancel}>{cancelLabel}</button>
+      </>}
+    />
+  </form></div>, ownerDocument.body)
 }

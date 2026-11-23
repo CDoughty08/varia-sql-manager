@@ -5,9 +5,9 @@ import { randomBytes } from 'node:crypto'
 import { expandExplorerPath, explorerLines, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.mjs'
 import {
-  anyResultGrid, closeDocumentButton, documentFrame, documentTab, gridCell, activeDocumentName, activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, editorTextIn, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
-  explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, explorerDropLine, searchHitApproximate, explorerSublabel, explorerToolbar, itemCount,
-  dependenciesDialog, dependenciesTree, dependencyNode, localGrid, menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, objectSearchServerOptions, outputView, paneMenuButton, part, peekDefinitionText, peekEditorWidgetHosts, dockPopoutBack, queryEditorText, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton, expectEditorShown
+  anyResultGrid, closeDocumentButton, connectDialogWindow, documentFrame, documentTab, gridCell, activeDocumentName, activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, editorTextIn, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
+  explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, explorerDropLine, pressToClose, searchHitApproximate, explorerSublabel, explorerToolbar, itemCount,
+  dependenciesDialog, dependenciesTree, dependencyNode, localGrid, menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, objectSearchServerOptions, outputView, paneMenuButton, part, peekDefinitionText, peekEditorWidgetHosts, dockPopoutBack, queryEditorText, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, submitConnect, toolbarButton as mainToolbarButton, expectEditorShown, dialogClosed
 } from './fixtures/ui.mjs'
 import { pinStackedResults } from './fixtures/results-pane.mjs'
 import { activeDocument, emptyQueryStripPoint, queryServer, serverDropCard } from './fixtures/ui.mjs'
@@ -107,8 +107,7 @@ async function connect(server, { keyboard = false } = {}) {
     await page.getByRole('button', { name: 'Connect to server', exact: true }).focus()
     await page.keyboard.press('Enter')
   } else await mainToolbarButton(page, 'Connect').click()
-  const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
-  await expect(dialog.getByText('Loading saved connections…')).toHaveCount(0)
+  const { window: connectWin, dialog } = await connectDialogWindow(application)
   await dialog.getByLabel('Server Name', { exact: true }).fill(server)
   if (server === process.env.VARIA_TEST_SQL_SERVER && liveUser) {
     await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
@@ -118,9 +117,9 @@ async function connect(server, { keyboard = false } = {}) {
   if (server === process.env.VARIA_TEST_SQL_SERVER) await dialog.getByLabel('Trust server certificate', { exact: true }).check()
   if (keyboard) {
     await dialog.getByLabel('Server Name', { exact: true }).focus()
-    await page.keyboard.press('Enter')
-  } else await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(dialog).toHaveCount(0, { timeout: 30000 })
+    await pressToClose(connectWin, 'Enter')
+    await dialogClosed(connectWin, 'Connect', { timeout: 30000 })
+  } else await submitConnect(connectWin, dialog, { timeout: 30000 })
 }
 /** Records renderer long tasks (50 ms or more, the shortest Chromium reports) from now on, by the phase they fell in. */
 const startLongTasks = () => page.evaluate(() => {

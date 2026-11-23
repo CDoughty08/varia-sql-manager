@@ -368,6 +368,7 @@ explorer.context, for the SQL Server Agent node
   &Properties  ⌘I  -+++
 explorer.context, for a SQL Server Agent job
   &New Job…  -+++
+  &Create Job Like This…  -+++
   ---
   View &History  -+++
   ---

@@ -232,6 +232,8 @@ internal static partial class BigQueryExecutionChecks
 
     static async Task StorageReadAsync(Action<bool, string> check)
     {
+        Trace("StoreProbe");
+        StoreProbe(check);
         Trace("StorageText");
         StorageText(check);
         Trace("Scanner");
@@ -250,6 +252,20 @@ internal static partial class BigQueryExecutionChecks
         await StorageProxyAsync(check);
         Trace("StorageEdgesAsync");
         await StorageEdgesAsync(check);
+    }
+
+    /// <summary>The BigQuery checks never read the machine's memory load (docs/testing.md): with the real probe, a busy machine
+    /// past its 90 % threshold truncated every result, and Storage Read checks failed as fallbacks, empty sets and timeouts.</summary>
+    static void StoreProbe(Action<bool, string> check)
+    {
+        using (var harness = new Harness(new Jobs()))
+            check(!harness.Service.Results.ChecksSystemMemory && harness.Service.Results.GlobalBytes >= ResultStore.MinBytes,
+                "the BigQuery execution harness stores results under the machine's budget without the memory-load probe");
+        var folder = Path.Combine(GoldenText.Repository(), "backend", "Varia.Backend.Tests");
+        var probing = Directory.GetFiles(folder, "BigQuery*.cs").SelectMany(file => File.ReadLines(file).Select((line, index) => (file, line, index)))
+            .Where(item => item.line.Contains("new SqlService(", StringComparison.Ordinal) && !item.line.Contains("CheckStores.Unprobed()", StringComparison.Ordinal))
+            .Select(item => Path.GetFileName(item.file) + ":" + (item.index + 1)).ToList();
+        check(probing.Count == 0, "every BigQuery check's SqlService gets a store without the memory-load probe (CheckStores.Unprobed): " + string.Join(", ", probing));
     }
 
     /// <summary>BigQueryText: the writers both readers share, against independently written text.</summary>

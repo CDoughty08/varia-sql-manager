@@ -3,8 +3,8 @@ import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
-  backendReady, dialogClosed, dialogWindow, documentTabSlots, editorText as editorTextOf, menubar, movePane, optionsControls, optionsDescription, optionsForm, optionsHeading, optionsNotes, optionsSection, pane, dockPopoutBack, popoutTabs, queryServer, resultGrid,
-  shortcutsInspector, shortcutsRow, shortcutsSearch, shortcutsSheet, shortcutsTable, toolbarButton, warningBanner as warningBannerOf, expectEditorShown, pressToClose, clickToClose
+  backendReady, connectDialogWindow, dialogClosed, dialogWindow, documentTabSlots, editorText as editorTextOf, menubar, movePane, optionsControls, optionsDescription, optionsForm, optionsHeading, optionsNotes, optionsSection, pane, dockPopoutBack, popoutTabs, queryServer, resultGrid,
+  shortcutsInspector, shortcutsRow, shortcutsSearch, shortcutsSheet, shortcutsTable, submitConnect, toolbarButton, warningBanner as warningBannerOf, expectEditorShown, pressToClose, clickToClose
 } from './fixtures/ui.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
@@ -120,9 +120,35 @@ try {
   expect(await controlShape(search())).toEqual(standardControl)
   expect(await searchIconFits(search())).toBe(true)
   await expect(search()).toHaveCSS('outline-offset', '-2px')
+  const footerMetrics = await options.evaluate(() => {
+    const box = document.querySelector('[role="dialog"]').getBoundingClientRect()
+    const buttons = [...document.querySelectorAll('[role="dialog"] button')]
+    const reset = buttons.find(item => item.textContent?.trim() === 'Reset Page')?.getBoundingClientRect()
+    const cancel = buttons.find(item => item.textContent?.trim() === 'Cancel')?.getBoundingClientRect()
+    return {
+      compatMode: document.compatMode,
+      dialogBottomGap: innerHeight - box.bottom,
+      leftGap: reset?.left,
+      bottomGapLeft: reset ? innerHeight - reset.bottom : null,
+      rightGap: cancel ? innerWidth - cancel.right : null,
+      bottomGapRight: cancel ? innerHeight - cancel.bottom : null
+    }
+  })
+  expect(footerMetrics.compatMode).toBe('CSS1Compat')
+  expect(Math.abs(footerMetrics.dialogBottomGap)).toBeLessThan(1)
+  expect(Math.abs(footerMetrics.leftGap - 8)).toBeLessThan(1)
+  expect(Math.abs(footerMetrics.rightGap - 8)).toBeLessThan(1)
+  expect(Math.abs(footerMetrics.bottomGapLeft - 8)).toBeLessThan(1)
+  expect(Math.abs(footerMetrics.bottomGapRight - 8)).toBeLessThan(1)
   await expect(heading()).toHaveText('Environment › General')
   await expect(node('General').first()).toHaveAttribute('aria-selected', 'true')
-  await expect(optionsNotes(dialog()).first()).toHaveText('Color theme: View › Theme')
+  const themeModeGroup = dialog().getByRole('radiogroup', { name: 'Color theme mode', exact: true })
+  await expect(themeModeGroup.getByRole('radio', { name: /^Dark/ })).toHaveAttribute('aria-checked', 'true')
+  await expect(field('Dark theme palette')).toBeVisible()
+  await themeModeGroup.getByRole('radio', { name: /^Light/ }).click()
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.themeType)).toBe('light')
+  await themeModeGroup.getByRole('radio', { name: /^Dark/ }).click()
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.themeType)).toBe('dark')
   for (const name of ['Text Editor', 'Transact-SQL', 'Query Execution', 'Query Results', 'SQL Server Object Explorer']) await node(name).click()
   expect(await treeNames()).toEqual([
     'Environment', '  General', '  AutoRecover', '  Documents', '  Fonts and Colors', '  Shortcuts', '  Product Updates', '  Live Data', '  Object Explorer', '  Connections', 'Text Editor', '  General', '  Editor Tab and Status Bar', '  Transact-SQL', '    General', '    IntelliSense', '    Tabs', '  GoogleSQL', 'Query Execution', '  SQL Server', '    General', '    Advanced', '  BigQuery',
@@ -164,12 +190,17 @@ try {
   await expect(optionsDescription(dialog())).toHaveCount(0)
   await dialog().getByRole('radio', { name: 'Mouse', exact: true }).click()
   expect(await controlShape(dialog().getByRole('combobox', { name: /: modifier$/ }).first())).toEqual(denseControl)
-  // Fonts and Colors says where colors are set, above its Size row and while that row is focused.
+  // Fonts and Colors says where colors are set, shows the focused Size row in the bottom description pane, and previews Size live.
   await node('Fonts and Colors').click()
   await field('Size').focus()
   expect(await controlShape(field('Size'))).toEqual(standardControl)
   await expect(optionsNotes(dialog())).toHaveText('Colors come from the color theme (View › Theme).')
   await expect(optionsDescription(dialog())).toContainText('Size')
+  const fontPreview = dialog().getByLabel('Editor font size preview', { exact: true }).locator('pre')
+  await expect(fontPreview).toHaveCSS('font-size', '13px')
+  await field('Size').fill('16')
+  await expect(fontPreview).toHaveCSS('font-size', '16px')
+  await field('Size').fill('13')
   // Environment › AutoRecover has SSMS's defaults (on, every 5 minutes, kept 7 days); off greys both numbers.
   await node('AutoRecover').click()
   await expect(field('Save AutoRecover information')).toBeChecked()
@@ -200,14 +231,19 @@ try {
   await field('Automatically reconnect on startup').uncheck()
   console.log('Options checks: Alt+T, O opens Environment › General with the search box focused, the page tree has its expected pages and keys, AutoRecover has SSMS\'s defaults, and Connections enables startup reconnect by default.')
 
-  // 2. Ctrl+E (⌘E) searches: "time-out" leaves Query Execution › SQL Server › General, highlighted; Escape clears, then closes.
+  // 2. Ctrl+E (⌘E) searches across all pages: "time-out" shows unified Search Results with breadcrumb links and
+  // highlighted matches; Escape clears it, then prompts before discarding pending changes.
   await node('Shortcuts').focus()
   await options.keyboard.press(searchKey)
   await expect(search()).toBeFocused()
   await options.keyboard.type('time-out')
   expect(await treeNames()).toEqual(['Query Execution', '  SQL Server', '    General'])
-  await expect(heading()).toHaveText('Query Execution › SQL Server › General')
+  await expect(heading()).toHaveText('Search Results')
   await expect(optionsForm(dialog()).locator('mark')).toHaveText('time-out')
+  await dialog().getByRole('button', { name: 'Query Execution › SQL Server › General ›', exact: true }).click()
+  await expect(heading()).toHaveText('Query Execution › SQL Server › General')
+  await dialog().getByRole('button', { name: 'Back to all search results', exact: true }).click()
+  await expect(heading()).toHaveText('Search Results')
   // The key is the catalogue's options.focusSearch, a modal key: from a page's field it focuses the box and selects its
   // text, and Shift with it does nothing.
   await field('Execution time-out').focus()
@@ -222,9 +258,19 @@ try {
   await options.keyboard.press('Escape')
   await expect(search()).toHaveValue('')
   await expect(dialog()).toBeVisible()
-  await pressToClose(options, 'Escape')
+  // Connections has a pending change from step 1: Escape opens the inline discard confirmation in place of OK/Cancel.
+  await options.keyboard.press('Escape')
+  const keepEditing = dialog().getByRole('button', { name: 'Keep Editing', exact: true })
+  await expect(keepEditing).toBeFocused()
+  await expect(dialog().getByRole('button', { name: 'OK', exact: true })).toHaveCount(0)
+  await expect(dialog().getByRole('button', { name: 'Apply', exact: true })).toHaveCount(0)
+  await keepEditing.click()
+  await expect(dialog().getByRole('button', { name: 'OK', exact: true })).toBeVisible()
+  await expect(dialog()).toBeVisible()
+  await options.keyboard.press('Escape')
+  await clickToClose(dialog().getByRole('button', { name: 'Discard Changes', exact: true }))
   await closed()
-  console.log('Options checks: Ctrl+E focuses the search, which filters the tree and highlights matches; Escape clears it, then cancels.')
+  console.log('Options checks: Ctrl+E shows unified Search Results with breadcrumbs, Escape clears it, and dirty Escape asks before discarding.')
 
   // 3. Changes across pages, one OK: settings.json holds exactly the changed keys, and each takes effect.
   await openOptions()
@@ -234,6 +280,8 @@ try {
   await node('Advanced').click()
   await field('Stop the script at the first batch that raises an error').check()
   await field('Stop the script at the first batch that raises an error').focus()
+  await expect(optionsForm(dialog())).toContainText('Varia')
+  await expect(optionsForm(dialog())).toContainText('Next execution')
   await expect(optionsDescription(dialog())).toContainText('Not in SSMS.')
   await showPage('Text Editor', 'Transact-SQL')
   await field('Word wrap').check()
@@ -241,7 +289,8 @@ try {
   await field('Tab size').fill('2')
   await field('Indent size').fill('2')
   // SSMS's default is Keep tabs; with Insert spaces, Tab inserts an indent's two columns as spaces.
-  await dialog().getByRole('radio', { name: 'Insert spaces', exact: true }).check()
+  await dialog().getByRole('radio', { name: 'Insert spaces', exact: true }).click()
+  await expect(dialog().getByRole('radio', { name: 'Insert spaces', exact: true })).toHaveAttribute('aria-checked', 'true')
   await showPage('SQL Server Object Explorer', 'Commands')
   await field('Value for Select Top <n> Rows command').fill('50')
   await showPage('Environment', 'Object Explorer')
@@ -277,10 +326,10 @@ try {
   await expect.poll(() => page.locator('.monaco-editor .view-line').count()).toBeGreaterThan(1)
   // F5 on a connected query sends Options' time-out and stop-on-error.
   await toolbarButton(page, 'Connect').click()
-  await page.getByLabel('Server Name', { exact: true }).fill('server-a')
-  await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(page.getByRole('dialog')).toHaveCount(0)
+  const { window: connectWin, dialog: connectDialog } = await connectDialogWindow(application)
+  await connectDialog.getByLabel('Server Name', { exact: true }).fill('server-a')
+  await connectDialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
+  await submitConnect(connectWin, connectDialog)
   // Connect closes before it binds the query to the new connection (App's finishConnected), and F5 on a query with none
   // asks to connect instead of running: wait for the query's server.
   await expect(queryServer(page)).not.toHaveValue('')
@@ -317,7 +366,8 @@ try {
   await expect(field('Execution time-out')).toBeFocused()
   await expect(field('Execution time-out')).toHaveAttribute('aria-invalid', 'true')
   await expect(field('Execution time-out')).not.toHaveCSS('border-top-color', validBorder)
-  await clickToClose(dialog().getByRole('button', { name: 'Cancel', exact: true }))
+  await dialog().getByRole('button', { name: 'Cancel', exact: true }).click()
+  await clickToClose(dialog().getByRole('button', { name: 'Discard Changes', exact: true }))
   await closed()
   expect((await stored()).values).toMatchObject({ 'environment.connections.autoReconnect': false, 'queryExecution.executionTimeout': 7, 'textEditor.sql.tabSize': 2 })
   await openOptions()
@@ -362,10 +412,10 @@ try {
   expect(await optionsWindow()).toMatchObject({ parent: true, resizable: true, ...process.platform === 'linux' ? {} : { minimizable: false, maximizable: false } })
   await showPage('Query Results', 'SQL Server', 'Results to Grid')
   for (const name of ['Grid display', 'Copy and save', 'Limits and memory', 'Execution plan']) await expect(optionsSection(dialog(), name)).toBeVisible()
-  await expect(optionsSection(dialog(), 'Execution plan').getByRole('checkbox', { name: 'Show outline', exact: true })).toBeChecked()
+  await expect(optionsSection(dialog(), 'Execution plan').getByRole('switch', { name: 'Show outline', exact: true })).toBeChecked()
   // Copy and Save Results As have their own header settings: copy without by default, save with.
-  await expect(optionsSection(dialog(), 'Copy and save').getByRole('checkbox', { name: 'Include column headers when copying the results', exact: true })).not.toBeChecked()
-  await expect(optionsSection(dialog(), 'Copy and save').getByRole('checkbox', { name: 'Include column headers when saving the results', exact: true })).toBeChecked()
+  await expect(optionsSection(dialog(), 'Copy and save').getByRole('switch', { name: 'Include column headers when copying the results', exact: true })).not.toBeChecked()
+  await expect(optionsSection(dialog(), 'Copy and save').getByRole('switch', { name: 'Include column headers when saving the results', exact: true })).toBeChecked()
   await expect(optionsSection(dialog(), 'Execution plan').getByRole('spinbutton', { name: 'Outline width', exact: true })).toHaveValue('220')
   await expect(optionsSection(dialog(), 'Limits and memory')).toContainText('0 = no limit')
   await expect(optionsSection(dialog(), 'Limits and memory')).toContainText('GiB · 0 = automatic')
@@ -374,20 +424,51 @@ try {
   expect(await controlShape(dialog().getByRole('button', { name: 'OK', exact: true }))).toEqual(standardControl)
   // Transfer keyboard focus from the search box so the select shows its inset focus ring.
   await search().focus()
-  await options.keyboard.press('Tab')
-  await options.keyboard.press('Tab')
+  for (let step = 0; step < 6; step++) {
+    if (await resultsLayout.evaluate(el => el === document.activeElement)) break
+    await options.keyboard.press('Tab')
+  }
   await expect(resultsLayout).toBeFocused()
   await expect(resultsLayout).toHaveCSS('outline-offset', '-2px')
-  const columns = await optionsControls(dialog()).evaluateAll(controls => controls.map(control => { const box = control.getBoundingClientRect(); return `${Math.round(box.left)}:${Math.round(box.width)}` }))
-  expect(columns.length).toBeGreaterThan(5)
-  expect(new Set(columns).size).toBe(1)
+  const lefts = await optionsControls(dialog()).evaluateAll(controls => controls.map(control => Math.round(control.getBoundingClientRect().left)))
+  expect(lefts.length).toBeGreaterThan(5)
+  expect(Math.max(...lefts) - Math.min(...lefts)).toBeLessThanOrEqual(1)
+  await optionsSection(dialog(), 'Execution plan').getByRole('spinbutton', { name: 'Outline width', exact: true }).hover()
+  await expect(optionsDescription(dialog()).locator('strong')).toHaveText('Outline width')
   await showPage('Text Editor', 'Editor Tab and Status Bar')
-  expect(await controlShape(field('Include database name'))).toEqual(denseControl)
+  await expect(field('Include database name')).toBeVisible()
+  await showPage('SQL Server Object Explorer', 'Commands')
+  expect(await controlShape(field('Value for Select Top <n> Rows command'))).toEqual(denseControl)
   await showPage('Query Results', 'SQL Server', 'Results to Grid')
-  // Searching a section's name finds its rows.
+  // Searching a section's name finds its rows in unified Search Results and drills back into the page.
   await search().fill('execution plan')
+  await expect(heading()).toHaveText('Search Results')
+  await dialog().getByRole('button', { name: 'Query Results › SQL Server › Results to Grid ›', exact: true }).click()
   await expect(heading()).toHaveText('Query Results › SQL Server › Results to Grid')
   await search().fill('')
+  // Rail splitter keyboard resize, Modified filter, Apply without closing, and per-row reset.
+  const splitter = dialog().getByRole('separator', { name: 'Resize options navigation', exact: true })
+  await splitter.focus()
+  await options.keyboard.press('ArrowRight')
+  await expect(splitter).toHaveAttribute('aria-valuenow', '236')
+  await options.keyboard.press('Home')
+  await expect(splitter).toHaveAttribute('aria-valuenow', '224')
+  const outlineSwitch = optionsSection(dialog(), 'Execution plan').getByRole('switch', { name: 'Show outline', exact: true })
+  await outlineSwitch.uncheck()
+  await expect(dialog()).toContainText('1 setting pending')
+  const applyButton = dialog().getByRole('button', { name: 'Apply', exact: true })
+  await expect(applyButton).toBeEnabled()
+  await applyButton.click()
+  await expect(dialog()).toBeVisible()
+  await expect(applyButton).toBeDisabled()
+  await expect(dialog()).toContainText('Changes applied')
+  await dialog().getByRole('button', { name: /^Modified \(/ }).click()
+  await expect(heading()).toHaveText('Modified Settings')
+  await dialog().getByRole('button', { name: 'Reset Show outline', exact: true }).click()
+  await expect(applyButton).toBeEnabled()
+  await applyButton.click()
+  await dialog().getByRole('button', { name: /^Modified \(/ }).click()
+  await showPage('Query Results', 'SQL Server', 'Results to Grid')
   // A text field in the dialog window has its menu, by mouse and by Shift+F10; Escape closes the menu, not the dialog.
   const fieldMenu = options.getByRole('menu', { name: 'Text field', exact: true })
   await search().click({ button: 'right' })
@@ -418,7 +499,8 @@ try {
   // Smaller than the default and than CI's screens: a reopened window is kept 32 px inside the screen.
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(item => item.getTitle() === 'Options').setContentSize(900, 600))
   await expect.poll(() => options.evaluate(() => [innerWidth, innerHeight])).toEqual([900, 600])
-  await clickToClose(dialog().getByRole('button', { name: 'Cancel', exact: true }))
+  await dialog().getByRole('button', { name: 'Cancel', exact: true }).click()
+  await clickToClose(dialog().getByRole('button', { name: 'Discard Changes', exact: true }))
   await closed()
   await openOptions()
   expect((await optionsWindow()).size).toEqual([900, 600])
@@ -486,11 +568,12 @@ try {
     await options.keyboard.press('Shift+F9')
     await expect(capture).toHaveValue(mac ? '⇧F9' : 'Shift+F9')
     await inspector.getByRole('button', { name: 'Assign', exact: true }).click()
-    await expect(dialog()).toContainText('2 shortcut changes staged · applied on OK')
+    await expect(dialog()).toContainText('2 shortcuts pending')
   }
   if (!mac) {
     await remapNewQuery()
-    await clickToClose(dialog().getByRole('button', { name: 'Cancel', exact: true }))
+    await dialog().getByRole('button', { name: 'Cancel', exact: true }).click()
+    await clickToClose(dialog().getByRole('button', { name: 'Discard Changes', exact: true }))
     await closed()
     expect(await shortcutsFile()).toBeNull()
     expect(await fileMenuKeys()).toBe('Control+N')
@@ -506,10 +589,10 @@ try {
     await opens(page, () => editor().focus(), 'Shift+F9', 1)
     // A popout routes keys through the same rules: Shift+F9 in the Results window opens a query in the main window.
     await toolbarButton(page, 'Connect').click()
-    await page.getByLabel('Server Name', { exact: true }).fill('server-a')
-    await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
-    await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
-    await expect(page.getByRole('dialog')).toHaveCount(0)
+    const { window: popoutConnectWin, dialog: popoutConnectDialog } = await connectDialogWindow(application)
+    await popoutConnectDialog.getByLabel('Server Name', { exact: true }).fill('server-a')
+    await popoutConnectDialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
+    await submitConnect(popoutConnectWin, popoutConnectDialog)
     await editor().focus()
     await page.keyboard.press('Control+A')
     await page.keyboard.insertText('SELECT 1')
@@ -536,14 +619,14 @@ try {
     await expect(refused).toContainText('Nothing was changed.')
     await refused.getByRole('button', { name: 'OK', exact: true }).click()
     await expect(refused).toHaveCount(0)
-    await expect(dialog()).not.toContainText('staged · applied on OK')
+    await expect(dialog()).not.toContainText('pending')
 
     // Reset All, then OK: the file keeps no bindings and Ctrl+N is New Query's again.
     await dialog().getByRole('button', { name: 'Reset All…', exact: true }).click()
     const reset = shortcutsSheet(dialog(), 'Reset all shortcuts?')
     await reset.getByRole('button', { name: 'Reset All', exact: true }).click()
     await expect(reset).toHaveCount(0)
-    await expect(dialog()).toContainText('2 shortcut changes staged · applied on OK')
+    await expect(dialog()).toContainText('2 shortcuts pending')
     await clickToClose(dialog().getByRole('button', { name: 'OK', exact: true }))
     await closed()
     await expect.poll(async () => { const file = await shortcutsFile(); return file && (file.bindings ?? []) }).toEqual([])
@@ -581,7 +664,7 @@ try {
   await openOptions()
   await node('SQL Server Object Explorer').click()
   await node('Scripting').click()
-  await expect(field('Script USE <database>')).toHaveValue('false')
+  await expect(field('Script USE <database>')).not.toBeChecked()
   await pressToClose(options, 'Escape')
   await closed()
   expect(await stored()).toEqual({ version: 1, values: { 'objectExplorer.scripting.scriptUseDatabase': false } })

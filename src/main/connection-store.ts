@@ -62,6 +62,8 @@ export class ConnectionStore {
       profile.options = kept ? { ...options, environment: kept } : options
       if (input.favorite !== undefined) profile.favorite = input.favorite
       if (input.registered !== undefined) profile.registered = input.registered
+      // Restoring a removed recent entry keeps its original recency instead of turning it into a Saved-only entry.
+      if (input.lastConnected !== undefined && !connected) { profile.lastConnected = input.lastConnected; delete profile.saved }
       // Saved marks only an entry that never connected; a connection makes it recent instead.
       if (input.saved && !profile.lastConnected) profile.saved = true
       if (input.autoReconnect !== undefined) profile.autoReconnect = input.autoReconnect

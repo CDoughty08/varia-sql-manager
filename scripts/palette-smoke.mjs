@@ -2,7 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { explorerRow, explorerStatics, explorerTree } from './fixtures/explorer-tree.mjs'
-import { activeDocumentName, backendReady, documentTabs, editorText as editorTextOf, messages, part, quickInput, quickInputActive, quickInputBox, quickInputMessage, quickInputRows, searchBox, expectEditorShown } from './fixtures/ui.mjs'
+import { activeDocumentName, backendReady, connectDialogWindow, documentTabs, editorText as editorTextOf, messages, part, pressToClose, quickInput, quickInputActive, quickInputBox, quickInputMessage, quickInputRows, searchBox, submitConnect, expectEditorShown, dialogClosed } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'palette-profile-'))
@@ -274,12 +274,11 @@ try {
   await expect.poll(() => menuItem('query.execute')).toMatchObject({ enabled: true })
   await textbox().focus()
   await page.keyboard.press('F5')
-  await expect(page.getByRole('dialog', { name: 'Connect', exact: true })).toBeVisible()
+  const { window: f5Win, dialog: f5Dialog } = await connectDialogWindow(application)
   expect(await calls('query.execute')).toBe(0)
-  await page.getByLabel('Server Name', { exact: true }).fill('server-a')
-  await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await f5Dialog.getByLabel('Server Name', { exact: true }).fill('server-a')
+  await f5Dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
+  await submitConnect(f5Win, f5Dialog)
   const explorer = await explorerRow(page, 'server-a')
   await expect(explorer).toBeVisible()
   await expect.poll(() => calls('query.execute')).toBe(1)
@@ -399,10 +398,10 @@ try {
   // does not reach into the editor behind it.
   await typeSql('SELECT 42;')
   await page.getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(page.getByRole('dialog')).toBeVisible()
-  await page.keyboard.press('F1')
-  await page.keyboard.press('Control+N')
-  const cancel = page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true })
+  const { window: connectWin, dialog } = await connectDialogWindow(application)
+  await connectWin.keyboard.press('F1')
+  await connectWin.keyboard.press('Control+N')
+  const cancel = dialog.getByRole('button', { name: 'Cancel', exact: true })
   await cancel.focus()
   // The workbench's command listener comes first, so once this one has seen the click, Undo has run.
   await page.evaluate(() => { globalThis.variaSeenCommands = []; globalThis.variaStopSeeing = window.varia.onCommand(id => globalThis.variaSeenCommands.push(id)) })
@@ -411,8 +410,8 @@ try {
   await page.evaluate(() => globalThis.variaStopSeeing())
   await expect(cancel).toBeFocused()
   expect(await editorText()).toContain('SELECT\u00a042;')
-  await page.keyboard.press('Escape')
-  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await pressToClose(connectWin, 'Escape')
+  await dialogClosed(connectWin, 'Connect')
   await expect(widget()).toHaveCount(0)
   await expect(tabs()).toHaveCount(2)
 

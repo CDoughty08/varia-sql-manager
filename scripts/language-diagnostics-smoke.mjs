@@ -1,5 +1,5 @@
 import { electron, expect } from './fixtures/smoke.mjs'
-import { activeDocumentName, backendReady, caretStatus, documentTab, editorDiagnosticMarks, editorGroupForDocument, editorGroups, editorHover, editorSurface, editorText, editorTextbox, queryDatabase, queryServer, sqlQueryIssues, suggestionItems, suggestionOption, suggestionWidget, toolbarButton } from './fixtures/ui.mjs'
+import { activeDocumentName, backendReady, caretStatus, connectDialogWindow, documentTab, editorDiagnosticMarks, editorGroupForDocument, editorGroups, editorHover, editorSurface, editorText, editorTextbox, queryDatabase, queryServer, sqlQueryIssues, submitConnect, suggestionItems, suggestionOption, suggestionWidget, toolbarButton } from './fixtures/ui.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { parseCalls } from './fixtures/call-log.mjs'
@@ -39,16 +39,16 @@ async function setText(scope, value) {
 }
 async function connect(name, database) {
   await toolbarButton(page, 'Connect').click()
-  await page.getByLabel('Server Name', { exact: true }).fill(name)
-  await page.getByLabel('Authentication', { exact: true }).selectOption(live && username ? 'sql' : 'windows')
+  const { window: connectWin, dialog } = await connectDialogWindow(application)
+  await dialog.getByLabel('Server Name', { exact: true }).fill(name)
+  await dialog.getByLabel('Authentication', { exact: true }).selectOption(live && username ? 'sql' : 'windows')
   if (live && username) {
-    await page.getByLabel('Login', { exact: true }).fill(username)
-    await page.getByLabel('Password', { exact: true }).fill(password)
+    await dialog.getByLabel('Login', { exact: true }).fill(username)
+    await dialog.getByLabel('Password', { exact: true }).fill(password)
   }
-  await page.getByLabel('Database Name', { exact: true }).fill(database)
-  await page.getByLabel('Trust server certificate', { exact: true }).check()
-  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(page.getByRole('dialog')).toHaveCount(0, wait)
+  await dialog.getByLabel('Database Name', { exact: true }).fill(database)
+  await dialog.getByLabel('Trust server certificate', { exact: true }).check()
+  await submitConnect(connectWin, dialog, wait)
   await expect(queryDatabase(page)).toHaveValue(database)
   return { connectionId: await queryServer(page).inputValue(), tab: await activeDocumentName(page) }
 }

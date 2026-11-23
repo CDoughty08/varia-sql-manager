@@ -1,4 +1,4 @@
-import { activeDocumentName, backendReady, documentTabs, explorerTree, outputStatus, outputView, planCanvas, planViewer, queryBarButton, quickInputActive } from './ui.mjs'
+import { activeDocumentName, backendReady, clickToClose, connectDialogWindow, dialogClosed, documentTabs, explorerTree, outputStatus, outputView, planCanvas, planViewer, queryBarButton, quickInputActive } from './ui.mjs'
 
 /** Crash the real sidecar while one tab profiles, inspect only that run's collector from another query tab,
  * reconnect through the palette, and let the next toolbar capture recover it. No backend request starts a run. */
@@ -38,12 +38,11 @@ export async function checkCaptureRecovery({ application, page, expect, run, agg
     await page.keyboard.press('F1'); await page.keyboard.type('reconnect')
     await expect(quickInputActive(page)).toContainText('Connection: Reconnect')
     await page.keyboard.press('Enter')
-    const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
-    await expect(dialog).toBeVisible()
+    const { window: connectWin, dialog } = await connectDialogWindow(application)
     const typedCredentials = !!process.env.VARIA_TEST_SQL_USER?.trim()
     if (typedCredentials) await dialog.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
-    await dialog.getByRole('button', { name: typedCredentials ? 'Update Credentials and Reconnect' : 'Connect', exact: true }).click()
-    await expect(dialog).toHaveCount(0)
+    await clickToClose(dialog.getByRole('button', { name: typedCredentials ? 'Update Credentials and Reconnect' : 'Connect', exact: true }))
+    await dialogClosed(connectWin, 'Connect', { timeout: 30000 })
     await expect(page.getByRole('combobox', { name: 'Query server', exact: true }).locator('option:checked')).not.toBeDisabled()
     await expect(explorerTree(page)).toBeFocused()
     await page.keyboard.press(`${mod}+n`)

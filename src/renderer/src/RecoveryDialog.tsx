@@ -3,6 +3,7 @@ import { useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import Icon from './Icon'
 import { savedAgo } from './services/recovery'
 import { trapFocus } from './trap-focus'
+import DialogFooter from './kit/DialogFooter'
 
 /**
  * Recover Unsaved Queries: what AutoRecover kept of queries an earlier run or workbench did not save, all selected.
@@ -78,10 +79,12 @@ export default function RecoveryDialog() {
       </div>}
       {error && <p className="connect-error" role="alert">{error}</p>}
     </div>
-    <div className="connection-footer">
-      <button type="button" disabled={!chosen.length || busy} onClick={() => { setError(''); setConfirming(true) }}>Discard Selected</button><span />
-      <button className="primary" type="button" autoFocus disabled={!chosen.length || busy} onClick={recover}>Recover Selected</button>
-      <button type="button" onClick={close}>Later</button>
-    </div>
+    <DialogFooter
+      leading={<button type="button" disabled={!chosen.length || busy} onClick={() => { setError(''); setConfirming(true) }}>Discard Selected</button>}
+      trailing={<>
+        <button className="primary" type="button" autoFocus disabled={!chosen.length || busy} onClick={recover}>Recover Selected</button>
+        <button type="button" onClick={close}>Later</button>
+      </>}
+    />
   </div></div>
 }
