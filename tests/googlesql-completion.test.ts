@@ -359,6 +359,10 @@ describe('completion from the index', () => {
     const started = performance.now()
     expect((await complete(unnests)).incomplete).toBe(true)
     expect(performance.now() - started).toBeLessThan(2000)
+    // A member list whose source the cap cut is not final, though every answer came back whole.
+    const copies = Array.from({ length: 600 }, (_, index) => `c0 a${index}`).join(', ')
+    const member = await complete(`WITH c0 AS (SELECT * FROM \`varia-wide.lab.whole\`), c1 AS (SELECT * FROM ${copies}) SELECT items.| FROM c1, sales.orders o`)
+    expect(member.incomplete).toBe(true)
   })
 
   it('says the list is not final when an UNNEST\'s prefix went unasked', async () => {

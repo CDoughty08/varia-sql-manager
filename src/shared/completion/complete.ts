@@ -49,12 +49,12 @@ export async function completeFromIndex(read: CompletionRead, dialect: Completio
       if (cutShort.size && (field ? field.columns.truncated : !namespace)) {
         const { prefix, object } = field ? await resolver.prefixThrough(field.source, field.path, word.typed) : { prefix: [...site.qualifier, word.typed].join('.'), object: undefined }
         if (prefix) {
-          resolver = new ScopeResolver(scope, dialect, lookup, object && cutShort.has(object) ? new Map([[object, [prefix]]]) : narrowing(cutShort, [prefix]))
+          resolver = new ScopeResolver(scope, dialect, lookup, object && cutShort.has(object) ? new Map([[object, [prefix]]]) : narrowing(cutShort, [prefix])).inherit(resolver)
           await resolver.load()
           field = await resolver.field(site.qualifier) ?? field
         }
       }
-      incomplete ||= resolver.failed || resolver.cut || (!field && resolver.cutShort().size > 0)
+      incomplete ||= resolver.failed || resolver.cut || resolver.overBudget || (!field && resolver.cutShort().size > 0)
       if (field) {
         incomplete ||= field.columns.truncated
         for (const column of childrenOf(field.columns.columns, field.path)) add(columnItem(column, field.path.length, insert))
@@ -89,11 +89,11 @@ export async function completeFromIndex(read: CompletionRead, dialect: Completio
           const { prefix, object } = await resolver.prefixThrough(source, [], word.typed)
           for (const [path, prefixes] of plan) if (prefix && (!object || object === path) && !prefixes.includes(prefix)) prefixes.push(prefix)
         }
-        resolver = new ScopeResolver(scope, dialect, lookup, plan)
+        resolver = new ScopeResolver(scope, dialect, lookup, plan).inherit(resolver)
         await resolver.load()
         given = await resolver.all(scope.sources)
       }
-      incomplete ||= resolver.failed || resolver.cut
+      incomplete ||= resolver.failed || resolver.cut || resolver.overBudget
       // Sources that read the same object share its columns: each is listed once, under the nearest.
       const listed = new Set<object>()
       for (const [rank, source] of scope.sources.entries()) {

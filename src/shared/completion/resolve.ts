@@ -113,6 +113,12 @@ export class ScopeResolver {
   private named?: Map<string, ScopeSource[]>
   /** Select-list reads and columns merged so far (resolverLimits.work). */
   private spent = 0
+
+  /** Whether reads went past the work cap: what they gave is not all there is. */
+  get overBudget(): boolean { return this.spent > resolverLimits.work }
+
+  /** Carries an earlier resolver's work over (a second ask is the same completion's, under the same cap). */
+  inherit(from: ScopeResolver): this { this.spent = Math.max(this.spent, from.spent); return this }
   private readonly ctes = new Map<string, QueryShape>()
   /** Sources being read: one met again while it is read (a WITH query that reads itself) gives no columns. */
   private readonly reading = new Set<ScopeSource>()
@@ -250,7 +256,7 @@ export class ScopeResolver {
         // UNNEST(hits) AS hits: the path names what the source reads, not the source itself.
         const field = await this.field(source.path, source)
         // Not found: it may lie past what a table cut short gave.
-        if (!field) return { columns: [], truncated: this.cutShort().size > 0 }
+        if (!field) return { columns: [], truncated: this.overBudget || this.cutShort().size > 0 }
         this.spent += 1 + field.columns.columns.length
         const prefix = field.path.length
         return { truncated: field.columns.truncated, columns: childrenAndBelow(field.columns.columns, field.path).map(column => ({ ...column, path: column.path.split('.').slice(prefix).join('.') })) }
