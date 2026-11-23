@@ -317,7 +317,7 @@ export default function JobDocument({ documentId }: { documentId: string }) {
       : state.error && !state.error.field && <InlineError message={state.error.message} code={state.error.code} context={`Job ${name} on ${state.server}`} actions={recovery} />}
     {jobErrorField(state.error) && !state.stale && <p className="property-field-error" role="alert"><Icon name="error" />{`Not saved: ${agentJobFieldLabels[jobErrorField(state.error)!]}. Nothing was changed; your changes are kept.`}</p>}
     {!state.error && state.notice && <p className="document-status" role="status"><Icon name="pass" />{state.notice}</p>}
-    {state.row && <div className="agent-copy-banner" role="note"><Icon name="copy" /><span>{rowLinked && rowAt ? createSeveralText.editorBanner(rowAt) : createSeveralText.editorOrphan}</span>
+    {state.row && <div className="agent-copy-banner" role="note"><Icon name="copy" /><span>{rowLinked && rowAt ? jobDocuments.rowPaused(state.id) ? createSeveralText.editorPaused(rowAt) : createSeveralText.editorBanner(rowAt) : createSeveralText.editorOrphan}</span>
       {rowLinked && <button type="button" className="link-button" onClick={() => jobDocuments.backToTable(state.id)}>{createSeveralText.backToTable}</button>}</div>}
     {state.source && !state.row && <div className="agent-copy-banner" role="note"><Icon name="copy" /><span>{createFromText.banner(state.source.base.name)}</span>
       <button type="button" className="link-button" aria-expanded={!!state.compareOpen} onClick={() => jobDocuments.toggleCompare(state.id)}>{state.compareOpen ? createFromText.compareHide : createFromText.compare}</button></div>}

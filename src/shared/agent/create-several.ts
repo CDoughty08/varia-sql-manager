@@ -76,9 +76,11 @@ export const createSeveralText = {
   failed: (message: string) => `Failed: ${message} Rolled back.`,
   unknown: (message: string) => `Not known: ${message}`,
   open: 'Open',
-  done: (created: number, failed: number, skipped: number, disabled: number) => {
+  done: (created: number, failed: number, skipped: number, disabled: number, unknown = 0, notSent = 0) => {
     const parts = [`${created} ${created === 1 ? 'job' : 'jobs'} created${created && disabled === created ? ' (disabled)' : disabled ? ` (${disabled} disabled)` : ''}`]
     if (failed) parts.push(`${failed} failed and rolled back`)
+    if (unknown) parts.push(`${unknown} not known (check Jobs before retrying)`)
+    if (notSent) parts.push(`${notSent} not sent`)
     if (skipped) parts.push(`${skipped} skipped`)
     return `Done: ${parts.join(', ')}. Each row was its own transaction.`
   },
@@ -90,6 +92,8 @@ export const createSeveralText = {
   backHint: 'Back to the table keeps the rows that were not created so you can fix and retry them; created rows are locked.',
   lost: 'The connection closed while the job was being created, so whether it was created is unknown. Reconnect, then check Jobs before retrying.',
   stopped: 'Not sent: an earlier row lost the connection.',
+  closed: 'Not sent: the connection is closed.',
+  editorPaused: (at: number) => `Row ${at} of Create several jobs is read-only while the table shows its review or results: go Back to the table there to change it.`,
   busy: 'The jobs are being created. Wait for it to finish.'
 } as const
 
@@ -264,6 +268,8 @@ export type SeveralResult =
   | { readonly state: 'created'; readonly name: string; readonly enabled: boolean; readonly enableError?: string }
   | { readonly state: 'failed'; readonly message: string }
   | { readonly state: 'unknown'; readonly message: string }
+  /** Never sent (an earlier row lost the connection, or it was closed): known not created. */
+  | { readonly state: 'notSent'; readonly message: string }
 export interface SeveralRow {
   readonly key: string
   /** Typed overrides by column id; an absent cell uses the row's base (its full editor's draft, else the template). */
@@ -332,7 +338,13 @@ export function severalCell(context: SeveralContext, row: SeveralRow, column: Se
 }
 
 function putRow(table: SeveralTable, key: string, change: (row: SeveralRow) => SeveralRow): SeveralTable {
-  const rows = table.rows.map(row => row.key === key && !severalLocked(row) ? change(row) : row)
+  const rows = table.rows.map(row => {
+    if (row.key !== key || severalLocked(row)) return row
+    const next = change(row)
+    if (next === row || (next.result?.state !== 'failed' && next.result?.state !== 'notSent')) return next
+    const { result: _result, ...rest } = next
+    return rest
+  })
   return rows.some((row, at) => row !== table.rows[at]) ? { ...table, rows } : table
 }
 
@@ -538,8 +550,8 @@ export function severalSummary(context: SeveralContext, table: SeveralTable, row
 /** The results banner's counts. `skipped`: rows the review left out. */
 export function severalDoneText(table: SeveralTable, skipped: number): string {
   const created = table.rows.filter(row => row.result?.state === 'created')
-  const failed = table.rows.filter(row => row.result && row.result.state !== 'created').length
-  return createSeveralText.done(created.length, failed, skipped, created.filter(row => row.result?.state === 'created' && !row.result.enabled).length)
+  const count = (state: NonNullable<SeveralRow['result']>['state']) => table.rows.filter(row => row.result?.state === state).length
+  return createSeveralText.done(created.length, count('failed'), skipped, created.filter(row => row.result?.state === 'created' && !row.result.enabled).length, count('unknown'), count('notSent'))
 }
 /** The created jobs saved disabled: what Enable the created jobs enables. */
 export const severalDisabled = (table: SeveralTable) => table.rows.filter(row => row.result?.state === 'created' && !row.result.enabled)

@@ -183,6 +183,17 @@ describe('Create several: the table', () => {
     expect(severalSummary(context, table, table.rows[0]!)).toBe('Job, 3 steps (T-SQL, SSIS), new schedule ETL – Load HR – Nightly 02:30, 2 fields differ, disabled')
     const done: SeveralTable = { ...table, rows: [{ ...table.rows[0]!, result: { state: 'created', name: 'ETL – Load HR', enabled: false } }, { key: 'r2', cells: {}, result: { state: 'failed', message: 'x' } }] }
     expect(severalDoneText(done, 1)).toBe('Done: 1 job created (disabled), 1 failed and rolled back, 1 skipped. Each row was its own transaction.')
+    // A lost connection is not a rollback: the row on its way is not known and the rest were never sent.
+    const lost: SeveralTable = { ...done, rows: [done.rows[0]!, { key: 'r2', cells: {}, result: { state: 'unknown', message: 'x' } }, { key: 'r3', cells: {}, result: { state: 'notSent', message: 'y' } }] }
+    expect(severalDoneText(lost, 0)).toBe('Done: 1 job created (disabled), 1 not known (check Jobs before retrying), 1 not sent. Each row was its own transaction.')
+  })
+  it('drops a failed row\'s result once the row changes, but keeps a created or unknown one', () => {
+    const context = contextOf()
+    const base = startSeveral(context)
+    const table: SeveralTable = { ...base, rows: [{ key: 'r1', cells: {}, result: { state: 'failed', message: 'x' } }, { key: 'r2', cells: {}, result: { state: 'unknown', message: 'y' } }], next: 3 }
+    const edited = withSeveralCell(context, withSeveralCell(context, table, 'r1', 'name', 'Renamed'), 'r2', 'name', 'Other')
+    expect(edited.rows.map(row => row.result?.state)).toEqual([undefined, 'unknown'])
+    expect(withSeveralEdited(table, 'r1', severalRowDraft(context, table.rows[0]!).draft).rows[0]!.result).toBeUndefined()
   })
 })
 
@@ -264,7 +275,7 @@ describe('Create several: the document', () => {
     answers.push({ ok: true, value: { steps: [], messages: [], elapsedMs: 1 } }, { ok: false, error: 'gone', code: 'CONNECTION_LOST' })
     await jobDocuments.createSeveralJobs(id)
     expect(executes().filter(request => request.action === 'agentJob')).toHaveLength(2)
-    expect(jobDocuments.get(id)?.several?.table.rows.map(row => row.result?.state)).toEqual(['created', 'unknown', 'unknown'])
+    expect(jobDocuments.get(id)?.several?.table.rows.map(row => row.result?.state)).toEqual(['created', 'unknown', 'notSent'])
   })
   it('opens a row in the full editor, whose edits go back to the row, and Back to the table closes it', async () => {
     const { jobDocuments, documents } = opened()
@@ -275,6 +286,15 @@ describe('Create several: the document', () => {
     const editor = jobDocuments.openSeveralRow(id, 'r1')!
     expect(documents.get(editor)).toMatchObject({ name: 'Row 1 · ETL – Load HR', dirty: false })
     expect(jobDocuments.get(editor)).toMatchObject({ phase: 'ready', draft: { name: 'ETL – Load HR' }, row: { table: id, key: 'r1' } })
+    // Under review the row cannot change from its editor either: what the review shows is what Create sends.
+    jobDocuments.reviewSeveral(id)
+    expect(jobDocuments.rowPaused(editor)).toBe(true)
+    expect(jobDocuments.canEdit(editor)).toBe(false)
+    jobDocuments.updateDraft(editor, { description: 'During review' })
+    expect(jobDocuments.get(id)!.several!.table.rows[0]!.edited).toBeUndefined()
+    expect(jobDocuments.canSave(editor)).toBe(false)
+    jobDocuments.severalToTable(id)
+    expect(jobDocuments.canEdit(editor)).toBe(true)
     expect(jobDocuments.openSeveralRow(id, 'r1')).toBe(editor)
     expect(jobDocuments.canSave(editor)).toBe(false)
     expect(jobDocuments.canReload(editor)).toBe(false)

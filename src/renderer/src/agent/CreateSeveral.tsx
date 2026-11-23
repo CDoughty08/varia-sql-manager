@@ -194,7 +194,7 @@ function Results({ state, service, several, context, checks }: TableProps) {
           <td>{done ? <span className="agent-copy-inline"><Icon name="pass" />{done.enabled ? createSeveralText.createdEnabled : createSeveralText.created}
             {done.enableError && <span className="field-note">{createSeveralText.enableFailed(done.enableError)}</span>}
             <button type="button" className="link-button" onClick={() => service.openSeveralCreated(state.id, done.name)}>{createSeveralText.open}</button></span>
-            : row.result && row.result.state !== 'created' ? <span className="agent-copy-inline agent-several-failed"><Icon name="error" />{row.result.state === 'failed' ? createSeveralText.failed(row.result.message) : createSeveralText.unknown(row.result.message)}</span>
+            : row.result && row.result.state !== 'created' ? <span className="agent-copy-inline agent-several-failed"><Icon name="error" />{row.result.state === 'failed' ? createSeveralText.failed(row.result.message) : row.result.state === 'unknown' ? createSeveralText.unknown(row.result.message) : row.result.message}</span>
               : several.phase === 'creating' && !reason ? <span className="field-note">{createSeveralText.waiting}</span> : reason || several.phase !== 'review' ? <span className="field-note">{createSeveralText.notSent}</span> : <span className="field-note">{createSeveralText.ok}</span>}</td>
         </tr>
       })}</tbody>

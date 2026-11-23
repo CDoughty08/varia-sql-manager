@@ -160,7 +160,7 @@ alerts, operators and who is notified, behind the same gate until 0.11.0.
   a cell; at most 100 rows) and Fill names (`{n}`, `{package}`, `{database}`, `{source}`). The selected row's details list every field it
   differs in from the template, with Reset for those not in a visible column; **Open full editor** opens the row as an unsaved job tab
   ("Row n · name") with every section, whose edits go straight back to the row as its whole draft (shown as Other changes), and Back to
-  the table closes it; Save and Reload are off there, and a row removed or created meanwhile leaves the editor a copy of its own. Checks
+  the table closes it; Save and Reload are off there, it is read-only while the table shows its review or results, and a row removed or created meanwhile leaves the editor a copy of its own. Checks
   run before anything is sent: a duplicate name among the rows, a name msdb already lists, a cell that cannot be used and every error New
   Job's save refuses block a row; warnings (a required SSIS parameter without a value, an operator not notified) only show. **Review and
   create** lists what each row sends and the rows it skips; Create sends each row as its own `agentJob` save (New Job's one transaction),

@@ -326,7 +326,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
 
   canEdit(id: string): boolean {
     const state = this.get(id)
-    return !!state?.model && !!state.draft && state.phase === 'ready' && !state.model.readOnly && !state.stale
+    return !!state?.model && !!state.draft && state.phase === 'ready' && !state.model.readOnly && !state.stale && !this.rowPaused(id)
   }
   updateDraft(id: string, patch: Partial<AgentJobDraft>): void {
     const state = this.get(id)
@@ -1257,11 +1257,16 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     this.options.documents.setDirty(document.id, false)
     return document.id
   }
-  /** Whether a full editor's row can still take its edits: its table shows it, not created and not being sent. */
+  /** Whether a full editor still belongs to its row: the table has it and it is not created. */
   rowLinked(id: string): boolean {
     const link = this.get(id)?.row, several = link ? this.get(link.table)?.several : undefined
     const row = several?.table.rows.find(item => item.key === link!.key)
-    return !!row && !severalLocked(row) && several!.phase !== 'creating'
+    return !!row && !severalLocked(row)
+  }
+  /** A linked editor whose table is under review, creating or showing results: the row cannot change until Back to the table. */
+  rowPaused(id: string): boolean {
+    const link = this.get(id)?.row
+    return !!link && this.rowLinked(id) && this.get(link.table)?.several?.phase !== 'table'
   }
   /** The row's number in its table, for the editor's banner and tab. */
   rowNumber(id: string): number | undefined {
@@ -1272,7 +1277,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   /** The full editor's draft onto its row; false when the row cannot take it (the editor is then a copy of its own). */
   private syncRow(id: string): boolean {
     const state = this.get(id), link = state?.row
-    if (!state?.draft || !link || !this.rowLinked(id)) return false
+    if (!state?.draft || !link || !this.rowLinked(id) || this.rowPaused(id)) return false
     const several = this.get(link.table)!.several!
     this.patchSeveral(link.table, { table: withSeveralEdited(several.table, link.key, state.draft), selected: link.key })
     const at = this.rowNumber(id)
@@ -1311,9 +1316,9 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     let stopped = false
     for (const [index, row] of sending.entries()) {
       this.patchSeveral(id, { progress: { at: index + 1, count: sending.length } })
-      const result: SeveralResult = stopped ? { state: 'unknown', message: createSeveralText.stopped } : await this.createRow(id, connectionId, state.model, severalRowDraft(context, row).draft)
+      const result: SeveralResult = stopped ? { state: 'notSent', message: createSeveralText.stopped } : await this.createRow(id, connectionId, state.model, severalRowDraft(context, row).draft)
       if (!this.get(id)?.several) return
-      if (result.state === 'unknown') stopped = true
+      if (result.state === 'unknown' || result.state === 'notSent') stopped = true
       const table = this.get(id)!.several!.table
       this.patchSeveral(id, { table: { ...table, rows: table.rows.map(item => item.key === row.key ? { ...item, result } : item) } })
     }
@@ -1322,7 +1327,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   private async createRow(id: string, connectionId: string, model: AgentJobDocumentModel, draft: AgentJobDraft): Promise<SeveralResult> {
     const save = agentJobSave(model, draft)
     if (!save) return { state: 'failed', message: 'There is nothing to send.' }
-    if (!this.live(id) || this.connectionOf(id) !== connectionId) return { state: 'unknown', message: createSeveralText.stopped }
+    if (!this.live(id) || this.connectionOf(id) !== connectionId) return { state: 'notSent', message: createSeveralText.closed }
     const requestId = this.begin(id, 'save')
     const result = await this.call(() => this.options.api.executeObjectAction({ action: 'agentJob', connectionId, requestId, target: { kind: 'agent' }, agentJob: save }))
     if (!this.end(id, requestId)) return { state: 'unknown', message: createSeveralText.lost }
