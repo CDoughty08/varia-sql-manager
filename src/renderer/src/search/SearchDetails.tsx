@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { BigQueryProperties } from '../../../shared/bigquery/objects'
 import { peekSpecs } from '../../../shared/explorer/peek.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
 import type { ObjectSearchHit } from '../../../shared/explorer/search.ts'
@@ -10,6 +11,7 @@ import { onUnexpectedError } from '../core/errors'
 import ExplorerIcon from '../explorer/ExplorerIcon'
 import { formatPeekValue } from '../explorer/peek-format'
 import { PeekListGrid } from '../explorer/PeekListGrid'
+import { LocalGrid } from '../grid/LocalGrid'
 import { peekMessages } from '../explorer/PeekService'
 import Icon from '../Icon'
 import Segmented from '../kit/Segmented'
@@ -129,10 +131,31 @@ export function hitProperties(hit: ObjectSearchHit): readonly { readonly label: 
   const { object } = hit
   return [
     { label: 'Type', value: hitKindSpec(object.kind).title },
+    ...object.project === undefined ? [] : [{ label: 'Project', value: object.project }],
+    ...object.dataset === undefined ? [] : [{ label: 'Dataset', value: object.dataset }],
     ...object.database === undefined ? [] : [{ label: 'Database', value: object.database }],
     ...object.parent ? [{ label: 'Schema', value: object.parent.schema ?? '' }, { label: hitKindSpec(object.parent.kind).title, value: object.parent.name }]
       : object.schema === undefined ? [] : [{ label: 'Schema', value: object.schema }]
   ].filter(row => row.value !== '')
+}
+
+/** A BigQuery object's facts as the pane lists them: every group's, but its full name and type, which the head and the strip already show. */
+export function bigQueryFacts(value: BigQueryProperties): readonly { readonly label: string; readonly value: string }[] {
+  return value.groups.flatMap(group => group.facts).filter(fact => fact.label !== 'Full name' && fact.label !== 'Type')
+}
+
+/** A BigQuery table's columns and nested fields as the pane's grid shows them: path, type and description. */
+export function bigQueryColumnsTable(value: BigQueryProperties) {
+  return { columns: [{ name: 'Name' }, { name: 'Type' }, { name: 'Description' }], rows: (value.columns ?? []).map(column => [column.name, column.type, column.description ?? null]) }
+}
+
+/** A BigQuery table's CREATE statement, which a billed query reads: offered on a button that goes through the estimate and the cost prompts. */
+function BilledCreate({ searchId }: { readonly searchId: string }) {
+  const { searchDetails } = useWorkbench()
+  return <div className="peek-note">
+    <p>BigQuery bills the query that reads a table’s CREATE statement, so the pane reads it only when you ask, after its estimate.</p>
+    <button type="button" className="peek-action" disabled={!searchDetails.canReadCreate(searchId)} onClick={() => { void searchDetails.readCreate(searchId).catch(onUnexpectedError) }}>Show CREATE Statement</button>
+  </div>
 }
 
 function Definition({ details, part }: { readonly details: Details; readonly part: DefinitionPart }) {
@@ -158,6 +181,7 @@ function Definition({ details, part }: { readonly details: Details; readonly par
     scroller.scrollTop = Math.max(0, element.offsetTop + (line - 1) * height - scroller.clientHeight / 3)
   }, [details.id, text, line])
   if (part.status === 'none') return <p className="peek-note">{hitKindSpec(details.hit.object.kind).title} has no definition to show.</p>
+  if (part.status === 'billed') return null
   if (part.status === 'loading') return <p className="peek-note">Loading the definition…</p>
   if (part.status === 'error') return <p className="peek-note error" role="alert">{part.message}</p>
   if (text === undefined) return <p className="peek-note">{peekMessages.noDefinition}</p>
@@ -168,11 +192,13 @@ function Definition({ details, part }: { readonly details: Details; readonly par
         ? <span key={index} style={{ color: run.style.foreground, fontStyle: run.style.fontStyle.includes('italic') ? 'italic' : undefined, fontWeight: run.style.fontStyle.includes('bold') ? 'bold' : undefined }}>{run.text}</span>
         : run.text)}</pre>
     {length !== undefined && length > text.length && <p className="peek-note">The definition is longer than this pane shows ({length.toLocaleString('en-US')} characters). Peek or Script to New Query shows all of it.</p>}
+    {details.bigQuery?.status === 'ready' && details.bigQuery.value.definitionCut && <p className="peek-note">The definition is longer than this pane shows. Script to New Query shows all of it.</p>}
   </>
 }
 
 /** A table's or view's columns: Peek's Columns list, which came with its properties, in a card grid as Peek shows it. Properties above already announces a failed read, so its words here are not a second alert. */
 export function Columns({ details }: { readonly details: Details }) {
+  if (details.hit.object.project !== undefined) return <BigQueryColumns details={details} />
   const facts = details.facts, list = details.lists?.columns
   if (!facts || facts.status === 'loading') return <p className="peek-note">Loading the columns…</p>
   if (facts.status === 'error') return <p className="peek-note error">{facts.message}</p>
@@ -182,12 +208,26 @@ export function Columns({ details }: { readonly details: Details }) {
   </div>
 }
 
+/** A BigQuery table's columns and nested fields with their descriptions, from the free facts. */
+function BigQueryColumns({ details }: { readonly details: Details }) {
+  const part = details.bigQuery
+  const table = useMemo(() => part?.status === 'ready' ? bigQueryColumnsTable(part.value) : undefined, [part])
+  if (!part || part.status === 'loading') return <p className="peek-note">Loading the columns…</p>
+  if (part.status === 'error') return <p className="peek-note error">{part.message}</p>
+  const name = displayText(details.hit.label)
+  return <div className="search-details-columns">
+    <LocalGrid table={table!} label="Columns" preset="card" empty="This object has no columns." suggestedName={`${name} Columns`} />
+    {part.value.columnsCut && <p className="peek-note">There are more columns than the pane lists.</p>}
+  </div>
+}
+
 export function Properties({ details }: { readonly details: Details }) {
   const facts = details.facts, spec = details.kind && peekSpecs[details.kind], subtype = details.hit.subtype
   // The card's groups: those of the hit's subtype, and none the login was refused (said below instead).
   const groups = spec ? spec.groups.filter(group => (!group.subtypes || (subtype !== undefined && group.subtypes.includes(subtype))) && !(group.refused && details.refused?.includes(group.id))) : []
   const refused = spec ? spec.groups.filter(group => group.refused && details.refused?.includes(group.id)) : []
   const shown = facts?.status === 'ready' ? groups.flatMap(group => group.facts).filter(fact => fact.id !== 'schema' && Object.hasOwn(facts.value, fact.id)) : []
+  const bigQuery = details.bigQuery
   return <div className="search-details-properties">
     <dl className="search-details-facts" aria-label="Properties">
       {hitProperties(details.hit).map(row => <div key={row.label} className="search-details-fact"><dt>{row.label}</dt><dd title={displayText(row.value)}>{displayText(row.value)}</dd></div>)}
@@ -195,10 +235,12 @@ export function Properties({ details }: { readonly details: Details }) {
         const value = formatPeekValue(fact, facts.value[fact.id]!)
         return <div key={fact.id} className="search-details-fact"><dt>{fact.label}</dt><dd title={value}>{value}</dd></div>
       })}
+      {bigQuery?.status === 'ready' && bigQueryFacts(bigQuery.value).map(fact => <div key={fact.label} className="search-details-fact"><dt>{fact.label}</dt><dd title={fact.value}>{fact.value}</dd></div>)}
     </dl>
     {facts?.status === 'ready' && refused.map(group => <p key={group.id} className="peek-note">{group.refused}</p>)}
-    {facts?.status === 'loading' && <p className="peek-note">Loading properties…</p>}
+    {(facts?.status === 'loading' || bigQuery?.status === 'loading') && <p className="peek-note">Loading properties…</p>}
     {facts?.status === 'error' && <p className="peek-note error" role="alert">{facts.message}</p>}
+    {bigQuery?.status === 'error' && <p className="peek-note error" role="alert">{bigQuery.message}</p>}
   </div>
 }
 
@@ -232,6 +274,6 @@ export default function SearchDetails({ searchId }: { readonly searchId: string 
       <span id={`${searchId}-details-view`} hidden>Show</span>
       <Segmented id={`${searchId}-details-views`} labelledBy={`${searchId}-details-view`} segments={views} value={snapshot.view} onChange={value => searchDetails.setView(value as 'definition' | 'columns')} />
     </div>}
-    <div className="peek-scroll search-details-scroll">{columns ? <Columns details={details} /> : <Definition details={details} part={details.definition} />}</div>
+    <div className="peek-scroll search-details-scroll">{columns ? <Columns details={details} /> : details.definition.status === 'billed' ? <BilledCreate searchId={searchId} /> : <Definition details={details} part={details.definition} />}</div>
   </section>
 }

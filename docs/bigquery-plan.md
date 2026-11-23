@@ -1062,17 +1062,13 @@ Flattening nested columns into grid columns is not planned (BigQuery's console d
 ### Search Objects for BigQuery (BQ-6a)
 
 Shipped: docs/object-search.md's [BigQuery](object-search.md#bigquery) section describes the index (two free REST passes,
-sharded groups, extra projects by name unless `objectExplorer.search.bigQueryExtraProjects`, refresh by scope and after DDL)
-and how Search Objects searches it. BQ-6b reads the same index: a table's columns are child entries named by field path with
+sharded groups, extra projects by name unless `objectExplorer.search.bigQueryExtraProjects`, refresh by scope and after DDL),
+the opt-in [billed bulk index](object-search.md#billed-bulk-index) (BQ-6a-2), and how Search Objects searches it; its
+details pane shows BigQuery's free facts and columns, and a result's menu has New Query. BQ-6b reads the same index: a table's columns are child entries named by field path with
 their types in `ObjectDetails`, views' and routines' text are definitions, and `ObjectSearchService.Lookup` still answers
 null for a BigQuery connection until BQ-6b gives it a reader.
 
-Still to do, outside BQ-6a:
-
-- BQ-6a-2, the optional billed bulk path (off by default): region-scoped `INFORMATION_SCHEMA.COLUMN_FIELD_PATHS` (plus `ROUTINES`,
-  `VIEWS`) in place of pass 2, each query billing at least 10 MiB and never cached, after BQ-7's estimate and prompt.
-- The details pane's BigQuery facts (partitioning, clustering, rows, size, labels, column descriptions) beside the script
-  it shows now, and a New Query action on a result.
+Still to do, outside BQ-6a: nothing. BQ-6a-2 shipped the billed bulk path, the details pane's facts and New Query.
 
 ### IntelliSense from the index (BQ-6b)
 
@@ -1250,8 +1246,8 @@ error codes in their enums; tab, AutoRecover and target records; method `provide
 | **BQ-3c-3** Copy, Save and loading | Copy limits; streaming Save; Load into memory UI; `REMOTE_EXPIRED` UI | M | BQ-3c-1, BQ-7 | README |
 | **BQ-3c-4** Load sample and in-place Re-run | The `sample` and `rerun` kinds of `results.remoteQuery` and `bigquery.dryRun`; the Load Sample dialog (first rows through `tabledata.list`, free; a random `TABLESAMPLE SYSTEM` sample after its estimate); a sample's in-memory derived result and its name on what is built from it; the expired strip's Re-run running the result's own statement (a script statement's alone) and replacing it in place; both auxiliary, cancelled with their source | M | BQ-3c-2, BQ-3c-3, BQ-7 (both are billed) | README, ipc.md, results guide |
 | **BQ-5** Object Explorer | Catalogue kinds and scope fields; REST listers and shared rate limiter; Preview Rows; Script As; Properties facts | M | BQ-3a (Preview Rows reads through its converter), BQ-7 (Script As CREATE is billed); AG-1 first or rebase | generated Explorer and Script As docs |
-| **BQ-6a** Search Objects index | Two-pass REST index (sharded groups, extra projects by name, refresh triggers); index DTO scope and column types; Search Objects scope, kinds, searches, actions, All servers (shipped; the billed bulk path is BQ-6a-2, and details-pane facts remain, below) | M–L | BQ-1, BQ-5 | |
-| **BQ-6a-2** Billed bulk index | `INFORMATION_SCHEMA` in place of pass 2 behind BQ-7's dry-run estimate and prompt, off by default; fills the same index entries | S–M | BQ-6a, BQ-7 | |
+| **BQ-6a** Search Objects index | Two-pass REST index (sharded groups, extra projects by name, refresh triggers); index DTO scope and column types; Search Objects scope, kinds, searches, actions, All servers (shipped; the billed bulk path and details-pane facts are BQ-6a-2) | M–L | BQ-1, BQ-5 | |
+| **BQ-6a-2** Billed bulk index | `INFORMATION_SCHEMA` in place of pass 2 behind BQ-7's dry-run estimate and prompt, off by default; fills the same index entries; the details pane's free facts and columns, a billed CREATE only on request, and New Query on a result (shipped) | S–M | BQ-6a, BQ-7 | |
 | **BQ-6b** IntelliSense | Completion from the index with alias scope; hover | L | BQ-4, BQ-6a, and the index's column metadata from the editor plan | |
 | **BQ-9** Job history | `bigquery` live scope and REST runner; `bigquery.jobs` source, args schema and `idleIntervalMs`; `bigquery.jobs.get` and `bigquery.jobs.cancel`; Job History document with `LiveGrid`, scope toggle, filters, script grouping, details pane; Cancel job, Open results, Re-attach, Open SQL, Re-run, Copy job id and console link; entry points in Explorer, palette and the Messages job id link; Show in Job History in the records-without-a-tab dialog | M | BQ-3d (Open results and Re-attach), BQ-5 (Explorer menus), BQ-7 (Re-run's cost rules) | live catalogue docs regenerated, README |
 | **BQ-8** Live checks and docs | Real-project opt-in suite and fixture refresh; windowed smoke; Getting Started guide and sample (`src/shared/help/catalog.ts`); final docs pass | M | lands alongside each lane; final pass last | README, testing.md, help |

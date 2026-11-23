@@ -38,7 +38,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
         "ssis.describe", "ssis.execute", "ssis.catalogSetup",
-        "bigquery.account", "bigquery.projects", "bigquery.dryRun", "bigquery.properties", "agent.profile", "agent.historyMessage", "agent.counterValues", "results.remoteQuery",
+        "bigquery.account", "bigquery.projects", "bigquery.dryRun", "bigquery.properties", "bigquery.indexEstimate", "agent.profile", "agent.historyMessage", "agent.counterValues", "results.remoteQuery",
         "query.attach", "bigquery.endIdleSessions", "bigquery.cancelJobs", "bigquery.jobs.get", "bigquery.jobs.cancel",
         "results.diffSeek", "language.parse"
     ];
@@ -545,6 +545,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "bigquery.properties" => await bigQuery.PropertiesAsync(Read<BigQueryPropertiesArgs>(parameters, json), Token(context)),
         "bigquery.jobs.get" => await bigQuery.JobDetailsAsync(Read<BigQueryJobArgs>(parameters, json), Token(context)),
         "bigquery.jobs.cancel" => await bigQuery.CancelHistoryJobAsync(Read<BigQueryJobArgs>(parameters, json), Token(context)),
+        "bigquery.indexEstimate" => await bigQuery.IndexEstimateAsync(Read<BigQueryIndexEstimateArgs>(parameters, json), Token(context)),
         "language.status" => GetLanguageStatus(parameters, json),
         "language.complete" => await language.CompleteAsync(Read<LanguageRequest>(parameters, json), Token(context)),
         "language.hover" => (object?)await language.HoverAsync(Read<LanguageRequest>(parameters, json), Token(context)) ?? null!,
@@ -623,8 +624,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     };
 
     /// <summary>explorer.index for SQL Server: BigQuery's refresh options are refused.</summary>
-    private static ObjectIndexArgs SqlServerIndexArgs(ObjectIndexArgs args) => args.ExtraDetails is null && args.Scope is null && args.Stale is null ? args
-        : throw new RequestException("INVALID_PARAMS", "Invalid object index request: extraDetails, scope and stale are BigQuery's.");
+    private static ObjectIndexArgs SqlServerIndexArgs(ObjectIndexArgs args) => args.ExtraDetails is null && args.Scope is null && args.Stale is null && args.Bulk is null ? args
+        : throw new RequestException("INVALID_PARAMS", "Invalid object index request: extraDetails, scope, stale and bulk are BigQuery's.");
 
     private static T Read<T>(JsonElement value, JsonSerializerOptions json) => value.Deserialize<T>(json)
         ?? throw new RequestException("INVALID_PARAMS", "Parameters are required.");

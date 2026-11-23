@@ -6,7 +6,8 @@ import { parseCalls } from './fixtures/call-log.mjs'
 import { explorerRow, explorerStatics } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, activeDocumentName, backendReady, clickToClose, connectDialogWindow, connectErrorDetails, connectFailure, connectFailureCopyStatus, connectFailureNote, connectFailureSentence, connectOutcome, databaseErrorDetails,
-  dialogClosed, documentTab, editorGroups, editorTextbox, environmentPill, explorerLabel, part, pressToClose, queryBar, queryServer, queryStatus, savedConnections, selectOpenDocument, serverRows, statusBar, submitConnect, toolbarButton, expectEditorShown
+  dialogClosed, documentTab, editorGroups, editorTextbox, environmentPill, explorerLabel, localGrid, objectSearchBox, objectSearchHits, part, pressToClose, queryBar, queryServer, queryStatus, quickInput, savedConnections, selectOpenDocument,
+  serverRows, statusBar, submitConnect, toolbarButton, expectEditorShown
 } from './fixtures/ui.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import { connectionLifecycle } from './fixtures/connection-lifecycle.mjs'
@@ -846,6 +847,68 @@ try {
   await rm(environmentProfile, { recursive: true, force: true })
 }
 
+/** The emulator's objects for Search Objects: a partitioned, clustered and labelled table with a column description, and a view. */
+async function bigQueryFixtures(endpoint) {
+  const tables = new URL('bigquery/v2/projects/varia-emulator/datasets/varia_fixture/tables', endpoint.endsWith('/') ? endpoint : endpoint + '/').toString()
+  const reference = tableId => ({ projectId: 'varia-emulator', datasetId: 'varia_fixture', tableId })
+  for (const body of [
+    {
+      tableReference: reference('search_orders'), description: 'Orders placed online.', labels: { team: 'sales' }, timePartitioning: { type: 'DAY', field: 'placed' }, clustering: { fields: ['customer'] },
+      schema: { fields: [{ name: 'id', type: 'INTEGER', mode: 'REQUIRED' }, { name: 'customer', type: 'STRING', description: 'Who placed the order.' }, { name: 'placed', type: 'TIMESTAMP' }] }
+    },
+    { tableReference: reference('search_orders_daily'), view: { query: 'SELECT DATE(placed) AS day, COUNT(*) AS n FROM varia_fixture.search_orders GROUP BY day', useLegacySql: false } }
+  ]) {
+    // A run before this one may have left the object in a long-lived emulator.
+    await fetch(`${tables}/${body.tableReference.tableId}`, { method: 'DELETE' })
+    const created = await fetch(tables, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    if (!created.ok) throw new Error(`The emulator refused ${body.tableReference.tableId}: HTTP ${created.status}`)
+  }
+}
+
+/**
+ * Search Objects on the emulator connection: a table's details pane shows tables.get's facts (partitioning, clustering, labels)
+ * and its columns with their descriptions, and offers its billed CREATE statement only on a button; a view shows its text; a
+ * result's New Query opens a GoogleSQL tab on the connection, in the result's dataset.
+ */
+async function bigQuerySearchDetails() {
+  await page.keyboard.press('F1')
+  await page.keyboard.type('search objects')
+  await quickInput(page).getByRole('option', { name: /^Object Explorer: Search Objects…/ }).click()
+  await expect(objectSearchBox(page)).toBeFocused()
+  await page.keyboard.type('search_orders')
+  const hits = objectSearchHits(page)
+  await expect(hits.filter({ hasText: 'search_orders_daily' })).toHaveCount(1, { timeout: 30000 })
+  const details = page.locator(part.objectSearchTab).getByRole('region', { name: /^Details: / })
+  await hits.filter({ hasText: 'search_orders' }).filter({ hasNotText: 'search_orders_daily' }).first().click()
+  await expect(details).toHaveAccessibleName('Details: varia_fixture.search_orders')
+  const properties = details.getByLabel('Properties', { exact: true })
+  await expect(properties).toContainText('DAY on placed', { timeout: 20000 })
+  await expect(properties).toContainText('customer')
+  await expect(properties).toContainText('team: sales')
+  // A table's CREATE statement is a billed query: offered on a button, never read on selection.
+  await expect(details.getByRole('button', { name: 'Show CREATE Statement', exact: true })).toBeVisible()
+  await details.getByRole('radio', { name: 'Columns', exact: true }).click()
+  const columns = localGrid(details, 'Columns')
+  await expect(columns).toHaveAttribute('aria-label', /^Columns, 3 rows, 3 columns/)
+  await expect(columns).toContainText('Who placed the order.')
+  await details.getByRole('radio', { name: 'Definition', exact: true }).click()
+  // A view's text comes with its facts.
+  await hits.filter({ hasText: 'search_orders_daily' }).click()
+  await expect(details).toHaveAccessibleName('Details: varia_fixture.search_orders_daily')
+  await expect(details.getByLabel('Definition', { exact: true })).toContainText('COUNT(*) AS n', { timeout: 20000 })
+  // New Query on the result: a GoogleSQL tab on the connection, in the result's dataset (the billing project's).
+  await hits.filter({ hasText: 'search_orders_daily' }).click({ button: 'right' })
+  const hitMenu = page.getByRole('menu', { name: 'Search result', exact: true })
+  const tabs = await documentTab(page).count()
+  await hitMenu.getByRole('menuitem', { name: 'New Query', exact: true }).click()
+  // A new query tab, active: the dataset box below is its own.
+  await expect(documentTab(page)).toHaveCount(tabs + 1)
+  await expect(activeDocument(page)).toContainText(/SQLQuery\d+/)
+  await expect(queryServer(page)).toContainText('varia-emulator')
+  await expect(page.getByLabel('Query dataset', { exact: true })).toHaveValue('varia_fixture')
+  console.log('BigQuery Search Objects checks passed against the emulator: the details pane\'s facts, columns and view text, the billed CREATE only on a button, and New Query.')
+}
+
 /**
  * Microsoft Entra ID in the Connect dialog (the stubbed requests): each type's fields as SSMS 22 shows them, and Stop, by
  * button and by Escape, while a sign-in waits for the web browser. The dialog starts on a SQL Server Authentication entry.
@@ -1618,11 +1681,13 @@ async function environmentLabels() {
 /**
  * The Connect dialog's BigQuery path against the emulator (anonymous credentials, so no Google project or credential is
  * involved): Server type, the account line, the project's datasets, Connect, then the server in Object Explorer and the
- * query tab's project and dataset. Skipped without VARIA_TEST_BIGQUERY_ENDPOINT.
+ * query tab's project and dataset; then Search Objects' details pane and New Query on a BigQuery result. Skipped without
+ * VARIA_TEST_BIGQUERY_ENDPOINT.
  */
 async function bigQueryEmulator() {
   const endpoint = process.env.VARIA_TEST_BIGQUERY_ENDPOINT
   if (!endpoint) { console.log('BigQuery Connect dialog checks skipped: VARIA_TEST_BIGQUERY_ENDPOINT is not set.'); return }
+  await bigQueryFixtures(endpoint)
   await launch({ ...launchOptions, env: { ...env, VARIA_TEST_USER_DATA: bigQueryProfile, VARIA_TEST_BIGQUERY_ENDPOINT: endpoint } })
   try {
     const dialog = await open()
@@ -1658,6 +1723,7 @@ async function bigQueryEmulator() {
     await editorTextbox(page).focus()
     await page.keyboard.type('SELECT 1')
     await expect(queryBar(page).getByRole('status', { name: 'Estimate: No estimate', exact: true })).toBeVisible({ timeout: 20000 })
+    await bigQuerySearchDetails()
     // The query now has unsaved text: the quit below answers Don't Save.
     await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
     // Next time, the dialog opens on the type used last, and history lists the project.

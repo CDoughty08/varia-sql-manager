@@ -17,7 +17,7 @@ import type { ErrorCode, ErrorReason } from './ipc/wire/protocol'
 import type { AuthenticationMode, BigQueryAuthenticationMode } from './auth'
 import type { ProviderId } from './providers'
 import type { ExplorerChildrenParams, ExplorerNodeRef } from './explorer/refs.ts'
-import type { ObjectIndexParams, ObjectIndexProgress, ObjectIndexResult, ObjectSearchParams, ObjectSearchResult } from './explorer/search.ts'
+import type { BigQueryIndexEstimateRequest, BigQueryIndexEstimateResult, ObjectIndexParams, ObjectIndexProgress, ObjectIndexResult, ObjectSearchParams, ObjectSearchResult } from './explorer/search.ts'
 import type { ExplorerIcon, NodeStatus, NodeSubtype } from './explorer/catalog.ts'
 import type { PeekDefinitionParams, PeekDefinitionResult, PeekDependenciesParams, PeekDependenciesResult, PeekParams, PeekResult } from './explorer/peek.ts'
 import type { DependenciesParams, DependenciesResult } from './explorer/dependencies.ts'
@@ -691,6 +691,7 @@ export interface RpcMethods {
   'bigquery.jobs.get': { params: JobHistoryGetParams; result: JobHistoryDetails }
   /** Job History's Cancel Job: jobs.cancel, which BigQuery answers at once. */
   'bigquery.jobs.cancel': { params: JobHistoryJobParams; result: JobHistoryCancelResult }
+  'bigquery.indexEstimate': { params: BigQueryIndexEstimateRequest; result: BigQueryIndexEstimateResult }
   'connections.identity': { params: Record<string, never>; result: IntegratedIdentity }
   'databases.list': { params: { connectionId: string }; result: DatabaseInfo[] }
   'tables.columns': { params: { connectionId: string; database: string; schema: string; name: string }; result: TableColumns }
@@ -974,6 +975,8 @@ export interface VariaApi {
   bigQueryJob(params: JobHistoryGetParams): Promise<ApiResult<JobHistoryDetails>>
   /** Job History's Cancel Job: asks BigQuery to cancel one job of the connection's billing project. */
   bigQueryCancelJob(params: JobHistoryJobParams): Promise<ApiResult<JobHistoryCancelResult>>
+  /** The billed bulk index path's estimate: free dry runs of each location's INFORMATION_SCHEMA queries (docs/object-search.md, Bulk index). */
+  bigQueryIndexEstimate(params: BigQueryIndexEstimateRequest): Promise<ApiResult<BigQueryIndexEstimateResult>>
   /** "Don't ask again for this connection" (docs/bigquery.md, Cost): sets the saved BigQuery entry's cost-prompt choice;
    *  resolves whether the entry holds it. */
   setBigQueryCostPrompt(input: { options: BigQueryConnectionOptions; costPrompt: boolean }): Promise<ApiResult<boolean>>
