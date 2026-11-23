@@ -1,6 +1,6 @@
 // Job Activity Monitor's bulk Change owner and Attach schedule (AG-3b): the request each sends for one job, which jobs get one, and the
 // forms' flow through JobActivityService, with a refusal failing only its own job's line.
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { actionExecuteRequestSchema } from '../src/shared/actions/schema'
 import type { AgentScheduleRecord, AgentSchedulesModel } from '../src/shared/actions/agent-schedule'
 import { agentBulkText, attachPlan, changeJobOwnerRequestSchema, ownerPlan, ownerUnavailable } from '../src/shared/agent/bulk'
@@ -71,7 +71,9 @@ describe('Change owner and Attach schedule: shared rules', () => {
     }
   })
   it('skips a job the list already shows with that owner, ignoring case', () => {
-    expect(ownerPlan({ owner: 'SA' }, 'sa')).toEqual({ state: 'done', message: agentBulkText.ownerSame('SA') })
+    expect(ownerPlan({ owner: 'sa' }, 'sa')).toEqual({ state: 'done', message: agentBulkText.ownerSame('sa') })
+    // A case-sensitive server can hold 'SA' and 'sa' as two logins: only an exact match skips.
+    expect(ownerPlan({ owner: 'SA' }, 'sa')).toEqual({ send: 'sa' })
     expect(ownerPlan({ owner: 'sa' }, 'ops')).toEqual({ send: 'ops' })
     expect(ownerPlan({}, 'ops')).toEqual({ send: 'ops' })
     expect(ownerUnavailable({ sysadmin: false, owner: 'ops' })).toBe(agentBulkText.ownerSysadmin)
@@ -104,8 +106,11 @@ describe('Job Activity Monitor: Change owner', () => {
     api.executeObjectAction.mockImplementation(async request => request.target.name === 'Nightly'
       ? { ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'PERMISSION_DENIED', message: 'Only a member of the sysadmin role can change the owner.', retryable: false } } } as never
       : { ok: true, value: { steps: [], messages: [], elapsedMs: 1 } })
+    const focus = vi.fn()
+    Object.assign((jobActivity as unknown as { options: object }).options, { focus })
     await jobActivity.submitForm(id)
     expect(jobActivity.get(id)?.form).toBeUndefined()
+    expect(focus).toHaveBeenCalledWith(id)
     const sent = api.executeObjectAction.mock.calls.map(([request]) => request)
     expect(sent).toEqual([
       { action: 'changeJobOwner', connectionId: 'c1', requestId: expect.any(String), target: { kind: 'agentJob', name: 'Nightly' }, agentIdentity: { jobId: nightly }, jobOwner: 'ops' },

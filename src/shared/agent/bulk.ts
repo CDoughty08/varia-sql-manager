@@ -41,10 +41,10 @@ export const agentBulkText = {
 /** One selected job's plan: send a request, or a result decided without one (already so, or not sendable). */
 export type BulkJobPlan<T> = { readonly send: T } | { readonly state: 'done' | 'failed'; readonly message: string }
 
-/** Change owner for one job: nothing to send when the list already shows that owner (logins compare case-insensitively, as SQL Server's
- *  default collation does; a case-sensitive server only skips a job that already reads exactly so). */
+/** Change owner for one job: nothing to send when the list already shows exactly that owner. Only an exact match skips: on a
+ *  case-sensitive server 'Ops' and 'ops' can be two logins, and sending the same owner again is a harmless no-op. */
 export function ownerPlan(job: { readonly owner?: string }, owner: string): BulkJobPlan<string> {
-  if (job.owner !== undefined && job.owner.toLowerCase() === owner.toLowerCase()) return { state: 'done', message: agentBulkText.ownerSame(job.owner) }
+  if (job.owner === owner) return { state: 'done', message: agentBulkText.ownerSame(job.owner) }
   return { send: owner }
 }
 

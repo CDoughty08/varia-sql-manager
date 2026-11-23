@@ -515,12 +515,14 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
     if (record.version === undefined || !record.modified) return agentBulkText.scheduleUnguarded
     return undefined
   }
-  /** Change or Attach: the form closes and its jobs go one request each, every result its own line, as the other bulk verbs. */
+  /** Change or Attach: the form closes (focus back to the grid) and its jobs go one request each, every result its own line, as the other bulk verbs. */
   async submitForm(id: string): Promise<void> {
     const state = this.get(id), form = state?.form
     if (!state?.connectionId || !form || this.formUnavailable(id)) return
     const connectionId = state.connectionId
     this.patch(id, { form: undefined })
+    // The form held focus; the grid takes it back, as after Cancel.
+    this.options.focus?.(id)
     const run = async <T>(plan: BulkJobPlan<T>, sendIt: (value: T) => Promise<ApiResult<ActionExecuteResult>>, done: string): Promise<Pick<BulkLine, 'state' | 'message'>> => {
       if (!('send' in plan)) return plan
       const outcome = bulkLine(form.verb, await sendIt(plan.send))
