@@ -175,10 +175,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     are matched by this column, so it cannot be ignored.") and on the last compared column ("Compare at least one
     column.").
 
-  From the grid menu, More results tools or the palette, the checklist opens at the toolbar's Ignore button, or beside ⋯
-  when it is folded, as Match does. Match Rows By… from the grid menu opens the same way (`MatchMenuFrom` gains a
-  grid-menu origin, and C4 adds a Script Differences one). Apply, Escape or Cancel returns the focus to where it was:
-  the active cell, from the grid menu.
+  From the grid menu, the checklist opens at the toolbar's Ignore button, or beside ⋯ when it is folded; from More
+  results tools or the palette it opens beside ⋯, as Match does (`ComparisonToolbar`'s anchor skips the button for the
+  `more` origin). Match Rows By… from the grid menu opens the same way (`MatchMenuFrom` gains a grid-menu origin, and C4
+  adds a Script Differences one). Apply, Escape or Cancel returns the focus to where it was: the active cell, from the
+  grid menu.
 - **The checklist** is the Match menu's: the paired columns with their types, searchable (placeholder "Search columns",
   accessible name "Search columns to ignore", where the Match menu's is "Search key columns"), arrows to move, Space to
   tick, Apply or Cancel. A note under it says what ignoring does: "A ticked column is ignored: it stays in the grid,
@@ -863,9 +864,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       that changes it fails the whole batch when it compiles (Msg 8102), so nothing runs:
       - the index lacks the table: "Search Objects does not know [Sales_Test].[dbo].[Orders], so its columns cannot be
         checked and SET IDENTITY_INSERT is not offered. Check the name, or rebuild the search index.", with **Rebuild
-        Search Index** (`explorer.rebuildIndex` for the comparison's connection). Pressed, it stays in place,
-        unavailable (`aria-disabled`, so it keeps the focus) while the build runs, the live region says "Rebuilding the
-        search index for SQLDEV01…", and when the build finishes it says the line that follows;
+        Search Index** (the service call `objectSearch.build(connectionId)` with the comparison's connection, not the
+        `explorer.rebuildIndex` command, which picks its server from the Explorer node or the active document, or asks).
+        Pressed, it stays in place, unavailable (`aria-disabled`, so it keeps the focus) while the build runs, the live
+        region says "Rebuilding the search index for SQLDEV01…", and when the build finishes it says the line that
+        follows;
       - the connection has no index (Index on connect off; the renderer's `ObjectSearchService` status, `state: 'none'`
         in `src/shared/explorer/search.ts`, since without an index `explorer.scriptTarget` answers no suggestions and no
         `state`, not an error, which would show the failed-lookup sentence): "SQLDEV01 has no search index yet, so its
@@ -1753,36 +1756,37 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     still indexing, indexed without columns, a column unknown, over 4,096 columns) and the request again when the index
     build finishes, the unchecked lines hidden while their statement is unticked, the remembered-direction line and its
     hiding once the direction changes, the not-connected state (no request, New Query Editor Window unavailable, the
-    facts back on reconnect), Rebuild Search Index keeping the focus and saying the rebuild, the no-index and skipped
-    sentences, the document's database first among equal suggestions, the locked SET IDENTITY_INSERT's description, a
-    temporal table's period columns locked as generated, an ignored expression column the target lacks starting unticked
-    with its reason and warning once ticked again, a target rowversion column paired with a binary(8) column locked as
-    not insertable, the knows line from a held read while a rebuild runs and after a definitions-off read, a two-part
-    name kept when the document's database changes (the line, said and said again on activation), Script waiting for a
-    pending lookup ("Checking the target table…") and facts sent only from the answer for the sent target, a failed
-    lookup's sentence, a two-part name resolved to a disconnected document's kept database, Script's destination
-    sentence while disconnected, a connection lost while generating, the focus after Rebuild Search Index, a later Try
-    again and a footer refusal's button go away, Enter and Escape in the columns' search field (Enter with no match
-    doing nothing), Script pressed inside the 300 ms wait before a lookup saying "Checking the target table…", the
-    request sent while SET IDENTITY_INSERT is hidden carrying the value kept for the script (on by default, off after an
-    untick, on for a key identity), SET IDENTITY_INSERT unticked, hidden and offered again still unticked, hidden before
-    an answer gives INSERT's count (no direction, a failed preview), Rows and the options kept across the Choose key
-    columns… round trip, Script waiting after Try again, a reconnect and a finished build, an edit while disconnected
-    leaving Script to the destination's rule, the other-server warning winning over the moved line when both hold, the
-    moved line for another connection to the same server, SET IDENTITY_INSERT hidden while INSERT is unticked or has no
-    rows, the not-connected warning said when the connection drops and said again on activation, the preview's Try again
-    while its request runs, the field rewritten in three parts when the document's database or connection changes, the
-    connection lines (now on another server, no connection now) winning over the three-part line, the draft recording
-    the document's connection, an ignored column the target lacks left out of the ignored line, the failed lookup's Try
-    again while it runs and failing again, a disconnect while a lookup is pending showing the not-connected state, the
-    focus staying on Cancel when a refusal that replaced the form clears, a lookup held while the script is written, the
-    no-connection sentence, the three-part line for another database, the opening request carrying the draft's target
-    with Script checking until it answers, a failed lookup's Try again, the summary's order with a failed preview
-    leaving Script unavailable while a reason holds, the not-connected state after a connection lost while generating,
-    the focus staying on Script when a footer refusal clears and falling back to Target table, a two-part target in a
-    database beside another holding the same table, the key-column form of the truncation and U+FFFD refusals, closing
-    while generating opening nothing, Enter in Target table with nothing highlighted, the window over a popped-out
-    Results pane, a cancelled generation giving way to a closed or refused state, and the Clipboard announcement.
+    facts back on reconnect), Rebuild Search Index keeping the focus, saying the rebuild and building the comparison's
+    connection (not the active document's), the no-index and skipped sentences, the document's database first among
+    equal suggestions, the locked SET IDENTITY_INSERT's description, a temporal table's period columns locked as
+    generated, an ignored expression column the target lacks starting unticked with its reason and warning once ticked
+    again, a target rowversion column paired with a binary(8) column locked as not insertable, the knows line from a
+    held read while a rebuild runs and after a definitions-off read, a two-part name kept when the document's database
+    changes (the line, said and said again on activation), Script waiting for a pending lookup ("Checking the target
+    table…") and facts sent only from the answer for the sent target, a failed lookup's sentence, a two-part name
+    resolved to a disconnected document's kept database, Script's destination sentence while disconnected, a connection
+    lost while generating, the focus after Rebuild Search Index, a later Try again and a footer refusal's button go
+    away, Enter and Escape in the columns' search field (Enter with no match doing nothing), Script pressed inside the
+    300 ms wait before a lookup saying "Checking the target table…", the request sent while SET IDENTITY_INSERT is
+    hidden carrying the value kept for the script (on by default, off after an untick, on for a key identity), SET
+    IDENTITY_INSERT unticked, hidden and offered again still unticked, hidden before an answer gives INSERT's count (no
+    direction, a failed preview), Rows and the options kept across the Choose key columns… round trip, Script waiting
+    after Try again, a reconnect and a finished build, an edit while disconnected leaving Script to the destination's
+    rule, the other-server warning winning over the moved line when both hold, the moved line for another connection to
+    the same server, SET IDENTITY_INSERT hidden while INSERT is unticked or has no rows, the not-connected warning said
+    when the connection drops and said again on activation, the preview's Try again while its request runs, the field
+    rewritten in three parts when the document's database or connection changes, the connection lines (now on another
+    server, no connection now) winning over the three-part line, the draft recording the document's connection, an
+    ignored column the target lacks left out of the ignored line, the failed lookup's Try again while it runs and
+    failing again, a disconnect while a lookup is pending showing the not-connected state, the focus staying on Cancel
+    when a refusal that replaced the form clears, a lookup held while the script is written, the no-connection sentence,
+    the three-part line for another database, the opening request carrying the draft's target with Script checking until
+    it answers, a failed lookup's Try again, the summary's order with a failed preview leaving Script unavailable while
+    a reason holds, the not-connected state after a connection lost while generating, the focus staying on Script when a
+    footer refusal clears and falling back to Target table, a two-part target in a database beside another holding the
+    same table, the key-column form of the truncation and U+FFFD refusals, closing while generating opening nothing,
+    Enter in Target table with nothing highlighted, the window over a popped-out Results pane, a cancelled generation
+    giving way to a closed or refused state, and the Clipboard announcement.
   - Smoke: open the dialog window by role, script to a New Query Editor Window, and find `BEGIN TRANSACTION` in the
     focused editor. A frameless OS window can behave differently on Linux, so run it through `npm run test:smoke:wsl`
     before pushing.
