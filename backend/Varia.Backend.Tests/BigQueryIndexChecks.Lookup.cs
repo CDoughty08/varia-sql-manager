@@ -93,6 +93,27 @@ internal static partial class BigQueryIndexChecks
         var shards = (await Lookup(PathRequest("varia-alpha", "sales", "events_*"), PathRequest("varia-alpha", "sales", "events_20260101"), PathRequest("varia-alpha", "sales", "events_2026*"))).Answers;
         check(shards.All(answer => answer.Object?.Name == "events_20260103" && answer.Items.Count > 0),
             "a wildcard or an older shard of a date-sharded group answers with the group's newest shard and its columns: " + string.Join(",", shards.Select(answer => answer.Object?.Name ?? "-")));
+        // Readers made over the held reads with skips a later build would leave: a re-read that failed, a listing that failed, a
+        // dataset listed but never read, and a skip spelled exactly where a held dataset differs only in case.
+        var held = harness.Service.Search.HeldOf(id);
+        BigQueryLookup With(params ObjectIndexSkip[] skips) => new("varia-alpha", ["varia-beta"], held, ["varia-beta"], skips, building: false, built: true, new IndexBudget(1 << 20));
+        check(With(new ObjectIndexSkip("sales", "TOO_LARGE", "x", Project: "varia-alpha")).Dataset("varia-alpha", "sales") is { State: LookupState.Partial, Skip.Code: "TOO_LARGE", Held: not null }
+            && With().Dataset("varia-alpha", "sales").State == LookupState.Ready,
+            "a held dataset whose later read failed or was cut is partial, with that skip, and ready without it");
+        check(With(new ObjectIndexSkip("", "PERMISSION_DENIED", "x", Project: "varia-alpha")).ProjectState("varia-alpha") == LookupState.Partial
+            && With(new ObjectIndexSkip("hidden", "TIMEOUT", "x", Project: "varia-alpha")).ProjectState("varia-alpha") == LookupState.Partial && With().ProjectState("varia-alpha") == LookupState.Ready,
+            "a project whose listing failed after earlier reads, or with a dataset it never read, is partial");
+        check(With(new ObjectIndexSkip("SALES", "PERMISSION_DENIED", "x", Project: "varia-alpha")).Dataset("varia-alpha", "SALES") is { State: LookupState.Skipped, Dataset: "SALES" },
+            "a skip spelled exactly as asked wins over a held dataset that differs from it only in case");
+        var events = With().Dataset("varia-alpha", "sales");
+        check(With().Object(events, "events_2026*") is { Name: "events_20260103" } && With().Object(events, "events_20990101") is null && With().Object(events, "EVENTS_20260101") is null
+            && With().Object(events, "events_20251231") is null,
+            "a shard outside the group's range, or the prefix in another case, names no group");
+        var salesRead = held.Single(read => read.Database == "varia-alpha" && read.Dataset == "sales");
+        salesRead.ChildrenLeftOut = true;
+        var cut = (await Lookup(PathRequest("varia-alpha", "sales", "orders"))).Answers[0];
+        salesRead.ChildrenLeftOut = false;
+        check(cut.Object is { Detailed: false } && cut.State == "partial", "a table whose dataset's columns were left out is not detailed, and its dataset is partial");
         var census = (await Lookup(PathRequest("varia-beta", "census", "population"))).Answers[0];
         check(census is { State: "partial", Object: { Detailed: false }, Items.Count: 0 }, "an object of a project read by name only has no details and no columns");
         var missing = (await Lookup(PathRequest("varia-alpha", "sales", "nothing"), PathRequest("varia-alpha", "nothing", "t"))).Answers;

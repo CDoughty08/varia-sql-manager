@@ -36,6 +36,24 @@ export function columnAt(columns: readonly ScopeColumn[], path: readonly string[
   return columns.find(column => sameName(column.path, wanted))
 }
 
+/** Whether language.lookup takes a request: every path segment 1 to segmentChars long, a prefix up to prefixChars. A half-typed
+ *  quoted name can give an empty segment; asking with it would refuse the whole batch. */
+export function lookupTakes(request: LanguageLookupPath): boolean {
+  return request.path.every(segment => segment.length >= 1 && segment.length <= languageLookupLimits.segmentChars) && (request.prefix?.length ?? 0) <= languageLookupLimits.prefixChars
+}
+
+/** `lookup` asked only for the requests it takes; the others answer as absent, with nothing. */
+export function boundedLookup(lookup: IndexLookup): IndexLookup {
+  return async requests => {
+    const sent = requests.filter(lookupTakes)
+    if (sent.length === requests.length) return lookup(requests)
+    const answers = sent.length ? await lookup(sent) : []
+    if (!answers) return undefined
+    let next = 0
+    return requests.map(request => lookupTakes(request) ? answers[next++] : { state: 'absent' as const, path: [], items: [], truncated: false })
+  }
+}
+
 /** One lookup per completion or hover: the objects the scope reads, by path, each asked once. */
 export class ScopeResolver {
   private readonly answers = new Map<string, LanguageLookupAnswer>()
@@ -43,9 +61,16 @@ export class ScopeResolver {
   private readonly ctes = new Map<string, QueryShape>()
   /** Sources being read: one met again while it is read (a WITH query that reads itself) gives no columns. */
   private readonly reading = new Set<ScopeSource>()
+  /** An object's columns by index path, shared by every source that names it. */
+  private readonly objects = new Map<string, SourceColumns>()
+  private readonly lookup: IndexLookup
   failed = false
+  /** Objects past the request cap went unasked, so the scope's columns are not all here. */
+  cut = false
 
-  constructor(private readonly scope: QueryScope, private readonly dialect: CompletionDialect, private readonly lookup: IndexLookup) {
+  /** `prefix` narrows every object's columns to those starting with it: a second ask when the first was cut short. */
+  constructor(private readonly scope: QueryScope, private readonly dialect: CompletionDialect, lookup: IndexLookup, private readonly prefix?: string) {
+    this.lookup = boundedLookup(lookup)
     for (const cte of scope.ctes) if (!this.ctes.has(cte.name.toLowerCase())) this.ctes.set(cte.name.toLowerCase(), cte.shape)
   }
 
@@ -73,8 +98,9 @@ export class ScopeResolver {
     }
     // Each object gets its share of the answer's total, so a later one is not left with nothing.
     const objects = [...paths.values()].slice(0, languageLookupLimits.requests - extra.length)
+    this.cut = objects.length < paths.size
     const share = Math.max(1, Math.min(languageLookupLimits.items, Math.floor((languageLookupLimits.totalItems - extra.reduce((sum, request) => sum + (request.limit ?? languageLookupLimits.defaultItems), 0)) / Math.max(1, objects.length))))
-    const wanted: LanguageLookupPath[] = objects.map(path => ({ path, limit: share, ...details ? { details } : {} }))
+    const wanted: LanguageLookupPath[] = objects.map(path => ({ path, limit: share, ...this.prefix ? { prefix: this.prefix } : {}, ...details ? { details } : {} }))
     const requests = [...extra, ...wanted]
     if (!requests.length) return []
     const answers = await this.lookup(requests)
@@ -105,14 +131,20 @@ export class ScopeResolver {
       case 'object': {
         const path = this.dialect.objectPath(source.parts)
         const answer = path ? this.answers.get(key(path)) : undefined
-        if (!answer?.object) return { columns: [], truncated: false, path }
-        return { path: answer.path, object: answer.object, truncated: answer.truncated,
-          columns: answer.items.map(item => ({ path: item.name, type: item.type, nullable: item.nullable, description: item.description })) }
+        if (!path || !answer?.object) return { columns: [], truncated: false, path }
+        let shared = this.objects.get(key(path))
+        if (!shared) {
+          shared = { path: answer.path, object: answer.object, truncated: answer.truncated,
+            columns: answer.items.map(item => ({ path: item.name, type: item.type, nullable: item.nullable, description: item.description })) }
+          this.objects.set(key(path), shared)
+        }
+        return shared
       }
       case 'cte': { const shape = this.cte(source.cte); return shape ? this.shape(shape, hops) : { columns: [], truncated: false } }
       case 'derived': return this.shape(source.shape, hops)
       case 'unnest': {
-        const field = await this.field(source.path)
+        // UNNEST(hits) AS hits: the path names what the source reads, not the source itself.
+        const field = await this.field(source.path, source)
         if (!field) return { columns: [], truncated: false }
         const prefix = field.path.length
         return { truncated: field.columns.truncated, columns: childrenAndBelow(field.columns.columns, field.path).map(column => ({ ...column, path: column.path.split('.').slice(prefix).join('.') })) }
@@ -134,12 +166,16 @@ export class ScopeResolver {
 
   /** What a written chain names, for member completion, UNNEST and hover: a source by its name then a field path in it, else a
    *  column (and fields) of a source in reach, nearest first. */
-  async field(parts: readonly string[]): Promise<{ source: ScopeSource; path: string[]; columns: SourceColumns } | undefined> {
+  async field(parts: readonly string[], except?: ScopeSource): Promise<{ source: ScopeSource; path: string[]; columns: SourceColumns } | undefined> {
     if (!parts.length) return
-    const named = sourceNamed(this.scope, parts[0])
+    const named = this.scope.sources.find(source => source !== except && source.name !== undefined && sameName(source.name, parts[0]))
     if (named) return { source: named, path: parts.slice(1), columns: await this.columns(named) }
+    const seen = new Set<SourceColumns>()
     for (const source of this.scope.sources) {
+      if (source === except) continue
       const columns = await this.columns(source)
+      if (seen.has(columns)) continue
+      seen.add(columns)
       if (columnAt(columns.columns, [parts[0]])) return { source, path: [...parts], columns }
     }
   }

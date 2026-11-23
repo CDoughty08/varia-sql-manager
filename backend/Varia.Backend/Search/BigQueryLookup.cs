@@ -54,8 +54,10 @@ internal sealed class BigQueryLookup
     {
         if (Project(project) is not { } known) return LookupState.Absent;
         var listing = skips.Any(skip => skip.Project == known && skip.Database == "");
-        // Datasets read before a listing that failed (or was cut) still answer, but the list may be short.
-        if (reads.ContainsKey(known)) return listing ? LookupState.Partial : LookupState.Ready;
+        // Datasets read before a listing that failed (or was cut) still answer, but the list may be short; so it is when a dataset
+        // listed but never read is left out of it.
+        if (reads.TryGetValue(known, out var held))
+            return listing || skips.Any(skip => skip.Project == known && skip.Database != "" && !held.ContainsKey(skip.Database)) ? LookupState.Partial : LookupState.Ready;
         if (listing) return LookupState.Skipped;
         return building ? LookupState.Building : Index == "none" ? LookupState.Absent : LookupState.Ready;
     }
@@ -105,20 +107,32 @@ internal sealed class BigQueryLookup
         var exact = named.Where(at => table.Name(at) == name).ToList();
         var at = exact.Count > 0 ? exact[0] : named.Count == 1 ? named[0] : -1;
         if (at >= 0) return new(dataset.Project, table, at, read);
+        LookupObject? group = null;
         foreach (var entry in Objects(dataset))
-            if (Shards(entry) is { } shards && Shard(shards.Prefix, name)) return entry;
-        return null;
+        {
+            if (Shards(entry) is not { } shards || !Shard(shards, name)) continue;
+            // A wildcard that could mean more than one group means none of them.
+            if (group is not null) return null;
+            group = entry;
+        }
+        return group;
     }
 
-    /// <summary>Whether a written name is a wildcard over a shard group's tables or one of its shards (case ignored).</summary>
-    private static bool Shard(string prefix, string name)
+    /// <summary>Whether a written name is a wildcard over a shard group's tables (<c>events_*</c>, <c>events_2026*</c>, <c>ev*</c>) or
+    /// one of its shards within the group's range. Table names tell case apart, so the prefix compares exactly.</summary>
+    private static bool Shard(BigQueryShardsDto shards, string name)
     {
+        var prefix = shards.Prefix;
         if (name.EndsWith('*'))
         {
             var stem = name[..^1];
-            return stem.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? stem[prefix.Length..].All(char.IsAsciiDigit) : prefix.StartsWith(stem, StringComparison.OrdinalIgnoreCase);
+            if (!stem.StartsWith(prefix, StringComparison.Ordinal)) return prefix.StartsWith(stem, StringComparison.Ordinal);
+            var digits = stem[prefix.Length..];
+            return digits.Length <= 8 && digits.All(char.IsAsciiDigit)
+                && string.CompareOrdinal(digits, shards.Last[..digits.Length]) <= 0 && string.CompareOrdinal(digits, shards.First[..digits.Length]) >= 0;
         }
-        return name.Length == prefix.Length + 8 && name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && name[prefix.Length..].All(char.IsAsciiDigit);
+        var suffix = name.Length == prefix.Length + 8 && name.StartsWith(prefix, StringComparison.Ordinal) ? name[prefix.Length..] : "";
+        return suffix.Length == 8 && suffix.All(char.IsAsciiDigit) && string.CompareOrdinal(suffix, shards.First) >= 0 && string.CompareOrdinal(suffix, shards.Last) <= 0;
     }
 
     /// <summary>A table's columns and nested fields by path (address, address.city), depth first in schema order, with their types.</summary>

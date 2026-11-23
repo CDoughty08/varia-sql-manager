@@ -35,6 +35,13 @@ internal sealed partial class ObjectSearchService
             return new(billing, extras, state.Index.Databases, state.NamesOnly, state.Skipped.ToList(), state.Building, state.Built, budget, Changed);
     }
 
+    /// <summary>The dataset reads a connection's index holds (the checks read it).</summary>
+    internal IReadOnlyList<DatabaseIndex> HeldOf(string connectionId)
+    {
+        if (!states.TryGetValue(connectionId, out var state)) return [];
+        lock (state.Gate) return [.. state.Index.Databases];
+    }
+
     /// <summary>The datasets marked stale on a connection (the checks read it).</summary>
     internal IReadOnlyCollection<(string Project, string Dataset)> StaleOf(string connectionId)
     {

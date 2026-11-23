@@ -41,6 +41,8 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
   private readonly bindings: Disposable[] = []
   private readonly caches = new Map<string, LookupCache>()
   private readonly ensured = new Set<string>()
+  /** The connection (and generation) each tab's error came from: it goes when the tab moves to another or reconnects. */
+  private readonly errorKeys = new Map<string, string>()
   private inFlight = 0
   private disposed = false
 
@@ -116,7 +118,7 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
     if (!connectionId || !key) return async () => undefined
     let cache = this.caches.get(key)
     if (!cache) {
-      cache = new LookupCache(async (requests, caller) => this.ask(connectionId, caller, requests))
+      cache = new LookupCache(async (requests, caller) => this.ask(connectionId, key, caller, requests))
       this.caches.set(key, cache)
     }
     const kept = cache
@@ -133,21 +135,22 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
   }
 
   /** One language.lookup; its failure (or success) is shown on the tab that asked. */
-  private async ask(connectionId: string, documentId: string | undefined, requests: LanguageLookupPath[]) {
+  private async ask(connectionId: string, key: string, documentId: string | undefined, requests: LanguageLookupPath[]) {
     if (this.disposed || this.inFlight >= indexCompletionLimits.inFlight) return undefined
     this.inFlight++
     try {
       const result = await this.api.languageLookup({ connectionId, requests })
       if (this.disposed) return undefined
-      this.failure(documentId, result.ok ? undefined : result.error)
+      this.failure(documentId, key, result.ok ? undefined : result.error)
       return result.ok ? result.value : undefined
     } catch (error) {
-      this.failure(documentId, error instanceof Error ? error.message : 'The index could not answer.')
+      this.failure(documentId, key, error instanceof Error ? error.message : 'The index could not answer.')
       return undefined
     } finally { this.inFlight-- }
   }
 
-  private failure(documentId: string | undefined, error?: string): void {
+  private failure(documentId: string | undefined, key: string, error?: string): void {
+    if (documentId && error) this.errorKeys.set(documentId, key)
     if (this.disposed || !documentId || this.getSnapshot().errors.get(documentId) === error) return
     const errors = new Map(this.getSnapshot().errors)
     if (error) errors.set(documentId, error); else errors.delete(documentId)
@@ -160,7 +163,12 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
     const live = new Set(this.connections.getSnapshot().filter(connection => isLiveConnection(connection) && isBigQueryConnection(connection)).map(cacheKey))
     for (const key of [...this.caches.keys()]) if (!live.has(key)) { this.caches.delete(key); this.ensured.delete(key) }
     const snapshot = this.getSnapshot()
-    const errors = new Map([...snapshot.errors].filter(([id]) => this.documents.get(id)))
+    const errors = new Map([...snapshot.errors].filter(([id]) => {
+      const document = this.documents.get(id)
+      const connection = document?.connectionId ? this.connections.get(document.connectionId) : undefined
+      return !!connection && cacheKey(connection) === this.errorKeys.get(id)
+    }))
+    for (const id of [...this.errorKeys.keys()]) if (!errors.has(id)) this.errorKeys.delete(id)
     const indexes = new Map([...snapshot.indexes].filter(([key]) => live.has(key)))
     if (errors.size !== snapshot.errors.size || indexes.size !== snapshot.indexes.size) this.publish({ errors, indexes })
   }

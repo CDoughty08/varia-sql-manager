@@ -35,7 +35,9 @@ const index: Record<string, Record<string, Record<string, FakeObject>>> = {
     },
     staging: { 'raw-events': { kind: 'bqTable', columns: [{ name: 'payload', type: 'JSON' }] } }
   },
-  'varia-beta': { census: { people: { kind: 'bqTable', columns: [{ name: 'name', type: 'STRING' }] } } }
+  'varia-beta': { census: { people: { kind: 'bqTable', columns: [{ name: 'name', type: 'STRING' }] } } },
+  // A table wider than one answer's share.
+  'varia-wide': { lab: { wide: { kind: 'bqTable', columns: Array.from({ length: 2500 }, (_, index) => ({ name: `c${String(index).padStart(4, '0')}`, type: 'INT64' })) } } }
 }
 const keeps = (request: LanguageLookupPath, name: string) => request.exact ? name.toLowerCase() === request.prefix!.toLowerCase() : name.toLowerCase().startsWith((request.prefix ?? '').toLowerCase())
 function answer(request: LanguageLookupPath): LanguageLookupAnswer {
@@ -198,6 +200,16 @@ describe('GoogleSQL scope reader', () => {
     const short = `WITH ${near.join(', ')} SELECT  FROM a2`
     const columns = await completeFromIndex(readGoogleSqlCompletion(short, short.indexOf('  FROM') + 1), dialect, fakeLookup())
     expect(columns.items.filter(item => item.kind === 'column').map(item => item.label)).toContain('customer')
+    // The chain's completion itself stays quick, and so do many sources of one wide table.
+    const timed = performance.now()
+    await completeFromIndex(readGoogleSqlCompletion(text, offset), dialect, fakeLookup())
+    const many = 'SELECT  FROM ' + Array.from({ length: 1000 }, () => '`varia-wide.lab.wide`').join(', ')
+    await completeFromIndex(readGoogleSqlCompletion(many, 'SELECT '.length), dialect, fakeLookup())
+    expect(performance.now() - timed).toBeLessThan(3000)
+  })
+
+  it('reads a dot after a project id that ends in digits', () => {
+    expect(read('SELECT * FROM my-project-123456.|').site).toEqual({ kind: 'object', qualifier: ['my-project-123456'] })
   })
 
   it('reads deeply nested subqueries in bounded time and without overflowing', () => {
@@ -262,11 +274,30 @@ describe('completion from the index', () => {
     expect(list.labels('column')).toEqual(expect.arrayContaining(['id', 'customer', 'day', 'n']))
   })
 
+  it('lists an array\'s fields when UNNEST names it after itself, and asks again by prefix for a table wider than its share', async () => {
+    expect((await complete('SELECT items.| FROM sales.orders o, UNNEST(o.items) AS items')).labels()).toEqual(['sku', 'qty'])
+    const log: LanguageLookupPath[][] = []
+    const wide = await complete('SELECT c24| FROM `varia-wide.lab.wide` w', fakeLookup(log))
+    expect(wide.labels('column')).toContain('c2499')
+    expect(log.at(-1)?.[0]).toMatchObject({ path: ['varia-wide', 'lab', 'wide'], prefix: 'c24' })
+    const member = await complete('SELECT w.c249| FROM `varia-wide.lab.wide` w')
+    expect(member.labels('column')).toContain('c2499')
+  })
+
+  it('never sends a path segment the lookup would refuse, so the other sources still answer', async () => {
+    const log: LanguageLookupPath[][] = []
+    const list = await complete('SELECT | FROM sales.orders o JOIN `varia-alpha.sales.` x ON TRUE', fakeLookup(log))
+    expect(list.labels('column')).toContain('customer')
+    expect(log.flat().every(request => request.path.every(segment => segment.length > 0))).toBe(true)
+    expect((await complete('SELECT * FROM `varia-alpha..|')).items.filter(item => item.kind !== 'cte')).toEqual([])
+    expect(log.flat().every(request => languageLookupRequestSchema.safeParse({ connectionId: '8f2d5e1a-3c4b-4d6e-9f0a-1b2c3d4e5f60', requests: [request] }).success)).toBe(true)
+  })
+
   it('lists projects, datasets and objects for a table name, nearest first, quoting names that need it', async () => {
     const log: LanguageLookupPath[][] = []
     const list = await complete('WITH recent AS (SELECT 1) SELECT * FROM |', fakeLookup(log))
     expect(log[0].map(request => request.path)).toEqual([['varia-alpha', 'sales'], ['varia-alpha'], []])
-    expect(list.labels()).toEqual(['recent', 'orders', 'daily', 'to_cents', 'sales', 'staging', 'varia-alpha', 'varia-beta'])
+    expect(list.labels()).toEqual(['recent', 'orders', 'daily', 'to_cents', 'sales', 'staging', 'varia-alpha', 'varia-beta', 'varia-wide'])
     expect(list.item('varia-alpha')).toMatchObject({ kind: 'container', insertText: '`varia-alpha`', detail: 'Project' })
     expect(list.item('daily')).toMatchObject({ kind: 'view', detail: 'View' })
     expect(list.item('to_cents')).toMatchObject({ kind: 'routine', detail: 'Function (x NUMERIC) RETURNS INT64' })

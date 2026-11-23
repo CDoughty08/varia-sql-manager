@@ -97,10 +97,12 @@ internal static class EditorLookup
                 var dataset = lookup.Dataset(path[0], path[1]);
                 var owner = lookup.Object(dataset, path[2]);
                 if (owner is not { } entry)
-                    return new(State(dataset.State), dataset.Held is null ? [.. path] : [dataset.Project, dataset.Dataset], [], false, Skip: dataset.Skip?.Code);
+                    return new(State(dataset.State), lookup.Project(path[0]) is null ? [.. path] : [dataset.Project, dataset.Dataset], [], false, Skip: dataset.Skip?.Code);
                 var facts = BigQueryLookup.Facts(entry);
                 // Columns the budget left out make the object's details incomplete, whatever its facts say.
-                var shown = new LanguageLookupObject(entry.Name, entry.Kind, entry.Subtype, facts?.Detailed == true && dataset.Held?.ChildrenLeftOut != true, facts?.Rows, facts?.Bytes, facts?.Partitioning, facts?.Clustering,
+                // A model has no columns for the second pass to read: outside a project read by name only, it is as detailed as it gets.
+                var detailed = (facts?.Detailed == true || entry.Kind == "bqModel" && !lookup.NamesOnly(dataset.Project)) && dataset.Held?.ChildrenLeftOut != true;
+                var shown = new LanguageLookupObject(entry.Name, entry.Kind, entry.Subtype, detailed, facts?.Rows, facts?.Bytes, facts?.Partitioning, facts?.Clustering,
                     facts?.Signature, BigQueryLookup.Shards(entry), facts?.ColumnsCut == true ? true : null, entry.Table.Modified(entry.At));
                 var details = request.Details == true;
                 var columns = lookup.Columns(entry).Where(column => Keeps(column.Name));

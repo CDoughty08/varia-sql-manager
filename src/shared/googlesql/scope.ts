@@ -52,7 +52,9 @@ class Statement {
   constructor(readonly text: string, readonly offset: number) {
     const scanned = scanGoogleSql(text)
     // `my-proj-2.sales`: the scanner reads `2.` as a number; a name follows, so it is `2` then a dot.
-    const split = scanned.flatMap((token, index) => token.kind === 'number' && /^\d+\.$/.test(text.slice(token.start, token.end)) && scanned[index + 1]?.kind === 'word' && scanned[index + 1].start === token.end
+    // So is a dashed name's last piece before a dot (my-project-123456.), whatever follows.
+    const dashedPiece = (index: number) => scanned[index - 1]?.kind === 'punctuation' && text[scanned[index - 1].start] === '-' && scanned[index - 1].end === scanned[index].start
+    const split = scanned.flatMap((token, index) => token.kind === 'number' && /^\d+\.$/.test(text.slice(token.start, token.end)) && ((scanned[index + 1]?.kind === 'word' && scanned[index + 1].start === token.end) || dashedPiece(index))
       ? [{ kind: 'number' as const, start: token.start, end: token.end - 1 }, { kind: 'punctuation' as const, start: token.end - 1, end: token.end }] : [token])
     const all = split.map(token => ({ ...token, text: text.slice(token.start, token.end), upper: token.kind === 'word' ? text.slice(token.start, token.end).toUpperCase() : '' }))
     let start = 0, end = text.length
@@ -439,9 +441,9 @@ function fromPlace(statement: Statement, index: number, open: number): 'items' |
 /** The name chain that ends just before token or position `end`: the parts written before the one typed, and its first token. */
 function chainBefore(statement: Statement, end: number): { parts: string[]; first: number } | undefined {
   const { toks } = statement
-  const parts: string[] = []
+  const reversed: string[][] = []
   let at = end - 1
-  if (!isPunct(toks[at], '.')) return { parts, first: end }
+  if (!isPunct(toks[at], '.')) return { parts: [], first: end }
   while (isPunct(toks[at], '.')) {
     const name = toks[at - 1]
     // A dashed project written without backticks (my-proj-2.ds.): its words (and numbers) join into one part.
@@ -453,10 +455,10 @@ function chainBefore(statement: Statement, end: number): { parts: string[]; firs
       text = toks[start - 2].text + '-' + text
       start -= 2
     }
-    parts.unshift(...plain ? [text] : partsOf(name))
+    reversed.push(plain ? [text] : partsOf(name))
     at = start - 1
   }
-  return { parts, first: at + 1 }
+  return { parts: reversed.reverse().flat(), first: at + 1 }
 }
 
 /** What completion finds at `offset` in `text`. */

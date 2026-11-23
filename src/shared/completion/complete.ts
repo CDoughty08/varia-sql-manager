@@ -3,7 +3,7 @@
 // keywords; a dotted name lists an alias's columns or a STRUCT's fields. Nothing here knows an engine.
 import { languageLookupLimits, type LanguageLookupPath } from '../language-lookup'
 import type { CompletionDialect, CompletionItem, CompletionKind, CompletionList, CompletionRead, DialectFunction, IndexLookup } from './model'
-import { ScopeResolver, childrenOf, sameName, type ScopeColumn } from './resolve'
+import { ScopeResolver, boundedLookup, childrenOf, sameName, type ScopeColumn } from './resolve'
 
 /** Groups order the list ahead of the editor's fuzzy score among equals: what the scope gives first, the dialect's words last. */
 const group: Readonly<Record<CompletionKind, string>> = { column: '1', field: '1', alias: '2', cte: '2', table: '3', view: '3', routine: '4', model: '4', container: '5', function: '6', keyword: '7' }
@@ -26,7 +26,7 @@ export async function completeFromIndex(read: CompletionRead, dialect: Completio
       const containers = dialect.containers(site.qualifier).slice(0, languageLookupLimits.requests)
       if (!containers.length) break
       const requests: LanguageLookupPath[] = containers.map(container => ({ path: [...container.path], ...word.typed ? { prefix: word.typed } : {}, limit: languageLookupLimits.defaultItems }))
-      const answers = await lookup(requests)
+      const answers = await boundedLookup(lookup)(requests)
       // No answer (the index busy or unreachable): the editor asks again as the word grows.
       if (!answers) incomplete = true
       answers?.forEach((answer, rank) => {
@@ -39,10 +39,16 @@ export async function completeFromIndex(read: CompletionRead, dialect: Completio
       break
     }
     case 'member': {
-      const resolver = new ScopeResolver(scope, dialect, lookup)
+      let resolver = new ScopeResolver(scope, dialect, lookup)
       await resolver.load()
-      incomplete ||= resolver.failed
-      const field = await resolver.field(site.qualifier)
+      let field = await resolver.field(site.qualifier)
+      // A table wider than its share of the answer: ask again for the names that start with what is typed.
+      if (field?.columns.truncated && field.columns.object && word.typed) {
+        resolver = new ScopeResolver(scope, dialect, lookup, [...field.path, word.typed].join('.'))
+        await resolver.load()
+        field = await resolver.field(site.qualifier) ?? field
+      }
+      incomplete ||= resolver.failed || resolver.cut
       if (field) {
         incomplete ||= field.columns.truncated
         for (const column of childrenOf(field.columns.columns, field.path)) add(columnItem(column, field.path.length, insert))
@@ -58,13 +64,23 @@ export async function completeFromIndex(read: CompletionRead, dialect: Completio
       break
     }
     case 'expression': {
-      const resolver = new ScopeResolver(scope, dialect, lookup)
+      let resolver = new ScopeResolver(scope, dialect, lookup)
       await resolver.load()
-      incomplete ||= resolver.failed
+      let given = await Promise.all(scope.sources.map(source => resolver.columns(source)))
+      if (word.typed && given.some(columns => columns.truncated && columns.object)) {
+        resolver = new ScopeResolver(scope, dialect, lookup, word.typed)
+        await resolver.load()
+        given = await Promise.all(scope.sources.map(source => resolver.columns(source)))
+      }
+      incomplete ||= resolver.failed || resolver.cut
+      // Sources that read the same object share its columns: each is listed once, under the nearest.
+      const listed = new Set<object>()
       for (const [rank, source] of scope.sources.entries()) {
-        const given = await resolver.columns(source)
-        incomplete ||= given.truncated
-        for (const column of childrenOf(given.columns, [])) add({ ...columnItem(column, 0, insert, source.name), sortText: sortText('column', Math.min(rank, 99), column.path) })
+        const columns = given[rank]
+        incomplete ||= columns.truncated
+        if (listed.has(columns)) continue
+        listed.add(columns)
+        for (const column of childrenOf(columns.columns, [])) add({ ...columnItem(column, 0, insert, source.name), sortText: sortText('column', Math.min(rank, 99), column.path) })
       }
       // The nearest source of a name is the one it means (add keeps the first of a label).
       for (const source of scope.sources) if (source.name) add({ label: source.name, kind: 'alias', insertText: insert(source.name), detail: aliasDetail(source), sortText: sortText('alias', 0, source.name) })
