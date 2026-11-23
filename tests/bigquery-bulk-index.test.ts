@@ -89,7 +89,7 @@ describe('BigQuery bulk index path (renderer)', () => {
     declined.gates[0].answer({ run: false })
     await settle()
     expect(declined.index).toEqual([{ connectionId: 'bq', requestId: 'req1', definitions: true, extraDetails: false }])
-    for (const failure of [{ ok: false as const, error: 'Timed out.', code: 'TIMEOUT' }, { ok: true as const, value: { ...estimate, locations: [] } }, 'throw' as const]) {
+    for (const failure of [{ ok: false as const, error: 'Timed out.', code: 'TIMEOUT' as const }, { ok: true as const, value: { ...estimate, locations: [] } }, 'throw' as const]) {
       const failed = harness({ bulk: true, estimate: failure })
       failed.connections.set([bigQuery('bq')])
       await settle()

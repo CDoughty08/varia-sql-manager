@@ -551,12 +551,53 @@ internal static class BigQueryExplorerChecks
         {
             ["connectionId"] = harness.ConnectionId, ["requestId"] = Guid.NewGuid().ToString(), ["kind"] = kind, ["project"] = "varia-alpha", ["dataset"] = "sales", ["name"] = name
         };
+        var connected = harness.Fake.Seen.Count;
         var (code, result, _) = await harness.Call("bigquery.properties", Args("bqTable", "orders"));
         var properties = result as BigQueryProperties;
-        var (routine, _, _) = await harness.Call("bigquery.properties", Args("bqRoutine", "orders"));
+        var (model, _, _) = await harness.Call("bigquery.properties", Args("bqModel", "orders"));
+        var (badRoutine, _, _) = await harness.Call("bigquery.properties", Args("bqRoutine", "a.b"));
+        // The details pane's columns: the fields flattened depth first as the index has them (a bad name left out), descriptions beside them.
+        var columns = properties?.Columns?.Select(column => column.Name + ":" + column.Type + (column.Description is { } description ? ":" + description : "")).ToArray() ?? [];
+        check(columns.SequenceEqual(["id:INT64", "customer:STRING", "tags:ARRAY<STRING>", "placed:TIMESTAMP", "address:STRUCT", "address.city:STRING", "address.geo:STRUCT", "address.geo.lat:FLOAT64"])
+            && properties is { Definition: null, DefinitionCut: null, ColumnsCut: null },
+            $"bigquery.properties answers a table's columns as the index flattens them, with no definition: {string.Join(" ", columns)}");
+        var described = JsonNode.Parse(BigQueryFake.FixtureText("table-orders"))!;
+        described["schema"]!["fields"]![1]!["description"] = "Who placed it.";
+        described["schema"]!["fields"]![4]!["fields"]![0]!["description"] = new string('d', 2000);
+        harness.Fake.On("GET", Sales + "/tables/orders", new BigQueryFake.Reply(200, described.ToJsonString()));
+        var withDescriptions = (await harness.Call("bigquery.properties", Args("bqTable", "orders"))).Result as BigQueryProperties;
+        check(withDescriptions?.Columns?[1].Description == "Who placed it." && withDescriptions.Columns[5].Description is { Length: BigQueryService.MaxColumnText } bounded && bounded.EndsWith('…')
+            && withDescriptions.Columns[0].Description is null,
+            "bigquery.properties carries column descriptions, bounded at 1,024 characters");
+        harness.Fake.On("GET", Sales + "/tables/daily", BigQueryFake.Fixture("index-view-daily"));
+        var view = (await harness.Call("bigquery.properties", Args("bqView", "daily"))).Result as BigQueryProperties;
+        check(view is { Type: "view", Definition: { } query } && query.StartsWith("SELECT DATE(placed)", StringComparison.Ordinal) && view.Columns?.Count == 2,
+            $"bigquery.properties answers a view's query text and columns: {view?.Type} {view?.Columns?.Count}");
+        harness.Fake.On("GET", Sales + "/tables/long", new BigQueryFake.Reply(200, new JsonObject
+        {
+            ["type"] = "VIEW", ["view"] = new JsonObject { ["query"] = "SELECT '" + new string('x', BigQueryService.MaxDefinition) + "'" }
+        }.ToJsonString()));
+        var longView = (await harness.Call("bigquery.properties", Args("bqView", "long"))).Result as BigQueryProperties;
+        check(longView is { DefinitionCut: true, Definition.Length: BigQueryService.MaxDefinition, Columns: null },
+            $"bigquery.properties cuts a view's text at 1,000,000 characters: {longView?.Definition?.Length} {longView?.DefinitionCut}");
+        harness.Fake.On("GET", Sales + "/routines/to_cents", new BigQueryFake.Reply(200, """
+            {"routineReference":{"projectId":"varia-alpha","datasetId":"sales","routineId":"to_cents"},"routineType":"SCALAR_FUNCTION","language":"SQL",
+             "description":"Dollars to cents.","creationTime":"1700000000000","lastModifiedTime":"1700086400000","definitionBody":"CAST(x * 100 AS INT64)",
+             "arguments":[{"name":"x","dataType":{"typeKind":"NUMERIC"}}],"returnType":{"typeKind":"INT64"}}
+            """));
+        var (routineCode, routineResult, _) = await harness.Call("bigquery.properties", Args("bqRoutine", "to_cents"));
+        var routine = routineResult as BigQueryProperties;
+        var routineFacts = routine?.Groups.SelectMany(group => group.Facts.Select(fact => group.Title + "/" + fact.Label + "=" + fact.Value)).ToArray() ?? [];
+        check(routineCode == "ok" && routine is { Name: "to_cents", Type: "function", Definition: "CAST(x * 100 AS INT64)", Columns: null }
+            && routineFacts.Contains("Routine/Full name=varia-alpha.sales.to_cents") && routineFacts.Contains("Routine/Language=SQL")
+            && routineFacts.Contains("Routine/Signature=(x NUMERIC) RETURNS INT64") && routineFacts.Contains("Routine/Description=Dollars to cents.")
+            && routine.Groups.Select(group => group.Title).SequenceEqual(["Routine", "History"]) && harness.Fake.To(Sales + "/routines/to_cents").Count() == 1,
+            $"bigquery.properties answers a routine's facts and body from one routines.get: {routineCode} {string.Join(" | ", routineFacts)}");
         harness.Fake.On("GET", Sales + "/tables/orders", BigQueryFake.Fixture("error-not-found", 404));
         var (gone, _, _) = await harness.Call("bigquery.properties", Args("bqTable", "orders"));
-        check(code == "ok" && properties is { Name: "orders", Type: "table" } && properties.Groups.Count == 4 && routine == "INVALID_PARAMS" && gone == "NOT_FOUND",
-            $"bigquery.properties answers tables.get's facts for table-like kinds only, and NOT_FOUND for a vanished table: {code} {routine} {gone}");
+        check(code == "ok" && properties is { Name: "orders", Type: "table" } && properties.Groups.Count == 4 && model == "INVALID_PARAMS" && badRoutine == "INVALID_PARAMS" && gone == "NOT_FOUND",
+            $"bigquery.properties answers tables.get's facts for table-like kinds and routines.get's for routines, and NOT_FOUND for a vanished table: {code} {model} {badRoutine} {gone}");
+        check(harness.Fake.Seen.Skip(connected).All(request => !request.Uri.AbsolutePath.EndsWith("/queries", StringComparison.Ordinal) && !request.Uri.AbsolutePath.EndsWith("/jobs", StringComparison.Ordinal)),
+            "bigquery.properties runs no query or job: every fact is free metadata");
     }
 }

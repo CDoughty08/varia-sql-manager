@@ -594,7 +594,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     if (windows.active() !== window) window.focus()
     target.focus()
   }))
-  const searchDetails = new SearchDetailsService({ api, peek, connections, searches: objectSearch, scriptingOptions })
+  const searchDetails = new SearchDetailsService({ api, peek, connections, searches: objectSearch, scriptingOptions, billedGate: (connectionId, estimate, signal) => bigQueryCost.beforeScript(connectionId, estimate, signal) })
   const context = new ContextKeyService({
     platform,
     agentEnabled: api.agentPreview,

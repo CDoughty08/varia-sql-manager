@@ -6,16 +6,26 @@ namespace Varia.Backend.BigQuery;
 
 /// <summary>
 /// Properties for BigQuery's table-like objects (docs/bigquery.md, Properties): one tables.get, free, as read-only facts in four
-/// groups. Values are formatted here (sizes in binary units, times in UTC) so the document only lays them out.
+/// groups, with a view's text and the columns and their descriptions (Search Objects' details pane shows them). A routine, which
+/// only the details pane asks for, is one routines.get. Values are formatted here (sizes in binary units, times in UTC) so the
+/// document only lays them out.
 /// </summary>
 internal sealed partial class BigQueryService
 {
     public const int MaxFactValue = 2000;
-    static readonly string[] PropertyKinds = ["bqTable", "bqView", "bqMaterializedView", "bqExternalTable"];
+    /// <summary>The longest view text or routine body returned (the details pane shows this much: SearchDetails' shownChars).</summary>
+    public const int MaxDefinition = 1_000_000;
+    /// <summary>Columns and nested fields returned at most.</summary>
+    public const int MaxColumnFacts = 1000;
+    /// <summary>The longest column type text or description returned.</summary>
+    public const int MaxColumnText = 1024;
+    static readonly string[] PropertyKinds = ["bqTable", "bqView", "bqMaterializedView", "bqExternalTable", "bqRoutine"];
 
     public async Task<BigQueryProperties> PropertiesAsync(BigQueryPropertiesArgs args, CancellationToken token)
     {
-        if (!Guid.TryParse(args.RequestId, out _) || !PropertyKinds.Contains(args.Kind) || !BqNames.IsProject(args.Project) || !BqNames.IsDataset(args.Dataset) || !BqNames.IsTable(args.Name))
+        var routine = args.Kind == "bqRoutine";
+        if (!Guid.TryParse(args.RequestId, out _) || !PropertyKinds.Contains(args.Kind) || !BqNames.IsProject(args.Project) || !BqNames.IsDataset(args.Dataset)
+            || !(routine ? BqNames.IsRoutine(args.Name) : BqNames.IsTable(args.Name)))
             throw new RequestException("INVALID_PARAMS", "The object is invalid.");
         var connection = Find(args.ConnectionId) ?? throw new RequestException("NOT_CONNECTED", "The connection is no longer open.");
         var watch = Stopwatch.StartNew();
@@ -23,11 +33,60 @@ internal sealed partial class BigQueryService
         budget.CancelAfter(PreConnectLimit);
         try
         {
+            var fullName = args.Project + "." + args.Dataset + "." + args.Name;
+            if (routine)
+            {
+                var found = await MetadataAsync(connection, t => connection.Client.Service.Routines.Get(args.Project, args.Dataset, args.Name).ExecuteAsync(t), budget.Token);
+                var (kind, facts) = RoutineFacts(found, fullName);
+                var (body, bodyCut) = Definition(found.DefinitionBody);
+                return new(args.Name, kind, facts, watch.ElapsedMilliseconds, body, bodyCut);
+            }
             var table = await MetadataAsync(connection, t => connection.Client.Service.Tables.Get(args.Project, args.Dataset, args.Name).ExecuteAsync(t), budget.Token);
-            var (type, groups) = Facts(table, args.Project + "." + args.Dataset + "." + args.Name);
-            return new(args.Name, type, groups, watch.ElapsedMilliseconds);
+            var (type, groups) = Facts(table, fullName);
+            var (text, cut) = Definition(table.View?.Query ?? table.MaterializedView?.Query);
+            var (columns, columnsCut) = ColumnFacts(table);
+            return new(args.Name, type, groups, watch.ElapsedMilliseconds, text, cut, columns, columnsCut);
         }
-        catch (Exception error) when (error is not RequestException { Code: "INVALID_PARAMS" }) { throw BigQueryErrors.Map(error, args.Project, "bigquery.tables.get", token: token); }
+        catch (Exception error) when (error is not RequestException { Code: "INVALID_PARAMS" }) { throw BigQueryErrors.Map(error, args.Project, routine ? "bigquery.routines.get" : "bigquery.tables.get", token: token); }
+    }
+
+    static (string? Text, bool? Cut) Definition(string? text) => text is null ? (null, null) : text.Length <= MaxDefinition ? (text, null)
+        : (text[..(char.IsHighSurrogate(text[MaxDefinition - 1]) ? MaxDefinition - 1 : MaxDefinition)], true);
+
+    /// <summary>The columns and nested fields as the index flattens them (Search.BigQueryEntries.FromTable): path, type and description.</summary>
+    internal static (List<BigQueryColumnFact>? Columns, bool? Cut) ColumnFacts(Table table)
+    {
+        var detail = Search.BigQueryEntries.FromTable(table);
+        var columns = detail.Columns;
+        if (columns.Count == 0) return (null, null);
+        static string Bound(string text) => text.Length <= MaxColumnText ? text : text[..(MaxColumnText - 1)] + "…";
+        var kept = columns.Take(MaxColumnFacts).Select(column => new BigQueryColumnFact(column.Path, Bound(column.Type), column.Description is { Length: > 0 } description ? Bound(description) : null)).ToList();
+        return (kept, columns.Count > MaxColumnFacts || detail.ColumnsCut ? true : null);
+    }
+
+    /// <summary>A routine's facts: Routine (full name, type, language, signature, description) and History.</summary>
+    internal static (string Type, List<BigQueryFactGroup> Groups) RoutineFacts(Routine routine, string fullName)
+    {
+        var type = routine.RoutineType switch
+        {
+            "PROCEDURE" => "procedure", "TABLE_VALUED_FUNCTION" => "table function", "AGGREGATE_FUNCTION" => "aggregate function", _ => "function"
+        };
+        var groups = new List<BigQueryFactGroup>();
+        void Group(string title, params (string Label, string? Value)[] facts)
+        {
+            var kept = facts.Where(fact => !string.IsNullOrEmpty(fact.Value)).Select(fact => new BigQueryFact(fact.Label, Clip(fact.Value!))).ToList();
+            if (kept.Count > 0) groups.Add(new(title, kept));
+        }
+        Group("Routine",
+            ("Full name", fullName),
+            ("Type", type),
+            ("Language", routine.Language is { Length: > 0 } language ? language.ToUpperInvariant() switch { "SQL" => "SQL", "JAVASCRIPT" => "JavaScript", "PYTHON" => "Python", "JAVA" => "Java", "SCALA" => "Scala", _ => language } : null),
+            ("Signature", Search.BigQueryEntries.FromRoutine(routine).Signature),
+            ("Description", routine.Description));
+        Group("History",
+            ("Created", Time(routine.CreationTime)),
+            ("Last modified", Time(routine.LastModifiedTime)));
+        return (type, groups);
     }
 
     internal static (string Type, List<BigQueryFactGroup> Groups) Facts(Table table, string fullName)
