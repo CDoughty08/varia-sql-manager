@@ -463,7 +463,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const recovery = new RecoveryService({
     api, documents, files, settings, warn: message => commands.reportWarning(message),
     server: id => { const connection = connections.get(id); return connection ? connection.displayName || connection.server : undefined },
-    restoredJobs: (tabId, jobs) => queries.restoreJobs(tabId, jobs)
+    restoredJobs: (tabId, jobs) => queries.restoreJobs(tabId, jobs), agentEnabled: api.agentPreview
   })
   // A tab holding BigQuery jobs it does not follow re-attaches once its connection is live (docs/bigquery.md, Re-attaching to jobs).
   let reattachQueued = false
@@ -987,7 +987,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     }
     if (connect) void commands.execute('connection.connect', undefined, 'toolbar')
   }
-  if (api.hotExit) void restoreSession({ api, documents, files, groups: editorGroups, connectionTargets, resumeRecovery: (tabId, id) => recovery.resume(tabId, id), restoredJobs: (tabId, jobs) => queries.restoreJobs(tabId, jobs), otherwise: welcome })
+  if (api.hotExit) void restoreSession({ api, documents, files, groups: editorGroups, connectionTargets, resumeRecovery: (tabId, id) => recovery.resume(tabId, id), restoredJobs: (tabId, jobs) => queries.restoreJobs(tabId, jobs), otherwise: welcome, agentEnabled: api.agentPreview })
     .then(opened => opened >= 0, () => false).then(restored => {
       connectionRestored()
       if (disposed) return

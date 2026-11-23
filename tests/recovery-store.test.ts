@@ -36,7 +36,7 @@ describe('the AutoRecover store', () => {
     const record = await restarted.take(copy.id, 1)
     expect(record.fileSha256).toBe(known ? baseline.fileSha256 : undefined)
     const reopened = new SqlFileStore()
-    const file = await reopened.register(record.path!, record.kind, { baseSha256: record.fileSha256 })
+    const file = await reopened.register(record.path!, record.kind as 'sql', { baseSha256: record.fileSha256 })
     expect(await reopened.changedOnDisk(file!.id)).toBe(true)
     await writeFile(path, 'SELECT original')
     expect(await reopened.changedOnDisk(file!.id)).toBe(!known)

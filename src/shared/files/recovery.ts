@@ -1,6 +1,7 @@
-import type { DocumentKind, LineEnding, SqlFile } from '../contracts'
+import type { LineEnding, SqlFile } from '../contracts'
 import type { ProviderId } from '../providers'
 import type { RestoredJob } from '../bigquery/jobs'
+import type { KeptDocumentKind } from './session'
 
 /**
  * AutoRecover (Tools › Options › Environment › AutoRecover). Main keeps one record a query in `<userData>/WorkbenchAutoRecover/`,
@@ -25,11 +26,12 @@ export const recoveryLimits = {
 export const recoveryCapMessage = 'AutoRecover keeps at most 64 queries (256 MB).'
 
 /** What the renderer asks main to keep for one query: main adds the file's path from its own registration. `provider` is
- *  the query's engine (absent: SQL Server); a BigQuery query's `database` is its dataset. */
+ *  the query's engine (absent: SQL Server); a BigQuery query's `database` is its dataset. A SQL Server Agent document (AG-6g)
+ *  keeps its state as `text` (shared/agent/kept.ts), never a file, provider or job key. */
 export interface RecoveryWrite {
   readonly id: string
   readonly name: string
-  readonly kind: DocumentKind
+  readonly kind: KeptDocumentKind
   readonly fileId?: string
   readonly eol: LineEnding
   readonly server?: string
@@ -37,13 +39,15 @@ export interface RecoveryWrite {
   readonly provider?: ProviderId
   /** A BigQuery query's job key, so a recovered copy re-attaches to its jobs. */
   readonly jobKey?: string
+  /** A SQL Server Agent document's connection target, which the recovered document follows once it connects (only on those copies). */
+  readonly targetId?: string
   readonly text: string
 }
 /** A kept query as the Recover dialog lists it: no text. `savedAt` is an ISO time; `path` is the file it was saved to. */
 export interface RecoveryEntry {
   readonly id: string
   readonly name: string
-  readonly kind: DocumentKind
+  readonly kind: KeptDocumentKind
   readonly path?: string
   readonly savedAt: string
   readonly characters: number
@@ -54,7 +58,7 @@ export interface RecoveryEntry {
 export interface RecoveredDocument {
   readonly text: string
   readonly name: string
-  readonly kind: DocumentKind
+  readonly kind: KeptDocumentKind
   readonly eol: LineEnding
   readonly file?: SqlFile
   /** The query's engine as kept (absent: SQL Server): it reopens in that engine's language, with no connection. */
@@ -62,6 +66,8 @@ export interface RecoveredDocument {
   /** Its job key, and the jobs main still has records of under it (docs/bigquery.md, Re-attaching to jobs). */
   readonly jobKey?: string
   readonly jobs?: readonly RestoredJob[]
+  /** A SQL Server Agent document's connection target, as kept. */
+  readonly targetId?: string
 }
 
 /** The crash, hang and reload prompts' details: AutoRecover's wording once it has kept this page's queries. */

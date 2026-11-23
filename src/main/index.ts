@@ -25,6 +25,7 @@ import { dialogQueue } from './dialog-queue'
 import { saveDefaultPath } from './file-names'
 import { connectionAcceptSchema, connectionCancelSchema, connectionPruneSchema, validateRequest, validateResult } from './validation'
 import { SqlFileStore, fileKinds, reloadPromptSchema, saveDocument, saveFileSchema, type TargetCache } from './sql-files'
+import { isKeptAgentKind } from '../shared/agent/kept'
 import { openRecentEntry, RecentFilesStore, systemRecentDocuments } from './recent-files-store'
 import { deliverLaunchFiles as deliverWaiting, droppedPathsSchema, fileArguments, LaunchQueue, maxLaunchFiles, openEach, secondInstanceSchema, type SecondInstanceData } from './launch-files'
 import { recentFilesMenuModel } from '../shared/files/recent'
@@ -539,10 +540,11 @@ function pendingReload(): boolean {
 async function reopenDocument(document: SessionRecordDocument, targets: TargetCache): Promise<RestoredDocument> {
   const { path, text, fileSha256, ...rest } = document
   if (text !== undefined) {
-    const file = path ? await files.register(path, document.kind, { baseSha256: fileSha256 }, targets) : undefined
+    // A SQL Server Agent document's text is its kept state (AG-6g): it never has a file.
+    const file = path && !isKeptAgentKind(document.kind) ? await files.register(path, document.kind, { baseSha256: fileSha256 }, targets) : undefined
     return { ...rest, text, ...file ? { file } : {} }
   }
-  if (!path) throw new Error(`${document.name} could not be reopened.`)
+  if (!path || isKeptAgentKind(document.kind)) throw new Error(`${document.name} could not be reopened.`)
   try {
     const file = await files.read(path, { kind: document.kind, targets })
     return { ...rest, eol: file.eol, text: file.content, dirty: false, file: { id: file.id, name: file.name, path: file.path, encoding: file.encoding, ...file.codePage ? { codePage: file.codePage } : {}, readOnly: file.readOnly } }
@@ -1476,11 +1478,11 @@ app.whenReady().then(async () => {
   handle('varia:recovery-list', () => recovery.list(pageGeneration))
   handle('varia:recovery-take', async (value): Promise<RecoveredDocument> => {
     const generation = pageGeneration, record = await recovery.take(recoveryTakeSchema.parse(value).id, generation)
-    const file = record.path && generation === rendererGeneration ? await files.register(record.path, record.kind, { baseSha256: record.fileSha256 }) : undefined
+    const file = record.path && !isKeptAgentKind(record.kind) && generation === rendererGeneration ? await files.register(record.path, record.kind, { baseSha256: record.fileSha256 }) : undefined
     // A BigQuery copy brings its job key back, with the jobs main still has records of under it, to re-attach to.
     const jobs = record.jobKey ? await jobRecords.load().then(() => restoredJobs(jobRecords.forKeys([record.jobKey!])), () => []) : []
     return { text: record.text, name: record.name, kind: record.kind, eol: record.eol, ...file ? { file } : {}, ...record.provider ? { provider: record.provider } : {},
-      ...record.jobKey ? { jobKey: record.jobKey } : {}, ...jobs.length ? { jobs } : {} }
+      ...record.jobKey ? { jobKey: record.jobKey } : {}, ...jobs.length ? { jobs } : {}, ...record.targetId ? { targetId: record.targetId } : {} }
   })
   // Hot exit: the page's tabs as its close goes ahead, with main's paths in place of file ids, and the next start's restore.
   handle('varia:session-write', async value => {
