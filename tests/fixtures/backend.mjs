@@ -1900,16 +1900,39 @@ function agentObjectSave(params) {
   }
   return { steps: [], messages: [], elapsedMs: 1 }
 }
-const agentJobSteps = job => Array.from({ length: job.steps }, (_, index) => ({ id: index + 1, name: ['Check integrity', 'Rebuild indexes', 'Update statistics'][index] ?? `Step ${index + 1}`, subsystem: 'TSQL' }))
+// Each job's steps with their whole content (AG-6b), kept per job so a steps save renumbers them as msdb would.
+const agentStepContent = (id, name) => ({ id, name, subsystem: 'TSQL', command: `-- ${name}\nSELECT ${id};`, flags: 0, cmdexecSuccessCode: 0, onSuccessAction: 3, onSuccessStepId: 0, onFailAction: 2, onFailStepId: 0,
+  server: '', databaseName: 'master', databaseUserName: '', retryAttempts: 0, retryInterval: 0, osRunPriority: 0, outputFileName: '', proxyId: 0 })
+const agentStepLists = new Map()
+function agentJobSteps(job) {
+  if (!agentStepLists.has(job.id)) agentStepLists.set(job.id, { start: 1, steps: Array.from({ length: job.steps }, (_, index) => agentStepContent(index + 1, ['Check integrity', 'Rebuild indexes', 'Update statistics'][index] ?? `Step ${index + 1}`)) })
+  return agentStepLists.get(job.id).steps
+}
+/** A steps save (planAgentSteps' shape) as msdb runs it: deletes lower later ids, an insert raises them, then each step is written whole. */
+function agentApplySteps(job, save) {
+  const list = agentStepLists.get(job.id) ?? { start: 1, steps: [] }
+  let steps = [...(agentStepLists.has(job.id) ? list.steps : agentJobSteps(job))]
+  for (const id of save.deletes ?? []) steps = steps.filter(step => step.id !== id).map(step => step.id > id ? { ...step, id: step.id - 1 } : step)
+  for (const item of save.temporary ?? []) steps = steps.map(step => step.id === item.id ? { ...step, name: item.name } : step)
+  for (const item of save.adds ?? []) steps = [...steps.map(step => step.id >= item.id ? { ...step, id: step.id + 1 } : step), agentStepContent(item.id, item.name)]
+  for (const write of save.writes ?? []) steps = steps.map(step => step.id === write.id ? { id: write.id, name: write.name, subsystem: write.subsystem, command: write.command, flags: write.flags,
+    cmdexecSuccessCode: write.cmdexecSuccessCode, onSuccessAction: write.onSuccessAction, onSuccessStepId: write.onSuccessStepId, onFailAction: write.onFailAction, onFailStepId: write.onFailStepId,
+    server: write.server, databaseName: write.databaseName, databaseUserName: write.databaseUserName, retryAttempts: write.retryAttempts, retryInterval: write.retryInterval,
+    osRunPriority: write.osRunPriority, outputFileName: write.outputFileName, proxyId: write.proxyId } : step)
+  steps.sort((a, b) => a.id - b.id)
+  agentStepLists.set(job.id, { start: save.startStepId ?? list.start, steps })
+  job.steps = steps.length
+}
 function agentJobDocument(params) {
-  const base = { login: 'sa', sysadmin: true, platform: 'windows', categories: ['[Uncategorized (Local)]', 'Database Maintenance'], operators: agentOperators, owners: ['sa', 'CONTOSO\agent'], alertsEditable: true, mail: { checked: true, xps: true, profiles: 1, sysadmin: true, useDatabaseMail: true, agentProfile: 'Varia Mail' } }
+  const base = { login: 'sa', sysadmin: true, platform: 'windows', categories: ['[Uncategorized (Local)]', 'Database Maintenance'], operators: agentOperators, owners: ['sa', 'CONTOSO\agent'], alertsEditable: true, mail: { checked: true, xps: true, profiles: 1, sysadmin: true, useDatabaseMail: true, agentProfile: 'Varia Mail' },
+    subsystems: ['TSQL', 'CmdExec', 'PowerShell', 'SSIS'], databases: ['master', 'model', 'msdb', 'Sales', 'tempdb'], proxies: [{ id: 1, name: 'FileShareWriter', enabled: true, subsystems: ['CmdExec', 'PowerShell'], identity: 'CONTOSO\\svc-fswriter' }] }
   if (params.target.kind === 'agent') return { agentJobDocument: { ...base, steps: [], jobs: agentJobs.map(job => job.name).sort() }, elapsedMs: 1 }
   const job = agentJobs.find(item => item.name === params.target.name)
   if (!job) return undefined
   const doc = agentJobDoc(job)
   const record = { jobId: job.id.toUpperCase(), name: job.name, enabled: job.enabled, description: doc.description, category: job.category, owner: doc.owner,
     emailLevel: doc.emailLevel, emailOperator: doc.emailOperator, pageLevel: doc.pageLevel, pageOperator: doc.pageOperator, netSendLevel: doc.netSendLevel, netSendOperator: doc.netSendOperator,
-    eventLogLevel: doc.eventLogLevel, deleteLevel: doc.deleteLevel, created: job.created, modified: doc.modified, version: doc.version, startStepId: 1, lastRun: job.lastRun.replace(' ', 'T'), lastOutcome: job.outcome }
+    eventLogLevel: doc.eventLogLevel, deleteLevel: doc.deleteLevel, created: job.created, modified: doc.modified, version: doc.version, startStepId: (agentJobSteps(job), agentStepLists.get(job.id).start), lastRun: job.lastRun.replace(' ', 'T'), lastOutcome: job.outcome }
   return { agentJobDocument: { ...base, job: record, steps: agentJobSteps(job), alerts: doc.alerts }, elapsedMs: 1 }
 }
 // The proxy and Credential documents (AG-8b): one proxy as its credential's only user, and the documents' saves applied to them.
@@ -1971,6 +1994,7 @@ async function agentJobSave(params) {
     const doc = agentJobDoc(job)
     for (const field of fields) if (save[field] !== undefined) doc[field] = save[field]
     Object.assign(doc, { alerts: [], version: 1, modified: stamp() })
+    if (save.steps) agentApplySteps(job, save.steps)
     return { steps: [{ status: 'done', title: 'Create the job' }], messages: [], elapsedMs: 1 }
   }
   const job = agentJobs.find(item => item.name === params.target.name)
@@ -1985,6 +2009,7 @@ async function agentJobSave(params) {
   if (save.category !== undefined) job.category = save.category
   for (const field of fields) if (save[field] !== undefined) doc[field] = save[field]
   if (save.removeAlerts) doc.alerts = doc.alerts.filter(alert => !save.removeAlerts.some(removed => removed.id === alert.id))
+  if (save.steps) agentApplySteps(job, save.steps)
   Object.assign(doc, { version: doc.version + 1, modified: stamp() })
   return { steps: [{ status: 'done', title: 'Save the job' }], messages: [], elapsedMs: 1 }
 }
@@ -2448,6 +2473,11 @@ async function workbench(id, method, params, credit) {
       write(FrameKind.EVENT, id, 0, { type: 'resultSet.residence', descriptor })
       write(FrameKind.EVENT, id, 0, { type: 'resultSet.closed', descriptor })
       return respond(id, { resultSets: [descriptor], discardedResultSets: 0, messages: [info('The result was loaded into memory.')], recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1, database: '', messagesTruncated: false, budget: summaryBudget(), completedAt: new Date().toISOString().replace('Z', '0000+00:00') })
+    }
+    // The job step editor's Parse (AG-6b): a misspelt SELECT is the one syntax error the fake knows.
+    case 'language.parse': {
+      const lines = String(params.text).split('\n'), line = lines.findIndex(text => /\bSELEC\b/i.test(text))
+      return respond(id, { errors: line < 0 ? [] : [{ line: line + 1, column: lines[line].search(/\bSELEC\b/i) + 1, number: 102, message: "Incorrect syntax near 'SELEC'." }], truncated: false })
     }
   }
   const connection = workbenchConnections.get(params.connectionId)

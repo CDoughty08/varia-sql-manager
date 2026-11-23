@@ -1284,6 +1284,24 @@ export const commandCatalog = {
     title: 'Go to New Result', category: 'Query', icon: 'arrow-right', keywords: ['compare', 'diff', 'new', 'side', 'input', 'result', 'go'], providers: both,
     menus: [{ menu: 'output.tools', group: '5_compare', order: 7, mnemonic: 'u', when: 'resultsGridComparison' }]
   },
+  // Moving between a comparison's differences (CompareService.navigate): the next or previous change unit from the active
+  // cell, wrapping round, said as "Change 2 of 31" in the comparison's live region. Alt+F5 as in VS Code's diff editor (F8
+  // is Show Object Explorer), only with the focus in a results grid; the palette and the menus work from anywhere. Go to
+  // Possible Match selects the row a removed or added row looks like (? in its row header).
+  'output.compareNextDifference': {
+    title: 'Go to Next Difference', category: 'Query', icon: 'arrow-down', keywords: ['compare', 'diff', 'next', 'difference', 'change', 'navigate', 'jump', 'step'], precondition: 'resultsGridComparison', providers: both, methods: ['results.diffSeek'],
+    keybindings: [{ key: 'alt+f5', when: 'outputGridFocus && resultsGridComparison' }],
+    menus: [{ menu: 'output.context', group: '3_compare', order: 1, mnemonic: 'x', when: 'outputGridComparison' }, { menu: 'output.tools', group: '5_compare', order: 10, when: 'resultsGridComparison' }]
+  },
+  'output.comparePreviousDifference': {
+    title: 'Go to Previous Difference', category: 'Query', icon: 'arrow-up', keywords: ['compare', 'diff', 'previous', 'difference', 'change', 'navigate', 'jump', 'step', 'back'], precondition: 'resultsGridComparison', providers: both, methods: ['results.diffSeek'],
+    keybindings: [{ key: 'alt+shift+f5', when: 'outputGridFocus && resultsGridComparison' }],
+    menus: [{ menu: 'output.context', group: '3_compare', order: 2, when: 'outputGridComparison' }, { menu: 'output.tools', group: '5_compare', order: 11, when: 'resultsGridComparison' }]
+  },
+  'output.compareGoToPossibleMatch': {
+    title: 'Go to Possible Match', category: 'Query', icon: 'link', keywords: ['compare', 'diff', 'possible', 'match', 'partner', 'look', 'alike', 'key', 'row'], precondition: 'comparisonRowHasPartner', providers: both, methods: ['results.diffSeek'],
+    menus: [{ menu: 'output.context', group: '3_compare', order: 3, when: 'outputGridComparison' }]
+  },
   // The results toolbar's Profile and Row size toggles (queryResults.grid.columnProfile, queryResults.grid.rowSize).
   'output.toggleColumnProfile': {
     title: 'Show Column Profile', category: 'Query', icon: 'graph', keywords: ['profile', 'stats', 'statistics', 'distinct', 'nulls', 'histogram', 'grid', 'column'], providers: both, methods: ['results.profile'],

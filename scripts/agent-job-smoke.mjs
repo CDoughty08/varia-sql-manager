@@ -2,9 +2,10 @@
 // the smoke runs open the release gate): double-click and Enter in Job Activity Monitor open one tab per job with its live state, an
 // edit counts on Save, Save sends one agentJob action carrying the version it read, a save that loses the race (the job-save-race
 // control file) opens the field-by-field compare whose Reload and keep my changes saves on the next try, Start once at step sends the
-// chosen step, and New Job from the palette copies an existing job and creates it. Alerts and operators (AG-7): the new job's New alert for
-// this job creates an alert that runs it and notifies an operator, and the palette's Operators and Notifications grid saves a changed cell
-// as one agentAlert action and sends a test e-mail through the fake backend (nothing is sent). Screenshots in Dark and Light go to artifacts/.
+// chosen step, Steps reorders, parses, deletes with Undo and saves the renumbering (AG-6b), and New Job from the palette copies an existing
+// job and creates it. Alerts and operators (AG-7): the new job's New alert for this job creates an alert that runs it and notifies an operator,
+// and the palette's Operators and Notifications grid saves a changed cell as one agentAlert action and sends a test e-mail through the fake
+// backend (nothing is sent). Screenshots in Dark and Light go to artifacts/.
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
@@ -109,6 +110,45 @@ try {
   await expect(documentState(job('Nightly'))).toContainText('Running', { timeout: 30000 })
   await expect(documentState(job('Nightly'))).toContainText('Idle · Last run succeeded', { timeout: 45000 })
   console.log('Start at step passed: the step menu sends the chosen step and the header follows the run.')
+
+  step = 'steps'
+  // Steps (AG-6b): pick a step, point its failure at another, move a step to the top (its targets follow), Parse, delete with Undo, and
+  // Save sends the planner's renumbering with the Start step.
+  const list = job('Nightly').getByRole('listbox', { name: 'Steps', exact: true })
+  await expect(list.getByRole('option')).toHaveCount(3)
+  await list.getByRole('option', { name: /Rebuild indexes/ }).click()
+  const editor = job('Nightly').getByRole('group', { name: 'Step 2: Rebuild indexes', exact: true })
+  await expect(editor.getByLabel('Step name', { exact: true })).toHaveValue('Rebuild indexes')
+  await editor.getByLabel('On failure', { exact: true }).selectOption({ label: 'Go to step 3: Update statistics' })
+  await list.getByRole('option', { name: /Update statistics/ }).click()
+  const moved = job('Nightly').getByRole('group', { name: 'Step 3: Update statistics', exact: true })
+  await moved.getByRole('button', { name: 'Move up', exact: true }).click()
+  await job('Nightly').getByRole('group', { name: 'Step 2: Update statistics', exact: true }).getByRole('button', { name: 'Move up', exact: true }).click()
+  await expect(list.getByRole('option').first()).toContainText('Update statistics')
+  // Rebuild indexes is step 3 now and still goes to Update statistics, step 1.
+  await expect(list.getByRole('option').nth(2)).toContainText('Step 1')
+  const top = job('Nightly').getByRole('group', { name: 'Step 1: Update statistics', exact: true })
+  await top.getByRole('button', { name: 'Parse', exact: true }).click()
+  await expect(top.getByRole('status')).toContainText('Commands completed successfully.')
+  expect((await calls('language.parse')).at(-1)).toMatchObject({ text: '-- Update statistics\nSELECT 3;' })
+  await top.getByRole('button', { name: 'Make Start step', exact: true }).click()
+  await list.getByRole('option', { name: /Check integrity/ }).click()
+  await job('Nightly').getByRole('group', { name: 'Step 2: Check integrity', exact: true }).getByRole('button', { name: 'Delete', exact: true }).click()
+  await expect(list.getByRole('option')).toHaveCount(2)
+  await expect(job('Nightly').getByRole('status').filter({ hasText: "Deleted step 2 'Check integrity'." })).toBeVisible()
+  await page.screenshot({ path: 'artifacts/agent-job-steps.png' })
+  await job('Nightly').getByRole('button', { name: 'Undo', exact: true }).click()
+  await expect(list.getByRole('option')).toHaveCount(3)
+  await job('Nightly').getByRole('group', { name: 'Nightly actions', exact: true }).getByRole('button', { name: /^Save · [0-9]+ changes$/ }).click()
+  await expect(job('Nightly').getByRole('status').filter({ hasText: 'The job was saved.' })).toBeVisible()
+  const stepsSave = (await saves()).at(-1).agentJob.steps
+  expect(stepsSave.temporary).toHaveLength(3)
+  expect(stepsSave.writes.map(write => write.name)).toEqual(['Update statistics', 'Check integrity', 'Rebuild indexes'])
+  expect(stepsSave.writes[2]).toMatchObject({ onFailAction: 4, onFailStepId: 1 })
+  expect(stepsSave.startStepId).toBe(1)
+  await expect(list.getByRole('option').first()).toContainText('Start step')
+  await expect(list.getByRole('option').first()).toContainText('Update statistics')
+  console.log('Steps passed: targets follow a move, Parse reports, Delete undoes, and Save renumbers the steps with the Start step.')
 
   step = 'new job'
   // New Job from the palette: Copy an existing job fills General and Notifications; Create adds the job.

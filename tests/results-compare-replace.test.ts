@@ -346,7 +346,7 @@ describe('a comparison changed in place', () => {
     expect(layoutFor('entry', wire.diff.maxEntryPairs)).toEqual({ layout: 'entry', fallback: false })
     expect(layoutFor('entry', wire.diff.maxEntryPairs + 1)).toEqual({ layout: 'unified', fallback: true })
     expect(layoutFor('unified', wire.diff.maxEntryPairs + 1)).toEqual({ layout: 'unified', fallback: false })
-    const info = { left: 'e1', right: 'e2', leftNumber: 1, rightNumber: 2, match: { mode: 'auto' as const, columns: ['Id'] }, layout: 'unified' as const, fallback: true as const, pairs: 3000, columnChanges: [], exact: false, same: 1, changed: 2, added: 0, removed: 1, soft: 0, leftOnly: [], rightOnly: [], approximate: false, repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, trailingHidden: 0, leftRows: 4, rightRows: 4 }
+    const info = { left: 'e1', right: 'e2', leftNumber: 1, rightNumber: 2, match: { mode: 'auto' as const, columns: ['Id'] }, layout: 'unified' as const, fallback: true as const, pairs: 3000, columnChanges: [], exact: false, same: 1, changed: 2, added: 0, removed: 1, soft: 0, leftOnly: [], rightOnly: [], approximate: false, repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, trailingHidden: 0, overview: [], units: 3, leftRows: 4, rightRows: 4 }
     expect(comparisonNotices(info).map(notice => notice.text)).toEqual([fallbackText])
     expect(publishText(info, false, comparisonNotices(info).map(notice => notice.text))).toBe(`Comparison ready: matched by Id, 2 changed, 0 added, 1 removed. ${fallbackText}`)
   })

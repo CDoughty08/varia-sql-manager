@@ -510,6 +510,12 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   (`HighlightsService.carry`). Changes are refused while an input is closed (`closedReason`, the `comparisonInputsOpen`
   key). Source links come from frozen `ResultSlot.sources` and go only to an entry whose set key is still the one
   compared; otherwise they read closed.
+  Moving between differences (`CompareService.navigate`, `goToPossibleMatch`) asks `results.diffSeek` in the grid's own
+  view and steps between one row's units itself, from the tone `GridView` has read (`grid/diff-navigation.ts`); the
+  grid lands and selects (`GridView.landDiff`), and reports its active row's tone (`onDiffRow`) for the
+  `comparisonRowHasPartner` key. Moves run one after another (a few queue), each waiting for the row it starts on to have its
+  tone (`GridView.toneWhenRead`), so a quick repeat steps within the row the last one landed on. The overview strip (`grid/overview.ts`) draws the
+  answer's `overview` and shows only while the grid shows the stored rows in their order; nothing polls.
 - **Dropping a result.** Every way a result leaves its run goes through `ResultsService.drop`: closing one view
   (`removeEntry`, caption or tab close buttons, Close Result on an ended run; a Table closes its group and Pivot), Close
   Results, a new run, the tab closing. It aborts the entry's sort or filter build, forgets held views, sort, distinct

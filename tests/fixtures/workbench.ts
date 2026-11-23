@@ -453,7 +453,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const operations = new SsisOperationsService({ api, documents, panes, live, connections, settings, targetIdOf })
   const agentJobs = new AgentJobStatusService({ api, live, connections })
   const jobActivity = new JobActivityService({ api, documents, panes, live, connections, targetIdOf, started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt) })
-  const jobDocuments = new JobDocumentService({ api, documents, files, connections, live, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) })
+  const jobDocuments = new JobDocumentService({ api, documents, files, connections, live, targetIdOf, openQuery: (sql, name, connectionId, database) => { documents.newQuery(sql, name, connectionId, database) }, ...(options.timers ? { timers: options.timers } : {}) })
   const agentObjectOptions = { api, documents, files, connections, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) }
   const alertDocuments = new AlertOperatorDocumentService(alertSpec, agentObjectOptions)
   const operatorDocuments = new AlertOperatorDocumentService(operatorSpec, agentObjectOptions)

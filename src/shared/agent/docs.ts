@@ -67,7 +67,14 @@ const limitNotes: { readonly [L in AgentLimit]: string } = {
   counterInstances: 'Instances one counter\'s current values list',
   recommendedAlerts: 'Alerts one Add recommended alerts creates',
   alertRows: 'Alerts the Operators and notifications grid reads',
-  operatorRows: 'Operators one listing reads'
+  operatorRows: 'Operators one listing reads',
+  stepCommandChars: "Characters of one step's command in a job save",
+  stepCommandTotalChars: "Characters of all the steps' commands in one job save",
+  stepOutputChars: "Characters of a step's output file path (`sysjobsteps.output_file_name`)",
+  stepRetries: "A step's largest Retry attempts",
+  stepRetryMinutes: "A step's largest Retry interval, in minutes",
+  parseChars: "Characters the step editor's Parse sends (`language.parse`)",
+  parseErrors: 'Errors one Parse reports; more set `truncated`'
 }
 
 /** The generated reference: code tables, gates, procedures and limits. */

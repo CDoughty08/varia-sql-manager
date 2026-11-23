@@ -40,7 +40,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "ssis.describe", "ssis.execute", "ssis.catalogSetup",
         "bigquery.account", "bigquery.projects", "bigquery.dryRun", "bigquery.properties", "agent.profile", "agent.historyMessage", "agent.counterValues", "results.remoteQuery",
         "query.attach", "bigquery.endIdleSessions", "bigquery.cancelJobs",
-        "results.diffSeek"
+        "results.diffSeek", "language.parse"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
     public const string SynthesizeMethod = "debug.results.synthesize";
@@ -614,6 +614,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "agent.profile" => await explorer.AgentProfileAsync(Read<AgentProfileArgs>(parameters, json), Token(context)),
         "agent.historyMessage" => await actions.HistoryMessageAsync(Read<AgentHistoryMessageArgs>(parameters, json), Token(context)),
         "agent.counterValues" => await actions.CounterValuesAsync(Read<AgentCounterValuesArgs>(parameters, json), Token(context)),
+        "language.parse" => await StepParser.ParseAsync(Read<LanguageParseArgs>(parameters, json), Token(context)),
         SynthesizeMethod when hooks => Synthesize(Read<SynthesizeArgs>(parameters, json), Token(context)),
         _ => throw new RequestException("METHOD_NOT_FOUND", "Unsupported backend method.")
     };
