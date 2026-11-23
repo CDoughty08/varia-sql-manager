@@ -118,14 +118,16 @@ try {
 
   step = 'cancel'
   // Cancel Job from the grid's menu asks first; Keep running sends nothing, Cancel Job posts jobs.cancel in the job's location.
-  // The menu greys what the selected row's cells rule out, read as the row is selected: select it and wait for that read (the
-  // toolbar's Cancel Job turns on for a running job) before opening the menu.
-  await jobCell('varia_running').click()
-  await expect(frame().getByRole('button', { name: 'Cancel Job', exact: true })).toBeEnabled()
-  await jobCell('varia_running').click({ button: 'right' })
+  // The menu greys what the selected row's cells rule out, read after the row is selected and weighed as the menu opens (until
+  // then every item is offered): open it again until that read has landed.
   const menu = page.getByRole('menu', { name: 'Job History', exact: true })
-  await expect(menu).toBeVisible()
-  await expect(menu.getByRole('menuitem', { name: 'Open Results', exact: true })).toBeDisabled()
+  await jobCell('varia_running').click()
+  await expect(async () => {
+    if (await menu.isVisible()) await page.keyboard.press('Escape')
+    await expect(menu).toHaveCount(0)
+    await jobCell('varia_running').click({ button: 'right' })
+    await expect(menu.getByRole('menuitem', { name: 'Open Results', exact: true })).toBeDisabled({ timeout: 1000 })
+  }).toPass({ timeout: 15000 })
   await menu.getByRole('menuitem', { name: 'Cancel Job…', exact: true }).click()
   const question = frame().getByRole('alertdialog', { name: 'Cancel Job', exact: true })
   await expect(question).toContainText(/^Cancel job varia_running .*ago\?/)

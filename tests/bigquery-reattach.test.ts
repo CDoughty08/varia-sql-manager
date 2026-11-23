@@ -841,6 +841,21 @@ describe('jobs without a tab', () => {
     await f.queries.reviewJobsWithoutTab({ reviewJobsWithoutTab })
     expect(notifyJobs).toHaveBeenCalledTimes(1)
   })
+  it('hands Show in Job History its jobs by project, and finds the tab that holds a job of a project', async () => {
+    const f = fixture(), show = vi.fn(), notifyJobs = vi.fn()
+    f.queries.notifyJobs = notifyJobs
+    const projects = [{ project: 'example-project', jobs: [{ jobId: 'job_9', location: 'US' }] }]
+    await f.queries.reviewJobsWithoutTab({ reviewJobsWithoutTab: async () => ({ ok: true, value: { answer: 'show', jobIds: ['job_9'], show: projects } }) }, show)
+    expect(show).toHaveBeenCalledExactlyOnceWith(projects)
+    expect(notifyJobs).not.toHaveBeenCalled()
+    const update = (patch: object) => (f.queries as unknown as { update: (id: string, patch: object) => void }).update(f.tab.id, patch)
+    expect(f.queries.tabHoldingJob('job_1', 'example-project')).toBeUndefined()
+    update({ summary: { job: { jobId: 'job_1', project: 'example-project' } } })
+    expect(f.queries.tabHoldingJob('job_1', 'example-project')).toBe(f.tab.id)
+    expect(f.queries.tabHoldingJob('job_1', 'other-project')).toBeUndefined()
+    update({ summary: undefined, running: { queryId: 'q-1', connectionId: 'bq-a', startedAt: 0, jobId: 'job_2' } })
+    expect(f.queries.tabHoldingJob('job_2', 'example-project')).toBe(f.tab.id)
+  })
 })
 
 describe('failed aborts', () => {

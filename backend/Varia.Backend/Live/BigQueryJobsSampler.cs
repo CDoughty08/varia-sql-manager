@@ -28,6 +28,12 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
     private View view;
     /// <summary>The last sample left nothing open and nothing to load (read by the subscription after the sample).</summary>
     private volatile bool idle;
+    /// <summary>Answers read so far, and the samples in a row the budget cut before any answer landed (a stalled network, rate
+    /// limits retried until the budget ran out): after <see cref="StallsBeforeTimeout"/> the probe fails with TIMEOUT rather than
+    /// say "still loading" for ever.</summary>
+    private long answers;
+    private int stalls;
+    internal const int StallsBeforeTimeout = 3;
 
     /// <summary>What one listing holds: the top-level jobs by id, which of them are the principal's (All users), how far the
     /// first listing has read, the newest creation time held, and the children of expanded scripts.</summary>
@@ -50,6 +56,8 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
         /// <summary>A refresh listing the budget stopped, and where it goes on next time.</summary>
         public HistoryListing? Since { get; set; }
         public string? SinceToken { get; set; }
+        /// <summary>The jobs shown that the refresh under way has merged, over every sample it took: its cap.</summary>
+        public int SinceMerged { get; set; }
         /// <summary>The unreachable locations the listing under way has reported (they replace the last whole listing's).</summary>
         public SortedSet<string> Reporting { get; } = new(StringComparer.Ordinal);
         /// <summary>All users: a My jobs listing the budget stopped while classifying, and where it goes on next time.</summary>
@@ -111,8 +119,22 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
             budget.CancelAfter(Math.Max(1000, item.BudgetMs));
             var loading = false;
             LiveProbeError? failure = null;
-            try { loading = !await RefreshAsync(connection, view, item.BudgetMs, budget.Token); }
-            catch (OperationCanceledException) when (!token.IsCancellationRequested) { loading = true; }
+            var answered = answers;
+            try
+            {
+                loading = !await RefreshAsync(connection, view, item.BudgetMs, budget.Token);
+                stalls = 0;
+            }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested)
+            {
+                loading = true;
+                stalls = answers == answered ? stalls + 1 : 0;
+                if (stalls >= StallsBeforeTimeout)
+                {
+                    stalls = 0;
+                    failure = LiveErrors.Create(Probe, "TIMEOUT", "BigQuery did not answer the job listing within the refresh's time budget, several times in a row.");
+                }
+            }
             catch (Exception error) when (!token.IsCancellationRequested)
             {
                 failure = Failure(error, connection.Options.Project);
@@ -168,7 +190,7 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
         // only the request it cut.
         var deadline = Environment.TickCount64 + Math.Max(1000, budgetMs) * 3 / 4;
         int Left() => Environment.TickCount64 >= deadline ? 0 : (int)Math.Clamp(bytes, 0, int.MaxValue);
-        void Spend(long spent) => bytes -= spent;
+        void Spend(long spent) { bytes -= spent; answers++; }
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var args = state.Args;
         var (min, max) = Range(args, now);
@@ -196,13 +218,15 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
                     var done = await ListAsync(connection, state, state.First, state.FirstToken, next => state.FirstToken = next, token, Left, Spend, first: true);
                     if (done) (state.First, state.FirstToken, state.FirstDone) = (null, null, true);
                     else whole = false;
+                    // A first listing that takes several samples follows the open jobs it has read so far.
+                    if (!done && !await FinishedAsync(connection, state, listing, token, Left, Spend)) whole = false;
                 }
                 else
                 {
                     // A stopped refresh goes on from its page with its own window; a new one starts at the newest job read whole.
                     state.Since ??= listing with { MinCreated = Math.Max(min, state.Newest - BigQueryJobHistory.OverlapMs) };
                     var done = await ListAsync(connection, state, state.Since, state.SinceToken, next => state.SinceToken = next, token, Left, Spend, first: false);
-                    if (done) (state.Since, state.SinceToken) = (null, null);
+                    if (done) (state.Since, state.SinceToken, state.SinceMerged) = (null, null, 0);
                     else whole = false;
                     // Open jobs are followed even while new jobs are still being listed.
                     if (!await FinishedAsync(connection, state, listing, token, Left, Spend)) whole = false;
@@ -244,7 +268,6 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
         Func<int> left, Action<long> spend, bool first)
     {
         var size = BigQueryJobHistory.PageJobs;
-        var merged = 0;
         while (true)
         {
             token.ThrowIfCancellationRequested();
@@ -263,12 +286,12 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
             {
                 // Every top-level job moves the watermark, filtered out or not: else a rare filter would list the whole range anew.
                 if (job.Parent is null && job.Created is { } created && created > state.Candidate) state.Candidate = created;
-                if (Merge(state, job)) merged++;
+                if (Merge(state, job) && !first) state.SinceMerged++;
             }
             pageToken = page.Next;
             save(pageToken);
             // The cap: the newest 1,000 jobs shown. A refresh after a long pause stops there too, since Trim keeps only those.
-            if (pageToken is null || (first ? state.Held.Values.Count(job => Shown(state.Args, job)) : merged) >= BigQueryJobHistory.MaxJobs)
+            if (pageToken is null || (first ? state.Held.Values.Count(job => Shown(state.Args, job)) : state.SinceMerged) >= BigQueryJobHistory.MaxJobs)
             {
                 if (pageToken is not null) state.More = true;
                 Whole(state);
@@ -306,22 +329,29 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
     private static bool Merge(View state, HistoryJob job)
     {
         if (job.Parent is not null) return false;
+        // A finished job never opens again: an older listing's answer (the refresh's overlap) does not undo what jobs.get read.
+        if (job.Open && state.Held.TryGetValue(job.Id, out var held) && !held.Open) return Shown(state.Args, held);
         var shown = Shown(state.Args, job);
         if (shown || job.Open) state.Held[job.Id] = job;
         else state.Held.Remove(job.Id);
         return shown;
     }
 
-    /// <summary>The cap: the newest jobs shown stay, then open ones followed; dropping a shown one says the range holds more.</summary>
+    /// <summary>The cap: the newest jobs shown stay, and apart from them the newest open jobs the filters leave out, followed
+    /// until they finish into the filters (each up to <see cref="BigQueryJobHistory.MaxJobs"/>); dropping a shown one says the range
+    /// holds more.</summary>
     private static void Trim(View state)
     {
         // What the view no longer holds needs no classification kept (All users would otherwise remember every job it saw).
         state.Classified.IntersectWith(state.Held.Keys);
         state.Mine.IntersectWith(state.Held.Keys);
         if (state.Held.Count <= BigQueryJobHistory.MaxJobs) return;
-        foreach (var job in state.Held.Values.OrderByDescending(job => Shown(state.Args, job)).ThenByDescending(job => job.Created ?? 0).ThenBy(job => job.Id, StringComparer.Ordinal).Skip(BigQueryJobHistory.MaxJobs).ToList())
+        static IEnumerable<HistoryJob> Newest(IEnumerable<HistoryJob> jobs) => jobs.OrderByDescending(job => job.Created ?? 0).ThenBy(job => job.Id, StringComparer.Ordinal);
+        var shown = Newest(state.Held.Values.Where(job => Shown(state.Args, job))).Skip(BigQueryJobHistory.MaxJobs).ToList();
+        var followed = Newest(state.Held.Values.Where(job => !Shown(state.Args, job) && job.Open)).Skip(BigQueryJobHistory.MaxJobs);
+        if (shown.Count > 0) state.More = true;
+        foreach (var job in shown.Concat(followed).ToList())
         {
-            if (Shown(state.Args, job)) state.More = true;
             state.Held.Remove(job.Id);
             state.Children.Remove(job.Id);
         }
@@ -342,15 +372,23 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
         var start = listing.MinCreated ?? 0;
         var oldest = held.All(job => job.Created is not null) ? held.Min(job => job.Created!.Value) : start;
         var openListing = listing with { States = ["pending", "running"], MinCreated = Math.Max(start, oldest) };
+        var unreachable = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         string? pageToken = null;
+        var size = BigQueryJobHistory.PageJobs;
         while (true)
         {
             if (left() <= 0) return false;
             HistoryPage? page;
-            try { page = await ListPageAsync(connection, state, openListing, pageToken, BigQueryJobHistory.PageJobs, left(), token); }
-            catch (BigQueryOverLimit) { return false; }
+            try { page = await ListPageAsync(connection, state, openListing, pageToken, size, left(), token); }
+            catch (BigQueryOverLimit)
+            {
+                // Pages of long query texts: fewer jobs a page, as the listing does.
+                if (size > 1 && left() >= BigQueryJobHistory.JobBytes) { size = Math.Max(1, size / 4); continue; }
+                return false;
+            }
             if (page is null) return true;
             spend(page.Bytes);
+            unreachable.UnionWith(page.Unreachable);
             foreach (var job in page.Items)
             {
                 seen.Add(job.Id);
@@ -359,7 +397,9 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
             pageToken = page.Next;
             if (pageToken is null) break;
         }
-        var finished = open.Where(id => !seen.Contains(id) && state.Held.TryGetValue(id, out var job) && job.Open).Select(id => state.Held[id]).ToList();
+        // Missing from the answer is finished, unless its location could not be read: it stays open till the next sample.
+        var finished = open.Where(id => !seen.Contains(id) && state.Held.TryGetValue(id, out var job) && job.Open && (job.Location is null || !unreachable.Contains(job.Location)))
+            .Select(id => state.Held[id]).ToList();
         if (finished.Count == 0) return true;
         var others = new List<HistoryJob>();
         var reads = 0;
@@ -369,14 +409,17 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
             if (!own && state.GetDenied) { others.Add(job); continue; }
             // The read's limit is what is left (a job without its details is small); an over-long answer stops it till next time.
             if (reads++ >= FinishedReads || left() <= 0) return false;
+            var limit = Math.Min(left(), BigQueryJobHistory.JobBytes);
             try
             {
-                var read = await service.ReadHistoryJobAsync(connection, job.Id, job.Location, Math.Min(left(), BigQueryJobHistory.JobBytes), detail: false, token);
+                var read = await service.ReadHistoryJobAsync(connection, job.Id, job.Location, limit, detail: false, token);
                 spend(read.Bytes);
                 // Merged: a job that finished in a state the filters leave out is dropped.
                 if (read.Job is { } done && done.Id == job.Id) Merge(state, done);
             }
-            catch (BigQueryOverLimit) { return false; }
+            catch (BigQueryOverLimit) when (limit < BigQueryJobHistory.JobBytes) { return false; }
+            // Larger than a job's whole limit: its own done listing, which may take what is left of the sample, reads it.
+            catch (BigQueryOverLimit) { others.Add(job); }
             catch (Exception error) when (!token.IsCancellationRequested && BigQueryErrors.Map(error, connection.Options.Project) is RequestException { Code: var code } && code is "PERMISSION_DENIED" or "NOT_FOUND")
             {
                 if (code == "NOT_FOUND") state.Held.Remove(job.Id);
@@ -391,12 +434,17 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
         {
             var window = listing with { States = ["done"], MinCreated = other.Created ?? 0, MaxCreated = (other.Created ?? 0) + 1 };
             pageToken = null;
+            size = BigQueryJobHistory.PageJobs;
             while (true)
             {
                 if (left() <= 0) return false;
                 HistoryPage? page;
-                try { page = await ListPageAsync(connection, state, window, pageToken, BigQueryJobHistory.PageJobs, left(), token); }
-                catch (BigQueryOverLimit) { return false; }
+                try { page = await ListPageAsync(connection, state, window, pageToken, size, left(), token); }
+                catch (BigQueryOverLimit)
+                {
+                    if (size > 1 && left() >= BigQueryJobHistory.JobBytes) { size = Math.Max(1, size / 4); continue; }
+                    return false;
+                }
                 if (page is null) return true;
                 spend(page.Bytes);
                 if (page.Items.FirstOrDefault(job => job.Id == other.Id) is { } done) { Merge(state, done); break; }
@@ -491,7 +539,13 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
         foreach (var gone in state.Children.Keys.Where(id => !expanded.Contains(id)).ToList()) state.Children.Remove(gone);
         foreach (var id in expanded)
         {
-            if (!state.Held.TryGetValue(id, out var parent) || !parent.Script) continue;
+            if (!state.Held.TryGetValue(id, out var parent) || !parent.Script)
+            {
+                // A script the view no longer holds (finished out of the filters, slid out of the range) keeps no children,
+                // which would otherwise keep the probe from ever going idle.
+                state.Children.Remove(id);
+                continue;
+            }
             // Read once after the script finished; again only while a budget cut its statements short of the cap.
             if (state.Children.TryGetValue(id, out var cached) && !parent.Open && cached.Items.All(child => !child.Open)
                 && (!cached.More || cached.Items.Count >= BigQueryJobHistory.Children)) continue;

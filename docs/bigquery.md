@@ -620,12 +620,14 @@ without going to BigQuery Studio. Everything comes from BigQuery's free REST cal
   jobs created since a minute before the newest job a whole listing read (filtered out or not; a refresh the budget stops
   goes on from its page next time, since each page's token is kept as it lands; it stops between pages at three quarters of the time budget), for the open jobs (`stateFilter` pending and running, from the oldest open job held) and, for
   each open job that left that answer, its final state (`jobs.get`, or one `stateFilter=done` listing over their creation
-  window for other users' jobs when `jobs.get` on them is refused). A DONE job never changes and is never read again; new
-  scope or filters list from scratch, at once. The `bigquery.jobs` live source refreshes every 5 s while a job is running or
+  window for other users' jobs when `jobs.get` on them is refused); an open job in a location the answer could not read
+  stays open until it can. A DONE job never changes and is never read again; new scope or filters list from scratch, at
+  once, even when the sample under way then finds nothing open. Three samples in a row that the time budget cuts before
+  any answer lands (a stalled network, rate limits retried until the budget runs out) fail with `TIMEOUT`. The `bigquery.jobs` live source refreshes every 5 s while a job is running or
   pending and every 60 s otherwise (its `idleIntervalMs`, [docs/live.md](live.md)), and the load guard leaves it alone: its
   cost is network and quota waits, which a longer interval would not ease. Pinned jobs (a link, the dialog) are read by id
   and shown whatever the filters say (pinning clears the search); an open job the filters leave out is still followed
-  until it finishes; a hidden document pauses, and Refresh (F5) and
+  until it finishes (up to 1,000 of them, apart from the 1,000 jobs shown); a hidden document pauses, and Refresh (F5) and
   Pause are in its header. The status line counts the jobs and open jobs, says when more exist in the range, and names
   locations BigQuery could not read.
 - **Columns.** State (Running, Pending, Done, Failed, Cancelled, with row tones: failed and cancelled are DONE jobs with an

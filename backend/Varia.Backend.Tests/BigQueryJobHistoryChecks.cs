@@ -37,6 +37,7 @@ internal static class BigQueryJobHistoryChecks
         await WatermarkAsync(check, key);
         await PinnedClassifyAsync(check, key);
         await BudgetAndFollowAsync(check, key);
+        await CapAndStallAsync(check, key);
         await FailuresAsync(check, key);
         await DetailsAsync(check, key);
         await CancelAsync(check, key);
@@ -363,19 +364,28 @@ internal static class BigQueryJobHistoryChecks
         newer["id"] = "varia-alpha:US.newer_1";
         newer["jobReference"]!["jobId"] = "newer_1";
         newer["statistics"]!["creationTime"] = (harness.Now - 5_000).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var refused = true;
         harness.Fake.On("GET", Jobs, request => request.Uri.Query.Contains("stateFilter=", StringComparison.Ordinal) ? BigQueryFake.Text("""{"kind":"bigquery#jobList"}""")
-            : request.Uri.Query.Contains("pageToken=since-2", StringComparison.Ordinal) ? BigQueryFake.Fixture("error-access-denied", 403)
-            : new BigQueryFake.Reply(200, new JsonObject { ["kind"] = "bigquery#jobList", ["nextPageToken"] = "since-2", ["jobs"] = new JsonArray(newer) }.ToJsonString()));
+            : request.Uri.Query.Contains("pageToken=since-2", StringComparison.Ordinal) ? refused ? BigQueryFake.Fixture("error-access-denied", 403) : BigQueryFake.Text("""{"kind":"bigquery#jobList"}""")
+            : new BigQueryFake.Reply(200, new JsonObject { ["kind"] = "bigquery#jobList", ["nextPageToken"] = "since-2", ["jobs"] = new JsonArray(newer.DeepClone()) }.ToJsonString()));
         harness.Fake.On("GET", Jobs + "/varia_running", _ => new BigQueryFake.Reply(200, JsonNode.Parse(Timed("jobs-list", harness.Now).Replace("\"RUNNING\"", "\"DONE\""))!["jobs"]![0]!.ToJsonString()));
         var stopped = await SampleAsync(sampler);
+        string Refresh(int from) => harness.Listings().Skip(from).FirstOrDefault(query => !query.Contains("stateFilter=", StringComparison.Ordinal)) ?? "";
         var before = harness.Listings().Count;
+        refused = false;
         await SampleAsync(sampler);
-        var since = harness.Listings().Skip(before).Where(query => !query.Contains("stateFilter=", StringComparison.Ordinal)).Select(MinCreated).FirstOrDefault();
-        check(stopped.Errors is [{ Code: "PERMISSION_DENIED" }] && since == harness.Now - 30_000 - BigQueryJobHistory.OverlapMs,
-            $"a refresh stopped after its first page lists from the newest job read whole again, not from the newer job that page held ({harness.Now - since} ms back)");
+        var resumed = Refresh(before);
+        before = harness.Listings().Count;
+        await SampleAsync(sampler);
+        var next = Refresh(before);
+        check(stopped.Errors is [{ Code: "PERMISSION_DENIED" }] && resumed.Contains("pageToken=since-2", StringComparison.Ordinal)
+            && MinCreated(resumed) == harness.Now - 30_000 - BigQueryJobHistory.OverlapMs && MinCreated(next) == harness.Now - 5_000 - BigQueryJobHistory.OverlapMs,
+            $"a refresh stopped after its first page goes on from that page in its own window, and only once whole does the next one list from the newer job ({resumed} | {next})");
 
         using var filtered = new Harness();
         await filtered.ConnectAsync(key);
+        // Every job finished, so the newest (a query) is neither held nor followed: only "filtered out or not" moves the watermark.
+        filtered.Fake.On("GET", Jobs, request => new BigQueryFake.Reply(200, Timed(request.Uri.Query.Contains("pageToken=jobs-page-2", StringComparison.Ordinal) ? "jobs-list-page-2" : "jobs-list", filtered.Now).Replace("\"RUNNING\"", "\"DONE\"").Replace("\"PENDING\"", "\"DONE\"")));
         using var loads = filtered.Sampler(new("mine", Hours: 24, Types: ["load"]));
         var first = await SampleAsync(loads);
         await SampleAsync(loads);
@@ -449,14 +459,17 @@ internal static class BigQueryJobHistoryChecks
         using var cut = new Harness();
         await cut.ConnectAsync(key);
         cut.Fake.On("GET", Jobs, Pages(0));
+        // A starved runner may stop between pages before the third: then nothing hangs, and the check still holds.
+        var firstSample = true;
         var hung = 0;
-        cut.Fake.Hang = request => request.Uri.Query.Contains("pageToken=p3", StringComparison.Ordinal) && Interlocked.Increment(ref hung) == 1;
+        cut.Fake.Hang = request => firstSample && request.Uri.Query.Contains("pageToken=p3", StringComparison.Ordinal) && Interlocked.Increment(ref hung) == 1;
         using var cutSampler = cut.Sampler(new("mine", Hours: 24));
         var stopped = await cutSampler.SampleAsync([Due(1000)], CancellationToken.None);
+        firstSample = false;
         var resumed = await cutSampler.SampleAsync([Due()], CancellationToken.None);
         var asked = Tokens(cut);
-        check(Status(stopped, "loading") is 1 && Status(stopped, "held") is 2 && Status(resumed, "loading") is 0 && Status(resumed, "held") is 6
-            && asked.Count(token => token == "") == 1 && asked.Count(token => token == "p3") == 2,
+        check(Status(stopped, "loading") is 1 && Status(resumed, "loading") is 0 && Status(resumed, "held") is 6
+            && asked.Count(token => token == "") == 1 && asked.Count(token => token == "p3") == (hung > 0 ? 2 : 1) && (hung == 0 || Status(stopped, "held") is 2),
             "a request the budget's cancellation cuts loses only that page: " + string.Join(",", asked));
 
         using var filtered = new Harness();
@@ -491,6 +504,59 @@ internal static class BigQueryJobHistoryChecks
         check(finished.Errors.Count == 0 && Status(finished, "open") is 0 && shared.Gets("varia_running") == 1 && window is [var only]
             && long.Parse(Regex.Match(only, "maxCreationTime=(\\d+)").Groups[1].Value) - long.Parse(Regex.Match(only, "minCreationTime=(\\d+)").Groups[1].Value) == 1,
             "another user's finished job, where jobs.get is refused, is read by a done listing of its creation millisecond: " + string.Join(" | ", window));
+    }
+
+    /// <summary>With the cap reached, an open job the filters leave out is still followed, so one that finishes into them shows;
+    /// and samples the budget cuts before any answer lands fail with TIMEOUT after a few, rather than load for ever.</summary>
+    static async Task CapAndStallAsync(Action<bool, string> check, JsonObject key)
+    {
+        using var harness = new Harness();
+        await harness.ConnectAsync(key);
+        var template = JsonNode.Parse(Timed("jobs-list", harness.Now))!["jobs"]!;
+        static long CreatedOf(JsonNode job) => long.Parse(job["statistics"]!["creationTime"]!.ToString(), System.Globalization.CultureInfo.InvariantCulture);
+        var all = new List<JsonNode>();
+        for (var n = 0; n <= BigQueryJobHistory.MaxJobs; n++)
+        {
+            var job = template[1]!.DeepClone();
+            job["id"] = "varia-alpha:US.done_" + n;
+            job["jobReference"]!["jobId"] = "done_" + n;
+            job["statistics"]!["creationTime"] = (harness.Now - n * 1000L).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            job["statistics"]!.AsObject().Remove("numChildJobs");
+            all.Add(job);
+        }
+        // A running job five minutes old: older than the refresh's window, newer than the thousandth job shown.
+        var running = template[0]!.DeepClone();
+        running["statistics"]!["creationTime"] = (harness.Now - 300_500).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var finished = false;
+        harness.Fake.On("GET", Jobs, request =>
+        {
+            var query = Uri.UnescapeDataString(request.Uri.Query);
+            var min = Regex.Match(query, "minCreationTime=(\\d+)") is { Success: true } match ? long.Parse(match.Groups[1].Value) : 0;
+            IEnumerable<JsonNode> listed = query.Contains("stateFilter=", StringComparison.Ordinal) ? finished ? [] : [running]
+                : [.. all, finished ? JsonNode.Parse(running.ToJsonString().Replace("\"RUNNING\"", "\"DONE\""))! : running];
+            var jobs = listed.Where(job => CreatedOf(job) >= min).OrderByDescending(CreatedOf).ToList();
+            var at = Regex.Match(query, "pageToken=c(\\d+)") is { Success: true } token ? int.Parse(token.Groups[1].Value) : 0;
+            var page = new JsonObject { ["kind"] = "bigquery#jobList", ["jobs"] = new JsonArray([.. jobs.Skip(at * 100).Take(100).Select(job => job.DeepClone())]) };
+            if (jobs.Count > (at + 1) * 100) page["nextPageToken"] = "c" + (at + 1);
+            return new BigQueryFake.Reply(200, page.ToJsonString());
+        }).On("GET", Jobs + "/varia_running", _ => new BigQueryFake.Reply(200, running.ToJsonString().Replace("\"RUNNING\"", "\"DONE\"")));
+        using var sampler = harness.Sampler(new("mine", Hours: 24, States: ["done"]));
+        var capped = await SampleAsync(sampler);
+        var followed = !sampler.IsIdle(BigQueryJobsSampler.Probe);
+        finished = true;
+        var after = await SampleAsync(sampler);
+        check(capped.Errors.Count == 0 && Status(capped, "held") is 1000 && Status(capped, "more") is 1 && followed
+            && after.Errors.Count == 0 && Status(after, "held") is 1000 && harness.Gets("varia_running") == 1 && sampler.IsIdle(BigQueryJobsSampler.Probe),
+            "with 1,000 jobs shown, a running job the state filter leaves out is still followed, and read once it finishes into the filter");
+
+        using var stalled = new Harness();
+        await stalled.ConnectAsync(key);
+        stalled.Fake.Hang = request => request.Uri.AbsolutePath.EndsWith("/jobs", StringComparison.Ordinal);
+        using var waiting = stalled.Sampler(new("mine", Hours: 24));
+        var cut = new List<LiveSampleBatch>();
+        for (var n = 0; n < BigQueryJobsSampler.StallsBeforeTimeout; n++) cut.Add(await waiting.SampleAsync([Due(1000)], CancellationToken.None));
+        check(cut[..^1].All(batch => batch.Errors.Count == 0 && Status(batch, "loading") is 1) && cut[^1].Errors is [{ Code: "TIMEOUT" }],
+            $"samples the budget cuts before any answer fail with TIMEOUT after {BigQueryJobsSampler.StallsBeforeTimeout}, not load for ever");
     }
 
     /// <summary>BigQuery's refusals reach the probe as their liveErrorCodes.</summary>

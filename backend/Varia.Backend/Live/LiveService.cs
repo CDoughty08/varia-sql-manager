@@ -68,6 +68,9 @@ internal sealed class LiveProbeState(LiveProbeJson spec, int intervalMs)
     public Dictionary<int, LiveTrackArgs> Tracks { get; } = [];
     /// <summary>When the probe is next due, on the service clock (ms); its last sample's time, or −1 before the first.</summary>
     public long DueAt { get; set; }
+    /// <summary>The slot a Refresh or Reread asked for since the probe was last taken: the sample under way, finishing, moves the
+    /// slot to the interval in force (an idle interval, the load guard's) and must not lose it.</summary>
+    public long? AskedAt { get; set; }
     public long LastSampleAt { get; set; } = -1;
     /// <summary>The next sample follows a pause: rates restart (gap resumed).</summary>
     public bool Resumed { get; set; }
@@ -278,8 +281,14 @@ internal sealed class LiveSubscription : IDisposable
                 probe.Failures = 0;
                 probe.DueAt = due;
             }
-            else if (probe.Failures == 0) probe.DueAt = Math.Min(probe.DueAt, due);
+            else if (probe.Failures == 0) Ask(probe, due);
         }
+    }
+
+    private static void Ask(LiveProbeState probe, long due)
+    {
+        probe.DueAt = Math.Min(probe.DueAt, due);
+        probe.AskedAt = Math.Min(probe.AskedAt ?? long.MaxValue, due);
     }
 
     private static long RefreshDue(LiveProbeState probe, long now) =>
@@ -293,7 +302,7 @@ internal sealed class LiveSubscription : IDisposable
     {
         if (probe.Paused || probe.Gated || probe.Stopped is not null || probe.Failures != 0 || probe.EffectiveIntervalMs > probe.IntervalMs) return;
         var costFloor = probe.LastSampleAt < 0 ? now : probe.LastSampleAt + (long)Math.Ceiling((probe.CostEwma ?? 0) / probe.Spec.MaxDutyCycle);
-        probe.DueAt = Math.Min(probe.DueAt, Math.Max(RefreshDue(probe, now), costFloor));
+        Ask(probe, Math.Max(RefreshDue(probe, now), costFloor));
     }
 
     /// <summary>Every probe stopped for good: the first one's error, which ends the subscription failed.</summary>
@@ -347,6 +356,7 @@ internal sealed class LiveSubscription : IDisposable
                     new Dictionary<int, LiveTrackArgs>(probe.Tracks), probe.BudgetMs, probe.EffectiveIntervalMs, now, probe.View, probe.Filter));
                 probe.DueAt += (long)(missed + 1) * period;
                 probe.LastSampleAt = now;
+                probe.AskedAt = null;
                 probe.Resumed = false;
                 // The sample is written in the sort it took above.
                 probe.Resort = false;
@@ -422,6 +432,8 @@ internal sealed class LiveSubscription : IDisposable
                         probe.DueAt = item.TakenAt + PeriodOf(probe);
                     }
                     Guard(probe, sample.CostMs, item.TakenAt);
+                    // A refresh asked for while this sample ran (new filters, F5) still comes when it was asked for.
+                    if (probe.AskedAt is { } asked) probe.DueAt = Math.Min(probe.DueAt, asked);
                     // Rates need two samples: the second comes within a second, then the probe settles on its interval. The sample
                     // says whether it has rates: a source also starts again from a baseline after a failed first attempt or a lost
                     // connection, which the schedule cannot see. A baseline has no earlier slots to have skipped.

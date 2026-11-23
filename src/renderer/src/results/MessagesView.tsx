@@ -24,18 +24,21 @@ const Message = memo(function Message({ entry, tabId, queryId, index, canReveal,
   </div>
 })
 
+/** The connection Show in Job History opens on: the tab's, only while it is still on the job's project (Change Connection
+ *  keeps the results), since another project's Job History would not list the job. */
+export function jobLinkConnection(project: string, connectionId: string | undefined, connections: readonly Parameters<typeof bigQueryProject>[0][]): string | undefined {
+  return connectionId && bigQueryProject(connections.find(item => item?.id === connectionId)) === project ? connectionId : undefined
+}
+
 /** A BigQuery query's job (its summary's), named after the messages with a link that opens Job History filtered to it. */
 function JobLine({ job, connectionId, commands }: { readonly job: BigQueryJobSummary; readonly connectionId?: string } & Pick<Workbench, 'commands'>) {
   const id = qualifiedJobId(job.project, job.jobId, job.location)
-  // Only while the tab is still on the job's project (Change Connection keeps the results): another project's Job History
-  // would not list it.
   const { connections } = useWorkbench()
-  const live = useServiceSnapshot(connections)
-  const onProject = !!connectionId && bigQueryProject(live.find(item => item.id === connectionId)) === job.project
+  const linked = jobLinkConnection(job.project, connectionId, useServiceSnapshot(connections))
   return <div className="message-entry message-job-line">
     <pre className="msg">Job ID: {id}</pre>
-    {connectionId && onProject && <button type="button" className="message-source-link" title="Open Job History filtered to this job"
-      onClick={() => void commands.execute('bigquery.jobHistory', { bigQueryJobs: { connectionId, jobs: [{ jobId: job.jobId, ...job.location ? { location: job.location } : {} }] } }, 'toolbar')}>
+    {linked && <button type="button" className="message-source-link" title="Open Job History filtered to this job"
+      onClick={() => void commands.execute('bigquery.jobHistory', { bigQueryJobs: { connectionId: linked, jobs: [{ jobId: job.jobId, ...job.location ? { location: job.location } : {} }] } }, 'toolbar')}>
       <Icon name="history" /><span>Show in Job History</span>
     </button>}
   </div>

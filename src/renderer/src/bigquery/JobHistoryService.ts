@@ -274,11 +274,14 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     if (this.pending.length) {
       const waiting = this.pending.filter(item => this.now() - item.at < jobHistoryPendingMs)
       this.pending = []
+      // One that fails to open waits for the next change rather than take the others with it; its error is still reported.
+      let failure: unknown
       for (const item of waiting) {
         const connection = this.liveFor(item.project)
-        if (connection) this.open(connection.id, item.jobs)
-        else this.pending.push(item)
+        if (!connection) { this.pending.push(item); continue }
+        try { this.open(connection.id, item.jobs) } catch (error) { this.pending.push(item); failure ??= error }
       }
+      if (failure !== undefined) { this.publishContext(); throw failure }
     }
     this.publishContext()
   }
@@ -433,10 +436,18 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     if (!job || !state?.connectionId) {
       // A job is selected but the document cannot read it (its connection is gone): say so rather than "Loading the job…".
       const selected = state?.selected
-      if (state?.detailsOpen && selected && !selected.pending) this.patch(id, { details: { jobId: selected.jobId, loading: false, error: { message: jobHistoryText.notConnected } } })
+      if (state?.detailsOpen && selected && !selected.pending) {
+        // A new generation, so an earlier job's answer still on its way cannot replace this.
+        this.bump(id, 'details')
+        this.patch(id, { details: { jobId: selected.jobId, loading: false, error: { message: jobHistoryText.notConnected } } })
+      }
       return
     }
-    if (!job.mine && this.refused(id).get) { this.patch(id, { details: { jobId: job.jobId, loading: false, error: { message: this.refused(id).get!, code: 'PERMISSION_DENIED' } } }); return }
+    if (!job.mine && this.refused(id).get) {
+      this.bump(id, 'details')
+      this.patch(id, { details: { jobId: job.jobId, loading: false, error: { message: this.refused(id).get!, code: 'PERMISSION_DENIED' } } })
+      return
+    }
     const generation = this.bump(id, 'details'), connectionId = state.connectionId
     this.patch(id, { details: { jobId: job.jobId, loading: true } })
     const result = await this.request(() => this.options.api.bigQueryJob({ connectionId, jobId: job.jobId, ...job.location ? { location: job.location } : {}, ...job.mine ? {} : { allUsers: true } }))
