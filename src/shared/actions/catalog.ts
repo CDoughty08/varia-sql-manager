@@ -62,6 +62,7 @@ export const kindDialogActions = [
   'tableProperties',
   'agentProperties',
   'agentJob',
+  'agentSchedule',
   'agentProxy',
   'credential'
 ] as const
@@ -103,6 +104,7 @@ export const dialogIds = [
   'restartAgent',
   'agentProperties',
   'agentJob',
+  'agentSchedules',
   'agentProxy',
   'credential'
 ] as const
@@ -952,6 +954,9 @@ const dialogSpecData = {
     pages: [page('general', 'General'), page('steps', 'Steps'), page('schedules', 'Schedules'), page('notifications', 'Notifications'), page('targets', 'Targets'), page('alerts', 'Alerts'),
       page('history', 'History', { icon: 'history' })]
   },
+  // The Schedules document (AG-6c, docs/agent-ui-rethink.md › rx-schedules-doc), which replaces SSMS's Manage Schedules: the grid of the
+  // schedules the login may see, the selected one's editor and its jobs beside it. Each save is one `agentSchedule` action.
+  agentSchedules: { title: 'Schedules', surface: 'document', titleFormat: 'plain', size: 'large', action: 'agentSchedule', pages: [page('schedules', 'Schedules')] },
   // The proxy document (AG-8b, docs/agent-ui-rethink.md › rx-proxy): SSMS's Proxy Account Properties on one screen, its credential created in
   // place. Save runs CREATE CREDENTIAL (when new), the proxy's msdb calls and its grants in one transaction.
   agentProxy: {
@@ -1116,6 +1121,8 @@ export const kindDialogActionSpecs: { readonly [A in KindDialogAction]: KindDial
   agentProperties: { title: 'SQL Server Agent Properties', dialog: 'agentProperties', kind: 'agent', verb: 'properties', engines: onServers },
   // The job document's Save (AG-6a): an existing job's changes, or New Job (target the Agent node). Agent runs on SQL Server and Managed Instance.
   agentJob: { title: 'Job Properties', dialog: 'agentJob', kind: 'agentJob', verb: 'properties', engines: onServers },
+  // A schedule's save from the Schedules document or New › Schedule… (AG-6c): on the SQL Server Agent node, as New Job's.
+  agentSchedule: { title: 'Schedules', dialog: 'agentSchedules', kind: 'agent', verb: 'properties', engines: onServers },
   // The proxy document's Save (AG-8b): an existing proxy's changes, or New Proxy (target the Agent node). Managed Instance has no proxies.
   agentProxy: { title: 'Proxy Account Properties', dialog: 'agentProxy', kind: 'agentProxy', verb: 'properties', engines: ['box'] },
   // The credential document's Save (AG-8b): an existing credential's ALTER, or New Credential (target the server).
