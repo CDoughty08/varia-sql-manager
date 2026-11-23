@@ -1,5 +1,6 @@
 import type { ApiResult, RecoveredDocument, RecoveryEntry, SqlFile, VariaApi } from '../../../shared/contracts'
 import { recoveryLimits } from '../../../shared/files/recovery'
+import { isKeptAgentKind, keptAgentText } from '../../../shared/agent/kept'
 import type { SettingsValues } from '../../../shared/settings/catalog'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
@@ -24,6 +25,8 @@ export interface RecoveryServiceOptions {
   readonly newId?: () => string
   /** A recovered BigQuery query's jobs, to re-attach to once it connects (QueryService.restoreJobs). */
   readonly restoredJobs?: (tabId: string, jobs: NonNullable<RecoveredDocument['jobs']>) => void
+  /** SQL Server Agent's release gate (`agentEnabled`): Agent documents' copies are offered and recovered only while it is on. */
+  readonly agentEnabled?: boolean
 }
 /** When a copy was saved, as the Recover dialog says it: "just now", "5 minutes ago", "yesterday", "3 days ago". */
 export function savedAgo(savedAt: string, now: number = Date.now()): string {
@@ -36,7 +39,7 @@ export function savedAgo(savedAt: string, now: number = Date.now()): string {
   return format.format(Math.round(seconds / 86_400), 'day')
 }
 /** A query's record, and the model version and engine it holds (none until a write succeeded). */
-interface Kept { readonly id: string; version?: number; provider?: string; jobKey?: string }
+interface Kept { readonly id: string; version?: number; provider?: string; jobKey?: string; state?: string; targetId?: string }
 const minuteMs = 60_000
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 const failed = (error: unknown) => error instanceof Error ? error.message : 'The operation failed.'
@@ -86,6 +89,8 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
       this.warnOnce(`AutoRecover could not list the queries it kept: ${failed(error)}`)
       return this.getSnapshot().entries
     }
+    // Behind the release gate, a SQL Server Agent document's copy is not offered (it stays on disk until it ages out or the gate is on).
+    if (!this.options.agentEnabled) entries = entries.filter(entry => !isKeptAgentKind(entry.kind))
     if (!this.disposed) this.publish({ ...this.getSnapshot(), entries })
     return entries
   }
@@ -96,6 +101,8 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
   /** Resumes a copy main verified against a pin that just reopened. Future edits replace it and closing removes it. */
   resume(tabId: string, id: string): void {
     const document = this.options.documents.get(tabId)
+    // A SQL Server Agent document's copy is written again at the next interval, with its state as it is then.
+    if (isKeptAgentKind(document?.kind)) { this.kept.set(tabId, { id }); return }
     this.kept.set(tabId, { id, version: this.options.documents.getModel(tabId)?.getAlternativeVersionId(), provider: document && !document.kind ? document.provider : undefined, jobKey: document && !document.kind ? document.jobKey : undefined })
   }
 
@@ -115,6 +122,7 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
   }
   private async keep(tabId: string): Promise<void> {
     const { documents } = this.options, document = documents.get(tabId), model = documents.getModel(tabId)
+    if (document?.dirty && isKeptAgentKind(document.kind)) return this.keepAgent(tabId)
     // A table designer, Database Properties, SSIS properties, an Activity Monitor or Operations has no model: AutoRecover keeps text only.
     if (!document?.dirty || !model || isCustomKind(document.kind)) return
     // Moving a query to another engine changes no text, but the copy must still reopen in the new language.
@@ -137,6 +145,25 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
       kept.version = version
       kept.provider = provider
       kept.jobKey = jobKey
+    } catch (error) { this.warnOnce(`AutoRecover could not save ${document.name}: ${failed(error)}`) }
+  }
+  /** A SQL Server Agent document with unsaved changes (AG-6g): its kept state (no secrets) and connection target, when either changed. */
+  private async keepAgent(tabId: string): Promise<void> {
+    const { documents } = this.options, document = documents.get(tabId)
+    const state = documents.keepCustom(tabId)
+    if (!document || !isKeptAgentKind(document.kind) || state === undefined) return
+    const current = this.kept.get(tabId), targetId = document.targetId
+    if (current?.state === state && current.targetId === targetId) return
+    const kept: Kept = current ?? { id: this.options.newId?.() ?? crypto.randomUUID() }
+    this.kept.set(tabId, kept)
+    const server = document.connectionId ? this.options.server?.(document.connectionId) : undefined
+    try {
+      unwrap(await this.options.api.writeRecovery({
+        id: kept.id, name: document.name.slice(0, recoveryLimits.nameChars), kind: document.kind, eol: 'lf', ...server ? { server: server.slice(0, recoveryLimits.serverChars) } : {},
+        ...server && document.database ? { database: document.database.slice(0, recoveryLimits.databaseChars) } : {}, ...targetId ? { targetId } : {}, text: state
+      }))
+      kept.state = state
+      kept.targetId = targetId
     } catch (error) { this.warnOnce(`AutoRecover could not save ${document.name}: ${failed(error)}`) }
   }
   /** A query that has no unsaved changes any more, or closed, needs no copy. */
@@ -194,6 +221,14 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
           let taken
           try { taken = unwrap(await this.options.api.takeRecovery(id)) } catch (error) { problems.push(failed(error)); continue }
           if (taken.file) files.push(taken.file)
+          // A SQL Server Agent document's copy reopens through its own service, on the target it was kept with, behind the release gate.
+          if (isKeptAgentKind(taken.kind)) {
+            if (!this.options.agentEnabled) { problems.push(keptAgentText.unavailable); continue }
+            let reopened
+            try { reopened = this.options.documents.reopenKept(taken.kind, { name: taken.name, state: taken.text, ...taken.targetId ? { targetId: taken.targetId } : {} }) } catch { problems.push(keptAgentText.unreadable(taken.name)); continue }
+            this.kept.set(reopened.id, { id })
+            continue
+          }
           const document = this.options.documents.restore(taken.name, taken.text, taken.kind, taken.eol, taken.file, taken.provider, taken.jobKey)
           this.resume(document.id, id)
           if (taken.jobs?.length) this.options.restoredJobs?.(document.id, taken.jobs)

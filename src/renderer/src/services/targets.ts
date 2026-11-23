@@ -114,7 +114,7 @@ export class TargetService {
       if (document.targetId !== targetId || document.connectionId === connectionId) continue
       if (isQueryDocument(document)) {
         if (document.attachWanted) this.documents.update(document.id, { connectionId, sessionNotice: 'restarted' })
-      } else if (includeCustom && this.documents.isCustom(document.id) && this.documents.canFollowTarget(document.id, targetId))
+      } else if ((includeCustom || this.documents.attachesOnReconnect(document.id)) && this.documents.isCustom(document.id) && this.documents.canFollowTarget(document.id, targetId))
         this.documents.update(document.id, { connectionId })
     }
   }

@@ -29,7 +29,10 @@ import { previewDelayMs } from '../properties/DatabasePropertiesService'
 import { deliverScript, type DeliverScriptDeps } from '../scripting/deliver'
 import type { LiveConnection } from '../services/connections'
 import { CustomDocumentTargets, type CustomDocumentTargetOptions } from '../services/custom-document-targets'
-import type { CustomDocumentProvider, DocumentService } from '../services/documents'
+import type { CustomDocumentProvider, DocumentService, KeptCustomDocument } from '../services/documents'
+import { decodeKeptState, encodeKeptState, keptAgentText, rebaseKeptDraft, sameShape } from '../../../shared/agent/kept.ts'
+import type { QueryDocument } from '../documents'
+import { liveConnectionOn } from './kept-documents'
 
 export type AgentObjectKind = 'agentAlert' | 'agentOperator' | 'agentOperators'
 export type AgentObjectPhase = 'loading' | 'loadFailed' | 'ready' | 'saving'
@@ -86,12 +89,14 @@ export interface AgentObjectState<M = unknown, D = unknown> {
   readonly scriptRevision?: number
   readonly scriptDatabase?: string
   readonly scriptNotice?: string
+  /** Reopened by hot exit or AutoRecover (AG-6g) and not read since: `model` and `base` are the read the draft began from. */
+  readonly restored?: true
 }
 export interface AgentObjectSnapshot<M, D> { readonly documents: Readonly<Record<string, AgentObjectState<M, D>>> }
 
 export interface AgentObjectServiceOptions extends CustomDocumentTargetOptions {
   readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions' | 'agentCounterValues' | 'writeClipboardText'>
-  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'setDirty' | 'activate' | 'getSnapshot' | 'subscribe'> & DeliverScriptDeps['documents']
+  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'setDirty' | 'activate' | 'getSnapshot' | 'subscribe'> & Partial<Pick<DocumentService, 'openKeptCustom'>> & DeliverScriptDeps['documents']
   readonly files: DeliverScriptDeps['files']
   readonly connections: ExternalStore<readonly LiveConnection[]>
   readonly focus?: (id: string) => void
@@ -200,7 +205,8 @@ export class AlertOperatorDocumentService<M, D> extends SnapshotStore<AgentObjec
     this.newId = options.newId ?? (() => crypto.randomUUID())
     this.timers = options.timers ?? browserTimers
     this.registration = options.documents.registerProvider(this)
-    this.unsubscribe = [options.connections.subscribe(() => { try { this.connectionsChanged() } catch (failure) { onUnexpectedError(failure) } })]
+    const changed = () => { try { this.connectionsChanged(); this.readRestored() } catch (failure) { onUnexpectedError(failure) } }
+    this.unsubscribe = [options.connections.subscribe(changed), options.documents.subscribe(changed)]
   }
 
   get(id: string): AgentObjectState<M, D> | undefined { return this.getSnapshot().documents[id] }
@@ -277,7 +283,8 @@ export class AlertOperatorDocumentService<M, D> extends SnapshotStore<AgentObjec
     this.patch(id, { phase: 'loading', error: undefined, notice: undefined })
     void this.describe(id)
   }
-  private async describe(id: string, notice?: string, after: 'save' | 'action' = 'save'): Promise<void> {
+  /** With `kept` (a reopened document's first read, AG-6g), the user's draft is put on the object as read now rather than replaced. */
+  private async describe(id: string, notice?: string, after: 'save' | 'action' = 'save', kept?: { readonly model: M; readonly base: D; readonly draft: D }): Promise<void> {
     const state = this.get(id), connectionId = this.connectionOf(id)
     if (!state || !connectionId) return
     const requestId = this.begin(id, 'describe')
@@ -293,6 +300,15 @@ export class AlertOperatorDocumentService<M, D> extends SnapshotStore<AgentObjec
       return
     }
     const base = this.spec.initial(model)
+    if (kept) {
+      // A new object's draft began from its preset's blank; an existing one's from the read (or, for the grid, what a partial save committed).
+      const from = this.spec.exists(kept.model) ? kept.base : this.spec.initial(kept.model, current.preset)
+      const rebased = rebaseKeptDraft(from, this.spec.exists(model) ? base : this.spec.initial(model, current.preset), kept.draft)
+      this.patch(id, { phase: 'ready', model, base, draft: rebased.draft, revision: current.revision + 1, unread: false, error: undefined,
+        notice: rebased.conflicts.length ? keptAgentText.conflicts(this.spec.noun) : keptAgentText.reread(this.spec.noun) })
+      this.afterDraft(id)
+      return
+    }
     const draft = this.spec.exists(model) ? base : this.spec.initial(model, current.preset)
     this.patch(id, { phase: 'ready', model, base, draft, revision: current.revision + 1, changes: 0, unread: false, error: undefined, notice, script: { state: 'idle', message: noScriptNotice }, scriptRevision: undefined })
     // New Alert and New Operator stay clean until their first edit, as New Job does, so closing an untouched one asks nothing.
@@ -504,6 +520,52 @@ export class AlertOperatorDocumentService<M, D> extends SnapshotStore<AgentObjec
   }
 
   // --- The document's life ---------------------------------------------------------------------------------------------
+
+  // --- Hot exit and AutoRecover (AG-6g) --------------------------------------------------------------------------------
+
+  /** The document's unsaved state: the target, the read the draft began from (with its base) and the draft. */
+  keep(id: string): string | undefined {
+    const state = this.get(id)
+    if (!state?.model || state.draft === undefined || state.base === undefined) return undefined
+    return encodeKeptState({ version: 1, kind: this.kind, target: state.target, server: state.server, ...state.login ? { login: state.login } : {}, model: state.model, draft: state.draft,
+      extra: { base: state.base, ...state.preset ? { preset: state.preset } : {} } })
+  }
+  /** A kept document reopened disconnected on its target; it reads its object again once the target connects. */
+  reopenKept(kept: KeptCustomDocument): QueryDocument {
+    if (this.disposed || !this.options.documents.openKeptCustom) throw new Error(keptAgentText.unreadable(kept.name))
+    const value = decodeKeptState(kept.state, this.kind)
+    const model = value?.model as M | undefined, draft = value?.draft as D | undefined, base = value?.extra?.['base'] as D | undefined
+    const preset = value?.extra?.['preset'] as AgentAlertPreset | undefined
+    let shaped = false
+    try { shaped = !!model && draft !== undefined && base !== undefined && sameShape(this.spec.initial(model), draft) && sameShape(this.spec.initial(model), base) && (preset === undefined || (typeof preset === 'object' && preset !== null)) } catch { shaped = false }
+    if (!value || !model || draft === undefined || base === undefined || !shaped) throw new Error(keptAgentText.unreadable(kept.name))
+    const document = this.options.documents.openKeptCustom(this.kind, this.spec.tabName(value.target), kept.database ?? 'msdb', kept.targetId)
+    if (kept.targetId) this.targetBindings.bindTarget(document.id, kept.targetId)
+    this.put({
+      id: document.id, target: value.target, server: value.server, ...value.login ? { login: value.login } : {}, phase: 'ready', model, base, draft, revision: 1, edits: 0, changes: 0,
+      ...preset ? { preset } : {}, restored: true, error: fallback('CONNECTION_LOST', keptAgentText.restored(this.spec.noun, value.server)),
+      frame: initialFrameState(this.spec.sections), script: { state: 'idle', message: noScriptNotice }
+    })
+    this.afterDraft(document.id)
+    this.options.documents.setDirty(document.id, true)
+    const live = liveConnectionOn(this.options.connections, this.options.targetIdOf, kept.targetId)
+    if (live) this.options.documents.update(document.id, { connectionId: live })
+    return document
+  }
+  attachesOnReconnect(id: string): boolean { return !!this.get(id)?.restored }
+  /** Reopened documents whose target is now connected read their object again, keeping the draft. */
+  private readRestored(): void {
+    for (const state of Object.values(this.getSnapshot().documents)) {
+      if (!state.restored || !state.model || state.draft === undefined || state.base === undefined || !this.live(state.id) || this.requests.has(state.id)) continue
+      const kept = { model: state.model, base: state.base, draft: state.draft }
+      this.patch(state.id, { phase: 'loading', restored: undefined, error: undefined, notice: undefined })
+      void this.describe(state.id, undefined, 'save', kept).finally(() => {
+        // A read the connection's loss dropped leaves the document as kept, to read again at the next connect.
+        const after = this.get(state.id)
+        if (after && after.model === kept.model && !this.live(state.id)) this.patch(state.id, { restored: true, ...after.phase === 'loading' ? { phase: 'ready' as const } : {} })
+      })
+    }
+  }
 
   canClose(id: string): string | undefined { return this.get(id)?.phase === 'saving' ? agentObjectText.saving(this.spec.noun) : undefined }
   revision(id: string): number { return this.get(id)?.edits ?? 0 }
