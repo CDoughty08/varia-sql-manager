@@ -139,6 +139,16 @@ describe('hot exit for SQL Server Agent documents', () => {
     expect(sessionWriteSchema.safeParse(kept.session).success).toBe(true)
     // With Restore open queries on startup off only pinned tabs are kept, so the job is asked about as before.
     expect(keptSession(f.documents, () => undefined, { connectionTargets: f.connectionTargets, pinnedOnly: true }).kept.has(id)).toBe(false)
+    // While its save runs it is not kept, so the close is refused as before rather than cutting the save short.
+    let finish!: () => void
+    f.api.executeObjectAction.mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve({ ok: true, value: { steps: [], messages: [], elapsedMs: 1 } }) }))
+    const saving = f.jobDocuments.save(id)
+    await settled()
+    expect(f.jobDocuments.get(id)?.phase).toBe('saving')
+    expect(keptSession(f.documents, () => undefined, { connectionTargets: f.connectionTargets }).kept.has(id)).toBe(false)
+    expect(f.documents.closeRefusal(id)).toBeTruthy()
+    finish()
+    await saving
   })
   it('reopens a kept job disconnected with the draft, and reads it again on the automatic reconnect with the draft on top', async () => {
     const { state, name } = await keptJob()

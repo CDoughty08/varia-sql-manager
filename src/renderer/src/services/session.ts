@@ -33,7 +33,7 @@ const associations = (documents: readonly QueryDocument[]) => JSON.stringify(doc
  * designer with unsaved changes asks as before), and neither is a value still being appended or a tab past the caps.
  * With editor groups, the documents are in group order, and the groups they are in are kept by each one's place.
  */
-export function keptSession(documents: Pick<DocumentService, 'getSnapshot' | 'getModel' | 'isFilling'> & Partial<Pick<DocumentService, 'keepCustom'>>, server: (connectionId: string) => string | undefined,
+export function keptSession(documents: Pick<DocumentService, 'getSnapshot' | 'getModel' | 'isFilling'> & Partial<Pick<DocumentService, 'keepCustom' | 'closeRefusal'>>, server: (connectionId: string) => string | undefined,
   { budget = sessionLimits.totalBytes - sessionLimits.slackBytes, pinnedOnly = false, groups, connectionTargets, explorerExpansion, assertConnectionsReady }: {
     budget?: number; pinnedOnly?: boolean; groups?: Pick<EditorGroupService, 'capture'>; connectionTargets?: Pick<ConnectionTargetService, 'exportWorkspace'>
     /** Object Explorer's expanded nodes per target (`ExplorerService.savedExpansion`), kept with the workspace for the next start. */
@@ -52,9 +52,9 @@ export function keptSession(documents: Pick<DocumentService, 'getSnapshot' | 'ge
     if (written.length >= sessionLimits.documents) break
     if (pinnedOnly && !document.pinned) continue
     // A SQL Server Agent document with unsaved changes (AG-6g) keeps its state, without secrets, on its connection target; one whose target
-    // is not kept, or whose state is past its limit, is left out and asked about.
+    // is not kept, or whose state is past its limit, is left out and asked about. One still saving is left out too, so its close refusal stands.
     if (isKeptAgentKind(document.kind)) {
-      const state = document.dirty ? documents.keepCustom?.(document.id) : undefined
+      const state = document.dirty && !documents.closeRefusal?.(document.id) ? documents.keepCustom?.(document.id) : undefined
       const targetId = document.targetId && targetIds.has(document.targetId) ? document.targetId : undefined
       if (state === undefined || !targetId) continue
       const entry: SessionDocumentWrite = {
@@ -101,7 +101,7 @@ export function keptSession(documents: Pick<DocumentService, 'getSnapshot' | 'ge
 }
 
 /** Reload uses the same eligibility as hot exit and takes its last checkpoint as the old page unloads. */
-export function reloadSession(documents: Pick<DocumentService, 'getSnapshot' | 'getModel' | 'isFilling'> & Partial<Pick<DocumentService, 'keepCustom'>>, server: (connectionId: string) => string | undefined,
+export function reloadSession(documents: Pick<DocumentService, 'getSnapshot' | 'getModel' | 'isFilling'> & Partial<Pick<DocumentService, 'keepCustom' | 'closeRefusal'>>, server: (connectionId: string) => string | undefined,
   { restoreQueries, recoveryId, ...options }: Parameters<typeof keptSession>[2] & {
     restoreQueries: boolean; recoveryId: (tabId: string) => string | undefined
   }): ReloadPins | undefined {
