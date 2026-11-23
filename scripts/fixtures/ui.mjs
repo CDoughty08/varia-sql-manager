@@ -1014,7 +1014,7 @@ export async function submitConnect(window, dialog, options) {
 }
 /** An Options form page's sections (role group, named by their headings) and the fields and lists of its control column. */
 export const optionsSection = (dialog, name) => optionsForm(dialog).getByRole('group', named(name))
-export const optionsControls = dialog => optionsForm(dialog).locator('input[type="number"], select')
+export const optionsControls = dialog => optionsForm(dialog).locator('input[type="number"], select, input[role="switch"]')
 /** The Options dialog's page heading (Query Execution › SQL Server › General), notes, form and description pane. */
 export const optionsHeading = dialog => dialog.getByRole('heading', { level: 3 })
 export const optionsNotes = dialog => dialog.locator(part.optionsNote)
