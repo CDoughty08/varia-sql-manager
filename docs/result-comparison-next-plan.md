@@ -859,8 +859,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       system objects); while a rebuild runs over that read, or after a later read of the database failed, the line adds
       "These are from Search Objects' last index of Sales_Test." It warns, never refuses, when it cannot, naming what
       that costs, since without the index the dialog cannot offer SET IDENTITY_INSERT or leave the identity column out
-      of UPDATEs, so an INSERT into an identity column then fails and rolls the script back (Msg 544), and so does an
-      UPDATE that changes it (Msg 8102):
+      of UPDATEs, so an INSERT into an identity column then fails and rolls the script back (Msg 544), and an UPDATE
+      that changes it fails the whole batch when it compiles (Msg 8102), so nothing runs:
       - the index lacks the table: "Search Objects does not know [Sales_Test].[dbo].[Orders], so its columns cannot be
         checked and SET IDENTITY_INSERT is not offered. Check the name, or rebuild the search index.", with **Rebuild
         Search Index** (`explorer.rebuildIndex` for the comparison's connection). Pressed, it stays in place,
@@ -1242,10 +1242,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       differences.", with **Choose key columns…** (the default button) and **Use order_no as key columns**. Automatic
       can pick a column that is unique only by chance, such as a timestamp (§ 1), and keying on it would turn every
       changed row into a DELETE and an INSERT, firing delete triggers and cascades. So **Use … as key columns** is
-      offered only when rows paired by that column and it is not a date or time type or rowversion; otherwise Choose key
-      columns… is the only button, and where nothing paired the sentence reads "Rows were matched automatically by
-      updated_at, but no rows paired by it, since its values are unique only by chance. Choose key columns to script
-      differences.";
+      offered only when rows paired by that column and it is not a date or time type (Automatic never picks a binary
+      column such as rowversion, `RowIdentity.Candidates`); otherwise Choose key columns… is the only button, and where
+      nothing paired the sentence reads "Rows were matched automatically by updated_at, but no rows paired by it, since
+      its values are unique only by chance. Choose key columns to script differences.";
     - **Choose key columns…** closes the dialog, keeping its draft, brings forward the window that holds the
       comparison's Results pane (the main window, or a popout), shows the pane and the comparison's tab, and opens the
       Match menu at the toolbar's Match button, or beside ⋯ when Match is folded (`MatchMenuFrom` gains `script`). The
@@ -1482,14 +1482,14 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     1,000), which holds the counts, names and sample values and knows when an input's result was released; the dialog
     chooses only the refusal's buttons and their availability, by `kind` and the comparison's own facts (`notColumns`
     covers Row position, Whole rows, Automatic's fallback and Automatic with a key, so whether to offer **Use order_no
-    as key columns** comes from the comparison's match and the key's type, which the renderer holds, `CompareService`),
-    and never parses the sentence. Past 1,000,000 characters, estimated first, it refuses with `tooLarge`, well inside
-    the 16 MiB response limit. In a preview the counts are the chosen rows' entries by kind; after Script they are the
-    script's own statements, which can be lower (Counts above). The backend itself refuses a comparison whose match is
-    not a `columns` match, so Automatic's choice can never be scripted by accident (Use order_no as key columns replaces
-    the comparison with that `columns` match first), and a comparison of rows as shown. Both read the diff set's records
-    (C3's match and C6's as-shown flags), and the WHERE clauses take the recorded key pairs, so the params carry no key
-    columns.
+    as key columns** comes from the comparison's match, the key's type and whether nothing paired (`nothingPaired`),
+    which the renderer holds, `CompareService`), and never parses the sentence. Past 1,000,000 characters, estimated
+    first, it refuses with `tooLarge`, well inside the 16 MiB response limit. In a preview the counts are the chosen
+    rows' entries by kind; after Script they are the script's own statements, which can be lower (Counts above). The
+    backend itself refuses a comparison whose match is not a `columns` match, so Automatic's choice can never be
+    scripted by accident (Use order_no as key columns replaces the comparison with that `columns` match first), and a
+    comparison of rows as shown. Both read the diff set's records (C3's match and C6's as-shown flags), and the WHERE
+    clauses take the recorded key pairs, so the params carry no key columns.
 - **Backend `Results/DiffScript.cs`:** literals by the column's `dataType`, precision and scale:
 
   | Type | Literal |
