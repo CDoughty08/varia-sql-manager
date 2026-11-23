@@ -1051,29 +1051,30 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       value is written as its own result's type."). Each value is formatted by its own input's column type. A diff's
       data columns carry Result 3's types (`UnifiedDiff.Columns`) whichever result a value came from, and only One row's
       previous-value columns carry Result 1's, so the diff set also records Result 1's column type (its name, precision,
-      scale and maximum length, as `ResultColumn` holds them, since a literal or a key's CAST needs them) and collation
-      per pair. Every Result 1 value is formatted by it, even while Result 1 is closed: removed rows in both layouts,
-      Two rows' `changedOld` halves (the values a toOld UPDATE SETs), and the WHERE keys taken from them. A literal's
-      form always comes from its own input's column type, never another column's: pairs join by name and wire (Text or
-      Binary, `ResultDiffer.Pairs`), so `id int` can pair with `id varchar`, and an int rule would copy varchar text raw
-      into the script. In a WHERE clause (keys, Q11's guards, the INSERT check) only the text decisions follow the
-      column of the side the target holds, Result 1's under `toNew` (One row keeps only Result 3's key values on a
-      changed entry) and Result 3's under `toOld`: whether an all-ASCII value is written plain, and whether one that is
-      not is refused under a SQL_ collation (Literals below). A key pair whose two types are of different kinds is
-      refused, and Q11's guards leave such a pair out. The kinds come from `sortKind`: numbers (integer, decimal, float,
-      boolean), text (text, json), dates and times (date, datetime, timestamp), times (time, since SQL Server refuses a
-      conversion between time and date), binary (rowversion and timestamp among it), and uniqueidentifier, which
-      `sortKind` calls `other` and is told by its type name. So int pairs with decimal, and int with varchar is refused.
-      A key pair of one kind whose two recorded types differ (datetime against datetime2(3), int against decimal)
-      compares in the target side's type: a WHERE clause wraps the literal, still written by its own column, in a CAST
-      to the target side's recorded type, written as the typed casts are (`CAST(CAST('2024-05-01T10:00:00.003' AS
-      datetime2(3)) AS datetime)`). Without it the comparison runs in the higher type and can miss the row (a datetime's
-      .003 is .00333…), and the INSERT check would then let a duplicate in. A CAST that overflows fails the script under
-      XACT_ABORT, and one that rounds onto another key only makes a check THROW. Text and binary pairs are never cast:
-      the text decisions already choose plain varchar or `N'…'` by the target's column, and a CAST of `N'…'` to varchar
-      converts through the database's default code page, not the column's, so a Cyrillic key in a Windows-collation
-      varchar column would no longer match; `=` already ignores differences of length and trailing spaces (text) or
-      trailing zero bytes (binary).
+      scale and maximum length, as `ResultColumn` holds them, since a literal or a key's CAST needs them, and whether it
+      is a CLR type, since such a column's type is its bare name, marked only by its `udt` role, which One row's old
+      columns replace with `old`) and collation per pair. Every Result 1 value is formatted by it, even while Result 1
+      is closed: removed rows in both layouts, Two rows' `changedOld` halves (the values a toOld UPDATE SETs), and the
+      WHERE keys taken from them. A literal's form always comes from its own input's column type, never another
+      column's: pairs join by name and wire (Text or Binary, `ResultDiffer.Pairs`), so `id int` can pair with `id
+      varchar`, and an int rule would copy varchar text raw into the script. In a WHERE clause (keys, Q11's guards, the
+      INSERT check) only the text decisions follow the column of the side the target holds, Result 1's under `toNew`
+      (One row keeps only Result 3's key values on a changed entry) and Result 3's under `toOld`: whether an all-ASCII
+      value is written plain, and whether one that is not is refused under a SQL_ collation (Literals below). A key pair
+      whose two types are of different kinds is refused, and Q11's guards leave such a pair out. The kinds come from
+      `sortKind`: numbers (integer, decimal, float, boolean), text (text, json), dates and times (date, datetime,
+      timestamp), times (time, since SQL Server refuses a conversion between time and date), binary (rowversion and
+      timestamp among it), and uniqueidentifier, which `sortKind` calls `other` and is told by its type name. So int
+      pairs with decimal, and int with varchar is refused. A key pair of one kind whose two recorded types differ
+      (datetime against datetime2(3), int against decimal) compares in the target side's type: a WHERE clause wraps the
+      literal, still written by its own column, in a CAST to the target side's recorded type, written as the typed casts
+      are (`CAST(CAST('2024-05-01T10:00:00.003' AS datetime2(3)) AS datetime)`). Without it the comparison runs in the
+      higher type and can miss the row (a datetime's .003 is .00333…), and the INSERT check would then let a duplicate
+      in. A CAST that overflows fails the script under XACT_ABORT, and one that rounds onto another key only makes a
+      check THROW. Text and binary pairs are never cast: the text decisions already choose plain varchar or `N'…'` by
+      the target's column, and a CAST of `N'…'` to varchar converts through the database's default code page, not the
+      column's, so a Cyrillic key in a Windows-collation varchar column would no longer match; `=` already ignores
+      differences of length and trailing spaces (text) or trailing zero bytes (binary).
     - Identity: an identity column is never SET, since SQL Server refuses that: when one that is not a key changed, a
       line says "id is an identity column, so its changes are not scripted". While INSERT is ticked and the latest
       answer gives it rows among the chosen rows, and the index says a ticked column is the target's identity, **SET
@@ -1146,28 +1147,28 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     only in Result 3 stay."), so it never reads as if the target already matched. Either way Script is unavailable.
     - The preview asks the backend for its 30 lines (`results.scriptDiff` with `maxLines`) on opening, with or without a
       target and direction, and then 300 ms after the form last changed, cancelling the request before. Each answer
-      brings the Rows options' counts. It refuses only what those lines need (a truncated, U+FFFD or code-page value
-      among them, a key its collation cannot write exactly, `keyCollation`, or a refusal known on opening); the rest are
-      found on Script. A preview line over 2,000 characters (a long value's literal) ends in "…", the preview's only
-      cut; the script holds it whole. While it waits, the preview reads "-- Choose the target table and a direction to
-      see the script." ("-- Choose a direction to see the script.", "-- Choose the target table to see the script."
-      while only the target is missing, "-- Fix the target table's name to see the script." while its name cannot be
-      used), and after a refused answer "-- No preview: the reason is beside Script." A request that fails instead (its
-      deadline, or `TOO_LARGE` when the count's working memory does not fit) is not a refusal. On opening, its sentence
-      replaces "Reading the comparison…", with **Try again**, which takes the focus, is described by the sentence, which
-      the live region says, and sends the request again. Pressed, on opening or later, Try again stays in place,
-      unavailable (`aria-disabled`, so it keeps the focus) while the request runs, the failure sentence gives way to
-      "Reading the comparison…" (on opening with its progress, later as the preview's text, "-- Reading the
-      comparison…"), which the live region says, and then what the answer brings shows and is said, the failure sentence
-      again when it fails again. Later, the preview reads "-- No preview: " and the sentence, with Try again under it;
-      everything the form draws from an answer hides until an answer brings it again (the Rows and statement counts, the
-      look-alike and not-looked-for lines, the line by Rows after a replace's count (Rows below), the unchecked-UPDATEs,
-      unchecked-DELETEs and Exact text lines, SET IDENTITY_INSERT and its line), so no line shows numbers from an answer
-      that no longer matches the form; the summary reads "The preview could not be read, so its counts and warnings are
-      not shown." unless a reason in the summary's order (Keyboard and screen readers) holds, and Script stays available
-      only while none does, since its own run says any failure and the script's header carries those warnings (The
-      script below). A backend loss is not such a failure: it releases the comparison, so the closed state shows
-      instead, on opening and later.
+      brings the Rows options' counts. It refuses only what those lines need (a truncated or unwritable value among
+      them: U+FFFD, a subnormal float, a value outside the target side's code page; a key its collation cannot write
+      exactly, `keyCollation`, or a refusal known on opening); the rest are found on Script. A preview line over 2,000
+      characters (a long value's literal) ends in "…", the preview's only cut; the script holds it whole. While it
+      waits, the preview reads "-- Choose the target table and a direction to see the script." ("-- Choose a direction
+      to see the script.", "-- Choose the target table to see the script." while only the target is missing, "-- Fix the
+      target table's name to see the script." while its name cannot be used), and after a refused answer "-- No preview:
+      the reason is beside Script." A request that fails instead (its deadline, or `TOO_LARGE` when the count's working
+      memory does not fit) is not a refusal. On opening, its sentence replaces "Reading the comparison…", with **Try
+      again**, which takes the focus, is described by the sentence, which the live region says, and sends the request
+      again. Pressed, on opening or later, Try again stays in place, unavailable (`aria-disabled`, so it keeps the
+      focus) while the request runs, the failure sentence gives way to "Reading the comparison…" (on opening with its
+      progress, later as the preview's text, "-- Reading the comparison…"), which the live region says, and then what
+      the answer brings shows and is said, the failure sentence again when it fails again. Later, the preview reads "--
+      No preview: " and the sentence, with Try again under it; everything the form draws from an answer hides until an
+      answer brings it again (the Rows and statement counts, the look-alike and not-looked-for lines, the line by Rows
+      after a replace's count (Rows below), the unchecked-UPDATEs, unchecked-DELETEs and Exact text lines, SET
+      IDENTITY_INSERT and its line), so no line shows numbers from an answer that no longer matches the form; the
+      summary reads "The preview could not be read, so its counts and warnings are not shown." unless a reason in the
+      summary's order (Keyboard and screen readers) holds, and Script stays available only while none does, since its
+      own run says any failure and the script's header carries those warnings (The script below). A backend loss is not
+      such a failure: it releases the comparison, so the closed state shows instead, on opening and later.
     - The counts and the summary are entries by kind in the chosen rows. All differences reads the diff's own counts.
       Rows in the grid and Selected rows are counted by the backend in a pass over the chosen rows, after one that marks
       them (so a look-alike's partner can be found among them), reserving the bit per stored row as Copy as Diff does;
@@ -1334,11 +1335,13 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     text under a collation that is not UTF-8 (an nvarchar '中' paired with a Latin1 varchar column, or two varchar
     columns of different code pages, as the same query against two databases gives): the `unwritable` refusal with a
     sentence naming the cause ("1 value in note holds characters that note's code page, windows-1252, cannot store (row
-    id = 1004). Choose rows without them, or untick note.", the U+FFFD forms otherwise), `keyUnwritable` for an INSERT's
-    key value, since SQL Server stores '?' or a near letter there without an error, and every check would still pass.
-    `DiffScript` encodes each such value in that side's recorded code page (`ResultCollation.CodePage`) with an
-    exception fallback; a side with no recorded collation refuses values that are not all ASCII, as the WHERE rule does.
-    WHERE values come from the target side's own column, so they always fit;
+    id = 1004). Choose rows without them, or untick note.", the U+FFFD forms otherwise), `keyUnwritable` for a key value
+    (an INSERT's, or an UPDATE's SET of a key equal only by collation under Exact text), since SQL Server stores '?' or
+    a near letter there without an error, and every check would still pass. `DiffScript` encodes each such value in that
+    side's recorded code page (`ResultCollation.CodePage`) with an exception fallback; a side with no recorded
+    collation, or whose code page `Encoding.GetEncoding` cannot give, refuses values that are not all ASCII, as the
+    WHERE rule does. WHERE values are compared, never stored: one that is not all ASCII is written `N'…'` and compared
+    in Unicode (Literals below), so the check does not apply to them;
   - a key value of a char or varchar column with a SQL_ collation that is not all ASCII (Literals below): "2 key values
     in code cannot be matched exactly under its collation ('Straße' and 1 more). Choose rows without them, or other key
     columns.", with **Choose key columns…**;
@@ -1590,10 +1593,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - A cut tone lists only the first changed cells, so `DiffScript` takes an entry's changed pairs (its SET columns
       and Q11's) from the change index's full list whenever the tone was cut, which C3 keeps in both layouts (§ 4a).
     - Three more records on the diff set, written in `DiffWritten` beside the match C3 records: Result 1's column type
-      (name, precision, scale and maximum length) and collation per pair (Columns above, Literals); whether the inputs
-      were BigQuery results (`residence` set), for the refusal; and the names of columns only one result has, as the
-      diff answer's `OneSided` lists them (at most `MaxDiffColumnNames` a side), for the header's left-out line, which
-      must be written while Result 1 is closed.
+      (name, precision, scale, maximum length and a CLR flag) and collation per pair (Columns above, Literals); whether
+      the inputs were BigQuery results (`residence` set), for the refusal; and the names of columns only one result has,
+      as the diff answer's `OneSided` lists them (at most `MaxDiffColumnNames` a side), for the header's left-out line,
+      which must be written while Result 1 is closed.
   - Names are bracket-quoted by the existing shared `ScriptFormatter.Quote`, unchanged: it has many callers (Script As,
     restore, the alter and DML templates among them), so a control character in a target name (NUL and line breaks
     among them) is refused by the request's zod schema and by C#'s request validation instead.
@@ -1758,8 +1761,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       U+FFFD refusal;
     - an nvarchar value outside a Latin1 varchar target side's code page refused as `unwritable` in a SET and an INSERT
       and as `keyUnwritable` in an INSERT's key, a varchar value of another code page likewise, and a UTF-8 varchar
-      target side taking any value; the code-page sentence naming the code page, and a side with no recorded collation
-      refusing a value that is not all ASCII;
+      target side taking any value; the code-page sentence naming the code page, a side with no recorded collation
+      refusing a value that is not all ASCII (beside the char key and guard with none), and a key equal only by
+      collation under Exact text refused as `keyUnwritable`; `DiffScriptChecks` registers `CodePagesEncodingProvider`,
+      as `CellLengthChecks` does;
     - a value with CR, LF, NUL and U+2028, and one over 4,000 characters with line breaks, written with `NCHAR` joins and
       the `nvarchar(max)` cast; a key with those characters in its THROW message, and one with a quote straddling the
       200-point cut;
@@ -1944,7 +1949,9 @@ after Q4.
   - `ResultSearcher` checks: an old-only hit, both sides deduplicated, order kept, a cut row's old value, NULL old values,
     view order, page skipping with the new filters.
   - vitest for the status text, and one with a small `maxMatches` stepping with Next past the first run: the old-value
-    suffix follows the new run's indexes, and is gone when the new run has none.
+    suffix follows the new run's indexes, and is gone when the new run has none; a `results-port.test.ts` case where an
+    answer with `matchOld` passes `searchResultSchema` and reaches the renderer, and an unordered or out-of-range
+    `matchOld` is refused, since main forwards a search answer only after that schema passes.
   - The fake backend's search implements it. A `results-smoke.mjs` step searches an old value in One row.
 - **Risks:** a wide comparison's search reads up to twice the columns of the same pages, inside search's existing
   reservations.
