@@ -29,7 +29,7 @@ internal static partial class BigQueryChecks
         public Harness(BigQueryFake? fake = null, Uri? endpoint = null, SubjectTokens? subjects = null)
         {
             Fake = fake ?? BigQueryFake.Google();
-            Service = new SqlService(bigQuery: new BigQueryEnvironment(endpoint, Fake.Factory, subjects ?? new SubjectTokens([])));
+            Service = new SqlService(CheckStores.Unprobed(), bigQuery: new BigQueryEnvironment(endpoint, Fake.Factory, subjects ?? new SubjectTokens([])));
         }
         public async Task<(string Code, JsonElement Result, string Message)> Call(string method, JsonNode parameters)
         {
