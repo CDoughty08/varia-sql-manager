@@ -124,15 +124,18 @@ internal sealed partial class BigQueryService
                 if (billed < read * BigQueryBulkSql.FloorBytes)
                     throw new RequestException("COST_CAP", "The maximum bytes billed is below the INFORMATION_SCHEMA floor of " + BigQueryCost.Bytes(read * BigQueryBulkSql.FloorBytes) + ".");
                 var request = BulkJob(connection, sql, location, billed);
+                // The whole cap leaves the budget before the job starts: a job that never reports its bill (a time limit, a failed
+                // read, Stop) may still bill up to its cap, so the next location never counts on it.
+                budget.Remaining -= billed;
                 references.Add(request.JobReference);
                 var job = await InsertJobAsync(connection, request, null, stop);
                 if (BigQueryJobException.Of(job) is { } refused) throw BigQueryErrors.Job(refused.Result, refused.Errors, project, billed);
                 var cursor = new BulkCursor(this, connection, job.JobReference ?? request.JobReference, location, billed, project, stop);
                 cursors.Add(cursor);
-                // The next job starts only once this one finished: a failed column job bills nothing more, and what it billed (its
-                // bytes processed rounded up to whole MiB, at least its floor; its cap when BigQuery does not say) leaves the budget.
+                // The next job starts only once this one finished: a failed column job bills nothing more, and what it cannot have
+                // billed (its cap less the bound on its bytes processed; nothing when BigQuery does not say) returns to the budget.
                 var processed = await cursor.StartAsync();
-                budget.Remaining -= processed is { } bytes ? Math.Min(billed, BigQueryBulkSql.BilledAfter(bytes, read)) : billed;
+                if (processed is { } bytes) budget.Remaining += billed - Math.Min(billed, BigQueryBulkSql.Billed(bytes, read));
             }
             var columns = cursors[0];
             var views = cursors.ElementAtOrDefault(1);

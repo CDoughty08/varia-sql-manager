@@ -48,12 +48,11 @@ internal static class BigQueryBulkSql
         ? [(Columns(project, location), 3), (Views(project, location), 1), (Routines(project, location), 1)]
         : [(Columns(project, location), 3)];
 
-    /// <summary>What a finished job billed at most: its bytes processed rounded up to whole MiB, at least its floor.</summary>
-    public static long BilledAfter(long? processed, int views) =>
-        Math.Max(views * FloorBytes, processed is > 0 and { } bytes ? (bytes + (1L << 20) - 1) / (1L << 20) * (1L << 20) : 0);
-
-    /// <summary>A query's billed bytes as the estimate counts them: the dry run's figure, never below the floor of the views it reads.</summary>
-    public static long Billed(long dryRun, int views) => Math.Max(dryRun, views * FloorBytes);
+    /// <summary>The most a query reading <paramref name="views"/> INFORMATION_SCHEMA views bills for <paramref name="bytes"/> processed
+    /// (a dry run's, for the estimate; a finished job's, for the build's budget): BigQuery bills each view its bytes but at least the
+    /// floor, which every view's floor plus all the bytes, rounded up to whole MiB, bounds from above.</summary>
+    public static long Billed(long bytes, int views) =>
+        views * FloorBytes + (bytes > 0 ? Math.Min(BigQueryLimits.MaxSafeInteger, (bytes + (1L << 20) - 1) / (1L << 20) * (1L << 20)) : 0);
 }
 
 /// <summary>One column or nested field as COLUMN_FIELD_PATHS gives it, with its top-level column's position and nullability.</summary>

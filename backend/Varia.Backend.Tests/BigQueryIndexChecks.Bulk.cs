@@ -35,8 +35,8 @@ internal static partial class BigQueryIndexChecks
         var projects = new[] { "varia`alpha", "Varia-Alpha", "a", "x; DROP" }.Count(project => Throws(() => BigQueryBulkSql.Columns(project, "US")));
         check(refused == hostile.Length && projects == 4, $"a hostile location or project never reaches the text ({refused}/{hostile.Length}, {projects}/4)");
         check(BigQueryBulkSql.Queries("varia-alpha", "US", false).Count == 1 && BigQueryBulkSql.Queries("varia-alpha", "US", true).Sum(query => query.Views) == 5
-            && BigQueryBulkSql.Billed(0, 3) == 30L << 20 && BigQueryBulkSql.Billed(50L << 20, 1) == 50L << 20,
-            "without definitions only the column query runs; each query is estimated at no less than 10 MiB per view it reads");
+            && BigQueryBulkSql.Billed(0, 3) == 30L << 20 && BigQueryBulkSql.Billed(50L << 20, 1) == 60L << 20 && BigQueryBulkSql.Billed(1, 3) == 31L << 20,
+            "without definitions only the column query runs; a query is counted at every view's 10 MiB floor plus its bytes rounded up to whole MiB");
 
         static bool Throws(Action action)
         {
@@ -226,12 +226,12 @@ internal static partial class BigQueryIndexChecks
             $"the estimate dry-runs each location's three queries in that location and counts each at its floor: {code} {message} {estimate?.Estimate.BytesProcessed} {string.Join(",", jobs.DryRuns.Select(run => run.Location))}");
         jobs.DryRunBytes = 1L << 30;
         var (_, bare, _) = await harness.Call("bigquery.indexEstimate", new JsonObject { ["connectionId"] = harness.ConnectionId, ["definitions"] = false, ["extraDetails"] = true });
-        check(bare is BigQueryIndexEstimateResult { Locations: [_, _, { Project: "varia-beta", Location: "US" }], Estimate.BytesProcessed: 3L << 30 } && jobs.DryRuns.Count == 9 && jobs.Created.IsEmpty,
-            "without definitions only the column query is estimated, a dry run above the floor counts as itself, and extraDetails adds the extra project's locations");
+        check(bare is BigQueryIndexEstimateResult { Locations: [_, _, { Project: "varia-beta", Location: "US" }], Estimate.BytesProcessed: 3 * ((1L << 30) + (30L << 20)) } && jobs.DryRuns.Count == 9 && jobs.Created.IsEmpty,
+            "without definitions only the column query is estimated, a dry run's bytes count beside the floors, and extraDetails adds the extra project's locations");
 
         // The build: the US location's queries run once each, one at a time, never cached, each capped so the three together bill no
-        // more than the budget (the estimate shown): 100 MiB less the other jobs' floors (30, 10 and 10 MiB), or what they billed once
-        // they finished (1 MiB processed bills the floor). us-east1 holds nothing to read and bills nothing.
+        // more than the budget (the estimate shown): 100 MiB less the later jobs' floors (10 and 10 MiB) and what the earlier ones may
+        // have billed (their floors plus 2 MiB for 1 MiB and a byte processed). us-east1 holds nothing to read and bills nothing.
         var built = await harness.Index(more => more["bulk"] = new JsonObject
         {
             ["locations"] = new JsonArray(new JsonObject { ["project"] = "varia-alpha", ["location"] = "US" }, new JsonObject { ["project"] = "varia-alpha", ["location"] = "us-east1" },
@@ -240,7 +240,7 @@ internal static partial class BigQueryIndexChecks
         });
         var bulk = Entries(harness.Service, harness.ConnectionId, "varia-alpha", "sales");
         var created = jobs.Created.ToList();
-        check(created.Count == 3 && created.All(job => job.Location == "US" && job.Cache == false) && created.Select(job => job.Cap).SequenceEqual(new long?[] { 80L << 20, 60L << 20, 60L << 20 })
+        check(created.Count == 3 && created.All(job => job.Location == "US" && job.Cache == false) && created.Select(job => job.Cap).SequenceEqual(new long?[] { 80L << 20, 58L << 20, 56L << 20 })
             && built.Status.Bulk is { Locations: 1, Failed: 0 } && jobs.Cancels == 0,
             "the build runs the US location's three queries once, in the US, uncached, each capped inside the budget, none for a location with nothing to read, and cancels nothing it finished: "
             + string.Join(", ", created.Select(job => job.Location + " " + job.Cap)));
@@ -281,7 +281,8 @@ internal static partial class BigQueryIndexChecks
             check(poorJobs.Created.IsEmpty && shortOf.Status.Bulk is { Locations: 0, Failed: 1, Code: "COST_CAP" } && Entries(poor.Service, poor.ConnectionId, "varia-alpha", "sales").SequenceEqual(rest),
                 $"a budget of {budgetBytes} B or a cap of {cap} B below the floors starts no job and falls back to the free calls ({shortOf.Status.Bulk?.Code}, {poorJobs.Created.Count} jobs)");
         }
-        // A job whose first page does not say what it processed counts as its whole cap: the later jobs get only their floors.
+        // A job whose first page does not say what it processed keeps its whole cap charged: the later jobs get only their floors.
+        // One that never finishes (the location's time limit) keeps it charged too, so the next location cannot count on it.
         using (var silent = new Harness())
         {
             var silentJobs = new BulkJobs { Processed = null };
@@ -292,6 +293,25 @@ internal static partial class BigQueryIndexChecks
             await silent.Index(more => more["bulk"] = request);
             check(silentJobs.Created.Select(job => job.Cap).SequenceEqual(new long?[] { 80L << 20, 10L << 20, 10L << 20 }),
                 "an unknown bill counts as the job's cap: " + string.Join(", ", silentJobs.Created.Select(job => job.Cap)));
+        }
+        using (var stuck = new Harness())
+        {
+            var stuckJobs = new BulkJobs();
+            stuckJobs.Route(stuck.Fake);
+            stuck.Fake.On("GET", @"https://bigquery\.googleapis\.com/bigquery/v2/projects/varia-alpha/queries/[^/]+", new BigQueryFake.Reply(200, "{\"jobComplete\":false}"));
+            await stuck.ConnectAsync(key);
+            var service = stuck.Service.BigQuery;
+            service.BulkLimit = TimeSpan.FromMilliseconds(300);
+            service.DdlPoll = TimeSpan.FromMilliseconds(20);
+            var shared = new BigQueryBulkBudget(200L << 20);
+            string? failure = null;
+            try
+            {
+                await foreach (var _ in ((IBigQueryIndexSource)service).BulkAsync(stuck.ConnectionId, "varia-alpha", "US", true, null, shared, (_, _) => true, CancellationToken.None)) { }
+            }
+            catch (OperationCanceledException) { failure = "timeout"; }
+            check(failure == "timeout" && stuckJobs.Created.Count == 1 && stuckJobs.Created.Single().Cap == 180L << 20 && shared.Remaining == 20L << 20,
+                $"a job past the location's time limit keeps its cap charged to the shared budget ({failure}, {shared.Remaining} B left)");
         }
 
         // Refused: bulk with a scope, stale, an unknown project, a hostile location, too many locations; and SQL Server refuses bulk.

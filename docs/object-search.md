@@ -373,11 +373,12 @@ queries per location, which is faster for projects with thousands of objects:
 - **Cost.** BigQuery bills each query at least 10 MiB for every INFORMATION_SCHEMA view it reads (the column query reads
   three) and never answers them from cache. So a full build first asks `bigquery.indexEstimate`: the locations of the
   billing project's datasets (and the extra projects' when their schemas are indexed), up to 64, each query dry-run free,
-  with the floor counted in. The estimate then goes through the same cost prompts as Execute, which ask only above the
-  cost threshold or when the estimate may be low. The estimate shown is the build's budget: a location's queries run one
-  at a time, each capped at what is left of the budget less the later queries' floors (or at the connection's or
-  Options' maximum bytes billed, Query Execution › BigQuery › Cost, when lower), and what a finished query billed leaves
-  the budget. So the build never bills more than the estimate. A query over its cap fails without being billed, and a
+  each counted as every view's floor plus its bytes. The estimate then goes through the same cost prompts as Execute,
+  which ask only above the cost threshold or when the estimate may be low. The estimate shown is the build's budget: a
+  location's queries run one at a time, each capped at what is left of the budget less the later queries' floors (or at
+  the connection's or Options' maximum bytes billed, Query Execution › BigQuery › Cost, when lower). The whole cap leaves
+  the budget when the query starts, and only once it finishes does what it cannot have billed (by the same count as the
+  estimate) return. So the build never bills more than the estimate. A query over its cap fails without being billed, and a
   location the rest of the budget or the cap cannot cover is not started; either way its datasets are read with the
   free calls. The status says "Estimating the billed INFORMATION_SCHEMA read of the index's details…" meanwhile; Stop, a
   newer build or a disconnect ends it.
