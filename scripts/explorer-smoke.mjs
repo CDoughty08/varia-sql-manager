@@ -10,7 +10,7 @@ import {
   dependenciesDialog, dependenciesTree, dependencyNode, inspectorTab, localGrid, menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, objectSearchServerOptions, outputView, paneMenuButton, part, peekDefinitionText, peekEditorWidgetHosts, dockPopoutBack, queryEditorText, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, submitConnect, toolbarButton as mainToolbarButton, expectEditorShown, dialogClosed
 } from './fixtures/ui.mjs'
 import { pinStackedResults } from './fixtures/results-pane.mjs'
-import { activeDocument, emptyQueryStripPoint, queryServer, serverDropCard } from './fixtures/ui.mjs'
+import { activeDocument, emptyQueryStripPoint, queryDatabase, queryServer, serverDropCard } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -942,7 +942,7 @@ try {
   const tabCount = await tabs().count()
   await page.keyboard.press('Control+N')
   await expect(tabs()).toHaveCount(tabCount + 1)
-  await expect(page.locator('#query-database')).toHaveValue('AppData')
+  await expect(queryDatabase(page)).toHaveValue('AppData')
   await textbox().focus()
   await page.keyboard.press('F8')
   await expect(tree()).toBeFocused()

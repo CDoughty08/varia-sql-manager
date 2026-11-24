@@ -59,7 +59,7 @@ export const part = {
   tabTitle: '.tab-title',
   tabMetadata: '.tab-metadata',
   /** Editor groups (src/renderer/src/editor-groups/): Dockview's groups inside the query editor panel, and the active one. */
-  /** The editor area in the Query editor panel: every editor group, under the active query's bar. */
+  /** The editor area in the Query editor panel: every editor group, each with its tab strip above per-query bars. */
   editorArea: '.editor-groups-root',
   editorGroup: '.editor-groups .dv-groupview',
   activeEditorGroup: '.editor-groups .dv-groupview.dv-active-group',
@@ -391,14 +391,15 @@ export const menubar = page => page.getByRole('menubar', { name: 'Application me
  */
 export const toolbar = page => page.getByRole('toolbar', { name: 'Standard', exact: true })
 export const toolbarButton = (page, name) => toolbar(page).getByRole('button', named(name))
-/** A query's own bar (SSMS's SQL Editor toolbar): Execute, Cancel, and the Connection group with the server and database lists. */
-export const queryBar = page => page.getByRole('toolbar', { name: 'SQL Editor', exact: true })
-export const queryBarButton = (page, name) => queryBar(page).getByRole('button', named(name))
-export const queryScope = page => queryBar(page).locator(part.queryScope)
-export const queryConnection = page => queryBar(page).getByRole('group', { name: 'Connection', exact: true })
+const activeQuerySurface = page => page.locator(`${part.activeEditorGroup}, ${part.toolbar}`)
+/** A query's own bar (SSMS's SQL Editor toolbar): Execute, Cancel, and the Connection group with the server and database lists. Scopes to the active group when given a page, or to a specific group locator. */
+export const queryBar = scope => ('mainFrame' in scope ? scope.locator(part.activeEditorGroup) : scope).getByRole('toolbar', { name: 'SQL Editor', exact: true })
+export const queryBarButton = (scope, name) => queryBar(scope).getByRole('button', named(name))
+export const queryScope = scope => queryBar(scope).locator(part.queryScope)
+export const queryConnection = scope => queryBar(scope).getByRole('group', { name: 'Connection', exact: true })
 /** The active query's server and database lists: in its query bar, or in the classic toolbar when that is on. */
-export const queryServer = page => page.getByLabel('Query server', { exact: true })
-export const queryDatabase = page => page.getByLabel('Query database', { exact: true })
+export const queryServer = scope => ('mainFrame' in scope ? activeQuerySurface(scope) : scope).getByLabel('Query server', { exact: true })
+export const queryDatabase = scope => ('mainFrame' in scope ? activeQuerySurface(scope) : scope).getByLabel('Query database', { exact: true })
 /** What a server dragged from Object Explorer onto a query will do (the card under a tab, the editor's plate, the insert hint). */
 export const serverDropCard = page => page.getByRole('status', { name: 'Server drop', exact: true })
 export const banner = page => page.locator(part.banner)
