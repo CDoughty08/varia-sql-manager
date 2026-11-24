@@ -43,6 +43,11 @@ function nearestRun(row: TimelineRow, start: number): number {
   for (let index = 1; index < row.runs.length; index++) if (Math.abs(row.runs[index].start - start) < Math.abs(row.runs[best].start - start)) best = index
   return best
 }
+/** The row's first run the viewport shows (focus lands there without moving the view, so a click hits what it was aimed at), or -1. */
+function firstShown(row: TimelineRow, viewport: TimelineViewport): number {
+  const index = row.runs.findIndex(run => run.start + run.seconds > viewport.start)
+  return index >= 0 && row.runs[index].start < viewport.start + viewport.seconds ? index : -1
+}
 /** A row's summary for its lane cell's accessible name. */
 function rowSummary(model: TimelineModel, row: TimelineRow): string {
   const count = row.runs.length, overlaps = row.runs.filter(run => run.overlap).length
@@ -57,12 +62,21 @@ export default function SchedulesTimeline({ documentId, model: read, span, onSpa
     return now ? timelineModel({ now, seconds, ...timelineInputs(read) }) : undefined
   }, [read, seconds])
   const [viewport, setViewport] = useState<TimelineViewport>({ start: 0, seconds })
-  const [active, setActive] = useState<TimelineActive>()
+  // The active run by its row's key and its start, so a Refresh (rows re-sorted, now moved on) or the filter keeps it on the same run, or
+  // drops it when that run is gone; the view gets it as indexes.
+  const [picked, setPicked] = useState<{ readonly key: string; readonly start?: number }>()
   const axis = useRef<HTMLDivElement>(null)
   const body = useRef<HTMLDivElement>(null)
   const lanes = useRef<(HTMLDivElement | null)[]>([])
   const view = useRef<TimelineView>(undefined)
-  const rows = model?.rows ?? []
+  const rows = useMemo(() => model?.rows ?? [], [model])
+  const active = useMemo<TimelineActive | undefined>(() => {
+    const row = picked ? rows.findIndex(item => item.key === picked.key) : -1
+    if (row < 0) return undefined
+    const run = picked?.start === undefined ? -1 : rows[row].runs.findIndex(item => item.start === picked.start)
+    return { row, run }
+  }, [picked, rows])
+  const setActive = (row: number, run: number) => { const target = rows[row]; if (target) setPicked({ key: target.key, ...target.runs[run] ? { start: target.runs[run].start } : {} }) }
   const open = (row: number, run: number, schedule: boolean) => {
     const target = model?.rows[row], item = target?.runs[run]
     if (!target || !item) return
@@ -73,55 +87,20 @@ export default function SchedulesTimeline({ documentId, model: read, span, onSpa
   opener.current = open
 
   // The whole window shows again when the span changes.
-  useEffect(() => { setViewport({ start: 0, seconds }); setActive(undefined) }, [seconds])
+  useEffect(() => { setViewport({ start: 0, seconds }); setPicked(undefined) }, [seconds])
+  const drawn = !!model
   useEffect(() => {
     if (!axis.current || !body.current) return
     const created = new TimelineView({ axis: axis.current, root: body.current, open: (row, run, schedule) => opener.current(row, run, schedule) })
     view.current = created
     return () => { created.dispose(); view.current = undefined }
-  }, [])
+  }, [drawn])
   useEffect(() => {
     view.current?.setModel(model)
     view.current?.setLanes(lanes.current.slice(0, rows.length).filter((lane): lane is HTMLDivElement => !!lane))
   }, [model, rows.length])
   useEffect(() => { view.current?.setViewport(viewport) }, [viewport])
   useEffect(() => { view.current?.setActive(active) }, [active])
-
-  if (!model) return <p className="field-note">{timelineText.none}</p>
-  const zoom = (factor: number) => setViewport(current => zoomViewport(current, seconds, factor))
-  const moveTo = (row: number, run: number) => {
-    const target = rows[row]?.runs[run]
-    if (!target) return
-    setActive({ row, run })
-    setViewport(current => revealRun(current, seconds, target.start, target.seconds))
-  }
-  const onKey = (event: KeyboardEvent<HTMLDivElement>, row: number) => {
-    const runs = rows[row].runs, current = active?.row === row ? active.run : -1
-    const go = (next: number | undefined) => { event.preventDefault(); if (next !== undefined) moveTo(row, next) }
-    switch (event.key) {
-      case 'ArrowRight': return go(runs.length ? Math.min(runs.length - 1, current + 1) : undefined)
-      case 'ArrowLeft': return go(runs.length ? Math.max(0, current < 0 ? 0 : current - 1) : undefined)
-      case 'Home': return go(runs.length ? 0 : undefined)
-      case 'End': return go(runs.length ? runs.length - 1 : undefined)
-      case 'ArrowDown': case 'ArrowUp': {
-        event.preventDefault()
-        const next = row + (event.key === 'ArrowDown' ? 1 : -1)
-        if (next < 0 || next >= rows.length) return
-        lanes.current[next]?.focus()
-        const at = current >= 0 ? runs[current].start : viewport.start
-        if (rows[next].runs.length) moveTo(next, nearestRun(rows[next], at))
-        else setActive({ row: next, run: -1 })
-        return
-      }
-      case 'Enter': {
-        event.preventDefault()
-        if (current >= 0) open(row, current, event.shiftKey)
-        return
-      }
-      case '+': case '=': event.preventDefault(); zoom(0.5); return
-      case '-': event.preventDefault(); zoom(2); return
-    }
-  }
   // Ctrl/⌘+wheel zooms at the pointer and Shift or sideways wheel scrolls, as on the plan canvas. A native listener, not
   // React's passive onWheel, so preventDefault keeps Chromium from zooming the whole window as well.
   const wheelState = useRef({ viewport, seconds })
@@ -146,7 +125,45 @@ export default function SchedulesTimeline({ documentId, model: read, span, onSpa
     }
     element.addEventListener('wheel', onWheel, { passive: false })
     return () => element.removeEventListener('wheel', onWheel)
-  }, [])
+  }, [drawn])
+
+  if (!model) return <p className="field-note">{timelineText.none}</p>
+  const zoom = (factor: number) => setViewport(current => zoomViewport(current, seconds, factor))
+  const moveTo = (row: number, run: number) => {
+    const target = rows[row]?.runs[run]
+    if (!target) return
+    setActive(row, run)
+    setViewport(current => revealRun(current, seconds, target.start, target.seconds))
+  }
+  const onKey = (event: KeyboardEvent<HTMLDivElement>, row: number) => {
+    // Chords belong to the workbench (Ctrl+= zooms the window); only plain keys and Shift+Enter walk the Timeline.
+    if (event.ctrlKey || event.metaKey || event.altKey) return
+    const runs = rows[row].runs, current = active?.row === row ? active.run : -1
+    const go = (next: number | undefined) => { event.preventDefault(); if (next !== undefined) moveTo(row, next) }
+    switch (event.key) {
+      case 'ArrowRight': return go(runs.length ? Math.min(runs.length - 1, current + 1) : undefined)
+      case 'ArrowLeft': return go(runs.length ? Math.max(0, current < 0 ? 0 : current - 1) : undefined)
+      case 'Home': return go(runs.length ? 0 : undefined)
+      case 'End': return go(runs.length ? runs.length - 1 : undefined)
+      case 'ArrowDown': case 'ArrowUp': {
+        event.preventDefault()
+        const next = row + (event.key === 'ArrowDown' ? 1 : -1)
+        if (next < 0 || next >= rows.length) return
+        lanes.current[next]?.focus()
+        const at = current >= 0 ? runs[current].start : viewport.start
+        if (rows[next].runs.length) moveTo(next, nearestRun(rows[next], at))
+        else setActive(next, -1)
+        return
+      }
+      case 'Enter': {
+        event.preventDefault()
+        if (current >= 0) open(row, current, event.shiftKey)
+        return
+      }
+      case '+': case '=': event.preventDefault(); zoom(0.5); return
+      case '-': event.preventDefault(); zoom(2); return
+    }
+  }
   const activeRow = active ? rows[active.row] : undefined, activeRun = active && activeRow ? activeRow.runs[active.run] : undefined
   const announced = activeRow && activeRun ? timelineText.run(model, activeRow, activeRun) : ''
   const spanId = `agent-timeline-span-${documentId}`
@@ -174,17 +191,18 @@ export default function SchedulesTimeline({ documentId, model: read, span, onSpa
         </div>
         <div className="agent-timeline-lane" role="gridcell" ref={element => { lanes.current[index] = element }} tabIndex={(active?.row ?? 0) === index ? 0 : -1}
           aria-label={rowSummary(model, row)} aria-describedby={`${spanId}-run`} onKeyDown={event => onKey(event, index)}
-          onFocus={() => { if (active?.row !== index) { if (row.runs.length) moveTo(index, 0); else setActive({ row: index, run: -1 }) } }} />
+          onFocus={() => { if (active?.row !== index) setActive(index, firstShown(row, viewport)) }} />
       </div>)}
     </div>
     <p id={`${spanId}-run`} className="visually-hidden" aria-live="polite">{announced}</p>
     {!rows.length && <p className="field-note">{timelineText.none}</p>}
     {(model.overlaps.length > 0 || model.selfOverlaps.length > 0) && <div className="agent-timeline-notes" role="region" aria-label="Overlaps">
-      {model.overlaps.map(overlap => <p key={`${overlap.row}:${overlap.start}`} className="agent-timeline-note"><Icon name="warning" />
+      {model.overlaps.map(overlap => <p key={`${overlap.row}:${overlap.start}:${overlap.scheduleId}`} className="agent-timeline-note"><Icon name="warning" />
         <span>{timelineText.overlap(model, overlap)}</span>
         <button type="button" className="agent-schedules-link" onClick={() => onOpenSchedule(overlap.scheduleId)}>
           Open {rows.find(row => row.key === overlap.row)?.schedules.find(item => item.id === overlap.scheduleId)?.name ?? 'schedule'}</button></p>)}
       {model.moreOverlaps > 0 && <p className="field-note">{timelineText.moreOverlaps(model.moreOverlaps)}</p>}
+      {model.overlapsCut && <p className="field-note">{timelineText.overlapsCut}</p>}
       {model.selfOverlaps.map(self => <p key={self.row} className="agent-timeline-note"><Icon name="warning" /><span>{timelineText.self(self)}</span></p>)}
     </div>}
     {model.rowsLeftOut > 0 && <p className="field-note">{timelineText.rowsLeftOut(model.rowsLeftOut)}</p>}

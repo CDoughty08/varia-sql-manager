@@ -21,7 +21,9 @@ export const timelineLimits = {
   /** Runs the whole Timeline draws. */
   runs: 40_000,
   /** Overlap notes listed under the Timeline; the rest are counted. */
-  notes: 20
+  notes: 20,
+  /** Row checks the overlap sweep makes (about runs × rows still running); past it the sweep stops, and says so. */
+  overlapChecks: 2_000_000
 } as const
 
 export interface TimelineScheduleInput {
@@ -88,6 +90,8 @@ export interface TimelineModel {
   readonly overlaps: readonly TimelineOverlap[]
   /** Overlaps beyond timelineLimits.notes. */
   readonly moreOverlaps: number
+  /** The overlap sweep stopped at timelineLimits.overlapChecks: later runs were not checked. */
+  readonly overlapsCut: boolean
   readonly selfOverlaps: readonly TimelineSelfOverlap[]
   /** Rows left out past timelineLimits.rows. */
   readonly rowsLeftOut: number
@@ -129,75 +133,84 @@ export function timelineModel(input: { readonly now: AgentMoment; readonly secon
     ? input.jobs.filter(job => job.schedules.length).map(job => ({ key: `j:${job.id.toLowerCase()}`, kind: 'job', jobId: job.id, name: job.name, enabled: job.enabled, ...job.usualSeconds !== undefined ? { usualSeconds: job.usualSeconds } : {}, schedules: job.schedules }))
     : (input.schedules ?? []).map(schedule => ({ key: `s:${schedule.id}`, kind: 'schedule', name: schedule.name, enabled: schedule.enabled, schedules: [schedule] }))
   const from = momentSeconds(now), until = from + seconds
-  let budget: number = timelineLimits.runs
+  const runsOf = (row: RowInput, count: number) => row.schedules.flatMap(schedule =>
+    // Disabled jobs and schedules are drawn too, dashed: where they would run if enabled.
+    scheduleRuns({ ...schedule.timing, enabled: true }, now, count, until - 1, schedule.nextRun ?? now).map(run => ({ schedule, start: momentSeconds(run) - from })))
+  // Rows in the order they next run (rows without a run in the window last, by name), cut to the row limit before any run is collected,
+  // so the run budget goes only to rows drawn, shared out evenly: no row is left looking as if it never runs.
+  const ordered = inputs.map(row => ({ row, first: Math.min(Infinity, ...runsOf(row, 1).map(run => run.start)) }))
+    .sort((a, b) => a.first - b.first || a.row.name.localeCompare(b.row.name))
+  const rowsLeftOut = Math.max(0, ordered.length - timelineLimits.rows)
+  const share = Math.max(1, Math.min(timelineLimits.runsPerRow, Math.floor(timelineLimits.runs / Math.max(1, Math.min(ordered.length, timelineLimits.rows)))))
   let runsCut = false
-  const built = inputs.map(row => {
+  const shown = ordered.slice(0, timelineLimits.rows).map(({ row }) => {
     const drawn = Math.max(1, row.usualSeconds ?? unmeasuredSeconds)
-    const runs: { start: number; seconds: number; scheduleId: number; off: boolean }[] = []
-    let truncated = false
-    for (const schedule of row.schedules) {
-      const room = Math.min(timelineLimits.runsPerRow - runs.length, budget)
-      if (room <= 0) { truncated = true; break }
-      // Disabled jobs and schedules are drawn too, dashed: where they would run if enabled.
-      const found = scheduleRuns({ ...schedule.timing, enabled: true }, now, room + 1, until - 1, schedule.nextRun ?? now)
-      if (found.length > room) truncated = true
-      for (const run of found.slice(0, room)) runs.push({ start: momentSeconds(run) - from, seconds: drawn, scheduleId: schedule.id, off: !row.enabled || !schedule.enabled })
-      budget -= Math.min(found.length, room)
-    }
+    const found = runsOf(row, share + 1).sort((a, b) => a.start - b.start || a.schedule.id - b.schedule.id)
+    const truncated = found.length > share
     if (truncated) runsCut = true
-    runs.sort((a, b) => a.start - b.start || a.scheduleId - b.scheduleId)
+    const runs = found.slice(0, share).map(run => ({ start: run.start, seconds: drawn, scheduleId: run.schedule.id, off: !row.enabled || !run.schedule.enabled }))
     return { row, runs, truncated, drawn }
   })
-  // Rows in the order they next run; rows without a run in the window last, by name.
-  built.sort((a, b) => (a.runs[0]?.start ?? Infinity) - (b.runs[0]?.start ?? Infinity) || a.row.name.localeCompare(b.row.name))
-  const rowsLeftOut = Math.max(0, built.length - timelineLimits.rows)
-  const shown = built.slice(0, timelineLimits.rows)
 
-  // Overlaps between rows: a sweep over every run that is on, in start order, against the runs still going.
-  interface Live { readonly row: number; readonly run: number; readonly start: number; readonly end: number }
-  const flat: Live[] = []
-  shown.forEach((entry, row) => entry.runs.forEach((run, index) => { if (!run.off) flat.push({ row, run: index, start: run.start, end: run.start + run.seconds }) }))
-  flat.sort((a, b) => a.start - b.start || b.end - a.end)
-  const flagged = new Set<string>()
-  const hosts = new Map<string, { host: Live; others: Map<number, number> }>()
-  let active: Live[] = []
+  // Overlaps between rows: a sweep over every run that is on, in start order. A row's runs all last the same, so the ones still going
+  // when a run starts are a contiguous stretch of that row's runs (a queue, head to tail); each run is flagged once, and each start is
+  // counted against the earliest run still going in each other row, so the work stays near runs × rows drawn, and is capped besides.
+  const on = shown.map(entry => entry.runs.flatMap((run, index) => run.off ? [] : [index]))
+  const flat: { readonly row: number; readonly start: number; readonly end: number }[] = []
+  shown.forEach((entry, row) => on[row].forEach(index => flat.push({ row, start: entry.runs[index].start, end: entry.runs[index].start + entry.runs[index].seconds })))
+  // Longer runs first at the same start, so a short run starting with a long one is counted as starting during it.
+  flat.sort((a, b) => a.start - b.start || b.end - a.end || a.row - b.row)
+  const head = on.map(() => 0), tail = on.map(() => 0), flaggedTo = on.map(() => 0)
+  const flagged = shown.map(entry => new Uint8Array(entry.runs.length))
+  const hosts = new Map<number, { readonly row: number; readonly run: number; readonly others: Map<number, number> }>()
+  const going = new Set<number>()
+  let checks = 0, overlapsCut = false
+  const endOf = (row: number, at: number) => { const run = shown[row].runs[on[row][at]]; return run.start + run.seconds }
   for (const item of flat) {
-    active = active.filter(other => other.end > item.start)
-    for (const other of active) {
-      if (other.row === item.row) continue
-      flagged.add(`${other.row}:${other.run}`)
-      flagged.add(`${item.row}:${item.run}`)
-      const key = `${other.row}:${other.run}`
-      const note = hosts.get(key) ?? { host: other, others: new Map<number, number>() }
+    if (checks > timelineLimits.overlapChecks) { overlapsCut = true; break }
+    let met = false
+    for (const row of going) {
+      checks++
+      while (head[row] < tail[row] && endOf(row, head[row]) <= item.start) head[row]++
+      if (head[row] === tail[row]) { going.delete(row); continue }
+      if (row === item.row) continue
+      met = true
+      for (let at = Math.max(head[row], flaggedTo[row]); at < tail[row]; at++) flagged[row][on[row][at]] = 1
+      flaggedTo[row] = tail[row]
+      const run = on[row][head[row]], key = row * timelineLimits.runsPerRow + run
+      const note = hosts.get(key) ?? { row, run, others: new Map<number, number>() }
       note.others.set(item.row, (note.others.get(item.row) ?? 0) + 1)
       hosts.set(key, note)
     }
-    active.push(item)
+    if (met) flagged[item.row][on[item.row][tail[item.row]]] = 1
+    tail[item.row]++
+    going.add(item.row)
   }
-  const notes = [...hosts.values()].sort((a, b) => a.host.start - b.host.start || a.host.row - b.host.row)
-  const overlaps: TimelineOverlap[] = notes.slice(0, timelineLimits.notes).map(({ host, others }) => {
-    const entry = shown[host.row]
+  const notes = [...hosts.values()].sort((a, b) => shown[a.row].runs[a.run].start - shown[b.row].runs[b.run].start || a.row - b.row)
+  const overlaps: TimelineOverlap[] = notes.slice(0, timelineLimits.notes).map(({ row, run, others }) => {
+    const entry = shown[row], host = entry.runs[run]
     return {
-      start: host.start, end: host.end, row: entry.row.key, name: entry.row.name, scheduleId: entry.runs[host.run].scheduleId,
-      others: [...others].map(([row, count]) => ({ row: shown[row].row.key, name: shown[row].row.name, count }))
+      start: host.start, end: host.start + host.seconds, row: entry.row.key, name: entry.row.name, scheduleId: host.scheduleId,
+      others: [...others].map(([other, count]) => ({ row: shown[other].row.key, name: shown[other].row.name, count }))
     }
   })
   // A row whose usual run is longer than a gap between two of its starts (measured only: an unmeasured minute says nothing).
   const selfOverlaps: TimelineSelfOverlap[] = []
   for (const entry of shown) {
     if (entry.row.usualSeconds === undefined || !entry.row.enabled) continue
-    const on = entry.runs.filter(run => !run.off)
+    const live = entry.runs.filter(run => !run.off)
     let gap = Infinity
-    for (let index = 1; index < on.length; index++) gap = Math.min(gap, on[index].start - on[index - 1].start)
+    // Two schedules starting the job at the same moment are one run to Agent, not a gap of nothing.
+    for (let index = 1; index < live.length; index++) { const step = live[index].start - live[index - 1].start; if (step > 0) gap = Math.min(gap, step) }
     if (gap < entry.drawn) selfOverlaps.push({ row: entry.row.key, name: entry.row.name, usualSeconds: entry.drawn, gapSeconds: gap })
   }
   const rows: TimelineRow[] = shown.map((entry, row) => ({
     key: entry.row.key, kind: entry.row.kind, ...entry.row.jobId ? { jobId: entry.row.jobId } : {}, name: entry.row.name, enabled: entry.row.enabled,
     ...entry.row.usualSeconds !== undefined ? { usualSeconds: entry.row.usualSeconds } : {},
     schedules: entry.row.schedules.map(schedule => ({ id: schedule.id, name: schedule.name, enabled: schedule.enabled })),
-    label: rowLabel(entry.row), runs: entry.runs.map((run, index) => ({ ...run, overlap: flagged.has(`${row}:${index}`) })), truncated: entry.truncated
+    label: rowLabel(entry.row), runs: entry.runs.map((run, index) => ({ ...run, overlap: flagged[row][index] === 1 })), truncated: entry.truncated
   }))
-  return { start: now, seconds, rows, overlaps, moreOverlaps: Math.max(0, notes.length - timelineLimits.notes), selfOverlaps, rowsLeftOut, runsCut, kind }
+  return { start: now, seconds, rows, overlaps, moreOverlaps: Math.max(0, notes.length - timelineLimits.notes), overlapsCut, selfOverlaps, rowsLeftOut, runsCut, kind }
 }
 
 /** The row's words beside its name: its first schedule's when (and how many more), its usual duration, and whether it is disabled. */
@@ -214,12 +227,13 @@ function rowLabel(row: RowInput): string {
 export const timelineText = {
   bars: (kind: 'job' | 'schedule') => kind === 'job'
     ? "Bars are each job's usual duration (the median of its last successful runs) at its scheduled starts; a job without one is drawn for a minute."
-    : 'Which job uses which schedule needs sysadmin, so rows are schedules, each run drawn for a minute.',
+    : 'Which job uses which schedule needs sysadmin, so rows are schedules, each run drawn for a minute; schedules no job uses are left out.',
   overlap: (model: Pick<TimelineModel, 'start' | 'seconds'>, overlap: TimelineOverlap) => {
     const others = overlap.others.map(other => `${other.name} ${overlap.others.length === 1 && other.count > 1 ? `runs ${times(other.count)}` : `starts ${times(other.count)}`}`)
     return `Overlap ${timelineClock(model, overlap.start)}–${timelineClock(model, overlap.end)}: ${others.join(', ')} during ${overlap.name}.`
   },
   moreOverlaps: (count: number) => `${plural(count, 'more overlap')} not listed.`,
+  overlapsCut: 'Too many runs overlap to check them all: later overlaps are not flagged.',
   self: (self: TimelineSelfOverlap) => `${self.name} usually runs ${usualText(self.usualSeconds).slice(1)}, longer than the ${usualText(self.gapSeconds).slice(1)} between two of its starts; SQL Server Agent skips a start while the job is still running.`,
   rowsLeftOut: (count: number) => `${plural(count, 'more row')} not drawn (the Timeline draws at most ${timelineLimits.rows}).`,
   runsCut: `Some rows have more runs in this window than the Timeline draws (at most ${timelineLimits.runsPerRow.toLocaleString('en-US')} a row, ${timelineLimits.runs.toLocaleString('en-US')} in all); their later runs are left out.`,
@@ -231,7 +245,7 @@ export const timelineText = {
     if (row.kind === 'job' && schedule) parts.push(`schedule ${schedule.name}`)
     parts.push(row.usualSeconds !== undefined ? `usual run ${usualText(row.usualSeconds).slice(1)}` : 'no measured run')
     if (run.off) parts.push(!row.enabled ? 'job disabled' : 'schedule disabled')
-    if (run.overlap) parts.push('overlaps another job')
+    if (run.overlap) parts.push(row.kind === 'job' ? 'overlaps another job' : 'overlaps another schedule')
     return parts.join(', ')
   }
 } as const
@@ -249,7 +263,7 @@ export function timelineInputs(model: AgentSchedulesModel): { readonly jobs?: Ti
   })
   const schedule = (record: AgentSchedulesModel['schedules'][number], nextRun?: AgentMoment): TimelineScheduleInput =>
     ({ id: record.id, name: record.name, enabled: record.enabled, timing: timingOf(record), ...nextRun ? { nextRun } : {} })
-  if (!model.links || !model.jobs) return { schedules: model.schedules.map(record => schedule(record)) }
+  if (!model.links || !model.jobs) return { schedules: model.schedules.filter(record => record.jobCount > 0).map(record => schedule(record)) }
   const records = new Map(model.schedules.map(record => [record.id, record]))
   const usual = new Map((model.durations ?? []).map(duration => [duration.jobId.toLowerCase(), duration.seconds]))
   const byJob = new Map<string, TimelineScheduleInput[]>()

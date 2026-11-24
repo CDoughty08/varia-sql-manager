@@ -524,7 +524,23 @@ export function scheduleRuns(schedule: AgentScheduleTiming & { readonly enabled?
   return walkRuns(schedule, times, cycle, fromSeconds, count, until).map(momentOfSeconds)
 }
 /** The next five runs, as the editor lists them. */
-export const nextRuns = (schedule: AgentScheduleTiming & { readonly enabled?: boolean }, now: AgentMoment, count = 5) => scheduleRuns(schedule, now, count)
+/** The next runs from now; `anchor` is Agent's own next run where known (an every-n cycle counts from it, see scheduleRuns). */
+export const nextRuns = (schedule: AgentScheduleTiming & { readonly enabled?: boolean }, now: AgentMoment, count = 5, anchor?: AgentMoment) => scheduleRuns(schedule, now, count, undefined, anchor)
+/** A schedule link as sysadmin's read has it, with the next run Agent wrote to sysjobschedules (absent until Agent writes one). */
+export interface AgentNextRunLink { readonly scheduleId: number; readonly jobId: string; readonly nextRunDate?: number; readonly nextRunTime?: number }
+/** Agent's own next run for a schedule: one job's link, or without `jobId` the earliest of its links; undefined when none is known. An
+ *  every-n-weeks or every-n-months cycle keeps counting from Agent's runs once the schedule is saved, so callers showing a saved schedule's
+ *  runs pass this as the anchor; an edited timing restarts the cycle at the save, so they pass none. */
+export function agentNextRun(links: readonly AgentNextRunLink[] | undefined, scheduleId: number, jobId?: string): AgentMoment | undefined {
+  let best: AgentMoment | undefined
+  for (const link of links ?? []) {
+    if (link.scheduleId !== scheduleId || (jobId !== undefined && link.jobId.toLowerCase() !== jobId.toLowerCase())) continue
+    if (link.nextRunDate === undefined || link.nextRunTime === undefined) continue
+    const at = { date: link.nextRunDate, time: link.nextRunTime }
+    if (!best || momentSeconds(at) < momentSeconds(best)) best = at
+  }
+  return best
+}
 
 /** Why a schedule has no next runs, or undefined when it has some. */
 export function noRunsReason(schedule: AgentScheduleTiming & { readonly enabled?: boolean }, now: AgentMoment): string | undefined {
@@ -544,7 +560,8 @@ export interface ScheduledJob {
   readonly enabled: boolean
   /** Seconds; undefined when it has no successful run to measure. */
   readonly usualSeconds?: number
-  readonly schedules: readonly (AgentScheduleTiming & { readonly enabled?: boolean })[]
+  /** Each with Agent's own next run where known, the anchor of its every-n cycle. */
+  readonly schedules: readonly (AgentScheduleTiming & { readonly enabled?: boolean; readonly nextRun?: AgentMoment })[]
 }
 export interface FreeSlotClash { readonly job: string; readonly at: AgentMoment; readonly mine: AgentMoment }
 export interface FreeSlotResult {
@@ -567,8 +584,8 @@ export function median(values: readonly number[]): number | undefined {
  * The free-slot check (mock rx-job-schedules): this schedule's next runs, each lasting the job's usual duration, against the runs of other
  * enabled jobs' enabled schedules lasting theirs. A clash is any overlap, at most one per other job and run of this one.
  */
-export function freeSlotCheck(schedule: AgentScheduleTiming & { readonly enabled?: boolean }, now: AgentMoment, usualSeconds: number | undefined, others: readonly ScheduledJob[], count = 5): FreeSlotResult {
-  const runs = nextRuns({ ...schedule, enabled: true }, now, count)
+export function freeSlotCheck(schedule: AgentScheduleTiming & { readonly enabled?: boolean }, now: AgentMoment, usualSeconds: number | undefined, others: readonly ScheduledJob[], count = 5, anchor?: AgentMoment): FreeSlotResult {
+  const runs = nextRuns({ ...schedule, enabled: true }, now, count, anchor)
   // A run measured at 0 seconds still occupies its start second, so two runs starting together always clash.
   const mine = Math.max(1, usualSeconds ?? unmeasuredSeconds)
   const clashes: FreeSlotClash[] = []
@@ -581,7 +598,7 @@ export function freeSlotCheck(schedule: AgentScheduleTiming & { readonly enabled
       // many days of runs stays cheap and never runs out of runs before the window ends.
       const a = momentSeconds(run), b = a + mine
       const from = momentOfSeconds(Math.max(0, a - theirs + 1))
-      const hits = job.schedules.flatMap(other => scheduleRuns(other, from, 1, b - 1, now)).map(momentSeconds)
+      const hits = job.schedules.flatMap(other => scheduleRuns(other, from, 1, b - 1, other.nextRun ?? now)).map(momentSeconds)
       if (hits.length) clashes.push({ job: job.name, at: momentOfSeconds(Math.min(...hits)), mine: run })
     }
   }

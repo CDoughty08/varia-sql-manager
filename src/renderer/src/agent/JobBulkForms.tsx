@@ -8,7 +8,7 @@ import { agentBulkText } from '../../../shared/agent/bulk'
 import { agentLimits } from '../../../shared/agent/catalog'
 import { agentBulkTitles } from '../../../shared/agent/jobs'
 import { momentOfText } from '../../../shared/actions/agent-schedule'
-import { formatRun, freq, nextRuns, noRunsReason, scheduleMatches, scheduleSentence, scheduleWhen } from '../../../shared/agent/schedule'
+import { agentNextRun, formatRun, freq, nextRuns, noRunsReason, scheduleMatches, scheduleSentence, scheduleWhen } from '../../../shared/agent/schedule'
 import Icon from '../Icon'
 import InlineError from '../kit/InlineError'
 import { pickRows } from './JobSchedules'
@@ -76,7 +76,7 @@ function ScheduleFields({ id, service, form }: { readonly id: string; readonly s
   const matches = form.search.trim() ? usable.filter(item => scheduleMatches(item, form.search)) : usable
   const picked = form.picked === undefined ? undefined : model.schedules.find(item => item.id === form.picked)
   const now = momentOfText(model.now)
-  const runs = picked && now ? nextRuns(picked, now, 5) : []
+  const runs = picked && now ? nextRuns(picked, now, 5, agentNextRun(model.links, picked.id)) : []
   return <div className="agent-schedules agent-bulk-schedules">
     <div className="agent-schedule-list">
       <input id={searchId} className="property-input" type="search" placeholder="Search shared schedules" aria-label="Search shared schedules" maxLength={agentLimits.nameChars} autoFocus

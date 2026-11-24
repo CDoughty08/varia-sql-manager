@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { freq, noEndDate, subday, type AgentScheduleTiming } from '../src/shared/agent/schedule'
-import { timelineClock, timelineLimits, timelineModel, timelineText, usualText, type TimelineJobInput } from '../src/shared/agent/timeline'
+import { timelineClock, timelineInputs, timelineLimits, timelineModel, timelineText, usualText, type TimelineJobInput } from '../src/shared/agent/timeline'
+import type { AgentSchedulesModel } from '../src/shared/actions/agent-schedule'
 
 // Sunday 2026-11-22 14:30, server time (the mock's now).
 const now = { date: 20261122, time: 143000 }
@@ -56,7 +57,10 @@ describe('the Schedules Timeline', () => {
     expect(week.runsCut).toBe(true)
     const many = Array.from({ length: 30 }, (_, index) => job(`P${index}`, `Poller ${index}`, { usualSeconds: 1 }, { freqSubdayType: subday.seconds, freqSubdayInterval: 10, activeStartTime: 0 }, index + 10))
     const capped = timelineModel({ now, seconds: 7 * 86_400, jobs: many })
-    expect(capped.rows.reduce((total, row) => total + row.runs.length, 0)).toBe(timelineLimits.runs)
+    // The total is shared out evenly over the rows drawn: every poller draws its share, none is left looking as if it never runs.
+    const share = Math.floor(timelineLimits.runs / 30)
+    expect(capped.rows.every(row => row.runs.length === share && row.truncated)).toBe(true)
+    expect(capped.rows.reduce((total, row) => total + row.runs.length, 0)).toBeLessThanOrEqual(timelineLimits.runs)
     const wide = timelineModel({ now, seconds: 86_400, jobs: Array.from({ length: timelineLimits.rows + 5 }, (_, index) => job(`R${index}`, `Job ${index}`, {}, {}, index + 1)) })
     expect(wide.rows).toHaveLength(timelineLimits.rows)
     expect(timelineText.rowsLeftOut(wide.rowsLeftOut)).toBe('5 more rows not drawn (the Timeline draws at most 200).')
@@ -66,6 +70,36 @@ describe('the Schedules Timeline', () => {
     const pairs = timelineModel({ now, seconds: 86_400, jobs: [logs, { ...logs, id: 'B2', name: 'Copy', usualSeconds: 60 }] })
     expect(pairs.overlaps).toHaveLength(timelineLimits.notes)
     expect(pairs.moreOverlaps).toBe(96 - timelineLimits.notes)
+  })
+  it('sweeps many long, frequent jobs quickly, and says when it stopped checking', () => {
+    // 20 jobs every 10 seconds, each usually running an hour: every run overlaps every other job's, the worst case for the sweep.
+    const busy = Array.from({ length: 20 }, (_, index) => job(`Q${index}`, `Busy ${index}`, { usualSeconds: 3_600 }, { freqSubdayType: subday.seconds, freqSubdayInterval: 10, activeStartTime: 0 }, index + 100))
+    const began = performance.now()
+    const model = timelineModel({ now, seconds: 86_400, jobs: busy })
+    expect(performance.now() - began).toBeLessThan(1_500)
+    expect(model.rows.every(row => row.runs.every(run => run.overlap))).toBe(true)
+    expect(model.overlaps).toHaveLength(timelineLimits.notes)
+    // Past the check budget the sweep stops and the Timeline says so.
+    const crowd = Array.from({ length: 200 }, (_, index) => job(`W${index}`, `Wide ${index}`, { usualSeconds: 86_400 }, { freqSubdayType: subday.seconds, freqSubdayInterval: 10, activeStartTime: 0 }, index + 300))
+    const cut = timelineModel({ now, seconds: 86_400, jobs: crowd })
+    expect(cut.overlapsCut).toBe(true)
+    expect(timelineText.overlapsCut).toMatch(/not flagged/)
+  })
+  it('gives two schedules starting one job together one note, and no self-overlap of nothing', () => {
+    const twin = { ...backup, usualSeconds: 600, schedules: [backup.schedules[0], { ...backup.schedules[0], id: 2, name: 'Twin' }] }
+    const other = job('Y', 'Report', { usualSeconds: 60 }, { activeStartTime: 10500 }, 5)
+    const model = timelineModel({ now, seconds: 86_400, jobs: [twin, other] })
+    expect(model.overlaps.map(overlap => timelineText.overlap(model, overlap))).toEqual(['Overlap 01:00–01:10: Report starts once during Nightly full backup – Sales.'])
+    expect(model.selfOverlaps).toEqual([])
+  })
+  it('leaves out schedules no job uses below sysadmin, and words their overlaps as schedules', () => {
+    const record = (id: number, name: string, jobCount: number) => ({ id, name, enabled: true, freqType: freq.daily, freqInterval: 1, freqSubdayType: subday.once, freqSubdayInterval: 0, freqRelativeInterval: 0,
+      freqRecurrenceFactor: 0, activeStartDate: 20260101, activeEndDate: noEndDate, activeStartTime: 10000, activeEndTime: 235959, jobCount })
+    const read = { now: '2026-11-22T14:30:00', schedules: [record(1, 'Used', 2), record(2, 'Also used', 1), record(3, 'Unused', 0)] } as unknown as AgentSchedulesModel
+    const inputs = timelineInputs(read)
+    expect(inputs.schedules?.map(item => item.name)).toEqual(['Used', 'Also used'])
+    const model = timelineModel({ now, seconds: 86_400, ...inputs })
+    expect(timelineText.run(model, model.rows[0], model.rows[0].runs[0])).toMatch(/overlaps another schedule$/)
   })
   it('makes schedule rows below sysadmin, and counts an every-n cycle from the next run Agent wrote', () => {
     const fortnightly = { id: 7, name: 'Fortnightly', enabled: true, timing: timing({ freqType: freq.weekly, freqInterval: 2, freqRecurrenceFactor: 2, activeStartTime: 30000 }) }

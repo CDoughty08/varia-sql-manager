@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatRun, freq, nextRuns, noEndDate, scheduleRuns, subday, type AgentMoment, type AgentScheduleTiming } from '../src/shared/agent/schedule'
+import { agentNextRun, formatRun, freeSlotCheck, freq, nextRuns, noEndDate, scheduleRuns, subday, type AgentMoment, type AgentScheduleTiming } from '../src/shared/agent/schedule'
 
 // Every expectation in the first block is what a live SQL Server 2025 Agent computed (sysjobactivity.next_scheduled_run_date) for a scratch
 // job with that one schedule, created at the `now` shown (server time, Monday 2026-11-23). tests/agent-schedule-live.test.ts repeats the
@@ -103,5 +103,21 @@ describe('runs over a window', () => {
     // Two weekdays every other week: both days of the anchor's week (weeks start on Sunday), then two weeks on.
     expect(list({ ...fortnightly, freqInterval: 2 | 32 }, 4)).toEqual(['Mon 2026-11-23 03:00', 'Fri 2026-11-27 03:00', 'Mon 2026-12-07 03:00', 'Fri 2026-12-11 03:00'])
     expect(list({ freqType: freq.monthly, freqInterval: 1, freqRecurrenceFactor: 3, activeStartDate: 20260101, activeStartTime: 30000 }, 3)).toEqual(['Tue 2026-12-01 03:00', 'Mon 2027-03-01 03:00', 'Tue 2027-06-01 03:00'])
+  })
+  it("shows a saved every-n schedule's runs on Agent's own cycle, in the editor and the free-slot check too", () => {
+    const fortnightly = timing({ freqType: freq.weekly, freqInterval: 2, freqRecurrenceFactor: 2, activeStartDate: 20260105, activeStartTime: 30000 })
+    const tuesday = { date: 20261124, time: 120000 }
+    // It last ran Monday 23 November, so Agent's next run is 7 December; counted from Tuesday it would be the off week, 30 November.
+    const links = [{ scheduleId: 7, jobId: 'A', nextRunDate: 20261207, nextRunTime: 30000 }, { scheduleId: 7, jobId: 'B', nextRunDate: 20261221, nextRunTime: 30000 }, { scheduleId: 7, jobId: 'C' }]
+    expect(agentNextRun(links, 7)).toEqual({ date: 20261207, time: 30000 })
+    expect(agentNextRun(links, 7, 'b')).toEqual({ date: 20261221, time: 30000 })
+    expect(agentNextRun(links, 7, 'C')).toBeUndefined()
+    expect(agentNextRun(undefined, 7)).toBeUndefined()
+    expect(nextRuns(fortnightly, tuesday, 2).map(formatRun)).toEqual(['Mon 2026-11-30 03:00', 'Mon 2026-12-14 03:00'])
+    expect(nextRuns(fortnightly, tuesday, 2, agentNextRun(links, 7)).map(formatRun)).toEqual(['Mon 2026-12-07 03:00', 'Mon 2026-12-21 03:00'])
+    // The free-slot check counts this job's runs and each other job's from their anchors: a weekly 03:00 job on Agent's other week never clashes.
+    const other = { name: 'Other', enabled: true, usualSeconds: 600, schedules: [{ ...fortnightly, nextRun: { date: 20261130, time: 30000 } }] }
+    expect(freeSlotCheck(fortnightly, tuesday, 600, [other], 3, { date: 20261207, time: 30000 }).clashes).toEqual([])
+    expect(freeSlotCheck(fortnightly, tuesday, 600, [{ ...other, schedules: [{ ...fortnightly, nextRun: { date: 20261207, time: 30000 } }] }], 3, { date: 20261207, time: 30000 }).clashes).toHaveLength(3)
   })
 })

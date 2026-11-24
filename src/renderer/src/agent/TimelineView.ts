@@ -219,10 +219,15 @@ export class TimelineView implements Disposable {
     const run = row < 0 ? undefined : this.hit(row, event.clientX)
     if (!model || run === undefined) { this.hideTooltip(); return }
     this.tooltipText.nodeValue = timelineText.run(model, model.rows[row], model.rows[row].runs[run])
-    const box = this.options.root.getBoundingClientRect()
-    this.tooltip.style.left = `${Math.max(0, event.clientX - box.left + 12)}px`
-    this.tooltip.style.top = `${Math.max(0, event.clientY - box.top + 16)}px`
+    // The root scrolls (up to timelineLimits.rows rows): place the tooltip in its content, kept inside its visible part.
+    const root = this.options.root, box = root.getBoundingClientRect()
     this.tooltip.hidden = false
+    const width = this.tooltip.offsetWidth, height = this.tooltip.offsetHeight
+    const x = event.clientX - box.left + 12, y = event.clientY - box.top + 16
+    const left = x + width > root.clientWidth ? Math.max(0, event.clientX - box.left - 12 - width) : x
+    const top = y + height > root.clientHeight ? Math.max(0, event.clientY - box.top - 8 - height) : y
+    this.tooltip.style.left = `${left + root.scrollLeft}px`
+    this.tooltip.style.top = `${top + root.scrollTop}px`
   }
   private hideTooltip(): void { this.tooltip.hidden = true }
   private click(pool: LanePool, event: MouseEvent): void {

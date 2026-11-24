@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-  dateOfDay, dayNumber, formatRun, freq, momentSeconds, nextRuns, noEndDate, subday, timeOf, type AgentMoment, type AgentScheduleTiming
+  dateOfDay, dayNumber, formatRun, freq, momentSeconds, nextRuns, noEndDate, scheduleRuns, subday, timeOf, type AgentMoment, type AgentScheduleTiming
 } from '../src/shared/agent/schedule'
 import { connectLive, liveServer } from './fixtures/live-sql'
 
@@ -80,7 +80,6 @@ describe.runIf(enabled)('schedule occurrences against SQL Server Agent', () => {
       'EXEC msdb.dbo.sp_attach_schedule @job_id = @job, @schedule_id = @schedule;'
     ].join('\n')).join('\n'), 'msdb')
     expect(created.status).toBe('completed')
-    const after = await clock()
     const names = jobs.map(prefix => quote(prefix + '_job')).join(', ')
     let agent = new Map<string, string | null>()
     for (const until = Date.now() + 20_000; ;) {
@@ -91,12 +90,18 @@ describe.runIf(enabled)('schedule occurrences against SQL Server Agent', () => {
       if (Date.now() > until) break
       await wait(500)
     }
-    // Agent computes when the schedule is attached, between the two clock reads: either moment's answer is Agent's.
+    // Agent computes some time after the attach, and a short schedule may even run while the loop above waits, so Agent then writes the
+    // run after it: any run Varia lists from the clock read before the create up to its next run after the wait is Agent's answer.
+    const after = await clock()
     const ours = (timing: AgentScheduleTiming, now: AgentMoment) => { const next = nextRuns(timing, now, 1)[0]; return next ? formatRun(next) : 'none' }
+    const between = (timing: AgentScheduleTiming) => {
+      const last = nextRuns(timing, after, 1)[0]
+      return last ? scheduleRuns(timing, before, 1_000, momentSeconds(last)).map(formatRun) : []
+    }
     const report = list.map(({ label, timing }, index) => {
       const read = momentOf(agent.get(jobs[index] + '_job'))
       const theirs = read ? formatRun(read) : 'none'
-      const mine = [ours(timing, before), ours(timing, after)]
+      const mine = [ours(timing, before), ours(timing, after), ...between(timing)]
       return `${label}: Agent ${theirs}, Varia ${mine.includes(theirs) ? theirs : mine.join(' or ')}`
     })
     // Agent's answers stay in the failure diff; the label alone says which shape differs.

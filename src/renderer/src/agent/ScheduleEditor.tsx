@@ -4,7 +4,7 @@
 // fields, and problems come from scheduleProblems.
 import { agentLimits, frequencyTypes, relativeDays, relativeIntervals, weekDays, type AgentPlatform } from '../../../shared/agent/catalog.ts'
 import {
-  endOfDay, formatDate, formatRun, formatTime, freq, idleOffered, matchingPreset, nextRuns, noEndDate, noRunsReason, parseDate, parseTime, schedulePresets, scheduleSentence, subday, withFrequency,
+  endOfDay, formatDate, formatRun, formatTime, freq, idleOffered, matchingPreset, nextRuns, noEndDate, noRunsReason, parseDate, parseTime, sameTiming, schedulePresets, scheduleSentence, subday, withFrequency,
   type AgentMoment, type AgentScheduleFields, type ScheduleField, type ScheduleProblem
 } from '../../../shared/agent/schedule.ts'
 import Icon from '../Icon'
@@ -30,6 +30,8 @@ export interface ScheduleEditorProps {
   readonly aside?: React.ReactNode
   /** The server's platform: Managed Instance offers no CPU-idle frequency or preset (a schedule already idle still shows it). */
   readonly platform?: AgentPlatform
+  /** Agent's own next run for the schedule as read, where known: its every-n cycle counts from it while the timing is unchanged. */
+  readonly anchor?: AgentMoment
 }
 
 const recurringTypes: readonly number[] = [freq.daily, freq.weekly, freq.monthly, freq.relative]
@@ -47,7 +49,7 @@ function textOf(problems: readonly ScheduleProblem[], ...fields: ScheduleField[]
   return { ...error ? { error } : {}, ...warnings.length ? { note: warnings.join(' ') } : {} }
 }
 
-export default function ScheduleEditor({ idPrefix, fields, base, onChange, disabled, problems, now, freeSlot, aside, platform }: ScheduleEditorProps) {
+export default function ScheduleEditor({ idPrefix, fields, base, onChange, disabled, problems, now, freeSlot, aside, platform, anchor }: ScheduleEditorProps) {
   const idle = idleOffered(platform) || fields.freqType === freq.idle
   const presets = schedulePresets.filter(preset => idleOffered(platform) || preset.id !== 'idle')
   const id = (key: string) => `${idPrefix}-${key}`
@@ -59,7 +61,7 @@ export default function ScheduleEditor({ idPrefix, fields, base, onChange, disab
   const frequency = { description: 'How often the schedule repeats.', ...textOf(problems, 'frequency', 'interval', 'days') }
   const daily = { description: 'When in the day it runs: once, or every so often between two times.', ...textOf(problems, 'dailyFrequency', 'startTime', 'endTime') }
   const duration = { description: 'The dates the schedule is used between.', ...textOf(problems, 'startDate', 'endDate') }
-  const runs = nextRuns(fields, now, 5)
+  const runs = nextRuns(fields, now, 5, anchor && base && sameTiming(fields, base) ? anchor : undefined)
   const reason = runs.length ? undefined : noRunsReason(fields, now)
   const unit = subdayUnits.find(item => item.code === fields.freqSubdayType)
   return <div className="agent-schedule-editor">
