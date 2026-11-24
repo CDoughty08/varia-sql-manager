@@ -438,8 +438,8 @@ describe('AgentTreeLive: job rows\' chips from agent.jobs', () => {
     await f.open('SQL Server Agent', 'Jobs')
     const [view] = f.viewsOf('agent.jobs')
     const shown = () => { const node = f.explorer.node(f.find('Index maintenance'))!; const status = rowStatus(undefined, node, f.tree); return status ? liveJob(node, status).status : node.status }
-    const unchanged = (sampledAt: number) => {
-      const tick: LiveTick = { type: 'live.tick', seq: ++view.seq, sampledAt, samples: [{ probe: 'agent.jobs.list', costMs: 1, effectiveIntervalMs: 5000, tables: [{ table: 0, descriptor: view.table().descriptor, revision: view.seq, diff: { added: 0, removed: 0, changed: 0 } }] }] as LiveTick['samples'] }
+    const unchanged = (sampledAt: number, costMs = 1) => {
+      const tick: LiveTick = { type: 'live.tick', seq: ++view.seq, sampledAt, samples: [{ probe: 'agent.jobs.list', costMs, effectiveIntervalMs: 5000, tables: [{ table: 0, descriptor: view.table().descriptor, revision: view.seq, diff: { added: 0, removed: 0, changed: 0 } }] }] as LiveTick['samples'] }
       for (const listener of [...view.listeners]) listener({ subscriptionId: view.id, tick })
     }
     // Listed enabled; the read, after the listing, finds it disabled elsewhere.
@@ -448,6 +448,10 @@ describe('AgentTreeLive: job rows\' chips from agent.jobs', () => {
     expect(shown()).toBe('disabled')
     // The folder lists again later (as a Disable or Enable re-lists it at once): until a newer read, the listing wins.
     f.explorer.reconcile(f.find('Jobs'))
+    await settle()
+    expect(shown()).toBeUndefined()
+    // A sample that ended after the listing but began before it (it read msdb first) does not win.
+    unchanged(Date.now() + 60_000, 120_000)
     await settle()
     expect(shown()).toBeUndefined()
     // The next sample finds the list unchanged: as of that sample it still says disabled, so it wins again.

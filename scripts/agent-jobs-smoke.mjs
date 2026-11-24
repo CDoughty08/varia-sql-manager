@@ -84,7 +84,8 @@ try {
   await expect.poll(async () => (await views()).length).toBe(2)
   const jobRow = async name => revealExplorerRow(page, 'server-a', 'SQL Server Agent', 'Jobs', name)
   await expect(await jobRow('Nightly')).toHaveAttribute('aria-label', /Last run failed/)
-  await expect(await jobRow('Purge')).toHaveAttribute('aria-label', /, disabled/)
+  // The listing arrives after the first sample was taken, so it wins until the next sample (the list's 5 s interval) says otherwise.
+  await expect(await jobRow('Purge')).toHaveAttribute('aria-label', /, disabled/, { timeout: 15000 })
   await rm(resolve(control, 'agent-listed-enabled'))
   await expect(await jobRow('Backup')).not.toHaveAttribute('aria-label', /Last run failed|Running|disabled/)
   // A job created elsewhere moves the jobs fingerprint, and the folder lists it without Refresh.

@@ -348,13 +348,16 @@ export class AgentTreeLive extends SnapshotStore<AgentTreeSnapshot> implements D
       if (sample.probe !== agentJobsProbe) continue
       const entry = sample.tables?.find(table => table.table === 0)
       if (!entry) continue
+      // The backend stamps a sample when it ends; msdb was read up to its cost before, so the rows are dated from its start,
+      // and a listing that arrived while the sample ran wins over it.
+      const readAt = tick.sampledAt - Math.max(0, sample.costMs)
       // An unchanged revision needs no read: its rows are the ones already read, now as of this sample (unless a read of a
       // newer revision is on its way, which dates them itself).
       if (entry.diff && entry.diff.added + entry.diff.removed + entry.diff.changed === 0 && read.rows) {
-        if (!read.reading) read.at = tick.sampledAt
+        if (!read.reading) read.at = readAt
         continue
       }
-      this.readJobs(connectionId, handle, read, subscriptionId, tick.sampledAt)
+      this.readJobs(connectionId, handle, read, subscriptionId, readAt)
     }
     this.publishJobs()
   }
