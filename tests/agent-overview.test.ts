@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   alertsCheck, failedCheck, historyCheck, historyShortfalls, mailCheck, namesText, needsAttention, notifyCheck, overviewChecks, overviewStatus, overviewTiles, ownerCheck, schedulesCheck,
   serviceCheck, serviceWords, spanText, stampMs, unreadText, overviewTruncatedText, type OverviewFacts, type OverviewJob, type OverviewReadState
@@ -12,6 +12,9 @@ import { factsOfRows } from '../src/renderer/src/agent/AgentOverviewService'
 import type { LiveTable } from '../src/renderer/src/live/LiveService'
 import { connectionInfo, readyBackend, workbenchFixture } from './fixtures/workbench'
 import type { FakeLiveHandle } from './fixtures/live-handle'
+import { agentOverviewFixText, createAgentOverviewFixes } from '../src/renderer/src/agent/agent-overview-fixes'
+import { jobSections } from '../src/renderer/src/agent/JobDocumentService'
+import { selectSection } from '../src/renderer/src/kit/document-frame'
 
 const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
 const cleanups: (() => void)[] = []
@@ -289,5 +292,55 @@ describe('the Agent overview document', () => {
     const before = handle.refreshes
     await fixture.commands.execute('agent.refreshOverview', { tabId: id }, 'toolbar')
     expect(handle.refreshes).toBe(before + 1)
+  })
+})
+
+describe("the Agent overview's fixes", () => {
+  function fixes(commands?: Parameters<typeof createAgentOverviewFixes>[0]['commands'], node = false) {
+    const fixture = workbenchFixture({ agentPreview: true })
+    cleanups.push(() => fixture.dispose())
+    fixture.api.push(readyBackend())
+    fixture.connect(connectionInfo('c1'))
+    const explorer = { agentNodeOf: (connectionId: string) => node && connectionId === 'c1' ? { id: 'agent-node', kind: 'agent', connectionId } as never : fixture.explorer.agentNodeOf(connectionId) }
+    return { fixture, fixes: createAgentOverviewFixes({ ...fixture, explorer, commands: commands ?? (() => fixture.commands) }) }
+  }
+
+  it('opens Job Activity Monitor on Failed, and Change owner for at most the bulk limit, saying so', async () => {
+    const { fixture, fixes: run } = fixes()
+    run.failedJobs('c1')
+    const id = fixture.documents.active!.id
+    expect(fixture.jobActivity.get(id)!.view).toBe('failed')
+    const many = Array.from({ length: 101 }, (_, at) => ({ id: `J${at}`, name: `Job ${at}`, owner: 'old' }))
+    await expect(run.changeOwner('c1', many)).rejects.toThrow(agentOverviewFixText.firstJobs(100, 101))
+    expect(fixture.jobActivity.get(id)!.form).toMatchObject({ verb: 'changeOwner' })
+    expect(fixture.jobActivity.get(id)!.form!.jobs).toHaveLength(100)
+  })
+
+  it("opens the job's Notifications section, Add recommended alerts and the Schedules document", () => {
+    const { fixture, fixes: run } = fixes()
+    run.openJob('c1', 'Nightly', 'notifications')
+    const job = fixture.documents.active!.id
+    const frame = fixture.jobDocuments.get(job)!.frame
+    expect(selectSection(frame, jobSections, 'notifications')).toEqual(frame)
+    run.recommendedAlerts('c1')
+    expect(fixture.operatorsDocuments.get(fixture.documents.active!.id)).toMatchObject({ ask: 'recommended' })
+    run.schedules('c1')
+    expect(fixture.documents.active).toMatchObject({ connectionId: 'c1' })
+    expect(fixture.documents.active!.id).not.toBe(job)
+  })
+
+  it('says why Agent Properties and Start cannot open, and Start says why its command is refused', async () => {
+    const { fixes: run } = fixes()
+    expect(() => run.agentProperties('c1', 'history')).toThrow(agentOverviewFixText.noAgentNode)
+    await expect(run.startAgent('c1')).rejects.toThrow(agentOverviewFixText.noAgentNode)
+    const refused = { isEnabled: () => false, unavailableReason: () => 'Varia starts SQL Server Agent only from Windows.', execute: vi.fn(async () => true) }
+    const { fixes: greyed } = fixes(() => refused, true)
+    await expect(greyed.startAgent('c1')).rejects.toThrow('Varia starts SQL Server Agent only from Windows.')
+    expect(refused.execute).not.toHaveBeenCalled()
+    const failed = { isEnabled: () => true, unavailableReason: () => undefined, execute: vi.fn(async () => false) }
+    await expect(fixes(() => failed, true).fixes.startAgent('c1')).rejects.toThrow(agentOverviewFixText.cannotStart)
+    const started = { isEnabled: () => true, unavailableReason: () => undefined, execute: vi.fn(async () => true) }
+    await fixes(() => started, true).fixes.startAgent('c1')
+    expect(started.execute).toHaveBeenCalledWith('explorer.startAgent', { target: { kind: 'explorer', node: expect.objectContaining({ kind: 'agent' }) } }, 'toolbar')
   })
 })

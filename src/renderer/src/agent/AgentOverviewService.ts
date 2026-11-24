@@ -27,7 +27,7 @@ export interface AgentOverviewFixes {
   readonly agentProperties: (connectionId: string, page?: 'history') => void
   readonly recommendedAlerts: (connectionId: string) => void
   readonly schedules: (connectionId: string) => void
-  readonly startAgent: (connectionId: string) => void
+  readonly startAgent: (connectionId: string) => void | Promise<void>
 }
 
 export interface AgentOverviewState {
@@ -220,7 +220,7 @@ export class AgentOverviewService extends SnapshotStore<AgentOverviewSnapshot> i
         case 'agentProperties': fixes.agentProperties(connectionId, 'history'); break
         case 'recommendedAlerts': fixes.recommendedAlerts(connectionId); break
         case 'schedules': fixes.schedules(connectionId); break
-        case 'startAgent': fixes.startAgent(connectionId); break
+        case 'startAgent': await fixes.startAgent(connectionId); break
       }
     } catch (failure) { this.patch(id, { notice: failure instanceof Error ? failure.message : String(failure) }) }
   }

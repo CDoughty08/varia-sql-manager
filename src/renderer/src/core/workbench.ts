@@ -119,12 +119,11 @@ import { SsisOperationsService } from '../ssis/SsisOperationsService'
 import { JobActivityService } from '../agent/JobActivityService'
 import { LogViewerService } from '../agent/LogViewerService'
 import { AgentJobStatusService } from '../agent/AgentJobStatusService'
-import { JobDocumentService, jobSections } from '../agent/JobDocumentService'
-import { selectSection } from '../kit/document-frame'
+import { JobDocumentService } from '../agent/JobDocumentService'
 import { AlertOperatorDocumentService, alertSpec, operatorSpec, operatorsSpec, type AlertDocumentService, type OperatorDocumentService, type OperatorsDocumentService } from '../agent/AlertOperatorDocumentService'
 import { agentContribution } from '../contributions/agent'
 import { AgentOverviewService } from '../agent/AgentOverviewService'
-import { agentLimits } from '../../../shared/agent/catalog'
+import { createAgentOverviewFixes } from '../agent/agent-overview-fixes'
 import { agentObjectsContribution } from '../contributions/agent-objects'
 import { SchedulesService } from '../agent/SchedulesService'
 import { ProxyDocumentService } from '../agent/ProxyDocumentService'
@@ -606,32 +605,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     recycled: connectionId => { const folder = explorer.folderNode(connectionId, { kind: 'agent' }, 'agentErrorLogs'); if (folder !== undefined) explorer.reconcile(folder) }
   })
   // SQL Server Agent's overview (AG-15): each check's fix runs through the surface that owns it; the overview itself writes nothing.
-  const agentNode = (connectionId: string) => {
-    const node = explorer.agentNodeOf(connectionId)
-    if (!node) throw new Error('Expand the server in Object Explorer until its SQL Server Agent node shows, then try again.')
-    return node
-  }
   const agentOverview = new AgentOverviewService({
     documents, panes, groups: editorGroups, live, connections, targetIdOf,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-overview="${CSS.escape(id)}"] .agent-check button, [data-agent-overview="${CSS.escape(id)}"] .agent-overview-head button`)?.focus()),
-    fixes: {
-      failedJobs: connectionId => { const id = jobActivity.open(connectionId); jobActivity.setView(id, 'failed') },
-      changeOwner: async (connectionId, jobs) => {
-        const id = jobActivity.open(connectionId), first = jobs.slice(0, agentLimits.startJobs)
-        const refused = await jobActivity.openForm(id, 'changeOwner', first.map(job => ({ id: job.id, name: job.name, status: '', lastRun: '', owner: job.owner })))
-        if (refused) throw new Error(refused)
-        if (first.length < jobs.length) throw new Error(`Change owner… opened for the first ${first.length} of ${jobs.length} jobs, as each is its own request; check again once they are done.`)
-      },
-      openJob: (connectionId, name, section) => {
-        const id = jobDocuments.openJob(connectionId, name)
-        const state = jobDocuments.get(id)
-        if (section && state) jobDocuments.setFrame(id, selectSection(state.frame, jobSections, section))
-      },
-      agentProperties: (connectionId, page) => { dialogs.open('agentProperties', agentNode(connectionId)); if (page) dialogs.setPage(page) },
-      recommendedAlerts: connectionId => { const id = operatorsDocuments.open(connectionId, { kind: 'agent' }); operatorsDocuments.setAsk(id, 'recommended') },
-      schedules: connectionId => { schedules.open(connectionId) },
-      startAgent: connectionId => { void commands.execute('explorer.startAgent', { target: { kind: 'explorer', node: agentNode(connectionId) } }, 'toolbar') }
-    }
+    fixes: createAgentOverviewFixes({ jobActivity, jobDocuments, dialogs, operatorsDocuments, schedules, explorer, commands: () => commands })
   })
   const objectSearch = new ObjectSearchService({
     api, documents, connections, settings, targetIdOf, events, agentEnabled: api.agentPreview,
