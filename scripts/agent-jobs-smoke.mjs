@@ -143,7 +143,16 @@ try {
   const afterMenu = await refreshes()
   await page.keyboard.press('F5')
   await expect.poll(refreshes).toBeGreaterThan(afterMenu)
-  console.log('Row menu passed: a right-click on a job opens the monitor\'s own menu, whose Refresh and F5 read the list again.')
+  // The row menu replaces Query Output's menu, not its keys (outputGridFocus): Alt+Down on Status opens that column's filter.
+  await grid().locator(gridPart.cell, { hasText: /^Purge$/ }).click()
+  await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('Alt+ArrowDown')
+  const statusFunnel = page.getByRole('dialog', { name: 'Filter Status', exact: true })
+  await expect(statusFunnel).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(statusFunnel).toHaveCount(0)
+  console.log('Row menu passed: a right-click on a job opens the monitor\'s own menu, whose Refresh and F5 read the list again; Alt+Down still filters a column.')
 
   step = 'change owner'
   // Two jobs selected: Change owner reads the logins, then sends one changeJobOwner per job with its own result line; Escape closes a form.

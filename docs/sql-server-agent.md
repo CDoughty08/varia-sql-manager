@@ -91,8 +91,8 @@ alerts, operators and who is notified, behind the same gate until 0.11.0.
   (AG-9), since a menubar item cannot be gated. The list's row menu (right-click, Shift+F10 or the context-menu
   key; `agent.jobs.context` through MenuService) acts on the selected jobs: Open, Create Job Like This and Script Job as CREATE
   (a new query window, through Object Explorer's Script As) on one job, Start Job, Stop Job, Enable Job and Disable Job as the
-  bar runs them, View History, and Refresh. Copy in the list is the grid's own (Ctrl+C), since the row menu replaces Query
-  Output's.
+  bar runs them, View History, and Refresh. The row menu replaces Query Output's, but the grid keeps Query Output's keys
+  (Ctrl+C, Ctrl+Shift+C, Ctrl+A, Ctrl+S, and Alt+Down for a column's filter).
 - **Job document** (`agentJob`, object actions, docs/object-actions.md). One tab per job ("Job Properties - Nightly"), opened
   from a job's node (Enter, double-click or Properties), from Job Activity Monitor, from Ctrl+Q's object search and from the
   palette's SQL Server Agent: Open Job… (the job selected in Job Activity Monitor or Object Explorer, else a pick of the

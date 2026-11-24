@@ -254,6 +254,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private readonly limits: ExplorerServiceLimits
   private readonly loader: ExplorerLoader
   private readonly nodes = new Map<number, TreeNode>()
+  /** Each connection's Agent node found last (`agentMenuNode`); checked on use, since a node can go. */
+  private readonly agentNodes = new Map<string, number>()
   private readonly states = new Map<number, NodeState>()
   private roots: number[] = []
   private readonly rootByConnection = new Map<string, number>()
@@ -610,8 +612,10 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
    */
   agentMenuNode(connectionId: string, sample?: { readonly state?: number; readonly startup?: number; readonly clustered?: boolean }): ExplorerMenuNode | undefined {
     if (!this.connectionOf(connectionId)) return undefined
-    let found: ExplorerMenuNode | undefined
-    for (const node of this.nodes.values()) if (node.kind === 'agent' && node.connectionId === connectionId && (found = this.menuNode(node.id))) break
+    // The node found last is asked first: a monitor's banner asks again on every tree and status publish.
+    const cached = this.agentNodes.get(connectionId), known = cached === undefined ? undefined : this.nodes.get(cached)
+    let found = known?.kind === 'agent' && known.connectionId === connectionId ? this.menuNode(known.id) : undefined
+    if (!found) for (const node of this.nodes.values()) if (node.kind === 'agent' && node.connectionId === connectionId && (found = this.menuNode(node.id))) { this.agentNodes.set(connectionId, node.id); break }
     const menu = found ?? { ...this.objectNode(connectionId, { kind: 'agent' }, 'SQL Server Agent'), id: 0, agent: this.agentFacts(connectionId) }
     const facts = menu.agent ?? this.agentFacts(connectionId)
     return { ...menu, agent: { ...facts, ...(sample?.state !== undefined ? { state: sample.state } : {}), ...(sample?.startup !== undefined ? { startup: sample.startup } : {}), ...(!facts.clustered && sample?.clustered ? { clustered: true } : {}) } }

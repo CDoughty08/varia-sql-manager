@@ -392,18 +392,33 @@ export class MenuTargetService {
       const tab = element.closest('.dv-tab')?.querySelector('[data-pane-tab], [data-tab-id]')
       const registration = tab && this.providers.get(tab)
       if (registration) return this.hit(registration, tab, element)
-      const output = outputTarget(element)
-      if (!output) return undefined
-      // Keyboard menus open below the grid's active cell, else its first cell.
-      const anchor = output.view !== 'messages' ? gridAnchor(output.element) ?? output.element.querySelector('.rg-c.is-act') ?? output.element.querySelector('.rg-c') ?? undefined : undefined
-      // Without a clicked column the menu is for the anchor's cell: its column, and its row with whether that row has a
-      // possible match, unless a row number was clicked (which keeps its own row and match).
-      const cell = output.column === undefined && anchor ? outputCell(anchor, output.element) : undefined
-      const column = cell?.column, row = output.row === undefined ? cell?.row : undefined
-      const target = column === undefined && row === undefined ? output
-        : { ...output, ...(column !== undefined ? { column } : {}), ...(row !== undefined ? { row, ...(cell?.partner ? { rowHasPartner: true } : {}) } : {}) }
-      return { target, element: output.element, focus: output.element, ...(anchor ? { anchor } : {}) }
+      return this.outputHit(element)
     } catch (error) { onUnexpectedError(error); return undefined }
+  }
+  /**
+   * The Query Output view `element` is in, whatever an outer element's menu: an owner's own menu around a grid (Job Activity
+   * Monitor's row menu) replaces Query Output's menu, not its keys, which find their grid here.
+   */
+  outputFor(element: Element | null): OutputTarget | undefined {
+    if (typeof element?.closest !== 'function') return undefined
+    try {
+      const target = this.outputHit(element)?.target
+      return target?.kind === 'output' ? target : undefined
+    } catch (error) { onUnexpectedError(error); return undefined }
+  }
+
+  private outputHit(element: Element): TargetHit | undefined {
+    const output = outputTarget(element)
+    if (!output) return undefined
+    // Keyboard menus open below the grid's active cell, else its first cell.
+    const anchor = output.view !== 'messages' ? gridAnchor(output.element) ?? output.element.querySelector('.rg-c.is-act') ?? output.element.querySelector('.rg-c') ?? undefined : undefined
+    // Without a clicked column the menu is for the anchor's cell: its column, and its row with whether that row has a
+    // possible match, unless a row number was clicked (which keeps its own row and match).
+    const cell = output.column === undefined && anchor ? outputCell(anchor, output.element) : undefined
+    const column = cell?.column, row = output.row === undefined ? cell?.row : undefined
+    const target = column === undefined && row === undefined ? output
+      : { ...output, ...(column !== undefined ? { column } : {}), ...(row !== undefined ? { row, ...(cell?.partner ? { rowHasPartner: true } : {}) } : {}) }
+    return { target, element: output.element, focus: output.element, ...(anchor ? { anchor } : {}) }
   }
 
   private hit({ provider, focus: registeredFocus }: TargetRegistration, registered: Element, from: Element): TargetHit | null {

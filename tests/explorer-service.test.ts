@@ -268,6 +268,19 @@ describe('ExplorerService: the Agent release gate', () => {
     elsewhere.dispose()
     expect(menu()).toEqual([false, false])
   })
+  it("finds a server's Agent node for Job Activity Monitor's Start without walking the tree again (AG-10)", async () => {
+    const f = fixture({}, true, { windowsClient: true })
+    f.state.agentNode = true
+    f.connect()
+    await settle()
+    const agent = f.find('SQL Server Agent')
+    const connectionId = f.explorer.menuNode(agent)!.connectionId
+    expect(f.explorer.agentMenuNode(connectionId, { state: 1 })).toMatchObject({ id: agent, kind: 'agent', agent: { state: 1 } })
+    // The banner asks on every tree and status publish: the node found last is asked first.
+    const walk = vi.spyOn((f.explorer as unknown as { nodes: Map<number, unknown> }).nodes, 'values')
+    expect(f.explorer.agentMenuNode(connectionId)?.id).toBe(agent)
+    expect(walk).not.toHaveBeenCalled()
+  })
 })
 
 describe('ExplorerService: expanding as the user', () => {

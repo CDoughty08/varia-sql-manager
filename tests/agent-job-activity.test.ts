@@ -480,6 +480,21 @@ describe('Job Activity Monitor\'s Start Agent, F5, View menu and row menu (AG-10
     expect(await fixture.commands.execute('explorer.startAgent', start.args, 'toolbar')).toBe(true)
     expect(fixture.dialogs.current).toMatchObject({ dialog: 'startAgent', connectionId: 'c1', target: { kind: 'agent' } })
   })
+  it('follows the Agent node only while the banner offers Start', () => {
+    const fixture = workbenchFixture({ agentPreview: true, windowsClient: true })
+    cleanups.push(() => fixture.dispose())
+    fixture.api.push(readyBackend())
+    fixture.connect(connectionInfo('c1'))
+    const id = fixture.jobActivity.open('c1')
+    const handle = (fixture.live.handles as FakeLiveHandle[]).find(item => item.spec.probes.some(probe => probe.probe === 'agent.jobs.list'))!
+    handle.deliver({ ...stopped, samples: [{ ...stopped.samples[0], status: [{ id: 'agentXps', value: 1 }, { id: 'serviceState', value: 4 }] }] } as never)
+    expect(fixture.jobActivity.startAgentOffered(id)).toBe(false)
+    handle.deliver({ ...stopped, seq: 2 } as never)
+    expect(fixture.jobActivity.startAgentOffered(id)).toBe(true)
+    // Disabled: the banner says so and offers no Start.
+    handle.deliver({ ...stopped, seq: 3, samples: [{ ...stopped.samples[0], status: [{ id: 'agentXps', value: 1 }, { id: 'serviceState', value: 1 }, { id: 'startupType', value: 4 }] }] } as never)
+    expect(fixture.jobActivity.startAgentOffered(id)).toBe(false)
+  })
   it("greys Start Agent on a failover cluster instance from the monitor's own service probe, with no Object Explorer sample", () => {
     const fixture = workbenchFixture({ agentPreview: true, windowsClient: true })
     cleanups.push(() => fixture.dispose())
@@ -534,6 +549,22 @@ describe('Job Activity Monitor\'s Start Agent, F5, View menu and row menu (AG-10
     grid.select([row(nightly, 'Nightly')])
     await settled()
     for (const command of ['agent.openJob', 'agent.createJobLike'] as const) expect(commands.isEnabled(command, { tabId: id })).toBe(true)
+  })
+  it("decides the row menu's items from the grid's selection at once, before its rows are read", async () => {
+    const { jobActivity, commands } = monitor()
+    const id = jobActivity.open('c1')
+    const grid = new FakeGrid({ newRows: 0, following: true, lost: false })
+    jobActivity.attachGrid(id, grid as unknown as LiveGrid)
+    grid.select([row(nightly, 'Nightly'), row(backup, 'Backup')])
+    await settled()
+    // A right-click on one row selects it just before its menu opens, while the rows are still being read.
+    grid.select([row(nightly, 'Nightly')])
+    expect(jobActivity.get(id)!.selected).toHaveLength(2)
+    expect(jobActivity.selectedCount(id)).toBe(1)
+    for (const command of ['agent.openJob', 'agent.createJobLike', 'agent.scriptJob'] as const) expect(commands.isEnabled(command, { tabId: id })).toBe(true)
+    grid.clear()
+    expect(jobActivity.selectedCount(id)).toBe(0)
+    expect(commands.isEnabled('agent.openJob', { tabId: id })).toBe(false)
   })
   it("lets the monitor's own service reading win for Start, and reads again at once when a start of Agent ends on its connection", () => {
     const fixture = workbenchFixture({ agentPreview: true, windowsClient: true })

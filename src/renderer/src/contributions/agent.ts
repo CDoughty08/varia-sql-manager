@@ -49,7 +49,7 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
   }
   const monitorOf = (args?: CommandArgs): string | undefined => { const id = args?.tabId ?? documents.getSnapshot().activeId; return jobActivity.get(id) ? id : undefined }
   // Run from Job Activity Monitor, a one-job verb (Open, Create Job Like This) needs exactly one job selected there (AG-10, its row menu).
-  const oneInMonitor = (args?: CommandArgs): boolean => { const id = explorerNodeOf(args) ? undefined : monitorOf(args); return !id || jobActivity.get(id)?.selected.length === 1 }
+  const oneInMonitor = (args?: CommandArgs): boolean => { const id = explorerNodeOf(args) ? undefined : monitorOf(args); return !id || jobActivity.selectedCount(id) === 1 }
   // The job document (AG-6a): Open Job and New Job on a server picked as Job Activity Monitor's is, and the document's verbs on the
   // job document whose header runs them, else the active one.
   const withServer = (args: CommandArgs | undefined, title: string, then: (connectionId: string) => void) => {
@@ -179,8 +179,8 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
     // Script Job as CREATE (AG-10, the monitor's row menu): the one job selected there, through Object Explorer's Script As (ScriptingService), which
     // need not have loaded the job's node; it opens a new query window, as Script Job as › CREATE To › New Query Editor Window does.
     commands.register('agent.scriptJob', {
-      when: args => { const id = monitorOf(args), state = id ? jobActivity.get(id) : undefined; return !!scripting && !!state?.connectionId && connections.isLiveSqlServer(state.connectionId) && state.selected.length === 1 },
-      unavailable: args => { const id = monitorOf(args), state = id ? jobActivity.get(id) : undefined; return state && state.selected.length !== 1 ? 'Select one job to script it.' : undefined },
+      when: args => { const id = monitorOf(args), state = id ? jobActivity.get(id) : undefined; return !!scripting && !!state?.connectionId && connections.isLiveSqlServer(state.connectionId) && !!id && jobActivity.selectedCount(id) === 1 },
+      unavailable: args => { const id = monitorOf(args), state = id ? jobActivity.get(id) : undefined; return id && state && jobActivity.selectedCount(id) !== 1 ? 'Select one job to script it.' : undefined },
       run: async args => {
         const monitor = monitorOf(args)
         if (!monitor || !scripting) return

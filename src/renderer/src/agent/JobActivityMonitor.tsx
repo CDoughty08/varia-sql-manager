@@ -90,12 +90,14 @@ function startAgentKey(workbench: StartAgentWorkbench, documentId: string): stri
   const start = workbench.jobActivity.startAgentTarget(documentId)
   return start ? `${workbench.commands.isEnabled('explorer.startAgent', start.args)}|${start.reason ?? ''}|${!!workbench.dialogs.current}` : ''
 }
-function useStartAgentButton(workbench: StartAgentWorkbench, documentId: string): string {
+/** Followed only while the banner offers Start (`offered`): otherwise the tree's and the status's publishes cost nothing here. */
+function useStartAgentButton(workbench: StartAgentWorkbench, documentId: string, offered: boolean): string {
   const subscribe = useCallback((listener: () => void) => {
+    if (!offered) return () => {}
     const stops = [workbench.explorer.subscribe(listener), workbench.explorerStatus.subscribe(listener), workbench.longRuns.subscribe(listener), workbench.dialogs.subscribe(listener)]
     return () => stops.forEach(stop => stop())
-  }, [workbench])
-  const snapshot = () => startAgentKey(workbench, documentId)
+  }, [workbench, offered])
+  const snapshot = () => offered ? startAgentKey(workbench, documentId) : ''
   return useSyncExternalStore(subscribe, snapshot, snapshot)
 }
 
@@ -111,7 +113,8 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
   // Start in the Agent-stopped banner (AG-10) follows the Agent node's service verb and its rules (a Linux server, Varia off Windows, a cluster).
   // A start, stop or restart beginning or ending, a status sample or a dialog opening changes it without changing the monitor's own
   // state: the monitor redraws when the button's enabled state or reason changes, not on every tree or status publish.
-  useStartAgentButton(workbench, documentId)
+  const offered = service.startAgentOffered(documentId)
+  useStartAgentButton(workbench, documentId, offered)
   if (!state || !handle) return <EmptyState className="workspace-empty" icon="agent-activity" title={jobActivityTitle} detail="This document has closed." />
   const probe = live.probes[agentJobsProbe]
   const table = handle.table(agentJobsProbe, 0)
@@ -120,7 +123,7 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
   const end = service.ended(documentId)
   // Tiles, chips and the Status note keep the last reading while lost (it is what the grid shows); the banner and pill wait.
   const availability = service.availability(documentId), shown = service.shownAvailability(documentId)
-  const start = service.startAgentTarget(documentId)
+  const start = offered ? service.startAgentTarget(documentId) : undefined
   const canStart = !!start && workbench.commands.isEnabled('explorer.startAgent', start.args)
   const startWhy = canStart ? undefined : start?.reason ?? (workbench.dialogs.current ? 'Close the open dialog first.' : 'Start SQL Server Agent is not available right now.')
   const banner = agentBanner(shown, state.service, !!start, state.linux)
@@ -209,7 +212,7 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
         }}>
           {unavailable ? <EmptyState icon="agent-activity" title="Job Activity Monitor is not available" detail={unavailable} />
             : <>
-              <LiveGridPane live={handle} probe={agentJobsProbe} label="Jobs" contextMenu={false} toneLabel={toneLabel} filters={filters} state={service.gridState(documentId)} onGrid={grid => service.attachGrid(documentId, grid)} />
+              <LiveGridPane live={handle} probe={agentJobsProbe} label="Jobs" toneLabel={toneLabel} filters={filters} state={service.gridState(documentId)} onGrid={grid => service.attachGrid(documentId, grid)} />
               {rows === 0 && <EmptyState className="agent-jobs-empty" icon="agent-activity"
                 title={filtersOn ? 'No jobs match the filters' : 'No jobs'}
                 detail={filtersOn ? 'Clear the filters to see every job this login can see.' : 'msdb shows this login no SQL Server Agent jobs: a SQLAgentUserRole member sees only the jobs it owns.'}

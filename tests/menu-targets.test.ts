@@ -290,6 +290,22 @@ describe('menu target service', () => {
     unregister()
     expect(service.targetFor(dom(header))).toBeUndefined()
   })
+  it("keeps a live grid's keys under an owner's own menu (Job Activity Monitor's row menu, AG-10)", () => {
+    const doc = fakeDocument(), make = (tag: string, init?: ConstructorParameters<typeof FakeElement>[2]) => new FakeElement(doc, tag, init)
+    const active = make('div', { className: 'rg-c is-act', attributes: { 'aria-colindex': '4' } })
+    const grid = make('div', { attributes: { 'data-output-view': 'live', 'aria-label': 'Jobs' } }).append(active)
+    const owner = make('div').append(grid)
+    make('body').append(owner)
+    const service = new MenuTargetService()
+    const live = { sortable: true, filterable: true } as LiveOutput
+    const unregister = registerLiveOutput(dom(grid), live)
+    service.register(dom(owner), () => ({ kind: 'jobActivity', tabId: 't8' }))
+    // The menu is the owner's; Query Output's keys (Alt+Down, Ctrl+S) still find the grid, with its active column.
+    expect(service.targetFor(dom(active))!.target).toEqual({ kind: 'jobActivity', tabId: 't8' })
+    expect(service.outputFor(dom(active))).toMatchObject({ kind: 'output', view: 'live', live, column: 2 })
+    expect(service.outputFor(dom(owner))).toBeUndefined()
+    unregister()
+  })
   it('reads a text field\'s facts again once it has focus', () => {
     let undo = false
     const doc = fakeDocument(), field = new FakeElement(doc, 'input', { value: 'x' })

@@ -11,7 +11,7 @@ import type { AgentSchedulesModel } from '../../../shared/actions/agent-schedule
 import { agentBulkText, attachPlan, ownerPlan, ownerUnavailable, type BulkJobPlan } from '../../../shared/agent/bulk'
 import { agentLimits } from '../../../shared/agent/catalog'
 import {
-  agentAvailability, agentBulkTitles, agentJobFilterLimits, agentJobTextColumns, agentJobsProbe, agentJobsSource, agentServiceProbe, bulkUnavailable, jobActivityTabName,
+  agentAvailability, agentBanner, agentBulkTitles, agentJobFilterLimits, agentJobTextColumns, agentJobsProbe, agentJobsSource, agentServiceProbe, bulkUnavailable, jobActivityTabName,
   type AgentAvailability, type AgentBulkFormVerb, type AgentBulkVerb, type AgentJobColumnFilter, type AgentJobsArgs, type AgentJobView, type AgentServiceSample
 } from '../../../shared/agent/jobs'
 import { liveProbes } from '../../../shared/live/catalog'
@@ -223,6 +223,12 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
    * object with the same facts), with the monitor's own service reading where the tree has none, and why the verb is greyed (Varia off
    * Windows, a Linux server, Managed Instance, a cluster, a start or stop already running, a Disabled service); undefined without a server.
    */
+  /** Whether the Agent-stopped banner offers Start (Agent stopped, its service not Disabled): only then does the monitor follow the
+   *  Agent node's verb, so the tree's and the status's publishes cost a running monitor nothing. */
+  startAgentOffered(id: string): boolean {
+    const state = this.get(id)
+    return !!state && agentBanner(this.shownAvailability(id), state.service, true, state.linux)?.start === true
+  }
   startAgentTarget(id: string): { readonly args: CommandArgs; readonly reason?: string } | undefined {
     const state = this.get(id)
     if (!state?.connectionId || !this.live(id)) return undefined
@@ -390,6 +396,19 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
     return this.get(id)?.selected ?? []
   }
 
+  /**
+   * How many jobs are selected now, as the grid knows at once (capped at one over the bulk cap). A menu or a button decides
+   * from this, since the selected jobs themselves are read from the rows after a click (a right-click selects its row just
+   * before its menu opens); a verb's run waits for them (`settledSelection`).
+   */
+  selectedCount(id: string): number {
+    const entry = this.grids.get(id)
+    if (!entry) return this.get(id)?.selected.length ?? 0
+    const { table, selection, activeKey } = entry.grid.getSnapshot()
+    if (!table || !selection || activeKey === undefined) return 0
+    return selectionRows(selection, table.descriptor.rowsAvailable, table.descriptor.columns.length, agentLimits.startJobs + 1).length
+  }
+
   private selectionChanged(id: string): void {
     const entry = this.grids.get(id)
     if (!entry) return
@@ -432,8 +451,7 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
     const state = this.get(id)
     if (!state || !this.live(id)) return 'Connect to the server first.'
     if (state.bulk?.running) return 'A bulk action is running in this monitor.'
-    if (state.overCap) return bulkUnavailable(agentLimits.startJobs + 1)
-    return bulkUnavailable(state.selected.length)
+    return bulkUnavailable(this.selectedCount(id))
   }
   canBulk(id: string): boolean { return this.bulkUnavailable(id) === undefined }
 
