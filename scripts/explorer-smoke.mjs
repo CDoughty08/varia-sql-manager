@@ -6,7 +6,7 @@ import { expandExplorerPath, explorerLines, explorerRow, explorerTree, revealExp
 import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.mjs'
 import {
   anyResultGrid, closeDocumentButton, connectDialogWindow, documentFrame, documentTab, gridCell, activeDocumentName, activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, editorTextIn, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
-  explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, explorerDropLine, pressToClose, searchHitApproximate, explorerSublabel, explorerToolbar, itemCount,
+  explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, explorerDropLine, pressToClose, searchHitApproximate, explorerSublabel, explorerToolbar, explorerFilterToolbar, itemCount,
   dependenciesDialog, dependenciesTree, dependencyNode, inspectorTab, localGrid, menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, objectSearchServerOptions, outputView, paneMenuButton, part, peekDefinitionText, peekEditorWidgetHosts, dockPopoutBack, queryEditorText, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, submitConnect, toolbarButton as mainToolbarButton, expectEditorShown, dialogClosed
 } from './fixtures/ui.mjs'
 import { pinStackedResults } from './fixtures/results-pane.mjs'
@@ -54,12 +54,19 @@ const normalized = text => text.replace(/\s+/g, ' ').trim()
 const ordersScript = 'CREATE TABLE [dbo].[Orders](\n\t[Id] [int] NOT NULL\n)\nGO\n'
 const tabs = () => documentTabs(page).getByRole('tab')
 const toolbarButton = name => explorerToolbar(page).getByRole('button', { name, exact: true })
+const filterButton = name => explorerFilterToolbar(page).getByRole('button', { name, exact: true })
 const menu = name => page.getByRole('menu', { name, exact: true })
+const openExplorerMenu = async () => {
+  await paneMenuButton(page, 'explorer').click()
+  const panelMenu = menu('Object Explorer menu')
+  await expect(panelMenu).toBeVisible()
+  return panelMenu
+}
 const searchBox = () => page.getByRole('textbox', { name: 'Search in Object Explorer', exact: true })
-/** With no search text, the closed Search options button and any top-band shortcuts sit between the box and tree. */
+/** With no search text, the closed Search options button, the inline filter/view toolbar and any top-band shortcuts sit between the box and tree. */
 async function tabPastExplorerShortcuts(key) {
   const count = await page.getByRole('group', { name: 'Servers above', exact: true }).getByRole('button').count()
-  for (let step = 0; step < count + 2; step++) await page.keyboard.press(key)
+  for (let step = 0; step < count + 3; step++) await page.keyboard.press(key)
 }
 const backToSearchBox = async () => { await tabPastExplorerShortcuts('Shift+Tab'); await expect(searchBox()).toBeFocused() }
 const searchBoxToTree = async () => { await tabPastExplorerShortcuts('Tab'); await expect(tree()).toBeFocused() }
@@ -198,7 +205,7 @@ try {
   await expect(primaryAction(emptyExplorer)).toHaveText(['Connect to server'])
   await expect(emptyExplorer).toHaveCSS('justify-content', 'center')
   // A toolbar toggle stays visibly selected after hover and focus leave, in both themes and Windows contrast themes.
-  const groupBySchema = toolbarButton('Group by Schema')
+  const groupBySchema = filterButton('Group by Schema')
   const toggleStyle = () => groupBySchema.evaluate(button => {
     const style = getComputedStyle(button)
     return { fill: style.backgroundColor, border: style.borderTopColor, borderStyle: style.borderTopStyle, width: style.borderTopWidth, color: style.color }
@@ -261,10 +268,10 @@ try {
 
   // 2. The Windows tree's keys, type-ahead, and `*`.
   await select('server-a')
-  await expect(toolbarButton('Filter Settings')).toBeDisabled()
-  await expect(toolbarButton('Filter Settings')).toHaveAttribute('title', /Select a folder such as Tables, Views, Databases, or Logins/)
+  await expect(filterButton('Filter Settings')).toBeDisabled()
+  await expect(filterButton('Filter Settings')).toHaveAttribute('title', /Select a folder such as Tables, Views, Databases, or Logins/)
   await press('ArrowDown', 'Databases')
-  await expect(toolbarButton('Filter Settings')).toBeEnabled()
+  await expect(filterButton('Filter Settings')).toBeEnabled()
   await press('ArrowRight', 'Databases')
   await expect(await explorerRow(page, 'server-a', 'Databases')).toHaveAttribute('aria-expanded', 'true')
   await expect(await explorerRow(page, 'server-a', 'Databases', 'System Databases')).toBeVisible()
@@ -373,35 +380,37 @@ try {
   await setStub({ pageDelayMs: 1000, pageSize: 5 })
   await expandExplorerPath(page, 'server-a', 'Databases', 'AppData', 'Tables')
   await expect(explorerTree(page).getByRole('treeitem', { name: /^Loading… \d+ of 120,005$/ })).toBeVisible()
-  await expect(toolbarButton('Stop')).toBeEnabled()
-  await toolbarButton('Stop').click()
+  const stopMenu = await openExplorerMenu()
+  await expect(stopMenu.getByRole('menuitem', { name: 'Stop', exact: true })).toBeEnabled()
+  await stopMenu.getByRole('menuitem', { name: 'Stop', exact: true }).click()
   const stopped = explorerTree(page).getByRole('treeitem', { name: /^Stopped after \d+ of 120,005 items\. Press Enter to continue loading\.$/ })
   await expect(stopped).toBeVisible()
-  await expect(toolbarButton('Stop')).toBeDisabled()
+  const stoppedMenu = await openExplorerMenu()
+  await expect(stoppedMenu.getByRole('menuitem', { name: 'Stop', exact: true })).toBeDisabled()
+  await page.keyboard.press('Escape')
   const before = (await stubCalls()).length
   await stopped.getByRole('button', { name: 'Continue loading', exact: true }).click()
   await expect.poll(async () => (await stubCalls()).length).toBeGreaterThan(before)
   await expect(explorerTree(page).locator(part.explorerProgressRow)).toBeVisible()
-  // Stop by keyboard: it disables itself, and focus moves on to the next enabled button instead of the page.
+  // Stop by keyboard through the header's ⋯ menu: focus returns to ⋯, and Tab moves cleanly through the search row to the tree.
   await expect(tree()).toBeFocused()
-  // The search box (and its toggles) and the header's ⋯ button sit between the toolbar and the tree.
   await backToSearchBox()
   await page.keyboard.press('Shift+Tab')
   await expect(paneMenuButton(page, 'explorer')).toBeFocused()
-  await page.keyboard.press('Shift+Tab')
-  const toolCount = await explorerToolbar(page).getByRole('button').count()
-  for (let step = 0; step < toolCount && await focusedTool() !== 'Stop'; step++) await page.keyboard.press('ArrowRight')
-  expect(await focusedTool()).toBe('Stop')
+  await page.keyboard.press('Enter')
+  const keyboardMenu = menu('Object Explorer menu')
+  await expect(keyboardMenu).toBeVisible()
+  const stopItem = keyboardMenu.getByRole('menuitem', { name: 'Stop', exact: true })
+  await expect(stopItem).toBeEnabled()
+  for (let step = 0; step < 12 && await stopItem.getAttribute('data-active') === null; step++) await page.keyboard.press('ArrowDown')
+  await expect(stopItem).toBeFocused()
   await page.keyboard.press('Enter')
   await expect(stopped).toBeVisible()
-  await expect(toolbarButton('Stop')).toBeDisabled()
-  await expect.poll(focusedTool).toBe('Filter Settings')
-  await page.keyboard.press('Tab')
   await expect(paneMenuButton(page, 'explorer')).toBeFocused()
   await page.keyboard.press('Tab')
   await expect(searchBox()).toBeFocused()
   await searchBoxToTree()
-  console.log('Object Explorer checks: folders load only when expanded, collapsing cancels a running load, Stop (by mouse and by keyboard, which keeps focus in the toolbar) shows how far a folder got, and Enter continues.')
+  console.log('Object Explorer checks: folders load only when expanded, collapsing cancels a running load, Stop (from the panel menu by mouse and keyboard) shows how far a folder got, and Enter continues.')
 
   // 4. F5 in the tree reconciles the selected folder: rows still there keep their row, and what is expanded below them
   // stays expanded and reloads too; the live region says what changed.
@@ -558,8 +567,8 @@ try {
   expect(await active()).toMatchObject({ label: 'Tables', selected: 'true' })
   expect(await activeInView()).toBe(true)
   await refreshTo('tables', ['server-a', 'Databases', 'AppData', 'Tables'], ['dbo.Orders', 'dbo.table1', 'dbo.table2'])
-  await expect(toolbarButton('Filter Settings')).toBeEnabled()
-  await toolbarButton('Filter Settings').click()
+  await expect(filterButton('Filter Settings')).toBeEnabled()
+  await filterButton('Filter Settings').click()
   const filterDialog = page.getByRole('dialog', { name: 'Filter Settings – Tables', exact: true })
   await expect(filterDialog).toBeVisible()
   await expect(filterDialog.getByLabel('Name value', { exact: true })).toBeFocused()
@@ -567,7 +576,7 @@ try {
   await expect(filterDialog).toHaveCount(0)
   await expect(tree()).toBeFocused()
   const filterFrom = (await stubCalls()).length
-  await toolbarButton('Filter Settings').click()
+  await filterButton('Filter Settings').click()
   await expect(filterDialog.getByLabel('Name operator', { exact: true })).toHaveValue('contains')
   await filterDialog.getByLabel('Creation Date operator', { exact: true }).selectOption('between')
   await filterDialog.getByLabel('Creation Date', { exact: true }).fill('2026-02-01')
@@ -586,7 +595,7 @@ try {
   const tablesRow = await explorerRow(page, 'server-a', 'Databases', 'AppData', 'Tables')
   await expect(tablesRow).toHaveAttribute('aria-label', 'Tables (filtered)')
   await expect(tablesRow.locator(part.explorerFiltered)).toHaveText('(filtered)')
-  await expect(toolbarButton('Filter Settings').locator('.codicon-filter-filled')).toHaveCount(1)
+  await expect(filterButton('Filter Settings').locator('.codicon-filter-filled')).toHaveCount(1)
   // The filtered first page replaces the old rows, dbo.Orders's included.
   await expect.poll(async () => (await childLabels('server-a', 'Databases', 'AppData', 'Tables')).filter(label => label.startsWith('dbo.'))).toEqual(['dbo.Orders'])
   await expect(await explorerRow(page, 'server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders')).toBeVisible()
@@ -997,8 +1006,8 @@ try {
   await select('server-a', 'Databases', 'AppData', 'Tables')
   await refreshTo('tables', ['server-a', 'Databases', 'AppData', 'Tables'], ['dbo.Orders', 'dbo.table1', 'dbo.table2'])
   const serverRow = await explorerRow(page, 'server-a'), tablesFolder = await explorerRow(page, 'server-a', 'Databases', 'AppData', 'Tables')
-  // Servers are 30 px rows with their version and login in brief and a filled dot; other rows are 22 px, in 13 px text.
-  expect(await serverRow.evaluate(row => row.getBoundingClientRect().height)).toBe(30)
+  // Servers are 44 px 2-line bands with their version and login in brief and a filled dot; other rows are 22 px, in 13 px text.
+  expect(await serverRow.evaluate(row => row.getBoundingClientRect().height)).toBe(44)
   expect(await tablesFolder.evaluate(row => row.getBoundingClientRect().height)).toBe(22)
   await expect(explorerLabel(tablesFolder)).toHaveCSS('font-size', '13px')
   await expect(explorerSublabel(serverRow)).toHaveText('16.0 · sa')
@@ -1165,8 +1174,11 @@ try {
   }
   await typesButton.click()
   await page.locator(part.explorerSearch).evaluate(element => { element.style.width = '220px' })
-  const fieldWidth = (await explorerSearchField(page).boundingBox()).width
-  await expect.poll(async () => (await typePicker.boundingBox()).width).toBeCloseTo(fieldWidth, 0)
+  const filterRowWidth = await page.locator(part.explorerSearchFilters).evaluate(element => {
+    const style = getComputedStyle(element)
+    return element.getBoundingClientRect().width - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+  })
+  await expect.poll(async () => (await typePicker.boundingBox()).width).toBeCloseTo(filterRowWidth, 0)
   await page.screenshot({ path: resolve('artifacts', 'explorer-search-filters.png') })
   await filter('Columns').check()
   await filter('Functions').check()
@@ -1717,7 +1729,7 @@ try {
       tag.append(pill)
       return { tag, pill, label }
     }
-    const end = row.querySelector(part.explorerEnd), name = row.querySelector(part.explorerLabel), style = getComputedStyle(row), token = name => parseFloat(style.getPropertyValue(name))
+    const top = row.querySelector(part.explorerServerTop), end = top.querySelector(part.explorerEnd), name = top.querySelector(part.explorerLabel), style = getComputedStyle(top), rowStyle = getComputedStyle(row)
     const width = element => element.getBoundingClientRect().width
     const outer = element => { const box = getComputedStyle(element); return width(element) + parseFloat(box.marginLeft) + parseFloat(box.marginRight) }
     /** An element's width out of the row's flow, sized by its own text alone. */
@@ -1731,22 +1743,20 @@ try {
     // What the pill needs, and what the server's name needs.
     const needed = unconstrained(make(text).pill), nameNeeded = unconstrained(name.cloneNode(true))
     // The cap, as the rule gives it (cqw is a share of the row's content box) and as the longest label a profile takes
-    // meets it.
+    // meets it. On the 2-line server band, the active-query glyph lives on Line 2 so Line 1's tag uses the full 40cqw cap.
     const widest = make('W'.repeat(32))
     end.prepend(widest.tag)
-    const content = width(row) - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
-    const glyph = row.querySelector(part.explorerActive) ? token('--varia-glyph-sm') + token('--varia-space-1') : 0
-    const rule = Math.min(0.4 * content - glyph, 12 * parseFloat(getComputedStyle(widest.tag).fontSize))
-    // The room the name's share leaves the tag: the row's content less what comes before the name (fixed: indent, chevron,
-    // icon), the name's share, the gaps around the sublabel (which gives way to nothing first), the end's padding, and the
-    // end's other parts (the active query's glyph, the dot) with their gaps.
+    const content = width(row) - parseFloat(rowStyle.paddingLeft) - parseFloat(rowStyle.paddingRight)
+    const rule = Math.min(0.4 * content, 12 * parseFloat(getComputedStyle(widest.tag).fontSize))
+    // The room the name's share leaves the tag on Line 1: Line 1's width less what comes before the name (chevron, icon),
+    // the name's share, the gap to the end, the end's padding, and the end's other parts (the dot) with their gaps.
     const share = Math.min(0.35 * content, 10 * parseFloat(getComputedStyle(name).fontSize)), kept = Math.min(nameNeeded, share)
-    const inFlow = [...row.children].filter(element => getComputedStyle(element).position !== 'absolute'), from = inFlow.indexOf(name), to = inFlow.indexOf(end)
+    const inFlow = [...top.children].filter(element => getComputedStyle(element).position !== 'absolute'), from = inFlow.indexOf(name), to = inFlow.indexOf(end)
     const gap = parseFloat(style.columnGap), endStyle = getComputedStyle(end), endGap = parseFloat(endStyle.columnGap)
-    const before = name.getBoundingClientRect().left - row.getBoundingClientRect().left - parseFloat(style.paddingLeft)
-    const between = inFlow.slice(from + 1, to).reduce((sum, element) => sum + (element.matches(part.explorerSublabel) ? 0 : outer(element)), gap * (to - from))
+    const before = name.getBoundingClientRect().left - top.getBoundingClientRect().left
+    const between = inFlow.slice(from + 1, to).reduce((sum, element) => sum + outer(element), gap * (to - from))
     const others = [...end.children].filter(element => element !== widest.tag).reduce((sum, element) => sum + outer(element) + endGap, 0)
-    const room = content - before - kept - between - parseFloat(endStyle.paddingLeft) - others
+    const room = width(top) - before - kept - between - parseFloat(endStyle.paddingLeft) - others
     const limit = Math.min(rule, room)
     const cap = width(widest.pill), capped = widest.label.scrollWidth > widest.label.clientWidth, nameAtCap = width(name)
     widest.tag.remove()
@@ -1815,7 +1825,7 @@ try {
   await press('Home', 'server-a')
   const cancelledBefore = (await cancels()).length
   const tabsBeforeDisconnect = await tabs().count()
-  await toolbarButton('Disconnect').click()
+  await (await openExplorerMenu()).getByRole('menuitem', { name: 'Disconnect', exact: true }).click()
   const disconnectA = page.getByRole('dialog', { name: 'Disconnect server-a?', exact: true })
   await expect(disconnectA).toBeVisible()
   await expect(disconnectA.getByRole('list', { name: 'Affected query tabs', exact: true })).toContainText(serverAQuery)
@@ -1826,8 +1836,9 @@ try {
   const disconnected = serverRows(page).filter({ hasText: 'server-a' })
   await expect(disconnected).toHaveAttribute('aria-label', 'server-a (Disconnected)')
   await expect(disconnected).not.toHaveAttribute('aria-expanded')
-  await expect(toolbarButton('Reconnect…')).toBeEnabled()
-  await toolbarButton('Remove from Explorer').click()
+  const disconnectedMenu = await openExplorerMenu()
+  await expect(disconnectedMenu.getByRole('menuitem', { name: 'Reconnect…', exact: true })).toBeEnabled()
+  await disconnectedMenu.getByRole('menuitem', { name: 'Remove from Explorer', exact: true }).click()
   // Removing the already-disconnected root needs no tab/session preflight; Keep Tabs retained its target offscreen.
   await expect(page.getByRole('dialog', { name: 'Disconnect server-a?', exact: true })).toHaveCount(0)
   await expect(tabs()).toHaveCount(tabsBeforeDisconnect)
@@ -1887,12 +1898,19 @@ try {
       const icon = row.querySelector(part.explorerIcon).getBoundingClientRect(), label = row.querySelector(part.explorerLabel).getBoundingClientRect()
       return Math.abs((icon.top + icon.bottom) / 2 - (label.top + label.bottom) / 2)
     })
-    // A sublabel only takes the space its label leaves, so a label is never cut short while its sublabel still shows.
+    // A single-line row's sublabel only takes the space its label leaves, so a label is never cut short while its sublabel still shows.
     const clipped = [...document.querySelectorAll(part.explorerTree + ' [role="treeitem"]')].filter(row => {
       const label = row.querySelector(part.explorerLabel), sublabel = row.querySelector(part.explorerSublabel)
-      return label && sublabel && sublabel.getBoundingClientRect().width > 0 && label.scrollWidth > label.clientWidth
+      return label && sublabel && label.parentElement === sublabel.parentElement && sublabel.getBoundingClientRect().width > 0 && label.scrollWidth > label.clientWidth
     }).map(row => row.getAttribute('aria-label'))
-    return { toolbar: { left: toolbar.left, right: toolbar.right, top: toolbar.top, bottom: toolbar.bottom }, width: innerWidth, height: innerHeight, scrollWidth: document.documentElement.scrollWidth, scrollHeight: document.documentElement.scrollHeight, offsets: rows, clipped }
+    // Horizontal seam alignment across the dock splitter: Row 1 (.explorer-header) matches Document Tabs; Row 2 (.object-search-bar) matches QueryBar.
+    const seams = {
+      header: Math.round(document.querySelector(part.explorerHeader).getBoundingClientRect().height),
+      tabs: Math.round(document.querySelector(part.documentTabs).getBoundingClientRect().height),
+      searchBar: Math.round(document.querySelector(part.explorerSearchBar).getBoundingClientRect().height),
+      queryBar: Math.round(document.querySelector(part.queryBar).getBoundingClientRect().height)
+    }
+    return { toolbar: { left: toolbar.left, right: toolbar.right, top: toolbar.top, bottom: toolbar.bottom }, width: innerWidth, height: innerHeight, scrollWidth: document.documentElement.scrollWidth, scrollHeight: document.documentElement.scrollHeight, offsets: rows, clipped, seams }
   }, part)
   expect(layout.toolbar.left).toBeGreaterThanOrEqual(0)
   expect(layout.toolbar.right).toBeLessThanOrEqual(layout.width)
@@ -1902,9 +1920,13 @@ try {
   expect(layout.offsets.length).toBeGreaterThan(5)
   expect(Math.max(...layout.offsets)).toBeLessThanOrEqual(1)
   expect(layout.clipped).toEqual([])
-  for (const name of ['Connect Object Explorer', 'Disconnect', 'Stop', 'Filter Settings', 'Refresh', 'Collapse All']) await expect(toolbarButton(name)).toBeInViewport()
+  expect(layout.seams.header).toBe(layout.seams.tabs)
+  expect(layout.seams.searchBar).toBe(layout.seams.queryBar)
+  for (const name of ['Connect Object Explorer', 'Refresh', 'Collapse All']) await expect(toolbarButton(name)).toBeInViewport()
+  for (const name of ['Filter Settings', 'Group by Schema']) await expect(filterButton(name)).toBeInViewport()
+  await expect((await explorerRow(page, 'server-b', 'Databases', 'AppData', 'Tables', 'dbo.Orders', 'Columns', 'Id')).locator(part.explorerPkBadge)).toHaveText('PK')
   await page.screenshot({ path: resolve('artifacts', 'explorer-1024.png') })
-  // Drag the dock to its minimum, where the title, all eight tools and the move menu must still be reachable.
+  // Drag the dock to its minimum (200 px), where the header stays on one flush row with its title, three primary tools and ⋯ menu reachable.
   const explorerPane = page.locator(part.explorerPane), paneMenu = paneMenuButton(page, 'explorer')
   const explorerTitle = explorerPane.getByText('Object Explorer', { exact: true })
   const explorerWidth = async () => Math.round((await explorerPane.boundingBox()).width)
@@ -1922,11 +1944,13 @@ try {
   await resizeExplorer(180)
   await expect.poll(explorerWidth).toBe(200)
   const paneBox = await explorerPane.boundingBox(), titleBox = await explorerTitle.boundingBox(), moveMenu = await paneMenu.boundingBox()
+  const headerHeight = Math.round((await page.locator(part.explorerHeader).boundingBox()).height)
   const toolBoxes = await explorerToolbar(page).getByRole('button').evaluateAll(buttons => buttons.map(button => button.getBoundingClientRect().toJSON()))
-  expect(toolBoxes).toHaveLength(8)
+  expect(toolBoxes).toHaveLength(3)
+  expect(headerHeight).toBe(layout.seams.tabs)
   expect(await explorerTitle.evaluate(label => label.scrollWidth <= label.clientWidth)).toBe(true)
   expect(titleBox.y).toBeLessThan(moveMenu.y + moveMenu.height)
-  expect(toolBoxes.every(tool => tool.x >= paneBox.x && tool.right <= paneBox.x + paneBox.width && tool.y >= moveMenu.y + moveMenu.height)).toBe(true)
+  expect(toolBoxes.every(tool => tool.x >= paneBox.x && tool.right <= moveMenu.x + 1 && tool.y < moveMenu.y + moveMenu.height)).toBe(true)
   expect(moveMenu.x + moveMenu.width).toBeLessThanOrEqual(paneBox.x + paneBox.width)
   await paneMenu.click()
   await expect(paneMenu).toHaveAttribute('aria-expanded', 'true')
@@ -1998,17 +2022,17 @@ try {
     expect(sample.rowY + sample.top).toBeCloseTo(fixed.rowY + fixed.top, 4)
   }
   const thirdTop = middle - 260, end = fixed.scrollHeight - fixed.height
-  const thresholds = [0, 1, 29, 30, 31, thirdTop - 60, thirdTop - 52, end - 30, end]
+  const thresholds = [0, 1, 43, 44, 45, thirdTop - 88, thirdTop - 110, end - 44, end]
   const positions = [...new Set(thresholds.flatMap(top => [top - 1, top - 0.5, top, top + 0.5, top + 1]).filter(top => top >= 0 && top <= end))].sort((a, b) => a - b)
   for (const top of [...positions, ...positions.toReversed()]) checkGeometry(await sampleScroll(top))
-  await sampleScroll(29)
+  await sampleScroll(43)
   const scrollBox = await tree().boundingBox()
   await page.mouse.move(scrollBox.x + 40, scrollBox.y + scrollBox.height / 2)
   await page.mouse.wheel(0, 4)
-  await expect.poll(async () => (await scrollGeometry()).top).toBeGreaterThan(29)
+  await expect.poll(async () => (await scrollGeometry()).top).toBeGreaterThan(43)
   checkGeometry(await scrollGeometry())
   await page.mouse.wheel(0, -4)
-  await expect.poll(async () => (await scrollGeometry()).top).toBeLessThan(33)
+  await expect.poll(async () => (await scrollGeometry()).top).toBeLessThan(47)
   checkGeometry(await scrollGeometry())
   // The pinned overlay ends before the native gutter, so the same thumb remains under the pointer throughout a drag.
   await sampleScroll(0)
@@ -2026,7 +2050,7 @@ try {
     }
   } finally { await page.mouse.up() }
   // Assert a real drag moved the thumb, rather than merely checking a tree that never scrolled.
-  expect(draggedTo).toBeGreaterThan(30)
+  expect(draggedTo).toBeGreaterThan(44)
   const scrollToMiddle = () => tree().evaluate((element, top) => { element.scrollTop = top }, middle)
   await scrollToMiddle()
   const upper = page.getByRole('group', { name: 'Servers above', exact: true })
@@ -2095,9 +2119,9 @@ try {
   }
   // Four pending servers used to leave a partial third shortcut above "2 more below" if a wheel step or scrollbar
   // drag stopped mid-rollover. Check the actual button rectangles, not only which shortcuts are in the DOM.
-  await tree().evaluate(element => { element.parentElement.style.flex = 'none'; element.parentElement.style.height = '300px' })
-  await expect.poll(() => tree().evaluate(element => element.clientHeight)).toBe(300)
-  const bottomRollover = thirdTop + 30 - 300 + 64
+  await tree().evaluate(element => { element.parentElement.style.flex = 'none'; element.parentElement.style.height = '360px' })
+  await expect.poll(() => tree().evaluate(element => element.clientHeight)).toBe(360)
+  const bottomRollover = thirdTop + 44 - 360 + 88
   for (const top of [bottomRollover - 11, bottomRollover, bottomRollover + 11, bottomRollover, bottomRollover - 11]) {
     await sampleScroll(top)
     await expect(lower.getByRole('button', { name: /^Jump to/ })).toHaveCount(2)
@@ -2109,8 +2133,8 @@ try {
         return { top: row.top - box.top, height: row.height, bottom: row.bottom - box.top }
       }) }
     })
-    expect(shape).toEqual({ height: 82, buttons: [{ top: 0, height: 30, bottom: 30 }, { top: 30, height: 30, bottom: 60 }, { top: 60, height: 22, bottom: 82 }] })
-    expect(await tree().evaluate(element => element.clientHeight)).toBe(300)
+    expect(shape).toEqual({ height: 110, buttons: [{ top: 0, height: 44, bottom: 44 }, { top: 44, height: 44, bottom: 88 }, { top: 88, height: 22, bottom: 110 }] })
+    expect(await tree().evaluate(element => element.clientHeight)).toBe(360)
   }
   await lower.screenshot({ path: resolve('artifacts', 'explorer-pins-bottom-whole-rows.png') })
   await tree().evaluate(element => { element.parentElement.style.removeProperty('flex'); element.parentElement.style.removeProperty('height') })

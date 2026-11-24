@@ -215,24 +215,24 @@ try {
       countInside: !!value && value.getBoundingClientRect().right <= chips.getBoundingClientRect().right + 0.5
     }
   }, part)
-  // Short of room, each row's name keeps exactly its share (whole where its text fits it) and the chips take all the room
+  // Short of room on a 1-line row, the name keeps its share (whole where its text fits it) and the chips take all the room
   // that share leaves, up to what they need, so no empty space is left while they give way; a chip's word gives way
-  // before its count, which is whole wherever that room holds it with its glyph. Which rows are short depends on the font:
-  // in Segoe UI both names fit their share and the database row has room for RESTORING 42 %; Linux's DejaVu Sans sets
-  // status-server past its share of a 278 px row, and RESTORING a few pixels past what AppData leaves it.
+  // before its count, which is whole wherever that room holds it with its glyph. On the 2-line server band, Line 1 keeps
+  // the server name, PROD and the dot unclipped, while Line 2 gives live chips dedicated room beside the sublabel.
   await expect(statusChips(appData).first()).toHaveText('RESTORING 42 %')
   await expect(statusChips(statusServer).first().locator(part.statusPillValue)).toHaveText('2')
-  for (const [row, which] of [[appData, 'AppData'], [statusServer, 'status-server']]) {
-    const room = await fit(row), message = `${which}: ${JSON.stringify(room)}; server row: ${layout}`
-    expect(room.chips, message).toBeCloseTo(Math.min(room.chipsNeeded, room.room), 0)
-    if (room.room < room.chipsNeeded) expect(room.name, message).toBeCloseTo(room.kept, 0)
-    else expect(room.name, message).toBeGreaterThan(room.kept - 0.5)
-    if (room.room >= room.countNeeds) expect(room.countInside, message).toBe(true)
-  }
-  // The database row's count is whole in any font. The server row is short of room (its name, the chips, PROD, the active
-  // query's glyph and the dot): the jobs chip's word gives way, and PROD and the dot stay whole.
+  const appRoom = await fit(appData), appMessage = `AppData: ${JSON.stringify(appRoom)}; server row: ${layout}`
+  expect(appRoom.chips, appMessage).toBeCloseTo(Math.min(appRoom.chipsNeeded, appRoom.room), 0)
+  if (appRoom.room < appRoom.chipsNeeded) expect(appRoom.name, appMessage).toBeCloseTo(appRoom.kept, 0)
+  else expect(appRoom.name, appMessage).toBeGreaterThan(appRoom.kept - 0.5)
+  if (appRoom.room >= appRoom.countNeeds) expect(appRoom.countInside, appMessage).toBe(true)
+  // Both rows' counts stay whole, and the 2-line server band keeps chips inside Line 2 and PROD + dot whole on Line 1.
   expect(await shown(statusChips(appData).first().locator(part.statusPillValue), part.explorerChips), layout).toBe(true)
-  expect(await statusChips(statusServer).first().locator(part.statusPillLabel).evaluate(label => label.scrollWidth > label.clientWidth), layout).toBe(true)
+  expect(await shown(statusChips(statusServer).first().locator(part.statusPillValue), part.explorerChips), layout).toBe(true)
+  expect(await statusServer.evaluate((row, part) => {
+    const sub = row.querySelector(part.explorerServerSub), chips = sub?.querySelector(part.explorerChips)
+    return !!sub && !!chips && chips.getBoundingClientRect().right <= sub.getBoundingClientRect().right + 0.5
+  }, part), layout).toBe(true)
   const prod = environmentPill(statusServer, 'explorer')
   await expect(prod).toHaveText('PROD')
   expect([await shown(prod.locator(part.statusPillLabel), part.explorerRow), await shown(statusServer.locator(part.explorerDot), part.explorerRow)], layout).toEqual([true, true])

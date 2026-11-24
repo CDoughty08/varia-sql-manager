@@ -43,15 +43,16 @@ const twoServers = tree([
 ])
 
 describe('Object Explorer outline', () => {
+  const total = ciTree.at(-1)!.top + ciTree.at(-1)!.height
   it('lays the fixture trees out as the tree does', () => {
-    expect(ciTree.at(-1)!.top + ciTree.at(-1)!.height).toBe(1020)
+    expect(total).toBe(1034)
     expect(rendered(ciTree, 467, 553).map(row => row.label).slice(0, 2)).toEqual(['Graph Tables', 'Dropped Ledger Tables'])
   })
 
   it('finds a row whose server is out of the rendered window through an outline read from the top', () => {
     const path = ['server-a', 'Security'], security = ciTree.find(row => row.level === 2 && row.label === 'Security')!
     // No window holds both server-a and its Security, so a match within one window's rows (as explorerRow made) never finds it.
-    const windows = [467, 0, 276, 552].map(top => rendered(ciTree, Math.min(top, 1020 - 553), 553))
+    const windows = [467, 0, 276, 552].map(top => rendered(ciTree, Math.min(top, total - 553), 553))
     expect(windows.map(rows => findExplorerPath(rows, path))).toEqual([undefined, undefined, undefined, undefined])
     expect(findExplorerPath(explorerOutline(windows), path)).toEqual(security)
     // The CI window alone, or windows that leave a gap between server-a and Security, never match.
@@ -88,8 +89,8 @@ describe('Object Explorer outline', () => {
   })
 
   it('knows when the rendered rows cover the viewport', () => {
-    expect(explorerCovers(rendered(ciTree, 467, 553), 467, 1020)).toBe(true)
+    expect(explorerCovers(rendered(ciTree, 481, 553), 481, total)).toBe(true)
     // A stale window from the top, with the selected row rendered below it, does not cover the bottom.
-    expect(explorerCovers(rendered(ciTree, 0, 553, ciTree.at(-1)!.id), 467, 1020)).toBe(false)
+    expect(explorerCovers(rendered(ciTree, 0, 553, ciTree.at(-1)!.id), 481, total)).toBe(false)
   })
 })

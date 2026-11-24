@@ -242,7 +242,7 @@ describe('context keys', () => {
     expect(contextRecord('linux', { explorerNode: 'table', paneFloating: true })).toMatchObject({ explorerNode: 'table', outputView: '', paneFloating: true })
     expect(keysOfScope('target')).toEqual([
       'explorerNode', 'explorerServerLost', 'explorerFolderFilterable', 'explorerFolderFiltered', 'explorerFolder', 'explorerNodePeekable', 'explorerNodeDependencies', 'explorerFolderInsertable', 'explorerNodeNameless', 'explorerNodeStatus', 'explorerServerEngine', 'explorerServerLinux', 'explorerProvider', 'agentRole',
-      'outputView', 'outputGridTransposable', 'outputGridBare', 'outputLiveFilterable', 'outputLiveRows', 'outputLiveSortable', 'pane', 'paneFloating', 'panePopout', 'documentTabFloating', 'searchHitSchema', 'searchHitBigQuery', 'outputGridComparison'
+      'outputView', 'outputGridTransposable', 'outputGridBare', 'outputLiveFilterable', 'outputLiveRows', 'outputLiveSortable', 'pane', 'paneFloating', 'panePopout', 'explorerToolsLost', 'explorerToolsFloating', 'explorerToolsPopout', 'documentTabFloating', 'searchHitSchema', 'searchHitBigQuery', 'outputGridComparison'
     ])
     expect(isContextKey('__proto__')).toBe(false)
     expect(isContextKey('constructor')).toBe(false)
