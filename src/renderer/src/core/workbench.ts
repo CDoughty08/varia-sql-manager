@@ -616,7 +616,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-peek-tab="${CSS.escape(id)}"] [role="tab"][aria-selected="true"]`)?.focus())
   })
   const bigQueryProperties = new BigQueryPropertiesService({
-    api, documents, focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-bigquery-properties="${CSS.escape(id)}"] [role="region"]`)?.focus())
+    api, documents, connections, results, scriptingOptions,
+    billedGate: (connectionId, estimate, signal) => bigQueryCost.beforeScript(connectionId, estimate, signal),
+    focus: id => focusLater(() => {
+      const root = document.querySelector<HTMLElement>(`[data-bigquery-properties="${CSS.escape(id)}"]`)
+      ;(root?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? root?.querySelector<HTMLElement>('button'))?.focus()
+    })
   })
   const inspector = new InspectorService({ api, platform })
   const editorPeek = new EditorPeekService({ sqlLanguage, connections, scripting, peek, peekTabs })

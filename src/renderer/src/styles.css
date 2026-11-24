@@ -3977,3 +3977,39 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
   .agent-several-cell[data-changed] { border-left-color: Highlight; }
   .agent-several-details .link-button, .agent-several-results .link-button, .agent-several-table .link-button { color: LinkText; }
 }
+/* BigQuery Properties inspector (OP-2b): surface-specific pills, flow section headers, fill toolbars and label chips. */
+.bq-props-pills { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); min-width: 0; }
+.bq-props-flow { display: flex; flex-direction: column; gap: var(--varia-space-4); }
+.bq-props-subhead { margin: 0 0 var(--varia-space-2); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.bq-props-description { margin: 0; color: var(--varia-foreground); font-size: var(--varia-size-sm); line-height: var(--varia-line-md); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.bq-props-muted { margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.bq-props-fill-toolbar { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-4); border-bottom: 1px solid var(--varia-panel-border); background: var(--varia-editor-background); }
+.bq-props-toolbar-title { color: var(--varia-foreground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); font-weight: 600; }
+.bq-props-toolbar-meta { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bq-props-toolbar-spacer { flex: 1 1 0; min-width: var(--varia-space-1); }
+.bq-props-tool-btn { display: inline-flex; align-items: center; gap: var(--varia-space-1); height: 24px; padding: 0 var(--varia-space-2); border: 1px solid transparent; border-radius: var(--varia-radius-sm); background: transparent; color: var(--varia-button-secondaryForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); white-space: nowrap; }
+.bq-props-tool-btn.outline { border-color: var(--varia-button-border); }
+.bq-props-tool-btn:hover:not(:disabled) { background: var(--varia-button-secondaryHoverBackground); color: var(--varia-button-secondaryHoverForeground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease), color var(--varia-motion-fast) var(--varia-motion-ease); }
+.bq-props-tool-btn:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; transition: none; }
+.bq-props-search { display: inline-flex; align-items: center; gap: var(--varia-space-1); width: min(260px, 100%); height: 24px; padding: 0 var(--varia-space-2); border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); background: var(--varia-input-background); color: var(--varia-input-placeholderForeground); }
+.bq-props-search:focus-within { border-color: var(--varia-focusBorder); }
+.bq-props-search input { flex: 1; min-width: 0; border: 0; padding: 0; background: transparent; color: var(--varia-input-foreground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+.bq-props-search input:focus-visible { outline: none; }
+.bq-props-notice { flex: none; display: flex; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-4); border-bottom: 1px solid var(--varia-panel-border); background: var(--varia-panel-background); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+.bq-props-center { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; align-items: center; justify-content: safe center; gap: var(--varia-space-3); padding: var(--varia-space-5) var(--varia-space-4); }
+.bq-props-loading-row { display: inline-flex; align-items: center; gap: var(--varia-space-2); margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.bq-props-empty-note { flex: none; margin: 0; padding: var(--varia-space-2) var(--varia-space-4); border-top: 1px solid var(--varia-panel-border); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+.bq-props-labels-head { display: flex; align-items: center; justify-content: space-between; gap: var(--varia-space-2); }
+.bq-props-labels-head > .bq-props-subhead { margin: 0; }
+.bq-label-chips { display: flex; flex-wrap: wrap; gap: var(--varia-space-2); margin: 0; padding: 0; list-style: none; }
+.bq-label-chip { display: inline-flex; align-items: stretch; max-width: 100%; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); overflow: hidden; font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+.bq-label-key { padding: var(--varia-space-1) var(--varia-space-2); background: var(--varia-panel-background); color: var(--varia-descriptionForeground); border-right: 1px solid var(--varia-panel-border); overflow-wrap: anywhere; user-select: text; }
+.bq-label-val { padding: var(--varia-space-1) var(--varia-space-2); background: var(--varia-editor-background); color: var(--varia-foreground); overflow-wrap: anywhere; user-select: text; }
+.bq-label-copy { display: inline-flex; align-items: center; justify-content: center; width: 22px; padding: 0; border: 0; border-left: 1px solid var(--varia-sideBarSectionHeader-border); border-radius: 0; background: var(--varia-editor-background); color: var(--varia-descriptionForeground); }
+.bq-label-copy:hover:not(:disabled) { background: var(--varia-button-secondaryHoverBackground); color: var(--varia-button-secondaryHoverForeground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
+.bq-label-copy:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; transition: none; }
+.bq-label-copy.copied { color: var(--varia-successForeground); transition: none; }
+@media (forced-colors: active) {
+  .bq-label-chip, .bq-props-search { border-color: CanvasText; }
+  .bq-props-tool-btn.outline { border-color: ButtonText; }
+}
