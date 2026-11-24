@@ -162,14 +162,14 @@ export interface LogViewerCommandEntry {
 }
 const openViewer = 'Open Log File Viewer first (SQL Server Agent: View History).'
 /**
- * The Log File Viewer's commands, all behind the release gate (agentEnabled; the renderer registers none without it): View History on
+ * The Log File Viewer's commands: View History on
  * the Agent node's, the Jobs folder's and a job's menus (SSMS's places, one placement) and in the palette, and the viewer's Refresh and Delete History.
  */
 export function logViewerCommandEntries(): { readonly [K in LogViewerCommandId]: LogViewerCommandEntry } {
   return {
     'agent.viewHistory': {
       title: 'View History', category: 'SQL Server Agent', icon: 'history', keywords: ['agent', 'job', 'jobs', 'history', 'log', 'file', 'viewer', 'runs', 'outcome', 'failed'],
-      precondition: 'agentEnabled && backendReady && hasConnection', unavailableHint: 'Connect to a SQL Server whose SQL Server Agent you can see first.',
+      precondition: 'backendReady && hasConnection', unavailableHint: 'Connect to a SQL Server whose SQL Server Agent you can see first.',
       menus: [{
         menu: 'explorer.context', group: '1_monitor', order: 2, mnemonic: 'h',
         when: "(explorerNode == 'agent' || (explorerNode == 'folder' && explorerFolder == 'agentJobs') || explorerNode == 'agentJob') && !explorerServerLost"
@@ -177,11 +177,11 @@ export function logViewerCommandEntries(): { readonly [K in LogViewerCommandId]:
     },
     'agent.refreshHistory': {
       title: 'Refresh History', category: 'SQL Server Agent', icon: 'refresh', keywords: ['agent', 'job', 'history', 'log', 'reload', 'now'],
-      precondition: 'agentEnabled && backendReady && activeDocumentIsLogViewer', unavailableHint: openViewer
+      precondition: 'backendReady && activeDocumentIsLogViewer', unavailableHint: openViewer
     },
     'agent.deleteHistory': {
       title: 'Delete History…', category: 'SQL Server Agent', icon: 'trash', keywords: ['agent', 'job', 'history', 'purge', 'clear', 'remove'],
-      precondition: 'agentEnabled && backendReady && activeDocumentIsLogViewer', unavailableHint: openViewer
+      precondition: 'backendReady && activeDocumentIsLogViewer', unavailableHint: openViewer
     }
   }
 }

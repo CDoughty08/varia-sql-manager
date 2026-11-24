@@ -23,6 +23,11 @@ database management tools in one app, with SSMS's features and keys and a modern
   object properties and actions, Restore Database.
 - **Monitoring**: Activity Monitor (sessions, blocking, expensive queries, waits, file I/O) and the Integration Services
   Catalog, with live data that refreshes on its own.
+- **SQL Server Agent**: Jobs, Job Activity Monitor, Alerts, Operators, Proxies and Error Logs in Object Explorer; each job,
+  alert, operator, proxy and credential opens as a document tab with its steps, schedules, notifications and history, and
+  saves in one transaction that refuses to overwrite someone else's change; the Log File Viewer, shared schedules, Create
+  Job Like This and Create several, Script As, and Start, Stop and Restart of the Agent service from a Windows client
+  ([SQL Server Agent](docs/sql-server-agent.md)).
 - **Workbench**: VS Code-style command palette (F1), editor groups, popout windows, hot exit that restores tabs and
   connections, a main window that reopens where you left it (safely back on screen if a monitor is gone), remappable keyboard shortcuts and mouse gestures, Dark, Light or System themes, customizable.
 - **Authentication**: SQL Server, Windows (Kerberos on Linux and macOS) and Microsoft Entra ID.
@@ -64,7 +69,8 @@ self-signed certificate. Windows authentication on Linux and macOS needs the sys
 ## Not yet available
 
 SQLCMD mode, Results to Text and Results to File (grid results can be exported), IntelliSense for Entra connections,
-backup, SQL Server Agent job management, and database user and role dialogs (logins are supported).
+backup, and database user and role dialogs (logins are supported). A few SQL Server Agent pages, such as
+multi-server targets and job categories, are still to come ([parity with SSMS](docs/sql-server-agent.md#parity-with-ssms)).
 
 ## Build from source
 
@@ -117,7 +123,7 @@ through a small preload API that main verifies, and query results stay in backen
 | Editor | [Language services](docs/language-services.md), [commands](docs/commands.md), [gestures](docs/gestures.md), [editor groups](docs/editor-groups.md), [hot exit](docs/hot-exit.md), [popout windows](docs/popout-windows.md) |
 | Results | [Result grid tools](docs/results-tools.md), [named results](docs/named-result-sets-scope.md), [execution plans](docs/execution-plans.md) |
 | Objects | [Object Explorer](docs/object-explorer.md), [connections](docs/connections-explorer.md), [object actions](docs/object-actions.md), [Search Objects](docs/object-search.md), [scripting](docs/scripting.md), [Table Designer](docs/table-designer.md) |
-| Monitoring | [Activity Monitor](docs/activity-monitor.md), [live data](docs/live.md), [Integration Services](docs/integration-services.md) |
+| Monitoring | [Activity Monitor](docs/activity-monitor.md), [live data](docs/live.md), [Integration Services](docs/integration-services.md), [SQL Server Agent](docs/sql-server-agent.md) |
 | App | [Settings](docs/settings.md), [themes](docs/themes/README.md), [updates](docs/updates.md), [About](docs/about.md), [Getting Started](docs/getting-started.md), [release notes](docs/release-notes.md) |
 
 No license has been chosen yet.

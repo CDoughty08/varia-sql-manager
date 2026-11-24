@@ -1,7 +1,7 @@
 # Getting Started
 
 Open **Help > Getting Started**, or search for Getting Started in the command palette. The read-only tab contains
-offline guides for connecting to SQL Server, connecting to BigQuery, running a query, and working with results. Search matches titles,
+offline guides for connecting to SQL Server, connecting to BigQuery, running a query, working with results, and scheduling work with SQL Server Agent. Search matches titles,
 summaries and topic keywords. Related guides link the workflows together.
 
 Command names, menu paths, shortcuts, mouse gestures and option values come from Varia's current catalogs and

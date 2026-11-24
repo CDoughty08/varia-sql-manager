@@ -302,7 +302,7 @@ try {
   expect((await stubCalls('scripting.script')).at(-1)).toMatchObject({ verb: 'alter', targets: [{ kind: 'procedure', name: 'ShipOrder' }] })
   console.log('Scripting checks: Script View as, Script Stored Procedure as with EXECUTE and without SELECT, and Modify opening ALTER.')
 
-  // 6b. A SQL Server Agent job (behind the release gate, which smoke runs open): Script Job as offers CREATE, DROP and DROP And
+  // 6b. A SQL Server Agent job: Script Job as offers CREATE, DROP and DROP And
   // CREATE To, and CREATE To › New Query Editor Window opens the job's script.
   const jobPath = ['server-a', 'SQL Server Agent', 'Jobs', 'Nightly backup']
   await expandExplorerPath(page, ...jobPath.slice(0, -1))

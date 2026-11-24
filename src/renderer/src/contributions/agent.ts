@@ -7,8 +7,7 @@ import { explorerNodeOf } from '../menus/targets'
 import { serverItems } from './query'
 
 /**
- * SQL Server Agent's Job Activity Monitor commands (AG-3, docs/sql-server-agent.md), registered only behind the release gate
- * (agentEnabled) so neither the palette nor a menu offers them without it. Job Activity Monitor opens one per connection: the
+ * SQL Server Agent's Job Activity Monitor commands (AG-3, docs/sql-server-agent.md). Job Activity Monitor opens one per connection: the
  * server of the Object Explorer node its menu (or Enter on the Job Activity Monitor node) runs it on, else the active
  * document's, else the selected node's, else the one live connection or the one picked from several. Refresh and the bulk
  * verbs act on the monitor whose header or bar runs them (`tabId`), else the active document. View History (AG-5a) opens the Log
@@ -18,9 +17,7 @@ import { serverItems } from './query'
  * (AG-5b) opens the viewer on that log (Current from the folder) with no job checked, and their Recycle opens it on Current with Recycle's
  * confirmation; Recycle from the palette or the viewer's header asks in the viewer it runs on.
  */
-export function agentContribution({ commands, jobActivity, logViewer, documents, connections, explorer, quickInput, jobDocuments, schedules }: Pick<Workbench, 'commands' | 'jobActivity' | 'logViewer' | 'documents' | 'connections' | 'explorer' | 'quickInput' | 'jobDocuments' | 'schedules'>,
-  options: { readonly agentEnabled?: boolean } = {}): Disposable {
-  if (!options.agentEnabled) return { dispose: () => {} }
+export function agentContribution({ commands, jobActivity, logViewer, documents, connections, explorer, quickInput, jobDocuments, schedules }: Pick<Workbench, 'commands' | 'jobActivity' | 'logViewer' | 'documents' | 'connections' | 'explorer' | 'quickInput' | 'jobDocuments' | 'schedules'>): Disposable {
   const live = (id: string | undefined) => id !== undefined && connections.isLiveSqlServer(id) ? id : undefined
   const target = (args?: CommandArgs): string | undefined => {
     const node = explorerNodeOf(args)

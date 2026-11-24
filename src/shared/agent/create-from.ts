@@ -340,7 +340,7 @@ export interface CreateFromCommandEntry {
   readonly menus?: readonly { readonly menu: 'explorer.context'; readonly group: string; readonly order: number; readonly mnemonic?: string; readonly when?: string }[]
 }
 /**
- * Create Job Like This…, behind the release gate (agentEnabled): on a job's menu (after New Job…), on Job Activity Monitor's bar for the one
+ * Create Job Like This…: on a job's menu (after New Job…), on Job Activity Monitor's bar for the one
  * job selected there, and in the palette, where it copies the job document that is active, else asks for a job (SSMS has no such
  * command; the rethink's "New Job from Existing…" is a keyword). It opens New Job filled from the job, with Changes from source first.
  */
@@ -349,7 +349,7 @@ export function createFromCommandEntries(): { readonly [K in CreateFromCommandId
     'agent.createJobLike': {
       title: 'Create Job Like This…', category: 'SQL Server Agent', icon: 'copy',
       keywords: ['agent', 'job', 'new', 'existing', 'from', 'copy', 'duplicate', 'clone', 'similar', 'sqlserveragent'],
-      precondition: 'agentEnabled && backendReady && hasConnection', unavailableHint: 'Connect to a SQL Server whose SQL Server Agent you can see first.',
+      precondition: 'backendReady && hasConnection', unavailableHint: 'Connect to a SQL Server whose SQL Server Agent you can see first.',
       menus: [{ menu: 'explorer.context', group: '0_new', order: 2, mnemonic: 'c', when: "explorerNode == 'agentJob' && !explorerServerLost" }]
     }
   }
