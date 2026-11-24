@@ -94,7 +94,7 @@ export function operationsCommandEntries(): { readonly [K in OperationsCommandId
     'ssis.refreshOperations': {
       title: 'Refresh Operations', category: 'Integration Services', icon: 'refresh', keywords: ['ssis', 'reload', 'update', 'now'], precondition: 'backendReady && activeDocumentIsSsisOperations && ssisOperationsRefreshable',
       unavailableHint: openOperations,
-      keybindings: [{ key: 'f5', when: "activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus" }],
+      keybindings: [{ key: 'f5', when: "activeDocumentIsSsisOperations && !activeDocumentIsSsis && !activeDocumentIsSsisExecution && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus" }],
       menus: [{ menu: 'ssis.operation.context', group: '8_view', order: 1, title: 'Refresh', mnemonic: 'r' }]
     },
     'ssis.pauseOperations': {

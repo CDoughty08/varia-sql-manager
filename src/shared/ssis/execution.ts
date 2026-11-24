@@ -116,7 +116,7 @@ export function executionCommandEntries(): { readonly [K in ExecutionCommandId]:
     'ssis.refreshExecution': {
       title: 'Refresh Execution', category: 'Integration Services', icon: 'refresh', keywords: ['ssis', 'reload', 'execution', 'messages'],
       precondition: 'backendReady && activeDocumentIsSsisExecution', unavailableHint: 'Open an SSIS execution\'s messages first.',
-      keybindings: [{ key: 'f5', when: "activeDocumentIsSsisExecution && !activeDocumentIsSsis && !activeDocumentIsSsisOperations && !activeDocumentIsJobHistory && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus" }]
+      keybindings: [{ key: 'f5', when: "activeDocumentIsSsisExecution && !activeDocumentIsSsis && !activeDocumentIsJobActivity && !activeDocumentIsJobHistory && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus" }]
     }
   }
 }

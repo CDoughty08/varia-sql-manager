@@ -24,8 +24,10 @@ function reading(feature: MemoryFeature, memory: MemoryUsage) {
   const percent = memory.globalBytes > 0 ? 100 * memory.usedBytes / memory.globalBytes : 0
   const percentage = percent > 0 && percent < 1 ? '<1%' : `${Math.floor(percent)}%`
   const detail = memory.detail
+  // Windowed BigQuery results' block caches hold rows too, as the Nerd metrics count them: in the rows and in what holds them.
+  const window = detail?.windowCacheBytes ?? 0
   const packed: Packed | undefined = detail && anyCompressed(detail)
-    ? { givenBack: Math.max(0, detail.logicalBytes - detail.storedBytes - detail.cacheBytes), logicalBytes: detail.logicalBytes, memoryBytes: detail.storedBytes + detail.cacheBytes } : undefined
+    ? { givenBack: Math.max(0, detail.logicalBytes - detail.storedBytes - detail.cacheBytes), logicalBytes: detail.logicalBytes + window, memoryBytes: detail.storedBytes + detail.cacheBytes + window } : undefined
   // The ring's faint second tone: the rows as read on the budget's scale, beyond the memory that holds them.
   const asRead = packed && memory.globalBytes > 0 ? 100 * (memory.usedBytes + packed.givenBack) / memory.globalBytes : undefined
   return { ...memory, feature, level, percent, percentage, packed, asRead }

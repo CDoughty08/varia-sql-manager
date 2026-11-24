@@ -745,11 +745,12 @@ describe('Peek tabs', () => {
   const flush = () => new Promise(resolve => setTimeout(resolve, 0))
   const facts = (extra: Partial<PeekResult> = {}): ApiResult<PeekResult> => ok({ facts: { schema: 'dbo', modified: '2024-01-02T03:04:05' }, elapsedMs: 1, ...extra })
 
-  it('gives tables and views a Top rows tab and every kind Columns or Parameters and Dependencies, with no rows request of its own', () => {
-    expect(peekTabsOf('table')).toEqual(['definition', 'columns', 'tableObjects', 'dependencies', 'rows'])
-    expect(peekTabsOf('view')).toEqual(['definition', 'columns', 'dependencies', 'rows'])
-    expect(peekTabsOf('procedure')).toEqual(['definition', 'parameters', 'dependencies'])
-    expect([peekTabTitle('table', 'columns'), peekTabTitle('function', 'parameters'), peekTabTitle('view', 'rows')]).toEqual(['Columns', 'Parameters', 'Top rows'])
+  it('gives tables and views a Top rows tab and every kind canonical inspector tabs, with no rows request of its own', () => {
+    expect(peekTabsOf('table')).toEqual(['overview', 'definition', 'storage', 'columns', 'tableObjects', 'dependencies', 'rows'])
+    expect(peekTabsOf('view')).toEqual(['overview', 'definition', 'columns', 'dependencies', 'rows'])
+    expect(peekTabsOf('procedure')).toEqual(['overview', 'definition', 'parameters', 'dependencies'])
+    expect([peekTabTitle('table', 'overview'), peekTabTitle('table', 'storage'), peekTabTitle('index', 'usage'), peekTabTitle('table', 'columns'), peekTabTitle('function', 'parameters'), peekTabTitle('view', 'rows')])
+      .toEqual(['Overview', 'Storage & Layout', 'Usage Telemetry', 'Columns', 'Parameters', 'Top rows'])
     // Top rows runs through query.execute and the results port: explorer.peekRows is gone from main and the backend's catalogue.
     expect(Object.keys(requestSchemas)).not.toContain('explorer.peekRows')
     expect(Object.keys(methodPolicies)).not.toContain('explorer.peekRows')
@@ -766,7 +767,7 @@ describe('Peek tabs', () => {
     peeks[0]!(facts())
     await flush()
     expect(api.explorerPeekDependencies).not.toHaveBeenCalled()
-    expect(open()).toMatchObject({ tab: 'definition', facts: { status: 'ready' }, back: [] })
+    expect(open()).toMatchObject({ tab: 'overview', facts: { status: 'ready' }, back: [] })
     expect(open().dependencies).toBeUndefined()
     service.selectTab('dependencies')
     expect(api.explorerPeekDependencies).toHaveBeenCalledWith({ connectionId, requestId: 'id-2', target: { kind: 'procedure', database: 'Sales', schema: 'dbo', name: 'Customer' } })
@@ -805,7 +806,7 @@ describe('Peek tabs', () => {
     // A procedure has no Top rows tab.
     service.peek(node('procedure', 2), 'menu')
     service.selectTab('rows')
-    expect(open().tab).toBe('definition')
+    expect(open().tab).toBe('overview')
     expect(api.execute).toHaveBeenCalledTimes(1)
     // Peeking another object released the table's rows.
     expect(results.held()).toEqual([])
@@ -850,7 +851,7 @@ describe('Peek tabs', () => {
     expect(service.canFollow({ ...view, kind: 'trigger' })).toBe(false)
     expect(service.canFollow({ ...view, kind: 'column' as never })).toBe(false)
     service.follow(view)
-    expect(open()).toMatchObject({ rowId: 7, kind: 'view', tab: 'definition', node: { kind: 'view', label: 'Sales.vOrders', ref: { type: 'object', object: { kind: 'view', database: 'Sales', schema: 'Sales', name: 'vOrders' } } } })
+    expect(open()).toMatchObject({ rowId: 7, kind: 'view', tab: 'overview', node: { kind: 'view', label: 'Sales.vOrders', ref: { type: 'object', object: { kind: 'view', database: 'Sales', schema: 'Sales', name: 'vOrders' } } } })
     expect(open().back).toHaveLength(1)
     expect(api.explorerPeek).toHaveBeenLastCalledWith({ connectionId, requestId: expect.any(String), target: { kind: 'view', database: 'Sales', schema: 'Sales', name: 'vOrders' } })
     peeks[1]!(facts())
@@ -866,7 +867,7 @@ describe('Peek tabs', () => {
     // Peeking the row again from the tree while the card shows a followed object shows the row's own.
     service.follow(view)
     service.peek(node('table', 7), 'keyboard')
-    expect(open()).toMatchObject({ kind: 'table', back: [], tab: 'definition' })
+    expect(open()).toMatchObject({ kind: 'table', back: [], tab: 'overview' })
   })
 })
 
@@ -875,20 +876,29 @@ describe('Peek kinds beyond modules', () => {
   const flush = () => new Promise(resolve => setTimeout(resolve, 0))
   const embedded = () => (JSON.parse(explorerCatalogJson()) as { peek: ReturnType<typeof peekCatalogBlock> }).peek
 
-  it('declares each kind\'s tabs in the catalogue, Definition first, and lists only where the kind has them', () => {
+  it('declares each kind\'s tabs in canonical order, Overview then Definition first, and lists only where the kind has them', () => {
     const tabs = Object.fromEntries(peekKinds.map(kind => [kind, peekTabsOf(kind)]))
     expect(tabs).toEqual({
-      table: ['definition', 'columns', 'tableObjects', 'dependencies', 'rows'], view: ['definition', 'columns', 'dependencies', 'rows'],
-      procedure: ['definition', 'parameters', 'dependencies'], function: ['definition', 'parameters', 'dependencies'],
-      index: ['definition', 'indexColumns'], key: ['definition', 'keyColumns'], constraint: ['definition'], trigger: ['definition', 'events', 'dependencies'],
-      databaseTrigger: ['definition', 'events'], serverTrigger: ['definition', 'events'],
-      database: ['definition', 'files'], login: ['definition', 'serverRoles', 'userMapping'],
-      synonym: ['definition', 'dependencies'], sequence: ['definition', 'dependencies'], type: ['definition', 'dependencies'],
-      tableType: ['definition', 'columns', 'dependencies']
+      table: ['overview', 'definition', 'storage', 'columns', 'tableObjects', 'dependencies', 'rows'],
+      view: ['overview', 'definition', 'columns', 'dependencies', 'rows'],
+      procedure: ['overview', 'definition', 'parameters', 'dependencies'],
+      function: ['overview', 'definition', 'parameters', 'dependencies'],
+      index: ['overview', 'definition', 'usage', 'indexColumns'],
+      key: ['overview', 'definition', 'keyColumns'],
+      constraint: ['overview', 'definition'],
+      trigger: ['overview', 'definition', 'events', 'dependencies'],
+      databaseTrigger: ['overview', 'definition', 'events'],
+      serverTrigger: ['overview', 'definition', 'events'],
+      database: ['overview', 'definition', 'files'],
+      login: ['overview', 'definition', 'serverRoles', 'userMapping'],
+      synonym: ['overview', 'definition', 'dependencies'],
+      sequence: ['overview', 'definition', 'dependencies'],
+      type: ['overview', 'definition', 'dependencies'],
+      tableType: ['overview', 'definition', 'columns', 'dependencies']
     })
     // A synonym has no Top rows, a sequence no Parameters, a database or a login no Dependencies.
     expect([peekHas('synonym', 'rows'), peekHas('sequence', 'parameters'), peekHas('database', 'dependencies'), peekHas('login', 'dependencies'), peekHas('key', 'dependencies'), peekHas('constraint', 'dependencies')]).toEqual([false, false, false, false, false, false])
-    for (const kind of peekKinds) expect(peekTabsOf(kind)[0], kind).toBe('definition')
+    for (const kind of peekKinds) expect(peekTabsOf(kind).slice(0, 2), kind).toEqual(['overview', 'definition'])
     // Columns, Indexes & keys, Key columns and Parameters are lists, read with the facts: the backend's catalogue names them for the kinds that show them.
     expect(peekListsOf('table')).toEqual(['columns', 'tableObjects'])
     expect(peekListsOf('key')).toEqual(['keyColumns'])
@@ -962,9 +972,9 @@ describe('Peek kinds beyond modules', () => {
     const keyColumns = peekListTable(peekLists.keyColumns, [['CustomerId', 'Id', null, 'int'], ['OrderId', null, true, 'bigint']])
     expect(keyColumns.columns.map(column => column.name)).toEqual(['Column', 'Referenced column', 'Descending', 'Type'])
     expect(keyColumns.rows).toEqual([['CustomerId', 'Id', null, 'int'], ['OrderId', null, 'True', 'bigint']])
-    const tableObjects = peekListTable(peekLists.tableObjects, [['Primary key', 'PK_Orders', 'Clustered (Id)', 'Active'], ['Foreign key', 'FK_Orders_Cust', '(CustomerId) → dbo.Customers (Id)', 'Trusted']])
-    expect(tableObjects.columns.map(column => column.name)).toEqual(['Kind', 'Name', 'Definition', 'Status'])
-    expect(tableObjects.rows).toEqual([['Primary key', 'PK_Orders', 'Clustered (Id)', 'Active'], ['Foreign key', 'FK_Orders_Cust', '(CustomerId) → dbo.Customers (Id)', 'Trusted']])
+    const tableObjects = peekListTable(peekLists.tableObjects, [['Primary key', 'PK_Orders', 'Clustered ([Id])', 'Active'], ['Foreign key', 'FK_Orders_Cust', '([CustomerId]) → [dbo].[Customers] ([Id])', 'Trusted']])
+    expect(tableObjects.columns.map(column => column.name)).toEqual(['Kind', 'Name', 'Summary', 'Status'])
+    expect(tableObjects.rows).toEqual([['Primary key', 'PK_Orders', 'Clustered ([Id])', 'Active'], ['Foreign key', 'FK_Orders_Cust', '([CustomerId]) → [dbo].[Customers] ([Id])', 'Trusted']])
     expect(peekLists.parameters.columns.map(column => column.label)).toEqual(['Name', 'Type', 'Direction', 'Default', 'Definition'])
     // Text keeps its control characters for the grid to show; a count is a number column, which sorts by value.
     expect(peekListTable({ columns: [{ id: 'a', label: 'A', format: 'text' }, { id: 'n', label: 'N', format: 'count' }] }, [['x\ty', 1024]])).toEqual({ columns: [{ name: 'A' }, { name: 'N', kind: 'number' }], rows: [['x\ty', '1,024']] })

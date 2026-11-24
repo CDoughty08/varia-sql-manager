@@ -3,7 +3,7 @@ import { explorerLimits, folderSpecs, kindSpecs } from '../../../shared/explorer
 import { displayText } from '../../../shared/explorer/refs.ts'
 import { environmentTag } from '../../../shared/environments'
 import EnvironmentTag from '../EnvironmentTag'
-import { loginChips, type StatusChip } from '../../../shared/explorer/status.ts'
+import { liveJobStatus, loginChips, type StatusChip } from '../../../shared/explorer/status.ts'
 import { codiconClass } from '../../../shared/icons'
 import { isPeekKind } from '../../../shared/explorer/peek.ts'
 import Icon from '../Icon'
@@ -149,6 +149,14 @@ export function rowDescription(node: TreeNode, note?: string): string | undefine
 export function liveDatabase(node: TreeNode, status: RowStatus): { node: TreeNode; changed: boolean } {
   const effective = status.state === 'unavailable' ? 'unavailable' : node.status === 'noAccess' ? 'noAccess' : status.state
   return { node: { ...node, sublabel: status.words ? `(${status.words})` : undefined, status: effective }, changed: effective !== node.status }
+}
+
+/** A job row as its live status shows it: disabled when the read found it disabled, not when it found it enabled, unless the
+ *  row was listed after that read (a Disable re-lists it at once); the same node object when that is what the listing said,
+ *  so the memoised row does not change for it. */
+export function liveJob(node: TreeNode, status: RowStatus): TreeNode {
+  const effective = liveJobStatus(node.status, node.listedAt, status)
+  return effective === node.status ? node : { ...node, status: effective }
 }
 
 /** A row's live chips. Their words are in the row's accessible name, so the chips are hidden from screen readers. */
@@ -306,7 +314,9 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
   }
   // A database the live status covers shows its state from the chips; any other row keeps the list's.
   const live = status?.live && listed.kind === 'database' ? liveDatabase(listed, status) : undefined
-  const node = live?.node ?? listed, note = live?.changed ? changedSentence : undefined
+  // A job row the live read covers (AG-12) is dimmed and badged as that read finds it enabled or not, whatever its listing said.
+  const job = listed.kind === 'agentJob' && status ? liveJob(listed, status) : undefined
+  const node = live?.node ?? job ?? listed, note = live?.changed ? changedSentence : undefined
   const expandable = node.hasChildren && !node.lost, folder = node.kind === 'folder', root = node.parent === 0
   const toggle = (event: MouseEvent) => { event.stopPropagation(); if (expandable) actions.toggle(rowId) }
   const dimmed = node.status === 'disabled' || node.status === 'unavailable' || node.status === 'noAccess' || node.lost
@@ -314,10 +324,10 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
   const tag = root ? environmentTag(environment) : undefined
   // A server's chips (running jobs, availability groups) follow its name and come before its environment. Server, database
   // and SQL Server Agent rows show live chips (group names are the server's text); a login shows its listing's static chips.
-  const agent = node.kind === 'agent'
+  const agent = node.kind === 'agent', agentJob = node.kind === 'agentJob'
   const staticChips = live || root || node.kind !== 'login' ? undefined : listedChips(node)
-  const chips = staticChips ?? (live || root || agent ? status?.chips : undefined)
-  const serverWords = (root || agent) && status?.words ? displayText(status.words) : undefined
+  const chips = staticChips ?? (live || root || agent || agentJob ? status?.chips : undefined)
+  const serverWords = (root || agent || agentJob) && status?.words ? displayText(status.words) : undefined
   const name = [rowName(node), serverWords, tag?.description].filter(Boolean).join(', ')
   const tooltip = [rowTooltip(node, note), serverWords, tag?.description].filter(Boolean).join('\n')
   // The tree shows the peek cursor over these while Peek on Hover's modifier is held (styles.css, data-peek-armed).

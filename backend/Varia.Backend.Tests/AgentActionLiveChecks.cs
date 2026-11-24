@@ -131,9 +131,14 @@ internal static class AgentActionLiveChecks
             var stopped = await Run("stopAgent");
             var down = !await AgentLiveChecks.UpAsync(sql, 0);
             check(stopped is { Error: null, AgentService: "stopped" } && down, "Stop SQL Server Agent stops the service and waits for Stopped: " + Steps(stopped));
+            // AG-12: the agent.tree probe sees the flip that re-lists the Agent node (Agent's stop sets Agent XPs to 0).
+            var off = await AgentTreeChecks.StateAsync(sql);
+            check(off is { Xps: "0", State: "1" }, "with Agent stopped, agent.treeProbe reads Agent XPs 0 and the service stopped (1), which re-list the Agent node: " + off);
             var startedAgain = await Run("startAgent");
             var up = await AgentLiveChecks.UpAsync(sql, wait);
             check(startedAgain is { Error: null, AgentService: "running" } && up, "Start SQL Server Agent starts it and waits for Running, and Agent connects again: " + Steps(startedAgain));
+            var on = await AgentTreeChecks.StateAsync(sql);
+            check(on is { Xps: "1", State: "4" }, "started again, agent.treeProbe reads Agent XPs 1 and the service running (4): " + on);
             var restarted = await Run("restartAgent");
             var upAgain = await AgentLiveChecks.UpAsync(sql, wait);
             check(restarted is { Error: null, AgentService: "running" } && restarted.Steps.Count == 4 && restarted.Steps.All(step => step.Status == "done") && upAgain,

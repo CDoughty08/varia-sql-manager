@@ -1,6 +1,6 @@
 import { maxClipboardText, type ApiResult, type ExplorerError, type VariaApi } from '../../../shared/contracts'
 import { isPeekKind, peekHas, peekLimits, peekSpecs, peekTabsOf, type PeekDependency, type PeekKind, type PeekResult, type PeekTab } from '../../../shared/explorer/peek.ts'
-import { kindSpecs, type NodeSubtype } from '../../../shared/explorer/catalog.ts'
+import { childParentKinds, kindSpecs, scopeFields, type NodeSubtype } from '../../../shared/explorer/catalog.ts'
 import type { ObjectRef } from '../../../shared/explorer/refs.ts'
 import { scriptMenuState } from '../../../shared/scripting/catalog.ts'
 import type { ScriptingOptions } from '../../../shared/scripting/options.ts'
@@ -11,6 +11,7 @@ import type { ExternalStore } from '../core/types'
 import type { ExplorerMenuNode } from '../menus/targets'
 import type { ResultsService } from '../results/ResultsService'
 import { isLiveConnection, type ConnectionAvailability } from '../services/connection-availability'
+import { peekObjectName } from './peek-format'
 
 /** How a peek was asked for: a hover opens the card without moving focus; the keyboard and the menu focus it. */
 export type PeekSource = 'hover' | 'keyboard' | 'menu'
@@ -465,6 +466,19 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
     this.load(node, dependency.kind, open.source === 'hover' ? 'keyboard' : open.source, false, { back })
   }
 
+  /**
+   * Navigates in-place to another peekable object on the same connection (such as a child's parent table, a foreign key's
+   * referenced table, or a login's default database), pushing the current object onto the Back stack.
+   */
+  followObject(target: ObjectRef, label?: string): void {
+    const open = this.getSnapshot().open
+    if (!open || !this.connected || !isPeekKind(target.kind) || !validPeekObjectRef(target)) return
+    const { subtype: _subtype, status: _status, database: _database, listedAt: _listedAt, filtered: _filtered, insertable: _insertable, ...rest } = open.node
+    const node: ExplorerMenuNode = { ...rest, kind: target.kind, ref: { type: 'object', object: target }, label: label ?? peekObjectName(target) }
+    const back = [...open.back, { node: open.node, kind: open.kind, tab: open.tab }].slice(-peekLimits.backSteps)
+    this.load(node, target.kind, open.source === 'hover' ? 'keyboard' : open.source, false, { back })
+  }
+
   /** Returns to the object a dependency was followed from, on the tab it showed. */
   goBack(): void {
     const open = this.getSnapshot().open
@@ -535,8 +549,8 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
     this.releaseRows()
     const id = ++this.next
     const requests: Requests = this.requests = {}
-    // A row's own card opens on Definition; Back and Refresh keep the tab they had.
-    const tab = carry.tab && peekTabsOf(kind).includes(carry.tab) ? carry.tab : 'definition'
+    // A row's own card opens on Overview (canonical tab 1); Back and Refresh keep the tab they had.
+    const tab = carry.tab && peekTabsOf(kind).includes(carry.tab) ? carry.tab : 'overview'
     // Rows the row's card does not own (a followed dependency) still anchor at that row.
     const rowId = carry.back?.length ? carry.back[0]!.node.id : node.id
     const anchor = carry.anchor === undefined ? this.getSnapshot().open?.anchor : carry.anchor ?? undefined
@@ -835,6 +849,23 @@ const scriptable = (target: PeekTarget) => scriptMenuState({ kind: target.kind, 
 /** A scripted object's place in the cache: its connection, its kind and its names (a child's with its parent's). */
 const scriptKey = (connectionId: string, object: ObjectRef) =>
   JSON.stringify([connectionId, object.kind, object.database ?? null, object.schema ?? null, object.parent?.kind ?? null, object.parent?.schema ?? null, object.parent?.name ?? null, object.name ?? null])
+const validName = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 128 && !value.includes('\0')
+/** Validates a cross-object navigation ref against its catalogue scope (required fields non-empty, forbidden absent). */
+function validPeekObjectRef(target: ObjectRef): boolean {
+  const { required, forbidden } = scopeFields[kindSpecs[target.kind].scope]
+  const record = target as unknown as Record<string, unknown>
+  for (const field of forbidden) if (record[field] !== undefined) return false
+  for (const field of required) {
+    if (field === 'parent') {
+      const parent = target.parent
+      if (!parent || !childParentKinds(target.kind).includes(parent.kind) || !validName(parent.name)) return false
+      if (kindSpecs[parent.kind].scope === 'schemaObject' && !validName(parent.schema)) return false
+    } else if (!validName(record[field])) {
+      return false
+    }
+  }
+  return true
+}
 /** Cancels are fire and forget: a failure is reported, never shown. */
 const report = (result: Promise<ApiResult<unknown>>) => { void result.then(value => { if (!value.ok) onUnexpectedError(new Error(value.error)) }, onUnexpectedError) }
 /** A request that throws (a lost IPC channel) settles as a failure value, as every other failure does. */
