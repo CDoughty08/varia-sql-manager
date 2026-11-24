@@ -3,7 +3,7 @@
 // filter bar reads the window again, the grid updates in place with the selection kept on the same operation, Stop Operation
 // asks, stops and shows Stopping then Canceled, F5, Pause and Copy act on it, Open drills down in place to a failed execution's
 // run page (its messages filtered by SSIS event and task, copied), Back and Forward (keys, buttons, the mouse's back button)
-// step through the history without reading again, the package crumb and the package node's Executions and Last Run open the
+// step through the history without reading again, the package crumb and the package node's Executions and Last Execution open the
 // package's runs, hiding the tab pauses it and closing ends it,
 // a server with no catalog says so in place of its rows (in view in a short window), and a view the catalog refuses offers
 // Retry, which subscribes again. Screenshots in Dark and Light go to artifacts/.
@@ -270,7 +270,7 @@ try {
   console.log('History passed: Back, Forward and the mouse button step without reading again, and the package crumb lists its runs.')
 
   step = 'package node'
-  // The package node's Executions and Last Run open the same document at the package and at its newest run.
+  // The package node's Executions and Last Execution open the same document at the package and at its newest run.
   const finance = ['server-a', 'Integration Services Catalogs', 'SSISDB', 'Finance']
   await expandExplorerPath(page, ...finance, 'Projects', 'Loads', 'Packages')
   const packageMenu = async item => {
@@ -280,12 +280,12 @@ try {
   await packageMenu('Executions')
   await expect(documentFrame(page, 'Daily.dtsx')).toBeVisible()
   await expect(history()).toContainText('5 of 5')
-  await packageMenu('Last Run')
+  await packageMenu('Last Execution')
   await expect(documentFrame(page, 'Execution 48214')).toBeVisible()
   await expect(history()).toContainText('6 of 6')
   await history().getByRole('button', { name: 'SSISDB', exact: true }).click()
   await expect(frame()).toBeVisible()
-  console.log('Package node passed: Executions and Last Run open the package and its newest run in the document.')
+  console.log('Package node passed: Executions and Last Execution open the package and its newest run in the document.')
 
   step = 'light'
   await page.evaluate(() => window.varia.setThemePreference({ mode: 'light' }))

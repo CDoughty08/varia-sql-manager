@@ -418,7 +418,7 @@ keys it uses are listed below.
 | Go Back | `ssis.goBack` | Alt+Left (`activeDocumentIsSsisOperations && !textInputFocus`) | Alt+Left (`activeDocumentIsSsisOperations && !textInputFocus`) | ⌘[ (`activeDocumentIsSsisOperations && !textInputFocus`) | `activeDocumentIsSsisOperations && ssisCanGoBack` | — |
 | Go Forward | `ssis.goForward` | Alt+Right (`activeDocumentIsSsisOperations && !textInputFocus`) | Alt+Right (`activeDocumentIsSsisOperations && !textInputFocus`) | ⌘] (`activeDocumentIsSsisOperations && !textInputFocus`) | `activeDocumentIsSsisOperations && ssisCanGoForward` | — |
 | Package Executions | `ssis.packageExecutions` | — | — | — | `backendReady && ssisVerbPackageProperties == 'enabled'` | Object Explorer context menu › Executions |
-| Package Last Execution | `ssis.lastRun` | — | — | — | `backendReady && ssisVerbPackageProperties == 'enabled'` | Object Explorer context menu › Last Run |
+| Package Last Execution | `ssis.lastRun` | — | — | — | `backendReady && ssisVerbPackageProperties == 'enabled'` | Object Explorer context menu › Last Execution |
 | Folder Properties | `ssis.folderProperties` | — | — | — | `backendReady && ssisVerbFolderProperties == 'enabled'` | Object Explorer context menu › Properties |
 | Project Properties | `ssis.projectProperties` | — | — | — | `backendReady && ssisVerbProjectProperties == 'enabled'` | Object Explorer context menu › Properties |
 | Package Properties | `ssis.packageProperties` | — | — | — | `backendReady && ssisVerbPackageProperties == 'enabled'` | Object Explorer context menu › Properties |
@@ -821,7 +821,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `1_operations` | A**c**tive Operations | `ssis.activeOperations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_operations` | E**x**ecutions | `ssis.packageExecutions` | `explorerNode == 'ssisPackage' && !explorerServerLost` |
 | `1_operations` | All E**x**ecutions | `ssis.allExecutions` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
-| `1_operations` | Last R**u**n | `ssis.lastRun` | `explorerNode == 'ssisPackage' && !explorerServerLost` |
+| `1_operations` | Last Exec**u**tion | `ssis.lastRun` | `explorerNode == 'ssisPackage' && !explorerServerLost` |
 | `1_operations` | All Vali**d**ations | `ssis.allValidations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_operations` | All O**p**erations | `ssis.allOperations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_query` | **N**ew Database… | `explorer.newDatabaseOnDatabase` | `explorerNode == 'database' && !explorerServerLost && explorerServerEngine == 'box'` |

@@ -19,8 +19,8 @@ F5 or Refresh reads the shown step again. A new step after Back drops the steps 
   under Operations below. Open (Enter, a double-click, or Open on a row's menu) goes to that execution's run.
 - **A package's runs** (the package node's Executions, the package crumb): a run strip of the last runs (bar height is the
   duration, failed runs in the error colour, the usual time dashed) and every run in a core grid, newest first (ID, Status,
-  Started, Duration, Errors, Warnings, Caller); Last run, a strip bar, or opening a row goes to that run. `ssis.packageRuns` reads it.
-- **A run** (Open on an operation, the package node's Last Run, a SQL Server Agent job's SSIS execution link): one page that
+  Started, Duration, Errors, Warnings, Caller); Last execution, a strip bar, or opening a row goes to that run. `ssis.packageRuns` reads it.
+- **A run** (Open on an operation, the package node's Last Execution, a SQL Server Agent job's SSIS execution link): one page that
   scrolls, SSMS's Overview, All Messages and Execution Performance reports in one place. The header shows the status, started,
   duration (with the package's usual time), error and warning counts, caller and environment, with Older run and Newer run.
   Below it: a callout with where a failed run failed and which tasks never ran; this run against the package's recent runs; the

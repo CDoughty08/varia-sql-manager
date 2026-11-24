@@ -13,7 +13,7 @@ import { explorerNodeOf, type ExplorerMenuNode } from '../menus/targets'
  * The Integration Services document (src/shared/ssis/operations.ts, ./execution.ts): Active Operations, All Executions, All
  * Validations and All Operations open a connection's document at its list with their filters; on the SSISDB node they act on
  * its server, from View or the palette on the server of the Object Explorer selection, else of the active document, else the
- * only connected one. A package's Executions and Last Run open it at the package's runs or its newest run. The document's own
+ * only connected one. A package's Executions and Last Execution open it at the package's runs or its newest run. The document's own
  * commands (Open, Back, Forward, Refresh, …) act on the document whose menu or header runs them (`tabId`), else the active one.
  */
 export function ssisContribution({ commands, explorer, ssisProperties, operations, documents, connections, settings }: Pick<Workbench, 'commands' | 'explorer' | 'ssisProperties' | 'operations' | 'documents' | 'connections' | 'settings'>): Disposable {

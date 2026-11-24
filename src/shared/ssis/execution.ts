@@ -124,7 +124,7 @@ const packageNode = "explorerNode == 'ssisPackage' && !explorerServerLost"
 /**
  * Open on an execution's row in the Integration Services document's list (its menu, a double-click, Enter), which drills to the
  * run's page in place; Back and Forward walk the places the document has shown (also the mouse's back and forward buttons,
- * src/shared/commands/gestures.ts); a package's Executions and Last Run on its Object Explorer menu open the document at the
+ * src/shared/commands/gestures.ts); a package's Executions and Last Execution on its Object Explorer menu open the document at the
  * package's runs or its newest run. A job's History opens a run's page from its SSIS step's link.
  */
 export function executionCommandEntries(): { readonly [K in ExecutionCommandId]: ExecutionCommandEntry } {
@@ -152,7 +152,7 @@ export function executionCommandEntries(): { readonly [K in ExecutionCommandId]:
     'ssis.lastRun': {
       title: 'Package Last Execution', category: 'Integration Services', icon: 'go-to-file', keywords: ['ssis', 'package', 'last', 'latest', 'execution', 'messages'],
       precondition: "backendReady && ssisVerbPackageProperties == 'enabled'", unavailableHint: 'Select an SSIS Catalog package in Object Explorer.',
-      menus: [{ menu: 'explorer.context', group: '1_operations', order: 2, title: 'Last Run', mnemonic: 'u', when: packageNode }]
+      menus: [{ menu: 'explorer.context', group: '1_operations', order: 2, title: 'Last Execution', mnemonic: 'u', when: packageNode }]
     }
   }
 }

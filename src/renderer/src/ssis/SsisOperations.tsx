@@ -324,10 +324,10 @@ function PackagePage({ documentId, state, place }: { readonly documentId: string
   const facts: Fact[] = model ? [
     { label: 'Runs', value: model.runs.length.toLocaleString('en-US') + (model.truncated ? '+' : '') }, { label: 'Failed', value: failed.toLocaleString('en-US') },
     { label: 'Usual duration', value: usual === undefined ? '—' : durationText(usual), title: 'The median of the succeeded runs' },
-    ...last ? [{ label: 'Last run', value: `${ssisTime(last.started ?? last.created)} ${statusLabel(last.status)}` }] : []
+    ...last ? [{ label: 'Last execution', value: `${ssisTime(last.started ?? last.created)} ${statusLabel(last.status)}` }] : []
   ] : []
   const verbs: Verb[] = [{ command: 'ssis.refreshOperations', args: { tabId: documentId }, label: 'Refresh' }]
-  const tools = last && <button type="button" className="ssis-tool" onClick={() => open(last.id)} title={`Open execution ${last.id}`}>Last run<Icon name="arrow-right" /></button>
+  const tools = last && <button type="button" className="ssis-tool" onClick={() => open(last.id)} title={`Open execution ${last.id}`}>Last execution<Icon name="arrow-right" /></button>
   const body = <div className="ssis-page" ref={scroll.ref} onScroll={scroll.onScroll} data-ssis-page="package">
     <ReadProblem error={read?.error} gone={!!read?.gone} connected={connected} server={state.label} context={`Reading ${place.package}'s runs on ${state.label}`}
       onRetry={() => operations.refreshPlace(documentId)} onBack={canGoBack(state.trail) ? () => operations.step(documentId, -1) : undefined} />
