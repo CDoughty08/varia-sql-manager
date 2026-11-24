@@ -197,6 +197,9 @@ export interface GridViewOptions {
   onOpenValue?(row: number, column: number): void
   /** A live table's log (LiveGrid): when the view is at the last row as rows arrive, it stays at the last row. */
   readonly followTail?: boolean
+  /** A fitted grid sized to all its rows inside an ancestor scroll container: virtualizes painted rows against the
+   *  outer scroller so large natural-height lists keep bounded DOM pools with zero nested vertical scrolling. */
+  readonly outerScroll?: boolean
   /** After a frame that changed what it showed (LiveGrid: follow tail, tracked rows). */
   onViewport?(viewport: GridViewport): void
   /** What a screen reader hears for a toned row's active cell ("blocked"); nothing when it returns undefined. */
@@ -361,6 +364,9 @@ export class GridView {
   private outerWidth = 0
   private wide: boolean | undefined
   private viewportHeight = 0
+  private outerScroller: HTMLElement | undefined
+  private outerViewportHeight = 0
+  private stopOuterScroll: (() => void) | undefined
   private lastTopRow = 0
   private cancelFrame: (() => void) | undefined
   private failures = 0
@@ -509,7 +515,8 @@ export class GridView {
           const rows = this.drawnRows(), columns = this.drawnColumns()
           if (rows <= 0 || columns <= 0) return true
           const current = this.selection() ?? firstCell(this.o.entry)
-          const next = navigate(current, action, { rows, columns, pageRows: pageStep(this.viewportHeight - g.headerHeight) })
+          const pageHeight = this.o.outerScroll && this.outerViewportHeight > 0 ? Math.min(this.viewportHeight, this.outerViewportHeight) : this.viewportHeight
+          const next = navigate(current, action, { rows, columns, pageRows: pageStep(pageHeight - g.headerHeight) })
           this.select(next)
           this.reveal(next.active.row, next.active.column)
           return true
@@ -936,15 +943,59 @@ export class GridView {
   private sourceRange(range: VisibleRange): VisibleRange {
     return this.rotated ? { firstRow: range.firstColumn, lastRow: range.lastColumn, firstColumn: range.firstRow, lastColumn: range.lastRow } : range
   }
+  /** The outer scroll container's client box in viewport coordinates (excluding borders and horizontal scrollbar). */
+  private outerClientBox(): { readonly top: number; readonly bottom: number; readonly height: number } | undefined {
+    const outer = this.outerScroller
+    if (!outer) return undefined
+    const rect = outer.getBoundingClientRect()
+    const height = outer.clientHeight
+    const top = rect.top + outer.clientTop
+    return { top, bottom: top + height, height }
+  }
+
   /** Scrolls a cell into view on the next frame ('nearest', never smooth). */
   private reveal(row: number, column: number): void {
     const target = ensureVisible({
       virtualTop: this.pendingTop ?? this.offsets.virtualTop, scrollLeft: this.pendingLeft ?? this.offsets.scrollLeft, viewportWidth: this.viewportWidth,
       viewportHeight: this.viewportHeight, rowHeader: this.rowHeader, layout: this.layout, rows: this.drawnRows()
     }, row, column)
-    this.pendingTop = target.virtualTop
+    if (this.o.outerScroll && !this.rotated) {
+      if (!this.outerScroller || !this.outerScroller.isConnected) this.bindOuterScroller()
+      const outer = this.outerClientBox()
+      if (outer && outer.height > 0 && this.outerScroller) {
+        const scrollerRect = this.scroller.getBoundingClientRect()
+        // For row 0, align to the top of the grid header so column headers remain visible.
+        const rowTopScreen = row === 0 ? scrollerRect.top : scrollerRect.top + g.headerHeight + row * g.rowHeight
+        const rowBottomScreen = scrollerRect.top + g.headerHeight + (row + 1) * g.rowHeight
+        if (rowTopScreen < outer.top) this.outerScroller.scrollTop = Math.max(0, this.outerScroller.scrollTop + (rowTopScreen - outer.top))
+        else if (rowBottomScreen > outer.bottom) this.outerScroller.scrollTop += rowBottomScreen - outer.bottom
+      }
+      this.pendingTop = 0
+    } else {
+      this.pendingTop = target.virtualTop
+    }
     this.pendingLeft = target.scrollLeft
     this.schedule()
+  }
+
+  /** Finds and watches the nearest vertically scrolling ancestor for natural-height outer-scroll virtualization. */
+  private bindOuterScroller(): void {
+    this.stopOuterScroll?.()
+    this.stopOuterScroll = undefined
+    this.outerScroller = undefined
+    if (!this.o.outerScroll || this.rotated || this.disposed) return
+    const view = windowOf(this.root)
+    let found: HTMLElement | undefined
+    for (let node = this.root.parentElement; node; node = node.parentElement) {
+      const overflowY = view.getComputedStyle?.(node)?.overflowY
+      if (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') { found = node; break }
+    }
+    if (!found) return
+    this.outerScroller = found
+    const onScroll = () => { try { this.schedule() } catch (error) { this.o.onError(error) } }
+    found.addEventListener('scroll', onScroll, { passive: true })
+    const resize = observeResize(found, () => { try { this.schedule() } catch (error) { this.o.onError(error) } })
+    this.stopOuterScroll = () => { found.removeEventListener('scroll', onScroll); resize.dispose() }
   }
 
   /** A grid sized to its rows has nothing to scroll: its match may be below the stack's fold, so the painted cell is
@@ -1074,8 +1125,9 @@ export class GridView {
     }
     const onRatio = () => { if (this.disposed) return; this.updateCap(); watchRatio() }
     watchRatio()
-    const adoption = windows.onDidAdopt(() => { if (!this.disposed) { this.updateCap(); watchRatio() } })
-    this.cleanup.push(() => { media?.removeEventListener('change', onRatio); adoption.dispose() })
+    const adoption = windows.onDidAdopt(() => { if (!this.disposed) { this.updateCap(); watchRatio(); this.bindOuterScroller() } })
+    this.bindOuterScroller()
+    this.cleanup.push(() => { media?.removeEventListener('change', onRatio); adoption.dispose(); this.stopOuterScroll?.(); this.stopOuterScroll = undefined; this.outerScroller = undefined })
     const fonts = this.root.ownerDocument.fonts
     const onFonts = () => { if (this.disposed) return; this.charWidth = fontMeasure(true).charWidth; this.schedule() }
     fonts?.addEventListener('loadingdone', onFonts)
@@ -1393,12 +1445,26 @@ export class GridView {
       const next = dragSelection(selection, hit)
       if (next !== selection) this.select(next)
     }
-    const above = g.headerHeight - drag.y, below = drag.y - this.viewportHeight, before = this.rowHeader - drag.x, after = drag.x - this.viewportWidth
+    const before = this.rowHeader - drag.x, after = drag.x - this.viewportWidth
     let scrolled = false
-    if (above > 0 || below > 0) {
-      const rows = Math.min(40, 1 + Math.floor(Math.max(above, below) / 16)) * (above > 0 ? -1 : 1)
-      this.pendingTop = Math.max(0, (this.pendingTop ?? this.offsets.virtualTop) + rows * g.rowHeight)
-      scrolled = true
+    if (this.o.outerScroll && this.outerScroller && !this.rotated) {
+      const outer = this.outerClientBox()
+      if (outer && outer.height > 0) {
+        const screenY = this.scroller.getBoundingClientRect().top + drag.y
+        const above = Math.max(g.headerHeight - drag.y, outer.top - screenY), below = screenY - outer.bottom
+        if (above > 0 || below > 0) {
+          const rows = Math.min(40, 1 + Math.floor(Math.max(above, below) / 16)) * (above > 0 ? -1 : 1)
+          this.outerScroller.scrollTop = Math.max(0, this.outerScroller.scrollTop + rows * g.rowHeight)
+          scrolled = true
+        }
+      }
+    } else {
+      const above = g.headerHeight - drag.y, below = drag.y - this.viewportHeight
+      if (above > 0 || below > 0) {
+        const rows = Math.min(40, 1 + Math.floor(Math.max(above, below) / 16)) * (above > 0 ? -1 : 1)
+        this.pendingTop = Math.max(0, (this.pendingTop ?? this.offsets.virtualTop) + rows * g.rowHeight)
+        scrolled = true
+      }
     }
     if (before > 0 || after > 0) {
       const px = Math.min(240, 16 + 2 * Math.max(before, after)) * (before > 0 ? -1 : 1)
@@ -1803,9 +1869,44 @@ export class GridView {
     if (this.rotated) this.keepActiveDrawn()
 
     this.dragStep()
-    const viewport = { top: virtualTop, left, width, height }
-    const bodyRows = Math.ceil(Math.max(0, height - g.headerHeight) / g.rowHeight)
+    let viewport = { top: virtualTop, left, width, height }
+    let bodyRows = Math.ceil(Math.max(0, height - g.headerHeight) / g.rowHeight)
     let overscan: { rows: number; columns: number } = { rows: g.overscanRows, columns: g.overscanColumns }
+    if (this.o.outerScroll && !this.rotated) {
+      if (!this.outerScroller || !this.outerScroller.isConnected) this.bindOuterScroller()
+      const outer = this.outerClientBox()
+      // Small natural-height lists (<= 20 rows) paint all rows directly even while offscreen; larger lists slice to the outer client box.
+      const anchorRows = Math.min(drawnRows, 12)
+      if (outer) {
+        if (outer.height > 0) {
+          this.outerViewportHeight = outer.height
+          const scrollerRect = this.scroller.getBoundingClientRect()
+          const bodyHeight = Math.max(0, height - g.headerHeight)
+          const bodyTop = scrollerRect.top + g.headerHeight
+          const visTop = Math.max(0, outer.top - bodyTop)
+          const visBottom = Math.min(bodyHeight, outer.bottom - bodyTop)
+          if (scrollerRect.height > 0 && visBottom > visTop) {
+            viewport = { top: visTop, left, width, height: g.headerHeight + (visBottom - visTop) }
+            bodyRows = Math.ceil((visBottom - visTop) / g.rowHeight)
+          } else if (drawnRows > 20) {
+            // Large list outside the outer scroll viewport: keep a small top anchor in the DOM for scroll-into-view and AT.
+            viewport = { top: 0, left, width, height: g.headerHeight + anchorRows * g.rowHeight }
+            bodyRows = Math.max(1, anchorRows)
+            overscan = { rows: 0, columns: g.overscanColumns }
+          }
+        } else if (drawnRows > 20) {
+          // Collapsed/hidden outer container: keep only the small top anchor so pools stay bounded.
+          viewport = { top: 0, left, width, height: g.headerHeight + anchorRows * g.rowHeight }
+          bodyRows = Math.max(1, anchorRows)
+          overscan = { rows: 0, columns: g.overscanColumns }
+        }
+      } else if (drawnRows > 20) {
+        // No scrolling ancestor found: cap pool height to the window viewport so large natural-height tables never over-allocate.
+        const fallbackHeight = Math.min(height, Math.max(g.headerHeight + g.rowHeight * 20, windowOf(this.root).innerHeight || 600))
+        viewport = { top: virtualTop, left, width, height: fallbackHeight }
+        bodyRows = Math.ceil(Math.max(0, fallbackHeight - g.headerHeight) / g.rowHeight)
+      }
+    }
     let range = visibleRange(viewport, drawnRows, this.layout, rowHeader, overscan)
     // A very large view of narrow columns (a 4K screen) keeps less in reserve: every pooled cell costs style, layout and
     // paint when a jump rewrites them all.
@@ -1836,7 +1937,7 @@ export class GridView {
     this.paint(range, headerRange, drawnRows, drawnColumns, rebased, columnsMoved)
     if (this.rotated) this.paintBands(headerRange, Math.max(0, Math.min(height - g.headerHeight, drawnRows * g.rowHeight - virtualTop)))
     this.aria(snapshot.state, rows)
-    this.report(model, virtualTop, drawnRows, height)
+    this.report(model, this.o.outerScroll && !this.rotated ? viewport.top : virtualTop, drawnRows, this.o.outerScroll && !this.rotated ? viewport.height : height)
     if (this.diff) this.settleDiff()
     if (bars) this.overview!.place(this.overviewShown && rows > 0, g.headerHeight, bars.right, bars.bottom)
   }

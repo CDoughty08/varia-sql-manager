@@ -8,13 +8,15 @@ import { draftValue, greyNotes, modelValue, optionChoices, optionGroups, optionS
 import SubDialog from '../dialogs/SubDialog'
 import Icon from '../Icon'
 import DocumentFrame, { type FrameSection, type Verb } from '../kit/DocumentFrame'
+import FactGrid, { type FactItem } from '../kit/FactGrid'
 import InlineError from '../kit/InlineError'
-import PropertyField, { FactList, FieldHints, FieldHintStrip, fieldAria } from '../kit/PropertyField'
+import PropertyField, { FieldHints, FieldHintStrip, fieldAria } from '../kit/PropertyField'
+import RatioBar from '../kit/RatioBar'
 import Segmented from '../kit/Segmented'
 import Skeleton from '../kit/Skeleton'
 import StatusPill from '../kit/StatusPill'
 import Switch from '../kit/Switch'
-import { databaseStatusPill, dateText, fieldControl, megabytes, problemSections, shownModel, switchStates } from './fields'
+import { databaseMemoryRatio, databaseSpaceRatio, databaseStatusPill, dateText, fieldControl, megabytes, problemSections, shownModel, switchStates } from './fields'
 import { filegroupLists, filegroupsTable, filesTable } from './grids'
 import PropertiesGrid from './PropertiesGrid'
 import { propertiesMessages, type DatabasePropertiesService, type PropertiesState } from './DatabasePropertiesService'
@@ -33,23 +35,29 @@ export interface SectionProps {
   readonly service: DatabasePropertiesService
 }
 
-/** Learn's General page rows, as facts. */
-function GeneralSection({ model }: Pick<SectionProps, 'model'>) {
+/** Learn's General page rows, as click-to-copy FactGrid groups plus space/memory proportion meters. */
+export function GeneralSection({ model }: Pick<SectionProps, 'model'>) {
   const general = model.general
-  const fact = (label: string, value: string, title?: string) => ({ label, value, ...title ? { title } : {} })
+  const spaceRatio = useMemo(() => databaseSpaceRatio(general), [general.sizeMb, general.spaceAvailableMb])
+  const memoryRatio = useMemo(() => databaseMemoryRatio(general), [general.memoryAllocatedMb, general.memoryUsedMb])
+  const fact = (label: string, value: string, options?: { readonly title?: string; readonly mono?: boolean }): FactItem => ({
+    label, value, ...options?.title ? { title: options.title } : {}, ...options?.mono ? { mono: true } : {}
+  })
   return <div className="properties-general">
+    {spaceRatio && <RatioBar title="Database Space" totalLabel={spaceRatio.totalLabel} segments={spaceRatio.segments} />}
+    {memoryRatio && <RatioBar title="Memory-Optimized Objects" totalLabel={memoryRatio.totalLabel} segments={memoryRatio.segments} />}
     <h3 className="properties-group-title">Backup</h3>
-    <FactList facts={[fact('Last Database Backup', dateText(general.lastBackup)), fact('Last Database Log Backup', dateText(general.lastLogBackup))]} />
+    <FactGrid facts={[fact('Last Database Backup', dateText(general.lastBackup)), fact('Last Database Log Backup', dateText(general.lastLogBackup))]} />
     <h3 className="properties-group-title">Database</h3>
-    <FactList facts={[
-      fact('Name', displayText(general.name)), fact('Status', databaseStatusPill(model).label), fact('Owner', general.owner ? displayText(general.owner) : '', 'The owner can be changed in Files.'),
+    <FactGrid facts={[
+      fact('Name', displayText(general.name), { mono: true }), fact('Status', databaseStatusPill(model).label), fact('Owner', general.owner ? displayText(general.owner) : '', { title: 'The owner can be changed in Files.', mono: true }),
       fact('Date Created', dateText(general.created)), fact('Size', megabytes(general.sizeMb)), fact('Space Available', megabytes(general.spaceAvailableMb)),
       fact('Number of Users', general.users === undefined ? '' : String(general.users)),
-      fact('Memory Allocated To Memory Optimized Objects', megabytes(general.memoryAllocatedMb), 'Needs VIEW DATABASE STATE.'),
-      fact('Memory Used By Memory Optimized Objects', megabytes(general.memoryUsedMb), 'Needs VIEW DATABASE STATE.')
+      fact('Memory Allocated To Memory Optimized Objects', megabytes(general.memoryAllocatedMb), { title: 'Needs VIEW DATABASE STATE.' }),
+      fact('Memory Used By Memory Optimized Objects', megabytes(general.memoryUsedMb), { title: 'Needs VIEW DATABASE STATE.' })
     ]} />
     <h3 className="properties-group-title">Maintenance</h3>
-    <FactList facts={[fact('Collation', general.collation ?? '', 'The collation can be changed in Options.')]} />
+    <FactGrid facts={[fact('Collation', general.collation ?? '', { title: 'The collation can be changed in Options.', mono: true })]} />
   </div>
 }
 
@@ -77,7 +85,7 @@ export function FilesSection({ state, model, draft, editable, errors, service }:
   const files = useMemo(() => filesTable(model), [model])
   return <div className="properties-files">
     <h3 className="properties-group-title">Database</h3>
-    <FactList facts={[{ label: 'Database name', value: displayText(model.general.name) }, { label: 'Use full-text indexing', value: 'Always on (since SQL Server 2008)' }]} />
+    <FactGrid facts={[{ label: 'Database name', value: displayText(model.general.name), mono: true }, { label: 'Use full-text indexing', value: 'Always on (since SQL Server 2008)' }]} />
     <h3 className="properties-group-title">Ownership</h3>
     <PropertyField id={id} label="Owner" changed={changed} {...text}>
       <span className="properties-owner">
@@ -88,20 +96,20 @@ export function FilesSection({ state, model, draft, editable, errors, service }:
       </span>
     </PropertyField>
     <h3 className="properties-group-title">Database files</h3>
-    <PropertiesGrid table={files} label="Database files" empty="No files are listed." suggestedName={`${state.label} files`} />
+    <PropertiesGrid table={files} label="Database files" empty="No files are listed." suggestedName={`${state.label} files`} maxRows={Infinity} />
     <p className="field-note">{model.filesTruncated ? 'The database has more files than are listed. ' : ''}Adding, removing and resizing files is not supported yet.</p>
     {choosing && <SelectOwner logins={model.logins} current={draft.owner} onCancel={() => setChoosing(false)} onOk={login => { setChoosing(false); service.updateDraft(state.id, { owner: login }) }} />}
   </div>
 }
 
 /** Filegroups: SSMS's Rows, FILESTREAM and Memory Optimized Data lists, read-only in this version, flags as words. */
-function FilegroupsSection({ state, model }: Pick<SectionProps, 'state' | 'model'>) {
+export function FilegroupsSection({ state, model }: Pick<SectionProps, 'state' | 'model'>) {
   const lists = useMemo(() => filegroupLists(model).map(list => ({ list, table: filegroupsTable(model, list) })), [model])
   return <div className="properties-filegroups">
     {lists.map(({ list, table }) => <div className="properties-filegroups-group" key={list.key}>
       <h3 className="properties-group-title">{list.title}</h3>
       {list.key === 'filestream' && model.server.filestreamLevel === 0 && <p className="field-note">{greyNotes.filestream}</p>}
-      <PropertiesGrid table={table} label={`${list.title} filegroups`} empty="None." suggestedName={`${state.label} ${list.title} filegroups`} />
+      <PropertiesGrid table={table} label={`${list.title} filegroups`} empty="None." suggestedName={`${state.label} ${list.title} filegroups`} maxRows={Infinity} />
     </div>)}
     <p className="field-note">{model.filegroupsTruncated ? 'The database has more filegroups than are listed. ' : ''}Adding, removing and changing filegroups is not supported yet.</p>
   </div>
@@ -225,7 +233,7 @@ export default function DatabaseProperties({ documentId }: { documentId: string 
     {model && !model.readOnlyReason && state.offline && <p className="document-status"><Icon name="lock" />{propertiesMessages.offline}</p>}
     {model && !model.readOnlyReason && model.options.readOnly === 'true' && <p className="document-status"><Icon name="lock" />{greyNotes.readOnlyDatabase}</p>}
   </>
-  return <FieldHints><DocumentFrame id={`properties-${state.id}`} title={state.label} subtitle="Database Properties" crumbs={[{ label: state.server, title: state.login ? `${state.server} (${state.login})` : state.server }, { label: 'Databases' }]}
+  return <FieldHints resetKey={state.frame.section}><DocumentFrame id={`properties-${state.id}`} title={state.label} subtitle="Database Properties" crumbs={[{ label: state.server, title: state.login ? `${state.server} (${state.login})` : state.server }, { label: 'Databases' }]}
     state={pill && <StatusPill tone={pill.tone} label={pill.label} size="small" />} verbs={verbs} banner={banner} sections={sections} frame={state.frame}
     onFrame={frame => properties.setFrame(state.id, frame)} attributes={{ 'data-properties': state.id }}
     script={{ content: state.script, notice: state.scriptNotice, onDeliver: destination => void properties.deliver(state.id, destination) }} hint={<FieldHintStrip />} /></FieldHints>

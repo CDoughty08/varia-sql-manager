@@ -7,11 +7,11 @@ import { densityUse } from '../src/shared/theme/metrics'
 import { databaseChanged, initialDatabaseDraft, setOption } from '../src/renderer/src/dialogs/database-properties'
 import { initialFrameState } from '../src/renderer/src/kit/document-frame'
 import PropertyField, { FactList, FieldHintStrip, fieldAria, nextHints, shownHint } from '../src/renderer/src/kit/PropertyField'
-import { FilesSection, OptionField, optionProps, type SectionProps } from '../src/renderer/src/properties/DatabaseProperties'
+import { FilegroupsSection, FilesSection, GeneralSection, OptionField, optionProps, type SectionProps } from '../src/renderer/src/properties/DatabaseProperties'
 import type { DatabasePropertiesService, PropertiesState } from '../src/renderer/src/properties/DatabasePropertiesService'
 import Segmented, { segmentedMaximum, segmentKey } from '../src/renderer/src/kit/Segmented'
 import Switch from '../src/renderer/src/kit/Switch'
-import { databaseStatusPill, fieldControl, problemSections, switchStates } from '../src/renderer/src/properties/fields'
+import { databaseMemoryRatio, databaseSpaceRatio, databaseStatusPill, fieldControl, problemSections, switchStates } from '../src/renderer/src/properties/fields'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import { databaseModel } from './fixtures/database-properties'
@@ -144,6 +144,32 @@ describe('property sheet hints and sections', () => {
     expect([...files.matchAll(/<h3 class="properties-group-title"[^>]*>([^<]+)<\/h3>/g)].map(match => match[1])).toEqual(['Database', 'Ownership', 'Database files'])
     expect(files.indexOf('Ownership')).toBeLessThan(files.indexOf('for="properties-doc-owner"'))
     expect(files.indexOf('Use full-text indexing')).toBeLessThan(files.indexOf('Ownership'))
+    expect(files).toContain('<dl class="fact-grid">')
+  })
+  it('renders General facts in FactGrid with space and memory RatioBars, and renders Files and Filegroups at natural height', () => {
+    const props = sectionProps()
+    const general = html(createElement(GeneralSection, { model: props.model }))
+    expect(general).toContain('<dl class="fact-grid">')
+    expect(general).toContain('aria-label="Copy Name"')
+    expect(general).toContain('Database Space')
+    expect(general).not.toContain('Memory-Optimized Objects')
+    const withMemory = databaseModel({ general: { ...props.model.general, memoryAllocatedMb: 128, memoryUsedMb: 48 } })
+    const memoryHtml = html(createElement(GeneralSection, { model: withMemory }))
+    expect(memoryHtml).toContain('Memory-Optimized Objects')
+    expect(databaseSpaceRatio({ sizeMb: 16, spaceAvailableMb: 5.25 })?.segments.map(s => [s.id, s.value])).toEqual([['used', 10.75], ['available', 5.25]])
+    expect(databaseSpaceRatio({ sizeMb: 16, spaceAvailableMb: 20 })?.segments.map(s => [s.id, s.value])).toEqual([['used', 0], ['available', 16]])
+    expect(databaseSpaceRatio({ sizeMb: 0, spaceAvailableMb: 0 })).toBeUndefined()
+    expect(databaseSpaceRatio({ sizeMb: 16 })).toBeUndefined()
+    expect(databaseMemoryRatio({ memoryAllocatedMb: 100, memoryUsedMb: 40 })?.segments.map(s => [s.id, s.value])).toEqual([['used', 40], ['unused', 60]])
+    expect(databaseMemoryRatio({ memoryAllocatedMb: 0, memoryUsedMb: 0 })).toBeUndefined()
+    // Files and Filegroups render at natural height (zero nested vertical scroll even above 12 rows).
+    const manyFiles = Array.from({ length: 20 }, (_, i) => ({ ...props.model.files[0], name: `F${i}`, fileName: `F${i}.ndf`, isPrimary: i === 0 }))
+    const manyGroups = Array.from({ length: 20 }, (_, i) => ({ ...props.model.filegroups[0], name: `FG${i}`, isDefault: i === 0 }))
+    const bigModel = databaseModel({ files: manyFiles, filegroups: manyGroups })
+    const filesHtml = inWorkbench(createElement(FilesSection, { ...props, model: bigModel }))
+    expect(filesHtml).toContain(`style="height:${22 + 20 * 20 + 2}px;flex:none"`)
+    const groupsHtml = inWorkbench(createElement(FilegroupsSection, { state: props.state, model: bigModel }))
+    expect(groupsHtml).toContain(`style="height:${22 + 20 * 20 + 2}px;flex:none"`)
   })
 })
 
@@ -216,6 +242,7 @@ describe('property sheet styles', () => {
   it('stacks each label over its control when the sections column is narrow, measured on that column', () => {
     expect(valueOf('.document-sections', 'container')).toBe('document-sections / inline-size')
     expect(valueOf('.property-field, .property-facts', 'grid-template-columns', ['@container document-sections (max-width: 540px)'])).toBe('minmax(0, 1fr)')
+    expect(valueOf('.document-sections .fact-grid:not(.compact)', 'grid-template-columns', ['@container document-sections (max-width: 540px)'])).toBe('minmax(0, 1fr)')
     // No property rule follows the frame's width, which counts the section list too.
     expect(rules.filter(rule => rule.at.some(at => /^@container \(/.test(at)) && /\.propert/.test(rule.selector))).toEqual([])
   })

@@ -607,6 +607,40 @@ describe('FactGrid, CapabilityChips, RatioBar and FieldHintStrip clearing', () =
     expect(hint()).toBe('')
   })
 
+  it('clears hovered hints on section resetKey changes while preserving an active focused field hint', () => {
+    function SectionHarness() {
+      const [section, setSection] = useState('filegroups')
+      return createElement(FieldHints, {
+        resetKey: section,
+        children: createElement('div', null,
+          createElement('button', { type: 'button', id: 'to-options', onClick: () => setSection('options') }, 'Options'),
+          createElement('button', { type: 'button', id: 'to-general', onClick: () => setSection('general') }, 'General'),
+          createElement(PropertyField, { id: 'autoClose', label: 'Auto Close', description: 'Shuts down cleanly.', children: createElement('input', { id: 'autoClose' }) }),
+          createElement(PropertyField, { id: 'autoShrink', label: 'Auto Shrink', description: 'Shrinks files.', children: createElement('input', { id: 'autoShrink' }) }),
+          createElement(FieldHintStrip)
+        )
+      })
+    }
+    const el = mount(createElement(SectionHarness))
+    const autoClose = el.querySelector<HTMLInputElement>('#autoClose')!
+    const shrinkRow = el.querySelector<HTMLElement>('[data-field="autoShrink"]')!
+    const toOptions = el.querySelector<HTMLButtonElement>('#to-options')!
+    const toGeneral = el.querySelector<HTMLButtonElement>('#to-general')!
+    const hint = () => el.querySelector('.field-hint')?.textContent ?? ''
+
+    // Focus Auto Close while hovered on Auto Shrink, then simulate scroll-spy changing section without stealing focus.
+    act(() => { autoClose.focus() })
+    act(() => { shrinkRow.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })) })
+    expect(hint()).toContain('Shrinks files.')
+    act(() => { toOptions.click() })
+    // Hovered hint cleared, focused hint preserved because #autoClose still holds focus.
+    expect(hint()).toContain('Shuts down cleanly.')
+
+    // Clicking General section moves focus off the field and changes section -> hint clears completely.
+    act(() => { toGeneral.focus(); toGeneral.click() })
+    expect(hint()).toBe('')
+  })
+
   it('upholds single-scroller, no smooth strip scroll, narrow hide <=680px, touch-action, property alignment, and forced-colors CSS invariants', () => {
     const rules = stylesheetRules()
     const decls = (selector: string, at = '') => rules.filter(r => r.selector === selector && r.at.join(' ') === at).flatMap(r => r.declarations)

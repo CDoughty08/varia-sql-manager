@@ -147,6 +147,8 @@ export const part = {
   explorerSearch: '.object-search-pane',
   /** A Search Objects tab's document. */
   objectSearchTab: '[data-object-search]',
+  /** The Search Objects tab's summary status line (distinct from SearchDetails' FactGrid copy live region). */
+  objectSearchSummary: '.object-search-summary',
   explorerSearchField: '.object-search-pane .object-search-field',
   /** The pane's footer: the selection's listing and its freshness, then the connected servers. */
   explorerFooter: '.explorer-footer',
@@ -892,6 +894,8 @@ export const objectSearchServerOptions = page => page.locator(part.objectSearchT
 export const objectSearchGroup = (page, server) => page.locator(part.objectSearchTab).getByRole('listbox', { name: `Results on ${server}`, exact: true })
 export const objectSearchHits = page => page.locator(part.objectSearchTab).getByRole('listbox', { name: 'Results', exact: true }).getByRole('option')
 export const objectSearchSelected = page => page.locator(part.objectSearchTab).getByRole('listbox', { name: 'Results', exact: true }).getByRole('option', { selected: true })
+/** The Search Objects tab's own summary status line (`role="status"`). */
+export const objectSearchSummary = page => page.locator(part.objectSearchTab).locator(part.objectSearchSummary)
 export const explorerSearchSplitter = page => page.locator(part.explorerSearch).getByRole('separator', { name: 'Resize search results', exact: true })
 export const explorerSearchToggle = (page, name) => page.locator(part.explorerSearch).getByRole('button', { name, exact: true })
 export const explorerSearchOptions = page => page.locator(part.explorerSearch).getByRole('button', { name: /^Search options/ })
