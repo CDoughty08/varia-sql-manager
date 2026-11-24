@@ -296,6 +296,19 @@ describe('a grid transposed', () => {
     expect(link.key('Enter')).toBe(true)
     expect(link.onOpenValue).toHaveBeenLastCalledWith(4, 2)
     link.view.dispose()
+    // A click on the empty link cell opens nothing either; a click on its neighbour does (transposed: rows run across).
+    const clicked = mount({ rows: 10, columns: 6, role: 'link', text: empty })
+    await clicked.frame()
+    const click = (row: number) => {
+      const x = clicked.nameWidth() + row * clicked.state.transposed!.width + 5, y = 22 + 2 * 20 + 5
+      clicked.pointer('pointerdown', clicked.scroller, x, y)
+      clicked.pointer('pointerup', clicked.scroller, x, y)
+    }
+    click(3)
+    expect(clicked.onOpenValue).not.toHaveBeenCalled()
+    click(4)
+    expect(clicked.onOpenValue).toHaveBeenLastCalledWith(4, 2)
+    clicked.view.dispose()
     const xml = mount({ rows: 10, columns: 6, transposed: false, text: empty })
     await xml.frame()
     xml.state.selection = cells([3, 2])

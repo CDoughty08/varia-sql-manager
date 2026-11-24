@@ -235,6 +235,18 @@ describe('ActivityMonitorService session actions', () => {
     api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'JOB_STATE', message: 'Nightly is not running.', retryable: false } } })
     await activity.stopJob(id, agent)
     expect(activity.get(id)?.killReport).toMatchObject({ tone: 'error', title: 'Job Nightly was not stopped.', detail: 'Nightly is not running.' })
+    // A second Stop of the same job while the first is in flight is refused, not sent.
+    let answer!: (value: Awaited<ReturnType<typeof api.executeObjectAction>>) => void
+    api.executeObjectAction.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    const calls = api.executeObjectAction.mock.calls.length
+    const first = activity.stopJob(id, agent)
+    expect(activity.jobUnavailable(id, agent, 'stop')).toBe('Stop Job is already stopping Nightly.')
+    await activity.stopJob(id, agent)
+    expect(api.executeObjectAction.mock.calls.length).toBe(calls + 1)
+    expect(activity.get(id)?.killReport).toMatchObject({ tone: 'error', title: 'Stop Job did not run.', detail: 'Stop Job is already stopping Nightly.' })
+    answer({ ok: true, value: { steps: [], messages: [], elapsedMs: 1 } })
+    await first
+    expect(activity.get(id)).toMatchObject({ stopping: undefined, killReport: { tone: 'success' } })
     // A lost backend or connection may have come after sp_stop_job ran: the outcome is unknown, not a failure.
     for (const code of ['BACKEND_LOST', 'CONNECTION_LOST', 'CANCELLED'] as const) {
       api.executeObjectAction.mockResolvedValueOnce({ ok: false, error: 'The connection was lost.', code })

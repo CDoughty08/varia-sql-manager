@@ -737,7 +737,7 @@ the names after each sessions sample, only for jobs it does not keep: one read o
 `msdb.dbo.sysjobsteps` (sysadmin only; an Agent role gets the job's name without its steps), on the monitor's pool with its
 prologue, constant text with every id a parameter, checked by the monitor's lint. A name, or msdb naming none, is kept
 60 s for the connection (at most 512 jobs), so a renamed job shows its new name within that and a running
-job costs a small read a minute (two where the steps are named). Short of a lost connection, a timeout or a failed login, which break the sample as any of its statements
+job costs a small read a minute (two where the steps are named). Short of a lost connection, a timeout, a failed login or the sample time budget, which break the sample as any of its statements
 would, neither read ever fails the sample or shows an error: a login without msdb access or an
 Agent role sees "Job 8A1B2C3D-…, step 2", the decoded id and step without names, and the read is not tried again on that
 connection; a lock wait or another passing failure waits out the keep time.

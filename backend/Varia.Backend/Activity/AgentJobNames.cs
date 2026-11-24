@@ -107,7 +107,7 @@ internal sealed class AgentJobNames(ActivityCatalog catalog, Func<long>? clock =
         Trim(steps, time);
     }
 
-    /// <summary>A read failed for the moment (a lock wait, the budget): the names it asked for wait out agentJobNamesMs, keeping
+    /// <summary>A read failed for the moment (a lock wait, a deadlock): the names it asked for wait out agentJobNamesMs, keeping
     /// what was known, so a busy msdb is not asked every sample.</summary>
     public void MissedJobs(IReadOnlyList<Guid> asked)
     {
