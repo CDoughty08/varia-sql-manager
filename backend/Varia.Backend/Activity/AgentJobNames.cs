@@ -43,7 +43,7 @@ internal static class AgentPrograms
 /// <summary>The names of the Agent jobs and steps a monitor's sessions run (AG-16), read through <see cref="ActivitySql.AgentJobs"/>
 /// and <see cref="ActivitySql.AgentSteps"/> and kept per monitor connection (one server, one login: msdb shows each login its own
 /// jobs). A name, or msdb naming none, is kept agentJobNamesMs before it is asked again, so a renamed job shows its new name within
-/// that and a running job costs one small read a minute; a read that failed for the moment waits as long. A read msdb refuses for
+/// that and a running job costs a small read a minute (two with step names); a read that failed for the moment waits as long. A read msdb refuses for
 /// good (PERMISSION_DENIED: no msdb user, no Agent role, sysjobsteps below sysadmin) is not tried again on the connection, and the
 /// rows show the decoded id and step without names. At most agentJobCache jobs and as many steps; past that, what is stale goes,
 /// then everything. Not thread-safe: the sessions probe runs one sample at a time.</summary>
