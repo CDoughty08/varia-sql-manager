@@ -76,7 +76,9 @@ function Sparkline({ runs, usual }: { readonly runs: readonly JobHistoryRun[]; r
     view.ringChanged()
   }, [drawn, shown])
   if (!shown) return null
-  return <div ref={rootRef} className="live-chart agent-history-spark" data-variant="sparkline"><canvas ref={canvasRef} className="live-chart-canvas" /></div>
+  // One image named by the summary (its children, ChartView's canvas among them, are presentational), which the pointer shows too: a
+  // sparkline has no crosshair, and each run's start, outcome and duration are in the list beside it.
+  return <div ref={rootRef} className="live-chart agent-history-spark" data-variant="sparkline" role="img" aria-label={label} title={label}><canvas ref={canvasRef} className="live-chart-canvas" /></div>
 }
 
 /** The running job's view: this run against the usual time, each step's state, and Stop. */

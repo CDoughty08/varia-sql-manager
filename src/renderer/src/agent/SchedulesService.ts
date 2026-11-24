@@ -203,7 +203,7 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
     this.generations.set(id, (this.generations.get(id) ?? 0) + 1)
     this.patch(id, { phase: 'ready', model, drafts, selected, scheduleJobs: undefined, error: undefined, notice, revision: current.revision + 1 })
     this.dirtyChanged(id)
-    if (!model.sysadmin && current.operatorRole === undefined) void this.readRole(id, connectionId)
+    if (!model.sysadmin && !current.operatorRole) void this.readRole(id, connectionId)
     // Opened on a new schedule: its Name is drawn only once the first read is in, so the caret goes there now, and an untouched draft
     // made from the local date moves to the server's (its start date and weekday).
     if (!current.model && selected === newScheduleKey) {
@@ -461,8 +461,9 @@ ${scheduleId}`, pending = this.jobReads.get(key)
     if (!profile || this.roleReads.has(id)) return
     this.roleReads.add(id)
     const result = await this.request(id, requestId => profile({ connectionId, requestId }))
-    if (result?.ok && result.value.profile?.operatorRole && this.connectionOf(id) === connectionId) this.patch(id, { operatorRole: true })
-    else this.roleReads.delete(id)
+    // A read that answered settles it for the document (in the role or not); only a failed one is tried again with the next read.
+    if (!result?.ok) { this.roleReads.delete(id); return }
+    if (result.value.profile?.operatorRole && this.connectionOf(id) === connectionId) this.patch(id, { operatorRole: true })
   }
   /** The grid's Enabled box: saved at once (enable or disable, guarded), whatever the schedule's draft holds. */
   async setEnabled(id: string, scheduleId: number, enabled: boolean): Promise<void> {

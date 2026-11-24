@@ -123,27 +123,41 @@ internal static class AgentJobDocumentLiveChecks
         finally { await sql("IF USER_ID(" + Quote(login) + ") IS NOT NULL DROP USER " + Bracket(login) + ";", "msdb"); }
     }
 
-    /// <summary>The Schedules document's Enabled box as a SQLAgentOperatorRole login (AG-10): the exact arguments its enable and disable send
-    /// (ScheduleSave) toggle a schedule another login owns, while a rename of it is refused; all inside a transaction rolled back.</summary>
+    /// <summary>The Schedules document's Enabled box as a SQLAgentOperatorRole login (AG-10): the very batch its enable and disable send
+    /// (ScheduleSave: the STALE guard under UPDLOCK, HOLDLOCK, then sp_update_schedule with only the schedule and @enabled), run through
+    /// sp_executesql with its parameters, toggles a schedule another login owns, while a rename of it is refused; all inside a transaction
+    /// rolled back.</summary>
     private static async Task OperatorScheduleAsync(Action<bool, string> check, ScratchDatabase scratch, Func<string, string, Task<SqlRun>> sql)
     {
         static string Bracket(string value) => "[" + value.Replace("]", "]]", StringComparison.Ordinal) + "]";
         static string Literal(object? value) => value switch { null => "NULL", string text => Quote(text), _ => Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture)! };
-        static string Arguments(string op) => string.Join(", ", AgentSql.ScheduleSave(op, 0, 0, DateTime.UtcNow, null, null, null, []).Calls[0].Arguments
-            .Where(argument => argument.Name != "@schedule_id").Select(argument => argument.Name + " = " + Literal(argument.Value)));
+        static string TypeOf(AgentParameter parameter) => parameter.Type switch
+        {
+            System.Data.SqlDbType.Int => "int", System.Data.SqlDbType.TinyInt => "tinyint", System.Data.SqlDbType.DateTime => "datetime",
+            System.Data.SqlDbType.NVarChar => "nvarchar(" + parameter.Size.ToString(System.Globalization.CultureInfo.InvariantCulture) + ")",
+            _ => throw new InvalidOperationException("A schedule save parameter of an unexpected type.")
+        };
+        // The batch's guard values are read (as the caller) just before it runs: the schedule's id, version and date in @id, @v and @m.
+        static string Run(string op)
+        {
+            var batch = AgentSql.ScheduleSave(op, 0, 0, DateTime.UtcNow, null, null, null, []);
+            string Value((AgentParameter Parameter, object? Value) entry) => entry.Parameter.Name switch { "@schedule_id" => "@id", "@version" => "@v", "@modified" => "@m", _ => Literal(entry.Value) };
+            return "SELECT @v = version_number, @m = date_modified FROM msdb.dbo.sysschedules WHERE schedule_id = @id;\n"
+                + "EXECUTE AS LOGIN = @login;\nEXEC sp_executesql " + Quote(batch.Text) + ", " + Quote(string.Join(", ", batch.Parameters.Select(entry => entry.Parameter.Name + " " + TypeOf(entry.Parameter))))
+                + ", " + string.Join(", ", batch.Parameters.Select(Value)) + ";\nREVERT;\n";
+        }
         var login = scratch.OwnLogin("agsched");
         var made = await sql("CREATE LOGIN " + Bracket(login) + " WITH PASSWORD = " + Quote(ScratchDatabase.Throwaway()) + ", CHECK_POLICY = OFF;", "master");
         try
         {
             var mapped = await sql("CREATE USER " + Bracket(login) + " FOR LOGIN " + Bracket(login) + ";\nALTER ROLE SQLAgentOperatorRole ADD MEMBER " + Bracket(login) + ";", "msdb");
-            var run = await sql("BEGIN TRANSACTION;\nDECLARE @id int;\nEXEC msdb.dbo.sp_add_schedule @schedule_name = " + Quote(scratch.AgentObject("sch")) + ", @enabled = 1, @freq_type = 1, @schedule_id = @id OUTPUT;\n"
-                + "EXECUTE AS LOGIN = " + Quote(login) + ";\nEXEC msdb.dbo.sp_update_schedule @schedule_id = @id, " + Arguments("disable") + ";\n"
-                + "REVERT;\nDECLARE @off int = (SELECT enabled FROM msdb.dbo.sysschedules WHERE schedule_id = @id);\nEXECUTE AS LOGIN = " + Quote(login) + ";\n"
-                + "EXEC msdb.dbo.sp_update_schedule @schedule_id = @id, " + Arguments("enable") + ";\n"
-                + "DECLARE @refused int = 0;\nBEGIN TRY EXEC msdb.dbo.sp_update_schedule @schedule_id = @id, @new_name = N'renamed'; END TRY BEGIN CATCH SET @refused = ERROR_NUMBER(); END CATCH;\nREVERT;\n"
+            var run = await sql("BEGIN TRANSACTION;\nDECLARE @id int, @v int, @m datetime, @login sysname = " + Quote(login) + ";\n"
+                + "EXEC msdb.dbo.sp_add_schedule @schedule_name = " + Quote(scratch.AgentObject("sch")) + ", @enabled = 1, @freq_type = 1, @schedule_id = @id OUTPUT;\n"
+                + Run("disable") + "DECLARE @off int = (SELECT enabled FROM msdb.dbo.sysschedules WHERE schedule_id = @id);\n" + Run("enable")
+                + "EXECUTE AS LOGIN = @login;\nDECLARE @refused int = 0;\nBEGIN TRY EXEC msdb.dbo.sp_update_schedule @schedule_id = @id, @new_name = N'renamed'; END TRY BEGIN CATCH SET @refused = ERROR_NUMBER(); END CATCH;\nREVERT;\n"
                 + "SELECT CONCAT(@off, ':', enabled, ':', CASE WHEN @refused <> 0 THEN 'refused' ELSE 'renamed' END, ':', CASE WHEN owner_sid = SUSER_SID() THEN 'caller' ELSE 'other' END) FROM msdb.dbo.sysschedules WHERE schedule_id = @id;\nROLLBACK TRANSACTION;", "msdb");
             check(made.Status == "completed" && mapped.Status == "completed" && run.Error is null && run.Scalar == "0:1:refused:caller",
-                "a SQLAgentOperatorRole login enables and disables a schedule it does not own with the arguments the Schedules document sends, and may not rename it: " + made.Error + mapped.Error + run.Error + " " + run.Scalar);
+                "a SQLAgentOperatorRole login enables and disables a schedule it does not own with the Schedules document's own guarded batch, and may not rename it: " + made.Error + mapped.Error + run.Error + " " + run.Scalar);
         }
         finally { await sql("IF USER_ID(" + Quote(login) + ") IS NOT NULL DROP USER " + Bracket(login) + ";", "msdb"); }
     }

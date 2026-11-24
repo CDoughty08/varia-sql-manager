@@ -94,7 +94,11 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
   // The list's row menu (AG-10, agent.jobs.context through MenuService): the job verbs on the jobs selected there.
   const menuTarget = useMenuTarget<HTMLDivElement>(() => ({ kind: 'jobActivity', tabId: documentId }))
   // Start in the Agent-stopped banner (AG-10) follows the Agent node's service verb and its rules (a Linux server, Varia off Windows, a cluster).
+  // It redraws when a start, stop or restart begins or ends, a status sample arrives or a dialog opens or closes, none of which
+  // changes the monitor's own state.
   useServiceSnapshot(workbench.explorer)
+  useServiceSnapshot(workbench.explorerStatus)
+  useServiceSnapshot(workbench.longRuns)
   useServiceSnapshot(workbench.dialogs)
   if (!state || !handle) return <EmptyState className="workspace-empty" icon="agent-activity" title={jobActivityTitle} detail="This document has closed." />
   const probe = live.probes[agentJobsProbe]
@@ -106,7 +110,8 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
   const availability = service.availability(documentId), shown = service.shownAvailability(documentId)
   const start = service.startAgentTarget(documentId)
   const canStart = !!start && workbench.commands.isEnabled('explorer.startAgent', start.args)
-  const banner = agentBanner(shown, state.service, canStart || !!start?.reason, state.linux)
+  const startWhy = canStart ? undefined : start?.reason ?? (workbench.dialogs.current ? 'Close the open dialog first.' : 'Start SQL Server Agent is not available right now.')
+  const banner = agentBanner(shown, state.service, !!start, state.linux)
   const override = agentStatusOverride(availability)
   const problems = listProblems(probe)
   const waiting = service.lastRunWaiting(documentId)
@@ -138,7 +143,7 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
     tools={stale && <StaleBadge updatedAt={probe?.lastSampleAt} stale={stale} />} verbs={verbs} attributes={{ 'data-agent-jobs': documentId }}>
     <div className="agent-jobs">
       {banner && <div className="agent-banner" role="status"><Icon name="warning" /><span>{banner.text}</span>
-        {banner.start && start && <button type="button" className="agent-banner-start" disabled={!canStart} title={canStart ? 'Start SQL Server Agent' : start.reason ?? 'Start SQL Server Agent is not available right now.'}
+        {banner.start && start && <button type="button" className="agent-banner-start" disabled={!canStart} title={startWhy ?? 'Start SQL Server Agent'}
           onClick={() => void workbench.commands.execute('explorer.startAgent', start.args, 'toolbar')}><Icon name="play" />Start Agent…</button>}
       </div>}
       {end ? <div className="agent-jobs-ended">

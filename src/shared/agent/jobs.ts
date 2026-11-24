@@ -81,7 +81,7 @@ export const serviceStates = { stopped: 1, running: 4 } as const
 export const startupDisabled = 4
 
 /** What agent.jobs.service's last sample says (undefined members: not read, so unknown). */
-export interface AgentServiceSample { readonly agentXps?: number; readonly serviceState?: number; readonly startupType?: number }
+export interface AgentServiceSample { readonly agentXps?: number; readonly serviceState?: number; readonly startupType?: number; readonly clustered?: number }
 /**
  * Whether Agent can run jobs now, by agent.jobs.service: `running` (XPs on and the service running or unreadable), `stopped`
  * (the service reads stopped), `xpsOff` (XPs 0 while the service runs), `unknown` (XPs 0 and the service state unreadable,
@@ -297,9 +297,7 @@ export function jobActivityCommandEntries(): { readonly [K in JobActivityCommand
       title: jobActivityTitle, category: 'SQL Server Agent', icon: 'agent-activity', keywords: ['agent', 'jobs', 'activity', 'monitor', 'running', 'sqlserveragent', 'live'],
       precondition: 'agentEnabled && backendReady && hasConnection', unavailableHint: 'Connect to a SQL Server whose SQL Server Agent you can see first.',
       menus: [
-        { menu: 'explorer.context', group: '1_monitor', order: 1, mnemonic: 'j', when: "(explorerNode == 'agent' || explorerNode == 'agentJobActivity') && !explorerServerLost" },
-        // AG-10: View › Job Activity Monitor, after Activity Monitor and Integration Services Operations (B: Search Objects… has J).
-        { menu: 'view', group: '2_monitor', order: 3, mnemonic: 'b' }
+        { menu: 'explorer.context', group: '1_monitor', order: 1, mnemonic: 'j', when: "(explorerNode == 'agent' || explorerNode == 'agentJobActivity') && !explorerServerLost" }
       ]
     },
     // F5 refreshes the active monitor (AG-10), as in SSMS's Job Activity Monitor and Varia's other live documents; Refresh ends the row menu.

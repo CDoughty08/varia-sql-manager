@@ -347,8 +347,8 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
   },
   'agent.jobs.service': {
     id: 'agent.jobs.service', source: 'agent.jobs', label: 'SQL Server Agent state', intervalMs: { default: 10_000, min: 5000, max: 300_000 }, gates: { minMajor: 13, editions: [1, 2, 3, 8] },
-    description: 'SQL Server Agent\'s state for the views of its jobs, so they need no Object Explorer open: the same constant text as explorer.agentService (Agent XPs from sys.configurations, which needs no permission; the service\'s state and startup type only where HAS_PERMS_BY_NAME says the login may read them, else left out as unknown).',
-    status: ['agentXps', 'serviceState', 'startupType']
+    description: 'SQL Server Agent\'s state for the views of its jobs, so they need no Object Explorer open: the same constant text as explorer.agentService (Agent XPs from sys.configurations, which needs no permission; the service\'s state and startup type only where HAS_PERMS_BY_NAME says the login may read them, else left out as unknown), and whether the server is a failover cluster instance (SERVERPROPERTY IsClustered), which greys Job Activity Monitor\'s Start Agent.',
+    status: ['agentXps', 'serviceState', 'startupType', 'clustered']
   },
   'agent.jobs.watched': {
     id: 'agent.jobs.watched', source: 'agent.jobs', label: 'Watched jobs', intervalMs: { default: 5000, min: 2000, max: 300_000 }, gates: { minMajor: 13, editions: [1, 2, 3, 8] },

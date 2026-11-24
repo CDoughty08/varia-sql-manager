@@ -570,10 +570,6 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     const node = this.selectedNode()
     return node && this.targetOf(node)
   }
-  /**
-   * Narrows database menus by the live status samples too (D3a): a database a sample newer than its listing shows offline
-   * greys Take Offline at once, before any listing. The context keys follow the samples; nothing subscribes for them but this.
-   */
   /** Feeds the Agent node's `busy` rule from the long-run registry (AG-10); the context keys follow its runs. */
   useLongRuns(source: AgentLongRunSource): Disposable {
     this.longRuns = source
@@ -581,6 +577,10 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.updateContext()
     return { dispose: () => { stop(); if (this.longRuns === source) { this.longRuns = undefined; this.updateContext() } } }
   }
+  /**
+   * Narrows database menus by the live status samples too (D3a): a database a sample newer than its listing shows offline
+   * greys Take Offline at once, before any listing. The context keys follow the samples; nothing subscribes for them but this.
+   */
   useStatus(source: DatabaseRuntimeSource): Disposable {
     this.status = source
     const stop = source.subscribe(() => this.guard(() => this.updateContext()))
@@ -605,15 +605,15 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   /**
    * A connection's SQL Server Agent node as a menu target for its service verbs from elsewhere (AG-10, Job Activity Monitor's Start Agent):
    * the tree's own row when it is loaded, else the object with the same facts and no row (id 0, so nothing is reloaded after the run). A
-   * state or startup type the tree has not sampled is taken from `sample` (the monitor's own service probe).
+   * state, startup type or cluster fact the tree has not sampled is taken from `sample` (the monitor's own service probe).
    */
-  agentMenuNode(connectionId: string, sample?: { readonly state?: number; readonly startup?: number }): ExplorerMenuNode | undefined {
+  agentMenuNode(connectionId: string, sample?: { readonly state?: number; readonly startup?: number; readonly clustered?: boolean }): ExplorerMenuNode | undefined {
     if (!this.connectionOf(connectionId)) return undefined
     let found: ExplorerMenuNode | undefined
     for (const node of this.nodes.values()) if (node.kind === 'agent' && node.connectionId === connectionId && (found = this.menuNode(node.id))) break
     const menu = found ?? { ...this.objectNode(connectionId, { kind: 'agent' }, 'SQL Server Agent'), id: 0, agent: this.agentFacts(connectionId) }
     const facts = menu.agent ?? this.agentFacts(connectionId)
-    return { ...menu, agent: { ...facts, ...(facts.state === undefined && sample?.state !== undefined ? { state: sample.state } : {}), ...(facts.startup === undefined && sample?.startup !== undefined ? { startup: sample.startup } : {}) } }
+    return { ...menu, agent: { ...facts, ...(facts.state === undefined && sample?.state !== undefined ? { state: sample.state } : {}), ...(facts.startup === undefined && sample?.startup !== undefined ? { startup: sample.startup } : {}), ...(!facts.clustered && sample?.clustered ? { clustered: true } : {}) } }
   }
   /** A row's node (a synthetic row's owner) as a context menu's target, with its id; undefined for a removed node. */
   menuNode(rowId: number | undefined): ExplorerMenuNode | undefined {

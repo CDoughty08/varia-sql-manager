@@ -85,9 +85,10 @@ alerts, operators and who is notified, behind the same gate until 0.11.0.
   result is its own line, a refusal fails only that job, and Stop and Escape (which closes a form) work as for Start; Agent stopped or Agent XPs off is a banner,
   a note below the list says Status is msdb's last reading, and the list refreshes once Agent runs again. The Agent-stopped
   banner has **Start Agent…**, which runs the Agent node's Start (`explorer.startAgent`, with its confirmation and rules: greyed
-  with the reason where the node's would be, the monitor's own service reading standing in for one the tree has not sampled).
-  Double-click, Enter or Open on the selected job opens its job document. View › Job Activity Monitor opens it for the active
-  connection, and F5 in it refreshes the list (Refresh Jobs). The list's row menu (right-click, Shift+F10 or the context-menu
+  with the reason where the node's would be, or while a dialog is open; the monitor's own `agent.jobs.service` reading, which
+  carries the cluster fact too, stands in for one the tree has not sampled). Double-click, Enter or Open on the selected job
+  opens its job document, and F5 in it refreshes the list (Refresh Jobs). A View menu item waits for the release gate to go
+  (AG-9), since a menubar item cannot be gated. The list's row menu (right-click, Shift+F10 or the context-menu
   key; `agent.jobs.context` through MenuService) acts on the selected jobs: Open, Create Job Like This and Script Job as CREATE
   (a new query window, through Object Explorer's Script As) on one job, Start Job, Stop Job, Enable Job and Disable Job as the
   bar runs them, View History, and Refresh. Copy in the list is the grid's own (Ctrl+C), since the row menu replaces Query
@@ -222,8 +223,9 @@ alerts, operators and who is notified, behind the same gate until 0.11.0.
   History shows. A New Job has no History until it is
   saved. All jobs' history in Log File Viewer opens the viewer with this job checked. The sparkline draws through ChartView like
   every chart: a ring of the last 14 finished runs, evenly spaced oldest first (runs, not samples over time), their durations over
-  a faint fill and the usual time as a gray line; its accessible name says how many failed, since status colours are never a
-  series.
+  a faint fill and the usual time as a gray line. It is one image whose name (also its tooltip) says how many runs failed and the
+  usual time, since status colours are never a series; a sparkline has no crosshair, so each run's start, outcome and duration
+  are read in the runs list beside it.
 - **Schedules document** (Manage Schedules on the Jobs folder's menu and the palette; New › Schedule… on the Agent node). One
   document per connection replaces SSMS's Manage Schedules dialog: a grid of the shared schedules (name, when, Enabled, how many
   jobs, owner) with All, Unused and Disabled views and a filter that matches schedule names, job names (sysadmin, whose read has the links) and when schedules run, and

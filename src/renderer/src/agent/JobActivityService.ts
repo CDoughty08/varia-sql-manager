@@ -212,7 +212,7 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
   startAgentTarget(id: string): { readonly args: CommandArgs; readonly reason?: string } | undefined {
     const state = this.get(id)
     if (!state?.connectionId || !this.live(id)) return undefined
-    const node = this.options.explorer?.agentMenuNode(state.connectionId, { ...state.service?.serviceState !== undefined ? { state: state.service.serviceState } : {}, ...state.service?.startupType !== undefined ? { startup: state.service.startupType } : {} })
+    const node = this.options.explorer?.agentMenuNode(state.connectionId, { ...state.service?.serviceState !== undefined ? { state: state.service.serviceState } : {}, ...state.service?.startupType !== undefined ? { startup: state.service.startupType } : {}, ...state.service?.clustered === 1 ? { clustered: true } : {} })
     if (!node) return undefined
     const reason = actionMenuReasons(node).startAgent
     // The verb's precondition reads the selection's action keys: the node's stand in for them, as a Search Objects result's do.
@@ -258,9 +258,9 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
         if (sample.probe === agentServiceProbe && sample.status) {
           // Every service sample carries what it read; a value left out is unknown, so the sample replaces the last whole.
           const value = (id: string) => { const entry = sample.status!.find(item => item.id === id); return typeof entry?.value === 'number' ? entry.value : undefined }
-          const service: AgentServiceSample = { agentXps: value('agentXps'), serviceState: value('serviceState'), startupType: value('startupType') }
+          const service: AgentServiceSample = { agentXps: value('agentXps'), serviceState: value('serviceState'), startupType: value('startupType'), clustered: value('clustered') }
           const before = this.get(state.id)?.service
-          if (before?.agentXps !== service.agentXps || before?.serviceState !== service.serviceState || before?.startupType !== service.startupType) patch = { ...patch, service }
+          if (before?.agentXps !== service.agentXps || before?.serviceState !== service.serviceState || before?.startupType !== service.startupType || before?.clustered !== service.clustered) patch = { ...patch, service }
           // Agent usable while the list stopped on AGENT_DISABLED (it may have restarted between two service samples): read again
           // so the list resumes by itself.
           if (agentAvailability(service) === 'running' && handle.getSnapshot().probes[agentJobsProbe]?.error?.code === 'AGENT_DISABLED') handle.refresh()

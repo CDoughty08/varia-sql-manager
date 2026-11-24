@@ -480,7 +480,20 @@ describe('Job Activity Monitor\'s Start Agent, F5, View menu and row menu (AG-10
     expect(await fixture.commands.execute('explorer.startAgent', start.args, 'toolbar')).toBe(true)
     expect(fixture.dialogs.current).toMatchObject({ dialog: 'startAgent', connectionId: 'c1', target: { kind: 'agent' } })
   })
-  it('binds F5 to Refresh Jobs in the monitor and places Job Activity Monitor in View', () => {
+  it("greys Start Agent on a failover cluster instance from the monitor's own service probe, with no Object Explorer sample", () => {
+    const fixture = workbenchFixture({ agentPreview: true, windowsClient: true })
+    cleanups.push(() => fixture.dispose())
+    fixture.api.push(readyBackend())
+    fixture.connect(connectionInfo('c1'))
+    const id = fixture.jobActivity.open('c1')
+    const handle = (fixture.live.handles as FakeLiveHandle[]).find(item => item.spec.probes.some(probe => probe.probe === 'agent.jobs.list'))!
+    handle.deliver({ ...stopped, samples: [{ ...stopped.samples[0], status: [...stopped.samples[0].status, { id: 'clustered', value: 1 }] }] } as never)
+    const start = fixture.jobActivity.startAgentTarget(id)!
+    expect(start.args).toMatchObject({ target: { node: { agent: { clustered: true } } } })
+    expect(start.reason).toMatch(/cluster/i)
+    expect(fixture.commands.isEnabled('explorer.startAgent', start.args)).toBe(false)
+  })
+  it('binds F5 to Refresh Jobs in the monitor and leaves the View menu to the release (AG-9), as a menubar item cannot be gated', () => {
     const refresh = commandDescriptor('agent.refreshJobs')
     const f5 = refresh.keybindings?.find(binding => 'key' in binding && binding.key === 'f5')
     expect(f5).toBeDefined()
@@ -489,7 +502,8 @@ describe('Job Activity Monitor\'s Start Agent, F5, View menu and row menu (AG-10
     // Object Explorer's own F5 and the query editor's keep theirs.
     expect(evaluateWhen(when, { activeDocumentIsJobActivity: true, activePanel: 'explorer' } as never)).toBe(false)
     expect(evaluateWhen(when, { activeDocumentIsJobActivity: true, activePanel: 'editor', editorFocus: true } as never)).toBe(false)
-    expect(commandDescriptor('agent.jobActivity').menus?.some(menu => menu.menu === 'view')).toBe(true)
+    // A menubar item cannot carry the release gate (agentEnabled), so View › Job Activity Monitor waits for AG-9 to remove it.
+    expect(commandDescriptor('agent.jobActivity').menus?.some(menu => menu.menu === 'view')).toBe(false)
     // Enter opens the selected job in the list, which carries no Query Output menu now (its row menu is the job's).
     expect(commandDescriptor('agent.openJob').keybindings?.[0]?.when).toBe('activeDocumentIsJobActivity && liveGridFocus')
   })

@@ -469,6 +469,10 @@ describe('the Schedules document', () => {
     expect(schedules.readOnly(id, schedules.record(id, '3'))).toBe(schedulesText.readOnly('dana'))
     await schedules.setEnabled(id, 3, true)
     expect(executes()).toHaveLength(0)
+    // The answer settles it for the document: Refresh reads the schedules again but not the role.
+    await schedules.refresh(id)
+    await settled()
+    expect(api.agentProfile).toHaveBeenCalledTimes(1)
   })
   it('reads the chosen jobs again after a STALE Create, keeps a pending new schedule, and drops a jobs read from before a re-read', async () => {
     const { schedules, setModel, executes, answers, api } = schedulesWorkbench()

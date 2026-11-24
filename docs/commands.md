@@ -436,7 +436,7 @@ keys it uses are listed below.
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
-| Job Activity Monitor | `agent.jobActivity` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › Job Activity Monitor; View › Job Activity Monitor |
+| Job Activity Monitor | `agent.jobActivity` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › Job Activity Monitor |
 | Refresh Jobs | `agent.refreshJobs` | F5 (`activeDocumentIsJobActivity && !activeDocumentIsJobHistory && !activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus`) | F5 (`activeDocumentIsJobActivity && !activeDocumentIsJobHistory && !activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus`) | F5 (`activeDocumentIsJobActivity && !activeDocumentIsJobHistory && !activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus`) | `agentEnabled && backendReady && activeDocumentIsJobActivity` | Job Activity Monitor context menu › Refresh |
 | Start Jobs | `agent.startJobs` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | Job Activity Monitor context menu › Start Job |
 | Stop Jobs | `agent.stopJobs` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | Job Activity Monitor context menu › Stop Job |
@@ -660,7 +660,6 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `1_layout` | **R**eset Layout | `layout.reset` | Always |
 | `2_monitor` | Activity **M**onitor | `activity.open` | Always |
 | `2_monitor` | I**n**tegration Services Operations | `ssis.allOperations` | Always |
-| `2_monitor` | Jo**b** Activity Monitor | `agent.jobActivity` | Always |
 | `3_theme` | T**h**eme › | Submenu: View › Theme | Always |
 | `4_zoom` | Zoom **I**n | `view.zoomIn` | Always |
 | `4_zoom` | Zoom **O**ut | `view.zoomOut` | Always |
