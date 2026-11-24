@@ -264,7 +264,6 @@ Probe `activity.sessions`; key `sessionId` (with `loginTime` for rates); at most
 | Command | `command` | text | — | Yes | SSMS | The request's command. |
 | Application | `application` | text | — | Yes | SSMS | program_name. |
 | Agent Job | `job` | text | — | Yes | New | The SQL Server Agent job step the session runs (program_name "SQLAgent - TSQL JobStep (Job 0x… : Step n)"): the job's name, the step and the step's name, read from msdb (sysjobs_view, and sysjobsteps for sysadmin) and kept a minute; "Job <id>, step n" when msdb names no job to this login. A link that opens the job at its History. |
-| Agent Job Name | `jobName` | text | — |  | New | The Agent job's name alone, when msdb gave it; Open Job and Stop Job act on it. |
 | Wait Type | `waitType` | text | — | Yes | SSMS | The request's wait type; for a parallel request, the longest blocking wait of its tasks. |
 | Wait Time (ms) | `waitTimeMs` | bigint | ms | Yes | SSMS | The request's current wait. |
 | Wait Resource | `waitResource` | text | — | Yes | SSMS | wait_resource, else the blocking task's resource description (512 characters). |
@@ -293,6 +292,7 @@ Probe `activity.sessions`; key `sessionId` (with `loginTime` for rates); at most
 | Host PID | `hostProcessId` | int | id |  | New | host_process_id. |
 | Query Hash | `queryHash` | text | — |  | New | The current request's query_hash. |
 | Varia | `varia` | text | — |  | New | What a Varia session is: this window's query tab, or one of its pools. |
+| Agent Job Name | `jobName` | text | — |  | New | The Agent job's name alone, when msdb gave it; Open Job and Stop Job act on it. |
 
 ### Blocking (`blocking`)
 
@@ -312,7 +312,6 @@ Probe `activity.sessions`; key `sessionId`; at most 2,000 rows. Order: lead bloc
 | Host | `hostName` | text | — | Yes | New | host_name. |
 | Application | `application` | text | — | Yes | New | program_name. |
 | Agent Job | `job` | text | — | Yes | New | The SQL Server Agent job step the session runs (program_name "SQLAgent - TSQL JobStep (Job 0x… : Step n)"): the job's name, the step and the step's name, read from msdb (sysjobs_view, and sysjobsteps for sysadmin) and kept a minute; "Job <id>, step n" when msdb names no job to this login. A link that opens the job at its History. |
-| Agent Job Name | `jobName` | text | — |  | New | The Agent job's name alone, when msdb gave it; Open Job and Stop Job act on it. |
 | Database | `database` | text | — | Yes | New | The request's database, else the session's. |
 | Open Transactions | `openTransactions` | int | count | Yes | New | The session's open transactions. |
 | Cycle | `cycle` | bool | — | Yes | New | Part of a cycle (a deadlock SQL Server has not resolved yet); the chain is cut at its lowest session id. |
@@ -320,6 +319,7 @@ Probe `activity.sessions`; key `sessionId`; at most 2,000 rows. Order: lead bloc
 | Login Time | `loginTime` | datetime | — |  | New | The session's login_time; with the session id it identifies the session for Details and Kill Process. |
 | Host PID | `hostProcessId` | int | id |  | New | The session's host_process_id, which Kill Process checks. |
 | Varia | `varia` | text | — |  | New | What a Varia session is, as in Sessions; Kill Process is not offered for Varia's own pools. |
+| Agent Job Name | `jobName` | text | — |  | New | The Agent job's name alone, when msdb gave it; Open Job and Stop Job act on it. |
 
 ### Active Expensive Queries (`activeQueries`)
 

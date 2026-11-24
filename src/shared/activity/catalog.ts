@@ -224,10 +224,9 @@ const c = (id: string, caption: string, type: ColumnType, unit: ColumnUnit, visi
 /** AG-16's columns on a session's row: the SQL Server Agent job step it runs, as a link, and the job's name, which Open Job
  *  and Stop Job read. */
 const agentJobNote = 'The SQL Server Agent job step the session runs (program_name "SQLAgent - TSQL JobStep (Job 0x… : Step n)"): the job\'s name, the step and the step\'s name, read from msdb (sysjobs_view, and sysjobsteps for sysadmin) and kept a minute; "Job <id>, step n" when msdb names no job to this login. A link that opens the job at its History.'
-const agentJobColumns = (visible: boolean): readonly ColumnSpec[] => [
-  { ...c('job', 'Agent Job', 'text', '', visible, 'new', agentJobNote), link: true },
-  c('jobName', 'Agent Job Name', 'text', '', false, 'new', 'The Agent job\'s name alone, when msdb gave it; Open Job and Stop Job act on it.')
-]
+const agentJobColumn = (visible: boolean): ColumnSpec => ({ ...c('job', 'Agent Job', 'text', '', visible, 'new', agentJobNote), link: true })
+/** Hidden, so with the other hidden columns at the end of a table. */
+const agentJobNameColumn = c('jobName', 'Agent Job Name', 'text', '', false, 'new', 'The Agent job\'s name alone, when msdb gave it; Open Job and Stop Job act on it.')
 
 /** Row tones and the generic grid tone each uses (L5's `resultsGrid.row*` keys). */
 export const rowTones = {
@@ -268,7 +267,7 @@ export const tableSpecs: { readonly [T in ActivityTable]: TableSpec } = {
       c('database', 'Database', 'text', '', true, 'ssms', 'The request\'s database, else the session\'s.'),
       c('command', 'Command', 'text', '', true, 'ssms', 'The request\'s command.'),
       c('application', 'Application', 'text', '', true, 'ssms', 'program_name.'),
-      ...agentJobColumns(true),
+      agentJobColumn(true),
       c('waitType', 'Wait Type', 'text', '', true, 'ssms', 'The request\'s wait type; for a parallel request, the longest blocking wait of its tasks.'),
       c('waitTimeMs', 'Wait Time (ms)', 'bigint', 'ms', true, 'ssms', 'The request\'s current wait.'),
       c('waitResource', 'Wait Resource', 'text', '', true, 'ssms', `wait_resource, else the blocking task's resource description (${number(activityLimits.resourceChars)} characters).`),
@@ -296,7 +295,8 @@ export const tableSpecs: { readonly [T in ActivityTable]: TableSpec } = {
       c('authScheme', 'Auth Scheme', 'text', '', false, 'new', 'SQL, NTLM or KERBEROS.'),
       c('hostProcessId', 'Host PID', 'int', 'id', false, 'new', 'host_process_id.'),
       c('queryHash', 'Query Hash', 'text', '', false, 'new', 'The current request\'s query_hash.'),
-      c('varia', 'Varia', 'text', '', false, 'new', 'What a Varia session is: this window\'s query tab, or one of its pools.')
+      c('varia', 'Varia', 'text', '', false, 'new', 'What a Varia session is: this window\'s query tab, or one of its pools.'),
+      agentJobNameColumn
     ]
   },
   blocking: {
@@ -315,12 +315,13 @@ export const tableSpecs: { readonly [T in ActivityTable]: TableSpec } = {
       c('login', 'Login', 'text', '', true, 'new', 'login_name.'),
       c('hostName', 'Host', 'text', '', true, 'new', 'host_name.'),
       c('application', 'Application', 'text', '', true, 'new', 'program_name.'),
-      ...agentJobColumns(true),
+      agentJobColumn(true),
       c('database', 'Database', 'text', '', true, 'new', 'The request\'s database, else the session\'s.'),
       c('openTransactions', 'Open Transactions', 'int', 'count', true, 'new', 'The session\'s open transactions.'),
       c('cycle', 'Cycle', 'bool', '', true, 'new', 'Part of a cycle (a deadlock SQL Server has not resolved yet); the chain is cut at its lowest session id.'),
       c('lastBatch', 'Last Batch', 'text', '', true, 'new', 'Lead blockers only: the start of the last batch it sent (sys.dm_exec_input_buffer).'),
-      ...sessionIdentityColumns
+      ...sessionIdentityColumns,
+      agentJobNameColumn
     ]
   },
   activeQueries: {
@@ -357,7 +358,8 @@ export const tableSpecs: { readonly [T in ActivityTable]: TableSpec } = {
       c('hostName', 'Host Name', 'text', '', false, 'new', 'The session\'s host_name, which Kill Process names.'),
       c('openTransactions', 'Open Transactions', 'int', 'count', false, 'new', 'The session\'s open transactions, which Kill Process warns about.'),
       c('application', 'Application', 'text', '', false, 'new', 'The session\'s program_name, from its Sessions row.'),
-      ...agentJobColumns(false),
+      agentJobColumn(false),
+      agentJobNameColumn,
       ...sessionIdentityColumns
     ]
   },

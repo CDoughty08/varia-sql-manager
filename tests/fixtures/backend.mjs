@@ -1521,7 +1521,7 @@ function activitySessionsSample(live, probe, revision = revisionOf(probe)) {
   // The probe's sort for this table (a header's sort button), by text with the session id breaking ties.
   const sort = (probe.sort ?? []).filter(key => key.table === undefined || key.table === 0)
   if (sort.length) rows.sort((a, b) => { for (const key of sort) { const left = String(a[key.column] ?? ''), right = String(b[key.column] ?? ''); if (left !== right) return (left < right ? -1 : 1) * (key.descending ? -1 : 1) } return a.sessionId - b.sessionId })
-  const columns = spec.columns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true }))
+  const columns = spec.columns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true, ...(column.role ? { role: column.role } : {}) }))
   const result = storeResult({ columns, rows: rows.map(row => spec.columns.map(column => column.id === 'sessionId' ? String(row.sessionId) : row[column.id] ?? null)) }, 0)
   const kept = live.kept.get(probe.probe) ?? []
   kept.push(result.resultId)

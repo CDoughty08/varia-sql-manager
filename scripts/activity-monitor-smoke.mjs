@@ -641,9 +641,10 @@ try {
   // AG-16: SQL Server Agent runs step 2 of Nightly. Its session's Agent Job cell is a link to the job's document at History;
   // the row menu's Stop Job sends AG-2's guarded stopJob with the id the program name carries.
   await writeFile(join(control, 'activity-agent-job'), '')
-  const jobLink = sessionsGrid.getByRole('gridcell', { name: 'Nightly, step 2 (Load)', exact: true })
+  // Active, a link cell's name adds ", link, press Enter to open".
+  const jobLink = sessionsGrid.getByRole('gridcell', { name: /^Nightly, step 2 \(Load\)/ })
   await expect(jobLink).toBeVisible({ timeout: 15_000 })
-  const jobMenu = await sessionMenu(sessionsGrid, 'DB-01')
+  const jobMenu = await sessionMenu(sessionsGrid, 'NT SERVICE\\SQLSERVERAGENT')
   await expect(jobMenu.getByRole('menuitem', { name: /^Open Job/ })).toBeEnabled()
   await jobMenu.getByRole('menuitem', { name: /^Stop Job/ }).click()
   await expect(monitor().getByRole('status').filter({ hasText: 'Stop requested for job Nightly.' })).toBeVisible()
@@ -658,12 +659,12 @@ try {
   await expect(documentTab(page, 'Job Properties - Nightly')).toHaveAttribute('aria-selected', 'true')
   await expect(documentFrame(page, 'Nightly').getByRole('button', { name: 'History', exact: true })).toHaveAttribute('aria-current', 'location')
   // Back on the monitor, the link again focuses the one tab rather than opening another.
-  await documentTab(page, /^Activity Monitor/).click()
+  await queryTabs().filter({ hasText: 'activity-server - Activity Monitor' }).click()
   await jobLink.click()
   await expect(documentTab(page, 'Job Properties - Nightly')).toHaveAttribute('aria-selected', 'true')
   await expect(documentTab(page, 'Job Properties - Nightly')).toHaveCount(1)
   await page.getByRole('button', { name: 'Close Job Properties - Nightly', exact: true }).click()
-  await documentTab(page, /^Activity Monitor/).click()
+  await queryTabs().filter({ hasText: 'activity-server - Activity Monitor' }).click()
   await rm(join(control, 'activity-agent-job'))
   await expect(jobLink).toHaveCount(0, { timeout: 15_000 })
   console.log('Agent job links passed: a job step\'s session links to its job at History, focused if open, and Stop Job sends the guarded verb with its id.')
