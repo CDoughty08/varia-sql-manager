@@ -176,7 +176,7 @@ export class AgentTreeLive extends SnapshotStore<AgentTreeSnapshot> implements D
 
   private open(key: string): void {
     const at = key.indexOf(':'), kind = key.slice(0, at) as Kind, connectionId = key.slice(at + 1)
-    if (kind === 'tree' && !this.seen.has(connectionId) && this.agents(connectionId).some(agent => agent.children !== undefined && agent.load !== 'loading')) this.late.add(connectionId)
+    if (kind === 'tree' && !this.seen.has(connectionId) && this.agents(connectionId).some(agent => (agent.children !== undefined || failedAgent(agent)) && agent.load !== 'loading')) this.late.add(connectionId)
     const owner: LiveOwner = {
       key: 'explorer:agent:' + key,
       visible: () => this.o.explorerVisible.visible(),

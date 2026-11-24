@@ -440,8 +440,10 @@ const explorerRows = {
   agentProxies: owner => owner.kind !== 'agentProxySubsystem' ? proxySubsystems.map(subsystem => explorerObject({ kind: 'agentProxySubsystem', name: subsystem.name }, subsystem.label, { hasChildren: true })) : fakeProxies.filter(proxy => proxy.subsystems.includes(proxySubsystems.find(subsystem => subsystem.name === owner.name)?.id)).map(proxy => explorerObject({ kind: 'agentProxy', name: proxy.name }, proxy.name)),
   credentials: () => fakeCredentials.map(credential => explorerObject({ kind: 'credential', name: credential.name }, credential.name)),
   // The Jobs folder in name order, with each job's id and a disabled job's status, as CatalogSql lists them (AG-12's chips).
-  agentJobs: () => agentTreeJobs().sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
-    .map(job => explorerObject({ kind: 'agentJob', name: job.name }, job.name, { jobId: job.id.toUpperCase(), ...job.enabled ? {} : { status: 'disabled' } }))
+  agentJobs: (_, listedEnabled = !!controlDirectory && existsSync(join(controlDirectory, 'agent-listed-enabled'))) => agentTreeJobs().sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+    // With agent-listed-enabled the folder lists every job enabled, as if listed before one was disabled elsewhere, so only the
+    // live read can dim it.
+    .map(job => explorerObject({ kind: 'agentJob', name: job.name }, job.name, { jobId: job.id.toUpperCase(), ...job.enabled || listedEnabled ? {} : { status: 'disabled' } }))
 }
 const agentListings = new Set(['agentProxies', 'credentials', 'agentJobs'])
 // The control file agent-extra-job: a job created elsewhere (another session's sp_add_job), which only the Jobs folder lists.

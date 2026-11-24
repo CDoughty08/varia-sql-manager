@@ -357,6 +357,24 @@ describe('AgentTreeLive: agent.tree reloads only what changed', () => {
     expect(agent()).toMatchObject({ load: 'loaded', error: undefined })
     expect(f.rows().map(node => node.label)).toContain('Jobs')
   })
+  it('lists a node that failed before its view opened once its view first samples, so a flip meanwhile is not lost', async () => {
+    const f = fixture({ settings: { 'liveData.explorerStatus': false } })
+    f.msdb.xps = false
+    f.connect()
+    await settle()
+    await f.open('SQL Server Agent')
+    expect(f.explorer.node(f.find('SQL Server Agent'))).toMatchObject({ load: 'error', children: undefined })
+    // Agent XPs comes back on while no view watches; the view that opens then first reads it on.
+    f.msdb.xps = true
+    f.setSettings({ 'liveData.explorerStatus': true })
+    await settle()
+    const [view] = f.viewsOf('agent.tree')
+    const from = f.sent.length
+    view.tree(fingerprints())
+    await settle()
+    expect(f.loads(from)).toEqual(['agent'])
+    expect(f.explorer.node(f.find('SQL Server Agent'))).toMatchObject({ load: 'loaded' })
+  })
   it('reloads everything once when the node was listed before its view opened, and compares with the last fingerprints when it opens again', async () => {
     const f = fixture()
     f.connect()
