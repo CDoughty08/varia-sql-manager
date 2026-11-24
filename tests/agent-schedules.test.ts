@@ -380,6 +380,18 @@ describe('the Schedules document', () => {
     schedules.openSchedule(id, 2)
     expect(schedules.get(id)).toMatchObject({ mode: 'grid', selected: '2', view: 'all', filter: '' })
   })
+  it("opens the Timeline's job on the document's connection, and says so in the banner when it cannot", async () => {
+    const { schedules, jobDocuments } = schedulesWorkbench()
+    const id = schedules.open('c1')
+    await settled()
+    const opened = vi.spyOn(jobDocuments, 'openJob')
+    schedules.openJob(id, 'Nightly')
+    expect(opened).toHaveBeenCalledWith('c1', 'Nightly')
+    expect(schedules.get(id)?.error).toBeUndefined()
+    opened.mockImplementation(() => { throw new Error('The job could not open.') })
+    schedules.openJob(id, 'Nightly')
+    expect(schedules.get(id)?.error).toMatchObject({ code: 'SQL_ERROR', message: 'The job could not open.' })
+  })
   it('creates a new schedule from New › Schedule… and selects it once read', async () => {
     const { schedules, executes, setModel } = schedulesWorkbench()
     const id = schedules.open('c1', true)

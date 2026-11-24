@@ -100,6 +100,9 @@ export default function SchedulesTimeline({ documentId, model: read, span, onSpa
     if (!axis.current || !body.current) return
     const created = new TimelineView({ axis: axis.current, root: body.current, open: (row, run, schedule) => { activator.current(row, run); opener.current(row, run, schedule) } })
     view.current = created
+    // A view made after the first draw (the model arriving later) starts from what is shown now, not its defaults.
+    created.setViewport(viewport)
+    created.setActive(active)
     return () => { created.dispose(); view.current = undefined }
   }, [drawn])
   useEffect(() => {
@@ -112,7 +115,10 @@ export default function SchedulesTimeline({ documentId, model: read, span, onSpa
   const focused = useRef<{ key: string; index: number }>(undefined)
   useEffect(() => {
     const was = focused.current, document = body.current?.ownerDocument
-    if (!was || !document || rows.some(row => row.key === was.key)) return
+    if (!was || !document) return
+    // Still there (perhaps re-sorted): remember where it is now, for when a later Refresh takes it away.
+    const now = rows.findIndex(row => row.key === was.key)
+    if (now >= 0) { focused.current = { key: was.key, index: now }; return }
     if (document.activeElement && document.activeElement !== document.body) { focused.current = undefined; return }
     const index = Math.min(was.index, rows.length - 1)
     if (index >= 0) lanes.current[index]?.focus()
@@ -193,7 +199,7 @@ export default function SchedulesTimeline({ documentId, model: read, span, onSpa
       <button type="button" className="agent-timeline-zoom" aria-label="Zoom in" title="Zoom in (+)" aria-disabled={viewport.seconds <= Math.min(minViewportSeconds, seconds)} onClick={() => zoom(0.5)}><Icon name="zoom-in" /></button>
       <button type="button" className="agent-timeline-zoom" aria-label="Zoom out" title="Zoom out (-)" aria-disabled={!zoomed} onClick={() => zoom(2)}><Icon name="zoom-out" /></button>
       <button type="button" className="agent-timeline-zoom" aria-disabled={!zoomed} onClick={() => setViewport({ start: 0, seconds })}>Show all</button>
-      <input type="range" className="agent-timeline-scroll" aria-label="Scroll the timeline" min={0} max={Math.max(0, seconds - viewport.seconds)} step={60} value={Math.round(viewport.start)} disabled={!zoomed}
+      <input type="range" className="agent-timeline-scroll" aria-label="Scroll the timeline" min={0} max={Math.max(0, seconds - viewport.seconds)} step={60} value={Math.round(viewport.start)} aria-disabled={!zoomed}
         aria-valuetext={`${timelineClock(model, viewport.start)} to ${timelineClock(model, viewport.start + viewport.seconds)}`}
         onChange={event => setViewport(current => fitViewport({ start: Number(event.target.value), seconds: current.seconds }, seconds))} />
       <span className="field-note agent-timeline-hint">{timelineText.bars(model.kind)}</span>
