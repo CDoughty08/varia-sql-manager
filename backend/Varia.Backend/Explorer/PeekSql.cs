@@ -756,13 +756,13 @@ internal static class PeekSql
 
     /// <summary>The detail rows read beside a table's <c>tableObjects</c> list: index key/included columns, foreign-key column
     /// pairs and trigger events. <see cref="Cut"/> is the owner (detail kind and owner id) whose rows the cap stopped in, when it
-    /// stopped.</summary>
+    /// stopped, and whether the first row left unread was an included column.</summary>
     internal sealed class TableObjectDetails
     {
         public Dictionary<int, List<(string Name, bool Included, bool Descending)>> IndexColumns { get; } = [];
         public Dictionary<int, List<(string Column, string? ReferencedColumn)>> ForeignKeyColumns { get; } = [];
         public Dictionary<int, List<string>> TriggerEvents { get; } = [];
-        public (string Kind, int OwnerId)? Cut { get; set; }
+        public (string Kind, int OwnerId, bool Included)? Cut { get; set; }
 
         /// <summary>Whether an owner's details may be missing rows: the cap stopped in this owner, or stopped before any of its
         /// rows came (rows come in kind group then owner order, so an owner with no rows after a cut was never reached).</summary>
@@ -778,32 +778,35 @@ internal static class PeekSql
     {
         var details = new TableObjectDetails();
         var count = 0;
-        while (await reader.ReadAsync(token))
-        {
-            var raw = Raw(reader, columns);
-            var kind = (raw["detailKind"] as string)?.TrimEnd();
-            var ownerId = Int(raw["ownerId"]);
-            // The row past the cap names the owner the cut landed in (its earlier rows, if any, were read).
-            if (count == TableObjectDetailCap) { details.Cut = (kind ?? "", ownerId); break; }
-            count++;
-            if (raw["colName"] is not string colName) continue;
-            switch (kind)
-            {
-                case "IC":
-                    if (!details.IndexColumns.TryGetValue(ownerId, out var idxCols)) details.IndexColumns[ownerId] = idxCols = [];
-                    idxCols.Add((colName, Bool(raw["included"]) == true, Bool(raw["descending"]) == true));
-                    break;
-                case "FK":
-                    if (!details.ForeignKeyColumns.TryGetValue(ownerId, out var fkCols)) details.ForeignKeyColumns[ownerId] = fkCols = [];
-                    fkCols.Add((colName, raw["refColName"] as string));
-                    break;
-                case "TE":
-                    if (!details.TriggerEvents.TryGetValue(ownerId, out var events)) details.TriggerEvents[ownerId] = events = [];
-                    events.Add(colName);
-                    break;
-            }
-        }
+        while (await reader.ReadAsync(token) && AddTableObjectDetail(details, Raw(reader, columns), count++)) { }
         return details;
+    }
+
+    /// <summary>Adds the detail row at position <paramref name="read"/> (counted from 0) to <paramref name="details"/>, or, for
+    /// the row past <see cref="TableObjectDetailCap"/>, records the owner the cut landed in (its earlier rows, if any, were read)
+    /// and whether the cut came at an included column; false then, to stop reading.</summary>
+    internal static bool AddTableObjectDetail(TableObjectDetails details, Dictionary<string, object?> raw, int read)
+    {
+        var kind = (raw["detailKind"] as string)?.TrimEnd();
+        var ownerId = Int(raw["ownerId"]);
+        if (read >= TableObjectDetailCap) { details.Cut = (kind ?? "", ownerId, Bool(raw.GetValueOrDefault("included")) == true); return false; }
+        if (raw["colName"] is not string colName) return true;
+        switch (kind)
+        {
+            case "IC":
+                if (!details.IndexColumns.TryGetValue(ownerId, out var idxCols)) details.IndexColumns[ownerId] = idxCols = [];
+                idxCols.Add((colName, Bool(raw["included"]) == true, Bool(raw["descending"]) == true));
+                break;
+            case "FK":
+                if (!details.ForeignKeyColumns.TryGetValue(ownerId, out var fkCols)) details.ForeignKeyColumns[ownerId] = fkCols = [];
+                fkCols.Add((colName, raw["refColName"] as string));
+                break;
+            case "TE":
+                if (!details.TriggerEvents.TryGetValue(ownerId, out var events)) details.TriggerEvents[ownerId] = events = [];
+                events.Add(colName);
+                break;
+        }
+        return true;
     }
 
     /// <summary>One row of a table's <c>tableObjects</c> list: Kind, Name, Summary (names bracketed as scripts write them; a list
@@ -861,9 +864,10 @@ internal static class PeekSql
                 }
                 else if (idxTypeCode != 5)
                 {
-                    // Key columns come before included ones, so a cut with no included column read may have stopped in the
-                    // keys (and the INCLUDE list is unknown), while one after an included column stopped in INCLUDE.
-                    var cutInInclude = idxIncomplete && allCols?.Any(c => c.Included) == true;
+                    // Key columns come before included ones: a cut at or after an included column leaves the keys whole and
+                    // INCLUDE short, while one in the keys leaves the INCLUDE list unknown.
+                    var cutInInclude = idxIncomplete && (allCols?.Any(c => c.Included) == true
+                        || details?.Cut is { Kind: "IC", Included: true } cutRow && cutRow.OwnerId == idxId);
                     var idxKeyCols = ColumnList(allCols?.Where(c => !c.Included).Select(c => KeyColumn(c.Name, c.Descending)), idxIncomplete && !cutInInclude);
                     var incCols = ColumnList(allCols?.Where(c => c.Included).Select(c => Bracket(c.Name)), cutInInclude);
                     if (idxKeyCols.Length > 0) text.Append(" (").Append(idxKeyCols).Append(')');

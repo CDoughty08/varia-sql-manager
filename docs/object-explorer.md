@@ -496,7 +496,7 @@ A table's **Indexes & keys** list shows each key, index, constraint and trigger 
 or index's type and columns, a foreign key's columns and referenced table, a check's or default's expression, a trigger's
 timing and events. Names are bracketed as scripts write them (`[Order]]Id]`). A summary is a description, not T-SQL to paste;
 Script As writes that. The columns, foreign-key pairs and trigger events behind the summaries are read up to a fixed number of rows;
-when a table has more, the summaries the cap reached partway or not at all end in `…`, while the list still shows every row.
+when a table has more, the summaries the cap reached partway or not at all end in `…`, and the cut removes no row from the list.
 
 | List | Kinds | Columns |
 | --- | --- | --- |

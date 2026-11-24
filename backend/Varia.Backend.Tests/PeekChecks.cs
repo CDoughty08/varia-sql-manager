@@ -346,7 +346,7 @@ internal static partial class PeekChecks
         // The detail cap cut index 3 after its second key column (the row past the cap was index 3's): index 3 says its keys
         // are cut and its INCLUDE list unknown, index 8 (never reached) says its columns are unknown, and earlier owners
         // (FK 10, trigger 20, PK index 1) stay complete. Only objects left out truncate the list.
-        var cut = new PeekSql.TableObjectDetails { Cut = ("IC", 3) };
+        var cut = new PeekSql.TableObjectDetails { Cut = ("IC", 3, false) };
         cut.ForeignKeyColumns[10] = [("CustomerId", "Id")];
         cut.TriggerEvents[20] = ["INSERT"];
         cut.IndexColumns[1] = [("Id", false, false)];
@@ -369,12 +369,12 @@ internal static partial class PeekChecks
             "a detail cut marks the owner it landed in and owners after it as incomplete, leaves earlier owners whole, and does not truncate the list: "
             + JsonSerializer.Serialize(cutList));
         // A cut after an included column was read lands in INCLUDE; cut FK and trigger owners end their lists in the marker too.
-        var cutInclude = new PeekSql.TableObjectDetails { Cut = ("IC", 3) };
+        var cutInclude = new PeekSql.TableObjectDetails { Cut = ("IC", 3, true) };
         cutInclude.IndexColumns[3] = [("Name", false, false), ("Amount", true, false)];
         cutInclude.ForeignKeyColumns[10] = [("A", "X")];
-        var cutFk = new PeekSql.TableObjectDetails { Cut = ("FK", 10) };
+        var cutFk = new PeekSql.TableObjectDetails { Cut = ("FK", 10, false) };
         cutFk.ForeignKeyColumns[10] = [("A", "X")];
-        var cutTr = new PeekSql.TableObjectDetails { Cut = ("TE", 20) };
+        var cutTr = new PeekSql.TableObjectDetails { Cut = ("TE", 20, false) };
         cutTr.TriggerEvents[20] = ["INSERT"];
         var fkRaw = new Dictionary<string, object?> { ["kindCode"] = "F ", ["name"] = "FK", ["objectId"] = 10, ["refSchema"] = "dbo", ["refTable"] = "P", ["disabled"] = false, ["notTrusted"] = false };
         var trRaw = new Dictionary<string, object?> { ["kindCode"] = "TR", ["name"] = "TR", ["objectId"] = 20, ["insteadOf"] = false, ["disabled"] = false };
@@ -385,6 +385,24 @@ internal static partial class PeekChecks
             && PeekSql.TableObjectRow(trRaw, cutFk) is [_, _, "AFTER \u2026", _]
             && PeekSql.TableObjectRow(Ix("IX", 3), new PeekSql.TableObjectDetails()) is [_, _, "Nonclustered", _],
             "a cut in INCLUDE, a foreign key's or a trigger's details ends that list in the marker, an owner never reached says so, and without a cut nothing is marked");
+
+        // A cut exactly at an index's first included column leaves its keys whole and its INCLUDE list unread.
+        var cutAtInclude = new PeekSql.TableObjectDetails { Cut = ("IC", 3, true) };
+        cutAtInclude.IndexColumns[3] = [("Name", false, false), ("Id", false, true)];
+        check(PeekSql.TableObjectRow(Ix("IX", 3), cutAtInclude) is [_, _, "Nonclustered ([Name], [Id] DESC) INCLUDE (…)", _],
+            "a cut at an index's first included column marks INCLUDE, not the complete key list: " + Show(PeekSql.TableObjectRow(Ix("IX", 3), cutAtInclude)));
+
+        // Reading: rows below the cap are added; the row past it is not, and names the owner the cut landed in and whether
+        // that row was an included column.
+        Dictionary<string, object?> Detail(string kind, int owner, string col, bool included) =>
+            new() { ["detailKind"] = kind, ["ownerId"] = owner, ["included"] = included, ["descending"] = false, ["colName"] = col, ["refColName"] = null };
+        var read = new PeekSql.TableObjectDetails();
+        var kept = PeekSql.AddTableObjectDetail(read, Detail("IC", 3, "Name", false), 0);
+        var keptLast = PeekSql.AddTableObjectDetail(read, Detail("IC ", 3, "Id", false), PeekSql.TableObjectDetailCap - 1);
+        var stopped = PeekSql.AddTableObjectDetail(read, Detail("IC", 3, "Amount", true), PeekSql.TableObjectDetailCap);
+        check(kept && keptLast && !stopped && read.Cut == ("IC", 3, true)
+            && read.IndexColumns[3] is [("Name", false, false), ("Id", false, false)],
+            "reading detail rows keeps every row below the cap and records the row past it as the cut, at its owner and included flag, without adding it");
 
         check(PeekSql.ConstraintType("PRIMARY_KEY_CONSTRAINT") == "Primary key" && PeekSql.ConstraintType("UNIQUE_CONSTRAINT") == "Unique constraint"
             && PeekSql.ConstraintType("FOREIGN_KEY_CONSTRAINT") == "Foreign key" && PeekSql.ConstraintType("CHECK_CONSTRAINT") == "Check constraint"
