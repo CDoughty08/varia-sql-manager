@@ -207,7 +207,7 @@ class Connections extends SnapshotStore<readonly LiveConnection[]> {
 }
 const connection = (id: string, lost = false) => ({ id, server: 'srv-' + id, database: 'master', serverVersion: '16.0', options: {}, ...lost ? { lost: true } : {} }) as unknown as LiveConnection
 
-function harness(settings: { indexOnConnect?: boolean; definitions?: boolean; agentEnabled?: boolean; extraProjects?: boolean } = {}) {
+function harness(settings: { indexOnConnect?: boolean; definitions?: boolean; extraProjects?: boolean } = {}) {
   const calls = { index: [] as Parameters<VariaApi['explorerIndex']>[0][], search: [] as Parameters<VariaApi['explorerSearch']>[0][], cancel: [] as string[][] }
   const pendingIndex: ((result: ApiResult<ObjectIndexResult>) => void)[] = []
   const pendingSearch: ((result: ApiResult<ObjectSearchResult>) => void)[] = []
@@ -238,7 +238,7 @@ function harness(settings: { indexOnConnect?: boolean; definitions?: boolean; ag
       run: () => { const callbacks = [...queue.values()]; queue.clear(); callbacks.forEach(callback => callback()) } }
   })()
   let ids = 0
-  const service = new ObjectSearchService({ api, documents, connections, settings: { get: (key => values[key]) as ObjectSearchOptions['settings']['get'] }, timers, newId: () => 'req' + ++ids, agentEnabled: settings.agentEnabled ?? true, events })
+  const service = new ObjectSearchService({ api, documents, connections, settings: { get: (key => values[key]) as ObjectSearchOptions['settings']['get'] }, timers, newId: () => 'req' + ++ids, events })
   return { service, api, calls, pendingIndex, pendingSearch, connections, timers, registered, documents, events, emit: (value: ObjectIndexProgress) => progress?.(value), hasListener: () => !!progress }
 }
 const settle = () => new Promise(resolve => setTimeout(resolve, 0))
@@ -315,13 +315,13 @@ describe('ObjectSearchService', () => {
   })
 
   it('sends each engine only its own kinds, and a database scope only to SQL Server', async () => {
-    const { service, calls, connections, pendingSearch } = harness({ agentEnabled: false })
+    const { service, calls, connections, pendingSearch } = harness()
     connections.set([bigQueryConnection('bq'), connection('a')])
     const id = service.open(undefined, 'orders', true)!
     const byServer = () => Object.fromEntries(calls.search.slice(-2).map(call => [call.connectionId, call]))
-    // Every kind: BigQuery's search names none (its index holds only its own), SQL Server's all of its own but Agent's.
+    // Every kind: neither search names any (each index holds only its own engine's kinds).
     expect(byServer().bq).not.toHaveProperty('kinds')
-    expect(byServer().a.kinds).toEqual(searchKinds.filter(kind => !(agentSearchKinds as readonly string[]).includes(kind)))
+    expect(byServer().a).not.toHaveProperty('kinds')
     service.setQuery(id, { types: ['tables', 'columns'] })
     expect(byServer().bq.kinds).toEqual(['bqTable', 'bqColumn'])
     expect(byServer().a.kinds).toEqual(['table', 'column'])
@@ -575,17 +575,17 @@ describe('ObjectSearchService', () => {
     expect(calls.search[4]).not.toHaveProperty('kinds')
   })
 
-  it('searches SQL Server Agent\'s kinds only behind the Agent release gate (AG-1)', () => {
-    const { service, calls, connections, timers } = harness({ agentEnabled: false })
+  it('searches SQL Server Agent\'s kinds with no environment variable set (AG-9 removed the release gate)', () => {
+    const { service, calls, connections, timers } = harness()
     connections.set([connection('a')])
     const id = service.open('a')!
     service.setQuery(id, { text: 'nightly' })
     timers.run()
-    // Every kind but Agent's when none is chosen; Other without its Agent kinds when it is.
-    expect(calls.search[0].kinds).toEqual(searchKinds.filter(kind => !(agentSearchKinds as readonly string[]).includes(kind)))
+    // Every kind when none is chosen; Other with its Agent kinds when it is.
+    expect(calls.search[0]).not.toHaveProperty('kinds')
     service.setQuery(id, { types: ['other'] })
-    expect(calls.search[1].kinds).toEqual(searchTypeKinds(['other'])!.filter(kind => !(agentSearchKinds as readonly string[]).includes(kind)))
-    expect(searchTypeKinds(['other'])).toEqual(expect.arrayContaining([...agentSearchKinds]))
+    expect(calls.search[1].kinds).toEqual(searchTypeKinds(['other']))
+    expect(calls.search[1].kinds).toEqual(expect.arrayContaining([...agentSearchKinds]))
   })
 
   it('walks the hits with Enter: searching at once when the answer is not in, wrapping round, and starting over on a new answer', async () => {

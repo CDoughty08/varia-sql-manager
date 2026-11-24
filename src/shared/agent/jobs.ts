@@ -280,24 +280,24 @@ export interface JobActivityCommandEntry {
 }
 const openJobActivity = 'Open Job Activity Monitor first (SQL Server Agent: Job Activity Monitor).'
 /**
- * Job Activity Monitor's commands, all behind the release gate (agentEnabled; the renderer registers none without it): the
+ * Job Activity Monitor's commands: the
  * monitor on the Agent node's and the Job Activity Monitor node's menus and in the palette, and its Refresh and bulk verbs,
  * which act on the jobs selected in the active monitor.
  */
 export function jobActivityCommandEntries(): { readonly [K in JobActivityCommandId]: JobActivityCommandEntry } {
   const bulk = (verb: AgentBulkVerb | AgentBulkFormVerb, icon: JobActivityCommandEntry['icon'], keywords: readonly string[]): JobActivityCommandEntry => ({
     title: agentBulkTitles[verb].dialog, category: 'SQL Server Agent', icon, keywords: ['agent', 'job', 'jobs', ...keywords],
-    precondition: 'agentEnabled && backendReady && activeDocumentIsJobActivity', unavailableHint: 'Select jobs in Job Activity Monitor first.'
+    precondition: 'backendReady && activeDocumentIsJobActivity', unavailableHint: 'Select jobs in Job Activity Monitor first.'
   })
   return {
     'agent.jobActivity': {
       title: jobActivityTitle, category: 'SQL Server Agent', icon: 'agent-activity', keywords: ['agent', 'jobs', 'activity', 'monitor', 'running', 'sqlserveragent', 'live'],
-      precondition: 'agentEnabled && backendReady && hasConnection', unavailableHint: 'Connect to a SQL Server whose SQL Server Agent you can see first.',
+      precondition: 'backendReady && hasConnection', unavailableHint: 'Connect to a SQL Server whose SQL Server Agent you can see first.',
       menus: [{ menu: 'explorer.context', group: '1_monitor', order: 1, mnemonic: 'j', when: "(explorerNode == 'agent' || explorerNode == 'agentJobActivity') && !explorerServerLost" }]
     },
     'agent.refreshJobs': {
       title: 'Refresh Jobs', category: 'SQL Server Agent', icon: 'refresh', keywords: ['agent', 'jobs', 'activity', 'reload', 'now'],
-      precondition: 'agentEnabled && backendReady && activeDocumentIsJobActivity', unavailableHint: openJobActivity
+      precondition: 'backendReady && activeDocumentIsJobActivity', unavailableHint: openJobActivity
     },
     'agent.startJobs': bulk('startJob', 'play', ['start', 'run', 'execute']),
     'agent.stopJobs': bulk('stopJob', 'debug-stop', ['stop', 'cancel']),
