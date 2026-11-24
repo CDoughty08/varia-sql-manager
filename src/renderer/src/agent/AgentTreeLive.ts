@@ -68,7 +68,7 @@ interface View { readonly handle: LiveHandle; readonly stops: (() => void)[] }
 /** A connection's view that ended: when it opens again (after `timer`), or `final` when it will not until a Refresh. */
 interface Stopped { attempts: number; timer: unknown; final: boolean }
 /** A jobs view's last read: the rows by job id, the subscription they came from, and the newest read in flight. */
-interface JobRead { subscriptionId?: string; at?: number; rows?: Map<string, { enabled: string | null; status: string | null; step: string | null; lastOutcome: string | null }>; seq: number; service?: AgentServiceSample }
+interface JobRead { subscriptionId?: string; at?: number; reading?: boolean; rows?: Map<string, { enabled: string | null; status: string | null; step: string | null; lastOutcome: string | null }>; seq: number; service?: AgentServiceSample }
 
 export class AgentTreeLive extends SnapshotStore<AgentTreeSnapshot> implements Disposable {
   private readonly views = new Map<string, View>()
@@ -351,8 +351,12 @@ export class AgentTreeLive extends SnapshotStore<AgentTreeSnapshot> implements D
       if (sample.probe !== agentJobsProbe) continue
       const entry = sample.tables?.find(table => table.table === 0)
       if (!entry) continue
-      // An unchanged revision needs no read: its rows are the ones already read.
-      if (entry.diff && entry.diff.added + entry.diff.removed + entry.diff.changed === 0 && read.rows) continue
+      // An unchanged revision needs no read: its rows are the ones already read, now as of this sample (unless a read of a
+      // newer revision is on its way, which dates them itself).
+      if (entry.diff && entry.diff.added + entry.diff.removed + entry.diff.changed === 0 && read.rows) {
+        if (!read.reading) read.at = tick.sampledAt
+        continue
+      }
       this.readJobs(connectionId, handle, read, subscriptionId, tick.sampledAt)
     }
     this.publishJobs()
@@ -362,10 +366,12 @@ export class AgentTreeLive extends SnapshotStore<AgentTreeSnapshot> implements D
     const table = handle.table(agentJobsProbe)
     if (!table) return
     const seq = ++read.seq
+    read.reading = true
     const current = () => this.reads.get(connectionId) === read && read.seq === seq && read.subscriptionId === subscriptionId
     // Every job the list keeps, not only the explorer status tables' first 1,000.
     readRows(table, agentLimits.listRows, jobSpan).then(({ rows }) => {
       if (!current() || this.disposed) return
+      read.reading = false
       read.at = sampledAt
       const cell = (row: (string | null)[], id: string) => row[jobColumns[id] - jobSpan.start]
       read.rows = new Map(rows.filter(row => cell(row, 'jobId')).map(row => [cell(row, 'jobId')!.toLowerCase(), {
@@ -375,9 +381,23 @@ export class AgentTreeLive extends SnapshotStore<AgentTreeSnapshot> implements D
     }, () => {
       // A revision released before it was read: the rows read before it are out of date, and the next revision is read whatever its diff says.
       if (!current()) return
+      read.reading = false
       read.rows = undefined
       this.publishJobs()
     })
+  }
+
+  /** When each listed job row of the connection was listed, by job id in lower case. */
+  private listedAt(connectionId: string): Map<string, number> {
+    const listed = new Map<string, number>()
+    const visit = (node: TreeNode): void => {
+      for (const child of node.children ?? []) {
+        if (child.kind === 'agentJob') { if (child.jobId && child.listedAt !== undefined) listed.set(child.jobId.toLowerCase(), child.listedAt) }
+        else if (child.kind === 'folder' && child.folder === 'agentJobs') visit(child)
+      }
+    }
+    for (const agent of this.agents(connectionId)) visit(agent)
+    return listed
   }
 
   /** Publishes every jobs view's chips, coalesced to one publication per microtask. */
@@ -403,10 +423,14 @@ export class AgentTreeLive extends SnapshotStore<AgentTreeSnapshot> implements D
         const before = previous.get(connectionId)
         const statuses = new Map<string, AgentJobRowStatus>()
         let same = !!before
+        const listed = this.listedAt(connectionId)
         for (const [id, row] of read.rows) {
           const { chips, enabled } = agentJobChips(row, current)
           const old = before?.get(id)
-          const status = old && old.enabled === enabled && sameChips(old.chips, chips) ? old : jobStatus(chips, enabled, read.at)
+          // The same status, unless its read lost to a newer listing that this read is newer than (liveJob compares them).
+          const at = listed.get(id)
+          const outdated = old?.enabledAt !== undefined && at !== undefined && old.enabledAt <= at && read.at !== undefined && read.at > at
+          const status = old && !outdated && old.enabled === enabled && sameChips(old.chips, chips) ? old : jobStatus(chips, enabled, read.at)
           if (status !== old) same = false
           statuses.set(id, status)
         }

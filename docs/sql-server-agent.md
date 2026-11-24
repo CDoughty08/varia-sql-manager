@@ -48,7 +48,8 @@ alerts, operators and who is notified, behind the same gate until 0.11.0.
   shown, its job rows carry state chips from Job Activity Monitor's own `agent.jobs.list` and `agent.jobs.service` probes,
   in one background view per connection: **Running · step n/m** (Executing, Waiting for worker thread, Performing
   completion actions), **Between retries** or **Suspended**, otherwise **Failed** when the last run failed; a job the list
-  reads as disabled is dimmed with ", disabled". The chip's words join the row's accessible name and tooltip. Collapsing or
+  reads as disabled is dimmed with ", disabled" (and one it reads as enabled is not), unless the row was listed after that
+  read, as a Disable or Enable lists it again at once. The chip's words join the row's accessible name and tooltip. Collapsing or
   hiding the folder ends the view; with Agent stopped or Agent XPs off (the list then stops on `AGENT_DISABLED`)
   the last read's **Failed** chips and disabled jobs stay, and Running and the retry states go, as they would be out of date. While the Agent node
   is expanded and shown, the `agent.tree` source reads Agent XPs and the service state (explorer.agentService's text) and,

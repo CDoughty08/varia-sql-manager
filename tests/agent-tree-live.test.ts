@@ -13,6 +13,7 @@ import type { AppliedTick, LiveHandle, LiveOwner, LiveSnapshot, LiveSpec, LiveTa
 import { ConnectionService } from '../src/renderer/src/services/connections'
 import { ExplorerService } from '../src/renderer/src/explorer/ExplorerService'
 import { rowStatus } from '../src/renderer/src/explorer/ExplorerStatusService'
+import { liveJob } from '../src/renderer/src/explorer/ExplorerRow'
 import { AgentTreeLive } from '../src/renderer/src/agent/AgentTreeLive'
 import { connectionInfo, connectionOptions, manualTimers } from './fixtures/workbench'
 
@@ -434,6 +435,30 @@ describe('AgentTreeLive: job rows\' chips from agent.jobs', () => {
     f.explorer.collapse(f.find('Jobs'))
     await settle()
     expect(f.tree.job(cid(1), jobA)).toBeUndefined()
+  })
+  it('lets a listing newer than the read win, then the next read, changed or not, win again', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    await f.open('SQL Server Agent', 'Jobs')
+    const [view] = f.viewsOf('agent.jobs')
+    const shown = () => { const node = f.explorer.node(f.find('Index maintenance'))!; const status = rowStatus(undefined, node, f.tree); return status ? liveJob(node, status).status : node.status }
+    const unchanged = (sampledAt: number) => {
+      const tick: LiveTick = { type: 'live.tick', seq: ++view.seq, sampledAt, samples: [{ probe: 'agent.jobs.list', costMs: 1, effectiveIntervalMs: 5000, tables: [{ table: 0, descriptor: view.table().descriptor, revision: view.seq, diff: { added: 0, removed: 0, changed: 0 } }] }] as LiveTick['samples'] }
+      for (const listener of [...view.listeners]) listener({ subscriptionId: view.id, tick })
+    }
+    // Listed enabled; the read, after the listing, finds it disabled elsewhere.
+    view.jobs([job(jobA, { enabled: 'No' })])
+    await settle()
+    expect(shown()).toBe('disabled')
+    // The folder lists again later (as a Disable or Enable re-lists it at once): until a newer read, the listing wins.
+    f.explorer.reconcile(f.find('Jobs'))
+    await settle()
+    expect(shown()).toBeUndefined()
+    // The next sample finds the list unchanged: as of that sample it still says disabled, so it wins again.
+    unchanged(Date.now() + 60_000)
+    await settle()
+    expect(shown()).toBe('disabled')
   })
   it('reads every job the list keeps, past the 1,000 rows of the explorer status tables and the 4,096 of one window', async () => {
     const f = fixture()

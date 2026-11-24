@@ -451,7 +451,7 @@ count and connection dot keep their size, and the label gives up the row's empty
 | agent | n jobs running | running | as the server's chip; the node's sublabel says "Agent XPs disabled" while that option is 0, and an unknown service state shows no chip |
 | agentJob | Running · step n/m | running | the job is executing, waiting for a worker thread or performing completion actions (Job Activity Monitor's agent.jobs read, while its Jobs folder is open); the step count where msdb gives it |
 | agentJob | Between retries / Suspended | warning | that is the job's execution status |
-| agentJob | Failed | critical | the job is not running and its last run failed. While SQL Server Agent cannot run jobs (stopped, Agent XPs off, or neither readable) only this chip shows. A job the read finds disabled, or enabled, is dimmed with the disabled badge, or not, whatever its listing said |
+| agentJob | Failed | critical | the job is not running and its last run failed. While SQL Server Agent cannot run jobs (stopped, Agent XPs off, or neither readable) only this chip shows. A job the read finds disabled, or enabled, is dimmed with the disabled badge, or not, unless the row was listed after that read (a Disable or Enable lists it again at once), until the next read |
 
 ## Peek
 
