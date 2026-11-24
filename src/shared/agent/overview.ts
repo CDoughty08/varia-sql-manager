@@ -390,7 +390,7 @@ export interface AgentOverviewCommandEntry {
   readonly unavailableHint: string
   readonly menus?: readonly { readonly menu: 'explorer.context'; readonly group: string; readonly order: number; readonly mnemonic?: string; readonly when?: string }[]
 }
-/** The overview on the Agent node's menu (and its default action) and in the palette, and Check again for the active overview. */
+/** The overview on the Agent node's menu and in the palette (the node itself expands on Enter), and Check again for the active overview. */
 export function agentOverviewCommandEntries(): { readonly [K in AgentOverviewCommandId]: AgentOverviewCommandEntry } {
   return {
     'agent.overview': {
