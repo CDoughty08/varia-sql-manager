@@ -5,6 +5,14 @@ Monaco editor, and groups split side by side, stack, or float over the editor ar
 
 ## In the editor
 
+- **Per-query bar.** Each SQL document mounts its own `QueryBar` directly below its editor group's tab strip (unless
+  the classic toolbar is enabled), scoped to that tab's connection, database/dataset, selection and execution state.
+  Split editor groups show independent query bars side by side; clicking any control in an inactive group's bar
+  activates that group first and preserves focus return to its editor, while switching to non-query documents (Activity
+  Monitor, Table Designer, Properties, XML/JSON values) leaves the tab strip anchored at the top with no vertical jump.
+  Connected bars paint a `1 px` top hairline, soft leading wash and tinted connection-pill border from the connection's
+  color (neutral when unset), and show the connection's friendly alias in the collapsed server box with full host
+  details in the dropdown options and tooltip.
 - **Execute.** With text selected, the Execute button reads **Execute selection** with its line range and runs only the
   selection; a click inside the selection clears it and places the caret. Otherwise it reads **Execute** (detail **Entire query**)
   and runs the whole document (`QueryBar.tsx`).
@@ -45,8 +53,8 @@ Monaco editor, and groups split side by side, stack, or float over the editor ar
 - **Editors.** Each group creates its editor (`editor/create-editor.ts`) the first time it shows a text document; the
   editor moves into the panel shown and goes with the group. `DocumentService.showIn` swaps models and keeps each
   document's view state. Custom documents (Table Designer, properties, monitors, Object Search) render their own views.
-- **Active document** is the active group's shown document; Results, Messages, the query bar, the status bar's Ln and Col
-  and every editing command follow it.
+- **Active document** is the active group's shown document; Results, Messages, the classic toolbar, the status bar's Ln
+  and Col and every editing command follow it, while each visible SQL document keeps its own scoped `QueryBar`.
 - **Focus** follows a new or moved document: focus requested before the group's editor shows it waits, unless focus goes
   elsewhere first (`dropPendingFocus`). A group editor moving into another panel takes the keyboard only when it had it,
   or when focus fell to the page from the editor area (menus, palette and dialogs aside). Focus in Object Explorer or a
@@ -77,13 +85,16 @@ Last Query, or results while focus is in the results pane):
 - Move Left and Move Right (Ctrl+Shift+PageUp/PageDown) move a tab within its strip. Move Editor into Next Group past the
   last group opens a new group on the right. Split Editor needs another tab in the group; the palette's greyed row says
   so.
-- **Shelves.** Pinned text tabs sit on a shelf above the unpinned ones, distinguished by layout and pin buttons, not
-  labels. Ctrl+scroll down over a shelf adds rows, up removes them; **Increase/Decrease Tab Stack Height** in a tab's menu
-  change its shelf, in the palette the active document's. A brief hint reports the row count, when all tabs fit, or the
-  one-row minimum. A one-row shelf scrolls horizontally; a taller one uses its last slot for **… N more**, listing tabs
-  outside the shown rows (its entries have no tab context menu). Row counts and scroll positions are independent per shelf and group. Stacks can grow until every
-  tab fits, with no window-height cap; a header taller than its group scrolls vertically (Ctrl+scroll still changes the
-  height), and keyboard selection and rename reveal the tab.
+- **Shelves.** Pinned text tabs sit on a dedicated shelf above the unpinned ones, distinguished by layout and accent pin
+  buttons, not labels. Document tabs use the refined 2-line height (`40 px` Compact / `44 px` Comfortable) with a
+  `196 px` default cell width target, omit the session chip when a query has no live SPID or remembered disconnected
+  server, and keep Pin and Close in fixed `20 px` slots so buttons never shift horizontally on hover. Ctrl+scroll down
+  over a shelf adds rows, up removes them; **Increase/Decrease Tab Stack Height** in a tab's menu change its shelf, in
+  the palette the active document's. A brief hint reports the row count, when all tabs fit, or the one-row minimum. A
+  one-row shelf scrolls horizontally; a taller one uses its last slot for **… N more**, listing tabs outside the shown
+  rows (its entries have no tab context menu). Row counts and scroll positions are independent per shelf and group.
+  Stacks can grow until every tab fits, with no window-height cap; a header taller than its group scrolls vertically
+  (Ctrl+scroll still changes the height), and keyboard selection and rename reveal the tab.
 - **Pins** stay first in their group's order (`EditorAreaController.keepPinsFirst`, after every layout change and
   reconcile); Move Left and Right never cross that boundary. A pinned tab dragged to another group joins its pinned shelf.
   Pins survive hot exit and Reload Window with the groups (docs/hot-exit.md).

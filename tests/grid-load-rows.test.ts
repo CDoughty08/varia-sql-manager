@@ -34,7 +34,7 @@ function mount() {
     root, scroller, handle, client: { windowsInFlight: 0 }, descriptor, state, entry: 'e1', resultNumber: 1, resultCount: 1, platform: 'win32',
     onSelection: () => {}, onFirstCell: () => {}, onCopy: () => {}, onEscape: () => false, onStatus: () => {}, onError: error => { throw error }, onOpenValue: () => {}, onSort: () => {}, onFilter: () => {}
   })
-  const frame = async () => { await new Promise(done => setTimeout(done, 0)); view.invalidate(); await new Promise(done => requestAnimationFrame(() => done(undefined))); await new Promise(done => setTimeout(done, 0)) }
+  const frame = async () => { await new Promise(done => setImmediate(done)); view.invalidate(); await new Promise(done => requestAnimationFrame(() => done(undefined))); await new Promise(done => setImmediate(done)) }
   const change = (next: Partial<ResultSnapshot>) => { snapshot = { ...snapshot, ...next }; for (const listener of listeners) listener() }
   return { view, root, state, frame, change, reads }
 }

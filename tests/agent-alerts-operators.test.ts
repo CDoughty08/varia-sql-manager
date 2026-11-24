@@ -20,7 +20,7 @@ import { testBlocked, timeText, timeValue } from '../src/renderer/src/agent/Oper
 import { deleteObjectDefinition } from '../src/renderer/src/dialogs/definitions'
 import { connectionInfo, readyBackend, workbenchFixture } from './fixtures/workbench'
 
-const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
+const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setImmediate(resolve)) }
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 

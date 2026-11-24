@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { dialogLifecycle, longRunRefusals, rendererWatchdog } from './fixtures/dialog-lifecycle.mjs'
 import { sessionPrompts } from './fixtures/session-prompts.mjs'
-import { activeDocumentName, activeMenuItem, anyResultGrid, resultGrid, backendReady, banner, clickToClose, connectDialogWindow, dialogClosed, documentTabFullyShown, documentTabs, documentTabSlots, pressToClose, slotTab, editorText as editorTextOf, errorMessages, explorerLabel, gridCell, gridPart, matching, memoryBreakdown, memoryIndicator, menuItemNames, messages as messagesOf, openMenus as openMenusOf, outputPane, outputView, paneMenuButton, paneTab, part, quickInput, searchBox, serverRows, statusBar, submitConnect, titleBar, toolbarButton, expectEditorShown } from './fixtures/ui.mjs'
+import { activeDocumentName, activeMenuItem, anyResultGrid, resultGrid, backendReady, banner, clickToClose, connectDialogWindow, dialogClosed, documentTabFullyShown, documentTabs, documentTabSlots, pressToClose, slotTab, editorText as editorTextOf, errorMessages, explorerLabel, gridCell, gridPart, matching, memoryBreakdown, memoryIndicator, menuItemNames, messages as messagesOf, openMenus as openMenusOf, outputPane, outputView, paneMenuButton, paneTab, part, queryDatabase, queryServer, quickInput, searchBox, serverRows, statusBar, submitConnect, titleBar, toolbarButton, expectEditorShown } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -693,8 +693,13 @@ try {
   // tab's center and the menu opens above it, over the tab's upper right.
   const contentSize = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getContentSize())
   const resizeTo = async ([width, height]) => {
-    await application.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setContentSize(size[0], size[1]), [width, height])
-    await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([width, height])
+    const apply = () => application.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setContentSize(size[0], size[1]), [width, height])
+    await apply()
+    await expect.poll(async () => {
+      const dims = await page.evaluate(() => [innerWidth, innerHeight])
+      if (dims[0] !== width || dims[1] !== height) await apply()
+      return dims
+    }, { timeout: 15000 }).toEqual([width, height])
     await settle()
   }
   await page.keyboard.press('Escape')
@@ -787,7 +792,11 @@ try {
   // its submenus; scrolling outside it, resizing, losing focus, and clicking elsewhere close it.
   const setContentSize = (width, height) => application.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setContentSize(size.width, size.height), { width, height })
   await setContentSize(1024, 700)
-  await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([1024, 700])
+  await expect.poll(async () => {
+    const dims = await page.evaluate(() => [innerWidth, innerHeight])
+    if (dims[0] !== 1024 || dims[1] !== 700) await setContentSize(1024, 700)
+    return dims
+  }, { timeout: 15000 }).toEqual([1024, 700])
   await textbox().focus()
   // Without the results the editor reaches the bottom of the window.
   await page.keyboard.press('Control+R')
@@ -868,8 +877,8 @@ try {
   const before = await tabs().count()
   await explorerMenu.getByRole('menuitem', { name: 'New Query', exact: true }).click()
   await expect(tabs()).toHaveCount(before + 1)
-  await expect(page.locator('#query-server option:checked')).toHaveText('server-a')
-  await expect(page.locator('#query-database')).toHaveValue('master')
+  await expect(queryServer(page).locator('option:checked')).toHaveText('server-a')
+  await expect(queryDatabase(page)).toHaveValue('master')
   await expect(textbox()).toBeFocused()
   // A database's name, quoted. Right-click selected it, and focus went back to the tree.
   await expandExplorerPath(page, 'server-a', 'Databases')
@@ -950,17 +959,21 @@ try {
   await row(...ordersPath.slice(0, -1), 'dbo.Shipments')
   expect(await (await row(...ordersPath)).getAttribute('id')).toBe(kept)
   await rm(join(control, 'extra', 'tables'))
-  // The keyboard: Shift+F10 opens the selected table's menu below its row with its first item active; so does the
-  // context-menu key. Focus stays on the tree, which names the row as its active descendant.
+  // The keyboard: Shift+F10 opens the selected table's menu anchored flush to its row (below when it fits, or flipped
+  // above to stay inside the viewport) with its first item active; so does the context-menu key. Focus stays on the
+  // tree, which names the row as its active descendant.
   const table = await row(...ordersPath)
   await table.click()
   await expect(tree).toBeFocused()
   await page.keyboard.press('Shift+F10')
   await expect(explorerMenu.getByRole('menuitem', { name: 'Select Top 1000 Rows', exact: true })).toBeFocused()
   await expect(table).toHaveAttribute('data-menu-target', '')
-  const node = await table.boundingBox(), anchored = await explorerMenu.boundingBox()
-  expect(anchored.y).toBeGreaterThanOrEqual(node.y + node.height - 1)
-  expect(anchored.y).toBeLessThanOrEqual(node.y + node.height + 30)
+  const node = await table.boundingBox(), anchored = await explorerMenu.boundingBox(), windowBox = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }))
+  const anchoredBelow = anchored.y >= node.y + node.height - 1 && anchored.y <= node.y + node.height + 30
+  const anchoredAbove = anchored.y + anchored.height <= node.y + 1 && anchored.y + anchored.height >= node.y - 30
+  expect(anchoredBelow || anchoredAbove, `menu y=${anchored.y}..${anchored.y + anchored.height}, row y=${node.y}..${node.y + node.height}`).toBe(true)
+  expect(anchored.y).toBeGreaterThanOrEqual(0)
+  expect(anchored.y + anchored.height).toBeLessThanOrEqual(windowBox.height)
   await page.keyboard.press('Escape')
   await expect(tree).toBeFocused()
   await expect(table).not.toHaveAttribute('data-menu-target')
@@ -1463,7 +1476,7 @@ try {
     await menu('Object Explorer').getByRole('menuitem', { name: 'New Query', exact: true }).click()
     await expect(tabs()).toHaveCount(liveTabs + 1)
     await expect(textbox()).toBeFocused()
-    await expect(page.locator('#query-database')).toHaveValue('master')
+    await expect(queryDatabase(page)).toHaveValue('master')
     await page.keyboard.insertText('SELECT DB_NAME()')
     await page.keyboard.press('F5')
     await expect(gridCell(anyResultGrid(page), 0, 0).first()).toHaveText('master', { timeout: 30000 })

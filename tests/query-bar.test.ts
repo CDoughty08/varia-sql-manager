@@ -8,7 +8,8 @@ import QueryBar from '../src/renderer/src/QueryBar'
 import StandardToolbar from '../src/renderer/src/ShellToolbar'
 import { lostHint, queryContextModel, toolbarMove, toolbarRescue, toolbarReturn, toolbarStop, type QueryContextInput } from '../src/renderer/src/query-context'
 import type { LiveConnection } from '../src/renderer/src/services/connections'
-import { densityUse } from '../src/shared/theme/metrics'
+import { densities, densityUse } from '../src/shared/theme/metrics'
+import { connectionColorNames } from '../src/shared/theme/connection-colors'
 import { stylesheetRules } from './fixtures/css-rules'
 import { documentUri } from '../src/renderer/src/services/documents'
 import { EditorStatusService } from '../src/renderer/src/services/editor-status'
@@ -42,7 +43,11 @@ describe('query context lists', () => {
   })
   it('list Disconnected and every live server, and the databases of the query\'s own one', () => {
     const model = queryContextModel(input({ connections: [live('a', { displayName: 'Orders' }), live('b')] }))
-    expect(model.servers).toEqual([{ id: '', label: 'Disconnected', disabled: false }, { id: 'a', label: 'Orders (a.example)', disabled: false }, { id: 'b', label: 'b.example', disabled: false }])
+    expect(model.servers).toEqual([
+      { id: '', label: 'Disconnected', shortLabel: 'Disconnected', disabled: false },
+      { id: 'a', label: 'Orders (a.example)', shortLabel: 'Orders', disabled: false },
+      { id: 'b', label: 'b.example', shortLabel: 'b.example', disabled: false }
+    ])
     expect([model.live, model.serverDisabled, model.databaseDisabled, model.database, model.serverName]).toEqual([true, false, false, 'AppData', 'Orders (a.example)'])
     expect(model.databases).toEqual(['master', 'AppData'])
   })
@@ -128,28 +133,80 @@ describe('query bar', () => {
     documents.update(query.id, { targetId, attachWanted: true, lastServer: 'obsolete-server' })
     const html = render(createElement(QueryBar))
     expect(html).toContain('Production environment')
-    expect(html).toContain(`<option value="remembered:${targetId}" disabled="" selected="">Reporting (server.example) Disconnected</option>`)
+    expect(html).toContain(`<option value="remembered:${targetId}" disabled="" title="Reporting (server.example) Disconnected" selected="">Reporting Disconnected</option>`)
+    expect(html).toContain('title="Server: Reporting (server.example) Disconnected"')
     expect(html).toContain('<option value="Unavailable" selected="">Unavailable</option>')
     expect(html).toContain('aria-label="Query database" title="Database: Unavailable" disabled=""')
     expect(api.execute).not.toHaveBeenCalled()
   })
-  it('is an ARIA toolbar with Execute, Cancel and the connection pill: colour, environment tag, server and database', () => {
+  it('is an ARIA toolbar with Execute, Cancel and the connection pill: colour, environment tag, friendly alias and full dropdown details', () => {
     const { connections, documents, render } = fixture()
     connections.add({ ...connectionInfo('prod'), color: 'red', displayName: 'Orders' }, { ...connectionOptions, color: 'red', displayName: 'Orders', environment: 'Production' })
+    connections.add({ ...connectionInfo('stg'), color: 'blue', displayName: 'Staging ERP' }, { ...connectionOptions, server: 'stg.example', color: 'blue', displayName: 'Staging ERP', environment: 'Staging' })
     documents.create('a.sql', 'SELECT 1', 'AppData', 'prod')
     const html = render(createElement(QueryBar))
     // data-query-bar gives queryBarFocus, so F5, which Execute shows, runs the query from the bar too.
-    expect(html).toMatch(/^<div class="query-bar" role="toolbar" aria-label="SQL Editor" data-query-bar="">/)
+    expect(html).toMatch(/^<div class="query-bar" role="toolbar" aria-label="SQL Editor" data-query-bar="" data-connection-accent="" style="--query-bar-accent:var\(--varia-connection-red\)">/)
     // Execute is the bar's only filled button and names its key; Cancel waits for a running query.
     expect(html).toMatch(/<button type="button" class="ui-button query-bar-action execute primary" aria-label="Execute" aria-keyshortcuts="F5" title="Execute \(F5\)">.*<kbd aria-hidden="true">F5<\/kbd><\/button>/)
     expect(html).toMatch(/<button type="button" class="ui-button query-bar-action" aria-label="Cancel" aria-keyshortcuts="Alt\+Pause" disabled="" title="Cancel Executing Query \(Alt\+Pause\)">/)
     const pill = html.slice(html.indexOf('<div class="query-connection"'))
-    expect(pill).toMatch(/^<div class="query-connection" role="group" aria-label="Connection"><span class="connection-swatch" style="background:var\(--varia-connection-red\)" aria-hidden="true"><\/span>/)
+    expect(pill).toMatch(/^<div class="query-connection" role="group" aria-label="Connection" data-connection-accent="" style="--query-bar-accent:var\(--varia-connection-red\)"><span class="connection-swatch" style="background:var\(--varia-connection-red\)" aria-hidden="true"><\/span>/)
     expect(pill).toContain('<span class="query-bar-environment"><span class="visually-hidden">Environment: </span><span class="environment-tag" data-place="query" data-tone="critical">')
     expect(pill).toContain('title="Orders (prod.example): Production environment"')
-    // The tag is no control: the server list, which the toolbar's keys reach, describes the environment.
-    expect(pill).toMatch(/<select id="query-server" class="ui-field" aria-label="Query server" aria-description="Production environment" title="Server: Orders \(prod.example\)">.*<option value="prod" selected="">Orders \(prod.example\)<\/option><\/select>/)
+    // The collapsed selected option shows the friendly alias while other options and the tooltip keep the full host.
+    expect(pill).toMatch(/<select id="query-server" class="ui-field" aria-label="Query server" aria-description="Production environment" title="Server: Orders \(prod.example\)">.*<option value="prod" title="Orders \(prod.example\)" selected="">Orders<\/option><option value="stg">Staging ERP \(stg.example\)<\/option><\/select>/)
     expect(pill).toMatch(/<select id="query-database" class="ui-field" aria-label="Query database" title="Database: AppData"><option value="AppData" selected="">AppData<\/option><\/select>/)
+  })
+  it('scopes per-tab QueryBars in split groups with unique IDs, independent connection tinting and execution state', () => {
+    const { connections, documents, queries, render } = fixture()
+    connections.add({ ...connectionInfo('prod'), color: 'red', displayName: 'Production ERP' }, { ...connectionOptions, color: 'red', displayName: 'Production ERP', environment: 'Production' })
+    connections.add({ ...connectionInfo('stg'), color: 'blue', displayName: 'Staging Analytics' }, { ...connectionOptions, server: 'stg.example', color: 'blue', displayName: 'Staging Analytics', environment: 'Staging' })
+    const q1 = documents.create('prod.sql', 'SELECT 1', 'AppData', 'prod')
+    const q2 = documents.create('stg.sql', 'SELECT 2', 'AnalyticsStg', 'stg')
+    documents.update(q1.id, { includeActualPlan: true })
+    documents.activate(q1.id)
+    vi.spyOn(queries, 'getSnapshot').mockReturnValue({ [q1.id]: { running: { queryId: 'run-1', connectionId: 'prod', startedAt: 1 } } })
+    vi.spyOn(queries, 'isRunning').mockImplementation(id => id === q1.id)
+    const html1 = render(createElement(QueryBar, { tabId: q1.id }))
+    const html2 = render(createElement(QueryBar, { tabId: q2.id }))
+    expect(html1).toContain(`id="query-server-${q1.id}"`)
+    expect(html1).toContain(`id="query-database-${q1.id}"`)
+    expect(html2).toContain(`id="query-server-${q2.id}"`)
+    expect(html2).toContain(`id="query-database-${q2.id}"`)
+    expect(html1).toContain('--query-bar-accent:var(--varia-connection-red)')
+    expect(html2).toContain('--query-bar-accent:var(--varia-connection-blue)')
+    expect(html1).toMatch(/aria-label="Execute"[^>]*disabled=""/)
+    expect(html1).toMatch(/aria-label="Cancel"[^>]*title="Cancel Executing Query \(Alt\+Pause\)">/)
+    expect(html1).not.toMatch(/aria-label="Cancel"[^>]*disabled=""/)
+    expect(html1).toMatch(/aria-label="Include Actual Execution Plan"[^>]*aria-pressed="true"/)
+    expect(html2).not.toMatch(/aria-label="Execute"[^>]*disabled=""/)
+    expect(html2).toMatch(/aria-label="Cancel"[^>]*disabled=""/)
+    expect(html2).toMatch(/aria-label="Include Actual Execution Plan"[^>]*aria-pressed="false"/)
+    expect(html1).toContain('<option value="prod" title="Production ERP (prod.example)" selected="">Production ERP</option>')
+    expect(html1).toContain('<option value="stg">Staging Analytics (stg.example)</option>')
+    expect(html2).toContain('<option value="stg" title="Staging Analytics (stg.example)" selected="">Staging Analytics</option>')
+    expect(html2).toContain('<option value="prod">Production ERP (prod.example)</option>')
+    // Even when a non-query tab is active, a visible SQL split group keeps its own enabled QueryBar.
+    const xml = documents.openText({ name: 'result.xml', text: '<a/>', kind: 'xml' })
+    expect(documents.active?.id).toBe(xml.id)
+    const html2WithXmlActive = render(createElement(QueryBar, { tabId: q2.id }))
+    expect(html2WithXmlActive).not.toMatch(/aria-label="Execute"[^>]*disabled=""/)
+    expect(html2WithXmlActive).toContain('<option value="AnalyticsStg" selected="">AnalyticsStg</option>')
+  })
+  it('tints QueryBar and its connection pill for every preset and custom hex color, and stays neutral when unset', () => {
+    const { connections, documents, render } = fixture()
+    for (const color of [...connectionColorNames, '#2266aa']) {
+      const id = `conn-${color}`
+      connections.add({ ...connectionInfo(id), color }, { ...connectionOptions, server: `${id}.example`, color })
+      const doc = documents.create(`${id}.sql`, 'SELECT 1', 'master', id)
+      const html = render(createElement(QueryBar, { tabId: doc.id }))
+      expect(html, color).toContain(`data-connection-accent="" style="--query-bar-accent:var(--varia-connection-${color})"`)
+    }
+    const plain = documents.create('plain.sql', 'SELECT 1', 'master')
+    const plainHtml = render(createElement(QueryBar, { tabId: plain.id }))
+    expect(plainHtml).not.toContain('data-connection-accent')
+    expect(plainHtml).not.toContain('--query-bar-accent')
   })
   it('gives each database its exact name as the option\'s value, spaces and all', () => {
     const { connections, documents, render } = fixture()
@@ -224,6 +281,14 @@ describe('query bar', () => {
     expect([value('.query-connection select.ui-field', 'flex'), value('.query-connection select.ui-field', 'min-width')]).toEqual(['0 1000 auto', '64px'])
     expect(value('.ui-field', 'height')).toBe('var(--ui-control-height)')
     expect(value('.ui-button', 'min-height')).toBe('var(--ui-control-height)')
+    // Tabs sit above per-query bars: .query-bar-spacer is retired, and 2-line tabs use 40/44 px with a fixed 20 px Pin slot.
+    expect(rules.some(rule => rule.selector === '.query-bar-spacer')).toBe(false)
+    expect([densities.compact.documentTab, densities.comfortable.documentTab]).toEqual([40, 44])
+    expect([value('.tab-pin, .tab-close', 'width'), value('.tab-pin, .tab-close', 'height')]).toEqual(['20px', '20px'])
+    expect([value('.query-tab:not([data-pinned]) .tab-pin', 'opacity'), value('.query-tab:not([data-pinned]):hover .tab-pin', 'opacity'), value('.query-tab[data-pinned] .tab-pin', 'opacity')]).toEqual(['0.52', '1', '1'])
+    expect([value('.query-bar[data-connection-accent]::before', 'opacity'), value(':root[data-theme-type="light"] .query-bar[data-connection-accent]::before', 'opacity')]).toEqual(['0.08', '0.065'])
+    expect([value('.query-bar[data-connection-accent]::after', 'height'), value('.query-bar[data-connection-accent]::after', 'opacity'), value(':root[data-theme-type="light"] .query-bar[data-connection-accent]::after', 'opacity')]).toEqual(['1px', '0.38', '0.32'])
+    expect(value('.query-connection[data-connection-accent]::before', 'opacity')).toBe('0.42')
   })
   it('gives every list an opaque fill: Chromium draws an open list on its background, white for a transparent one', () => {
     // In Dark the options keep the list's light text, which on white is all but invisible.

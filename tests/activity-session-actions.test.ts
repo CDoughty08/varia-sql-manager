@@ -17,7 +17,7 @@ import { localCopyText } from '../src/shared/results/local-table'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
-const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
+const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setImmediate(resolve)) }
 
 const session57: SessionRef = { sessionId: 57, loginTime: '2026-11-09T08:00:00.000', hostProcessId: 4100, login: 'app_orders', hostName: 'APP-01', openTransactions: 1 }
 const present = (overrides: Partial<ActivityDetailsResult> = {}): ActivityDetailsResult => ({

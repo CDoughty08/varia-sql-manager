@@ -14,7 +14,7 @@ import { jobDocumentText, jobLive } from '../src/renderer/src/agent/JobDocumentS
 import { connectionInfo, readyBackend, workbenchFixture } from './fixtures/workbench'
 import type { FakeLiveHandle } from './fixtures/live-handle'
 
-const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
+const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setImmediate(resolve)) }
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 

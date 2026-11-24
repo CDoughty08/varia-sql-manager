@@ -22,7 +22,7 @@ describe('generated theme documentation', () => {
     }
     expect(colors.properties['focusBorder'].markdownDescription).toBe('(VS Code) Focus ring around the focused control. Default `$focus` (Dark `#8f9cff`, Light `#4453d0`).')
     expect(colors.properties['statusBar.executingBackground'].markdownDescription).toContain('(Varia)')
-    expect(colors.properties['tree.indentGuidesStroke'].markdownDescription).toContain('Not used yet; reserved for the Object Explorer tree.')
+    expect(colors.properties['tree.indentGuidesStroke'].markdownDescription).not.toContain('Not used yet')
     // Toasts shipped (F4b): their keys are applied now.
     expect(colors.properties['notifications.background'].markdownDescription).not.toContain('Not used yet')
     expect(colors.properties['resultsGrid.hoverBackground'].markdownDescription).not.toContain('Not used yet')

@@ -14,14 +14,37 @@ internal static partial class FusedReadChecks
 {
     public static void RunWhole(Action<bool, string> check)
     {
+        RunWholeDiffs(check);
+        RunWholeDistinctsSearch(check);
+        RunWholeMixedServices(check);
+        RunWholeFaults(check);
+    }
+
+    public static void RunWholeDiffs(Action<bool, string> check)
+    {
+        using (ViewSorter.WorkersHere(4)) Diffs(check);
+    }
+
+    public static void RunWholeDistinctsSearch(Action<bool, string> check)
+    {
         using (ViewSorter.WorkersHere(4))
         {
-            Diffs(check);
             Distincts(check);
             IdentitiesAndSearches(check);
+        }
+    }
+
+    public static void RunWholeMixedServices(Action<bool, string> check)
+    {
+        using (ViewSorter.WorkersHere(4))
+        {
             MixedWhole(check);
             Services(check);
         }
+    }
+
+    public static void RunWholeFaults(Action<bool, string> check)
+    {
         CancelledWhole(check);
         RefusedWhole(check);
         UnpackedMeanwhile(check);

@@ -6,7 +6,7 @@ import { resizeWindow } from './fixtures/window-resize.mjs'
 import { actionsStubData, caution, dependentsMessage, detachFiles, detachScript, installActionsStub, longDatabase, longRole, offlineScript, offlineWarning, propertiesScript, restoreFilesScript, restoreScript, scriptText, stubServerFiles, stubSessions, tablePropertiesScript } from './fixtures/actions-stub.mjs'
 import {
   activeDocument, activeDocumentName, addObjectDialogSteps, attachFileNameShown, backendReady, closeDocumentButton, connectDialogWindow, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentVerb, editorText, editorTextbox, openDocument, openDocuments, selectOpenDocument,
-  errorBanner, explorerLabel, fieldHint, frameSection, gridCell, gridPart, inputShowsEnd, localGrid, localGridFrame, objectDialogConnection, objectDialogMappedUsers, objectDialogPage, objectDialogProgress, objectDialogSessions, objectDialogSessionsToggle, objectDialogStepItems, objectDialogTabs, objectDialogWarningIcons, objectDialogWarnings, openMenus as openMenusOf, part,
+  errorBanner, explorerLabel, fieldHint, frameSection, gridCell, gridPart, inputShowsEnd, inspectorPanel, inspectorTab, inspectorTabLabels, localGrid, localGridFrame, objectDialogConnection, objectDialogMappedUsers, objectDialogPage, objectDialogProgress, objectDialogSessions, objectDialogSessionsToggle, objectDialogStepItems, objectDialogTabs, objectDialogWarningIcons, objectDialogWarnings, openMenus as openMenusOf, part,
   passwordField, propertyFact, propertyRow, queryDatabase, quickInput, quickInputActive, quickInputMessage, renameBox, scriptActions, scriptDrawer, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, submitConnect, toastMessage, toasts, toolbarButton, unsavedMark,
   warningBanner as warningBannerOf, pane
 } from './fixtures/ui.mjs'
@@ -270,13 +270,16 @@ try {
     await expect(pane(page, 'results')).toBeHidden()
     await expect(documentSubtitle(table())).toHaveText('Table Properties')
     await expect(documentCrumbs(table())).toHaveText(['server-a', 'AppData', 'Tables'])
-    await expect(sectionListOf(table()).getByRole('button')).toHaveText(['General', 'Permissions', 'Change Tracking', 'Storage', 'Extended Properties'])
-    await expect(propertyFact(table(), 'Name')).toHaveText('Lines')
-    await expect(propertyFact(table(), 'Schema')).toHaveText('dbo')
-    await expect(propertyFact(table(), 'Data compression')).toHaveText('Page')
-    await expect(propertyFact(table(), 'Row count')).toHaveText((1200).toLocaleString())
-    // Permissions is a page grid (LG-3): Ctrl+A then Ctrl+Shift+C copy it with headers as a results grid does, and an
-    // unpartitioned table shows no Partitions grid.
+    await expect(inspectorTabLabels(table())).toHaveText(['Overview', 'Definition', 'Storage & Layout', 'Columns', 'Indexes & Keys', 'Dependencies', 'Permissions & RLS', 'Extended Properties', 'Preview Rows'])
+    await expect(propertyFact(inspectorPanel(table()), 'Name')).toHaveText('Lines')
+    await expect(propertyFact(inspectorPanel(table()), 'Schema')).toHaveText('dbo')
+    // Storage & Layout shows compression, row count and (for partitioned tables only) Partitions.
+    await inspectorTab(table(), 'Storage & Layout').click()
+    await expect(propertyFact(inspectorPanel(table()), 'Data compression')).toHaveText('Page')
+    await expect(propertyFact(inspectorPanel(table()), 'Row count')).toHaveText((1200).toLocaleString())
+    await expect(localGrid(table(), 'Partitions')).toHaveCount(0)
+    // Permissions & RLS is a natural-height page grid: Ctrl+A then Ctrl+Shift+C copy it with headers as a results grid does.
+    await inspectorTab(table(), 'Permissions & RLS').click()
     const permissionsGrid = localGrid(table(), 'Permissions')
     await expect(permissionsGrid).toHaveAttribute('aria-label', 'Permissions, 1 row, 6 columns')
     await expect(permissionsGrid.locator(gridPart.columnHeader).filter({ visible: true })).toHaveText(['Principal', 'Type', 'Permission', 'Column', 'State', 'Grantor'])
@@ -284,13 +287,16 @@ try {
     await page.keyboard.press('ControlOrMeta+A')
     await page.keyboard.press('ControlOrMeta+Shift+C')
     await expect.poll(clipboard).toBe([['Principal', 'Type', 'Permission', 'Column', 'State', 'Grantor'], ['app', 'Sql user', 'SELECT', '', 'Grant', 'dbo']].map(row => row.join('\t')).join(eol))
-    await expect(localGrid(table(), 'Partitions')).toHaveCount(0)
+    // Extended Properties keeps its editable table with row copy.
+    await inspectorTab(table(), 'Extended Properties').click()
     await expect(table().getByRole('table')).toHaveCount(1)
+    // Overview holds Editable Options (Lock escalation and Change Tracking).
+    await inspectorTab(table(), 'Overview').click()
     await expect(tableVerb('Apply')).toBeDisabled()
     const escalation = table().getByRole('radiogroup', { name: 'Lock escalation', exact: true })
     await expect(escalation.getByRole('radio', { name: 'Table', exact: true })).toHaveAttribute('aria-checked', 'true')
     await escalation.getByRole('radio', { name: 'Disable', exact: true }).click()
-    await expect(tableVerb('Apply')).toBeEnabled()
+    await expect(tableVerb('Apply · 1')).toBeEnabled()
     await expect(unsavedMark(documentTab(page, 'Table Properties - dbo.Lines'))).toBeVisible()
     // The Script drawer previews only the change.
     await scriptToggle(table()).click()
@@ -298,19 +304,18 @@ try {
     expect((await stubCalls('actions.script')).at(-1)).toMatchObject({ action: 'tableProperties', target: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'Lines' }, tableChanges: { lockEscalation: 'DISABLE' }, identity: { id: 901 } })
     await scriptToggle(table()).click()
     // Change tracking off asks first; Cancel (the default) sends nothing.
-    await sectionListOf(table()).getByRole('button', { name: 'Change Tracking', exact: true }).click()
     const tracking = table().getByRole('switch', { name: 'Change Tracking', exact: true })
     await expect(tracking).toBeChecked()
     await tracking.click()
     await expect(table().getByRole('switch', { name: 'Track Columns Updated', exact: true })).toBeDisabled()
-    await tableVerb('Apply').click()
+    await tableVerb('Apply · 2').click()
     await expect.poll(async () => (await application.evaluate(() => globalThis.variaStub.prompts)).length).toBe(1)
     expect((await application.evaluate(() => globalThis.variaStub.prompts))[0]).toMatchObject({ title: 'Change Tracking', message: 'Turn off change tracking on dbo.Lines?', buttons: ['Turn Off', 'Cancel'], defaultId: 1, cancelId: 1 })
-    await expect(tableVerb('Apply')).toBeEnabled()
+    await expect(tableVerb('Apply · 2')).toBeEnabled()
     expect((await stubCalls('actions.execute')).filter(call => call.action === 'tableProperties')).toHaveLength(0)
     // Turn Off: Apply sends both changes, reads the table again and is clean.
     await application.evaluate(() => { globalThis.variaStub.answers = [0] })
-    await tableVerb('Apply').click()
+    await tableVerb('Apply · 2').click()
     await expect(documentBanner(table())).toContainText('The changes were applied.')
     expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'tableProperties', tableChanges: { lockEscalation: 'DISABLE', changeTracking: { enabled: false } }, identity: { id: 901, created: '2026-01-01T00:00:00.000' } })
     await expect(tracking).not.toBeChecked()
@@ -319,7 +324,7 @@ try {
     await page.screenshot({ path: resolve('artifacts', 'table-properties-dark.png') })
     await closeDocumentButton(page, 'Table Properties - dbo.Lines').click()
     await expect(documentTab(page, 'Table Properties - dbo.Lines')).toHaveCount(0)
-    console.log('Object action checks: Table Properties opens as a document with SSMS\'s pages and facts, previews only its change, asks before turning change tracking off and applies it with lock escalation in one request.')
+    console.log('Object action checks: Table Properties opens on ObjectInspectorFrame with canonical tabs, previews only its change, asks before turning change tracking off and applies it with lock escalation in one request.')
   }
 
   // 5. Database Properties as a document: a tab rather than a modal, SSMS's pages as sections with their list, facts as

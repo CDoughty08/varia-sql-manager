@@ -820,7 +820,7 @@ try {
   // Object Explorer shows the server by its name and color, expanded to its folders.
   const serverRow = await explorerRow(page, 'Development')
   await expect(serverRow).toHaveAttribute('aria-expanded', 'true')
-  expect(await serverRow.locator(part.explorerAccent).evaluate(element => getComputedStyle(element).backgroundColor)).toBe('rgb(230, 103, 103)')
+  expect(await serverRow.evaluate(element => ({ accent: element.hasAttribute('data-accent'), border: getComputedStyle(element, '::after').borderTopColor }))).toEqual({ accent: true, border: 'rgb(230, 103, 103)' })
   await expect(await explorerRow(page, 'Development', 'Server Objects')).toBeVisible()
   await page.locator('.monaco-editor [role="textbox"]').focus()
   await page.keyboard.press('Control+A')
@@ -1282,12 +1282,13 @@ async function environmentLabels() {
       await page.mouse.move(x, y); await page.mouse.down()
       await page.mouse.move(x + dx, y, { steps: 5 }); await page.mouse.up()
     }
-    const before = (await queryBar(page).boundingBox()).width
+    const area = page.locator(part.editorArea)
+    const before = (await area.boundingBox()).width
     await drag(before - width)
-    await expect.poll(async () => (await queryBar(page).boundingBox()).width).toBeLessThan(width + 12)
+    await expect.poll(async () => (await area.boundingBox()).width).toBeLessThan(width + 12)
     return async () => {
-      await drag((await queryBar(page).boundingBox()).width - before)
-      await expect.poll(async () => (await queryBar(page).boundingBox()).width).toBeGreaterThan(before - 12)
+      await drag((await area.boundingBox()).width - before)
+      await expect.poll(async () => (await area.boundingBox()).width).toBeGreaterThan(before - 12)
     }
   }
   // The lists give way first, then a long label is cut short: the tag never runs under the server list, the lists keep
@@ -1329,7 +1330,7 @@ async function environmentLabels() {
     probe.style.backgroundColor = 'var(--varia-statusPill-criticalBackground)'
     document.body.append(probe)
     const expected = getComputedStyle(probe), box = pill.getBoundingClientRect(), outer = element.getBoundingClientRect()
-    const result = { color: style.color === expected.color, fill: style.backgroundColor === expected.backgroundColor, accent: !!element.querySelector(part.explorerAccent),
+    const result = { color: style.color === expected.color, fill: style.backgroundColor === expected.backgroundColor, accent: element.hasAttribute('data-accent'),
       inside: box.top >= outer.top && box.bottom <= outer.bottom && box.right <= outer.right + 0.5, whole: pill.scrollWidth <= pill.clientWidth }
     probe.remove()
     return result
