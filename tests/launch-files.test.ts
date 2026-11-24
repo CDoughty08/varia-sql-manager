@@ -84,7 +84,7 @@ describe('delivering waiting files', () => {
     }
     return { state, reads, sent, value }
   }
-  const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+  const settle = () => new Promise(resolve => setImmediate(resolve))
   const [a, b] = ['a.sql', 'b.sql'].map(name => process.platform === 'win32' ? `C:\\${name}` : `/${name}`)
   it('waits for a ready page, and sends what it read', async () => {
     const queue = new LaunchQueue(), { state, reads, sent, value } = host()

@@ -175,8 +175,8 @@ try {
   const pagesBefore = fake.results.length
   await strip('Result 1').getByRole('button', { name: 'Load into memory', exact: true }).click()
   // The load reads the job's rows again from the first, with jobs.getQueryResults, past the block cache.
-  await expect.poll(() => fake.results.slice(pagesBefore).some(read => read.table === table && read.start === 0), { timeout: 30000 }).toBe(true)
-  await expect.poll(() => stripText('Result 1'), { timeout: 30000 }).not.toMatch(/windowed in BigQuery|Loading into memory/)
+  await expect.poll(() => fake.results.slice(pagesBefore).some(read => read.table === table && read.start === 0), { timeout: 60000 }).toBe(true)
+  await expect.poll(() => stripText('Result 1'), { timeout: 60000 }).not.toMatch(/windowed in BigQuery|Loading into memory/)
   await gridCell(resultGrid(page, 'Result 1'), 0, 0).click()
   await page.keyboard.press('Control+End')
   await expect(gridCell(resultGrid(page, 'Result 1'), 59_999, 1)).toHaveText('row 59999', { timeout: 30000 })

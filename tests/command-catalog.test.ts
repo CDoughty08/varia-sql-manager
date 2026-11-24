@@ -224,6 +224,10 @@ describe('command catalogue', () => {
     }
   })
   it.each(platforms)('has no keybinding conflicts or reserved keys on %s', platform => {
+    const first = findConflicts(defaultRules(platform), platform)
+    expect(first).toEqual([])
+    // Memoized default-rule checks must return a fresh array so callers cannot poison the cache.
+    first.push({ kind: 'reserved', chord: 'ctrl+c', commands: ['file.new'], message: 'mutated' })
     expect(findConflicts(defaultRules(platform), platform)).toEqual([])
   })
   it('stays a plain data object', () => {
@@ -240,6 +244,9 @@ describe('context keys', () => {
     expect(record).toMatchObject({ isMac: true, isWindows: false, isLinux: false, queryRunning: true, activePanel: 'explorer', editorFocus: false })
     expect(contextRecord('win32')).toMatchObject({ isWindows: true, activePanel: '', hasActiveDocument: false, explorerNode: '', outputView: '', paneFloating: false })
     expect(contextRecord('linux', { explorerNode: 'table', paneFloating: true })).toMatchObject({ explorerNode: 'table', outputView: '', paneFloating: true })
+    expect(Object.hasOwn(contextRecord('linux', { notARealKey: true } as Partial<ContextKeys>), 'notARealKey')).toBe(false)
+    expect(contextRecord('darwin', { isMac: false })).toMatchObject({ isMac: false, isWindows: false, isLinux: false })
+    expect(contextRecord('darwin')).toMatchObject({ isMac: true, isWindows: false, isLinux: false })
     expect(keysOfScope('target')).toEqual([
       'explorerNode', 'explorerServerLost', 'explorerFolderFilterable', 'explorerFolderFiltered', 'explorerFolder', 'explorerNodePeekable', 'explorerNodeDependencies', 'explorerFolderInsertable', 'explorerNodeNameless', 'explorerNodeStatus', 'explorerServerEngine', 'explorerServerLinux', 'explorerProvider', 'agentRole',
       'outputView', 'outputGridTransposable', 'outputGridBare', 'outputLiveFilterable', 'outputLiveRows', 'outputLiveSortable', 'pane', 'paneFloating', 'panePopout', 'explorerToolsLost', 'explorerToolsFloating', 'explorerToolsPopout', 'documentTabFloating', 'searchHitSchema', 'searchHitBigQuery', 'outputGridComparison'

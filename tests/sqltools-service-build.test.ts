@@ -251,7 +251,10 @@ describe('bundled SQL Tools Service preparation', () => {
   })
   it('copies each target beside the backend and prepares it at development and packaging entry points', async () => {
     const pkg = JSON.parse(await readFile('package.json', 'utf8'))
-    for (const script of ['dev', 'build', 'start', 'build:smoke']) expect(pkg.scripts[script], script).toContain('npm run sqltools:prepare')
+    const { steps } = await import('../scripts/check.mjs')
+    for (const script of ['dev', 'build', 'start']) expect(pkg.scripts[script], script).toContain('npm run sqltools:prepare')
+    expect(pkg.scripts['build:smoke']).toBe('node scripts/check.mjs --build')
+    expect(steps['Prepare SQL Tools Service']).toBe('npm run sqltools:prepare')
     const builder = await readFile('electron-builder.yml', 'utf8')
     expect(builder).toContain('beforePack: build/sqltools-service-check.cjs')
     for (const rid of ['win', 'linux', 'osx']) expect(builder).toContain(`from: artifacts/sqltools-service/${rid}-\${arch}\n      to: sqltools-service`)
@@ -267,7 +270,7 @@ describe('bundled SQL Tools Service preparation', () => {
     const ci = await readFile('.github/workflows/ci.yml', 'utf8')
     // These are workflow paths, not a test that launches the backend (check.mjs classifies backend consumers).
     const testAssembly = posix.join('backend', 'Varia.Backend.Tests', 'bin', 'Release', 'net11.0', 'Varia.Backend.Tests.dll')
-    expect(ci).toContain(`if: matrix.group == 1 && (success() || failure()) && hashFiles('${testAssembly}') != ''`)
+    expect(ci).toContain(`if: matrix.slot == 1 && (success() || failure()) && hashFiles('${testAssembly}') != ''`)
     expect(ci).toContain('dotnet run --no-build --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --sql-language-live')
   })
 })

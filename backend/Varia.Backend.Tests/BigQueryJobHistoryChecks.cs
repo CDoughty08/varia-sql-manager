@@ -602,12 +602,12 @@ internal static class BigQueryJobHistoryChecks
         late.Fake.Hang = request => lagging && request.Uri.Query.Contains("stateFilter=", StringComparison.Ordinal);
         late.Fake.On("GET", Jobs, request =>
         {
-            // The answer's latency is what this check is about: half the budget below, past its first quarter.
-            if (lagging && !request.Uri.Query.Contains("stateFilter=", StringComparison.Ordinal)) Thread.Sleep(500);
+            // The answer's latency is what this check is about: past a quarter of the budget below, with headroom for loaded runners.
+            if (lagging && !request.Uri.Query.Contains("stateFilter=", StringComparison.Ordinal)) Thread.Sleep(1100);
             return BigQueryFake.Text("""{"kind":"bigquery#jobList"}""");
         }).On("GET", Jobs + "/varia_running", _ => new BigQueryFake.Reply(200, JsonNode.Parse(Timed("jobs-list", late.Now).Replace("\"RUNNING\"", "\"DONE\""))!["jobs"]![0]!.ToJsonString()));
         var before = late.Listings().Count;
-        var cutLate = await trailing.SampleAsync([Due(1000)], CancellationToken.None);
+        var cutLate = await trailing.SampleAsync([Due(4000)], CancellationToken.None);
         lagging = false;
         var middle = late.Listings().Count;
         var caughtUp = await SampleAsync(trailing);

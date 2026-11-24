@@ -350,6 +350,14 @@ internal static partial class BigQueryExecutionChecks
 
     public static async Task RunAsync(Action<bool, string> check)
     {
+        await RunCoreAsync(check);
+        await RunResidenceAsync(check);
+        await RunViewsCopySaveAsync(check);
+        await RunStorageAsync(check);
+    }
+
+    public static async Task RunCoreAsync(Action<bool, string> check)
+    {
         Trace("References");
         References(check);
         Trace("CostText");
@@ -378,9 +386,9 @@ internal static partial class BigQueryExecutionChecks
         await EdgesAsync(check);
         Trace("CancelAsync");
         await CancelAsync(check);
-        await ResidenceAsync(check);
-        await StorageReadAsync(check);
     }
+
+    public static Task RunStorageAsync(Action<bool, string> check) => StorageReadAsync(check);
 
     /// <summary>VARIA_TRACE_CHECKS=1 names each section on stderr, to find a section that hangs.</summary>
     static void Trace(string section) { if (Environment.GetEnvironmentVariable("VARIA_TRACE_CHECKS") == "1") Console.Error.WriteLine("BigQueryExecution: " + section); }

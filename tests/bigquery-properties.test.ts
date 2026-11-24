@@ -265,16 +265,16 @@ describe('BigQueryPropertiesService', () => {
     replies[1].resolve({ ok: true, value: basicFacts('2') })
     await Promise.resolve(); await Promise.resolve()
     replies[0].resolve({ ok: true, value: basicFacts('1') })
-    await new Promise(resolve => setTimeout(resolve, 0))
+    await new Promise(resolve => setImmediate(resolve))
     expect(service.view(id)).toMatchObject({ loading: false, value: basicFacts('2') })
     void service.refresh(id)
     replies[2].resolve({ ok: false, error: 'Access Denied', code: 'PERMISSION_DENIED' })
-    await new Promise(resolve => setTimeout(resolve, 0))
+    await new Promise(resolve => setImmediate(resolve))
     expect(service.view(id)).toMatchObject({ loading: false, error: 'Access Denied', value: basicFacts('2') })
     void service.refresh(id)
     service.closed(id)
     replies[3].resolve({ ok: true, value: basicFacts('3') })
-    await new Promise(resolve => setTimeout(resolve, 0))
+    await new Promise(resolve => setImmediate(resolve))
     expect(service.view(id)).toBeUndefined()
   })
 
@@ -282,7 +282,7 @@ describe('BigQueryPropertiesService', () => {
     const { service, api, replies, scriptReplies, billedGate } = setupService()
     const id = service.open(node('bqTable'))!
     replies[0].resolve({ ok: true, value: richTableProps })
-    await new Promise(resolve => setTimeout(resolve, 0))
+    await new Promise(resolve => setImmediate(resolve))
 
     // Selecting the Definition tab does NOT run billed SQL.
     service.selectTab(id, 'definition')
@@ -302,7 +302,7 @@ describe('BigQueryPropertiesService', () => {
     // Approving the cost prompt runs the billed CREATE statement with maximumBytesBilled.
     const approved = service.loadDdl(id)
     scriptReplies[1].resolve({ ok: true, value: { database: 'sales', commands: 0, elapsedMs: 5, warnings: [], estimate: { bytesProcessed: 10_485_760, statementType: 'SELECT' } } })
-    await new Promise(resolve => setTimeout(resolve, 0))
+    await new Promise(resolve => setImmediate(resolve))
     expect(api.scriptObjects).toHaveBeenCalledTimes(3)
     expect(api.scriptObjects).toHaveBeenLastCalledWith(expect.objectContaining({ verb: 'create', maximumBytesBilled: 10_485_760 }))
     scriptReplies[2].resolve({ ok: true, value: { database: 'sales', commands: 1, elapsedMs: 12, warnings: [], text: 'CREATE TABLE `analytics_prod.commerce.orders` (...);' } })
@@ -314,7 +314,7 @@ describe('BigQueryPropertiesService', () => {
     const { service, api, replies, executeReplies, results } = setupService()
     const id = service.open(node('bqTable'))!
     replies[0].resolve({ ok: true, value: richTableProps })
-    await new Promise(resolve => setTimeout(resolve, 0))
+    await new Promise(resolve => setImmediate(resolve))
 
     expect(api.execute).not.toHaveBeenCalled()
     service.selectTab(id, 'columns')
@@ -339,7 +339,7 @@ describe('BigQueryPropertiesService', () => {
         completedAt: '2026-04-01T00:00:00.0000000'
       }
     })
-    await new Promise(resolve => setTimeout(resolve, 0))
+    await new Promise(resolve => setImmediate(resolve))
     expect(service.view(id)?.preview).toMatchObject({ status: 'ready', rowsRead: 5 })
     const previewKey = (service.view(id)?.preview as { readonly key: string }).key
 
@@ -398,7 +398,7 @@ describe('BigQueryPropertiesService', () => {
     service.cancelPreview(id)
     expect(service.view(id)?.preview).toEqual({ status: 'error', message: 'Preview cancelled.' })
     executeReplies[0].resolve({ ok: false, error: 'cancelled' })
-    await new Promise(resolve => setTimeout(resolve, 0))
+    await new Promise(resolve => setImmediate(resolve))
 
     vi.spyOn(console, 'error').mockImplementation(() => {})
     results.finish.mockRejectedValueOnce(new Error('worker disposed'))
@@ -471,7 +471,7 @@ describe('BigQueryPropertiesTab UI', () => {
   it('renders unified ObjectInspectorFrame with KPIs, Vitals rail, canonical tabs, STRUCT expansion, on-demand table DDL, and lazy Preview Rows', async () => {
     const { wb, bigQueryProperties, docId, writeClipboardText, cleanup } = setupUi('bqTable', richTableProps)
     try {
-      await new Promise(resolve => setTimeout(resolve, 0))
+      await new Promise(resolve => setImmediate(resolve))
       const el = mount(createElement(WorkbenchProvider, { workbench: wb, children: createElement(BigQueryPropertiesTab, { documentId: docId }) }))
 
       // Shell & Chrome: breadcrumbs, engine badge, semantic pills, Hero KPIs, Vitals rail.
@@ -534,7 +534,7 @@ describe('BigQueryPropertiesTab UI', () => {
       // Definition tab explicit Load DDL loads Monaco GoogleSQL editor on click.
       act(() => { tabs[1].click() })
       const loadBtn = [...el.querySelectorAll('button')].find(btn => btn.textContent?.includes('Load DDL'))!
-      await act(async () => { loadBtn.click(); await new Promise(resolve => setTimeout(resolve, 0)) })
+      await act(async () => { loadBtn.click(); await new Promise(resolve => setImmediate(resolve)) })
       expect(el.querySelector('[data-bq-definition-editor]')).not.toBeNull()
       expect(el.textContent).toContain('Copy')
       expect(el.textContent).toContain('Open in New Query')
@@ -546,7 +546,7 @@ describe('BigQueryPropertiesTab UI', () => {
   it('renders free GoogleSQL definition immediately for views and omits Storage & Layout, Labels, and Preview Rows when N/A', async () => {
     const { wb, docId, createdModels, cleanup } = setupUi('bqView', { ...richViewProps, definitionTruncated: true, schemaTruncated: true })
     try {
-      await new Promise(resolve => setTimeout(resolve, 0))
+      await new Promise(resolve => setImmediate(resolve))
       const el = mount(createElement(WorkbenchProvider, { workbench: wb, children: createElement(BigQueryPropertiesTab, { documentId: docId }) }))
 
       const tabs = [...el.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
@@ -580,7 +580,7 @@ describe('BigQueryPropertiesTab UI', () => {
     }
     const { wb, docId, cleanup } = setupUi('bqExternalTable', extProps)
     try {
-      await new Promise(resolve => setTimeout(resolve, 0))
+      await new Promise(resolve => setImmediate(resolve))
       const el = mount(createElement(WorkbenchProvider, { workbench: wb, children: createElement(BigQueryPropertiesTab, { documentId: docId }) }))
       expect(el.textContent).toContain('External')
       const tabs = [...el.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
@@ -618,7 +618,7 @@ describe('BigQueryPropertiesTab UI', () => {
     const tbl1 = bigQueryProperties.open(node('bqTable', { label: 'tbl_a', ref: { type: 'object', object: { kind: 'bqTable', project: 'analytics_prod', dataset: 'commerce', name: 'tbl_a' } } }))!
     const tbl2 = bigQueryProperties.open(node('bqTable', { label: 'tbl_b', ref: { type: 'object', object: { kind: 'bqTable', project: 'analytics_prod', dataset: 'commerce', name: 'tbl_b' } } }))!
     try {
-      await new Promise(resolve => setTimeout(resolve, 0))
+      await new Promise(resolve => setImmediate(resolve))
       const el = mount(createElement(WorkbenchProvider, {
         workbench: wb,
         children: createElement('div', null,

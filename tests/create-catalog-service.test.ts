@@ -39,7 +39,7 @@ function setup(answer: ApiResult<SsisCatalogSetupResult> = setupOf()) {
   let ids = 0
   const service = new CreateCatalogService({ api, connections, explorer, longRuns, newId: () => `id-${++ids}` })
   cleanups.push(() => service.dispose(), () => longRuns.dispose())
-  const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+  const settle = () => new Promise(resolve => setImmediate(resolve))
   return { service, api, connections, explorer, execute, settle, longRuns }
 }
 
@@ -250,7 +250,7 @@ describe('Create Catalog command', () => {
     const answer = deferred<ApiResult<SsisExecuteResult>>()
     fixture.api.executeSsis.mockImplementationOnce(() => answer.promise)
     fixture.ssisCatalog.open(folder())
-    await new Promise(resolve => setTimeout(resolve, 0))
+    await new Promise(resolve => setImmediate(resolve))
     fixture.ssisCatalog.setEnableClr(true)
     const running = fixture.ssisCatalog.create(secret, secret)
     expect(fixture.ssisCatalog.current?.phase).toBe('executing')
@@ -294,7 +294,7 @@ describe('Create Catalog command', () => {
     fixture.api.executeSsis.mockImplementationOnce(() => new Promise(() => {}))
     fixture.api.cancelSsis.mockImplementation(() => new Promise(() => {}))
     fixture.ssisCatalog.open(folder())
-    await new Promise(resolve => setTimeout(resolve, 0))
+    await new Promise(resolve => setImmediate(resolve))
     fixture.ssisCatalog.setEnableClr(true)
     void fixture.ssisCatalog.create(secret, secret)
     fixture.api.push({ status: 'unresponsive', generation: 1, silentMs: 15_000 })

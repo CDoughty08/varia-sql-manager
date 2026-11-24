@@ -13,7 +13,7 @@ import { connectionInfo, workbenchFixture } from './fixtures/workbench'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { while (cleanups.length) cleanups.pop()!() })
-const settled = async () => { for (let turn = 0; turn < 12; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
+const settled = async () => { for (let turn = 0; turn < 12; turn++) await new Promise(resolve => setImmediate(resolve)) }
 const deferred = <T>() => { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done }); return { promise, resolve } }
 
 const uuid = (n: number) => `0000000${n}-0000-4000-8000-000000000000`

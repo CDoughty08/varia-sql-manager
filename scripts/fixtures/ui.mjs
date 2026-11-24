@@ -640,10 +640,14 @@ export const closePaneButton = (page, id) => page.getByRole('button', { name: 'C
 export const paneMenuButton = (page, id) => page.getByRole('button', { name: paneTitles[id] + ' panel menu', exact: true })
 /** Moves a pane through its ⋯ menu: left, right, top, bottom, float, dock, close, or tab:<pane>. */
 export const movePane = async (page, id, where) => {
-  await paneMenuButton(page, id).click()
+  const button = paneMenuButton(page, id)
+  await expect(button).toBeVisible()
+  await button.click()
   const name = where.startsWith('tab:') ? 'Tab with ' + paneMenuTitles[where.slice(4)] : paneMoves[where]
   if (!name) throw new Error('No panel move ' + where)
-  await page.getByRole('menu').getByRole('menuitem', { name, exact: true }).click()
+  const item = page.getByRole('menu').getByRole('menuitem', { name, exact: true })
+  await expect(item).toBeVisible()
+  await item.click()
 }
 
 // Popout windows: a popout's page holds its panels' tabs, the button that docks them all back, and the panels themselves.

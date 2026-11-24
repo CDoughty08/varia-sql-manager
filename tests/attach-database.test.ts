@@ -240,7 +240,7 @@ describe('Attach Databases dialog', () => {
     let count = 0
     const dialogs = new ObjectDialogService({ api, connections, explorer, documents: { newQuery: vi.fn() }, files: { saveCopy: vi.fn() }, serverFiles, longRuns, newId: () => `id-${++count}` })
     cleanups.push(() => dialogs.dispose())
-    const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+    const settle = () => new Promise(resolve => setImmediate(resolve))
     return { dialogs, api, explorer, longRuns, run, serverFiles, execute, settle }
   }
   const folder: ExplorerMenuNode = { id: 5, connectionId: 'server-a', ref: { type: 'folder', owner: server, folder: 'databases' }, kind: 'folder', folder: 'databases', label: 'Databases', lost: false }

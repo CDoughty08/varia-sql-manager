@@ -342,7 +342,7 @@ describe('Unified PeekCard and PeekTab rendering on ObjectInspectorFrame', () =>
       const el = mount(createElement(WorkbenchProvider, { workbench, children: createElement(PeekTabView, { documentId: docId }) }))
       await act(async () => {
         finishPeek()
-        await new Promise(resolve => setTimeout(resolve, 0))
+        await new Promise(resolve => setImmediate(resolve))
       })
       const frame = el.querySelector<HTMLElement>('[data-peek-tab]')!
       expect(frame).not.toBeNull()
@@ -461,7 +461,7 @@ describe('Unified PeekCard and PeekTab rendering on ObjectInspectorFrame', () =>
       const el = mount(createElement(WorkbenchProvider, { workbench, children: createElement(PeekTabView, { documentId: docId }) }))
       // While loading, only the active pane renders role="status" (Vitals rail does not duplicate it).
       expect(el.querySelectorAll('[role="status"]')).toHaveLength(1)
-      await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+      await act(async () => { await new Promise(resolve => setImmediate(resolve)) })
 
       const frame = el.querySelector<HTMLElement>('[data-peek-tab]')!
       const link = frame.querySelector<HTMLButtonElement>('[aria-label="Peek dbo.Customers"]')!
@@ -471,7 +471,7 @@ describe('Unified PeekCard and PeekTab rendering on ObjectInspectorFrame', () =>
       expect(document.activeElement).toBe(link)
       await act(async () => {
         link.click()
-        await new Promise(resolve => setTimeout(resolve, 0))
+        await new Promise(resolve => setImmediate(resolve))
       })
       // Focus must stay inside the PeekTab on the active tab so Ctrl+1..9 and Back shortcuts keep working.
       expect(frame.contains(document.activeElement)).toBe(true)
@@ -483,7 +483,7 @@ describe('Unified PeekCard and PeekTab rendering on ObjectInspectorFrame', () =>
       act(() => { backBtn.focus() })
       await act(async () => {
         backBtn.click()
-        await new Promise(resolve => setTimeout(resolve, 0))
+        await new Promise(resolve => setImmediate(resolve))
       })
       expect(frame.querySelector('[aria-label="Back"]')).toBeNull()
       expect(frame.contains(document.activeElement)).toBe(true)
@@ -492,7 +492,7 @@ describe('Unified PeekCard and PeekTab rendering on ObjectInspectorFrame', () =>
       failNext = true
       await act(async () => {
         peekTabs.getSnapshot().views[docId]?.refresh()
-        await new Promise(resolve => setTimeout(resolve, 0))
+        await new Promise(resolve => setImmediate(resolve))
       })
       expect(frame.querySelectorAll('[role="alert"]')).toHaveLength(1)
 
@@ -500,7 +500,7 @@ describe('Unified PeekCard and PeekTab rendering on ObjectInspectorFrame', () =>
       failNext = false
       await act(async () => {
         peekTabs.getSnapshot().views[docId]?.refresh()
-        await new Promise(resolve => setTimeout(resolve, 0))
+        await new Promise(resolve => setImmediate(resolve))
       })
       expect(frame.querySelectorAll('.fact-grid-link').length).toBeGreaterThan(0)
       act(() => {

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { ApiResult, IntegratedIdentity } from '../src/shared/contracts'
 import { IntegratedIdentityLookup } from '../src/renderer/src/services/integrated-identity'
 
-const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+const settle = () => new Promise(resolve => setImmediate(resolve))
 
 function fixture(platform = 'linux') {
   const answers: ((result: ApiResult<IntegratedIdentity>) => void)[] = []

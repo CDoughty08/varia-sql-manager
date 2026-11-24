@@ -12,7 +12,7 @@ import { deferred } from './fixtures/documents'
 import { fakeFocus, manualTimers, workbenchFixture } from './fixtures/workbench'
 
 const ok = <T>(value: T): ApiResult<T> => ({ ok: true, value })
-const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+const settle = () => new Promise(resolve => setImmediate(resolve))
 const summary = (id: string, name: string, types: ThemeType[], fields: Partial<ThemeSummary> = {}): ThemeSummary => ({ id, name, source: 'user', types, usable: true, errors: 0, warnings: 0, ...fields })
 const themes: ThemeSummary[] = [
   summary('varia-dark', 'Varia Dark', ['dark'], { source: 'builtin' }), summary('varia-light', 'Varia Light', ['light'], { source: 'builtin' }),
