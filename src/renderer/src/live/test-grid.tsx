@@ -13,7 +13,8 @@ export interface TestGrid { grid(): LiveGrid | undefined; dispose(): void }
 export function mountTestGrid(workbench: Workbench, handle: LiveHandle, probe: LiveProbeId, table: number, state?: LiveGridState): TestGrid {
   const host = document.createElement('div')
   host.className = 'live-grid-test'
-  host.style.cssText = 'position: fixed; left: 48px; top: 96px; width: 720px; height: 360px; z-index: 20; display: flex;'
+  // Above Dockview sashes/overlays (<= 9999) so splitters never intercept grid clicks, below popovers (13000) and menus (30000).
+  host.style.cssText = 'position: fixed; left: 48px; top: 96px; width: 720px; height: 360px; z-index: 10000; display: flex;'
   document.body.append(host)
   let grid: LiveGrid | undefined
   const root = createRoot(host)
