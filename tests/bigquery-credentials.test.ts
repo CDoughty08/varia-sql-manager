@@ -3,9 +3,9 @@ import { readFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { adcFile, BigQueryCredentials, BigQueryKeyFiles, maxCredentialBytes, readCredentialFile } from '../src/main/bigquery-credentials'
-import { backendSpawnSpec, bigQueryEmulatorEndpoint } from '../src/main/backend/spawn-spec'
+import { backendSpawnSpec, bigQueryEmulatorEndpoint, bigQueryEmulatorStorageEndpoint } from '../src/main/backend/spawn-spec'
 import { validateRequest, validateResult } from '../src/main/validation'
 import { BackendError } from '../src/main/backend/errors'
 
@@ -116,6 +116,34 @@ describe('BigQuery credential material (main)', () => {
     expect(await emulator.material({ authentication: 'gcloud' })).toEqual({ source: 'anonymous' })
   })
 
+  it('asks once about the token file a gcloud ADC federation configuration reads, and refuses it unasked in the background', async () => {
+    const directory = await folder()
+    const token = join(directory, 'token.txt'), adc = join(directory, 'application_default_credentials.json')
+    const federation = JSON.stringify({ type: 'external_account', audience: '//iam.googleapis.com/x', subject_token_type: 'urn:ietf:params:oauth:token-type:jwt', token_url: 'https://sts.googleapis.com/v1/token', credential_source: { file: token } })
+    await writeFile(adc, federation)
+    const confirmed = new Set<string>()
+    const askSource = vi.fn(async (keyPath: string, source: string) => { confirmed.add(`${keyPath}|${source}`); return true })
+    const environment = { env: { CLOUDSDK_CONFIG: directory }, platform: process.platform, home: directory, emulator: false,
+      sourceConfirmed: async (keyPath: string, source: string) => confirmed.has(`${keyPath}|${source}`), askSource }
+    const credentials = new BigQueryCredentials(new BigQueryKeyFiles(), environment)
+    // A background reconnect cannot ask: refused, and nothing is asked.
+    expect(await refusal(credentials.material({ authentication: 'gcloud' }))).toMatchObject({ code: 'AUTH_KEY_FILE', message: expect.stringContaining('token file') })
+    expect(askSource).not.toHaveBeenCalled()
+    // A Connect asks, naming the ADC file and its token file; Use It is remembered, so the next request asks nothing.
+    expect(await credentials.material({ authentication: 'gcloud' }, { interactive: true })).toEqual({ source: 'adc', json: federation })
+    expect(askSource).toHaveBeenCalledExactlyOnceWith(adc, token)
+    expect(await credentials.material({ authentication: 'gcloud' })).toEqual({ source: 'adc', json: federation })
+    expect(askSource).toHaveBeenCalledTimes(1)
+    // Cancel refuses the sign-in; an ADC file without a file source (gcloud's user credentials) asks nothing.
+    askSource.mockClear()
+    confirmed.clear()
+    askSource.mockResolvedValueOnce(false)
+    expect(await refusal(credentials.material({ authentication: 'gcloud' }, { interactive: true }))).toMatchObject({ code: 'AUTH_KEY_FILE' })
+    await writeFile(adc, userFile)
+    expect(await credentials.material({ authentication: 'gcloud' }, { interactive: true })).toEqual({ source: 'adc', json: userFile })
+    expect(askSource).toHaveBeenCalledTimes(1)
+  })
+
   it('honours VARIA_TEST_BIGQUERY_ENDPOINT only in unpackaged builds and only as a loopback http address', () => {
     expect(bigQueryEmulatorEndpoint({ packaged: false, env: { VARIA_TEST_BIGQUERY_ENDPOINT: 'http://localhost:9050' } })).toBe('http://localhost:9050/')
     expect(bigQueryEmulatorEndpoint({ packaged: false, env: { VARIA_TEST_BIGQUERY_ENDPOINT: 'http://127.0.0.1:9050/' } })).toBe('http://127.0.0.1:9050/')
@@ -132,6 +160,20 @@ describe('BigQuery credential material (main)', () => {
     expect(backendSpawnSpec({ ...base, packaged: false, env: { PATH: '/bin', VARIA_USER_DATA: '/elsewhere' } }).env?.VARIA_USER_DATA).toBeUndefined()
     // An address the backend would refuse to start with never reaches it.
     expect(backendSpawnSpec({ ...base, packaged: false, env: { PATH: '/bin', VARIA_TEST_BIGQUERY_ENDPOINT: 'http://emulator.example.com:9050' } }).env?.VARIA_TEST_BIGQUERY_ENDPOINT).toBeUndefined()
+  })
+
+  it("forwards the emulator's Storage Read port beside its endpoint, so the app reads emulator results through Storage Read", () => {
+    const base = { root: resolve('app'), resourcesPath: resolve('resources'), platform: process.platform, smokeTest: false }
+    const env = { PATH: '/bin', VARIA_TEST_BIGQUERY_ENDPOINT: 'http://localhost:9050', VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT: ' http://localhost:9060 ' }
+    expect(bigQueryEmulatorStorageEndpoint({ packaged: false, env })).toBe('http://localhost:9060/')
+    expect(backendSpawnSpec({ ...base, packaged: false, env }).env?.VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT).toBe('http://localhost:9060/')
+    expect(backendSpawnSpec({ ...base, packaged: false, smokeTest: true, env }).env?.VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT).toBe('http://localhost:9060/')
+    const names = (spec: ReturnType<typeof backendSpawnSpec>) => Object.keys(spec.env ?? {}).map(name => name.toUpperCase())
+    // Never without the emulator endpoint, never in a packaged build, never an address the backend would refuse to start with.
+    expect(names(backendSpawnSpec({ ...base, packaged: false, env: { PATH: '/bin', varia_test_bigquery_storage_endpoint: 'http://localhost:9060' } }))).not.toContain('VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT')
+    expect(names(backendSpawnSpec({ ...base, packaged: true, env }))).not.toContain('VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT')
+    for (const value of ['http://emulator.example.com:9060', 'https://localhost:9060', 'http://localhost:9060/grpc', 'localhost:9060'])
+      expect(names(backendSpawnSpec({ ...base, packaged: false, env: { ...env, VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT: value } })), value).not.toContain('VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT')
   })
 
   it('takes the pre-connect methods\' parameters without credential material, and checks their answers', () => {
@@ -159,9 +201,12 @@ describe('BigQuery credential material (main)', () => {
     expect(main).toContain('await connectionOpen.connect(validated as ProviderConnectionOptions, context)')
     expect(main).toContain(`backend.request('connections.connect', await withBigQueryCredential(params) as ConnectionOptions`)
     expect(main).toContain(`backend.request('connections.databases', await withBigQueryCredential(params) as ConnectionOptions`)
-    expect(main).toContain('credential: await bigQueryCredentials.material(params as BigQueryConnectionOptions)')
+    // A background reconnect never asks about an ADC token file (decision 49 fails closed); a request the user waits on may.
+    expect(main).toContain('credential: await bigQueryCredentials.material(params as BigQueryConnectionOptions, { interactive: !(params as { nonInteractive?: boolean }).nonInteractive })')
     expect(main).toContain(`if (method === 'bigquery.account' || method === 'bigquery.projects') {`)
-    expect(main).toContain('const credential = await bigQueryCredentials.material(params)')
+    expect(main).toContain('const credential = await bigQueryCredentials.material(params, { interactive: true })')
+    // Main's recorded-job cancels have no one waiting on a question: they never ask.
+    expect(main).toContain('const credential = await bigQueryCredentials.material(params)\n')
     expect(main).toContain(`['connections.connect', 'connections.databases', 'actions.execute', 'bigquery.account', 'bigquery.projects'].includes(method)`)
   })
 

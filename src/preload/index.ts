@@ -202,7 +202,7 @@ const api: VariaApi = {
   dropJobRecords: jobKey => ipcRenderer.invoke('varia:job-records-drop', jobKey),
   keepJobsAtQuit: jobKeys => ipcRenderer.invoke('varia:quit-keep-jobs', jobKeys),
   cancelRestoredJobs: jobKeys => ipcRenderer.invoke('varia:jobs-cancel-restored', jobKeys),
-  reviewJobsWithoutTab: openJobKeys => ipcRenderer.invoke('varia:jobs-without-tab', openJobKeys),
+  reviewJobsWithoutTab: request => ipcRenderer.invoke('varia:jobs-without-tab', request),
   onFailedAborts: listener => {
     const handler = (_event: Electron.IpcRendererEvent, count: unknown) => { if (typeof count === 'number' && Number.isSafeInteger(count) && count > 0) listener(count) }
     ipcRenderer.on('varia:failed-aborts', handler)

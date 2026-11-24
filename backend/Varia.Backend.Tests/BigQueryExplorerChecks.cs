@@ -541,6 +541,11 @@ internal static class BigQueryExplorerChecks
         var pages = small.Fake.To(Sales + "/tables/preview/data").Count();
         check(full is { Status: "completed" } && full.ResultSets.Single() is { Truncated: "queryBudget" or "globalBudget" } && pages < 20,
             $"a preview the result budget stops completes without reading the table's other pages: {full?.Status} {full?.ResultSets.FirstOrDefault()?.Truncated} {pages} pages");
+        check(full?.Messages.Any(message => message.Text.Contains("result memory budget is full", StringComparison.Ordinal)) == true, "a preview the result budget stops says so in Messages");
+        // A low-memory stop says so, not that the budget is full.
+        check(SqlService.PreviewStopNote(["systemMemory"]) is { } low && low.Contains("low on memory", StringComparison.Ordinal) && !low.Contains("budget", StringComparison.Ordinal)
+            && SqlService.PreviewStopNote(["globalBudget", "systemMemory"])!.Contains("budget is full", StringComparison.Ordinal) && SqlService.PreviewStopNote([null, "rowLimit"]) is null,
+            "Preview Rows says a low-memory stop is the computer's memory, and a budget stop the budget's");
     }
 
     static async Task PropertiesAsync(Action<bool, string> check, JsonObject key)

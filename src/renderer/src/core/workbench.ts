@@ -16,6 +16,7 @@ import { QueryService } from '../services/queries'
 import { ConnectionService } from '../services/connections'
 import { ConnectionTargetService } from '../services/connection-targets'
 import { bindStartupReconnect } from '../services/connection-startup'
+import { connectBigQueryProfile } from '../services/connect-profile'
 import { bindConnectionPruning } from '../services/connection-pruning'
 import type { StartupReconnectService } from '../services/startup-reconnect'
 import { createDisconnectCoordinator } from '../services/disconnect-workbench'
@@ -440,7 +441,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const bigQueryCost = new BigQueryCostService({ api, documents, connections, settings, events, monaco, ask: (request, signal, stillAsks, onAnswer) => costPrompts.ask(request, signal, stillAsks, onAnswer), optOut: costOptOut(api, () => costChoiceChanged()) })
   costChoiceChanged = () => bigQueryCost.optOutChanged()
   queries.estimateOf = (id, sql) => bigQueryCost.estimateFor(id, sql)
-  queries.setCostGate((tabId, sql, origin, signal) => bigQueryCost.beforeExecute(tabId, sql, origin, signal))
+  queries.setCostGate((tabId, sql, origin, signal, rerunOf) => bigQueryCost.beforeExecute(tabId, sql, origin, signal, rerunOf))
   const queryPlans = new QueryPlansService(live, documents, queries, panes, results)
   const planPreparation = new PlanPreparationCache()
   const planReleases = resultClient.onRelease(keys => planPreparation.release(keys))
@@ -699,6 +700,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   })
   const cleanup = events.subscribe(event => { if (event.type === 'documents.closed') queries.forget(event.tabId) })
   let disposed = false
+  // Connects Show in Job History started end with the workbench.
+  const lifetime = new AbortController()
   const reloadPins = (): ReloadPins | undefined => {
     if (!api.hotExit) return
     return reloadSession(documents, id => connections.get(id)?.server, {
@@ -816,6 +819,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     dispose: () => {
       if (disposed) return
       disposed = true
+      lifetime.abort()
       stopConnectionBindings()
       startup.dispose()
       connectionPruning.dispose()
@@ -979,13 +983,20 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const welcome = () => { if (!disposed) documents.create('SQLQuery1.sql', welcomeQueryText, 'master') }
   // Show in Job History (the records dialog): each project's Job History filtered to its jobs; a project with no live
   // connection opens Connect, and its Job History opens once a connection to it is live.
+  // Show in Job History (docs/bigquery.md, Job History): a connected project opens at once; another connects the saved
+  // connection that started its jobs, with no Connect dialog, and opens once connected; one without says why.
   const showJobsWithoutTab = (projects: NonNullable<JobsWithoutTabReview['show']>) => {
-    let connect = false
-    for (const { project, jobs } of projects) {
-      try { if (!jobHistory.show(project, jobs)) { connect = true; notifications.notify({ severity: 'info', message: `Connect to BigQuery project ${project}: Job History opens with its ${jobs.length === 1 ? 'job' : `${jobs.length} jobs`} once connected.` }) } }
-      catch (error) { commands.reportError(error instanceof Error ? error.message : 'Job History could not open.') }
+    for (const { project, jobs, profileId, unavailable } of projects) {
+      try {
+        if (jobHistory.show(project, jobs)) continue
+        if (!profileId) { jobHistory.forget(project); notifications.notify({ severity: 'info', message: unavailable ?? `Connect to BigQuery project ${project} to see its jobs in Job History.` }); continue }
+        void connectBigQueryProfile({ api, connections, targets, backend, documents, startupReconnect: startup.scheduler, signal: lifetime.signal }, profileId).then(result => {
+          if (result.ok) return
+          jobHistory.forget(project)
+          if (!result.cancelled && !lifetime.signal.aborted) commands.reportError(`BigQuery project ${project} could not be connected for Job History: ${result.error}`)
+        }, onUnexpectedError)
+      } catch (error) { commands.reportError(error instanceof Error ? error.message : 'Job History could not open.') }
     }
-    if (connect) void commands.execute('connection.connect', undefined, 'toolbar')
   }
   if (api.hotExit) void restoreSession({ api, documents, files, groups: editorGroups, connectionTargets, resumeRecovery: (tabId, id) => recovery.resume(tabId, id), restoredJobs: (tabId, jobs) => queries.restoreJobs(tabId, jobs), otherwise: welcome, agentEnabled: api.agentPreview })
     .then(opened => opened >= 0, () => false).then(restored => {
@@ -993,8 +1004,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       if (disposed) return
       void recovery.start()
       // A session that could not be restored may still reopen its tabs (previous.json): their jobs are not asked about.
-      if (restored) void queries.reviewJobsWithoutTab(api, showJobsWithoutTab)
+      if (restored) void queries.reviewJobsWithoutTab(api, showJobsWithoutTab, () => jobHistory.liveProjects())
     })
-  else { welcome(); connectionRestored(); void recovery.start(); void queries.reviewJobsWithoutTab(api, showJobsWithoutTab) }
+  else { welcome(); connectionRestored(); void recovery.start(); void queries.reviewJobsWithoutTab(api, showJobsWithoutTab, () => jobHistory.liveProjects()) }
   return workbench
 }

@@ -13,8 +13,12 @@ export const dryRunLimits = { characters: 1_000_000 } as const
 export const incompleteReasons = ['script', 'lowerBound', 'unknown', 'zeroBytes'] as const
 export type IncompleteReason = typeof incompleteReasons[number]
 
-/** Editor text with the tab's dataset, or a results.remoteQuery request to estimate (docs/bigquery.md, Sort and filter in BigQuery). */
-export type BigQueryDryRunRequest = { connectionId: string; sql: string; dataset?: string } | { connectionId: string; remote: RemoteDryRun }
+/**
+ * Editor text with the tab's dataset, or a results.remoteQuery request to estimate (docs/bigquery.md, Sort and filter in BigQuery).
+ * `sessionId` is the tab's (query.execute's): when the tab already has a BigQuery session the text is dry-run in it, so its
+ * temp tables and variables resolve. The backend never creates a session for an estimate.
+ */
+export type BigQueryDryRunRequest = { connectionId: string; sql: string; dataset?: string; sessionId?: string } | { connectionId: string; remote: RemoteDryRun }
 export interface BigQueryDryRunResult {
   bytesProcessed: number
   incomplete?: IncompleteReason
@@ -26,7 +30,7 @@ export interface BigQueryDryRunResult {
 }
 
 export const bigQueryDryRunRequestSchema = z.union([
-  z.object({ connectionId: z.uuid(), sql: z.string().min(1).max(dryRunLimits.characters), dataset: bigQueryDatasetSchema.optional() }).strict(),
+  z.object({ connectionId: z.uuid(), sql: z.string().min(1).max(dryRunLimits.characters), dataset: bigQueryDatasetSchema.optional(), sessionId: z.uuid().optional() }).strict(),
   z.object({ connectionId: z.uuid(), remote: remoteDryRunSchema }).strict()
 ])
 export const bigQueryDryRunResultSchema = z.object({

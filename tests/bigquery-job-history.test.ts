@@ -1,16 +1,18 @@
 import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  agoText, cancelQuestion, consoleJobLink, customRange, parseStatements, defaultJobHistoryFilters, jobHistoryActionState, jobHistoryActiveFilters, jobHistoryArgs, jobHistoryColumns, jobHistoryLimits,
+  agoText, cancelQuestion, rerunAsks, rerunQuestion, consoleJobLink, customRange, parseStatements, defaultJobHistoryFilters, jobHistoryActionState, jobHistoryActiveFilters, jobHistoryArgs, jobHistoryColumns, jobHistoryLimits,
   jobHistoryDetailsSchema, qualifiedJobId, type JobHistoryDetails, type JobHistoryRow
 } from '../src/shared/bigquery/history'
-import { jobsByProject } from '../src/shared/bigquery/jobs'
+import { jobsByProject, jobsUnavailableText } from '../src/shared/bigquery/jobs'
 import { optionsAllow } from '../src/shared/ipc/methods'
 import { liveArgsSchemas } from '../src/shared/live/schema'
 import { commandDescriptor } from '../src/shared/commands/catalog'
 import { compileWhen, evaluateWhen } from '../src/shared/commands/when'
 import { documentProvider } from '../src/renderer/src/documents'
 import { actionKeys, cancelNotice, jobHistoryPendingMs, jobHistoryText } from '../src/renderer/src/bigquery/JobHistoryService'
+import { argsFor } from '../src/renderer/src/menus/targets'
+import { costPromptText } from '../src/renderer/src/services/bigquery-cost-prompt'
 import type { LiveGrid, LiveGridSnapshot } from '../src/renderer/src/live/LiveGrid'
 import { SnapshotStore } from '../src/renderer/src/core/store'
 import type { ConnectionInfo } from '../src/shared/contracts'
@@ -89,11 +91,32 @@ describe('Job History rules', () => {
     expect([agoText(0, 500), agoText(0, 30_000), agoText(0, 60_000), agoText(0, 720_000), agoText(0, 3_600_000), agoText(0, 3 * 86_400_000)])
       .toEqual(['just now', '30 seconds ago', '1 minute ago', '12 minutes ago', '1 hour ago', '3 days ago'])
   })
+  it('ask before a Re-run that may change table data or runs another user\'s job, naming it; the cost prompt names it too', () => {
+    expect(rerunAsks(row({ statement: 'SELECT' }))).toBe(false)
+    expect(['INSERT', 'UPDATE', 'DELETE', 'MERGE', 'TRUNCATE_TABLE', 'SCRIPT'].every(statement => rerunAsks(row({ statement })))).toBe(true)
+    expect(rerunAsks(row({ statement: 'SELECT', mine: false }))).toBe(true)
+    expect(rerunQuestion(row({ statement: 'DELETE' }), '2 hours ago')).toBe('Re-run job job_1 2 hours ago? Its DELETE changes table data again.')
+    expect(rerunQuestion(row({ statement: 'SCRIPT', mine: false, user: 'ana@example.com' }))).toBe('Re-run job job_1 started by ana@example.com? It is a script, which may change table data. It runs as you.')
+    const request = { prompt: { kind: 'threshold' as const, bytes: 2 ** 40 }, connection: 'acme', thresholdBytes: 2 ** 30, prices: true }
+    expect(costPromptText({ ...request, rerunOf: 'job_1' })).toMatchObject({ title: 'Re-run this job?', sentence: expect.stringMatching(/^Re-running job job_1 will process 1\.00 TiB/) })
+    expect(costPromptText(request).title).toBe('Run this query?')
+    expect(costPromptText({ prompt: { kind: 'incomplete', bytes: 0, reason: 'script' }, connection: 'acme', thresholdBytes: 1, prices: false, rerunOf: 'job_1' }).sentence).toMatch(/^The estimate for re-running job job_1, 0 B, may be low/)
+  })
   it('group records without a tab by project for Show in Job History, 64 jobs a project at most', () => {
     const records = [...Array.from({ length: 70 }, (_, index) => ({ jobId: `a_${index}`, project: 'varia-alpha', location: 'US' })), { jobId: 'b_1', project: 'varia-beta' }]
     const show = jobsByProject(records)
     expect(show.map(item => [item.project, item.jobs.length])).toEqual([['varia-alpha', 64], ['varia-beta', 1]])
     expect(show[1].jobs).toEqual([{ jobId: 'b_1' }])
+    // With the saved connections and the connected projects: a connected project needs none; another takes the newest of
+    // its records' connections that still exists; one with none says why.
+    const owned = [
+      { jobId: 'c_1', project: 'varia-gamma', profileId: 'p-old', createdAt: 1 }, { jobId: 'c_2', project: 'varia-gamma', profileId: 'p-new', createdAt: 2 },
+      { jobId: 'c_3', project: 'varia-gamma', profileId: 'p-gone', createdAt: 3 }, { jobId: 'd_1', project: 'varia-delta', profileId: 'p-gone', createdAt: 1 },
+      { jobId: 'e_1', project: 'varia-alpha', profileId: 'p-new', createdAt: 1 }
+    ]
+    expect(jobsByProject(owned, new Set(['p-old', 'p-new']), new Set(['varia-alpha'])).map(({ jobs: _jobs, ...rest }) => rest)).toEqual([
+      { project: 'varia-gamma', profileId: 'p-new' }, { project: 'varia-delta', unavailable: jobsUnavailableText('varia-delta') }, { project: 'varia-alpha' }
+    ])
   })
   it('keep every action offered while a job\'s cells are read, and none once the connection is gone', () => {
     const pending = { ...row({ state: 'done', type: 'other', mine: false }), pending: true as const }
@@ -126,10 +149,12 @@ const options = (project = 'varia-alpha') => ({ provider: 'bigquery' as const, p
 
 /** A LiveGrid stand-in whose active row is one job: its cells in the probe's column order. */
 class FakeGrid extends SnapshotStore<LiveGridSnapshot> {
-  select(cells: Partial<Record<(typeof jobHistoryColumns)[number]['id'], string>> | undefined) {
+  /** `others`: further rows by index, which a menu may be opened on while row 0 stays active. */
+  select(cells: Partial<Record<(typeof jobHistoryColumns)[number]['id'], string>> | undefined, others: Record<number, Partial<Record<(typeof jobHistoryColumns)[number]['id'], string>>> = {}) {
     if (!cells) { this.publish({ newRows: 0, following: true, lost: false } as unknown as LiveGridSnapshot); return }
-    const text = jobHistoryColumns.map(column => cells[column.id] ?? '')
-    const handle = { getWindow: async () => ({ first: 0, count: 1, colStart: 0, colEnd: text.length, text, flags: new Uint8Array(text.length) }) }
+    const textOf = (row: Partial<Record<(typeof jobHistoryColumns)[number]['id'], string>>) => jobHistoryColumns.map(column => row[column.id] ?? '')
+    const text = textOf(cells)
+    const handle = { getWindow: async (first: number) => { const row = first === 0 ? text : others[first] ? textOf(others[first]) : undefined; return row ? { first, count: 1, colStart: 0, colEnd: row.length, text: row, flags: new Uint8Array(row.length) } : { first, count: 0, colStart: 0, colEnd: 0, text: [], flags: new Uint8Array(0) } } }
     this.publish({ newRows: 0, following: true, lost: false, activeKey: cells.job, selection: { entry: 'live', active: { row: 0, col: 0 }, anchor: { row: 0, col: 0 }, blocks: [] }, table: { handle } } as unknown as LiveGridSnapshot)
   }
 }
@@ -205,7 +230,7 @@ describe('Job History documents', () => {
     expect(handle().args.at(-1)).not.toHaveProperty('states')
   })
   it('read the selected job from the grid, open its results without taking its session, and focus a tab that already holds it', async () => {
-    const { service, grid, context, queries, documents } = history()
+    const { service, grid, context, queries, documents, api } = history()
     const id = service.open('bq1')
     service.attachGrid(id, grid as unknown as LiveGrid)
     grid.select(cells())
@@ -219,6 +244,21 @@ describe('Job History documents', () => {
     expect(tab).toMatchObject({ connectionId: 'bq1', database: '' })
     expect(tab.id).not.toBe(id)
     expect(restore).toHaveBeenCalledWith(tab.id, [expect.objectContaining({ jobId: 'job_1', project: 'varia-alpha', location: 'US', state: 'done', adopt: false })])
+    // With the job's SQL read (jobs.get, free), Open Results' tab holds it and the dataset it ran with, so Execute there runs
+    // it again once BigQuery no longer keeps the result.
+    documents.activate(id)
+    api.bigQueryJob.mockResolvedValueOnce({ ok: true, value: details({ sql: 'SELECT 42', dataset: 'varia-alpha.sales' }) })
+    await service.attach(id, 'openResults')
+    expect(api.bigQueryJob).toHaveBeenLastCalledWith({ connectionId: 'bq1', jobId: 'job_1', location: 'US' })
+    expect(documents.getModel(documents.active!.id)?.getValue()).toBe('SELECT 42')
+    expect(documents.active).toMatchObject({ database: 'sales' })
+    // SQL BigQuery cut is not put there: an empty tab, no default dataset.
+    documents.activate(id)
+    api.bigQueryJob.mockResolvedValueOnce({ ok: true, value: details({ sql: 'SELECT', sqlTruncated: true, dataset: 'varia-alpha.sales' }) })
+    await service.attach(id, 'openResults')
+    expect(documents.getModel(documents.active!.id)?.getValue()).toBe('')
+    expect(documents.active).toMatchObject({ database: '' })
+    restore.mockClear()
     // Re-attach on a running job adopts its session; a tab that already holds the job is shown instead.
     documents.activate(id)
     grid.select(cells({ state: 'Running' }))
@@ -230,7 +270,7 @@ describe('Job History documents', () => {
     documents.activate(id)
     await service.attach(id, 'reattach')
     expect(documents.active?.id).toBe(tab.id)
-    expect(restore).toHaveBeenCalledTimes(2)
+    expect(restore).toHaveBeenCalledTimes(1)
   })
   it('open the job\'s whole SQL in a new tab, and Re-run executes it there unless the SQL was cut', async () => {
     const { service, grid, api, queries, documents } = history()
@@ -254,12 +294,25 @@ describe('Job History documents', () => {
     api.bigQueryJob.mockResolvedValueOnce({ ok: true, value: details({ dataset: 'other-project.sales' }) })
     await service.openSql(id, false)
     expect(documents.active).toMatchObject({ database: '' })
+    // Re-run of another user's job asks first, naming the job and its user; the tab opens and runs only on Re-run.
     documents.activate(id)
+    const tabs = documents.getSnapshot().documents.length
     await service.openSql(id, true)
-    expect(execute).toHaveBeenCalledWith(documents.active!.id)
+    expect(service.get(id)?.confirm).toMatchObject({ action: 'rerun', question: expect.stringMatching(/^Re-run job job_1 started by ben@example\.com .+ ago\? It runs as you\.$/) })
+    expect(documents.getSnapshot().documents).toHaveLength(tabs)
+    service.answerConfirm(id, false)
+    expect(service.get(id)?.confirm).toBeUndefined()
+    expect(documents.getSnapshot().documents).toHaveLength(tabs)
+    await service.openSql(id, true)
+    service.answerConfirm(id, true)
+    await settled()
+    // Execute names the job it runs again, so the cost prompts can.
+    expect(execute).toHaveBeenCalledWith(documents.active!.id, undefined, 'job_1')
     documents.activate(id)
     api.bigQueryJob.mockResolvedValue({ ok: true, value: details({ sql: 'SELECT', sqlTruncated: true }) })
     await service.openSql(id, true)
+    service.answerConfirm(id, true)
+    await settled()
     expect(execute).toHaveBeenCalledTimes(1)
     expect(service.get(id)?.notice?.text).toBe(jobHistoryText.sqlTruncated)
     // A refused read of another user's job is remembered: Open SQL is then greyed with the reason.
@@ -309,21 +362,64 @@ describe('Job History documents', () => {
     expect(context.getState().jobHistoryCanCancel).toBe(true)
     await service.requestCancel(id)
     expect(service.get(id)?.confirm?.question).toMatch(/^Cancel job job_1 started by ben@example\.com .+ ago\?$/)
-    service.answerCancel(id, false)
+    service.answerConfirm(id, false)
     expect(api.bigQueryCancelJob).not.toHaveBeenCalled()
     await service.requestCancel(id)
-    service.answerCancel(id, true)
+    service.answerConfirm(id, true)
     await settled()
     expect(api.bigQueryCancelJob).toHaveBeenCalledWith({ connectionId: 'bq1', jobId: 'job_1', location: 'US' })
     expect(service.get(id)?.notice).toEqual({ tone: 'info', text: jobHistoryText.cancelSent('job_1') })
     expect(handle().refreshes).toBe(1)
     api.bigQueryCancelJob.mockResolvedValueOnce({ ok: false, error: 'No.', code: 'PERMISSION_DENIED' })
     await service.requestCancel(id)
-    service.answerCancel(id, true)
+    service.answerConfirm(id, true)
     await settled()
     expect(service.get(id)?.notice).toMatchObject({ tone: 'error', text: jobHistoryText.cancelDenied('No.') })
     expect(context.getState().jobHistoryCanCancel).toBe(false)
     expect(service.actionState(id, 'cancel').reason).toBe(jobHistoryText.cancelDenied('No.'))
+  })
+  it("re-run the user's own SELECT at once, and ask first for one that changes table data", async () => {
+    const { service, grid, api, queries, documents } = history()
+    const id = service.open('bq1')
+    service.attachGrid(id, grid as unknown as LiveGrid)
+    const execute = vi.spyOn(queries, 'execute').mockResolvedValue(undefined)
+    api.bigQueryJob.mockResolvedValue({ ok: true, value: details() })
+    grid.select(cells())
+    await settled()
+    await service.openSql(id, true)
+    expect(service.get(id)?.confirm).toBeUndefined()
+    expect(execute).toHaveBeenCalledWith(documents.active!.id, undefined, 'job_1')
+    documents.activate(id)
+    grid.select(cells({ statement: 'MERGE' }))
+    await settled()
+    await service.openSql(id, true)
+    expect(service.get(id)?.confirm).toMatchObject({ action: 'rerun', question: expect.stringMatching(/^Re-run job job_1 .+ ago\? Its MERGE changes table data again\.$/) })
+    expect(execute).toHaveBeenCalledTimes(1)
+  })
+  it('act on the pressed row when a menu opens on a row other than the active one', async () => {
+    const { service, grid, api, commands } = history()
+    const id = service.open('bq1')
+    service.attachGrid(id, grid as unknown as LiveGrid)
+    // The active row is job_1; row 3 holds job_3 (another user's running job).
+    grid.select(cells(), { 3: cells({ job: 'job_3', jobId: 'job_3', state: 'Running', mine: '0', user: 'ben@example.com', location: 'EU' }) })
+    await settled()
+    const target = { kind: 'jobHistory' as const, tabId: id, row: 3 }
+    // Every row action is offered for a pressed row: its job is read when one runs.
+    expect(argsFor(target).state).toMatchObject({ jobHistoryCanCancel: true, jobHistoryCanRerun: true })
+    expect(argsFor({ kind: 'jobHistory', tabId: id }).state).toBeUndefined()
+    await commands.execute('bigquery.copyJobId', argsFor(target), 'menu')
+    expect(api.writeClipboardText).toHaveBeenLastCalledWith('varia-alpha:EU.job_3')
+    await commands.execute('bigquery.cancelJob', argsFor(target), 'menu')
+    expect(service.get(id)?.confirm).toMatchObject({ action: 'cancel', job: { jobId: 'job_3' }, question: expect.stringMatching(/^Cancel job job_3 started by ben@example\.com/) })
+    service.answerConfirm(id, true)
+    await settled()
+    expect(api.bigQueryCancelJob).toHaveBeenCalledWith({ connectionId: 'bq1', jobId: 'job_3', location: 'EU' })
+    // An action that does not apply to the pressed job says why, whatever the active row allows.
+    await commands.execute('bigquery.openJobResults', argsFor(target), 'menu')
+    expect(service.get(id)?.notice?.text).toBe('Only the job\'s creator can read its result table.')
+    // The active row's own row is the selected job.
+    await commands.execute('bigquery.copyJobId', argsFor({ ...target, row: 0 }), 'menu')
+    expect(api.writeClipboardText).toHaveBeenLastCalledWith('varia-alpha:US.job_1')
   })
   it('copy the qualified job id and the console link as text', async () => {
     const { service, grid, api } = history()

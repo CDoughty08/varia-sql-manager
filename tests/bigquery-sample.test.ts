@@ -4,7 +4,8 @@ import type { BigQueryDryRunResult } from '../src/shared/bigquery/dry-run'
 import { remoteDryRunSchema, remoteResultIds, remoteViewLimits, type RemoteDryRun } from '../src/shared/bigquery/remote-view'
 import { validateRequest } from '../src/main/validation'
 import { RemoteDeclined, RemoteViews, remoteStop } from '../src/renderer/src/results/remote-views'
-import { entryName, groupOf, resultTitle, ResultsService } from '../src/renderer/src/results/ResultsService'
+import { entryName, expiredRefusal, groupOf, resultTitle, ResultsService } from '../src/renderer/src/results/ResultsService'
+import { ResultError } from '../src/renderer/src/results/ResultClient'
 import { defaultSampleRows, maxSampleRows, parseSampleRows, rowBytesOf, sampleName, sampleNote, sampleStatus, sampleTooLarge } from '../src/renderer/src/results/sample'
 import { SampleDialogService } from '../src/renderer/src/results/sample-dialog'
 import { loadingState, loadingText, loadOffer, windowedFullText, windowedText } from '../src/renderer/src/grid/ResultGrid'
@@ -196,6 +197,18 @@ describe('Load sample in the results service', () => {
     expect(f.tab().focused).toBe(sample.key)
     expect(f.tab().loads).toBeUndefined()
     expect(f.service.canLoadSample('t1', f.key)).toBe(true)
+    f.service.dispose()
+  })
+  it('marks its source expired when BigQuery no longer keeps it, so the grid offers Re-run in place of another sample', async () => {
+    const f = serviceFixture()
+    const loading = f.service.loadSample('t1', f.key, 1_000, 'first')
+    await vi.waitFor(() => expect(f.remote.sample).toHaveBeenCalled())
+    f.answers[0].reject(new ResultError('REMOTE_EXPIRED', 'BigQuery no longer has this result.'))
+    expect(await loading).toBeUndefined()
+    expect(f.service.isExpired('t1', f.key)).toBe(true)
+    expect(f.service.canLoadSample('t1', f.key)).toBe(false)
+    expect(await f.service.loadSample('t1', f.key, 10, 'first')).toBe(expiredRefusal)
+    expect(f.remote.sample).toHaveBeenCalledTimes(1)
     f.service.dispose()
   })
   it('names a second sample of one size apart by its number, and puts it after the first', async () => {

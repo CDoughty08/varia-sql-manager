@@ -106,6 +106,8 @@ export function heldAfter(attach: TabJob | undefined, held: readonly TabJob[] = 
 const jobList = (ids: readonly string[]) => ids.length === 1 ? `BigQuery job ${ids[0]} is` : `BigQuery jobs ${ids.join(', ')} are`
 /** A run that failed while its job still ran: the session holds the job. */
 export const jobHeldAfterFailure = (ids: readonly string[]) => `${jobList(ids)} still running in BigQuery and ${ids.length === 1 ? 'holds' : 'hold'} this tab's BigQuery session: the next query waits for ${ids.length === 1 ? 'it' : 'them'}, and closing the tab asks whether to cancel ${ids.length === 1 ? 'it' : 'them'} or leave ${ids.length === 1 ? 'it' : 'them'} running (unless a choice is remembered).`
+/** A re-attach whose results BigQuery no longer keeps, in a tab that holds the query's SQL. */
+export const attachExpiredRerun = 'This tab holds the job\'s SQL: Execute runs it again in BigQuery, after its estimate and the cost prompts.'
 /** A run whose backend or connection was lost while its job ran: the job carries on in BigQuery. */
 export const jobStillRunning = (ids: readonly string[]) => `${jobList(ids)} still running in BigQuery. Varia re-attaches to ${ids.length === 1 ? 'it' : 'them'} once this query's connection is back.`
 /** A restored tab that is not connected: its job from the last session runs on unseen otherwise. */
@@ -115,7 +117,8 @@ export const restoredJobRunning = (ids: readonly string[]) => `${ids.length === 
 export const failedAbortsText = (count: number, retried = true) => `Varia could not end ${count === 1 ? 'an idle BigQuery session' : `${count} idle BigQuery sessions`}. Any transaction in ${count === 1 ? 'it' : 'them'} stays open until ${count === 1 ? 'it expires' : 'they expire'}, other transactions on ${count === 1 ? 'its' : 'their'} tables fail meanwhile, and ${count === 1 ? 'its' : 'their'} temporary tables are billed as storage.${retried ? ' Varia tries again the next time the connection reaches BigQuery.' : ''}`
 /** BigQuery's estimate and prompts before a run: the text, where it starts in the document (a selection's line and
  *  column, for dry-run markers), and a signal Cancel aborts. Resolves whether to run. */
-export type CostGate = (tabId: string, sql: string, origin: { readonly line: number; readonly column: number }, signal: AbortSignal) => Promise<boolean>
+/** `rerunOf`: the job a Job History Re-run runs again, which the prompts name. */
+export type CostGate = (tabId: string, sql: string, origin: { readonly line: number; readonly column: number }, signal: AbortSignal, rerunOf?: string) => Promise<boolean>
 export class QueryService extends SnapshotStore<QuerySnapshot> implements Disposable {
   readonly statistics = new ClientStatisticsService()
   private disposed = false
@@ -361,11 +364,11 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
    * After a restore: running jobs no open tab (or AutoRecover copy) will re-attach to are asked about once, in main's box.
    * The outcome's failures are shown by id to copy; Show in Job History's jobs go to `show`, by project.
    */
-  async reviewJobsWithoutTab(api: Partial<Pick<VariaApi, 'reviewJobsWithoutTab'>>, show?: (projects: NonNullable<JobsWithoutTabReview['show']>) => void): Promise<void> {
+  async reviewJobsWithoutTab(api: Partial<Pick<VariaApi, 'reviewJobsWithoutTab'>>, show?: (projects: NonNullable<JobsWithoutTabReview['show']>) => void, liveProjects: () => readonly string[] = () => []): Promise<void> {
     if (this.disposed || !api.reviewJobsWithoutTab) return
     const keys = [...new Set(this.documents.getSnapshot().documents.flatMap(document => isQueryDocument(document) && document.jobKey ? [document.jobKey] : []))]
     let review
-    try { const response = await api.reviewJobsWithoutTab(keys); if (!response.ok) return; review = response.value } catch { return }
+    try { const response = await api.reviewJobsWithoutTab({ keys, liveProjects: [...liveProjects()] }); if (!response.ok) return; review = response.value } catch { return }
     if (review?.answer === 'show' && review.show?.length && !this.disposed) { show?.(review.show); return }
     if (!review || review.answer !== 'cancel' || !review.cancel || this.disposed) return
     for (const text of cancelNotesText('BigQuery', review.cancel.jobs)) this.notify?.(text)
@@ -527,11 +530,12 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       ...estimateMode ? { estimateMode } : {} })
   }
   /** Runs the active query, or the query `tabId` names. `preview`: a BigQuery tab's Preview Rows, read with tabledata.list
-   *  (free, no job, so no cost prompt) instead of running the text, which is the SELECT it stands for. */
-  execute(tabId = this.documents.getSnapshot().activeId, preview?: BigQueryPreviewTarget): Promise<void> {
+   *  (free, no job, so no cost prompt) instead of running the text, which is the SELECT it stands for. `rerunOf`: the
+   *  BigQuery job Job History's Re-run runs again, which the cost prompts name. */
+  execute(tabId = this.documents.getSnapshot().activeId, preview?: BigQueryPreviewTarget, rerunOf?: string): Promise<void> {
     if (!this.canExecute(tabId)) return Promise.resolve()
     this.executionVersions.set(tabId, (this.executionVersions.get(tabId) ?? 0) + 1)
-    const run = this.run(tabId, preview)
+    const run = this.run(tabId, preview, undefined, true, rerunOf)
     this.runs.set(tabId, run)
     return run.finally(() => { if (this.runs.get(tabId) === run) this.runs.delete(tabId) })
   }
@@ -587,7 +591,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   }
   /** Runs the tab's text, or re-attaches it to one of its BigQuery jobs (`attach`, query.attach): the same lifecycle, events
    *  and results, without the text, its cost gate or plans. */
-  private async run(tabId: string, preview?: BigQueryPreviewTarget, attach?: TabJob, follow = true): Promise<void> {
+  private async run(tabId: string, preview?: BigQueryPreviewTarget, attach?: TabJob, follow = true, rerunOf?: string): Promise<void> {
     const document = this.documents.get(tabId)!
     const connection = this.getConnection(document.connectionId!)!
     if ((preview || attach) && connection.providerId !== 'bigquery') return
@@ -617,7 +621,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       this.gated.set(tabId, { queryId, stop, before })
       const stopped = new Promise<false>(resolve => { stop.signal.addEventListener('abort', () => resolve(false), { once: true }) })
       let run = false
-      try { run = await Promise.race([this.costGate(tabId, sql, { line: startLine, column: startColumn }, stop.signal), stopped]) } catch { run = true }
+      try { run = await Promise.race([this.costGate(tabId, sql, { line: startLine, column: startColumn }, stop.signal, rerunOf), stopped]) } catch { run = true }
       if (stop.signal.aborted || this.disposed || this.getSnapshot()[tabId]?.running?.queryId !== queryId) {
         if (this.gated.get(tabId)?.queryId === queryId) this.gated.delete(tabId)
         return
@@ -725,6 +729,9 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     // A re-attach that failed for a passing reason on a live connection is not one whose connection went away.
     const lost = jobs.filter(job => !job.detached && job.state === 'running' && !held?.includes(job) && !keptFailed.includes(job) && (job.jobId !== attach?.jobId || backendGone.has(lostCode)))
     if (lost.length) this.addSessionMessage(tabId, jobStillRunning(lost.map(job => job.jobId)), 'info')
+    // Results BigQuery no longer keeps: a tab that holds the query's SQL (Job History's Open Results puts it there) runs it again.
+    if (attach && (code ?? (summary?.status === 'failed' ? summary.error?.code : undefined)) === 'REMOTE_EXPIRED' && this.documents.getModel(tabId)?.getValue().trim())
+      this.addSessionMessage(tabId, attachExpiredRerun, 'info')
     if (keptFailed.length) this.addSessionMessage(tabId, jobHeldAfterFailure(keptFailed.map(job => job.jobId)), 'info')
     // A job left running, or held after a failed run, is followed by this backend already: it is re-attached only after a
     // restart.

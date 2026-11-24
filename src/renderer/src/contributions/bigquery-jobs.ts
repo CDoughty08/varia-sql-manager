@@ -1,6 +1,6 @@
 import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
-import { explorerNodeOf } from '../menus/targets'
+import { explorerNodeOf, jobHistoryRowOf } from '../menus/targets'
 import { serverItems } from './query'
 
 /**
@@ -9,7 +9,8 @@ import { serverItems } from './query'
  * extra project's history is not offered, since jobs belong to the billing project), a Messages job id's tab or the records
  * dialog (`bigQueryJobs`, filtered to those jobs), else the active document's, else the selected node's, else the one live
  * BigQuery connection or the one picked from several. The row actions act on the job selected in the document whose menu or
- * header runs them (`tabId`), else the active one.
+ * header runs them (`tabId`), else the active one; a grid menu opened on a row other than the active one (inside a
+ * multi-row selection) acts on that row's job.
  */
 export function bigQueryJobsContribution({ commands, jobHistory, documents, connections, explorer, quickInput }: Pick<Workbench, 'commands' | 'jobHistory' | 'documents' | 'connections' | 'explorer' | 'quickInput'>): Disposable {
   const live = (id: string | undefined) => id !== undefined && connections.isLiveBigQuery(id) ? id : undefined
@@ -38,9 +39,9 @@ export function bigQueryJobsContribution({ commands, jobHistory, documents, conn
     } catch (error) { commands.reportError(error instanceof Error ? error.message : 'Job History could not open.') }
   }
   const documentOf = (args?: CommandArgs): string | undefined => { const id = args?.tabId ?? documents.getSnapshot().activeId; return jobHistory.get(id) ? id : undefined }
-  const on = (action: (id: string) => unknown, when: (id: string) => boolean = id => jobHistory.usable(id)) => ({
+  const on = (action: (id: string, row?: number) => unknown, when: (id: string) => boolean = id => jobHistory.usable(id)) => ({
     when: (args?: CommandArgs) => { const id = documentOf(args); return !!id && when(id) },
-    run: async (args?: CommandArgs) => { const id = documentOf(args); if (id && when(id)) await action(id) }
+    run: async (args?: CommandArgs) => { const id = documentOf(args); if (id && when(id)) await action(id, jobHistoryRowOf(args)) }
   })
   const registrations = [
     commands.register('bigquery.jobHistory', {
@@ -56,13 +57,13 @@ export function bigQueryJobsContribution({ commands, jobHistory, documents, conn
         quickInput.show({ ariaLabel: 'Job History', placeholder: 'Select a BigQuery connection', noun: 'connections', items: serverItems(choices), onDidAccept: item => open(item.id, args) })
       }
     }),
-    commands.register('bigquery.openJobResults', on(id => jobHistory.attach(id, 'openResults'))),
-    commands.register('bigquery.reattachJob', on(id => jobHistory.attach(id, 'reattach'))),
-    commands.register('bigquery.openJobSql', on(id => jobHistory.openSql(id, false))),
-    commands.register('bigquery.rerunJob', on(id => jobHistory.openSql(id, true))),
-    commands.register('bigquery.cancelJob', on(id => jobHistory.requestCancel(id))),
-    commands.register('bigquery.copyJobId', on(id => jobHistory.copy(id, 'id'))),
-    commands.register('bigquery.copyJobLink', on(id => jobHistory.copy(id, 'link'))),
+    commands.register('bigquery.openJobResults', on((id, row) => jobHistory.attach(id, 'openResults', row))),
+    commands.register('bigquery.reattachJob', on((id, row) => jobHistory.attach(id, 'reattach', row))),
+    commands.register('bigquery.openJobSql', on((id, row) => jobHistory.openSql(id, false, row))),
+    commands.register('bigquery.rerunJob', on((id, row) => jobHistory.openSql(id, true, row))),
+    commands.register('bigquery.cancelJob', on((id, row) => jobHistory.requestCancel(id, row))),
+    commands.register('bigquery.copyJobId', on((id, row) => jobHistory.copy(id, 'id', row))),
+    commands.register('bigquery.copyJobLink', on((id, row) => jobHistory.copy(id, 'link', row))),
     commands.register('bigquery.jobDetails', on(id => jobHistory.toggleDetails(id), () => true)),
     commands.register('bigquery.refreshJobs', on(id => jobHistory.refresh(id), id => jobHistory.refreshable(id))),
     commands.register('bigquery.pauseJobs', on(id => jobHistory.togglePause(id), id => jobHistory.pausable(id)))

@@ -215,6 +215,20 @@ export function cancelQuestion(row: Pick<JobHistoryRow, 'jobId' | 'user' | 'mine
   return `Cancel job ${id}${by}${startedAgo ? ` ${startedAgo}` : ''}?`
 }
 
+/** Statement types that change table data: Re-run asks before running one again. A script may hold any of them. */
+const changesData: ReadonlySet<string> = new Set(['INSERT', 'UPDATE', 'DELETE', 'MERGE', 'TRUNCATE_TABLE', 'SCRIPT'])
+/** Whether Re-run asks first: the job may change table data, or another user ran it (it runs again as the current user). */
+export function rerunAsks(row: Pick<JobHistoryRow, 'mine' | 'statement'>): boolean { return !row.mine || changesData.has(row.statement ?? '') }
+/** "Re-run job varia_1f2e… started by ana@example.com 2 hours ago? Its MERGE changes table data again.": Re-run's question. */
+export function rerunQuestion(row: Pick<JobHistoryRow, 'jobId' | 'user' | 'mine' | 'statement'>, startedAgo?: string): string {
+  const id = row.jobId.length > 40 ? row.jobId.slice(0, 39) + '…' : row.jobId
+  const by = row.mine ? '' : row.user ? ` started by ${row.user}` : ' started by another user'
+  const statement = row.statement ?? ''
+  const data = !changesData.has(statement) ? '' : statement === 'SCRIPT' ? ' It is a script, which may change table data.' : ` Its ${statement} changes table data again.`
+  const as = row.mine ? '' : ' It runs as you.'
+  return `Re-run job ${id}${by}${startedAgo ? ` ${startedAgo}` : ''}?${data}${as}`
+}
+
 /** "12 minutes ago": how long ago a job was created, for the cancel prompt. */
 export function agoText(createdMs: number, nowMs: number): string {
   const seconds = Math.max(0, Math.round((nowMs - createdMs) / 1000))

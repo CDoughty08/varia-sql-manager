@@ -117,8 +117,7 @@ internal sealed partial class SqlService
         }
         var output = messages.Snapshot();
         var descriptors = sets.Select(set => set.Describe()).ToList();
-        if (descriptors.Any(set => set.Truncated is "queryBudget" or "globalBudget" or "systemMemory"))
-            output.Add(new("Preview Rows stopped early because the result memory budget is full; close other query results to free memory.", QueryMessages.Info));
+        if (PreviewStopNote(descriptors.Select(set => set.Truncated)) is { } note) output.Add(new(note, QueryMessages.Info));
         if (context is not null) context.Unsent = () => store.Release(descriptors.Select(set => set.ResultId));
         var completedAt = DateTimeOffset.Now.ToString("yyyy-MM-ddTHH:mm:ss.fffffffzzz", CultureInfo.InvariantCulture);
         // The tab's dataset as Execute reports it (its own, else the connection's): the previewed table may be in another project.
@@ -191,6 +190,18 @@ internal sealed partial class SqlService
     }
 
     /// <summary>A preview's failure: ROW_ACCESS when row access policies refused tabledata.list, else the usual mapping.</summary>
+    /// <summary>Why Preview Rows stopped reading early, from its result's truncation: the result budget, or the computer's
+    /// low memory, which closing results alone may not cure. Null when it read every page it meant to.</summary>
+    internal static string? PreviewStopNote(IEnumerable<string?> truncated)
+    {
+        var reasons = truncated.ToList();
+        if (reasons.Any(reason => reason is "queryBudget" or "globalBudget"))
+            return "Preview Rows stopped early because the result memory budget is full; close other query results to free memory.";
+        return reasons.Contains("systemMemory")
+            ? "Preview Rows stopped early because the computer is low on memory; close other query results or other programs to free memory."
+            : null;
+    }
+
     internal static RequestException PreviewFailure(Exception error, string project)
     {
         if (error is RequestException own) return own;

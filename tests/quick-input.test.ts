@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CommandId } from '../src/shared/commands/catalog'
 import { platforms } from '../src/shared/commands/keybindings'
 import type { DatabaseInfo } from '../src/shared/contracts'
-import { databaseItems } from '../src/renderer/src/contributions/query'
+import { databaseItems, noDefaultDataset } from '../src/renderer/src/contributions/query'
 import { CommandHistory, historyKey } from '../src/renderer/src/quickinput/history'
 import { QuickInputService, quickInputLimits, type QuickPickItem, type QuickPickOptions } from '../src/renderer/src/quickinput/QuickInputService'
 import { objectRow, seeAllObjects } from '../src/renderer/src/contributions/palette'
@@ -377,6 +377,9 @@ describe('quick input loading', () => {
     const { service, labels } = controller()
     service.show(options({ noun: 'databases', items: rows }))
     expect(labels().slice(0, 4)).toEqual(['master', 'model', 'msdb', 'tempdb'])
+    // A BigQuery query's datasets keep BigQuery's order, after no default dataset, which clears the query's.
+    const datasets = databaseItems([{ name: 'sales', isSystem: false, isSnapshot: false }, { name: 'archive', isSystem: false, isSnapshot: false }], true)
+    expect(datasets.map(row => [row.id, row.label])).toEqual([['', noDefaultDataset], ['sales', 'sales'], ['archive', 'archive']])
   })
 })
 
