@@ -83,6 +83,7 @@ export interface JobHistoryServiceOptions extends CustomDocumentTargetOptions {
 }
 
 export const jobHistoryText = {
+  rowUnread: 'Job History could not read the job on that row. Select it and try again.',
   allUsersDenied: (message?: string) => `BigQuery refused listing every user's jobs on this connection${message ? `: ${message}` : ''}. Job History shows your jobs; All users needs the bigquery.jobs.list permission on the project.`,
   allUsersRefused: 'All users is not available on this connection: BigQuery refused listing every user\'s jobs.',
   cancelSent: (jobId: string) => `Cancel sent for job ${jobId}. BigQuery ends it shortly.`,
@@ -427,7 +428,10 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     if (row === undefined || !entry || snapshot?.selection?.active.row === row) return this.selectedJob(id)
     // The job read as the menu opened: a refresh that lists a new job meanwhile moves every row down one.
     const pressed = this.pressed.get(id)
-    return pressed?.row === row ? pressed.job : this.readRow(id, row)
+    const job = await (pressed?.row === row ? pressed.job : this.readRow(id, row))
+    // A row that could not be read (the list moved on, or its read failed) says so rather than doing nothing.
+    if (!job && this.get(id) && this.usable(id)) this.patch(id, { notice: { tone: 'info', text: jobHistoryText.rowUnread } })
+    return job
   }
   /**
    * A menu opened on a row other than the active one: its job is read now, as the menu opens, and the menu's action acts

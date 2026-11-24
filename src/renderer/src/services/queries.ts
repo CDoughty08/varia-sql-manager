@@ -729,8 +729,9 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     // A re-attach that failed for a passing reason on a live connection is not one whose connection went away.
     const lost = jobs.filter(job => !job.detached && job.state === 'running' && !held?.includes(job) && !keptFailed.includes(job) && (job.jobId !== attach?.jobId || backendGone.has(lostCode)))
     if (lost.length) this.addSessionMessage(tabId, jobStillRunning(lost.map(job => job.jobId)), 'info')
-    // Results BigQuery no longer keeps: a tab that holds the query's SQL (Job History's Open Results puts it there) runs it again.
-    if (attach && (code ?? (summary?.status === 'failed' ? summary.error?.code : undefined)) === 'REMOTE_EXPIRED' && this.documents.getModel(tabId)?.getValue().trim())
+    // Results BigQuery no longer keeps: only Open Results' own tab (adopt false) holds just the job's SQL, which Execute runs
+    // again. A restored tab may hold a whole script the job was a selection of, or text edited while it ran.
+    if (attach?.adopt === false && (code ?? (summary?.status === 'failed' ? summary.error?.code : undefined)) === 'REMOTE_EXPIRED' && this.documents.getModel(tabId)?.getValue().trim())
       this.addSessionMessage(tabId, attachExpiredRerun, 'info')
     if (keptFailed.length) this.addSessionMessage(tabId, jobHeldAfterFailure(keptFailed.map(job => job.jobId)), 'info')
     // A job left running, or held after a failed run, is followed by this backend already: it is re-attached only after a

@@ -275,6 +275,13 @@ describe('re-attaching restored tabs', () => {
     await settle()
     expect(f.queryApi.attach).toHaveBeenCalledTimes(2)
     expect(f.results.addMessage).not.toHaveBeenCalledWith(empty.id, attachExpiredRerun, 'info')
+    // A restored tab's re-attach (it adopts the session) may hold more than the job's SQL: it is not told Execute re-runs it.
+    f.results.addMessage.mockClear()
+    f.queryApi.attach.mockResolvedValueOnce({ ok: false, error: 'Gone.', code: 'REMOTE_EXPIRED' })
+    f.queries.restoreJobs(f.tab.id, [job('job_3', { state: 'done' })])
+    await settle()
+    expect(f.queryApi.attach).toHaveBeenCalledTimes(3)
+    expect(f.results.addMessage).not.toHaveBeenCalledWith(f.tab.id, attachExpiredRerun, 'info')
   })
   it("drops a job another principal ran, and Stop on a re-attach cancels it like a query's", async () => {
     const f = fixture(), pending = deferred<ApiResult<QueryResult>>()

@@ -142,6 +142,13 @@ describe('BigQuery credential material (main)', () => {
     await writeFile(adc, userFile)
     expect(await credentials.material({ authentication: 'gcloud' }, { interactive: true })).toEqual({ source: 'adc', json: userFile })
     expect(askSource).toHaveBeenCalledTimes(1)
+    // An impersonated service account whose source credentials are such a configuration asks the same question.
+    const impersonated = JSON.stringify({ type: 'impersonated_service_account', service_account_impersonation_url: 'https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/a@b.iam.gserviceaccount.com:generateAccessToken', source_credentials: JSON.parse(federation) })
+    await writeFile(adc, impersonated)
+    expect(await refusal(credentials.material({ authentication: 'gcloud' }))).toMatchObject({ code: 'AUTH_KEY_FILE' })
+    askSource.mockClear()
+    expect(await credentials.material({ authentication: 'gcloud' }, { interactive: true })).toEqual({ source: 'adc', json: impersonated })
+    expect(askSource).toHaveBeenCalledExactlyOnceWith(adc, token)
   })
 
   it('honours VARIA_TEST_BIGQUERY_ENDPOINT only in unpackaged builds and only as a loopback http address', () => {

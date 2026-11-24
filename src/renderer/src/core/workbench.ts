@@ -983,8 +983,6 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // The tabs the last close kept (hot exit), else the welcome query; what an earlier run or page left unsaved is offered
   // once the workbench is up.
   const welcome = () => { if (!disposed) documents.create('SQLQuery1.sql', welcomeQueryText, 'master') }
-  // Show in Job History (the records dialog): each project's Job History filtered to its jobs; a project with no live
-  // connection opens Connect, and its Job History opens once a connection to it is live.
   // Show in Job History (docs/bigquery.md, Job History): a connected project opens at once; another connects the saved
   // connection that started its jobs, with no Connect dialog, and opens once connected; one without says why.
   const showJobsWithoutTab = (projects: NonNullable<JobsWithoutTabReview['show']>) => {

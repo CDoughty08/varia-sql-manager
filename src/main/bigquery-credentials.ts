@@ -106,7 +106,12 @@ export interface BigQueryCredentialEnvironment {
  */
 export async function federationSource(json: string): Promise<string | undefined> {
   let credentialSource: unknown
-  try { credentialSource = (JSON.parse(json) as { credential_source?: unknown } | null)?.credential_source }
+  try {
+    // An impersonated service account's source credentials may themselves be a federation configuration reading a file.
+    type Federation = { credential_source?: unknown; source_credentials?: { credential_source?: unknown } | null } | null
+    const parsed = JSON.parse(json) as Federation
+    credentialSource = parsed?.credential_source ?? (typeof parsed?.source_credentials === 'object' ? parsed.source_credentials?.credential_source : undefined)
+  }
   catch { return undefined }
   if (typeof credentialSource !== 'object' || credentialSource === null || !('file' in credentialSource)) return undefined
   const source = (credentialSource as { file: unknown }).file

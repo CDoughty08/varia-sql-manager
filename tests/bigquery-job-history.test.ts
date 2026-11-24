@@ -444,6 +444,11 @@ describe('Job History documents', () => {
     const target = { kind: 'jobHistory' as const, tabId: id, row: 3 }
     await commands.execute('bigquery.copyJobId', argsFor(target), 'menu')
     expect(api.writeClipboardText).toHaveBeenLastCalledWith('varia-alpha:US.job_3')
+    // A row the list no longer has says so rather than doing nothing.
+    api.writeClipboardText.mockClear()
+    await commands.execute('bigquery.copyJobId', argsFor({ ...target, row: 7 }), 'menu')
+    expect(api.writeClipboardText).not.toHaveBeenCalled()
+    expect(service.get(id)?.notice?.text).toBe(jobHistoryText.rowUnread)
   })
   it('copy the qualified job id and the console link as text', async () => {
     const { service, grid, api } = history()
