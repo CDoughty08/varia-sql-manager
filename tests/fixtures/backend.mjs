@@ -1421,7 +1421,7 @@ function explorerStatus() {
 function explorerSample(live, probe) {
   const status = explorerStatus() ?? {}
   if (probe.probe === 'explorer.agent') return { metrics: [status.jobs ?? 0] }
-  if (probe.probe === 'explorer.agentService') { const [agentXps, serviceState, startupType] = status.agent ?? [1, 4, 2]; return { status: [{ id: 'agentXps', value: agentXps }, { id: 'serviceState', value: serviceState }, { id: 'startupType', value: startupType }] } }
+  if (probe.probe === 'explorer.agentService') { const [agentXps, serviceState, startupType, clustered = 0] = status.agent ?? [1, 4, 2]; return { status: [{ id: 'agentXps', value: agentXps }, { id: 'serviceState', value: serviceState }, { id: 'startupType', value: startupType }, { id: 'clustered', value: clustered }] } }
   const rows = (probe.probe === 'explorer.databases' ? status.databases : probe.probe === 'explorer.progress' ? status.progress : status.groups) ?? []
   const columns = liveProbes[probe.probe].tables[0].columns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true }))
   const result = storeResult({ columns, rows: rows.map(row => row.map(cell => String(cell))) }, 0)
@@ -2688,6 +2688,16 @@ async function workbench(id, method, params, credit) {
         case 'agentProxy': return respond(id, agentProxyDocument(params))
         case 'credential': return respond(id, credentialDocument(params))
         case 'tableDesigner': return respond(id, { tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', canCreate: true }, elapsedMs: 1 })
+        case 'tableProperties': return respond(id, {
+          tableProperties: {
+            general: { name: params.target.name ?? 'Orders', schema: params.target.schema ?? 'dbo', created: '2024-01-02T03:04:05.000', modified: '2024-02-03T04:05:06.000', systemObject: false, ansiNulls: true, replicated: false, lockEscalation: 'TABLE', memoryOptimized: false, fileTable: false, external: false, id: 901 },
+            storage: { rowCount: 3, dataSpaceKb: 16, indexSpaceKb: 8, compression: 'NONE', filegroup: 'PRIMARY', partitioned: false, partitions: [{ number: 1, rows: 3, compression: 'NONE', filegroup: 'PRIMARY' }], partitionsTruncated: false },
+            changeTracking: { databaseEnabled: true, enabled: false, trackColumnsUpdated: false, primaryKey: true },
+            permissions: [], permissionsTruncated: false, securityPredicates: [], securityPredicatesTruncated: false,
+            extendedProperties: [], extendedPropertiesTruncated: false, level: 16
+          },
+          elapsedMs: 1
+        })
         default: return respond(id, { deleteTarget: { name: [params.target.schema, params.target.name].filter(Boolean).join('.'), type: 'Table', owner: 'dbo', warnings: [], dependentsTruncated: false }, elapsedMs: 1 })
       }
     case 'actions.script':

@@ -8,9 +8,10 @@ import { SnapshotStore } from '../src/renderer/src/core/store'
 import type { Timers } from '../src/renderer/src/core/timers'
 import type { WorkbenchEvent } from '../src/renderer/src/core/types'
 import { ConnectionService, type LiveConnection } from '../src/renderer/src/services/connections'
-import { ExplorerService, expansionKey, serverBrief, serverSublabel, type ExplorerServiceLimits, type SeekOutcome } from '../src/renderer/src/explorer/ExplorerService'
+import { ExplorerService, expansionKey, serverBrief, serverSublabel, type ExplorerServiceLimits, type ExplorerServiceOptions, type SeekOutcome } from '../src/renderer/src/explorer/ExplorerService'
+import { LongRunService } from '../src/renderer/src/services/long-runs'
 import { scriptContextValues, scriptMenuState } from '../src/shared/scripting/catalog'
-import { actionContextValues, actionMenuState } from '../src/shared/actions/catalog'
+import { actionContextValues, actionMenuReasons, actionMenuState } from '../src/shared/actions/catalog'
 import { ssisVerbContextValues, ssisVerbMenuState } from '../src/shared/ssis/catalog'
 import { childrenShown, lastDescendant, rowIndex, RowKind, rowKindOf, syntheticId, treeKey } from '../src/renderer/src/explorer/tree-model'
 import { connectionInfo, connectionOptions } from './fixtures/workbench'
@@ -143,7 +144,7 @@ const isPage = (id: FolderId) => (params: ExplorerChildrenParams) => isFolder(id
 const disposals: (() => void)[] = []
 afterEach(() => { disposals.splice(0).forEach(dispose => dispose()) })
 
-function fixture(limits: Partial<ExplorerServiceLimits> = {}) {
+function fixture(limits: Partial<ExplorerServiceLimits> = {}, more: Partial<ExplorerServiceOptions> = {}) {
   const backend = fakeBackend()
   const connections = new ConnectionService(), events = new EventBus(), emitted: WorkbenchEvent[] = []
   events.subscribe(event => emitted.push(event))
@@ -151,7 +152,7 @@ function fixture(limits: Partial<ExplorerServiceLimits> = {}) {
   let ids = 0
   // The wall clock listings are stamped with; tests move it by hand.
   const wall = { now: 1_800_000_000_000 }
-  const explorer = new ExplorerService({ api: backend.api, connections, events, timers: clock.timers, schedule: callback => callback(), newId: () => uuid(++ids), limits, now: () => wall.now })
+  const explorer = new ExplorerService({ api: backend.api, connections, events, timers: clock.timers, schedule: callback => callback(), newId: () => uuid(++ids), limits, now: () => wall.now, ...more })
   disposals.push(() => explorer.dispose())
   const connect = (name = 'server-a', profile: Partial<ConnectionInfo> = {}) => connections.add({ ...info(name), productVersion: '16.0.4135.4', login: 'sa', ...profile }, connectionOptions)
   const rows = () => explorer.getSnapshot().rows
@@ -234,6 +235,49 @@ describe('ExplorerService: SQL Server Agent', () => {
     f.connect()
     await settle()
     expect(f.labels().slice(1)).toEqual(['  Databases', '  Security', '  Server Objects', '  SQL Server Agent'])
+  })
+  it('greys the Agent node\'s Start, Stop and Restart up front on a cluster, and while one of them runs on its server (AG-10)', async () => {
+    const f = fixture({}, { windowsClient: true })
+    f.state.agentNode = true
+    f.connect()
+    await settle()
+    let service: { state?: number; clustered?: boolean } = { state: 4 }
+    const listeners = new Set<() => void>()
+    f.explorer.useStatus({ databaseRuntime: () => undefined, agentServiceOf: () => service, subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener) } })
+    const longRuns = new LongRunService()
+    disposals.push(() => longRuns.dispose())
+    f.explorer.useLongRuns(longRuns)
+    const agent = f.find('SQL Server Agent')
+    const menu = () => { const node = f.explorer.menuNode(agent)!; return [node.agent?.clustered ?? false, node.agent?.busy ?? false] }
+    expect(menu()).toEqual([false, false])
+    service = { state: 4, clustered: true }
+    listeners.forEach(listener => listener())
+    expect(menu()).toEqual([true, false])
+    service = { state: 4 }
+    // A run on another server does not count; one on this server does, until it ends.
+    const elsewhere = longRuns.begin({ kind: 'restartAgent', connectionId: 'server-b', server: 'b' })
+    expect(menu()).toEqual([false, false])
+    const restart = longRuns.begin({ kind: 'restartAgent', connectionId: f.explorer.menuNode(agent)!.connectionId, server: 'server-a' })
+    expect(menu()).toEqual([false, true])
+    // The node's menu state follows: every service verb greyed with the busy reason.
+    expect(actionMenuState(f.explorer.menuNode(agent)!).stopAgent).toBe('disabled')
+    expect(actionMenuReasons(f.explorer.menuNode(agent)!).stopAgent).toBe('SQL Server Agent is being started or stopped.')
+    restart.dispose()
+    elsewhere.dispose()
+    expect(menu()).toEqual([false, false])
+  })
+  it("finds a server's Agent node for Job Activity Monitor's Start without walking the tree again (AG-10)", async () => {
+    const f = fixture({}, { windowsClient: true })
+    f.state.agentNode = true
+    f.connect()
+    await settle()
+    const agent = f.find('SQL Server Agent')
+    const connectionId = f.explorer.menuNode(agent)!.connectionId
+    expect(f.explorer.agentMenuNode(connectionId, { state: 1 })).toMatchObject({ id: agent, kind: 'agent', agent: { state: 1 } })
+    // The banner asks on every tree and status publish: the node found last is asked first.
+    const walk = vi.spyOn((f.explorer as unknown as { nodes: Map<number, unknown> }).nodes, 'values')
+    expect(f.explorer.agentMenuNode(connectionId)?.id).toBe(agent)
+    expect(walk).not.toHaveBeenCalled()
   })
 })
 

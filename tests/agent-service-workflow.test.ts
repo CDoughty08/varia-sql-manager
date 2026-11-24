@@ -30,6 +30,14 @@ describe('the Agent service workflow', () => {
     expect(yaml).toContain('-- --live-suite Agent,AgentService\n')
     expect(yaml).not.toMatch(/VARIA_TEST_SQL_(USER|PASSWORD)|SAPWD/)
   })
+  it('retries the SQL Server install when Chocolatey\'s feed fails, and stops plainly when it never installs', () => {
+    const install = yaml.slice(yaml.indexOf('- name: Install SQL Server 2022'), yaml.indexOf('- name: Agent live suites'))
+    expect(install).toMatch(/for \(\$attempt = 1; \$attempt -le \$attempts; \$attempt\+\+\)/)
+    expect(install).toContain("if (Get-Service 'SQLAgent$VARIA' -ErrorAction SilentlyContinue) { break }")
+    expect(install).toMatch(/throw "SQL Server 2022 did not install after \$attempts attempts/)
+    // The service is started only after the loop has seen it.
+    expect(install.indexOf("Start-Service 'SQLAgent$VARIA'")).toBeGreaterThan(install.indexOf('throw "'))
+  })
   it('is not part of ci.yml, so the required "CI result" check never waits on it', () => {
     expect(readFileSync('.github/workflows/ci.yml', 'utf8')).not.toContain('VARIA_TEST_SQL_AGENT_SERVICE')
   })

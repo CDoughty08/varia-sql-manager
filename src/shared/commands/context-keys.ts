@@ -59,6 +59,7 @@ export const contextKeys = {
   optionsDialogFocus: { type: 'boolean', scope: 'focus', description: 'Focus is in the Options dialog.' },
   designerFocus: { type: 'boolean', scope: 'focus', description: "Focus is in the active table designer; activePanel is then 'editor'." },
   queryBarFocus: { type: 'boolean', scope: 'focus', description: "Focus is in the active query's bar (Execute, Cancel and its server and database lists); activePanel is then 'editor'." },
+  agentStepsFocus: { type: 'boolean', scope: 'focus', description: "Focus is in a SQL Server Agent job document's Steps section (its list or the selected step's fields, but not its command editor, whose Monaco keeps Alt+Up/Down)." },
   activityMonitorFocus: { type: 'boolean', scope: 'focus', description: "Focus is in the active Activity Monitor; activePanel is then 'editor'." },
   documentTabFocus: { type: 'boolean', scope: 'focus', description: "Focus is on a document tab in the strip, or in its rename box; activePanel is then 'editor'." },
   peekFocus: { type: 'boolean', scope: 'focus', description: "Focus is in Object Explorer's Peek card, which floats outside every pane (activePanel is then '')." },

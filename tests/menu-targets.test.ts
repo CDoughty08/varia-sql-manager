@@ -17,11 +17,11 @@ describe('menu targets', () => {
       { kind: 'explorerTools', pane: 'explorer', floating: false, popout: false }, { kind: 'tableDesigner', tabId: 't4' },
       { kind: 'documentTab', tabId: 't2' }, { kind: 'output', tabId: 't3', view: 'messages', selectedText: '', element: element('div').dom }, { kind: 'dockTab', pane: 'results', floating: true, popout: false }, input, { kind: 'ssisOperations', tabId: 't5' }, { kind: 'jobHistory', tabId: 't7' },
       { kind: 'searchHit', searchId: 's', index: 0, hit: { object: hitObject, folder: 'tables', label: 'dbo.Orders' }, pane: false, node: { lost: false, kind: 'table', connectionId: 'c', label: 'dbo.Orders', ref: { type: 'object', object: hitObject } }, state: { explorerScriptTitle: 'table' } },
-      { kind: 'resultsTools', tabId: 't6' }, { kind: 'peekProperties', text: 'x' }, { kind: 'planOutline' }, { kind: 'planProperties', facts: [] }
+      { kind: 'resultsTools', tabId: 't6' }, { kind: 'peekProperties', text: 'x' }, { kind: 'planOutline' }, { kind: 'planProperties', facts: [] }, { kind: 'jobActivity', tabId: 't8' }
     ]
     expect(targets.map(target => menuForTarget[target.kind])).toEqual(contextMenuIds)
     const none = { explorerNode: '', explorerServerLost: false, explorerFolderFilterable: false, explorerFolderFiltered: false, explorerFolder: '', explorerFolderInsertable: false, explorerNodeNameless: false, explorerNodePeekable: false, explorerNodeDependencies: false, explorerNodeStatus: '', explorerServerEngine: '', explorerServerLinux: false, explorerProvider: '', agentRole: '', outputView: '', outputGridTransposable: false, outputGridBare: false, outputLiveFilterable: false, outputLiveRows: '', outputLiveSortable: false, pane: '', paneFloating: false, panePopout: false, explorerToolsLost: false, explorerToolsFloating: false, explorerToolsPopout: false, documentTabFloating: false, searchHitSchema: false, searchHitBigQuery: false, outputGridComparison: false }
-    expect(targets.map(targetKeys)).toEqual([none, { ...none, explorerNode: 'table', explorerNodePeekable: true, explorerNodeDependencies: true, explorerProvider: 'sqlserver' }, none, none, none, { ...none, outputView: 'messages' }, { ...none, pane: 'results', paneFloating: true }, none, none, none, { ...none, searchHitSchema: true }, none, none, none, none])
+    expect(targets.map(targetKeys)).toEqual([none, { ...none, explorerNode: 'table', explorerNodePeekable: true, explorerNodeDependencies: true, explorerProvider: 'sqlserver' }, none, none, none, { ...none, outputView: 'messages' }, { ...none, pane: 'results', paneFloating: true }, none, none, none, { ...none, searchHitSchema: true }, none, none, none, none, none])
     expect(targetKeys(undefined)).toEqual(none)
     // The empty area below the servers, and a server lost with its backend generation.
     expect(targetKeys({ kind: 'explorer' })).toEqual({ ...none, explorerNode: 'background' })
@@ -51,7 +51,7 @@ describe('menu targets', () => {
     const columns = { id: 3, lost: false, kind: 'folder', folder: 'columns', connectionId: 'c', label: 'Columns', ref: { type: 'folder', owner: { kind: 'table', database: 'd', schema: 's', name: 'n' }, folder: 'columns' }, insertable: true } as const
     expect(targetKeys({ kind: 'explorer', node: columns })).toEqual({ ...none, explorerProvider: 'sqlserver', explorerNode: 'folder', explorerFolder: 'columns', explorerFolderInsertable: true })
     // File commands act on the tab the menu is for.
-    expect(targets.map(target => argsFor(target).tabId)).toEqual(['t1', undefined, undefined, 't4', 't2', 't3', undefined, undefined, 't5', 't7', undefined, 't6', undefined, undefined, undefined])
+    expect(targets.map(target => argsFor(target).tabId)).toEqual(['t1', undefined, undefined, 't4', 't2', 't3', undefined, undefined, 't5', 't7', undefined, 't6', undefined, undefined, undefined, 't8'])
     // The results toolbar's ⋯ runs its items as the toolbar's buttons do: the query, and no target to read a grid from.
     expect(argsFor(targets[11])).toEqual({ tabId: 't6' })
     expect(argsFor(targets[6])).toEqual({ target: targets[6] })
@@ -298,6 +298,22 @@ describe('menu target service', () => {
     expect(targetKeys({ ...hit.target, live: { sortable: false } as LiveOutput } as MenuTarget).outputLiveSortable).toBe(false)
     unregister()
     expect(service.targetFor(dom(header))).toBeUndefined()
+  })
+  it("keeps a live grid's keys under an owner's own menu (Job Activity Monitor's row menu, AG-10)", () => {
+    const doc = fakeDocument(), make = (tag: string, init?: ConstructorParameters<typeof FakeElement>[2]) => new FakeElement(doc, tag, init)
+    const active = make('div', { className: 'rg-c is-act', attributes: { 'aria-colindex': '4' } })
+    const grid = make('div', { attributes: { 'data-output-view': 'live', 'aria-label': 'Jobs' } }).append(active)
+    const owner = make('div').append(grid)
+    make('body').append(owner)
+    const service = new MenuTargetService()
+    const live = { sortable: true, filterable: true } as LiveOutput
+    const unregister = registerLiveOutput(dom(grid), live)
+    service.register(dom(owner), () => ({ kind: 'jobActivity', tabId: 't8' }))
+    // The menu is the owner's; Query Output's keys (Alt+Down, Ctrl+S) still find the grid, with its active column.
+    expect(service.targetFor(dom(active))!.target).toEqual({ kind: 'jobActivity', tabId: 't8' })
+    expect(service.outputFor(dom(active))).toMatchObject({ kind: 'output', view: 'live', live, column: 2 })
+    expect(service.outputFor(dom(owner))).toBeUndefined()
+    unregister()
   })
   it('reads a text field\'s facts again once it has focus', () => {
     let undo = false

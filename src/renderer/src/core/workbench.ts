@@ -500,6 +500,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     hoverModifier: key => gesturesFor(platform).isModifierKey('explorer.peekHover', key) || gesturesFor(platform).isModifierKey('editor.peekHover', key) })
   const serverFiles = new ServerFilePickerService({ api, connections })
   const longRuns = new LongRunService({ api })
+  // The Agent node's Start, Stop and Restart grey while one of them runs on its server (agentServiceRules' busy).
+  const explorerLongRuns = explorer.useLongRuns(longRuns)
   const disconnectPrompts = new DisconnectPromptService()
   const disconnectCoordinator = createDisconnectCoordinator({
     connectionTargets, documents, queries, files, longRuns, api, prompts: disconnectPrompts,
@@ -534,8 +536,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-properties="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus())
   })
   const tableProperties = new TablePropertiesService({
-    api, documents, files, connections, targetIdOf,
-    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-table-properties="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus())
+    api, documents, files, connections, targetIdOf, scriptingOptions, results,
+    focusEditor: () => focusLater(() => documents.focusActive()),
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-table-properties="${CSS.escape(id)}"] [role="tablist"][aria-label="Object sections"] [role="tab"][tabindex="0"]`)?.focus())
   })
   const newDatabase = new NewDatabaseService({
     api, documents, files, connections, explorer, longRuns, serverFiles, targetIdOf, focusEditor: () => focusLater(() => documents.focusActive()),
@@ -601,7 +604,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const proxyDocuments = new ProxyDocumentService({ api, documents, files, connections, targetIdOf, focus: focusAgentObject('data-agent-proxy', 'data-agent-proxy-focus') })
   const credentialDocuments = new CredentialDocumentService({ api, documents, files, connections, targetIdOf, focus: focusAgentObject('data-credential', 'data-credential-focus') })
   const jobActivity = new JobActivityService({
-    api, documents, panes, groups: editorGroups, live, connections, targetIdOf,
+    api, documents, panes, groups: editorGroups, live, connections, targetIdOf, explorer, longRuns,
     started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt),
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-jobs="${CSS.escape(id)}"] [role="grid"]`)?.focus())
   })
@@ -619,11 +622,16 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // BigQuery tabs' completion and hover, from the Search Objects index; the first lookup that finds none starts it as a search would.
   const indexCompletion = new IndexCompletionService(monaco, api, documents, connections, { ensureIndex: id => objectSearch.ensureIndex(id) })
   const peekTabs = new PeekTabService({
-    peek, documents, connections, targetIdOf,
+    peek, documents, connections, targetIdOf, tableProperties,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-peek-tab="${CSS.escape(id)}"] [role="tab"][aria-selected="true"]`)?.focus())
   })
   const bigQueryProperties = new BigQueryPropertiesService({
-    api, documents, focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-bigquery-properties="${CSS.escape(id)}"] [role="region"]`)?.focus())
+    api, documents, connections, results, scriptingOptions,
+    billedGate: (connectionId, estimate, signal) => bigQueryCost.beforeScript(connectionId, estimate, signal),
+    focus: id => focusLater(() => {
+      const root = document.querySelector<HTMLElement>(`[data-bigquery-properties="${CSS.escape(id)}"]`)
+      ;(root?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? root?.querySelector<HTMLElement>('button'))?.focus()
+    })
   })
   const inspector = new InspectorService({ api, platform })
   const editorPeek = new EditorPeekService({ sqlLanguage, connections, scripting, peek, peekTabs })
@@ -860,8 +868,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       compare.dispose()
       pivot.dispose()
       resultsSearch.dispose()
-      // Before the results: each tab's view releases its Top rows there (the card's are released with it below, or by the results).
+      // Before the results: each tab's view and Table Properties' Preview Rows release their Top rows there (the card's are released with it below, or by the results).
       peekTabs.dispose()
+      tableProperties.dispose()
       bigQueryProperties.dispose()
       inspector.dispose()
       results.dispose()
@@ -891,6 +900,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       explorerJobs.dispose()
       agentTree.dispose()
       explorerRuntime.dispose()
+      explorerLongRuns.dispose()
       explorerStatus.dispose()
       live.dispose()
       resultVisibility.dispose()
@@ -900,7 +910,6 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       ssisFocus.dispose()
       ssisProperties.dispose()
       properties.dispose()
-      tableProperties.dispose()
       newDatabase.dispose()
       restore.dispose()
       sqlDiagnostics.dispose()

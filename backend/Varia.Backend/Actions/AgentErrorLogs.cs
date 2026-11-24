@@ -69,14 +69,17 @@ internal sealed partial class ActionService
     }
 
     /// <summary>xp_enumerrorlogs's Date as server time: text such as "11/22/2026  21:44" (what SQL Server sends), or a datetime; anything else is none.</summary>
-    internal static string? ErrorLogDate(object? value)
+    internal static string? ErrorLogDate(object? value) => ErrorLogTime(value)?.ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture);
+
+    /// <summary>The one parse of xp_enumerrorlogs's Date, shared by the Log File Viewer's list (<see cref="ErrorLogDate"/>) and Object Explorer's
+    /// Error Logs labels (<see cref="Varia.Backend.Explorer.AgentListings.ErrorLog"/>), so both show the same time.</summary>
+    internal static DateTime? ErrorLogTime(object? value)
     {
-        const string format = "yyyy-MM-dd'T'HH:mm:ss";
-        if (value is DateTime date) return date.ToString(format, CultureInfo.InvariantCulture);
+        if (value is DateTime date) return date;
         if (value is not string text) return null;
         var spaced = string.Join(' ', text.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
         return DateTime.TryParseExact(spaced, ["MM/dd/yyyy HH:mm", "M/d/yyyy H:mm", "MM/dd/yyyy HH:mm:ss", "M/d/yyyy H:mm:ss"], CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed)
-            ? parsed.ToString(format, CultureInfo.InvariantCulture) : null;
+            ? parsed : null;
     }
 
     /// <summary>The logs in archive order, Current (0) first. No list at all (SQL Server on Linux) is Current alone with Archives false.</summary>

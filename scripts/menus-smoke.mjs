@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { dialogLifecycle, longRunRefusals, rendererWatchdog } from './fixtures/dialog-lifecycle.mjs'
 import { sessionPrompts } from './fixtures/session-prompts.mjs'
-import { activeDocumentName, activeMenuItem, anyResultGrid, resultGrid, backendReady, banner, clickToClose, connectDialogWindow, dialogClosed, documentTabFullyShown, documentTabs, documentTabSlots, pressToClose, slotTab, editorText as editorTextOf, errorMessages, explorerLabel, gridCell, gridPart, matching, memoryBreakdown, memoryIndicator, menuItemNames, messages as messagesOf, openMenus as openMenusOf, outputPane, outputView, paneMenuButton, paneTab, part, quickInput, searchBox, serverRows, statusBar, submitConnect, titleBar, toolbarButton, expectEditorShown } from './fixtures/ui.mjs'
+import { activeDocumentName, activeMenuItem, anyResultGrid, resultGrid, backendReady, banner, clickToClose, connectDialogWindow, dialogClosed, documentTabFullyShown, documentTabs, documentTabSlots, pressToClose, slotTab, editorText as editorTextOf, errorMessages, explorerLabel, gridCell, gridPart, matching, memoryBreakdown, memoryIndicator, menuItemNames, messages as messagesOf, openMenus as openMenusOf, outputPane, outputView, paneMenuButton, paneTab, part, queryDatabase, queryServer, quickInput, searchBox, serverRows, statusBar, submitConnect, titleBar, toolbarButton, expectEditorShown } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -868,8 +868,8 @@ try {
   const before = await tabs().count()
   await explorerMenu.getByRole('menuitem', { name: 'New Query', exact: true }).click()
   await expect(tabs()).toHaveCount(before + 1)
-  await expect(page.locator('#query-server option:checked')).toHaveText('server-a')
-  await expect(page.locator('#query-database')).toHaveValue('master')
+  await expect(queryServer(page).locator('option:checked')).toHaveText('server-a')
+  await expect(queryDatabase(page)).toHaveValue('master')
   await expect(textbox()).toBeFocused()
   // A database's name, quoted. Right-click selected it, and focus went back to the tree.
   await expandExplorerPath(page, 'server-a', 'Databases')
@@ -1467,7 +1467,7 @@ try {
     await menu('Object Explorer').getByRole('menuitem', { name: 'New Query', exact: true }).click()
     await expect(tabs()).toHaveCount(liveTabs + 1)
     await expect(textbox()).toBeFocused()
-    await expect(page.locator('#query-database')).toHaveValue('master')
+    await expect(queryDatabase(page)).toHaveValue('master')
     await page.keyboard.insertText('SELECT DB_NAME()')
     await page.keyboard.press('F5')
     await expect(gridCell(anyResultGrid(page), 0, 0).first()).toHaveText('master', { timeout: 30000 })

@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (441)
+## Commands (444)
 
 ### File
 
@@ -445,21 +445,24 @@ keys it uses are listed below.
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
-| Job Activity Monitor | `agent.jobActivity` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › Job Activity Monitor |
-| Refresh Jobs | `agent.refreshJobs` | — | — | — | `backendReady && activeDocumentIsJobActivity` | — |
-| Start Jobs | `agent.startJobs` | — | — | — | `backendReady && activeDocumentIsJobActivity` | — |
-| Stop Jobs | `agent.stopJobs` | — | — | — | `backendReady && activeDocumentIsJobActivity` | — |
-| Enable Jobs | `agent.enableJobs` | — | — | — | `backendReady && activeDocumentIsJobActivity` | — |
-| Disable Jobs | `agent.disableJobs` | — | — | — | `backendReady && activeDocumentIsJobActivity` | — |
+| Job Activity Monitor | `agent.jobActivity` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › Job Activity Monitor; View › Job Activity Monitor |
+| Refresh Jobs | `agent.refreshJobs` | F5 (`activeDocumentIsJobActivity && !activeDocumentIsJobHistory && !activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus`) | F5 (`activeDocumentIsJobActivity && !activeDocumentIsJobHistory && !activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus`) | F5 (`activeDocumentIsJobActivity && !activeDocumentIsJobHistory && !activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus`) | `backendReady && activeDocumentIsJobActivity` | Job Activity Monitor context menu › Refresh |
+| Start Jobs | `agent.startJobs` | — | — | — | `backendReady && activeDocumentIsJobActivity` | Job Activity Monitor context menu › Start Job |
+| Stop Jobs | `agent.stopJobs` | — | — | — | `backendReady && activeDocumentIsJobActivity` | Job Activity Monitor context menu › Stop Job |
+| Enable Jobs | `agent.enableJobs` | — | — | — | `backendReady && activeDocumentIsJobActivity` | Job Activity Monitor context menu › Enable Job |
+| Disable Jobs | `agent.disableJobs` | — | — | — | `backendReady && activeDocumentIsJobActivity` | Job Activity Monitor context menu › Disable Job |
+| Script Job as CREATE | `agent.scriptJob` | — | — | — | `backendReady && activeDocumentIsJobActivity` | Job Activity Monitor context menu › Script Job as CREATE |
 | Change Job Owner… | `agent.changeJobOwner` | — | — | — | `backendReady && activeDocumentIsJobActivity` | — |
 | Attach Schedule to Jobs… | `agent.attachJobSchedule` | — | — | — | `backendReady && activeDocumentIsJobActivity` | — |
-| Open Job… | `agent.openJob` | Enter (`activeDocumentIsJobActivity && outputGridFocus`) | Enter (`activeDocumentIsJobActivity && outputGridFocus`) | ↩ (`activeDocumentIsJobActivity && outputGridFocus`) | `backendReady && hasConnection` | — |
+| Open Job… | `agent.openJob` | Enter (`activeDocumentIsJobActivity && liveGridFocus`) | Enter (`activeDocumentIsJobActivity && liveGridFocus`) | ↩ (`activeDocumentIsJobActivity && liveGridFocus`) | `backendReady && hasConnection` | Job Activity Monitor context menu › Open |
 | New Job… | `agent.newJob` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › New Job… |
 | Save Job | `agentJob.save` | — | — | — | `backendReady && activeDocumentIsAgentJob` | — |
 | Start Job | `agentJob.start` | — | — | — | `backendReady && activeDocumentIsAgentJob` | — |
 | Start Job at Step… | `agentJob.startAtStep` | — | — | — | `backendReady && activeDocumentIsAgentJob` | — |
 | Stop Job | `agentJob.stop` | — | — | — | `backendReady && activeDocumentIsAgentJob` | — |
 | Reload Job | `agentJob.reload` | — | — | — | `backendReady && activeDocumentIsAgentJob` | — |
+| Move Step Up | `agentJob.moveStepUp` | Alt+Up (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | Alt+Up (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | ⌥↑ (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | `backendReady && activeDocumentIsAgentJob` | — |
+| Move Step Down | `agentJob.moveStepDown` | Alt+Down (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | Alt+Down (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | ⌥↓ (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | `backendReady && activeDocumentIsAgentJob` | — |
 | New Alert… | `agent.newAlert` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › New Alert… |
 | Alert… (not in the palette) | `agent.newAlertOnAgent` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › New › Alert… |
 | Open Alert… | `agent.openAlert` | — | — | — | `backendReady && hasConnection` | — |
@@ -479,7 +482,7 @@ keys it uses are listed below.
 | Proxy… (not in the palette) | `agent.newProxyOnAgent` | — | — | — | `backendReady && explorerSelectionKind == 'agent'` | Object Explorer context menu › New › Proxy… |
 | Save Proxy | `agentProxy.save` | — | — | — | `backendReady && activeDocumentIsAgentProxy` | — |
 | Reload Proxy | `agentProxy.reload` | — | — | — | `backendReady && activeDocumentIsAgentProxy` | — |
-| View History | `agent.viewHistory` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › View History |
+| View History | `agent.viewHistory` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › View History; Job Activity Monitor context menu › View History |
 | Refresh History | `agent.refreshHistory` | — | — | — | `backendReady && activeDocumentIsLogViewer` | — |
 | Delete History… | `agent.deleteHistory` | — | — | — | `backendReady && activeDocumentIsLogViewer` | — |
 | View Agent Log | `agent.viewAgentLog` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › View Agent Log |
@@ -490,7 +493,7 @@ keys it uses are listed below.
 | Save Schedule | `agentSchedules.save` | — | — | — | `backendReady && activeDocumentIsAgentSchedules` | — |
 | Refresh Schedules | `agentSchedules.refresh` | — | — | — | `backendReady && activeDocumentIsAgentSchedules` | — |
 | Delete Schedule | `agentSchedules.delete` | — | — | — | `backendReady && activeDocumentIsAgentSchedules` | — |
-| Create Job Like This… | `agent.createJobLike` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › Create Job Like This… |
+| Create Job Like This… | `agent.createJobLike` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › Create Job Like This…; Job Activity Monitor context menu › Create Job Like This… |
 
 ### BigQuery
 
@@ -666,6 +669,7 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `1_layout` | **R**eset Layout | `layout.reset` | Always |
 | `2_monitor` | Activity **M**onitor | `activity.open` | Always |
 | `2_monitor` | I**n**tegration Services Operations | `ssis.allOperations` | Always |
+| `2_monitor` | Jo**b** Activity Monitor | `agent.jobActivity` | Always |
 | `3_theme` | T**h**eme › | Submenu: View › Theme | Always |
 | `4_zoom` | Zoom **I**n | `view.zoomIn` | Always |
 | `4_zoom` | Zoom **O**ut | `view.zoomOut` | Always |
@@ -1262,7 +1266,23 @@ Right-click the execution plan's Properties pane, or press Shift+F10 or the cont
 | `1_copy` | **C**opy | `plan.copyProperties` | Always |
 | `1_copy` | Copy **V**alue | `plan.copyPropertyValues` | Always |
 
-## Context keys (205)
+#### Job Activity Monitor context menu (`agent.jobs.context`)
+
+Right-click a job in Job Activity Monitor's list (a right-click outside the selection selects that row first), or press Shift+F10 or the context-menu key in it. Items act on the jobs selected there: Open, Create Job Like This and Script Job as CREATE on the one job selected, Start, Stop, Enable and Disable as the monitor's bar runs them, View History on the selected jobs, and Refresh.
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_open` | **O**pen | `agent.openJob` | Always |
+| `1_open` | **C**reate Job Like This… | `agent.createJobLike` | Always |
+| `2_run` | **S**tart Job | `agent.startJobs` | Always |
+| `2_run` | S**t**op Job | `agent.stopJobs` | Always |
+| `3_state` | **E**nable Job | `agent.enableJobs` | Always |
+| `3_state` | **D**isable Job | `agent.disableJobs` | Always |
+| `4_script` | Sc**r**ipt Job as CREATE | `agent.scriptJob` | Always |
+| `5_history` | View **H**istory | `agent.viewHistory` | Always |
+| `9_view` | Re**f**resh | `agent.refreshJobs` | Always |
+
+## Context keys (206)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1290,6 +1310,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `optionsDialogFocus` | boolean | focus | Focus is in the Options dialog. |
 | `designerFocus` | boolean | focus | Focus is in the active table designer; activePanel is then 'editor'. |
 | `queryBarFocus` | boolean | focus | Focus is in the active query's bar (Execute, Cancel and its server and database lists); activePanel is then 'editor'. |
+| `agentStepsFocus` | boolean | focus | Focus is in a SQL Server Agent job document's Steps section (its list or the selected step's fields, but not its command editor, whose Monaco keeps Alt+Up/Down). |
 | `activityMonitorFocus` | boolean | focus | Focus is in the active Activity Monitor; activePanel is then 'editor'. |
 | `documentTabFocus` | boolean | focus | Focus is on a document tab in the strip, or in its rename box; activePanel is then 'editor'. |
 | `peekFocus` | boolean | focus | Focus is in Object Explorer's Peek card, which floats outside every pane (activePanel is then ''). |

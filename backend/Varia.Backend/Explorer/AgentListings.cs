@@ -82,12 +82,8 @@ internal static class AgentListings
     /// <summary>An error log row: keyed by archive number (0 is Current), labelled as SSMS does.</summary>
     public static ExplorerNode ErrorLog(RowContext context, int archive, object? date)
     {
-        var when = date switch
-        {
-            DateTime value => value.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture),
-            null => null,
-            _ => Convert.ToString(date, CultureInfo.InvariantCulture)
-        };
+        // The Log File Viewer's Select logs labels its rows from the same parse (ActionService.ErrorLogTime); text that does not parse shows no time.
+        var when = Varia.Backend.Actions.ActionService.ErrorLogTime(date)?.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
         var label = (archive == 0 ? "Current" : "Archive #" + archive.ToString(CultureInfo.InvariantCulture)) + (when is null ? "" : " - " + when);
         return ExplorerQueries.Node(context, new ObjectRefDto("agentErrorLog", Name: archive.ToString(CultureInfo.InvariantCulture)), label, hasChildren: false);
     }

@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { encryptedMessage, installScriptingStub, scriptingStubData, viewDefinitionWarning } from './fixtures/scripting-stub.mjs'
-import { activeDocument, backendReady, connectDialogWindow, documentTabs, editorText as editorTextOf, errorBanner, errorMessages, explorerLabel, menuItemNames, messages, openMenus as openMenusOf, optionsDescription, optionsHeading, outputView, part, quickInput as quickInputOf, quickInputActive, serverRows, statusSegment, submitConnect, toolbarButton, unsavedMark, warningBanner as warningBannerOf, expectEditorShown, dialogClosed, dialogWindow, pressToClose, clickToClose } from './fixtures/ui.mjs'
+import { activeDocument, backendReady, connectDialogWindow, documentTabs, editorText as editorTextOf, errorBanner, errorMessages, explorerLabel, menuItemNames, messages, openMenus as openMenusOf, optionsDescription, optionsHeading, outputView, part, queryDatabase, quickInput as quickInputOf, quickInputActive, serverRows, statusSegment, submitConnect, toolbarButton, unsavedMark, warningBanner as warningBannerOf, expectEditorShown, dialogClosed, dialogWindow, pressToClose, clickToClose } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -263,7 +263,7 @@ try {
   for (const key of ['ArrowDown', 'ArrowDown', 'ArrowRight', 'ArrowRight', 'Enter']) await page.keyboard.press(key)
   await expect(tabs()).toHaveCount(before + 1)
   await expect.poll(editorText).toBe('-- create dbo.Orders')
-  await expect(page.locator('#query-database')).toHaveValue('AppData')
+  await expect(queryDatabase(page)).toHaveValue('AppData')
   await expect(unsavedMark(activeDocument(page))).toHaveCount(0)
   expect((await stubCalls('scripting.script')).at(-1)).toMatchObject({ targets: [{ kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' }], verb: 'create', options: { scriptUseDatabase: false } })
   console.log('Scripting checks: Script Table as greys ALTER, CREATE OR ALTER and EXECUTE, and the keyboard opens CREATE in an unmarked query on AppData with the saved options.')
@@ -314,7 +314,7 @@ try {
   await menuNamed('Script Job as').getByRole('menuitem', { name: 'CREATE To', exact: true }).click()
   await menuNamed('CREATE To').getByRole('menuitem', { name: 'New Query Editor Window', exact: true }).click()
   await expect.poll(editorText).toBe('-- create Nightly backup')
-  await expect(page.locator('#query-database')).toHaveValue('msdb')
+  await expect(queryDatabase(page)).toHaveValue('msdb')
   expect((await stubCalls('scripting.script')).at(-1)).toMatchObject({ verb: 'create', targets: [{ kind: 'agentJob', name: 'Nightly backup' }] })
   console.log('Scripting checks: a SQL Server Agent job offers Script Job as with CREATE, DROP and DROP And CREATE, and CREATE opens its script.')
 
@@ -500,7 +500,7 @@ try {
       await scriptFrom(widgets, 'Script Table as', 'CREATE To', 'New Query Editor Window')
       await expect(tabs()).toHaveCount(queriesBefore + 1, wait)
       await expect.poll(editorText, wait).toContain('CREATE TABLE [dbo].[Widgets]')
-      await expect(page.locator('#query-database')).toHaveValue(name)
+      await expect(queryDatabase(page)).toHaveValue(name)
       await scriptFrom(widgets, 'Script Table as', 'CREATE To', 'Clipboard')
       await expect(scriptStatus()).toHaveText('Script copied to the clipboard.', wait)
       const script = await clipboard()

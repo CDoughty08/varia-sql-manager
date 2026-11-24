@@ -2,7 +2,7 @@
 // cannot run jobs, the tiles, the view chips and filter box, the live grid of jobs (LiveGridPane: the results grid's GridView,
 // no React per row) with its funnels, the bulk bar, the selected job's last run in place, and the bulk verbs' result lines.
 // JobActivityService keeps every state; this only draws it.
-import { useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from 'react'
 import {
   agentBanner, agentBulkCommands, agentBulkFormVerbs, agentBulkTitles, agentBulkVerbs, agentJobFilterColumns, agentJobFilterLimits, agentJobTiles, agentJobViewSpecs, agentJobsProbe, agentServiceProbe,
   agentStatusOverride, jobActivityTitle, tileValue, viewCount
@@ -18,6 +18,7 @@ import InlineError from '../kit/InlineError'
 import { LivePill, StaleBadge } from '../kit/LivePill'
 import Tile, { tileName } from '../kit/Tile'
 import { LiveGridPane, type LiveFilters } from '../live/LiveGridPane'
+import { useMenuTarget } from '../menus/useMenuTarget'
 import type { LiveSnapshot } from '../live/LiveService'
 import { probePillStatus } from '../live/status'
 import { formatCount, plural } from '../results/status'
@@ -83,6 +84,23 @@ function BulkResults({ state, onStop, onClose }: { readonly state: JobActivitySt
 }
 
 /** A Job Activity Monitor document. */
+type StartAgentWorkbench = Pick<ReturnType<typeof useWorkbench>, 'explorer' | 'explorerStatus' | 'longRuns' | 'dialogs' | 'commands' | 'jobActivity'>
+/** Start Agent's state in a monitor's banner, as a string that changes only when the button would (AG-10). */
+function startAgentKey(workbench: StartAgentWorkbench, documentId: string): string {
+  const start = workbench.jobActivity.startAgentTarget(documentId)
+  return start ? `${workbench.commands.isEnabled('explorer.startAgent', start.args)}|${start.reason ?? ''}|${!!workbench.dialogs.current}` : ''
+}
+/** Followed only while the banner offers Start (`offered`): otherwise the tree's and the status's publishes cost nothing here. */
+function useStartAgentButton(workbench: StartAgentWorkbench, documentId: string, offered: boolean): string {
+  const subscribe = useCallback((listener: () => void) => {
+    if (!offered) return () => {}
+    const stops = [workbench.explorer.subscribe(listener), workbench.explorerStatus.subscribe(listener), workbench.longRuns.subscribe(listener), workbench.dialogs.subscribe(listener)]
+    return () => stops.forEach(stop => stop())
+  }, [workbench, offered])
+  const snapshot = () => offered ? startAgentKey(workbench, documentId) : ''
+  return useSyncExternalStore(subscribe, snapshot, snapshot)
+}
+
 export default function JobActivityMonitor({ documentId }: { readonly documentId: string }) {
   const workbench = useWorkbench()
   const service = workbench.jobActivity
@@ -90,6 +108,13 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
   const state = documents[documentId]
   const handle = service.handle(documentId)
   const live = useSyncExternalStore(handle?.subscribe ?? noSubscribe, handle?.getSnapshot ?? noLiveSnapshot, handle?.getSnapshot ?? noLiveSnapshot)
+  // The list's row menu (AG-10, agent.jobs.context through MenuService): the job verbs on the jobs selected there.
+  const menuTarget = useMenuTarget<HTMLDivElement>(() => ({ kind: 'jobActivity', tabId: documentId }))
+  // Start in the Agent-stopped banner (AG-10) follows the Agent node's service verb and its rules (a Linux server, Varia off Windows, a cluster).
+  // A start, stop or restart beginning or ending, a status sample or a dialog opening changes it without changing the monitor's own
+  // state: the monitor redraws when the button's enabled state or reason changes, not on every tree or status publish.
+  const offered = service.startAgentOffered(documentId)
+  useStartAgentButton(workbench, documentId, offered)
   if (!state || !handle) return <EmptyState className="workspace-empty" icon="agent-activity" title={jobActivityTitle} detail="This document has closed." />
   const probe = live.probes[agentJobsProbe]
   const table = handle.table(agentJobsProbe, 0)
@@ -98,7 +123,10 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
   const end = service.ended(documentId)
   // Tiles, chips and the Status note keep the last reading while lost (it is what the grid shows); the banner and pill wait.
   const availability = service.availability(documentId), shown = service.shownAvailability(documentId)
-  const banner = agentBanner(shown, state.service, false, state.linux)
+  const start = offered ? service.startAgentTarget(documentId) : undefined
+  const canStart = !!start && workbench.commands.isEnabled('explorer.startAgent', start.args)
+  const startWhy = canStart ? undefined : start?.reason ?? (workbench.dialogs.current ? 'Close the open dialog first.' : 'Start SQL Server Agent is not available right now.')
+  const banner = agentBanner(shown, state.service, !!start, state.linux)
   const override = agentStatusOverride(availability)
   const problems = listProblems(probe)
   const waiting = service.lastRunWaiting(documentId)
@@ -129,7 +157,10 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
     state={pill}
     tools={stale && <StaleBadge updatedAt={probe?.lastSampleAt} stale={stale} />} verbs={verbs} attributes={{ 'data-agent-jobs': documentId }}>
     <div className="agent-jobs">
-      {banner && <div className="agent-banner" role="status"><Icon name="warning" /><span>{banner.text}</span></div>}
+      {banner && <div className="agent-banner" role="status"><Icon name="warning" /><span>{banner.text}</span>
+        {banner.start && start && <button type="button" className="agent-banner-start" disabled={!canStart} title={startWhy ?? 'Start SQL Server Agent'}
+          onClick={() => void workbench.commands.execute('explorer.startAgent', start.args, 'toolbar')}><Icon name="play" />Start Agent…</button>}
+      </div>}
       {end ? <div className="agent-jobs-ended">
         {end.denied ? <div role="status"><EmptyState icon="lock" title="No access to SQL Server Agent" detail={end.message} /></div>
           : <InlineError role="status" message={end.message} code={end.code} actions={[{ label: 'Retry', run: () => service.refresh(documentId) }]} />}
@@ -172,7 +203,7 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
             onClick={() => void workbench.commands.execute('agent.createJobLike', { tabId: documentId }, 'toolbar')}><Icon name="copy" />Create Job Like This…</button>
         </div>
         <JobBulkForm id={documentId} service={service} form={state.form} />
-        <div className="agent-jobs-grid" onDoubleClick={event => {
+        <div className="agent-jobs-grid" ref={menuTarget} onDoubleClick={event => {
           // Only on a job's row (GridView's own hit test): a header's border fits its column, and the area below the rows is no job.
           // The grid's pointer layer lies over its rows, so every element under the pointer is asked, not just the event's target.
           const root = (event.target as Element).closest('[role="grid"]')

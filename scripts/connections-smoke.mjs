@@ -1282,12 +1282,13 @@ async function environmentLabels() {
       await page.mouse.move(x, y); await page.mouse.down()
       await page.mouse.move(x + dx, y, { steps: 5 }); await page.mouse.up()
     }
-    const before = (await queryBar(page).boundingBox()).width
+    const area = page.locator(part.editorArea)
+    const before = (await area.boundingBox()).width
     await drag(before - width)
-    await expect.poll(async () => (await queryBar(page).boundingBox()).width).toBeLessThan(width + 12)
+    await expect.poll(async () => (await area.boundingBox()).width).toBeLessThan(width + 12)
     return async () => {
-      await drag((await queryBar(page).boundingBox()).width - before)
-      await expect.poll(async () => (await queryBar(page).boundingBox()).width).toBeGreaterThan(before - 12)
+      await drag((await area.boundingBox()).width - before)
+      await expect.poll(async () => (await area.boundingBox()).width).toBeGreaterThan(before - 12)
     }
   }
   // The lists give way first, then a long label is cut short: the tag never runs under the server list, the lists keep
