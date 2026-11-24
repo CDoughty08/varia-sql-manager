@@ -195,12 +195,23 @@ internal static class BigQueryExplorerChecks
             Type = "EXTERNAL",
             View = new ViewDefinition { Query = "SELECT 1" }
         }, "ext", "varia-alpha.sales.ext", 6);
+        var untypedView = BigQueryService.MapTable(new Table
+        {
+            View = new ViewDefinition { Query = "SELECT 42" }
+        }, "emu_v", "varia-alpha.sales.emu_v", 7);
+        var untypedMv = BigQueryService.MapTable(new Table
+        {
+            Type = "",
+            MaterializedView = new MaterializedViewDefinition { Query = "SELECT 99" }
+        }, "emu_mv", "varia-alpha.sales.emu_mv", 8);
         check(view is { Type: "view", Definition: "SELECT id, customer FROM `varia-alpha.sales.orders`", DefinitionCut: null, DefinitionTruncated: null }
             && mv is { Type: "materialized view", Definition: "SELECT customer, COUNT(*) AS n FROM `varia-alpha.sales.orders` GROUP BY 1", DefinitionCut: null, DefinitionTruncated: null }
             && longView is { DefinitionCut: true, DefinitionTruncated: true } && longView.Definition!.Length == BigQueryPropertiesLimits.DefinitionChars - 1 && !char.IsSurrogate(longView.Definition[^1])
             && nativeWithStrayView is { Definition: null, DefinitionCut: null, DefinitionTruncated: null }
-            && externalWithStrayView is { Type: "external table", Definition: null, DefinitionCut: null, DefinitionTruncated: null },
-            "View and materialized view SQL come from tables.get with surrogate-safe truncation; native and external tables omit definition");
+            && externalWithStrayView is { Type: "external table", Definition: null, DefinitionCut: null, DefinitionTruncated: null }
+            && untypedView is { Definition: "SELECT 42", DefinitionCut: null, DefinitionTruncated: null }
+            && untypedMv is { Definition: "SELECT 99", DefinitionCut: null, DefinitionTruncated: null },
+            "View and materialized view SQL come from tables.get with surrogate-safe truncation (including when type is omitted by an emulator); native and external tables omit definition");
 
         // Snapshot, clone and malformed base table reference.
         var snapshotTime = new DateTimeOffset(2025, 6, 1, 12, 30, 0, TimeSpan.Zero);

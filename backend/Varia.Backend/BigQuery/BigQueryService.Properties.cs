@@ -323,6 +323,8 @@ internal sealed partial class BigQueryService
         {
             "VIEW" => table.View?.Query,
             "MATERIALIZED_VIEW" => table.MaterializedView?.Query,
+            // Emulators may omit table.Type on views; preserve the pre-OP-2a fallback when type is absent.
+            null or "" => !string.IsNullOrWhiteSpace(table.View?.Query) ? table.View.Query : table.MaterializedView?.Query,
             _ => null
         };
         if (string.IsNullOrWhiteSpace(query)) return (null, null);
