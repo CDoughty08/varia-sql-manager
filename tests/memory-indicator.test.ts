@@ -3,6 +3,7 @@ import { EventBus } from '../src/renderer/src/core/events'
 import { memoryLevel, MemoryUsageService } from '../src/renderer/src/results/memory'
 import type { MemoryReport } from '../src/shared/ipc/port-messages'
 import { formatBytes } from '../src/renderer/src/results/status'
+import { stylesheetRules } from './fixtures/css-rules'
 import { summaryOf } from './fixtures/results'
 
 const MB = 1048576
@@ -74,5 +75,13 @@ describe('result memory', () => {
       .toEqual(['normal', 'normal', 'warning', 'warning', 'critical', 'critical'])
     expect([0, 899, 900, 949, 950, 1001].map(used => memoryLevel(usage(used), 'results')))
       .toEqual(['normal', 'normal', 'warning', 'warning', 'critical', 'critical'])
+  })
+
+  it('caps the biggest-result tab name instead of crushing it with flex-shrink: 1000', () => {
+    const rule = stylesheetRules().find(entry => entry.selector === '.memory-biggest-name > .memory-biggest-tab')
+    const declared = Object.fromEntries(rule?.declarations.map(item => [item.property, item.value]) ?? [])
+    expect(declared['flex']).toBe('0 1 auto')
+    expect(declared['max-width']).toBe('42%')
+    expect(declared['flex-shrink']).toBeUndefined()
   })
 })

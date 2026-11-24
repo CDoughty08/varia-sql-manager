@@ -21,7 +21,10 @@ describe('bigquery.dryRun contract', () => {
     expect(() => validateRequest('bigquery.dryRun', { connectionId, sql: '' })).toThrow()
     expect(() => validateRequest('bigquery.dryRun', { connectionId, sql: 'x'.repeat(1_000_001) })).toThrow()
     expect(() => validateRequest('bigquery.dryRun', { connectionId, sql: 'SELECT 1', dataset: 'a-b' })).toThrow()
-    expect(() => validateRequest('bigquery.dryRun', { connectionId, sql: 'SELECT 1', sessionId: connectionId })).toThrow()
+    // The tab's session id (F1): a uuid, and only with text (a remote estimate runs on the result's own connection).
+    expect(() => validateRequest('bigquery.dryRun', { connectionId, sql: 'SELECT 1', sessionId: connectionId })).not.toThrow()
+    expect(() => validateRequest('bigquery.dryRun', { connectionId, sql: 'SELECT 1', sessionId: 'tab-1' })).toThrow()
+    expect(() => validateRequest('bigquery.dryRun', { connectionId, remote: { resultId: 1, generation: 1, kind: 'view' }, sessionId: connectionId })).toThrow()
     expect(validateResult('bigquery.dryRun', { bytesProcessed: 10, incomplete: 'script', statementType: 'SCRIPT' })).toMatchObject({ incomplete: 'script' })
     expect(() => validateResult('bigquery.dryRun', { bytesProcessed: -1 })).toThrow()
     expect(() => validateResult('bigquery.dryRun', { bytesProcessed: 1, incomplete: 'maybe' })).toThrow()
@@ -125,7 +128,8 @@ describe('dry-run diagnostics', () => {
     f.replies.push(estimate(GiB))
     f.tick()
     await f.settle()
-    expect(f.api.bigQueryDryRun).toHaveBeenCalledWith({ connectionId, sql: 'SELECT * FROM orders', dataset: 'sales' })
+    // The tab's id goes along, so text using the tab's temp tables estimates in its BigQuery session once it has one.
+    expect(f.api.bigQueryDryRun).toHaveBeenCalledWith({ connectionId, sql: 'SELECT * FROM orders', dataset: 'sales', sessionId: f.tab.id })
     expect(f.service.getSnapshot().get(f.tab.id)).toEqual({ phase: 'estimate', bytes: GiB })
     expect(f.markers).toHaveBeenLastCalledWith(expect.anything(), dryRunMarkerOwner, [])
     expect(f.service.status(f.tab.id)?.label).toBe('BigQuery: no issues')

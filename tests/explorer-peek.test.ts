@@ -18,7 +18,7 @@ import { dependencyLimits } from '../src/shared/explorer/dependencies'
 
 // A list tab's grid needs the workbench; these checks read which list and preset the tab draws.
 vi.mock('../src/renderer/src/explorer/PeekListGrid', () => ({
-  PeekListGrid: ({ id, preset }: { id: string; preset: string }) => createElement('div', { 'data-peek-list': id, 'data-preset': preset })
+  PeekListGrid: ({ id, preset, fill }: { id: string; preset: string; fill?: boolean }) => createElement('div', { 'data-peek-list': id, 'data-preset': preset, ...fill ? { 'data-fill': 'true' } : {} })
 }))
 
 const connectionId = '11111111-1111-4111-8111-111111111111', requestId = '22222222-2222-4222-8222-222222222222'
@@ -962,9 +962,9 @@ describe('Peek kinds beyond modules', () => {
     const keyColumns = peekListTable(peekLists.keyColumns, [['CustomerId', 'Id', null, 'int'], ['OrderId', null, true, 'bigint']])
     expect(keyColumns.columns.map(column => column.name)).toEqual(['Column', 'Referenced column', 'Descending', 'Type'])
     expect(keyColumns.rows).toEqual([['CustomerId', 'Id', null, 'int'], ['OrderId', null, 'True', 'bigint']])
-    const tableObjects = peekListTable(peekLists.tableObjects, [['Primary key', 'PK_Orders', 'Clustered (Id)', 'Active'], ['Foreign key', 'FK_Orders_Cust', '(CustomerId) → dbo.Customers (Id)', 'Trusted']])
-    expect(tableObjects.columns.map(column => column.name)).toEqual(['Kind', 'Name', 'Definition', 'Status'])
-    expect(tableObjects.rows).toEqual([['Primary key', 'PK_Orders', 'Clustered (Id)', 'Active'], ['Foreign key', 'FK_Orders_Cust', '(CustomerId) → dbo.Customers (Id)', 'Trusted']])
+    const tableObjects = peekListTable(peekLists.tableObjects, [['Primary key', 'PK_Orders', 'Clustered ([Id])', 'Active'], ['Foreign key', 'FK_Orders_Cust', '([CustomerId]) → [dbo].[Customers] ([Id])', 'Trusted']])
+    expect(tableObjects.columns.map(column => column.name)).toEqual(['Kind', 'Name', 'Summary', 'Status'])
+    expect(tableObjects.rows).toEqual([['Primary key', 'PK_Orders', 'Clustered ([Id])', 'Active'], ['Foreign key', 'FK_Orders_Cust', '([CustomerId]) → [dbo].[Customers] ([Id])', 'Trusted']])
     expect(peekLists.parameters.columns.map(column => column.label)).toEqual(['Name', 'Type', 'Direction', 'Default', 'Definition'])
     // Text keeps its control characters for the grid to show; a count is a number column, which sorts by value.
     expect(peekListTable({ columns: [{ id: 'a', label: 'A', format: 'text' }, { id: 'n', label: 'N', format: 'count' }] }, [['x\ty', 1024]])).toEqual({ columns: [{ name: 'A' }, { name: 'N', kind: 'number' }], rows: [['x\ty', '1,024']] })
@@ -975,9 +975,11 @@ describe('Peek kinds beyond modules', () => {
     const markup = renderToStaticMarkup(createElement(PeekListView, { id: 'files', part: ready, list: { rows: [['Sales', 'ROWS', 8192, 'By 64 MB, unlimited', 'C:\\data\\Sales.mdf']], truncated: true }, preset: 'card', objectName: 'Sales' }))
     expect(markup).toContain('data-peek-list="files"')
     expect(markup).toContain('data-preset="card"')
+    expect(markup).toContain('data-fill="true"')
     expect(markup).toContain('There are more than the card lists.')
     const empty = renderToStaticMarkup(createElement(PeekListView, { id: 'userMapping', part: ready, list: { rows: [], unread: 3 }, preset: 'page', objectName: 'sa' }))
     expect(empty).toContain('data-preset="page"')
+    expect(empty).not.toContain('data-fill=')
     expect(empty).toContain('3 databases could not be read.')
   })
 

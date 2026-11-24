@@ -311,6 +311,7 @@ internal static partial class LiveSql
         AgentProbe => new(probe, band, Agent, ["running_jobs"], null, null, [new("runningJobs", "running_jobs")]),
         AvailabilityProbe => new(probe, band, Availability, [], null, null, []) { Tables = [new(0)] },
         AgentServiceProbe => new(probe, band, AgentServiceAt(band), AgentServiceColumns, null, null, [], AgentServiceStatus),
+        AgentTreeProbe => AgentTree(probe, band),
         _ => null
     };
 

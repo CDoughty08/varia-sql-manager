@@ -31,7 +31,7 @@ env:
 # the benchmarks run side by side, so a failure in one hides nothing in the others and the run takes as long as its
 # longest job. Every code-changing pull request runs every platform, drafts included: the repository is public, so runners cost nothing.
 # What a public repository does pay in is concurrency (20 jobs at once across the account, 5 of them macOS). A code-changing PR
-# runs 15 jobs: 13 validation jobs plus scope and result. A third Windows smoke shard keeps language-service coverage within the per-shard time budget; no job repeats
+# runs 16 jobs: 14 validation jobs plus scope and result. A fourth Windows smoke shard keeps the suites within the per-shard time budget; no job repeats
 # another's work. Report-only work stays off pull requests: Linux's 1024x768 repeats of suites the
 # Windows shards already run at that size run on main only, and the desktop benchmarks run daily (bench-desktop.yml).
 # Scope detection and the final required result add two short Linux jobs.
@@ -313,7 +313,7 @@ jobs:
           retention-days: 7
 
   smoke-windows:
-    name: Smoke (Windows ${{ matrix.shard }}/3)
+    name: Smoke (Windows ${{ matrix.shard }}/4)
     # The smoke suites assert Windows/Linux window chrome (controls overlay, hidden menu bar, Ctrl shortcuts), so on macOS
     # they fail at the first check; they run there once its native menu bar and Cmd shortcuts are covered.
     needs: scope
@@ -321,7 +321,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4]
     runs-on: windows-latest
     # Room for every timed step below (tests/ci-workflow.test.ts) plus the setup before them.
     timeout-minutes: 45
@@ -345,7 +345,7 @@ jobs:
         run: npm run build:smoke
       - name: Electron smoke tests
         timeout-minutes: 25
-        run: node scripts/smoke-shards.mjs ${{ matrix.shard }}/3
+        run: node scripts/smoke-shards.mjs ${{ matrix.shard }}/4
       - name: Upload smoke-test screenshots
         if: failure()
         uses: actions/upload-artifact@v7

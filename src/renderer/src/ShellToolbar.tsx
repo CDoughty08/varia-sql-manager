@@ -22,12 +22,12 @@ export function CommandCentre() {
   </button>
 }
 
-function ToolButton({ id, icon, name, title, className, args }: { id: CommandId; icon: IconId; name: string; title: string; className?: string; args?: CommandArgs }) {
+function ToolButton({ id, icon, name, title, className, args, dirty }: { id: CommandId; icon: IconId; name: string; title: string; className?: string; args?: CommandArgs; dirty?: boolean }) {
   const { commands } = useWorkbench()
   const enabled = useCommandEnabled(id, args)
   const key = useKeybindingLabel(id)
   return <button type="button" className={className ? `ui-button icon-button ${className}` : 'ui-button icon-button'} aria-label={name} title={withKey(title, key)} disabled={!enabled}
-    onClick={() => void commands.execute(id, args, 'toolbar')}><Icon name={icon} /></button>
+    onClick={() => void commands.execute(id, args, 'toolbar')}><Icon name={icon} />{dirty && <span className="save-dirty-dot" aria-hidden="true" />}</button>
 }
 
 /**
@@ -78,10 +78,12 @@ export default function StandardToolbar({ variant }: { variant: 'header' | 'clas
 
   return <div className="header-toolbar" role="toolbar" aria-label="Standard">
     <ToolButton id="connection.connect" icon="plug" name="Connect" title="Connect to Server…" />
+    <span className="toolbar-divider" aria-hidden="true" />
     <ToolButton id="file.new" icon="new-file" name="New query" title="New Query" />
     <ToolButton id="file.open" icon="folder-opened" name="Open" title="Open File…" />
-    <ToolButton id="file.save" icon="save" name="Save" title="Save" />
+    <ToolButton id="file.save" icon="save" name="Save" title="Save" dirty={!!tab?.dirty} />
     <ToolButton id="file.saveAll" icon="save-all" name="Save All" title="Save All" />
+    <span className="toolbar-divider" aria-hidden="true" />
     {/* SSMS's toolbar button: the server of the active query, else the one selected in Object Explorer. */}
     <ToolButton id="activity.open" icon="pulse" name="Activity Monitor" title="Activity Monitor" />
   </div>

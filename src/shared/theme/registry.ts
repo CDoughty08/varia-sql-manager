@@ -36,8 +36,8 @@ const groups = {
     'textPreformat.foreground': ['V', '$textSecondary', 'Preformatted text in the editor.', 'monaco'],
     'sash.hoverBorder': ['V', '$focus', 'Dock splitter while it is hovered or dragged.', 'css'],
     'scrollbarSlider.background': ['V', '$textMuted/40', 'Scrollbar thumb.', 'css monaco'],
-    'scrollbarSlider.hoverBackground': ['V', '$textMuted/55', 'Scrollbar thumb when hovered.', 'monaco'],
-    'scrollbarSlider.activeBackground': ['V', '$textMuted/70', 'Scrollbar thumb while it is dragged.', 'monaco']
+    'scrollbarSlider.hoverBackground': ['V', '$textMuted/55', 'Scrollbar thumb when hovered.', 'css monaco'],
+    'scrollbarSlider.activeBackground': ['V', '$textMuted/70', 'Scrollbar thumb while it is dragged.', 'css monaco']
   },
   'Title bar, menus, and toolbar': {
     'titleBar.activeBackground': ['V', '$chrome', 'Title bar, and the native window-controls overlay on Windows and Linux.', 'css native', { opaqueOver: 'editor.background' }],
@@ -50,7 +50,7 @@ const groups = {
     'commandCenter.background': ['V', '$raised', 'Search box in the title bar (the command centre).', 'css'],
     'commandCenter.foreground': ['V', '$textTertiary', 'Search box text, icon and key.', 'css'],
     'commandCenter.activeBackground': ['V', '$active', 'Search box while hovered.', 'css'],
-    'commandCenter.border': ['V', '$controlBorder/45', 'Outline of the search box.', 'css'],
+    'commandCenter.border': ['V', '$controlBorder', 'Outline of the search box.', 'css'],
     'menubar.selectionBackground': ['V', '$active', 'Open title-bar menu.', 'css'],
     'menubar.selectionForeground': ['V', '$textStrong', 'Label of the open title-bar menu.', 'css'],
     'menubar.selectionBorder': ['V', '$accent/0', 'Outline of the open, hovered, or focused title-bar menu; none by default.', 'css'],
@@ -241,7 +241,7 @@ const groups = {
     'resultsGrid.headerSelectionBackground': ['X', '$selection', 'Column and row headers of selected cells.', 'css'],
     'resultsGrid.headerSelectionForeground': ['X', '$textAccent', 'Text of the headers of selected cells.', 'css'],
     'resultsGrid.linkForeground': ['X', '$accent', 'XML, JSON and plan values that open in a new tab.', 'css'],
-    'resultsGrid.splitterBackground': ['X', '$controlBorder', 'Splitters between stacked result grids; hovered or dragged, they take sash.hoverBorder.', 'css'],
+    'resultsGrid.splitterBackground': ['X', '$iconMuted', 'Splitters between stacked result grids; hovered or dragged, they take sash.hoverBorder.', 'css'],
     'resultsMessages.foreground': ['X', '$text', 'Text of the Messages tab.', 'css']
   },
   'Status bar': {
@@ -307,7 +307,7 @@ const groups = {
     'memoryPanel.packedForeground': ['X', '$purple', 'Text of the Packed state in the Memory panel.', 'css'],
     'chip.background': ['X', '$text/0', 'Filter chips (toggle buttons such as All, Active, Blocked) while off; transparent by default.', 'css'],
     'chip.foreground': ['X', '$textSecondary', 'Label of a filter chip while off.', 'css'],
-    'chip.border': ['X', '$controlBorder/45', 'Outline of a filter chip while off.', 'css'],
+    'chip.border': ['X', '$controlBorder', 'Outline of a filter chip while off.', 'css'],
     'chip.activeBackground': ['X', '$selection', 'A filter chip while on.', 'css'],
     'chip.activeForeground': ['X', '$textAccent', 'Label and check mark of a filter chip while on.', 'css'],
     'chip.activeBorder': ['X', '$accent', 'Outline of a filter chip while on; with the fill and the check mark, it shows the chip is on.', 'css'],
@@ -335,7 +335,7 @@ const groups = {
     'charts.foreground': ['V', '$textTertiary', 'Chart labels, legends, and the crosshair.', 'css script'],
     'charts.lines': ['V', '$border', 'Chart grid lines and baseline.', 'script'],
     'charts.blue': ['V', '$chart1', 'First series of a chart; series take blue, orange, green, yellow, then purple.', 'css script'],
-    'charts.orange': ['V', '$chart2', 'Second series of a chart.', 'script'],
+    'charts.orange': ['V', '$chart2', 'Second series of a chart.', 'css script'],
     'charts.green': ['V', '$chart3', 'Third series of a chart; also the block cache of windowed BigQuery results in the Memory panel.', 'css script'],
     'charts.yellow': ['V', '$chart4', 'Fourth series of a chart; also the cache of unpacked pages in the Memory panel.', 'css script'],
     'charts.purple': ['V', '$chart5', 'Fifth series of a chart.', 'css script'],

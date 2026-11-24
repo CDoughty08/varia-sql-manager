@@ -154,7 +154,9 @@ export type MenuTarget =
   /** An Integration Services Operations grid; its commands act on the selected operation. */
   | { readonly kind: 'ssisOperations'; readonly tabId: string }
   /** A BigQuery Job History grid; its commands act on the selected job. */
-  | { readonly kind: 'jobHistory'; readonly tabId: string }
+  /** `row`: the grid row pressed, when it is not the active row (a right-click inside a multi-row selection keeps the
+   *  selection): the menu's row actions act on that row's job. */
+  | { readonly kind: 'jobHistory'; readonly tabId: string; readonly row?: number }
   | OutputTarget
   /** A panel's tab or ⋯ button; `popout` when the panel is in a window of its own. */
   | { readonly kind: 'dockTab'; readonly pane: PaneId; readonly floating: boolean; readonly popout: boolean }
@@ -225,6 +227,9 @@ export function argsFor(target: MenuTarget): CommandArgs {
   // that reads a grid from its target falls back to that query's focused grid.
   if (target.kind === 'resultsTools') return { tabId: target.tabId }
   const tabId = target.kind === 'editor' || target.kind === 'documentTab' || target.kind === 'output' || target.kind === 'tableDesigner' || target.kind === 'ssisOperations' || target.kind === 'jobHistory' ? target.tabId : undefined
+  // A Job History row pressed outside the active row: its job is read when an action runs, so every row action is offered
+  // (as for a selected row whose cells are still being read) and each says why when it does not apply.
+  if (target.kind === 'jobHistory' && target.row !== undefined) return { target, tabId: target.tabId, state: pressedJobKeys }
   const state = target.kind === 'searchHit' ? target.state : target.kind === 'output' && target.view === 'grid'
     ? { resultsGridTransposed: !!target.transposed, resultsGridComparison: target.resultKind === 'diff', comparisonInputsOpen: target.resultKind === 'diff' && !!target.inputsOpen,
       // The menu's row: a clicked cell's or row number's, or the active cell's a keyboard menu opens below; else (a header's
@@ -233,6 +238,9 @@ export function argsFor(target: MenuTarget): CommandArgs {
     : undefined
   return { target, ...(tabId ? { tabId } : {}), ...(state ? { state } : {}) }
 }
+const pressedJobKeys = { jobHistoryJobSelected: true, jobHistoryCanOpenResults: true, jobHistoryCanReattach: true, jobHistoryCanOpenSql: true, jobHistoryCanRerun: true, jobHistoryCanCancel: true }
+/** The Job History row a menu was opened on, when it is not the active row. */
+export const jobHistoryRowOf = (args: CommandArgs | undefined): number | undefined => args?.target?.kind === 'jobHistory' ? args.target.row : undefined
 export const peekPropertiesOf = (args: CommandArgs | undefined): PeekPropertiesTarget | undefined => args?.target?.kind === 'peekProperties' ? args.target : undefined
 export const planOutlineOf = (args: CommandArgs | undefined): PlanOutlineTarget | undefined => args?.target?.kind === 'planOutline' ? args.target : undefined
 export const planPropertiesOf = (args: CommandArgs | undefined): PlanPropertiesTarget | undefined => args?.target?.kind === 'planProperties' ? args.target : undefined
@@ -286,7 +294,8 @@ export interface TargetHit {
   /** What a keyboard-opened menu opens below, when not `element`: the results grid's active cell. */
   readonly anchor?: Element
 }
-export type TargetProvider = (element: Element) => MenuTarget | null
+/** `element` is the registered element; `from` the one the menu was asked for on (the pressed or focused element inside it). */
+export type TargetProvider = (element: Element, from: Element) => MenuTarget | null
 interface TargetRegistration {
   readonly provider: TargetProvider
   /** A composite widget keeps keyboard focus on its owner rather than an inner action button. */
@@ -406,7 +415,7 @@ export class MenuTargetService {
   }
 
   private hit({ provider, focus: registeredFocus }: TargetRegistration, registered: Element, from: Element): TargetHit | null {
-    const target = provider(registered)
+    const target = provider(registered, from)
     if (!target) return null
     const tab = registered.closest<HTMLElement>('.dv-tab') ?? undefined
     // The focusable part that was clicked (a tab's button), else the registered element or the Dockview tab around it.

@@ -189,7 +189,7 @@ export function installExplorerStub({ ipcMain }, { statics }) {
           ? [['Id', 'int', false, 'PK', '1, 1', null, null, '[Id] int IDENTITY(1,1) NOT NULL'], ['CustomerName', 'nvarchar(50)', true, null, null, null, "(N'')", "[CustomerName] nvarchar(50) NULL DEFAULT (N'')"]]
           : [['Id', 'int', false, null, null, null, null, '[Id] int NOT NULL']] },
           ...params.target.kind === 'table' ? { tableObjects: { rows: params.target.name === 'Orders'
-            ? [['Primary key', 'PK_Orders', 'Clustered (Id)', 'Active']] : [] } } : {} } } : {},
+            ? [['Primary key', 'PK_Orders', 'Clustered ([Id])', 'Active']] : [] } } : {} } } : {},
         // A module's text comes with its facts, as the backend reads it from sys.sql_modules (Peek's followed view has its own).
         ...(() => {
           const definition = searchObjects.find(item => item.object.kind === params.target.kind && item.object.name === params.target.name)?.definition

@@ -1,14 +1,16 @@
 import type { LayoutLoad, LayoutState, WorkspaceLayout } from './layouts'
+import type { InspectorVitalsLoad, InspectorVitalsPrefs } from './inspector-vitals'
 import type { EstimatedPlanRequest, EstimatedPlanResult } from './estimated-plans'
 import type { ConnectContext, ConnectionEnvironmentInput, ConnectionLibraryView, ConnectionProfileInput, ConnectionSaveView, SecretStorageState } from './connections'
 import type { ConnectionAuthentication, ConnectionFailureReason } from './connection-targets'
 import type { ConnectionBindingsChanged } from './connection-bindings'
 import type { BigQueryLibraryView, BigQueryProfileInput, PickedKeyFile } from './bigquery-connections'
+import type { StepScriptSubsystem } from './agent/step-file'
 import type { BigQueryDryRunRequest, BigQueryDryRunResult } from './bigquery/dry-run'
 import type { ResultsRemoteQueryParams } from './bigquery/remote-view'
 import type { BigQueryPreviewTarget, BigQueryProperties, BigQueryPropertiesRequest } from './bigquery/objects'
 import type { JobHistoryCancelResult, JobHistoryDetails, JobHistoryGetParams, JobHistoryJobParams } from './bigquery/history'
-import type { CancelJobsResult, JobsWithoutTabReview, QueryAttachParams, RecordedJobsCancel } from './bigquery/jobs'
+import type { CancelJobsResult, JobsWithoutTabRequest, JobsWithoutTabReview, QueryAttachParams, RecordedJobsCancel } from './bigquery/jobs'
 import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } from './theme/types'
 import type { CommandId, RendererRole } from './commands/catalog'
 import type { ContextMenuCommand, ContextMenuRequest, MenuState } from './commands/menus'
@@ -967,6 +969,10 @@ export interface VariaApi {
   pickKeyFile(authentication: 'serviceAccountKey' | 'externalAccount'): Promise<ApiResult<PickedKeyFile | null>>
   /** Decision 49: the user confirmed the token file a picked federation configuration reads. */
   confirmFederationSource(keyFile: string, source: string): Promise<ApiResult<void>>
+  /** agentStepScript.open (AG-11): Load from file… on a CmdExec or PowerShell job step. Main shows its open dialog, filtered to the step
+   *  type's scripts plus All files, and reads the chosen file under the step command's limit. Resolves its text only (never its path), or
+   *  null when the user cancelled. */
+  openAgentStepScript(subsystem: StepScriptSubsystem): Promise<ApiResult<string | null>>
   disconnect(connectionId: string): Promise<ApiResult<RpcMethods['connections.disconnect']['result']>>
   /** BigQuery before connecting: the account the credential signs in as, and a page of the projects it can see. */
   bigQueryAccount(params: BigQueryCredentialParams): Promise<ApiResult<BigQueryAccount>>
@@ -1141,7 +1147,7 @@ export interface VariaApi {
   cancelRestoredJobs(jobKeys: readonly string[]): Promise<ApiResult<RecordedJobsCancel>>
   /** After a restore: asks once about running jobs recorded under no open tab's key (Cancel Jobs or Keep), in main's box;
    *  null when there are none. Finished jobs without a tab are dropped. */
-  reviewJobsWithoutTab(openJobKeys: readonly string[]): Promise<ApiResult<JobsWithoutTabReview | null>>
+  reviewJobsWithoutTab(request: JobsWithoutTabRequest): Promise<ApiResult<JobsWithoutTabReview | null>>
   /** Writes text to the clipboard through main, which works while the window is unfocused; there is no read. */
   /** At most `maxClipboardText` characters: main refuses a longer text. */
   writeClipboardText(text: string): Promise<ApiResult<void>>
@@ -1169,6 +1175,8 @@ export interface VariaApi {
   closeWindowCancelled(): void
   loadLayouts(): Promise<ApiResult<LayoutLoad>>
   saveLayouts(state: LayoutState): Promise<ApiResult<void>>
+  loadInspectorVitals(): Promise<ApiResult<InspectorVitalsLoad>>
+  saveInspectorVitals(prefs: InspectorVitalsPrefs): Promise<ApiResult<InspectorVitalsPrefs>>
   importLayout(): Promise<ApiResult<WorkspaceLayout | null>>
   exportLayout(layout: WorkspaceLayout): Promise<ApiResult<boolean>>
   onCommand(callback: (command: CommandId) => void): () => void

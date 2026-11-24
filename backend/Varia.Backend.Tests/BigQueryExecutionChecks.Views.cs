@@ -214,6 +214,11 @@ internal static partial class BigQueryExecutionChecks
         await Run(harness, "results.remoteQuery", View(id, filters: [new JsonObject { ["op"] = "between", ["column"] = 1, ["list"] = list.ResultId, ["rows"] = new JsonArray(3, 1) }]));
         check(InsertedSql(harness).EndsWith("WHERE (`s` IS NOT NULL AND `s` BETWEEN (SELECT value FROM `varia-emulator`.`_anon0123`.`anon_result_1` WHERE r = @p0) AND (SELECT value FROM `varia-emulator`.`_anon0123`.`anon_result_1` WHERE r = @p1))", StringComparison.Ordinal),
             "Between names its bounds by their rows in the value list: " + InsertedSql(harness));
+        // ... and never a NULL row: BETWEEN a NULL bound would keep nothing (the UI never sends one; the backend refuses it).
+        var insertsBefore = harness.Jobs.InsertedIds.Count;
+        var (nullCode, nullResult, nullMessage) = await harness.Call("results.remoteQuery", View(id, filters: [new JsonObject { ["op"] = "between", ["column"] = 1, ["list"] = list.ResultId, ["rows"] = new JsonArray(0, 2) }]));
+        check(nullCode == "INVALID_PARAMS" && nullMessage.Contains("not NULL", StringComparison.Ordinal) && harness.Jobs.InsertedIds.Count == insertsBefore,
+            $"a Between bound on the value list's NULL row is refused before any job: {nullCode} {nullMessage} {nullResult}");
         // The list's ticks come from the kept filters, asked with LOGICAL_OR.
         distinct["queryId"] = Guid.NewGuid().ToString();
         distinct["kept"] = new JsonArray(new JsonObject { ["op"] = "in", ["column"] = 1, ["list"] = list.ResultId, ["rows"] = new JsonArray(1) });
@@ -422,6 +427,24 @@ internal static partial class BigQueryExecutionChecks
             check(held && code == "ok" && result?.Status == (release ? "failed" : "cancelled") && (!release || result?.Error?.Code == "RESULT_RELEASED") && result?.ResultSets.Count == 0
                 && cancelled && harness.Service.Results.Find(id + 1) is null,
                 $"{(release ? "closing the source" : "Stop")} cancels a remote view's job and keeps no result: {held} {code} {message} {result?.Status} {result?.Error?.Code} {string.Join(",", harness.Jobs.Cancels)}");
+        }
+        // Stop while jobs.insert is still out: BigQuery may create the job after a cancel sent at once would have found
+        // nothing, so the cancel waits for the insert to end and asks again while it answers 404.
+        {
+            var (harness, id) = await WindowedAsync();
+            using var _ = harness;
+            harness.Service.BigQuery.UnbornCancelPoll = TimeSpan.FromMilliseconds(10);
+            harness.Jobs.Polling = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            harness.Jobs.HangInsert = true;
+            var queryId = Guid.NewGuid().ToString();
+            var running = Run(harness, "results.remoteQuery", View(id, sort: [Key(0)], queryId: queryId));
+            var held = await Task.WhenAny(harness.Jobs.Polling.Task, Task.Delay(15_000)) == harness.Jobs.Polling.Task;
+            var job = harness.Jobs.Unborn.Keys.SingleOrDefault();
+            await harness.Call("query.cancel", new JsonObject { ["queryId"] = queryId });
+            var (code, result, _, message) = await running;
+            var cancelled = job is not null && await BigQuerySessionChecks.Poll(() => harness.Jobs.Cancels.Contains(job));
+            check(held && code == "ok" && result?.Status == "cancelled" && cancelled && harness.Service.Results.Find(id + 1) is null,
+                $"Stop during a derived query's jobs.insert cancels the job BigQuery creates after it: {held} {code} {message} {result?.Status} missed={string.Join(",", harness.Jobs.MissedCancels)} cancels={string.Join(",", harness.Jobs.Cancels)}");
         }
     }
 }

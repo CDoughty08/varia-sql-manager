@@ -86,6 +86,7 @@ internal static class AgentLiveChecks
         await ScratchDatabase.SweepAgentAsync(Sql, Console.WriteLine);
         await JobAsync(check, connection, reader, scratch, Sql, service, info, json);
         await ActivitySourceLiveChecks.AgentJobAsync(check, service, info, json, scratch.AgentObject("job"), Sql);
+        await AgentTreeChecks.LiveAsync(check, service, info, json, scratch, Sql);
         await RolesAsync(check, connection, reader, scratch, Sql, None, profile.Explorer(ExplorerCatalog.Current).Band);
         await AgentScriptingLiveChecks.RunAsync(check, service, info, json, scratch, Sql);
     }

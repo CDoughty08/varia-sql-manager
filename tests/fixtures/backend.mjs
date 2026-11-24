@@ -438,9 +438,24 @@ const explorerRows = {
   // SQL Server Agent's Proxies (AG-8b): the Proxies folder (list agentProxies, as its folder is named) lists a folder per subsystem,
   // and each subsystem (whose kind lists agentProxies too) the proxies active to it; Security › Credentials.
   agentProxies: owner => owner.kind !== 'agentProxySubsystem' ? proxySubsystems.map(subsystem => explorerObject({ kind: 'agentProxySubsystem', name: subsystem.name }, subsystem.label, { hasChildren: true })) : fakeProxies.filter(proxy => proxy.subsystems.includes(proxySubsystems.find(subsystem => subsystem.name === owner.name)?.id)).map(proxy => explorerObject({ kind: 'agentProxy', name: proxy.name }, proxy.name)),
-  credentials: () => fakeCredentials.map(credential => explorerObject({ kind: 'credential', name: credential.name }, credential.name))
+  credentials: () => fakeCredentials.map(credential => explorerObject({ kind: 'credential', name: credential.name }, credential.name)),
+  // The Jobs folder in name order, with each job's id and a disabled job's status, as CatalogSql lists them (AG-12's chips).
+  agentJobs: (_, listedEnabled = !!controlDirectory && existsSync(join(controlDirectory, 'agent-listed-enabled'))) => agentTreeJobs().sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+    // With agent-listed-enabled the folder lists every job enabled, as if listed before one was disabled elsewhere, so only the
+    // live read can dim it.
+    .map(job => explorerObject({ kind: 'agentJob', name: job.name }, job.name, { jobId: job.id.toUpperCase(), ...job.enabled || listedEnabled ? {} : { status: 'disabled' } }))
 }
-const agentListings = new Set(['agentProxies', 'credentials'])
+const agentListings = new Set(['agentProxies', 'credentials', 'agentJobs'])
+// The control file agent-extra-job: a job created elsewhere (another session's sp_add_job), which only the Jobs folder lists.
+const agentExtraJob = { id: 'a1b2c3d4-0000-4000-8000-0000000000ee', name: 'Archive', enabled: true }
+const agentTreeJobs = () => [...agentJobs, ...controlDirectory && existsSync(join(controlDirectory, 'agent-extra-job')) ? [agentExtraJob] : []]
+/** agent.treeProbe's status (AG-12): Agent XPs on, the service running, and each msdb table's count and checksum, the jobs' from the Jobs folder's jobs. */
+function agentTreeStatus() {
+  const jobs = agentTreeJobs()
+  const checksum = jobs.reduce((sum, job) => sum + parseInt(job.id.slice(-4), 16) + job.name.length + (job.enabled ? 1 : 0), 0)
+  const tables = { jobs: [jobs.length, checksum], alerts: [1, 100], operators: [1, 100], proxies: [1, 100], assignments: [1, 100] }
+  return [{ id: 'agentXps', value: 1 }, { id: 'serviceState', value: 4 }, ...Object.entries(tables).flatMap(([id, [count, sum]]) => [{ id: id + 'Count', value: count }, { id: id + 'Checksum', value: sum }])]
+}
 // What extra/<folder> adds: a role or table created since the folder was first listed.
 const explorerExtras = {
   serverRoles: () => explorerObject({ kind: 'serverRole', name: 'VariaAuditors' }, 'VariaAuditors'),
@@ -1359,7 +1374,7 @@ const fixtures = {
 function liveSubscribe(id, credit, params) {
   if (credit === undefined) return fail(id, 'INVALID_PARAMS', 'A live subscription is a stream: it needs credit.')
   const explorer = params.source === 'explorer' && Array.isArray(params.probes) && explorerStatus() !== undefined, ssis = params.source === 'ssis.catalog'
-  const operations = params.source === 'ssis.operations', agent = params.source === 'agent.jobs' || params.source === 'agent.history' || params.source === 'agent.errorLog'
+  const operations = params.source === 'ssis.operations', agent = params.source === 'agent.jobs' || params.source === 'agent.history' || params.source === 'agent.errorLog' || params.source === 'agent.tree'
   if ((params.source !== 'debug.synthetic' && params.source !== 'activity' && !explorer && !ssis && !operations && !agent) || !Array.isArray(params.probes)) return fail(id, 'INVALID_PARAMS', 'Unknown live source.')
   if (!explorer && params.probes.some(probe => !(params.source === 'activity' ? liveProbes[probe.probe]?.source === 'activity' : ssis ? probe.probe === 'ssis.catalogProbe' : operations ? probe.probe === ssisOperationsProbe : agent ? liveProbes[probe.probe]?.source === params.source : syntheticProbes.includes(probe.probe)))) return fail(id, 'INVALID_PARAMS', 'The fake backend does not implement this probe.')
   if (explorer && !workbenchConnections.has(params.connectionId)) return fail(id, 'NOT_CONNECTED', 'Connect to a SQL Server first.')
@@ -1668,7 +1683,7 @@ function sendLive(live, value) {
   live.available -= body.length
   process.stdout.write(encodeFrame(FrameKind.EVENT, live.id, 0, body))
 }
-const periodOf = (live, probe) => probe.probe === 'ssis.catalogProbe' ? 200 : live.args.tickMs ?? probe.intervalMs
+const periodOf = (live, probe) => probe.probe === 'ssis.catalogProbe' || probe.probe === 'agent.treeProbe' ? 200 : live.args.tickMs ?? probe.intervalMs
 function wakeLive(live) {
   clearTimeout(live.timer)
   if (!lives.has(live.id)) return
@@ -1711,6 +1726,7 @@ function wakeLive(live) {
     else if (live.source === 'agent.jobs') samples.push({ ...sample, ...agentJobsSample(live, probe) })
     else if (live.source === 'agent.history') samples.push({ ...sample, ...agentHistorySample(live, probe) })
     else if (live.source === 'agent.errorLog') samples.push({ ...sample, ...agentErrorLogSample(live, probe) })
+    else if (live.source === 'agent.tree') samples.push({ ...sample, status: agentTreeStatus() })
     else if (probe.probe === 'debug.synthetic.status') samples.push({ ...sample, status: [{ id: 'phase', value: n % 2 === 0 ? 'even' : 'odd' }, { id: 'samples', value: n }] })
     else if (probe.probe === 'ssis.catalogProbe') { const { gap, ...rest } = sample; samples.push({ ...rest, ...gap === 'late' ? { gap } : {}, status: catalogFingerprints() }) }
     else if (live.args.errorEvery && n % live.args.errorEvery === 0) errors.push({ probe: probe.probe, code: 'SQL_ERROR', message: 'The synthetic source failed this sample, as the test asked.', retryInMs: probe.intervalMs, terminal: false })

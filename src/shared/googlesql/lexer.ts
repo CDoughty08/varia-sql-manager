@@ -1,5 +1,5 @@
 // A small GoogleSQL scanner for editor features that need to know where strings, comments and brackets are: signature
-// help now, and the scope reader of BigQuery's completion later (docs/bigquery-plan.md, BQ-6b). Colours come from the
+// help and the scope reader of BigQuery's completion (docs/language-services.md, Completion from the index). Colours come from the
 // Monarch tokenizer (languages/googlesql.ts), which Monaco runs line by line; this reads a whole text at once.
 import { googleSqlFunction, googleSqlReservedKeywords } from './catalog'
 

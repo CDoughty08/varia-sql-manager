@@ -40,6 +40,8 @@ export interface LocalGridProps {
   /** A page as tall as its rows up to `maxRows`, as a card is, with room for its strip and a wide grid's scroll bar: a
    *  list among other content in a scrolling column (an SSIS properties list), where there is no area to fill. Keeps Save. */
   readonly fit?: boolean
+  /** A card grid that owns a full-height panel (Peek Card's list tabs): fills its flex parent instead of sizing to its rows. */
+  readonly fill?: boolean
   /** Scroll, widths and selection, kept by the owner across remounts; the grid keeps its own otherwise. */
   readonly state?: GridViewState
 }
@@ -67,7 +69,7 @@ const columnsOf = (table: LocalTableData) => table.columns.map(column => `${colu
  * work as in a results grid; Copy and Save write the same text through the TypeScript twin of ResultTextWriter (copy
  * here, a save in main). The menu reaches it as a grid with its own source (OutputTarget view `live`, LiveOutput).
  */
-function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = true, maxRows = cardRows, fit = false, state }: LocalGridProps) {
+function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = true, maxRows = cardRows, fit = false, fill = false, state }: LocalGridProps) {
   const { commands, platform } = useWorkbench()
   const bound = useMemo(() => boundTable(table), [table])
   const columnsKey = useMemo(() => columnsOf(bound), [bound])
@@ -193,9 +195,9 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
   const dropped = bound.droppedColumns > 0 ? `Showing the first ${formatCount(columns)} ${plural(columns, 'column')}.` : undefined
   const truncated = [bound.truncatedRows > 0 ? `Showing the first ${formatCount(rows)} ${plural(rows, 'row')}.` : undefined, dropped, cut].filter(Boolean).join(' ') || undefined
   const strip = notice ? { text: notice.text, ...notice.error ? { error: true } : {} } : truncated ? { text: truncated } : undefined
-  // A card is as tall as its header and rows, up to `maxRows`, with room for the platform's scroll bar under columns wider
-  // than it and for its strip.
-  const height = preset === 'card' || fit ? g.headerHeight + (rows === 0 ? cardEmpty : Math.min(rows, maxRows) * g.rowHeight + (wide ? scrollbarSize() : 0)) + (strip ? g.stripHeight : 0) + 2 : undefined
+  // A card (unless `fill` gives it a full-height panel) or fitted page is as tall as its header and rows, up to `maxRows`,
+  // with room for the platform's scroll bar under columns wider than it and for its strip.
+  const height = (preset === 'card' && !fill) || fit ? g.headerHeight + (rows === 0 ? cardEmpty : Math.min(rows, maxRows) * g.rowHeight + (wide ? scrollbarSize() : 0)) + (strip ? g.stripHeight : 0) + 2 : undefined
   return <GridShell mountKey={`local|${state ? columnsKey : instanceKey(bound)}|${instanceKey(own)}|${sortable ? 'sortable' : 'fixed'}|${label}`} mount={mount} onApi={onApi} contents="rows"
     frameProps={{ className: 'local-grid', 'data-local-grid': preset, ...fit ? { 'data-local-fit': '' } : {}, ...height !== undefined ? { style: { height, flex: 'none' } } : {} }}
     rootProps={{ 'aria-label': label, 'data-output-view': 'live' }} rootRef={setRoot}

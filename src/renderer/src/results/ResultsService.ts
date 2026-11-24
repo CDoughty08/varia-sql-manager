@@ -485,6 +485,9 @@ const loadWhileRunning = 'Load the result into memory once its query has finishe
 const sampleWhileRunning = 'Load a sample of the result once its query has finished.'
 const rerunWhileRunning = 'Run the result again once its query has finished.'
 const busyWindowed = 'This result is already loading or running again in BigQuery. Wait for it, or stop it first.'
+/** Load into memory or Load sample on a windowed result BigQuery no longer keeps: only Re-run can help. */
+export const expiredRefusal = 'BigQuery no longer keeps this result. Re-run… runs its query again.'
+const isExpiredError = (error: unknown): boolean => (error as { code?: unknown } | null)?.code === 'REMOTE_EXPIRED'
 const sampleFull = `These results already show ${resultLimits.sets.toLocaleString('en-US')} sets, so no sample can be added. Close some results first.`
 // A view built while rows still arrived whose rebuild from every row was cancelled: nothing builds it again by itself.
 const partialView = 'The grid is sorted or filtered over only the rows that had arrived. Sort or filter it again to include every row, then save.'
@@ -838,6 +841,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   async loadIntoMemory(tabId: string, key: EntryKey): Promise<string | undefined> {
     const run = this.runs.get(tabId), set = run?.entries.get(key)
     if (!run || !set || !this.api.remoteQuery || this.disposed) return undefined
+    if (this.expiredSets.has(set)) return expiredRefusal
     const snapshot = set.handle.getSnapshot()
     if (snapshot.state === 'lost' || snapshot.state === 'released') return snapshot.state === 'lost' ? unavailable : closedResults
     if (snapshot.residence !== 'remote' || run.loads.has(key)) return undefined
@@ -858,7 +862,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       // close is not reported as its failure.
       if (this.runs.get(tabId) !== run || run.entries.get(key) !== set || this.disposed) return undefined
       if (answer.ok) this.loaded(tabId, run, answer.value)
-      else refusal = `Could not load the result into memory: ${answer.error}`
+      else { refusal = `Could not load the result into memory: ${answer.error}`; if (answer.code === 'REMOTE_EXPIRED') this.markExpired(tabId, key) }
     } catch (error) {
       refusal = `Could not load the result into memory: ${error instanceof Error ? error.message : String(error)}`
     } finally {
@@ -876,13 +880,24 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** Whether Load into memory can start for this entry: a windowed BigQuery result whose run has finished, not loading,
    *  whose projected size fits the result memory free now (docs/bigquery.md, Load into memory). */
   canLoadIntoMemory(tabId: string, key: EntryKey): boolean { return this.loadState(tabId, key) === 'ready' }
+  /** Whether BigQuery no longer keeps this windowed result (a read, load, sample or estimate answered REMOTE_EXPIRED): its
+   *  grid offers only Re-run, and Load into memory and Load sample are not offered. A re-run's result is a new entry. */
+  isExpired(tabId: string, key: EntryKey): boolean { const set = this.runs.get(tabId)?.entries.get(key); return !!set && this.expiredSets.has(set) }
+  /** Marks a windowed result BigQuery no longer keeps (its grid read a page that answered REMOTE_EXPIRED, say). */
+  markExpired(tabId: string, key: EntryKey): void {
+    const set = this.runs.get(tabId)?.entries.get(key)
+    if (!set || this.expiredSets.has(set) || set.handle.getSnapshot().residence !== 'remote') return
+    this.expiredSets.add(set)
+    this.schedule(tabId)
+  }
+  private readonly expiredSets = new WeakSet<object>()
   /** Whether the one thing keeping Load into memory back is the room: the result's projection does not fit the memory free. */
   loadNeedsRoom(tabId: string, key: EntryKey): boolean { return this.loadState(tabId, key) === 'room' }
   private loadState(tabId: string, key: EntryKey): 'ready' | 'room' | undefined {
     const run = this.runs.get(tabId), set = run?.entries.get(key)
     if (!run || !set || !this.api.remoteQuery || run.status === 'running' || run.loads.has(key)) return undefined
     const snapshot = set.handle.getSnapshot()
-    if (snapshot.residence !== 'remote' || snapshot.state !== 'complete') return undefined
+    if (snapshot.residence !== 'remote' || snapshot.state !== 'complete' || this.expiredSets.has(set)) return undefined
     return fitsFreeMemory(snapshot.projectedBytes, this.memory?.()) ? 'ready' : 'room'
   }
 
@@ -924,6 +939,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (snapshot.residence !== 'remote') return ''
     if (run.status === 'running' || run.status === 'closed' || snapshot.state !== 'complete') return kind === 'sample' ? sampleWhileRunning : rerunWhileRunning
     if (run.loads.has(key)) return busyWindowed
+    if (kind === 'sample' && this.expiredSets.has(set)) return expiredRefusal
     if (kind === 'sample' && run.sets.length >= resultLimits.sets) return sampleFull
     return undefined
   }
@@ -965,6 +981,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     } catch (error) {
       // A declined prompt or a Stop ran nothing worth an error (a Stop's lines are already in Messages).
       if (!(error instanceof RemoteDeclined) && !abort.signal.aborted) failure = `Could not load a sample: ${error instanceof Error ? error.message : String(error)}`
+      if (isExpiredError(error) && this.runs.get(tabId) === run && run.entries.get(key) === set) this.markExpired(tabId, key)
     } finally {
       this.endAuxiliary(tabId, run, key, abort)
     }

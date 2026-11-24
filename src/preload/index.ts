@@ -73,6 +73,7 @@ const api: VariaApi = {
   setBigQueryCostPrompt: input => ipcRenderer.invoke('varia:bigquery-cost-prompt', input),
   pickKeyFile: authentication => ipcRenderer.invoke('varia:connections-pick-key-file', { authentication }),
   confirmFederationSource: (keyFile, source) => ipcRenderer.invoke('varia:connections-confirm-source', { keyFile, source }),
+  openAgentStepScript: subsystem => ipcRenderer.invoke('varia:agent-step-script-open', { subsystem }),
   disconnect: connectionId => request('connections.disconnect', { connectionId }),
   bigQueryAccount: params => request('bigquery.account', params),
   bigQueryProjects: params => request('bigquery.projects', params),
@@ -201,7 +202,7 @@ const api: VariaApi = {
   dropJobRecords: jobKey => ipcRenderer.invoke('varia:job-records-drop', jobKey),
   keepJobsAtQuit: jobKeys => ipcRenderer.invoke('varia:quit-keep-jobs', jobKeys),
   cancelRestoredJobs: jobKeys => ipcRenderer.invoke('varia:jobs-cancel-restored', jobKeys),
-  reviewJobsWithoutTab: openJobKeys => ipcRenderer.invoke('varia:jobs-without-tab', openJobKeys),
+  reviewJobsWithoutTab: request => ipcRenderer.invoke('varia:jobs-without-tab', request),
   onFailedAborts: listener => {
     const handler = (_event: Electron.IpcRendererEvent, count: unknown) => { if (typeof count === 'number' && Number.isSafeInteger(count) && count > 0) listener(count) }
     ipcRenderer.on('varia:failed-aborts', handler)
@@ -220,6 +221,8 @@ const api: VariaApi = {
   closeWindowCancelled: () => { ipcRenderer.send('varia:close-cancelled') },
   loadLayouts: () => ipcRenderer.invoke('varia:layouts-load'),
   saveLayouts: state => ipcRenderer.invoke('varia:layouts-save', state),
+  loadInspectorVitals: () => ipcRenderer.invoke('varia:inspector-vitals-load'),
+  saveInspectorVitals: prefs => ipcRenderer.invoke('varia:inspector-vitals-save', prefs),
   importLayout: () => ipcRenderer.invoke('varia:layout-import'),
   exportLayout: layout => ipcRenderer.invoke('varia:layout-export', layout),
   onCommand: callback => {

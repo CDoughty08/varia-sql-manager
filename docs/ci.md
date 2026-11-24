@@ -12,7 +12,7 @@ the Measurements below with the new baseline.
   tested), every push to main and manual runs. Newer PR and main pushes cancel their earlier runs; manual runs always
   finish (tags run release.yml, not CI). The repository is public, so minutes cost nothing, but GitHub runs only 20 of its jobs at once (5 on
   macOS).
-- **Jobs.** A scope job classifies the complete change, then the 13 validation jobs start together, and a final
+- **Jobs.** A scope job classifies the complete change, then the 14 validation jobs start together, and a final
   `CI result` job checks their outcomes. Each validation job builds what it needs, so one failure hides nothing and the
   run takes as long as its longest job:
   - `npm run check` on Linux, Windows and macOS.
@@ -21,9 +21,11 @@ the Measurements below with the new baseline.
     against its emulator (`--bigquery-emulator-live`, the image pinned by digest: about 2 s of checks after the pull on a
     developer machine). The other groups stay Node-free.
   - The smoke suites in three shards on Linux (sandboxed, under xvfb, with SQL Server, and the same pinned BigQuery
-    emulator started in each shard for the connections suite's Connect dialog phase: about 2 s of that suite) and three on Windows
-    (`scripts/smoke-shards.mjs`, which splits `test:smoke` by each platform's times in its `suiteSeconds`). macOS skips
-    the smoke tests until they cover its window chrome.
+    emulator started in each shard for the connections suite's Connect dialog phase: about 2 s of that suite) and four on Windows
+    (`scripts/smoke-shards.mjs`, which splits `test:smoke` by each platform's times in its `suiteSeconds`). The other
+    BigQuery suites (results, Explorer, Job History) need no emulator: they run against loopback REST fakes on both
+    platforms. macOS skips the smoke tests until they cover its window chrome.
+  - Nothing in CI contacts a real BigQuery project: the real-project checks are local and opt-in (docs/testing.md).
   - The Linux benchmarks (floors enforced).
 - **Report-only work stays off PRs.** Linux's 1024x768 repeats of the scripting and results suites (Windows runners'
   own display is 1024x768) run on main pushes; the Windows and macOS benchmarks run daily and by hand
@@ -102,7 +104,8 @@ the Measurements below with the new baseline.
   once, so every job and slot-minute a push adds delays every other run. **Removing whole jobs beats shaving steps.**
 - Packaging runs only for PRs that touch it: packaging every PR had caught nothing CI missed in 232 runs.
 - Main on 2026-11-11 (3 runs, `--workflow ci.yml --workflow release.yml --branch main`): CI 10.8 min wall, 47 Linux +
-  26 Windows + 5 macOS runner-minutes; packaging 14.1 min, 3 + 14 + 4.
+  26 Windows + 5 macOS runner-minutes; packaging 14.1 min, 3 + 14 + 4. That was before the fourth Windows smoke shard,
+  which adds one job's setup and `build:smoke` (a few Windows runner-minutes); the next baseline replaces these figures.
 - In `npm run check` on CI the critical path is the vitest chain, which shares 3 or 4 vCPUs with the .NET chain; speeding
   up vitest under that contention is the next gain in Check.
 - Most of an offline .NET run used to be waiting, not work (`VARIA_TEST_SLOW_MS=300` found about 64 s of 75.6 s in
@@ -177,8 +180,8 @@ Considered and rejected (do not re-propose without new numbers):
   any open (SNI error 25). A well-formed one sends every fake's open through the Named Pipes provider and SqlClient's
   throttle of non-pooled opens: under `offline-stress.mjs`, 5 to 7 of 15 copies crashed with "Timeout attempting to open
   the connection". The checks assert only that the failure is retryable, which both forms are.
-- **One shard per OS.** Makes 12 to 13 min jobs and smoke the critical path; Windows needs its third shard to stay within
-  the 360-second shard budget.
+- **One shard per OS.** Makes 12 to 13 min jobs and smoke the critical path; Windows needs four shards to stay within
+  the 360-second shard budget (its suites take about 1,100 s).
 - **Build once and fan out artifacts.** Needs `needs:` and adds 1 to 3 min of serial wall time before the smoke shards,
   the critical path, to save about 2 runner-min.
 - **Caching `node_modules` or the Electron download.** `npm ci` from the npm cache takes 4 to 8 s on Linux; the 637 MB tree
@@ -191,7 +194,7 @@ Considered and rejected (do not re-propose without new numbers):
 
 ## Rules for keeping CI lean
 
-- **Budget per push across all workflows.** A code-changing PR push starts at most 13 validation jobs, 1 of them macOS,
+- **Budget per push across all workflows.** A code-changing PR push starts at most 14 validation jobs, 1 of them macOS,
   plus the two short Linux scope and result jobs, which do not overlap their validation jobs (`tests/ci-workflow.test.ts`),
   plus at most 3 packaging jobs, only when it changes packaging (`tests/release-workflow.test.ts`). A PR over 3,000
   changed files may skip Release builds silently: run them by hand (`workflow_dispatch`) when it touches packaging.

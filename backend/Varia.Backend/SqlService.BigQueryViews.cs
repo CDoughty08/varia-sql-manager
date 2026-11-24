@@ -125,7 +125,12 @@ internal sealed partial class SqlService
             case "between" when filter.SnapshotId is null && filter.Nulls is null && filter.Rows is { Length: 2 } rows:
             {
                 var list = List();
-                return new RemoteFilter(RemoteFilterKind.Between, filter.Column, list, Rows(list, rows), false);
+                // BETWEEN a NULL bound keeps nothing: the list's NULL row (its value, column 0, is NULL) is no bound. A row not
+                // in a sealed page reads as NULL too, so it is refused rather than guessed.
+                var held = store.Find(filter.List!.Value);
+                if (Rows(list, rows).Any(row => held?.CellSize(row, 0) is null))
+                    throw new RequestException("INVALID_PARAMS", "A between filter's bounds are values, not NULL.");
+                return new RemoteFilter(RemoteFilterKind.Between, filter.Column, list, rows, false);
             }
             case "groups" when filter.Rows is null && filter.Nulls is null && filter.SnapshotId is { } snapshotId and > 0:
             {
@@ -168,7 +173,7 @@ internal sealed partial class SqlService
     private async Task<BigQueryDryRunResult> RemoteDryRunAsync(BigQueryDryRunArgs args, CancellationToken token)
     {
         var remote = args.Remote!;
-        if (args.Sql is not null || args.Dataset is not null) throw new RequestException("INVALID_PARAMS", "A dry run takes query text or a remote query, not both.");
+        if (args.Sql is not null || args.Dataset is not null || args.SessionId is not null) throw new RequestException("INVALID_PARAMS", "A dry run takes query text or a remote query, not both.");
         var connection = bigQuery.Find(args.ConnectionId) ?? throw new RequestException("NOT_CONNECTED", "The connection is no longer open.");
         var set = store.Find(remote.ResultId) ?? throw Unavailable(remote.ResultId);
         if (set.Remote is not { Source: BigQueryWindow window }) throw NotWindowed();
@@ -272,9 +277,13 @@ internal sealed partial class SqlService
         var status = "completed";
         QueryFailure? failure = null;
         var stopAsked = 0;
+        // Whether jobs.insert has answered or failed: a cancel sent while it is in flight can reach BigQuery before the job
+        // exists, so Stop then waits for the insert to settle and cancels from there (asking again while BigQuery answers 404).
+        var insertSettled = false;
         void StopJob()
         {
-            if (Interlocked.Exchange(ref stopAsked, 1) == 0 && sent && !complete) bigQuery.CancelJob(connection, project, jobId, location);
+            if (!sent || complete || !Volatile.Read(ref insertSettled)) return;
+            if (Interlocked.Exchange(ref stopAsked, 1) == 0) bigQuery.CancelJob(connection, project, jobId, location, maybeUnborn: !created);
         }
         using var stopJob = token.Register(StopJob);
         try
@@ -323,8 +332,24 @@ internal sealed partial class SqlService
                     }
                 };
                 sent = true;
-                var inserted = await bigQuery.InsertJobAsync(connection, job, dataset, token);
-                created = true;
+                Job inserted;
+                try
+                {
+                    inserted = await bigQuery.InsertJobAsync(connection, job, dataset, token);
+                    created = true;
+                }
+                catch (Exception error) when (BigQueryService.NeverCreated(error) && !token.IsCancellationRequested)
+                {
+                    // Refused outright or never sent: no job to cancel.
+                    sent = false;
+                    throw;
+                }
+                finally
+                {
+                    Volatile.Write(ref insertSettled, true);
+                    // Stop (or the source's release) came while the insert was out: cancel what it may have created.
+                    if (token.IsCancellationRequested) StopJob();
+                }
                 location = KnownLocation(inserted.JobReference?.Location) ?? location;
                 messages.Add("BigQuery job " + JobName(project, location, jobId) + ".");
                 events.Job(JobEvent(project, jobId, location, "running", BigQueryTransaction.None));

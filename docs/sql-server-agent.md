@@ -49,6 +49,21 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   Agent's 22022 is read again before it is reported: Agent XPs off is `AGENT_STOPPED` ("SQL Server Agent is not running"),
   a job that is not running when stopped, or already running when started, is `JOB_STATE`; msdb's 14261, 14262 and 14372
   are `NAME_IN_USE`, `NOT_FOUND` and `IN_USE`.
+- **Object Explorer follows Agent live** (`agent.tree`, `agent.jobs`, docs/live.md). While a Jobs folder is expanded and
+  shown, its job rows carry state chips from Job Activity Monitor's own `agent.jobs.list` and `agent.jobs.service` probes,
+  in one background view per connection: **Running · step n/m** (Executing, Waiting for worker thread, Performing
+  completion actions), **Between retries** or **Suspended**, otherwise **Failed** when the last run failed; a job the list
+  reads as disabled is dimmed with ", disabled" (and one it reads as enabled is not), unless the row was listed after that
+  read, as a Disable or Enable lists it again at once; the job's menu offers Enable Job or Disable Job by the same state. The chip's words join the row's accessible name and tooltip. Collapsing or
+  hiding the folder ends the view; with Agent stopped or Agent XPs off (the list then stops on `AGENT_DISABLED`)
+  the last read's **Failed** chips and disabled jobs stay, and Running and the retry states go, as they would be out of date. While the Agent node
+  is expanded and shown, the `agent.tree` source reads Agent XPs and the service state (explorer.agentService's text) and,
+  for each of `sysjobs_view`, `sysalerts`, `sysoperators`, `sysproxies` and `sysproxysubsystem`, a row count and a checksum
+  of the columns the tree shows, each table only where `HAS_PERMS_BY_NAME` lets the login read it. When Agent XPs or the
+  service state changes, the Agent node is listed again; when a table's fingerprint moves (a job, alert, operator or proxy
+  created, renamed, enabled, disabled or deleted elsewhere), only its folders are, keeping expansion and selection, so
+  Refresh is not needed. A failing sample is retried as every live probe's is (docs/live.md); a view that ends opens again after a back-off
+  from 2 s to a minute, unless it ended on a permission, sign-in or unsupported-server failure, which waits for Refresh. Both follow `liveData.explorerStatus` and pause with Object Explorer.
 - **Service control** (`AgentServiceControl`). The Agent node's Start, Stop and Restart ask before they run ("Are you sure
   you want to stop the SQLAgent$SALES service on DB01?", with the state the Service Control Manager reports) and then show
   their steps in place: Restart stops the service, waits for Stopped, starts it and waits for Running. They go through
@@ -109,7 +124,12 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   ScriptDom's parser in the backend on a large-stack thread, nothing runs; text nested more than 128 parentheses deep is
   reported too deep to parse) and **Open in query window** (a new query tab on the job's connection and the
   step's database); PowerShell and CmdExec in their own editors, with Run as (the SQL Server Agent service account or a
-  proxy granted to the step's type, `sp_help_proxy @subsystem_name`) and CmdExec's success exit code; SSIS on one scroll, with
+  proxy granted to the step's type, `sp_help_proxy @subsystem_name`) and CmdExec's success exit code, and **Load from file…**
+  (SSMS's Open…, AG-11): main shows its own open dialog filtered to the type's scripts (`.ps1`, `.psm1`, `.psd1`; `.bat`, `.cmd`)
+  plus All files, reads the chosen file with Open's encoding detection (a byte order mark, UTF-8, BOM-less UTF-16, else the
+  system's ANSI code page) up to one step's 100,000 characters, and returns only its text, never its path
+  (`openAgentStepScript`, the page names only the step type); the text replaces the command, with CRLF line endings if the file has any (LF otherwise), as one edit Undo takes back, and a
+  refused file (too long, holding NUL bytes, a folder) says why under the command; SSIS on one scroll, with
   the package picked inline from SSISDB's folders, projects and packages (or SQL Server and file system sources), its
   parameters, environment, 32-bit runtime and logging; Analysis Services Command and Query with the Server they run on. On success and On failure choose next step, quit with success, quit
   with failure or go to a named step; More options (retries, output file and its append, log to table, history output)
