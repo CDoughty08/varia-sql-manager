@@ -482,7 +482,8 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   }
   /** Load from file… (AG-11, SSMS's Open… on a CmdExec or PowerShell step): main's open dialog and read (`openAgentStepScript`). Resolves the
    *  file's text for the step's editor to put in as one undoable edit, or undefined when cancelled, refused (said under the command) or when
-   *  the step, its type or the job read changed while the dialog was up. */
+   *  another step was selected, the step's type changed or the job was read again while the dialog was up (a popout's dialog is not modal
+   *  to it), so the text never lands in a step the user is not looking at. */
   async loadStepScript(id: string, key: string): Promise<string | undefined> {
     const state = this.get(id), step = state?.draft?.steps.steps.find(item => item.key === key), open = this.options.api.openAgentStepScript
     if (!state || !step || !isStepScriptSubsystem(step.subsystem) || !this.canEditSteps(id) || state.stepFile?.running) return
@@ -495,7 +496,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     if (!result.ok) { this.patch(id, { stepFile: { key, running: false, failure: result.error } }); return }
     this.patch(id, { stepFile: undefined })
     const now = current.draft?.steps.steps.find(item => item.key === key)
-    if (result.value === null || current.model !== model || now?.subsystem !== subsystem || !this.canEditSteps(id)) return
+    if (result.value === null || current.model !== model || now?.subsystem !== subsystem || this.selectedStep(id)?.key !== key || !this.canEditSteps(id)) return
     return result.value
   }
   setStartStep(id: string, key: string): void {

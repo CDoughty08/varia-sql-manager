@@ -105,7 +105,7 @@ alerts, operators and who is notified, behind the same gate until 0.11.0.
   (SSMS's Open…, AG-11): main shows its own open dialog filtered to the type's scripts (`.ps1`, `.psm1`, `.psd1`; `.bat`, `.cmd`)
   plus All files, reads the chosen file with Open's encoding detection (a byte order mark, UTF-8, BOM-less UTF-16, else the
   system's ANSI code page) up to one step's 100,000 characters, and returns only its text, never its path
-  (`openAgentStepScript`, the page names only the step type); the text replaces the command as one edit Undo takes back, and a
+  (`openAgentStepScript`, the page names only the step type); the text replaces the command, line endings kept, as one edit Undo takes back, and a
   refused file (too long, binary, a folder) says why under the command; SSIS on one scroll, with
   the package picked inline from SSISDB's folders, projects and packages (or SQL Server and file system sources), its
   parameters, environment, 32-bit runtime and logging; Analysis Services Command and Query with the Server they run on. On success and On failure choose next step, quit with success, quit

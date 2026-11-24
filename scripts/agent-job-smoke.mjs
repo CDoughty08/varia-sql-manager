@@ -239,7 +239,7 @@ try {
 
   step = 'load from file'
   // Load from file… (AG-11): main's own open dialog (stubbed here), filtered to the type's scripts plus All files; the file's text (UTF-16
-  // with a byte order mark) replaces the command as one edit Undo takes back, and Save writes it.
+  // with a byte order mark and CRLF line endings, which it keeps) replaces the command as one edit Undo takes back, and Save writes it.
   const script = resolve(control, 'cleanup.ps1')
   await writeFile(script, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('Write-Output "Grüße"\r\nGet-ChildItem D:\\Backups\r\n', 'utf16le')]))
   await app.evaluate(({ dialog }, path) => {
@@ -262,7 +262,7 @@ try {
   await expect(editorSurface(rebuild)).toContainText('Get-ChildItem')
   await job('Nightly').getByRole('group', { name: 'Nightly actions', exact: true }).getByRole('button', { name: /^Save · [0-9]+ changes?$/ }).click()
   await expect(job('Nightly').getByRole('status').filter({ hasText: 'The job was saved.' })).toBeVisible()
-  expect((await saves()).at(-1).agentJob.steps.writes.find(write => write.name === 'Rebuild indexes')).toMatchObject({ subsystem: 'PowerShell', command: expect.stringMatching(/^Write-Output "Grüße"\r?\nGet-ChildItem D:\\Backups\r?\n$/) })
+  expect((await saves()).at(-1).agentJob.steps.writes.find(write => write.name === 'Rebuild indexes')).toMatchObject({ subsystem: 'PowerShell', command: 'Write-Output "Grüße"\r\nGet-ChildItem D:\\Backups\r\n' })
   console.log('Load from file passed: the step type\'s filter, the text as one undoable edit, and Save writes it.')
 
   step = 'new job'

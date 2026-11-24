@@ -409,6 +409,22 @@ describe("the job document's Steps page", () => {
     expect(await pending).toBeUndefined()
     expect(await jobDocuments.loadStepScript(id, 's1')).toBe('robocopy D:\\a \\\\fs\\b')
     expect(open).toHaveBeenLastCalledWith('PowerShell')
+    // Another step selected while the dialog was up (a popout's dialog is not modal to it): the text lands nowhere.
+    jobDocuments.selectStep(id, 's1')
+    open.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    const moved = jobDocuments.loadStepScript(id, 's1')
+    jobDocuments.selectStep(id, 's2')
+    answer({ ok: true, value: 'Get-Date' })
+    expect(await moved).toBeUndefined()
+    expect(jobDocuments.get(id)?.stepFile).toBeUndefined()
+    // The job read again while the dialog was up: its steps may be other steps now.
+    jobDocuments.selectStep(id, 's1')
+    open.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    const reread = jobDocuments.loadStepScript(id, 's1')
+    jobDocuments.reload(id)
+    await settled()
+    answer({ ok: true, value: 'Get-Date' })
+    expect(await reread).toBeUndefined()
   })
   it('drops a pending delete when Reload and keep my changes rebases the steps', async () => {
     const { jobDocuments, answers, setModel } = opened(stepped())

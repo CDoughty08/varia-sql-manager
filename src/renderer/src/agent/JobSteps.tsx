@@ -48,8 +48,8 @@ function FieldMessages({ text, id }: { readonly text: { error?: string; note?: s
   </>
 }
 
-/** Puts `text` in place of step `key`'s whole command as one edit the editor's Undo takes back (Load from file…); false when that step's model
- *  is not the one showing or the editor is read-only, so the caller writes the draft instead. */
+/** Puts `text` in place of step `key`'s whole command as one edit the editor's Undo takes back (Load from file…), keeping the file's line
+ *  endings; false when that step's model is not the one showing (the caller then writes the editable draft) or the editor is read-only. */
 interface StepCommandHandle { replace(key: string, text: string): boolean }
 /** The command's editor: the query editor (Tools › Options, Find) on a model per step, served by the language service with the step's
  *  connection and database when it is T-SQL. */
@@ -108,6 +108,10 @@ function StepCommandEditor({ epoch, stepKey: key, value, subsystem, connectionId
         if (!view || readOnly || !model || model.isDisposed() || view.getModel() !== model) return false
         // Stops on both sides, so one Undo takes back exactly the load; the content listener then writes the draft, which marks it dirty.
         view.pushUndoStop()
+        // Monaco rewrites inserted line breaks to the model's: the model takes the file's (CRLF if it has any), inside the same undo step,
+        // so a .bat keeps CRLF and the command holds the characters main counted.
+        const eol = text.includes('\r\n') ? workbench.monaco.editor.EndOfLineSequence.CRLF : workbench.monaco.editor.EndOfLineSequence.LF
+        if (model.getEndOfLineSequence() !== eol) model.pushEOL(eol)
         const applied = view.executeEdits('agent-step-load-file', [{ range: model.getFullModelRange(), text, forceMoveMarkers: true }])
         view.pushUndoStop()
         if (applied) view.setPosition({ lineNumber: 1, column: 1 })
@@ -115,7 +119,7 @@ function StepCommandEditor({ epoch, stepKey: key, value, subsystem, connectionId
       }
     }
     return () => { handle.current = null }
-  }, [handle, epoch, readOnly])
+  }, [handle, epoch, readOnly, workbench])
   return <div className="agent-step-editor"><div ref={host} className="agent-step-editor-host" /></div>
 }
 
@@ -347,8 +351,8 @@ function StepEditor(props: StepsProps & { readonly step: AgentStepDraft; readonl
   const count = state.draft!.steps.steps.length
   const commandEditor = useRef<StepCommandHandle | null>(null)
   const stepFile = state.stepFile?.key === step.key ? state.stepFile : undefined
-  // Load from file… (AG-11): main's dialog and read; the text replaces the command as one undoable edit, or the draft when the editor no
-  // longer shows this step.
+  // Load from file… (AG-11): main's dialog and read; the text replaces the command as one undoable edit, or the draft when the step is still
+  // selected but its editor is not mounted.
   const loadFile = async () => {
     const text = await service.loadStepScript(state.id, step.key)
     if (text !== undefined && !commandEditor.current?.replace(step.key, text)) service.updateStep(state.id, step.key, { command: text })
