@@ -4086,6 +4086,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
   .ssis-spark-bar, .ssis-track > i { background: Highlight; forced-color-adjust: none; }
   .ssis-spark-bar[data-failed], .ssis-timeline-row[data-failed] .ssis-track > i { background: Mark; }
   .ssis-crumbs .link-button { color: LinkText; }
+}
 /* BigQuery Properties inspector (OP-2b): surface-specific pills, flow section headers, fill toolbars and label chips. */
 .bq-props-pills { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); min-width: 0; }
 .bq-props-flow { display: flex; flex-direction: column; gap: var(--varia-space-4); }
