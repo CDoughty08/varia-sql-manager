@@ -31,8 +31,10 @@ internal static partial class AgentSql
     public static readonly AgentStatement ScheduleVersions = new("scheduleVersions",
         "SELECT s.schedule_id, s.version_number, s.date_modified, own.name AS owner, s.owner_sid\n"
         + "FROM msdb.dbo.sysschedules_localserver_view AS s LEFT JOIN sys.server_principals AS own ON own.sid = s.owner_sid;", ["schedule_id", "version_number", "date_modified", "owner", "owner_sid"], [], "listRows");
-    /// <summary>Which job uses which schedule (sysadmin: sysjobschedules is not granted to the Agent roles).</summary>
-    public static readonly AgentStatement ScheduleLinks = new("scheduleLinks", "SELECT js.schedule_id, js.job_id FROM msdb.dbo.sysjobschedules AS js;", ["schedule_id", "job_id"], [], "listRows");
+    /// <summary>Which job uses which schedule (sysadmin: sysjobschedules is not granted to the Agent roles), with the next run Agent last wrote
+    /// for the pair (0 until Agent writes it, which it does periodically): the Timeline counts an every-n-weeks or -months cycle from it (AG-14).</summary>
+    public static readonly AgentStatement ScheduleLinks = new("scheduleLinks", "SELECT js.schedule_id, js.job_id, js.next_run_date, js.next_run_time FROM msdb.dbo.sysjobschedules AS js;",
+        ["schedule_id", "job_id", "next_run_date", "next_run_time"], [], "listRows");
     /// <summary>One schedule's jobs (SQLAgentUserRole sees its own only).</summary>
     public static readonly AgentStatement JobsInSchedule = new("jobsInSchedule", "EXEC msdb.dbo.sp_help_jobs_in_schedule @schedule_id = @schedule_id;",
         ["job_id", "name", "enabled", "owner", "version_number"], [new("@schedule_id", SqlDbType.Int)], "listRows");

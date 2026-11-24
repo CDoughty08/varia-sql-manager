@@ -306,7 +306,8 @@ export const scheduleText = {
   idleNotDefined: (server: string) => `No idle CPU condition is defined on ${server}, so this schedule never starts a job. Set one in SQL Server Agent Properties › Advanced in SSMS.`,
   idleUnavailable: 'Start whenever the CPUs become idle is not available on this server\'s platform.',
   agentStart: 'Runs each time the SQL Server Agent service starts.',
-  spansMidnight: 'The ending time is before the starting time, so the window runs past midnight into the next day.'
+  spansMidnight: 'The ending time is before the starting time, so the window runs past midnight into the next morning (after a day it runs).',
+  spansMidnightCut: 'The ending time is before the starting time. On a weekly or monthly schedule SQL Server Agent ends the window at midnight, so nothing runs between midnight and the ending time.'
 } as const
 
 /**
@@ -353,7 +354,7 @@ export function scheduleProblems(fields: AgentScheduleFields, now?: AgentMoment,
       else count('dailyFrequency', fields.freqSubdayInterval, `${unitOf(fields.freqSubdayType)}s`, most)
       if (!validTime(fields.activeEndTime)) error('endTime', scheduleText.endTime)
       else if (effectiveEndTime(fields.activeEndTime) === fields.activeStartTime) error('endTime', scheduleText.sameTimes)
-      else if (effectiveEndTime(fields.activeEndTime) < fields.activeStartTime) warn('endTime', scheduleText.spansMidnight)
+      else if (effectiveEndTime(fields.activeEndTime) < fields.activeStartTime) warn('endTime', fields.freqType === freq.daily ? scheduleText.spansMidnight : scheduleText.spansMidnightCut)
     }
     if (fields.activeEndDate !== noEndDate && !validDate(fields.activeEndDate)) error('endDate', scheduleText.endDate)
     else if (fields.activeEndDate < fields.activeStartDate) error('endDate', scheduleText.endBeforeStart)
@@ -406,15 +407,24 @@ const weekOf = (day: number) => Math.floor((day + 4) / 7) // weeks start on Sund
 const monthOf = (date: number) => Math.floor(date / 10_000) * 12 + Math.floor(date / 100) % 100 - 1
 const daysInMonth = (date: number) => new Date(Date.UTC(Math.floor(date / 10_000), Math.floor(date / 100) % 100, 0)).getUTCDate()
 
-/** Whether a recurring schedule runs on a day (`day` as days since 1970). */
-function runsOn(timing: AgentScheduleTiming, day: number): boolean {
+/**
+ * Where a weekly or monthly schedule's every-n-weeks or every-n-months cycle starts (`week` from weekOf, `month` from monthOf): SQL Server
+ * Agent counts it from the first run it finds on or after the moment it computes (checked against a live Agent: a schedule saved with a past
+ * start date runs on the next matching day, then every n from there), not from the start date. Daily schedules count their days from the
+ * start date and relative ones their months from the start month, as Agent does.
+ */
+interface ScheduleCycle { readonly week?: number; readonly month?: number }
+const cycleStep = (timing: AgentScheduleTiming) => Math.max(1, timing.freqRecurrenceFactor)
+
+/** Whether a recurring schedule runs on a day (`day` as days since 1970), its every-n cycle counted from `cycle`. */
+function runsOn(timing: AgentScheduleTiming, day: number, cycle: ScheduleCycle = {}): boolean {
   const start = dayNumber(timing.activeStartDate)
   const date = dateOfDay(day)
   const weekday = new Date(day * dayMs).getUTCDay()
   switch (timing.freqType) {
     case freq.daily: return (day - start) % Math.max(1, timing.freqInterval) === 0
-    case freq.weekly: return (timing.freqInterval & (1 << weekday)) !== 0 && (weekOf(day) - weekOf(start)) % Math.max(1, timing.freqRecurrenceFactor) === 0
-    case freq.monthly: return date % 100 === timing.freqInterval && (monthOf(date) - monthOf(timing.activeStartDate)) % Math.max(1, timing.freqRecurrenceFactor) === 0
+    case freq.weekly: return (timing.freqInterval & (1 << weekday)) !== 0 && (weekOf(day) - (cycle.week ?? weekOf(start))) % cycleStep(timing) === 0
+    case freq.monthly: return date % 100 === timing.freqInterval && (monthOf(date) - (cycle.month ?? monthOf(timing.activeStartDate))) % cycleStep(timing) === 0
     case freq.relative: {
       if ((monthOf(date) - monthOf(timing.activeStartDate)) % Math.max(1, timing.freqRecurrenceFactor) !== 0) return false
       const matches = (candidate: number) => {
@@ -438,28 +448,62 @@ function runsOn(timing: AgentScheduleTiming, day: number): boolean {
     default: return false
   }
 }
-/** The times of day a recurring schedule runs on a day it runs, in seconds since midnight, in order. */
-function timesOfDay(timing: AgentScheduleTiming): number[] {
+/** A recurring schedule's times of day in seconds since midnight, in order: `own` on a day it runs, and `carried` on the day after a day
+ *  it runs (the part of that day's window past midnight). */
+interface DayTimes { readonly own: readonly number[]; readonly carried: readonly number[] }
+/**
+ * The times of day a recurring schedule runs. An ending time before the starting time spans midnight, and a live Agent treats it by type
+ * (checked against `sysjobactivity.next_scheduled_run_date`): a daily schedule's window runs on past midnight into the next morning, its
+ * interval continuing from the starting time (not restarting at 00:00), and only after a day it runs; a weekly, monthly or relative
+ * schedule's window ends at midnight, so it never runs between midnight and the ending time.
+ */
+function timesOfDay(timing: AgentScheduleTiming): DayTimes {
   const start = secondsOf(timing.activeStartTime)
-  if (timing.freqSubdayType === subday.once || timing.freqSubdayType === 0) return [start]
+  if (timing.freqSubdayType === subday.once || timing.freqSubdayType === 0) return { own: [start], carried: [] }
   const step = Math.max(1, timing.freqSubdayInterval) * (timing.freqSubdayType === subday.seconds ? 1 : timing.freqSubdayType === subday.minutes ? 60 : 3600)
   const end = secondsOf(effectiveEndTime(timing.activeEndTime))
-  const times: number[] = []
-  // An end before the start spans midnight: the window runs from the start to the day's end, and from midnight to the end.
-  if (end >= start) for (let t = start; t <= end; t += step) times.push(t)
-  else {
-    for (let t = start; t < 86_400; t += step) times.push(t)
-    for (let t = start % step; t <= end; t += step) times.push(t)
-    times.sort((a, b) => a - b)
+  const own: number[] = [], carried: number[] = []
+  if (end >= start) {
+    for (let t = start; t <= end; t += step) own.push(t)
+    return { own, carried }
   }
-  return [...new Set(times)]
+  let t = start
+  for (; t < 86_400; t += step) own.push(t)
+  if (timing.freqType === freq.daily) for (t -= 86_400; t <= end; t += step) carried.push(t)
+  return { own, carried }
+}
+
+/** The runs on or after `fromSeconds` the walk finds, at most `count`, none after `until`. */
+function walkRuns(schedule: AgentScheduleTiming, times: DayTimes, cycle: ScheduleCycle, fromSeconds: number, count: number, until: number | undefined): number[] {
+  const runs: number[] = []
+  // No end date still ends with msdb's calendar, on 9999-12-31.
+  const startDay = dayNumber(schedule.activeStartDate)
+  const lastDay = schedule.activeEndDate >= noEndDate || !validDate(schedule.activeEndDate) ? dayNumber(noEndDate) : dayNumber(schedule.activeEndDate)
+  const firstDay = Math.max(startDay, Math.floor(fromSeconds / 86_400))
+  // A day's own runs, and the morning after a run day carries the rest of its window (so the walk looks one day past the last).
+  const runDay = (day: number) => day >= startDay && day <= lastDay && runsOn(schedule, day, cycle)
+  for (let day = firstDay; day <= lastDay + 1 && day - firstDay <= scheduleSearchDays && runs.length < count; day++) {
+    if (until !== undefined && day * 86_400 > until) break
+    const carried = times.carried.length && runDay(day - 1) ? times.carried : []
+    const own = runDay(day) ? times.own : []
+    for (const time of carried.length ? [...carried, ...own] : own) {
+      const seconds = day * 86_400 + time
+      if (seconds < fromSeconds) continue
+      if (until !== undefined && seconds > until) break
+      runs.push(seconds)
+      if (runs.length >= count) break
+    }
+  }
+  return runs
 }
 
 /**
  * The runs of a schedule from `from` (inclusive) in server time: at most `count`, and none after `until` (seconds, wall clock) when it
- * is given. Agent-start, CPU-idle and disabled schedules have none. A recurring search stops after `scheduleSearchDays`.
+ * is given. Agent-start, CPU-idle and disabled schedules have none. A recurring search stops after `scheduleSearchDays`. A weekly or
+ * monthly schedule that repeats every n weeks or months counts its cycle from its first run on or after `anchor` (default `from`), as
+ * SQL Server Agent does from the moment it computes; pass the server's now (or Agent's own next run) when `from` is later than that.
  */
-export function scheduleRuns(schedule: AgentScheduleTiming & { readonly enabled?: boolean }, from: AgentMoment, count: number, until?: number): AgentMoment[] {
+export function scheduleRuns(schedule: AgentScheduleTiming & { readonly enabled?: boolean }, from: AgentMoment, count: number, until?: number, anchor?: AgentMoment): AgentMoment[] {
   if (schedule.enabled === false || count <= 0) return []
   const fromSeconds = momentSeconds(from)
   if (schedule.freqType === freq.once) {
@@ -469,23 +513,15 @@ export function scheduleRuns(schedule: AgentScheduleTiming & { readonly enabled?
     return seconds >= fromSeconds && (until === undefined || seconds <= until) ? [at] : []
   }
   if (![freq.daily, freq.weekly, freq.monthly, freq.relative].includes(schedule.freqType as 4) || !validDate(schedule.activeStartDate)) return []
-  const runs: AgentMoment[] = []
   const times = timesOfDay(schedule)
-  // No end date still ends with msdb's calendar, on 9999-12-31.
-  const lastDay = schedule.activeEndDate >= noEndDate || !validDate(schedule.activeEndDate) ? dayNumber(noEndDate) : dayNumber(schedule.activeEndDate)
-  const firstDay = Math.max(dayNumber(schedule.activeStartDate), Math.floor(fromSeconds / 86_400))
-  for (let day = firstDay; day <= lastDay && day - firstDay <= scheduleSearchDays && runs.length < count; day++) {
-    if (until !== undefined && day * 86_400 > until) break
-    if (!runsOn(schedule, day)) continue
-    for (const time of times) {
-      const seconds = day * 86_400 + time
-      if (seconds < fromSeconds) continue
-      if (until !== undefined && seconds > until) break
-      runs.push(momentOfSeconds(seconds))
-      if (runs.length >= count) break
-    }
+  let cycle: ScheduleCycle = {}
+  if ((schedule.freqType === freq.weekly || schedule.freqType === freq.monthly) && cycleStep(schedule) > 1) {
+    const first = walkRuns({ ...schedule, freqRecurrenceFactor: 1 }, times, {}, anchor ? momentSeconds(anchor) : fromSeconds, 1, undefined)[0]
+    if (first === undefined) return []
+    const day = Math.floor(first / 86_400)
+    cycle = schedule.freqType === freq.weekly ? { week: weekOf(day) } : { month: monthOf(dateOfDay(day)) }
   }
-  return runs
+  return walkRuns(schedule, times, cycle, fromSeconds, count, until).map(momentOfSeconds)
 }
 /** The next five runs, as the editor lists them. */
 export const nextRuns = (schedule: AgentScheduleTiming & { readonly enabled?: boolean }, now: AgentMoment, count = 5) => scheduleRuns(schedule, now, count)
@@ -545,7 +581,7 @@ export function freeSlotCheck(schedule: AgentScheduleTiming & { readonly enabled
       // many days of runs stays cheap and never runs out of runs before the window ends.
       const a = momentSeconds(run), b = a + mine
       const from = momentOfSeconds(Math.max(0, a - theirs + 1))
-      const hits = job.schedules.flatMap(other => scheduleRuns(other, from, 1, b - 1)).map(momentSeconds)
+      const hits = job.schedules.flatMap(other => scheduleRuns(other, from, 1, b - 1, now)).map(momentSeconds)
       if (hits.length) clashes.push({ job: job.name, at: momentOfSeconds(Math.min(...hits)), mine: run })
     }
   }

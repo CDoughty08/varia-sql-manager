@@ -27,8 +27,9 @@ export interface AgentScheduleRecord extends AgentScheduleFields {
 export interface AgentScheduleJob { readonly id: string; readonly name: string; readonly enabled: boolean; readonly owner: string; readonly version: number }
 /** A job's usual duration: the median of its last successful runs, in seconds. */
 export interface AgentJobDuration { readonly jobId: string; readonly seconds: number }
-/** Which job uses which schedule (sysjobschedules, sysadmin only). */
-export interface AgentScheduleLink { readonly scheduleId: number; readonly jobId: string }
+/** Which job uses which schedule (sysjobschedules, sysadmin only), with the next run Agent last wrote for the pair (yyyymmdd, hhmmss),
+ *  absent until Agent writes one: the Timeline counts an every-n-weeks or -months cycle from it (AG-14). */
+export interface AgentScheduleLink { readonly scheduleId: number; readonly jobId: string; readonly nextRunDate?: number; readonly nextRunTime?: number }
 /** The `agentSchedules` describe (target the SQL Server Agent node). With a `schedule` id it reads only that schedule's jobs. */
 export interface AgentSchedulesModel {
   readonly login: string

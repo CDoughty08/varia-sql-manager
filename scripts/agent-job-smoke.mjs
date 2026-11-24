@@ -381,6 +381,52 @@ try {
   await expect(unsavedMark(documentTab(page, 'Create several jobs'))).toHaveCount(0)
   console.log('Create several passed: pasted rows, a skipped existing name, a full-editor edit back on its row, one save per row and Enable the created jobs.')
 
+  step = 'timeline'
+  // The Schedules Timeline (AG-14): Backup attached to Nightly 02:30 starts during Nightly's usual 18 minutes, so the Timeline flags and
+  // explains the overlap; the keyboard walks Nightly's runs and Enter opens its job; Next 7 days, zoom and Open schedule.
+  await page.keyboard.press('F1')
+  await page.keyboard.type('Manage Schedules')
+  await quickInputRows(page).filter({ hasText: 'Manage Schedules' }).first().click()
+  await expect(documentTab(page, 'Schedules')).toHaveAttribute('aria-selected', 'true')
+  const scheduleGrid = page.getByRole('table', { name: 'Schedules', exact: true })
+  const nightlyEnabled = scheduleGrid.getByRole('checkbox', { name: 'Enabled: Nightly 02:30', exact: true })
+  if (!await nightlyEnabled.isChecked()) {
+    await nightlyEnabled.click()
+    await expect(nightlyEnabled).toBeChecked()
+  }
+  await scheduleGrid.getByRole('button', { name: 'Nightly 02:30', exact: true }).click()
+  const nightlySchedule = page.getByRole('region', { name: 'Schedule Nightly 02:30', exact: true })
+  await nightlySchedule.getByLabel('Attach a job', { exact: true }).selectOption({ label: 'Backup' })
+  await nightlySchedule.getByRole('button', { name: 'Attach', exact: true }).click()
+  await nightlySchedule.getByRole('button', { name: /^Save · 1 change/ }).click()
+  await expect(page.getByRole('status').filter({ hasText: 'Saved Nightly 02:30.' })).toBeVisible()
+  await page.getByRole('radio', { name: 'Timeline', exact: true }).click()
+  const timeline = page.getByRole('grid', { name: 'Schedules timeline', exact: true })
+  await expect(timeline.getByRole('rowheader', { name: /^Nightly/ })).toBeVisible()
+  await expect(timeline.getByRole('rowheader', { name: /^Backup\b/ }).first()).toBeVisible()
+  const overlaps = page.getByRole('region', { name: 'Overlaps', exact: true })
+  await expect(overlaps).toContainText('Overlap 02:30–02:48: Backup starts once during Nightly.')
+  const nightlyLane = timeline.getByRole('gridcell', { name: /^Nightly,/ })
+  await nightlyLane.focus()
+  await page.keyboard.press('End')
+  await expect(page.getByText(/^Nightly: 02:30 to 02:48, schedule Nightly 02:30, usual run 18 min, overlaps another job$/)).toHaveCount(1)
+  await page.screenshot({ path: 'artifacts/agent-schedules-timeline-dark.png' })
+  await page.evaluate(() => window.varia.setThemePreference({ mode: 'light' }))
+  await page.screenshot({ path: 'artifacts/agent-schedules-timeline-light.png' })
+  await page.evaluate(() => window.varia.setThemePreference({ mode: 'dark' }))
+  await page.keyboard.press('Enter')
+  await expect(documentTab(page, 'Job Properties - Nightly')).toHaveAttribute('aria-selected', 'true')
+  await documentTab(page, 'Schedules').click()
+  await page.getByRole('radio', { name: 'Next 7 days', exact: true }).click()
+  // Backup has only Nightly 02:30: a run each day of the week from Monday.
+  await expect(timeline.getByRole('gridcell', { name: /^Backup, .*7 runs, first Mon 02:30/ })).toBeVisible()
+  await page.getByRole('button', { name: 'Zoom in', exact: true }).click()
+  await expect(page.getByRole('slider', { name: 'Scroll the timeline', exact: true })).toBeEnabled()
+  await overlaps.getByRole('button', { name: 'Open Nightly 02:30', exact: true }).first().click()
+  await expect(page.getByRole('region', { name: 'Schedule Nightly 02:30', exact: true })).toBeVisible()
+  await documentTab(page, 'Job Properties - Nightly').click()
+  console.log('Timeline passed: an overlap flagged and explained, the keyboard walks runs and opens the job, Next 7 days, zoom and Open schedule.')
+
   step = 'light'
   await page.evaluate(() => window.varia.setThemePreference({ mode: 'light' }))
   await page.screenshot({ path: 'artifacts/agent-job-light.png' })

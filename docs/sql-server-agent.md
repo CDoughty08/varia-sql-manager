@@ -226,6 +226,24 @@ alerts, operators and who is notified, behind the same gate until 0.11.0.
   sysadmin, `sysjobschedules` is closed, so a schedule's jobs are read when it is selected (`sp_help_jobs_in_schedule`, which
   shows SQLAgentUserRole only its own jobs) and Unused counts every job, the unseen included. The saves have their own
   exact-shape lint, `AgentSql.LintScheduleSave`, which also refuses `@force_delete`.
+- **When schedules run.** The next runs, the free-slot check and the Timeline follow SQL Server Agent's own rules, checked shape by
+  shape against the next run Agent writes (`tests/agent-schedule-live.test.ts`): a daily schedule's every-N days and a relative
+  monthly one's every-N months count from its start date; a weekly or monthly every-N cycle counts from its first run on or after
+  now (or the start date), which is why the Timeline, where Agent has written `sysjobschedules.next_run_date`, counts from that;
+  a repeating daily window that crosses midnight (22:00 to 04:00) runs on past midnight after a run day, stepping on from its
+  start time, while a weekly, monthly or relative one stops at midnight, which the editor says. Weeks start on Sunday. One
+  case is not followed: a relative schedule with a future start date whose start month's occurrence falls before that date,
+  for which Agent writes no next run at all.
+- **Schedules Timeline** (the Schedules document's Timeline view, `src/shared/agent/timeline.ts`, `TimelineView.ts`). A Gantt
+  chart from now over the next 24 hours or 7 days: for sysadmin one row per job, from the links and each job's usual duration
+  (a job without one drawn for a minute), below sysadmin one row per schedule; rows in the order they next run, disabled jobs
+  and schedules dashed. Runs of two jobs that meet are flagged and listed above the chart as "Overlap 02:30–02:48: Backup
+  starts once during Nightly." with Open on the schedule (at most 20, the rest counted), and a job whose usual run outlasts the
+  gap to its next start is called out, as Agent skips a start while the job runs. Zoom in and out (Ctrl+wheel, + and -), scroll
+  (the slider, Shift+wheel), Show all; hovering a run shows its times, schedule and usual run; clicking it or Enter opens the
+  job, Shift+click or Shift+Enter its schedule. The chart is a grid: Up and Down move between rows, Left, Right, Home and End
+  between runs, each announced. It draws at most 200 rows, 2,000 runs a row and 40,000 in all, and says each cut; runs closer
+  than two pixels draw as one bar. The filter applies to it; All, Unused and Disabled do not.
 - **Alerts and operators** (`actions` dialogs `agentAlert`, `agentOperator`, `agentOperators`; `src/renderer/src/agent/`). An alert or
   operator opens in its own tab from its node (Enter, double-click or Properties) or the palette's Open Alert… and Open Operator…;
   the Agent node's New › Alert… and Operator…, the Alerts and Operators folders' New, and the palette open New Alert and New Operator,

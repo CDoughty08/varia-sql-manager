@@ -49,8 +49,8 @@ describe('schedule encoding, sentences and runs', () => {
     expect(runs(fields({ freqType: freq.relative, freqInterval: 6, freqRelativeInterval: 16, freqRecurrenceFactor: 1 }), 2)).toEqual(['Fri 2026-11-27 02:30', 'Fri 2026-12-25 02:30'])
     // A window that runs past midnight: 22:00, then 00:00 and 02:00 the next day.
     expect(runs(fields({ freqSubdayType: subday.hours, freqSubdayInterval: 2, activeStartTime: 220000, activeEndTime: 20000 }), 4)).toEqual(['Sun 2026-11-22 22:00', 'Mon 2026-11-23 00:00', 'Mon 2026-11-23 02:00', 'Mon 2026-11-23 22:00'])
-    // Every second week counts weeks from the start date's week (weeks start on Sunday).
-    expect(runs(fields({ freqType: freq.weekly, freqInterval: 2, freqRecurrenceFactor: 2, activeStartDate: 20261116 }), 2)).toEqual(['Mon 2026-11-30 02:30', 'Mon 2026-12-14 02:30'])
+    // Every second week counts from the first run on or after now, as SQL Server Agent does (not from the start date's week).
+    expect(runs(fields({ freqType: freq.weekly, freqInterval: 2, freqRecurrenceFactor: 2, activeStartDate: 20261116 }), 2)).toEqual(['Mon 2026-11-23 02:30', 'Mon 2026-12-07 02:30'])
     expect(runs(fields({ enabled: false }))).toEqual([])
     expect(noRunsReason(fields({ enabled: false }), now)).toBe('The schedule is disabled, so it starts no job.')
     expect(noRunsReason(fields({ freqType: freq.once, activeStartDate: 20261101 }), now)).toContain('has passed')

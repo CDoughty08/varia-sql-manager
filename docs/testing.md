@@ -170,7 +170,9 @@ npm run test:smoke:wsl -- --all
   `VARIA_TEST_SQL_SCRATCH=1` they also create a scratch job and login, named with the run prefix and a kind tag (`_job`,
   `_sch`, `_op`, `_al`, `_px`, `_cr`; logins `_l…`), dropped in `finally` and swept by `ScratchDatabase.SweepAsync` once
   the prefix is 6 hours old. Each scratch job run adds rows to Agent's server-wide history cap, pushing out real jobs'
-  oldest rows on a shared server, so a suite runs few jobs. `VARIA_TEST_SQL_AGENT_SERVICE=1` lets the `AgentService` suite
+  oldest rows on a shared server, so a suite runs few jobs. `tests/agent-schedule-live.test.ts` (with both variables)
+  creates one never-run scratch job per schedule shape and compares the next run Agent writes with Varia's.
+  `VARIA_TEST_SQL_AGENT_SERVICE=1` lets the `AgentService` suite
   stop, start and restart the server's Agent through the Windows Service Control Manager (it needs administrator rights on
   the server's machine); set it only on a server that exists for testing Varia. Only `npm run backend:test:agent-service`
   (exclusive machine lock) and `-- --live-suite AgentService` run that suite; other Agent suites never stop Agent.

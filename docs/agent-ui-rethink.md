@@ -148,9 +148,9 @@ In Agent's first release (0.11.0):
 - The Operators and notifications grid (it replaces three pages, so it is close to neutral).
 - Bulk Change owner and Attach schedule (one request per job).
 - Create several.
+- Schedules Timeline.
 
 Later:
-- Schedules Timeline.
 - Agent overview health checks.
 - Copy to another server (a write on a second connection).
 - New Job templates.
