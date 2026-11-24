@@ -1,12 +1,16 @@
 # SQL Server Agent
 
-SQL Server Agent support is planned for 0.11.0 ([docs/agent-plan.md](agent-plan.md), UI in
-[docs/agent-ui-rethink.md](agent-ui-rethink.md)). Behind the release gate (below) Object Explorer shows the SQL Server Agent node, a job's New Job…, View History, Start Job at Step…, Stop
-Job, Enable, Disable, Rename, Delete and Properties, and the Agent node's Start, Stop, Restart and Properties; Search Objects finds jobs, alerts
-and operators, Script As scripts jobs, alerts, operators and proxies, Job Activity Monitor follows the jobs live, the
-Log File Viewer reads and deletes job history, the job document edits a job's General, Steps, Schedules, Notifications, Targets and Alerts or creates a job and shows its History live,
-the Schedules document manages the shared schedules, and the alert and operator documents and the Operators and notifications grid edit and create
-alerts, operators and who is notified, behind the same gate until 0.11.0.
+SQL Server Agent ships in 0.10.0 ([docs/agent-plan.md](agent-plan.md), UI in
+[docs/agent-ui-rethink.md](agent-ui-rethink.md)), on for every SQL Server connection to a server that runs Agent, with no setting or environment variable
+(Express, Azure SQL Database and BigQuery connections have no Agent node). Object Explorer shows the SQL Server Agent node, a job's New Job…, View History,
+Start Job at Step…, Stop Job, Enable, Disable, Rename, Delete and Properties, and the Agent node's Start, Stop, Restart and
+Properties; Search Objects finds jobs, alerts and operators, Script As scripts jobs, alerts, operators and proxies, Job
+Activity Monitor follows the jobs live, the Log File Viewer reads and deletes job history and reads Agent's error logs, the
+job document edits a job's General, Steps, Schedules, Notifications, Targets and Alerts or creates a job and shows its
+History live, the Schedules document manages the shared schedules, the alert and operator documents and the Operators and
+notifications grid edit and create alerts, operators and who is notified, and the proxy and credential documents edit and
+create proxies and credentials. Help › Getting Started has a guide, Schedule work with SQL Server Agent, with a fictional
+schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
 
 ## How it works
 
@@ -21,9 +25,10 @@ alerts, operators and who is notified, behind the same gate until 0.11.0.
   refusal, a missing procedure, or `AGENT_DISABLED` for error 15281), reads at most its cap plus one row, and cancels the
   rest so a full result says it was truncated.
 - **Times** are the server's local time, as msdb stores them; nothing converts them to this computer's time zone.
-- **Release gate.** Agent's surfaces show only when Varia was started with `VARIA_AGENT_PREVIEW=1`: main reads the
-  variable once and passes the window an argument, which becomes the static context key `agentEnabled`. Without it Object
-  Explorer shows no SQL Server Agent node and no Agent command, menu item or document is offered.
+- **No release gate.** Until 0.10.0 Agent's surfaces were behind a release gate (`VARIA_AGENT_PREVIEW=1`, the context key
+  `agentEnabled`); AG-9 removed it, so the node, commands, menus, documents, Search Objects' Agent kinds, the node's status
+  probe and hot exit's Agent records need nothing to turn them on. `tests/agent-profile.test.ts` fails if the variable, the
+  key or the renderer argument comes back anywhere in the code, scripts or CI.
 - **What the login may do** (`agent.profile`). One constant batch in msdb, on the Object Explorer pool on its own slot per connection,
   reads the login's sysadmin membership and Agent roles (`IS_ROLEMEMBER`, so nested membership counts), EXECUTE on
   `sp_purge_jobhistory` and `sysmail_help_profile_sp`, the server-state permissions `sys.dm_server_services` and Agent's
@@ -371,6 +376,72 @@ alerts, operators and who is notified, behind the same gate until 0.11.0.
   multi-server job from a master server and a local job) is refused as ambiguous. A cloud database has no Agent to script.
   As for every kind Script As can write, Search Objects' details pane shows a selected job's, alert's or operator's CREATE
   script.
+
+## Parity with SSMS
+
+Re-checked for 0.10.0 (AG-9) against SSMS 2022's SQL Server Agent surfaces: its Object Explorer nodes and context menus,
+Job Activity Monitor, the Log File Viewer and the Job, Job Step, Job Schedule, Alert, Operator, Proxy Account, Credential
+and SQL Server Agent Properties dialogs. SSMS's names, order and mnemonics are kept wherever Varia has the verb; Varia's
+rethink (docs/agent-ui-rethink.md) deliberately turns the dialogs into document tabs. Gaps go to a lane of
+docs/agent-plan.md (AG-10 to AG-16) or to its Later row.
+
+**Matches SSMS**
+
+| Surface | SSMS 2022 | Varia |
+| --- | --- | --- |
+| Agent node | After the server's folders; children Jobs, Job Activity Monitor, Alerts, Operators, Proxies, Error Logs | Same order and names; which children show follows the login's Agent role, as SSMS's do; Managed Instance has no Alerts or Proxies, as in SSMS |
+| Agent node menu | New › Job…, Alert…, Operator…, Proxy…, Schedule…; Start, Stop, Restart; View History; Properties | Same items, grouped differently (Job Activity Monitor and View History after New, then Start, Stop and Restart); Start, Stop and Restart through the Service Control Manager as the Windows user, as SSMS |
+| Jobs folder menu | New Job…, Manage Schedules, View History | Same (Manage Schedules opens the Schedules document) |
+| Job menu | New Job…, Script Job as, Start Job at Step…, Stop Job, Enable/Disable, View History, Rename, Delete, Properties | Same names, grouped as Varia's menus are: New Job… and Create Job Like This…, View History, Start Job at Step… and Stop Job, Script Job as, Enable/Disable, Rename and Delete, Properties |
+| Job Activity Monitor node | Double-click or View Job Activity opens it | Double-click, Enter or Job Activity Monitor opens it, one per server |
+| Alerts, Operators, Proxies menus | New Alert… / New Operator… / New Proxy…; Script … as; Enable/Disable (alerts); Rename; Delete; Properties | Same; Proxies list one folder per subsystem, then Unassigned Proxies, as SSMS |
+| Error Logs menu | View Agent Log, Recycle | Same (Recycle asks first; not on Managed Instance) |
+| Log File Viewer | Select logs, runs with their steps, message details, Delete history | Same layout (master/detail), with Agent's error logs in the same viewer |
+| Job dialog pages | General, Steps, Schedules, Alerts, Notifications, Targets | Same sections, plus History (rethink); Targets shows the local server only |
+| Job Step dialog | General (name, type, Run as, database, command, Parse, Open), Advanced (on success, on failure, retries, output file, log to table) | Same fields on the Steps page beside the list; Advanced is the folded More options |
+| Job Schedule dialog | Schedule type, frequency, daily frequency, duration, summary sentence | Same fields and SSMS's sentence, plus presets and the next runs (rethink) |
+| Alert dialog | General (event, performance condition, WMI), Response (job, operators), Options | One screen with When / Then / Options; WMI alerts read-only (editing is Later) |
+| Operator dialog | General (e-mail, pager, on-duty schedule), Notifications, History | General, Pager duty and Notifications, plus Send test e-mail and the Operators and Notifications grid; the History page (last notification attempts) is Later |
+| Proxy Account dialog | General (credential, subsystems), Principals, References | One screen with the inline credential; References as Used by on the credential |
+| SQL Server Agent Properties | General, Advanced, Alert System, Job System, Connection, History | General and History (a dialog, as SSMS); the rest are Later |
+| Keys | No default Agent keys; Enter opens, Delete deletes, F2 renames in Object Explorer; F5 refreshes | Same in Object Explorer; F5 in Job Activity Monitor is AG-10 |
+
+**Deliberate differences (the rethink)**
+
+- Jobs, alerts, operators, proxies, credentials and the shared schedules are document tabs, not modal dialogs: several stay
+  open, unsaved ones survive a restart (hot exit and AutoRecover), and Save writes one transaction that refuses to overwrite
+  another session's change (STALE, with a field-by-field compare).
+- Creation happens in place (a new schedule, operator or credential inside the job, alert or proxy that needs it) instead of
+  stacked child dialogs.
+- Job Activity Monitor is a live document with tiles, view chips and a last-run panel; SSMS's Filter dialog is the filter
+  box and column filters, and its bulk verbs give one result line per job.
+- New Job adds Create Job Like This and Create several; the job document adds History in place and the live run view.
+- Manage Schedules is the Schedules document (a grid with the selected schedule's editor) instead of a dialog.
+- Start, Stop and Restart run only from a Windows client against a Windows server that is not Managed Instance or a cluster,
+  and show the state elsewhere, because they need the Service Control Manager.
+
+**Gaps**
+
+| Gap | Where it goes |
+| --- | --- |
+| Job Activity Monitor's View menu item, F5, Start Agent on its banner, and a row menu | AG-10 |
+| Greying the service verbs on a cluster before the backend refuses, and the `busy` rule while a service action runs | AG-10 |
+| Error Logs' date labels | AG-10 |
+| SQLAgentOperatorRole enabling or disabling another owner's schedule | AG-10 |
+| Alt+Up and Alt+Down to move steps (Move up and Move down buttons today) | AG-10 |
+| The history sparkline through ChartView | AG-10 |
+| The palette's Enable and Disable titles for a job (read "Enable Login" and "Disable Login") | AG-10 |
+| Load from file… for CmdExec and PowerShell steps | AG-11 |
+| Job-state chips on job nodes, and reloading the Agent node when Agent XPs flips | AG-12 |
+| An SSIS execution messages view for the job history's SSIS link (a query window today) | AG-13 |
+| Schedules timeline; schedule occurrences across midnight and for every N months; an Agent live suite for schedules | AG-14 |
+| Agent overview health checks | AG-15 |
+| Activity Monitor sessions that link to the job they run | AG-16 |
+| Manage Job Categories; multi-server targets (MSX/TSX); Script Action to Job; output file and table log viewers; SQL Server Logs and Database Mail in the Log File Viewer; Agent Properties' Advanced, Alert System, Job System and Connection pages and the fail-safe operator; the operator's History page; Error Logs' Configure; WMI alert editing; Copy to another server; New Job templates; Flow view; Elastic Jobs | Later |
+| SSMS's Start PowerShell, Reports and Policies items on Agent nodes | Not planned (Varia has none of them on any node) |
+
+AG-4's Script As output still waits for SSMS goldens from an SSMS run (the owner's); it is compared with SMO's own
+`Job.Script` until then.
 
 ## What AG-0 found on a real server
 

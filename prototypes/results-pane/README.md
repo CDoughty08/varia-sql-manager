@@ -13,3 +13,4 @@ have pane sizes (`?size=narrow`).
 | [grouped-results-transposed.html](grouped-results-transposed.html) | Alternatives for the transposed grid (frozen column, sort and filter, Using Column as Headers, the row cap, highlights, a transposed Pivot). |
 | [compare-picker-options.html](compare-picker-options.html) | Layout options for the Compare picker (docked pane, popover, modal); `?option=A\|B\|C`. |
 | [result-operation-progress.html](result-operation-progress.html) | Progress and held-off controls while an operation over a whole result runs; `?option=A\|B\|C`. Write-up: [docs/result-operation-progress.md](../../docs/result-operation-progress.md). |
+| [compare-next-ux.html](compare-next-ux.html) | Not shipped: the next round of comparison features, one scene per feature (`?scene=ignore\|details\|copy\|script\|search\|filtered\|sbs\|pivot`, `?state=`, `?size=narrow`). Plan: [docs/result-comparison-next-plan.md](../../docs/result-comparison-next-plan.md). |

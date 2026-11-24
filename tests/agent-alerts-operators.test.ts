@@ -206,8 +206,8 @@ describe("the operator document's and grid's shared rules", () => {
     expect(testBlocked(operatorModel({ operator: undefined }), draft, 0)).toContain('Save the operator first')
     expect(timeValue(timeText(83000))).toBe(83000)
   })
-  it('keeps every command behind the release gate, and Properties on an alert or operator a document', () => {
-    for (const [id, entry] of Object.entries({ ...agentAlertCommandEntries(), ...agentOperatorCommandEntries() })) expect(entry.precondition, id).toContain('agentEnabled')
+  it('needs no release gate for any command (AG-9), and Properties on an alert or operator a document', () => {
+    for (const [id, entry] of Object.entries({ ...agentAlertCommandEntries(), ...agentOperatorCommandEntries() })) expect(entry.precondition, id).not.toContain('agentEnabled')
     expect(commandDescriptor('agent.newAlertOnAgent').menus?.some(menu => menu.menu === 'explorer.new' && menu.when?.includes("agentRole == 'sysadmin'") && menu.when.includes('!explorerServerLinux'))).toBe(true)
     expect(commandDescriptor('agent.newOperatorOnAgent').menus?.some(menu => menu.menu === 'explorer.new')).toBe(true)
     expect(commandDescriptor('agent.newAlert').menus?.some(menu => menu.menu === 'explorer.context' && menu.when?.includes("explorerFolder == 'agentAlerts'"))).toBe(true)
@@ -238,7 +238,7 @@ describe("the operator document's and grid's shared rules", () => {
 
 /** A workbench whose describe answers the AG-7 models. */
 function opened() {
-  const fixture = workbenchFixture({ agentPreview: true })
+  const fixture = workbenchFixture()
   cleanups.push(() => fixture.dispose())
   fixture.api.push(readyBackend())
   fixture.connect(connectionInfo('c1'))

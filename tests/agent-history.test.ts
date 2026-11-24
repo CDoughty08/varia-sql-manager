@@ -33,7 +33,7 @@ function jobsTable(rows: string[][]): LiveTable {
 }
 
 function viewer() {
-  const fixture = workbenchFixture({ agentPreview: true })
+  const fixture = workbenchFixture()
   cleanups.push(() => fixture.dispose())
   fixture.api.push(readyBackend())
   fixture.connect(connectionInfo('c1'))
@@ -96,11 +96,11 @@ describe("agent.history's shared rules", () => {
     expect(deleteHistoryUnavailable({ ...base, role: 'sysadmin', checked: agentLimits.historyJobs + 1 })).toContain(String(agentLimits.historyJobs))
     expect(deleteHistoryUnavailable({ ...base, role: 'sysadmin', live: false })).toContain('Connect')
   })
-  it("offers View History on the Agent node, the Jobs folder and a job, behind the release gate", () => {
+  it("offers View History on the Agent node, the Jobs folder and a job, with no release gate (AG-9)", () => {
     const entries = logViewerCommandEntries()
     for (const id of ['agent.viewHistory', 'agent.refreshHistory', 'agent.deleteHistory'] as const) {
       expect(commandDescriptor(id).precondition).toBe(entries[id].precondition)
-      expect(entries[id].precondition).toContain('agentEnabled')
+      expect(entries[id].precondition).not.toContain('agentEnabled')
     }
     const [placement] = commandDescriptor('agent.viewHistory').menus!
     const when = compileWhen(placement.when!)

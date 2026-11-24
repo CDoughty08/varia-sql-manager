@@ -130,7 +130,7 @@ const stepRow = (instance: number, stepId: number, patch: Record<string, string>
 })
 
 function opened() {
-  const fixture = workbenchFixture({ agentPreview: true })
+  const fixture = workbenchFixture()
   cleanups.push(() => fixture.dispose())
   fixture.api.push(readyBackend())
   fixture.connect(connectionInfo('c1'))

@@ -223,7 +223,7 @@ describe('Object Explorer row visuals', () => {
     expect(markup).toContain('title="SQL Server Agent\nSQL Server Agent\nStopped, Agent XPs disabled"')
     expect(markup).toContain('<span class="oe-sublabel">Agent XPs disabled</span>')
     expect(markup).toContain('<span class="status-pill-label">STOPPED</span>')
-    // Without a status (gate off, no sample, unknown state) the row is as listed.
+    // Without a status (no sample, unknown state) the row is as listed.
     expect(render(agent)).not.toMatch(/oe-chips|oe-sublabel/)
   })
   it('show a login\'s Disabled or Connect denied as a static chip beside its badge, and say it in words', () => {
