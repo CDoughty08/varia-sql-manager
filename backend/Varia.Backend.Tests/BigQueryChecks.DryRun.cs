@@ -138,10 +138,11 @@ internal static partial class BigQueryChecks
         var empty = await harness.Call("bigquery.dryRun", Args("  \n "));
         var huge = await harness.Call("bigquery.dryRun", Args(new string('x', 1_000_001)));
         var badDataset = await harness.Call("bigquery.dryRun", Args("SELECT 1", "sales;drop"));
-        var unknownField = await harness.Call("bigquery.dryRun", new JsonObject { ["connectionId"] = id, ["sql"] = "SELECT 1", ["sessionId"] = Guid.NewGuid().ToString() });
+        var unknownField = await harness.Call("bigquery.dryRun", new JsonObject { ["connectionId"] = id, ["sql"] = "SELECT 1", ["createSession"] = true });
+        var badSession = await harness.Call("bigquery.dryRun", new JsonObject { ["connectionId"] = id, ["sql"] = "SELECT 1", ["sessionId"] = "sess-1" });
         check(legacy.Code == "LEGACY_SQL" && empty.Code == "INVALID_PARAMS" && huge.Code == "INVALID_PARAMS" && badDataset.Code == "INVALID_PARAMS" && unknownField.Code == "INVALID_PARAMS"
-            && harness.Fake.To(BigQueryFake.Jobs).Count() == jobs,
-            $"legacy SQL, blank or over-long text, a bad dataset and unknown fields are refused before any job: {legacy.Code} {empty.Code} {huge.Code} {badDataset.Code} {unknownField.Code}");
+            && badSession.Code == "INVALID_PARAMS" && harness.Fake.To(BigQueryFake.Jobs).Count() == jobs,
+            $"legacy SQL, blank or over-long text, a bad dataset, a session id that is not a tab's and unknown fields are refused before any job: {legacy.Code} {empty.Code} {huge.Code} {badDataset.Code} {unknownField.Code} {badSession.Code}");
 
         var sqlServer = await harness.Call("bigquery.dryRun", new JsonObject { ["connectionId"] = Guid.NewGuid().ToString(), ["sql"] = "SELECT 1" });
         await harness.Call("connections.disconnect", new JsonObject { ["connectionId"] = id });

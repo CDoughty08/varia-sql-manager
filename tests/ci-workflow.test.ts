@@ -152,15 +152,15 @@ describe('CI workflow', () => {
     expect(slice('live', 'smoke-linux')).toContain("VARIA_TEST_SQL_AGENT: '1'")
     expect(readFileSync('.claude/hooks/session-start.sh', 'utf8')).toMatch(/-e MSSQL_AGENT_ENABLED=true[\s\S]*export VARIA_TEST_SQL_AGENT=1/)
   })
-  it('runs every platform on every code-changing pull request, drafts included, in at most 13 jobs', () => {
+  it('runs every platform on every code-changing pull request, drafts included, in at most 14 jobs', () => {
     expect([...workflow.values()].map(job => job.if ?? '').filter(condition => /draft/.test(condition))).toEqual([])
     for (const [name, job] of own) expect(job.if, name).toBe(runAlways)
     const pullRequest = own.filter(([, job]) => job.if === runAlways)
     const platforms = new Set(pullRequest.flatMap(([, job]) => job.runsOn === '${{ matrix.os }}' ? job.matrix.get('os')!.split(', ') : [job.runsOn!]))
     expect([...platforms].sort()).toEqual(['macos-latest', 'ubuntu-24.04', 'windows-latest'])
-    // Three smoke shards per platform keep the growing suites within their time budget, below the account's 20-job concurrency.
+    // Three smoke shards on Linux and four on Windows keep the growing suites within their time budget, below the account's 20-job concurrency.
     const size = (job: Job) => [...job.matrix.values()].reduce((product, axis) => product * axis.split(',').length, 1)
-    expect(pullRequest.reduce((sum, [, job]) => sum + size(job), 0)).toBeLessThanOrEqual(13)
+    expect(pullRequest.reduce((sum, [, job]) => sum + size(job), 0)).toBeLessThanOrEqual(14)
     // Linux repeats at 1024x768 only on main: the Windows shards run those suites at that size on every pull request.
     for (const step of workflow.get('smoke-linux')!.steps.filter(step => /1024x768x24/.test(step.run))) expect(step.if, step.name).toMatch(/github\.event_name == 'push'/)
   })

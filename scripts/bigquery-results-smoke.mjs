@@ -1,15 +1,18 @@
 // A windowed BigQuery result against a loopback REST fake (scripts/fixtures/bigquery-rest.mjs, as
 // VARIA_TEST_BIGQUERY_ENDPOINT: emulator mode, so no Google project or credential is involved) through the Release
-// backend: Load Sample… from the results toolbar's ⋯ menu, its first rows (free, no job) and a random sample (a
-// TABLESAMPLE job), each a new result named for what it holds; then the result's table expiring, its strip offering
-// Re-run…, and Re-run running the result's own statement and replacing it where it is (docs/bigquery.md, Load a sample,
-// Expiry). No assertion depends on absolute pixel sizes.
+// backend, under Always windowed: Load Sample… from the results toolbar's ⋯ menu, its first rows (free, no job) and a
+// random sample (a TABLESAMPLE job), each a new result named for what it holds; then the result's table expiring, its strip
+// offering Re-run…, and Re-run running the result's own statement and replacing it where it is (docs/bigquery.md, Load a
+// sample, Expiry). On the re-run result, a jump to its end reads that block with tabledata.list (no job), Copy of a whole
+// column reads its blocks, Save Results As streams every row to a file, and Load into memory reads it into memory in
+// place; then Automatically, by size keeps the same query's small result in memory (docs/bigquery.md, Residence). No
+// assertion depends on absolute pixel sizes.
 import { electron, expect } from './fixtures/smoke.mjs'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { startBigQueryRest } from './fixtures/bigquery-rest.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
-import { backendReady, connectDialogWindow, editorTextbox, gridCell, gridPart, moreResultsTools, outputStatus, resultGrid, resultIdOf, resultsToolsMenu, submitConnect, toolbarButton } from './fixtures/ui.mjs'
+import { backendReady, connectDialogWindow, editorTextbox, gridCell, gridPart, jobNotice, moreResultsTools, outputStatus, resultGrid, resultIdOf, resultsToolsMenu, submitConnect, toolbarButton } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'bigquery-results-profile-'))
@@ -29,6 +32,8 @@ page.on('pageerror', error => failures.push(error.message))
 
 const status = () => outputStatus(page)
 const strip = name => resultGrid(page, name).locator('xpath=..').locator(gridPart.strip)
+/** The strip's text, or '' once the grid shows none (an in-memory result with nothing to say). */
+const stripText = async name => await strip(name).count() ? await strip(name).innerText() : ''
 const sampleDialog = () => page.getByRole('dialog', { name: 'Load Sample', exact: true })
 /** Opens Load Sample… from the results toolbar's ⋯ menu for the grid that has the focus. */
 async function openSample(name) {
@@ -109,6 +114,7 @@ try {
   await expect(strip('Result 1')).toContainText('BigQuery no longer keeps this result', { timeout: 30000 })
   const rerun = strip('Result 1').getByRole('button', { name: 'Re-run…', exact: true })
   const before = await resultIdOf(resultGrid(page, 'Result 1'))
+  const readsBeforeRerun = fake.reads.length
   await rerun.click()
   // The strip says it runs again at once: wait for the new job and for the grid to show the new result.
   await expect.poll(() => fake.inserted.length, { timeout: 30000 }).toBe(jobs + 2)
@@ -121,9 +127,83 @@ try {
   // The samples stay, still named for what they hold.
   await expect(first).toBeVisible()
   await expect(random).toBeVisible()
+
+  const rerunGrid = resultGrid(page, 'Result 1')
+  // Paging, on the re-run result (a new table): the grid reads blocks of the result table with tabledata.list as it
+  // scrolls, never a job; the re-run check's jump to the end read the block that holds the last row, and the jumps here
+  // home and back come from the block cache or read again. These phases cache every row, so they come after
+  // the expiry check, which needs rows not cached. The re-run check left the grid at its last row.
+  await gridCell(rerunGrid, 59_999, 0).click()
+  await page.keyboard.press('Control+Home')
+  await expect(gridCell(rerunGrid, 0, 1)).toHaveText('row 0', { timeout: 30000 })
+  await page.keyboard.press('Control+End')
+  await expect(gridCell(rerunGrid, 59_999, 1)).toHaveText('row 59999', { timeout: 30000 })
+  const table = fake.tableOf('SELECT n, s FROM t')
+  const rerunReads = fake.reads.slice(readsBeforeRerun).filter(read => read.table === table)
+  expect(rerunReads.some(read => read.start > 50_000)).toBe(true)
+  await page.keyboard.press('Control+Home')
+  await expect(gridCell(rerunGrid, 0, 1)).toHaveText('row 0')
+  console.log('BigQuery results checks: a windowed result reads its blocks with tabledata.list as the grid scrolls and jumps.')
+
+  // Copy of a whole column reads every block it spans, in order, under the Copy limit.
+  await application.evaluate(({ clipboard }) => clipboard.writeText('before'))
+  await gridCell(rerunGrid, 0, 1).click()
+  await page.keyboard.press('Control+Shift+End')
+  await page.keyboard.press('Control+C')
+  const clipboardLines = async () => (await application.evaluate(({ clipboard }) => clipboard.readText())).split(/\r?\n/)
+  await expect.poll(async () => (await clipboardLines()).length, { timeout: 30000 }).toBe(60_000)
+  const copied = await clipboardLines()
+  expect([copied[0], copied[12_345], copied[59_999]]).toEqual(['row 0', 'row 12345', 'row 59999'])
+  console.log('BigQuery results checks: Copy of a windowed column reads its 60,000 rows block by block.')
+
+  // Save Results As streams every row from BigQuery to the file, past the block cache, with no job.
+  const saved = join(profile, 'windowed.txt')
+  await application.evaluate(({ dialog }, filePath) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath }) }, saved)
+  // The copy left the grid at its last row.
+  await page.keyboard.press('Control+Home')
+  await gridCell(rerunGrid, 0, 0).click()
+  await page.keyboard.press('Control+S')
+  await expect(jobNotice(page)).toHaveText('Saved 60,000 rows to windowed.txt.', { timeout: 30000 })
+  const lines = (await readFile(saved, 'utf8')).replace(/^\uFEFF/, '').split('\r\n')
+  expect([lines[0], lines[1], lines[60_000], lines.length]).toEqual(['n\ts', '0\trow 0', '59999\trow 59999', 60_002])
+  expect(fake.inserted.length).toBe(jobs + 2)
+  console.log('BigQuery results checks: Save Results As streams all 60,000 rows of a windowed result to the file.')
+
+  // Load into memory: the strip offers it while the result fits the result memory free; it reads the whole table into
+  // memory in place, with no job, and the result is no longer windowed.
+  const loaded = jobs + 2
+  const pagesBefore = fake.results.length
+  await strip('Result 1').getByRole('button', { name: 'Load into memory', exact: true }).click()
+  // The load reads the job's rows again from the first, with jobs.getQueryResults, past the block cache.
+  await expect.poll(() => fake.results.slice(pagesBefore).some(read => read.table === table && read.start === 0), { timeout: 30000 }).toBe(true)
+  await expect.poll(() => stripText('Result 1'), { timeout: 30000 }).not.toMatch(/windowed in BigQuery|Loading into memory/)
+  await gridCell(resultGrid(page, 'Result 1'), 0, 0).click()
+  await page.keyboard.press('Control+End')
+  await expect(gridCell(resultGrid(page, 'Result 1'), 59_999, 1)).toHaveText('row 59999', { timeout: 30000 })
+  expect(await stripText('Result 1')).not.toMatch(/windowed in BigQuery/)
+  expect(fake.inserted.length).toBe(loaded)
+  console.log('BigQuery results checks: Load into memory reads a windowed result into memory in place, with no job.')
+
+  // Automatically, by size: the same query's 60,000 short rows fit half the room the query may take, so they stay in memory.
+  expect((await page.evaluate(() => window.varia.updateSettings({ 'queryResults.bigQuery.residence': 'automatic' }))).ok).toBe(true)
+  const loadedId = await resultIdOf(resultGrid(page, 'Result 1'))
+  await editorTextbox(page).focus()
+  await page.keyboard.press('F5')
+  await expect.poll(() => fake.inserted.length, { timeout: 30000 }).toBe(loaded + 1)
+  // The new run replaces the loaded result: wait for the new one before asserting on it.
+  await expect.poll(() => resultIdOf(resultGrid(page, 'Result 1')), { timeout: 30000 }).not.toBe(loadedId)
+  await expect(status()).toContainText(/^Completed · /, { timeout: 30000 })
+  const automatic = fake.tableOf('SELECT n, s FROM t')
+  await gridCell(resultGrid(page, 'Result 1'), 0, 0).click()
+  await page.keyboard.press('Control+End')
+  await expect(gridCell(resultGrid(page, 'Result 1'), 59_999, 1)).toHaveText('row 59999', { timeout: 30000 })
+  // In memory, the whole result came with the query's own pages: the grid read nothing of its table with tabledata.list.
+  expect(fake.reads.filter(read => read.table === automatic)).toEqual([])
+  expect(await stripText('Result 1')).not.toContain('windowed in BigQuery')
+  console.log('BigQuery results checks: Automatically, by size keeps a result that fits in memory.')
   expect(failures).toEqual([])
   expect(fake.unanswered.filter(path => !/\/datasets\/_anon_fake\/tables\//.test(path))).toEqual([])
-  console.log('BigQuery results checks passed: Load Sample… of the first rows and at random, and Re-run of an expired result in place.')
+  console.log('BigQuery results checks passed: paging, Copy and Save over a windowed result, Load Sample… of the first rows and at random, Re-run of an expired result in place, Load into memory and the automatic residence.')
 } catch (error) {
   await page.screenshot({ path: resolve('artifacts', 'bigquery-results-failure.png') }).catch(() => {})
   console.error('Unanswered fake requests: ' + fake.unanswered.join(', '))

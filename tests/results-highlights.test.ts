@@ -364,4 +364,13 @@ describe('highlights', () => {
     expect(highlights.getSnapshot().t1).toBeUndefined()
     expect(highlights.canHighlight('t1', released)).toBe(false)
   })
+  it('offers no highlight on a windowed BigQuery result, whose rows cannot be told apart yet', () => {
+    const { client, results, highlights } = fixture()
+    results.begin('t1', 'q1')
+    const value = descriptor(1, { index: 0, rowsRead: 0, rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 0, rowsTotal: 5_000 })
+    client.emit('q1', { type: 'resultSet.opened', descriptor: value })
+    void results.finish('t1', 'q1', { summary: summaryOf([value]) })
+    expect(results.getSnapshot().t1.sets[0].handle.getSnapshot()).toMatchObject({ state: 'complete', residence: 'remote' })
+    expect(highlights.canHighlight('t1', keyAt(results, 't1', 0))).toBe(false)
+  })
 })

@@ -13,7 +13,7 @@ import type { ConnectionService, LiveConnection } from './connections'
 import { isBigQueryConnection } from './connection-availability'
 
 export const dryRunMarkerOwner = 'varia.googlesql.dryRun'
-/** The editing pause before a diagnostics dry run (docs/bigquery-plan.md, IntelliSense from the index). */
+/** The editing pause before a diagnostics dry run (docs/bigquery.md, Cost). */
 export const dryRunDebounceMs = 1000
 
 /** A remote estimate that failed: BigQuery's text, and its code (REMOTE_EXPIRED when the result's table is gone and its query
@@ -43,6 +43,8 @@ export interface CostPromptRequest {
   readonly cap?: number
   readonly thresholdBytes: number
   readonly prices: boolean
+  /** The BigQuery job a Job History Re-run runs again: the prompt names it. */
+  readonly rerunOf?: string
 }
 /** `moot`: the prompt waited behind another whose answer made it moot, and was never shown. */
 export interface CostPromptAnswer { readonly run: boolean; readonly dontAskAgain?: boolean; readonly moot?: true }
@@ -132,7 +134,7 @@ interface Entry {
   revision: number
   /** The text and dataset the current estimate is for, so Execute reuses it instead of dry-running the same text again. */
   estimated?: { readonly sql: string; readonly dataset?: string; readonly result: BigQueryDryRunResult }
-  /** The incomplete-estimate prompt asks once per tab (decision 22). */
+  /** The incomplete-estimate prompt asks once per tab (docs/bigquery.md, Cost). */
   warnedIncomplete?: boolean
   /** The revision Execute last ran: a run that finishes after an edit leaves the newer state alone. */
   executed?: number
@@ -157,7 +159,7 @@ export interface BigQueryCostDeps {
  * BigQuery's estimate and cost rules in the renderer (docs/bigquery.md, Cost): dry-run diagnostics after an editing pause
  * (markers at BigQuery's `[line:column]`, and the estimate beside Execute), the dry run before Execute, and its two prompts.
  * A dry run sends the editor's text to Google, so it runs only for a connected BigQuery tab, only after the user edits or
- * executes (decision 44: never by itself after a restore or a provider switch), and the diagnostics one only while Text
+ * executes (never by itself after a restore or a provider switch), and the diagnostics one only while Text
  * Editor › GoogleSQL turns it on. Nothing blocks by default: a dry run that fails leaves Execute to run and report the
  * query's own error, and the cap is the hard guard.
  */
@@ -278,7 +280,8 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     const checking: EstimateState = { phase: 'checking' }
     this.put(entry.id, checking)
     let response: ApiResult<BigQueryDryRunResult>
-    try { response = await this.deps.api.bigQueryDryRun({ connectionId: connection.id, sql, ...dataset ? { dataset } : {} }) }
+    // The tab's id is its session's: text using the tab's temp tables or variables estimates in that session once it exists.
+    try { response = await this.deps.api.bigQueryDryRun({ connectionId: connection.id, sql, ...dataset ? { dataset } : {}, sessionId: entry.id }) }
     catch (error) { response = { ok: false, error: error instanceof Error ? error.message : 'The dry run failed.' } as ApiResult<BigQueryDryRunResult> }
     const current = !this.disposed && this.entries.get(entry.id) === entry && !entry.model.isDisposed() && entry.revision === revision
     if (!current) {
@@ -329,7 +332,7 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     return estimated && estimated.sql === sql && estimated.dataset === this.dataset(tabId) ? estimated.result.bytesProcessed : undefined
   }
 
-  async beforeExecute(tabId: string, sql: string, origin: { readonly line: number; readonly column: number } = { line: 1, column: 1 }, signal?: AbortSignal): Promise<boolean> {
+  async beforeExecute(tabId: string, sql: string, origin: { readonly line: number; readonly column: number } = { line: 1, column: 1 }, signal?: AbortSignal, rerunOf?: string): Promise<boolean> {
     const connection = this.connection(tabId), entry = this.entries.get(tabId)
     if (!connection || !entry) return true
     clearTimeout(entry.timer)
@@ -352,7 +355,7 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     // Disconnected or switched while the dry run was out: no prompt about a connection the tab no longer has (Execute
     // reports that itself).
     if (!estimate || this.entries.get(tabId) !== entry || this.connection(tabId)?.id !== connection.id) return true
-    return this.prompts(connection, estimate, entry, signal)
+    return this.prompts(connection, estimate, entry, signal, rerunOf)
   }
 
   /**
@@ -392,7 +395,7 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
   }
 
   /** The prompts for an estimate, in turn (the threshold, then an incomplete estimate's warning); resolves whether to run. */
-  private async prompts(connection: LiveConnection, estimate: BigQueryDryRunResult, entry: Entry | undefined, signal?: AbortSignal): Promise<boolean> {
+  private async prompts(connection: LiveConnection, estimate: BigQueryDryRunResult, entry: Entry | undefined, signal?: AbortSignal, rerunOf?: string): Promise<boolean> {
     await this.deps.optOut.refresh(connection)
     if (signal?.aborted || this.disposed) return false
     const settings = this.deps.settings, threshold = () => gibibytes(settings.get('queryExecution.bigQuery.costThreshold')) ?? 0
@@ -409,7 +412,7 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
       let applied: Promise<unknown> | undefined
       const answer = await this.deps.ask({
         prompt, connection: connection.displayName ?? connection.server, thresholdBytes: threshold(), prices: settings.get('queryExecution.bigQuery.showCost') !== 'bytes',
-        ...this.cap(connection) ? { cap: this.cap(connection) } : {}
+        ...this.cap(connection) ? { cap: this.cap(connection) } : {}, ...rerunOf ? { rerunOf } : {}
       }, signal, () => current()?.kind === kind,
       // Applied as the answer is given, before another tab's waiting prompt is checked: Don't ask again stops it too.
       given => {

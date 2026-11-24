@@ -298,7 +298,7 @@ export function jobActivityCommandEntries(): { readonly [K in JobActivityCommand
       precondition: 'backendReady && hasConnection', unavailableHint: 'Connect to a SQL Server whose SQL Server Agent you can see first.',
       menus: [
         { menu: 'explorer.context', group: '1_monitor', order: 1, mnemonic: 'j', when: "(explorerNode == 'agent' || explorerNode == 'agentJobActivity') && !explorerServerLost" },
-        // View beside Activity Monitor and Integration Services Operations (AG-10): it asks for the server when more than one is connected.
+        // View beside Activity Monitor and Integration Services Operations (AG-10), on the active tab's or Object Explorer's server, else asking which.
         { menu: 'view', group: '2_monitor', order: 3, mnemonic: 'b' }
       ]
     },

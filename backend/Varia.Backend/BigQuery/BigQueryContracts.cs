@@ -47,7 +47,7 @@ internal static partial class BigQueryLimits
     public const int ExtraProjects = 16;
     public const int ServiceAccount = 254;
     public const int DisplayName = 128;
-    /// <summary>A key or federation configuration file main reads: at most 64 KiB (docs/bigquery-plan.md, Authentication).</summary>
+    /// <summary>A key or federation configuration file main reads: at most 64 KiB (docs/bigquery.md, Authentication).</summary>
     public const int CredentialBytes = 64 * 1024;
     public const int PageToken = 1024;
     public const int ProjectsPerPage = 1000;
@@ -122,8 +122,9 @@ internal sealed record BigQueryJobSummary(string Project, string JobId, string? 
 
 /// <summary>bigquery.dryRun's parameters (src/shared/bigquery/dry-run.ts): a connected handle, GoogleSQL text (the editor's,
 /// or the text Execute is about to run) and the tab's default dataset; or, instead of text, Remote: a results.remoteQuery request
-/// whose query is estimated (docs/bigquery.md, Sort and filter in BigQuery).</summary>
-internal sealed record BigQueryDryRunArgs(string ConnectionId, string? Sql = null, string? Dataset = null, RemoteDryRunArgs? Remote = null);
+/// whose query is estimated (docs/bigquery.md, Sort and filter in BigQuery). SessionId is the tab's (query.execute's sessionId):
+/// when the tab already has a BigQuery session the text is dry-run in it, so temp tables and variables resolve; none is created.</summary>
+internal sealed record BigQueryDryRunArgs(string ConnectionId, string? Sql = null, string? Dataset = null, RemoteDryRunArgs? Remote = null, string? SessionId = null);
 
 /// <summary>A results.remoteQuery request (view, distinct, sample or rerun) to estimate, without its query ID; the answer says
 /// whether running it would fall back to the original query (BigQueryDryRunResult.Fallback).</summary>

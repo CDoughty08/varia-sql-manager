@@ -339,7 +339,7 @@ async function readMarker(path: string): Promise<Marker> {
 }
 
 /**
- * Startup's one-time copy of 0.9.0's files to 0.10.0's names (docs/bigquery-plan.md, decision 24), before any store reads
+ * Startup's one-time copy of 0.9.0's files to 0.10.0's names (docs/architecture.md, Profile files and the 0.9.0 migration), before any store reads
  * them. The 0.9.0 files are never written again (an unreadable one is quarantined, as its store would), so downgrading
  * opens the state from the moment of upgrade. Each finished step is recorded in `migrationMarker` and never runs again; a
  * failed or partial one (logged without paths or content) runs again at the next start, adding what its 0.10.0 file still
