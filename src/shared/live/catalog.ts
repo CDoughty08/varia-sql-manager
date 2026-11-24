@@ -10,6 +10,7 @@ import { limits } from '../ipc/wire/protocol.ts'
 import { catalogFingerprintStatus } from '../ssis/catalog.ts'
 import type { ProviderId } from '../providers.ts'
 import { agentLimits } from '../agent/catalog.ts'
+import { agentTreeStatus } from '../agent/tree.ts'
 import { jobHistoryColumns, jobHistoryLimits, jobHistoryProbe, jobHistorySource, jobHistoryStatus } from '../bigquery/history-catalog.ts'
 
 /** Where a source reads: server DMVs, the SSISDB catalog, BigQuery's REST API (a BigQuery connection), or nothing (a test
@@ -145,12 +146,12 @@ const agentWatchedSeries: readonly LiveSeriesSpec[] = [
   { id: 'serverNow', unit: 'count', label: 'Server time (yyyymmddhhmmss)', counter: 'gauge' }
 ]
 
-export const liveSourceIds = ['debug.synthetic', 'activity', 'explorer', 'ssis.catalog', 'ssis.operations', 'query.plan', 'agent.jobs', 'agent.history', 'agent.errorLog', 'bigquery.jobs'] as const
+export const liveSourceIds = ['debug.synthetic', 'activity', 'explorer', 'ssis.catalog', 'ssis.operations', 'query.plan', 'agent.jobs', 'agent.history', 'agent.errorLog', 'bigquery.jobs', 'agent.tree'] as const
 export type LiveSourceId = typeof liveSourceIds[number]
 export const liveProbeIds = [
   'debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status', 'debug.synthetic.grid', 'debug.synthetic.log', 'debug.synthetic.wide', ...activityLiveProbes,
   'explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability', 'ssis.catalogProbe', 'ssis.operations.list', 'query.plan.operators',
-  'explorer.agentService', 'agent.jobs.list', 'agent.jobs.service', 'agent.jobs.watched', 'agent.history.list', 'agent.errorLog.read', 'bigquery.jobs.list'
+  'explorer.agentService', 'agent.jobs.list', 'agent.jobs.service', 'agent.jobs.watched', 'agent.history.list', 'agent.errorLog.read', 'bigquery.jobs.list', 'agent.treeProbe'
 ] as const
 export type LiveProbeId = typeof liveProbeIds[number]
 
@@ -190,6 +191,10 @@ export const liveSources: { readonly [S in LiveSourceId]: LiveSourceSpec } = {
   'agent.errorLog': {
     id: 'agent.errorLog', label: 'SQL Server Agent error logs', scope: 'server', testOnly: false, probes: ['agent.errorLog.read'], hidden: 'pause',
     description: `SQL Server Agent's error logs (docs/sql-server-agent.md, Log File Viewer), sysadmin only, read on the server pool (" - Activity Monitor": READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW) opened in master through master's own error log readers (AgentReader, linted by AgentSql.LintRead). The Log File Viewer opens one view per document while a log is checked; hidden views pause. Args: the checked logs by archive number (logs), the date window in days and a message text.`
+  },
+  'agent.tree': {
+    id: 'agent.tree', label: 'SQL Server Agent tree', scope: 'server', testOnly: false, probes: ['agent.treeProbe'],
+    description: 'What SQL Server Agent\'s Object Explorer node lists (docs/sql-server-agent.md, Object Explorer), read on the server pool (" - Activity Monitor": READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW) opened in master. Object Explorer holds one per connection while a SQL Server Agent node is open and shown, and re-lists only what changed, keeping expansion and selection: the node when Agent XPs or the service state changed, a folder when its fingerprint did. Hidden views pause.'
   },
   [jobHistorySource]: {
     id: jobHistorySource, label: 'BigQuery job history', scope: 'bigquery', providers: ['bigquery'], testOnly: false, probes: [jobHistoryProbe], hidden: 'pause',
@@ -362,6 +367,11 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
     description: `The newest ${jobHistoryLimits.jobs} top-level jobs in the time range, newest first, from jobs.list with projection=full in pages of ${jobHistoryLimits.pageJobs}, each job's SQL cut to a ${jobHistoryLimits.previewChars}-character one-line preview as its page is decoded. A refresh asks for new jobs from ${jobHistoryLimits.overlapMs / 1000} s before the newest job a whole listing read (filtered out or not), at most the newest ${jobHistoryLimits.jobs}, for the open jobs (stateFilter pending and running; an open job is followed whatever the filters say), and, for each held open job missing from that answer, its final state: jobs.get for the principal's own jobs and, where BigQuery allows it, others', else a stateFilter=done listing of each one's creation millisecond. A done job never changes, so it is kept and never read again; new args list from scratch. In All users a second, minimal listing without allUsers marks the principal's own jobs, never an email comparison; another user's job that came back without its configuration is marked details hidden. Failed and cancelled are DONE jobs with an error, cancelled when its reason is stopped. A refresh stops between pages at ${jobHistoryLimits.responseBytes / 1024 / 1024} MiB of responses or three quarters of its budget and goes on from that page at the next one, which comes at the asked interval while the list is loading. Expanded scripts list their children (jobs.list?parentJobId, the newest ${jobHistoryLimits.children}, in statement order) under them, read again only while the script runs. Pinned jobs are read with jobs.get whatever their age and shown whatever the filters say. Its cost is network and quota waits, so no load guard (loadGuard false). Status: jobs held, whether more exist in the range, whether the list is still loading, the locations BigQuery could not read, the open jobs, and whether All users was refused (PERMISSION_DENIED).`,
     status: jobHistoryStatus,
     tables: [{ id: 'jobs', mode: 'snapshot', key: ['job'], rowCap: jobHistoryLimits.jobs + jobHistoryLimits.expanded * jobHistoryLimits.children, columns: jobHistoryColumns }]
+  },
+  'agent.treeProbe': {
+    id: 'agent.treeProbe', source: 'agent.tree', label: 'Agent tree changes', intervalMs: { default: 15_000, min: 5000, max: 300_000 }, gates: { minMajor: 13, editions: [1, 2, 3, 8] }, budgetMs: { min: 500, max: 10_000 },
+    description: 'One query: Agent XPs and the service state as explorer.agentService reads them (the state only where HAS_PERMS_BY_NAME says the login may), then, for each msdb table the Agent node\'s folders list (agentTreeFingerprints in src/shared/agent/tree.ts: sysjobs_view, sysalerts, sysoperators, sysproxies, sysproxysubsystem), its row count and a checksum of the columns the tree shows (the sum of the first 3 bytes of each row\'s SHA-256, exact in JavaScript), read only where HAS_PERMS_BY_NAME says the login may select it, else 0 and 0. sysjobs_view filters a SQLAgentUserRole login to its own jobs, so a fingerprint changes only when something the login may see does. A job created, renamed, enabled, disabled or deleted elsewhere, and the same for alerts, operators and proxies, reloads its folder; Refresh is not needed.',
+    status: agentTreeStatus
   },
   'agent.history.list': {
     id: 'agent.history.list', source: 'agent.history', label: 'Job history', intervalMs: { default: 15_000, min: 5000, max: 300_000 }, gates: { minMajor: 13, editions: [1, 2, 3, 8] }, budgetMs: { min: 1000, max: 10_000 },

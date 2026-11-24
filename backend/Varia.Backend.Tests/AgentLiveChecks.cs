@@ -84,6 +84,7 @@ internal static class AgentLiveChecks
         // A killed earlier run's job, login user or other Agent object goes first, so this suite alone keeps a shared server clean.
         await ScratchDatabase.SweepAgentAsync(Sql, Console.WriteLine);
         await JobAsync(check, connection, reader, scratch, Sql, service, info, json);
+        await AgentTreeChecks.LiveAsync(check, service, info, json, scratch, Sql);
         await RolesAsync(check, connection, reader, scratch, Sql, None, profile.Explorer(ExplorerCatalog.Current).Band);
         await AgentScriptingLiveChecks.RunAsync(check, service, info, json, scratch, Sql);
     }

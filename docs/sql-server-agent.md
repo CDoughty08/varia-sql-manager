@@ -49,6 +49,21 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   Agent's 22022 is read again before it is reported: Agent XPs off is `AGENT_STOPPED` ("SQL Server Agent is not running"),
   a job that is not running when stopped, or already running when started, is `JOB_STATE`; msdb's 14261, 14262 and 14372
   are `NAME_IN_USE`, `NOT_FOUND` and `IN_USE`.
+- **Object Explorer follows Agent live** (`agent.tree`, `agent.jobs`, docs/live.md). While a Jobs folder is expanded and
+  shown, its job rows carry state chips from Job Activity Monitor's own `agent.jobs.list` and `agent.jobs.service` probes,
+  in one background view per connection: **Running · step n/m** (Executing, Waiting for worker thread, Performing
+  completion actions), **Between retries** or **Suspended**, otherwise **Failed** when the last run failed; a job the list
+  reads as disabled is dimmed with ", disabled" (and one it reads as enabled is not), unless the row was listed after that
+  read, as a Disable or Enable lists it again at once; the job's menu offers Enable Job or Disable Job by the same state. The chip's words join the row's accessible name and tooltip. Collapsing or
+  hiding the folder ends the view; with Agent stopped or Agent XPs off (the list then stops on `AGENT_DISABLED`)
+  the last read's **Failed** chips and disabled jobs stay, and Running and the retry states go, as they would be out of date. While the Agent node
+  is expanded and shown, the `agent.tree` source reads Agent XPs and the service state (explorer.agentService's text) and,
+  for each of `sysjobs_view`, `sysalerts`, `sysoperators`, `sysproxies` and `sysproxysubsystem`, a row count and a checksum
+  of the columns the tree shows, each table only where `HAS_PERMS_BY_NAME` lets the login read it. When Agent XPs or the
+  service state changes, the Agent node is listed again; when a table's fingerprint moves (a job, alert, operator or proxy
+  created, renamed, enabled, disabled or deleted elsewhere), only its folders are, keeping expansion and selection, so
+  Refresh is not needed. A failing sample is retried as every live probe's is (docs/live.md); a view that ends opens again after a back-off
+  from 2 s to a minute, unless it ended on a permission, sign-in or unsupported-server failure, which waits for Refresh. Both follow `liveData.explorerStatus` and pause with Object Explorer.
 - **Service control** (`AgentServiceControl`). The Agent node's Start, Stop and Restart ask before they run ("Are you sure
   you want to stop the SQLAgent$SALES service on DB01?", with the state the Service Control Manager reports) and then show
   their steps in place: Restart stops the service, waits for Stopped, starts it and waits for Running. They go through

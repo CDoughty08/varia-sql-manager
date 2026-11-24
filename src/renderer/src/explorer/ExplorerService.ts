@@ -6,7 +6,7 @@ import { isPeekKind } from '../../../shared/explorer/peek.ts'
 import { explorerNodeProvider, type ProviderContext } from '../../../shared/providers.ts'
 import { isDependencyKind } from '../../../shared/explorer/dependencies.ts'
 import { explorerFilterSchema } from '../../../shared/explorer/schema.ts'
-import { currentDatabaseRuntime, type DatabaseRuntime, type DatabaseStatusRow } from '../../../shared/explorer/status.ts'
+import { currentDatabaseRuntime, liveJobStatus, type DatabaseRuntime, type DatabaseStatusRow } from '../../../shared/explorer/status.ts'
 import { actionContextValues, actionMenuState, type ActionContextValues, type AgentServiceTarget } from '../../../shared/actions/catalog.ts'
 import { scriptContextValues, scriptMenuState, type ScriptContextValues } from '../../../shared/scripting/catalog.ts'
 import { ssisVerbContextValues, ssisVerbMenuState, type SsisVerbContextValues } from '../../../shared/ssis/catalog.ts'
@@ -132,6 +132,12 @@ export interface DatabaseRuntimeSource {
   subscribe(listener: () => void): () => void
 }
 
+/** Each job row's live enabled state (AgentTreeLive, AG-12), for a job's Enable Job or Disable Job. */
+export interface JobStatusSource {
+  job(connectionId: string, jobId: string | undefined): { readonly enabled?: boolean; readonly enabledAt?: number } | undefined
+  subscribe(listener: () => void): () => void
+}
+
 /**
  * How a first page replaces the children: `keep` reuses static folders (and their state); `reconcile` keeps every child
  * that is still there, by refKey, with its own children, expansion and selection.
@@ -202,7 +208,7 @@ const sameParent = (a: ParentRef, b: ObjectRef) => a.kind === b.kind && a.schema
  *  runtime state is the one it has now (`runtime`: the listing's, or a newer live sample's). */
 const targetOf = (node: TreeNode, connection: Pick<LiveConnection, 'engineEdition' | 'linux' | 'options'> | undefined, runtime: DatabaseRuntime | undefined, agent?: AgentServiceTarget): ExplorerTarget => ({
   connectionId: node.connectionId, ref: node.ref, kind: node.kind, ...(node.folder ? { folder: node.folder } : {}), ...(node.subtype ? { subtype: node.subtype } : {}), label: node.label,
-  ...(node.status ? { status: node.status } : {}), ...(runtime ? { database: runtime } : {}), ...(node.listedAt !== undefined ? { listedAt: node.listedAt } : {}),
+  ...(node.status ? { status: node.status } : {}), ...(runtime ? { database: runtime } : {}), ...(node.listedAt !== undefined && node.database ? { listedAt: node.listedAt } : {}),
   engine: serverEngineOf(connection?.engineEdition), linux: !!connection?.linux, ...(connection?.options.provider === 'bigquery' ? { provider: 'bigquery' as const } : {}),
   ...(node.jobId !== undefined ? { jobId: node.jobId } : {}),
   ...(node.created !== undefined ? { created: node.created } : {}), ...(agent ? { agent } : {})
@@ -280,6 +286,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   /** The filter the rows were last flattened with, so a change of filter is announced once. */
   private readonly now: () => number
   private status?: DatabaseRuntimeSource
+  private jobs?: JobStatusSource
   /** The child `reconcile` selects when a page of its folder brings it. */
   private pendingSelect?: { readonly folder: number; readonly key: string; readonly name: string | undefined }
   /** The node `seek` walks towards, re-tried as each page arrives. */
@@ -568,13 +575,21 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.updateContext()
     return { dispose: () => { stop(); if (this.status === source) { this.status = undefined; this.updateContext() } } }
   }
+  /** Offers a job's Enable Job or Disable Job by the live read too, as its row shows it (AG-12). */
+  useJobStatus(source: JobStatusSource): Disposable {
+    this.jobs = source
+    const stop = source.subscribe(() => this.guard(() => this.updateContext()))
+    this.updateContext()
+    return { dispose: () => { stop(); if (this.jobs === source) { this.jobs = undefined; this.updateContext() } } }
+  }
   private targetOf(node: TreeNode): ExplorerTarget {
     const name = node.kind === 'database' && node.ref.type === 'object' ? node.ref.object.name : undefined
     const runtime = name === undefined ? node.database : currentDatabaseRuntime(node.database, node.listedAt, this.status?.databaseRuntime(node.connectionId, name))
     // The Agent node's verbs follow its service's sampled state (actions catalogue, agentServiceRules).
     const service = node.kind === 'agent' ? this.status?.agentServiceOf?.(node.connectionId) : undefined
     const agent = node.kind === 'agent' ? { windowsClient: this.windowsClient, ...(service?.state !== undefined ? { state: service.state } : {}), ...(service?.startup !== undefined ? { startup: service.startup } : {}) } : undefined
-    return targetOf(node, this.connectionOf(node.connectionId), runtime, agent)
+    const status = node.kind === 'agentJob' ? liveJobStatus(node.status, node.listedAt, this.jobs?.job(node.connectionId, node.jobId)) : node.status
+    return targetOf(status === node.status ? node : { ...node, status }, this.connectionOf(node.connectionId), runtime, agent)
   }
   /** A row's node (a synthetic row's owner) as a context menu's target, with its id; undefined for a removed node. */
   menuNode(rowId: number | undefined): ExplorerMenuNode | undefined {
@@ -1536,6 +1551,9 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private takeRuntime(node: TreeNode, wire: WireNode): void {
     if (wire.database) { node.database = wire.database; node.listedAt = this.now() }
     else if (node.database) { node.database = undefined; node.listedAt = undefined }
+    // A job row is stamped too, so a live read taken before the listing (a Disable's re-list) does not override its state; its
+    // row renders again for it, as the memoised row cannot see the stamp move (liveJob compares it).
+    if (wire.jobId !== undefined) { node.listedAt = this.now(); node.rev++ }
   }
   private createChild(parent: TreeNode, wire: WireNode): TreeNode {
     const ref = this.intern(parent, wire.ref)
