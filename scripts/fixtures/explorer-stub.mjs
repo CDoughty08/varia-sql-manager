@@ -184,10 +184,12 @@ export function installExplorerStub({ ipcMain }, { statics }) {
         facts: { schema: params.target.schema ?? null, created: '2024-01-02T03:04:05', modified: '2024-02-03T04:05:06', systemObject: false, replicated: false, lockEscalation: 'TABLE',
           memoryOptimized: false, temporal: 'NON_TEMPORAL_TABLE', ledger: 'NON_LEDGER_TABLE', rowCount: 12345, dataSpace: 2048, indexSpace: 64, filegroup: 'PRIMARY', textFilegroup: null,
           partitioned: false, compression: 'NONE' },
-        // A table's or view's Columns list comes with its facts, each row with its declaration (PeekSql's columns list).
+        // A table's or view's Columns list (and a table's Indexes & keys list) comes with its facts.
         ...params.target.kind === 'table' || params.target.kind === 'view' ? { lists: { columns: { rows: params.target.name === 'Orders'
           ? [['Id', 'int', false, 'PK', '1, 1', null, null, '[Id] int IDENTITY(1,1) NOT NULL'], ['CustomerName', 'nvarchar(50)', true, null, null, null, "(N'')", "[CustomerName] nvarchar(50) NULL DEFAULT (N'')"]]
-          : [['Id', 'int', false, null, null, null, null, '[Id] int NOT NULL']] } } } : {},
+          : [['Id', 'int', false, null, null, null, null, '[Id] int NOT NULL']] },
+          ...params.target.kind === 'table' ? { tableObjects: { rows: params.target.name === 'Orders'
+            ? [['Primary key', 'PK_Orders', 'Clustered (Id)', 'Active']] : [] } } : {} } } : {},
         // A module's text comes with its facts, as the backend reads it from sys.sql_modules (Peek's followed view has its own).
         ...(() => {
           const definition = searchObjects.find(item => item.object.kind === params.target.kind && item.object.name === params.target.name)?.definition

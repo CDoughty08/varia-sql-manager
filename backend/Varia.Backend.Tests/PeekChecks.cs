@@ -64,16 +64,18 @@ internal static partial class PeekChecks
     private static void Catalog(Action<bool, string> check)
     {
         var peek = ExplorerCatalog.Current.Peek;
-        check(peek.Kinds.Keys.Order(StringComparer.Ordinal).SequenceEqual(["database", "databaseTrigger", "function", "index", "login", "procedure", "sequence", "serverTrigger", "synonym",
+        check(peek.Kinds.Keys.Order(StringComparer.Ordinal).SequenceEqual(["constraint", "database", "databaseTrigger", "function", "index", "key", "login", "procedure", "sequence", "serverTrigger", "synonym",
                 "table", "tableType", "trigger", "type", "view"]) && peek.DefinitionPageChars == 1_000_000 && peek.DefinitionMaxChars == 134_217_728 && peek.BudgetMs == 15_000
             && peek.Kinds.Values.Where(kind => kind.Module).Select(kind => kind.Kind).Order(StringComparer.Ordinal).SequenceEqual(["databaseTrigger", "function", "procedure", "serverTrigger", "trigger", "view"]),
             "the catalogue's peek block lists its kinds, the modules and triggers with their text and the rest scripted, with its limits");
-        check(peek.Kinds.Values.Where(kind => !kind.Dependencies).Select(kind => kind.Kind).Order(StringComparer.Ordinal).SequenceEqual(["database", "databaseTrigger", "index", "login", "serverTrigger"])
+        check(peek.Kinds.Values.Where(kind => !kind.Dependencies).Select(kind => kind.Kind).Order(StringComparer.Ordinal).SequenceEqual(["constraint", "database", "databaseTrigger", "index", "key", "login", "serverTrigger"])
+            && peek.Kinds["table"].ListSpecs.Select(list => list.Id).SequenceEqual(["columns", "tableObjects"])
+            && peek.Kinds["key"].ListSpecs is [{ Id: "keyColumns" }] && peek.Kinds["constraint"].ListSpecs.Count == 0
             && peek.Kinds["login"].ListSpecs.Select(list => list.Id).SequenceEqual(["serverRoles", "userMapping"]) && peek.Kinds["index"].ListSpecs is [{ Id: "indexColumns" }]
             && peek.Kinds["database"].ListSpecs is [{ Id: "files" }] && peek.Kinds["trigger"].ListSpecs is [{ Id: "events" }] && peek.Kinds["synonym"].ListSpecs.Count == 0
             && peek.Kinds["index"].OptionalGroup == "usage" && peek.Kinds["index"].Facts.Where(fact => fact.Optional).Select(fact => fact.Id).First() == "userSeeks"
             && peek.Kinds.Values.Count(kind => kind.OptionalGroup is not null) == 1 && peek.ListRows == 1024 && peek.MappingDatabases == 256,
-            "each peek kind declares its tabs: no dependencies for a database, a login, an index or a DDL trigger, its lists, and an index's usage as its one optional group");
+            "each peek kind declares its tabs: no dependencies for a database, a login, an index, a key, a constraint or a DDL trigger, its lists, and an index's usage as its one optional group");
         check(peek.Dependencies == 200 && peek.DependencyLevel == 500, "Peek lists 200 dependencies each way, and a level of View Dependencies' tree 500");
         // Top rows runs Select Top Rows' script through query.execute: the catalogue gives the backend no rows of its own to read.
         JsonObject embedded;
@@ -144,9 +146,9 @@ internal static partial class PeekChecks
                 List<string> expected = [.. facts.Where(fact => !fact.Optional).Select(fact => fact.Id), .. PeekSql.Extras(spec)];
                 List<string> optional = [.. facts.Where(fact => fact.Optional).Select(fact => fact.Id)];
                 List<string> aliases = [.. Alias().Matches(batch.Text).Select(match => match.Groups[1].Value)];
-                List<string> all = [.. expected, .. batch.Lists.SelectMany(list => list.Columns), .. optional, .. optional.Count > 0 ? new[] { PeekSql.Refused } : []];
+                List<string> all = [.. expected, .. batch.Lists.SelectMany(list => list.DetailColumns is { } detail ? list.Columns.Concat(detail) : list.Columns), .. optional, .. optional.Count > 0 ? new[] { PeekSql.Refused } : []];
                 if (!batch.Columns.SequenceEqual(expected) || !batch.Optional.SequenceEqual(optional) || !aliases.SequenceEqual(all)) problems.Add(name + ": its columns are " + string.Join(",", aliases));
-                if (!batch.Text.StartsWith(PeekSql.Lookup(spec.Kind, parent), StringComparison.Ordinal)) problems.Add(name + ": it does not find the object first");
+                if (!batch.Text.StartsWith(PeekSql.Lookup(spec.Kind, parent, render.Band), StringComparison.Ordinal)) problems.Add(name + ": it does not find the object first");
                 if (spec.Module != batch.Text.Contains("LEFT(m.definition COLLATE Latin1_General_100_BIN2, 1000000) AS [definition], CONVERT(bigint, DATALENGTH(m.definition)) / 2 AS [definitionLength], o.modify_date AS [definitionStamp]", StringComparison.Ordinal))
                     problems.Add(name + ": its module text");
                 if (spec.Module)
@@ -173,7 +175,7 @@ internal static partial class PeekChecks
                 if (batch.Lists.Count + (batch.Mapping ? 1 : 0) > 0 && System.Text.RegularExpressions.Regex.Matches(batch.Text, @"SELECT TOP \(@take\) ").Count != batch.Lists.Count + (batch.Mapping ? 1 : 0) - noFiles)
                     problems.Add(name + ": a list without TOP (@take)");
             }
-        check(renders == 204 && problems.Count == 0, "every peek kind (an index and a trigger below each parent kind) renders for bands 12-17, on a box and a cloud server, passes the lint, and reads the catalogue's facts in order "
+        check(renders == 252 && problems.Count == 0, "every peek kind (an index, key, constraint and trigger below each parent kind) renders for bands 12-17, on a box and a cloud server, passes the lint, and reads the catalogue's facts in order "
             + "as their ids, then its helpers, its lists and its optional group (" + renders + " renders" + (problems.Count > 0 ? "; first problem: " + problems[0] : ")"));
         var mappingProblems = CatalogSql.Lint(PeekSql.MappingUsers, new SqlRender(ExplorerCatalog.MinBand), list: false, mayCheckAccess: false);
         check(mappingProblems.Count == 0 && PeekSql.MappingUsers.Contains("sp.name = @object_name", StringComparison.Ordinal) && !PeekSql.MappingUsers.Contains("sql_logins", StringComparison.Ordinal),
@@ -193,7 +195,33 @@ internal static partial class PeekChecks
             "a primary XML index is told by its type, User mapping counts every database, and a table type is a type's user by its own names");
         var refusedLookup = false;
         try { PeekSql.Render(peek.Kinds["trigger"], new SqlRender(17), peek.DefinitionPageChars, "tableType"); } catch (InvalidOperationException) { refusedLookup = true; }
-        check(refusedLookup, "Peek finds no trigger below a table type");
+        var refusedKeyView = false;
+        try { PeekSql.Render(peek.Kinds["key"], new SqlRender(17), peek.DefinitionPageChars, "view"); } catch (InvalidOperationException) { refusedKeyView = true; }
+        var refusedConstraintView = false;
+        try { PeekSql.Render(peek.Kinds["constraint"], new SqlRender(17), peek.DefinitionPageChars, "view"); } catch (InvalidOperationException) { refusedConstraintView = true; }
+        check(refusedLookup && refusedKeyView && refusedConstraintView, "Peek finds no trigger below a table type and no key or constraint below a view");
+        var constraint14 = PeekSql.Render(peek.Kinds["constraint"], new SqlRender(14), peek.DefinitionPageChars, "table");
+        var constraint15 = PeekSql.Render(peek.Kinds["constraint"], new SqlRender(15), peek.DefinitionPageChars, "table");
+        var table14 = PeekSql.Render(peek.Kinds["table"], new SqlRender(14), peek.DefinitionPageChars);
+        var table15 = PeekSql.Render(peek.Kinds["table"], new SqlRender(15), peek.DefinitionPageChars);
+        var key17 = PeekSql.Render(peek.Kinds["key"], new SqlRender(17), peek.DefinitionPageChars, "table");
+        check(!constraint14.Text.Contains("sys.edge_constraints", StringComparison.Ordinal) && constraint15.Text.Contains("sys.edge_constraints", StringComparison.Ordinal)
+            && !table14.Text.Contains("sys.edge_constraints", StringComparison.Ordinal) && table15.Text.Contains("sys.edge_constraints", StringComparison.Ordinal)
+            && !table15.Text.Contains("dm_db_index_usage_stats", StringComparison.Ordinal) && !table15.Text.Contains("FOR XML", StringComparison.OrdinalIgnoreCase)
+            && !table15.Text.Contains("STRING_AGG", StringComparison.OrdinalIgnoreCase) && key17.Text.Contains("sys.foreign_key_columns", StringComparison.Ordinal)
+            && key17.Text.Contains("LEFT JOIN sys.all_columns AS rc", StringComparison.Ordinal)
+            && table15.Text.Contains("te.type_desc COLLATE DATABASE_DEFAULT", StringComparison.Ordinal)
+            && table15.Text.Contains("kc.type COLLATE DATABASE_DEFAULT", StringComparison.Ordinal)
+            && table15.Text.Contains("ec.delete_referential_action_desc COLLATE DATABASE_DEFAULT", StringComparison.Ordinal)
+            && key17.Text.Contains("fk.delete_referential_action_desc COLLATE DATABASE_DEFAULT", StringComparison.Ordinal)
+            && key17.Text.Contains("fk.update_referential_action_desc COLLATE DATABASE_DEFAULT", StringComparison.Ordinal)
+            && constraint15.Text.Contains("cc.type_desc COLLATE DATABASE_DEFAULT", StringComparison.Ordinal)
+            && table15.Text.Contains("SELECT TOP (" + (PeekSql.TableObjectDetailCap + 1) + ") ", StringComparison.Ordinal)
+            && table15.Text.Contains("SELECT 1 AS grp, 0 AS prio, 'FK'", StringComparison.Ordinal)
+            && table15.Text.Contains("SELECT 2, 0, 'TE'", StringComparison.Ordinal)
+            && table15.Text.Contains("SELECT 3, CASE WHEN i.is_primary_key = 1 THEN 0 WHEN i.is_unique_constraint = 1 THEN 1 ELSE 2 END, 'IC'", StringComparison.Ordinal),
+            "edge constraints are gated to band 15+ in constraint and tableObjects, syspalnames columns coerce to DATABASE_DEFAULT across UNION ALL, "
+            + "tableObjects prioritizes FK/trigger/PK/UQ details with overflow detection and uses no DMV, FOR XML or STRING_AGG");
         // Dependencies are their own request: sys.sql_expression_dependencies needs more than VIEW DEFINITION, and a login refused
         // it must still get the facts.
         var dependencyProblems = new List<string>();
@@ -257,6 +285,56 @@ internal static partial class PeekChecks
             "a table's temporal and ledger facts appear only from their bands, and System object counts tools-support objects as the tree does");
         // The lint still refuses what the batches avoid.
         check(CatalogSql.Lint(newest.Text, new SqlRender(13), false, false).Any(problem => problem.Contains("ledger_type")), "a table's band 17 batch fails the lint on a band 13 server");
+    }
+
+    /// <summary>A table's tableObjects rows across every object kind: PK, UQ, FK, Index (with key, descending, included, filter
+    /// and Primary XML), Check, Default, Edge and Trigger (AFTER and INSTEAD OF), plus disabled/untrusted/clipped states.</summary>
+    private static void TableObjectRows(Action<bool, string> check)
+    {
+        var details = new PeekSql.TableObjectDetails();
+        details.IndexColumns[1] = [("Id", false, false)];
+        details.IndexColumns[2] = [("Email", false, true)];
+        details.IndexColumns[3] = [("Name", false, true), ("Id", false, false), ("Amount", true, false)];
+        details.IndexColumns[5] = [("Id", true, false), ("Name", true, false)];
+        details.IndexColumns[6] = [("OrderDate", true, false), ("Amount", true, false)];
+        details.ForeignKeyColumns[10] = [("CustomerId", "Id")];
+        details.ForeignKeyColumns[11] = [("TenantId", null), ("OrderId", null)];
+        details.TriggerEvents[20] = ["INSERT", "UPDATE"];
+        details.TriggerEvents[21] = ["DELETE"];
+        string Show(object?[] row) => JsonSerializer.Serialize(row);
+        var pk = PeekSql.TableObjectRow(new() { ["kindCode"] = "PK", ["name"] = "PK_Orders", ["indexId"] = 1, ["indexType"] = (byte)1, ["disabled"] = false }, details);
+        var uq = PeekSql.TableObjectRow(new() { ["kindCode"] = "UQ", ["name"] = "UQ_Email", ["indexId"] = 2, ["indexType"] = (byte)2, ["disabled"] = true }, details);
+        var fk = PeekSql.TableObjectRow(new() { ["kindCode"] = "F ", ["name"] = "FK_Cust", ["objectId"] = 10, ["refSchema"] = "Sales", ["refTable"] = "Customers", ["disabled"] = false, ["notTrusted"] = false }, details);
+        var fkHidden = PeekSql.TableObjectRow(new() { ["kindCode"] = "F ", ["name"] = "FK_Hidden", ["objectId"] = 11, ["refSchema"] = null, ["refTable"] = null, ["disabled"] = false, ["notTrusted"] = true }, details);
+        var ix = PeekSql.TableObjectRow(new() { ["kindCode"] = "IX", ["name"] = "IX_Name", ["indexId"] = 3, ["indexType"] = (byte)2, ["isUnique"] = true, ["disabled"] = false, ["filter"] = "([Name] IS NOT NULL)" }, details);
+        var xmlIx = PeekSql.TableObjectRow(new() { ["kindCode"] = "IX", ["name"] = "PXML_Doc", ["indexId"] = 4, ["indexType"] = (byte)3, ["primaryXml"] = true, ["isUnique"] = false, ["disabled"] = false }, details);
+        var cci = PeekSql.TableObjectRow(new() { ["kindCode"] = "IX", ["name"] = "CCI_Orders", ["indexId"] = 5, ["indexType"] = (byte)5, ["isUnique"] = false, ["disabled"] = false }, details);
+        var ncci = PeekSql.TableObjectRow(new() { ["kindCode"] = "IX", ["name"] = "NCCI_Orders", ["indexId"] = 6, ["indexType"] = (byte)6, ["isUnique"] = false, ["disabled"] = false, ["filter"] = "([Amount]>(0))" }, details);
+        var ck = PeekSql.TableObjectRow(new() { ["kindCode"] = "C ", ["name"] = "CK_Amt", ["expr"] = "([Amount]>=(0))", ["disabled"] = true, ["notTrusted"] = true }, details);
+        var df = PeekSql.TableObjectRow(new() { ["kindCode"] = "D ", ["name"] = "DF_Date", ["colName"] = "OrderDate", ["expr"] = "(sysutcdatetime())" }, details);
+        var ec = PeekSql.TableObjectRow(new() { ["kindCode"] = "EC", ["name"] = "EC_Link", ["deleteAction"] = "CASCADE", ["disabled"] = false, ["notTrusted"] = false }, details);
+        var trAfter = PeekSql.TableObjectRow(new() { ["kindCode"] = "TR", ["name"] = "TR_Audit", ["objectId"] = 20, ["insteadOf"] = false, ["disabled"] = false }, details);
+        var trInstead = PeekSql.TableObjectRow(new() { ["kindCode"] = "TR", ["name"] = "TR_Del", ["objectId"] = 21, ["insteadOf"] = true, ["disabled"] = true }, details);
+        check(pk is ["Primary key", "PK_Orders", "Clustered (Id)", "Active"]
+            && uq is ["Unique constraint", "UQ_Email", "Nonclustered (Email DESC)", "Disabled"]
+            && fk is ["Foreign key", "FK_Cust", "(CustomerId) \u2192 Sales.Customers (Id)", "Trusted"]
+            && fkHidden is ["Foreign key", "FK_Hidden", "(TenantId, OrderId)", "Not trusted"]
+            && ix is ["Index", "IX_Name", "Unique nonclustered (Name DESC, Id) INCLUDE (Amount) WHERE ([Name] IS NOT NULL)", "Active"]
+            && xmlIx is ["Index", "PXML_Doc", "Primary XML", "Active"]
+            && cci is ["Index", "CCI_Orders", "Clustered columnstore", "Active"]
+            && ncci is ["Index", "NCCI_Orders", "Nonclustered columnstore (OrderDate, Amount) WHERE ([Amount]>(0))", "Active"]
+            && ck is ["Check constraint", "CK_Amt", "([Amount]>=(0))", "Disabled"]
+            && df is ["Default constraint", "DF_Date", "OrderDate = (sysutcdatetime())", "Active"]
+            && ec is ["Edge constraint", "EC_Link", "ON DELETE CASCADE", "Trusted"]
+            && trAfter is ["Trigger", "TR_Audit", "AFTER INSERT, UPDATE", "Active"]
+            && trInstead is ["Trigger", "TR_Del", "INSTEAD OF DELETE", "Disabled"],
+            "tableObjects composes Kind, Name, Definition summary and Status for every table child kind: " + Show(pk) + " " + Show(cci) + " " + Show(ncci) + " " + Show(trAfter));
+        var exact = new string('x', PeekSql.MaxExpressionChars);
+        var over = new string('x', PeekSql.MaxExpressionChars + 1);
+        var surrogate = new string('x', PeekSql.MaxExpressionChars - 1) + "\U0001F600";
+        check(PeekSql.ClipExpression(exact) == exact && PeekSql.ClipExpression(over) == exact + "\u2026"
+            && PeekSql.ClipExpression(surrogate) == new string('x', PeekSql.MaxExpressionChars - 1) + "\u2026" && PeekSql.ClipExpression(null) is null,
+            "expression clipping leaves strings up to MaxExpressionChars intact and clips longer ones without splitting a UTF-16 surrogate pair");
     }
 
     /// <summary>A Columns or Parameters row from the parts its statement reads: every shown field, and the declaration as T-SQL.</summary>
@@ -389,9 +467,15 @@ internal static partial class PeekChecks
             "a login's type and a sequence's cache read in SSMS's words");
         var listRow = PeekSql.ListRow("indexColumns", new() { ["name"] = "Name", ["included"] = true, ["descending"] = false, ["type"] = "nvarchar", ["maxLength"] = (short)100, ["precision"] = (byte)0,
             ["scale"] = (byte)0, ["userDefined"] = false });
+        var keyPkRow = PeekSql.ListRow("keyColumns", new() { ["name"] = "Id", ["referencedColumn"] = null, ["descending"] = true, ["type"] = "int", ["maxLength"] = (short)4, ["precision"] = (byte)10,
+            ["scale"] = (byte)0, ["userDefined"] = false });
+        var keyFkRow = PeekSql.ListRow("keyColumns", new() { ["name"] = "ParentId", ["referencedColumn"] = "Id", ["descending"] = null, ["type"] = "int", ["maxLength"] = (short)4, ["precision"] = (byte)10,
+            ["scale"] = (byte)0, ["userDefined"] = false });
         var fileRow = PeekSql.ListRow("files", new() { ["name"] = "f", ["type"] = "ROWS", ["size"] = 8192L, ["growth"] = 8192, ["path"] = "C:\\x.mdf", ["percentGrowth"] = false, ["maxSize"] = -1 });
-        check(listRow is ["Name", true, false, "nvarchar(50)"] && fileRow is ["f", "ROWS", 8192L, "By 64 MB, unlimited", "C:\\x.mdf"],
-            "an index column's type and a file's growth read as the tree and SSMS's Files page write them: " + JsonSerializer.Serialize(listRow) + " " + JsonSerializer.Serialize(fileRow));
+        check(listRow is ["Name", true, false, "nvarchar(50)"] && keyPkRow is ["Id", null, true, "int"] && keyFkRow is ["ParentId", "Id", null, "int"]
+            && fileRow is ["f", "ROWS", 8192L, "By 64 MB, unlimited", "C:\\x.mdf"],
+            "an index or key column's type and a file's growth read as the tree and SSMS's Files page write them: " + JsonSerializer.Serialize(listRow) + " " + JsonSerializer.Serialize(keyFkRow));
+        TableObjectRows(check);
         ColumnAndParameterRows(check);
         check(PeekSql.FunctionType("SQL_SCALAR_FUNCTION") == "Scalar-valued" && PeekSql.FunctionType("SQL_INLINE_TABLE_VALUED_FUNCTION") == "Inline table-valued"
             && PeekSql.FunctionType("SQL_TABLE_VALUED_FUNCTION") == "Multi-statement table-valued" && PeekSql.FunctionType("AGGREGATE_FUNCTION") == "CLR aggregate"
@@ -445,18 +529,24 @@ internal static partial class PeekChecks
                 await Code(Body("{\"kind\":\"database\",\"name\":\"Sales\"}")), await Code(Body("{\"kind\":\"login\",\"name\":\"sa\"}")), await Code(Body(Ref("synonym"))),
                 await Code(Body("{\"kind\":\"index\",\"database\":\"Sales\",\"parent\":{\"kind\":\"table\",\"schema\":\"dbo\",\"name\":\"T\"},\"name\":\"IX\"}")),
                 await Code(Body("{\"kind\":\"index\",\"database\":\"Sales\",\"parent\":{\"kind\":\"procedure\",\"schema\":\"dbo\",\"name\":\"P\"},\"name\":\"IX\"}")),
+                await Code(Body("{\"kind\":\"key\",\"database\":\"Sales\",\"parent\":{\"kind\":\"table\",\"schema\":\"dbo\",\"name\":\"T\"},\"name\":\"PK_T\"}")),
+                await Code(Body("{\"kind\":\"key\",\"database\":\"Sales\",\"parent\":{\"kind\":\"view\",\"schema\":\"dbo\",\"name\":\"V\"},\"name\":\"PK_V\"}")),
+                await Code(Body("{\"kind\":\"constraint\",\"database\":\"Sales\",\"parent\":{\"kind\":\"table\",\"schema\":\"dbo\",\"name\":\"T\"},\"name\":\"CK_T\"}")),
+                await Code(Body("{\"kind\":\"constraint\",\"database\":\"Sales\",\"parent\":{\"kind\":\"tableType\",\"schema\":\"dbo\",\"name\":\"TT\"},\"name\":\"CK_TT\"}")),
                 await Code(Body("{\"kind\":\"serverTrigger\",\"name\":\"t\"}"))
             };
-            check(peeks.SequenceEqual(["NOT_CONNECTED", "NOT_CONNECTED", "NOT_CONNECTED", "NOT_CONNECTED", "INVALID_PARAMS", "NOT_CONNECTED"]),
-                "explorer.peek takes a database, a login, a synonym, an index below a table and a server trigger, and refuses an index below a procedure, before the connection: " + string.Join(", ", peeks));
+            check(peeks.SequenceEqual(["NOT_CONNECTED", "NOT_CONNECTED", "NOT_CONNECTED", "NOT_CONNECTED", "INVALID_PARAMS", "NOT_CONNECTED", "INVALID_PARAMS", "NOT_CONNECTED", "NOT_CONNECTED", "NOT_CONNECTED"]),
+                "explorer.peek takes a database, a login, a synonym, an index/key/constraint below a valid parent and a server trigger, and refuses invalid parents, before the connection: " + string.Join(", ", peeks));
             var dependencies = new[]
             {
                 await Dependencies(Body("{\"kind\":\"login\",\"name\":\"sa\"}")), await Dependencies(Body("{\"kind\":\"database\",\"name\":\"Sales\"}")),
                 await Dependencies(Body("{\"kind\":\"index\",\"database\":\"Sales\",\"parent\":{\"kind\":\"table\",\"schema\":\"dbo\",\"name\":\"T\"},\"name\":\"IX\"}")),
+                await Dependencies(Body("{\"kind\":\"key\",\"database\":\"Sales\",\"parent\":{\"kind\":\"table\",\"schema\":\"dbo\",\"name\":\"T\"},\"name\":\"PK_T\"}")),
+                await Dependencies(Body("{\"kind\":\"constraint\",\"database\":\"Sales\",\"parent\":{\"kind\":\"table\",\"schema\":\"dbo\",\"name\":\"T\"},\"name\":\"CK_T\"}")),
                 await Dependencies(Body(Ref("synonym"))), await Dependencies(Body(Ref("sequence")))
             };
-            check(dependencies.SequenceEqual(["INVALID_PARAMS", "INVALID_PARAMS", "INVALID_PARAMS", "NOT_CONNECTED", "NOT_CONNECTED"]),
-                "explorer.peekDependencies refuses the kinds without the tab (a login, a database, an index) and takes a synonym and a sequence: " + string.Join(", ", dependencies));
+            check(dependencies.SequenceEqual(["INVALID_PARAMS", "INVALID_PARAMS", "INVALID_PARAMS", "INVALID_PARAMS", "INVALID_PARAMS", "NOT_CONNECTED", "NOT_CONNECTED"]),
+                "explorer.peekDependencies refuses the kinds without the tab (a login, a database, an index, a key, a constraint) and takes a synonym and a sequence: " + string.Join(", ", dependencies));
             async Task<string> Level(string target, string direction)
             {
                 var body = "{\"connectionId\":\"" + Guid.NewGuid() + "\",\"requestId\":\"" + Guid.NewGuid() + "\",\"target\":" + target + direction + "}";
