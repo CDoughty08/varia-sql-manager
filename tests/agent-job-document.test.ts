@@ -441,7 +441,31 @@ describe("the job document's Steps page", () => {
     expect(jobDocuments.canEditSteps(id)).toBe(false)
     answer({ ok: true, value: 'dir' })
     expect(await pending).toBeUndefined()
-    expect(jobDocuments.get(id)?.stepFile).toMatchObject({ key: 's1', running: false, failure: 'The step cannot be edited now, so the file was not loaded.' })
+    expect(jobDocuments.get(id)?.stepFile).toMatchObject({ key: 's1', running: false, failure: 'The step could not be edited when the file was chosen, so it was not loaded.' })
+  })
+  it('lets a newer load of the same step survive an older dialog answering after a re-read', async () => {
+    const fixture = opened(stepped()), { jobDocuments } = fixture
+    const answers: ((value: ApiResult<string | null>) => void)[] = []
+    Object.assign(fixture.api, { openAgentStepScript: vi.fn(() => new Promise<ApiResult<string | null>>(resolve => { answers.push(resolve) })) })
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    jobDocuments.updateStep(id, 's1', { subsystem: 'CmdExec' })
+    jobDocuments.selectStep(id, 's1')
+    const first = jobDocuments.loadStepScript(id, 's1')
+    // Reload re-reads the job: the first load's entry goes, so Load from file can be clicked again (a popout's dialogs
+    // queue in main behind the first).
+    jobDocuments.reload(id)
+    await settled()
+    expect(jobDocuments.get(id)?.stepFile).toBeUndefined()
+    jobDocuments.updateStep(id, 's1', { subsystem: 'CmdExec' })
+    jobDocuments.selectStep(id, 's1')
+    const second = jobDocuments.loadStepScript(id, 's1')
+    expect(jobDocuments.get(id)?.stepFile).toMatchObject({ key: 's1', running: true })
+    answers[0]!({ ok: true, value: 'old' })
+    expect(await first).toBeUndefined()
+    expect(jobDocuments.get(id)?.stepFile).toMatchObject({ key: 's1', running: true })
+    answers[1]!({ ok: true, value: 'echo new' })
+    expect(await second).toBe('echo new')
   })
   it('drops a pending delete when Reload and keep my changes rebases the steps', async () => {
     const { jobDocuments, answers, setModel } = opened(stepped())

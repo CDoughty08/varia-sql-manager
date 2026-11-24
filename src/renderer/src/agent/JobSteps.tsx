@@ -403,7 +403,7 @@ function StepEditor(props: StepsProps & { readonly step: AgentStepDraft; readonl
         <span className="agent-step-inline">
           {step.subsystem === 'TSQL' && <button type="button" onClick={() => void service.parseStep(state.id, step.key)} disabled={parse?.running}><Icon name="check" />Parse</button>}
           {step.subsystem === 'TSQL' && <button type="button" onClick={() => service.openStepInQuery(state.id, step.key)}><Icon name="link-external" />Open in query window</button>}
-          {isStepScriptSubsystem(step.subsystem) && <button type="button" disabled={!editable || stepFile?.running} onClick={() => void loadFile()}><Icon name="file" />{stepScriptText.load}</button>}
+          {isStepScriptSubsystem(step.subsystem) && <button type="button" disabled={!editable || state.stepFile?.running} onClick={() => void loadFile()}><Icon name="file" />{stepScriptText.load}</button>}
         </span>
       </div>
       <StepCommandEditor epoch={`${model.job?.jobId ?? 'new'} ${model.job?.version ?? 0} ${model.job?.modified ?? ''}`} stepKey={step.key} value={step.command} subsystem={step.subsystem} connectionId={service.connectionId(state.id)} {...step.subsystem === 'TSQL' && step.databaseName ? { database: step.databaseName } : {}}

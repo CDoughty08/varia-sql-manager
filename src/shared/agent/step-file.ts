@@ -29,5 +29,5 @@ export const stepScriptText = {
   notText: 'This file is not a text file Varia can read. Use UTF-8 or UTF-16.',
   notFile: 'The selection is not a file.',
   unavailable: 'Load from file is not available here.',
-  locked: 'The step cannot be edited now, so the file was not loaded.'
+  locked: 'The step could not be edited when the file was chosen, so it was not loaded.'
 } as const
