@@ -667,7 +667,7 @@ connection leaves the tree read-only; reconnect and open View Dependencies again
 | `typeAheadMs` | 1,000 | Type-ahead buffer reset, in ms |
 | `typeAheadMax` | 64 | Type-ahead buffer length |
 | `rowHeight` | 22 | Row height, in px |
-| `serverRowHeight` | 30 | Height of a server row, in px |
+| `serverRowHeight` | 44 | Height of a server row, in px |
 | `indent` | 16 | Indentation per level, in px |
 | `overscan` | 10 | Rows rendered beyond each edge of the viewport |
 | `deleteSlice` | 10,000 | Nodes removed per task when a subtree is dropped |
