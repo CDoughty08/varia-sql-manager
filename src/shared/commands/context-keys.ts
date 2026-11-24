@@ -77,6 +77,7 @@ export const contextKeys = {
   activeDocumentIsDesigner: { type: 'boolean', scope: 'state', description: 'The active document is a table designer.' },
   activeDocumentIsSsis: { type: 'boolean', scope: 'state', description: 'The active document is the properties of an SSIS Catalog folder, project, package or environment.' },
   activeDocumentIsSsisOperations: { type: 'boolean', scope: 'state', description: 'The active document is Integration Services Operations.' },
+  activeDocumentIsSsisExecution: { type: 'boolean', scope: 'state', description: 'The active document is the messages of an SSIS Catalog execution.' },
   activeDocumentIsJobActivity: { type: 'boolean', scope: 'state', description: "The active document is SQL Server Agent's Job Activity Monitor." },
   activeDocumentIsAgentJob: { type: 'boolean', scope: 'state', description: 'The active document is a SQL Server Agent job (Job Properties, or New Job).' },
   activeDocumentIsAgentAlert: { type: 'boolean', scope: 'state', description: 'The active document is a SQL Server Agent alert (Alert Properties, or New Alert).' },

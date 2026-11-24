@@ -15,7 +15,7 @@ import { explorerNodeOf, type ExplorerMenuNode } from '../menus/targets'
  * palette on the server of the Object Explorer selection, else of the active document, else the only connected one. The
  * document's own commands act on the document whose menu or header runs them (`tabId`), else the active one.
  */
-export function ssisContribution({ commands, explorer, ssisProperties, operations, documents, connections, settings }: Pick<Workbench, 'commands' | 'explorer' | 'ssisProperties' | 'operations' | 'documents' | 'connections' | 'settings'>): Disposable {
+export function ssisContribution({ commands, explorer, ssisProperties, operations, ssisExecutions, documents, connections, settings }: Pick<Workbench, 'commands' | 'explorer' | 'ssisProperties' | 'operations' | 'ssisExecutions' | 'documents' | 'connections' | 'settings'>): Disposable {
   const nodeOf = (args?: CommandArgs): ExplorerMenuNode | undefined => args?.target ? explorerNodeOf(args) : explorer.menuNode(explorer.getSnapshot().selected)
   const connectionFor = (args?: CommandArgs): string | undefined => {
     const node = explorerNodeOf(args)
@@ -68,7 +68,18 @@ export function ssisContribution({ commands, explorer, ssisProperties, operation
     commands.register('ssis.refreshOperations', on(id => operations.refresh(id), id => operations.refreshable(id))),
     commands.register('ssis.pauseOperations', on(id => operations.togglePause(id), id => operations.pausable(id))),
     commands.register('ssis.copyOperations', on(id => operations.copy(id, settings.getSnapshot().values['queryResults.grid.copyColumnHeaders']))),
-    commands.register('ssis.copyOperationsWithHeaders', on(id => operations.copy(id, true)))
+    commands.register('ssis.copyOperationsWithHeaders', on(id => operations.copy(id, true))),
+    // The SSIS execution messages document (AG-13): View Messages on an execution's row, and the document's Refresh.
+    commands.register('ssis.viewExecutionMessages', on(async id => {
+      const execution = await operations.selectedExecution(id)
+      if (!execution) return
+      ssisExecutions.open(execution.connectionId, execution.executionId)
+      documents.focusActive()
+    }, id => operations.executionSelected(id))),
+    commands.register('ssis.refreshExecution', {
+      when: args => { const id = args?.tabId ?? documents.getSnapshot().activeId; return documents.get(id)?.kind === 'ssisExecution' && ssisExecutions.canRefresh(id) },
+      run: args => ssisExecutions.refresh(args?.tabId ?? documents.getSnapshot().activeId ?? '')
+    })
   ]
   return { dispose: () => registrations.forEach(registration => registration.dispose()) }
 }

@@ -4,7 +4,7 @@ import { z } from 'zod'
 import type { ObjectRef } from '../explorer/refs.ts'
 import { objectRefSchema } from '../explorer/schema.ts'
 import {
-  describeTargets, describeViews, operationKinds, operationStatuses, ssisActions, ssisLimits, type OperationKind, type SsisActionVerb, type SsisDescribeView, type SsisErrorCode, type SsisFeature
+  describeTargets, describeViews, messageGroups, operationKinds, operationStatuses, ssisActions, ssisLimits, type MessageGroup, type OperationKind, type SsisActionVerb, type SsisDescribeView, type SsisErrorCode, type SsisFeature
 } from './catalog.ts'
 import type { ActionStep } from '../actions/schema.ts'
 
@@ -80,6 +80,16 @@ export const ssisOperationsArgsSchema = z.object({
   windowHours: z.number().int().min(1).max(ssisLimits.operationsWindowHours).optional(),
   limit: z.number().int().min(1).max(ssisLimits.operationsRows).optional()
 }).strict() satisfies z.ZodType<SsisOperationsArgs>
+
+/**
+ * One execution's overview and messages (ssis.execution, AG-13): `executionId` is `catalog.executions.execution_id`; `groups` keeps
+ * the messages of those groups (all of them when absent). The counts always cover every message of the execution.
+ */
+export interface SsisExecutionRequest { readonly connectionId: string; readonly requestId: string; readonly executionId: number; readonly groups?: readonly MessageGroup[] }
+export const ssisExecutionSchema = z.object({
+  connectionId: z.uuid(), requestId: z.uuid(), executionId: operationId,
+  groups: z.array(z.enum(messageGroups)).min(1).max(messageGroups.length).refine(distinct, 'Each group may be named once.').optional()
+}).strict() satisfies z.ZodType<SsisExecutionRequest>
 
 export const ssisCancelSchema = z.object({
   requestIds: z.array(z.uuid()).min(1).max(ssisLimits.cancelIds).refine(ids => new Set(ids).size === ids.length, 'Duplicate request id.')
@@ -187,6 +197,61 @@ export type SsisModel = SsisCatalogModel | SsisFolderModel | SsisProjectModel | 
 export interface SsisDescribeResult {
   readonly model?: SsisModel
   readonly revision?: string
+  readonly elapsedMs: number
+  readonly error?: SsisError
+}
+/** One execution (`catalog.executions`), as the execution messages view's header and General show it. Times keep their offset;
+ *  `now` is the server's clock when it was read, so a running execution's duration needs no local clock. */
+export interface SsisExecutionOverview {
+  readonly id: number
+  readonly folder: string
+  readonly project: string
+  readonly package: string
+  readonly environmentFolder?: string
+  readonly environment?: string
+  readonly executedAs: string
+  readonly caller: string
+  readonly use32bit: boolean
+  /** catalog.operations.status's codes (operationStatuses). */
+  readonly status: number
+  readonly created?: string
+  readonly started?: string
+  readonly ended?: string
+  readonly stoppedBy?: string
+  readonly server?: string
+  readonly machine?: string
+  readonly now: string
+}
+/** One message (`catalog.event_messages`); the event columns are absent for an operation-only message, and `message` is at most
+ *  ssisLimits.executionMessageChars characters, the last an ellipsis when it was cut. */
+export interface SsisExecutionMessage {
+  readonly id?: number
+  readonly time: string
+  /** catalog.operation_messages.message_type (messageTypes). */
+  readonly type: number
+  readonly sourceType?: number
+  readonly source?: string
+  readonly package?: string
+  readonly event?: string
+  readonly path?: string
+  readonly code?: number
+  readonly message: string
+}
+export interface SsisExecutionModel {
+  readonly overview: SsisExecutionOverview
+  /** Every message of the execution by type, whatever `groups` kept. */
+  readonly counts: readonly { readonly type: number; readonly count: number }[]
+  /** The groups the messages were read for (every group when the request named none). */
+  readonly groups: readonly MessageGroup[]
+  /** The newest messages of those groups, newest first. */
+  readonly messages: readonly SsisExecutionMessage[]
+  /** More messages of those groups than one read holds (ssisLimits.executionMessages, or the answer's size): the oldest are left out. */
+  readonly truncated: boolean
+}
+/** `model`, or `error`: NOT_FOUND for an execution the catalog no longer has (its retention cleanup removed it) or this login may
+ *  not read, CATALOG_MISSING without SSISDB, PERMISSION_DENIED or NO_DB_ACCESS without access. */
+export interface SsisExecutionResult {
+  readonly model?: SsisExecutionModel
   readonly elapsedMs: number
   readonly error?: SsisError
 }

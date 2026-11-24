@@ -1,7 +1,7 @@
 // Renders the generated part of docs/integration-services.md from the catalogue: everything after `generatedMarker`.
 // tests/ssis-catalog.test.ts keeps the file in sync and leaves the hand-written part above the marker as it is.
 import {
-  catalogDatabase, catalogFingerprints, catalogProbeFinalCodes, catalogProbeRetryMs,describeTargets, describeViews, executableResults, loggingLevels, messageSourceTypes, messageTypes, operationStatuses, operationTypes, openStatuses,
+  catalogDatabase, catalogFingerprints, catalogProbeFinalCodes, catalogProbeRetryMs,describeTargets, describeViews, executableResults, loggingLevels, messageGroups, messageGroupSpecs, messageSourceTypes, messageTypes, operationStatuses, operationTypes, openStatuses,
   parameterObjectTypes, permissionTypes, referenceTypes, securableTypes, ssisErrorCodes, ssisErrorRetryable, ssisFeatureSources, ssisFeatures, ssisLimits, systemParameters,
   valueTypes, finalStatuses, ssisActions, ssisActionVerbs, ssisCommandEntries, ssisDocumentKinds, ssisDocumentSpecs, ssisVerbContextKey, ssisVerbs, ssisVerbSpecs, stoppableOperationTypes, operationKinds, operationKindSpecs, groupedOperationTypes, validationStatuses, createCatalog, type CodeLabel, type SsisActionSpec
 } from './catalog.ts'
@@ -58,7 +58,9 @@ const limitNotes: Readonly<Record<keyof typeof ssisLimits, string>> = {
   operationsWindowHours: 'The longest window, in hours (`windowHours`)',
   operationsDefaultWindowHours: 'The window unless told otherwise, in hours',
   operationsCountMs: 'How often the 24-hour counts are read, in ms',
-  operationsRebaseMs: 'How often the counts read every operation again instead of from their watermarks, and the window from scratch instead of above its settled id, in ms'
+  operationsRebaseMs: 'How often the counts read every operation again instead of from their watermarks, and the window from scratch instead of above its settled id, in ms',
+  executionMessages: 'The newest messages of the chosen types one execution read holds (`ssis.execution`); more set `truncated`',
+  executionMessageChars: 'Characters of one execution message, and of its execution path, an execution read keeps; a longer one ends in "…"'
 }
 
 const viewNotes: Readonly<Record<typeof describeViews[number], string>> = {
@@ -288,6 +290,25 @@ export function renderSsisDocs(): string {
     'the selection\'s hue):',
     '',
     table(['Status', 'Meaning', 'Tone'], operationStatuses.map(item => [code(item.code), item.label, item.tone ?? '—'])),
+    '',
+    '### Execution messages (`ssis.execution`)',
+    '',
+    'The execution messages document (AG-13) is SSMS\'s Overview and All Messages reports for one execution: View Messages on an',
+    'execution\'s row in Integration Services Operations (its menu, the header\'s Messages, or a double-click) and an SSIS step\'s',
+    'execution link in a SQL Server Agent job\'s History open it, one tab per connection and execution ("Execution 48213"); opening it',
+    'again shows that tab and reads it again, and Refresh (F5 in the document) reads it again while the last answer stays on screen.',
+    '`ssis.execution { connectionId, requestId, executionId, groups? }` reads one batch on the SSIS read pool, under the read gates,',
+    `the read prologue and the describe budget (${ssisLimits.describeMs / 1000} s, then \`TIMEOUT\`): the execution's row in \`catalog.executions\`, every message of the`,
+    'execution counted by type, and the newest messages of the chosen groups from `catalog.event_messages` (newest first, ordered by',
+    `\`message_time\` and id; at most ${ssisLimits.executionMessages.toLocaleString('en-US')}, and fewer past the answer's size estimate, which set \`truncated\`). A message and its execution path keep`,
+    `${ssisLimits.executionMessageChars.toLocaleString('en-US')} characters (read one past, so a longer one ends in "…"). The type filter is one bit parameter per group, its types`,
+    'from the catalogue, so the text is constant; the counts ignore it. An execution the catalog no longer has (its retention cleanup',
+    'removed it) or the login may not read (the catalog views\' row-level security) answers `NOT_FOUND`, a server without SSISDB',
+    '`CATALOG_MISSING`, and a login without access `NO_DB_ACCESS` or `PERMISSION_DENIED`, all as values the document shows. The list is',
+    'the results grid (Copy, Copy with Headers, sort, Save Results As), each row\'s text as it shows it (line breaks kept).',
+    '',
+    table(['Group', 'Label', 'Message types'], messageGroups.map(group => [code(group), messageGroupSpecs[group].label,
+      group === 'other' ? `every type but ${messageGroups.flatMap(item => messageGroupSpecs[item].types).map(code).join(', ')}` : messageGroupSpecs[group].types.map(code).join(', ')])),
     '',
     '### Code tables',
     '',

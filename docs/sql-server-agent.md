@@ -198,8 +198,8 @@ alerts, operators and who is notified, behind the same gate until 0.11.0.
   and its steps with outcome, duration and retries. The run's last failed step opens with its whole message (agent.historyMessage
   where the grid's copy was cut), with Copy, **Edit step** (the step of that name as the job is now) and **Start at step**. A step
   whose message names an SSIS Catalog execution ("Execution ID: 48213", which a failed catalog step writes) has an **SSIS execution**
-  link that opens a query window, not run, over `SSISDB.catalog.event_messages` for that execution, errors first, where the real error
-  usually is. While the job runs, the section starts with the run view: the elapsed time from the run's start and the server's clock
+  link that opens that execution's messages document ([Integration Services](integration-services.md#execution-messages)): its overview
+  and catalog messages, where the real error usually is. While the job runs, the section starts with the run view: the elapsed time from the run's start and the server's clock
   (the header's `agent.jobs.watched` probe; no elapsed time where the start is unreadable, never a guess) against the usual time as a
   bar, each step's state (finished steps as their rows say, the step Agent reports as current Executing or Between retries, the rest
   Waiting; with this run not selected under All, or its rows not read yet, the others show — rather than a guess) with this run's and
@@ -473,7 +473,7 @@ with `VARIA_TEST_SQL_SCRATCH=1`, `AgentHistoryLiveChecks` reads the scratch job'
 reads a message, and runs Delete History on it and a second scratch job (older than 30 days keeps the run, all deletes it).
 With args.usual the same checks cover the usual durations (the median, the newest 10 succeeded runs only, a retried step's
 rows added up, the table sent empty without it), and the live suite reads the scratch job's. `tests/agent-job-history.test.ts` covers the
-History section's rules (durations, the outcome message, the SSIS execution link and its query, the bars, each step's state while the job
+History section's rules (durations, the outcome message, the SSIS execution link, the bars, each step's state while the job
 runs, the elapsed time) and its service against a fake view (opening once, following the newest run, a picked run kept, the failed
 step's whole message, Copy, Failed, refusals). The `agent-jobs` smoke suite opens the Log File Viewer from Job Activity Monitor and drives All jobs, the Failed outcome, a
 run's steps and message, and Delete History, then checks Current, selects a log row and runs Recycle (Enter on its

@@ -98,20 +98,6 @@ export function ssisExecutionId(message: string): number | undefined {
   const id = match ? Number(match[1]) : NaN
   return Number.isSafeInteger(id) && id > 0 ? id : undefined
 }
-/** The query a step's SSIS execution link opens in a query window (never run by itself): the catalog's messages for that execution,
- *  where the real error usually is. The id is a parsed integer, so the text holds nothing from the server but digits. */
-export function ssisExecutionQuery(id: number): string {
-  if (!Number.isSafeInteger(id) || id <= 0) throw new Error('An SSIS execution id is a positive integer.')
-  return [
-    `-- SSIS Catalog messages of execution ${id}, from the job's history (errors first).`,
-    '-- message_type: 120 Error, 130 Task failed, 110 Warning, 70 Information.',
-    'SELECT message_time, message_type, message_source_name, message',
-    'FROM SSISDB.catalog.event_messages',
-    `WHERE operation_id = ${id}`,
-    'ORDER BY CASE WHEN message_type IN (120, 130) THEN 0 ELSE 1 END, message_time, event_message_id;'
-  ].join('\n')
-}
-
 /** The step a run's detail opens with its message: the last step that failed, else none. */
 export function failedStep(steps: readonly JobHistoryStep[]): JobHistoryStep | undefined {
   return [...steps].reverse().find(step => step.stepId > 0 && step.tone === 'error')

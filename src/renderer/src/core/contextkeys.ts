@@ -202,7 +202,7 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     activeDocumentIsAgentAlert: active?.kind === 'agentAlert', activeDocumentIsAgentOperator: active?.kind === 'agentOperator', activeDocumentIsAgentOperators: active?.kind === 'agentOperators',
     activeDocumentIsAgentProxy: active?.kind === 'agentProxy', activeDocumentIsCredential: active?.kind === 'credential',
     activeDocumentIsLogViewer: active?.kind === 'agentLogViewer', activeDocumentIsAgentSchedules: active?.kind === 'agentSchedules',
-    activeDocumentIsSsisOperations: active?.kind === 'ssisOperations', ssisOperationStoppable: !!operations?.stoppable, ssisOperationsPaused: !!operations?.paused, ssisOperationsRefreshable: !!operations?.refreshable, ssisOperationsPausable: !!operations?.pausable,
+    activeDocumentIsSsisOperations: active?.kind === 'ssisOperations', activeDocumentIsSsisExecution: active?.kind === 'ssisExecution', ssisOperationStoppable: !!operations?.stoppable, ssisOperationsPaused: !!operations?.paused, ssisOperationsRefreshable: !!operations?.refreshable, ssisOperationsPausable: !!operations?.pausable,
     activeDocumentIsJobHistory: active?.kind === 'bigQueryJobs', jobHistoryPaused: !!history?.paused, jobHistoryRefreshable: !!history?.refreshable, jobHistoryPausable: !!history?.pausable,
     jobHistoryJobSelected: !!history?.selected, jobHistoryCanOpenResults: !!history?.openResults, jobHistoryCanReattach: !!history?.reattach, jobHistoryCanOpenSql: !!history?.openSql,
     jobHistoryCanRerun: !!history?.rerun, jobHistoryCanCancel: !!history?.cancel,

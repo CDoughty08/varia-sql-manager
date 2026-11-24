@@ -116,6 +116,7 @@ import { TablePropertiesService } from '../properties/TablePropertiesService'
 import { NewDatabaseService } from '../new-database/NewDatabaseService'
 import { RestoreService } from '../restore/RestoreService'
 import { SsisOperationsService } from '../ssis/SsisOperationsService'
+import { SsisExecutionService } from '../ssis/SsisExecutionService'
 import { JobActivityService } from '../agent/JobActivityService'
 import { LogViewerService } from '../agent/LogViewerService'
 import { AgentJobStatusService } from '../agent/AgentJobStatusService'
@@ -290,6 +291,8 @@ export interface Workbench extends Disposable {
   readonly activity: ActivityMonitorService
   /** Integration Services Operations (Active Operations, All Executions…): each connection's document, filters and Stop Operation. */
   readonly operations: SsisOperationsService
+  /** SSIS execution messages documents (AG-13): one execution's overview and messages, from Operations and a job's History. */
+  readonly ssisExecutions: SsisExecutionService
   /** BigQuery Job History (BQ-9): each BigQuery connection's document, its filters, details and row actions. */
   readonly jobHistory: JobHistoryService
   /** SQL Server Agent's Job Activity Monitors (AG-3): one per connection, each a live view of its jobs. */
@@ -555,6 +558,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     api, documents, panes, groups: editorGroups, live, connections, settings, targetIdOf,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-ssis-operations="${CSS.escape(id)}"] [role="grid"]`)?.focus())
   })
+  const ssisExecutions = new SsisExecutionService({
+    api, documents, connections, targetIdOf,
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-ssis-execution="${CSS.escape(id)}"] [role="grid"]`)?.focus())
+  })
   const jobHistory = new JobHistoryService({
     api, documents, panes, groups: editorGroups, live, connections, settings, queries, targetIdOf,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-bq-jobs="${CSS.escape(id)}"] [role="grid"]`)?.focus())
@@ -564,6 +571,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const jobDocuments = new JobDocumentService({
     api, documents, files, connections, live, targetIdOf,
     openQuery: (sql, name, connectionId, database) => { documents.newQuery(sql, name, connectionId, database) },
+    openSsisExecution: (connectionId, executionId) => { ssisExecutions.open(connectionId, executionId); documents.focusActive() },
     focus: id => focusLater(() => {
       const root = document.querySelector<HTMLElement>(`[data-agent-job="${CSS.escape(id)}"]`)
       ;(root?.querySelector<HTMLElement>('[data-agent-job-focus]') ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]'))?.focus()
@@ -792,6 +800,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     restore,
     activity,
     operations,
+    ssisExecutions,
     jobHistory,
     jobActivity,
     logViewer,
@@ -880,6 +889,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       designers.dispose()
       ssisFocus.dispose()
       ssisProperties.dispose()
+      ssisExecutions.dispose()
       properties.dispose()
       tableProperties.dispose()
       newDatabase.dispose()

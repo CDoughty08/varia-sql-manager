@@ -293,6 +293,7 @@ noted where it matters.
 | `actions.execute` | invoke; `cancelObjectActions` (Stop); progress via `onActionProgress` | unary with EVENTs | actions | none, no backstop (note 2 below). Sensitive. Main checks the answer (`actionExecuteResultSchema`, every step field bounded). Never re-sent |
 | `ssis.describe` | invoke; `cancelSsis` | unary | ssis | 45 s, budget 40 s (lock wait ≤ 5 s, role checks 1 s: `BLOCKED`) |
 | `ssis.execute` | invoke; `cancelSsis` (Stop) | unary | ssis | none, no backstop: waits for locks as SSMS does; only CANCEL (reason 1) ends it, answered with its steps once SQL Server ends the statement (≤ 10 s later); preflight budget 25 s (lock timeout 10 s: `BLOCKED`). Sensitive. Never re-sent. Create Catalog: see **Create Catalog** below |
+| `ssis.execution` | invoke; `cancelSsis` | unary | ssis | 45 s, budget 40 s (lock wait ≤ 5 s: `BLOCKED`) |
 | `ssis.catalogSetup` | invoke; `cancelSsis` | unary | ssis | 45 s, budget 40 s (lock timeout 10 s: `BLOCKED`) |
 | `activity.details` | invoke; `cancelActivity` (closing Details) | unary | live (live gates) | 15 s, budget 10 s |
 | `activity.kill` | invoke | unary | actions (own gates) | 30 s, budget 25 s, answered with the outcomes of the sessions tried. Never re-sent |
@@ -471,6 +472,10 @@ the SSIS read pool (program name + " - Integration Services", Initial Catalog th
 - The SSIS profile is read once per connection (role checks `LOCK_TIMEOUT 1000`). `result.error` codes:
   `CATALOG_MISSING`, `NO_DB_ACCESS`, `DATABASE_UNAVAILABLE`, `BLOCKED`, `TIMEOUT`, `PERMISSION_DENIED`, `NOT_FOUND`,
   `NOT_SUPPORTED` (before 2016, Linux), `CONNECTION_LOST`, `AUTH_KERBEROS`, `AUTH_UNSUPPORTED`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `SQL_ERROR`.
+- `ssis.execution { connectionId, requestId, executionId: 1 – 2^53 − 1, groups?: ('error' | 'warning' | 'information' | 'other')[1..4] }`
+  answers `{ model?, elapsedMs, error? }` on the same pool and prologue as `ssis.describe`: the execution's overview, its
+  messages counted by type, and the newest ≤ 5,000 of the chosen groups (all when `groups` is left out), each message and path
+  ≤ 4,000 characters, else `truncated`. A missing (purged) execution is `NOT_FOUND`; the other codes are describe's.
 - **SSIS cancellation** is `varia:ssis-cancel`: an attention, answered `CANCELLED`.
 
 **SSIS writes.** `ssis.execute { connectionId, requestId, action: { verb: 'stopOperation', operationId: 1 – 2^53 − 1 },

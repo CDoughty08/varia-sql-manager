@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (432)
+## Commands (434)
 
 ### File
 
@@ -405,6 +405,8 @@ keys it uses are listed below.
 | Pause Operations | `ssis.pauseOperations` | — | — | — | `activeDocumentIsSsisOperations && ssisOperationsPausable`; checked when `ssisOperationsPaused` | Integration Services Operations context menu › Pause |
 | Copy Operations | `ssis.copyOperations` | — | — | — | `activeDocumentIsSsisOperations` | Integration Services Operations context menu › Copy |
 | Copy Operations with Headers | `ssis.copyOperationsWithHeaders` | — | — | — | `activeDocumentIsSsisOperations` | Integration Services Operations context menu › Copy with Headers |
+| View Execution Messages | `ssis.viewExecutionMessages` | — | — | — | `backendReady && activeDocumentIsSsisOperations` | Integration Services Operations context menu › View Messages |
+| Refresh Execution | `ssis.refreshExecution` | F5 (`activeDocumentIsSsisExecution && !activeDocumentIsSsis && !activeDocumentIsSsisOperations && !activeDocumentIsJobHistory && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus`) | F5 (`activeDocumentIsSsisExecution && !activeDocumentIsSsis && !activeDocumentIsSsisOperations && !activeDocumentIsJobHistory && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus`) | F5 (`activeDocumentIsSsisExecution && !activeDocumentIsSsis && !activeDocumentIsSsisOperations && !activeDocumentIsJobHistory && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus`) | `backendReady && activeDocumentIsSsisExecution` | — |
 | Folder Properties | `ssis.folderProperties` | — | — | — | `backendReady && ssisVerbFolderProperties == 'enabled'` | Object Explorer context menu › Properties |
 | Project Properties | `ssis.projectProperties` | — | — | — | `backendReady && ssisVerbProjectProperties == 'enabled'` | Object Explorer context menu › Properties |
 | Package Properties | `ssis.packageProperties` | — | — | — | `backendReady && ssisVerbPackageProperties == 'enabled'` | Object Explorer context menu › Properties |
@@ -1119,6 +1121,7 @@ Right-click the Integration Services Operations grid (a right-click outside the 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
 | `1_operation` | **S**top Operation | `ssis.stopOperation` | Always |
+| `1_operation` | View **M**essages | `ssis.viewExecutionMessages` | Always |
 | `5_copy` | **C**opy | `ssis.copyOperations` | Always |
 | `5_copy` | Copy with **H**eaders | `ssis.copyOperationsWithHeaders` | Always |
 | `8_view` | **R**efresh | `ssis.refreshOperations` | Always |
@@ -1222,7 +1225,7 @@ Right-click the execution plan's Properties pane, or press Shift+F10 or the cont
 | `1_copy` | **C**opy | `plan.copyProperties` | Always |
 | `1_copy` | Copy **V**alue | `plan.copyPropertyValues` | Always |
 
-## Context keys (202)
+## Context keys (203)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1265,6 +1268,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `activeDocumentIsDesigner` | boolean | state | The active document is a table designer. |
 | `activeDocumentIsSsis` | boolean | state | The active document is the properties of an SSIS Catalog folder, project, package or environment. |
 | `activeDocumentIsSsisOperations` | boolean | state | The active document is Integration Services Operations. |
+| `activeDocumentIsSsisExecution` | boolean | state | The active document is the messages of an SSIS Catalog execution. |
 | `activeDocumentIsJobActivity` | boolean | state | The active document is SQL Server Agent's Job Activity Monitor. |
 | `activeDocumentIsAgentJob` | boolean | state | The active document is a SQL Server Agent job (Job Properties, or New Job). |
 | `activeDocumentIsAgentAlert` | boolean | state | The active document is a SQL Server Agent alert (Alert Properties, or New Alert). |

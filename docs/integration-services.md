@@ -4,7 +4,21 @@ Object Explorer shows the SSIS Catalog (`SSISDB`) read-only: its folders, projec
 on any of them (and Enter or a double-click on a package or environment, as in SSMS) opens its properties as a read-only
 document tab, which `ssis.describe` reads. Varia changes it in two ways so far: Create Catalog (Integration Services
 Catalogs › Create Catalog…, S9a), which creates `SSISDB` as SSMS 22 does, and Stop Operation (`ssis.execute`), which the
-backend runs and the Operations view (S3) will offer.
+backend runs and the Operations view (S3) offers.
+
+## Execution messages
+
+One execution's overview and messages open as a read-only document tab, "Execution 48213", SSMS's Overview and All Messages
+reports in one place: from an execution's row in Integration Services Operations (View Messages on its menu, the Messages verb,
+or a double-click), and from an SSIS step's execution link in a SQL Server Agent job's History. The header shows the execution's
+status, package, duration and its error and warning counts; the overview lists folder, project, package, environment, times,
+who ran it and where. Below it, chips choose the message types (Errors, Warnings, Information, Other, each with the execution's
+count) and the results grid lists the newest messages of those types first, with Copy, Copy with Headers, sort and Save Results
+As. F5 or Refresh reads it again (a running execution's newest messages). `ssis.execution` reads it on the SSIS read pool,
+bounded (the newest 5,000 messages, each cut at 4,000 characters, said when it happens). A purged execution (the catalog's
+retention cleanup), a server without the catalog, and a login that may not open or read it are said in the document, not thrown.
+Its live checks (`SsisExecutionLiveChecks`, `VARIA_TEST_SQL_SCRATCH=1`) run against the fake catalog; the reference part below
+lists its statements and type groups.
 This page records what is known about the catalog that the SSIS work builds on, how it was found out, and the test
 fixtures that stand in for a catalog where there is none; its last part, generated from `src/shared/ssis/catalog.ts`,
 is the reference for the tree, the reads, the catalog's code tables and the limits. The design is D-ssis (wave 4).
@@ -495,6 +509,29 @@ the selection's hue):
 | `8` | Stopping | warning |
 | `9` | Completed | — |
 
+### Execution messages (`ssis.execution`)
+
+The execution messages document (AG-13) is SSMS's Overview and All Messages reports for one execution: View Messages on an
+execution's row in Integration Services Operations (its menu, the header's Messages, or a double-click) and an SSIS step's
+execution link in a SQL Server Agent job's History open it, one tab per connection and execution ("Execution 48213"); opening it
+again shows that tab and reads it again, and Refresh (F5 in the document) reads it again while the last answer stays on screen.
+`ssis.execution { connectionId, requestId, executionId, groups? }` reads one batch on the SSIS read pool, under the read gates,
+the read prologue and the describe budget (40 s, then `TIMEOUT`): the execution's row in `catalog.executions`, every message of the
+execution counted by type, and the newest messages of the chosen groups from `catalog.event_messages` (newest first, ordered by
+`message_time` and id; at most 5,000, and fewer past the answer's size estimate, which set `truncated`). A message and its execution path keep
+4,000 characters (read one past, so a longer one ends in "…"). The type filter is one bit parameter per group, its types
+from the catalogue, so the text is constant; the counts ignore it. An execution the catalog no longer has (its retention cleanup
+removed it) or the login may not read (the catalog views' row-level security) answers `NOT_FOUND`, a server without SSISDB
+`CATALOG_MISSING`, and a login without access `NO_DB_ACCESS` or `PERMISSION_DENIED`, all as values the document shows. The list is
+the results grid (Copy, Copy with Headers, sort, Save Results As), each row's text as it shows it (line breaks kept).
+
+| Group | Label | Message types |
+| --- | --- | --- |
+| `error` | Errors | `120`, `130` |
+| `warning` | Warnings | `110` |
+| `information` | Information | `70` |
+| `other` | Other | every type but `120`, `130`, `110`, `70` |
+
 ### Code tables
 
 Operation types (`catalog.operations.operation_type`):
@@ -652,3 +689,5 @@ Environment reference types: `R` Relative, `A` Absolute. Parameter value types: 
 | `operationsDefaultWindowHours` | 24 | The window unless told otherwise, in hours |
 | `operationsCountMs` | 30,000 | How often the 24-hour counts are read, in ms |
 | `operationsRebaseMs` | 300,000 | How often the counts read every operation again instead of from their watermarks, and the window from scratch instead of above its settled id, in ms |
+| `executionMessages` | 5,000 | The newest messages of the chosen types one execution read holds (`ssis.execution`); more set `truncated` |
+| `executionMessageChars` | 4,000 | Characters of one execution message, and of its execution path, an execution read keeps; a longer one ends in "…" |

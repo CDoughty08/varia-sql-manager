@@ -1,14 +1,15 @@
 // Integration Services Operations against the fake backend's SSIS catalog (tests/fixtures/backend.mjs, VARIA_TEST_BACKEND=workbench):
 // the SSISDB node's Active Operations and reports open one live document per connection; tiles count and filter, the
 // filter bar reads the window again, the grid updates in place with the selection kept on the same operation, Stop Operation
-// asks, stops and shows Stopping then Canceled, F5, Pause and Copy act on it, hiding the tab pauses it and closing ends it,
+// asks, stops and shows Stopping then Canceled, F5, Pause and Copy act on it, View Messages opens a failed execution's messages
+// (filtered by type, copied), hiding the tab pauses it and closing ends it,
 // a server with no catalog says so in place of its rows (in view in a short window), and a view the catalog refuses offers
 // Retry, which subscribes again. Screenshots in Dark and Light go to artifacts/.
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { expandExplorerPath, revealExplorerRow } from './fixtures/explorer-tree.mjs'
-import { connectDialogWindow, documentCrumbs, documentFrame, documentTab, documentTabs, gridPart, gridTones, liveGrid, liveGridSelector, menuItemNames, statusBar, submitConnect, toolbarButton } from './fixtures/ui.mjs'
+import { connectDialogWindow, documentCrumbs, documentFrame, documentTab, documentTabs, gridPart, gridTones, liveGrid, liveGridSelector, localGrid, menuItemNames, statusBar, submitConnect, toolbarButton } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -206,6 +207,32 @@ try {
   await operationsMenu.getByRole('menuitem', { name: 'Copy with Headers', exact: true }).click()
   await expect.poll(clipboard).toMatch(/^ID\tType\tStatus\tFolder.*\r?\n103\tCreate and start execution\tFailed\tFinance/s)
   console.log('Verbs passed: F5 refreshes, Pause stops and resumes, Copy with Headers copies the selected operation.')
+
+  step = 'messages'
+  // View Messages (AG-13) on a failed execution opens its overview and catalog messages, newest first; the type chips read it
+  // again with only the chosen groups, and the grid copies what is selected.
+  await selectOperation('103')
+  await verb('Messages').click()
+  await expect(documentTab(page, 'Execution 103')).toHaveAttribute('aria-selected', 'true')
+  const execution = documentFrame(page, 'Execution 103')
+  await expect(documentCrumbs(execution)).toHaveText(['server-a', 'Integration Services Catalogs', 'SSISDB', 'Finance', 'Loads'])
+  await expect(execution.getByRole('definition').first()).toHaveText('103')
+  await expect(execution).toContainText('Failed')
+  const messages = localGrid(page, 'Messages')
+  await expect(messages).toHaveAttribute('aria-label', /^Messages, 6 rows, 9 columns$/)
+  expect((await calls('ssis.execution')).at(-1)).toMatchObject({ executionId: 103 })
+  const types = execution.getByRole('group', { name: 'Message types', exact: true })
+  await expect(types.getByRole('button')).toHaveText(['Errors (2)', 'Warnings (1)', 'Information (1)', 'Other (2)'])
+  for (const name of ['Warnings (1)', 'Information (1)', 'Other (2)']) await types.getByRole('button', { name, exact: true }).click()
+  await expect(messages).toHaveAttribute('aria-label', /^Messages, 2 rows, 9 columns$/)
+  expect((await calls('ssis.execution')).at(-1)).toMatchObject({ executionId: 103, groups: ['error'] })
+  await messages.locator(gridPart.cell).filter({ hasText: /^Violation of PRIMARY KEY/ }).click()
+  await page.keyboard.press(`${mod}+c`)
+  await expect.poll(clipboard).toMatch(/^Violation of PRIMARY KEY constraint 'PK_Fact'/)
+  await page.screenshot({ path: 'artifacts/ssis-execution-dark.png' })
+  await page.getByRole('button', { name: 'Close Execution 103', exact: true }).click()
+  await documentTab(page, 'Operations - server-a').click()
+  console.log('Messages passed: View Messages opens the execution overview and messages, the type chips filter them and Copy copies the selection.')
 
   step = 'light'
   await page.evaluate(() => window.varia.setThemePreference({ mode: 'light' }))
