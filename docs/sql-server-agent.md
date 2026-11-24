@@ -150,6 +150,24 @@ alerts, operators and who is notified, behind the same gate until 0.11.0.
   refusing a step that takes another's old name. New Job's steps are its `sp_add_jobstep` calls between `sp_add_job` and
   `sp_add_jobserver`. A refused step call lands on Steps ("Saving step 2 was refused"). The Schedules section's calls follow the steps (below).
   Pager duty is not yet checked against the job's schedules.
+  **Create several…** (AG-6f; mocks `rx-create-several`, `rx-create-several-review`) on Changes from source turns the copy into a table in
+  the same tab ("Create several jobs"), one row per new job; the copy as it stands is the template. An empty cell uses the template's value
+  (grey); a typed one overrides that field for that row only (accent edge); clearing it goes back to the template's. Columns opens with Name,
+  each step's key fields but its command, each schedule's Share, Copy or Leave out, and Enabled, and offers every other field: Owner
+  (sysadmin only), Category, Description, the e-mail and pager operators and levels, the event log and delete levels, and each step's
+  name, command, retries, retry minutes, output file and Run as. A row copying a schedule names it after the row's job ("Job – Schedule")
+  unless it was renamed. Fill: Add row, Duplicate row, Paste rows (tab-separated lines, one cell per visible column, also when pasted into
+  a cell; at most 100 rows) and Fill names (`{n}`, `{package}`, `{database}`, `{source}`). The selected row's details list every field it
+  differs in from the template, with Reset for those not in a visible column; **Open full editor** opens the row as an unsaved job tab
+  ("Row n · name") with every section, whose edits go straight back to the row as its whole draft (shown as Other changes), and Back to
+  the table closes it; Save and Reload are off there, it is read-only while the table shows its review or results, and a row removed or created meanwhile leaves the editor a copy of its own. Checks
+  run before anything is sent: a duplicate name among the rows, a name msdb already lists, a cell that cannot be used and every error New
+  Job's save refuses block a row; warnings (a required SSIS parameter without a value, an operator not notified) only show. **Review and
+  create** lists what each row sends and the rows it skips; Create sends each row as its own `agentJob` save (New Job's one transaction),
+  one after another, each with its own result: created rows lock with Open, a failed row says msdb's error and was rolled back, and a
+  lost connection marks the row on its way unknown and sends no more. Back to the table keeps the rows not created to fix and retry;
+  **Enable the created jobs** reads the job list once for their ids, then enables each (AG-2's `enable`) with its own result. No new
+  RPC or backend write.
 - **Schedules** (`src/shared/agent/schedule.ts` for the encoding, sentences, presets, runs and free-slot check;
   `src/shared/actions/agent-schedule.ts` for the saves). The job document's **Schedules** section lists the job's schedules, each
   with its short "when" and whether other jobs share it, and edits the selected one in place with SSMS's own fields (Occurs,
@@ -284,7 +302,20 @@ alerts, operators and who is notified, behind the same gate until 0.11.0.
   in one transaction, checked by its own exact-shape lint (`AgentSql.LintHistoryDelete`), and reports msdb's messages. Below
   sysadmin and SQLAgentOperatorRole it is offered only with EXECUTE on `sp_purge_jobhistory`, and msdb lets such a login delete only
   its own jobs' history; msdb's 14392 is `PERMISSION_DENIED` and Agent XPs off `AGENT_STOPPED`. Agent stopped is the same banner as Job Activity
-  Monitor's. The viewer's source list is a list of logs, so the Agent error logs (AG-5b) join it as more sources.
+  Monitor's.
+- **Agent error logs** (`agent.errorLog`, `agent.errorLogs`). For sysadmin, Select logs lists SQL Server Agent's error logs
+  under the jobs ("Current - date", "Archive #1 - date"; `xp_enumerrorlogs 2`, archive order, Current alone where the server
+  lists none, as on Linux). View Agent Log on the Error Logs folder (Current) or a log opens the server's viewer with that log
+  checked and no job. The checked logs' rows show in their own grid (Agent log: date, log, type, message), newest first across
+  logs, with the window and Message contains filters shared with the runs: the window reads the server's clock, and the text is
+  `xp_readerrorlog`'s search argument (`sp_readmierrorlog` on Managed Instance, which reads oldest first, so its truncation note
+  says the oldest rows were kept). A read holds at most `logRows` rows; the selected row's whole message shows in **Log row
+  details** with Copy. The rows are a separate grid from the runs rather than the same one because their columns differ (no
+  duration, steps or outcome); with logs checked and no job, only the log grid shows. **Recycle…** (the viewer's header, the
+  Error Logs folder or a log, or the palette) runs `msdb.dbo.sp_cycle_agent_errorlog` after a destructive confirmation whose
+  Cancel takes focus, so Enter recycles nothing. It is the `recycleAgentErrorLog` object action (target the Agent node, one
+  exact-shape batch, `AgentSql.LintRecycle`), sysadmin only and not offered on Managed Instance; Agent stopped or Agent XPs off
+  is `AGENT_STOPPED`. Afterwards the viewer reads the logs again and Object Explorer reloads the Error Logs folder.
 - **Status bar.** A job Start started from Job Activity Monitor is followed in the status bar ("Nightly: running step 1
   of 3", then its outcome and start in server time) with Stop and Dismiss, and +N for more; at most `watchedJobs` per
   connection are followed, and as many ended items are kept (the oldest goes). Each connection has one view of `agent.jobs.watched` and `agent.jobs.service` with
@@ -445,7 +476,12 @@ rows added up, the table sent empty without it), and the live suite reads the sc
 History section's rules (durations, the outcome message, the SSIS execution link and its query, the bars, each step's state while the job
 runs, the elapsed time) and its service against a fake view (opening once, following the newest run, a picked run kept, the failed
 step's whole message, Copy, Failed, refusals). The `agent-jobs` smoke suite opens the Log File Viewer from Job Activity Monitor and drives All jobs, the Failed outcome, a
-run's steps and message, and Delete History. The `agent-job` smoke suite opens a job's History section.
+run's steps and message, and Delete History, then checks Current, selects a log row and runs Recycle (Enter on its
+confirmation cancels). The `agent-job` smoke suite opens a job's History section.
+`AgentErrorLogChecks` checks the error log args, the reader's merge, cap and failures against a fake
+reader, the list's fallbacks, Recycle's validation and its lint with near misses offline; in the Agent live suite with
+`VARIA_TEST_SQL_SCRATCH=1`, `AgentErrorLogLiveChecks` lists the logs, reads Current and recycles the server's Agent error log
+(Current becomes Archive #1 and the new Current gets Agent's 412 line), or expects `AGENT_STOPPED` with Agent stopped.
 
 `AgentObjectChecks` checks the alert and operator writes offline: validation and its refusals, each save's batch, the object batch
 lint with near misses, the error mapping and the scripts. In the Agent live suite with `VARIA_TEST_SQL_SCRATCH=1`,
@@ -714,7 +750,7 @@ Writes (from AG-2) call only these, each followed by a return-code check:
 | `msdb.dbo.sp_revoke_proxy_from_subsystem` | `@proxy_id`, `@subsystem_id` | AG-8b |
 | `msdb.dbo.sp_grant_login_to_proxy` | `@proxy_id`, `@login_name`, `@fixed_server_role`, `@msdb_role` | AG-8b |
 | `msdb.dbo.sp_revoke_login_from_proxy` | `@proxy_id`, `@name` | AG-8b |
-| `msdb.dbo.sp_cycle_agent_errorlog` | later lanes | AG-5b |
+| `msdb.dbo.sp_cycle_agent_errorlog` |  | AG-5b |
 | `msdb.dbo.sp_notify_operator` | `@profile_name`, `@name`, `@subject`, `@body` | AG-7 |
 
 msdb error numbers the actions map (AG-2 onward; reads map 15281 to `AGENT_DISABLED` instead):

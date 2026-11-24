@@ -393,9 +393,16 @@ internal static class PeekLiveChecks
         const string s = "[Pk4]]'Ü]";
         static bool Bit(string? value) => value is "1" or "True" or "true";
         var created = await sql("CREATE SCHEMA " + s + ";\nGO\n"
-            + "CREATE TABLE " + s + ".[T]]'表] (Id int NOT NULL CONSTRAINT [PK]]'表] PRIMARY KEY CLUSTERED, Name nvarchar(50) NULL, Amount decimal(9, 2) NULL);\n"
+            + "CREATE TABLE " + s + ".[T]]'表] (Id int NOT NULL CONSTRAINT [PK]]'表] PRIMARY KEY CLUSTERED, Name nvarchar(50) NULL CONSTRAINT [UQ]]'表] UNIQUE NONCLUSTERED, "
+            + "Amount decimal(9, 2) NULL CONSTRAINT [CK]]'表] CHECK (Amount >= 0) CONSTRAINT [DF]]'表] DEFAULT (0));\n"
             + "CREATE UNIQUE INDEX [IX]]'表] ON " + s + ".[T]]'表] (Name DESC, Id) INCLUDE (Amount) WHERE Name IS NOT NULL WITH (FILLFACTOR = 80, PAD_INDEX = ON);\n"
             + "INSERT " + s + ".[T]]'表] (Id, Name, Amount) VALUES (1, N'a', 1.5), (2, N'b', NULL), (3, NULL, NULL);\nGO\n"
+            + "CREATE TABLE " + s + ".[FkChild] (Id int NOT NULL PRIMARY KEY, ParentId int NULL CONSTRAINT [FK]]'表] FOREIGN KEY REFERENCES " + s + ".[T]]'表] (Id) ON DELETE CASCADE, "
+            + "Note nvarchar(20) NULL, CONSTRAINT [CK_Off] CHECK (Id > 0 AND (ParentId IS NULL OR ParentId > 0)));\n"
+            + "ALTER TABLE " + s + ".[FkChild] NOCHECK CONSTRAINT [CK_Off];\nGO\n"
+            + (major >= 15
+                ? "CREATE TABLE " + s + ".[GNode] (Id int NOT NULL) AS NODE;\nCREATE TABLE " + s + ".[GEdge] (CONSTRAINT [EC]]'表] CONNECTION (" + s + ".[GNode] TO " + s + ".[GNode]) ON DELETE CASCADE) AS EDGE;\nGO\n"
+                : "")
             + "CREATE SEQUENCE " + s + ".[S]]'表] AS bigint START WITH 10 INCREMENT BY 5 MINVALUE 10 MAXVALUE 1000 CYCLE CACHE 20;\nGO\n"
             + "CREATE TABLE " + s + ".[UsesS] (Id bigint NOT NULL CONSTRAINT [DF_Pk4S] DEFAULT (NEXT VALUE FOR " + s + ".[S]]'表]));\nGO\n"
             + "CREATE TRIGGER " + s + ".[TR]]'表] ON " + s + ".[T]]'表] AFTER INSERT, UPDATE AS SET NOCOUNT ON; SELECT COUNT(*) FROM " + s + ".[UsesS];\nGO\n"
@@ -440,6 +447,60 @@ internal static class PeekLiveChecks
                 && primary.Lists?["indexColumns"].Rows is [["Id", false, false, "int"]], "a primary key's clustered index says so: " + Facts(primary));
             var wrongParent = await Peek(service, connectionId, Child("index", "UsesS", "IX]'表"), json);
             check(wrongParent is { Error.Code: "NOT_FOUND" }, "an index is found only below its own table");
+
+            // Keys (PK, UQ, FK) and Constraints (CHECK, DEFAULT, EDGE on SQL Server 2019+), plus tableObjects.
+            var pkKey = await Peek(service, connectionId, Child("key", "T]'表", "PK]'表"), json);
+            var uqKey = await Peek(service, connectionId, Child("key", "T]'表", "UQ]'表"), json);
+            var fkKey = await Peek(service, connectionId, Child("key", "FkChild", "FK]'表"), json);
+            check(pkKey is { Error: null, Definition: null } && pkKey.Facts["keyType"] as string == "PRIMARY_KEY_CONSTRAINT"
+                && pkKey.Facts["parentTable"] as string == schema + ".T]'表" && pkKey.Facts["referencedTable"] is null
+                && pkKey.Facts["indexType"] as string == "Clustered" && pkKey.Facts["disabled"] is false && pkKey.Facts["systemNamed"] is false
+                && pkKey.Lists?["keyColumns"].Rows is [["Id", null, false, "int"]]
+                && uqKey is { Error: null } && uqKey.Facts["keyType"] as string == "UNIQUE_CONSTRAINT" && uqKey.Facts["indexType"] as string == "Nonclustered"
+                && uqKey.Lists?["keyColumns"].Rows is [["Name", null, false, string uqColType]] && uqColType.StartsWith("nvarchar", StringComparison.Ordinal)
+                && fkKey is { Error: null } && fkKey.Facts["keyType"] as string == "FOREIGN_KEY_CONSTRAINT"
+                && fkKey.Facts["parentTable"] as string == schema + ".FkChild" && fkKey.Facts["referencedTable"] as string == schema + ".T]'表"
+                && fkKey.Facts["deleteAction"] as string == "CASCADE" && fkKey.Facts["updateAction"] as string == "NO_ACTION"
+                && fkKey.Facts["disabled"] is false && fkKey.Facts["notTrusted"] is false && fkKey.Facts["indexType"] is null
+                && fkKey.Lists?["keyColumns"].Rows is [["ParentId", "Id", null, "int"]],
+                "hostile-named PK, UQ and FK keys peek with their type, parent, referenced table, actions, status and keyColumns: "
+                + Facts(pkKey) + " | " + Facts(fkKey) + " | " + JsonSerializer.Serialize(fkKey.Lists?["keyColumns"].Rows));
+            var ck = await Peek(service, connectionId, Child("constraint", "T]'表", "CK]'表"), json);
+            var ckOff = await Peek(service, connectionId, Child("constraint", "FkChild", "CK_Off"), json);
+            var df = await Peek(service, connectionId, Child("constraint", "T]'表", "DF]'表"), json);
+            check(ck is { Error: null, Definition: null } && ck.Facts["constraintType"] as string == "CHECK_CONSTRAINT"
+                && ck.Facts["parentTable"] as string == schema + ".T]'表" && ck.Facts["column"] as string == "Amount"
+                && ck.Facts["expression"] as string is { Length: > 0 } ckExpr && ckExpr.Contains("Amount", StringComparison.Ordinal)
+                && ck.Facts["disabled"] is false && ck.Facts["notTrusted"] is false
+                && ckOff is { Error: null } && ckOff.Facts["disabled"] is true && ckOff.Facts["notTrusted"] is true && ckOff.Facts["column"] is null
+                && df is { Error: null } && df.Facts["constraintType"] as string == "DEFAULT_CONSTRAINT"
+                && df.Facts["column"] as string == "Amount" && df.Facts["expression"] as string == "((0))" && df.Facts["disabled"] is null,
+                "hostile-named CHECK (enabled and disabled) and DEFAULT constraints peek with their type, column, expression and enforcement status: "
+                + Facts(ck) + " | " + Facts(ckOff) + " | " + Facts(df));
+            if (major >= 15)
+            {
+                var ec = await Peek(service, connectionId, Child("constraint", "GEdge", "EC]'表"), json);
+                var edgeTable = await Peek(service, connectionId, Own("table", "GEdge"), json);
+                var edgeObjs = edgeTable.Lists?.GetValueOrDefault("tableObjects")?.Rows ?? [];
+                check(ec is { Error: null } && ec.Facts["constraintType"] as string == "EDGE_CONSTRAINT" && ec.Facts["parentTable"] as string == schema + ".GEdge"
+                    && ec.Facts["disabled"] is false && ec.Facts["notTrusted"] is false && ec.Facts["systemNamed"] is false
+                    && edgeObjs.Any(row => row is ["Edge constraint", "EC]'表", "ON DELETE CASCADE", "Trusted"]),
+                    "an edge constraint peeks on SQL Server 2019+ and appears in its table's tableObjects list: " + Facts(ec) + " | " + JsonSerializer.Serialize(edgeObjs));
+            }
+            var tablePeek = await Peek(service, connectionId, Own("table", "T]'表"), json);
+            var tableObjs = tablePeek.Lists?.GetValueOrDefault("tableObjects")?.Rows ?? [];
+            var childTablePeek = await Peek(service, connectionId, Own("table", "FkChild"), json);
+            var childObjs = childTablePeek.Lists?.GetValueOrDefault("tableObjects")?.Rows ?? [];
+            check(tablePeek is { Error: null }
+                && tableObjs.Any(row => row is ["Primary key", "PK]'表", "Clustered (Id)", "Active"])
+                && tableObjs.Any(row => row is ["Unique constraint", "UQ]'表", "Nonclustered (Name)", "Active"])
+                && tableObjs.Any(row => row is ["Index", "IX]'表", string ixSum, "Active"] && ixSum.Contains("Unique nonclustered (Name DESC, Id) INCLUDE (Amount) WHERE", StringComparison.Ordinal))
+                && tableObjs.Any(row => row is ["Check constraint", "CK]'表", string ckSum, "Trusted"] && ckSum.Contains("Amount", StringComparison.Ordinal))
+                && tableObjs.Any(row => row is ["Default constraint", "DF]'表", "Amount = ((0))", "Active"])
+                && tableObjs.Any(row => row is ["Trigger", "TR]'表", "AFTER INSERT, UPDATE", "Active"])
+                && childObjs.Any(row => row is ["Foreign key", "FK]'表", string fkSum, "Trusted"] && fkSum == "(ParentId) \u2192 " + schema + ".T]'表 (Id)")
+                && childObjs.Any(row => row is ["Check constraint", "CK_Off", _, "Disabled"]),
+                "tableObjects lists PK, UQ, FK, Index, Check, Default and Trigger summaries and statuses cleanly: " + JsonSerializer.Serialize(tableObjs) + " | " + JsonSerializer.Serialize(childObjs));
 
             // Triggers.
             var trigger = await Peek(service, connectionId, Child("trigger", "T]'表", "TR]'表"), json);
@@ -521,6 +582,11 @@ internal static class PeekLiveChecks
             var typeColumns = tableType.Lists?.GetValueOrDefault("columns")?.Rows ?? [];
             check(typeColumns is [["Id", "int", false, "PK", null, null, null, "[Id] int NOT NULL"], ["Name", "nvarchar(10)", true, ..], ["Phone", _, true, ..]],
                 "a table type's Columns list reads its table object's columns, with its key: " + JsonSerializer.Serialize(typeColumns));
+            var ttPkName = (await sql("SELECT kc.name FROM sys.table_types AS tt JOIN sys.schemas AS sc ON sc.schema_id = tt.schema_id JOIN sys.key_constraints AS kc ON kc.parent_object_id = tt.type_table_object_id WHERE sc.name = N'Pk4]''Ü' AND tt.name = N'TT]''表';", database)).Scalar;
+            var ttPk = ttPkName is { Length: > 0 } ? await Peek(service, connectionId, Child("key", "TT]'表", ttPkName, "tableType"), json) : null;
+            check(ttPk is { Error: null } && ttPk.Facts["keyType"] as string == "PRIMARY_KEY_CONSTRAINT" && ttPk.Facts["parentTable"] as string == schema + ".TT]'表"
+                && ttPk.Facts["systemNamed"] is true && ttPk.Lists?["keyColumns"].Rows is [["Id", null, false, "int"]],
+                "a table type's primary key peeks below its tableType parent with the table type's own name: " + (ttPk is null ? "missing pk name" : Facts(ttPk)));
 
             // The scratch database, read on the server.
             var scratch = await Peek(service, connectionId, new ObjectRefDto("database", null, null, database), json);
@@ -574,6 +640,24 @@ internal static class PeekLiveChecks
                 && last is [var flag] && Bit(flag),
                 "a login without VIEW SERVER STATE reads the index's facts and columns, and its usage statement answers one refused column: "
                 + (granted.Error ?? refused.Error ?? JsonSerializer.Serialize(refused.Sets.Select(set => set.Count))));
+            // A login with VIEW DEFINITION (no VIEW SERVER STATE) reads table (including tableObjects), key and constraint cleanly.
+            var lowTableBatch = PeekSql.Render(ExplorerCatalog.Current.Peek.Kinds["table"], new SqlRender(band), ExplorerCatalog.Current.Peek.DefinitionPageChars);
+            var lowKeyBatch = PeekSql.Render(ExplorerCatalog.Current.Peek.Kinds["key"], new SqlRender(band), ExplorerCatalog.Current.Peek.DefinitionPageChars, "table");
+            var lowConstraintBatch = PeekSql.Render(ExplorerCatalog.Current.Peek.Kinds["constraint"], new SqlRender(band), ExplorerCatalog.Current.Peek.DefinitionPageChars, "table");
+            var lowTable = await sql("EXECUTE AS LOGIN = N'" + usageLogin.Replace("'", "''") + "';\nDECLARE @object_schema sysname = N'Pk4]''Ü', @object_name sysname = N'T]''表', @take int = 1025;\n"
+                + "BEGIN TRY\n" + lowTableBatch.Text + "END TRY\nBEGIN CATCH\nREVERT;\nTHROW;\nEND CATCH;\nREVERT;\n", database);
+            var lowKey = await sql("EXECUTE AS LOGIN = N'" + usageLogin.Replace("'", "''") + "';\nDECLARE @object_schema sysname = N'Pk4]''Ü', @object_name sysname = N'FkChild', @k1 sysname = N'FK]''表', @take int = 1025;\n"
+                + "BEGIN TRY\n" + lowKeyBatch.Text + "END TRY\nBEGIN CATCH\nREVERT;\nTHROW;\nEND CATCH;\nREVERT;\n", database);
+            var lowConstraint = await sql("EXECUTE AS LOGIN = N'" + usageLogin.Replace("'", "''") + "';\nDECLARE @object_schema sysname = N'Pk4]''Ü', @object_name sysname = N'T]''表', @k1 sysname = N'CK]''表', @take int = 1025;\n"
+                + "BEGIN TRY\n" + lowConstraintBatch.Text + "END TRY\nBEGIN CATCH\nREVERT;\nTHROW;\nEND CATCH;\nREVERT;\n", database);
+            check(lowTable.Status == "completed" && lowTable.Sets.Count == 5 && lowKey.Status == "completed" && lowKey.Sets.Count == 3 && lowConstraint.Status == "completed" && lowConstraint.Sets.Count == 2,
+                "a login without VIEW SERVER STATE reads table (with tableObjects), key and constraint batches cleanly: " + (lowTable.Error ?? lowKey.Error ?? lowConstraint.Error));
+            // Denying VIEW DEFINITION on the referenced table keeps the FK peek and keyColumns row working (with NULL referenced table/column).
+            var deniedRef = await sql("DENY VIEW DEFINITION ON OBJECT::" + s + ".[T]]'表] TO [peek_usage];\n", database);
+            var lowHiddenFk = await sql("EXECUTE AS LOGIN = N'" + usageLogin.Replace("'", "''") + "';\nDECLARE @object_schema sysname = N'Pk4]''Ü', @object_name sysname = N'FkChild', @k1 sysname = N'FK]''表', @take int = 1025;\n"
+                + "BEGIN TRY\n" + lowKeyBatch.Text + "END TRY\nBEGIN CATCH\nREVERT;\nTHROW;\nEND CATCH;\nREVERT;\n", database);
+            check(deniedRef.Status == "completed" && lowHiddenFk.Status == "completed" && lowHiddenFk.Sets.Count == 3 && lowHiddenFk.Sets[2] is [["ParentId", null, null, "int", ..]],
+                "an FK peek degrades cleanly when the login cannot view the referenced table: " + (deniedRef.Error ?? lowHiddenFk.Error ?? JsonSerializer.Serialize(lowHiddenFk.Sets.LastOrDefault())));
         }
         finally
         {
@@ -581,7 +665,8 @@ internal static class PeekLiveChecks
                 + "DROP TABLE IF EXISTS " + s + ".[ShapesCopy];\nDROP TABLE IF EXISTS " + s + ".[Shapes]]'表];\nDROP TYPE IF EXISTS " + s + ".[TT]]'表];\n"
                 + "DROP TYPE IF EXISTS " + s + ".[AT]]'表];\nDROP SYNONYM IF EXISTS " + s + ".[SYR];\nDROP SYNONYM IF EXISTS " + s + ".[SY]]'表];\n"
                 + "IF EXISTS (SELECT 1 FROM sys.triggers WHERE parent_class = 0 AND name = N'DTR]''表') DROP TRIGGER [DTR]]'表] ON DATABASE;\n"
-                + "DROP TABLE IF EXISTS " + s + ".[T]]'表];\nDROP TABLE IF EXISTS " + s + ".[UsesS];\nDROP SEQUENCE IF EXISTS " + s + ".[S]]'表];\nDROP SCHEMA IF EXISTS " + s + ";\n", database);
+                + (major >= 15 ? "DROP TABLE IF EXISTS " + s + ".[GEdge];\nDROP TABLE IF EXISTS " + s + ".[GNode];\n" : "")
+                + "DROP TABLE IF EXISTS " + s + ".[FkChild];\nDROP TABLE IF EXISTS " + s + ".[T]]'表];\nDROP TABLE IF EXISTS " + s + ".[UsesS];\nDROP SEQUENCE IF EXISTS " + s + ".[S]]'表];\nDROP SCHEMA IF EXISTS " + s + ";\n", database);
             var droppedLogin = await sql("IF EXISTS (SELECT 1 FROM sys.server_principals WHERE name = N'" + login.Replace("'", "''") + "') DROP LOGIN " + bracketed + ";\n"
                 + "IF EXISTS (SELECT 1 FROM sys.server_principals WHERE name = N'" + usageLogin.Replace("'", "''") + "') DROP LOGIN " + usageBracketed + ";\n", "master");
             check(dropped.Status == "completed" && droppedLogin.Status == "completed", "the P4 peek fixtures and the scratch login are dropped: " + (dropped.Error ?? droppedLogin.Error));

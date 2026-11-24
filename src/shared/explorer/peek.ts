@@ -6,7 +6,7 @@ import type { ExplorerError } from '../contracts.ts'
 import type { NodeKind, NodeSubtype } from './catalog.ts'
 import type { ObjectRef, ParentRef } from './refs.ts'
 
-export const peekKinds = ['table', 'view', 'procedure', 'function', 'index', 'trigger', 'databaseTrigger', 'serverTrigger', 'database', 'login', 'synonym', 'sequence', 'type',
+export const peekKinds = ['table', 'view', 'procedure', 'function', 'index', 'key', 'constraint', 'trigger', 'databaseTrigger', 'serverTrigger', 'database', 'login', 'synonym', 'sequence', 'type',
   'tableType'] as const satisfies readonly NodeKind[]
 export type PeekKind = typeof peekKinds[number]
 export const isPeekKind = (kind: string): kind is PeekKind => (peekKinds as readonly string[]).includes(kind)
@@ -28,11 +28,12 @@ export interface PeekFact { readonly id: string; readonly label: string; readonl
 export interface PeekGroup { readonly id: string; readonly title: string; readonly facts: readonly PeekFact[]; readonly subtypes?: readonly NodeSubtype[]; readonly refused?: string }
 /**
  * Lists a peek reads with its facts, in the same batch, each on a tab of its own: a table's, view's or table type's columns, a
- * procedure's or function's parameters, an index's key and included columns, a trigger's events, a database's files, a login's
- * server roles, and its user mapping (one statement in each database it can read, after the batch). Each keeps at most
- * `peekLimits.listRows` rows, in the order the backend reads them, and shows as a local grid (`PeekListGrid`).
+ * table's indexes, keys, constraints and triggers, a procedure's or function's parameters, an index's key and included columns,
+ * a key's columns, a trigger's events, a database's files, a login's server roles, and its user mapping (one statement in each
+ * database it can read, after the batch). Each keeps at most `peekLimits.listRows` rows, in the order the backend reads them,
+ * and shows as a local grid (`PeekListGrid`).
  */
-export const peekListIds = ['columns', 'parameters', 'indexColumns', 'events', 'files', 'serverRoles', 'userMapping'] as const
+export const peekListIds = ['columns', 'tableObjects', 'parameters', 'indexColumns', 'keyColumns', 'events', 'files', 'serverRoles', 'userMapping'] as const
 export type PeekListId = typeof peekListIds[number]
 export interface PeekListColumn { readonly id: string; readonly label: string; readonly format: PeekFormat }
 export interface PeekListSpec { readonly id: PeekListId; readonly title: string; readonly columns: readonly PeekListColumn[]; readonly empty: string }
@@ -45,6 +46,10 @@ export const peekLists: { readonly [L in PeekListId]: PeekListSpec } = {
     columns: [column('name', 'Name', 'text'), column('type', 'Type', 'text'), column('nullable', 'Nullable', 'bool'), column('key', 'Key', 'text'), column('identity', 'Identity', 'text'),
       column('computed', 'Computed', 'text'), column('default', 'Default', 'text'), column('declaration', 'Definition', 'text')]
   },
+  tableObjects: {
+    id: 'tableObjects', title: 'Indexes & keys', empty: 'No indexes, keys, constraints or triggers.',
+    columns: [column('kind', 'Kind', 'text'), column('name', 'Name', 'text'), column('summary', 'Definition', 'text'), column('status', 'Status', 'text')]
+  },
   parameters: {
     id: 'parameters', title: 'Parameters', empty: 'No parameters.',
     columns: [column('name', 'Name', 'text'), column('type', 'Type', 'text'), column('direction', 'Direction', 'text'), column('default', 'Default', 'text'), column('declaration', 'Definition', 'text')]
@@ -52,6 +57,10 @@ export const peekLists: { readonly [L in PeekListId]: PeekListSpec } = {
   indexColumns: {
     id: 'indexColumns', title: 'Columns', empty: 'No columns.',
     columns: [column('name', 'Column', 'text'), column('included', 'Included', 'bool'), column('descending', 'Descending', 'bool'), column('type', 'Type', 'text')]
+  },
+  keyColumns: {
+    id: 'keyColumns', title: 'Key columns', empty: 'No columns.',
+    columns: [column('name', 'Column', 'text'), column('referencedColumn', 'Referenced column', 'text'), column('descending', 'Descending', 'bool'), column('type', 'Type', 'text')]
   },
   events: { id: 'events', title: 'Events', empty: 'No events.', columns: [column('event', 'Event', 'code'), column('first', 'First', 'bool'), column('last', 'Last', 'bool')] },
   files: {
@@ -94,7 +103,7 @@ const triggerOptions = [fact('executeAs', 'Execute as', 'text'), ...sqlOptions]
 
 export const peekSpecs: { readonly [K in PeekKind]: PeekKindSpec } = {
   table: {
-    kind: 'table', definition: 'script', tabs: ['definition', 'columns', 'dependencies', 'rows'], groups: [
+    kind: 'table', definition: 'script', tabs: ['definition', 'columns', 'tableObjects', 'dependencies', 'rows'], groups: [
       { id: 'general', title: 'General', facts: [...owned, fact('replicated', 'Replicated', 'bool'), fact('lockEscalation', 'Lock escalation', 'code'),
         fact('memoryOptimized', 'Memory optimized', 'bool'), fact('temporal', 'Temporal', 'code', 13), fact('ledger', 'Ledger', 'code', 16)] },
       { id: 'storage', title: 'Storage', facts: [fact('rowCount', 'Row count', 'count'), fact('dataSpace', 'Data space', 'kb'), fact('indexSpace', 'Index space', 'kb'),
@@ -133,6 +142,22 @@ export const peekSpecs: { readonly [K in PeekKind]: PeekKindSpec } = {
       { id: 'usage', title: 'Usage since the server started', refused: 'The login cannot read index usage (that needs VIEW SERVER STATE).', facts: [
         fact('userSeeks', 'User seeks', 'count'), fact('userScans', 'User scans', 'count'), fact('userLookups', 'User lookups', 'count'), fact('userUpdates', 'User updates', 'count'),
         fact('lastSeek', 'Last seek', 'date'), fact('lastScan', 'Last scan', 'date'), fact('lastLookup', 'Last lookup', 'date'), fact('lastUpdate', 'Last update', 'date')] }
+    ]
+  },
+  key: {
+    kind: 'key', definition: 'script', tabs: ['definition', 'keyColumns'], groups: [
+      { id: 'general', title: 'General', facts: [fact('keyType', 'Key type', 'code'), fact('parentTable', 'Parent table', 'text'), fact('referencedTable', 'Referenced table', 'text'),
+        fact('deleteAction', 'Delete action', 'code'), fact('updateAction', 'Update action', 'code'), ...dated, fact('systemNamed', 'System named', 'bool')] },
+      { id: 'status', title: 'Enforcement & Status', facts: [fact('disabled', 'Disabled', 'bool'), fact('notTrusted', 'Not trusted', 'bool'),
+        fact('notForReplication', 'Not for replication', 'bool'), fact('indexType', 'Index type', 'text')] }
+    ]
+  },
+  constraint: {
+    kind: 'constraint', definition: 'script', tabs: ['definition'], groups: [
+      { id: 'general', title: 'General', facts: [fact('constraintType', 'Constraint type', 'code'), fact('parentTable', 'Parent table', 'text'), fact('column', 'Column', 'text'),
+        fact('expression', 'Expression', 'text'), ...dated, fact('systemNamed', 'System named', 'bool')] },
+      { id: 'status', title: 'Enforcement & Status', facts: [fact('disabled', 'Disabled', 'bool'), fact('notTrusted', 'Not trusted', 'bool'),
+        fact('notForReplication', 'Not for replication', 'bool')] }
     ]
   },
   trigger: {

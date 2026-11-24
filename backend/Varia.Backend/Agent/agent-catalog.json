@@ -114,7 +114,7 @@
     {"arguments":["@proxy_id","@subsystem_id"],"database":"msdb","lane":"AG-8b","name":"sp_revoke_proxy_from_subsystem"},
     {"arguments":["@proxy_id","@login_name","@fixed_server_role","@msdb_role"],"database":"msdb","lane":"AG-8b","name":"sp_grant_login_to_proxy"},
     {"arguments":["@proxy_id","@name"],"database":"msdb","lane":"AG-8b","name":"sp_revoke_login_from_proxy"},
-    {"database":"msdb","lane":"AG-5b","name":"sp_cycle_agent_errorlog"},
+    {"arguments":[],"database":"msdb","lane":"AG-5b","name":"sp_cycle_agent_errorlog"},
     {"arguments":["@profile_name","@name","@subject","@body"],"database":"msdb","lane":"AG-7","name":"sp_notify_operator"}
   ]
 }

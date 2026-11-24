@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (439)
+## Commands (441)
 
 ### File
 
@@ -482,6 +482,8 @@ keys it uses are listed below.
 | View History | `agent.viewHistory` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › View History |
 | Refresh History | `agent.refreshHistory` | — | — | — | `agentEnabled && backendReady && activeDocumentIsLogViewer` | — |
 | Delete History… | `agent.deleteHistory` | — | — | — | `agentEnabled && backendReady && activeDocumentIsLogViewer` | — |
+| View Agent Log | `agent.viewAgentLog` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › View Agent Log |
+| Recycle Agent Error Log… | `agent.recycleErrorLog` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › Recycle |
 | Manage Schedules | `agent.schedules` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › Manage Schedules |
 | New Schedule… | `agent.newSchedule` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › New › Schedule… |
 | Job… (not in the palette) | `agent.newJobOnAgent` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › New › Job… |
@@ -809,6 +811,8 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `1_monitor` | **J**ob History | `bigquery.jobHistory` | `((explorerNode == 'server' && explorerProvider == 'bigquery') \|\| explorerNode == 'bqProject') && !explorerServerLost` |
 | `1_monitor` | View **H**istory | `agent.viewHistory` | `(explorerNode == 'agent' \|\| (explorerNode == 'folder' && explorerFolder == 'agentJobs') \|\| explorerNode == 'agentJob') && !explorerServerLost` |
 | `1_monitor` | **M**anage Schedules | `agent.schedules` | `explorerNode == 'folder' && explorerFolder == 'agentJobs' && !explorerServerLost` |
+| `1_monitor` | View A**g**ent Log | `agent.viewAgentLog` | `((explorerNode == 'folder' && explorerFolder == 'agentErrorLogs') \|\| explorerNode == 'agentErrorLog') && !explorerServerLost` |
+| `1_monitor` | Rec**y**cle | `agent.recycleErrorLog` | `((explorerNode == 'folder' && explorerFolder == 'agentErrorLogs') \|\| explorerNode == 'agentErrorLog') && !explorerServerLost && explorerServerEngine == 'box'` |
 | `1_operations` | A**c**tive Operations | `ssis.activeOperations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_operations` | All E**x**ecutions | `ssis.allExecutions` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_operations` | All Vali**d**ations | `ssis.allValidations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |

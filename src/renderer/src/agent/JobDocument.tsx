@@ -15,6 +15,8 @@ import DocumentFrame, { sectionDomId, type FrameSection, type Verb } from '../ki
 import { selectSection } from '../kit/document-frame'
 import { createFromText } from '../../../shared/agent/create-from.ts'
 import JobCopyChanges, { CopyCompare } from './JobCopyChanges'
+import CreateSeveral, { SeveralBanner } from './CreateSeveral'
+import { createSeveralText } from '../../../shared/agent/create-several.ts'
 import InlineError from '../kit/InlineError'
 import PropertyField, { FieldHints, FieldHintStrip, fieldAria } from '../kit/PropertyField'
 import Skeleton from '../kit/Skeleton'
@@ -302,6 +304,12 @@ export default function JobDocument({ documentId }: { documentId: string }) {
     content: <JobCopyChanges state={state} model={model} draft={draft} editable={editable} problems={problems} service={jobDocuments} goTo={goTo} />
   })
   const name = model?.job?.name ?? (draft?.name || 'New Job')
+  // Create several (AG-6f): the copy turned into a table owns the tab; a row's full editor says where its edits go.
+  if (state.several) return <DocumentFrame id={frameId} title={createSeveralText.tab} subtitle={state.source ? `New jobs like ${state.source.base.name}` : 'New jobs'}
+    crumbs={[{ label: state.server, title: state.login ? `${state.server} (${state.login})` : state.server }, { label: 'SQL Server Agent' }, { label: 'Jobs' }]}
+    banner={<>{state.error && <InlineError message={state.error.message} code={state.error.code} context={`Create several jobs on ${state.server}`} />}<SeveralBanner state={state} service={jobDocuments} /></>}
+    attributes={{ 'data-agent-job': state.id }}><CreateSeveral state={state} service={jobDocuments} /></DocumentFrame>
+  const rowAt = state.row ? jobDocuments.rowNumber(state.id) : undefined, rowLinked = state.row ? jobDocuments.rowLinked(state.id) : false
   const recovery = state.phase === 'loadFailed' || state.error?.code === 'NOT_FOUND' ? [{ label: 'Reload', run: () => jobDocuments.reload(state.id) }] : []
   const banner = <>
     {phaseLabel && <p className="document-status" role="status"><Icon name="loading" spin />{phaseLabel}</p>}
@@ -309,7 +317,9 @@ export default function JobDocument({ documentId }: { documentId: string }) {
       : state.error && !state.error.field && <InlineError message={state.error.message} code={state.error.code} context={`Job ${name} on ${state.server}`} actions={recovery} />}
     {jobErrorField(state.error) && !state.stale && <p className="property-field-error" role="alert"><Icon name="error" />{`Not saved: ${agentJobFieldLabels[jobErrorField(state.error)!]}. Nothing was changed; your changes are kept.`}</p>}
     {!state.error && state.notice && <p className="document-status" role="status"><Icon name="pass" />{state.notice}</p>}
-    {state.source && <div className="agent-copy-banner" role="note"><Icon name="copy" /><span>{createFromText.banner(state.source.base.name)}</span>
+    {state.row && <div className="agent-copy-banner" role="note"><Icon name="copy" /><span>{rowLinked && rowAt ? jobDocuments.rowPaused(state.id) ? createSeveralText.editorPaused(rowAt) : createSeveralText.editorBanner(rowAt) : createSeveralText.editorOrphan}</span>
+      {rowLinked && <button type="button" className="link-button" onClick={() => jobDocuments.backToTable(state.id)}>{createSeveralText.backToTable}</button>}</div>}
+    {state.source && !state.row && <div className="agent-copy-banner" role="note"><Icon name="copy" /><span>{createFromText.banner(state.source.base.name)}</span>
       <button type="button" className="link-button" aria-expanded={!!state.compareOpen} onClick={() => jobDocuments.toggleCompare(state.id)}>{state.compareOpen ? createFromText.compareHide : createFromText.compare}</button></div>}
     {state.source && state.compareOpen && <CopyCompare state={state} service={jobDocuments} />}
     {model?.readOnly && <p className="document-status"><Icon name="lock" />{model.job ? agentJobText.readOnly(model.job.owner) : model.readOnly}</p>}

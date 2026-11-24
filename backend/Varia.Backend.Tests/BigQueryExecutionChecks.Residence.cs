@@ -2048,10 +2048,11 @@ internal static partial class BigQueryExecutionChecks
             using var remote = Remote(store, blocks, rows: 1000, rowBytes: 200_016, cache: 16L << 20);
             var (next, rows) = await ReadRemote(remote, 0, 10);
             var most = remote.CachedBytes;
-            // Sampled until the read-ahead's fetches have all settled.
-            SpinWait.SpinUntil(() => { most = Math.Max(most, remote.CachedBytes); return blocks.Calls.Count >= 3 && remote.FetchingBlocks() == 0; }, 15_000);
-            check(next >= 10 && Consecutive(rows, 0, 10) && remote.BlockRows < RemoteResult.MinBlockRows && most <= remote.CacheLimit && store.WindowCacheBytes <= remote.CacheLimit,
-                $"very wide rows read in blocks that fit the cache, which stays within its limit: {next} {remote.BlockRows} {most} {remote.CacheLimit}");
+            // Sampled until the read-ahead's fetches have all settled: the cache holds two of these blocks, so the read's block
+            // and one block ahead.
+            var settled = SpinWait.SpinUntil(() => { most = Math.Max(most, remote.CachedBytes); return blocks.Calls.Count >= 2 && remote.FetchingBlocks() == 0; }, 15_000);
+            check(settled && next >= 10 && Consecutive(rows, 0, 10) && remote.BlockRows < RemoteResult.MinBlockRows && most <= remote.CacheLimit && store.WindowCacheBytes <= remote.CacheLimit,
+                $"very wide rows read in blocks that fit the cache, which stays within its limit: {settled} {blocks.Calls.Count} {next} {remote.BlockRows} {most} {remote.CacheLimit}");
         }
         // Rows far wider than the first page's (which sized the blocks): the block stops being built at the cache's limit and
         // is refused, rather than built whole first (the read and its two read-ahead blocks together write fewer rows than one
@@ -2196,12 +2197,13 @@ internal static partial class BigQueryExecutionChecks
             };
             await ReadRemote(remote, 0, 10);
             if (again is not null) await again;
-            // Every fetch settled: a stray second fetch of block 1 would have started by now.
-            SpinWait.SpinUntil(() => remote.CachedBlocks() is [0, 1, 2] && remote.FetchingBlocks() == 0, 10_000);
+            // Every fetch settled (the second read reads ahead too): a stray second fetch of block 1 would have started by now.
+            var settled = SpinWait.SpinUntil(() => remote.CachedBlocks() is [0, 1, 2, ..] && remote.FetchingBlocks() == 0, 15_000);
+            var cached = string.Join(",", remote.CachedBlocks());
             remote.Dispose();
             var freed = SpinWait.SpinUntil(() => store.WindowCacheBytes == 0 && store.UsedBytes == 0, 5000);
-            check(fired == 1 && freed && blocks.Calls.Count(call => call.First == remote.BlockRows) == 1,
-                $"a block evicted between the read-ahead's choice and its fetch is not fetched, and nothing stays charged: {fired} {store.WindowCacheBytes} {blocks.Calls.Count(call => call.First == remote.BlockRows)}");
+            check(settled && fired == 1 && freed && blocks.Calls.Count(call => call.First == remote.BlockRows) == 1,
+                $"a block evicted between the read-ahead's choice and its fetch is not fetched, and nothing stays charged: {settled} {cached} {fired} {store.WindowCacheBytes} {blocks.Calls.Count(call => call.First == remote.BlockRows)}");
         }
     }
 }

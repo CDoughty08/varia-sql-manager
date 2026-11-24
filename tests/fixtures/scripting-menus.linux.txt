@@ -594,6 +594,8 @@ explorer.context, for an index
   ---
   Re&fresh
 explorer.context, for a foreign key
+  Pee&k (disabled)
+  ---
   &Script Key as >
     &CREATE To >
       &New Query Editor Window
