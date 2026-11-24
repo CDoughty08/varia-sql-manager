@@ -25,8 +25,6 @@ export interface RecoveryServiceOptions {
   readonly newId?: () => string
   /** A recovered BigQuery query's jobs, to re-attach to once it connects (QueryService.restoreJobs). */
   readonly restoredJobs?: (tabId: string, jobs: NonNullable<RecoveredDocument['jobs']>) => void
-  /** SQL Server Agent's release gate (`agentEnabled`): Agent documents' copies are offered and recovered only while it is on. */
-  readonly agentEnabled?: boolean
 }
 /** When a copy was saved, as the Recover dialog says it: "just now", "5 minutes ago", "yesterday", "3 days ago". */
 export function savedAgo(savedAt: string, now: number = Date.now()): string {
@@ -84,13 +82,11 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
   }
   /** Asks main again what there is to recover. */
   async refresh(): Promise<readonly RecoveryEntry[]> {
-    let entries: RecoveryEntry[]
+    let entries: readonly RecoveryEntry[]
     try { entries = unwrap(await this.options.api.listRecovery()) } catch (error) {
       this.warnOnce(`AutoRecover could not list the queries it kept: ${failed(error)}`)
       return this.getSnapshot().entries
     }
-    // Behind the release gate, a SQL Server Agent document's copy is not offered (it stays on disk until it ages out or the gate is on).
-    if (!this.options.agentEnabled) entries = entries.filter(entry => !isKeptAgentKind(entry.kind))
     if (!this.disposed) this.publish({ ...this.getSnapshot(), entries })
     return entries
   }
@@ -222,9 +218,8 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
           let taken
           try { taken = unwrap(await this.options.api.takeRecovery(id)) } catch (error) { problems.push(failed(error)); continue }
           if (taken.file) files.push(taken.file)
-          // A SQL Server Agent document's copy reopens through its own service, on the target it was kept with, behind the release gate.
+          // A SQL Server Agent document's copy reopens through its own service, on the target it was kept with.
           if (isKeptAgentKind(taken.kind)) {
-            if (!this.options.agentEnabled) { problems.push(keptAgentText.unavailable); continue }
             let reopened
             try { reopened = this.options.documents.reopenKept(taken.kind, { name: taken.name, state: taken.text, ...taken.targetId ? { targetId: taken.targetId } : {} }) } catch { problems.push(keptAgentText.unreadable(taken.name)); continue }
             this.kept.set(reopened.id, { id })

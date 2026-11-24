@@ -4,15 +4,12 @@ import { explorerNodeOf } from '../menus/targets'
 import { serverItems } from './query'
 
 /**
- * The proxy and Credential documents' commands (AG-8b, docs/sql-server-agent.md › Proxies and credentials), registered only behind the release
- * gate (agentEnabled). New Proxy… opens on the server of the Object Explorer node its menu runs on (active to the subsystem when that node is a
+ * The proxy and Credential documents' commands (AG-8b, docs/sql-server-agent.md › Proxies and credentials). New Proxy… opens on the server of the Object Explorer node its menu runs on (active to the subsystem when that node is a
  * subsystem's folder), else the active document's, else the one live SQL Server or the one picked from several; Proxy… in the SQL Server Agent
  * node's New submenu is the same document. New Credential… opens on the Credentials folder's or a credential's server. Each document's Save
  * and Reload act on the document whose header runs them (`tabId`), else the active one.
  */
-export function agentProxyContribution({ commands, documents, connections, explorer, quickInput, proxyDocuments, credentialDocuments }: Pick<Workbench, 'commands' | 'documents' | 'connections' | 'explorer' | 'quickInput' | 'proxyDocuments' | 'credentialDocuments'>,
-  options: { readonly agentEnabled?: boolean } = {}): Disposable {
-  if (!options.agentEnabled) return { dispose: () => {} }
+export function agentProxyContribution({ commands, documents, connections, explorer, quickInput, proxyDocuments, credentialDocuments }: Pick<Workbench, 'commands' | 'documents' | 'connections' | 'explorer' | 'quickInput' | 'proxyDocuments' | 'credentialDocuments'>): Disposable {
   const live = (id: string | undefined) => id !== undefined && connections.isLiveSqlServer(id) ? id : undefined
   const target = (args?: CommandArgs, selectionFirst = false): string | undefined => {
     const node = explorerNodeOf(args)

@@ -379,11 +379,11 @@ export interface AgentScheduleCommandEntry {
   readonly unavailableHint: string
   readonly menus?: readonly { readonly menu: 'explorer.context' | 'explorer.new'; readonly group: string; readonly order: number; readonly mnemonic?: string; readonly title?: string; readonly when?: string }[]
 }
-const inSchedules = 'agentEnabled && backendReady && activeDocumentIsAgentSchedules'
-const connected = 'agentEnabled && backendReady && hasConnection'
+const inSchedules = 'backendReady && activeDocumentIsAgentSchedules'
+const connected = 'backendReady && hasConnection'
 const connectFirst = 'Connect to a SQL Server whose SQL Server Agent you can see first.'
 /**
- * The Schedules document's commands, all behind the release gate: Manage Schedules (the Jobs folder's menu, as SSMS, and the palette)
+ * The Schedules document's commands: Manage Schedules (the Jobs folder's menu, as SSMS, and the palette)
  * opens the Schedules document that replaces SSMS's Manage Schedules dialog; New Schedule… (the Agent node's New ›, and the palette)
  * opens it with a new schedule in its editor. The Agent node's New › Job… is New Job under a command of its own, since macOS's context
  * menus show placements by command id and agent.newJob's own placement would show beside the submenu (the palette has New Job…). Save, Refresh and Delete act on the Schedules document whose toolbar runs them, else the

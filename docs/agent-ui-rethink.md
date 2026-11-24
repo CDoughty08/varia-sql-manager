@@ -1,6 +1,7 @@
 # Rethinking SQL Server Agent's UI
 
-Status: **adopted by the owner on 2026-11-16** for Agent's first release, now 0.11.0 (0.10.0 focuses on BigQuery).
+Status: **adopted by the owner on 2026-11-16** for Agent's first release, which shipped in 0.10.0 alongside BigQuery (owner decision
+2026-11-23).
 `docs/agent-plan.md`'s lanes were rewritten to match on 2026-11-18. Mocks: the "Rethink · …" groups
 at the top of `docs/mockups/sql-server-agent.html`; the SSMS-style scenes below them stay as reference.
 
@@ -134,7 +135,7 @@ As › CREATE, edit the text, run it. Varia adds a direct path.
 
 ## Tiers (decided 2026-11-16)
 
-In Agent's first release (0.11.0):
+In Agent's first release (0.10.0):
 - The document model.
 - Inline creation.
 - Alert and proxy on one screen.
@@ -148,10 +149,13 @@ In Agent's first release (0.11.0):
 - The Operators and notifications grid (it replaces three pages, so it is close to neutral).
 - Bulk Change owner and Attach schedule (one request per job).
 - Create several.
-- Schedules Timeline.
+
+After the first release, in docs/agent-plan.md's lanes:
+- Schedules Timeline (AG-14).
+- Agent overview health checks (AG-15).
+- Activity Monitor job links (AG-16).
 
 Later:
-- Agent overview health checks.
 - Copy to another server (a write on a second connection).
 - New Job templates.
 - A Flow view of step targets.

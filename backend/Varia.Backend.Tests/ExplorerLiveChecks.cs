@@ -88,7 +88,7 @@ internal static class ExplorerLiveChecks
             check(profile.Linux == linux, "the profile says whether SQL Server runs on Linux, as sys.dm_os_host_info does (" + (linux ? "Linux" : "Windows") + ")");
         }
         check(info.Linux == linux, "connect reports whether SQL Server runs on Linux, for the explorerServerLinux context key");
-        // SQL Server Agent's node follows the folders where the edition has Agent (the renderer shows it only behind its release gate).
+        // SQL Server Agent's node follows the folders where the edition has Agent.
         string[] serverRows = Varia.Backend.Agent.AgentCatalog.Current.PlatformOf(info.EngineEdition ?? 0, linux) is null
             ? ["Databases", "Security", "Server Objects", "Integration Services Catalogs"]
             : ["Databases", "Security", "Server Objects", "Integration Services Catalogs", "SQL Server Agent"];

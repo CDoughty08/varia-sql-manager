@@ -284,13 +284,14 @@ describe('the standalone schedule save', () => {
     expect(scheduleSaveSchema.safeParse({ op: 'drop', schedule: guard }).success).toBe(false)
     expect(scheduleSaveSchema.safeParse({ op: 'update', schedule: guard, jobs: [{ jobId: 'not-a-guid', version: 1, attach: true }] }).success).toBe(false)
   })
-  it('keeps every command behind the release gate, with Manage Schedules on the Jobs folder and New › Schedule… on the Agent node', () => {
-    for (const [id, entry] of Object.entries(agentScheduleCommandEntries())) expect(entry.precondition, id).toContain('agentEnabled')
+  it('needs no release gate for any command (AG-9), with Manage Schedules on the Jobs folder and New › Schedule… on the Agent node', () => {
+    for (const [id, entry] of Object.entries(agentScheduleCommandEntries())) expect(entry.precondition, id).not.toContain('agentEnabled')
     expect(commandDescriptor('agent.schedules').menus?.[0].when).toContain("explorerFolder == 'agentJobs'")
     expect(commandDescriptor('agent.newSchedule').menus?.[0]).toMatchObject({ menu: 'explorer.new', title: 'Schedule…', when: "explorerNode == 'agent' && !explorerServerLost" })
     expect(commandDescriptor('agent.newJobOnAgent').menus?.[0]).toMatchObject({ menu: 'explorer.new', when: "explorerNode == 'agent' && !explorerServerLost" })
     expect(commandDescriptor('agent.newJob').menus?.map(item => item.menu)).not.toContain('explorer.new')
-    expect(JSON.stringify(submenus['explorer.new'])).toContain("(explorerNode == 'agent' && agentEnabled)")
+    expect(JSON.stringify(submenus['explorer.new'])).toContain("|| explorerNode == 'agent'")
+    expect(JSON.stringify(submenus['explorer.new'])).not.toContain('agentEnabled')
   })
 })
 
@@ -305,7 +306,7 @@ const schedulesModel = (patch: Partial<AgentSchedulesModel> = {}): AgentSchedule
 })
 
 function schedulesWorkbench(first = schedulesModel()) {
-  const fixture = workbenchFixture({ agentPreview: true })
+  const fixture = workbenchFixture()
   cleanups.push(() => fixture.dispose())
   fixture.api.push(readyBackend())
   fixture.connect(connectionInfo('c1'))
@@ -697,7 +698,7 @@ describe("the job document's Schedules section", () => {
     schedules: [record(1)], now: '2026-11-22T14:30:00'
   }
   function jobWorkbench(document = job) {
-    const fixture = workbenchFixture({ agentPreview: true })
+    const fixture = workbenchFixture()
     cleanups.push(() => fixture.dispose())
     fixture.api.push(readyBackend())
     fixture.connect(connectionInfo('c1'))

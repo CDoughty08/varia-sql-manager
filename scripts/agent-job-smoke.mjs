@@ -1,5 +1,5 @@
-// SQL Server Agent's job document (AG-6a) against the fake backend's jobs (tests/fixtures/backend.mjs, VARIA_TEST_BACKEND=workbench;
-// the smoke runs open the release gate): double-click and Enter in Job Activity Monitor open one tab per job with its live state, an
+// SQL Server Agent's job document (AG-6a) against the fake backend's jobs (tests/fixtures/backend.mjs, VARIA_TEST_BACKEND=workbench):
+// double-click and Enter in Job Activity Monitor open one tab per job with its live state, an
 // edit counts on Save, Save sends one agentJob action carrying the version it read, a save that loses the race (the job-save-race
 // control file) opens the field-by-field compare whose Reload and keep my changes saves on the next try, Start once at step sends the
 // chosen step, Steps reorders, parses, deletes with Undo and saves the renumbering (AG-6b), and New Job from the palette copies an existing
