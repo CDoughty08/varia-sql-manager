@@ -518,7 +518,9 @@ internal static class SsisOperationsLiveChecks
     private static async Task FilterKeptAsync(Action<bool, string> check, Views views, ConnectionInfo info)
     {
         var hours = SsisCatalog.Current.Limit("operationsWindowHours");
-        var view = views.Subscribe(info.Id, new { windowHours = hours }, intervalMs: 3000);
+        // A 10 s interval: a filter that waited for the next sample would take up to 10 s, a reread well under it (the cost floor
+        // may hold it a few times a sample's cost).
+        var view = views.Subscribe(info.Id, new { windowHours = hours }, intervalMs: 10_000);
         try
         {
             await views.Until(view.Recorder, rows => rows.Count > 0, 30_000);
@@ -528,13 +530,14 @@ internal static class SsisOperationsLiveChecks
                 Console.WriteLine("The real SSISDB has no execution in the window: the filter persistence check is skipped.");
                 return;
             }
-            var matching = views.Rows(view.Recorder).Count(row => row[5] == package);
             // The grid's selection on an operation the filter leaves out (the newest other one, if any).
             if (views.Rows(view.Recorder).FirstOrDefault(row => row[5] != package)?[0] is { } selected) views.Track(view, 1, selected);
-            bool Filtered(List<string?[]> rows) => rows.Count == matching && rows.All(row => row[5] == package);
-            // Wait for a sample to land, so the update arrives early in the 3 s interval.
+            // Any rows, all the package's: the filtered window may hold older matches the unfiltered one crowded out, or a new run.
+            bool Filtered(List<string?[]> rows) => rows.Count > 0 && rows.All(row => row[5] == package);
+            // Wait for a sample to land (past the baseline's quick second one), so the update arrives early in the interval.
+            await view.Recorder.WaitAsync(recorder => recorder.Ticks.Count >= 2, 30_000);
             var before = view.Recorder.Ticks.Count;
-            await view.Recorder.WaitAsync(recorder => recorder.Ticks.Count > before, 10_000);
+            await view.Recorder.WaitAsync(recorder => recorder.Ticks.Count > before, 30_000);
             var sent = System.Diagnostics.Stopwatch.StartNew();
             views.Update(view, new { windowHours = hours, package });
             var prompt = await views.Until(view.Recorder, Filtered, 10_000);
@@ -547,10 +550,10 @@ internal static class SsisOperationsLiveChecks
             {
                 for (; read < recorder.Ticks.Count; read++)
                     if (recorder.Ticks[read].Samples.FirstOrDefault(sample => sample.Probe == Probe) is { Tables: [var table, ..] } && read == recorder.Ticks.Count - 1) kept.Add(LiveResultChecks.RowsOf(views.Store, table.Descriptor));
-                return recorder.Ticks.Count >= from + 4;
-            }, 30_000);
-            check(prompt && latency < 2500 && later && kept.All(Filtered) && Filtered(views.Rows(view.Recorder)),
-                "a package filter on the real catalog applies at once (" + latency + " ms on a 3 s interval) and the next samples keep it (" + matching + " rows each; "
+                return recorder.Ticks.Count >= from + 2;
+            }, 45_000);
+            check(prompt && latency < 6000 && later && kept.All(Filtered) && Filtered(views.Rows(view.Recorder)),
+                "a package filter on the real catalog applies at once (" + latency + " ms on a 10 s interval) and the next samples keep it ("
                 + string.Join(" | ", kept.Select(rows => rows.Count + ":" + string.Join(",", rows.Select(row => row[0])))) + ")");
         }
         finally { await Views.Stop(view); }

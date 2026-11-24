@@ -159,8 +159,8 @@ What the checks prove:
   notes.
 - **Operations against the real catalog** (`SsisOperationsLiveChecks.RealAsync`, `VARIA_TEST_SSIS=1`, when SSISDB exists):
   the source reads the real views at the isolation the catalog's READ_COMMITTED_SNAPSHOT picks, with every column and tile,
-  and reports the probe's cost; then, on a 3 s view, a package filter (the newest execution's) applies at once, a followed
-  operation it leaves out does not stay as a departed row, and the next four samples keep exactly the matching rows. It only
+  and reports the probe's cost; then, on a 10 s view, a package filter (the newest execution's) applies well within the interval, a
+  followed operation it leaves out does not stay as a departed row, and the next samples keep only that package's rows. It only
   reads, and skips the filter check when the window holds no execution.
 - **Drift check** (`VARIA_TEST_SSIS=1`): the real `SSISDB`'s shape equals its band's manifest entry. With
   `VARIA_TEST_SQL_SCRATCH=1` too, so does the Integration Services feature's own catalog backup, restored as a marked
