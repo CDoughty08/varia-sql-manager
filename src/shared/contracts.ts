@@ -5,6 +5,7 @@ import type { ConnectContext, ConnectionEnvironmentInput, ConnectionLibraryView,
 import type { ConnectionAuthentication, ConnectionFailureReason } from './connection-targets'
 import type { ConnectionBindingsChanged } from './connection-bindings'
 import type { BigQueryLibraryView, BigQueryProfileInput, PickedKeyFile } from './bigquery-connections'
+import type { StepScriptSubsystem } from './agent/step-file'
 import type { BigQueryDryRunRequest, BigQueryDryRunResult } from './bigquery/dry-run'
 import type { ResultsRemoteQueryParams } from './bigquery/remote-view'
 import type { BigQueryPreviewTarget, BigQueryProperties, BigQueryPropertiesRequest } from './bigquery/objects'
@@ -968,6 +969,10 @@ export interface VariaApi {
   pickKeyFile(authentication: 'serviceAccountKey' | 'externalAccount'): Promise<ApiResult<PickedKeyFile | null>>
   /** Decision 49: the user confirmed the token file a picked federation configuration reads. */
   confirmFederationSource(keyFile: string, source: string): Promise<ApiResult<void>>
+  /** agentStepScript.open (AG-11): Load from file… on a CmdExec or PowerShell job step. Main shows its open dialog, filtered to the step
+   *  type's scripts plus All files, and reads the chosen file under the step command's limit. Resolves its text only (never its path), or
+   *  null when the user cancelled. */
+  openAgentStepScript(subsystem: StepScriptSubsystem): Promise<ApiResult<string | null>>
   disconnect(connectionId: string): Promise<ApiResult<RpcMethods['connections.disconnect']['result']>>
   /** BigQuery before connecting: the account the credential signs in as, and a page of the projects it can see. */
   bigQueryAccount(params: BigQueryCredentialParams): Promise<ApiResult<BigQueryAccount>>
