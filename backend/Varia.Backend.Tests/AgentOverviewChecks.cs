@@ -54,8 +54,9 @@ internal static class AgentOverviewChecks
             {
                 "jobDocumentFacts" => [["sa", sysadmin ? 1 : 0, 1]],
                 "clock" => [[Now]],
-                // job_id, name, enabled, owner, category, last_run_date, last_run_time, last_run_outcome, status, email, page, netsend, has_schedule
-                "overviewJobs" => [[Nightly, "Nightly", 1, "sa", "[Uncategorized]", 20261123, 30000, 0, 4, 2, 0, 0, 1], [Purge, "Purge", 1, "CONTOSO\\jsmith", "[Uncategorized]", 0, 0, 5, 4, 0, 0, 0, 0]],
+                // job_id, name, enabled, owner, category, last_run_date, last_run_time, last_run_outcome, status, email, page, netsend, has_schedule, date_created
+                "overviewJobs" => [[Nightly, "Nightly", 1, "sa", "[Uncategorized]", 20261123, 30000, 0, 4, 2, 0, 0, 1, new DateTime(2026, 1, 2, 3, 4, 5)],
+                    [Purge, "Purge", 1, "CONTOSO\\jsmith", "[Uncategorized]", 0, 0, 5, 4, 0, 0, 0, 0, null]],
                 "properties" => [[1000, 100, 10, 600]],
                 "overviewAlerts" => [["Severity 017", 1, 0, 17, 20261120, 101010, 1]],
                 "mailProfiles" => [[1, "AgentMail"]],
@@ -96,8 +97,8 @@ internal static class AgentOverviewChecks
         var nightly = jobs.Single(row => row[1] == "Nightly");
         var purge = jobs.Single(row => row[1] == "Purge");
         check(nightly[6] == "2026-11-23T03:00:00" && nightly[5] == "0" && nightly[8] == "2" && nightly[12] == "0" && nightly[13] == "98" && nightly[14] == "49" && nightly[15] == "2026-11-22T15:00:00"
-            && purge[6] == "NULL" && purge[12] == "1" && purge[13] == "0" && purge[14] == "0" && purge[15] == "NULL",
-            "a job row carries its last run as a stamp, its notify levels, its owner's login state and its history counts (0 for a job with none): " + string.Join(" | ", jobs.Select(row => string.Join(",", row))));
+            && nightly[16] == "2026-01-02T03:04:05" && purge[6] == "NULL" && purge[12] == "1" && purge[13] == "0" && purge[14] == "0" && purge[15] == "NULL" && purge[16] == "NULL",
+            "a job row carries its last run and creation as stamps, its notify levels, its owner's login state and its history counts (0 for a job with none): " + string.Join(" | ", jobs.Select(row => string.Join(",", row))));
 
         var below = new List<string>();
         var role = new AgentOverviewReader { Reader = Fake(below, sysadmin: false), Platform = "windows", TestService = () => (1, null, null) };
@@ -120,6 +121,17 @@ internal static class AgentOverviewChecks
         check(shapedSample.Sampled && shapedSample.Errors.Count == 0 && shapedReads["alerts"] == ("PERMISSION_DENIED", AgentReader.RefusedMessage) && shapedReads["jobs"].State == "ok"
             && shapedSample.Tables[1].Rows.Count == 0 && shapedSample.Tables[0].Rows.Count == 2,
             "a refused read is a reads table row with its code and message, never a failed probe, and the other reads still show");
+
+        // A failed facts read: who reads is unknown, so the sysadmin reads carry that read's code, never "role" (which would tell a sysadmin
+        // that only sysadmin can read them).
+        var unknown = new AgentOverviewReader
+        {
+            Reader = new AgentReader { TestRun = (statement, values, cap) => statement.Id == "jobDocumentFacts" ? throw new AgentShapeException("PERMISSION_DENIED", AgentReader.RefusedMessage) : Fake([], true).TestRun!(statement, values, cap) },
+            Platform = "windows", TestService = () => (1, 4, null)
+        };
+        var unknownReads = Reads(await unknown.SampleAsync(null, LiveSql.UncommittedPrologue, null, CancellationToken.None));
+        check(new[] { "facts", "owners", "history", "schedules", "mail", "service" }.All(id => unknownReads[id] == ("PERMISSION_DENIED", AgentReader.RefusedMessage)) && unknownReads["jobs"].State == "ok",
+            "with the facts read refused the sysadmin reads do not run and carry its code and message, not role, and the role reads still run");
 
         var linuxRan = new List<string>();
         var linux = new AgentOverviewReader { Reader = Fake(linuxRan, sysadmin: true), Platform = "linux", TestService = () => (1, 4, null) };

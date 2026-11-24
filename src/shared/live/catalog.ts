@@ -431,7 +431,8 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
           { id: 'jobLastRun', name: 'Last Run', dataType: 'nvarchar' }, { id: 'jobStatus', name: 'Status', dataType: 'int' }, { id: 'jobNotifyEmail', name: 'E-mail', dataType: 'int' },
           { id: 'jobNotifyPage', name: 'Page', dataType: 'int' }, { id: 'jobNotifyNetsend', name: 'Net send', dataType: 'int' }, { id: 'jobScheduled', name: 'Scheduled', dataType: 'int' },
           { id: 'jobOwnerState', name: 'Owner Login', dataType: 'int' }, { id: 'jobHistoryRows', name: 'History Rows', dataType: 'bigint' }, { id: 'jobHistoryRuns', name: 'History Runs', dataType: 'bigint' },
-          { id: 'jobHistoryOldest', name: 'Oldest History', dataType: 'nvarchar' }
+          { id: 'jobHistoryOldest', name: 'Oldest History', dataType: 'nvarchar' },
+          { id: 'jobCreated', name: 'Created', dataType: 'nvarchar' }
         ]
       },
       {

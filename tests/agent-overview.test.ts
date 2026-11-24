@@ -70,6 +70,8 @@ describe("the Agent overview's checks", () => {
     expect(serviceCheck(facts({ serviceState: 1, agentXps: 0, platform: 'linux' }))!.fix).toBeUndefined()
     expect(serviceCheck(facts({ agentXps: 0, serviceState: undefined }))).toMatchObject({ severity: 'error', title: 'SQL Server Agent cannot run jobs now' })
     expect(serviceCheck(facts({ reads: {} }))).toBeUndefined()
+    // A failed state read is not a stopped Agent: the check says it was not read.
+    expect(serviceCheck(facts({ agentXps: undefined, serviceState: undefined, reads: { ...allRead, state: { state: 'SQL_ERROR', message: 'The read failed.' } } }))).toMatchObject({ severity: 'unread', detail: 'The read failed.' })
   })
 
   it('counts jobs whose last run failed within a day of the server clock, saying which are retrying', () => {
@@ -116,6 +118,9 @@ describe("the Agent overview's checks", () => {
     expect(check.detail).toBe('History is capped at 1,000 rows, 100 per job. Log backup – Sales writes about 2 rows a run, so its history covers about 12 hours.')
     // Under the per-job cap and the total cap, a short history is just a young job.
     expect(historyShortfalls(facts({ jobs: [job('New', { historyRows: 4, historyRuns: 2, historyOldest: '2026-11-23T10:00:00' })] }))).toEqual([])
+    // A job created inside the window has short history because it is new, even at its cap: not flagged.
+    expect(historyShortfalls(facts({ jobs: [{ ...busy, created: '2026-11-22T23:00:00' }] }))).toEqual([])
+    expect(historyShortfalls(facts({ jobs: [{ ...busy, created: '2026-01-01T00:00:00' }] }))).toHaveLength(1)
     // The jobs' rows together at the total cap, each well under its own: Agent purges the oldest across jobs, so a short history is flagged.
     const crowded = Array.from({ length: 10 }, (_, at) => job(`Job ${at}`.padEnd(6 + at, 'x'), { historyRows: 100, historyRuns: 50, historyOldest: '2026-11-22T00:00:00' }))
     expect(historyShortfalls(facts({ historyMaxRowsPerJob: 500, jobs: crowded }))).toHaveLength(10)
@@ -202,10 +207,10 @@ describe('the agent.overview source', () => {
     const status = overviewStatus([{ id: 'platform', value: 'linux' }, { id: 'isSysadmin', value: 0 }, { id: 'agentXps', value: 1 }, { id: 'serverNow', value: '2026-11-23T12:00:00' }, { id: 'agentProfile', value: '' }, { id: 'unknown', value: 3 }])
     expect(status).toEqual({ platform: 'linux', sysadmin: false, agentXps: 1, serverNow: '2026-11-23T12:00:00' })
     const cells = (values: Record<string, string | undefined>) => (column: string) => values[column]
-    const read = factsOfRows([], [cells({ jobId: 'A', jobName: 'Nightly', jobEnabled: '1', jobOwner: 'sa', jobOutcome: '0', jobLastRun: '2026-11-23T03:00:00', jobNotifyEmail: '2', jobOwnerState: '1', jobHistoryRows: '98' })],
+    const read = factsOfRows([], [cells({ jobId: 'A', jobName: 'Nightly', jobEnabled: '1', jobOwner: 'sa', jobOutcome: '0', jobLastRun: '2026-11-23T03:00:00', jobNotifyEmail: '2', jobOwnerState: '1', jobHistoryRows: '98', jobCreated: '2026-01-02T03:04:05' })],
       [cells({ alertName: 'Sev 17', alertEnabled: '1', alertMessageId: '0', alertSeverity: '17', alertNotifies: '1' })], [cells({ scheduleId: '7', scheduleName: 'Quarter end', scheduleEnabled: '1', scheduleJobs: '0' })],
       [cells({ readId: 'jobs', readState: 'ok' }), cells({ readId: 'owners', readState: 'role' }), cells({ readId: 'alerts', readState: 'PERMISSION_DENIED', readMessage: 'refused', readTruncated: '0' }), cells({ readId: 'bogus', readState: 'ok' })])
-    expect(read.jobs).toEqual([{ id: 'A', name: 'Nightly', enabled: true, owner: 'sa', category: '', notifyEmail: 2, notifyPage: 0, notifyNetsend: 0, scheduled: false, outcome: 0, lastRun: '2026-11-23T03:00:00', ownerState: 1, historyRows: 98 }])
+    expect(read.jobs).toEqual([{ id: 'A', name: 'Nightly', enabled: true, owner: 'sa', category: '', notifyEmail: 2, notifyPage: 0, notifyNetsend: 0, scheduled: false, outcome: 0, lastRun: '2026-11-23T03:00:00', ownerState: 1, historyRows: 98, created: '2026-01-02T03:04:05' }])
     expect(read.alerts).toEqual([{ name: 'Sev 17', enabled: true, messageId: 0, severity: 17, notifies: true }])
     expect(read.schedules).toEqual([{ id: 7, name: 'Quarter end', enabled: true, jobs: 0 }])
     expect(read.reads).toEqual({ jobs: { state: 'ok' }, owners: { state: 'role' }, alerts: { state: 'PERMISSION_DENIED', message: 'refused' } })
@@ -238,7 +243,7 @@ describe('the Agent overview document', () => {
     const handle = fixture.handle()
     expect(handle.spec.probes).toEqual([{ probe: 'agent.overview.read', intervalMs: 60_000 }])
     // jobs: jobId … jobHistoryOldest (16 columns); reads: readId, readState, readMessage, readTruncated.
-    handle.tables.set('agent.overview.read:0', table([['J1', 'Purge', '1', 'CONTOSO\\jsmith', '', '1', '2026-11-23T03:00:00', '4', '0', '0', '0', '1', '1', '10', '5', '2026-10-01T00:00:00']]))
+    handle.tables.set('agent.overview.read:0', table([['J1', 'Purge', '1', 'CONTOSO\\jsmith', '', '1', '2026-11-23T03:00:00', '4', '0', '0', '0', '1', '1', '10', '5', '2026-10-01T00:00:00', '2026-01-02T03:04:05']]))
     handle.tables.set('agent.overview.read:1', table([]))
     handle.tables.set('agent.overview.read:2', table([]))
     handle.tables.set('agent.overview.read:3', table([['jobs', 'ok', '', '0'], ['owners', 'ok', '', '0'], ['alerts', 'platform', '', '0']]))

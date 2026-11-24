@@ -2195,7 +2195,7 @@ const overviewColumns = table => liveProbes['agent.overview.read'].tables[table]
 function agentOverviewSample(live, probe) {
   const stamp = text => text.replace(' ', 'T')
   const jobs = storeResult({ columns: overviewColumns(0), rows: agentJobs.map(job => [job.id.toUpperCase(), job.name, job.enabled ? '1' : '0', agentJobDoc(job).owner, job.category, String(job.outcome), stamp(job.lastRun),
-    agentRunning(job) ? '1' : '4', job.name === 'Backup' ? '0' : '2', '0', '0', '1', job.name === 'Purge' ? '1' : '0', '20', '10', '2026-10-01T00:00:00']) }, 0)
+    agentRunning(job) ? '1' : '4', job.name === 'Backup' ? '0' : '2', '0', '0', '1', job.name === 'Purge' ? '1' : '0', '20', '10', '2026-10-01T00:00:00', job.created]) }, 0)
   const alerts = storeResult({ columns: overviewColumns(1), rows: [] }, 0)
   const schedules = storeResult({ columns: overviewColumns(2), rows: [['1', 'Nightly 02:30', '1', '2'], ['9', 'Quarter end', '1', '0']] }, 0)
   const reads = storeResult({ columns: overviewColumns(3), rows: ['facts', 'state', 'clock', 'jobs', 'properties', 'alerts', 'profiles', 'owners', 'history', 'schedules', 'mail', 'service'].map(read => [read, 'ok', null, '0']) }, 0)

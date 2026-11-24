@@ -49,6 +49,14 @@ internal static class AgentOverviewLiveChecks
                 "as sysadmin every overview read is read (alerts off Windows say platform; Agent's mail settings may be a shape error, which the mail check works around), with the server's clock and the history caps: "
                 + string.Join(", ", reads.Select(item => item.Key + "=" + item.Value)) + " | " + string.Join(", ", status.Keys));
 
+            // A sysadmin owner can log in for Agent whatever its login's state (Agent runs its steps as the service account): the same job,
+            // given to the server's sa (SID 0x01, disabled or not), reads 0.
+            var given = await sql("DECLARE @sa sysname = SUSER_SNAME(0x01);\nEXEC msdb.dbo.sp_update_job @job_name = " + Quote(job) + ", @owner_login_name = @sa;", "msdb");
+            var (saRows, _) = await SubscribedAsync(service, info, json);
+            var saJob = saRows.TryGetValue(0, out var saJobs) ? saJobs.FirstOrDefault(row => row[1] == job) : null;
+            check(given.Status == "completed" && saJob is not null && saJob[12] == "0",
+                "a job owned by sa (a sysadmin) reads as an owner that can log in, whether or not sa's login is disabled: " + given.Error + " " + (saJob is null ? "no job row" : saJob[12]));
+
             // A SQLAgentReaderRole login reads the jobs, properties and alerts; the sysadmin reads are role values, never failures.
             var reader = scratch.OwnLogin("ovr");
             var readerMade = await sql("CREATE LOGIN " + Bracket(reader) + " WITH PASSWORD = " + Quote(ScratchDatabase.Throwaway()) + ", CHECK_POLICY = OFF;", "master");

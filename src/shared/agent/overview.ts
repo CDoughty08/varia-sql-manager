@@ -42,6 +42,8 @@ export interface OverviewJob {
   readonly historyRows?: number
   readonly historyRuns?: number
   readonly historyOldest?: string
+  /** When the job was created, server local (yyyy-mm-ddThh:mm:ss). */
+  readonly created?: string
 }
 export interface OverviewAlert { readonly name: string; readonly enabled: boolean; readonly messageId: number; readonly severity: number; readonly lastOccurred?: string; readonly notifies: boolean }
 export interface OverviewSchedule { readonly id: number; readonly name: string; readonly enabled: boolean; readonly jobs: number }
@@ -164,6 +166,8 @@ export function overviewAvailability(facts: OverviewFacts): AgentAvailability {
 export function serviceCheck(facts: OverviewFacts): OverviewCheck | undefined {
   const availability = overviewAvailability(facts)
   if (availability === 'running' || availability === 'pending') return undefined
+  // A failed state read says nothing about Agent: the check says it was not read rather than that Agent is down.
+  if (!readOk(facts, 'state')) return unread('service', facts, 'state', 'SQL Server Agent\'s state')
   const canStart = facts.sysadmin === true && facts.platform === 'windows' && facts.startupType !== startupDisabled
   const banner = agentBanner(availability, facts, canStart, facts.platform === 'linux')
   return {
@@ -239,8 +243,9 @@ export function historyShortfalls(facts: OverviewFacts): HistoryShortfall[] {
   const total = ran.reduce((sum, job) => sum + job.historyRows!, 0)
   const totalFull = total + Math.max(0, ...ran.map(perRun)) > max
   return ran.flatMap(job => {
-    const oldest = stampMs(job.historyOldest)
-    if (oldest === undefined) return []
+    const oldest = stampMs(job.historyOldest), created = stampMs(job.created)
+    // A job younger than the window has short history because it is new, not because the caps purge it.
+    if (oldest === undefined || (created !== undefined && now - created < historyWindowMs)) return []
     const capped = totalFull || job.historyRows! + perRun(job) > perJob
     const covered = Math.max(0, now - oldest)
     return capped && covered < historyWindowMs ? [{ job, coveredMs: covered, rowsPerRun: perRun(job) }] : []

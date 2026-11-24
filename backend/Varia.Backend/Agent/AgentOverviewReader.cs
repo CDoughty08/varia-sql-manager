@@ -136,8 +136,14 @@ internal sealed class AgentOverviewReader(AgentCatalog? catalog = null) : ILiveS
             if (Run(results, errors, "service", AgentSql.OverviewService) is { Rows.Count: > 0 } service && service.Value(service.Rows[0], "service_account") is string { Length: > 0 } account)
                 status.Add(new("serviceAccount", Clip(account)));
         }
-        else
+        else if (factRows is { Rows.Count: > 0 })
             foreach (var id in (string[])["owners", "history", "schedules", "mail", "service"]) Skip(id, "role");
+        else
+        {
+            // Who reads is unknown: the sysadmin reads did not run for the facts read's own reason, not for a role.
+            var why = outcomes.First(outcome => outcome.Id == "facts");
+            foreach (var id in (string[])["owners", "history", "schedules", "mail", "service"]) outcomes.Add(why with { Id = id, State = why.State == "ok" ? "SQL_ERROR" : why.State });
+        }
 
         var ownerStates = new Dictionary<Guid, int>();
         if (owners is not null)
@@ -203,7 +209,8 @@ internal sealed class AgentOverviewReader(AgentCatalog? catalog = null) : ILiveS
             // Read but absent is a job sysjobs did not list (created since): unknown, not "can log in".
             ownersRead && owners.TryGetValue(id, out var owner) ? LiveCell.Of((long)owner) : LiveCell.Null,
             historyRead ? LiveCell.Of(kept?.Rows ?? 0) : LiveCell.Null, historyRead ? LiveCell.Of(kept?.Runs ?? 0) : LiveCell.Null,
-            LiveCell.Of(kept?.Oldest is { } oldest ? Stamp(oldest) : null)
+            LiveCell.Of(kept?.Oldest is { } oldest ? Stamp(oldest) : null),
+            LiveCell.Of(jobs.Value(row, "date_created") is DateTime created ? Stamp(created) : null)
         ]);
     }
 

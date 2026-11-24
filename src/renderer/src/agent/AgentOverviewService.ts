@@ -97,7 +97,7 @@ export function factsOfRows(status: readonly { readonly id: string; readonly val
       notifyEmail: num(cell('jobNotifyEmail')) ?? 0, notifyPage: num(cell('jobNotifyPage')) ?? 0, notifyNetsend: num(cell('jobNotifyNetsend')) ?? 0, scheduled: num(cell('jobScheduled')) === 1,
       ...optional('outcome', num(cell('jobOutcome'))), ...optional('lastRun', cell('jobLastRun')), ...optional('status', num(cell('jobStatus'))),
       ...optional('ownerState', num(cell('jobOwnerState'))), ...optional('historyRows', num(cell('jobHistoryRows'))), ...optional('historyRuns', num(cell('jobHistoryRuns'))),
-      ...optional('historyOldest', cell('jobHistoryOldest'))
+      ...optional('historyOldest', cell('jobHistoryOldest')), ...optional('created', cell('jobCreated'))
     } as OverviewJob
   }
   const alert = (cell: (column: string) => string | undefined): OverviewAlert | undefined => {
