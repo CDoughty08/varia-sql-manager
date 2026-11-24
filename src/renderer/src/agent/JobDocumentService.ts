@@ -431,7 +431,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const steps = state.draft.steps.steps
     const step = { ...newStepDraft(steps, subsystem), key: newStepKey(state.deletion ? [...steps, state.deletion.deleted] : steps) }
     this.updateDraft(id, { steps: addStep(state.draft.steps, step) })
-    this.patch(id, { step: step.key, parse: undefined })
+    this.patch(id, { step: step.key, parse: undefined, ...state.stepFile?.running ? {} : { stepFile: undefined } })
   }
   /** Moves a step to `index` (drag, Move up and Move down); go-to targets follow, being keys. */
   moveStepTo(id: string, key: string, index: number): void {
@@ -453,7 +453,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const steps = result.draft.steps
     const next = steps[Math.min(result.deletion.position, steps.length - 1)]
     this.updateDraft(id, { steps: result.draft })
-    this.patch(id, { deletion: result.deletion, step: next?.key, parse: undefined })
+    this.patch(id, { deletion: result.deletion, step: next?.key, parse: undefined, ...state.stepFile?.running ? {} : { stepFile: undefined } })
   }
   undoDeleteStep(id: string): void {
     const state = this.get(id)
@@ -497,12 +497,14 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const result = await this.call(() => open(subsystem))
     const current = this.get(id)
     if (this.disposed || !current || current.stepFile !== started) return
-    if (!result.ok) { this.patch(id, { stepFile: { key, running: false, failure: result.error } }); return }
     const now = current.draft?.steps.steps.find(item => item.key === key)
-    // Edit rights lost meanwhile (a save started, the job went stale): said, so the choice does not vanish without a word.
-    const locked = result.value !== null && current.model === model && now?.subsystem === subsystem && this.selectedStep(id)?.key === key && !this.canEditSteps(id)
+    // Still the step the user is looking at, as it was: otherwise the answer, a refusal included, goes nowhere.
+    const same = current.model === model && now?.subsystem === subsystem && this.selectedStep(id)?.key === key
+    if (!result.ok) { this.patch(id, { stepFile: same ? { key, running: false, failure: result.error } : undefined }); return }
+    // Edit rights lost meanwhile (a save still running, the job gone stale): said, so the choice does not vanish without a word.
+    const locked = result.value !== null && same && !this.canEditSteps(id)
     this.patch(id, { stepFile: locked ? { key, running: false, failure: stepScriptText.locked } : undefined })
-    if (result.value === null || current.model !== model || now?.subsystem !== subsystem || this.selectedStep(id)?.key !== key || !this.canEditSteps(id)) return
+    if (result.value === null || !same || !this.canEditSteps(id)) return
     return result.value
   }
   setStartStep(id: string, key: string): void {

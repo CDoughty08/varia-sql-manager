@@ -377,6 +377,7 @@ describe("the job document's Steps page", () => {
   it('loads a CmdExec or PowerShell command from main\'s open dialog, naming only the step type, and says why a file was refused', async () => {
     const fixture = opened(stepped()), { jobDocuments } = fixture
     const open = vi.fn<(subsystem: 'PowerShell' | 'CmdExec') => Promise<ApiResult<string | null>>>(async () => ({ ok: true, value: 'robocopy D:\\a \\\\fs\\b' }))
+    let answer!: (value: ApiResult<string | null>) => void
     const id = jobDocuments.openJob('c1', 'Nightly load')
     await settled()
     // Without the API (a test workbench) the step says so; a T-SQL step never asks.
@@ -410,13 +411,36 @@ describe("the job document's Steps page", () => {
     jobDocuments.selectStep(id, 's1')
     expect(jobDocuments.get(id)?.stepFile).toBeUndefined()
     jobDocuments.updateStep(id, 's1', { subsystem: 'CmdExec' })
+    // A refusal that answers after another step was selected, or after the type changed, is not kept for the step either.
+    open.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    const refusedAway = jobDocuments.loadStepScript(id, 's1')
+    jobDocuments.selectStep(id, 's2')
+    answer({ ok: false, error: 'The file does not exist.' })
+    await refusedAway
+    expect(jobDocuments.get(id)?.stepFile).toBeUndefined()
+    jobDocuments.selectStep(id, 's1')
+    open.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    const refusedRetyped = jobDocuments.loadStepScript(id, 's1')
+    jobDocuments.updateStep(id, 's1', { subsystem: 'PowerShell' })
+    answer({ ok: false, error: 'The file does not exist.' })
+    await refusedRetyped
+    expect(jobDocuments.get(id)?.stepFile).toBeUndefined()
+    jobDocuments.updateStep(id, 's1', { subsystem: 'CmdExec' })
+    // Deleting or adding a step drops a refusal, so a new step that reuses a key never inherits it.
+    open.mockResolvedValueOnce({ ok: false, error: 'The file does not exist.' })
+    await jobDocuments.loadStepScript(id, 's1')
+    expect(jobDocuments.get(id)?.stepFile).toBeDefined()
+    jobDocuments.addStepOf(id, 'CmdExec')
+    expect(jobDocuments.get(id)?.stepFile).toBeUndefined()
+    jobDocuments.deleteStepOf(id, jobDocuments.selectedStep(id)!.key)
+    jobDocuments.dismissDeletion(id)
+    jobDocuments.selectStep(id, 's1')
     // The type changed while the dialog was up: the text is not for this step any more.
-    let answer!: (value: ApiResult<string | null>) => void
     open.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
     const pending = jobDocuments.loadStepScript(id, 's1')
     expect(jobDocuments.get(id)?.stepFile).toMatchObject({ key: 's1', running: true })
     expect(await jobDocuments.loadStepScript(id, 's1')).toBeUndefined()
-    expect(open).toHaveBeenCalledTimes(6)
+    expect(open).toHaveBeenCalledTimes(9)
     jobDocuments.updateStep(id, 's1', { subsystem: 'PowerShell' })
     answer({ ok: true, value: 'Get-Date' })
     expect(await pending).toBeUndefined()

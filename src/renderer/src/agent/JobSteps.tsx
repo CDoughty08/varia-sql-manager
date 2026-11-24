@@ -350,7 +350,7 @@ function StepEditor(props: StepsProps & { readonly step: AgentStepDraft; readonl
   const databases = model.databases && step.databaseName && !model.databases.includes(step.databaseName) ? [step.databaseName, ...model.databases] : model.databases
   const count = state.draft!.steps.steps.length
   const commandEditor = useRef<StepCommandHandle | null>(null)
-  const stepFile = state.stepFile?.key === step.key ? state.stepFile : undefined
+  const stepFile = state.stepFile?.key === step.key && isStepScriptSubsystem(step.subsystem) ? state.stepFile : undefined
   // Load from file… (AG-11): main's dialog and read; the text replaces the command as one undoable edit, or the draft when the step is still
   // selected but its editor is not mounted.
   const loadFile = async () => {

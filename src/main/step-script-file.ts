@@ -18,7 +18,7 @@ export async function readStepScript(path: string, { legacyLabel, decoder, limit
   let bytes: Buffer | undefined
   try { bytes = await readRegularFile(path, limits.bytes) } catch (error) {
     const code = (error as NodeJS.ErrnoException | undefined)?.code
-    throw new Error(code === 'ENOENT' ? 'The file does not exist.' : code === 'EACCES' || code === 'EPERM' ? 'Access to the file was denied.' : code === 'EISDIR' ? stepScriptText.notFile : 'The file could not be read.')
+    throw new Error(code === 'ENOENT' ? 'The file does not exist.' : code === 'EACCES' || code === 'EPERM' ? 'Access to the file was denied.' : code === 'EISDIR' ? stepScriptText.notFile : code === 'EBUSY' ? 'The file is in use by another program.' : 'The file could not be read.')
   }
   // A folder, FIFO or device is refused without blocking, and at most one byte past the limit is read.
   if (!bytes) throw new Error(stepScriptText.notFile)
