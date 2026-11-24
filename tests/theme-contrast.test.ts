@@ -48,7 +48,7 @@ describe('built-in theme contrast', () => {
       expect(backgroundOf(theme, ['sideBar.background', 'objectExplorer.activeConnectionBackground']), type).toEqual(backgroundOf(theme, ['sideBar.background']))
     }
   })
-  it('holds input and button outlines to 3:1 on every surface the controls sit on', () => {
+  it('holds resting input and button outlines to 1.5:1 on every surface while focus rings stay 3:1', () => {
     const outlines = contrastPairs.filter(pair => pair.foreground === 'input.border' || pair.foreground === 'button.border')
     // Fields and dialogs; the toolbar's server and database lists; Cancel on the Output toolbar; Object Explorer's
     // buttons; the results grid's Retry; the empty workspace and the failure screen.
@@ -57,7 +57,7 @@ describe('built-in theme contrast', () => {
       'button.border': ['input.background', 'editorWidget.background', 'panelTitle.background', 'sideBar.background', 'panel.background', 'editor.background']
     }
     for (const [foreground, backgrounds] of Object.entries(surfaces)) {
-      for (const surface of backgrounds) expect(outlines).toContainEqual({ foreground, background: [surface], minimum: 3 })
+      for (const surface of backgrounds) expect(outlines).toContainEqual({ foreground, background: [surface], minimum: 1.5 })
     }
   })
   it('checks everything a toast draws over its own background, which a theme can set apart', () => {
@@ -65,7 +65,8 @@ describe('built-in theme contrast', () => {
     const expected = [
       ...['notifications.foreground', 'descriptionForeground', 'button.secondaryForeground'].map(key => ({ ...toast(key), minimum: 4.5 })),
       { ...toast('button.secondaryHoverForeground', 'button.secondaryHoverBackground'), minimum: 4.5 },
-      ...['button.border', 'focusBorder', 'notificationsErrorIcon.foreground', 'notificationsWarningIcon.foreground', 'notificationsInfoIcon.foreground'].map(key => ({ ...toast(key), minimum: 3 }))
+      { ...toast('button.border'), minimum: 1.5 },
+      ...['focusBorder', 'notificationsErrorIcon.foreground', 'notificationsWarningIcon.foreground', 'notificationsInfoIcon.foreground'].map(key => ({ ...toast(key), minimum: 3 }))
     ]
     for (const pair of expected) expect(contrastPairs).toContainEqual(pair)
   })

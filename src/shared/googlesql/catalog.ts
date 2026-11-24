@@ -1,5 +1,5 @@
 // The GoogleSQL words and functions the editor knows: the tokenizer colours them (languages/googlesql.ts), signature
-// help shows the functions' signatures, and BigQuery's completion (docs/bigquery-plan.md, BQ-6b) lists them. Built by
+// help shows the functions' signatures, and BigQuery's completion (docs/language-services.md, Completion from the index) lists them. Built by
 // hand from Google's public GoogleSQL reference for BigQuery, never from queries. docs/googlesql.md is generated from
 // this file: after changing it run `npx vitest run tests/googlesql-catalog.test.ts -u`.
 

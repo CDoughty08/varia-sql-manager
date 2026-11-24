@@ -106,8 +106,9 @@ commands can be given shortcuts in Tools > Options > Environment > Shortcuts.
   Selected Columns Only is on; a strip says so, and Ctrl with another key (Ctrl+C) is not a peek. The modifier can be
   changed to Shift in Shortcut Mapping ([gestures](gestures.md), Peek at Selected Columns). Cards move, appear and fade
   with transform and opacity only, and not at all under reduced motion.
-- **Row size** draws a bar behind each row number for the row's size (the sum of DATALENGTH over its columns); hover it
-  for the bytes.
+- **Row size** draws a bar behind each row number for the row's size (the sum of DATALENGTH over its columns), flagging
+  only genuine large outliers (over half the largest row and either at least 4 KiB or 2.5× the mean) in the warning
+  colour so uniform rows stay calm; hover a row number for the exact bytes.
 
 ## Keep Selected Rows
 

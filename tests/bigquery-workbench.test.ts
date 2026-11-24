@@ -6,6 +6,8 @@ import { queryStatusModel } from '../src/renderer/src/results/query-status'
 import { queryContextModel } from '../src/renderer/src/query-context'
 import type { LiveConnection } from '../src/renderer/src/services/connections'
 import { executePendingQuery } from '../src/renderer/src/services/connection-opening'
+import { connectBigQueryProfile } from '../src/renderer/src/services/connect-profile'
+import type { VariaApi } from '../src/shared/contracts'
 import { deferred, TestEditor } from './fixtures/documents'
 import { readyBackend, workbenchFixture } from './fixtures/workbench'
 
@@ -82,6 +84,32 @@ describe('BigQuery connections in the workbench (BQ-2)', () => {
         expect(value.connections.get(id(1))).toMatchObject({ id: id(50), server: 'varia-alpha', login: 'ada@example.com' })
         expect(value.connections.isLive(id(50))).toBe(true)
       } finally { binding.dispose() }
+    } finally { value.dispose() }
+  })
+
+  // Show in Job History for a project the page is not connected to: the records' saved connection, with no Connect dialog.
+  it('connects a saved BigQuery connection by its id for Show in Job History, onto its disconnected target', async () => {
+    const value = workbenchFixture()
+    try {
+      value.connectionTargets.restore({ version: 1, targets: [target()] })
+      value.api.push(readyBackend(1))
+      const profile = { id: id(300), favorite: false, autoReconnect: 'on' as const, options: { provider: 'bigquery' as const, project: 'varia-alpha', dataset: 'sales', extraProjects: ['varia-beta'], authentication: 'gcloud' as const, environment: 'Production' } }
+      const loadConnectionLibrary = vi.fn<VariaApi['loadConnectionLibrary']>(async () => ({ ok: true, value: { bigQuery: { profiles: [profile] } } }) as unknown as Awaited<ReturnType<VariaApi['loadConnectionLibrary']>>)
+      const api = Object.assign(value.api, { loadConnectionLibrary }) as typeof value.api & Pick<VariaApi, 'loadConnectionLibrary'>
+      value.api.connect.mockImplementation(async (_options, context) => ({ ok: true, value: { id: id(50), targetId: context!.targetId, generation: 1, server: 'varia-alpha', database: 'sales', serverVersion: 'BigQuery', login: 'ada@example.com', providerId: 'bigquery', authentication: { principal } } }))
+      const signal = new AbortController().signal, deps = { ...value, api, signal }
+      expect(await connectBigQueryProfile(deps, id(300))).toEqual({ ok: true, connectionId: id(50) })
+      const [options, context] = value.api.connect.mock.calls[0]!
+      expect(options).toEqual(profile.options)
+      // Interactive, as Connect is (a sign-in can still be asked for); main records it in the saved entry.
+      expect(context).toMatchObject({ mode: 'interactive', targetId: id(1), selectedProfileId: id(300), credentialIntent: 'preserve', autoReconnect: 'on', expectedPrincipal: principal })
+      expect(value.connections.isLive(id(50))).toBe(true)
+      expect(value.connections.get(id(1))).toMatchObject({ id: id(50), server: 'varia-alpha' })
+      // A removed entry, a library that cannot be read and a failed connect each say why, and connect nothing.
+      expect(await connectBigQueryProfile(deps, id(301))).toEqual({ ok: false, error: 'The saved BigQuery connection these jobs ran on was removed.' })
+      loadConnectionLibrary.mockResolvedValueOnce({ ok: false, error: 'Unreadable.' })
+      expect(await connectBigQueryProfile(deps, id(300))).toEqual({ ok: false, error: 'Unreadable.' })
+      expect(value.api.connect).toHaveBeenCalledTimes(1)
     } finally { value.dispose() }
   })
 

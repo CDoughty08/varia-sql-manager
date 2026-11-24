@@ -334,10 +334,10 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
   }
   return <section className="output-panel" aria-label={regionNames[pane]} data-output-panel={pane} data-tab-id={tabId}>
     <div className="output-toolbar">
-      <div className="output-views" role="tablist" aria-label="Query output views" onKeyDown={tabKey}>
+      {views.length > 0 && <div className="output-views" role="tablist" aria-label="Query output views" onKeyDown={tabKey}>
         {/* The badges are drawn; the names say what they mean ("!" alone is not spoken). */}
         {views.map(view => <button key={view} {...tabProps(view)} aria-label={labels[view]}><span className="output-tab-label">{viewNames[view]}</span>{badges[view]}</button>)}
-      </div>
+      </div>}
       {showTools && <ResultsToolbar tabId={tabId} />}
       {pane === 'plan' && <button type="button" aria-pressed={historyOpen} onClick={() => setHistoryOpen(value => !value)}>Plan history ({history.entries.length})</button>}
       {pane === 'plan' && estimated ? <span className="output-status">Estimated{estimated.loading ? ' · Compiling…' : estimated.error ? ' · Unavailable' : ''}</span>

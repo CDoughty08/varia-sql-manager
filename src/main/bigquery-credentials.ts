@@ -89,6 +89,9 @@ export interface BigQueryCredentialEnvironment {
   /** Whether the user confirmed a federation configuration's file source in the Connect dialog (decision 49). Without
    *  it every file source is refused. */
   readonly sourceConfirmed?: (keyPath: string, source: string) => Promise<boolean>
+  /** Asks the user about the token file the gcloud ADC file's federation configuration reads (decision 49), recording a
+   *  Use It as `sourceConfirmed` reads it; only for a request the user is waiting on. */
+  readonly askSource?: (keyPath: string, source: string) => Promise<boolean>
   /** Reads the saved connections, which maps saved key file references back to their paths (a reconnect at startup
    *  may come before anything else has read them). */
   readonly restoreKeyFiles?: () => Promise<unknown>
@@ -103,7 +106,12 @@ export interface BigQueryCredentialEnvironment {
  */
 export async function federationSource(json: string): Promise<string | undefined> {
   let credentialSource: unknown
-  try { credentialSource = (JSON.parse(json) as { credential_source?: unknown } | null)?.credential_source }
+  try {
+    // An impersonated service account's source credentials may themselves be a federation configuration reading a file.
+    type Federation = { credential_source?: unknown; source_credentials?: { credential_source?: unknown } | null } | null
+    const parsed = JSON.parse(json) as Federation
+    credentialSource = parsed?.credential_source ?? (typeof parsed?.source_credentials === 'object' ? parsed.source_credentials?.credential_source : undefined)
+  }
   catch { return undefined }
   if (typeof credentialSource !== 'object' || credentialSource === null || !('file' in credentialSource)) return undefined
   const source = (credentialSource as { file: unknown }).file
@@ -139,7 +147,9 @@ export class BigQueryCredentials {
 
   get emulator(): boolean { return this.environment.emulator }
 
-  async material(params: Pick<BigQueryCredentialParams, 'authentication' | 'keyFile'>): Promise<BigQueryCredentialMaterial> {
+  /** `interactive`: the user waits on this request (a Connect, Test Connection or Browse, not a background reconnect), so an
+   *  unconfirmed ADC token file may be asked about; otherwise it is refused, as decision 49 fails closed. */
+  async material(params: Pick<BigQueryCredentialParams, 'authentication' | 'keyFile'>, { interactive = false }: { interactive?: boolean } = {}): Promise<BigQueryCredentialMaterial> {
     if (this.environment.emulator) return { source: 'anonymous' }
     if (usesKeyFile(params.authentication)) {
       const what = params.authentication === 'serviceAccountKey' ? 'The key file' : 'The federation configuration file'
@@ -161,6 +171,14 @@ export class BigQueryCredentials {
     // No gcloud file: ADC's last step is the metadata server, which the backend asks. A file the variable names but
     // Varia cannot use is an error, as it is for ADC itself.
     if (!adc.explicit && !await exists(adc.path)) return { source: 'metadata' }
-    return { source: 'adc', json: await readCredentialFile(adc.path, { json: false, what: adc.explicit ? 'The file GOOGLE_APPLICATION_CREDENTIALS names' : 'The gcloud credentials file' }) }
+    const json = await readCredentialFile(adc.path, { json: false, what: adc.explicit ? 'The file GOOGLE_APPLICATION_CREDENTIALS names' : 'The gcloud credentials file' })
+    // A federation configuration as ADC (gcloud auth application-default login --cred-file, or the variable) reading a token
+    // file: confirmed once, as a picked configuration is (decision 49).
+    const source = await federationSource(json)
+    if (source !== undefined && !await this.environment.sourceConfirmed?.(adc.path, source) && !(interactive && await this.environment.askSource?.(adc.path, source)))
+      throw new BackendError('AUTH_KEY_FILE', interactive
+        ? 'The Application Default Credentials read a token file that was not confirmed. Connect again to review it.'
+        : 'The Application Default Credentials read a token file that has not been confirmed. Connect to review it.')
+    return { source: 'adc', json }
   }
 }
