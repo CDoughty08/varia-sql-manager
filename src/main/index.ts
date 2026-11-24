@@ -25,6 +25,7 @@ import { dialogQueue } from './dialog-queue'
 import { saveDefaultPath } from './file-names'
 import { connectionAcceptSchema, connectionCancelSchema, connectionPruneSchema, validateRequest, validateResult } from './validation'
 import { SqlFileStore, fileKinds, reloadPromptSchema, saveDocument, saveFileSchema, type TargetCache } from './sql-files'
+import { isKeptAgentKind } from '../shared/agent/kept'
 import { openRecentEntry, RecentFilesStore, systemRecentDocuments } from './recent-files-store'
 import { deliverLaunchFiles as deliverWaiting, droppedPathsSchema, fileArguments, LaunchQueue, maxLaunchFiles, openEach, secondInstanceSchema, type SecondInstanceData } from './launch-files'
 import { recentFilesMenuModel } from '../shared/files/recent'
@@ -49,7 +50,7 @@ import { toPlatform } from '../shared/commands/keybindings'
 import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWriteSchema, retentionDays } from './recovery-store'
 import { migrateProfile, profileFiles } from './profile-migration'
 import { JobRecordStore, noteJobConnection, profileDeleteJobs } from './job-records'
-import { cancelJobsResultSchema, jobKeySchema, jobLimits, restoredJobs, type JobRecord, type RecordedJobsCancel } from '../shared/bigquery/jobs'
+import { cancelJobsResultSchema, jobKeySchema, jobLimits, jobsByProject, restoredJobs, type JobRecord, type RecordedJobsCancel } from '../shared/bigquery/jobs'
 import { connectionKey } from '../shared/connections'
 import { encodeReloadSession, SessionStore, sessionWriteSchema, type SessionInput, type SessionRecord, type SessionRecordDocument } from './session-store'
 import { sessionLimits, type ReloadPins, type RestoredDocument, type RestoredSession, type SessionWrite } from '../shared/files/session'
@@ -539,10 +540,11 @@ function pendingReload(): boolean {
 async function reopenDocument(document: SessionRecordDocument, targets: TargetCache): Promise<RestoredDocument> {
   const { path, text, fileSha256, ...rest } = document
   if (text !== undefined) {
-    const file = path ? await files.register(path, document.kind, { baseSha256: fileSha256 }, targets) : undefined
+    // A SQL Server Agent document's text is its kept state (AG-6g): it never has a file.
+    const file = path && !isKeptAgentKind(document.kind) ? await files.register(path, document.kind, { baseSha256: fileSha256 }, targets) : undefined
     return { ...rest, text, ...file ? { file } : {} }
   }
-  if (!path) throw new Error(`${document.name} could not be reopened.`)
+  if (!path || isKeptAgentKind(document.kind)) throw new Error(`${document.name} could not be reopened.`)
   try {
     const file = await files.read(path, { kind: document.kind, targets })
     return { ...rest, eol: file.eol, text: file.content, dirty: false, file: { id: file.id, name: file.name, path: file.path, encoding: file.encoding, ...file.codePage ? { codePage: file.codePage } : {}, readOnly: file.readOnly } }
@@ -1476,11 +1478,11 @@ app.whenReady().then(async () => {
   handle('varia:recovery-list', () => recovery.list(pageGeneration))
   handle('varia:recovery-take', async (value): Promise<RecoveredDocument> => {
     const generation = pageGeneration, record = await recovery.take(recoveryTakeSchema.parse(value).id, generation)
-    const file = record.path && generation === rendererGeneration ? await files.register(record.path, record.kind, { baseSha256: record.fileSha256 }) : undefined
+    const file = record.path && !isKeptAgentKind(record.kind) && generation === rendererGeneration ? await files.register(record.path, record.kind, { baseSha256: record.fileSha256 }) : undefined
     // A BigQuery copy brings its job key back, with the jobs main still has records of under it, to re-attach to.
     const jobs = record.jobKey ? await jobRecords.load().then(() => restoredJobs(jobRecords.forKeys([record.jobKey!])), () => []) : []
     return { text: record.text, name: record.name, kind: record.kind, eol: record.eol, ...file ? { file } : {}, ...record.provider ? { provider: record.provider } : {},
-      ...record.jobKey ? { jobKey: record.jobKey } : {}, ...jobs.length ? { jobs } : {} }
+      ...record.jobKey ? { jobKey: record.jobKey } : {}, ...jobs.length ? { jobs } : {}, ...record.targetId ? { targetId: record.targetId } : {} }
   })
   // Hot exit: the page's tabs as its close goes ahead, with main's paths in place of file ids, and the next start's restore.
   handle('varia:session-write', async value => {
@@ -1582,12 +1584,15 @@ app.whenReady().then(async () => {
     const one = running.length === 1
     const { response } = await pageDialog((window, signal) => dialog.showMessageBox(window, {
       type: 'question', title: 'BigQuery jobs without a tab', message: one ? '1 BigQuery job from the last session has no tab.' : `${running.length} BigQuery jobs from the last session have no tab.`,
-      detail: `${shown.join('\n')}\n\nCancel Jobs stops ${one ? 'it' : 'them'} in BigQuery. Keep leaves ${one ? 'it' : 'them'} running; BigQuery's job history lists ${one ? 'it' : 'them'}, and a kept job's session, with its temporary tables billed as storage, ends 24 hours after the job finishes.`,
-      buttons: [one ? 'Cancel Job' : 'Cancel Jobs', 'Keep'], defaultId: 1, cancelId: 1, noLink: true, signal
+      detail: `${shown.join('\n')}\n\nCancel Jobs stops ${one ? 'it' : 'them'} in BigQuery. Show in Job History lists ${one ? 'it' : 'them'} in Job History, where Re-attach opens ${one ? 'it' : 'each'} in a new tab. Keep leaves ${one ? 'it' : 'them'} running; Job History lists ${one ? 'it' : 'them'}, and a kept job's session, with its temporary tables billed as storage, ends 24 hours after the job finishes.`,
+      buttons: [one ? 'Cancel Job' : 'Cancel Jobs', 'Show in Job History', 'Keep'], defaultId: 2, cancelId: 2, noLink: true, signal
     }), { response: -1, checkboxChecked: false }, true)
     // A box a reload, crash or close took away decided nothing: the records stay for the next page's review.
     if (response < 0) return null
     const jobIds = running.map(record => record.jobId)
+    // Show in Job History hands the jobs (by project) to Job History, which waits for a connection when it must; their
+    // records go as Keep's do, since the jobs are the user's to find there now.
+    if (response === 1) { jobRecords.dropJobs(jobIds); return { answer: 'show' as const, jobIds, show: jobsByProject(running) } }
     if (response !== 0) { jobRecords.dropJobs(jobIds); return { answer: 'keep' as const, jobIds } }
     const cancel = await cancelRecordedJobs(running)
     // What could not be cancelled stays in BigQuery's job history; no tab will ask about it again.

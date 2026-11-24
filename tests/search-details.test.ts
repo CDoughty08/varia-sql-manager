@@ -8,7 +8,8 @@ import { detailsDrag, detailsKey, scriptable, searchDetailsLimits, SearchDetails
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { peekSpecs } from '../src/shared/explorer/peek'
-import { Columns, colouredEnd, shownChars, shownText, hitKindSpec, hitProperties, matchedLine, Properties, scrollKey } from '../src/renderer/src/search/SearchDetails'
+import { googleSqlLanguage } from '../src/renderer/src/languages/googlesql'
+import { Columns, sqlScopeOf, colouredEnd, shownChars, shownText, hitKindSpec, hitProperties, matchedLine, Properties, scrollKey } from '../src/renderer/src/search/SearchDetails'
 
 const ok = <T>(value: T): ApiResult<T> => ({ ok: true, value })
 const flush = () => new Promise(resolve => setTimeout(resolve, 0))
@@ -56,6 +57,12 @@ function setup() {
 }
 
 describe('Search Objects details pane', () => {
+  it('colours GoogleSQL as T-SQL: both grammars end their tokens with .sql, which the scope drops', () => {
+    expect(googleSqlLanguage.tokenPostfix).toBe('.sql')
+    expect(sqlScopeOf('keyword.sql')).toBe('keyword')
+    expect(sqlScopeOf('string.sql')).toBe('string')
+    expect(sqlScopeOf('keyword.googlesql')).toBe('keyword.googlesql')
+  })
   it('shows the hit at once and reads it only once the selection settles, so arrowing past hits reads nothing', () => {
     const { service, api, timers, settle } = setup()
     service.show('tab', connectionId, table)

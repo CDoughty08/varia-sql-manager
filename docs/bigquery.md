@@ -329,8 +329,8 @@ In the workbench:
   `query.cancel` with `detach`: the results close, the job keeps the tab's session, the next Execute waits for it (Stop
   cancels it), and closing the tab asks about it again while it runs.
 - **Jobs without a tab.** After a start whose tabs were restored (or with nothing to restore), running jobs whose tab is
-  gone (a crash, or an AutoRecover copy discarded, then asked at the next start) are asked about once: Cancel Jobs or
-  Keep (the default). Jobs an AutoRecover copy may still reopen are left for it. Finished ones are dropped silently.
+  gone (a crash, or an AutoRecover copy discarded, then asked at the next start) are asked about once: Cancel Jobs, Show in
+  Job History (filtered to them, [Job History](#job-history)) or Keep (the default). Jobs an AutoRecover copy may still reopen are left for it. Finished ones are dropped silently.
 - **Deleting a saved connection.** One whose jobs still run asks first: Cancel Jobs and Delete, or Keep Connection (the
   default). Varia cannot cancel them once the connection is gone. Jobs that cannot be cancelled (broken credentials, a
   job that finished long ago) ask again, with Delete Anyway leaving them to BigQuery's job history; so does a connection
@@ -636,6 +636,85 @@ expires, snapshot time), in UTC and binary units. Empty facts are left out and v
 Refresh on a project or dataset node also re-reads it in the Search Objects index, on a node below a dataset that dataset,
 and on the connection's node the whole index ([Search Objects › BigQuery](object-search.md#bigquery)).
 
+## Job History
+
+Job History shows what ran in the connection's billing project, what is still running and what it cost, and cancels jobs,
+without going to BigQuery Studio. Everything comes from BigQuery's free REST calls (`jobs.list`, `jobs.get`,
+`jobs.cancel`) through the principal's rate limiter, never a query and never the billed `INFORMATION_SCHEMA.JOBS` views.
+
+- **Opening it.** One document per connection, opened again it is focused: Job History on the connection's or the billing
+  project's Object Explorer menu (an extra project's is greyed: jobs belong to the billing project), the palette's
+  "BigQuery: Job History" (the active document's connection, the one live BigQuery connection, or a pick), "Show in Job
+  History" under a finished BigQuery tab's Messages (filtered to that job), and Show in Job History in the dialog about
+  running jobs left without a tab (filtered to them, per project; with the project not connected, the Connect dialog opens
+  and Job History follows once a connection to it is live, within 10 minutes). The Messages link shows only while the tab is
+  still on the job's project. A filtered document says so beside the filters, where × shows
+  every job again.
+- **Scope.** My jobs (the default) lists the principal's jobs. All users lists the project's (`allUsers`): it needs
+  `bigquery.jobs.list` (BigQuery User), and without `bigquery.jobs.listAll` BigQuery leaves out other users' configuration,
+  so such a row says "Details hidden by BigQuery" in place of its SQL. A refused All users listing turns the toggle back
+  to My jobs, says why, and keeps it off for the connection. In All users a second, minimal listing without `allUsers`
+  marks the principal's own jobs (never an email comparison).
+- **Listing and refresh.** The newest 1,000 top-level jobs in the range, newest first, in pages of 100 with `projection=full`;
+  each job's SQL is cut to a one-line, 200-character preview as its page is read, and a refresh reads at most 10 MiB of
+  answers within its time budget (0.8 of the interval, at most 10 s), going on from there next time (the status line says "still loading"). A refresh asks for
+  jobs created since a minute before the newest job a whole listing read (filtered out or not; a refresh the budget stops
+  goes on from its page next time, since each page's token is kept as it lands; it stops between pages at three quarters of the time budget), for the open jobs (`stateFilter` pending and running, from the oldest open job held) and, for
+  each open job that left that answer, its final state (`jobs.get`, or one `stateFilter=done` listing over their creation
+  window for other users' jobs when `jobs.get` on them is refused); an open job in a location the answer could not read
+  stays open until it can. A DONE job never changes and is never read again; new scope or filters list from scratch, at
+  once, even when the sample under way then finds nothing open. Three samples in a row that the time budget cuts before
+  any answer lands (a stalled network, rate limits retried until the budget runs out) fail with `TIMEOUT`, as does each one
+  after until an answer lands, so the retries back off; each such sample asks for a quarter of the jobs a page (down to one,
+  doubling back once samples finish), so a page too slow for the budget still lands, as does a sample in which another
+  listing answered but one sent in the budget's first quarter was cut before its first page; a failure retries from the asked interval, never the idle one. The
+  open jobs' listing goes on from its page as the others do, ahead of the refresh listing while it is under way, and a job missing from it counts as finished once it is whole. The `bigquery.jobs` live source refreshes every 5 s while a job is running or
+  pending and every 60 s otherwise (its `idleIntervalMs`, [docs/live.md](live.md)), and the load guard leaves it alone: its
+  cost is network and quota waits, which a longer interval would not ease. Pinned jobs (a link, the dialog) are read by id
+  and shown whatever the filters say (pinning clears the search); an open job the filters leave out is still followed
+  until it finishes (up to 1,000 of them, apart from the 1,000 jobs shown); a hidden document pauses, and Refresh (F5) and
+  Pause are in its header. The status line counts the jobs and open jobs, says when more exist in the range, and names
+  locations BigQuery could not read.
+- **Columns.** State (Running, Pending, Done, Failed, Cancelled, with row tones: failed and cancelled are DONE jobs with an
+  error, cancelled when its reason is `stopped` and it did not time out), Job ID, Type, Statement, User, Created, Duration,
+  Processed, Billed, Cost (on demand, from bytes billed; empty with Show cost as Bytes only), Slot time, Cache, Location,
+  Varia (jobs with the `varia_client` label), Destination, Error and SQL; then the identity columns the actions read (Job,
+  Parent job, Mine, Details hidden, Children). A script shows ▸; "Show statements in grid" in the details pane lists up to
+  1,000 of its statements (the newest, when it has more) under it in statement order (at most 4 scripts at once), read again only while it runs.
+- **Filters.** State and Type chips (every chip on is no filter), Range (last hour, 24 hours, 7 days, 30 days, or Custom…
+  with From and To, at most 180 days and no older than BigQuery's 180-day retention), Statements (statement types such as
+  `SELECT, MERGE`), Started from Varia, and Search over job id, user, destination and the SQL preview. Clear filters keeps
+  the scope and the search. A State filter of only Running and Pending lists open jobs alone (both states, so a pending job is
+  there when it starts); a finished job the filters leave out is not kept, and the 1,000-job cap counts the jobs shown.
+- **Details** (Enter, or the header's Details) reads the selected job with `bigquery.jobs.get`: its facts (times, bytes
+  processed, bytes billed with their cost, slot time, cache hit, rows affected, default dataset, destination, maximum bytes billed, whether it ran
+  in a session, labels), its error with its position, its whole SQL with GoogleSQL highlighting (up to 1,000,000
+  characters), and a script's statements. Another user's job without `bigquery.jobs.get` is refused once, remembered for
+  the connection, and shown as hidden from then on.
+- **Actions** (the grid's context menu, the details pane, and Cancel Job in the header), each greyed with its reason where
+  it does not apply:
+  - **Open Results** on a finished query job of the principal's opens a query tab on the connection that re-attaches to the
+    job ([Re-attaching to jobs](#re-attaching-to-jobs)) without taking over its session, which is free; an expired result
+    says so there. **Re-attach** on a running one does the same and adopts its session, so Stop cancels it. A tab that
+    already holds the job is focused instead. Both need the job's creator, who alone can read its result table.
+  - **Open SQL in New Tab** and **Re-run** open the job's whole SQL in a new query tab on the connection, with the job's
+    default dataset when it is in the billing project; Re-run then executes it with the usual cost prompts, unless the SQL
+    was longer than Varia reads. Re-run and Cancel Job are not in the palette, where their words would outrank Execute and
+    Cancel Executing Query.
+  - **Cancel Job…** on a running or pending job asks first ("Cancel job … started by … 12 minutes ago?"), then calls
+    `bigquery.jobs.cancel`. Cancelling another user's job needs `bigquery.jobs.update`; a refusal greys it for the
+    connection, with the reason.
+  - **Copy Job ID** copies `project:LOCATION.job_id`, and **Copy Console Link** the job's address in the BigQuery console
+    as text (Varia opens no browser; Google does not document the address, so a test pins the form the console uses).
+- **Methods.** `bigquery.jobs.get` (metadata lane): one job's details and full SQL, and a script's children
+  (`jobs.list?parentJobId`, with `allUsers` for another user's script), whose refusal leaves the details and says why.
+  `bigquery.jobs.cancel` (control lane): one job, answered at once with the state BigQuery reports. Both take a connection
+  handle, a job id of at most 1,024 characters and a location of at most 64, and serve BigQuery alone. The session a job
+  ran in is reported only as whether there was one; its id never leaves the backend.
+- **Failures.** A refused or failed refresh is the view's error with its code (`AUTH_EXPIRED`, `PERMISSION_DENIED`,
+  `QUOTA`, `API_DISABLED`, `NOT_FOUND`, `TIMEOUT`, `CONNECTION_LOST`, else `SQL_ERROR`) and Retry; the rows already shown
+  stay, marked stale.
+
 ## Errors
 
 | Code | When | Text and recovery |
@@ -711,6 +790,13 @@ and TIME columns, writes BYTES base64-encoded twice and exits on ARRAY columns; 
   `tabledata.list`'s request, a refused view, `ROW_ACCESS`), Script As › CREATE's dry run, and Properties' facts;
   `tests/bigquery-explorer.test.ts` the shared rules and schemas, `tests/scripting-service.test.ts` CREATE's cost gate, and
   `tests/queries.test.ts` Preview Rows' path.
+  `BigQueryJobHistoryChecks` covers Job History: reading `jobs.list` and `jobs.get` JSON (states, previews, hidden details,
+  bounds), the source's args, the sampler's first listing, refreshes, finished-job reads and idle state, All users and
+  its refusal, pinned and expanded jobs, each refresh error code, `bigquery.jobs.get` and `bigquery.jobs.cancel`, and the
+  live scope's provider gate, on the `jobs-*.json` and `job-script.json` fixtures; `tests/bigquery-job-history.test.ts` the
+  shared rules, the bounds both sides hold, and the document's service and commands. `scripts/bigquery-jobs-smoke.mjs` drives
+  the document end to end with the real backend in emulator mode against a loopback fake of the jobs API: opening it from
+  Object Explorer, rows and tones, Cancel Job, details and statements, a refused All users and closing.
 - **Emulator.** `-- --bigquery-emulator-live` with `VARIA_TEST_BIGQUERY_ENDPOINT` runs emulator mode end to end and the
   REST calls later lanes build on (client job ids, result and table paging, scripts, parameters, cancel, metadata), and
   `query.execute` end to end (every type, paging, the row limit, a script on the default dataset, DML, a failure).
@@ -743,4 +829,5 @@ and TIME columns, writes BYTES base64-encoded twice and exits on ARRAY columns; 
   decoding bounds it.
 - **Never a real project.** No check contacts Google Cloud. What only a real project can prove (tokeninfo and STS
   answers, Google's exact error bodies, bytes billed and slot statistics, a 409 on a repeated job id, whether a script's
-  cap applies per statement) stays on the hand-written fixtures until the owner runs a check against one.
+  cap applies per statement, which fields `jobs.list` leaves out of other users' jobs and a script's children) stays on the
+  hand-written fixtures until the owner runs a check against one.

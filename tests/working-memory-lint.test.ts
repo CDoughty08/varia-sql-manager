@@ -185,9 +185,10 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   // (The jobs resource is reached only for its other calls: held in a variable or used for another member, a jobs.query
   // would pass the ban above. A job list's own Jobs and SSIS's created.Jobs are not the resource.)
   // ...nor by its resource or request classes built directly (a JobsResource of one's own, a QueryRequest however aliased):
-  // only Jobs.cs's GetRequest and the ListRequest of Sessions.cs and Held.cs (the job identity check) name them.
+  // only Jobs.cs's GetRequest and the ListRequest of Sessions.cs, Held.cs (the job identity check) and History.cs (Job
+  // History's listings) name them.
   expect(bigQueryUses(/\bJobsResource\b(?!\s*\.\s*(?:GetRequest|ListRequest)\b)|\bQueryRequest\b/g)).toEqual([])
-  expect(bigQueryUses(/\bJobsResource\b/g).sort()).toEqual(['BigQuery/BigQueryService.Held.cs', 'BigQuery/BigQueryService.Jobs.cs', 'BigQuery/BigQueryService.Sessions.cs'])
+  expect(bigQueryUses(/\bJobsResource\b/g).sort()).toEqual(['BigQuery/BigQueryService.Held.cs', 'BigQuery/BigQueryService.History.cs', 'BigQuery/BigQueryService.Jobs.cs', 'BigQuery/BigQueryService.Sessions.cs'])
   // In BigQuery code a Jobs member is reached for those calls alone (a job list's own Jobs in Sessions.cs and Held.cs aside). These
   // text bans are the readable first line; BigQueryExecutionChecks.References holds the rule on the compiled backend, where
   // no spelling (a property pattern, a held resource, a target-typed request) hides a jobs.query.
@@ -204,9 +205,10 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   const tableRowsBody = tableRows.slice(0, tableRows.indexOf('}, token, rateLimits: false);'))
   expect(tableRowsBody.length).toBeGreaterThan(0)
   expect(tableRowsBody.includes('service.Tabledata.List(')).toBe(true)
-  // Every page of rows is read by SendRawAsync, called only for a job's results, for TableRowsAsync and by Preview Rows (its
-  // table's metadata and its tabledata.list): no request of another shape (a table's data endpoint by hand) reaches it.
-  expect(uses(/\bSendRawAsync\b/g).sort()).toEqual([...Array(3).fill('BigQuery/BigQueryService.Jobs.cs'), ...Array(2).fill('SqlService.BigQueryPreview.cs')])
+  // Every page of rows is read by SendRawAsync, called only for a job's results, for TableRowsAsync, by Preview Rows (its
+  // table's metadata and its tabledata.list) and by Job History (a jobs.list page and a jobs.get, under a byte limit): no
+  // request of another shape (a table's data endpoint by hand) reaches it.
+  expect(uses(/\bSendRawAsync\b/g).sort()).toEqual([...Array(2).fill('BigQuery/BigQueryService.History.cs'), ...Array(3).fill('BigQuery/BigQueryService.Jobs.cs'), ...Array(2).fill('SqlService.BigQueryPreview.cs')])
   expect(count(tableRowsBody, /\bSendRawAsync\(service, request, t\)/g)).toBe(1)
   expect(count(jobs.slice(jobs.indexOf('async Task<BigQueryPage> ResultsPageAsync('), jobs.indexOf('internal Task<BigQueryPage> TableRowsAsync(')), /\bSendRawAsync\(service, request, token\)/g)).toBe(1)
   // ...and Save Results As, which writes a windowed result's pages to the file as they come (SqlService.BigQueryExport.cs).

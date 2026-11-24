@@ -237,7 +237,9 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     // Only jobs recorded before the review asked; a disconnected handle forgets its profile.
     expect(source).toContain('const orphans = jobRecords.withoutTab([...keys, ...kept]).filter(record => record.createdAt < asked)')
     expect(source).toContain('if (value.disconnected) connectionProfiles.delete(connectionId)')
-    expect(source).toContain("buttons: [one ? 'Cancel Job' : 'Cancel Jobs', 'Keep'], defaultId: 1, cancelId: 1")
+    expect(source).toContain("buttons: [one ? 'Cancel Job' : 'Cancel Jobs', 'Show in Job History', 'Keep'], defaultId: 2, cancelId: 2")
+    // Show in Job History drops the records as Keep does and hands the jobs, by project, to Job History.
+    expect(source).toContain("if (response === 1) { jobRecords.dropJobs(jobIds); return { answer: 'show' as const, jobIds, show: jobsByProject(running) } }")
     // Deleting a profile with running jobs asks, and keeps the profile when a cancel fails.
     // A SQL Server delete reads no job records; Keep Connection after failed cancels still says what the others noted.
     expect(source).toContain('const unread = bigQuery && await jobRecords.load().then(() => false, () => true)')
@@ -258,7 +260,7 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     expect(source).toContain('(await bigQueryStore.load().catch(() => undefined))?.library.profiles.some(profile => profile.id === id)')
     // The review runs only after a restore that worked.
     const workbench = await readFile(join(__dirname, '..', 'src', 'renderer', 'src', 'core', 'workbench.ts'), 'utf8')
-    expect(workbench).toContain('if (restored) void queries.reviewJobsWithoutTab(api)')
+    expect(workbench).toContain('if (restored) void queries.reviewJobsWithoutTab(api, showJobsWithoutTab)')
     expect(workbench).toContain('.then(opened => opened >= 0, () => false).then(restored => {')
     // What the cancels noted is said before the connection goes.
     expect(source).toContain("const notes = cancelNotesText('BigQuery', cancel.jobs)")

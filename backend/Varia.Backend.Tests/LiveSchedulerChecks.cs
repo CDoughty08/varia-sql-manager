@@ -158,9 +158,8 @@ internal static class LiveSchedulerChecks
                 .Concat(LiveSql.Lint(query.Text(LiveSql.CommittedPrologue, admin: false))).Select(problem => query.Probe + " band " + query.Band + ", restricted: " + problem))).ToList();
         // The one-batch probes are Object Explorer's status probes and the SSIS tree's catalog probe; the Activity Monitor's and the
         // Operations document's run several statements each (ActivityReader, SsisOperationsReader), checked by their own lints, and
-        // agent.jobs, agent.history and agent.errorLog run msdb's and master's procedures through AgentReader (AgentSql.LintRead) and
-        // explorer.agentService's text.
-        var oneBatch = catalog.Probes.Values.Where(probe => catalog.Sources[probe.Source].Scope != "none" && !ActivityCatalog.Current.LiveProbes.Contains(probe.Id) && probe.Id != LiveSql.OperationsProbe && probe.Id != Plans.LivePlanSampler.Probe
+        // agent.jobs, agent.history and agent.errorLog run msdb's and master's procedures through AgentReader (AgentSql.LintRead) and explorer.agentService's text. The bigquery scope's sources run no SQL (BigQuery's REST jobs API).
+        var oneBatch = catalog.Probes.Values.Where(probe => catalog.Sources[probe.Source].Scope is not ("none" or "bigquery") && !ActivityCatalog.Current.LiveProbes.Contains(probe.Id) && probe.Id != LiveSql.OperationsProbe && probe.Id != Plans.LivePlanSampler.Probe
             && probe.Source != Agent.AgentJobsReader.Source && probe.Source != Agent.AgentHistoryReader.Source && probe.Source != Agent.AgentErrorLogReader.Source).ToList();
         check(oneBatch.Count == 6 && queries.Count == oneBatch.Count * (LiveSql.MaxBand - LiveSql.MinBand + 1) && problems.Count == 0,
             "every one-batch SQL probe's text passes the live lint at every band, with the session probe, the catalog state read and the catalog probe's restricted and read-committed texts (" + queries.Count + "): " + string.Join("; ", problems.Take(5)));
@@ -394,8 +393,8 @@ internal static class LiveSchedulerChecks
     private static readonly LiveTableJson AppendTable = new("log", "append", [new("id", "id", "bigint")], ["id"]);
     private static readonly LiveTableJson SnapshotTable = new("rows", "snapshot", [new("k", "k", "int")], ["k"]);
     private static readonly LiveCatalog Fixture = LiveCatalog.Create(LiveCatalog.Current.Limits,
-        [Probe("fx.a", minGapMs: 15_000, duty: 0.2), Probe("fx.b"), Probe("fx.app", tables: [SnapshotTable, AppendTable])],
-        [new("fx", "Fixture", "Fixture", "server", false, ["fx.a", "fx.b", "fx.app"])]);
+        [Probe("fx.a", minGapMs: 15_000, duty: 0.2), Probe("fx.b"), Probe("fx.app", tables: [SnapshotTable, AppendTable]), Probe("fx.b") with { Id = "fx.idle", IdleIntervalMs = 60_000 }],
+        [new("fx", "Fixture", "Fixture", "server", false, ["fx.a", "fx.b", "fx.app", "fx.idle"])]);
 
     private static LiveSubscription Subscription(ILiveSampler sampler, Func<double> random, params (string Probe, int Interval)[] probes)
     {
@@ -437,6 +436,26 @@ internal static class LiveSchedulerChecks
             check(first is [{ Gap: "baseline", ElapsedMs: null, BudgetMs: 1600, EffectiveIntervalMs: 2000 }] && quick == 1000 && second is [{ Gap: null, ElapsedMs: 1000 }] && slot == 3000
                 && lateDue is [{ Gap: "late", Skipped: 2 }] && probe.DueAt == 9000 && subscription.TakeDue(7600).Count == 0 && subscription.WaitMs(7600) == 1400,
                 "a baseline brings the second sample within a second; the schedule is fixed rate; slots missed are counted (late, skipped 2) and never replayed in a burst");
+        }
+        var idler = new ScriptedSampler(periodMs: null);
+        using (var subscription = Subscription(idler, () => 0, ("fx.idle", 5000)))
+        {
+            var probe = subscription.Probes[0];
+            subscription.Opened([], 0);
+            subscription.Complete(subscription.TakeDue(0), Sample("fx.idle"), 5);
+            var taken = probe.DueAt;
+            var running = subscription.TakeDue(taken);
+            // New filters while the sample runs; the sample, with the old ones, then finds nothing open.
+            subscription.Refresh(taken + 500);
+            idler.Quiet = true;
+            subscription.Complete(running, Sample("fx.idle"), taken + 600);
+            var asked = probe.DueAt;
+            subscription.Complete(subscription.TakeDue(asked), Sample("fx.idle"), asked + 5);
+            var idleSlot = probe.DueAt;
+            var failing = subscription.TakeDue(idleSlot);
+            subscription.Complete(failing, Error("fx.idle", "SQL_ERROR"), idleSlot + 5);
+            check(asked == taken + 1000 && idleSlot == asked + 60_000 && !probe.Idle && probe.DueAt == idleSlot + 5000,
+                $"a refresh asked for while a sample runs survives that sample turning the probe idle ({asked - taken} ms), then the idle interval holds, and a failure retries at the asked interval ({probe.DueAt - idleSlot} ms)");
         }
 
         // Error back-off: the first failure retries at the interval, then doubles up to 60 s (jitter at its centre here).

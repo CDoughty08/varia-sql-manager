@@ -26,6 +26,8 @@ export interface CommandContext {
   readonly theme?: ThemePreferencePatch
   /** What the context menu that runs the command was opened for. */
   readonly target?: MenuTarget
+  /** BigQuery: Job History on this connection filtered to these jobs (a Messages job id, the records dialog). */
+  readonly bigQueryJobs?: { readonly connectionId: string; readonly jobs: readonly { readonly jobId: string; readonly location?: string }[] }
   /** The results grid cell a click or Enter opens (Open Value in New Tab), in the query tab `tabId`: its result's entry key, row and column. */
   readonly cell?: { readonly entry: string; readonly row: number; readonly column: number; readonly capturedPlan?: true }
   /** What the widget a command opens is placed below: the header's search box, for the Search it opens. */

@@ -6,6 +6,7 @@ import { bigQueryDryRunRequestSchema, bigQueryDryRunResultSchema } from '../shar
 import { resultsRemoteQuerySchema } from '../shared/bigquery/remote-view'
 import { bigQueryPreviewTargetSchema, bigQueryPropertiesRequestSchema, bigQueryPropertiesSchema } from '../shared/bigquery/objects'
 import { jobKeySchema, queryAttachParamsSchema } from '../shared/bigquery/jobs'
+import { jobHistoryCancelResultSchema, jobHistoryDetailsSchema, jobHistoryGetParamsSchema, jobHistoryJobParamsSchema } from '../shared/bigquery/history'
 import { bigQueryAccountSchema, bigQueryDatasetSchema, bigQueryCredentialParamsSchema, bigQueryProjectListSchema, bigQueryProjectsParamsSchema, connectionOptionsSchema, providerConnectionOptionsSchema } from '../shared/connections'
 import { providerIds } from '../shared/providers'
 import { connectionPrincipalIdSchema } from './connection-principal'
@@ -54,6 +55,8 @@ export const requestSchemas = {
   'bigquery.projects': bigQueryProjectsParamsSchema,
   'bigquery.dryRun': bigQueryDryRunRequestSchema,
   'bigquery.properties': bigQueryPropertiesRequestSchema,
+  'bigquery.jobs.get': jobHistoryGetParamsSchema,
+  'bigquery.jobs.cancel': jobHistoryJobParamsSchema,
   'bigquery.indexEstimate': bigQueryIndexEstimateRequestSchema,
   'connections.identity': z.object({}).strict(),
   'databases.list': z.object({ connectionId }).strict(),
@@ -121,6 +124,8 @@ export const resultSchemas: Partial<Record<RpcMethod, z.ZodType>> = {
   'bigquery.projects': bigQueryProjectListSchema,
   'bigquery.dryRun': bigQueryDryRunResultSchema,
   'bigquery.properties': bigQueryPropertiesSchema,
+  'bigquery.jobs.get': jobHistoryDetailsSchema,
+  'bigquery.jobs.cancel': jobHistoryCancelResultSchema,
   'bigquery.indexEstimate': bigQueryIndexEstimateResultSchema,
   'connections.databases': databaseListSchema,
   'databases.list': databaseListSchema,

@@ -10,7 +10,7 @@ import {
 } from './menus'
 
 // A Record so that a new Category cannot be left out of the document: its commands would otherwise vanish from it.
-const categoryOrder: Readonly<Record<Category, true>> = { File: true, Edit: true, View: true, Query: true, Connection: true, 'Object Explorer': true, 'Table Designer': true, 'Database Properties': true, 'Table Properties': true, 'New Database': true, 'Restore Database': true, 'Integration Services': true, Tools: true, 'Activity Monitor': true, 'SQL Server Agent': true, Preferences: true, Developer: true, Help: true }
+const categoryOrder: Readonly<Record<Category, true>> = { File: true, Edit: true, View: true, Query: true, Connection: true, 'Object Explorer': true, 'Table Designer': true, 'Database Properties': true, 'Table Properties': true, 'New Database': true, 'Restore Database': true, 'Integration Services': true, Tools: true, 'Activity Monitor': true, 'SQL Server Agent': true, BigQuery: true, Preferences: true, Developer: true, Help: true }
 const categories: readonly (Category | undefined)[] = [...Object.keys(categoryOrder) as Category[], undefined]
 const platformNames: Readonly<Record<Platform, string>> = { win32: 'Windows', linux: 'Linux', darwin: 'macOS' }
 const menuNames: Readonly<Record<MenuId, string>> = {
@@ -20,7 +20,7 @@ const menuNames: Readonly<Record<MenuId, string>> = {
   'explorer.tasks': 'Object Explorer context menu › Tasks', 'explorer.tasks.restore': 'Object Explorer context menu › Tasks › Restore',
   ...Object.fromEntries(scriptSubmenuIds.map(id => [id, 'Object Explorer context menu › Script … as' + (id === scriptAsSubmenuId ? '' : ` › ${submenus[id].title}`)])) as Record<typeof scriptSubmenuIds[number], string>,
   'tableDesigner.context': 'Table designer context menu', 'documentTab.context': 'Query tab context menu', 'output.context': 'Query Output context menu', 'output.highlight': 'Query Output context menu › Highlight', 'output.filter': 'Query Output context menu › Filter', 'output.transposeMenu': 'Query Output context menu › Transpose', 'dockTab.context': 'Panel tab context menu', 'input.context': 'Text field context menu',
-  'ssis.operation.context': 'Integration Services Operations context menu', 'search.hit.context': 'Search Objects result context menu', 'search.copy': 'Search Objects result context menu › Copy',
+  'ssis.operation.context': 'Integration Services Operations context menu', 'bigquery.jobs.context': 'BigQuery Job History context menu', 'search.hit.context': 'Search Objects result context menu', 'search.copy': 'Search Objects result context menu › Copy',
   'output.tools': 'Results toolbar › More results tools', 'peek.properties.context': 'Peek Properties context menu',
   'plan.outline.context': 'Execution plan outline context menu', 'plan.properties.context': 'Execution plan Properties context menu'
 }
@@ -33,6 +33,7 @@ const contextMenuUses: Readonly<Record<ContextMenuId, string>> = {
   'output.context': 'Right-click the results grid or Messages, or press Shift+F10 or the context-menu key where it has focus. A right-click outside the grid\'s selection selects that cell first.',
   'dockTab.context': 'Right-click a panel\'s tab (Object Explorer, Query editor, or Query output), or press Shift+F10 or the context-menu key on a focused tab.',
   'ssis.operation.context': 'Right-click the Integration Services Operations grid (a right-click outside the selection selects that row first), or press Shift+F10 or the context-menu key in it. Items act on the selected operation and the document\'s rows.',
+  'bigquery.jobs.context': 'Right-click the BigQuery Job History grid (a right-click outside the selection selects that row first), or press Shift+F10 or the context-menu key in it. Items act on the selected job; one that does not apply to it is greyed once the selected row\'s cells are read, and its reason shows in the details pane.',
   'search.hit.context': 'Right-click a Search Objects result (in the Search Objects tab or Object Explorer\'s search), which selects it, or press Shift+F10 or the context-menu key on the selected result. Items act on that object: Select Top N Rows, Modify and Script … as are Object Explorer\'s, for the object\'s kind; Rename, Delete and Properties are left to the tree (Reveal in Object Explorer first).',
   'output.tools': 'Click the ⋯ button at the end of the results toolbar (More results tools), or press Enter or Space on it. It holds every tool of the toolbar, so those a narrow pane folds away stay in reach, and Show Results as Tabs. Items act on the query the toolbar belongs to, as its buttons do.',
   'peek.properties.context': 'Right-click Peek\x27s Properties pane (in the card or a Peek tab), or press Shift+F10 or the context-menu key in it. Copy puts the properties whose text is selected, or all of them when none is, on the clipboard as Name and Value lines separated by a tab.',

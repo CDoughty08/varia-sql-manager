@@ -473,6 +473,10 @@ changes and drops them, fails a later call and checks nothing committed, deletes
 alert. No check sends e-mail. The `agent-job` smoke suite creates an alert from a job's New alert for this job…, saves a changed
 cell in the Operators and notifications grid and sends a test e-mail through the fake backend.
 
+Agent documents with unsaved changes are kept by hot exit and AutoRecover (docs/hot-exit.md, SQL Server Agent documents):
+`tests/agent-hot-exit.test.ts` covers each kind's kept state and reopening, and the `agent-hot-exit` smoke suite quits with an
+edited job and relaunches.
+
 The service verbs have offline checks through the `IServiceControl` fake (every refusal, the waits, a partial restart and
 the platform gates) and a live suite of their own, `AgentService` (`VARIA_TEST_SQL_AGENT_SERVICE=1`), which really stops,
 starts and restarts Agent and leaves it running. No grouped or full live run reaches it: it runs only through

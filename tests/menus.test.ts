@@ -398,6 +398,10 @@ describe('menu state', () => {
       'explorer.moveServerUp', 'explorer.moveServerDown',
       // BigQuery's Preview Rows and Properties: Object Explorer's menu on its tables and views, and the palette.
       'explorer.previewRows', 'explorer.bigQueryProperties',
+      // BigQuery Job History: Object Explorer's menu on a BigQuery server and its billing project, the palette, a Messages job id,
+      // and the document's own grid menu, header and keys.
+      'bigquery.jobHistory', 'bigquery.openJobResults', 'bigquery.reattachJob', 'bigquery.openJobSql', 'bigquery.rerunJob', 'bigquery.cancelJob', 'bigquery.copyJobId', 'bigquery.copyJobLink',
+      'bigquery.jobDetails', 'bigquery.refreshJobs', 'bigquery.pauseJobs',
       // Focusing editor groups: keys in editor text and the palette.
       'editor.focusNextGroup', 'editor.focusPreviousGroup',
       // Tab stack height: the query tab menu and palette equivalent of Control+wheel.
@@ -438,7 +442,7 @@ describe('menu state', () => {
       const placed = commandDescriptor(id).menus?.some(placement => nativeMenuIds.includes(placement.menu)) ?? false
       expect(menuCommandIds.includes(id), id).toBe(placed && !commandDescriptor(id).role)
     }
-    expect(toggleCommandIds).toEqual(['view.toggleResultsPane', 'query.includeActualPlan', 'query.includeLivePlan', 'query.includeClientStatistics', 'explorer.groupBySchema', 'ssis.pauseOperations', 'editor.toggleWordWrap', 'editor.toggleOvertype', 'editor.toggleWhitespace', 'editor.toggleLineNumbers', 'activity.togglePause', 'activity.toggleSplit', 'output.showSpaces', 'output.showAllWhitespace', 'output.sortTextByChars', 'output.sortTextByBytes', 'output.transpose', 'output.compareChangesOnly', 'output.compareOneRow', 'output.compareExactText', 'output.toggleColumnProfile', 'output.toggleProfileSelectedColumns', 'output.toggleResultsTabs', 'output.toggleRowSize', 'window.togglePanelTabs'])
+    expect(toggleCommandIds).toEqual(['view.toggleResultsPane', 'query.includeActualPlan', 'query.includeLivePlan', 'query.includeClientStatistics', 'explorer.groupBySchema', 'ssis.pauseOperations', 'bigquery.pauseJobs', 'editor.toggleWordWrap', 'editor.toggleOvertype', 'editor.toggleWhitespace', 'editor.toggleLineNumbers', 'activity.togglePause', 'activity.toggleSplit', 'output.showSpaces', 'output.showAllWhitespace', 'output.sortTextByChars', 'output.sortTextByBytes', 'output.transpose', 'output.compareChangesOnly', 'output.compareOneRow', 'output.compareExactText', 'output.toggleColumnProfile', 'output.toggleProfileSelectedColumns', 'output.toggleResultsTabs', 'output.toggleRowSize', 'window.togglePanelTabs'])
     // Main checks only toggles the schema names.
     expect(menuStateSchema.safeParse({ disabled: [], checked: ['editor.toggleWhitespace', 'editor.toggleLineNumbers'] }).success).toBe(true)
   })

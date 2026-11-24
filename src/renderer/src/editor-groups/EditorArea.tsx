@@ -46,6 +46,7 @@ import LogFileViewer from '../agent/LogFileViewer'
 import ObjectSearch from '../search/ObjectSearch'
 import PeekTab from '../explorer/PeekTab'
 import BigQueryPropertiesTab from '../explorer/BigQueryPropertiesTab'
+import JobHistory from '../bigquery/JobHistory'
 import PlanDocument from '../plans/PlanDocument'
 
 /**
@@ -151,6 +152,7 @@ function DocumentPanel({ api }: IDockviewPanelProps) {
     {kind === 'objectSearch' && <ObjectSearch documentId={id} />}
     {kind === 'peek' && <PeekTab documentId={id} />}
     {kind === 'bigQueryProperties' && <BigQueryPropertiesTab documentId={id} />}
+    {kind === 'bigQueryJobs' && <JobHistory documentId={id} />}
     {kind === 'releaseNotes' && <ReleaseNotes documentId={id} />}
     {kind === 'help' && <HelpDocument documentId={id} />}
     {kind === 'ssisOperations' && <SsisOperations documentId={id} />}

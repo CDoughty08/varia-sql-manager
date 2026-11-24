@@ -14,12 +14,13 @@ import { createFromCommandEntries } from '../agent/create-from.ts'
 import { agentProxyCommandEntries } from '../actions/agent-proxy.ts'
 import { logViewerCommandEntries } from '../agent/history.ts'
 import { errorLogCommandEntries } from '../agent/error-log.ts'
+import { jobHistoryCommandEntries } from '../bigquery/history-catalog.ts'
 import type { IconId } from '../icons.ts'
 import { ssisCommandEntries } from '../ssis/catalog.ts'
 import { bothProviders, providerAllows, providersOf, type ProviderContext, type ProviderId } from '../providers.ts'
 import type { BackendMethod } from '../contracts'
 
-export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Object Explorer' | 'Table Designer' | 'Database Properties' | 'Table Properties' | 'New Database' | 'Restore Database' | 'Integration Services' | 'Tools' | 'Activity Monitor' | 'Preferences' | 'Developer' | 'Help' | 'SQL Server Agent'
+export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Object Explorer' | 'Table Designer' | 'Database Properties' | 'Table Properties' | 'New Database' | 'Restore Database' | 'Integration Services' | 'Tools' | 'Activity Monitor' | 'Preferences' | 'Developer' | 'Help' | 'SQL Server Agent' | 'BigQuery'
 /** Electron roles a command can stand for: native menus show `{ role }`, while custom menus and the palette run its handler. */
 export type RoleName = 'cut' | 'copy' | 'paste' | 'delete' | 'selectAll' | 'reload' | 'toggleDevTools' | 'resetZoom' | 'zoomIn' | 'zoomOut' | 'togglefullscreen' | 'quit'
 /** The roles the renderer may ask main to run (`varia:run-role`); quitting goes through the renderer's own close flow instead. */
@@ -508,6 +509,9 @@ export const commandCatalog = {
   ...logViewerCommandEntries(),
   // The Agent error logs in the Log File Viewer (AG-5b): View Agent Log and Recycle, from src/shared/agent/error-log.ts.
   ...errorLogCommandEntries(),
+  // BigQuery Job History (BQ-9): the document on a connection's and billing project's menus and in the palette, and its row
+  // actions, generated from src/shared/bigquery/history-catalog.ts.
+  ...jobHistoryCommandEntries(),
   // The Schedules document (AG-6c): Manage Schedules, New Schedule… and the document's verbs, from src/shared/actions/agent-schedule.ts.
   ...agentScheduleCommandEntries(),
   // Create Job Like This (AG-6e): from src/shared/agent/create-from.ts.
