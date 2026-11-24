@@ -2345,7 +2345,7 @@ In flight as of 2026-11-22. After each merges, open comparison branches merge ma
 
 - **Difference navigation** has merged: Go to Next/Previous Difference, Go to Possible Match, the overview strip and the
   `comparisonRowHasPartner` key that C2's keys copy. Every lane starts from main.
-- **BigQuery** (docs/bigquery-plan.md, 0.10.0):
+- **BigQuery** (docs/bigquery.md, 0.10.0):
   - Remote views (BQ-3c) and job re-attach (BQ-3d-1, BQ-3d-2) have merged, so C1 and C6 build on the view plumbing, and
     the protocol, catalogue, document-registry and hot-exit files the comparison lanes append to already hold BQ-3d's
     changes. C6 adds `comparisonOutOfDate` to `ResultsService.ts`; C5b's new document kind stays out of the hot-exit

@@ -49,7 +49,7 @@ updates the mock in the same PR when the design changes.
 
 ## Owner decisions (2026-11-15)
 
-- **Plan home**: this docs page plus the mocks, in a docs-only PR (as docs/bigquery-plan.md), pushed only with mocks for
+- **Plan home**: this docs page plus the mocks, in a docs-only PR (as BigQuery's plan was), pushed only with mocks for
   all new and changed UI in Varia's style.
 - **Agent service control**: Start, Stop and Restart in 0.11.0, behind a confirmation. **Must ship** (lane AG-2).
   Revised on 2026-11-18: the Windows route, not `xp_servicecontrol` (above).
@@ -1343,7 +1343,7 @@ Operators, alerts and proxies stay listable and scriptable from AG-1 and AG-4.
 
 ## Coordination with BigQuery
 
-BigQuery (docs/bigquery-plan.md) is the 0.10.0 milestone and runs at the same time, with BQ-0 in progress. Agent must not
+BigQuery (docs/bigquery.md) is the 0.10.0 milestone and runs at the same time, with BQ-0 in progress. Agent must not
 slow it down:
 
 - **Before BQ-0 merges, only AG-0a.** BQ-0 touches every registry (methods in the five places, context keys, the
