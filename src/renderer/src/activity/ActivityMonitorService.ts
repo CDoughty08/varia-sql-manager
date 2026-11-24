@@ -500,10 +500,12 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
     }
     const job = session.job!, name = job.name!
     this.put({ ...state, stopping: [...state.stopping ?? [], job.jobId] })
-    let failure: string | undefined
+    let failure: string | undefined, unknown = false
     try {
       const result = await this.options.api!.executeObjectAction!({ action: 'stopJob', connectionId, requestId: this.options.newId?.() ?? crypto.randomUUID(), target: { kind: 'agentJob', name }, agentIdentity: { jobId: job.jobId } })
       failure = !result.ok ? result.error : result.value.error?.message
+      // sp_stop_job may have run before the backend or the connection went: say the outcome is unknown, as Object Explorer does.
+      unknown = !result.ok && (result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST')
     } catch (error) {
       failure = error instanceof Error ? error.message : 'The stop failed.'
     }
@@ -512,6 +514,7 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
     const stopping = (now.stopping ?? []).filter(item => item !== job.jobId)
     const report: KillReport = failure === undefined
       ? { tone: 'success', title: `Stop requested for job ${name}.`, detail: 'SQL Server Agent stops the job at its current step; the session ends when the step does, and the job\'s history records it as cancelled.' }
+      : unknown ? { tone: 'error', title: `Whether job ${name} stopped is unknown.`, detail: 'The connection or the SQL backend was lost while the stop ran. The job\'s History shows whether it stopped.' }
       : { tone: 'error', title: `Job ${name} was not stopped.`, detail: failure }
     this.put({ ...now, ...stopping.length ? { stopping } : { stopping: undefined }, killReport: { ...report, id: ++this.reports } })
     if (failure === undefined && this.live(id)) this.refresh(id)

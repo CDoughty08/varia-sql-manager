@@ -235,6 +235,12 @@ describe('ActivityMonitorService session actions', () => {
     api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'JOB_STATE', message: 'Nightly is not running.', retryable: false } } })
     await activity.stopJob(id, agent)
     expect(activity.get(id)?.killReport).toMatchObject({ tone: 'error', title: 'Job Nightly was not stopped.', detail: 'Nightly is not running.' })
+    // A lost backend or connection may have come after sp_stop_job ran: the outcome is unknown, not a failure.
+    for (const code of ['BACKEND_LOST', 'CONNECTION_LOST'] as const) {
+      api.executeObjectAction.mockResolvedValueOnce({ ok: false, error: 'The connection was lost.', code })
+      await activity.stopJob(id, agent)
+      expect(activity.get(id)?.killReport).toMatchObject({ tone: 'error', title: 'Whether job Nightly stopped is unknown.' })
+    }
   })
   it('reports a kill the backend could not try as nothing killed', async () => {
     const { activity, api, id } = monitorFixture()

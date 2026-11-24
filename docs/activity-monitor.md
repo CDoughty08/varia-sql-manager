@@ -746,7 +746,7 @@ The Agent Job cell is a link: a click, or Enter on it, opens the job's document 
 shows the run live. Query Output's menu in the three session panes adds **Open Job** (`activity.openJob`) and **Stop Job**
 (`activity.stopJob`), and the palette has both; they act on the row as Details does. Stop Job is the job menu's guarded
 Stop, run without a confirm as Object Explorer's is (the `stopJob` object action with the job id the program name carries, so a job since replaced under the name is
-refused); its answer shows above the tiles, as Kill's, and the monitor samples again at once. Both need the job's name, so a
+refused); its answer shows above the tiles, as Kill's (a connection lost while it ran leaves the outcome unknown, and says so), and the monitor samples again at once. Both need the job's name, so a
 login msdb names no job to is told why instead. The Details flyout lists the job under Identity and Now, as a link, and Copy
 includes it.
 
