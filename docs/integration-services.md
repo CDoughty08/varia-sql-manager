@@ -159,7 +159,9 @@ What the checks prove:
   notes.
 - **Operations against the real catalog** (`SsisOperationsLiveChecks.RealAsync`, `VARIA_TEST_SSIS=1`, when SSISDB exists):
   the source reads the real views at the isolation the catalog's READ_COMMITTED_SNAPSHOT picks, with every column and tile,
-  and reports the probe's cost. It only reads. It has not run yet: this server has no SSISDB until Create Catalog (S9a).
+  and reports the probe's cost; then, on a 3 s view, a package filter (the newest execution's) applies at once, a followed
+  operation it leaves out does not stay as a departed row, and the next four samples keep exactly the matching rows. It only
+  reads, and skips the filter check when the window holds no execution.
 - **Drift check** (`VARIA_TEST_SSIS=1`): the real `SSISDB`'s shape equals its band's manifest entry. With
   `VARIA_TEST_SQL_SCRATCH=1` too, so does the Integration Services feature's own catalog backup, restored as a marked
   `VariaScratch_…_ssisref` database. Neither creates, changes or drops `SSISDB`; the restored copy is never named
@@ -452,8 +454,11 @@ SQL text Varia builds, in messages, in logs or on disk, and the request's frame 
 
 The Operations document (Active Operations, All Executions, All Validations and All Operations) shows one live subscription of
 the `ssis.operations` source per connection, on the SSIS read pool at the live prologue (docs/live.md). Its args are the
-document's filters; new args read the window again. The backend keeps the window: `limit` operations that pass the filters
-and are still open or were created in the last `windowHours`, the open ones first (an open one of any age stays, so Active
+document's filters; new args read the window again at once (`live.update` args read every probe again, as a view or filter
+change does, never a renderer timer), and the first rows under them name no departed row, so a selected operation the new
+filters leave out goes at once instead of staying one more sample. Folder, Project and Package match whole names unless
+Names start with (`prefix`) is on, and an empty window says so when a name is set without it. The backend keeps the window:
+`limit` operations that pass the filters and are still open or were created in the last `windowHours`, the open ones first (an open one of any age stays, so Active
 Operations finds a long run), then the newest, and the open ones the status filter hides, followed unseen since they can end
 in a status it shows. A new window reads the open operations of its scope apart, whatever their age. Each sample reads the
 operations above the newest id it has settled (2 samples and 5 s after it was first seen, the operations table's

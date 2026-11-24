@@ -678,7 +678,13 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
                 if (patch.View is not null || patch.Filter is not null || patch.Clear?.Any(setting => setting is "view" or "filter") == true) subscription.Reread(state, now);
             }
             foreach (var track in args.Track ?? []) subscription.Probes.Find(probe => probe.Spec.Id == track.Probe)!.Tracks[track.Table] = track;
-            if (sourceArgs is not null) subscription.Sampler.Apply(sourceArgs);
+            if (sourceArgs is not null)
+            {
+                subscription.Sampler.Apply(sourceArgs);
+                // New args are a new filter for the whole source: every probe reads again as a view or filter change does,
+                // so the rows match them without waiting out an interval (a filter chip on a 60 s view would otherwise).
+                foreach (var probe in subscription.Probes) subscription.Reread(probe, now);
+            }
             if (args.Paused is { } all) subscription.SetPaused(all, now);
             if (args.Refresh is true) subscription.Refresh(now);
             subscription.Signal();

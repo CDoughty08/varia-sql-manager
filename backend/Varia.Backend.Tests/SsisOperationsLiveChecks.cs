@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using Varia.Backend.Live;
 using Varia.Backend.Protocol;
+using Varia.Backend.Results;
 using Varia.Backend.Ssis;
 
 namespace Varia.Backend.Tests;
@@ -33,6 +34,7 @@ internal static class SsisOperationsLiveChecks
     private sealed class Views(LiveService live, JsonSerializerOptions json)
     {
         private uint next = 9700;
+        public ResultStore Store => live.Store;
 
         public View Subscribe(string connectionId, object? args = null, int intervalMs = 1000)
         {
@@ -44,6 +46,10 @@ internal static class SsisOperationsLiveChecks
 
         public void Update(View view, object args) =>
             live.Update(new LiveUpdateArgs(view.Id, LiveService.SsisOperationsSource, Args: JsonSerializer.SerializeToElement(args, json)), json);
+
+        /// <summary>Follows these operations as the grid follows its selected rows (they stay one revision when they leave).</summary>
+        public void Track(View view, int seq, params string[] keys) =>
+            live.Update(new LiveUpdateArgs(view.Id, LiveService.SsisOperationsSource, Track: [new LiveTrackArgs(Probe, 0, seq, keys)]), json);
 
         public static async Task<LiveEnd> Stop(View view)
         {
@@ -497,11 +503,56 @@ internal static class SsisOperationsLiveChecks
                 Console.WriteLine("Operations probe on the real SSISDB: " + string.Join(", ", samples.Select(sample => sample.CostMs + " ms")) + ".");
             }
             finally { await Views.Stop(view); }
+            await FilterKeptAsync(check, views, info);
         }
         finally
         {
             live.Dispose();
             service.Ssis.Forget(info.Id);
         }
+    }
+
+    /// <summary>A name filter on a slow view of the real catalog: its rows come at once (not a whole interval later), a selected
+    /// row it leaves out does not stay as a departed row, and every later sample keeps them filtered, never blank. Skipped when
+    /// the catalog has no execution in the window to filter by.</summary>
+    private static async Task FilterKeptAsync(Action<bool, string> check, Views views, ConnectionInfo info)
+    {
+        var hours = SsisCatalog.Current.Limit("operationsWindowHours");
+        var view = views.Subscribe(info.Id, new { windowHours = hours }, intervalMs: 3000);
+        try
+        {
+            await views.Until(view.Recorder, rows => rows.Count > 0, 30_000);
+            var package = views.Rows(view.Recorder).Select(row => row[5]).FirstOrDefault(name => name is { Length: > 0 });
+            if (package is null)
+            {
+                Console.WriteLine("The real SSISDB has no execution in the window: the filter persistence check is skipped.");
+                return;
+            }
+            var matching = views.Rows(view.Recorder).Count(row => row[5] == package);
+            // The grid's selection on an operation the filter leaves out (the newest other one, if any).
+            if (views.Rows(view.Recorder).FirstOrDefault(row => row[5] != package)?[0] is { } selected) views.Track(view, 1, selected);
+            bool Filtered(List<string?[]> rows) => rows.Count == matching && rows.All(row => row[5] == package);
+            // Wait for a sample to land, so the update arrives early in the 3 s interval.
+            var before = view.Recorder.Ticks.Count;
+            await view.Recorder.WaitAsync(recorder => recorder.Ticks.Count > before, 10_000);
+            var sent = System.Diagnostics.Stopwatch.StartNew();
+            views.Update(view, new { windowHours = hours, package });
+            var prompt = await views.Until(view.Recorder, Filtered, 10_000);
+            var latency = sent.ElapsedMilliseconds;
+            // Each later sample's rows as it arrives (the store keeps only the newest results).
+            var from = view.Recorder.Ticks.Count;
+            var kept = new List<List<string?[]>>();
+            var read = from;
+            var later = await view.Recorder.WaitAsync(recorder =>
+            {
+                for (; read < recorder.Ticks.Count; read++)
+                    if (recorder.Ticks[read].Samples.FirstOrDefault(sample => sample.Probe == Probe) is { Tables: [var table, ..] } && read == recorder.Ticks.Count - 1) kept.Add(LiveResultChecks.RowsOf(views.Store, table.Descriptor));
+                return recorder.Ticks.Count >= from + 4;
+            }, 30_000);
+            check(prompt && latency < 2500 && later && kept.All(Filtered) && Filtered(views.Rows(view.Recorder)),
+                "a package filter on the real catalog applies at once (" + latency + " ms on a 3 s interval) and the next samples keep it (" + matching + " rows each; "
+                + string.Join(" | ", kept.Select(rows => rows.Count + ":" + string.Join(",", rows.Select(row => row[0])))) + ")");
+        }
+        finally { await Views.Stop(view); }
     }
 }

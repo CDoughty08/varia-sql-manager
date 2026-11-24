@@ -189,6 +189,30 @@ try {
   await expect.poll(async () => (await rows()).some(row => row.id === '101')).toBe(true)
   console.log('Filters passed: kinds, tiles and names read the window again, and Clear filters shows everything.')
 
+  step = 'slow filters'
+  // On a view that updates once a minute a filter still applies at once: new args read the window again in the backend, never
+  // on a renderer timer. The waits stay well inside the minute, so only that immediate read can pass them.
+  expect(await page.evaluate(() => window.varia.updateSettings({ 'integrationServices.operationsRefreshSeconds': 60 }))).toMatchObject({ ok: true })
+  await expect(frame()).toContainText(/Live · every 1 min/)
+  const ids = async () => (await rows()).map(row => row.id).join(',')
+  await chip('Kind', 'Executions').click()
+  await expect.poll(async () => { const shown = await rows(); return shown.length >= 4 && shown.every(row => row.type === 'Create and start execution') }, { timeout: 10000 }).toBe(true)
+  await frame().getByLabel('Package', { exact: true }).fill('Daily.dtsx')
+  await page.keyboard.press('Enter')
+  await expect.poll(ids, { timeout: 10000 }).toBe('108,103,102')
+  // A partial name matches nothing (names match whole), and the empty window says how to match the start of one.
+  await frame().getByLabel('Package', { exact: true }).fill('Daily')
+  await page.keyboard.press('Enter')
+  await expect(frame().getByText('No operations match the filters', { exact: true })).toBeVisible({ timeout: 10000 })
+  await expect(frame()).toContainText('Folder, Project and Package match whole names. Check Names start with to match names that start with the text.')
+  await frame().getByRole('checkbox', { name: 'Names start with', exact: true }).check()
+  await expect.poll(ids, { timeout: 10000 }).toBe('108,103,102')
+  await frame().getByRole('button', { name: 'Clear filters', exact: true }).first().click()
+  await expect.poll(async () => (await rows()).some(row => row.id === '101'), { timeout: 10000 }).toBe(true)
+  expect(await page.evaluate(() => window.varia.updateSettings({ 'integrationServices.operationsRefreshSeconds': 1 }))).toMatchObject({ ok: true })
+  await expect(frame()).toContainText(/Live · every 1 s/)
+  console.log('Slow filters passed: on a once-a-minute view chips and names apply at once, and a partial name says names match whole.')
+
   step = 'verbs'
   // F5 in the document refreshes it; Pause stops reading and says so; Copy with Headers copies the selected rows.
   await selectOperation('103')

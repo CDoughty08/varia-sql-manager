@@ -1975,7 +1975,8 @@ with `BACKEND_ERROR`.
   NULL first ascending, text case-insensitively then exactly), then by the key (a table that no key names keeps the source's order), and stores at most the row cap (`rowLimit`,
   rows left out counted in `rowsRead`). `diff` counts keys added, removed and changed (a 64-bit hash of their texts);
   `tracked` gives each key of the latest track list its new row or −1. A key is its key cells' texts joined with U+001F, NULL
-  as empty. A table with `departed` keeps a tracked row that left the source (not one hidden by view or filter) for one more
+  as empty. A table with `departed` keeps a tracked row that left the source (not one hidden by view or filter, nor one new
+  args leave out: a source that filters in SQL marks the rows it read anew under new args, `LiveReaderTable.Refiltered`) for one more
   revision at its old row; only the first `linger` keys stay. Facet columns carry their distinct values over the rows the
   facet scope keeps (before view and filter; the Activity Monitor's Sessions counts only rows its chips show), most frequent
   first, at most 100 of at most 128 characters, sent only when changed; facet text overflowing the tick's 32 KiB is left
@@ -1987,7 +1988,8 @@ with `BACKEND_ERROR`.
   table with nothing held waits for its next sample.
 - **View and filter.** An update that sets or clears a probe's view or filter reads that probe again as a refresh would
   (within its minimum gap and interval, and no sooner than its cost allows under the load guard's duty cycle), so the rows
-  match without waiting a whole interval; a paused, backing-off, stopped or load-slowed probe keeps its schedule.
+  match without waiting a whole interval; a paused, backing-off, stopped or load-slowed probe keeps its schedule. New `args`
+  are a new filter for the whole source: every probe reads again the same way, so a filter chip on a slow view applies at once.
 - **Row tones.** A table may end with a tone column (catalogue `role: 'tone'`, nvarchar, never a key, facet, sort or filter
   column): `error`, `warning`, `running`, `muted` or NULL. `ResultColumn.role` `tone` keeps it hidden in the grid, and Copy
   and Save Results As leave it out (`ResultTextWriter.Hidden`).

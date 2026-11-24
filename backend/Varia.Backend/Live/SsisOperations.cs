@@ -377,6 +377,8 @@ internal sealed class SsisOperationsReader(SsisCatalog catalog, SsisOperationsLi
     private readonly Func<long> now = clock ?? (() => Environment.TickCount64);
     private SsisOperationsFilter pending = SsisOperationsFilter.Of(args, catalog);
     private bool changed = true;
+    /// <summary>The window is read anew under new filters: its next written rows name no departed row (LiveReaderTable.Refiltered).</summary>
+    private bool refiltering;
     private string? prologue;
     private double?[] counts = [];
 
@@ -423,6 +425,8 @@ internal sealed class SsisOperationsReader(SsisCatalog catalog, SsisOperationsLi
         SsisOperationsFilter filter;
         lock (gate)
         {
+            // New args (not a Reset, which reads the same filters again) until a sample under them is written.
+            if (changed && !ReferenceEquals(pending, window.Filter)) refiltering = true;
             if (changed) window.Use(pending);
             changed = false;
             filter = window.Filter;
@@ -492,7 +496,9 @@ internal sealed class SsisOperationsReader(SsisCatalog catalog, SsisOperationsLi
         // The final tiles repeat their last count between reads.
         for (var i = 0; i < tiles.Count; i++) if (tiles[i].LastHours is not null) values[i] = i < counts.Length ? counts[i] : null;
         var raw = new LiveRawSample(null, null, values, new double?[values.Length]);
-        return new(raw, [new LiveReaderTable(0, window.Rows())], [], Status: [new LiveStatus("newest", window.Newest)]);
+        var refiltered = refiltering;
+        refiltering = false;
+        return new(raw, [new LiveReaderTable(0, window.Rows(), Refiltered: refiltered)], [], Status: [new LiveStatus("newest", window.Newest)]);
     }
 
     private void Bind(SqlCommand command, SsisOperationsFilter filter, long after, long[] open, SsisOperationsWatermarks marks)
