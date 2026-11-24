@@ -33,36 +33,45 @@ export const noDefaultDataset = '<no default dataset>'
 
 export function queryContribution({ commands, queries, documents, connections, targets, quickInput, events, backend }: Pick<Workbench, 'commands' | 'queries' | 'documents' | 'connections' | 'targets' | 'quickInput' | 'events' | 'backend'>,
   api: Pick<VariaApi, 'databases'>): Disposable {
+  const targetTab = (tabId?: string) => tabId ? documents.get(tabId) : documents.active
   /** Only an idle query may request explicit connection. A remembered target never authorizes SQL by itself. */
-  const connectsFirst = () => {
-    const tab = documents.active
+  const connectsFirst = (tabId?: string) => {
+    const tab = targetTab(tabId)
     if (!tab || !isQueryDocument(tab) || queries.isRunning(tab.id) || documents.getSnapshot().busy || backend.getSnapshot().state.status !== 'ready') return false
     const target = tab.targetId ? connections.connectionTargets.get(tab.targetId) : undefined
     if (target?.lifecycle.state === 'connecting' || target?.lifecycle.state === 'disconnecting') return false
     // An obsolete handle without a canonical target is not enough evidence to choose a reconnect identity.
     return !tab.connectionId || target?.lifecycle.state === 'disconnected' || target?.lifecycle.state === 'lost'
   }
-  const executesAttached = () => !!documents.active?.connectionId && connections.isLive(documents.active.connectionId) && queries.canExecute()
+  const executesAttached = (tabId?: string) => {
+    const tab = targetTab(tabId)
+    return !!tab?.connectionId && connections.isLive(tab.connectionId) && queries.canExecute(tab.id)
+  }
   const registrations = [
     // SSMS's F5 on a disconnected query opens Connect, then runs the query on the server chosen.
     commands.register('query.execute', {
-      when: () => executesAttached() || connectsFirst(),
-      run: () => { if (executesAttached()) return queries.execute(); if (connectsFirst()) events.emit({ type: 'query.connectRequested', tabId: documents.active!.id }) }
+      when: args => executesAttached(args?.tabId) || connectsFirst(args?.tabId),
+      run: args => {
+        const tab = targetTab(args?.tabId)
+        if (!tab) return
+        if (executesAttached(tab.id)) return queries.execute(tab.id)
+        if (connectsFirst(tab.id)) events.emit({ type: 'query.connectRequested', tabId: tab.id })
+      }
     }),
-    // A results strip's Stop query names its own tab; menus, keys and toolbars cancel the active one.
+    // A results strip's Stop query and a split group's query bar name their own tab; menus, keys and the classic toolbar cancel the active one.
     commands.register('query.cancel', { run: args => queries.cancel(args?.tabId) }),
-    commands.register('query.estimatePlan', { when: () => queries.canExecute(), run: () => queries.estimate() }),
-    commands.register('query.estimateSessionPlan', { when: () => queries.canExecute(), run: () => queries.estimate(undefined, 'session') }),
-    commands.register('query.includeActualPlan', { run: () => {
-      const tab = documents.active
+    commands.register('query.estimatePlan', { when: args => queries.canExecute(args?.tabId), run: args => queries.estimate(args?.tabId) }),
+    commands.register('query.estimateSessionPlan', { when: args => queries.canExecute(args?.tabId), run: args => queries.estimate(args?.tabId, 'session') }),
+    commands.register('query.includeActualPlan', { run: args => {
+      const tab = targetTab(args?.tabId)
       if (tab && isQueryDocument(tab)) documents.update(tab.id, { includeActualPlan: !tab.includeActualPlan })
     } }),
-    commands.register('query.includeLivePlan', { run: () => {
-      const tab = documents.get(documents.getSnapshot().activeId)
+    commands.register('query.includeLivePlan', { run: args => {
+      const tab = targetTab(args?.tabId)
       if (tab && isQueryDocument(tab)) documents.update(tab.id, { includeLivePlan: !tab.includeLivePlan })
     } }),
-    commands.register('query.includeClientStatistics', { run: () => {
-      const tab = documents.active
+    commands.register('query.includeClientStatistics', { run: args => {
+      const tab = targetTab(args?.tabId)
       if (tab && isQueryDocument(tab)) {
         documents.update(tab.id, { includeClientStatistics: !tab.includeClientStatistics })
         if (!tab.includeClientStatistics) void commands.execute('window.statistics', undefined, 'toolbar')

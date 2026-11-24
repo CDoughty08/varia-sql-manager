@@ -290,7 +290,7 @@ try {
   await submitConnect(connectWin, connectDialog)
   await expect(queryBar()).toHaveAttribute('role', 'status')
   await expect(queryBar().locator(part.queryStatusText)).toHaveText('Connected.')
-  await expect(activeTab().locator(part.tabSid)).toHaveText('—')
+  await expect(activeTab().locator(part.tabSid)).toHaveCount(0)
   await textbox().focus()
   await page.keyboard.press(mac ? 'Meta+A' : 'Control+A')
   await page.keyboard.insertText('WAIT_FOR_CANCEL')

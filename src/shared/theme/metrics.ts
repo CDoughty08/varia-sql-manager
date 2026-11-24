@@ -151,8 +151,8 @@ export const densityUse: Readonly<Record<keyof DensityMetrics, readonly string[]
 }
 /** Bar and row heights in px. Compact is the default and the only one :root sets; Comfortable is the planned option. */
 export const densities = {
-  compact: { header: 40, bar: 36, documentTab: 44, control: 26, row: 22, status: 24 },
-  comfortable: { header: 44, bar: 40, documentTab: 48, control: 28, row: 26, status: 26 }
+  compact: { header: 40, bar: 36, documentTab: 40, control: 26, row: 22, status: 24 },
+  comfortable: { header: 44, bar: 40, documentTab: 44, control: 28, row: 26, status: 26 }
 } as const satisfies Record<string, DensityMetrics>
 export type Density = keyof typeof densities
 export const defaultDensity: Density = 'compact'

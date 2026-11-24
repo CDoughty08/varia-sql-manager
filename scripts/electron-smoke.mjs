@@ -219,9 +219,9 @@ try {
   await expect(queryConnection(page).getByLabel('Query database', { exact: true })).toBeDisabled()
   expect(await page.evaluate(part => {
     const bar = document.querySelector(part.queryBar), box = bar.getBoundingClientRect()
-    return { aboveTabs: box.bottom <= document.querySelector(part.documentTabs).getBoundingClientRect().top + 0.5, above: box.bottom <= document.querySelector(part.editorPane).getBoundingClientRect().top + 0.5,
+    return { belowTabs: box.top >= document.querySelector(part.documentTabs).getBoundingClientRect().bottom - 0.5, above: box.bottom <= document.querySelector(part.editorPane).getBoundingClientRect().top + 0.5,
       height: box.height, stops: [...bar.querySelectorAll('button, select')].filter(control => control.tabIndex === 0).length, primary: [...bar.querySelectorAll(part.primaryAction)].map(button => button.getAttribute('aria-label')) }
-  }, part)).toEqual({ aboveTabs: true, above: true, height: 36, stops: 1, primary: ['Execute'] })
+  }, part)).toEqual({ belowTabs: true, above: true, height: 36, stops: 1, primary: ['Execute'] })
   // One tab stop: the arrow keys move between the enabled controls (Cancel waits for a running query) and leave the
   // server list's value alone.
   await queryServer(page).focus()
@@ -610,7 +610,7 @@ try {
   }, part)
   const beforeSidRegression = await page.evaluate(() => [innerWidth, innerHeight])
   await resizeContent(application, page, 1440, 900)
-  await expect.poll(tabGeometry).toMatchObject({ rowHeight: 44, nameVisible: true, nameUnclipped: true, sidVisible: true, chipsCentered: true, actionsVisible: true })
+  await expect.poll(tabGeometry).toMatchObject({ rowHeight: 40, nameVisible: true, nameUnclipped: true, sidVisible: true, chipsCentered: true, actionsVisible: true })
   await documentTabs(page).screenshot({ path: artifact('query-tabs-two-line.png') })
   await page.screenshot({ path: artifact('query-tabs-workbench.png') })
   await resizeContent(application, page, 1024, 720)

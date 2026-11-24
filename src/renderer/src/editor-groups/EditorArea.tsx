@@ -48,6 +48,7 @@ import PeekTab from '../explorer/PeekTab'
 import BigQueryPropertiesTab from '../explorer/BigQueryPropertiesTab'
 import JobHistory from '../bigquery/JobHistory'
 import PlanDocument from '../plans/PlanDocument'
+import QueryBar from '../QueryBar'
 
 /**
  * The query editor panel's editor groups (docs/editor-groups.md): a Dockview of its own inside the workbench's editor
@@ -102,8 +103,9 @@ export function groupsOf(json: SerializedDockview): EditorGroupInfo[] {
 /** Each panel's own document: a text document shows its group's editor; any other kind renders its own view. */
 function DocumentPanel({ api }: IDockviewPanelProps) {
   const area = useContext(AreaContext)!
-  const { documents } = useWorkbench()
+  const { documents, shellOptions } = useWorkbench()
   const kind = useServiceSelector(documents, snapshot => documentKind(snapshot.documents.find(document => document.id === api.id)))
+  const classicToolbar = useServiceSelector(shellOptions, snapshot => snapshot.classicToolbar)
   // Dockview keeps a panel's React tree while its tab is hidden; only the documents a group shows render, as the single
   // editor's workbench rendered only the active one.
   const [visible, setVisible] = useState(api.isVisible)
@@ -133,12 +135,17 @@ function DocumentPanel({ api }: IDockviewPanelProps) {
   }, [area, api.id, group, visible, custom])
   // A text document keeps its (empty) slot while hidden, so the editor can move in the moment its tab is chosen.
   if (!custom) {
-    const plan = kind === 'sqlplan'
+    const plan = kind === 'sqlplan', sql = kind === 'sql'
     const editor = <div className="editor-container" ref={slot} hidden={plan && !planSource} data-document-id={api.id} />
-    return plan ? <div className="document-view">
+    if (plan) return <div className="document-view">
       {visible && <PlanDocument documentId={api.id} source={planSource} onSource={setPlanSource} />}
       {editor}
-    </div> : editor
+    </div>
+    if (sql) return <div className="document-view">
+      {visible && !classicToolbar && <QueryBar tabId={api.id} onActivate={() => { if (!api.isActive) api.setActive() }} />}
+      {editor}
+    </div>
+    return editor
   }
   if (!visible) return null
   const id = api.id
@@ -170,7 +177,7 @@ function DocumentPanel({ api }: IDockviewPanelProps) {
 }
 
 /** A document's tab: its kind, name, environment, read-only, running and unsaved marks, and Close; double-click renames it. */
-function DocumentTab({ api, containerApi }: IDockviewPanelHeaderProps) {
+export function DocumentTab({ api, containerApi }: IDockviewPanelHeaderProps) {
   const workbench = useWorkbench(), id = api.id
   const tab = useServiceSelector(workbench.documents, snapshot => snapshot.documents.find(document => document.id === id))
   const busy = useServiceSelector(workbench.documents, snapshot => snapshot.busy)
@@ -245,7 +252,7 @@ function DocumentTab({ api, containerApi }: IDockviewPanelHeaderProps) {
   if (!tab) return null
   const kind = documentInfo(tab), pin = `${tab.pinned ? 'Unpin' : 'Pin'} ${tab.name}`
   const rememberedServer = isQueryDocument(tab) && presentation.disconnected ? presentation.server : undefined
-  const sid = isQueryDocument(tab) && <span className="tab-sid" title={session} aria-hidden="true">{rememberedServer ? 'Disconnected' : spid === undefined ? '—' : `SID ${spid}`}</span>
+  const sid = isQueryDocument(tab) && (spid !== undefined || !!rememberedServer) && <span className="tab-sid" title={session} aria-hidden="true">{rememberedServer ? 'Disconnected' : `SID ${spid}`}</span>
   const metadata = sid || environmentTag(environment)
   return <div className={selected ? 'query-tab active' : 'query-tab'} ref={ref} data-tab-id={id} data-dirty={tab.dirty || undefined} data-pinned={tab.pinned || undefined} data-query={isQueryDocument(tab) || undefined} style={{ borderTopColor: workbench.theme.accent(presentation.color), ...accentVariable(workbench.theme.accent(presentation.color)) }}
     onDoubleClick={event => { if (workbench.gestures.matches('documentTabs.rename', event) && !(event.target as Element).closest('.tab-close, .tab-pin')) workbench.tabRename.start(id) }}>
