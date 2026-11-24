@@ -91,19 +91,21 @@ alerts, operators and who is notified, behind the same gate until 0.11.0.
   checks, each with a severity, the jobs or schedules it names (links that open them) and a fix that opens the usual editor
   or confirmation. Nothing is written by the overview itself:
   - **Agent not running** (only then): Start for sysadmin on Windows, AG-2's service control on the Agent node.
-  - **Failed jobs**: a job whose last run failed within 24 hours ("(retrying)" while it retries); Show
-    them opens Job Activity Monitor on its Failed view.
+  - **Failed jobs**: a job whose last run failed and started within 24 hours ("(retrying)" while it retries); Show
+    them opens Job Activity Monitor on its Failed view, which lists every job whose last run failed, as the check's detail says.
   - **Owners that cannot log in**: a job owner whose login is disabled, missing (a SQL login's SID no longer in
     `sys.server_principals`; a Windows SID is not checked, as the domain may know it) or denied CONNECT SQL; a sysadmin owner
     such as a disabled `sa` passes, as Agent runs its jobs' steps as the service account. Change owner… opens Job Activity
-    Monitor's AG-3b form for exactly those jobs. Sysadmin only.
+    Monitor's AG-3b form for exactly those jobs (the first `startJobs` of more, saying so; a monitor running a bulk action or
+    off its server says why no form opened). Sysadmin only.
   - **Jobs that notify no one**: an enabled job with no e-mail, pager or net send notification on failure or completion
     (the event log and success-only notifications count as no one); Set notifications… opens the first job's Notifications.
   - **History retention**: a job at its per-job cap, or every job together at the total cap, whose history covers less than
     a week, unless the job was created within the week; History settings… opens SQL Server Agent Properties' History page.
     Unlimited history passes. Sysadmin only.
   - **Recommended alerts**: the alerts Add recommended alerts… would create (counted as its own dialog counts them); the
-    fix opens Operators and Notifications with it, for sysadmin. Windows only; elsewhere the check says the server has no alerts.
+    fix opens Operators and Notifications with it, for sysadmin. A recommended alert that exists but is disabled is named, and
+    is a warning even when none is missing. Windows only; elsewhere the check says the server has no alerts.
   - **Agent mail**: the job document's Database Mail check (Database Mail XPs, a profile, Agent's mail profile set and still
     a profile); a warning while a job or alert notifies by e-mail, a note otherwise. Varia has no Database Mail editor yet,
     so the text points to SSMS. Where Agent's own mail settings do not read (`sp_get_sqlagent_properties` sends no
@@ -117,7 +119,9 @@ alerts, operators and who is notified, behind the same gate until 0.11.0.
   schedules, Agent's mail settings and `sys.dm_server_services`. Each read is recorded in a reads table as `ok`, `role` (not
   run below sysadmin), `platform` (not on this platform) or the read's error code and message, so a refused read is a value
   and its check says "Not checked" with the reason (a failed facts read stops the sysadmin reads with its own reason, and a
-  failed state read is "Not checked", not a stopped Agent); the probe itself fails only when the connection does. The checks are
+  failed state read is "Not checked", not a stopped Agent); the probe itself fails only when the connection does. A list
+  read cut at its cap (`listRows`) makes the checks over it say they checked only the first rows, a pass there becomes a
+  note, and the Jobs and Alerts tiles show the count with a +. The checks are
   computed in the renderer from the raw facts.
 - **Job document** (`agentJob`, object actions, docs/object-actions.md). One tab per job ("Job Properties - Nightly"), opened
   from a job's node (Enter, double-click or Properties), from Job Activity Monitor, from Ctrl+Q's object search and from the

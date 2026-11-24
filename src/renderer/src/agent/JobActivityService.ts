@@ -456,11 +456,15 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
    *  is sysadmin, and the logins) or the Schedules describe (the shared schedules with their guards, the jobs' versions and, for sysadmin,
    *  which job uses which). A form opened again replaces the last; a read for one replaced or closed is dropped. */
   /** The bulk form for the jobs selected now, or for `given` jobs (the Agent overview's Change owner… names the jobs its check found, AG-15). */
-  async openForm(id: string, verb: AgentBulkFormVerb, given?: readonly SelectedJob[]): Promise<void> {
+  async openForm(id: string, verb: AgentBulkFormVerb, given?: readonly SelectedJob[]): Promise<string | undefined> {
     if (!given) await this.settledSelection(id)
     const state = this.get(id)
-    if (!state?.connectionId) return
-    if (given ? !this.live(id) || state.bulk?.running || bulkUnavailable(given.length) !== undefined : !this.canBulk(id)) return
+    if (!state?.connectionId) return agentBulkText.formUnavailable
+    // With `given` the caller is another document, which shows why no form opened (the monitor's own bar greys its buttons instead).
+    if (given) {
+      const refused = !this.live(id) ? agentBulkText.formUnavailable : state.bulk?.running ? agentBulkText.formBusy : bulkUnavailable(given.length)
+      if (refused) return refused
+    } else if (!this.canBulk(id)) return undefined
     const connectionId = state.connectionId
     const key = this.newId(), jobs = [...given ?? state.selected]
     this.patch(id, { form: verb === 'changeOwner' ? { verb, key, jobs, state: 'loading', owner: '' } : { verb, key, jobs, state: 'loading', search: '' } })

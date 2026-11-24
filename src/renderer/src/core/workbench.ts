@@ -124,6 +124,7 @@ import { selectSection } from '../kit/document-frame'
 import { AlertOperatorDocumentService, alertSpec, operatorSpec, operatorsSpec, type AlertDocumentService, type OperatorDocumentService, type OperatorsDocumentService } from '../agent/AlertOperatorDocumentService'
 import { agentContribution } from '../contributions/agent'
 import { AgentOverviewService } from '../agent/AgentOverviewService'
+import { agentLimits } from '../../../shared/agent/catalog'
 import { agentObjectsContribution } from '../contributions/agent-objects'
 import { SchedulesService } from '../agent/SchedulesService'
 import { ProxyDocumentService } from '../agent/ProxyDocumentService'
@@ -615,7 +616,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-overview="${CSS.escape(id)}"] .agent-check button, [data-agent-overview="${CSS.escape(id)}"] .agent-overview-head button`)?.focus()),
     fixes: {
       failedJobs: connectionId => { const id = jobActivity.open(connectionId); jobActivity.setView(id, 'failed') },
-      changeOwner: async (connectionId, jobs) => { const id = jobActivity.open(connectionId); await jobActivity.openForm(id, 'changeOwner', jobs.map(job => ({ id: job.id, name: job.name, status: '', lastRun: '', owner: job.owner }))) },
+      changeOwner: async (connectionId, jobs) => {
+        const id = jobActivity.open(connectionId), first = jobs.slice(0, agentLimits.startJobs)
+        const refused = await jobActivity.openForm(id, 'changeOwner', first.map(job => ({ id: job.id, name: job.name, status: '', lastRun: '', owner: job.owner })))
+        if (refused) throw new Error(refused)
+        if (first.length < jobs.length) throw new Error(`Change owner… opened for the first ${first.length} of ${jobs.length} jobs, as each is its own request; check again once they are done.`)
+      },
       openJob: (connectionId, name, section) => {
         const id = jobDocuments.openJob(connectionId, name)
         const state = jobDocuments.get(id)

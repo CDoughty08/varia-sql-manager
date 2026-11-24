@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   alertsCheck, failedCheck, historyCheck, historyShortfalls, mailCheck, namesText, needsAttention, notifyCheck, overviewChecks, overviewStatus, overviewTiles, ownerCheck, schedulesCheck,
-  serviceCheck, serviceWords, spanText, stampMs, unreadText, type OverviewFacts, type OverviewJob, type OverviewReadState
+  serviceCheck, serviceWords, spanText, stampMs, unreadText, overviewTruncatedText, type OverviewFacts, type OverviewJob, type OverviewReadState
 } from '../src/shared/agent/overview'
 import { recommendedAlerts } from '../src/shared/actions/agent-alert'
 import { commandDescriptor } from '../src/shared/commands/catalog'
@@ -79,7 +79,8 @@ describe("the Agent overview's checks", () => {
       jobs: [job('ETL', { outcome: 0, lastRun: '2026-11-23T02:00:00' }), job('Log backup', { outcome: 0, lastRun: '2026-11-23T11:45:00', status: 3 }),
         job('Old failure', { outcome: 0, lastRun: '2026-11-20T02:00:00' }), job('Fine')]
     }))
-    expect(check).toMatchObject({ severity: 'error', title: '2 jobs failed in the last 24 hours', detail: 'ETL and Log backup (retrying).', fix: { label: 'Show them', action: { kind: 'failedJobs' } } })
+    expect(check).toMatchObject({ severity: 'error', title: '2 jobs failed in the last 24 hours', fix: { label: 'Show them', action: { kind: 'failedJobs' } } })
+    expect(check.detail).toBe('ETL and Log backup (retrying). Counted by when the failed run started; Show them lists every job whose last run failed.')
     expect(check.objects).toEqual([{ kind: 'job', name: 'ETL' }, { kind: 'job', name: 'Log backup' }])
     // Without the server's clock every failed last run counts, said without a window.
     expect(failedCheck(facts({ serverNow: undefined, jobs: [job('Old failure', { outcome: 0, lastRun: '2026-11-20T02:00:00' })] })).title).toBe('1 job failed')
@@ -139,6 +140,11 @@ describe("the Agent overview's checks", () => {
     // An alert on the same severity under another name counts, as Add recommended alerts' own dialog counts it.
     expect(alertsCheck(facts({ alerts: [...facts().alerts.slice(1), { name: 'Sev 17 renamed', enabled: true, messageId: 0, severity: 17, notifies: false }] })).severity).toBe('ok')
     expect(alertsCheck(facts({ sysadmin: false, alerts: present })).fix).toBeUndefined()
+    // A recommended alert that exists but is disabled never fires: named, and a warning even when none is missing.
+    const disabled = facts().alerts.map(alert => alert.severity === 24 || alert.messageId === 823 ? { ...alert, enabled: false } : alert)
+    expect(alertsCheck(facts({ alerts: disabled }))).toMatchObject({ severity: 'warning', title: '2 recommended alerts are disabled' })
+    expect(alertsCheck(facts({ alerts: disabled })).detail).toContain('Disabled, so never raised: severity 024, and error 823.')
+    expect(alertsCheck(facts({ alerts: present.map(alert => alert.messageId === 823 ? { ...alert, enabled: false } : alert) })).detail).toContain('Disabled, so never raised: error 823.')
     expect(alertsCheck(facts({ platform: 'linux', reads: { ...allRead, alerts: { state: 'platform' } } }))).toMatchObject({ severity: 'unread', detail: 'SQL Server Agent on this server has no alerts.' })
     expect(alertsCheck(facts({ reads: { ...allRead, alerts: { state: 'PERMISSION_DENIED', message: 'This login may not read this part of SQL Server Agent.' } } })).severity).toBe('unread')
   })
@@ -162,6 +168,15 @@ describe("the Agent overview's checks", () => {
     const check = schedulesCheck(facts({ schedules: [{ id: 1, name: 'Nightly 02:30', enabled: true, jobs: 1 }, { id: 2, name: 'Quarter end', enabled: true, jobs: 0 }] }))
     expect(check).toMatchObject({ severity: 'info', title: '1 schedule is unused', detail: 'Quarter end.', objects: [{ kind: 'schedule', name: 'Quarter end' }], fix: { action: { kind: 'schedules' } } })
     expect(schedulesCheck(facts({ reads: { ...allRead, schedules: { state: 'role' } } })).severity).toBe('unread')
+  })
+
+  it('says a check over a list Agent cut at its cap checked only part of it, and a pass there is a note', () => {
+    const cut = facts({ reads: { ...allRead, jobs: { state: 'ok', truncated: true } } })
+    const checks = overviewChecks(cut)
+    expect(checks.find(check => check.id === 'failedJobs')).toMatchObject({ severity: 'info' })
+    expect(checks.filter(check => check.detail.endsWith(overviewTruncatedText)).map(check => check.id)).toEqual(['failedJobs', 'owners', 'notify', 'history', 'mail'])
+    expect(checks.find(check => check.id === 'alerts')!.severity).toBe('ok')
+    expect(overviewTiles(cut)[0]!.value).toBe('1+')
   })
 
   it('shows what a login below sysadmin can read and says the rest is sysadmin\'s', () => {
@@ -230,6 +245,14 @@ describe('the Agent overview document', () => {
     handle: { getWindow: async (first: number, count: number) => { const slice = rows.slice(first, first + count); const columns = slice[0]?.length ?? 0; return { first, count: slice.length, colStart: 0, colEnd: columns, text: slice.flat(), flags: new Uint8Array(slice.length * columns) } } },
     descriptor: { rowsAvailable: rows.length }
   }) as unknown as LiveTable
+
+  it("says why Job Activity Monitor opened no Change owner form for the overview's jobs", async () => {
+    const fixture = overview()
+    const id = fixture.jobActivity.open('c1')
+    const many = Array.from({ length: 101 }, (_, at) => ({ id: `J${at}`, name: `Job ${at}`, status: '', lastRun: '', owner: 'old' }))
+    expect(await fixture.jobActivity.openForm(id, 'changeOwner', many)).toBe('Select at most 100 jobs: each one is its own request.')
+    expect(fixture.jobActivity.get(id)!.form).toBeUndefined()
+  })
 
   it('opens one document per connection from its command, reads each sample into checks and runs a fix through its owner', async () => {
     const fixture = overview()

@@ -193,7 +193,8 @@ export function failedCheck(facts: OverviewFacts): OverviewCheck {
   if (!failed.length) return { id: 'failedJobs', severity: 'ok', title: `No job failed${window}`, detail: `${count(facts.jobs.length, 'job', 'jobs')} checked by their last run.`, objects: [] }
   const named = failed.map(job => job.status === 3 ? `${job.name} (retrying)` : job.name)
   return {
-    id: 'failedJobs', severity: 'error', title: `${count(failed.length, 'job', 'jobs')} failed${window}`, detail: `${namesText(named, 5)}.`,
+    id: 'failedJobs', severity: 'error', title: `${count(failed.length, 'job', 'jobs')} failed${window}`,
+    detail: `${namesText(named, 5)}.${facts.serverNow ? ' Counted by when the failed run started; Show them lists every job whose last run failed.' : ''}`,
     objects: failed.map(job => ({ kind: 'job', name: job.name })), fix: { label: 'Show them', action: { kind: 'failedJobs' } }
   }
 }
@@ -274,12 +275,18 @@ const raisedText = (entries: readonly { readonly messageId: number; readonly sev
 export function alertsCheck(facts: OverviewFacts): OverviewCheck {
   if (facts.platform && !agentGateOpen('alerts', facts.platform)) return unread('alerts', facts, 'alerts', 'alerts')
   if (!readOk(facts, 'alerts')) return unread('alerts', facts, 'alerts', 'the alerts')
-  const states = recommendedAlertStates(facts.alerts.map(alert => ({ name: alert.name, messageId: alert.messageId, severity: alert.severity })))
+  const raise = (alert: OverviewAlert) => ({ name: alert.name, messageId: alert.messageId, severity: alert.severity })
+  const states = recommendedAlertStates(facts.alerts.map(raise))
+  // An alert that exists but is disabled never fires: it counts as there (Add recommended alerts would not create it) but is named.
+  const firing = recommendedAlertStates(facts.alerts.filter(alert => alert.enabled).map(raise))
   const missing = states.filter(state => !state.exists), present = states.filter(state => state.exists)
+  const disabled = states.filter((state, at) => state.exists && !firing[at]!.exists)
+  const disabledText = disabled.length ? ` Disabled, so never raised: ${raisedText(disabled)}.` : ''
+  if (!missing.length && disabled.length) return { id: 'alerts', severity: 'warning', title: `${count(disabled.length, 'recommended alert is', 'recommended alerts are')} disabled`, detail: `Alerts on ${raisedText(present)} exist.${disabledText}`, objects: [] }
   if (!missing.length) return { id: 'alerts', severity: 'ok', title: 'Recommended alerts are in place', detail: `Alerts on ${raisedText(present)} exist.`, objects: [] }
   const text = raisedText(missing)
   const detail = `Missing: ${text}.${present.length ? ` ${raisedText(present).replace(/^./, first => first.toUpperCase())} ${present.length === 1 ? 'exists' : 'exist'}.` : ''}`
-    + (facts.sysadmin ? '' : ' A sysadmin adds them.')
+    + disabledText + (facts.sysadmin ? '' : ' A sysadmin adds them.')
   return { id: 'alerts', severity: 'warning', title: 'Recommended alerts are missing', detail, objects: [], ...facts.sysadmin ? { fix: { label: 'Add recommended alerts…', action: { kind: 'recommendedAlerts' } } } : {} }
 }
 
@@ -318,8 +325,21 @@ export function schedulesCheck(facts: OverviewFacts): OverviewCheck {
 /** Every check, in the order the overview lists them (the service check only while Agent cannot run jobs). */
 export function overviewChecks(facts: OverviewFacts): OverviewCheck[] {
   const service = serviceCheck(facts)
-  return [...service ? [service] : [], failedCheck(facts), ownerCheck(facts), notifyCheck(facts), historyCheck(facts), alertsCheck(facts), mailCheck(facts), schedulesCheck(facts)]
+  const checks = [...service ? [service] : [], failedCheck(facts), ownerCheck(facts), notifyCheck(facts), historyCheck(facts), alertsCheck(facts), mailCheck(facts), schedulesCheck(facts)]
+  return checks.map(check => truncatedCheck(facts, check))
 }
+/** The reads each check counts over: a list Agent's read cut at its cap leaves the check partial. */
+const checkLists: { readonly [C in OverviewCheckId]?: readonly OverviewRead[] } = {
+  failedJobs: ['jobs'], owners: ['jobs', 'owners'], notify: ['jobs'], history: ['jobs', 'history'], alerts: ['alerts'], schedules: ['schedules'], mail: ['jobs', 'alerts']
+}
+/** A check over a truncated list says so, and a pass on part of the list is a note, not a pass. */
+function truncatedCheck(facts: OverviewFacts, check: OverviewCheck): OverviewCheck {
+  if (check.severity === 'unread') return check
+  const cut = (checkLists[check.id] ?? []).filter(read => facts.reads[read]?.truncated)
+  if (!cut.length) return check
+  return { ...check, ...check.severity === 'ok' ? { severity: 'info' as const } : {}, detail: `${check.detail} ${overviewTruncatedText}` }
+}
+export const overviewTruncatedText = 'Agent sent more rows than Varia reads, so this checked only the first ones.'
 /** The checks that need attention (error or warning), for the section's "n of m checks". */
 export const needsAttention = (checks: readonly OverviewCheck[]): number => checks.filter(check => check.severity === 'error' || check.severity === 'warning').length
 
@@ -334,10 +354,10 @@ export function overviewTiles(facts: OverviewFacts): OverviewTile[] {
   const fired = facts.alerts.filter(alert => { const at = stampMs(alert.lastOccurred); return now !== undefined && at !== undefined && now - at <= alertWeekMs })
   const alertsRead = readOk(facts, 'alerts')
   return [
-    { id: 'jobs', label: 'Jobs', value: jobsRead ? String(facts.jobs.length) : '—', detail: jobsRead ? `${facts.jobs.filter(job => job.enabled).length} enabled` : '' },
+    { id: 'jobs', label: 'Jobs', value: jobsRead ? `${facts.jobs.length}${facts.reads.jobs?.truncated ? '+' : ''}` : '—', detail: jobsRead ? `${facts.jobs.filter(job => job.enabled).length} enabled` : '' },
     { id: 'failed', label: facts.serverNow ? 'Failed, last 24 h' : 'Last run failed', value: jobsRead ? String(failed.length) : '—', detail: namesText(failed.map(job => job.name), 2), ...failed.length ? { tone: 'error' as const } : {} },
     { id: 'running', label: 'Running', value: jobsRead ? String(running.length) : '—', detail: namesText(running.map(job => job.name), 2), ...running.length ? { tone: 'accent' as const } : {} },
-    { id: 'alerts', label: 'Alerts', value: alertsRead ? String(facts.alerts.length) : '—', detail: alertsRead ? `${fired.length} fired this week` : '' }
+    { id: 'alerts', label: 'Alerts', value: alertsRead ? `${facts.alerts.length}${facts.reads.alerts?.truncated ? '+' : ''}` : '—', detail: alertsRead ? `${fired.length} fired this week` : '' }
   ]
 }
 
