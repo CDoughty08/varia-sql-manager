@@ -170,6 +170,14 @@ if (args is ["--bigquery-emulator-live"])
     Console.WriteLine("Passed " + passed + " BigQuery emulator checks.");
     return;
 }
+// The guarded real-project checks (docs/testing.md, Real BigQuery project): bills the project VARIA_TEST_BIGQUERY_PROJECT
+// names, only with VARIA_TEST_BIGQUERY_CONFIRM repeating it; run by hand, never in CI or a live group.
+if (args is [BigQueryRealProjectChecks.Argument])
+{
+    await BigQueryRealProjectChecks.RunAsync(Check);
+    Console.WriteLine("Passed " + passed + " BigQuery real-project checks.");
+    return;
+}
 if (args is ["--sql-language-live"])
 {
     await SqlLanguageLiveChecks.RunAsync(Check);
@@ -495,6 +503,7 @@ if (liveGroup is null)
         ("Provider", () => ProviderChecks.RunAsync(Check)),
         ("BigQuery", () => BigQueryChecks.RunAsync(Check)),
         ("BigQueryCredential", () => { BigQueryCredentialChecks.Run(Check); return Task.CompletedTask; }),
+        ("BigQueryRealProjectGuard", () => { BigQueryRealProjectChecks.RunOffline(Check); return Task.CompletedTask; }),
         ("BigQueryExecution", () => BigQueryExecutionChecks.RunAsync(Check)),
         ("BigQuerySession", () => BigQuerySessionChecks.RunAsync(Check)),
         ("BigQueryExplorer", () => BigQueryExplorerChecks.RunAsync(Check)),

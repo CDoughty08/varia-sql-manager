@@ -106,7 +106,12 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   ScriptDom's parser in the backend on a large-stack thread, nothing runs; text nested more than 128 parentheses deep is
   reported too deep to parse) and **Open in query window** (a new query tab on the job's connection and the
   step's database); PowerShell and CmdExec in their own editors, with Run as (the SQL Server Agent service account or a
-  proxy granted to the step's type, `sp_help_proxy @subsystem_name`) and CmdExec's success exit code; SSIS on one scroll, with
+  proxy granted to the step's type, `sp_help_proxy @subsystem_name`) and CmdExec's success exit code, and **Load from file…**
+  (SSMS's Open…, AG-11): main shows its own open dialog filtered to the type's scripts (`.ps1`, `.psm1`, `.psd1`; `.bat`, `.cmd`)
+  plus All files, reads the chosen file with Open's encoding detection (a byte order mark, UTF-8, BOM-less UTF-16, else the
+  system's ANSI code page) up to one step's 100,000 characters, and returns only its text, never its path
+  (`openAgentStepScript`, the page names only the step type); the text replaces the command, with CRLF line endings if the file has any (LF otherwise), as one edit Undo takes back, and a
+  refused file (too long, holding NUL bytes, a folder) says why under the command; SSIS on one scroll, with
   the package picked inline from SSISDB's folders, projects and packages (or SQL Server and file system sources), its
   parameters, environment, 32-bit runtime and logging; Analysis Services Command and Query with the Server they run on. On success and On failure choose next step, quit with success, quit
   with failure or go to a named step; More options (retries, output file and its append, log to table, history output)

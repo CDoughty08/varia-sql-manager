@@ -8,7 +8,7 @@ import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import { EventBus } from '../src/renderer/src/core/events'
 import DiscardStatus from '../src/renderer/src/results/DiscardStatus'
-import { DiscardNotice, discardNotice, hasResultsView, outputViewOf } from '../src/renderer/src/results/OutputPane'
+import OutputPane, { DiscardNotice, discardNotice, hasResultsView, outputViewOf } from '../src/renderer/src/results/OutputPane'
 import { ResultsService, type TabResults } from '../src/renderer/src/results/ResultsService'
 import type { DocumentService } from '../src/renderer/src/services/documents'
 import { defaultSettings, type SettingsValues } from '../src/shared/settings/catalog'
@@ -178,5 +178,34 @@ describe('discard results after execution', () => {
     expect(view.documents.focusActive).toHaveBeenCalledTimes(1)
     elsewhere.remove()
     view.unmount()
+  })
+
+  it('omits the .output-views tablist box before a query has any output views', () => {
+    const store = <T>(value: T) => ({ subscribe: () => () => {}, getSnapshot: () => value })
+    const settings = settingsStore({})
+    const panes = Object.assign(store({ results: true, messages: false, plan: false, statistics: false }), {
+      peers: store({ results: ['results', 'messages'], messages: ['results', 'messages'], plan: ['plan'], statistics: ['statistics'] }),
+      select: vi.fn(),
+      dock: vi.fn()
+    })
+    const queries = Object.assign(store({}), { statistics: store({}) })
+    const workbench = {
+      settings, panes, queries,
+      results: Object.assign(store({}), { operations: store({}) }),
+      queryPlans: store({}),
+      retainedPlans: store({ entries: [] }),
+      pivot: store({ tabs: {} }),
+      compare: Object.assign(store({ pickers: {}, actionable: {} }), { actionableReason: () => undefined }),
+      menus: { openContext: vi.fn(), menuFor: store(null) },
+      menuTargets: { register: () => {} },
+      commands: { execute: vi.fn(async () => true), canExecute: () => true, subscribe: () => () => {} },
+      documents: { focusActive: vi.fn() }
+    } as unknown as Workbench
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    act(() => { root.render(createElement(WorkbenchProvider, { workbench, children: createElement(OutputPane, { pane: 'results', tabId: 't1', query: true, connected: true }) })) })
+    expect(container.querySelector('.output-views')).toBeNull()
+    act(() => { root.unmount(); container.remove() })
   })
 })

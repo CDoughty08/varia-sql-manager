@@ -6,7 +6,7 @@
 // are values in the snapshot; nothing throws into React.
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import {
-  agoText, cancelQuestion, consoleJobLink, defaultJobHistoryFilters, jobHistoryActionState, jobHistoryArgs, jobHistoryLimits, jobHistoryProbe, jobHistorySource,
+  agoText, cancelQuestion, rerunAsks, rerunQuestion, consoleJobLink, defaultJobHistoryFilters, jobHistoryActionState, jobHistoryArgs, jobHistoryLimits, jobHistoryProbe, jobHistorySource,
   jobHistoryStateLabels, jobHistoryStates, jobHistoryTabName, jobHistoryTextColumns, jobHistoryTypeLabels, jobHistoryTypes, qualifiedJobId,
   type HistoryJobRef, type JobHistoryAction, type JobHistoryCancelResult, type JobHistoryDetails, type JobHistoryFilters, type JobHistoryRow, type JobHistoryState as JobState
 } from '../../../shared/bigquery/history'
@@ -55,8 +55,8 @@ export interface JobHistoryState {
   readonly selected?: SelectedJob
   readonly detailsOpen: boolean
   readonly details?: JobDetailsState
-  /** Cancel Job waits for the user's answer about this job. */
-  readonly confirm?: { readonly job: SelectedJob; readonly question: string }
+  /** Cancel Job, or Re-run of a statement that may change data or of another user's job, waits for the user's answer. */
+  readonly confirm?: { readonly action: 'cancel' | 'rerun'; readonly job: SelectedJob; readonly question: string }
   /** Jobs a cancel is on its way for. */
   readonly cancelling: readonly string[]
   readonly notice?: JobHistoryNotice
@@ -83,6 +83,7 @@ export interface JobHistoryServiceOptions extends CustomDocumentTargetOptions {
 }
 
 export const jobHistoryText = {
+  rowUnread: 'Job History could not read the job on that row. Select it and try again.',
   allUsersDenied: (message?: string) => `BigQuery refused listing every user's jobs on this connection${message ? `: ${message}` : ''}. Job History shows your jobs; All users needs the bigquery.jobs.list permission on the project.`,
   allUsersRefused: 'All users is not available on this connection: BigQuery refused listing every user\'s jobs.',
   cancelSent: (jobId: string) => `Cancel sent for job ${jobId}. BigQuery ends it shortly.`,
@@ -113,6 +114,20 @@ function createdMs(text: string): number | undefined {
   return Number.isFinite(value) ? value : undefined
 }
 const bit = (text: string | undefined): boolean => text === '1' || text?.toLowerCase() === 'true'
+/** A job read from its row's cells (the probe's column order); undefined for a row that names no job. */
+function jobFromCells(text: readonly (string | null | undefined)[]): SelectedJob | undefined {
+  const cell = (name: string) => text[column[name]] ?? ''
+  const key = cell('job')
+  if (!key) return undefined
+  const created = cell('created')
+  const createdAt = createdMs(created)
+  return {
+    jobId: key, state: stateByLabel.get(cell('state')) ?? 'done', type: typeByLabel.get(cell('type')) ?? 'other',
+    ...cell('location') ? { location: cell('location') } : {}, ...cell('statement') ? { statement: cell('statement') } : {}, ...cell('user') ? { user: cell('user') } : {},
+    ...created ? { created } : {}, ...createdAt !== undefined ? { createdAt } : {}, ...cell('parent') ? { parentJobId: cell('parent') } : {},
+    mine: bit(cell('mine')), hidden: bit(cell('hidden')), children: Number(cell('children')) || 0
+  }
+}
 
 /** The context keys of an action on the selected job (JobHistoryKeys): a job still being read keeps every action offered. */
 export function actionKeys(job: SelectedJob | undefined, refused: JobHistoryRefusals, cancelling: readonly string[], usable: boolean): Omit<JobHistoryKeys, 'paused' | 'refreshable' | 'pausable'> {
@@ -229,6 +244,10 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     this.pending = [...this.pending.filter(item => item.project !== project), { project, jobs: jobs.slice(0, jobHistoryLimits.pinned), at: this.now() }]
     return false
   }
+  /** A Show in Job History whose connection could not be opened waits no longer. */
+  forget(project: string): void { this.pending = this.pending.filter(item => item.project !== project) }
+  /** The BigQuery projects the page is connected to now (the records dialog offers Show in Job History for these). */
+  liveProjects(): string[] { return [...new Set(this.options.connections.getSnapshot().flatMap(item => { const project = live(item) ? bigQueryProject(item) : undefined; return project ? [project] : [] }))] }
 
   private subscribeLive(state: JobHistoryState): void {
     const owner = documentOwner(state.id, this.options.documents, this.options.panes, this.options.groups)
@@ -388,15 +407,7 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     const read = ++entry.read
     entry.reading = table.handle.getWindow(row, 1, { colStart: 0, colEnd: columns.length, display: false }).then(window => {
       if (this.grids.get(id) !== entry || entry.read !== read || window.count < 1 || window.text[column.job] !== key) return
-      const cell = (name: string) => window.text[column[name]] ?? ''
-      const created = cell('created')
-      const createdAt = createdMs(created)
-      const job: SelectedJob = {
-        jobId: key, state: stateByLabel.get(cell('state')) ?? 'done', type: typeByLabel.get(cell('type')) ?? 'other',
-        ...cell('location') ? { location: cell('location') } : {}, ...cell('statement') ? { statement: cell('statement') } : {}, ...cell('user') ? { user: cell('user') } : {},
-        ...created ? { created } : {}, ...createdAt !== undefined ? { createdAt } : {}, ...cell('parent') ? { parentJobId: cell('parent') } : {},
-        mine: bit(cell('mine')), hidden: bit(cell('hidden')), children: Number(cell('children')) || 0
-      }
+      const job = jobFromCells(window.text)!
       const before = this.get(id)?.selected
       if (!before || before.pending || JSON.stringify(before) !== JSON.stringify(job)) this.patch(id, { selected: job })
       // Another job, or the same one in a new state (it finished): its facts changed.
@@ -409,6 +420,39 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     await this.grids.get(id)?.reading
     const job = this.get(id)?.selected
     return job && !job.pending && this.usable(id) ? job : undefined
+  }
+  /** The job a row action acts on: the pressed row's when its menu was opened on a row other than the active one (a
+   *  right-click inside a multi-row selection keeps the selection), else the selected job. */
+  private async jobFor(id: string, row?: number): Promise<SelectedJob | undefined> {
+    const entry = this.grids.get(id), snapshot = entry?.grid.getSnapshot()
+    if (row === undefined || !entry || snapshot?.selection?.active.row === row) return this.selectedJob(id)
+    // The job read as the menu opened: a refresh that lists a new job meanwhile moves every row down one.
+    const pressed = this.pressed.get(id)
+    const job = await (pressed?.row === row ? pressed.job : this.readRow(id, row))
+    // A row that could not be read (the list moved on, or its read failed) says so rather than doing nothing.
+    if (!job && this.get(id) && this.usable(id)) this.patch(id, { notice: { tone: 'info', text: jobHistoryText.rowUnread } })
+    return job
+  }
+  /**
+   * A menu opened on a row other than the active one: its job is read now, as the menu opens, and the menu's action acts
+   * on that job whatever the list shows by then (Job History is live and newest first). The menu asks again for its target
+   * while it opens, so the same row pressed within a second is read once.
+   */
+  pressRow(id: string, row: number): void {
+    const pressed = this.pressed.get(id), now = this.now()
+    if (pressed?.row === row && now - pressed.at < 1000) return
+    const job = this.readRow(id, row)
+    this.pressed.set(id, { row, at: now, job })
+  }
+  private readonly pressed = new Map<string, { readonly row: number; readonly at: number; readonly job: Promise<SelectedJob | undefined> }>()
+  private async readRow(id: string, row: number): Promise<SelectedJob | undefined> {
+    const entry = this.grids.get(id), snapshot = entry?.grid.getSnapshot()
+    const table = snapshot?.table
+    if (!table || !Number.isSafeInteger(row) || row < 0) return undefined
+    let window: Awaited<ReturnType<typeof table.handle.getWindow>>
+    try { window = await table.handle.getWindow(row, 1, { colStart: 0, colEnd: columns.length, display: false }) } catch { return undefined }
+    if (this.grids.get(id) !== entry || window.count < 1 || !this.usable(id)) return undefined
+    return jobFromCells(window.text)
   }
   /** Whether an action applies to the selected job now, and why not (the menus' and the details pane's tooltips). */
   actionState(id: string, action: JobHistoryAction): { enabled: boolean; reason?: string } {
@@ -465,28 +509,54 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
   /** Open Results (a finished query job of the principal's) or Re-attach (a running one): a tab already holding the job is
    *  focused; otherwise a new query tab on the connection attaches to it through query.attach. Open Results does not take
    *  over the job's session, which another tab may still use; Re-attach does, so the session ends with the new tab. */
-  async attach(id: string, action: 'openResults' | 'reattach'): Promise<void> {
-    const job = await this.selectedJob(id)
+  async attach(id: string, action: 'openResults' | 'reattach', row?: number): Promise<void> {
+    const job = await this.jobFor(id, row)
     const state = this.get(id)
     if (!job || !state?.connectionId) return
     const allowed = jobHistoryActionState(action, job, this.refused(id))
     if (!allowed.enabled) { this.patch(id, { notice: { tone: 'info', text: allowed.reason! } }); return }
     const holder = this.options.queries.tabHoldingJob(job.jobId, state.project)
     if (holder) { this.options.documents.activate(holder); return }
-    // No default dataset: else the new tab takes the active document's (Job History's own is the project).
-    const tab = this.options.documents.newQuery('', undefined, state.connectionId, '')
+    // Open Results holds the job's SQL (jobs.get, free), with the default dataset it ran with: when BigQuery no longer keeps
+    // the result, Execute in that tab runs it again (docs/bigquery.md, Job History). Without it, an empty tab and no default
+    // dataset (else the new tab takes the active document's: Job History's own is the project).
+    let sql = '', dataset = ''
+    if (action === 'openResults') {
+      const connectionId = state.connectionId, generation = this.bump(id, 'action')
+      const known = state.details?.jobId === job.jobId ? state.details.value : undefined
+      const details = known ? { ok: true as const, value: known } : await this.request(() => this.options.api.bigQueryJob({ connectionId, jobId: job.jobId, ...job.location ? { location: job.location } : {} }))
+      if (!this.current(id, 'action', generation, connectionId)) return
+      // A tab may have opened the job while jobs.get answered.
+      const opened = this.options.queries.tabHoldingJob(job.jobId, state.project)
+      if (opened) { this.options.documents.activate(opened); return }
+      if (details?.ok && details.value.job.sql && !details.value.job.sqlTruncated) {
+        sql = details.value.job.sql
+        dataset = details.value.job.dataset?.startsWith(state.project + '.') ? details.value.job.dataset.slice(state.project.length + 1) : ''
+      }
+    }
+    const tab = this.options.documents.newQuery(sql, undefined, state.connectionId, dataset)
     this.options.queries.restoreJobs(tab.id, [{
       jobId: job.jobId, project: state.project, ...job.location ? { location: job.location } : {}, state: action === 'reattach' ? 'running' : 'done',
       transaction: 'unknown', createdAt: job.createdAt ?? this.now(), ...action === 'openResults' ? { adopt: false as const } : {}
     }])
   }
-  /** Open SQL in New Tab, or Re-run (Execute in that tab, so the cost rules apply as to any query): the job's whole SQL. */
-  async openSql(id: string, run: boolean): Promise<void> {
-    const job = await this.selectedJob(id)
+  /** Open SQL in New Tab, or Re-run (Execute in that tab, so the cost rules apply as to any query): the job's whole SQL.
+   *  Re-run of a statement that may change table data, or of another user's job, asks first, naming the job. */
+  async openSql(id: string, run: boolean, row?: number): Promise<void> {
+    const job = await this.jobFor(id, row)
     const state = this.get(id)
     if (!job || !state?.connectionId) return
     const allowed = jobHistoryActionState(run ? 'rerun' : 'openSql', job, this.refused(id))
     if (!allowed.enabled) { this.patch(id, { notice: { tone: 'info', text: allowed.reason! } }); return }
+    if (run && rerunAsks(job)) {
+      this.patch(id, { confirm: { action: 'rerun', job, question: rerunQuestion(job, job.createdAt !== undefined ? agoText(job.createdAt, this.now()) : undefined) }, notice: undefined })
+      return
+    }
+    await this.sql(id, job, run)
+  }
+  private async sql(id: string, job: SelectedJob, run: boolean): Promise<void> {
+    const state = this.get(id)
+    if (!state?.connectionId || !this.usable(id)) return
     const connectionId = state.connectionId, generation = this.bump(id, 'action')
     const known = state.details?.jobId === job.jobId ? state.details.value : undefined
     const details = known ? { ok: true as const, value: known } : await this.request(() => this.options.api.bigQueryJob({ connectionId, jobId: job.jobId, ...job.location ? { location: job.location } : {}, ...job.mine ? {} : { allUsers: true } }))
@@ -502,22 +572,25 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     const dataset = details.value.job.dataset?.startsWith(state.project + '.') ? details.value.job.dataset.slice(state.project.length + 1) : ''
     const tab = this.options.documents.newQuery(sql, undefined, connectionId, dataset)
     if (details.value.job.sqlTruncated) this.patch(id, { notice: { tone: 'info', text: jobHistoryText.sqlTruncated } })
-    else if (run) void this.options.queries.execute(tab.id).catch(onUnexpectedError)
+    // The cost prompts name the job they would run again.
+    else if (run) void this.options.queries.execute(tab.id, undefined, job.jobId).catch(onUnexpectedError)
   }
-  /** Cancel Job on the selected job, once its cells are read: always asks first (it names the job, its user and its age). */
-  async requestCancel(id: string): Promise<void> {
-    const job = await this.selectedJob(id)
+  /** Cancel Job on the selected (or pressed) job, once its cells are read: always asks first (it names the job, its user and
+   *  its age). */
+  async requestCancel(id: string, row?: number): Promise<void> {
+    const job = await this.jobFor(id, row)
     const state = this.get(id)
     if (!job || !state || state.cancelling.includes(job.jobId)) return
     const allowed = jobHistoryActionState('cancel', job, this.refused(id))
     if (!allowed.enabled) { this.patch(id, { notice: { tone: 'info', text: allowed.reason! } }); return }
-    this.patch(id, { confirm: { job, question: cancelQuestion(job, job.createdAt !== undefined ? agoText(job.createdAt, this.now()) : undefined) }, notice: undefined })
+    this.patch(id, { confirm: { action: 'cancel', job, question: cancelQuestion(job, job.createdAt !== undefined ? agoText(job.createdAt, this.now()) : undefined) }, notice: undefined })
   }
-  answerCancel(id: string, cancel: boolean): void {
+  /** The answer to the question Cancel Job or Re-run asked: `proceed` cancels the job, or opens and runs its SQL. */
+  answerConfirm(id: string, proceed: boolean): void {
     const confirm = this.get(id)?.confirm
     if (!confirm) return
     this.patch(id, { confirm: undefined })
-    if (cancel) void this.cancel(id, confirm.job)
+    if (proceed) void (confirm.action === 'cancel' ? this.cancel(id, confirm.job) : this.sql(id, confirm.job, true)).catch(onUnexpectedError)
     this.options.focus?.(id)
   }
   private async cancel(id: string, job: SelectedJob): Promise<void> {
@@ -534,8 +607,8 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     if (result.ok) this.handles.get(id)?.refresh()
   }
   /** Copy Job ID (project:LOCATION.job_id) or Copy Console Link, as text. */
-  async copy(id: string, what: 'id' | 'link'): Promise<void> {
-    const job = await this.selectedJob(id)
+  async copy(id: string, what: 'id' | 'link', row?: number): Promise<void> {
+    const job = await this.jobFor(id, row)
     const state = this.get(id)
     if (!job || !state) return
     const text = what === 'id' ? qualifiedJobId(state.project, job.jobId, job.location) : consoleJobLink(state.project, job.jobId, job.location)
@@ -572,6 +645,7 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     this.watches.delete(id)
     this.handles.get(id)?.dispose()
     this.handles.delete(id)
+    this.pressed.delete(id)
     this.gridStates.delete(id)
     this.publish({ documents: Object.fromEntries(Object.entries(this.getSnapshot().documents).filter(([key]) => key !== id)) })
     this.publishContext()

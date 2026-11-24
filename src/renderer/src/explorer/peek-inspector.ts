@@ -212,7 +212,10 @@ export function peekStatePills(open: OpenPeek): readonly PeekStatePill[] {
   } else if (open.kind === 'key' || open.kind === 'constraint') {
     if (f.disabled === true) add('disabled', 'Disabled', 'critical')
     if (f.notTrusted === true) add('untrusted', 'Not trusted', 'warning')
-    else if (f.disabled !== true && (f.keyType === 'FOREIGN_KEY_CONSTRAINT' || f.constraintType === 'CHECK_CONSTRAINT')) add('trusted', 'Trusted', 'success')
+    else if (f.disabled !== true && (
+      f.keyType === 'Foreign key' || f.keyType === 'FOREIGN_KEY_CONSTRAINT' ||
+      f.constraintType === 'Check constraint' || f.constraintType === 'CHECK_CONSTRAINT'
+    )) add('trusted', 'Trusted', 'success')
   } else if (open.kind === 'trigger' || open.kind === 'databaseTrigger' || open.kind === 'serverTrigger') {
     if (f.disabled === true) add('disabled', 'Disabled', 'critical')
     if (f.insteadOf === true) add('insteadOf', 'Instead of', 'info')
@@ -291,13 +294,15 @@ export function peekHeroKpis(open: OpenPeek): readonly InspectorKpi[] {
     if (str(f.created)) push({ id: 'created', label: 'Created', value: formatPeekValue({ format: 'date' }, f.created!) })
     if (str(f.modified)) push({ id: 'modified', label: 'Last modified', value: formatPeekValue({ format: 'date' }, f.modified!) })
   } else if (open.kind === 'key') {
-    if (str(f.keyType)) push({ id: 'keyType', label: 'Type', value: formatPeekValue({ format: 'code' }, f.keyType!) })
+    const keyType = str(f.keyType)
+    if (keyType) push({ id: 'keyType', label: 'Type', value: displayText(keyType) })
     const keyCols = listCountString(open, 'keyColumns')
     if (keyCols) push({ id: 'keyColumns', label: 'Key columns', value: keyCols })
     if (str(f.deleteAction)) push({ id: 'deleteAction', label: 'On delete', value: formatPeekValue({ format: 'code' }, f.deleteAction!) })
     if (str(f.updateAction)) push({ id: 'updateAction', label: 'On update', value: formatPeekValue({ format: 'code' }, f.updateAction!) })
   } else if (open.kind === 'constraint') {
-    if (str(f.constraintType)) push({ id: 'type', label: 'Type', value: formatPeekValue({ format: 'code' }, f.constraintType!) })
+    const constraintType = str(f.constraintType)
+    if (constraintType) push({ id: 'type', label: 'Type', value: displayText(constraintType) })
     const col = str(f.column)
     if (col) push({ id: 'column', label: 'Column', value: displayText(col) })
   } else if (open.kind === 'login') {

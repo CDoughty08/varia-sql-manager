@@ -133,6 +133,13 @@ describe('menu target service', () => {
     // The tab itself is not focusable, so a click on its padding moves no focus.
     expect(service.targetFor(dom(queryTab))).toEqual({ target: { kind: 'documentTab', tabId: 't1' }, element: queryTab, mark: queryTab })
   })
+  it('hands the provider the element the menu was asked for on, so a grid can name the pressed row', () => {
+    const doc = fakeDocument(), cell = new FakeElement(doc, 'div'), grid = new FakeElement(doc, 'div').append(cell)
+    const service = new MenuTargetService()
+    service.register(grid.dom, (_registered, from) => ({ kind: 'jobHistory', tabId: 'h1', ...from === cell.dom ? { row: 3 } : {} }))
+    expect(service.targetFor(cell.dom)?.target).toEqual({ kind: 'jobHistory', tabId: 'h1', row: 3 })
+    expect(service.targetFor(grid.dom)?.target).toEqual({ kind: 'jobHistory', tabId: 'h1' })
+  })
   it('keeps a registered composite widget as the focus owner when an inner action opens its menu', () => {
     const doc = fakeDocument(), button = new FakeElement(doc, 'button', { attributes: { tabindex: '-1' } })
     const row = new FakeElement(doc, 'div').append(button), tree = new FakeElement(doc, 'div', { attributes: { tabindex: '0' } }).append(row)

@@ -135,7 +135,11 @@ export class HighlightsService extends SnapshotStore<HighlightsSnapshot> impleme
   }
 
   /** Whether a grid's rows can be highlighted: its set has every row and is still held. */
-  canHighlight(tabId: string, key: EntryKey): boolean { return complete(this.entry(tabId, key)) }
+  canHighlight(tabId: string, key: EntryKey): boolean {
+    // A windowed BigQuery result has no row identities yet (REMOTE_RESULT): its rows cannot be followed, so it offers none.
+    const entry = this.entry(tabId, key)
+    return complete(entry) && entry.handle.getSnapshot().residence !== 'remote'
+  }
 
   /** Whether a grid has highlights (Clear All Highlights). */
   hasHighlights(tabId: string, key: EntryKey): boolean {
