@@ -7,6 +7,9 @@
    shadow of the find and hover widgets. */
 :root { --vscode-strokeThickness: 1px; --vscode-shadow-lg: 0 0 12px var(--varia-widget-shadow); }
 * { box-sizing: border-box; }
+/* Uniform Options-style scrollbars across the workbench; forced-colors keeps system scrollbars. */
+html { scrollbar-color: var(--varia-scrollbarSlider-background) transparent; }
+@media (forced-colors: active) { html { scrollbar-color: auto; } }
 body { margin: 0; user-select: none; }
 input, textarea, [contenteditable="true"], .monaco-editor, .messages, [role="alert"] { user-select: text; }
 button, select { user-select: none; }
