@@ -30,6 +30,11 @@ const finalCodes: ReadonlySet<string> = new Set(agentTreeFinalCodes)
 /** The list's columns a chip reads, by their place in the catalogue (src/shared/live/catalog.ts). */
 const jobColumns = Object.fromEntries(liveProbes[agentJobsProbe].tables![0].columns.map((column, index) => [column.id, index])) as Record<string, number>
 const usable = new Set(['fresh', 'stale'])
+/** The list's columns the chips read, so a revision read every few seconds while a job runs skips the rest. */
+const jobSpan = (() => {
+  const used = ['enabled', 'status', 'step', 'lastOutcome', 'jobId'].map(id => jobColumns[id])
+  return { start: Math.min(...used), end: Math.max(...used) + 1 }
+})()
 
 /** A job row's live status: its chips, what they say, and whether the job is enabled as the read found it. */
 export type AgentJobRowStatus = RowStatus
@@ -63,7 +68,7 @@ interface View { readonly handle: LiveHandle; readonly stops: (() => void)[] }
 /** A connection's view that ended: when it opens again (after `timer`), or `final` when it will not until a Refresh. */
 interface Stopped { attempts: number; timer: unknown; final: boolean }
 /** A jobs view's last read: the rows by job id, the subscription they came from, and the newest read in flight. */
-interface JobRead { subscriptionId?: string; rows?: Map<string, { enabled: string | null; status: string | null; step: string | null; lastOutcome: string | null }>; seq: number; service?: AgentServiceSample }
+interface JobRead { subscriptionId?: string; at?: number; rows?: Map<string, { enabled: string | null; status: string | null; step: string | null; lastOutcome: string | null }>; seq: number; service?: AgentServiceSample }
 
 export class AgentTreeLive extends SnapshotStore<AgentTreeSnapshot> implements Disposable {
   private readonly views = new Map<string, View>()
@@ -348,21 +353,23 @@ export class AgentTreeLive extends SnapshotStore<AgentTreeSnapshot> implements D
       if (!entry) continue
       // An unchanged revision needs no read: its rows are the ones already read.
       if (entry.diff && entry.diff.added + entry.diff.removed + entry.diff.changed === 0 && read.rows) continue
-      this.readJobs(connectionId, handle, read, subscriptionId)
+      this.readJobs(connectionId, handle, read, subscriptionId, tick.sampledAt)
     }
     this.publishJobs()
   }
 
-  private readJobs(connectionId: string, handle: LiveHandle, read: JobRead, subscriptionId: string): void {
+  private readJobs(connectionId: string, handle: LiveHandle, read: JobRead, subscriptionId: string, sampledAt: number): void {
     const table = handle.table(agentJobsProbe)
     if (!table) return
     const seq = ++read.seq
     const current = () => this.reads.get(connectionId) === read && read.seq === seq && read.subscriptionId === subscriptionId
     // Every job the list keeps, not only the explorer status tables' first 1,000.
-    readRows(table, agentLimits.listRows).then(({ rows }) => {
+    readRows(table, agentLimits.listRows, jobSpan).then(({ rows }) => {
       if (!current() || this.disposed) return
-      read.rows = new Map(rows.filter(row => row[jobColumns.jobId]).map(row => [row[jobColumns.jobId]!.toLowerCase(), {
-        enabled: row[jobColumns.enabled], status: row[jobColumns.status], step: row[jobColumns.step], lastOutcome: row[jobColumns.lastOutcome]
+      read.at = sampledAt
+      const cell = (row: (string | null)[], id: string) => row[jobColumns[id] - jobSpan.start]
+      read.rows = new Map(rows.filter(row => cell(row, 'jobId')).map(row => [cell(row, 'jobId')!.toLowerCase(), {
+        enabled: cell(row, 'enabled'), status: cell(row, 'status'), step: cell(row, 'step'), lastOutcome: cell(row, 'lastOutcome')
       }]))
       this.publishJobs()
     }, () => {
@@ -399,7 +406,7 @@ export class AgentTreeLive extends SnapshotStore<AgentTreeSnapshot> implements D
         for (const [id, row] of read.rows) {
           const { chips, enabled } = agentJobChips(row, current)
           const old = before?.get(id)
-          const status = old && old.enabled === enabled && sameChips(old.chips, chips) ? old : jobStatus(chips, enabled)
+          const status = old && old.enabled === enabled && sameChips(old.chips, chips) ? old : jobStatus(chips, enabled, read.at)
           if (status !== old) same = false
           statuses.set(id, status)
         }
@@ -414,8 +421,8 @@ export class AgentTreeLive extends SnapshotStore<AgentTreeSnapshot> implements D
 /** An expanded Agent node whose listing failed with no rows to keep (first listed with Agent XPs off): a state change lists it again. */
 const failedAgent = (node: TreeNode): boolean => node.kind === 'agent' && node.load === 'error' && node.expanded
 
-const jobStatus = (chips: readonly StatusChip[], enabled: boolean | undefined): AgentJobRowStatus =>
-  ({ chips, live: true, words: chips.map(chip => chip.words).join(', '), ...enabled !== undefined ? { enabled } : {} })
+const jobStatus = (chips: readonly StatusChip[], enabled: boolean | undefined, at: number | undefined): AgentJobRowStatus =>
+  ({ chips, live: true, words: chips.map(chip => chip.words).join(', '), ...enabled !== undefined ? { enabled, ...at !== undefined ? { enabledAt: at } : {} } : {} })
 const sameChips = (left: readonly StatusChip[], right: readonly StatusChip[]) => left.length === right.length && left.every((chip, at) => {
   const other = right[at]
   return chip.id === other.id && chip.tone === other.tone && chip.label === other.label && chip.title === other.title && chip.words === other.words && chip.icon === other.icon

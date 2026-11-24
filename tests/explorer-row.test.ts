@@ -243,6 +243,11 @@ describe('Object Explorer row visuals', () => {
     expect(liveJob(job({ status: 'disabled' }), { chips: [], live: true, words: '' }).status).toBe('disabled')
     const listed = job()
     expect(liveJob(listed, { chips: [], live: true, words: '', enabled: true })).toBe(listed)
+    // A row listed after the read (a Disable re-lists it at once) keeps its listing's state until a newer read.
+    const relisted = job({ status: 'disabled', listedAt: 2000 })
+    expect(liveJob(relisted, { chips: [], live: true, words: '', enabled: true, enabledAt: 1000 })).toBe(relisted)
+    expect(liveJob(relisted, { chips: [], live: true, words: '', enabled: true, enabledAt: 3000 }).status).toBeUndefined()
+    expect(liveJob(job({ listedAt: 2000 }), { chips: [], live: true, words: '', enabled: false, enabledAt: 1000 }).status).toBeUndefined()
     // Without a status (Jobs folder's view not sampling) the row is as listed.
     expect(render(job())).not.toMatch(/oe-chips/)
   })

@@ -30,6 +30,8 @@ export interface RowStatus {
   readonly sublabel?: string
   /** A job row's enabled state as the live read found it (AgentTreeLive), in place of its listing's; undefined: the listing's. */
   readonly enabled?: boolean
+  /** When the read that found `enabled` was sampled (epoch ms): a job listed later keeps its listing's state. */
+  readonly enabledAt?: number
 }
 export interface ServerStatus {
   /** The server row's chips (running Agent jobs, availability group health); undefined while none are known. */
@@ -90,13 +92,14 @@ export function statusKey(connection: Pick<LiveConnection, 'id' | 'generation' |
 }
 
 /** Reads a status table's rows as cell texts (null for NULL), and whether they are all of them. */
-export async function readRows(table: LiveTable, max = maxRows): Promise<{ rows: (string | null)[][]; complete: boolean }> {
-  const { descriptor } = table, columns = descriptor.columns.length, count = Math.min(max, descriptor.rowsAvailable)
+export async function readRows(table: LiveTable, max = maxRows, span?: { readonly start: number; readonly end: number }): Promise<{ rows: (string | null)[][]; complete: boolean }> {
+  // Only the columns in `span` when given (each row then holds just those), so a caller that needs a few reads no more.
+  const { descriptor } = table, colStart = span?.start ?? 0, colEnd = span?.end ?? descriptor.columns.length, columns = colEnd - colStart, count = Math.min(max, descriptor.rowsAvailable)
   const complete = !descriptor.truncated && descriptor.rowsAvailable <= max && (descriptor.rowsRead ?? 0) <= descriptor.rowsAvailable
   const rows: (string | null)[][] = []
   // A window holds at most windowRows rows, so a longer table (Agent's job list) is read a window at a time.
   while (rows.length < count) {
-    const window = await table.handle.getWindow(rows.length, Math.min(windowRows, count - rows.length), { colStart: 0, colEnd: columns })
+    const window = await table.handle.getWindow(rows.length, Math.min(windowRows, count - rows.length), { colStart, colEnd })
     for (let row = 0; row < window.count; row++) rows.push(Array.from({ length: columns }, (_, column) => {
       const at = row * columns + column
       return window.flags[at] & 1 ? null : window.text[at]

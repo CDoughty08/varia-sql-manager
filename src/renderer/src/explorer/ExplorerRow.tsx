@@ -151,10 +151,11 @@ export function liveDatabase(node: TreeNode, status: RowStatus): { node: TreeNod
   return { node: { ...node, sublabel: status.words ? `(${status.words})` : undefined, status: effective }, changed: effective !== node.status }
 }
 
-/** A job row as its live status shows it: disabled when the read found it disabled, not when it found it enabled; the same
- *  node object when that is what the listing said, so the memoised row does not change for it. */
+/** A job row as its live status shows it: disabled when the read found it disabled, not when it found it enabled, unless the
+ *  row was listed after that read (a Disable re-lists it at once); the same node object when that is what the listing said,
+ *  so the memoised row does not change for it. */
 export function liveJob(node: TreeNode, status: RowStatus): TreeNode {
-  if (status.enabled === undefined) return node
+  if (status.enabled === undefined || (status.enabledAt !== undefined && node.listedAt !== undefined && status.enabledAt <= node.listedAt)) return node
   const effective = status.enabled ? (node.status === 'disabled' ? undefined : node.status) : 'disabled'
   return effective === node.status ? node : { ...node, status: effective }
 }

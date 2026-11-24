@@ -133,10 +133,11 @@ class FakeView {
     const descriptor = { generation: 1, resultId: 1, columns: jobColumns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true })), rowsRead: rows.length, rowsStored: rows.length, rowsAvailable: rows.length, state: 'complete' } as unknown as ResultDescriptor
     return {
       probe: 'agent.jobs.list', index: 0, mode: 'snapshot', descriptor,
-      handle: { getWindow: async (first: number, count: number) => {
-        // As the results worker's windows, at most 4,096 rows each.
-        const shown = rows.slice(first, first + Math.min(count, 4096))
-        return { first, count: shown.length, colStart: 0, colEnd: columns, text: shown.flatMap(cells => cells.map(cell => cell ?? '')), flags: Uint8Array.from(shown.flatMap(cells => cells.map(cell => cell === null ? 1 : 0))) }
+      handle: { getWindow: async (first: number, count: number, span?: { colStart: number; colEnd: number }) => {
+        // As the results worker's windows: at most 4,096 rows each, and only the columns asked for.
+        const colStart = span?.colStart ?? 0, colEnd = span?.colEnd ?? columns
+        const shown = rows.slice(first, first + Math.min(count, 4096)).map(cells => cells.slice(colStart, colEnd))
+        return { first, count: shown.length, colStart, colEnd, text: shown.flatMap(cells => cells.map(cell => cell ?? '')), flags: Uint8Array.from(shown.flatMap(cells => cells.map(cell => cell === null ? 1 : 0))) }
       } }
     } as unknown as LiveTable
   }
@@ -421,6 +422,9 @@ describe('AgentTreeLive: job rows\' chips from agent.jobs', () => {
     // The tree lists ids in msdb's case; the read's may differ.
     expect(rowStatus(undefined, running, f.tree)).toMatchObject({ words: 'Running, step 2 of 4', enabled: true })
     expect(rowStatus(undefined, running, f.tree)?.chips.map(chip => chip.label)).toEqual(['Running · step 2/4'])
+    // The read and the listing are both stamped, so a Disable's re-list after the read wins until the next read (liveJob).
+    expect(running.listedAt).toBeTypeOf('number')
+    expect(rowStatus(undefined, running, f.tree)?.enabledAt).toBeTypeOf('number')
     expect(rowStatus(undefined, f.explorer.node(f.find('Nightly'))!, f.tree)).toMatchObject({ words: 'Last run failed', enabled: false })
     // An unchanged sample keeps the same objects, so memoised rows do not render again.
     const before = f.tree.getSnapshot()

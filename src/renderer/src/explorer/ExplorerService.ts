@@ -205,7 +205,7 @@ const sameParent = (a: ParentRef, b: ObjectRef) => a.kind === b.kind && a.schema
  *  runtime state is the one it has now (`runtime`: the listing's, or a newer live sample's). */
 const targetOf = (node: TreeNode, connection: Pick<LiveConnection, 'engineEdition' | 'linux' | 'options'> | undefined, runtime: DatabaseRuntime | undefined, agent?: AgentServiceTarget): ExplorerTarget => ({
   connectionId: node.connectionId, ref: node.ref, kind: node.kind, ...(node.folder ? { folder: node.folder } : {}), ...(node.subtype ? { subtype: node.subtype } : {}), label: node.label,
-  ...(node.status ? { status: node.status } : {}), ...(runtime ? { database: runtime } : {}), ...(node.listedAt !== undefined ? { listedAt: node.listedAt } : {}),
+  ...(node.status ? { status: node.status } : {}), ...(runtime ? { database: runtime } : {}), ...(node.listedAt !== undefined && node.database ? { listedAt: node.listedAt } : {}),
   engine: serverEngineOf(connection?.engineEdition), linux: !!connection?.linux, ...(connection?.options.provider === 'bigquery' ? { provider: 'bigquery' as const } : {}),
   ...(node.jobId !== undefined ? { jobId: node.jobId } : {}),
   ...(node.created !== undefined ? { created: node.created } : {}), ...(agent ? { agent } : {})
@@ -1547,6 +1547,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private takeRuntime(node: TreeNode, wire: WireNode): void {
     if (wire.database) { node.database = wire.database; node.listedAt = this.now() }
     else if (node.database) { node.database = undefined; node.listedAt = undefined }
+    // A job row is stamped too, so a live read taken before the listing (a Disable's re-list) does not override its state.
+    if (wire.jobId !== undefined) node.listedAt = this.now()
   }
   private createChild(parent: TreeNode, wire: WireNode): TreeNode {
     const ref = this.intern(parent, wire.ref)
