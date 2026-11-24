@@ -13,9 +13,13 @@ Monaco editor, and groups split side by side, stack, or float over the editor ar
   Connected bars paint a `1 px` top hairline, soft leading wash and tinted connection-pill border from the connection's
   color (neutral when unset), and show the connection's friendly alias in the collapsed server box with full host
   details in the dropdown options and tooltip.
-- **Execute.** With text selected, the Execute button reads **Execute selection** with its line range and runs only the
-  selection; a click inside the selection clears it and places the caret. Otherwise it reads **Execute** (detail **Entire query**)
-  and runs the whole document (`QueryBar.tsx`).
+- **Execute, Cancel and Plan menu.** While idle, the primary button reads **Execute** (paired with a muted **All** scope
+  pill) or, with text selected, **Run Selection** paired with a warning-tinted line-range pill (`Line N` / `Lines N–M`; a
+  click inside the selection clears it and places the caret). While that tab's query is running, the primary button
+  morphs in place into an error-tinted **Cancel** button with a live elapsed timer (`1.4s`), keeping keyboard focus across
+  the transition. One unified **Plan ▾** menu consolidates **Include Actual Plan**, **Include Live Plan**, and
+  **Display Estimated Plan** with distinct icons and active trigger labels (`Plan`, `Actual Plan`, `Live Plan`, or
+  `Actual + Live`); the classic toolbar keeps its existing separate buttons (`QueryBar.tsx`).
 - **Zoom.** Ctrl+wheel over the editor (Cmd+wheel also works on macOS) enlarges or shrinks the text in every editor tab
   for this session. The **View** menu's zoom commands resize the whole workbench.
 - **Documents without query output.** Activity Monitor, Properties, Table Designer, New Database, the SSIS pages and

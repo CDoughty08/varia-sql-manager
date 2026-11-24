@@ -8,6 +8,22 @@ import { isLiveConnection } from './services/connection-availability'
 export function withKey(text: string, label: { text: string } | undefined): string { return label ? `${text} (${label.text})` : text }
 export const lostHint = "This query's connection was lost when the SQL backend restarted. Reconnect to run queries."
 
+/** Compact live elapsed duration for the morphing Cancel button (e.g. `1.4s`, `1m 04s`). */
+export function formatElapsed(ms: number): string {
+  const clamped = Math.max(0, ms)
+  if (clamped < 60_000) return `${(clamped / 1000).toFixed(1)}s`
+  const totalSeconds = Math.floor(clamped / 1000)
+  return `${Math.floor(totalSeconds / 60)}m ${String(totalSeconds % 60).padStart(2, '0')}s`
+}
+
+/** Active icon and label for the unified `Plan ▾` trigger in the modern per-tab QueryBar. */
+export function planButtonState(actual: boolean, live: boolean): { readonly active: boolean; readonly label: string; readonly icon: 'execution-plan' | 'execution-plan-actual' | 'execution-plan-live' } {
+  if (actual && live) return { active: true, label: 'Actual + Live', icon: 'execution-plan-live' }
+  if (live) return { active: true, label: 'Live Plan', icon: 'execution-plan-live' }
+  if (actual) return { active: true, label: 'Actual Plan', icon: 'execution-plan-actual' }
+  return { active: false, label: 'Plan', icon: 'execution-plan' }
+}
+
 /** What a query's server and database lists show and allow: the same in its query bar and in the classic toolbar. */
 export interface QueryContextInput {
   /** The document's connection, absent while disconnected. */

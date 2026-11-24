@@ -391,9 +391,21 @@ export const menubar = page => page.getByRole('menubar', { name: 'Application me
 export const toolbar = page => page.getByRole('toolbar', { name: 'Standard', exact: true })
 export const toolbarButton = (page, name) => toolbar(page).getByRole('button', named(name))
 const activeQuerySurface = page => page.locator(`${part.activeEditorGroup}, ${part.toolbar}`)
-/** A query's own bar (SSMS's SQL Editor toolbar): Execute, Cancel, and the Connection group with the server and database lists. Scopes to the active group when given a page, or to a specific group locator. */
+/** A query's own bar (SSMS's SQL Editor toolbar): Execute (morphing to Cancel while running), scope pill, unified Plan menu and Connection group. Scopes to the active group when given a page, or to a specific group locator. */
 export const queryBar = scope => ('mainFrame' in scope ? scope.locator(part.activeEditorGroup) : scope).getByRole('toolbar', { name: 'SQL Editor', exact: true })
 export const queryBarButton = (scope, name) => queryBar(scope).getByRole('button', named(name))
+/** The unified `Plan ▾` menu trigger on the modern QueryBar (`Plan`, `Actual Plan`, `Live Plan`, or `Actual + Live`). */
+export const queryPlanButton = scope => queryBar(scope).getByRole('button', { name: /^(?:Plan|Actual Plan|Live Plan|Actual \+ Live)$/ })
+/** The open `Plan ▾` popover menu (`Execution Plan Options`). */
+export const queryPlanMenu = page => page.getByRole('menu', { name: 'Execution Plan Options', exact: true })
+/** An item inside the open `Plan ▾` menu, matched by ARIA role and exact accessible name. */
+export const queryPlanOption = (page, name) => queryPlanMenu(page).getByRole('menuitemcheckbox', named(name)).or(queryPlanMenu(page).getByRole('menuitem', named(name)))
+/** Opens the unified `Plan ▾` menu (if closed) and clicks one of its items by exact name. */
+export async function clickQueryPlanOption(scope, name, page = 'mainFrame' in scope ? scope : scope.page()) {
+  const trigger = queryPlanButton(scope)
+  if (await trigger.getAttribute('aria-expanded') !== 'true') await trigger.click()
+  await queryPlanOption(page, name).click()
+}
 export const queryScope = scope => queryBar(scope).locator(part.queryScope)
 export const queryConnection = scope => queryBar(scope).getByRole('group', { name: 'Connection', exact: true })
 /** The active query's server and database lists: in its query bar, or in the classic toolbar when that is on. */
