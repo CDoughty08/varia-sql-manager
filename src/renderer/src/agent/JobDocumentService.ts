@@ -494,8 +494,10 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const current = this.get(id)
     if (this.disposed || !current || current.stepFile?.key !== key || !current.stepFile.running) return
     if (!result.ok) { this.patch(id, { stepFile: { key, running: false, failure: result.error } }); return }
-    this.patch(id, { stepFile: undefined })
     const now = current.draft?.steps.steps.find(item => item.key === key)
+    // Edit rights lost meanwhile (a save started, the job went stale): said, so the choice does not vanish without a word.
+    const locked = result.value !== null && current.model === model && now?.subsystem === subsystem && this.selectedStep(id)?.key === key && !this.canEditSteps(id)
+    this.patch(id, { stepFile: locked ? { key, running: false, failure: stepScriptText.locked } : undefined })
     if (result.value === null || current.model !== model || now?.subsystem !== subsystem || this.selectedStep(id)?.key !== key || !this.canEditSteps(id)) return
     return result.value
   }

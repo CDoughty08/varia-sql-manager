@@ -109,7 +109,7 @@ function StepCommandEditor({ epoch, stepKey: key, value, subsystem, connectionId
         // Stops on both sides, so one Undo takes back exactly the load; the content listener then writes the draft, which marks it dirty.
         view.pushUndoStop()
         // Monaco rewrites inserted line breaks to the model's: the model takes the file's (CRLF if it has any), inside the same undo step,
-        // so a .bat keeps CRLF and the command holds the characters main counted.
+        // so a CRLF .bat keeps CRLF (a mixed file becomes all CRLF, a little longer; Save's limit still applies).
         const eol = text.includes('\r\n') ? workbench.monaco.editor.EndOfLineSequence.CRLF : workbench.monaco.editor.EndOfLineSequence.LF
         if (model.getEndOfLineSequence() !== eol) model.pushEOL(eol)
         const applied = view.executeEdits('agent-step-load-file', [{ range: model.getFullModelRange(), text, forceMoveMarkers: true }])

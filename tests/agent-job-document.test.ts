@@ -426,6 +426,23 @@ describe("the job document's Steps page", () => {
     answer({ ok: true, value: 'Get-Date' })
     expect(await reread).toBeUndefined()
   })
+  it('says so when the step can no longer be edited by the time a step script is chosen', async () => {
+    const fixture = opened(stepped()), { jobDocuments, answers, setModel } = fixture
+    let answer!: (value: ApiResult<string | null>) => void
+    Object.assign(fixture.api, { openAgentStepScript: vi.fn(() => new Promise<ApiResult<string | null>>(resolve => { answer = resolve })) })
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    jobDocuments.updateStep(id, 's1', { subsystem: 'CmdExec' })
+    const pending = jobDocuments.loadStepScript(id, 's1')
+    // A save that loses the race leaves the document stale (read-only until Reload) while the dialog is still up.
+    setModel({ ...stepped(), job: record({ version: 8 }) })
+    answers.push({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'STALE', message: 'stale', retryable: false } } })
+    expect(await jobDocuments.save(id)).toBe(false)
+    expect(jobDocuments.canEditSteps(id)).toBe(false)
+    answer({ ok: true, value: 'dir' })
+    expect(await pending).toBeUndefined()
+    expect(jobDocuments.get(id)?.stepFile).toMatchObject({ key: 's1', running: false, failure: 'The step cannot be edited now, so the file was not loaded.' })
+  })
   it('drops a pending delete when Reload and keep my changes rebases the steps', async () => {
     const { jobDocuments, answers, setModel } = opened(stepped())
     const id = jobDocuments.openJob('c1', 'Nightly load')

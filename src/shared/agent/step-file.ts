@@ -28,5 +28,6 @@ export const stepScriptText = {
   tooLarge: `The file is longer than a step's command may be (${agentLimits.stepCommandChars.toLocaleString('en-US')} characters).`,
   notText: 'This file is not a text file Varia can read. Use UTF-8 or UTF-16.',
   notFile: 'The selection is not a file.',
-  unavailable: 'Load from file is not available here.'
+  unavailable: 'Load from file is not available here.',
+  locked: 'The step cannot be edited now, so the file was not loaded.'
 } as const
