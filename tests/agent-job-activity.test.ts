@@ -453,7 +453,7 @@ describe("The status bar's running job", () => {
   })
 })
 
-describe('Job Activity Monitor\'s Start Agent, F5, View menu and row menu (AG-10)', () => {
+describe('Job Activity Monitor\'s Start Agent, F5 and row menu (AG-10)', () => {
   const stopped = { type: 'live.tick', seq: 1, sampledAt: 1, samples: [{ probe: 'agent.jobs.service', costMs: 1, effectiveIntervalMs: 10_000, status: [{ id: 'agentXps', value: 1 }, { id: 'serviceState', value: 1 }, { id: 'startupType', value: 2 }] }] } as const
   it('offers Start Agent through the Agent node\'s Start, greyed with its rule\'s reason, and opens its dialog where the rules allow', async () => {
     const off = monitor()
