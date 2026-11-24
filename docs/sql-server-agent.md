@@ -83,6 +83,39 @@ alerts, operators and who is notified, behind the same gate until 0.11.0.
   result is its own line, a refusal fails only that job, and Stop and Escape (which closes a form) work as for Start; Agent stopped or Agent XPs off is a banner,
   a note below the list says Status is msdb's last reading, and the list refreshes once Agent runs again. Double-click,
   Enter or Open on the selected job opens its job document.
+- **Agent overview** (AG-15; `agent.overview`, docs/live.md; the rules in `src/shared/agent/overview.ts`, `AgentOverviewService`
+  and `AgentOverview.tsx` in the renderer). Agent Overview on the Agent node's menu, or the palette's SQL Server Agent: Agent
+  Overview (Ctrl+Q finds it as a command), opens one document per connection ("Agent Overview - server"). Its header shows
+  Agent's state, startup type, service account and the server's version, with Check again and Properties; tiles count jobs,
+  jobs failed in the last 24 hours (by the server's clock), running jobs and alerts (those fired this week); then the health
+  checks, each with a severity, the jobs or schedules it names (links that open them) and a fix that opens the usual editor
+  or confirmation. Nothing is written by the overview itself:
+  - **Agent not running** (only then): Start for sysadmin on Windows, AG-2's service control on the Agent node.
+  - **Failed jobs**: a job whose last run failed within 24 hours ("(retrying)" while it retries); Show
+    them opens Job Activity Monitor on its Failed view.
+  - **Owners that cannot log in**: a job owner whose login is disabled, missing (a SQL login's SID no longer in
+    `sys.server_principals`; a Windows SID is not checked, as the domain may know it) or denied CONNECT SQL; Change owner…
+    opens Job Activity Monitor's AG-3b form for exactly those jobs. Sysadmin only.
+  - **Jobs that notify no one**: an enabled job with no e-mail, pager or net send notification on failure or completion
+    (the event log and success-only notifications count as no one); Set notifications… opens the first job's Notifications.
+  - **History retention**: a job at its per-job cap, or every job together at the total cap, whose history covers less than
+    a week; History settings… opens SQL Server Agent Properties' History page. Unlimited history passes. Sysadmin only.
+  - **Recommended alerts**: the alerts Add recommended alerts… would create (counted as its own dialog counts them); the
+    fix opens Operators and Notifications with it, for sysadmin. Windows only; elsewhere the check says the server has no alerts.
+  - **Agent mail**: the job document's Database Mail check (Database Mail XPs, a profile, Agent's mail profile set and still
+    a profile); a warning while a job or alert notifies by e-mail, a note otherwise. Varia has no Database Mail editor yet,
+    so the text points to SSMS. Where Agent's own mail settings do not read (`sp_get_sqlagent_properties` sends no
+    `use_databasemail` or `databasemail_profile` on SQL Server 2025), the check decides on Database Mail XPs and the
+    profiles and says Agent's profile was not read. Sysadmin only.
+  - **Unused schedules**: shared schedules no job uses; Open Schedules opens the Schedules document. Sysadmin only.
+
+  The source's one probe, `agent.overview.read` (every 60 s, 15 s to 5 min), runs on the server pool through AgentReader:
+  `JobDocumentFacts`, Agent's state (`explorer.agentService`'s text), the server's clock, `sp_help_job`, Agent's properties,
+  `sp_help_alert` (Windows only), the mail profiles and, for sysadmin, the owners' logins, the history counts per job, the
+  schedules, Agent's mail settings and `sys.dm_server_services`. Each read is recorded in a reads table as `ok`, `role` (not
+  run below sysadmin), `platform` (not on this platform) or the read's error code and message, so a refused read is a value
+  and its check says "Not checked" with the reason; the probe itself fails only when the connection does. The checks are
+  computed in the renderer from the raw facts.
 - **Job document** (`agentJob`, object actions, docs/object-actions.md). One tab per job ("Job Properties - Nightly"), opened
   from a job's node (Enter, double-click or Properties), from Job Activity Monitor, from Ctrl+Q's object search and from the
   palette's SQL Server Agent: Open Job… (the job selected in Job Activity Monitor or Object Explorer, else a pick of the

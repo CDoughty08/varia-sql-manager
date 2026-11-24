@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (432)
+## Commands (434)
 
 ### File
 
@@ -482,6 +482,8 @@ keys it uses are listed below.
 | Refresh Schedules | `agentSchedules.refresh` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentSchedules` | — |
 | Delete Schedule | `agentSchedules.delete` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentSchedules` | — |
 | Create Job Like This… | `agent.createJobLike` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › Create Job Like This… |
+| Agent Overview | `agent.overview` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › Agent Overview |
+| Refresh Agent Overview | `agent.refreshOverview` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentOverview` | — |
 
 ### BigQuery
 
@@ -803,6 +805,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `1_monitor` | View **H**istory | `agent.viewHistory` | `(explorerNode == 'agent' \|\| (explorerNode == 'folder' && explorerFolder == 'agentJobs') \|\| explorerNode == 'agentJob') && !explorerServerLost` |
 | `1_monitor` | **M**anage Schedules | `agent.schedules` | `explorerNode == 'folder' && explorerFolder == 'agentJobs' && !explorerServerLost` |
 | `1_monitor` | View A**g**ent Log | `agent.viewAgentLog` | `((explorerNode == 'folder' && explorerFolder == 'agentErrorLogs') \|\| explorerNode == 'agentErrorLog') && !explorerServerLost` |
+| `1_monitor` | Agent Overvie**w** | `agent.overview` | `explorerNode == 'agent' && !explorerServerLost` |
 | `1_monitor` | Rec**y**cle | `agent.recycleErrorLog` | `((explorerNode == 'folder' && explorerFolder == 'agentErrorLogs') \|\| explorerNode == 'agentErrorLog') && !explorerServerLost && explorerServerEngine == 'box'` |
 | `1_operations` | A**c**tive Operations | `ssis.activeOperations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_operations` | All E**x**ecutions | `ssis.allExecutions` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
@@ -1222,7 +1225,7 @@ Right-click the execution plan's Properties pane, or press Shift+F10 or the cont
 | `1_copy` | **C**opy | `plan.copyProperties` | Always |
 | `1_copy` | Copy **V**alue | `plan.copyPropertyValues` | Always |
 
-## Context keys (202)
+## Context keys (203)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1284,6 +1287,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `jobHistoryCanRerun` | boolean | state | The job selected in Job History is a top-level query job whose SQL BigQuery shows (Re-run). |
 | `jobHistoryCanCancel` | boolean | state | The job selected in Job History is running or pending, no cancel of it is on its way, and BigQuery has not refused cancelling other users' jobs on this connection. |
 | `activeDocumentIsAgentSchedules` | boolean | state | The active document is SQL Server Agent's Schedules document (Manage Schedules). |
+| `activeDocumentIsAgentOverview` | boolean | state | The active document is SQL Server Agent's overview and health checks (Agent Overview). |
 | `ssisOperationStoppable` | boolean | state | The operation selected in the active Integration Services Operations document is an execution or validation that is running or pending, and no stop of it is on its way. |
 | `ssisOperationsPaused` | boolean | state | The active Integration Services Operations document is paused (Pause): it reads nothing until resumed. |
 | `ssisOperationsRefreshable` | boolean | state | The active Integration Services Operations document reads the catalog, or stopped on a failure that Refresh may get past (not a missing catalog). |

@@ -145,12 +145,12 @@ const agentWatchedSeries: readonly LiveSeriesSpec[] = [
   { id: 'serverNow', unit: 'count', label: 'Server time (yyyymmddhhmmss)', counter: 'gauge' }
 ]
 
-export const liveSourceIds = ['debug.synthetic', 'activity', 'explorer', 'ssis.catalog', 'ssis.operations', 'query.plan', 'agent.jobs', 'agent.history', 'agent.errorLog', 'bigquery.jobs'] as const
+export const liveSourceIds = ['debug.synthetic', 'activity', 'explorer', 'ssis.catalog', 'ssis.operations', 'query.plan', 'agent.jobs', 'agent.history', 'agent.errorLog', 'bigquery.jobs', 'agent.overview'] as const
 export type LiveSourceId = typeof liveSourceIds[number]
 export const liveProbeIds = [
   'debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status', 'debug.synthetic.grid', 'debug.synthetic.log', 'debug.synthetic.wide', ...activityLiveProbes,
   'explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability', 'ssis.catalogProbe', 'ssis.operations.list', 'query.plan.operators',
-  'explorer.agentService', 'agent.jobs.list', 'agent.jobs.service', 'agent.jobs.watched', 'agent.history.list', 'agent.errorLog.read', 'bigquery.jobs.list'
+  'explorer.agentService', 'agent.jobs.list', 'agent.jobs.service', 'agent.jobs.watched', 'agent.history.list', 'agent.errorLog.read', 'bigquery.jobs.list', 'agent.overview.read'
 ] as const
 export type LiveProbeId = typeof liveProbeIds[number]
 
@@ -190,6 +190,10 @@ export const liveSources: { readonly [S in LiveSourceId]: LiveSourceSpec } = {
   'agent.errorLog': {
     id: 'agent.errorLog', label: 'SQL Server Agent error logs', scope: 'server', testOnly: false, probes: ['agent.errorLog.read'], hidden: 'pause',
     description: `SQL Server Agent's error logs (docs/sql-server-agent.md, Log File Viewer), sysadmin only, read on the server pool (" - Activity Monitor": READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW) opened in master through master's own error log readers (AgentReader, linted by AgentSql.LintRead). The Log File Viewer opens one view per document while a log is checked; hidden views pause. Args: the checked logs by archive number (logs), the date window in days and a message text.`
+  },
+  'agent.overview': {
+    id: 'agent.overview', label: 'SQL Server Agent overview', scope: 'server', testOnly: false, probes: ['agent.overview.read'], hidden: 'pause',
+    description: `SQL Server Agent's overview and health checks (docs/sql-server-agent.md, Agent overview), read on the server pool (" - Activity Monitor": READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW) opened in master through msdb's own procedures and a few sysadmin catalogue reads (AgentReader, linted by AgentSql.LintRead), plus explorer.agentService's state text. The overview document opens one view per connection; hidden views pause. It takes no args; Check again asks for a sample now.`
   },
   [jobHistorySource]: {
     id: jobHistorySource, label: 'BigQuery job history', scope: 'bigquery', providers: ['bigquery'], testOnly: false, probes: [jobHistoryProbe], hidden: 'pause',
@@ -410,6 +414,45 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
         columns: [
           { id: 'logDate', name: 'Date', dataType: 'datetime2' }, { id: 'logSource', name: 'Log', dataType: 'nvarchar' }, { id: 'logType', name: 'Type', dataType: 'nvarchar' },
           { id: 'logMessage', name: 'Message', dataType: 'nvarchar' }, { id: 'logKey', name: 'Entry', dataType: 'nvarchar' }, { id: 'logArchive', name: 'Archive', dataType: 'int' }, { ...toneColumn, id: 'logTone' }
+        ]
+      }
+    ]
+  },
+  'agent.overview.read': {
+    id: 'agent.overview.read', source: 'agent.overview', label: 'Agent overview', intervalMs: { default: 60_000, min: 15_000, max: 300_000 }, gates: { minMajor: 13, editions: [1, 2, 3, 8] }, budgetMs: { min: 1000, max: 10_000 },
+    description: `The facts the Agent overview's health checks read (src/shared/agent/overview.ts turns them into checks). For every Agent role: whether the login is sysadmin and Database Mail XPs (one SELECT), Agent XPs and the service's state and startup type (explorer.agentService's text), the server's clock, every job the login may see (msdb.dbo.sp_help_job: last run, state, failure notifications, schedule), the history caps (msdb.dbo.sp_get_sqlagent_properties), alerts (msdb.dbo.sp_help_alert; SQLAgentOperatorRole and up; none on Linux) and the Database Mail profiles (msdb.dbo.sysmail_help_profile_sp). For sysadmin only: whether each job's owner can log in (msdb.dbo.sysjobs with sys.server_principals and sys.server_permissions), each job's history rows, runs and oldest row (msdb.dbo.sysjobhistory, aggregated on the server), the schedules with their job counts (msdb.dbo.sp_help_schedule), Agent's mail settings and its service account (sys.dm_server_services). Below sysadmin those are not run and the reads table says role. A refused read is a reads table row with its error code and message, never a failed probe. Lists cut at ${agentLimits.listRows} rows. Times are server local, as yyyy-mm-ddThh:mm:ss.`,
+    status: ['platform', 'productVersion', 'isSysadmin', 'mailXps', 'agentXps', 'serviceState', 'startupType', 'serverNow', 'historyMaxRows', 'historyMaxRowsPerJob', 'mailProfiles', 'useDatabaseMail', 'agentProfile', 'agentProfileFound', 'serviceAccount'],
+    tables: [
+      {
+        id: 'jobs', mode: 'snapshot', key: ['jobId'], rowCap: agentLimits.listRows,
+        columns: [
+          { id: 'jobId', name: 'Job ID', dataType: 'uniqueidentifier' }, { id: 'jobName', name: 'Name', dataType: 'nvarchar' }, { id: 'jobEnabled', name: 'Enabled', dataType: 'int' },
+          { id: 'jobOwner', name: 'Owner', dataType: 'nvarchar' }, { id: 'jobCategory', name: 'Category', dataType: 'nvarchar' }, { id: 'jobOutcome', name: 'Last Run Outcome', dataType: 'int' },
+          { id: 'jobLastRun', name: 'Last Run', dataType: 'nvarchar' }, { id: 'jobStatus', name: 'Status', dataType: 'int' }, { id: 'jobNotifyEmail', name: 'E-mail', dataType: 'int' },
+          { id: 'jobNotifyPage', name: 'Page', dataType: 'int' }, { id: 'jobNotifyNetsend', name: 'Net send', dataType: 'int' }, { id: 'jobScheduled', name: 'Scheduled', dataType: 'int' },
+          { id: 'jobOwnerState', name: 'Owner Login', dataType: 'int' }, { id: 'jobHistoryRows', name: 'History Rows', dataType: 'bigint' }, { id: 'jobHistoryRuns', name: 'History Runs', dataType: 'bigint' },
+          { id: 'jobHistoryOldest', name: 'Oldest History', dataType: 'nvarchar' }
+        ]
+      },
+      {
+        id: 'alerts', mode: 'snapshot', key: ['alertName'], rowCap: agentLimits.listRows,
+        columns: [
+          { id: 'alertName', name: 'Name', dataType: 'nvarchar' }, { id: 'alertEnabled', name: 'Enabled', dataType: 'int' }, { id: 'alertMessageId', name: 'Error Number', dataType: 'int' },
+          { id: 'alertSeverity', name: 'Severity', dataType: 'int' }, { id: 'alertLast', name: 'Last Occurred', dataType: 'nvarchar' }, { id: 'alertNotifies', name: 'Notifies', dataType: 'int' }
+        ]
+      },
+      {
+        id: 'schedules', mode: 'snapshot', key: ['scheduleId'], rowCap: agentLimits.listRows,
+        columns: [
+          { id: 'scheduleId', name: 'Schedule ID', dataType: 'int' }, { id: 'scheduleName', name: 'Name', dataType: 'nvarchar' }, { id: 'scheduleEnabled', name: 'Enabled', dataType: 'int' },
+          { id: 'scheduleJobs', name: 'Jobs', dataType: 'int' }
+        ]
+      },
+      {
+        id: 'reads', mode: 'snapshot', key: ['readId'], rowCap: 32,
+        columns: [
+          { id: 'readId', name: 'Read', dataType: 'nvarchar' }, { id: 'readState', name: 'State', dataType: 'nvarchar' }, { id: 'readMessage', name: 'Message', dataType: 'nvarchar' },
+          { id: 'readTruncated', name: 'Truncated', dataType: 'int' }
         ]
       }
     ]

@@ -556,6 +556,7 @@ if (liveGroup is null)
         ("AgentErrorLog", () => AgentErrorLogChecks.RunAsync(Check)),
         ("AgentObject", () => AgentObjectChecks.RunAsync(Check)),
         ("AgentSchedule", () => AgentScheduleChecks.RunAsync(Check)),
+        ("AgentOverview", () => AgentOverviewChecks.RunAsync(Check)),
         ("Discard", () => DiscardChecks.RunAsync(Check))
     ];
     var suiteNames = offlineSuites.Select(suite => suite.Name).ToArray();

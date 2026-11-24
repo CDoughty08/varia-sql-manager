@@ -821,6 +821,8 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
             new Agent.AgentHistoryReader((Agent.AgentHistoryLiveArgs?)args)),
         Agent.AgentErrorLogReader.Source when source.Scope == "server" && TestSql is null => new SqlSampler(host, Gates, subscriptionId, connectionId, source, Limits, TestText, null,
             new Agent.AgentErrorLogReader((Agent.AgentErrorLogLiveArgs?)args)),
+        Agent.AgentOverviewReader.Source when source.Scope == "server" && TestSql is null => new SqlSampler(host, Gates, subscriptionId, connectionId, source, Limits, TestText, null,
+            new Agent.AgentOverviewReader()),
         _ when source.Scope is "server" or "ssisdb" => new SqlSampler(host, Gates, subscriptionId, connectionId, source, Limits, TestText, TestSql,
             source.Id == ActivityCatalog.Current.Source && TestSql is null ? new ActivityReader(host, connectionId, (ActivityLiveArgs?)args) : null),
         _ => throw Invalid("Unknown live source.")

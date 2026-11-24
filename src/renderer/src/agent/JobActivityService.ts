@@ -455,12 +455,14 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
   /** Opens Change owner's or Attach schedule's form for the jobs selected now, and reads what it offers: New Job's describe (whether the login
    *  is sysadmin, and the logins) or the Schedules describe (the shared schedules with their guards, the jobs' versions and, for sysadmin,
    *  which job uses which). A form opened again replaces the last; a read for one replaced or closed is dropped. */
-  async openForm(id: string, verb: AgentBulkFormVerb): Promise<void> {
-    await this.settledSelection(id)
+  /** The bulk form for the jobs selected now, or for `given` jobs (the Agent overview's Change owner… names the jobs its check found, AG-15). */
+  async openForm(id: string, verb: AgentBulkFormVerb, given?: readonly SelectedJob[]): Promise<void> {
+    if (!given) await this.settledSelection(id)
     const state = this.get(id)
-    if (!state?.connectionId || !this.canBulk(id)) return
+    if (!state?.connectionId) return
+    if (given ? !this.live(id) || state.bulk?.running || bulkUnavailable(given.length) !== undefined : !this.canBulk(id)) return
     const connectionId = state.connectionId
-    const key = this.newId(), jobs = [...state.selected]
+    const key = this.newId(), jobs = [...given ?? state.selected]
     this.patch(id, { form: verb === 'changeOwner' ? { verb, key, jobs, state: 'loading', owner: '' } : { verb, key, jobs, state: 'loading', search: '' } })
     const requestId = this.newId()
     let failure: string | undefined, value: Awaited<ReturnType<VariaApi['describeObject']>> | undefined

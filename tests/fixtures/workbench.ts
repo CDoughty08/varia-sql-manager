@@ -92,6 +92,7 @@ import { fakeLiveViews } from './live-views'
 import { SsisOperationsService } from '../../src/renderer/src/ssis/SsisOperationsService'
 import { JobActivityService } from '../../src/renderer/src/agent/JobActivityService'
 import { LogViewerService } from '../../src/renderer/src/agent/LogViewerService'
+import { AgentOverviewService, type AgentOverviewFixes } from '../../src/renderer/src/agent/AgentOverviewService'
 import { AgentJobStatusService } from '../../src/renderer/src/agent/AgentJobStatusService'
 import { JobDocumentService } from '../../src/renderer/src/agent/JobDocumentService'
 import { AlertOperatorDocumentService, alertSpec, operatorSpec, operatorsSpec } from '../../src/renderer/src/agent/AlertOperatorDocumentService'
@@ -472,6 +473,12 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const credentialDocuments = new CredentialDocumentService({ api, documents, files, connections, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) })
   const logViewerRecycled = vi.fn<(connectionId: string) => void>()
   const logViewer = new LogViewerService({ api, documents, panes, live, connections, targetIdOf, recycled: logViewerRecycled })
+  const overviewFixes = {
+    failedJobs: vi.fn<AgentOverviewFixes['failedJobs']>(), changeOwner: vi.fn<AgentOverviewFixes['changeOwner']>(), openJob: vi.fn<AgentOverviewFixes['openJob']>(),
+    agentProperties: vi.fn<AgentOverviewFixes['agentProperties']>(), recommendedAlerts: vi.fn<AgentOverviewFixes['recommendedAlerts']>(), schedules: vi.fn<AgentOverviewFixes['schedules']>(),
+    startAgent: vi.fn<AgentOverviewFixes['startAgent']>()
+  }
+  const agentOverview = new AgentOverviewService({ documents, panes, live, connections, targetIdOf, fixes: overviewFixes })
   const objectSearch = new ObjectSearchService({ api, documents, connections, settings, targetIdOf })
   const inputMode = new InputModeService(fakeInputMode())
   const notifications = new NotificationService(options.timers ? { timers: options.timers } : {})
@@ -607,6 +614,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     jobHistory,
     jobActivity,
     logViewer,
+    agentOverview,
     agentJobs,
     jobDocuments,
     alertDocuments,
@@ -713,6 +721,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     jobHistory.dispose()
     jobActivity.dispose()
     logViewer.dispose()
+    agentOverview.dispose()
     agentJobs.dispose()
     objectSearch.dispose()
     bookmarks.dispose()
@@ -784,6 +793,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     credentialDocuments,
     logViewer,
     logViewerRecycled,
+    overviewFixes,
+    agentOverview,
     agentJobs,
     objectSearch,
     live,

@@ -358,6 +358,7 @@ explorer.context, for the SQL Server Agent node
   ---
   &Job Activity Monitor  -+++
   View &History  -+++
+  Agent Overvie&w  -+++
   ---
   &Start  -+++
   S&top  -+++

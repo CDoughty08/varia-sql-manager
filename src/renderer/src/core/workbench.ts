@@ -119,9 +119,11 @@ import { SsisOperationsService } from '../ssis/SsisOperationsService'
 import { JobActivityService } from '../agent/JobActivityService'
 import { LogViewerService } from '../agent/LogViewerService'
 import { AgentJobStatusService } from '../agent/AgentJobStatusService'
-import { JobDocumentService } from '../agent/JobDocumentService'
+import { JobDocumentService, jobSections } from '../agent/JobDocumentService'
+import { selectSection } from '../kit/document-frame'
 import { AlertOperatorDocumentService, alertSpec, operatorSpec, operatorsSpec, type AlertDocumentService, type OperatorDocumentService, type OperatorsDocumentService } from '../agent/AlertOperatorDocumentService'
 import { agentContribution } from '../contributions/agent'
+import { AgentOverviewService } from '../agent/AgentOverviewService'
 import { agentObjectsContribution } from '../contributions/agent-objects'
 import { SchedulesService } from '../agent/SchedulesService'
 import { ProxyDocumentService } from '../agent/ProxyDocumentService'
@@ -295,6 +297,8 @@ export interface Workbench extends Disposable {
   /** SQL Server Agent's Job Activity Monitors (AG-3): one per connection, each a live view of its jobs. */
   readonly jobActivity: JobActivityService
   readonly logViewer: LogViewerService
+  /** SQL Server Agent's overview and health checks (AG-15), one per connection. */
+  readonly agentOverview: AgentOverviewService
   /** The status bar's running Agent jobs this window started, followed while hidden (AG-3). */
   readonly agentJobs: AgentJobStatusService
   readonly jobDocuments: JobDocumentService
@@ -600,6 +604,29 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     // A Recycle renames every Agent error log: Object Explorer's Error Logs folder of that server, if listed, reloads.
     recycled: connectionId => { const folder = explorer.folderNode(connectionId, { kind: 'agent' }, 'agentErrorLogs'); if (folder !== undefined) explorer.reconcile(folder) }
   })
+  // SQL Server Agent's overview (AG-15): each check's fix runs through the surface that owns it; the overview itself writes nothing.
+  const agentNode = (connectionId: string) => {
+    const node = explorer.agentNodeOf(connectionId)
+    if (!node) throw new Error('Expand the server in Object Explorer until its SQL Server Agent node shows, then try again.')
+    return node
+  }
+  const agentOverview = new AgentOverviewService({
+    documents, panes, groups: editorGroups, live, connections, targetIdOf,
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-overview="${CSS.escape(id)}"] .agent-check button, [data-agent-overview="${CSS.escape(id)}"] .agent-overview-head button`)?.focus()),
+    fixes: {
+      failedJobs: connectionId => { const id = jobActivity.open(connectionId); jobActivity.setView(id, 'failed') },
+      changeOwner: async (connectionId, jobs) => { const id = jobActivity.open(connectionId); await jobActivity.openForm(id, 'changeOwner', jobs.map(job => ({ id: job.id, name: job.name, status: '', lastRun: '', owner: job.owner }))) },
+      openJob: (connectionId, name, section) => {
+        const id = jobDocuments.openJob(connectionId, name)
+        const state = jobDocuments.get(id)
+        if (section && state) jobDocuments.setFrame(id, selectSection(state.frame, jobSections, section))
+      },
+      agentProperties: (connectionId, page) => { dialogs.open('agentProperties', agentNode(connectionId)); if (page) dialogs.setPage(page) },
+      recommendedAlerts: connectionId => { const id = operatorsDocuments.open(connectionId, { kind: 'agent' }); operatorsDocuments.setAsk(id, 'recommended') },
+      schedules: connectionId => { schedules.open(connectionId) },
+      startAgent: connectionId => { void commands.execute('explorer.startAgent', { target: { kind: 'explorer', node: agentNode(connectionId) } }, 'toolbar') }
+    }
+  })
   const objectSearch = new ObjectSearchService({
     api, documents, connections, settings, targetIdOf, events, agentEnabled: api.agentPreview,
     billedGate: (connectionId, estimate, signal) => bigQueryCost.beforeScript(connectionId, estimate, signal),
@@ -795,6 +822,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     jobHistory,
     jobActivity,
     logViewer,
+    agentOverview,
     agentJobs,
     jobDocuments,
     alertDocuments,
@@ -859,6 +887,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       jobHistory.dispose()
       jobActivity.dispose()
       logViewer.dispose()
+      agentOverview.dispose()
       agentJobs.dispose()
       jobDocuments.dispose()
       alertDocuments.dispose()

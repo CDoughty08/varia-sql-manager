@@ -43,6 +43,7 @@ import SchedulesDocument from '../agent/SchedulesDocument'
 import ProxyDocument from '../agent/ProxyDocument'
 import CredentialDocument from '../agent/CredentialDocument'
 import LogFileViewer from '../agent/LogFileViewer'
+import AgentOverview from '../agent/AgentOverview'
 import ObjectSearch from '../search/ObjectSearch'
 import PeekTab from '../explorer/PeekTab'
 import BigQueryPropertiesTab from '../explorer/BigQueryPropertiesTab'
@@ -165,6 +166,7 @@ function DocumentPanel({ api }: IDockviewPanelProps) {
     {kind === 'agentProxy' && <ProxyDocument documentId={id} />}
     {kind === 'credential' && <CredentialDocument documentId={id} />}
     {kind === 'agentLogViewer' && <LogFileViewer documentId={id} />}
+    {kind === 'agentOverview' && <AgentOverview documentId={id} />}
     {kind === 'restoreDatabase' && <RestoreDatabase documentId={id} />}
   </div>
 }

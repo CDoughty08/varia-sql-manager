@@ -115,7 +115,7 @@ describe('live catalogue', () => {
     expect(Object.keys(liveArgsSchemas).sort()).toEqual([...liveSourceIds].sort())
     expect(productionSourceIds).toEqual(liveSourceIds.filter(id => !liveSources[id].testOnly))
     expect(liveSources['debug.synthetic']).toMatchObject({ testOnly: true, scope: 'none' })
-    expect(productionSourceIds).toEqual(['activity', 'explorer', 'ssis.catalog', 'ssis.operations', 'query.plan', 'agent.jobs', 'agent.history', 'agent.errorLog', 'bigquery.jobs'])
+    expect(productionSourceIds).toEqual(['activity', 'explorer', 'ssis.catalog', 'ssis.operations', 'query.plan', 'agent.jobs', 'agent.history', 'agent.errorLog', 'bigquery.jobs', 'agent.overview'])
     // BigQuery's Job History (BQ-9): the bigquery scope and engine only, 5 s while a job is open and 60 s otherwise (idleIntervalMs,
     // within the protocol's maximum), the protocol's 10 s budget, a memory text filter, and one snapshot table keyed by the job id
     // that holds the newest 1,000 jobs and the children of the expanded scripts, its tone column last.

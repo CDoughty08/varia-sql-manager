@@ -3815,3 +3815,29 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
   .agent-several-cell[data-changed] { border-left-color: Highlight; }
   .agent-several-details .link-button, .agent-several-results .link-button, .agent-several-table .link-button { color: LinkText; }
 }
+/* SQL Server Agent overview (AG-15): header, tiles and the health checks. */
+.agent-overview { display: flex; flex-direction: column; gap: var(--varia-space-3); box-sizing: border-box; max-width: 980px; padding: var(--varia-space-3) var(--varia-space-4) var(--varia-space-4); }
+.agent-overview-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); font-size: var(--varia-size-sm); }
+.agent-overview-head > button { margin-left: auto; display: inline-flex; align-items: center; gap: var(--varia-space-1); }
+.agent-overview-state { padding: 1px var(--varia-space-2); border-radius: var(--varia-radius-sm); border: 1px solid currentColor; font-weight: 600; }
+.agent-overview-state[data-tone="ok"] { color: var(--varia-successForeground); }
+.agent-overview-state[data-tone="error"] { color: var(--varia-errorForeground); }
+.agent-overview-state[data-tone="muted"] { color: var(--varia-descriptionForeground); }
+.agent-overview-meta { display: inline-flex; flex-wrap: wrap; gap: var(--varia-space-3); color: var(--varia-descriptionForeground); }
+.agent-overview-tile[data-tone="error"] .tile-value { color: var(--varia-errorForeground); }
+.agent-overview-tile[data-tone="accent"] .tile-value { color: var(--varia-focusBorder); }
+.agent-overview-reading, .agent-checks-hint { margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); }
+.agent-checks-head { display: flex; align-items: baseline; gap: var(--varia-space-2); }
+.agent-checks-head h3 { margin: 0; font-size: var(--varia-size-md); }
+.agent-checks-head span { margin-left: auto; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); }
+.agent-check-list { display: flex; flex-direction: column; margin: var(--varia-space-2) 0; padding: 0; list-style: none; }
+.agent-check { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; column-gap: var(--varia-space-2); row-gap: 2px; align-items: start; padding: var(--varia-space-2) 0; border-top: 1px solid var(--varia-panel-border); font-size: var(--varia-size-sm); }
+.agent-check-icon { grid-row: span 2; padding-top: 1px; }
+.agent-check[data-severity="error"] .agent-check-icon { color: var(--varia-errorForeground); }
+.agent-check[data-severity="warning"] .agent-check-icon { color: var(--varia-warningForeground); }
+.agent-check[data-severity="ok"] .agent-check-icon { color: var(--varia-successForeground); }
+.agent-check[data-severity="info"] .agent-check-icon, .agent-check[data-severity="unread"] .agent-check-icon { color: var(--varia-descriptionForeground); }
+.agent-check-title { font-weight: 600; }
+.agent-check-detail { grid-column: 2 / 4; color: var(--varia-descriptionForeground); }
+.agent-check-objects { display: flex; flex-wrap: wrap; gap: var(--varia-space-1); margin-top: var(--varia-space-1); }
+.agent-check-object { display: inline-flex; align-items: center; gap: 4px; margin-right: var(--varia-space-2); }

@@ -86,6 +86,8 @@ internal static class AgentLiveChecks
         await JobAsync(check, connection, reader, scratch, Sql, service, info, json);
         await RolesAsync(check, connection, reader, scratch, Sql, None, profile.Explorer(ExplorerCatalog.Current).Band);
         await AgentScriptingLiveChecks.RunAsync(check, service, info, json, scratch, Sql);
+        // The Agent overview (AG-15) on its own scratch job, login and schedule, after the job suites have dropped theirs.
+        await AgentOverviewLiveChecks.RunAsync(check, service, info, json, scratch, Sql, connection, profile);
     }
 
     /// <summary>Object Explorer's Agent node probe (explorer.agentService, AG-1) on a server whose Agent is up: Agent XPs 1 and

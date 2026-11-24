@@ -18,7 +18,7 @@ import { serverItems } from './query'
  * (AG-5b) opens the viewer on that log (Current from the folder) with no job checked, and their Recycle opens it on Current with Recycle's
  * confirmation; Recycle from the palette or the viewer's header asks in the viewer it runs on.
  */
-export function agentContribution({ commands, jobActivity, logViewer, documents, connections, explorer, quickInput, jobDocuments, schedules }: Pick<Workbench, 'commands' | 'jobActivity' | 'logViewer' | 'documents' | 'connections' | 'explorer' | 'quickInput' | 'jobDocuments' | 'schedules'>,
+export function agentContribution({ commands, jobActivity, logViewer, documents, connections, explorer, quickInput, jobDocuments, schedules, agentOverview }: Pick<Workbench, 'commands' | 'jobActivity' | 'logViewer' | 'documents' | 'connections' | 'explorer' | 'quickInput' | 'jobDocuments' | 'schedules' | 'agentOverview'>,
   options: { readonly agentEnabled?: boolean } = {}): Disposable {
   if (!options.agentEnabled) return { dispose: () => {} }
   const live = (id: string | undefined) => id !== undefined && connections.isLiveSqlServer(id) ? id : undefined
@@ -77,7 +77,17 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
     when: (args?: CommandArgs) => { const id = schedulesOf(args); return !!id && when(id) },
     run: async (args?: CommandArgs) => { const id = schedulesOf(args); if (id && when(id)) await run(id) }
   })
+  // The Agent overview (AG-15): on a server picked as Job Activity Monitor's is; Check again on the overview whose header runs it, else the active one.
+  const overviewOf = (args?: CommandArgs): string | undefined => { const id = args?.tabId ?? documents.getSnapshot().activeId; return agentOverview.get(id) ? id : undefined }
   const registrations = [
+    commands.register('agent.overview', {
+      when: args => { const node = explorerNodeOf(args); return !node || (!node.lost && connections.isLiveSqlServer(node.connectionId)) },
+      run: args => withServer(args, 'Agent Overview', connectionId => report(() => agentOverview.open(connectionId), 'The Agent overview could not open.'))
+    }),
+    commands.register('agent.refreshOverview', {
+      when: args => { const id = overviewOf(args); return !!id && agentOverview.isLive(id) },
+      run: args => { const id = overviewOf(args); if (id) agentOverview.refresh(id) }
+    }),
     commands.register('agent.schedules', {
       when: args => { const node = explorerNodeOf(args); return !node || (!node.lost && connections.isLiveSqlServer(node.connectionId)) },
       run: args => withServer(args, 'Manage Schedules', connectionId => report(() => schedules.open(connectionId), 'The Schedules document could not open.'))
