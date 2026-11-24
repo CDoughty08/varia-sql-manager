@@ -1551,8 +1551,9 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private takeRuntime(node: TreeNode, wire: WireNode): void {
     if (wire.database) { node.database = wire.database; node.listedAt = this.now() }
     else if (node.database) { node.database = undefined; node.listedAt = undefined }
-    // A job row is stamped too, so a live read taken before the listing (a Disable's re-list) does not override its state.
-    if (wire.jobId !== undefined) node.listedAt = this.now()
+    // A job row is stamped too, so a live read taken before the listing (a Disable's re-list) does not override its state; its
+    // row renders again for it, as the memoised row cannot see the stamp move (liveJob compares it).
+    if (wire.jobId !== undefined) { node.listedAt = this.now(); node.rev++ }
   }
   private createChild(parent: TreeNode, wire: WireNode): TreeNode {
     const ref = this.intern(parent, wire.ref)

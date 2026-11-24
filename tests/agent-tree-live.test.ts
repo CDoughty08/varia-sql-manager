@@ -462,9 +462,12 @@ describe('AgentTreeLive: job rows\' chips from agent.jobs', () => {
     expect(f.explorer.menuNode(f.find('Index maintenance'))?.status).toBeUndefined()
     // The folder lists again (as a Disable or Enable re-lists it at once): the listing wins over rows read before it.
     await later()
+    const rev = f.explorer.node(f.find('Index maintenance'))!.rev
     f.explorer.reconcile(f.find('Jobs'))
     await settle()
     expect(shown()).toBeUndefined()
+    // The listing did not change the row's status, but its row renders again: the memoised row would keep the read otherwise.
+    expect(f.explorer.node(f.find('Index maintenance'))!.rev).toBeGreaterThan(rev)
     // A tick that arrives after the listing may have read msdb before it (the backend stamps a tick when it ends): it does not win.
     await later()
     unchanged()
