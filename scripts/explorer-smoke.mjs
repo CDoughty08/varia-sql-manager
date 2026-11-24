@@ -7,7 +7,7 @@ import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.
 import {
   anyResultGrid, closeDocumentButton, connectDialogWindow, documentFrame, documentTab, gridCell, activeDocumentName, activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, editorTextIn, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
   explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, explorerDropLine, pressToClose, searchHitApproximate, explorerSublabel, explorerToolbar, itemCount,
-  dependenciesDialog, dependenciesTree, dependencyNode, localGrid, menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, objectSearchServerOptions, outputView, paneMenuButton, part, peekDefinitionText, peekEditorWidgetHosts, dockPopoutBack, queryEditorText, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, submitConnect, toolbarButton as mainToolbarButton, expectEditorShown, dialogClosed
+  dependenciesDialog, dependenciesTree, dependencyNode, inspectorTab, localGrid, menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, objectSearchServerOptions, outputView, paneMenuButton, part, peekDefinitionText, peekEditorWidgetHosts, dockPopoutBack, queryEditorText, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, submitConnect, toolbarButton as mainToolbarButton, expectEditorShown, dialogClosed
 } from './fixtures/ui.mjs'
 import { pinStackedResults } from './fixtures/results-pane.mjs'
 import { activeDocument, emptyQueryStripPoint, queryServer, serverDropCard } from './fixtures/ui.mjs'
@@ -796,33 +796,29 @@ try {
   expect(runs[1]).toMatchObject({ database: 'AppData', maxResultSets: 1, sql: expect.stringMatching(/\nSELECT TOP \(10\) \[Id\][\s\S]*\[CustomerName\][\s\S]*FROM \[AppData\]\.\[dbo\]\.\[Orders\]/) })
   expect(runs[1].sessionId).not.toBe(runs[0].sessionId)
   expect((await stubCalls('query.session.close')).map(call => call.sessionId)).toEqual(expect.arrayContaining(runs.map(run => run.sessionId)))
-  // Open as Tab: the card becomes a document tab on the tab it showed, with Hero KPIs, Refresh and Script As (and Properties for a kind that has the dialog).
+  // Open as Tab on a SQL Server table promotes Peek directly into the unified Table Properties document on the matching tab.
   await peekCard.getByRole('button', { name: 'Open as Tab', exact: true }).click()
   await expect(peekCard).toBeHidden()
   const peekDocument = documentFrame(page, 'dbo.Orders')
-  await expect(documentTab(page, 'dbo.Orders')).toHaveAttribute('aria-selected', 'true')
+  await expect(documentTab(page, 'Table Properties - dbo.Orders')).toHaveAttribute('aria-selected', 'true')
   await expect(gridCell(anyResultGrid(peekDocument), 0, 1)).toHaveText('Customer 0000000000 GmbH')
   expect(await topRowRuns()).toHaveLength(3)
   const peekActions = peekDocument.getByRole('group', { name: 'dbo.Orders actions', exact: true })
-  await expect(peekActions.getByRole('button', { name: /^Script As/ })).toBeEnabled()
-  // A table has Table Properties, so its tab offers Properties.
-  await expect(peekActions.getByRole('button', { name: /^Properties/ })).toBeEnabled()
-  // A Peek tab's list fills the tab and saves: Save Results As is in its menu.
-  const docTabs = peekDocument.getByRole('tablist', { name: 'Object sections', exact: true })
-  await docTabs.getByRole('tab', { name: /^Columns\b/ }).click()
+  await expect(peekActions.getByRole('button', { name: 'Refresh', exact: true })).toBeEnabled()
+  // Table Properties' Columns tab fills the tab and saves: Save Results As is in its menu.
+  await inspectorTab(peekDocument, 'Columns').click()
   await gridCell(localGrid(peekDocument, 'Columns'), 0, 0).click({ button: 'right' })
   expect(await menuItemNames(menu('Query output'), { disabled: true })).not.toContain('Save Results As…')
   expect(await menuItemNames(menu('Query output'))).toContain('Save Results As…')
   await page.keyboard.press('Escape')
-  await docTabs.getByRole('tab', { name: 'Top rows', exact: true }).click()
-  await docTabs.getByRole('tab', { name: 'Top rows', exact: true }).focus()
-  await page.keyboard.press('F5')
+  await inspectorTab(peekDocument, 'Preview Rows').click()
+  await peekActions.getByRole('button', { name: 'Refresh', exact: true }).click()
   await expect.poll(async () => (await topRowRuns()).length).toBe(4)
   await expect(gridCell(anyResultGrid(peekDocument), 0, 1)).toHaveText('Customer 0000000000 GmbH')
-  await closeDocumentButton(page, 'dbo.Orders').click()
+  await closeDocumentButton(page, 'Table Properties - dbo.Orders').click()
   await expect(peekDocument).toHaveCount(0)
   expect((await stubCalls('query.session.close')).map(call => call.sessionId)).toEqual(expect.arrayContaining((await topRowRuns()).map(run => run.sessionId)))
-  // Ctrl+Enter (Cmd+Enter on macOS) moves the open card to a tab, preserving its active tab (Definition here).
+  // Ctrl+Enter (Cmd+Enter on macOS) promotes the open card into Table Properties on its Definition tab.
   await selectRow(peekRow)
   await page.keyboard.press('Space')
   await expect(peekCard).toBeFocused()
@@ -831,23 +827,24 @@ try {
   await page.keyboard.press(`${tabKey}+Enter`)
   await expect(peekCard).toBeHidden()
   const definitionTab = documentFrame(page, 'dbo.Orders')
+  await expect(documentTab(page, 'Table Properties - dbo.Orders')).toHaveAttribute('aria-selected', 'true')
   await expect(peekDefinitionText(definitionTab)).toHaveCount(1)
   await expect.poll(async () => normalized(await editorTextIn(definitionTab))).toBe(normalized(ordersScript))
-  // Script to New Query opens the whole definition in a real query tab.
+  // Open in New Query opens the whole definition in a real query tab.
   const queriesBefore = await documentTabs(page).getByRole('tab').count()
-  await definitionTab.getByRole('button', { name: 'Script to New Query', exact: true }).click()
+  await definitionTab.getByRole('button', { name: 'Open in New Query', exact: true }).click()
   await expect(documentTabs(page).getByRole('tab')).toHaveCount(queriesBefore + 1)
   await expect.poll(async () => normalized(await queryEditorText(page))).toContain(normalized(ordersScript))
   const scripted = await activeDocumentName(page)
-  expect(scripted).not.toBe('dbo.Orders')
+  expect(scripted).not.toBe('Table Properties - dbo.Orders')
   await closeDocumentButton(page, scripted).click()
   await expect(documentTabs(page).getByRole('tab')).toHaveCount(queriesBefore)
-  await closeDocumentButton(page, 'dbo.Orders').click()
-  // Ctrl+click (Cmd+click) on a row opens it in a tab straight away.
+  await closeDocumentButton(page, 'Table Properties - dbo.Orders').click()
+  // Ctrl+click (Cmd+click) on a table row opens Table Properties straight away.
   await peekRow.locator(part.explorerRowText).first().click({ modifiers: [tabKey] })
-  await expect(documentTab(page, 'dbo.Orders')).toHaveAttribute('aria-selected', 'true')
+  await expect(documentTab(page, 'Table Properties - dbo.Orders')).toHaveAttribute('aria-selected', 'true')
   await expect(peekCard).toBeHidden()
-  await closeDocumentButton(page, 'dbo.Orders').click()
+  await closeDocumentButton(page, 'Table Properties - dbo.Orders').click()
   await expect(documentFrame(page, 'dbo.Orders')).toHaveCount(0)
   await peekRow.click({ button: 'right' })
   await menu('Object Explorer').getByRole('menuitem', { name: 'Peek', exact: true }).click()
