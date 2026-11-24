@@ -336,7 +336,13 @@ internal sealed class SsisService : IDisposable
     }
 
     /// <summary>A text read one character past <paramref name="max"/>, cut to it with an ellipsis when it is longer.</summary>
-    internal static string Clip(string text, int max) => text.Length <= max ? text : text[..(max - 1)] + "…";
+    internal static string Clip(string text, int max)
+    {
+        if (text.Length <= max) return text;
+        // Never split a surrogate pair at the cut.
+        var keep = char.IsHighSurrogate(text[max - 2]) ? max - 2 : max - 1;
+        return text[..keep] + "…";
+    }
 
     private async Task<(object? Model, SsisError? Error)> RunAsync(string connectionId, string subject, ExplorerProfile served,
         Func<SqlConnection, SsisProfile, CancellationToken, Task<(object? Model, SsisError? Error)>> read, CancellationToken token)

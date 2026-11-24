@@ -475,7 +475,7 @@ the SSIS read pool (program name + " - Integration Services", Initial Catalog th
 - `ssis.execution { connectionId, requestId, executionId: 1 – 2^53 − 1, groups?: ('error' | 'warning' | 'information' | 'other')[1..4] }`
   answers `{ model?, elapsedMs, error? }` on the same pool and prologue as `ssis.describe`: the execution's overview, its
   messages counted by type, and the newest ≤ 5,000 of the chosen groups (all when `groups` is left out), each message and path
-  ≤ 4,000 characters, else `truncated`. A missing (purged) execution is `NOT_FOUND`; the other codes are describe's.
+  ≤ 4,000 characters (a longer one ends in "…"); past the row bound or about 4,000,000 bytes, `truncated`. A missing (purged) execution is `NOT_FOUND`; the other codes are describe's.
 - **SSIS cancellation** is `varia:ssis-cancel`: an attention, answered `CANCELLED`.
 
 **SSIS writes.** `ssis.execute { connectionId, requestId, action: { verb: 'stopOperation', operationId: 1 – 2^53 − 1 },

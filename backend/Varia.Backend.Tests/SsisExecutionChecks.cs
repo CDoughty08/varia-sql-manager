@@ -62,6 +62,7 @@ internal static class SsisExecutionChecks
             && Value(bound, "@error") is true && Value(bound, "@warning") is false && Value(bound, "@information") is false && Value(bound, "@other") is true,
             "an execution read binds its id, one row past its bound, the message characters and one bit per group");
         check(SsisService.Clip(new string('m', 4001), 4000) is { Length: 4000 } clipped && clipped.EndsWith('…') && SsisService.Clip(new string('m', 4000), 4000).Length == 4000
+            && SsisService.Clip(new string('m', 3998) + "\uD83D\uDE00" + "tail", 4000) == new string('m', 3998) + "…"
             && SsisService.ExecutionGone(7).StartsWith("Execution 7 is not in the SSIS Catalog: the catalog's retention cleanup may have removed it", StringComparison.Ordinal),
             "a message one character past its bound is cut with an ellipsis, and a purged execution's message says the retention cleanup may have removed it");
 
@@ -86,10 +87,13 @@ internal static class SsisExecutionChecks
         }
 
         var old = new SsisChecks.FakeHost(12);
-        var refused = await new SsisService(old).ExecutionAsync(Args(5), CancellationToken.None);
-        var linux = await new SsisService(new SsisChecks.FakeHost(17, linux: true)).ExecutionAsync(Args(5), CancellationToken.None);
+        using var oldService = new SsisService(old);
+        var refused = await oldService.ExecutionAsync(Args(5), CancellationToken.None);
+        using var linuxService = new SsisService(new SsisChecks.FakeHost(17, linux: true));
+        var linux = await linuxService.ExecutionAsync(Args(5), CancellationToken.None);
         var host = new SsisChecks.FakeHost();
-        var kerberos = await new SsisService(host).ExecutionAsync(Args(5), CancellationToken.None);
+        using var hostService = new SsisService(host);
+        var kerberos = await hostService.ExecutionAsync(Args(5), CancellationToken.None);
         check(refused.Error is { Code: "NOT_SUPPORTED" } && linux.Error is { Code: "NOT_SUPPORTED" } && old.Opens == 0 && refused.Model is null
             && kerberos.Error is { Code: "AUTH_KERBEROS" } && host.Opens == 1,
             "an execution read on a server without a catalog answers NOT_SUPPORTED without connecting, and a sign-in failure is a value");
