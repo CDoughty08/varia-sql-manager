@@ -58,8 +58,19 @@ jobs:
       - name: Install SQL Server 2022 Developer (instance VARIA)
         timeout-minutes: 25
         shell: pwsh
+        # Chocolatey's community feed answers 503 now and then, and choco then installs nothing: try again with backoff, and say so
+        # plainly when SQL Server never installed rather than failing later on a service that does not exist.
         run: |
-          choco install sql-server-2022 -y --no-progress --params "'/IgnorePendingReboot /INSTANCENAME:VARIA /FEATURES:SQLENGINE /SQLSYSADMINACCOUNTS:$env:COMPUTERNAME\$env:USERNAME /AGTSVCSTARTUPTYPE:Manual'"
+          $params = "'/IgnorePendingReboot /INSTANCENAME:VARIA /FEATURES:SQLENGINE /SQLSYSADMINACCOUNTS:$env:COMPUTERNAME\$env:USERNAME /AGTSVCSTARTUPTYPE:Manual'"
+          $attempts = 4
+          for ($attempt = 1; $attempt -le $attempts; $attempt++) {
+            choco install sql-server-2022 -y --no-progress --params $params
+            if (Get-Service 'SQLAgent$VARIA' -ErrorAction SilentlyContinue) { break }
+            if ($attempt -eq $attempts) { throw "SQL Server 2022 did not install after $attempts attempts (Chocolatey's feed or the download failed); see the choco output above." }
+            $wait = 30 * [math]::Pow(2, $attempt - 1)
+            Write-Host "::warning::choco install attempt $attempt installed no SQLAgent`$VARIA service; trying again in $wait s."
+            Start-Sleep -Seconds $wait
+          }
           Start-Service 'SQLAgent$VARIA'
           Get-Service 'MSSQL$VARIA', 'SQLAgent$VARIA' | Format-Table -AutoSize Name, Status, StartType
       - name: Agent live suites with service control
