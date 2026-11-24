@@ -38,7 +38,7 @@ class FakeGrid extends SnapshotStore<LiveGridSnapshot> {
 }
 
 async function monitor(rows: string[][]) {
-  const fixture = workbenchFixture({ agentPreview: true })
+  const fixture = workbenchFixture()
   cleanups.push(() => fixture.dispose())
   fixture.api.push(readyBackend())
   fixture.connect(connectionInfo('c1'))

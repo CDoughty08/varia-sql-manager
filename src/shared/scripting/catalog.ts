@@ -220,7 +220,7 @@ const kindData: { readonly [K in NodeKind]?: Data | typeof later } = {
   index: { ...plain('index', 'Index', 'child'), parents: ['table', 'view'] },
   statistic: { ...plain('statistic', 'Statistic', 'child'), parents: ['table', 'view'] },
   // SQL Server Agent (docs/agent-plan.md › Script As): SSMS's CREATE, DROP and DROP And CREATE, scripted by SMO. Their nodes
-  // exist only behind the agentEnabled release gate, so their Script submenu does too.
+  // are SQL Server only.
   agentJob: plain('agentJob', 'Job', 'agentObject'),
   agentAlert: plain('agentAlert', 'Alert', 'agentObject'),
   agentOperator: plain('agentOperator', 'Operator', 'agentObject'),
