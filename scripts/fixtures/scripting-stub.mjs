@@ -31,7 +31,7 @@ export function installScriptingStub({ ipcMain }, { statics }) {
     logins: () => [object({ kind: 'login', name: 'sa' }, 'sa', 'login', { hasChildren: false })],
     agentJobs: () => [object({ kind: 'agentJob', name: 'Nightly backup' }, 'Nightly backup', 'agent-job', { hasChildren: false })]
   }
-  // The server's SQL Server Agent node, a singleton after its folders, as the backend lists it behind the release gate.
+  // The server's SQL Server Agent node, a singleton after its folders, as the backend lists it.
   const singletons = { server: () => [object({ kind: 'agent' }, 'SQL Server Agent', 'agent')] }
   function children({ node }) {
     if (node.type === 'object') {

@@ -71,7 +71,7 @@ export function providerSearchKinds(provider: ProviderId, kinds?: readonly Searc
   const own = provider === 'bigquery' ? (value: string) => value.startsWith('bq') : (value: string) => !value.startsWith('bq')
   return (kinds ?? searchKindFilters).filter(own)
 }
-/** SQL Server Agent's indexed kinds: searched only behind the Agent release gate (ObjectSearchService.ask). */
+/** SQL Server Agent's indexed kinds (SQL Server only), under Search Objects' Other type. */
 export const agentSearchKinds = ['agentJob', 'agentAlert', 'agentOperator'] as const satisfies readonly SearchKind[]
 /** Kinds Object Explorer lists that the index does not hold (ObjectSearchService.Unindexed): Agent's proxies, their
  *  subsystems and error logs, which only a sysadmin may read. */

@@ -141,9 +141,9 @@ describe('Create Job Like This: the copy', () => {
     expect(createFromProblems(jobCopySource(model()))).toEqual([])
     expect(createFromProblems(jobCopySource(model({ stepsTruncated: true })))).toEqual([{ field: 'steps', severity: 'error', message: createFromText.stepsTruncated }])
   })
-  it('puts Create Job Like This on a job\'s menu after New Job, behind the release gate', () => {
+  it('puts Create Job Like This on a job\'s menu after New Job, with no release gate (AG-9)', () => {
     const entry = createFromCommandEntries()['agent.createJobLike']
-    expect(entry.precondition).toContain('agentEnabled')
+    expect(entry.precondition).not.toContain('agentEnabled')
     expect(commandDescriptor('agent.createJobLike')).toMatchObject({ title: 'Create Job Like This…', menus: [{ menu: 'explorer.context', group: '0_new', order: 2, when: "explorerNode == 'agentJob' && !explorerServerLost" }] })
     expect(entry.keywords).toContain('existing')
   })
@@ -151,7 +151,7 @@ describe('Create Job Like This: the copy', () => {
 
 /** A workbench whose describe answers the source job's model, and New Job's for the Agent node. */
 function opened(first = model()) {
-  const fixture = workbenchFixture({ agentPreview: true })
+  const fixture = workbenchFixture()
   cleanups.push(() => fixture.dispose())
   fixture.api.push(readyBackend())
   fixture.connect(connectionInfo('c1'))

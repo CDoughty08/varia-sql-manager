@@ -143,7 +143,7 @@ const isPage = (id: FolderId) => (params: ExplorerChildrenParams) => isFolder(id
 const disposals: (() => void)[] = []
 afterEach(() => { disposals.splice(0).forEach(dispose => dispose()) })
 
-function fixture(limits: Partial<ExplorerServiceLimits> = {}, agentEnabled = false) {
+function fixture(limits: Partial<ExplorerServiceLimits> = {}) {
   const backend = fakeBackend()
   const connections = new ConnectionService(), events = new EventBus(), emitted: WorkbenchEvent[] = []
   events.subscribe(event => emitted.push(event))
@@ -151,7 +151,7 @@ function fixture(limits: Partial<ExplorerServiceLimits> = {}, agentEnabled = fal
   let ids = 0
   // The wall clock listings are stamped with; tests move it by hand.
   const wall = { now: 1_800_000_000_000 }
-  const explorer = new ExplorerService({ api: backend.api, connections, events, timers: clock.timers, schedule: callback => callback(), newId: () => uuid(++ids), limits, now: () => wall.now, agentEnabled })
+  const explorer = new ExplorerService({ api: backend.api, connections, events, timers: clock.timers, schedule: callback => callback(), newId: () => uuid(++ids), limits, now: () => wall.now })
   disposals.push(() => explorer.dispose())
   const connect = (name = 'server-a', profile: Partial<ConnectionInfo> = {}) => connections.add({ ...info(name), productVersion: '16.0.4135.4', login: 'sa', ...profile }, connectionOptions)
   const rows = () => explorer.getSnapshot().rows
@@ -227,15 +227,13 @@ async function reconcilePages(f: ReturnType<typeof fixture>, tables: number, mat
   } finally { table.get = get }
 }
 
-describe('ExplorerService: the Agent release gate', () => {
-  it('drops the SQL Server Agent node while the gate is off, and lists it after the server folders while it is on (AG-1)', async () => {
-    for (const enabled of [false, true]) {
-      const f = fixture({}, enabled)
-      f.state.agentNode = true
-      f.connect()
-      await settle()
-      expect(f.labels().slice(1), String(enabled)).toEqual(['  Databases', '  Security', '  Server Objects', ...enabled ? ['  SQL Server Agent'] : []])
-    }
+describe('ExplorerService: SQL Server Agent', () => {
+  it('lists the SQL Server Agent node after the server folders with no release gate to open (AG-1, AG-9)', async () => {
+    const f = fixture()
+    f.state.agentNode = true
+    f.connect()
+    await settle()
+    expect(f.labels().slice(1)).toEqual(['  Databases', '  Security', '  Server Objects', '  SQL Server Agent'])
   })
 })
 

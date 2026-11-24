@@ -81,7 +81,7 @@ describe("the proxy and credential documents' shared rules", () => {
 
 /** A workbench whose describe answers the proxy and credential documents' models. */
 function opened(proxy = proxyModel(), credential = credentialModel()) {
-  const fixture = workbenchFixture({ agentPreview: true })
+  const fixture = workbenchFixture()
   cleanups.push(() => fixture.dispose())
   fixture.api.push(readyBackend())
   fixture.connect(connectionInfo('c1'))
@@ -283,26 +283,22 @@ describe('the credential document', () => {
   })
 })
 
-describe('the release gate', () => {
-  it('registers the proxy and credential commands only with agentEnabled', () => {
+describe('no release gate (AG-9)', () => {
+  it('registers the proxy and credential commands with no environment variable set', () => {
     const ids = ['agent.newProxy', 'agent.newProxyOnAgent', 'agentProxy.save', 'agentProxy.reload', 'agent.newCredential', 'credential.save', 'credential.reload'] as const
-    const gated = workbenchFixture({ agentPreview: false })
-    try { expect(ids.filter(id => gated.commands.has(id))).toEqual([]) } finally { gated.dispose() }
-    const open = workbenchFixture({ agentPreview: true })
-    try { expect(ids.filter(id => !open.commands.has(id))).toEqual([]) } finally { open.dispose() }
+    const fixture = workbenchFixture()
+    try { expect(ids.filter(id => !fixture.commands.has(id))).toEqual([]) } finally { fixture.dispose() }
   })
-  it("keeps a credential's Properties and New Credential… behind the gate, though Security › Credentials lists without it", () => {
+  it("offers a credential's Properties (its document) and New Credential… with no gate", () => {
     const credential = { id: 7, lost: false, kind: 'credential', connectionId: 'c1', label: 'FileShareWriterCred', engine: 'box', ref: { type: 'object', object: { kind: 'credential', name: 'FileShareWriterCred' } } } as unknown as ExplorerMenuNode
     const args = { target: { kind: 'explorer' as const, node: credential } }
-    for (const agentPreview of [false, true]) {
-      const fixture = workbenchFixture({ agentPreview })
-      try {
-        fixture.api.push(readyBackend())
-        fixture.connect(connectionInfo('c1'))
-        expect(fixture.commands.canRun('explorer.properties', args), String(agentPreview)).toBe(agentPreview)
-      } finally { fixture.dispose() }
-    }
-    expect(commandDescriptor('agent.newCredential').menus?.every(placement => placement.when?.startsWith('agentEnabled && '))).toBe(true)
+    const fixture = workbenchFixture()
+    try {
+      fixture.api.push(readyBackend())
+      fixture.connect(connectionInfo('c1'))
+      expect(fixture.commands.canRun('explorer.properties', args)).toBe(true)
+    } finally { fixture.dispose() }
+    expect(commandDescriptor('agent.newCredential').menus?.some(placement => placement.when?.includes('agentEnabled'))).toBe(false)
   })
   it("opens New Credential… from the palette on the selected Credentials folder's server, not the active tab's", async () => {
     const { commands, documents, explorer, connect, credentialDocuments } = opened()

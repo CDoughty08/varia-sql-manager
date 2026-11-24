@@ -2133,7 +2133,7 @@ try {
   await expect(explorerTree(page).getByRole('treeitem', { name: /^AppData\b.*Offline/ })).toHaveCount(0)
   console.log('Object action checks: Tasks › Take Offline lists the sessions and open transactions, holds OK until Drop All Active Connections or Check Again, scripts SET OFFLINE, Stops a wait and stays open on Success; Bring Online runs as it opens.')
 
-  // SQL Server Agent (AG-2, behind the release gate the smoke runs open). A job's menu offers Start Job at Step… and Stop Job,
+  // SQL Server Agent (AG-2). A job's menu offers Start Job at Step… and Stop Job,
   // then Disable, Rename and Delete. Start Job at Step… lists the job's steps, the first chosen; choosing the second sends its
   // name with the job's identity from the tree. Stop Job runs as a status-bar job and says what it did, and Disable flips the
   // row's badge. The Agent node's Start, Stop and Restart are offered with Varia on Windows and greyed with the reason

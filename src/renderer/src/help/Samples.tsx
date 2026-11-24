@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { authenticationCatalog, authenticationModes, type AuthenticationMode } from '../../../shared/auth'
+import { defaultSchedule, formatRun, nextRuns, schedulePresets, scheduleSentence, type AgentMoment, type SchedulePresetId } from '../../../shared/agent/schedule'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 
 /** Bounded teaching illustrations, not another editor, connection dialog or result-grid implementation. */
@@ -39,5 +40,25 @@ export function ResultsSample() {
     <p className="help-muted">Rank is numeric, so it sorts by value regardless of your text-sort option.</p>
     <p><strong>Ordinary Copy currently {headers ? 'includes' : 'omits'} column headers.</strong> Copy with Headers includes them regardless of that option.</p>
     <p className="help-muted">Fictional rows only. Use the real grid to select, copy or save returned data.</p>
+  </figure>
+}
+
+/** The fictional clock the schedule sample counts from, so its runs read the same on every computer and day. */
+export const agentSampleNow: AgentMoment = { date: 20260105, time: 90000 }
+/** Presets the job document's Schedules section offers first (not its More menu). */
+export const agentSamplePresets = schedulePresets.filter(preset => !preset.more)
+export function AgentScheduleSample() {
+  const [presetId, setPresetId] = useState<SchedulePresetId>('everyDay')
+  // The production presets and sentence, from a fictional New Job Schedule starting at 02:30 on the sample's day.
+  const start = { ...defaultSchedule(agentSampleNow.date, 'Nightly sales load'), activeStartTime: 23000 }
+  const preset = agentSamplePresets.find(item => item.id === presetId) ?? agentSamplePresets[0]
+  const schedule = preset.apply(start, agentSampleNow.date)
+  return <figure className="help-sample"><figcaption>Sample · how a schedule reads before you save it</figcaption>
+    <div className="help-sample-controls" role="group" aria-label="Sample schedule starting point">{agentSamplePresets.map(item =>
+      <button type="button" key={item.id} aria-pressed={item.id === preset.id} onClick={() => setPresetId(item.id)}>{item.label.replace(/…$/, '')}</button>)}</div>
+    <p role="status"><strong>{scheduleSentence(schedule)}</strong></p>
+    <p>Next runs of the fictional job “Nightly sales load”, counted from Monday 2026-01-05 09:00:</p>
+    <ol aria-label="Sample next runs">{nextRuns(schedule, agentSampleNow, 3).map(run => <li key={formatRun(run)}>{formatRun(run)}</li>)}</ol>
+    <p className="help-muted">Illustration only. The sentence and runs come from the job document’s own schedule rules, on a fictional date; this sample never connects, creates a schedule or runs a job.</p>
   </figure>
 }
