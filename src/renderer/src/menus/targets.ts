@@ -84,8 +84,8 @@ export interface OutputTarget {
   readonly transposed?: boolean
   /** A comparison's grid whose inputs are both still open (`comparisonInputsOpen`). */
   readonly inputsOpen?: boolean
-  /** On a comparison's row (a cell or its row number): whether that row has a possible match (`comparisonRowHasPartner`),
-   *  once its change marker has loaded. */
+  /** On a comparison's row (a cell or its row number, or the active cell a keyboard menu opens below): whether that row has
+   *  a possible match (`comparisonRowHasPartner`), once its change marker has loaded. */
   readonly rowHasPartner?: boolean
   readonly selectedText: string
   readonly element: HTMLElement
@@ -226,7 +226,8 @@ export function argsFor(target: MenuTarget): CommandArgs {
   const tabId = target.kind === 'editor' || target.kind === 'documentTab' || target.kind === 'output' || target.kind === 'tableDesigner' || target.kind === 'ssisOperations' || target.kind === 'jobHistory' ? target.tabId : undefined
   const state = target.kind === 'searchHit' ? target.state : target.kind === 'output' && target.view === 'grid'
     ? { resultsGridTransposed: !!target.transposed, resultsGridComparison: target.resultKind === 'diff', comparisonInputsOpen: target.resultKind === 'diff' && !!target.inputsOpen,
-      // The menu's row, when it was opened on one; else (the keyboard's menu on the grid) the focused grid's active row.
+      // The menu's row: a clicked cell's or row number's, or the active cell's a keyboard menu opens below; else (a header's
+      // menu, or a grid that names no row) the focused grid's active row.
       ...target.resultKind === 'diff' && target.row !== undefined ? { comparisonRowHasPartner: !!target.rowHasPartner } : {} }
     : undefined
   return { target, ...(tabId ? { tabId } : {}), ...(state ? { state } : {}) }
@@ -393,10 +394,12 @@ export class MenuTargetService {
       if (!output) return undefined
       // Keyboard menus open below the grid's active cell, else its first cell.
       const anchor = output.view !== 'messages' ? gridAnchor(output.element) ?? output.element.querySelector('.rg-c.is-act') ?? output.element.querySelector('.rg-c') ?? undefined : undefined
-      // Without a clicked column the menu is for the anchor's cell: its column, and its row unless a row number was clicked.
+      // Without a clicked column the menu is for the anchor's cell: its column, and its row with whether that row has a
+      // possible match, unless a row number was clicked (which keeps its own row and match).
       const cell = output.column === undefined && anchor ? outputCell(anchor, output.element) : undefined
-      const column = cell?.column, row = output.row ?? cell?.row
-      const target = column === undefined && row === output.row ? output : { ...output, ...(column !== undefined ? { column } : {}), ...(row !== undefined ? { row } : {}) }
+      const column = cell?.column, row = output.row === undefined ? cell?.row : undefined
+      const target = column === undefined && row === undefined ? output
+        : { ...output, ...(column !== undefined ? { column } : {}), ...(row !== undefined ? { row, ...(cell?.partner ? { rowHasPartner: true } : {}) } : {}) }
       return { target, element: output.element, focus: output.element, ...(anchor ? { anchor } : {}) }
     } catch (error) { onUnexpectedError(error); return undefined }
   }
