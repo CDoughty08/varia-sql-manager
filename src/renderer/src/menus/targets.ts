@@ -159,6 +159,8 @@ export type MenuTarget =
   | OutputTarget
   /** A panel's tab or ⋯ button; `popout` when the panel is in a window of its own. */
   | { readonly kind: 'dockTab'; readonly pane: PaneId; readonly floating: boolean; readonly popout: boolean }
+  /** Object Explorer's header ⋯ button: selected server actions, explorer tools, and panel docking actions. */
+  | { readonly kind: 'explorerTools'; readonly pane: 'explorer'; readonly floating: boolean; readonly popout: boolean; readonly node?: ExplorerMenuNode }
   | SearchHitTarget
   | InputTarget
   /** The results toolbar's ⋯ button (More results tools): its items act on the toolbar's query, as its buttons do. */
@@ -169,13 +171,13 @@ export type MenuTarget =
   | PlanPropertiesTarget
 
 export const menuForTarget: Readonly<Record<MenuTarget['kind'], ContextMenuId>> = {
-  editor: 'editor.context', explorer: 'explorer.context', tableDesigner: 'tableDesigner.context', documentTab: 'documentTab.context', output: 'output.context', dockTab: 'dockTab.context', input: 'input.context',
+  editor: 'editor.context', explorer: 'explorer.context', explorerTools: 'explorer.tools', tableDesigner: 'tableDesigner.context', documentTab: 'documentTab.context', output: 'output.context', dockTab: 'dockTab.context', input: 'input.context',
   ssisOperations: 'ssis.operation.context', jobHistory: 'bigquery.jobs.context', searchHit: 'search.hit.context', resultsTools: 'output.tools', peekProperties: 'peek.properties.context',
   planOutline: 'plan.outline.context', planProperties: 'plan.properties.context'
 }
 /** Each context menu's accessible name. */
 export const contextMenuLabels: Readonly<Record<ContextMenuId, string>> = {
-  'editor.context': 'Query editor', 'explorer.context': 'Object Explorer', 'tableDesigner.context': 'Table Designer', 'documentTab.context': 'Query tab', 'output.context': 'Query output',
+  'editor.context': 'Query editor', 'explorer.context': 'Object Explorer', 'explorer.tools': 'Object Explorer menu', 'tableDesigner.context': 'Table Designer', 'documentTab.context': 'Query tab', 'output.context': 'Query output',
   'dockTab.context': 'Panel tab', 'input.context': 'Text field', 'ssis.operation.context': 'Integration Services Operations', 'bigquery.jobs.context': 'Job History',
   'search.hit.context': 'Search result', 'output.tools': 'More results tools', 'peek.properties.context': 'Peek properties',
   'plan.outline.context': 'Plan outline', 'plan.properties.context': 'Plan properties'
@@ -211,6 +213,9 @@ export function targetKeys(target: MenuTarget | undefined): TargetKeys {
     pane: target?.kind === 'dockTab' ? target.pane : '',
     paneFloating: target?.kind === 'dockTab' && target.floating,
     panePopout: target?.kind === 'dockTab' && target.popout,
+    explorerToolsLost: target?.kind === 'explorerTools' && !!target.node?.lost,
+    explorerToolsFloating: target?.kind === 'explorerTools' && target.floating,
+    explorerToolsPopout: target?.kind === 'explorerTools' && target.popout,
     documentTabFloating: target?.kind === 'documentTab' && !!target.floating,
     searchHitSchema: target?.kind === 'searchHit' && searchHitNames(target.hit.object).schema !== undefined,
     searchHitBigQuery: target?.kind === 'searchHit' && target.hit.object.project !== undefined
@@ -245,7 +250,8 @@ export const planOutlineOf = (args: CommandArgs | undefined): PlanOutlineTarget 
 export const planPropertiesOf = (args: CommandArgs | undefined): PlanPropertiesTarget | undefined => args?.target?.kind === 'planProperties' ? args.target : undefined
 export const inputOf = (args: CommandArgs | undefined): InputTarget | undefined => args?.target?.kind === 'input' ? args.target : undefined
 /** The Object Explorer node a context menu was opened for; undefined for its empty area and for other targets. */
-export const explorerNodeOf = (args: CommandArgs | undefined): ExplorerMenuNode | undefined => args?.target?.kind === 'explorer' ? args.target.node : undefined
+export const explorerNodeOf = (args: CommandArgs | undefined): ExplorerMenuNode | undefined =>
+  args?.target?.kind === 'explorer' || args?.target?.kind === 'explorerTools' ? args.target.node : undefined
 export const outputOf = (args: CommandArgs | undefined): OutputTarget | undefined => args?.target?.kind === 'output' ? args.target : undefined
 export const searchHitOf = (args: CommandArgs | undefined): SearchHitTarget | undefined => args?.target?.kind === 'searchHit' ? args.target : undefined
 /** The object a menu was opened for: an Object Explorer node, or a Search Objects result's object. */

@@ -74,7 +74,7 @@ function edit(documents: Workbench['documents'], command: 'undo' | 'redo', args?
   documents.boundEditor?.trigger('menu', command, null)
 }
 
-const paneOf = (args?: CommandArgs): PaneId | undefined => args?.target?.kind === 'dockTab' ? args.target.pane : undefined
+const paneOf = (args?: CommandArgs): PaneId | undefined => args?.target?.kind === 'dockTab' || args?.target?.kind === 'explorerTools' ? args.target.pane : undefined
 const onPane = (action: (pane: PaneId) => void) => (args?: CommandArgs) => { const pane = paneOf(args); if (pane) action(pane) }
 
 /**

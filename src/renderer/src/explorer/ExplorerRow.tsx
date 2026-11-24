@@ -1,5 +1,5 @@
-import { memo, useEffect, useRef, type DragEvent, type FocusEvent, type KeyboardEvent, type MouseEvent, type ReactNode, type RefCallback, type SyntheticEvent } from 'react'
-import { explorerLimits, folderSpecs, kindSpecs } from '../../../shared/explorer/catalog.ts'
+import { memo, useEffect, useRef, type CSSProperties, type DragEvent, type FocusEvent, type KeyboardEvent, type MouseEvent, type ReactNode, type RefCallback, type SyntheticEvent } from 'react'
+import { explorerLimits, folderSpecs, kindSpecs, systemFolderIds, type FolderId } from '../../../shared/explorer/catalog.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
 import { environmentTag } from '../../../shared/environments'
 import EnvironmentTag from '../EnvironmentTag'
@@ -193,10 +193,18 @@ function LostActions({ rowId, label, actions }: { rowId: number; label: string; 
     <button tabIndex={-1} disabled={!canRemove} aria-label={'Remove ' + label + ' from Explorer'} title="Remove from Explorer" onMouseDown={stop} onClick={() => actions.remove(rowId)}><Icon name="close" /></button>
   </span>
 }
-function Accent({ color }: { color: string | undefined }) {
-  const accent = useConnectionAccent(color)
-  return accent ? <span className="oe-accent" style={{ background: accent }} /> : null
-}
+const systemFolders: ReadonlySet<FolderId> = new Set<FolderId>(systemFolderIds)
+
+/** Whether a column row is part of its table's primary key (its variant icon or SSMS sublabel prefix). */
+export const isPrimaryKeyColumn = (node: Pick<TreeNode, 'kind' | 'icon' | 'sublabel'>): boolean =>
+  node.kind === 'column' && (node.icon === 'key' || /^\(PK(?:,|\))/.test(node.sublabel ?? ''))
+
+/** Removes the leading "PK, " from a primary-key column's displayed sublabel since the PK badge shows it. */
+export const columnDisplaySublabel = (sublabel: string | undefined, primaryKey: boolean): string | undefined =>
+  primaryKey && sublabel?.startsWith('(PK, ') ? `(${sublabel.slice(5)}` : sublabel
+
+const accentStyle = (accent: string | undefined, base?: CSSProperties): CSSProperties | undefined =>
+  accent ? { ...base, '--server-accent': accent } as CSSProperties : base
 
 const stop = (event: SyntheticEvent) => event.stopPropagation()
 /**
@@ -258,11 +266,37 @@ export function RowEnd({ count, connection, active, children, actions }: { count
   </span>
 }
 
-/** A shortcut to the server's real tree row, with the same connection indicators. */
+/** Shared 2-line content for both in-tree server rows and pinned server bands, keeping top/bottom sticky stacking jump-free. */
+function ServerBandContent({ node, twistie, sublabel, active, environment, tag, chips, actions }: {
+  node: TreeNode; twistie: ReactNode; sublabel: string | undefined; active: boolean; environment?: string; tag: ReturnType<typeof environmentTag>; chips?: readonly StatusChip[]; actions?: ReactNode
+}) {
+  return <>
+    <span className="oe-server-top">
+      {twistie}
+      <ExplorerIcon name={node.icon} badge={badgeOf(node)} />
+      <Label text={node.label} />
+      <RowEnd connection={connectionState(node)}>
+        {tag && <EnvironmentTag environment={environment} place="explorer" />}
+      </RowEnd>
+    </span>
+    <span className="oe-server-sub">
+      {sublabel && <span className="oe-sublabel">{displayText(sublabel)}</span>}
+      {!node.lost && node.note && <span className="oe-sublabel">{displayText(node.note.label)}</span>}
+      <span className="oe-server-sub-end">
+        {chips && chips.length > 0 && <StatusChips chips={chips} />}
+        {active && <span className="oe-active" title="Server of the active query" aria-hidden="true"><Icon name="file-code" /></span>}
+        {actions}
+      </span>
+    </span>
+  </>
+}
+
+/** A shortcut to the server's real tree row, with the same 44 px 2-line band and connection indicators. */
 export function PinnedServerRow({ node, edge, current, active, color, environment, status, menu, top, jump }: {
   node: TreeNode; edge: 'top' | 'bottom'; current: boolean; active: boolean; color: string | undefined; environment?: string; status?: RowStatus; menu: boolean; top?: number; jump(): void
 }) {
   const { explorer } = useWorkbench()
+  const accent = useConnectionAccent(color)
   const menuTarget = useMenuTarget<HTMLButtonElement>(button => {
     const target = explorer.menuNode(node.id)
     // A popover is above the custom menu layer. Dismiss the shortcut list before opening the node's full menu.
@@ -276,24 +310,43 @@ export function PinnedServerRow({ node, edge, current, active, color, environmen
   const facts = [status?.words && displayText(status.words), tag?.description]
   const name = [`Jump to ${rowName(node)}`, ...facts, active && 'server of the active query', current && 'current section'].filter(Boolean).join(', ')
   return <button ref={menuTarget} type="button" className={`explorer-row server explorer-pinned-server${active ? ' active-connection' : ''}${node.lost ? ' lost dimmed' : ''}`}
-    style={{ top }} data-current-section={current || undefined} role={menu ? 'menuitem' : undefined} tabIndex={menu ? -1 : undefined}
+    style={accentStyle(accent, top === undefined ? undefined : { top })} data-accent={accent ? '' : undefined} data-current-section={current || undefined} role={menu ? 'menuitem' : undefined} tabIndex={menu ? -1 : undefined}
     aria-label={name} title={clip([rowTooltip(node), ...facts].filter(Boolean).join('\n'))} onClick={jump}>
-    <Accent color={color} />
-    <span className="oe-twistie"><Icon name={edge === 'top' ? 'chevron-up' : 'chevron-down'} /></span>
-    <ExplorerIcon name={node.icon} badge={badgeOf(node)} />
-    <Label text={node.label} />
-    {sublabel && <span className="oe-sublabel">{displayText(sublabel)}</span>}
-    <RowEnd connection={connectionState(node)} active={active}>
-      {!!status?.chips.length && <StatusChips chips={status.chips} />}
-      {tag && <EnvironmentTag environment={environment} place="explorer" />}
-    </RowEnd>
+    <ServerBandContent node={node} twistie={<span className="oe-twistie"><Icon name={edge === 'top' ? 'chevron-up' : 'chevron-down'} /></span>}
+      sublabel={sublabel} active={active} environment={environment} tag={tag} chips={status?.chips} />
   </button>
+}
+
+/** Root server treeitem: subscribes to the theme accent only on server rows so non-server rows avoid extra subscriptions. */
+function ServerTreeRow({ rowId, top, level, posinset, setsize, node, selected, draggable, active, color, environment, actions, menuTarget, status, drop, expandable, dimmed, sublabel, tag, chips, name, tooltip, note, peekable, select, toggle, edgeOf }: {
+  rowId: number; top: number; level: number; posinset: number; setsize: number; node: TreeNode; selected: boolean; draggable: boolean; active: boolean; color: string | undefined; environment?: string
+  actions: RowActions; menuTarget: RefCallback<HTMLDivElement>; status?: RowStatus; drop?: 'before' | 'after'; expandable: boolean; dimmed: boolean; sublabel: string | undefined
+  tag: ReturnType<typeof environmentTag>; chips?: readonly StatusChip[]; name: string; tooltip: string; note?: string; peekable: boolean
+  select: (event: MouseEvent) => void; toggle: (event: MouseEvent) => void; edgeOf: (event: DragEvent) => 'before' | 'after'
+}) {
+  const accent = useConnectionAccent(color)
+  const style = accentStyle(accent, { transform: `translateY(${top}px)` })
+  return <div ref={menuTarget} role="treeitem" id={`oe-${rowId}`} data-row-id={rowId}
+    className={`explorer-row server${node.lost ? ' lost' : ''}${active ? ' active-connection' : ''}${dimmed ? ' dimmed' : ''}`}
+    aria-level={level} aria-setsize={setsize || undefined} aria-posinset={posinset || undefined} aria-expanded={expandable ? node.expanded : undefined} aria-selected={selected}
+    aria-busy={node.load === 'loading' || serverConnectionStatus(node)?.busy || undefined} aria-label={name} aria-description={rowDescription(node, note)} title={clip(tooltip)} style={style} draggable={draggable || undefined}
+    data-accent={accent ? '' : undefined} data-peekable={peekable || undefined} data-drop={drop}
+    onMouseDown={select} onDoubleClick={() => { if (expandable) actions.toggle(rowId); else actions.activate(rowId) }}
+    onClick={(event: MouseEvent) => rowClick(actions, rowId, event)}
+    onMouseMove={(event: MouseEvent) => actions.peekHover(rowId, event)} onMouseLeave={() => actions.peekHover(rowId)}
+    onDragStart={draggable ? (event: DragEvent) => { if (!actions.dragStart(rowId, event.dataTransfer)) event.preventDefault() } : undefined}
+    onDragOver={(event: DragEvent) => actions.dragOver(rowId, edgeOf(event), event)} onDragEnd={() => actions.dragEnd()}>
+    <ServerBandContent node={node}
+      twistie={<span className={`oe-twistie${expandable ? ' ' + codiconClass(node.expanded ? 'chevron-down' : 'chevron-right') : ''}`} aria-hidden="true" onClick={toggle} />}
+      sublabel={sublabel} active={active} environment={environment} tag={tag} chips={chips ?? status?.chips}
+      actions={node.lost && <LostActions rowId={rowId} label={node.label} actions={actions} />} />
+  </div>
 }
 
 /** One windowed row of the tree: a node, or a loading, error, progress, stopped, capped, or paused row. */
 function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed, text, selected, draggable, active, color, environment, actions, menuTarget, renaming, status, recovery, drop }: RowProps) {
   const style = { transform: `translateY(${top}px)` }
-  const indent = <span className="oe-indent" style={{ width: (level - 1) * explorerLimits.indent }} />
+  const indent = level > 1 ? <span className="oe-indent" style={{ width: (level - 1) * explorerLimits.indent }} aria-hidden="true" /> : null
   const select = (event: MouseEvent) => { if (!(event.target as Element).closest('.oe-twistie')) actions.select(rowId) }
   const half = (event: DragEvent): 'before' | 'after' => { const box = event.currentTarget.getBoundingClientRect(); return event.clientY < box.top + box.height / 2 ? 'before' : 'after' }
   if (kind !== RowKind.Node || !listed) {
@@ -322,8 +375,8 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
   const dimmed = node.status === 'disabled' || node.status === 'unavailable' || node.status === 'noAccess' || node.lost
   const sublabel = shownSublabel(node)
   const tag = root ? environmentTag(environment) : undefined
-  // A server's chips (running jobs, availability groups) follow its name and come before its environment. Server, database
-  // and SQL Server Agent rows show live chips (group names are the server's text); a login shows its listing's static chips.
+  // A server's chips (running jobs, availability groups) sit on line 2 beside its host/version. Server, database and
+  // SQL Server Agent rows show live chips (group names are the server's text); a login shows its listing's static chips.
   const agent = node.kind === 'agent', agentJob = node.kind === 'agentJob'
   const staticChips = live || root || node.kind !== 'login' ? undefined : listedChips(node)
   const chips = staticChips ?? (live || root || agent || agentJob ? status?.chips : undefined)
@@ -337,8 +390,17 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
   const edgeOf = (event: DragEvent): 'before' | 'after' => {
     return root && expandable && node.expanded ? 'before' : half(event)
   }
+  if (root) {
+    return <ServerTreeRow rowId={rowId} top={top} level={level} posinset={posinset} setsize={setsize} node={node} selected={selected} draggable={draggable && !renaming}
+      active={active} color={color} environment={environment} actions={actions} menuTarget={menuTarget} status={status} drop={drop} expandable={expandable}
+      dimmed={dimmed} sublabel={sublabel} tag={tag} chips={chips} name={name} tooltip={tooltip} note={note} peekable={peekable} select={select} toggle={toggle} edgeOf={edgeOf} />
+  }
+  const column = node.kind === 'column' || node.kind === 'bqColumn'
+  const primaryKey = isPrimaryKeyColumn(node)
+  const shown = column ? columnDisplaySublabel(sublabel, primaryKey) : sublabel
+  const systemFolder = folder && !!node.folder && systemFolders.has(node.folder)
   return <div ref={menuTarget} role="treeitem" id={`oe-${rowId}`} data-row-id={rowId}
-    className={`explorer-row${folder ? ' folder' : ''}${root ? ' server' : ''}${node.lost ? ' lost' : ''}${active ? ' active-connection' : ''}${dimmed ? ' dimmed' : ''}${staticChips?.length ? ' static-chips' : ''}`}
+    className={`explorer-row${folder ? ' folder' : ''}${systemFolder ? ' system-folder' : ''}${column ? ' column' : ''}${node.lost ? ' lost' : ''}${active ? ' active-connection' : ''}${dimmed ? ' dimmed' : ''}${staticChips?.length ? ' static-chips' : ''}`}
     aria-level={level} aria-setsize={setsize || undefined} aria-posinset={posinset || undefined} aria-expanded={expandable ? node.expanded : undefined} aria-selected={selected}
     aria-busy={node.load === 'loading' || serverConnectionStatus(node)?.busy || undefined} aria-label={name} aria-description={rowDescription(node, note)} title={clip(tooltip)} style={style} draggable={(draggable && !renaming) || undefined}
     data-peekable={peekable || undefined} data-drop={drop}
@@ -347,20 +409,19 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
     onMouseMove={(event: MouseEvent) => actions.peekHover(rowId, event)} onMouseLeave={() => actions.peekHover(rowId)}
     onDragStart={draggable ? (event: DragEvent) => { if (!actions.dragStart(rowId, event.dataTransfer)) event.preventDefault() } : undefined}
     onDragOver={(event: DragEvent) => actions.dragOver(rowId, edgeOf(event), event)} onDragEnd={() => actions.dragEnd()}>
-    {root && <Accent color={color} />}
     {indent}
     <span className={`oe-twistie${expandable ? ' ' + codiconClass(node.expanded ? 'chevron-down' : 'chevron-right') : ''}`} aria-hidden="true" onClick={toggle} />
     <ExplorerIcon name={folder && node.expanded ? 'folder-opened' : node.icon} folder={folder} badge={badgeOf(node)} />
     {renaming && node.ref.type === 'object' && node.kind !== 'folder'
       ? <RenameBox rowId={rowId} name={node.ref.object.name ?? ''} title={kindSpecs[node.kind].title} actions={actions} />
       : <Label text={node.label} />}
+    {primaryKey && !renaming && <span className="oe-pk-badge" aria-hidden="true">PK</span>}
     {node.filtered && <span className="oe-filtered">(filtered)</span>}
-    {sublabel && !live && <span className="oe-sublabel">{displayText(sublabel)}</span>}
+    {shown && !live && <span className="oe-sublabel">{displayText(shown)}</span>}
     {agent && status?.sublabel && <span className="oe-sublabel">{displayText(status.sublabel)}</span>}
     {!node.lost && node.note && <span className="oe-sublabel">{displayText(node.note.label)}</span>}
-    <RowEnd count={itemCount(node)} connection={root ? connectionState(node) : undefined} active={active} actions={node.lost && <LostActions rowId={rowId} label={node.label} actions={actions} />}>
+    <RowEnd count={itemCount(node)} active={active}>
       {chips && chips.length > 0 && <StatusChips chips={chips} />}
-      {tag && <EnvironmentTag environment={environment} place="explorer" />}
     </RowEnd>
   </div>
 }

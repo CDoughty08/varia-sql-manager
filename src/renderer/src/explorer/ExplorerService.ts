@@ -1,6 +1,6 @@
 import type { AgentRole } from '../../../shared/agent/profile.ts'
 import type { ExplorerNode as WireNode, VariaApi } from '../../../shared/contracts'
-import { cloudEngineEditions, explorerLimits, filterProperties, folderFilterFor, folderSpecs, kindSpecs, nodeStatuses, parentKinds, serverEngineOf, type FolderId, type FilterProperty, type NodeKind, type NodeStatus, type ServerEngine } from '../../../shared/explorer/catalog.ts'
+import { cloudEngineEditions, explorerLimits, filterProperties, folderFilterFor, folderSpecs, kindSpecs, nodeStatuses, parentKinds, serverEngineOf, systemFolderIds, type FolderId, type FilterProperty, type NodeKind, type NodeStatus, type ServerEngine } from '../../../shared/explorer/catalog.ts'
 import { displayText, insertTextFor, refKey, type ExplorerFilter, type ExplorerNodeRef, type ExplorerTarget, type ObjectRef, type ParentRef } from '../../../shared/explorer/refs.ts'
 import { isPeekKind } from '../../../shared/explorer/peek.ts'
 import { explorerNodeProvider, type ProviderContext } from '../../../shared/providers.ts'
@@ -221,16 +221,18 @@ export function serverSublabel(connection: Pick<LiveConnection, 'serverVersion' 
 }
 const connectionAvailable = (connection: LiveConnection): boolean => !connection.lost && (!connection.lifecycle || connection.lifecycle.state === 'connected')
 /**
- * What the server row shows instead: the major and minor version, then the login ("16.0 · sa"). A Windows login loses its
- * domain or machine ("CONTOSO\dba" shows as "dba"), which would otherwise fill the narrow pane and look the same on every
- * server; the name and tooltip keep it.
+ * What the server band's second line shows: host (when an alias is set), major.minor version, and login ("prod-sql-01 · 16.0 · sa"
+ * or "16.0 · sa"). A Windows login loses its domain or machine ("CONTOSO\dba" shows as "dba"), which would otherwise fill
+ * the narrow pane and look the same on every server; the name and tooltip keep it.
  */
-export function serverBrief(connection: Pick<LiveConnection, 'serverVersion' | 'productVersion' | 'login'>): string {
+export function serverBrief(connection: Pick<LiveConnection, 'serverVersion' | 'productVersion' | 'login'> & { readonly displayName?: string; readonly server?: string; readonly options?: { readonly provider?: string } }): string {
+  const host = connection.displayName && connection.server && connection.displayName !== connection.server ? connection.server : undefined
+  if (connection.options?.provider === 'bigquery') return [host, 'BigQuery', connection.login].filter(Boolean).join(' · ')
   // "16.0.4135.4" from the profile, or "16.00.4135" as SqlClient reports it.
   const [major, minor] = (connection.productVersion || connection.serverVersion).split('.').map(part => /^\d+$/.test(part) ? String(Number(part)) : part)
   const version = minor === undefined ? major : `${major}.${minor}`
   const login = connection.productVersion ? connection.login?.slice(connection.login.lastIndexOf('\\') + 1) : undefined
-  return [version, login].filter(Boolean).join(' · ')
+  return [host, version, login].filter(Boolean).join(' · ')
 }
 
 /**
@@ -241,7 +243,7 @@ export function serverBrief(connection: Pick<LiveConnection, 'serverVersion' | '
  * or removed meanwhile is dropped by its generation.
  */
 /** The System folders listed first in Databases, Tables, Views and Stored Procedures, which an auto-expand never walks into. */
-const systemFolders: ReadonlySet<FolderId> = new Set<FolderId>(['systemDatabases', 'systemTables', 'systemViews', 'systemStoredProcedures'])
+const systemFolders: ReadonlySet<FolderId> = new Set<FolderId>(systemFolderIds)
 
 export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements Disposable {
   private readonly connections: ExplorerServiceOptions['connections']
