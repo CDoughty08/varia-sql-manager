@@ -145,12 +145,12 @@ const agentWatchedSeries: readonly LiveSeriesSpec[] = [
   { id: 'serverNow', unit: 'count', label: 'Server time (yyyymmddhhmmss)', counter: 'gauge' }
 ]
 
-export const liveSourceIds = ['debug.synthetic', 'activity', 'explorer', 'ssis.catalog', 'ssis.operations', 'query.plan', 'agent.jobs', 'agent.history', 'bigquery.jobs'] as const
+export const liveSourceIds = ['debug.synthetic', 'activity', 'explorer', 'ssis.catalog', 'ssis.operations', 'query.plan', 'agent.jobs', 'agent.history', 'agent.errorLog', 'bigquery.jobs'] as const
 export type LiveSourceId = typeof liveSourceIds[number]
 export const liveProbeIds = [
   'debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status', 'debug.synthetic.grid', 'debug.synthetic.log', 'debug.synthetic.wide', ...activityLiveProbes,
   'explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability', 'ssis.catalogProbe', 'ssis.operations.list', 'query.plan.operators',
-  'explorer.agentService', 'agent.jobs.list', 'agent.jobs.service', 'agent.jobs.watched', 'agent.history.list', 'bigquery.jobs.list'
+  'explorer.agentService', 'agent.jobs.list', 'agent.jobs.service', 'agent.jobs.watched', 'agent.history.list', 'agent.errorLog.read', 'bigquery.jobs.list'
 ] as const
 export type LiveProbeId = typeof liveProbeIds[number]
 
@@ -186,6 +186,10 @@ export const liveSources: { readonly [S in LiveSourceId]: LiveSourceSpec } = {
   'agent.history': {
     id: 'agent.history', label: 'SQL Server Agent job history', scope: 'server', testOnly: false, probes: ['agent.history.list'], hidden: 'pause',
     description: `SQL Server Agent's job history as the login may see it (docs/sql-server-agent.md, Log File Viewer), read on the server pool (" - Activity Monitor": READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW) opened in master, through msdb's own procedures (AgentReader, linted by AgentSql.LintRead), so every Agent role reads the history msdb shows it. The Log File Viewer opens one view per document; hidden views pause. Args: the checked jobs (jobs; absent every job, empty none), the date window in days, a run outcome, a message text, a step id, and the selected run whose steps the second table lists (run); the job document's History (AG-6d) checks its one job and asks for its usual durations (usual).`
+  },
+  'agent.errorLog': {
+    id: 'agent.errorLog', label: 'SQL Server Agent error logs', scope: 'server', testOnly: false, probes: ['agent.errorLog.read'], hidden: 'pause',
+    description: `SQL Server Agent's error logs (docs/sql-server-agent.md, Log File Viewer), sysadmin only, read on the server pool (" - Activity Monitor": READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW) opened in master through master's own error log readers (AgentReader, linted by AgentSql.LintRead). The Log File Viewer opens one view per document while a log is checked; hidden views pause. Args: the checked logs by archive number (logs), the date window in days and a message text.`
   },
   [jobHistorySource]: {
     id: jobHistorySource, label: 'BigQuery job history', scope: 'bigquery', providers: ['bigquery'], testOnly: false, probes: [jobHistoryProbe], hidden: 'pause',
@@ -392,6 +396,20 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
         id: 'usual', mode: 'snapshot', key: ['usualStep'], rowCap: 1001,
         columns: [
           { id: 'usualStep', name: 'Step ID', dataType: 'int' }, { id: 'usualSeconds', name: 'Usual Seconds', dataType: 'int' }, { id: 'usualRuns', name: 'Runs', dataType: 'int' }
+        ]
+      }
+    ]
+  },
+  'agent.errorLog.read': {
+    id: 'agent.errorLog.read', source: 'agent.errorLog', label: 'Agent error log', intervalMs: { default: 30_000, min: 10_000, max: 300_000 }, gates: { minMajor: 13, editions: [1, 2, 3, 8] }, budgetMs: { min: 1000, max: 10_000 },
+    description: `The checked SQL Server Agent error logs (args.logs, by archive number; 0 is Current) through master.dbo.xp_readerrorlog <log>, 2 (sysadmin), newest first, with the message text as its search argument (msdb.dbo.sp_readmierrorlog on Managed Instance, which takes no sort argument and reads oldest first: status errorLogOldestFirst). It cannot page, so at most ${agentLimits.logRows} rows are read across the checked logs, in archive order, and the rest are cancelled (the table says it was cut). The date window counts back from the server's clock, in backend memory. Rows are merged newest first; a message keeps at most 4,000 characters. Below sysadmin the read is refused (PERMISSION_DENIED).`,
+    status: ['errorLogOldestFirst'],
+    tables: [
+      {
+        id: 'entries', mode: 'snapshot', key: ['logKey'], rowCap: agentLimits.logRows,
+        columns: [
+          { id: 'logDate', name: 'Date', dataType: 'datetime2' }, { id: 'logSource', name: 'Log', dataType: 'nvarchar' }, { id: 'logType', name: 'Type', dataType: 'nvarchar' },
+          { id: 'logMessage', name: 'Message', dataType: 'nvarchar' }, { id: 'logKey', name: 'Entry', dataType: 'nvarchar' }, { id: 'logArchive', name: 'Archive', dataType: 'int' }, { ...toneColumn, id: 'logTone' }
         ]
       }
     ]

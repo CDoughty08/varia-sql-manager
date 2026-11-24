@@ -17,10 +17,11 @@ namespace Varia.Backend.Explorer;
 /// facts. Words SSMS shows for codes are made here, in C#, since the lint allows no string literals in the SQL.</summary>
 internal static class PeekSql
 {
-    /// <summary>A rendered batch: its text, the facts row's columns, each list's columns (shown ones first, then helpers), the
-    /// optional group's columns (empty when the kind or band has none), and whether it ends with User mapping's databases.</summary>
+    /// <summary>A rendered batch: its text, the facts row's columns, each list's columns (shown ones first, then helpers, plus
+    /// any detail result set's columns), the optional group's columns (empty when the kind or band has none), and whether it
+    /// ends with User mapping's databases.</summary>
     internal sealed record Batch(string Text, IReadOnlyList<string> Columns, IReadOnlyList<ListBatch> Lists, IReadOnlyList<string> Optional, bool Mapping);
-    internal sealed record ListBatch(string Id, IReadOnlyList<string> Columns);
+    internal sealed record ListBatch(string Id, IReadOnlyList<string> Columns, IReadOnlyList<string>? DetailColumns = null);
     /// <summary>User mapping's databases as the batch listed them (at most @take) and how many the login may enter in all.</summary>
     internal sealed record MappingList(List<string> Databases, int Total);
 
@@ -52,7 +53,10 @@ internal static class PeekSql
 
     /// <summary>A kind's SQL: its FROM and WHERE (finding the row by the lookup's variables), its own facts' expressions (over
     /// <see cref="Common"/>'s), and the helper columns its words need.</summary>
-    private sealed record KindSql(string From, Dictionary<string, string> Facts, (string Column, string Expression)[] Helpers);
+    private sealed record KindSql(Func<SqlRender, string> From, Dictionary<string, string> Facts, (string Column, string Expression)[] Helpers)
+    {
+        public KindSql(string from, Dictionary<string, string> facts, (string Column, string Expression)[] helpers) : this(_ => from, facts, helpers) { }
+    }
 
     private static Dictionary<string, string> Own(params (string Id, string Expression)[] facts) => facts.ToDictionary(item => item.Id, item => item.Expression, StringComparer.Ordinal);
 
@@ -122,6 +126,55 @@ internal static class PeekSql
             ("partitions", "pr.partitions"),
             ("compression", "pr.compression")),
             [("primaryXml", "CONVERT(bit, CASE WHEN xi.xml_index_type = 0 THEN 1 ELSE 0 END)"), ("compressions", "pr.compressions")]),
+        // The lookup leaves the parent table (or table type's table object) in @object_id, the key's object_id in @key_id and
+        // a PK/UQ's backing index_id in @index_id (NULL for a foreign key). Catalog *_desc columns use syspalnames' collation,
+        // so they coerce to DATABASE_DEFAULT wherever a UNION ALL meets CONVERT(nvarchar, NULL).
+        ["key"] = new("FROM (SELECT kc.object_id, kc.parent_object_id, kc.type_desc COLLATE DATABASE_DEFAULT AS type_desc, kc.create_date, kc.modify_date, kc.is_system_named, "
+            + "CONVERT(int, NULL) AS referenced_object_id, CONVERT(nvarchar(60), NULL) AS delete_action, CONVERT(nvarchar(60), NULL) AS update_action, "
+            + "i.is_disabled, CONVERT(bit, NULL) AS is_not_trusted, CONVERT(bit, NULL) AS is_not_for_replication, i.type AS index_type "
+            + "FROM sys.key_constraints AS kc LEFT JOIN sys.indexes AS i ON i.object_id = kc.parent_object_id AND i.index_id = kc.unique_index_id WHERE kc.object_id = @key_id "
+            + "UNION ALL SELECT fk.object_id, fk.parent_object_id, fk.type_desc COLLATE DATABASE_DEFAULT, fk.create_date, fk.modify_date, fk.is_system_named, "
+            + "fk.referenced_object_id, fk.delete_referential_action_desc COLLATE DATABASE_DEFAULT, fk.update_referential_action_desc COLLATE DATABASE_DEFAULT, "
+            + "fk.is_disabled, fk.is_not_trusted, fk.is_not_for_replication, CONVERT(tinyint, NULL) "
+            + "FROM sys.foreign_keys AS fk WHERE fk.object_id = @key_id) AS k "
+            + "JOIN sys.all_objects AS po ON po.object_id = k.parent_object_id LEFT JOIN sys.table_types AS tt ON tt.type_table_object_id = po.object_id "
+            + "JOIN sys.schemas AS ps ON ps.schema_id = COALESCE(tt.schema_id, po.schema_id) "
+            + "LEFT JOIN sys.all_objects AS ro ON ro.object_id = k.referenced_object_id LEFT JOIN sys.schemas AS rs ON rs.schema_id = ro.schema_id", Own(
+            ("keyType", "k.type_desc"),
+            ("parentTable", "COALESCE(tt.name, po.name)"),
+            ("referencedTable", "ro.name"),
+            ("deleteAction", "k.delete_action"),
+            ("updateAction", "k.update_action"),
+            ("created", "k.create_date"),
+            ("modified", "k.modify_date"),
+            ("systemNamed", "k.is_system_named"),
+            ("disabled", "k.is_disabled"),
+            ("notTrusted", "k.is_not_trusted"),
+            ("notForReplication", "k.is_not_for_replication"),
+            ("indexType", "k.index_type")),
+            [("parentSchema", "ps.name"), ("referencedSchema", "rs.name")]),
+        // The lookup leaves the parent table (or table type's table object) in @object_id and the constraint's object_id in
+        // @constraint_id. sys.edge_constraints exists from SQL Server 2019 (band 15).
+        ["constraint"] = new(r => "FROM (SELECT cc.object_id, cc.parent_object_id, cc.parent_column_id, cc.type_desc COLLATE DATABASE_DEFAULT AS type_desc, LEFT(cc.definition, 4001) AS expr, cc.create_date, cc.modify_date, "
+            + "cc.is_system_named, cc.is_disabled, cc.is_not_trusted, cc.is_not_for_replication FROM sys.check_constraints AS cc WHERE cc.object_id = @constraint_id "
+            + "UNION ALL SELECT dc.object_id, dc.parent_object_id, dc.parent_column_id, dc.type_desc COLLATE DATABASE_DEFAULT, LEFT(dc.definition, 4001), dc.create_date, dc.modify_date, "
+            + "dc.is_system_named, CONVERT(bit, NULL), CONVERT(bit, NULL), CONVERT(bit, NULL) FROM sys.default_constraints AS dc WHERE dc.object_id = @constraint_id"
+            + (r.Band >= 15 ? " UNION ALL SELECT ec.object_id, ec.parent_object_id, CONVERT(int, 0), ec.type_desc COLLATE DATABASE_DEFAULT, CONVERT(nvarchar(max), NULL), ec.create_date, ec.modify_date, "
+                + "ec.is_system_named, ec.is_disabled, ec.is_not_trusted, CONVERT(bit, NULL) FROM sys.edge_constraints AS ec WHERE ec.object_id = @constraint_id" : "")
+            + ") AS c JOIN sys.all_objects AS po ON po.object_id = c.parent_object_id LEFT JOIN sys.table_types AS tt ON tt.type_table_object_id = po.object_id "
+            + "JOIN sys.schemas AS ps ON ps.schema_id = COALESCE(tt.schema_id, po.schema_id) "
+            + "LEFT JOIN sys.all_columns AS col ON col.object_id = c.parent_object_id AND col.column_id = c.parent_column_id AND c.parent_column_id > 0", Own(
+            ("constraintType", "c.type_desc"),
+            ("parentTable", "COALESCE(tt.name, po.name)"),
+            ("column", "col.name"),
+            ("expression", "c.expr"),
+            ("created", "c.create_date"),
+            ("modified", "c.modify_date"),
+            ("systemNamed", "c.is_system_named"),
+            ("disabled", "c.is_disabled"),
+            ("notTrusted", "c.is_not_trusted"),
+            ("notForReplication", "c.is_not_for_replication")),
+            [("parentSchema", "ps.name")]),
         ["trigger"] = new("FROM sys.triggers AS o " + Tools + Modules + Assembly + ById, Own([.. TriggerFacts, ("insteadOf", "o.is_instead_of_trigger"),
             ("notForReplication", "o.is_not_for_replication")]), [("executeAsName", "dp.name")]),
         ["databaseTrigger"] = new("FROM sys.triggers AS o " + Tools + Modules + Assembly + ById, Own(TriggerFacts), [("executeAsName", "dp.name")]),
@@ -218,34 +271,51 @@ internal static class PeekSql
     private const string CloudFiles = "SELECT CONVERT(sysname, NULL) AS [name], CONVERT(nvarchar(60), NULL) AS [type], CONVERT(bigint, NULL) AS [size], CONVERT(int, NULL) AS [growth], "
         + "CONVERT(nvarchar(260), NULL) AS [path], CONVERT(bit, NULL) AS [percentGrowth], CONVERT(int, NULL) AS [maxSize] WHERE @object_id IS NULL;\n";
 
-    /// <summary>The lists whose columns <see cref="ListRow"/> composes from parts (a Definition, a Key, a default) rather than reads
-    /// as the catalogue's ids, first and in order, as the other lists do.</summary>
-    internal static readonly HashSet<string> Composed = new(StringComparer.Ordinal) { "columns", "parameters" };
-    /// <summary>The Columns and Parameters lists' column aliases, declared before <see cref="Lists"/>, which reads them as it starts.</summary>
+    /// <summary>The lists whose columns <see cref="ListRow"/> composes from parts (a Definition, a Key, a default, or a table
+    /// object's summary) rather than reads as the catalogue's ids, first and in order, as the other lists do.</summary>
+    internal static readonly HashSet<string> Composed = new(StringComparer.Ordinal) { "columns", "tableObjects", "parameters" };
+    /// <summary>The Columns, Table Objects and Parameters lists' column aliases, declared before <see cref="Lists"/>, which reads them as it starts.</summary>
     private static readonly string[] ColumnParts = ["name", "quotedName", "type", "quotedType", "quotedTypeSchema", "userDefined", "assemblyType", "baseType", "maxLength", "precision", "scale",
         "nullable", "identity", "seed", "increment", "notForReplication", "filestream", "computed", "computedText", "persisted", "defaultText", "collation", "sparse", "columnSet", "rowGuid", "generated", "hidden", "mask",
         "xmlDocument", "quotedXmlSchema", "quotedXmlCollection", "xmlSchema", "xmlCollection", "vectorDimensions", "primaryKey", "foreignKey"];
+    private static readonly string[] TableObjectParts = ["kindCode", "name", "objectId", "indexId", "indexType", "primaryXml", "isUnique", "disabled", "notTrusted", "filter", "expr",
+        "refSchema", "refTable", "colName", "insteadOf", "deleteAction"];
+    private static readonly string[] TableObjectDetailParts = ["detailKind", "ownerId", "included", "descending", "colName", "refColName"];
     private static readonly string[] ParameterParts = ["name", "type", "quotedType", "quotedTypeSchema", "userDefined", "assemblyType", "tableType", "typeSchema", "baseType", "maxLength",
         "precision", "scale", "output", "readOnly", "hasDefault", "defaultValue", "xmlDocument", "quotedXmlSchema", "quotedXmlCollection", "xmlSchema", "xmlCollection", "cursor", "moduleType", "nullable"];
 
     /// <summary>The lists' statements for a kind and band, each at most @take rows in a fixed order, with their column aliases:
-    /// the parts <see cref="ListRow"/> makes the list's columns from.</summary>
-    private static readonly Dictionary<string, (Func<string, SqlRender, string> Text, string[] Columns)> Lists = new(StringComparer.Ordinal)
+    /// the parts <see cref="ListRow"/> makes the list's columns from (and any detail result set's aliases).</summary>
+    private static readonly Dictionary<string, (Func<string, SqlRender, string> Text, string[] Columns, string[]? DetailColumns)> Lists = new(StringComparer.Ordinal)
     {
-        ["columns"] = (ColumnsList, ColumnParts),
-        ["parameters"] = ((_, _) => ParametersList, ParameterParts),
+        ["columns"] = (ColumnsList, ColumnParts, null),
+        ["tableObjects"] = (TableObjectsList, TableObjectParts, TableObjectDetailParts),
+        ["parameters"] = ((_, _) => ParametersList, ParameterParts, null),
         ["indexColumns"] = ((_, _) =>"SELECT TOP (@take) c.name AS [name], ic.is_included_column AS [included], ic.is_descending_key AS [descending], ty.name AS [type], "
             + "c.max_length AS [maxLength], c.precision AS [precision], c.scale AS [scale], ty.is_user_defined AS [userDefined] FROM sys.index_columns AS ic "
             + "JOIN sys.all_columns AS c ON c.object_id = ic.object_id AND c.column_id = ic.column_id JOIN sys.types AS ty ON ty.user_type_id = c.user_type_id "
             + "WHERE ic.object_id = @object_id AND ic.index_id = @index_id ORDER BY ic.is_included_column, CASE WHEN ic.key_ordinal = 0 THEN ic.index_column_id ELSE ic.key_ordinal END, ic.index_column_id;\n",
-            ["name", "included", "descending", "type", "maxLength", "precision", "scale", "userDefined"]),
+            ["name", "included", "descending", "type", "maxLength", "precision", "scale", "userDefined"], null),
+        ["keyColumns"] = ((_, _) => "SELECT TOP (@take) k.name AS [name], k.referenced_column AS [referencedColumn], k.descending AS [descending], k.type_name AS [type], "
+            + "k.max_length AS [maxLength], k.precision AS [precision], k.scale AS [scale], k.user_defined AS [userDefined] FROM ("
+            + "SELECT CASE WHEN ic.key_ordinal = 0 THEN ic.index_column_id ELSE ic.key_ordinal END AS ord, ic.index_column_id AS tie, c.name, CONVERT(sysname, NULL) AS referenced_column, "
+            + "ic.is_descending_key AS descending, ty.name AS type_name, c.max_length, c.precision, c.scale, ty.is_user_defined AS user_defined "
+            + "FROM sys.index_columns AS ic JOIN sys.all_columns AS c ON c.object_id = ic.object_id AND c.column_id = ic.column_id JOIN sys.types AS ty ON ty.user_type_id = c.user_type_id "
+            + "WHERE @index_id IS NOT NULL AND ic.object_id = @object_id AND ic.index_id = @index_id AND ic.is_included_column = 0 AND NOT (ic.key_ordinal = 0 AND ic.partition_ordinal > 0) "
+            + "UNION ALL SELECT fkc.constraint_column_id AS ord, fkc.constraint_column_id AS tie, c.name, rc.name AS referenced_column, CONVERT(bit, NULL) AS descending, "
+            + "ty.name AS type_name, c.max_length, c.precision, c.scale, ty.is_user_defined AS user_defined "
+            + "FROM sys.foreign_key_columns AS fkc JOIN sys.all_columns AS c ON c.object_id = fkc.parent_object_id AND c.column_id = fkc.parent_column_id "
+            + "LEFT JOIN sys.all_columns AS rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id "
+            + "JOIN sys.types AS ty ON ty.user_type_id = c.user_type_id "
+            + "WHERE @index_id IS NULL AND fkc.constraint_object_id = @key_id) AS k ORDER BY k.ord, k.tie;\n",
+            ["name", "referencedColumn", "descending", "type", "maxLength", "precision", "scale", "userDefined"], null),
         ["events"] = ((kind, _) =>"SELECT TOP (@take) te.type_desc AS [event], te.is_first AS [first], te.is_last AS [last] FROM "
-            + (kind == "serverTrigger" ? "sys.server_trigger_events" : "sys.trigger_events") + " AS te WHERE te.object_id = @object_id ORDER BY te.type;\n", ["event", "first", "last"]),
+            + (kind == "serverTrigger" ? "sys.server_trigger_events" : "sys.trigger_events") + " AS te WHERE te.object_id = @object_id ORDER BY te.type;\n", ["event", "first", "last"], null),
         ["files"] = ((_, _) =>"SELECT TOP (@take) mf.name AS [name], mf.type_desc AS [type], CONVERT(bigint, mf.size) * 8 AS [size], mf.growth AS [growth], mf.physical_name AS [path], "
             + "mf.is_percent_growth AS [percentGrowth], mf.max_size AS [maxSize] FROM sys.master_files AS mf WHERE mf.database_id = @object_id ORDER BY mf.file_id;\n",
-            ["name", "type", "size", "growth", "path", "percentGrowth", "maxSize"]),
+            ["name", "type", "size", "growth", "path", "percentGrowth", "maxSize"], null),
         ["serverRoles"] = ((_, _) =>"SELECT TOP (@take) r.name AS [role], r.is_fixed_role AS [fixed] FROM sys.server_role_members AS rm "
-            + "JOIN sys.server_principals AS r ON r.principal_id = rm.role_principal_id WHERE rm.member_principal_id = @object_id ORDER BY r.name;\n", ["role", "fixed"])
+            + "JOIN sys.server_principals AS r ON r.principal_id = rm.role_principal_id WHERE rm.member_principal_id = @object_id ORDER BY r.name;\n", ["role", "fixed"], null)
     };
 
     /// <summary>A table's, view's or table type's columns as the Columns folder lists them (<see cref="ExplorerQueries.ColumnVisibility"/>),
@@ -276,6 +346,56 @@ internal static class PeekSql
         + "LEFT JOIN sys.databases AS d ON d.database_id = DB_ID() WHERE c.object_id = "
         + (kind == "tableType" ? "(SELECT tt.type_table_object_id FROM sys.table_types AS tt WHERE tt.user_type_id = @object_id)" : "@object_id")
         + " AND " + ExplorerQueries.ColumnVisibility(r) + " ORDER BY c.column_id;\n";
+
+    /// <summary>Maximum detail rows read beside <c>tableObjects</c> (one extra row detects overflow and marks the list truncated).</summary>
+    internal const int TableObjectDetailCap = 16384;
+
+    /// <summary>A table's keys, indexes, constraints and triggers (bounded at @take, in kind then name order) followed by a
+    /// bounded detail result set of their FK columns, trigger events and index columns (FK and trigger details first, then PK/UQ
+    /// before other indexes, reading one row past <see cref="TableObjectDetailCap"/> to detect truncation) so summaries compose
+    /// in C# without STRING_AGG (SQL Server 2017+) or FOR XML (which refuses control characters in identifiers). Reads catalog
+    /// views only (no DMV, no VIEW SERVER STATE) and coerces syspalnames columns to DATABASE_DEFAULT across UNION ALL.</summary>
+    private static string TableObjectsList(string _, SqlRender r) => "SELECT TOP (@take) t.kind_code AS [kindCode], t.name AS [name], t.obj_id AS [objectId], t.idx_id AS [indexId], "
+        + "t.idx_type AS [indexType], t.primary_xml AS [primaryXml], t.is_unique AS [isUnique], t.is_disabled AS [disabled], t.is_not_trusted AS [notTrusted], "
+        + "t.filter_def AS [filter], t.expr AS [expr], t.ref_schema AS [refSchema], t.ref_table AS [refTable], t.col_name AS [colName], t.instead_of AS [insteadOf], t.del_action AS [deleteAction] FROM ("
+        + "SELECT CASE WHEN kc.type = 'PK' THEN 1 ELSE 3 END AS kind_order, kc.type COLLATE DATABASE_DEFAULT AS kind_code, kc.name, kc.object_id AS obj_id, kc.unique_index_id AS idx_id, kc.object_id AS tie_id, "
+        + "i.type AS idx_type, CONVERT(bit, 0) AS primary_xml, i.is_unique, i.is_disabled, CONVERT(bit, NULL) AS is_not_trusted, CONVERT(nvarchar(max), NULL) AS filter_def, "
+        + "CONVERT(nvarchar(max), NULL) AS expr, CONVERT(sysname, NULL) AS ref_schema, CONVERT(sysname, NULL) AS ref_table, CONVERT(sysname, NULL) AS col_name, "
+        + "CONVERT(bit, NULL) AS instead_of, CONVERT(nvarchar(60), NULL) AS del_action "
+        + "FROM sys.key_constraints AS kc LEFT JOIN sys.indexes AS i ON i.object_id = kc.parent_object_id AND i.index_id = kc.unique_index_id WHERE kc.parent_object_id = @object_id "
+        + "UNION ALL SELECT 2, 'F', fk.name, fk.object_id, CONVERT(int, NULL), fk.object_id, CONVERT(tinyint, NULL), CONVERT(bit, 0), CONVERT(bit, NULL), fk.is_disabled, fk.is_not_trusted, "
+        + "CONVERT(nvarchar(max), NULL), CONVERT(nvarchar(max), NULL), rs.name, ro.name, CONVERT(sysname, NULL), CONVERT(bit, NULL), CONVERT(nvarchar(60), NULL) "
+        + "FROM sys.foreign_keys AS fk LEFT JOIN sys.all_objects AS ro ON ro.object_id = fk.referenced_object_id LEFT JOIN sys.schemas AS rs ON rs.schema_id = ro.schema_id WHERE fk.parent_object_id = @object_id "
+        + "UNION ALL SELECT 4, 'IX', i.name, i.object_id, i.index_id, i.index_id, i.type, CONVERT(bit, CASE WHEN xi.xml_index_type = 0 THEN 1 ELSE 0 END), i.is_unique, i.is_disabled, "
+        + "CONVERT(bit, NULL), LEFT(i.filter_definition, 4001), CONVERT(nvarchar(max), NULL), CONVERT(sysname, NULL), CONVERT(sysname, NULL), CONVERT(sysname, NULL), CONVERT(bit, NULL), CONVERT(nvarchar(60), NULL) "
+        + "FROM sys.indexes AS i LEFT JOIN sys.xml_indexes AS xi ON xi.object_id = i.object_id AND xi.index_id = i.index_id "
+        + "WHERE i.object_id = @object_id AND i.type > 0 AND i.is_hypothetical = 0 AND i.is_primary_key = 0 AND i.is_unique_constraint = 0 AND i.name IS NOT NULL "
+        + "UNION ALL SELECT 5, 'C', cc.name, cc.object_id, CONVERT(int, NULL), cc.object_id, CONVERT(tinyint, NULL), CONVERT(bit, 0), CONVERT(bit, NULL), cc.is_disabled, cc.is_not_trusted, "
+        + "CONVERT(nvarchar(max), NULL), LEFT(cc.definition, 4001), CONVERT(sysname, NULL), CONVERT(sysname, NULL), CONVERT(sysname, NULL), CONVERT(bit, NULL), CONVERT(nvarchar(60), NULL) "
+        + "FROM sys.check_constraints AS cc WHERE cc.parent_object_id = @object_id "
+        + "UNION ALL SELECT 6, 'D', dc.name, dc.object_id, CONVERT(int, NULL), dc.object_id, CONVERT(tinyint, NULL), CONVERT(bit, 0), CONVERT(bit, NULL), CONVERT(bit, NULL), CONVERT(bit, NULL), "
+        + "CONVERT(nvarchar(max), NULL), LEFT(dc.definition, 4001), CONVERT(sysname, NULL), CONVERT(sysname, NULL), col.name, CONVERT(bit, NULL), CONVERT(nvarchar(60), NULL) "
+        + "FROM sys.default_constraints AS dc LEFT JOIN sys.all_columns AS col ON col.object_id = dc.parent_object_id AND col.column_id = dc.parent_column_id AND dc.parent_column_id > 0 WHERE dc.parent_object_id = @object_id"
+        + (r.Band >= 15
+            ? " UNION ALL SELECT 7, 'EC', ec.name, ec.object_id, CONVERT(int, NULL), ec.object_id, CONVERT(tinyint, NULL), CONVERT(bit, 0), CONVERT(bit, NULL), ec.is_disabled, ec.is_not_trusted, "
+                + "CONVERT(nvarchar(max), NULL), CONVERT(nvarchar(max), NULL), CONVERT(sysname, NULL), CONVERT(sysname, NULL), CONVERT(sysname, NULL), CONVERT(bit, NULL), ec.delete_referential_action_desc COLLATE DATABASE_DEFAULT "
+                + "FROM sys.edge_constraints AS ec WHERE ec.parent_object_id = @object_id"
+            : "")
+        + " UNION ALL SELECT 8, 'TR', tr.name, tr.object_id, CONVERT(int, NULL), tr.object_id, CONVERT(tinyint, NULL), CONVERT(bit, 0), CONVERT(bit, NULL), tr.is_disabled, CONVERT(bit, NULL), "
+        + "CONVERT(nvarchar(max), NULL), CONVERT(nvarchar(max), NULL), CONVERT(sysname, NULL), CONVERT(sysname, NULL), CONVERT(sysname, NULL), tr.is_instead_of_trigger, CONVERT(nvarchar(60), NULL) "
+        + "FROM sys.triggers AS tr WHERE tr.parent_class = 1 AND tr.parent_id = @object_id) AS t ORDER BY t.kind_order, t.name, t.tie_id;\n"
+        + "SELECT TOP (" + (TableObjectDetailCap + 1).ToString(CultureInfo.InvariantCulture) + ") d.detail_kind AS [detailKind], d.owner_id AS [ownerId], d.is_included AS [included], d.is_descending AS [descending], d.col_name AS [colName], d.ref_col_name AS [refColName] FROM ("
+        + "SELECT 1 AS grp, 0 AS prio, 'FK' AS detail_kind, fkc.constraint_object_id AS owner_id, CONVERT(bit, 0) AS is_included, CONVERT(bit, 0) AS is_descending, "
+        + "fkc.constraint_column_id AS ord, fkc.constraint_column_id AS tie, c.name AS col_name, rc.name AS ref_col_name "
+        + "FROM sys.foreign_key_columns AS fkc JOIN sys.all_columns AS c ON c.object_id = fkc.parent_object_id AND c.column_id = fkc.parent_column_id "
+        + "LEFT JOIN sys.all_columns AS rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id WHERE fkc.parent_object_id = @object_id "
+        + "UNION ALL SELECT 2, 0, 'TE', te.object_id, CONVERT(bit, 0), CONVERT(bit, 0), te.type, te.type, te.type_desc COLLATE DATABASE_DEFAULT, CONVERT(sysname, NULL) "
+        + "FROM sys.triggers AS tr JOIN sys.trigger_events AS te ON te.object_id = tr.object_id WHERE tr.parent_class = 1 AND tr.parent_id = @object_id "
+        + "UNION ALL SELECT 3, CASE WHEN i.is_primary_key = 1 THEN 0 WHEN i.is_unique_constraint = 1 THEN 1 ELSE 2 END, 'IC', ic.index_id, ic.is_included_column, ic.is_descending_key, "
+        + "CASE WHEN ic.key_ordinal = 0 THEN ic.index_column_id ELSE ic.key_ordinal END, ic.index_column_id, c.name, CONVERT(sysname, NULL) "
+        + "FROM sys.index_columns AS ic JOIN sys.indexes AS i ON i.object_id = ic.object_id AND i.index_id = ic.index_id JOIN sys.all_columns AS c ON c.object_id = ic.object_id AND c.column_id = ic.column_id "
+        + "WHERE ic.object_id = @object_id AND i.type > 0 AND i.is_hypothetical = 0 AND NOT (ic.key_ordinal = 0 AND ic.is_included_column = 0 AND ic.partition_ordinal > 0)) AS d "
+        + "ORDER BY d.grp, d.prio, d.owner_id, d.is_included, d.ord, d.tie;\n";
 
     /// <summary>A procedure's or function's parameters as the Parameters folder lists them (not the return value), in order, with
     /// what a declaration needs: the type's names through QUOTENAME, its sizes, and a CLR module's default (a T-SQL module's
@@ -317,7 +437,7 @@ internal static class PeekSql
 
     /// <summary>A table's FROM and WHERE (the row by @object_id, aliases o, s, t, i, ds, lob, pr and sp), which Table Properties reads its
     /// facts from too (Actions/TableProperties.cs), so both say the same of a table.</summary>
-    internal static string TableFrom => Kinds["table"].From;
+    internal static string TableFrom => Kinds["table"].From(new SqlRender(ExplorerCatalog.MinBand));
 
     /// <summary>A table fact's expression over <see cref="TableFrom"/>, as Peek reads it (its own facts, then the common ones).</summary>
     internal static string TableFact(string id) => Kinds["table"].Facts.GetValueOrDefault(id) ?? Common.GetValueOrDefault(id) ?? throw new InvalidOperationException("Peek has no table fact " + id + ".");
@@ -326,9 +446,9 @@ internal static class PeekSql
     internal const string Refused = "refused";
 
     /// <summary>The statement that finds the object and answers whether it did (one bit row; the batch ends when it did not): the
-    /// object's id in @object_id (a type's or table type's user_type_id), and for an index its parent's in @object_id and its own
-    /// in @index_id. An index or a trigger is found below its parent, by the name in @k1.</summary>
-    public static string Lookup(string kind, string? parentKind = null) => kind switch
+    /// object's id in @object_id (a type's or table type's user_type_id), and for an index, key or constraint its parent's in
+    /// @object_id and its own in @index_id, @key_id or @constraint_id. Child kinds are found below their parent, by the name in @k1.</summary>
+    public static string Lookup(string kind, string? parentKind = null, int band = ExplorerCatalog.MaxBand) => kind switch
     {
         "table" or "view" or "procedure" or "function" or "synonym" or "sequence" => CatalogSql.ParentLookup(kind),
         "type" => "DECLARE @object_id int;\nSELECT @object_id = ty.user_type_id FROM sys.types AS ty JOIN sys.schemas AS ps ON ps.schema_id = ty.schema_id "
@@ -337,6 +457,15 @@ internal static class PeekSql
             + "WHERE ps.name = @object_schema AND tt.name = @object_name;\n" + CatalogSql.Found("@object_id"),
         "index" => CatalogSql.ParentSelect(Parent(kind, parentKind)) + "DECLARE @index_id int;\nSELECT @index_id = i.index_id FROM sys.indexes AS i "
             + "WHERE i.object_id = @object_id AND i.name = @k1 AND i.type > 0 AND i.is_hypothetical = 0;\n" + CatalogSql.Found("@index_id"),
+        "key" => CatalogSql.ParentSelect(Parent(kind, parentKind)) + "DECLARE @key_id int, @index_id int;\nSELECT @key_id = k.object_id, @index_id = k.index_id FROM ("
+            + "SELECT kc.object_id, kc.unique_index_id AS index_id FROM sys.key_constraints AS kc WHERE kc.parent_object_id = @object_id AND kc.name = @k1 "
+            + "UNION ALL SELECT fk.object_id, CONVERT(int, NULL) AS index_id FROM sys.foreign_keys AS fk WHERE fk.parent_object_id = @object_id AND fk.name = @k1) AS k;\n"
+            + CatalogSql.Found("@key_id"),
+        "constraint" => CatalogSql.ParentSelect(Parent(kind, parentKind)) + "DECLARE @constraint_id int;\nSELECT @constraint_id = c.object_id FROM ("
+            + "SELECT cc.object_id FROM sys.check_constraints AS cc WHERE cc.parent_object_id = @object_id AND cc.name = @k1 "
+            + "UNION ALL SELECT dc.object_id FROM sys.default_constraints AS dc WHERE dc.parent_object_id = @object_id AND dc.name = @k1"
+            + (band >= 15 ? " UNION ALL SELECT ec.object_id FROM sys.edge_constraints AS ec WHERE ec.parent_object_id = @object_id AND ec.name = @k1" : "")
+            + ") AS c;\n" + CatalogSql.Found("@constraint_id"),
         "trigger" => CatalogSql.ParentSelect(Parent(kind, parentKind)) + "DECLARE @trigger_id int;\nSELECT @trigger_id = tr.object_id FROM sys.triggers AS tr "
             + "WHERE tr.parent_class = 1 AND tr.parent_id = @object_id AND tr.name = @k1;\nSET @object_id = @trigger_id;\n" + CatalogSql.Found("@object_id"),
         "databaseTrigger" => "DECLARE @object_id int;\nSELECT @object_id = tr.object_id FROM sys.triggers AS tr WHERE tr.parent_class = 0 AND tr.name = @object_name;\n"
@@ -348,10 +477,12 @@ internal static class PeekSql
         _ => throw new InvalidOperationException("Peek has no lookup for " + kind + ".")
     };
 
-    /// <summary>The parent kinds an index's or trigger's lookup finds it below (the tree's Indexes and Triggers folders).</summary>
+    /// <summary>The parent kinds a child peek lookup finds it below (the tree's Indexes, Keys, Constraints and Triggers folders).</summary>
     internal static readonly IReadOnlyDictionary<string, string[]> Parents = new Dictionary<string, string[]>(StringComparer.Ordinal)
     {
         ["index"] = ["table", "view", "tableType"],
+        ["key"] = ["table", "tableType"],
+        ["constraint"] = ["table", "tableType"],
         ["trigger"] = ["table", "view"]
     };
 
@@ -459,7 +590,7 @@ internal static class PeekSql
     public static string DefinitionPage(PeekKindSpec spec, string? parentKind = null)
     {
         if (!spec.Module || !Kinds.TryGetValue(spec.Kind, out var sql)) throw new InvalidOperationException("Peek reads no module text of " + spec.Kind + ".");
-        return Lookup(spec.Kind, parentKind) + "SELECT SUBSTRING(" + ModuleText + ", @offset + 1, @take) AS [text], " + ModuleLength + " AS [length], o.modify_date AS [stamp] " + sql.From + ";\n";
+        return Lookup(spec.Kind, parentKind) + "SELECT SUBSTRING(" + ModuleText + ", @offset + 1, @take) AS [text], " + ModuleLength + " AS [length], o.modify_date AS [stamp] " + sql.From(new SqlRender(ExplorerCatalog.MinBand)) + ";\n";
     }
 
     /// <summary>The page after the lookup's row: null when the module is gone.</summary>
@@ -496,9 +627,9 @@ internal static class PeekSql
             columns.Add(("definitionLength", ModuleLength));
             columns.Add(("definitionStamp", "o.modify_date"));
         }
-        var text = new StringBuilder(Lookup(spec.Kind, parentKind)).Append("SELECT ");
+        var text = new StringBuilder(Lookup(spec.Kind, parentKind, render.Band)).Append("SELECT ");
         text.AppendJoin(", ", columns.Select(column => column.Expression + " AS [" + column.Column + "]"));
-        text.Append(' ').Append(cloud && spec.Kind == "database" ? CloudDatabaseFrom : sql.From).Append(";\n");
+        text.Append(' ').Append(cloud && spec.Kind == "database" ? CloudDatabaseFrom : sql.From(render)).Append(";\n");
         var lists = new List<ListBatch>();
         var mapping = false;
         foreach (var list in spec.ListSpecs)
@@ -506,7 +637,7 @@ internal static class PeekSql
             if (list.Id == "userMapping") { text.Append(MappingDatabases); mapping = true; continue; }
             if (!Lists.TryGetValue(list.Id, out var statement)) throw new InvalidOperationException("Peek has no statement for the list " + list.Id + ".");
             text.Append(cloud && list.Id == "files" ? CloudFiles : statement.Text(spec.Kind, render));
-            lists.Add(new(list.Id, statement.Columns));
+            lists.Add(new(list.Id, statement.Columns, statement.DetailColumns));
         }
         IReadOnlyList<string> optional = [];
         if (facts.Any(fact => fact.Optional))
@@ -547,6 +678,20 @@ internal static class PeekSql
         foreach (var list in batch.Lists)
         {
             if (!await reader.NextResultAsync(token)) throw new InvalidOperationException("Peek's batch ended before its list " + list.Id + ".");
+            if (list.DetailColumns is { } detailColumns)
+            {
+                var rawRows = new List<Dictionary<string, object?>>();
+                var moreDetails = false;
+                while (await reader.ReadAsync(token))
+                {
+                    if (rawRows.Count == limits.ListRows) { moreDetails = true; break; }
+                    rawRows.Add(Raw(reader, list.Columns));
+                }
+                if (!await reader.NextResultAsync(token)) throw new InvalidOperationException("Peek's batch ended before its list details " + list.Id + ".");
+                var details = await ReadTableObjectDetailsAsync(reader, detailColumns, token);
+                lists![list.Id] = new([.. rawRows.Select(row => TableObjectRow(row, details))], moreDetails || details.Truncated ? true : null);
+                continue;
+            }
             var rows = new List<object?[]>();
             var more = false;
             while (await reader.ReadAsync(token))
@@ -600,12 +745,154 @@ internal static class PeekSql
         "parameters" => ParameterRow(raw, defaults),
         "indexColumns" => [raw["name"], Bool(raw["included"]), Bool(raw["descending"]), raw["type"] is string type
             ? ExplorerLabels.TypeText(new SqlTypeInfo(type, Int(raw["maxLength"]), Int(raw["precision"]), Int(raw["scale"]), IsUserDefined: Bool(raw["userDefined"]) == true)) : null],
+        "keyColumns" => [raw["name"], raw["referencedColumn"], Bool(raw["descending"]), raw["type"] is string keyType
+            ? ExplorerLabels.TypeText(new SqlTypeInfo(keyType, Int(raw["maxLength"]), Int(raw["precision"]), Int(raw["scale"]), IsUserDefined: Bool(raw["userDefined"]) == true)) : null],
         "events" => [raw["event"], Bool(raw["first"]), Bool(raw["last"])],
         "files" => [raw["name"], raw["type"], raw["size"] is null ? null : Convert.ToInt64(raw["size"], CultureInfo.InvariantCulture),
             Growth(Int(raw["growth"]), Bool(raw["percentGrowth"]) == true, Int(raw["maxSize"])), raw["path"]],
         "serverRoles" => [raw["role"], Bool(raw["fixed"])],
         _ => throw new InvalidOperationException("Peek reads no list " + list + ".")
     };
+
+    /// <summary>The detail rows read beside a table's <c>tableObjects</c> list: index key/included columns, foreign-key column
+    /// pairs and trigger events.</summary>
+    internal sealed class TableObjectDetails
+    {
+        public Dictionary<int, List<(string Name, bool Included, bool Descending)>> IndexColumns { get; } = [];
+        public Dictionary<int, List<(string Column, string? ReferencedColumn)>> ForeignKeyColumns { get; } = [];
+        public Dictionary<int, List<string>> TriggerEvents { get; } = [];
+        public bool Truncated { get; set; }
+    }
+
+    private static async Task<TableObjectDetails> ReadTableObjectDetailsAsync(SqlDataReader reader, IReadOnlyList<string> columns, CancellationToken token)
+    {
+        var details = new TableObjectDetails();
+        var count = 0;
+        while (await reader.ReadAsync(token))
+        {
+            if (count == TableObjectDetailCap) { details.Truncated = true; break; }
+            count++;
+            var raw = Raw(reader, columns);
+            var kind = (raw["detailKind"] as string)?.TrimEnd();
+            var ownerId = Int(raw["ownerId"]);
+            if (raw["colName"] is not string colName) continue;
+            switch (kind)
+            {
+                case "IC":
+                    if (!details.IndexColumns.TryGetValue(ownerId, out var idxCols)) details.IndexColumns[ownerId] = idxCols = [];
+                    idxCols.Add((colName, Bool(raw["included"]) == true, Bool(raw["descending"]) == true));
+                    break;
+                case "FK":
+                    if (!details.ForeignKeyColumns.TryGetValue(ownerId, out var fkCols)) details.ForeignKeyColumns[ownerId] = fkCols = [];
+                    fkCols.Add((colName, raw["refColName"] as string));
+                    break;
+                case "TE":
+                    if (!details.TriggerEvents.TryGetValue(ownerId, out var events)) details.TriggerEvents[ownerId] = events = [];
+                    events.Add(colName);
+                    break;
+            }
+        }
+        return details;
+    }
+
+    /// <summary>One row of a table's <c>tableObjects</c> list: Kind, Name, Definition summary and Status.</summary>
+    internal static object?[] TableObjectRow(Dictionary<string, object?> raw, TableObjectDetails? details = null)
+    {
+        var kindCode = (raw["kindCode"] as string)?.TrimEnd();
+        var name = raw["name"] as string;
+        var disabled = Bool(raw.GetValueOrDefault("disabled")) == true;
+        var notTrusted = Bool(raw.GetValueOrDefault("notTrusted")) == true;
+        string? kind, summary, status;
+        switch (kindCode)
+        {
+            case "PK" or "UQ":
+                kind = kindCode == "PK" ? "Primary key" : "Unique constraint";
+                var keyType = raw.GetValueOrDefault("indexType") is not null ? IndexType(Int(raw["indexType"]), false) : null;
+                var keyCols = raw.GetValueOrDefault("indexId") is not null && details?.IndexColumns.TryGetValue(Int(raw["indexId"]), out var kCols) == true
+                    ? string.Join(", ", kCols.Where(c => !c.Included).Select(c => c.Descending ? c.Name + " DESC" : c.Name)) : "";
+                summary = keyType is not null && keyCols.Length > 0 ? keyType + " (" + keyCols + ")" : keyCols.Length > 0 ? "(" + keyCols + ")" : keyType;
+                status = disabled ? "Disabled" : "Active";
+                break;
+            case "F":
+                kind = "Foreign key";
+                var fkCols = raw.GetValueOrDefault("objectId") is not null && details?.ForeignKeyColumns.TryGetValue(Int(raw["objectId"]), out var fCols) == true ? fCols : null;
+                var parentCols = fkCols is { Count: > 0 } ? string.Join(", ", fkCols.Select(c => c.Column)) : "";
+                var refCols = fkCols is { Count: > 0 } && fkCols.All(c => c.ReferencedColumn is not null) ? string.Join(", ", fkCols.Select(c => c.ReferencedColumn)) : "";
+                var refTable = Qualified(raw.GetValueOrDefault("refSchema") as string, raw.GetValueOrDefault("refTable") as string);
+                summary = refTable is not null
+                    ? (parentCols.Length > 0 ? "(" + parentCols + ") \u2192 " : "\u2192 ") + refTable + (refCols.Length > 0 ? " (" + refCols + ")" : "")
+                    : parentCols.Length > 0 ? "(" + parentCols + ")" : null;
+                status = disabled ? "Disabled" : notTrusted ? "Not trusted" : "Trusted";
+                break;
+            case "IX":
+                kind = "Index";
+                var idxTypeCode = Int(raw.GetValueOrDefault("indexType"));
+                var idxType = IndexType(idxTypeCode, Bool(raw.GetValueOrDefault("primaryXml")) == true);
+                var prefix = Bool(raw.GetValueOrDefault("isUnique")) == true && idxType.Length > 0 ? "Unique " + char.ToLowerInvariant(idxType[0]) + idxType[1..] : idxType;
+                var allCols = raw.GetValueOrDefault("indexId") is not null && details?.IndexColumns.TryGetValue(Int(raw["indexId"]), out var iCols) == true ? iCols : null;
+                var filter = raw.GetValueOrDefault("filter") as string;
+                var text = new StringBuilder(prefix);
+                // Columnstore indexes store their columns with is_included_column = 1 in sys.index_columns: a clustered
+                // columnstore covers every column (no column list), while a nonclustered columnstore lists its columns without INCLUDE.
+                if (idxTypeCode == 6)
+                {
+                    var csCols = allCols is not null ? string.Join(", ", allCols.Select(c => c.Name)) : "";
+                    if (csCols.Length > 0) text.Append(" (").Append(csCols).Append(')');
+                }
+                else if (idxTypeCode != 5)
+                {
+                    var idxKeyCols = allCols is not null ? string.Join(", ", allCols.Where(c => !c.Included).Select(c => c.Descending ? c.Name + " DESC" : c.Name)) : "";
+                    var incCols = allCols is not null ? string.Join(", ", allCols.Where(c => c.Included).Select(c => c.Name)) : "";
+                    if (idxKeyCols.Length > 0) text.Append(" (").Append(idxKeyCols).Append(')');
+                    if (incCols.Length > 0) text.Append(" INCLUDE (").Append(incCols).Append(')');
+                }
+                if (filter is not null) text.Append(" WHERE ").Append(filter);
+                summary = text.ToString();
+                status = disabled ? "Disabled" : "Active";
+                break;
+            case "C":
+                kind = "Check constraint";
+                summary = raw.GetValueOrDefault("expr") as string;
+                status = disabled ? "Disabled" : notTrusted ? "Not trusted" : "Trusted";
+                break;
+            case "D":
+                kind = "Default constraint";
+                var expr = raw.GetValueOrDefault("expr") as string;
+                var colName = raw.GetValueOrDefault("colName") as string;
+                summary = colName is not null && expr is not null ? colName + " = " + expr : expr ?? colName;
+                status = "Active";
+                break;
+            case "EC":
+                kind = "Edge constraint";
+                summary = string.Equals(raw.GetValueOrDefault("deleteAction") as string, "CASCADE", StringComparison.OrdinalIgnoreCase) ? "ON DELETE CASCADE" : null;
+                status = disabled ? "Disabled" : notTrusted ? "Not trusted" : "Trusted";
+                break;
+            case "TR":
+                kind = "Trigger";
+                var timing = Bool(raw.GetValueOrDefault("insteadOf")) == true ? "INSTEAD OF" : "AFTER";
+                var events = raw.GetValueOrDefault("objectId") is not null && details?.TriggerEvents.TryGetValue(Int(raw["objectId"]), out var evs) == true ? evs : null;
+                summary = events is { Count: > 0 } ? timing + " " + string.Join(", ", events) : timing;
+                status = disabled ? "Disabled" : "Active";
+                break;
+            default:
+                kind = kindCode;
+                summary = null;
+                status = null;
+                break;
+        }
+        return [kind, name, ClipExpression(summary), status];
+    }
+
+    internal const int MaxExpressionChars = 4000;
+
+    /// <summary>Clips a constraint or summary expression past <see cref="MaxExpressionChars"/> characters without splitting a
+    /// UTF-16 surrogate pair so facts and list cells stay bounded.</summary>
+    internal static string? ClipExpression(string? text)
+    {
+        if (text is not { Length: > MaxExpressionChars }) return text;
+        var cut = char.IsHighSurrogate(text[MaxExpressionChars - 1]) ? MaxExpressionChars - 1 : MaxExpressionChars;
+        return text[..cut] + "\u2026";
+    }
 
     /// <summary>A column's Name, Type (as the tree writes it), Nullable, Key, Identity (seed and increment), Computed (its
     /// expression), Default (its expression) and Definition, its declaration (<see cref="ColumnDefinition"/>).</summary>
@@ -740,11 +1027,11 @@ internal static class PeekSql
     /// <summary>explorer.peekDependencies' batch for a kind and band: the object found as its peek finds it, then what it uses
     /// and what uses it, at most @take rows each in name order. A synonym uses its base object; a type uses nothing, and is used
     /// by code that names it and by the objects with columns or parameters of it.</summary>
-    public static string Dependencies(string kind, SqlRender render, string? parentKind = null) => Lookup(kind, parentKind) + UsesOf(kind, render) + UsedByOf(kind, render);
+    public static string Dependencies(string kind, SqlRender render, string? parentKind = null) => Lookup(kind, parentKind, render.Band) + UsesOf(kind, render) + UsedByOf(kind, render);
 
     /// <summary>explorer.dependencies' batch (View Dependencies, one level of its tree): the object found as its peek finds it, then
     /// one of Peek's two listings, the same text the Dependencies tab reads.</summary>
-    public static string Level(string kind, SqlRender render, string? parentKind, bool usedBy) => Lookup(kind, parentKind) + (usedBy ? UsedByOf(kind, render) : UsesOf(kind, render));
+    public static string Level(string kind, SqlRender render, string? parentKind, bool usedBy) => Lookup(kind, parentKind, render.Band) + (usedBy ? UsedByOf(kind, render) : UsesOf(kind, render));
 
     private static string UsesOf(string kind, SqlRender render) => kind switch
     {
@@ -847,6 +1134,9 @@ internal static class PeekSql
                 Int(raw.GetValueOrDefault("typeScale")))) : null;
             case "default": return Qualified(raw.GetValueOrDefault("defaultSchema") as string, value as string);
             case "rule": return Qualified(raw.GetValueOrDefault("ruleSchema") as string, value as string);
+            case "parentTable": return Qualified(raw.GetValueOrDefault("parentSchema") as string, value as string);
+            case "referencedTable": return Qualified(raw.GetValueOrDefault("referencedSchema") as string, value as string);
+            case "expression": return ClipExpression(value as string);
         }
         if (value is null) return null;
         return fact.Format switch

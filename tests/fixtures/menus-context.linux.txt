@@ -400,6 +400,8 @@ explorer.context, for a SQL Server Agent job
   ---
   &Properties  -+++
 explorer.context, for a SQL Server Agent error log
+  View A&gent Log  -+++
+  ---
   Re&fresh  F5  -+++
 explorer.context, for an SSIS Catalog folder
   Re&fresh  F5  -+++

@@ -763,6 +763,7 @@ try {
   expect(await stubCalls('explorer.peekDependencies')).toHaveLength(0)
   await page.keyboard.press('ArrowRight')
   await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('ArrowRight')
   await expect(peekTabs.getByRole('tab', { name: 'Top rows', exact: true })).toBeFocused()
   await expect(peekTabs.getByRole('tab', { name: 'Columns', exact: true })).toHaveAttribute('aria-selected', 'true')
   await page.keyboard.press('ArrowLeft')

@@ -46,6 +46,10 @@ import {
   applyReplace, copiedScheduleKey, createFromCompare, createFromDraft, createFromLimits, createFromProblems, createFromText, jobCopySource, replaceMatches, withCopyScheduleChoice,
   type CopyCompareRow, type CopyScheduleChoice, type JobCopySource, type ReplaceMatch
 } from '../../../shared/agent/create-from.ts'
+import {
+  addSeveralRow, createSeveralLimits, createSeveralText, duplicateSeveralRow, fillSeveralNames, pasteSeveralRows, removeSeveralRow, resetSeveralDifference, severalChecks, severalContext,
+  severalEditorDraft, severalLocked, severalRowDraft, startSeveral, withSeveralCell, withSeveralColumn, withSeveralEdited, type SeveralCheck, type SeveralContext, type SeveralResult, type SeveralTable
+} from '../../../shared/agent/create-several.ts'
 
 export type JobDocumentPhase = 'loading' | 'loadFailed' | 'choosing' | 'ready' | 'saving'
 /** The header's live state from the watched probe: running (with its step), idle, or a job msdb no longer has. */
@@ -112,6 +116,26 @@ export interface JobDocumentState {
   readonly replace?: JobReplace
   /** Compare with source is open. */
   readonly compareOpen?: true
+  /** Create several (AG-6f): the copy turned into a table, one row per new job. The draft stays as the template it was made from. */
+  readonly several?: JobSeveral
+  /** A Create several row opened in the full editor: the table's document and the row its edits go back to. */
+  readonly row?: { readonly table: string; readonly key: string }
+}
+/** Create several's state: the table, the selected row, the open fill panel, and where Review and create is. */
+export interface JobSeveral {
+  readonly table: SeveralTable
+  readonly selected?: string
+  readonly phase: 'table' | 'review' | 'creating' | 'done'
+  /** Columns, Paste rows or Fill names, open above the table. */
+  readonly panel?: 'columns' | 'paste' | 'fill'
+  readonly paste?: string
+  readonly pattern?: string
+  /** The rows the last Create left out, with why, for the results. */
+  readonly skipped?: readonly { readonly key: string; readonly reason: string }[]
+  /** Create: the row being sent, of how many. */
+  readonly progress?: { readonly at: number; readonly count: number }
+  readonly enabling?: true
+  readonly notice?: string
 }
 export interface JobReplace {
   readonly find: string
@@ -142,7 +166,7 @@ export interface JobDocumentServiceOptions extends CustomDocumentTargetOptions {
     & Partial<Pick<VariaApi, 'languageParse' | 'describeSsis' | 'explorerChildren' | 'agentHistoryMessage'>>
   /** Steps' Open in query window (AG-6b): a new query tab on the job's connection, in the step's database. */
   readonly openQuery?: (sql: string, name: string, connectionId: string, database?: string) => void
-  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'setDirty' | 'activate' | 'getSnapshot' | 'subscribe'> & Partial<Pick<DocumentService, 'openKeptCustom'>> & DeliverScriptDeps['documents']
+  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'setDirty' | 'activate' | 'getSnapshot' | 'subscribe' | 'close'> & Partial<Pick<DocumentService, 'openKeptCustom'>> & DeliverScriptDeps['documents']
   readonly files: DeliverScriptDeps['files']
   readonly connections: ExternalStore<readonly LiveConnection[]>
   readonly live?: Pick<LiveService, 'open'>
@@ -204,6 +228,8 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   private readonly saving = new Map<string, Promise<boolean>>()
   private readonly views = new Map<string, { readonly jobId: string; readonly stop: () => void; readonly handle: LiveHandle }>()
   private readonly targetBindings: CustomDocumentTargets
+  /** Create several's columns, built once per table from its template. */
+  private readonly contexts = new Map<string, { readonly template: AgentJobDraft; readonly context: SeveralContext }>()
   private disposed = false
   /** The History section of each job document (AG-6d). */
   readonly history: JobHistoryService
@@ -308,7 +334,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
 
   canEdit(id: string): boolean {
     const state = this.get(id)
-    return !!state?.model && !!state.draft && state.phase === 'ready' && !state.model.readOnly && !state.stale
+    return !!state?.model && !!state.draft && state.phase === 'ready' && !state.model.readOnly && !state.stale && !this.rowPaused(id)
   }
   updateDraft(id: string, patch: Partial<AgentJobDraft>): void {
     const state = this.get(id)
@@ -338,11 +364,11 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     return agentStepProblems(state.draft.steps, { sysadmin: state.model.sysadmin, ...state.model.proxies ? { proxies: state.model.proxies } : {}, ...ssis ? { ssis } : {}, ...state.model.job ? { original: initialStepsDraft(state.model.steps, state.model.job.startStepId) } : {} })
   }
   /** Each SSIS step's required parameters without a value, for the steps whose project and package the picker has read. */
-  private ssisProblems(state: JobDocumentState): ReadonlyMap<string, readonly string[]> | undefined {
+  private ssisProblems(state: JobDocumentState, draft = state.draft): ReadonlyMap<string, readonly string[]> | undefined {
     const ssis = state.ssis
-    if (!state.draft || !ssis) return undefined
+    if (!draft || !ssis) return undefined
     const found = new Map<string, readonly string[]>()
-    for (const step of state.draft.steps.steps) {
+    for (const step of draft.steps.steps) {
       if (step.subsystem !== 'SSIS') continue
       const command = parseSsisCommand(step.command)
       const project = command && ssis.projectModels[`${command.folder}\\${command.project}`], packaged = command && ssis.packageModels[`${command.folder}\\${command.project}\\${command.package}`]
@@ -370,6 +396,8 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   private afterDraft(id: string): void {
     const state = this.get(id)
     if (!state?.model || !state.draft) return
+    // A Create several row's full editor: its edits go straight back to the row, so the tab holds nothing unsaved of its own.
+    if (state.row && this.syncRow(id)) { this.patch(id, { changes: 0 }); this.options.documents.setDirty(id, false); this.schedulePreview(id); return }
     const changes = state.model.job ? agentJobChangeCount(initialAgentJobDraft(state.model), state.draft) : state.draft.name.trim() ? 1 : 0
     this.patch(id, { changes })
     this.options.documents.setDirty(id, state.model.job ? changes > 0 : state.phase === 'ready')
@@ -529,7 +557,8 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
 
   canReload(id: string): boolean {
     const state = this.get(id)
-    return !!state && this.live(id) && state.phase !== 'saving' && state.phase !== 'loading' && !state.copying
+    // Create several's table and its rows' editors are not a job msdb has: a read would start them over as a blank New Job.
+    return !!state && this.live(id) && state.phase !== 'saving' && state.phase !== 'loading' && !state.copying && !state.several && !state.row
   }
   /** Reload: the job read again; the draft's changes go (the tab's close prompt is the guard for unsaved work). */
   reload(id: string): void {
@@ -595,6 +624,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   canSave(id: string): boolean {
     const state = this.get(id)
     if (!state?.model || !state.draft || !this.canEdit(id) || !this.live(id)) return false
+    if (state.several || this.rowLinked(id)) return false
     return !state.rebasing && (!state.model.job || state.changes > 0) && agentJobSavable(this.problems(id))
   }
   save(id: string): Promise<boolean> {
@@ -843,14 +873,18 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
 
   // --- CustomDocumentProvider ----------------------------------------------------------------------------------------
 
-  canClose(id: string): string | undefined { return this.get(id)?.phase === 'saving' ? jobDocumentText.saving : undefined }
+  canClose(id: string): string | undefined {
+    const state = this.get(id)
+    return state?.phase === 'saving' ? jobDocumentText.saving : state?.several?.phase === 'creating' || state?.several?.enabling ? createSeveralText.busy : undefined
+  }
 
   // --- Hot exit and AutoRecover (AG-6g) --------------------------------------------------------------------------------
 
   /** The job's unsaved state: the target, the read the draft began from and the draft. Nothing without a draft (New Job's start panel). */
   keep(id: string): string | undefined {
     const state = this.get(id)
-    if (!state?.model || !state.draft) return undefined
+    // A Create several table is not kept (its rows are not a job's draft): the close asks, as for other custom tabs.
+    if (!state?.model || !state.draft || state.several) return undefined
     return encodeKeptState({ version: 1, kind: 'agentJob', target: state.target, server: state.server, ...state.login ? { login: state.login } : {}, model: state.model, draft: state.draft })
   }
   /** A kept job reopened disconnected on its target; it reads the job again once the target connects. */
@@ -919,6 +953,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     this.previews.delete(id)
     this.clearPreviewTimer(id)
     this.history.closed(id)
+    this.contexts.delete(id)
     this.views.get(id)?.stop()
     this.views.delete(id)
     this.publish({ documents: Object.fromEntries(Object.entries(this.getSnapshot().documents).filter(([key]) => key !== id)) })
@@ -1166,6 +1201,250 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const state = this.get(id)
     return state?.source && state.draft ? createFromCompare(state.source, state.draft, state.model?.proxies ?? state.source.model.proxies ?? []) : []
   }
+
+  // --- Create several (AG-6f): the copy as a table, one row per new job, each created by New Job's save ------------------------
+
+  /** Create several…: the copy as Changes from source left it becomes the template of a table with one row; the tab is renamed. */
+  createSeveral(id: string): void {
+    const state = this.get(id)
+    if (!state?.source || !state.draft || !state.model || state.several || state.row || !this.canEdit(id)) return
+    const context = this.severalContextOf(id, state.draft)!
+    this.patch(id, { several: { table: startSeveral(context), selected: 'r1', phase: 'table' }, notice: undefined, error: undefined, compareOpen: undefined })
+    this.options.documents.update(id, { name: createSeveralText.tab })
+    this.options.documents.setDirty(id, true)
+  }
+  /** The table's columns and template, built once per table. */
+  severalContextOf(id: string, template = this.get(id)?.several?.table.template): SeveralContext | undefined {
+    const state = this.get(id)
+    if (!state?.source || !state.model || !template) return undefined
+    const cached = this.contexts.get(id)
+    if (cached?.template === template) return cached.context
+    const context = severalContext(state.source, template, state.model)
+    this.contexts.set(id, { template, context })
+    return context
+  }
+  /** The table can change: it shows (not under review or being created) and the job may be created by this login. */
+  canEditSeveral(id: string): boolean {
+    const state = this.get(id)
+    return !!state?.several && state.several.phase === 'table' && !state.several.enabling && !!state.model && !state.model.readOnly
+  }
+  private patchSeveral(id: string, patch: Partial<JobSeveral>): void {
+    const several = this.get(id)?.several
+    if (!several) return
+    const next = { ...several, ...patch } as JobSeveral & Record<string, unknown>
+    for (const key of Object.keys(patch)) if (next[key] === undefined) delete next[key]
+    this.patch(id, { several: next })
+    // Unsaved work is the rows not created yet: the close prompt asks only while there are some.
+    this.options.documents.setDirty(id, next.table.rows.some(row => !severalLocked(row)))
+  }
+  private editTable(id: string, change: (table: SeveralTable, context: SeveralContext) => SeveralTable, patch: Partial<JobSeveral> = {}): void {
+    const several = this.get(id)?.several, context = this.severalContextOf(id)
+    if (!several || !context || !this.canEditSeveral(id)) return
+    const table = change(several.table, context)
+    if (table !== several.table || Object.keys(patch).length) this.patchSeveral(id, { table, notice: undefined, ...patch })
+  }
+  setSeveralCell(id: string, key: string, columnId: string, value: string): void { this.editTable(id, (table, context) => withSeveralCell(context, table, key, columnId, value), { selected: key }) }
+  selectSeveralRow(id: string, key: string | undefined): void {
+    const several = this.get(id)?.several
+    if (several && several.selected !== key && (!key || several.table.rows.some(row => row.key === key))) this.patchSeveral(id, { selected: key })
+  }
+  addSeveralRow(id: string): void {
+    const several = this.get(id)?.several
+    if (!several) return
+    const full = several.table.rows.length >= createSeveralLimits.rows
+    this.editTable(id, table => addSeveralRow(table), full ? { notice: createSeveralText.tooMany } : { selected: `r${several.table.next}` })
+  }
+  duplicateSeveralRow(id: string, key: string): void {
+    const several = this.get(id)?.several
+    if (!several) return
+    const full = several.table.rows.length >= createSeveralLimits.rows
+    this.editTable(id, table => duplicateSeveralRow(table, key), full ? { notice: createSeveralText.tooMany } : { selected: `r${several.table.next}` })
+  }
+  removeSeveralRow(id: string, key: string): void {
+    const several = this.get(id)?.several
+    if (!several) return
+    const at = several.table.rows.findIndex(row => row.key === key)
+    this.editTable(id, table => removeSeveralRow(table, key))
+    const rows = this.get(id)?.several?.table.rows ?? []
+    if (several.selected === key && !rows.some(row => row.key === key)) this.patchSeveral(id, { selected: rows[Math.min(at, rows.length - 1)]?.key })
+  }
+  setSeveralColumn(id: string, columnId: string, shown: boolean): void { this.editTable(id, (table, context) => withSeveralColumn(context, table, columnId, shown)) }
+  /** Opens Columns, Paste rows or Fill names above the table (or closes it, given the open one). */
+  toggleSeveralPanel(id: string, panel: NonNullable<JobSeveral['panel']>): void {
+    const several = this.get(id)?.several
+    if (several && this.canEditSeveral(id)) this.patchSeveral(id, { panel: several.panel === panel ? undefined : panel })
+  }
+  setSeveralPaste(id: string, text: string): void { if (this.get(id)?.several) this.patchSeveral(id, { paste: text.slice(0, createSeveralLimits.pasteChars) }) }
+  setSeveralPattern(id: string, pattern: string): void { if (this.get(id)?.several) this.patchSeveral(id, { pattern: pattern.slice(0, createSeveralLimits.patternChars) }) }
+  /** Paste rows: the panel's text (or several lines pasted into a cell) as new rows, one tab-separated cell per visible column. */
+  pasteSeveral(id: string, text = this.get(id)?.several?.paste ?? ''): void {
+    const several = this.get(id)?.several
+    if (!several || !this.canEditSeveral(id)) return
+    const pasted = pasteSeveralRows(several.table, text)
+    if (!pasted.added && !pasted.cut) return
+    this.patchSeveral(id, { table: pasted.table, panel: undefined, paste: undefined, notice: createSeveralText.pasted(pasted.added, pasted.cut), selected: pasted.table.rows.at(-1)?.key })
+  }
+  fillSeveralNames(id: string): void {
+    const pattern = this.get(id)?.several?.pattern ?? ''
+    if (pattern.trim()) this.editTable(id, (table, context) => fillSeveralNames(context, table, pattern), { panel: undefined })
+  }
+  resetSeveral(id: string, key: string, differenceId: string): void { this.editTable(id, (table, context) => resetSeveralDifference(context, table, key, differenceId)) }
+  /** Each row's checks: duplicate and existing names, cells that cannot be used and New Job's own errors block it; warnings do not. */
+  severalChecks(id: string): ReadonlyMap<string, SeveralCheck> {
+    const state = this.get(id), context = this.severalContextOf(id)
+    return state?.several && context ? severalChecks(context, state.several.table, draft => this.ssisProblems(state, draft)) : new Map()
+  }
+  /** The SSIS packages the rows run (`folder\project\package`): the table reads each once, so required parameters without a value show. */
+  severalPackages(id: string): readonly string[] {
+    const state = this.get(id), context = this.severalContextOf(id)
+    if (!state?.several || !context) return []
+    const paths = new Set<string>()
+    for (const row of state.several.table.rows) {
+      if (severalLocked(row)) continue
+      for (const step of severalRowDraft(context, row).draft.steps.steps) {
+        const command = step.subsystem === 'SSIS' ? parseSsisCommand(step.command) : undefined
+        if (command) paths.add(`${command.folder}\\${command.project}\\${command.package}`)
+      }
+    }
+    return [...paths]
+  }
+
+  /** Open full editor: the row as an unsaved job tab with every section, whose edits go back to the row (brought forward when already open). */
+  openSeveralRow(id: string, key: string): string | undefined {
+    const state = this.get(id), context = this.severalContextOf(id), connectionId = this.connectionOf(id)
+    const row = state?.several?.table.rows.find(item => item.key === key)
+    if (!state?.several || !state.model || !state.source || !context || !row || severalLocked(row) || !connectionId || !this.canEditSeveral(id)) return undefined
+    const open = Object.values(this.getSnapshot().documents).find(item => item.row?.table === id && item.row.key === key)
+    if (open) { this.options.documents.activate(open.id); return open.id }
+    const at = state.several.table.rows.indexOf(row) + 1
+    const draft = severalEditorDraft(context, row).draft
+    const document = this.options.documents.openCustom('agentJob', createSeveralText.editorTab(at, draft.name || 'New Job'), connectionId, 'msdb')
+    this.targetBindings.bind(document.id, connectionId)
+    this.put({
+      id: document.id, target: { kind: 'agent' }, server: state.server, ...state.login ? { login: state.login } : {}, phase: 'ready', model: state.model, draft, revision: 1, edits: 0, changes: 0,
+      frame: initialFrameState(jobSections), script: { state: 'idle', message: noScriptNotice }, source: state.source, row: { table: id, key }, ...state.ssis ? { ssis: state.ssis } : {}
+    })
+    this.options.documents.setDirty(document.id, false)
+    return document.id
+  }
+  /** Whether a full editor still belongs to its row: the table has it and it is not created. */
+  rowLinked(id: string): boolean {
+    const link = this.get(id)?.row, several = link ? this.get(link.table)?.several : undefined
+    const row = several?.table.rows.find(item => item.key === link!.key)
+    return !!row && !severalLocked(row)
+  }
+  /** A linked editor whose table is under review, creating or showing results: the row cannot change until Back to the table. */
+  rowPaused(id: string): boolean {
+    const link = this.get(id)?.row
+    return !!link && this.rowLinked(id) && this.get(link.table)?.several?.phase !== 'table'
+  }
+  /** The row's number in its table, for the editor's banner and tab. */
+  rowNumber(id: string): number | undefined {
+    const link = this.get(id)?.row
+    const at = link ? this.get(link.table)?.several?.table.rows.findIndex(item => item.key === link.key) ?? -1 : -1
+    return at >= 0 ? at + 1 : undefined
+  }
+  /** The full editor's draft onto its row; false when the row cannot take it (the editor is then a copy of its own). */
+  private syncRow(id: string): boolean {
+    const state = this.get(id), link = state?.row
+    if (!state?.draft || !link || !this.rowLinked(id) || this.rowPaused(id)) return false
+    const several = this.get(link.table)!.several!
+    this.patchSeveral(link.table, { table: withSeveralEdited(several.table, link.key, state.draft), selected: link.key })
+    const at = this.rowNumber(id)
+    if (at) this.options.documents.update(id, { name: createSeveralText.editorTab(at, state.draft.name || 'New Job') })
+    return true
+  }
+  /** Back to the table: the table's tab comes forward and the editor closes (its edits are on the row already). */
+  backToTable(id: string): void {
+    const link = this.get(id)?.row
+    if (!link || !this.get(link.table)) return
+    this.options.documents.activate(link.table)
+    if (this.rowLinked(id)) this.options.documents.close(id).catch(onUnexpectedError)
+  }
+
+  /** Review and create: what each row sends, and the rows left out with why. Nothing is sent yet. */
+  reviewSeveral(id: string): void {
+    if (this.canEditSeveral(id) && this.live(id)) this.patchSeveral(id, { phase: 'review', panel: undefined, notice: undefined })
+  }
+  /** Back to the table from the review or the results: rows not created stay to fix and retry; created rows are locked. */
+  severalToTable(id: string): void {
+    const several = this.get(id)?.several
+    if (several && (several.phase === 'review' || several.phase === 'done') && !several.enabling) this.patchSeveral(id, { phase: 'table', notice: undefined, skipped: undefined })
+  }
+  /** Create: each row with no blocking problem, one after another, each its own `agentJob` save (New Job's sp_add_job in one transaction)
+   *  with its own result. A lost connection stops the rest: whether the row on its way was created is unknown. */
+  async createSeveralJobs(id: string): Promise<void> {
+    const state = this.get(id), context = this.severalContextOf(id), connectionId = this.connectionOf(id)
+    if (!state?.several || state.several.phase !== 'review' || !state.model || !context || !connectionId || !this.live(id)) return
+    const checks = this.severalChecks(id)
+    const open = state.several.table.rows.filter(row => !severalLocked(row))
+    const blocked = (key: string) => (checks.get(key)?.blocking.length ?? 0) > 0
+    const sending = open.filter(row => !blocked(row.key))
+    const skipped = open.filter(row => blocked(row.key)).map(row => ({ key: row.key, reason: checks.get(row.key)!.blocking[0]! }))
+    this.patch(id, { error: undefined })
+    this.patchSeveral(id, { phase: 'creating', skipped, progress: { at: 0, count: sending.length } })
+    let stopped = false
+    for (const [index, row] of sending.entries()) {
+      this.patchSeveral(id, { progress: { at: index + 1, count: sending.length } })
+      const result: SeveralResult = stopped ? { state: 'notSent', message: createSeveralText.stopped } : await this.createRow(id, connectionId, state.model, severalRowDraft(context, row).draft)
+      if (!this.get(id)?.several) return
+      if (result.state === 'unknown' || result.state === 'notSent') stopped = true
+      const table = this.get(id)!.several!.table
+      this.patchSeveral(id, { table: { ...table, rows: table.rows.map(item => item.key === row.key ? { ...item, result } : item) } })
+    }
+    this.patchSeveral(id, { phase: 'done', progress: undefined })
+  }
+  private async createRow(id: string, connectionId: string, model: AgentJobDocumentModel, draft: AgentJobDraft): Promise<SeveralResult> {
+    const save = agentJobSave(model, draft)
+    if (!save) return { state: 'failed', message: 'There is nothing to send.' }
+    if (!this.live(id) || this.connectionOf(id) !== connectionId) return { state: 'notSent', message: createSeveralText.closed }
+    const requestId = this.begin(id, 'save')
+    const result = await this.call(() => this.options.api.executeObjectAction({ action: 'agentJob', connectionId, requestId, target: { kind: 'agent' }, agentJob: save }))
+    if (!this.end(id, requestId)) return { state: 'unknown', message: createSeveralText.lost }
+    if (result.ok && !result.value.error) return { state: 'created', name: save.name ?? draft.name.trim(), enabled: draft.enabled }
+    if (!result.ok && (result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST')) return { state: 'unknown', message: createSeveralText.lost }
+    return { state: 'failed', message: result.ok ? result.value.error!.message : result.error }
+  }
+  /** Enable the created jobs saved disabled: New Job's describe lists every job with its id, then each is enabled on its own (AG-2's verb). */
+  async enableSeveralCreated(id: string): Promise<void> {
+    const state = this.get(id), connectionId = this.connectionOf(id)
+    const disabled = state?.several?.table.rows.filter(row => row.result?.state === 'created' && !row.result.enabled) ?? []
+    if (!state?.several || state.several.phase !== 'done' || state.several.enabling || !disabled.length || !connectionId || !this.live(id)) return
+    this.patchSeveral(id, { enabling: true, notice: undefined })
+    const listed = await this.call(() => this.options.api.describeObject({ connectionId, requestId: this.newId(), dialog: 'agentJob', target: { kind: 'agent' } }))
+    const jobs = listed.ok && !listed.value.error ? listed.value.agentJobDocument : undefined
+    const failure = !listed.ok ? listed.error : listed.value.error?.message
+    let enabled = 0
+    for (const row of disabled) {
+      if (!this.get(id)?.several) return
+      const name = row.result?.state === 'created' ? row.result.name : ''
+      const at = jobs?.jobs?.findIndex(item => item === name) ?? -1
+      const jobId = at >= 0 ? jobs?.jobIds?.[at] : undefined
+      let error = failure ?? (jobId ? undefined : 'The job is no longer listed.')
+      if (jobId) {
+        const result = await this.call(() => this.options.api.executeObjectAction({ action: 'enable', connectionId, requestId: this.newId(), target: { kind: 'agentJob', name }, agentIdentity: { jobId } }))
+        error = !result.ok ? result.error : result.value.error?.message
+      }
+      if (!error) enabled++
+      const result: SeveralResult = { state: 'created', name, enabled: !error, ...error ? { enableError: error } : {} }
+      const table = this.get(id)!.several!.table
+      this.patchSeveral(id, { table: { ...table, rows: table.rows.map(item => item.key === row.key ? { ...item, result } : item) } })
+    }
+    this.patchSeveral(id, { enabling: undefined, notice: enabled ? createSeveralText.enabled(enabled) : undefined })
+  }
+  /** A row's job name as it would be created (the grey name when none was typed), for the details, the review and the results. */
+  severalRowName(id: string, key: string): string {
+    const row = this.get(id)?.several?.table.rows.find(item => item.key === key), context = this.severalContextOf(id)
+    return row && context ? severalRowDraft(context, row).draft.name.trim() || 'New Job' : ''
+  }
+  /** A created row's Open: the new job's own document. */
+  openSeveralCreated(id: string, name: string): void {
+    const connectionId = this.connectionOf(id)
+    if (!connectionId) return
+    try { this.openJob(connectionId, name) } catch (failure) { this.patchSeveral(id, { notice: failure instanceof Error ? failure.message : 'The job could not be opened.' }) }
+  }
+  /** Close, from the results: the table's tab closes (the close prompt asks while rows are not created). */
+  closeSeveral(id: string): void { this.options.documents.close(id).catch(onUnexpectedError) }
 
   // --- Internals -----------------------------------------------------------------------------------------------------
 
