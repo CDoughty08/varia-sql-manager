@@ -236,15 +236,16 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   monthly one's every-N months count from its start date; a weekly or monthly every-N cycle counts from its first run on or after
   now (or the start date) when the schedule is saved or attached, and from Agent's own runs after that. So wherever the read has
   sysadmin's links, the editor, the free-slot check and the Timeline count a saved, unchanged, already attached schedule from Agent's
-  next run: the job's `sysjobactivity.next_scheduled_run_date` (rewritten as soon as a schedule changes) when the job has only that
-  schedule, else `sysjobschedules.next_run_date` (rewritten only on Agent's periodic write) if it is still a run of the timing as
-  read; for the schedule itself, only when every job using it agrees (jobs attached in different weeks keep different cycles). The
+  next run: the job's `sysjobactivity.next_scheduled_run_date` (rewritten as soon as a schedule changes) when it is a run of that
+  schedule, else `sysjobschedules.next_run_date` (rewritten every 20 minutes) if it is a run of the timing as read and the schedule was
+  saved at least 30 minutes earlier, else the schedule's last save (`date_modified`), where Agent restarted the cycle; for the
+  schedule itself, the cycle every job using it keeps, or none when they differ (jobs attached in different weeks). The
   Pick preview, Attach schedule, an edited timing and below sysadmin count from now. A repeating daily window that crosses
   midnight (22:00 to 04:00) runs on past midnight after a run day, stepping on from its start time, but not past the end date,
   while a weekly, monthly or relative one stops at midnight, which the editor says. Weeks start on Sunday. Agent passes over a run
   less than about a minute after it computes. Not followed: a relative schedule with a future start date whose start month's
-  occurrence falls before that date, for which Agent writes no next run at all, and a change of only the every-N count on a job
-  with several schedules, whose old `sysjobschedules` value still fits the new timing until Agent's next periodic write.
+  occurrence falls before that date, for which Agent writes no next run at all, and a job attached to a saved schedule less than
+  30 minutes ago whose job-wide next run is another schedule's, which counts from the schedule's save rather than its attach.
 - **Schedules Timeline** (the Schedules document's Timeline view, `src/shared/agent/timeline.ts`, `TimelineView.ts`). A Gantt
   chart from now over the next 24 hours or 7 days: for sysadmin one row per job, from the links and each job's usual duration
   (a job without one drawn for a minute), below sysadmin one row per schedule some job uses; rows in the order they next run, disabled jobs

@@ -108,6 +108,16 @@ export default function SchedulesTimeline({ documentId, model: read, span, onSpa
   }, [model, rows.length])
   useEffect(() => { view.current?.setViewport(viewport) }, [viewport])
   useEffect(() => { view.current?.setActive(active) }, [active])
+  // A focused lane whose row a Refresh took away leaves focus nowhere: it moves to the lane now in that place, so the keyboard stays in.
+  const focused = useRef<{ key: string; index: number }>(undefined)
+  useEffect(() => {
+    const was = focused.current, document = body.current?.ownerDocument
+    if (!was || !document || rows.some(row => row.key === was.key)) return
+    if (document.activeElement && document.activeElement !== document.body) { focused.current = undefined; return }
+    const index = Math.min(was.index, rows.length - 1)
+    if (index >= 0) lanes.current[index]?.focus()
+    else focused.current = undefined
+  }, [rows])
   // Ctrl/⌘+wheel zooms at the pointer and Shift or sideways wheel scrolls, as on the plan canvas. A native listener, not
   // React's passive onWheel, so preventDefault keeps Chromium from zooming the whole window as well.
   const wheelState = useRef({ viewport, seconds })
@@ -198,7 +208,8 @@ export default function SchedulesTimeline({ documentId, model: read, span, onSpa
         </div>
         <div className="agent-timeline-lane" role="gridcell" ref={element => { lanes.current[index] = element }} tabIndex={(active?.row ?? 0) === index ? 0 : -1}
           aria-label={rowSummary(model, row)} aria-describedby={`${spanId}-run`} onKeyDown={event => onKey(event, index)}
-          onFocus={() => { if (active?.row !== index) setActive(index, firstShown(row, viewport)) }} />
+          onFocus={() => { focused.current = { key: row.key, index }; if (active?.row !== index) setActive(index, firstShown(row, viewport)) }}
+          onBlur={event => { if (!lanes.current.includes(event.relatedTarget as HTMLDivElement)) focused.current = undefined }} />
       </div>)}
     </div>
     <p id={`${spanId}-run`} className="visually-hidden" aria-live="polite">{announced}</p>

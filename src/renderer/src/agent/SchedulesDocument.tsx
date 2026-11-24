@@ -3,7 +3,7 @@
 // schedule's editor (the job document's ScheduleEditor), the jobs that use it with Attach and Detach, and "Save · n changes"; or, with
 // Timeline chosen (AG-14), SchedulesTimeline: when the jobs run over the next 24 hours or 7 days. SchedulesService keeps every state; this
 // only draws it.
-import { memo, useMemo, useState } from 'react'
+import { memo, useDeferredValue, useMemo, useState } from 'react'
 import { scheduleFieldsOf, type AgentScheduleRecord, type AgentSchedulesModel } from '../../../shared/actions/agent-schedule.ts'
 import { agentLimits } from '../../../shared/agent/catalog.ts'
 import { agentNextRun, scheduleProblems, scheduleWhen } from '../../../shared/agent/schedule.ts'
@@ -42,7 +42,7 @@ function Detail({ state, service }: { readonly state: SchedulesState; readonly s
     </div>
     {readOnly && <p className="field-note" role="note"><Icon name="lock" />{readOnly}</p>}
     <ScheduleEditor idPrefix={idPrefix} fields={draft.fields} {...record ? { base: scheduleFieldsOf(record) } : {}} disabled={!!readOnly || busy}
-      problems={scheduleProblems(draft.fields, now, service.server(state.id))} now={now} platform={state.model?.platform} {...record ? { anchor: agentNextRun(state.model?.links, record.id, record) } : {}} onChange={fields => service.update(state.id, fields)}
+      problems={scheduleProblems(draft.fields, now, service.server(state.id))} now={now} platform={state.model?.platform} {...record ? { anchor: agentNextRun(state.model?.links, record.id, record, now) } : {}} onChange={fields => service.update(state.id, fields)}
       aside={<section aria-label="Jobs using it">
         <h4>Jobs using it <span className="field-note">{jobs.length}</span></h4>
         {jobs.length ? <ul className="agent-schedule-jobs">{jobs.map(job => {
@@ -110,7 +110,9 @@ export default function SchedulesDocument({ documentId }: { readonly documentId:
   const state = documents[documentId]
   const model = state?.model
   const rows = useMemo(() => visibleSchedules(model, state?.view ?? 'all', state?.filter ?? ''), [model, state?.view, state?.filter])
-  const timelineRead = useMemo(() => model && timelineFiltered(model, state?.filter ?? ''), [model, state?.filter])
+  // The Timeline rebuilds its model per filter (up to 40,000 runs): typing goes on at once and the Timeline follows when React has time.
+  const timelineFilter = useDeferredValue(state?.filter ?? '')
+  const timelineRead = useMemo(() => model && timelineFiltered(model, timelineFilter), [model, timelineFilter])
   if (!state) return null
   const counts = { all: model?.schedules.length ?? 0, unused: model?.schedules.filter(record => record.jobCount === 0).length ?? 0, disabled: model?.schedules.filter(record => !record.enabled).length ?? 0 }
   const viewId = `agent-schedules-view-${documentId}`

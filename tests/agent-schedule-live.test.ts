@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-  dateOfDay, dayNumber, formatRun, freq, momentOfSeconds, momentSeconds, nextRuns, noEndDate, scheduleRuns, subday, timeOf, type AgentMoment, type AgentScheduleTiming
+  agentNextRun, dateOfDay, dayNumber, formatRun, freq, momentOfSeconds, momentSeconds, nextRuns, noEndDate, scheduleRuns, subday, timeOf, type AgentMoment, type AgentScheduleTiming
 } from '../src/shared/agent/schedule'
-import { connectLive, liveServer } from './fixtures/live-sql'
+import { connectLive, liveServer, type ReadResult } from './fixtures/live-sql'
 
 // The occurrence math (src/shared/agent/schedule.ts) against a live SQL Server Agent (AG-14): one scratch job per schedule shape, each with
 // that one schedule, and Agent's own next run for it (sysjobactivity.next_scheduled_run_date, which Agent writes as soon as a schedule is
@@ -110,4 +110,63 @@ describe.runIf(enabled)('schedule occurrences against SQL Server Agent', () => {
     // Agent's answers stay in the failure diff; the label alone says which shape differs.
     expect(report).toEqual(list.map(({ label }, index) => { const read = momentOf(agent.get(jobs[index] + '_job')); return `${label}: Agent ${read ? formatRun(read) : 'none'}, Varia ${read ? formatRun(read) : 'none'}` }))
   }, 120_000)
+  it("anchors a shared every-n schedule's runs on what Agent wrote for each job, as the editor and the Timeline do", async () => {
+    const { run } = await connectLive(cleanups)
+    const scalar = async (sql: string) => (await run(sql)).resultSets[0]?.rows[0]?.[0] ?? null
+    const now = momentOf(await scalar("SELECT FORMAT(GETDATE(), 'yyyyMMdd|HHmmss');"))!
+    const day = dayNumber(now.date)
+    // Every 2 weeks on the weekday after tomorrow at 03:00; the second job also runs daily at 00:30, so its job-wide next run is that one.
+    const shared: AgentScheduleTiming = { freqType: freq.weekly, freqInterval: 1 << (((day + 2 + 4) % 7 + 7) % 7), freqSubdayType: subday.once, freqSubdayInterval: 0, freqRelativeInterval: 0,
+      freqRecurrenceFactor: 2, activeStartDate: dateOfDay(day - 30), activeEndDate: noEndDate, activeStartTime: 30000, activeEndTime: 235959 }
+    // Named as the .NET checks' sweep expects: the run's UTC timestamp, its own hex, and the kind.
+    const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14), hex = () => crypto.randomUUID().replaceAll('-', '').slice(0, 8)
+    const [first, second] = [`VariaScratch_${stamp}_${hex()}`, `VariaScratch_${stamp}_${hex()}`]
+    const [one, two, sch, daily] = [`${first}_job`, `${second}_job`, `${first}_sch`, `${second}_sch`]
+    cleanups.push(async () => {
+      await run([
+        ...[one, two].map(job => `IF EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name = ${quote(job)}) EXEC msdb.dbo.sp_delete_job @job_name = ${quote(job)}, @delete_unused_schedule = 1;`),
+        ...[sch, daily].map(name => `IF EXISTS (SELECT 1 FROM msdb.dbo.sysschedules WHERE name = ${quote(name)}) EXEC msdb.dbo.sp_delete_schedule @schedule_name = ${quote(name)}, @force_delete = 1;`)
+      ].join('\n'), 'msdb')
+    })
+    const job = (name: string) => `SET @job = NULL; EXEC msdb.dbo.sp_add_job @job_name = ${quote(name)}, @description = N'varia.scratch', @job_id = @job OUTPUT;
+      EXEC msdb.dbo.sp_add_jobstep @job_id = @job, @step_name = N'noop', @command = N'SELECT 1;'; EXEC msdb.dbo.sp_add_jobserver @job_id = @job;`
+    const created = await run(`DECLARE @job uniqueidentifier, @shared int, @daily int;
+      EXEC msdb.dbo.sp_add_schedule @schedule_name = ${quote(sch)}, @freq_type = ${shared.freqType}, @freq_interval = ${shared.freqInterval}, @freq_recurrence_factor = 2,
+        @active_start_date = ${shared.activeStartDate}, @active_start_time = 30000, @schedule_id = @shared OUTPUT;
+      EXEC msdb.dbo.sp_add_schedule @schedule_name = ${quote(daily)}, @freq_type = 4, @freq_interval = 1, @active_start_date = ${shared.activeStartDate}, @active_start_time = 3000, @schedule_id = @daily OUTPUT;
+      ${job(one)} EXEC msdb.dbo.sp_attach_schedule @job_id = @job, @schedule_id = @shared;
+      ${job(two)} EXEC msdb.dbo.sp_attach_schedule @job_id = @job, @schedule_id = @shared; EXEC msdb.dbo.sp_attach_schedule @job_id = @job, @schedule_id = @daily;`, 'msdb')
+    expect(created.status).toBe('completed')
+    // The describe's links (AgentSql.ScheduleLinks) for these jobs, once Agent has written both jobs' next runs.
+    const linkSql = `SELECT js.schedule_id, LOWER(CONVERT(nvarchar(36), js.job_id)), js.next_run_date, js.next_run_time, FORMAT(a.next_scheduled_run_date, 'yyyyMMdd|HHmmss'), j.name
+      FROM msdb.dbo.sysjobschedules AS js JOIN msdb.dbo.sysjobs AS j ON j.job_id = js.job_id
+      LEFT JOIN msdb.dbo.sysjobactivity AS a ON a.job_id = js.job_id AND a.session_id = (SELECT MAX(s.session_id) FROM msdb.dbo.syssessions AS s) WHERE j.name IN (${quote(one)}, ${quote(two)});`
+    let read: ReadResult | undefined
+    for (const until = Date.now() + 20_000; ;) {
+      read = await run(linkSql, 'msdb')
+      const rows = read.resultSets[0]?.rows ?? []
+      if ((rows.length === 3 && rows.every(row => row[4])) || Date.now() > until) break
+      await wait(500)
+    }
+    const rows = read?.resultSets[0]?.rows ?? []
+    const links = rows.map(row => {
+      const job = momentOf(row[4]), date = Number(row[2]), time = Number(row[3])
+      return { scheduleId: Number(row[0]), jobId: row[1] ?? '', ...date > 0 ? { nextRunDate: date, nextRunTime: time } : {}, ...job ? { jobNextRunDate: job.date, jobNextRunTime: job.time } : {} }
+    })
+    const idOf = (name: string) => rows.find(row => row[5] === name)?.[1] ?? ''
+    const scheduleId = Number(await scalar(`SELECT schedule_id FROM msdb.dbo.sysschedules WHERE name = ${quote(sch)};`))
+    const modified = (await scalar(`SELECT FORMAT(date_modified, 'yyyy-MM-ddTHH:mm:ss') FROM msdb.dbo.sysschedules WHERE name = ${quote(sch)};`)) ?? undefined
+    const agent = momentOf(rows.find(row => row[5] === one)?.[4])
+    const at = momentOf(await scalar("SELECT FORMAT(GETDATE(), 'yyyyMMdd|HHmmss');"))!
+    const nextOf = (anchor: AgentMoment | undefined) => { const next = nextRuns(shared, at, 1, anchor)[0]; return next ? formatRun(next) : 'none' }
+    const saved = { ...shared, ...modified ? { modified } : {} }
+    expect(agent, 'Agent wrote the first job its next run').toBeDefined()
+    expect(rows.find(row => row[5] === two)?.[4], "the second job's next run is its daily one").toMatch(/\|003000$/)
+    // The job with only this schedule: its sysjobactivity next run is the anchor, Agent's own answer.
+    expect(nextOf(agentNextRun(links, scheduleId, saved, at, idOf(one)))).toBe(agent ? formatRun(agent) : 'none')
+    // The job with two schedules: its job-wide next run is the daily one and sysjobschedules is not written yet, so the save anchors it,
+    // which is where Agent started both jobs' cycles.
+    expect(nextOf(agentNextRun(links, scheduleId, saved, at, idOf(two)))).toBe(agent ? formatRun(agent) : 'none')
+    expect(nextOf(agentNextRun(links, scheduleId, saved, at))).toBe(agent ? formatRun(agent) : 'none')
+  }, 60_000)
 })

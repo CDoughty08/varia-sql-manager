@@ -407,9 +407,10 @@ ${scheduleId}`, pending = this.jobReads.get(key)
   newSchedule(id: string, from?: AgentScheduleFields): void {
     const state = this.get(id)
     if (!state || state.busy) return
-    if (state.drafts[newScheduleKey]) { this.patch(id, { selected: newScheduleKey, confirmDelete: undefined, notice: schedulesText.newPending }); this.options.focus?.(id, 'name'); return }
+    // The editor shows only in the grid view, so New schedule (and Duplicate, and New › Schedule… on the Agent node) switches to it.
+    if (state.drafts[newScheduleKey]) { this.patch(id, { mode: 'grid', selected: newScheduleKey, confirmDelete: undefined, notice: schedulesText.newPending }); this.options.focus?.(id, 'name'); return }
     const fields = from ? { ...from, name: schedulesText.copyName(from.name) } : defaultSchedule(this.now(id).date)
-    this.patch(id, { drafts: { ...state.drafts, [newScheduleKey]: { fields, jobs: [] } }, selected: newScheduleKey, confirmDelete: undefined, error: undefined, notice: undefined })
+    this.patch(id, { mode: 'grid', drafts: { ...state.drafts, [newScheduleKey]: { fields, jobs: [] } }, selected: newScheduleKey, confirmDelete: undefined, error: undefined, notice: undefined })
     this.dirtyChanged(id)
     this.options.focus?.(id, 'name')
   }
@@ -531,7 +532,7 @@ ${scheduleId}`, pending = this.jobReads.get(key)
     this.patch(id, { drafts: { ...current.drafts, [key]: { base: record, fields: rebaseScheduleFields(draft.base, record, draft.fields), jobs } }, error: { ...error, message: message(schedulesText.staleKept) } })
     this.dirtyChanged(id)
   }
-  askDelete(id: string): void { if (this.canDelete(id)) this.patch(id, { confirmDelete: true, error: undefined }) }
+  askDelete(id: string): void { if (this.canDelete(id)) this.patch(id, { mode: 'grid', confirmDelete: true, error: undefined }) }
   cancelDelete(id: string): void { if (this.get(id)?.confirmDelete) this.patch(id, { confirmDelete: undefined }) }
   /** Delete, after its confirmation: sp_delete_schedule without @force_delete, so one a job uses is refused (IN_USE) and kept. */
   async confirmDelete(id: string): Promise<boolean> {

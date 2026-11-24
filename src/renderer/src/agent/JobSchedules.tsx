@@ -3,7 +3,7 @@
 // schedule edited in place, a shared schedule's preview with Attach, or a removed one's detach or delete choice with Undo. Nothing reaches
 // the server until the job is saved. JobDocumentService keeps every state; this only draws it.
 import { useEffect } from 'react'
-import { jobScheduleProblems, jobScheduleText, ownsSchedule, scheduleFieldsOf, type AgentScheduleJob, type AgentScheduleRecord, type AgentSchedulesModel, type JobScheduleEntry } from '../../../shared/actions/agent-schedule.ts'
+import { jobScheduleProblems, jobScheduleText, momentOfText, ownsSchedule, scheduleFieldsOf, type AgentScheduleJob, type AgentScheduleRecord, type AgentSchedulesModel, type JobScheduleEntry } from '../../../shared/actions/agent-schedule.ts'
 import type { AgentJobDocumentModel, AgentJobDraft } from '../../../shared/actions/agent-job.ts'
 import { agentLimits } from '../../../shared/agent/catalog.ts'
 import {
@@ -41,12 +41,13 @@ function scheduledJobsOf(shared: AgentSchedulesModel, self: string): { readonly 
   scheduledJobs.set(shared, byJob)
   const known = byJob.get(self)
   if (known) return known
+  const now = momentOfText(shared.now)
   const durations = new Map((shared.durations ?? []).map(item => [item.jobId.toLowerCase(), item.seconds]))
   const records = new Map(shared.schedules.map(record => [record.id, record]))
   const linked = new Map<string, ScheduledJob['schedules'][number][]>()
   for (const link of shared.links ?? []) {
     const record = records.get(link.scheduleId), job = link.jobId.toLowerCase()
-    const nextRun = record ? linkAnchor(shared.links ?? [], link, record) : undefined
+    const nextRun = record && now ? linkAnchor(link, record, now) : undefined
     if (record) linked.set(job, [...linked.get(job) ?? [], nextRun ? { ...record, nextRun } : record])
   }
   const others: ScheduledJob[] = (shared.jobs ?? []).filter(job => job.id.toLowerCase() !== self).map(job => {
@@ -61,8 +62,9 @@ function scheduledJobsOf(shared: AgentSchedulesModel, self: string): { readonly 
 function savedAnchor(state: JobDocumentState, model: AgentJobDocumentModel, entry: JobScheduleEntry): AgentMoment | undefined {
   const shared = state.shared?.model, job = model.job?.jobId
   if (entry.id === undefined || entry.attached || !job || !shared?.links) return undefined
-  const record = shared.schedules.find(item => item.id === entry.id)
-  return record && sameTiming(entry.fields, record) ? agentNextRun(shared.links, entry.id, record, job) : undefined
+  const record = shared.schedules.find(item => item.id === entry.id), now = momentOfText(shared.now)
+  // Enabling or disabling a schedule saves it too, which restarts its cycle; only the schedule exactly as saved keeps Agent's.
+  return record && now && sameTiming(entry.fields, record) && entry.fields.enabled === record.enabled ? agentNextRun(shared.links, entry.id, record, now, job) : undefined
 }
 /** The free-slot check, where the shared read knows every job's schedules and durations (sysadmin); undefined otherwise. */
 function freeSlot(state: JobDocumentState, model: AgentJobDocumentModel, entry: JobScheduleEntry, now: ReturnType<JobDocumentService['now']>): string | undefined {

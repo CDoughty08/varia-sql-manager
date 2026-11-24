@@ -537,29 +537,55 @@ export interface AgentNextRunLink {
   readonly jobNextRunDate?: number
   readonly jobNextRunTime?: number
 }
-/** Whether `at` is itself a run of `timing` (its day and its time). */
-function isRunOf(timing: AgentScheduleTiming, at: AgentMoment): boolean {
-  return scheduleRuns({ ...timing, enabled: true }, at, 1, momentSeconds(at), at).length === 1
+/** Whether `at` is a run of `timing` on the every-n cycle counted from `anchor` (by default its own: any run day and time). */
+function isRunOf(timing: AgentScheduleTiming, at: AgentMoment, anchor: AgentMoment = at): boolean {
+  return scheduleRuns({ ...timing, enabled: true }, at, 1, momentSeconds(at), anchor).length === 1
 }
-/** One link's anchor: the job's next run when the job has only this schedule (sysjobactivity, current), else sysjobschedules' next run if
- *  it is still a run of the timing as read (an older write for another timing is dropped); undefined when neither is known. */
-export function linkAnchor(links: readonly AgentNextRunLink[], link: AgentNextRunLink, timing: AgentScheduleTiming): AgentMoment | undefined {
-  const job = link.jobId.toLowerCase()
-  if (link.jobNextRunDate !== undefined && link.jobNextRunTime !== undefined && links.filter(item => item.jobId.toLowerCase() === job).length === 1)
-    return { date: link.jobNextRunDate, time: link.jobNextRunTime }
-  if (link.nextRunDate === undefined || link.nextRunTime === undefined) return undefined
-  const at = { date: link.nextRunDate, time: link.nextRunTime }
-  return isRunOf(timing, at) ? at : undefined
+/** sysjobschedules is rewritten on Agent's periodic write, every 20 minutes (SQL Server's documentation of the table); a pair value read
+ *  sooner than this after the schedule's last save may predate it. */
+export const pairWriteSeconds = 30 * 60
+/** A saved schedule as an anchor needs it: its timing and when it was last saved (sysschedules.date_modified, as the describe sends it). */
+export type AnchoredSchedule = AgentScheduleTiming & { readonly modified?: string }
+const momentOfModified = (text: string | undefined): AgentMoment | undefined => {
+  const match = text ? /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/.exec(text) : null
+  return match ? { date: Number(match[1]) * 10_000 + Number(match[2]) * 100 + Number(match[3]), time: Number(match[4]) * 10_000 + Number(match[5]) * 100 + Number(match[6]) } : undefined
+}
+/**
+ * One link's anchor, the moment its every-n cycle counts from, as fresh as the read allows: the job's next run from sysjobactivity when it
+ * is a run of this schedule (Agent rewrites it at once; it is the earliest across the job's schedules, so a run of another one is passed
+ * over); else sysjobschedules' pair value when it is a run of this timing and the schedule was saved long enough ago for Agent's periodic
+ * write to have followed; else the last save itself, where Agent restarted the cycle; undefined when none is known.
+ */
+export function linkAnchor(link: AgentNextRunLink, schedule: AnchoredSchedule, now: AgentMoment): AgentMoment | undefined {
+  return writtenAnchor(link, schedule, now) ?? momentOfModified(schedule.modified)
+}
+/** The anchor Agent wrote for a link (linkAnchor's first two sources), or undefined. */
+function writtenAnchor(link: AgentNextRunLink, schedule: AnchoredSchedule, now: AgentMoment): AgentMoment | undefined {
+  if (link.jobNextRunDate !== undefined && link.jobNextRunTime !== undefined) {
+    const at = { date: link.jobNextRunDate, time: link.jobNextRunTime }
+    if (isRunOf(schedule, at)) return at
+  }
+  const saved = momentOfModified(schedule.modified)
+  if (link.nextRunDate !== undefined && link.nextRunTime !== undefined) {
+    const at = { date: link.nextRunDate, time: link.nextRunTime }
+    if (isRunOf(schedule, at) && (!saved || momentSeconds(now) - momentSeconds(saved) >= pairWriteSeconds)) return at
+  }
+  return undefined
 }
 /** Agent's own next run for a saved schedule, the anchor of its every-n cycle: for one job (`jobId`), or for the schedule itself when every
- *  job using it that has a known anchor agrees (jobs attached in different weeks keep different cycles, and then there is none). An edited
- *  timing or a new attachment restarts the cycle at the save, so callers pass this only for a saved, unchanged schedule already attached. */
-export function agentNextRun(links: readonly AgentNextRunLink[] | undefined, scheduleId: number, timing: AgentScheduleTiming, jobId?: string): AgentMoment | undefined {
+ *  job using it with a known anchor keeps the same cycle (jobs attached in different weeks keep different ones, and then there is none). An
+ *  edited timing or a new attachment restarts the cycle at the save, so callers pass this only for a saved, unchanged schedule already
+ *  attached. */
+export function agentNextRun(links: readonly AgentNextRunLink[] | undefined, scheduleId: number, schedule: AnchoredSchedule, now: AgentMoment, jobId?: string): AgentMoment | undefined {
   if (!links) return undefined
-  const anchors = links.filter(link => link.scheduleId === scheduleId && (jobId === undefined || link.jobId.toLowerCase() === jobId.toLowerCase()))
-    .map(link => linkAnchor(links, link, timing)).filter((at): at is AgentMoment => !!at)
-  if (!anchors.length) return undefined
-  return anchors.every(at => momentSeconds(at) === momentSeconds(anchors[0])) ? anchors[0] : undefined
+  const mine = links.filter(link => link.scheduleId === scheduleId && (jobId === undefined || link.jobId.toLowerCase() === jobId.toLowerCase()))
+  if (!mine.length) return undefined
+  // A job Agent has written nothing for yet does not speak for the schedule; with none written, the last save is where the cycle restarted.
+  const anchors = mine.map(link => writtenAnchor(link, schedule, now)).filter((at): at is AgentMoment => !!at)
+  if (!anchors.length) return momentOfModified(schedule.modified)
+  // The same cycle, not the same moment: each anchor's first run must be a run of the cycle counted from the first anchor.
+  const first = anchors[0]
+  return anchors.every(at => { const run = scheduleRuns({ ...schedule, enabled: true }, at, 1, undefined, at)[0]; return !run || isRunOf(schedule, run, first) }) ? first : undefined
 }
 
 /** Why a schedule has no next runs, or undefined when it has some. */

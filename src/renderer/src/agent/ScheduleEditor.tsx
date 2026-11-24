@@ -61,7 +61,8 @@ export default function ScheduleEditor({ idPrefix, fields, base, onChange, disab
   const frequency = { description: 'How often the schedule repeats.', ...textOf(problems, 'frequency', 'interval', 'days') }
   const daily = { description: 'When in the day it runs: once, or every so often between two times.', ...textOf(problems, 'dailyFrequency', 'startTime', 'endTime') }
   const duration = { description: 'The dates the schedule is used between.', ...textOf(problems, 'startDate', 'endDate') }
-  const runs = nextRuns(fields, now, 5, anchor && base && sameTiming(fields, base) ? anchor : undefined)
+  // Agent keeps a saved schedule's every-n cycle; saving any change (Enabled included) restarts it, so only the schedule as saved keeps it.
+  const runs = nextRuns(fields, now, 5, anchor && base && sameTiming(fields, base) && fields.enabled === base.enabled ? anchor : undefined)
   const reason = runs.length ? undefined : noRunsReason(fields, now)
   const unit = subdayUnits.find(item => item.code === fields.freqSubdayType)
   return <div className="agent-schedule-editor">

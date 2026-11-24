@@ -4,7 +4,7 @@
 // the login may read which job uses which schedule (sysadmin); below that, rows are the schedules themselves, each run lasting a minute.
 // Bounded: at most `timelineLimits.rows` rows, `runsPerRow` runs a row and `runs` in all, each cut said in words. Pure and erasable
 // TypeScript: no React, no I/O; times are the server's wall clock as seconds (schedule.ts momentSeconds).
-import type { AgentSchedulesModel } from '../actions/agent-schedule.ts'
+import { momentOfText, type AgentSchedulesModel } from '../actions/agent-schedule.ts'
 import type { AgentScheduleTiming, AgentMoment } from './schedule.ts'
 import { formatTime, freq, linkAnchor, momentOfSeconds, momentSeconds, scheduleRuns, scheduleWhen, unmeasuredSeconds } from './schedule.ts'
 
@@ -272,12 +272,13 @@ export function timelineInputs(model: AgentSchedulesModel): { readonly jobs?: Ti
     ({ id: record.id, name: record.name, enabled: record.enabled, timing: timingOf(record), ...nextRun ? { nextRun } : {} })
   if (!model.links || !model.jobs) return { schedules: model.schedules.filter(record => record.jobCount > 0).map(record => schedule(record)) }
   const records = new Map(model.schedules.map(record => [record.id, record]))
+  const now = momentOfText(model.now)
   const usual = new Map((model.durations ?? []).map(duration => [duration.jobId.toLowerCase(), duration.seconds]))
   const byJob = new Map<string, TimelineScheduleInput[]>()
   for (const link of model.links) {
     const record = records.get(link.scheduleId)
     if (!record) continue
-    const next = linkAnchor(model.links, link, timingOf(record))
+    const next = now ? linkAnchor(link, { ...timingOf(record), ...record.modified ? { modified: record.modified } : {} }, now) : undefined
     const key = link.jobId.toLowerCase()
     byJob.set(key, [...byJob.get(key) ?? [], schedule(record, next)])
   }
