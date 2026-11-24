@@ -1,4 +1,5 @@
 import type { LayoutLoad, LayoutState, WorkspaceLayout } from './layouts'
+import type { InspectorVitalsLoad, InspectorVitalsPrefs } from './inspector-vitals'
 import type { EstimatedPlanRequest, EstimatedPlanResult } from './estimated-plans'
 import type { ConnectContext, ConnectionEnvironmentInput, ConnectionLibraryView, ConnectionProfileInput, ConnectionSaveView, SecretStorageState } from './connections'
 import type { ConnectionAuthentication, ConnectionFailureReason } from './connection-targets'
@@ -1088,8 +1089,6 @@ export interface VariaApi {
   readonly testMode: boolean
   /** True only in unpackaged smoke runs that ask for it (VARIA_TEST_FOLLOW_SYSTEM_MOTION=1): motion follows the system's preference whatever the setting says. */
   readonly followSystemMotion: boolean
-  /** True when main was started with VARIA_AGENT_PREVIEW=1: SQL Server Agent's surfaces show (context key `agentEnabled`) until 0.11.0 removes the gate. */
-  readonly agentPreview: boolean
   /** File › Open: the files chosen, with what could not be read ("name: message"); one failure does not stop the rest. */
   openSqlFiles(): Promise<ApiResult<OpenedFiles>>
   saveSqlFile(options: SaveSqlFile): Promise<ApiResult<SqlFile | null>>
@@ -1171,6 +1170,8 @@ export interface VariaApi {
   closeWindowCancelled(): void
   loadLayouts(): Promise<ApiResult<LayoutLoad>>
   saveLayouts(state: LayoutState): Promise<ApiResult<void>>
+  loadInspectorVitals(): Promise<ApiResult<InspectorVitalsLoad>>
+  saveInspectorVitals(prefs: InspectorVitalsPrefs): Promise<ApiResult<InspectorVitalsPrefs>>
   importLayout(): Promise<ApiResult<WorkspaceLayout | null>>
   exportLayout(layout: WorkspaceLayout): Promise<ApiResult<boolean>>
   onCommand(callback: (command: CommandId) => void): () => void

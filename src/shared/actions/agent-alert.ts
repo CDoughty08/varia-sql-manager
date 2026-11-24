@@ -475,12 +475,12 @@ export interface AgentObjectCommandEntry {
   readonly unavailableHint: string
   readonly menus?: readonly { readonly menu: 'explorer.context' | 'explorer.new'; readonly group: string; readonly order: number; readonly mnemonic?: string; readonly title?: string; readonly when?: string }[]
 }
-const connected = 'agentEnabled && backendReady && hasConnection'
+const connected = 'backendReady && hasConnection'
 const connectFirst = 'Connect to a SQL Server whose SQL Server Agent you can see first.'
 /** Alerts are SQL Server on Windows only (agentPlatformGates.alerts), and only sysadmin creates them. */
 export const alertsMenuWhen = "explorerServerEngine == 'box' && !explorerServerLinux && !explorerServerLost"
 /**
- * The alert document's commands, behind the release gate: New Alert… (the Agent node's New › Alert…, the Alerts folder and an alert's menus,
+ * The alert document's commands: New Alert… (the Agent node's New › Alert…, the Alerts folder and an alert's menus,
  * and the palette), Open Alert… and Add Recommended Alerts… (the Alerts folder), and the document's Save and Reload, which act on the alert
  * document whose header runs them (`tabId`), else the active one. Properties on an alert opens the document through the object actions.
  */
@@ -508,11 +508,11 @@ export function agentAlertCommandEntries(): { readonly [K in AgentAlertCommandId
     },
     'agentAlert.save': {
       title: 'Save Alert', category: 'SQL Server Agent', icon: 'save', keywords: ['agent', 'alert', 'apply', 'ok', 'update'],
-      precondition: 'agentEnabled && backendReady && activeDocumentIsAgentAlert', unavailableHint: 'Change the alert first; a read-only alert cannot be saved.'
+      precondition: 'backendReady && activeDocumentIsAgentAlert', unavailableHint: 'Change the alert first; a read-only alert cannot be saved.'
     },
     'agentAlert.reload': {
       title: 'Reload Alert', category: 'SQL Server Agent', icon: 'refresh', keywords: ['agent', 'alert', 'refresh', 'read', 'discard'],
-      precondition: 'agentEnabled && backendReady && activeDocumentIsAgentAlert', unavailableHint: 'Open an alert first (Properties on an alert in Object Explorer).'
+      precondition: 'backendReady && activeDocumentIsAgentAlert', unavailableHint: 'Open an alert first (Properties on an alert in Object Explorer).'
     }
   }
 }

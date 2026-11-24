@@ -395,12 +395,12 @@ export function agentOverviewCommandEntries(): { readonly [K in AgentOverviewCom
   return {
     'agent.overview': {
       title: 'Agent Overview', category: 'SQL Server Agent', icon: 'agent', keywords: ['agent', 'overview', 'health', 'checks', 'best', 'practice', 'sqlserveragent', 'summary', 'status'],
-      precondition: 'agentEnabled && backendReady && hasConnection', unavailableHint: 'Connect to a SQL Server whose SQL Server Agent you can see first.',
+      precondition: 'backendReady && hasConnection', unavailableHint: 'Connect to a SQL Server whose SQL Server Agent you can see first.',
       menus: [{ menu: 'explorer.context', group: '1_monitor', order: 4, mnemonic: 'w', when: "explorerNode == 'agent' && !explorerServerLost" }]
     },
     'agent.refreshOverview': {
       title: 'Refresh Agent Overview', category: 'SQL Server Agent', icon: 'refresh', keywords: ['agent', 'overview', 'health', 'checks', 'refresh', 'again', 'now'],
-      precondition: 'agentEnabled && backendReady && activeDocumentIsAgentOverview', unavailableHint: 'Open the Agent overview first (SQL Server Agent: Agent Overview).'
+      precondition: 'backendReady && activeDocumentIsAgentOverview', unavailableHint: 'Open the Agent overview first (SQL Server Agent: Agent Overview).'
     }
   }
 }

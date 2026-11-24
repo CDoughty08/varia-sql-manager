@@ -250,7 +250,7 @@ describe('the agent.overview source', () => {
 
 describe('the Agent overview document', () => {
   function overview() {
-    const fixture = workbenchFixture({ agentPreview: true })
+    const fixture = workbenchFixture()
     cleanups.push(() => fixture.dispose())
     fixture.api.push(readyBackend())
     fixture.connect(connectionInfo('c1'))
@@ -308,7 +308,7 @@ describe('the Agent overview document', () => {
 
 describe("the Agent overview's fixes", () => {
   function fixes(commands?: Parameters<typeof createAgentOverviewFixes>[0]['commands'], node = false) {
-    const fixture = workbenchFixture({ agentPreview: true })
+    const fixture = workbenchFixture()
     cleanups.push(() => fixture.dispose())
     fixture.api.push(readyBackend())
     fixture.connect(connectionInfo('c1'))
