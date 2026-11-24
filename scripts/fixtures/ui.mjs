@@ -19,6 +19,7 @@ export const part = {
   statusBar: 'footer[aria-label="Status bar"]',
   queryStatus: '[role="status"][aria-label="Query status"]',
   explorerToolbar: '[role="toolbar"][aria-label="Object Explorer toolbar"]',
+  explorerFilterToolbar: '[role="toolbar"][aria-label="Object Explorer filter and view toolbar"]',
   /** The tree by role and name: it waits for nothing, so page code can look for a tree that is not there yet. */
   explorerTree: '[role="tree"][aria-label="Object Explorer"]',
   // Shell
@@ -126,7 +127,11 @@ export const part = {
   explorerTwistie: '.oe-twistie',
   explorerIcon: '.oe-icon',
   explorerBadge: '.oe-badge',
-  explorerAccent: '.oe-accent',
+  explorerServerTop: '.oe-server-top',
+  explorerServerSub: '.oe-server-sub',
+  explorerServerSubEnd: '.oe-server-sub-end',
+  explorerPkBadge: '.oe-pk-badge',
+  explorerHeader: '.explorer-header',
   /** The tree's own box and rows, for page code that builds a probe tree to read the row styles. */
   explorerTreeView: '.explorer-tree',
   explorerRow: '.explorer-row',
@@ -148,6 +153,8 @@ export const part = {
   /** A Search Objects tab's document. */
   objectSearchTab: '[data-object-search]',
   explorerSearchField: '.object-search-pane .object-search-field',
+  explorerSearchBar: '.object-search-pane .object-search-bar',
+  explorerSearchFilters: '.object-search-pane .object-search-pane-filters',
   /** The pane's footer: the selection's listing and its freshness, then the connected servers. */
   explorerFooter: '.explorer-footer',
   explorerFreshness: '.explorer-freshness',
@@ -231,9 +238,10 @@ export const part = {
   /** The states kit's pill (src/renderer/src/kit/StatusPill.tsx), as a document header shows its state. */
   statusPill: '.status-pill',
   documentBanner: '.document-banner',
-  // Property sheets in documents (src/renderer/src/kit/PropertyField.tsx)
+  // Property sheets in documents (src/renderer/src/kit/PropertyField.tsx & FactGrid.tsx)
   propertyField: '.property-field',
-  propertyFact: '.property-fact',
+  propertyFact: '.property-fact, .fact-grid-row',
+  inspectorTabLabel: '.inspector-tab-label',
   fieldHint: '.field-hint',
   /** The frame's scrolling content under the header and fact line. */
   documentContent: '.document-content',
@@ -872,6 +880,7 @@ export const localGridFrame = (scope, name) => scope.locator(part.localGrid).fil
 // Object Explorer
 
 export const explorerToolbar = page => page.getByRole('toolbar', { name: 'Object Explorer toolbar', exact: true })
+export const explorerFilterToolbar = page => page.getByRole('toolbar', { name: 'Object Explorer filter and view toolbar', exact: true })
 export const explorerTree = page => page.getByRole('tree', { name: 'Object Explorer', exact: true })
 /** The servers: the tree's first level. */
 export const serverRows = page => explorerTree(page).locator('[role="treeitem"][aria-level="1"]')
@@ -1067,6 +1076,11 @@ export const documentStaleBadge = frame => documentHeader(frame).locator(part.st
 /** The fact line's values, in order. */
 export const documentFactValues = frame => frame.locator(part.documentFacts).locator('dd')
 export const sectionList = frame => frame.getByRole('navigation', { name: 'Sections', exact: true })
+/** The unified ObjectInspectorFrame's horizontal tab strip and one tab by title prefix (ignoring trailing counts/marks). */
+export const inspectorTabs = frame => frame.getByRole('tablist', { name: 'Object sections', exact: true })
+export const inspectorTab = (frame, name) => inspectorTabs(frame).getByRole('tab', { name: new RegExp(`^${escaped(name)}(?:\\s|\\(|$)`) })
+export const inspectorTabLabels = frame => inspectorTabs(frame).getByRole('tab').locator(part.inspectorTabLabel)
+export const inspectorPanel = frame => frame.getByRole('tabpanel')
 /** A section's item in the list by the section's id (its name says when the section needs attention). */
 export const sectionItem = (frame, id) => sectionList(frame).locator(`[data-section="${id}"]`)
 export const currentSectionItem = frame => sectionList(frame).locator('[aria-current="location"]')

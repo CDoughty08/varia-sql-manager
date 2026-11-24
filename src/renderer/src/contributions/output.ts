@@ -14,9 +14,12 @@ import { isHiddenColumn } from '../grid/hidden-columns'
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 
 /** The Query Output view that has focus, read as its menu would be: keys and the Edit menu act on it. */
-export function focusedOutput(menuTargets: Pick<MenuTargetService, 'targetFor'>): OutputTarget | undefined {
-  const hit = typeof document === 'undefined' ? undefined : menuTargets.targetFor(windows.activeElement())
-  return hit?.target.kind === 'output' ? hit.target : undefined
+export function focusedOutput(menuTargets: Pick<MenuTargetService, 'targetFor'> & Partial<Pick<MenuTargetService, 'outputFor'>>): OutputTarget | undefined {
+  if (typeof document === 'undefined') return undefined
+  const element = windows.activeElement(), hit = menuTargets.targetFor(element)
+  if (hit?.target.kind === 'output') return hit.target
+  // An owner's menu around the grid (Job Activity Monitor's row menu) replaces Query Output's menu, not its keys.
+  return hit ? menuTargets.outputFor?.(element) : undefined
 }
 
 /** Columns whose values open in a document tab: XML (FOR XML too), JSON (FOR JSON too) and execution plans. */

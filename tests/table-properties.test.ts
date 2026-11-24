@@ -1,3 +1,5 @@
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it } from 'vitest'
 import { actionRequestSchema, type ActionDescribeResult, type ActionExecuteResult, type ActionRequest, type ActionScriptResult } from '../src/shared/actions/schema'
 import { actionPromptBox, actionPromptRequestSchema } from '../src/shared/actions/prompts'
@@ -5,13 +7,21 @@ import { tableLimits, tableMessages, type TablePropertiesModel } from '../src/sh
 import { actionMenuState, dialogSpecs } from '../src/shared/actions/catalog'
 import type { ApiResult } from '../src/shared/contracts'
 import type { ObjectRef } from '../src/shared/explorer/refs'
+import type { Workbench } from '../src/renderer/src/core/workbench'
+import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import { addPropertyRow, initialTableDraft, patchPropertyRow, propertyKey, rowEditable, tableChanged, tableChanges, tableConfirmation, tableErrors, tableNotes, tableRequest, type TableDraft, type TableRequest } from '../src/renderer/src/dialogs/table-properties'
 import { setScriptOpen } from '../src/renderer/src/kit/document-frame'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
-import { generalFacts, storageFacts, tablePages, versioningFacts } from '../src/renderer/src/properties/table-fields'
+import TableProperties from '../src/renderer/src/properties/TableProperties'
+import {
+  formatSpaceKb, generalFacts, storageFacts, tableCapabilities, tableChangeCount, tableHeroKpis,
+  tableInspectorTabFromPeek, tableModifiedTabs, tablePages, tableProblemTabs, tableSpaceRatio,
+  tableStatusPills, tableVitalsFacts, versioningFacts
+} from '../src/renderer/src/properties/table-fields'
 import { previewDelayMs } from '../src/renderer/src/properties/DatabasePropertiesService'
 import { tablePropertiesMessages } from '../src/renderer/src/properties/TablePropertiesService'
-import { connectionInfo, manualTimers, workbenchFixture } from './fixtures/workbench'
+import { descriptor, summaryOf } from './fixtures/results'
+import { connectionInfo, connectionOptions, manualTimers, readyBackend, workbenchFixture } from './fixtures/workbench'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
@@ -151,19 +161,24 @@ describe('Table Properties draft', () => {
 })
 
 /** A workbench whose describe answers Table Properties' model, on manual timers so the Script preview's delay is the test's. */
-function opened(model = tableModel()) {
+function opened(model = tableModel(), canonical = false) {
   const clock = manualTimers()
   const fixture = workbenchFixture({ timers: clock.timers })
   cleanups.push(() => fixture.dispose())
-  fixture.connect(connectionInfo('c1'))
+  const connectionId = canonical ? crypto.randomUUID() : 'c1', targetId = crypto.randomUUID()
+  if (canonical) {
+    fixture.api.push(readyBackend())
+    const attempt = fixture.connections.beginConnect(connectionOptions, 1, targetId)!
+    fixture.connections.accept(connectionInfo(connectionId), connectionOptions, targetId, { principal: { provider: 'sqlserver', authentication: 'sql', id: 'sid:reader' } }, attempt)
+  } else fixture.connect(connectionInfo(connectionId))
   let current = model
   fixture.api.describeObject.mockImplementation(async params => ({ ok: true, value: (params.dialog === 'tableProperties' ? { tableProperties: current, elapsedMs: 1 } : { elapsedMs: 1 }) as ActionDescribeResult }))
   fixture.api.scriptObjectAction.mockImplementation(async params => ({ ok: true, value: { text: `ALTER TABLE -- ${JSON.stringify(params.action === 'tableProperties' ? params.tableChanges : {})}`, database: 'AppData', warnings: [] } as ActionScriptResult }))
   const { tableProperties, documents } = fixture
-  const id = tableProperties.open(node())
+  const id = tableProperties.open(node(orders, connectionId))
   const state = () => tableProperties.get(id)!
   const executes = () => fixture.api.executeObjectAction.mock.calls.map(([sent]) => sent as ActionRequest)
-  return { ...fixture, tableProperties, documents, id, state, executes, clock, setModel: (next: TablePropertiesModel) => { current = next } }
+  return { ...fixture, tableProperties, documents, id, state, executes, clock, connectionId, targetId, setModel: (next: TablePropertiesModel) => { current = next } }
 }
 const done: ApiResult<ActionExecuteResult> = { ok: true, value: { steps: [{ status: 'done', title: 'Set lock escalation' }], messages: [], elapsedMs: 1 } }
 
@@ -273,5 +288,230 @@ describe('Table Properties as a document', () => {
     expect(tableProperties.canEdit(id)).toBe(false)
     tableProperties.updateDraft(id, { lockEscalation: 'AUTO' })
     expect(tableProperties.get(id)?.changed).toBe(false)
+  })
+  it('adds zero extra SQL round-trips on open and lazy-loads Definition, Columns, Indexes & Keys, Dependencies and Preview Rows only on tab activation', async () => {
+    const { tableProperties, documents, results, id, state, api } = opened()
+    await settled()
+    expect(api.describeObject).toHaveBeenCalledTimes(1)
+    expect(api.explorerPeek).not.toHaveBeenCalled()
+    expect(api.scriptObjects).not.toHaveBeenCalled()
+    expect(api.explorerPeekDependencies).not.toHaveBeenCalled()
+    expect(api.tableColumns).not.toHaveBeenCalled()
+    expect(api.execute).not.toHaveBeenCalled()
+    expect(state().activeTab).toBe('overview')
+
+    // Columns triggers explorer.peek once; Indexes & Keys reuses the exact same catalog reply with zero second round-trip.
+    const columns = { rows: [['Id', 'int', false, 'PK', '1, 1', null, null, '[Id] int IDENTITY(1,1) NOT NULL']] }
+    const tableObjects = { rows: [['Primary key', 'PK_Orders', 'Clustered (Id)', 'Active']] }
+    api.explorerPeek.mockResolvedValueOnce({ ok: true, value: { facts: {}, lists: { columns, tableObjects }, elapsedMs: 1 } })
+    tableProperties.selectTab(id, 'columns')
+    await settled()
+    expect(api.explorerPeek).toHaveBeenCalledTimes(1)
+    expect(state().catalog).toEqual({ status: 'ready', value: { columns, tableObjects } })
+    tableProperties.selectTab(id, 'indexes')
+    await settled()
+    expect(api.explorerPeek).toHaveBeenCalledTimes(1)
+
+    // Definition scripts via scripting.script only when activated, copies and opens in a new query tab.
+    tableProperties.selectTab(id, 'definition')
+    await settled()
+    expect(api.scriptObjects).toHaveBeenCalledTimes(1)
+    expect(state().definition).toEqual({ status: 'ready', value: { text: '-- create Sales.Orders' } })
+    await tableProperties.copyDefinition(id)
+    expect(api.writeClipboardText).toHaveBeenCalledWith('-- create Sales.Orders')
+    const docsBefore = documents.getSnapshot().documents.length
+    tableProperties.openDefinitionInQuery(id)
+    expect(documents.getSnapshot().documents.length).toBe(docsBefore + 1)
+
+    // Dependencies loads via explorer.peekDependencies only when activated.
+    api.explorerPeekDependencies.mockResolvedValueOnce({ ok: true, value: { uses: [{ name: 'Customers', schema: 'dbo', kind: 'table' }], usedBy: [], elapsedMs: 1 } })
+    tableProperties.selectTab(id, 'dependencies')
+    await settled()
+    expect(api.explorerPeekDependencies).toHaveBeenCalledTimes(1)
+    expect(state().dependencies).toEqual({ status: 'ready', value: { uses: [{ name: 'Customers', schema: 'dbo', kind: 'table' }], usesTruncated: false, usedBy: [], usedByTruncated: false } })
+
+    // Preview Rows runs tableColumns + execute only when activated, closes its session, and releases results on close.
+    api.execute.mockResolvedValueOnce({ ok: true, value: summaryOf([descriptor(1)]) })
+    tableProperties.selectTab(id, 'preview')
+    await settled()
+    expect(api.tableColumns).toHaveBeenCalledTimes(1)
+    expect(api.execute).toHaveBeenCalledTimes(1)
+    expect(api.closeQuerySession).toHaveBeenCalledTimes(1)
+    expect(state().preview).toMatchObject({ status: 'ready', value: { key: expect.any(String) } })
+    const previewPart = state().preview
+    const previewKey = previewPart?.status === 'ready' ? previewPart.value.key : ''
+    expect(results.getSnapshot()[previewKey]).toBeDefined()
+
+    // Refresh resets lazy tabs and immediately reloads the currently active lazy tab.
+    api.execute.mockResolvedValueOnce({ ok: true, value: summaryOf([descriptor(2)]) })
+    tableProperties.refresh(id)
+    await settled()
+    expect(state().catalog).toBeUndefined()
+    expect(state().definition).toBeUndefined()
+    expect(state().dependencies).toBeUndefined()
+    expect(api.execute).toHaveBeenCalledTimes(2)
+    expect(results.getSnapshot()[previewKey]).toBeUndefined()
+
+    // Closing the document releases Preview Rows results.
+    const nextPreviewPart = state().preview
+    const nextPreviewKey = nextPreviewPart?.status === 'ready' ? nextPreviewPart.value.key : ''
+    tableProperties.closed(id)
+    expect(results.getSnapshot()[nextPreviewKey]).toBeUndefined()
+  })
+  it('opens directly on a requested canonical tab when promoted from Peek and focuses existing documents on that tab', async () => {
+    const { tableProperties, documents, id, state, api } = opened()
+    await settled()
+    expect(state().activeTab).toBe('overview')
+    documents.newQuery()
+    // Re-opening the same table with a target tab brings the existing tab forward and switches directly to that tab.
+    expect(tableProperties.open(node(), 'columns')).toBe(id)
+    await settled()
+    expect(documents.active?.id).toBe(id)
+    expect(state().activeTab).toBe('columns')
+    expect(api.describeObject).toHaveBeenCalledTimes(1)
+    expect(api.explorerPeek).toHaveBeenCalledTimes(1)
+    // Re-opening without an explicit tab preserves the currently active tab.
+    documents.newQuery()
+    expect(tableProperties.open(node())).toBe(id)
+    expect(state().activeTab).toBe('columns')
+  })
+  it('switches orphan rebind to requested tab without firing SQL for the previous tab, and handles disconnect/detach during lazy loads', async () => {
+    const { tableProperties, documents, results, connections, connectionTargets, targets, connectionId, targetId, id, state, api } = opened(tableModel(), true)
+    await settled()
+    api.execute.mockResolvedValueOnce({ ok: true, value: summaryOf([descriptor(1)]) })
+    tableProperties.selectTab(id, 'preview')
+    await settled()
+    expect(api.execute).toHaveBeenCalledTimes(1)
+    // Disconnect cancels/releases preview and marks preview as error.
+    const disconnect = connectionTargets.beginDisconnect(targetId, crypto.randomUUID())!
+    connectionTargets.completeDisconnect(disconnect)
+    targets.detached(targetId, { id: connectionId, generation: 1 })
+    expect(state().preview?.status).toBe('error')
+    expect(results.getSnapshot()).toEqual({})
+    // Reconnect on the same durable target and reopen targeting 'definition': must NOT re-execute preview SQL!
+    const nextConnectionId = crypto.randomUUID()
+    const attempt = connections.beginConnect(connectionOptions, 1, targetId)!
+    expect(connections.accept(connectionInfo(nextConnectionId), connectionOptions, targetId, { principal: { provider: 'sqlserver', authentication: 'sql', id: 'sid:reader' } }, attempt).status).toBe('accepted')
+    expect(tableProperties.open(node(orders, nextConnectionId), 'definition')).toBe(id)
+    await settled()
+    expect(state().activeTab).toBe('definition')
+    expect(api.execute).toHaveBeenCalledTimes(1)
+    expect(api.scriptObjects).toHaveBeenCalledTimes(1)
+    // Detach via documents.update clears connectionId and cancels in-flight lazy dependencies cleanly.
+    let resolveDeps!: (value: ApiResult<{ uses: []; usedBy: []; elapsedMs: number }>) => void
+    api.explorerPeekDependencies.mockImplementationOnce(() => new Promise(resolve => { resolveDeps = resolve }))
+    tableProperties.selectTab(id, 'dependencies')
+    expect(state().dependencies).toEqual({ status: 'loading' })
+    documents.update(id, { connectionId: undefined })
+    expect(state().dependencies?.status).toBe('error')
+    expect(api.explorerCancel).toHaveBeenCalled()
+    // Late reply after detach is ignored.
+    resolveDeps({ ok: true, value: { uses: [], usedBy: [], elapsedMs: 1 } })
+    await settled()
+    expect(state().dependencies?.status).toBe('error')
+    // Open in New Query still works offline (opens an unconnected query tab with the cached definition).
+    const before = documents.getSnapshot().documents.length
+    tableProperties.openDefinitionInQuery(id)
+    expect(documents.getSnapshot().documents.length).toBe(before + 1)
+    expect(documents.active?.connectionId).toBeUndefined()
+  })
+  it('handles non-scriptable droppedLedger and ledgerHistory tables, and invalidates Definition on apply and scripting options changes', async () => {
+    // Dropped ledger / ledger history tables settle Definition without calling scriptObjects once known.
+    const history = opened(tableModel({ ledger: { type: 'LEDGER_HISTORY_TABLE', dropped: false } }))
+    await settled()
+    history.tableProperties.selectTab(history.id, 'definition')
+    await settled()
+    expect(history.api.scriptObjects).not.toHaveBeenCalled()
+    expect(history.state().definition).toEqual({ status: 'ready', value: {} })
+
+    // Normal table: apply invalidates Definition and reloads it when Definition is active; scripting option change also reloads.
+    const { tableProperties, settings, id, state, api } = opened()
+    await settled()
+    tableProperties.selectTab(id, 'definition')
+    await settled()
+    expect(api.scriptObjects).toHaveBeenCalledTimes(1)
+    await settings.update({ 'objectExplorer.scripting.includeHeaders': false })
+    await settled()
+    expect(api.scriptObjects).toHaveBeenCalledTimes(2)
+    tableProperties.updateDraft(id, { lockEscalation: 'DISABLE' })
+    api.executeObjectAction.mockResolvedValueOnce(done)
+    expect(await tableProperties.apply(id)).toBe(true)
+    await settled()
+    expect(api.scriptObjects).toHaveBeenCalledTimes(3)
+    expect(state().definition).toEqual({ status: 'ready', value: { text: '-- create Sales.Orders' } })
+  })
+})
+
+describe('Table Properties unified inspector helpers and view', () => {
+  it('maps Peek tabs (legacy and canonical) onto Table Properties canonical tabs', () => {
+    expect(tableInspectorTabFromPeek(undefined)).toBe('overview')
+    expect(tableInspectorTabFromPeek('overview')).toBe('overview')
+    expect(tableInspectorTabFromPeek('definition')).toBe('definition')
+    expect(tableInspectorTabFromPeek('storage')).toBe('storage')
+    expect(tableInspectorTabFromPeek('columns')).toBe('columns')
+    expect(tableInspectorTabFromPeek('tableObjects')).toBe('indexes')
+    expect(tableInspectorTabFromPeek('indexes')).toBe('indexes')
+    expect(tableInspectorTabFromPeek('dependencies')).toBe('dependencies')
+    expect(tableInspectorTabFromPeek('rows')).toBe('preview')
+    expect(tableInspectorTabFromPeek('preview')).toBe('preview')
+  })
+  it('builds status pills, capabilities, Hero KPIs, space ratios, Vitals and modified/problem tab indicators', () => {
+    const rich = tableModel({
+      general: { ...tableModel().general, memoryOptimized: true, durability: 'SCHEMA_AND_DATA', graph: 'node' },
+      storage: { ...tableModel().storage, dataSpaceKb: 2048, indexSpaceKb: 512, partitioned: true, partitions: [{ number: 1, rows: 600, compression: 'PAGE', filegroup: 'FG1' }, { number: 2, rows: 600, compression: 'ROW', filegroup: 'FG2' }] },
+      temporal: { type: 'SYSTEM_VERSIONED_TEMPORAL_TABLE', other: 'Sales.OrdersHistory' },
+      ledger: { type: 'UPDATABLE_LEDGER_TABLE', dropped: false },
+      changeTracking: { databaseEnabled: true, enabled: true, trackColumnsUpdated: true, primaryKey: true }
+    })
+    expect(formatSpaceKb(88)).toBe('88 KB')
+    expect(formatSpaceKb(2048)).toBe('2.00 MB')
+    expect(tableStatusPills(rich).map(pill => pill.label)).toEqual(['System-versioned', 'Partitioned', 'Memory-optimized', 'Ledger', 'Change tracking', 'Graph node'])
+    const caps = tableCapabilities(rich)
+    expect(caps.filter(item => item.notable).map(item => item.id)).toContain('temporal')
+    expect(caps.filter(item => item.notable).map(item => item.id)).toContain('changeTracking')
+    expect(tableSpaceRatio(rich.storage)?.totalLabel).toBe('2.50 MB')
+    const kpis = tableHeroKpis(rich, { columns: { count: 14 }, indexes: { count: 5 } })
+    expect(kpis.map(kpi => kpi.label)).toEqual(['Rows', 'Total Space', 'Columns', 'Indexes & Keys', 'Partitions'])
+    expect(kpis[1]?.ratio).toHaveLength(2)
+    expect(tableVitalsFacts(rich).map(item => item.label)).toContain('Compression')
+
+    const start = initialTableDraft(rich)
+    expect(tableChangeCount(rich, start)).toBe(0)
+    expect([...tableModifiedTabs(rich, start)]).toEqual([])
+    const edited = patchPropertyRow({ ...start, lockEscalation: 'DISABLE' }, 'read-0', { value: 'Updated' })
+    expect(tableChangeCount(rich, edited)).toBe(2)
+    expect([...tableModifiedTabs(rich, edited)].sort()).toEqual(['extendedProperties', 'overview'])
+    const invalid = addPropertyRow(edited, 'new-empty')
+    expect([...tableProblemTabs(tableErrors(rich, invalid))]).toEqual(['extendedProperties'])
+  })
+  it('renders unified ObjectInspectorFrame with canonical tabs, Hero KPIs, Vitals rail, and natural-height grids without a 12-row cap', async () => {
+    const manyPermissions = Array.from({ length: 20 }, (_, index) => ({
+      principal: `user_${index}`, principalType: 'SQL_USER', permission: 'SELECT', state: 'GRANT', grantor: 'dbo'
+    }))
+    const fixture = opened(tableModel({ permissions: manyPermissions }))
+    await settled()
+    const workbench = { ...fixture, platform: 'win32' } as unknown as Workbench
+    const render = () => renderToStaticMarkup(createElement(WorkbenchProvider, { workbench, children: createElement(TableProperties, { documentId: fixture.id }) }))
+
+    const overviewHtml = render()
+    expect(overviewHtml).toContain('data-object-inspector="table-properties-')
+    expect(overviewHtml).toContain('SQL Server')
+    expect(overviewHtml).toContain('aria-label="Key metrics"')
+    expect(overviewHtml).toContain('aria-label="Vitals"')
+    expect(overviewHtml).toContain('aria-label="Object sections"')
+    for (const title of ['Overview', 'Definition', 'Storage &amp; Layout', 'Columns', 'Indexes &amp; Keys', 'Dependencies', 'Permissions &amp; RLS', 'Extended Properties', 'Preview Rows']) {
+      expect(overviewHtml).toContain(title)
+    }
+
+    // Dirty draft updates header verb to Apply · 1 and adds a modified dot to Overview.
+    fixture.tableProperties.updateDraft(fixture.id, { lockEscalation: 'DISABLE' })
+    const dirtyHtml = render()
+    expect(dirtyHtml).toContain('Apply · 1')
+    expect(dirtyHtml).toContain('(modified)')
+
+    // Permissions & RLS renders its 20-row grid at natural height (22 + 20 * 20 + 2 = 424px), never capped at 12 rows.
+    fixture.tableProperties.selectTab(fixture.id, 'permissions')
+    const permissionsHtml = render()
+    expect(permissionsHtml).toContain('style="height:424px;flex:none"')
   })
 })

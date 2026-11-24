@@ -274,8 +274,8 @@ export function rowStatus(server: ServerStatus | undefined, node: Pick<TreeNode,
 function agentServiceOf(status: readonly { id: string; value: number | string }[] | undefined): AgentServiceState | undefined {
   if (!status) return undefined
   const value = (id: string) => { const entry = status.find(item => item.id === id); return typeof entry?.value === 'number' ? entry.value : undefined }
-  const xps = value('agentXps'), state = value('serviceState'), startup = value('startupType')
-  return { ...xps !== undefined ? { xps } : {}, ...state !== undefined ? { state } : {}, ...startup !== undefined ? { startup } : {} }
+  const xps = value('agentXps'), state = value('serviceState'), startup = value('startupType'), clustered = value('clustered')
+  return { ...xps !== undefined ? { xps } : {}, ...state !== undefined ? { state } : {}, ...startup !== undefined ? { startup } : {}, ...clustered !== undefined ? { clustered: clustered === 1 } : {} }
 }
 
 /** Samples count only while the view runs the subscription they came from. */

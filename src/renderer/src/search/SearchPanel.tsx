@@ -287,6 +287,8 @@ export interface SearchPanelProps {
   readonly onLeave?: () => void
   /** Controls after the scope (the tab's server picker). */
   readonly options?: ReactNode
+  /** Compact inline controls beside the pane's search box (Object Explorer's Filter Settings and Group by Schema). */
+  readonly inlineTools?: ReactNode
 }
 
 /**
@@ -294,7 +296,7 @@ export interface SearchPanelProps {
  * Word and Use Regular Expression, the filters (names, definitions or both, and the object types), what the index holds, and the hits, which reveal
  * their object in Object Explorer, and whose context menu (search.hit.context) selects, scripts and copies it.
  */
-export default function SearchPanel({ searchId, layout, inputRef, onLeave, options }: SearchPanelProps) {
+export default function SearchPanel({ searchId, layout, inputRef, onLeave, options, inlineTools }: SearchPanelProps) {
   const workbench = useWorkbench()
   const { objectSearch, explorer, commands, platform, searchDetails } = workbench
   const snapshot = useServiceSnapshot(objectSearch)
@@ -604,21 +606,24 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
       : <ul ref={element => { list.current = element }} role="listbox" data-search-hits className="object-search-hits" aria-label={pane ? 'Search results' : 'Results'} {...listEvents}>
         {result?.hits.map((hit, index) => hitRow(hit, index, state.connectionId))}
       </ul>
-  return <div ref={root} className={`object-search object-search-${layout}`} data-sized={sized ? '' : undefined} style={sized ? { height: `${snapshot.paneSize! * 100}%` } : undefined}>
+  return <div ref={root} className={`object-search object-search-${layout}`} data-sized={sized ? '' : undefined} data-hits={pane && showHits ? '' : undefined} style={sized ? { height: `${snapshot.paneSize! * 100}%` } : undefined}>
     <div className="object-search-query">
-      <div className="object-search-field" role="search">
-        <Icon name="search" />
-        <input ref={inputRef} type="text" data-object-search-focus aria-label={pane ? 'Search in Object Explorer' : 'Search objects'} placeholder={state.regex ? 'Regular expression' : pane ? 'Search objects' : 'Object name or text in definitions'}
-          maxLength={objectSearchLimits.text} spellCheck={false} autoComplete="off" value={state.text} onChange={event => set({ text: event.target.value })} onKeyDown={onInputKey} />
-        {pane && state.text && <button type="button" className="icon-button" tabIndex={-1} aria-label="Clear search" title="Clear search (Escape)" onClick={() => { set({ text: '' }); root.current?.querySelector<HTMLElement>('[data-object-search-focus]')?.focus() }}><Icon name="close" /></button>}
-        {pane ? <SearchPopover label={`Search options${optionsActive ? ': active' : ''}`} title="Search options" icon="settings-gear" compact active={optionsActive}>
-          {(['caseSensitive', 'wholeWord', 'regex'] as const).map((key, index) => <label key={key} className="object-search-check">
-            <input type="checkbox" checked={state[key]} onChange={() => set({ [key]: !state[key] })} /><span>{['Match Case', 'Match Whole Word', 'Use Regular Expression'][index]}</span>
-          </label>)}
-          <label className="object-search-check" title={fuzzyTitle}>
-            <input type="checkbox" checked={state.fuzzy && !state.regex} disabled={state.regex} onChange={() => set({ fuzzy: !state.fuzzy })} /><span>{fuzzyLabel}</span>
-          </label>
-        </SearchPopover> : <>{toggle('caseSensitive', 'Match Case', 'case-sensitive')}{toggle('wholeWord', 'Match Whole Word', 'whole-word')}{toggle('regex', 'Use Regular Expression', 'regex')}{toggle('fuzzy', fuzzyLabel, 'fuzzy-match', fuzzyTitle)}</>}
+      <div className="object-search-bar">
+        <div className="object-search-field" role="search">
+          <Icon name="search" />
+          <input ref={inputRef} type="text" data-object-search-focus aria-label={pane ? 'Search in Object Explorer' : 'Search objects'} placeholder={state.regex ? 'Regular expression' : pane ? 'Search objects' : 'Object name or text in definitions'}
+            maxLength={objectSearchLimits.text} spellCheck={false} autoComplete="off" value={state.text} onChange={event => set({ text: event.target.value })} onKeyDown={onInputKey} />
+          {pane && state.text && <button type="button" className="icon-button" tabIndex={-1} aria-label="Clear search" title="Clear search (Escape)" onClick={() => { set({ text: '' }); root.current?.querySelector<HTMLElement>('[data-object-search-focus]')?.focus() }}><Icon name="close" /></button>}
+          {pane ? <SearchPopover label={`Search options${optionsActive ? ': active' : ''}`} title="Search options" icon="settings-gear" compact active={optionsActive}>
+            {(['caseSensitive', 'wholeWord', 'regex'] as const).map((key, index) => <label key={key} className="object-search-check">
+              <input type="checkbox" checked={state[key]} onChange={() => set({ [key]: !state[key] })} /><span>{['Match Case', 'Match Whole Word', 'Use Regular Expression'][index]}</span>
+            </label>)}
+            <label className="object-search-check" title={fuzzyTitle}>
+              <input type="checkbox" checked={state.fuzzy && !state.regex} disabled={state.regex} onChange={() => set({ fuzzy: !state.fuzzy })} /><span>{fuzzyLabel}</span>
+            </label>
+          </SearchPopover> : <>{toggle('caseSensitive', 'Match Case', 'case-sensitive')}{toggle('wholeWord', 'Match Whole Word', 'whole-word')}{toggle('regex', 'Use Regular Expression', 'regex')}{toggle('fuzzy', fuzzyLabel, 'fuzzy-match', fuzzyTitle)}</>}
+        </div>
+        {pane && inlineTools}
       </div>
       {!pane && state.database !== undefined && <DatabaseScope database={state.database} onClear={() => { focusInput(); set({ database: undefined }) }} />}
       {showHits && <>

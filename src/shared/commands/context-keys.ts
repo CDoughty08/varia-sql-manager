@@ -16,7 +16,7 @@ import { agentRoleValues } from '../agent/profile.ts'
 export type ContextKeyScope = 'static' | 'state' | 'focus' | 'target'
 interface Declared { readonly scope: Exclude<ContextKeyScope, 'target'>; readonly description: string; readonly menu?: undefined }
 /** A target key describes one kind of context-menu target, so it may appear only in that context menu's placements. */
-interface DeclaredTarget { readonly scope: 'target'; readonly description: string; readonly menu: 'explorer.context' | 'output.context' | 'dockTab.context' | 'documentTab.context' | 'search.hit.context' }
+interface DeclaredTarget { readonly scope: 'target'; readonly description: string; readonly menu: 'explorer.context' | 'explorer.tools' | 'output.context' | 'dockTab.context' | 'documentTab.context' | 'search.hit.context' }
 export type ContextKeyDeclaration =
   | ({ readonly type: 'boolean' } & (Declared | DeclaredTarget))
   | ({ readonly type: 'enum'; readonly values: readonly string[] } & (Declared | DeclaredTarget))
@@ -59,6 +59,7 @@ export const contextKeys = {
   optionsDialogFocus: { type: 'boolean', scope: 'focus', description: 'Focus is in the Options dialog.' },
   designerFocus: { type: 'boolean', scope: 'focus', description: "Focus is in the active table designer; activePanel is then 'editor'." },
   queryBarFocus: { type: 'boolean', scope: 'focus', description: "Focus is in the active query's bar (Execute, Cancel and its server and database lists); activePanel is then 'editor'." },
+  agentStepsFocus: { type: 'boolean', scope: 'focus', description: "Focus is in a SQL Server Agent job document's Steps section (its list or the selected step's fields, but not its command editor, whose Monaco keeps Alt+Up/Down)." },
   activityMonitorFocus: { type: 'boolean', scope: 'focus', description: "Focus is in the active Activity Monitor; activePanel is then 'editor'." },
   documentTabFocus: { type: 'boolean', scope: 'focus', description: "Focus is on a document tab in the strip, or in its rename box; activePanel is then 'editor'." },
   peekFocus: { type: 'boolean', scope: 'focus', description: "Focus is in Object Explorer's Peek card, which floats outside every pane (activePanel is then '')." },
@@ -245,6 +246,9 @@ export const contextKeys = {
   pane: { type: 'enum', scope: 'target', menu: 'dockTab.context', values: ['explorer', 'editor', 'results', 'messages', 'plan', 'statistics', ''], description: "The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, Results, Messages, Execution plan, or Client Statistics." },
   paneFloating: { type: 'boolean', scope: 'target', menu: 'dockTab.context', description: 'The panel the menu is for is floating.' },
   panePopout: { type: 'boolean', scope: 'target', menu: 'dockTab.context', description: 'The panel the menu is for is in a window of its own (Move into New Window).' },
+  explorerToolsLost: { type: 'boolean', scope: 'target', menu: 'explorer.tools', description: 'The selected Object Explorer server in the ⋯ menu is disconnected or lost.' },
+  explorerToolsFloating: { type: 'boolean', scope: 'target', menu: 'explorer.tools', description: 'Object Explorer is floating when its ⋯ menu opens.' },
+  explorerToolsPopout: { type: 'boolean', scope: 'target', menu: 'explorer.tools', description: 'Object Explorer is in a window of its own when its ⋯ menu opens.' },
   documentTabFloating: { type: 'boolean', scope: 'target', menu: 'documentTab.context', description: "The document tab the menu is for is in a floating editor group." },
   searchHitSchema: { type: 'boolean', scope: 'target', menu: 'search.hit.context', description: 'The Search Objects result the menu is for is in a schema (itself, or its parent for a column, key or trigger), so it has schema-qualified and fully qualified names.' },
   searchHitBigQuery: { type: 'boolean', scope: 'target', menu: 'search.hit.context', description: 'The Search Objects result the menu is for is a BigQuery object, whose full name is its backtick-quoted path rather than a bracketed one.' },

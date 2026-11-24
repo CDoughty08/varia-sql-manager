@@ -7,7 +7,7 @@ import { parseCalls } from './fixtures/call-log.mjs'
 import { explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, anyResultGrid, resultIdOf, backendReady, closeDocumentButton, connectDialogWindow, documentTab, documentTabs, editorStatus, editorText as editorTextOf, emptyState, emptyStateIcon, emptyStateTitle, errorMessages,
-  editorGroups, environmentPill, executingMark, explorerFooter, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, part, primaryAction, queryBar, queryBarButton, queryConnection, queryDatabase, queryPlanButton, queryPlanMenu, queryPlanOption, queryServer,
+  editorGroups, environmentPill, executingMark, explorerFooter, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, paneMenuButton, part, primaryAction, queryBar, queryBarButton, queryConnection, queryDatabase, queryPlanButton, queryPlanMenu, queryPlanOption, queryServer,
   queryStatus, readOnlyMark, resultGrid, selectOpenDocument, statusChips, submitConnect, tabNameBox, toolbar, toolbarButton, unsavedMark, workspaceEmpty, expectEditorShown
 } from './fixtures/ui.mjs'
 import { pinStackedResults } from './fixtures/results-pane.mjs'
@@ -1007,10 +1007,11 @@ try {
   await activeDocument(page).focus()
   await page.keyboard.press('Space')
   await page.screenshot({ path: artifact('workbench.png') })
-  // The toolbar's Disconnect acts on the selected node's server, retaining its root and query target after Keep Tabs.
+  // The panel menu's Disconnect acts on the selected node's server, retaining its root and query target after Keep Tabs.
   await (await explorerRow(page, 'server-b', 'Security')).click()
   const tabsBeforeDisconnect = await documentTabs(page).getByRole('tab').count()
-  await explorerToolbar(page).getByRole('button', { name: 'Disconnect', exact: true }).click()
+  await paneMenuButton(page, 'explorer').click()
+  await page.getByRole('menu', { name: 'Object Explorer menu', exact: true }).getByRole('menuitem', { name: 'Disconnect', exact: true }).click()
   const disconnectPrompt = page.getByRole('dialog', { name: 'Disconnect server-b?', exact: true })
   await expect(disconnectPrompt).toBeVisible()
   await disconnectPrompt.getByRole('button', { name: 'Disconnect and Keep Tabs', exact: true }).click()
@@ -1033,7 +1034,12 @@ try {
     // The header's controls (search box, buttons, server and database lists) sit on its middle line.
     const header = document.querySelector(part.titleBarContent), controls = [...header.querySelectorAll('button, select')].filter(element => element.getBoundingClientRect().width > 0)
     const headings = [...document.querySelectorAll(part.explorerTree + ' [role="treeitem"]')].filter(element => element.getBoundingClientRect().height > 0)
-    const distances = headings.flatMap(element => [element.querySelector(part.explorerLabel), element.querySelector(part.explorerSublabel), element.querySelector(part.explorerTwistie)].filter(Boolean).map(item => Math.abs(center(element.querySelector(part.explorerIcon)) - center(item))))
+    const distances = headings.flatMap(element => {
+      const icon = element.querySelector(part.explorerIcon)
+      // Server rows are 2-line bands whose sublabel sits on Line 2 below the icon's line.
+      const sublabel = element.querySelector(part.explorerServerTop) ? null : element.querySelector(part.explorerSublabel)
+      return [element.querySelector(part.explorerLabel), sublabel, element.querySelector(part.explorerTwistie)].filter(Boolean).map(item => Math.abs(center(icon) - center(item)))
+    })
     const safe = navigator.windowControlsOverlay.getTitlebarAreaRect()
     return { field: Math.max(...controls.map(control => Math.abs(center(control) - center(header)))), tree: Math.max(...distances), headingCount: headings.length, titleBarFits: document.querySelector(part.titleBarContent).getBoundingClientRect().right <= safe.x + safe.width + 1, overflow: document.documentElement.scrollWidth > window.innerWidth }
   }, part)

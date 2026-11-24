@@ -820,7 +820,7 @@ try {
   // Object Explorer shows the server by its name and color, expanded to its folders.
   const serverRow = await explorerRow(page, 'Development')
   await expect(serverRow).toHaveAttribute('aria-expanded', 'true')
-  expect(await serverRow.locator(part.explorerAccent).evaluate(element => getComputedStyle(element).backgroundColor)).toBe('rgb(230, 103, 103)')
+  expect(await serverRow.evaluate(element => ({ accent: element.hasAttribute('data-accent'), border: getComputedStyle(element, '::after').borderTopColor }))).toEqual({ accent: true, border: 'rgb(230, 103, 103)' })
   await expect(await explorerRow(page, 'Development', 'Server Objects')).toBeVisible()
   await page.locator('.monaco-editor [role="textbox"]').focus()
   await page.keyboard.press('Control+A')
@@ -1330,7 +1330,7 @@ async function environmentLabels() {
     probe.style.backgroundColor = 'var(--varia-statusPill-criticalBackground)'
     document.body.append(probe)
     const expected = getComputedStyle(probe), box = pill.getBoundingClientRect(), outer = element.getBoundingClientRect()
-    const result = { color: style.color === expected.color, fill: style.backgroundColor === expected.backgroundColor, accent: !!element.querySelector(part.explorerAccent),
+    const result = { color: style.color === expected.color, fill: style.backgroundColor === expected.backgroundColor, accent: element.hasAttribute('data-accent'),
       inside: box.top >= outer.top && box.bottom <= outer.bottom && box.right <= outer.right + 0.5, whole: pill.scrollWidth <= pill.clientWidth }
     probe.remove()
     return result

@@ -1,25 +1,59 @@
-import { useMemo } from 'react'
-import { useDomRowCopy } from '../grid/row-copy'
-import { dialogSpecs, type PageId } from '../../../shared/actions/catalog.ts'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { tableLimits, type TablePropertiesModel } from '../../../shared/actions/tables.ts'
+import { kindSpecs } from '../../../shared/explorer/catalog.ts'
+import { isPeekKind, type PeekDependency, type PeekList, type PeekListId } from '../../../shared/explorer/peek.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
-import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
-import { propertyKey, rowEditable, tableNotes, tableProblemSections, type TableDraft } from '../dialogs/table-properties'
+import { onUnexpectedError } from '../core/errors'
+import { useServiceSelector, useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
+import { propertyKey, rowEditable, tableNotes, type TableDraft } from '../dialogs/table-properties'
+import { createQueryEditor } from '../editor/create-editor'
+import ExplorerIcon from '../explorer/ExplorerIcon'
+import { PeekEditor, peekEditorUse } from '../explorer/peek-editor'
+import { PeekListGrid } from '../explorer/PeekListGrid'
+import { copyableDefinition, peekMessages, tooLongToCopy, type PeekDefinition, type PeekDependencies, type PeekPart, type PeekRows } from '../explorer/PeekService'
+import ResultsStack from '../grid/ResultsStack'
+import { useDomRowCopy } from '../grid/row-copy'
 import Icon from '../Icon'
-import DocumentFrame, { type FrameSection, type Verb } from '../kit/DocumentFrame'
+import CapabilityChips from '../kit/CapabilityChips'
+import { resizeScript, setScriptOpen } from '../kit/document-frame'
+import type { Verb } from '../kit/DocumentFrame'
+import FactGrid from '../kit/FactGrid'
 import InlineError from '../kit/InlineError'
-import PropertyField, { FactList, FieldHints, FieldHintStrip, fieldAria } from '../kit/PropertyField'
+import ObjectInspectorFrame, { type InspectorTab } from '../kit/ObjectInspectorFrame'
+import PropertyField, { FieldHints, FieldHintStrip, fieldAria } from '../kit/PropertyField'
+import RatioBar from '../kit/RatioBar'
 import Segmented from '../kit/Segmented'
 import Skeleton from '../kit/Skeleton'
+import StatusPill from '../kit/StatusPill'
 import Switch from '../kit/Switch'
-import { permissionsTable, partitionsTable, predicatesTable } from './grids'
+import type { ExplorerMenuNode } from '../menus/targets'
+import { settingsDocumentOptions } from '../services/documents'
+import { partitionsTable, permissionsTable, predicatesTable } from './grids'
 import PropertiesGrid from './PropertiesGrid'
-import { generalFacts, lockEscalationSegments, storageFacts, tablePages, versioningFacts } from './table-fields'
+import {
+  generalFacts, lockEscalationSegments, storageFacts, tableCapabilities, tableChangeCount, tableHeroKpis,
+  tableModifiedTabs, tableProblemTabs, tableSpaceRatio, tableStatusPills, tableVitalsFacts, toFactItems,
+  versioningFacts, type TableCatalogCounts, type TableInspectorTabId
+} from './table-fields'
 import type { TablePropertiesService, TablePropertiesState } from './TablePropertiesService'
 
 const fieldId = (documentId: string, key: string) => `table-properties-${documentId}-${key}`
+const monoIdentity = new Set(['Name', 'Schema'])
+const monoVersioning = new Set(['History table', 'Current table', 'Period start column', 'Period end column', 'Ledger view', 'Ledger history table'])
+const monoStorage = new Set(['Filegroup', 'Text filegroup', 'FILESTREAM filegroup', 'Partition scheme', 'Partition column'])
 
-interface SectionProps {
+const definitionEditorUse = {
+  ...peekEditorUse,
+  readOnly: { message: 'Definition is read-only. Use Open in New Query to edit the script.' },
+  inEditorPane: true
+} as const
+
+/** Moves focus back to the selected inspector tab before Retry removes the Retry button from the DOM. */
+function focusSelectedInspectorTab(event: MouseEvent<HTMLButtonElement>): void {
+  event.currentTarget.closest('[data-object-inspector]')?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus()
+}
+
+interface TabProps {
   readonly state: TablePropertiesState
   readonly model: TablePropertiesModel
   readonly draft: TableDraft
@@ -28,88 +62,252 @@ interface SectionProps {
   readonly service: TablePropertiesService
 }
 
-function GeneralSection({ state, model, draft, editable, service }: SectionProps) {
-  const facts = generalFacts(model), versioning = versioningFacts(model), id = fieldId(state.id, 'lockEscalation')
-  const changed = draft.lockEscalation !== model.general.lockEscalation
-  const note = model.general.memoryOptimized ? tableNotes.memoryOptimized : undefined
-  const description = 'How SQL Server escalates row and page locks: to the table, to the partition (Auto, on a partitioned table), or not at all (Disable).'
-  return <div className="properties-general">
-    <h3 className="properties-group-title">Description</h3>
-    <FactList facts={facts.description} />
-    <h3 className="properties-group-title">Options</h3>
-    <FactList facts={facts.options} />
-    <div className="properties-fields">
-      <PropertyField id={id} label="Lock escalation" changed={changed} labelFor={false} description={description} note={note}>
-        <Segmented id={id} labelledBy={`${id}-label`} segments={lockEscalationSegments} value={draft.lockEscalation} disabled={!editable || model.general.memoryOptimized} changed={changed}
-          {...fieldAria(id, { description, note, changed })} onChange={value => service.updateDraft(state.id, { lockEscalation: value })} />
-      </PropertyField>
-    </div>
-    {versioning.temporal && <><h3 className="properties-group-title">Temporal</h3><FactList facts={versioning.temporal} /></>}
-    {versioning.ledger && <><h3 className="properties-group-title">Ledger</h3><FactList facts={versioning.ledger} /></>}
-  </div>
+function ModelPlaceholder({ state }: { readonly state: TablePropertiesState }) {
+  return state.phase === 'loading'
+    ? <Skeleton rows={4} label="Reading the table" />
+    : <p className="field-note">{state.phase === 'loadFailed' ? 'Nothing to show: the table could not be read.' : ''}</p>
 }
 
-function PermissionsSection({ state, model }: Pick<SectionProps, 'state' | 'model'>) {
-  const table = useMemo(() => permissionsTable(model), [model])
-  return <div className="properties-permissions">
-    <h3 className="properties-group-title">Permissions granted or denied on the table</h3>
-    <PropertiesGrid table={table} label="Permissions" empty="No permissions are granted or denied on this table." suggestedName={`${state.label} permissions`} />
-    <p className="field-note">{model.permissionsTruncated ? `The table has more than ${tableLimits.permissions.toLocaleString()} permissions; the first are listed. ` : ''}Grant, deny and revoke permissions in a query window.</p>
-  </div>
-}
-
-function ChangeTrackingSection({ state, model, draft, editable, errors, service }: SectionProps) {
-  const tracking = model.changeTracking, id = fieldId(state.id, 'changeTracking'), columnsId = fieldId(state.id, 'trackColumnsUpdated')
-  const changed = draft.changeTracking !== tracking.enabled, columnsChanged = draft.changeTracking && draft.trackColumnsUpdated !== tracking.trackColumnsUpdated
+function OverviewTab({ state, model, draft, editable, errors, service }: TabProps) {
+  const facts = generalFacts(model), versioning = versioningFacts(model)
+  const capabilities = useMemo(() => tableCapabilities(model), [model])
+  const lockId = fieldId(state.id, 'lockEscalation')
+  const lockChanged = draft.lockEscalation !== model.general.lockEscalation
+  const lockNote = model.general.memoryOptimized ? tableNotes.memoryOptimized : undefined
+  const lockDescription = 'How SQL Server escalates row and page locks: to the table, to the partition (Auto, on a partitioned table), or not at all (Disable).'
+  const tracking = model.changeTracking
+  const trackingId = fieldId(state.id, 'changeTracking'), columnsId = fieldId(state.id, 'trackColumnsUpdated')
+  const trackingChanged = draft.changeTracking !== tracking.enabled
+  const columnsChanged = draft.changeTracking && draft.trackColumnsUpdated !== tracking.trackColumnsUpdated
   const memory = model.general.memoryOptimized
-  const note = memory ? tableNotes.trackingMemoryOptimized : !tracking.enabled && !tracking.databaseEnabled ? tableNotes.databaseTracking : !tracking.enabled && !tracking.primaryKey ? tableNotes.primaryKey : undefined
-  const text = { description: 'Whether SQL Server tracks which rows change, for applications that synchronize from the table.', note, error: errors.get('changeTracking') }
-  const columns = { description: 'Whether SQL Server also tracks which columns of a row changed.', ...!draft.changeTracking ? { note: 'Turn change tracking on first.' } : {} }
-  return <div className="properties-change-tracking">
-    <FactList facts={[{ label: 'Change tracking on the database', value: tracking.databaseEnabled ? 'True' : 'False' }, { label: 'Primary key', value: tracking.primaryKey ? 'True' : 'False', title: 'Change tracking needs one.' }]} />
+  const trackingNote = memory ? tableNotes.trackingMemoryOptimized : !tracking.enabled && !tracking.databaseEnabled ? tableNotes.databaseTracking : !tracking.enabled && !tracking.primaryKey ? tableNotes.primaryKey : undefined
+  const trackingText = { description: 'Whether SQL Server tracks which rows change, for applications that synchronize from the table.', note: trackingNote, error: errors.get('changeTracking') }
+  const columnsText = { description: 'Whether SQL Server also tracks which columns of a row changed.', ...!draft.changeTracking ? { note: 'Turn change tracking on first.' } : {} }
+  const trackingPrereqs = useMemo(() => [
+    { id: 'dbTracking', label: 'Change tracking on the database', value: tracking.databaseEnabled ? 'True' : 'False' },
+    { id: 'primaryKey', label: 'Primary key', value: tracking.primaryKey ? 'True' : 'False', title: 'Change tracking needs one.' }
+  ], [tracking.databaseEnabled, tracking.primaryKey])
+
+  return <div className="table-inspector-overview">
+    <h3 className="table-inspector-heading">Identity &amp; Lifecycle</h3>
+    <FactGrid facts={toFactItems(facts.description, monoIdentity)} />
+    <h3 className="table-inspector-heading">Capabilities &amp; Flags</h3>
+    <CapabilityChips items={capabilities} label="Table capabilities" empty="No special capabilities enabled." />
+    {versioning.temporal && <>
+      <h3 className="table-inspector-heading">Temporal</h3>
+      <FactGrid facts={toFactItems(versioning.temporal, monoVersioning)} />
+    </>}
+    {versioning.ledger && <>
+      <h3 className="table-inspector-heading">Ledger</h3>
+      <FactGrid facts={toFactItems(versioning.ledger, monoVersioning)} />
+    </>}
+    <h3 className="table-inspector-heading">Editable Options</h3>
     <div className="properties-fields">
-      <PropertyField id={id} label="Change Tracking" changed={changed} {...text}>
-        <Switch id={id} checked={draft.changeTracking} disabled={!editable || memory || (!tracking.enabled && (!tracking.databaseEnabled || !tracking.primaryKey))} changed={changed}
-          {...fieldAria(id, { ...text, changed })} onChange={checked => service.updateDraft(state.id, { changeTracking: checked })} />
+      <PropertyField id={lockId} label="Lock escalation" changed={lockChanged} labelFor={false} description={lockDescription} note={lockNote}>
+        <Segmented id={lockId} labelledBy={`${lockId}-label`} segments={lockEscalationSegments} value={draft.lockEscalation} disabled={!editable || memory} changed={lockChanged}
+          {...fieldAria(lockId, { description: lockDescription, note: lockNote, changed: lockChanged })} onChange={value => service.updateDraft(state.id, { lockEscalation: value })} />
       </PropertyField>
-      <PropertyField id={columnsId} label="Track Columns Updated" changed={columnsChanged} {...columns}>
+      <PropertyField id={trackingId} label="Change Tracking" changed={trackingChanged} {...trackingText}>
+        <Switch id={trackingId} checked={draft.changeTracking} disabled={!editable || memory || (!tracking.enabled && (!tracking.databaseEnabled || !tracking.primaryKey))} changed={trackingChanged}
+          {...fieldAria(trackingId, { ...trackingText, changed: trackingChanged })} onChange={checked => service.updateDraft(state.id, { changeTracking: checked })} />
+      </PropertyField>
+      <PropertyField id={columnsId} label="Track Columns Updated" changed={columnsChanged} {...columnsText}>
         <Switch id={columnsId} checked={draft.changeTracking && draft.trackColumnsUpdated} disabled={!editable || memory || !draft.changeTracking} changed={columnsChanged}
-          {...fieldAria(columnsId, { ...columns, changed: columnsChanged })} onChange={checked => service.updateDraft(state.id, { trackColumnsUpdated: checked })} />
+          {...fieldAria(columnsId, { ...columnsText, changed: columnsChanged })} onChange={checked => service.updateDraft(state.id, { trackColumnsUpdated: checked })} />
       </PropertyField>
     </div>
+    <h3 className="table-inspector-heading">Change Tracking Prerequisites</h3>
+    <FactGrid facts={trackingPrereqs} />
   </div>
 }
 
-function StorageSection({ state, model }: Pick<SectionProps, 'state' | 'model'>) {
-  const facts = storageFacts(model), partitions = useMemo(() => partitionsTable(model), [model])
-  return <div className="properties-storage">
-    <h3 className="properties-group-title">Compression</h3>
-    <FactList facts={facts.compression} />
-    <h3 className="properties-group-title">Filegroups</h3>
-    <FactList facts={facts.filegroups} />
-    <h3 className="properties-group-title">Partitioning</h3>
-    <FactList facts={facts.partitioning} />
-    <h3 className="properties-group-title">General</h3>
-    <FactList facts={facts.general} />
+function DefinitionTab({ state, part, editor, connectionId, connected, service }: {
+  readonly state: TablePropertiesState
+  readonly part: PeekPart<PeekDefinition> | undefined
+  readonly editor: PeekEditor | undefined
+  readonly connectionId: string
+  readonly connected: boolean
+  readonly service: TablePropertiesService
+}) {
+  const slot = useRef<HTMLDivElement>(null)
+  const [copied, setCopied] = useState(false)
+  const text = part?.status === 'ready' ? part.value.text : undefined
+  const copyable = copyableDefinition(text)
+  const shownKey = text === undefined ? undefined : `${state.id}:${state.definitionEpoch}:${connectionId}`
+
+  useLayoutEffect(() => {
+    const here = slot.current
+    if (!here || !editor || text === undefined || !shownKey) return
+    try {
+      editor.show(here, {
+        key: shownKey, text, connectionId,
+        ...(state.target.database === undefined ? {} : { database: state.target.database })
+      })
+    } catch (failure) { onUnexpectedError(failure) }
+    return () => editor.hide(here)
+  }, [editor, text, shownKey, connectionId, state.target.database])
+
+  useEffect(() => {
+    if (!copied) return
+    const timer = setTimeout(() => setCopied(false), 1500)
+    return () => clearTimeout(timer)
+  }, [copied])
+
+  const onCopy = () => {
+    void service.copyDefinition(state.id).then(written => { if (written) setCopied(true) }, onUnexpectedError)
+  }
+
+  return <>
+    <div className="table-inspector-toolbar" role="toolbar" aria-label="Definition actions">
+      <button type="button" className="ui-button table-inspector-toolbar-btn" data-control-variant="secondary" disabled={!copyable}
+        title={text !== undefined && !copyable ? tooLongToCopy : 'Copy definition'}
+        onClick={onCopy}>
+        <Icon name={copied ? 'check' : 'copy'} /><span>{copied ? 'Copied' : 'Copy'}</span>
+      </button>
+      <button type="button" className="ui-button table-inspector-toolbar-btn" data-control-variant="secondary" disabled={text === undefined}
+        title="Open CREATE script in a new query tab"
+        onClick={() => service.openDefinitionInQuery(state.id)}>
+        <Icon name="new-file" /><span>Open in New Query</span>
+      </button>
+    </div>
+    <div className="table-inspector-editor-fill">
+      {(!part || part.status === 'loading') && <p className="table-inspector-note" role="status"><Icon name="loading" spin />Loading the definition…</p>}
+      {part?.status === 'error' && <div className="table-inspector-note error" role="alert">
+        <span>{part.message}</span>
+        <button type="button" className="ui-button table-inspector-toolbar-btn" data-control-variant="secondary" disabled={!connected}
+          onClick={event => { focusSelectedInspectorTab(event); service.retryTab(state.id, 'definition') }}>Retry</button>
+      </div>}
+      {part?.status === 'ready' && text === undefined && <p className="table-inspector-note">{peekMessages.noDefinition}</p>}
+      {text !== undefined && <div ref={slot} className="peek-editor" />}
+    </div>
+  </>
+}
+
+function StorageTab({ state, model }: Pick<TabProps, 'state' | 'model'>) {
+  const facts = storageFacts(model)
+  const spaceRatio = useMemo(() => tableSpaceRatio(model.storage), [model.storage])
+  const partitions = useMemo(() => partitionsTable(model), [model])
+  return <div className="table-inspector-storage">
+    {spaceRatio && <RatioBar title="Data vs. Index Space" totalLabel={spaceRatio.totalLabel} segments={spaceRatio.segments} />}
+    <h3 className="table-inspector-heading">General</h3>
+    <FactGrid facts={toFactItems(facts.general)} />
+    <h3 className="table-inspector-heading">Compression</h3>
+    <FactGrid facts={toFactItems(facts.compression)} />
+    <h3 className="table-inspector-heading">Filegroups</h3>
+    <FactGrid facts={toFactItems(facts.filegroups, monoStorage)} />
+    <h3 className="table-inspector-heading">Partitioning</h3>
+    <FactGrid facts={toFactItems(facts.partitioning, monoStorage)} />
     {model.storage.partitioned && <>
-      <h3 className="properties-group-title">Partitions</h3>
-      <PropertiesGrid table={partitions} label="Partitions" empty="No partitions are listed." suggestedName={`${state.label} partitions`} />
+      <h3 className="table-inspector-heading">Partitions</h3>
+      <PropertiesGrid table={partitions} label="Partitions" empty="No partitions are listed." suggestedName={`${state.label} partitions`} maxRows={Infinity} />
       {model.storage.partitionsTruncated && <p className="field-note">The table has more partitions than are listed.</p>}
     </>}
     <p className="field-note">Change compression and partitioning with Manage Compression and Create Partition in a query window.</p>
   </div>
 }
 
-function SecurityPredicatesSection({ state, model }: Pick<SectionProps, 'state' | 'model'>) {
-  const table = useMemo(() => predicatesTable(model), [model])
-  return <div className="properties-security-predicates">
-    <h3 className="properties-group-title">Row-level security predicates on the table</h3>
-    <PropertiesGrid table={table} label="Security predicates" empty="No security predicates apply to this table." suggestedName={`${state.label} security predicates`} />
-    {model.securityPredicatesTruncated && <p className="field-note">The table has more predicates than are listed.</p>}
+function CatalogListTab({ state, id, tabId, list, part, connected, service }: {
+  readonly state: TablePropertiesState
+  readonly id: PeekListId
+  readonly tabId: TableInspectorTabId
+  readonly list: PeekList | undefined
+  readonly part: PeekPart<unknown> | undefined
+  readonly connected: boolean
+  readonly service: TablePropertiesService
+}) {
+  if (!part || part.status === 'loading') return <p className="table-inspector-note" role="status"><Icon name="loading" spin />Loading…</p>
+  if (part.status === 'error') return <div className="table-inspector-note error" role="alert">
+    <span>{part.message}</span>
+    <button type="button" className="ui-button table-inspector-toolbar-btn" data-control-variant="secondary" disabled={!connected}
+      onClick={event => { focusSelectedInspectorTab(event); service.retryTab(state.id, tabId) }}>Retry</button>
+  </div>
+  return <div className="table-inspector-grid-fill">
+    <PeekListGrid id={id} list={list} preset="page" fill objectName={state.label} />
+    {list?.truncated && <p className="table-inspector-note">There are more items than are listed.</p>}
   </div>
 }
 
-function ExtendedPropertiesSection({ state, model, draft, editable: documentEditable, errors, service }: SectionProps) {
+const dependencyName = (dependency: PeekDependency) => displayText([dependency.server, dependency.database, dependency.schema, dependency.name].filter(part => part !== undefined).join('.'))
+
+function canFollowDependency(dependency: PeekDependency): boolean {
+  return dependency.kind !== undefined && isPeekKind(dependency.kind) && kindSpecs[dependency.kind].scope === 'schemaObject'
+    && dependency.server === undefined && dependency.database === undefined && dependency.schema !== undefined
+}
+
+function DependencyGroup({ title, items, truncated, connected, onOpen }: {
+  readonly title: string
+  readonly items: readonly PeekDependency[]
+  readonly truncated: boolean
+  readonly connected: boolean
+  readonly onOpen: (dependency: PeekDependency) => void
+}) {
+  return <section aria-label={title}>
+    <h3 className="table-inspector-heading">{title}</h3>
+    {items.length === 0
+      ? <p className="field-note">{peekMessages.noDependencies}</p>
+      : <ul className="table-inspector-dep-list">{items.map((dependency, index) => {
+        const icon = <ExplorerIcon name={dependency.kind ? kindSpecs[dependency.kind].icon : 'references'} />
+        const note = dependency.foreignKey ? 'Foreign key' : dependency.kind ? kindSpecs[dependency.kind].title : undefined
+        const name = dependencyName(dependency)
+        const body = <>{icon}<bdi className="table-inspector-dep-name">{name}</bdi>{note && <span className="table-inspector-dep-kind">{note}</span>}</>
+        return <li key={`${name}-${index}`} className="table-inspector-dep-item">
+          {canFollowDependency(dependency)
+            ? <button type="button" className="table-inspector-dep-link" disabled={!connected}
+              aria-label={`Open ${name}`} title={connected ? `Open ${name}` : peekMessages.notConnected} onClick={() => onOpen(dependency)}>{body}</button>
+            : body}
+        </li>
+      })}</ul>}
+    {truncated && <p className="field-note">There are more dependencies than are listed.</p>}
+  </section>
+}
+
+function DependenciesTab({ state, part, connectionId, connected, service }: {
+  readonly state: TablePropertiesState
+  readonly part: PeekPart<PeekDependencies> | undefined
+  readonly connectionId: string
+  readonly connected: boolean
+  readonly service: TablePropertiesService
+}) {
+  const { documents, peekTabs } = useWorkbench()
+  if (!part || part.status === 'loading') return <p className="table-inspector-note" role="status"><Icon name="loading" spin />Loading dependencies…</p>
+  if (part.status === 'error') return <div className="table-inspector-note error" role="alert">
+    <span>{part.message}</span>
+    <button type="button" className="ui-button table-inspector-toolbar-btn" data-control-variant="secondary" disabled={!connected}
+      onClick={event => { focusSelectedInspectorTab(event); service.retryTab(state.id, 'dependencies') }}>Retry</button>
+  </div>
+  const openDependency = (dependency: PeekDependency) => {
+    if (!connected || !connectionId || !dependency.kind || !dependency.schema || !canFollowDependency(dependency)) return
+    const object = { kind: dependency.kind, ...(state.target.database === undefined ? {} : { database: state.target.database }), schema: dependency.schema, name: dependency.name }
+    const node: ExplorerMenuNode = {
+      id: -1, connectionId, kind: dependency.kind, ...(dependency.subtype === undefined ? {} : { subtype: dependency.subtype }),
+      ref: { type: 'object', object }, label: `${dependency.schema}.${dependency.name}`, lost: false
+    }
+    // Route through peekTabs.open so tables promote cleanly to TableProperties and disconnected checks stay unified.
+    if (peekTabs.open(node)) documents.focusActive()
+  }
+  const { uses, usesTruncated, usedBy, usedByTruncated } = part.value
+  return <div className="table-inspector-deps">
+    <DependencyGroup title="Uses" items={uses} truncated={usesTruncated} connected={connected} onOpen={openDependency} />
+    <DependencyGroup title="Used by" items={usedBy} truncated={usedByTruncated} connected={connected} onOpen={openDependency} />
+  </div>
+}
+
+function PermissionsTab({ state, model }: Pick<TabProps, 'state' | 'model'>) {
+  const permissions = useMemo(() => permissionsTable(model), [model])
+  const predicates = useMemo(() => predicatesTable(model), [model])
+  return <div className="table-inspector-permissions">
+    <h3 className="table-inspector-heading">Permissions granted or denied on the table</h3>
+    <PropertiesGrid table={permissions} label="Permissions" empty="No permissions are granted or denied on this table." suggestedName={`${state.label} permissions`} maxRows={Infinity} />
+    <p className="field-note">{model.permissionsTruncated ? `The table has more than ${tableLimits.permissions.toLocaleString()} permissions; the first are listed. ` : ''}Grant, deny and revoke permissions in a query window.</p>
+    {model.securityPredicates !== undefined && <>
+      <h3 className="table-inspector-heading">Row-level security predicates</h3>
+      <PropertiesGrid table={predicates} label="Security predicates" empty="No security predicates apply to this table." suggestedName={`${state.label} security predicates`} maxRows={Infinity} />
+      {model.securityPredicatesTruncated && <p className="field-note">The table has more predicates than are listed.</p>}
+    </>}
+  </div>
+}
+
+function ExtendedPropertiesTab({ state, model, draft, editable: documentEditable, errors, service }: TabProps) {
   const copyRow = useDomRowCopy()
   // A truncated list cannot be diffed safely (an add could collide with a property not listed), so it is read-only.
   const editable = documentEditable && !model.extendedPropertiesTruncated
@@ -119,7 +317,7 @@ function ExtendedPropertiesSection({ state, model, draft, editable: documentEdit
     if (key) requestAnimationFrame(() => document.getElementById(fieldId(state.id, `${key}-name`))?.focus())
   }
   return <div className="properties-extended">
-    <h3 className="properties-group-title" id={heading}>Extended properties</h3>
+    <h3 className="table-inspector-heading" id={heading}>Extended properties</h3>
     {draft.extendedProperties.length === 0 ? <p className="field-note">The table has no extended properties.</p> : <div className="properties-table">
       <table onCopy={copyRow} className="object-dialog-grid" aria-labelledby={heading}>
         <thead><tr><th scope="col">Name</th><th scope="col">Value</th><th scope="col"><span className="visually-hidden">Remove</span></th></tr></thead>
@@ -151,48 +349,215 @@ function ExtendedPropertiesSection({ state, model, draft, editable: documentEdit
   </div>
 }
 
+function PreviewRowsTab({ state, part, connected, service }: {
+  readonly state: TablePropertiesState
+  readonly part: PeekPart<PeekRows> | undefined
+  readonly connected: boolean
+  readonly service: TablePropertiesService
+}) {
+  const { results } = useWorkbench()
+  const key = part?.status === 'ready' ? part.value.key : undefined
+  const tab = useServiceSelector(results, all => key === undefined ? undefined : all[key])
+  if (!part || part.status === 'loading') return <p className="table-inspector-note" role="status"><Icon name="loading" spin />Reading the top rows…</p>
+  if (part.status === 'error') return <div className="table-inspector-note error" role="alert">
+    <span>{part.message}</span>
+    <button type="button" className="ui-button table-inspector-toolbar-btn" data-control-variant="secondary" disabled={!connected}
+      onClick={event => { focusSelectedInspectorTab(event); service.retryTab(state.id, 'preview') }}>Retry</button>
+  </div>
+  if (!tab?.sets.length) return <p className="table-inspector-note">{peekMessages.rowsUnavailable}</p>
+  const read = tab.summary?.resultSets[0]?.rowsRead
+  return <div className="table-inspector-preview" data-peek-rows="">
+    <ResultsStack tabId={part.value.key} tab={tab} />
+    {read === 0 && <p className="table-inspector-note">{peekMessages.noRows}</p>}
+  </div>
+}
+
+function TableVitals({ model }: { readonly model: TablePropertiesModel }) {
+  const spaceRatio = useMemo(() => tableSpaceRatio(model.storage), [model.storage])
+  const facts = useMemo(() => tableVitalsFacts(model), [model])
+  const activeCapabilities = useMemo(() => tableCapabilities(model).filter(item => item.notable), [model])
+  return <>
+    {spaceRatio && <div className="vitals-block">
+      <h4 className="vitals-block-title">Space Breakdown</h4>
+      <RatioBar flat title="Data vs. Index" totalLabel={spaceRatio.totalLabel} segments={spaceRatio.segments} />
+    </div>}
+    <div className="vitals-block">
+      <h4 className="vitals-block-title">Storage &amp; Identity</h4>
+      <FactGrid compact facts={facts} />
+    </div>
+    <div className="vitals-block">
+      <h4 className="vitals-block-title">Active Capabilities</h4>
+      {activeCapabilities.length > 0
+        ? <ul className="table-inspector-vitals-caps" aria-label="Active capabilities">
+          {activeCapabilities.map(item => (
+            <li key={item.id} className="cap-chip on" data-tone={item.tone} title={item.title}>
+              <span className="cap-chip-label">{item.label}</span>
+              {item.value !== undefined && <span className="cap-chip-value">{item.value}</span>}
+            </li>
+          ))}
+        </ul>
+        : <span className="cap-chips-empty">Standard table</span>}
+    </div>
+  </>
+}
+
 /**
- * Table Properties as a document: the header (where the table is, Refresh, Discard Changes and Apply), what the last action said,
- * SSMS's pages as sections, and the Script drawer, which previews what Apply would run in its one transaction.
+ * SQL Server Table Properties on the unified `ObjectInspectorFrame` shell: breadcrumbs, engine badge, semantic status
+ * pills, Hero KPI strip, resizable Vitals rail, canonical tabs (with lazy-loaded Definition, Columns, Indexes & Keys,
+ * Dependencies and Preview Rows), zero scroll-within-a-scroll, transactional Apply/Discard, zero-height FieldHintStrip
+ * overlay and docked ScriptDrawer.
  */
 export default function TableProperties({ documentId }: { documentId: string }) {
-  const { tableProperties } = useWorkbench()
+  const workbench = useWorkbench()
+  const { tableProperties, documents: documentService, connections } = workbench
   const { documents } = useServiceSnapshot(tableProperties)
   const state = documents[documentId]
+  // Subscribe reactively to connectionId and connection list so reconnect/disconnect updates Monaco and Retry buttons.
+  const connectionId = useServiceSelector(documentService, snapshot => snapshot.documents.find(doc => doc.id === documentId)?.connectionId ?? '')
+  useServiceSnapshot(connections)
+
+  // Hoist PeekEditor at document scope (allocated lazily on first Definition visit) so switching tabs preserves scroll/selection/Find.
+  const [definitionVisited, setDefinitionVisited] = useState(() => state?.activeTab === 'definition')
+  if (state?.activeTab === 'definition' && !definitionVisited) setDefinitionVisited(true)
+  const [definitionEditor, setDefinitionEditor] = useState<PeekEditor | undefined>(undefined)
+  useEffect(() => {
+    if (!definitionVisited || !workbench.monaco?.editor?.createModel) return
+    const made = new PeekEditor({
+      monaco: workbench.monaco,
+      create: container => createQueryEditor(workbench, container, definitionEditorUse),
+      modelOptions: settingsDocumentOptions(() => workbench.settings.getSnapshot().values).modelOptions
+    })
+    setDefinitionEditor(made)
+    return () => { setDefinitionEditor(undefined); made.dispose() }
+  }, [workbench, definitionVisited])
+
+  const definitionText = state?.definition?.status === 'ready' ? state.definition.value.text : undefined
+  const definitionKey = state && definitionText !== undefined ? `${state.id}:${state.definitionEpoch}:${connectionId}` : undefined
+  useEffect(() => { definitionEditor?.keep(definitionKey) }, [definitionEditor, definitionKey])
+
   if (!state) return <div className="table-properties" />
   const { model, draft } = state
-  const editable = tableProperties.canEdit(state.id), errors = tableProperties.errors(state.id), problems = tableProblemSections(errors)
+  const connected = tableProperties.isConnected(state.id)
+  const editable = tableProperties.canEdit(state.id)
+  const errors = tableProperties.errors(state.id)
+  const problemTabs = tableProblemTabs(errors)
+  const modifiedTabs = model && draft ? tableModifiedTabs(model, draft) : new Set<TableInspectorTabId>()
+  const changeCount = model && draft ? tableChangeCount(model, draft) : 0
   const args = { tabId: state.id }
   const verbs: Verb[] = state.phase === 'applying'
     ? [{ command: 'tableProperties.stop', args, emphasis: 'danger' }]
-    : [{ command: 'tableProperties.refresh', args }, { command: 'tableProperties.discard', args }, { command: 'tableProperties.apply', args, label: 'Apply', emphasis: 'primary' }]
+    : [
+      { command: 'tableProperties.refresh', args },
+      { command: 'tableProperties.discard', args, label: 'Discard' },
+      { command: 'tableProperties.apply', args, label: changeCount > 0 ? `Apply · ${changeCount}` : 'Apply', emphasis: 'primary' }
+    ]
   const phaseLabel = state.phase === 'loading' ? 'Reading the table…' : state.phase === 'applying' ? 'Applying the changes…' : state.phase === 'confirming' ? 'Waiting for your answer…' : undefined
-  const content = (page: PageId) => {
-    if (!model || !draft) return state.phase === 'loading' ? <Skeleton rows={4} label="Reading the table" /> : <p className="field-note">{state.phase === 'loadFailed' ? 'Nothing to show: the table could not be read.' : ''}</p>
-    const props: SectionProps = { state, model, draft, editable, errors, service: tableProperties }
-    switch (page) {
-      case 'general': return <GeneralSection {...props} />
-      case 'permissions': return <PermissionsSection state={state} model={model} />
-      case 'changeTracking': return <ChangeTrackingSection {...props} />
-      case 'storage': return <StorageSection state={state} model={model} />
-      case 'securityPredicates': return <SecurityPredicatesSection state={state} model={model} />
-      case 'extendedProperties': return <ExtendedPropertiesSection {...props} />
-      default: return null
-    }
-  }
-  const sections: FrameSection[] = tablePages(dialogSpecs.tableProperties.pages, model).map(page => ({ id: page.id, title: page.title, problem: problems.has(page.id), content: content(page.id) }))
   const stopped = state.error?.code === 'CANCELLED'
   const reread = state.stale || state.phase === 'loadFailed' || state.error?.code === 'NOT_FOUND'
   const recovery = reread && tableProperties.canRefresh(state.id) ? [{ label: 'Refresh', run: () => tableProperties.refresh(state.id) }]
     : reread && tableProperties.canDiscard(state.id) ? [{ label: 'Discard Changes', run: () => tableProperties.discard(state.id) }] : []
-  const banner = <>
+
+  const banner = (phaseLabel || state.error || state.notice || model?.readOnlyReason) ? <>
     {phaseLabel && <p className="document-status" role="status"><Icon name="loading" spin />{phaseLabel}</p>}
     {state.error && <InlineError message={state.error.message} code={state.error.code} role={stopped ? 'status' : 'alert'} context={`Table Properties - ${state.label} on ${state.server}`} actions={recovery} />}
     {!state.error && state.notice && <p className="document-status" role="status"><Icon name="pass" />{state.notice}</p>}
     {model?.readOnlyReason && <p className="document-status"><Icon name="lock" />{model.readOnlyReason}</p>}
-  </>
-  return <FieldHints><DocumentFrame id={`table-properties-${state.id}`} title={state.label} subtitle="Table Properties"
-    crumbs={[{ label: state.server, title: state.login ? `${state.server} (${state.login})` : state.server }, { label: displayText(state.target.database ?? '') }, { label: 'Tables' }]}
-    verbs={verbs} banner={banner} sections={sections} frame={state.frame} onFrame={frame => tableProperties.setFrame(state.id, frame)} attributes={{ 'data-table-properties': state.id }}
-    script={{ content: state.script, notice: state.scriptNotice, onDeliver: destination => void tableProperties.deliver(state.id, destination) }} hint={<FieldHintStrip />} /></FieldHints>
+  </> : undefined
+
+  const catalogReady = state.catalog?.status === 'ready' ? state.catalog.value : undefined
+  const catalogCounts: TableCatalogCounts | undefined = catalogReady ? {
+    ...(catalogReady.columns ? { columns: { count: catalogReady.columns.rows.length, truncated: catalogReady.columns.truncated } } : {}),
+    ...(catalogReady.tableObjects ? { indexes: { count: catalogReady.tableObjects.rows.length, truncated: catalogReady.tableObjects.truncated } } : {})
+  } : undefined
+  const kpis = model ? tableHeroKpis(model, catalogCounts) : []
+  const badges = model ? tableStatusPills(model) : []
+  const headerState = <span className="table-inspector-badges">
+    <StatusPill variant="tag" size="small" tone="neutral" label="SQL Server" />
+    {badges.map(badge => <StatusPill key={badge.id} size="small" tone={badge.tone} label={badge.label} title={badge.title} />)}
+  </span>
+
+  const tabProps: TabProps | undefined = model && draft ? { state, model, draft, editable, errors, service: tableProperties } : undefined
+  const depsReady = state.dependencies?.status === 'ready' ? state.dependencies.value : undefined
+  const depsCount = depsReady ? `${(depsReady.uses.length + depsReady.usedBy.length).toLocaleString()}${depsReady.usesTruncated || depsReady.usedByTruncated ? '+' : ''}` : undefined
+  const permsCount = model ? `${(model.permissions.length + (model.securityPredicates?.length ?? 0)).toLocaleString()}${model.permissionsTruncated || model.securityPredicatesTruncated ? '+' : ''}` : undefined
+  const extCount = draft && model ? `${draft.extendedProperties.filter(row => !row.removed).length.toLocaleString()}${model.extendedPropertiesTruncated ? '+' : ''}` : undefined
+  const partCount = model?.storage.partitioned ? `${model.storage.partitions.length.toLocaleString()}${model.storage.partitionsTruncated ? '+' : ''}` : undefined
+  const colsCount = catalogCounts?.columns ? `${catalogCounts.columns.count.toLocaleString()}${catalogCounts.columns.truncated ? '+' : ''}` : undefined
+  const idxsCount = catalogCounts?.indexes ? `${catalogCounts.indexes.count.toLocaleString()}${catalogCounts.indexes.truncated ? '+' : ''}` : undefined
+
+  const tabs: InspectorTab[] = [
+    {
+      id: 'overview', title: 'Overview', layout: 'flow',
+      modified: modifiedTabs.has('overview'), problem: problemTabs.has('overview'),
+      content: tabProps ? <OverviewTab {...tabProps} /> : <ModelPlaceholder state={state} />
+    },
+    {
+      id: 'definition', title: 'Definition', layout: 'fill',
+      content: <DefinitionTab state={state} part={state.definition} editor={definitionEditor} connectionId={connectionId} connected={connected} service={tableProperties} />
+    },
+    {
+      id: 'storage', title: 'Storage & Layout', layout: 'flow',
+      ...(partCount !== undefined ? { count: partCount, countLabel: `${partCount} partitions` } : {}),
+      content: model ? <StorageTab state={state} model={model} /> : <ModelPlaceholder state={state} />
+    },
+    {
+      id: 'columns', title: 'Columns', layout: 'fill',
+      ...(colsCount !== undefined ? { count: colsCount, countLabel: `${colsCount} columns` } : {}),
+      content: <CatalogListTab state={state} id="columns" tabId="columns" list={catalogReady?.columns} part={state.catalog} connected={connected} service={tableProperties} />
+    },
+    {
+      id: 'indexes', title: 'Indexes & Keys', layout: 'fill',
+      ...(idxsCount !== undefined ? { count: idxsCount, countLabel: `${idxsCount} indexes and keys` } : {}),
+      content: <CatalogListTab state={state} id="tableObjects" tabId="indexes" list={catalogReady?.tableObjects} part={state.catalog} connected={connected} service={tableProperties} />
+    },
+    {
+      id: 'dependencies', title: 'Dependencies', layout: 'flow',
+      ...(depsCount !== undefined ? { count: depsCount, countLabel: `${depsCount} dependencies` } : {}),
+      content: <DependenciesTab state={state} part={state.dependencies} connectionId={connectionId} connected={connected} service={tableProperties} />
+    },
+    {
+      id: 'permissions', title: 'Permissions & RLS', layout: 'flow',
+      ...(permsCount !== undefined ? { count: permsCount, countLabel: `${permsCount} permissions and predicates` } : {}),
+      content: model ? <PermissionsTab state={state} model={model} /> : <ModelPlaceholder state={state} />
+    },
+    {
+      id: 'extendedProperties', title: 'Extended Properties', layout: 'flow',
+      ...(extCount !== undefined ? { count: extCount, countLabel: `${extCount} extended properties` } : {}),
+      modified: modifiedTabs.has('extendedProperties'), problem: problemTabs.has('extendedProperties'),
+      content: tabProps ? <ExtendedPropertiesTab {...tabProps} /> : <ModelPlaceholder state={state} />
+    },
+    {
+      id: 'preview', title: 'Preview Rows', layout: 'fill',
+      content: <PreviewRowsTab state={state} part={state.preview} connected={connected} service={tableProperties} />
+    }
+  ]
+
+  return <FieldHints resetKey={state.activeTab}>
+    <ObjectInspectorFrame
+      id={`table-properties-${state.id}`}
+      title={state.label}
+      subtitle="Table Properties"
+      state={headerState}
+      crumbs={[
+        { label: state.server, title: state.login ? `${state.server} (${state.login})` : state.server },
+        { label: displayText(state.target.database ?? '') },
+        { label: 'Tables' }
+      ]}
+      surface="full"
+      kpis={kpis}
+      verbs={verbs}
+      banner={banner}
+      tabs={tabs}
+      activeTab={state.activeTab}
+      onSelectTab={id => tableProperties.selectTab(state.id, id as TableInspectorTabId)}
+      vitals={model ? <TableVitals model={model} /> : undefined}
+      attributes={{ 'data-table-properties': state.id }}
+      script={{ content: state.script, notice: state.scriptNotice, onDeliver: destination => void tableProperties.deliver(state.id, destination) }}
+      scriptOpen={state.frame.scriptOpen}
+      scriptSize={state.frame.scriptSize}
+      onScriptToggle={() => tableProperties.setFrame(state.id, setScriptOpen(state.frame, !state.frame.scriptOpen))}
+      onScriptResize={size => tableProperties.setFrame(state.id, resizeScript(state.frame, size))}
+      hint={<FieldHintStrip />}
+    />
+  </FieldHints>
 }

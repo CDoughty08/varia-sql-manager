@@ -6,8 +6,8 @@ import { expandExplorerPath, explorerLines, explorerRow, explorerTree, revealExp
 import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.mjs'
 import {
   anyResultGrid, closeDocumentButton, connectDialogWindow, documentFrame, documentTab, gridCell, activeDocumentName, activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, editorTextIn, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
-  explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, explorerDropLine, pressToClose, searchHitApproximate, explorerSublabel, explorerToolbar, itemCount,
-  dependenciesDialog, dependenciesTree, dependencyNode, localGrid, menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, objectSearchServerOptions, outputView, paneMenuButton, part, peekDefinitionText, peekEditorWidgetHosts, dockPopoutBack, queryEditorText, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, submitConnect, toolbarButton as mainToolbarButton, expectEditorShown, dialogClosed
+  explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, explorerDropLine, pressToClose, searchHitApproximate, explorerSublabel, explorerToolbar, explorerFilterToolbar, itemCount,
+  dependenciesDialog, dependenciesTree, dependencyNode, inspectorTab, localGrid, menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, objectSearchServerOptions, outputView, paneMenuButton, part, peekDefinitionText, peekEditorWidgetHosts, dockPopoutBack, queryEditorText, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, submitConnect, toolbarButton as mainToolbarButton, expectEditorShown, dialogClosed
 } from './fixtures/ui.mjs'
 import { pinStackedResults } from './fixtures/results-pane.mjs'
 import { activeDocument, emptyQueryStripPoint, queryDatabase, queryServer, serverDropCard } from './fixtures/ui.mjs'
@@ -54,12 +54,19 @@ const normalized = text => text.replace(/\s+/g, ' ').trim()
 const ordersScript = 'CREATE TABLE [dbo].[Orders](\n\t[Id] [int] NOT NULL\n)\nGO\n'
 const tabs = () => documentTabs(page).getByRole('tab')
 const toolbarButton = name => explorerToolbar(page).getByRole('button', { name, exact: true })
+const filterButton = name => explorerFilterToolbar(page).getByRole('button', { name, exact: true })
 const menu = name => page.getByRole('menu', { name, exact: true })
+const openExplorerMenu = async () => {
+  await paneMenuButton(page, 'explorer').click()
+  const panelMenu = menu('Object Explorer menu')
+  await expect(panelMenu).toBeVisible()
+  return panelMenu
+}
 const searchBox = () => page.getByRole('textbox', { name: 'Search in Object Explorer', exact: true })
-/** With no search text, the closed Search options button and any top-band shortcuts sit between the box and tree. */
+/** With no search text, the closed Search options button, the inline filter/view toolbar and any top-band shortcuts sit between the box and tree. */
 async function tabPastExplorerShortcuts(key) {
   const count = await page.getByRole('group', { name: 'Servers above', exact: true }).getByRole('button').count()
-  for (let step = 0; step < count + 2; step++) await page.keyboard.press(key)
+  for (let step = 0; step < count + 3; step++) await page.keyboard.press(key)
 }
 const backToSearchBox = async () => { await tabPastExplorerShortcuts('Shift+Tab'); await expect(searchBox()).toBeFocused() }
 const searchBoxToTree = async () => { await tabPastExplorerShortcuts('Tab'); await expect(tree()).toBeFocused() }
@@ -198,7 +205,7 @@ try {
   await expect(primaryAction(emptyExplorer)).toHaveText(['Connect to server'])
   await expect(emptyExplorer).toHaveCSS('justify-content', 'center')
   // A toolbar toggle stays visibly selected after hover and focus leave, in both themes and Windows contrast themes.
-  const groupBySchema = toolbarButton('Group by Schema')
+  const groupBySchema = filterButton('Group by Schema')
   const toggleStyle = () => groupBySchema.evaluate(button => {
     const style = getComputedStyle(button)
     return { fill: style.backgroundColor, border: style.borderTopColor, borderStyle: style.borderTopStyle, width: style.borderTopWidth, color: style.color }
@@ -261,10 +268,10 @@ try {
 
   // 2. The Windows tree's keys, type-ahead, and `*`.
   await select('server-a')
-  await expect(toolbarButton('Filter Settings')).toBeDisabled()
-  await expect(toolbarButton('Filter Settings')).toHaveAttribute('title', /Select a folder such as Tables, Views, Databases, or Logins/)
+  await expect(filterButton('Filter Settings')).toBeDisabled()
+  await expect(filterButton('Filter Settings')).toHaveAttribute('title', /Select a folder such as Tables, Views, Databases, or Logins/)
   await press('ArrowDown', 'Databases')
-  await expect(toolbarButton('Filter Settings')).toBeEnabled()
+  await expect(filterButton('Filter Settings')).toBeEnabled()
   await press('ArrowRight', 'Databases')
   await expect(await explorerRow(page, 'server-a', 'Databases')).toHaveAttribute('aria-expanded', 'true')
   await expect(await explorerRow(page, 'server-a', 'Databases', 'System Databases')).toBeVisible()
@@ -338,21 +345,21 @@ try {
   const loginCard = page.getByRole('dialog', { name: 'Peek: sa', exact: true })
   await expect(loginCard).toBeFocused()
   await expect(loginCard.getByRole('region', { name: 'General', exact: true })).toContainText('SQL Server authentication')
-  await expect(loginCard.getByRole('region', { name: 'Status', exact: true })).toContainText('Enforce password policy')
+  await expect(loginCard.getByRole('region', { name: 'Capabilities', exact: true })).toContainText('Enforce password policy')
   expect((await stubCalls('explorer.peek')).at(-1).target).toMatchObject({ kind: 'login', name: 'sa' })
-  const loginTabs = loginCard.getByRole('tablist', { name: 'Peek', exact: true })
-  await expect(loginTabs.getByRole('tab')).toHaveText(['Definition', 'Server roles', 'User mapping'])
+  const loginTabs = loginCard.getByRole('tablist', { name: 'Object sections', exact: true })
+  await expect(loginTabs.getByRole('tab')).toHaveCount(4)
   const dependencyCalls = (await stubCalls('explorer.peekDependencies')).length
-  await loginTabs.getByRole('tab', { name: 'Server roles', exact: true }).click()
+  await loginTabs.getByRole('tab', { name: /^Server roles\b/ }).click()
   await expect(gridCell(localGrid(loginCard, 'Server roles'), 0, 0)).toHaveText('sysadmin')
-  await loginTabs.getByRole('tab', { name: 'User mapping', exact: true }).click()
+  await loginTabs.getByRole('tab', { name: /^User mapping\b/ }).click()
   await expect(gridCell(localGrid(loginCard, 'User mapping'), 0, 0)).toHaveText('AppData')
   await expect(loginCard.getByRole('tabpanel')).toContainText('1 database could not be read.')
   expect(await stubCalls('explorer.peekDependencies')).toHaveLength(dependencyCalls)
   await page.keyboard.press('Escape')
   await expect(loginCard).toBeHidden()
   await expect(tree()).toBeFocused()
-  console.log('Object Explorer checks: Peek opens on a login with its General and Status facts, its Server roles and User mapping tabs and no Dependencies.')
+  console.log('Object Explorer checks: Peek opens on a login with its General and Capabilities overview, its Server roles and User mapping tabs and no Dependencies.')
 
   // 3. Lazy loading and cancellation: collapsing a folder whose load is running cancels it in the backend.
   await select('server-a', 'Server Objects', 'Linked Servers')
@@ -373,35 +380,37 @@ try {
   await setStub({ pageDelayMs: 1000, pageSize: 5 })
   await expandExplorerPath(page, 'server-a', 'Databases', 'AppData', 'Tables')
   await expect(explorerTree(page).getByRole('treeitem', { name: /^Loading… \d+ of 120,005$/ })).toBeVisible()
-  await expect(toolbarButton('Stop')).toBeEnabled()
-  await toolbarButton('Stop').click()
+  const stopMenu = await openExplorerMenu()
+  await expect(stopMenu.getByRole('menuitem', { name: 'Stop', exact: true })).toBeEnabled()
+  await stopMenu.getByRole('menuitem', { name: 'Stop', exact: true }).click()
   const stopped = explorerTree(page).getByRole('treeitem', { name: /^Stopped after \d+ of 120,005 items\. Press Enter to continue loading\.$/ })
   await expect(stopped).toBeVisible()
-  await expect(toolbarButton('Stop')).toBeDisabled()
+  const stoppedMenu = await openExplorerMenu()
+  await expect(stoppedMenu.getByRole('menuitem', { name: 'Stop', exact: true })).toBeDisabled()
+  await page.keyboard.press('Escape')
   const before = (await stubCalls()).length
   await stopped.getByRole('button', { name: 'Continue loading', exact: true }).click()
   await expect.poll(async () => (await stubCalls()).length).toBeGreaterThan(before)
   await expect(explorerTree(page).locator(part.explorerProgressRow)).toBeVisible()
-  // Stop by keyboard: it disables itself, and focus moves on to the next enabled button instead of the page.
+  // Stop by keyboard through the header's ⋯ menu: focus returns to ⋯, and Tab moves cleanly through the search row to the tree.
   await expect(tree()).toBeFocused()
-  // The search box (and its toggles) and the header's ⋯ button sit between the toolbar and the tree.
   await backToSearchBox()
   await page.keyboard.press('Shift+Tab')
   await expect(paneMenuButton(page, 'explorer')).toBeFocused()
-  await page.keyboard.press('Shift+Tab')
-  const toolCount = await explorerToolbar(page).getByRole('button').count()
-  for (let step = 0; step < toolCount && await focusedTool() !== 'Stop'; step++) await page.keyboard.press('ArrowRight')
-  expect(await focusedTool()).toBe('Stop')
+  await page.keyboard.press('Enter')
+  const keyboardMenu = menu('Object Explorer menu')
+  await expect(keyboardMenu).toBeVisible()
+  const stopItem = keyboardMenu.getByRole('menuitem', { name: 'Stop', exact: true })
+  await expect(stopItem).toBeEnabled()
+  for (let step = 0; step < 12 && await stopItem.getAttribute('data-active') === null; step++) await page.keyboard.press('ArrowDown')
+  await expect(stopItem).toBeFocused()
   await page.keyboard.press('Enter')
   await expect(stopped).toBeVisible()
-  await expect(toolbarButton('Stop')).toBeDisabled()
-  await expect.poll(focusedTool).toBe('Filter Settings')
-  await page.keyboard.press('Tab')
   await expect(paneMenuButton(page, 'explorer')).toBeFocused()
   await page.keyboard.press('Tab')
   await expect(searchBox()).toBeFocused()
   await searchBoxToTree()
-  console.log('Object Explorer checks: folders load only when expanded, collapsing cancels a running load, Stop (by mouse and by keyboard, which keeps focus in the toolbar) shows how far a folder got, and Enter continues.')
+  console.log('Object Explorer checks: folders load only when expanded, collapsing cancels a running load, Stop (from the panel menu by mouse and keyboard) shows how far a folder got, and Enter continues.')
 
   // 4. F5 in the tree reconciles the selected folder: rows still there keep their row, and what is expanded below them
   // stays expanded and reloads too; the live region says what changed.
@@ -558,8 +567,8 @@ try {
   expect(await active()).toMatchObject({ label: 'Tables', selected: 'true' })
   expect(await activeInView()).toBe(true)
   await refreshTo('tables', ['server-a', 'Databases', 'AppData', 'Tables'], ['dbo.Orders', 'dbo.table1', 'dbo.table2'])
-  await expect(toolbarButton('Filter Settings')).toBeEnabled()
-  await toolbarButton('Filter Settings').click()
+  await expect(filterButton('Filter Settings')).toBeEnabled()
+  await filterButton('Filter Settings').click()
   const filterDialog = page.getByRole('dialog', { name: 'Filter Settings – Tables', exact: true })
   await expect(filterDialog).toBeVisible()
   await expect(filterDialog.getByLabel('Name value', { exact: true })).toBeFocused()
@@ -567,7 +576,7 @@ try {
   await expect(filterDialog).toHaveCount(0)
   await expect(tree()).toBeFocused()
   const filterFrom = (await stubCalls()).length
-  await toolbarButton('Filter Settings').click()
+  await filterButton('Filter Settings').click()
   await expect(filterDialog.getByLabel('Name operator', { exact: true })).toHaveValue('contains')
   await filterDialog.getByLabel('Creation Date operator', { exact: true }).selectOption('between')
   await filterDialog.getByLabel('Creation Date', { exact: true }).fill('2026-02-01')
@@ -586,7 +595,7 @@ try {
   const tablesRow = await explorerRow(page, 'server-a', 'Databases', 'AppData', 'Tables')
   await expect(tablesRow).toHaveAttribute('aria-label', 'Tables (filtered)')
   await expect(tablesRow.locator(part.explorerFiltered)).toHaveText('(filtered)')
-  await expect(toolbarButton('Filter Settings').locator('.codicon-filter-filled')).toHaveCount(1)
+  await expect(filterButton('Filter Settings').locator('.codicon-filter-filled')).toHaveCount(1)
   // The filtered first page replaces the old rows, dbo.Orders's included.
   await expect.poll(async () => (await childLabels('server-a', 'Databases', 'AppData', 'Tables')).filter(label => label.startsWith('dbo.'))).toEqual(['dbo.Orders'])
   await expect(await explorerRow(page, 'server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders')).toBeVisible()
@@ -656,22 +665,26 @@ try {
   // Peek opens it too, and Ctrl (Cmd on macOS) resting on a row opens it without taking focus.
   const peekCard = page.getByRole('dialog', { name: 'Peek: dbo.Orders', exact: true })
   const peekRow = await select('server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders')
+  const tabKey = process.platform === 'darwin' ? 'Meta' : 'Control'
   await page.keyboard.press('Space')
   await expect(peekCard).toBeVisible()
   await expect(peekCard).toBeFocused()
-  await expect(peekCard.getByRole('region', { name: 'Storage', exact: true })).toContainText('12,345')
+  // Overview opens first with General facts, and the right Vitals rail shows compact storage vitals.
   await expect(peekCard.getByRole('region', { name: 'General', exact: true })).toContainText('Non temporal table')
+  await expect(peekCard.getByRole('complementary', { name: 'Vitals', exact: true })).toContainText('12,345')
+  // Ctrl+3 (Cmd+3 on macOS) jumps directly to Storage & Layout; Ctrl+2 jumps to Definition.
+  await page.keyboard.press(`${tabKey}+3`)
+  await expect(peekCard.getByRole('region', { name: 'Storage', exact: true })).toContainText('12,345')
+  await expect(peekCard.getByRole('region', { name: 'Storage', exact: true })).toContainText('2.00 MB')
+  await page.keyboard.press(`${tabKey}+2`)
   // The definition is in the query editor (Monaco, read-only): typing changes nothing.
   await expect(peekCard.getByRole('tabpanel')).toContainText('CREATE TABLE [dbo].[Orders]')
   await expect.poll(async () => normalized(await editorTextIn(peekCard))).toBe(normalized(ordersScript))
   const peeked = (await stubCalls('explorer.peek')).at(-1)
   expect(peeked.target).toMatchObject({ kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' })
   expect((await stubCalls('scripting.script')).at(-1)).toMatchObject({ verb: 'create', targets: [{ kind: 'table', name: 'Orders' }] })
-  // Tab wraps within the card, so Esc keeps reaching it: back from the card to the Properties pane (a stop for its Copy
-  // menu), then the definition.
-  await page.keyboard.press('Shift+Tab')
-  await expect(peekCard.getByRole('region', { name: 'Properties', exact: true })).toBeFocused()
-  await page.keyboard.press('Shift+Tab')
+  // Tab stays trapped inside the card, so Esc keeps reaching it, including from Monaco's read-only definition editor.
+  await peekDefinitionText(peekCard).focus()
   await expect(peekDefinitionText(peekCard)).toBeFocused()
   await page.keyboard.type('x')
   expect(normalized(await editorTextIn(peekCard))).toBe(normalized(ordersScript))
@@ -694,11 +707,9 @@ try {
   expect(await stubCalls('query.execute')).toHaveLength(executes)
   await expect.poll(async () => normalized(await editorTextIn(peekCard))).toBe(normalized(ordersScript))
   await peekDefinitionText(peekCard).focus()
-  // A read-only editor lets Tab move focus, so the card's loop still wraps, past the Properties pane.
+  // A read-only editor lets Tab move focus within the card without leaving it.
   await page.keyboard.press('Tab')
-  await expect(peekCard.getByRole('region', { name: 'Properties', exact: true })).toBeFocused()
-  await page.keyboard.press('Tab')
-  await expect(peekCard.getByRole('button', { name: 'Open as Tab', exact: true })).toBeFocused()
+  await expect.poll(() => peekCard.evaluate(card => card.contains(document.activeElement))).toBe(true)
   await page.keyboard.press('Escape')
   await expect(peekCard).toBeHidden()
   await expect(tree()).toBeFocused()
@@ -713,36 +724,36 @@ try {
   await page.keyboard.press('Shift+F10')
   await menu('Peek properties').getByRole('menuitem', { name: 'Copy', exact: true }).click()
   await expect.poll(clipboard).toMatch(new RegExp(`^Schema\tdbo${eol}Created\t2024-01-02 03:04${eol}`))
-  expect((await clipboard()).split(eol)).toContain('Row count\t12,345')
-  await peekProperties.getByText('Row count', { exact: true }).evaluate(element => { const range = document.createRange(); range.selectNodeContents(element); const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range) })
+  expect((await clipboard()).split(eol)).toContain('Lock escalation\tTable')
+  await peekProperties.getByText('Lock escalation', { exact: true }).evaluate(element => { const range = document.createRange(); range.selectNodeContents(element); const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range) })
   await peekProperties.focus()
   await page.keyboard.press('Shift+F10')
   await menu('Peek properties').getByRole('menuitem', { name: 'Copy', exact: true }).click()
-  await expect.poll(clipboard).toBe('Row count\t12,345')
+  await expect.poll(clipboard).toBe('Lock escalation\tTable')
   // A selection dragged with the mouse, then the menu from the keyboard (which KeybindingService takes before the pane sees it).
   await page.evaluate(() => getSelection().removeAllRanges())
   await application.evaluate(({ clipboard }) => clipboard.writeText('before'))
-  const dataSpace = await peekProperties.getByText('Data space', { exact: true }).boundingBox()
-  await page.mouse.move(dataSpace.x + 1, dataSpace.y + dataSpace.height / 2)
+  const temporal = await peekProperties.getByText('Temporal', { exact: true }).boundingBox()
+  await page.mouse.move(temporal.x + 1, temporal.y + temporal.height / 2)
   await page.mouse.down()
-  await page.mouse.move(dataSpace.x + dataSpace.width - 1, dataSpace.y + dataSpace.height / 2, { steps: 5 })
+  await page.mouse.move(temporal.x + temporal.width - 1, temporal.y + temporal.height / 2, { steps: 5 })
   await page.mouse.up()
   await expect.poll(() => page.evaluate(() => getSelection().toString())).not.toBe('')
   await page.keyboard.press('Shift+F10')
   await menu('Peek properties').getByRole('menuitem', { name: 'Copy', exact: true }).click()
-  await expect.poll(clipboard).toBe('Data space\t2.00 MB')
+  await expect.poll(clipboard).toBe('Temporal\tNon temporal table')
   // A right-click with nothing selected copies every fact, though macOS selects the word under the pointer as it opens the menu.
   await page.evaluate(() => getSelection().removeAllRanges())
-  await peekProperties.getByText('Row count', { exact: true }).click({ button: 'right' })
+  await peekProperties.getByText('Lock escalation', { exact: true }).click({ button: 'right' })
   await menu('Peek properties').getByRole('menuitem', { name: 'Copy', exact: true }).click()
   await expect.poll(clipboard).toMatch(new RegExp(`^Schema\tdbo${eol}Created\t2024-01-02 03:04${eol}`))
   await expect(peekCard).toBeVisible()
   // The tabs: Columns is a grid of the list that came with the facts (no request of its own), each row with its declaration;
   // Dependencies both ways (a dependency in this database peeks in the same card, and Back returns), and Top rows runs only
   // once chosen, in the results grid. Arrow keys only move focus: passing Top rows on the way to Dependencies reads nothing.
-  const peekTabs = peekCard.getByRole('tablist', { name: 'Peek', exact: true })
+  const peekTabs = peekCard.getByRole('tablist', { name: 'Object sections', exact: true })
   const childrenCalls = (await stubCalls('explorer.children')).length
-  await peekTabs.getByRole('tab', { name: 'Columns', exact: true }).click()
+  await peekTabs.getByRole('tab', { name: /^Columns\b/ }).click()
   const peekColumns = localGrid(peekCard, 'Columns')
   await expect(peekColumns).toHaveAttribute('aria-label', /^Columns, 2 rows, 8 columns/)
   await expect(gridCell(peekColumns, 1, 0)).toHaveText('CustomerName')
@@ -759,26 +770,27 @@ try {
   expect(await menuItemNames(menu('Query output'), { disabled: true })).toContain('Save Results As…')
   await page.keyboard.press('Escape')
   await expect(peekCard).toBeVisible()
-  await peekTabs.getByRole('tab', { name: 'Columns', exact: true }).focus()
+  await peekTabs.getByRole('tab', { name: /^Columns\b/ }).focus()
   expect(await stubCalls('explorer.peekDependencies')).toHaveLength(0)
   await page.keyboard.press('ArrowRight')
   await page.keyboard.press('ArrowRight')
   await page.keyboard.press('ArrowRight')
   await expect(peekTabs.getByRole('tab', { name: 'Top rows', exact: true })).toBeFocused()
-  await expect(peekTabs.getByRole('tab', { name: 'Columns', exact: true })).toHaveAttribute('aria-selected', 'true')
+  await expect(peekTabs.getByRole('tab', { name: /^Columns\b/ })).toHaveAttribute('aria-selected', 'true')
   await page.keyboard.press('ArrowLeft')
-  await expect(peekTabs.getByRole('tab', { name: 'Dependencies', exact: true })).toBeFocused()
+  await expect(peekTabs.getByRole('tab', { name: /^Dependencies\b/ })).toBeFocused()
   await page.keyboard.press('Enter')
-  await expect(peekTabs.getByRole('tab', { name: 'Dependencies', exact: true })).toHaveAttribute('aria-selected', 'true')
+  await expect(peekTabs.getByRole('tab', { name: /^Dependencies\b/ })).toHaveAttribute('aria-selected', 'true')
   await expect(peekCard.getByRole('region', { name: 'Uses', exact: true })).toContainText('Crm.dbo.Customers')
   await expect(peekCard.getByRole('region', { name: 'Used by', exact: true })).toContainText('Foreign key')
   const topRowRuns = async () => (await stubCalls('query.execute')).filter(call => call.maxRows === 10)
   expect(await topRowRuns()).toHaveLength(0)
   await peekCard.getByRole('button', { name: 'Peek dbo.vOrders', exact: true }).click()
   const followed = page.getByRole('dialog', { name: 'Peek: dbo.vOrders', exact: true })
+  await followed.getByRole('tablist', { name: 'Object sections', exact: true }).getByRole('tab', { name: 'Definition', exact: true }).click()
   await expect(followed.getByRole('tabpanel')).toContainText('CREATE VIEW dbo.vOrders')
   await followed.getByRole('button', { name: 'Back', exact: true }).click()
-  await expect(peekTabs.getByRole('tab', { name: 'Dependencies', exact: true })).toHaveAttribute('aria-selected', 'true')
+  await expect(peekTabs.getByRole('tab', { name: /^Dependencies\b/ })).toHaveAttribute('aria-selected', 'true')
   await peekTabs.getByRole('tab', { name: 'Top rows', exact: true }).click()
   // A failed run offers Retry, which keeps focus in the card (on the tab), so Esc still closes it.
   await expect(peekCard.getByRole('alert')).toContainText('Query timeout expired.')
@@ -793,56 +805,55 @@ try {
   expect(runs[1]).toMatchObject({ database: 'AppData', maxResultSets: 1, sql: expect.stringMatching(/\nSELECT TOP \(10\) \[Id\][\s\S]*\[CustomerName\][\s\S]*FROM \[AppData\]\.\[dbo\]\.\[Orders\]/) })
   expect(runs[1].sessionId).not.toBe(runs[0].sessionId)
   expect((await stubCalls('query.session.close')).map(call => call.sessionId)).toEqual(expect.arrayContaining(runs.map(run => run.sessionId)))
-  // Open as Tab: the card becomes a document tab on the tab it showed, with a run of its own, Refresh and Script As (and Properties for a kind that has the dialog).
+  // Open as Tab on a SQL Server table promotes Peek directly into the unified Table Properties document on the matching tab.
   await peekCard.getByRole('button', { name: 'Open as Tab', exact: true }).click()
   await expect(peekCard).toBeHidden()
   const peekDocument = documentFrame(page, 'dbo.Orders')
-  await expect(documentTab(page, 'dbo.Orders')).toHaveAttribute('aria-selected', 'true')
+  await expect(documentTab(page, 'Table Properties - dbo.Orders')).toHaveAttribute('aria-selected', 'true')
   await expect(gridCell(anyResultGrid(peekDocument), 0, 1)).toHaveText('Customer 0000000000 GmbH')
   expect(await topRowRuns()).toHaveLength(3)
   const peekActions = peekDocument.getByRole('group', { name: 'dbo.Orders actions', exact: true })
-  await expect(peekActions.getByRole('button', { name: /^Script As/ })).toBeEnabled()
-  // A table has Table Properties, so its tab offers Properties.
-  await expect(peekActions.getByRole('button', { name: /^Properties/ })).toBeEnabled()
-  // A Peek tab's list fills the tab and saves: Save Results As is in its menu.
-  await peekDocument.getByRole('tablist', { name: 'Peek', exact: true }).getByRole('tab', { name: 'Columns', exact: true }).click()
+  await expect(peekActions.getByRole('button', { name: 'Refresh', exact: true })).toBeEnabled()
+  // Table Properties' Columns tab fills the tab and saves: Save Results As is in its menu.
+  await inspectorTab(peekDocument, 'Columns').click()
   await gridCell(localGrid(peekDocument, 'Columns'), 0, 0).click({ button: 'right' })
   expect(await menuItemNames(menu('Query output'), { disabled: true })).not.toContain('Save Results As…')
   expect(await menuItemNames(menu('Query output'))).toContain('Save Results As…')
   await page.keyboard.press('Escape')
-  await peekDocument.getByRole('tablist', { name: 'Peek', exact: true }).getByRole('tab', { name: 'Top rows', exact: true }).click()
-  await peekDocument.getByRole('tablist', { name: 'Peek', exact: true }).getByRole('tab', { name: 'Top rows', exact: true }).focus()
-  await page.keyboard.press('F5')
+  await inspectorTab(peekDocument, 'Preview Rows').click()
+  await peekActions.getByRole('button', { name: 'Refresh', exact: true }).click()
   await expect.poll(async () => (await topRowRuns()).length).toBe(4)
   await expect(gridCell(anyResultGrid(peekDocument), 0, 1)).toHaveText('Customer 0000000000 GmbH')
-  await closeDocumentButton(page, 'dbo.Orders').click()
+  await closeDocumentButton(page, 'Table Properties - dbo.Orders').click()
   await expect(peekDocument).toHaveCount(0)
   expect((await stubCalls('query.session.close')).map(call => call.sessionId)).toEqual(expect.arrayContaining((await topRowRuns()).map(run => run.sessionId)))
-  // Ctrl+Enter (Cmd+Enter on macOS) moves the open card to a tab, on its Definition here.
-  const tabKey = process.platform === 'darwin' ? 'Meta' : 'Control'
+  // Ctrl+Enter (Cmd+Enter on macOS) promotes the open card into Table Properties on its Definition tab.
   await selectRow(peekRow)
   await page.keyboard.press('Space')
   await expect(peekCard).toBeFocused()
+  await page.keyboard.press(`${tabKey}+2`)
+  await expect.poll(async () => normalized(await editorTextIn(peekCard))).toBe(normalized(ordersScript))
   await page.keyboard.press(`${tabKey}+Enter`)
   await expect(peekCard).toBeHidden()
   const definitionTab = documentFrame(page, 'dbo.Orders')
+  await expect(documentTab(page, 'Table Properties - dbo.Orders')).toHaveAttribute('aria-selected', 'true')
   await expect(peekDefinitionText(definitionTab)).toHaveCount(1)
   await expect.poll(async () => normalized(await editorTextIn(definitionTab))).toBe(normalized(ordersScript))
-  // Script to New Query opens the whole definition in a real query tab.
+  // Open in New Query opens the whole definition in a real query tab.
   const queriesBefore = await documentTabs(page).getByRole('tab').count()
-  await definitionTab.getByRole('button', { name: 'Script to New Query', exact: true }).click()
+  await definitionTab.getByRole('button', { name: 'Open in New Query', exact: true }).click()
   await expect(documentTabs(page).getByRole('tab')).toHaveCount(queriesBefore + 1)
   await expect.poll(async () => normalized(await queryEditorText(page))).toContain(normalized(ordersScript))
   const scripted = await activeDocumentName(page)
-  expect(scripted).not.toBe('dbo.Orders')
+  expect(scripted).not.toBe('Table Properties - dbo.Orders')
   await closeDocumentButton(page, scripted).click()
   await expect(documentTabs(page).getByRole('tab')).toHaveCount(queriesBefore)
-  await closeDocumentButton(page, 'dbo.Orders').click()
-  // Ctrl+click (Cmd+click) on a row opens it in a tab straight away.
+  await closeDocumentButton(page, 'Table Properties - dbo.Orders').click()
+  // Ctrl+click (Cmd+click) on a table row opens Table Properties straight away.
   await peekRow.locator(part.explorerRowText).first().click({ modifiers: [tabKey] })
-  await expect(documentTab(page, 'dbo.Orders')).toHaveAttribute('aria-selected', 'true')
+  await expect(documentTab(page, 'Table Properties - dbo.Orders')).toHaveAttribute('aria-selected', 'true')
   await expect(peekCard).toBeHidden()
-  await closeDocumentButton(page, 'dbo.Orders').click()
+  await closeDocumentButton(page, 'Table Properties - dbo.Orders').click()
   await expect(documentFrame(page, 'dbo.Orders')).toHaveCount(0)
   await peekRow.click({ button: 'right' })
   await menu('Object Explorer').getByRole('menuitem', { name: 'Peek', exact: true }).click()
@@ -995,8 +1006,8 @@ try {
   await select('server-a', 'Databases', 'AppData', 'Tables')
   await refreshTo('tables', ['server-a', 'Databases', 'AppData', 'Tables'], ['dbo.Orders', 'dbo.table1', 'dbo.table2'])
   const serverRow = await explorerRow(page, 'server-a'), tablesFolder = await explorerRow(page, 'server-a', 'Databases', 'AppData', 'Tables')
-  // Servers are 30 px rows with their version and login in brief and a filled dot; other rows are 22 px, in 13 px text.
-  expect(await serverRow.evaluate(row => row.getBoundingClientRect().height)).toBe(30)
+  // Servers are 44 px 2-line bands with their version and login in brief and a filled dot; other rows are 22 px, in 13 px text.
+  expect(await serverRow.evaluate(row => row.getBoundingClientRect().height)).toBe(44)
   expect(await tablesFolder.evaluate(row => row.getBoundingClientRect().height)).toBe(22)
   await expect(explorerLabel(tablesFolder)).toHaveCSS('font-size', '13px')
   await expect(explorerSublabel(serverRow)).toHaveText('16.0 · sa')
@@ -1163,8 +1174,11 @@ try {
   }
   await typesButton.click()
   await page.locator(part.explorerSearch).evaluate(element => { element.style.width = '220px' })
-  const fieldWidth = (await explorerSearchField(page).boundingBox()).width
-  await expect.poll(async () => (await typePicker.boundingBox()).width).toBeCloseTo(fieldWidth, 0)
+  const filterRowWidth = await page.locator(part.explorerSearchFilters).evaluate(element => {
+    const style = getComputedStyle(element)
+    return element.getBoundingClientRect().width - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+  })
+  await expect.poll(async () => (await typePicker.boundingBox()).width).toBeCloseTo(filterRowWidth, 0)
   await page.screenshot({ path: resolve('artifacts', 'explorer-search-filters.png') })
   await filter('Columns').check()
   await filter('Functions').check()
@@ -1605,15 +1619,16 @@ try {
     await popout.keyboard.press('Space')
     const popoutPeek = popout.getByRole('dialog', { name: 'Peek: dbo.table1', exact: true })
     await expect(popoutPeek).toBeFocused()
+    const modifier = process.platform === 'darwin' ? 'Meta' : 'Control'
+    await popout.keyboard.press(`${modifier}+2`)
     await expect.poll(async () => normalized(await editorTextIn(popoutPeek))).toBe(normalized('CREATE TABLE [dbo].[table1](\n\t[Id] [int] NOT NULL\n)\nGO\n'))
     await peekDefinitionText(popoutPeek).focus()
     await expect(peekDefinitionText(popoutPeek)).toBeFocused()
-    const modifier = process.platform === 'darwin' ? 'Meta' : 'Control'
     await application.evaluate(({ clipboard }) => clipboard.writeText('before'))
     await popout.keyboard.press(`${modifier}+A`)
     await popout.keyboard.press(`${modifier}+C`)
     await expect.poll(async () => normalized(await application.evaluate(({ clipboard }) => clipboard.readText()))).toBe(normalized('CREATE TABLE [dbo].[table1](\n\t[Id] [int] NOT NULL\n)\nGO\n'))
-    // Find shows only when the editor has width: a slim popout's card stacks Properties under the definition to leave it room.
+    // Find shows only when the editor has width: a slim popout's card hides the Vitals rail below 680 px to leave it room.
     await popout.keyboard.press(`${modifier}+F`)
     await expect(popoutPeek.locator('.find-widget.visible')).toBeVisible()
     await expect(popoutPeek.locator('.find-widget .find-part textarea')).toBeFocused()
@@ -1629,7 +1644,7 @@ try {
     await expect(popoutPeek).toBeHidden()
     await expect(peekEditorWidgetHosts(popout)).toHaveCount(0)
     await expect(peekEditorWidgetHosts(page)).toHaveCount(0)
-    console.log('Object Explorer checks: Peek in a popped-out Object Explorer stacks Properties under the definition in a slim window, whose editor, made in that window, copies, takes focus and finds.')
+    console.log('Object Explorer checks: Peek in a popped-out Object Explorer hides the Vitals rail in a slim window, switches tabs via Ctrl+2, and its editor copies, takes focus and finds.')
     await dockPopoutBack(popout)
     await expect(tree()).toBeVisible()
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+W' : 'Control+F4')
@@ -1714,7 +1729,7 @@ try {
       tag.append(pill)
       return { tag, pill, label }
     }
-    const end = row.querySelector(part.explorerEnd), name = row.querySelector(part.explorerLabel), style = getComputedStyle(row), token = name => parseFloat(style.getPropertyValue(name))
+    const top = row.querySelector(part.explorerServerTop), end = top.querySelector(part.explorerEnd), name = top.querySelector(part.explorerLabel), style = getComputedStyle(top), rowStyle = getComputedStyle(row)
     const width = element => element.getBoundingClientRect().width
     const outer = element => { const box = getComputedStyle(element); return width(element) + parseFloat(box.marginLeft) + parseFloat(box.marginRight) }
     /** An element's width out of the row's flow, sized by its own text alone. */
@@ -1728,22 +1743,20 @@ try {
     // What the pill needs, and what the server's name needs.
     const needed = unconstrained(make(text).pill), nameNeeded = unconstrained(name.cloneNode(true))
     // The cap, as the rule gives it (cqw is a share of the row's content box) and as the longest label a profile takes
-    // meets it.
+    // meets it. On the 2-line server band, the active-query glyph lives on Line 2 so Line 1's tag uses the full 40cqw cap.
     const widest = make('W'.repeat(32))
     end.prepend(widest.tag)
-    const content = width(row) - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
-    const glyph = row.querySelector(part.explorerActive) ? token('--varia-glyph-sm') + token('--varia-space-1') : 0
-    const rule = Math.min(0.4 * content - glyph, 12 * parseFloat(getComputedStyle(widest.tag).fontSize))
-    // The room the name's share leaves the tag: the row's content less what comes before the name (fixed: indent, chevron,
-    // icon), the name's share, the gaps around the sublabel (which gives way to nothing first), the end's padding, and the
-    // end's other parts (the active query's glyph, the dot) with their gaps.
+    const content = width(row) - parseFloat(rowStyle.paddingLeft) - parseFloat(rowStyle.paddingRight)
+    const rule = Math.min(0.4 * content, 12 * parseFloat(getComputedStyle(widest.tag).fontSize))
+    // The room the name's share leaves the tag on Line 1: Line 1's width less what comes before the name (chevron, icon),
+    // the name's share, the gap to the end, the end's padding, and the end's other parts (the dot) with their gaps.
     const share = Math.min(0.35 * content, 10 * parseFloat(getComputedStyle(name).fontSize)), kept = Math.min(nameNeeded, share)
-    const inFlow = [...row.children].filter(element => getComputedStyle(element).position !== 'absolute'), from = inFlow.indexOf(name), to = inFlow.indexOf(end)
+    const inFlow = [...top.children].filter(element => getComputedStyle(element).position !== 'absolute'), from = inFlow.indexOf(name), to = inFlow.indexOf(end)
     const gap = parseFloat(style.columnGap), endStyle = getComputedStyle(end), endGap = parseFloat(endStyle.columnGap)
-    const before = name.getBoundingClientRect().left - row.getBoundingClientRect().left - parseFloat(style.paddingLeft)
-    const between = inFlow.slice(from + 1, to).reduce((sum, element) => sum + (element.matches(part.explorerSublabel) ? 0 : outer(element)), gap * (to - from))
+    const before = name.getBoundingClientRect().left - top.getBoundingClientRect().left
+    const between = inFlow.slice(from + 1, to).reduce((sum, element) => sum + outer(element), gap * (to - from))
     const others = [...end.children].filter(element => element !== widest.tag).reduce((sum, element) => sum + outer(element) + endGap, 0)
-    const room = content - before - kept - between - parseFloat(endStyle.paddingLeft) - others
+    const room = width(top) - before - kept - between - parseFloat(endStyle.paddingLeft) - others
     const limit = Math.min(rule, room)
     const cap = width(widest.pill), capped = widest.label.scrollWidth > widest.label.clientWidth, nameAtCap = width(name)
     widest.tag.remove()
@@ -1812,7 +1825,7 @@ try {
   await press('Home', 'server-a')
   const cancelledBefore = (await cancels()).length
   const tabsBeforeDisconnect = await tabs().count()
-  await toolbarButton('Disconnect').click()
+  await (await openExplorerMenu()).getByRole('menuitem', { name: 'Disconnect', exact: true }).click()
   const disconnectA = page.getByRole('dialog', { name: 'Disconnect server-a?', exact: true })
   await expect(disconnectA).toBeVisible()
   await expect(disconnectA.getByRole('list', { name: 'Affected query tabs', exact: true })).toContainText(serverAQuery)
@@ -1823,8 +1836,9 @@ try {
   const disconnected = serverRows(page).filter({ hasText: 'server-a' })
   await expect(disconnected).toHaveAttribute('aria-label', 'server-a (Disconnected)')
   await expect(disconnected).not.toHaveAttribute('aria-expanded')
-  await expect(toolbarButton('Reconnect…')).toBeEnabled()
-  await toolbarButton('Remove from Explorer').click()
+  const disconnectedMenu = await openExplorerMenu()
+  await expect(disconnectedMenu.getByRole('menuitem', { name: 'Reconnect…', exact: true })).toBeEnabled()
+  await disconnectedMenu.getByRole('menuitem', { name: 'Remove from Explorer', exact: true }).click()
   // Removing the already-disconnected root needs no tab/session preflight; Keep Tabs retained its target offscreen.
   await expect(page.getByRole('dialog', { name: 'Disconnect server-a?', exact: true })).toHaveCount(0)
   await expect(tabs()).toHaveCount(tabsBeforeDisconnect)
@@ -1884,12 +1898,19 @@ try {
       const icon = row.querySelector(part.explorerIcon).getBoundingClientRect(), label = row.querySelector(part.explorerLabel).getBoundingClientRect()
       return Math.abs((icon.top + icon.bottom) / 2 - (label.top + label.bottom) / 2)
     })
-    // A sublabel only takes the space its label leaves, so a label is never cut short while its sublabel still shows.
+    // A single-line row's sublabel only takes the space its label leaves, so a label is never cut short while its sublabel still shows.
     const clipped = [...document.querySelectorAll(part.explorerTree + ' [role="treeitem"]')].filter(row => {
       const label = row.querySelector(part.explorerLabel), sublabel = row.querySelector(part.explorerSublabel)
-      return label && sublabel && sublabel.getBoundingClientRect().width > 0 && label.scrollWidth > label.clientWidth
+      return label && sublabel && label.parentElement === sublabel.parentElement && sublabel.getBoundingClientRect().width > 0 && label.scrollWidth > label.clientWidth
     }).map(row => row.getAttribute('aria-label'))
-    return { toolbar: { left: toolbar.left, right: toolbar.right, top: toolbar.top, bottom: toolbar.bottom }, width: innerWidth, height: innerHeight, scrollWidth: document.documentElement.scrollWidth, scrollHeight: document.documentElement.scrollHeight, offsets: rows, clipped }
+    // Horizontal seam alignment across the dock splitter: Row 1 (.explorer-header) matches Document Tabs; Row 2 (.object-search-bar) matches QueryBar.
+    const seams = {
+      header: Math.round(document.querySelector(part.explorerHeader).getBoundingClientRect().height),
+      tabs: Math.round(document.querySelector(part.documentTabs).getBoundingClientRect().height),
+      searchBar: Math.round(document.querySelector(part.explorerSearchBar).getBoundingClientRect().height),
+      queryBar: Math.round(document.querySelector(part.queryBar).getBoundingClientRect().height)
+    }
+    return { toolbar: { left: toolbar.left, right: toolbar.right, top: toolbar.top, bottom: toolbar.bottom }, width: innerWidth, height: innerHeight, scrollWidth: document.documentElement.scrollWidth, scrollHeight: document.documentElement.scrollHeight, offsets: rows, clipped, seams }
   }, part)
   expect(layout.toolbar.left).toBeGreaterThanOrEqual(0)
   expect(layout.toolbar.right).toBeLessThanOrEqual(layout.width)
@@ -1899,9 +1920,13 @@ try {
   expect(layout.offsets.length).toBeGreaterThan(5)
   expect(Math.max(...layout.offsets)).toBeLessThanOrEqual(1)
   expect(layout.clipped).toEqual([])
-  for (const name of ['Connect Object Explorer', 'Disconnect', 'Stop', 'Filter Settings', 'Refresh', 'Collapse All']) await expect(toolbarButton(name)).toBeInViewport()
+  expect(layout.seams.header).toBe(layout.seams.tabs)
+  expect(layout.seams.searchBar).toBe(layout.seams.queryBar)
+  for (const name of ['Connect Object Explorer', 'Refresh', 'Collapse All']) await expect(toolbarButton(name)).toBeInViewport()
+  for (const name of ['Filter Settings', 'Group by Schema']) await expect(filterButton(name)).toBeInViewport()
+  await expect((await explorerRow(page, 'server-b', 'Databases', 'AppData', 'Tables', 'dbo.Orders', 'Columns', 'Id')).locator(part.explorerPkBadge)).toHaveText('PK')
   await page.screenshot({ path: resolve('artifacts', 'explorer-1024.png') })
-  // Drag the dock to its minimum, where the title, all eight tools and the move menu must still be reachable.
+  // Drag the dock to its minimum (200 px), where the header stays on one flush row with its title, three primary tools and ⋯ menu reachable.
   const explorerPane = page.locator(part.explorerPane), paneMenu = paneMenuButton(page, 'explorer')
   const explorerTitle = explorerPane.getByText('Object Explorer', { exact: true })
   const explorerWidth = async () => Math.round((await explorerPane.boundingBox()).width)
@@ -1919,11 +1944,13 @@ try {
   await resizeExplorer(180)
   await expect.poll(explorerWidth).toBe(200)
   const paneBox = await explorerPane.boundingBox(), titleBox = await explorerTitle.boundingBox(), moveMenu = await paneMenu.boundingBox()
+  const headerHeight = Math.round((await page.locator(part.explorerHeader).boundingBox()).height)
   const toolBoxes = await explorerToolbar(page).getByRole('button').evaluateAll(buttons => buttons.map(button => button.getBoundingClientRect().toJSON()))
-  expect(toolBoxes).toHaveLength(8)
+  expect(toolBoxes).toHaveLength(3)
+  expect(headerHeight).toBe(layout.seams.tabs)
   expect(await explorerTitle.evaluate(label => label.scrollWidth <= label.clientWidth)).toBe(true)
   expect(titleBox.y).toBeLessThan(moveMenu.y + moveMenu.height)
-  expect(toolBoxes.every(tool => tool.x >= paneBox.x && tool.right <= paneBox.x + paneBox.width && tool.y >= moveMenu.y + moveMenu.height)).toBe(true)
+  expect(toolBoxes.every(tool => tool.x >= paneBox.x && tool.right <= moveMenu.x + 1 && tool.y < moveMenu.y + moveMenu.height)).toBe(true)
   expect(moveMenu.x + moveMenu.width).toBeLessThanOrEqual(paneBox.x + paneBox.width)
   await paneMenu.click()
   await expect(paneMenu).toHaveAttribute('aria-expanded', 'true')
@@ -1995,17 +2022,17 @@ try {
     expect(sample.rowY + sample.top).toBeCloseTo(fixed.rowY + fixed.top, 4)
   }
   const thirdTop = middle - 260, end = fixed.scrollHeight - fixed.height
-  const thresholds = [0, 1, 29, 30, 31, thirdTop - 60, thirdTop - 52, end - 30, end]
+  const thresholds = [0, 1, 43, 44, 45, thirdTop - 88, thirdTop - 110, end - 44, end]
   const positions = [...new Set(thresholds.flatMap(top => [top - 1, top - 0.5, top, top + 0.5, top + 1]).filter(top => top >= 0 && top <= end))].sort((a, b) => a - b)
   for (const top of [...positions, ...positions.toReversed()]) checkGeometry(await sampleScroll(top))
-  await sampleScroll(29)
+  await sampleScroll(43)
   const scrollBox = await tree().boundingBox()
   await page.mouse.move(scrollBox.x + 40, scrollBox.y + scrollBox.height / 2)
   await page.mouse.wheel(0, 4)
-  await expect.poll(async () => (await scrollGeometry()).top).toBeGreaterThan(29)
+  await expect.poll(async () => (await scrollGeometry()).top).toBeGreaterThan(43)
   checkGeometry(await scrollGeometry())
   await page.mouse.wheel(0, -4)
-  await expect.poll(async () => (await scrollGeometry()).top).toBeLessThan(33)
+  await expect.poll(async () => (await scrollGeometry()).top).toBeLessThan(47)
   checkGeometry(await scrollGeometry())
   // The pinned overlay ends before the native gutter, so the same thumb remains under the pointer throughout a drag.
   await sampleScroll(0)
@@ -2023,7 +2050,7 @@ try {
     }
   } finally { await page.mouse.up() }
   // Assert a real drag moved the thumb, rather than merely checking a tree that never scrolled.
-  expect(draggedTo).toBeGreaterThan(30)
+  expect(draggedTo).toBeGreaterThan(44)
   const scrollToMiddle = () => tree().evaluate((element, top) => { element.scrollTop = top }, middle)
   await scrollToMiddle()
   const upper = page.getByRole('group', { name: 'Servers above', exact: true })
@@ -2092,9 +2119,9 @@ try {
   }
   // Four pending servers used to leave a partial third shortcut above "2 more below" if a wheel step or scrollbar
   // drag stopped mid-rollover. Check the actual button rectangles, not only which shortcuts are in the DOM.
-  await tree().evaluate(element => { element.parentElement.style.flex = 'none'; element.parentElement.style.height = '300px' })
-  await expect.poll(() => tree().evaluate(element => element.clientHeight)).toBe(300)
-  const bottomRollover = thirdTop + 30 - 300 + 64
+  await tree().evaluate(element => { element.parentElement.style.flex = 'none'; element.parentElement.style.height = '360px' })
+  await expect.poll(() => tree().evaluate(element => element.clientHeight)).toBe(360)
+  const bottomRollover = thirdTop + 44 - 360 + 88
   for (const top of [bottomRollover - 11, bottomRollover, bottomRollover + 11, bottomRollover, bottomRollover - 11]) {
     await sampleScroll(top)
     await expect(lower.getByRole('button', { name: /^Jump to/ })).toHaveCount(2)
@@ -2106,8 +2133,8 @@ try {
         return { top: row.top - box.top, height: row.height, bottom: row.bottom - box.top }
       }) }
     })
-    expect(shape).toEqual({ height: 82, buttons: [{ top: 0, height: 30, bottom: 30 }, { top: 30, height: 30, bottom: 60 }, { top: 60, height: 22, bottom: 82 }] })
-    expect(await tree().evaluate(element => element.clientHeight)).toBe(300)
+    expect(shape).toEqual({ height: 110, buttons: [{ top: 0, height: 44, bottom: 44 }, { top: 44, height: 44, bottom: 88 }, { top: 88, height: 22, bottom: 110 }] })
+    expect(await tree().evaluate(element => element.clientHeight)).toBe(360)
   }
   await lower.screenshot({ path: resolve('artifacts', 'explorer-pins-bottom-whole-rows.png') })
   await tree().evaluate(element => { element.parentElement.style.removeProperty('flex'); element.parentElement.style.removeProperty('height') })
