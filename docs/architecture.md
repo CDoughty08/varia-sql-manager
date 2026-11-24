@@ -679,7 +679,10 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
   its live probes are built from it, column ids unique within a probe (`liveColumnId`). SQL is constant per probe,
   statement, band and capability in `Activity/ActivitySql.cs`: DMVs (joined to `sys.databases` and `sys.master_files`
   for names), sizes and caps from the catalogue, no metadata built-ins, temp tables, `sys.sysprocesses` or
-  `dm_tran_locks`, every TOP ordered (only the capability probe asks what the login may do). Filters run in backend
+  `dm_tran_locks`, every TOP ordered (only the capability probe asks what the login may do). The one msdb read is the
+  Agent job and step names for job-step sessions (`AgentJobs`, `AgentSteps`): after the sessions statement, with server
+  state, at most `agentJobSlots` uniqueidentifier parameters, cached per connection (`AgentJobNames`), and a refusal
+  (916, permission denied) is never asked again on that connection, so a row falls back to the decoded id. Filters run in backend
   memory over a sample (`ActivityFilter`, sent as the source's args), never in SQL. A session is one of Varia's pools (hidden by default) only when
   its id is one Varia's pooled or Object Actions connections were given (`ILiveHost.OwnSessions`), never by claimed
   process id, host or program alone; `VariaSessions.Protected` (ledger ids or those claims) is the wider set refusals
