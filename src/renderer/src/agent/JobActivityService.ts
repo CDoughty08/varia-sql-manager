@@ -454,8 +454,17 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
 
   /** Opens Change owner's or Attach schedule's form for the jobs selected now, and reads what it offers: New Job's describe (whether the login
    *  is sysadmin, and the logins) or the Schedules describe (the shared schedules with their guards, the jobs' versions and, for sysadmin,
-   *  which job uses which). A form opened again replaces the last; a read for one replaced or closed is dropped. */
-  /** The bulk form for the jobs selected now, or for `given` jobs (the Agent overview's Change owner… names the jobs its check found, AG-15). */
+   *  which job uses which). A form opened again replaces the last; a read for one replaced or closed is dropped. With `given` it opens for
+   *  those jobs instead of the selection (the Agent overview's Change owner… names the jobs its check found, AG-15). */
+  /** Reads a failed form again for the jobs it names, which may not be the selection now (the Agent overview's form never was). */
+  async retryForm(id: string): Promise<void> {
+    const form = this.get(id)?.form
+    if (!form) return
+    const refused = await this.openForm(id, form.verb, form.jobs)
+    const now = this.get(id)?.form
+    if (refused && now?.key === form.key) this.patch(id, { form: { ...now, state: 'failed', error: refused } })
+  }
+
   async openForm(id: string, verb: AgentBulkFormVerb, given?: readonly SelectedJob[]): Promise<string | undefined> {
     if (!given) await this.settledSelection(id)
     const state = this.get(id)

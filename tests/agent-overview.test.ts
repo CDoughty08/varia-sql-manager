@@ -270,6 +270,19 @@ describe('the Agent overview document', () => {
     expect(fixture.jobActivity.get(id)!.form).toBeUndefined()
   })
 
+  it("retries a failed Change owner form for the overview's jobs, not the monitor's selection", async () => {
+    const fixture = overview()
+    const id = fixture.jobActivity.open('c1')
+    const given = [{ id: 'J1', name: 'Purge', status: '', lastRun: '', owner: 'old' }]
+    fixture.api.describeObject.mockResolvedValueOnce({ ok: false, error: 'The read timed out.' } as never)
+    await fixture.jobActivity.openForm(id, 'changeOwner', given)
+    expect(fixture.jobActivity.get(id)!.form).toMatchObject({ state: 'failed', jobs: given })
+    fixture.api.describeObject.mockResolvedValueOnce({ ok: true, value: { agentJobDocument: { sysadmin: true, owners: ['sa'] }, elapsedMs: 1 } } as never)
+    await fixture.jobActivity.retryForm(id)
+    expect(fixture.jobActivity.get(id)!.form).toMatchObject({ state: 'ready', jobs: given })
+    expect(fixture.api.describeObject).toHaveBeenCalledTimes(2)
+  })
+
   it('opens one document per connection from its command, reads each sample into checks and runs a fix through its owner', async () => {
     const fixture = overview()
     expect(commandDescriptor('agent.overview').menus?.[0]).toMatchObject({ menu: 'explorer.context', group: '1_monitor' })

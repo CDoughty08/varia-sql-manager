@@ -42,7 +42,7 @@ export const guideCatalog = {
   },
   'sql-server-agent': {
     title: 'Schedule work with SQL Server Agent', summary: 'Watch jobs run, read their history, and create or change jobs, schedules and alerts.',
-    keywords: ['Agent', 'job', 'jobs', 'schedule', 'step', 'history', 'Job Activity Monitor', 'alert', 'operator', 'proxy', 'credential', 'error log', 'msdb'],
+    keywords: ['Agent', 'job', 'jobs', 'schedule', 'step', 'history', 'Job Activity Monitor', 'alert', 'operator', 'proxy', 'credential', 'error log', 'msdb', 'overview', 'health check'],
     sections: [{ id: 'find', title: 'Find SQL Server Agent' }, { id: 'watch', title: 'Watch jobs and read history' }, { id: 'jobs', title: 'Create and change jobs' }, { id: 'objects', title: 'Alerts, operators and proxies' }, { id: 'trouble', title: 'If Agent is unavailable' }],
     related: ['connect', 'run-query'],
     commands: [{ id: 'agent.jobActivity', context: 'workbench' }, { id: 'agent.viewHistory', context: 'workbench' }, { id: 'agent.newJob', context: 'workbench' }, { id: 'agentJob.save', context: 'workbench' }, { id: 'agent.createJobLike', context: 'workbench' }, { id: 'agent.schedules', context: 'workbench' }, { id: 'agent.newAlert', context: 'workbench' }, { id: 'agent.newOperator', context: 'workbench' }, { id: 'agent.newProxy', context: 'workbench' }, { id: 'explorer.startAgent', context: 'workbench' }, { id: 'agent.overview', context: 'workbench' }],

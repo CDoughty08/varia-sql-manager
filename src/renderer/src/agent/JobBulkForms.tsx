@@ -45,7 +45,7 @@ function FormFrame({ id, service, form, title, submit, children }: FrameProps) {
     </div>
     <div className="agent-bulk-form-body">
       {form.state === 'loading' ? <p role="status" className="field-note">Reading…</p>
-        : form.state === 'failed' ? <InlineError role="status" message={form.error ?? agentBulkText.readFailed} actions={[{ label: 'Retry', run: () => void service.openForm(id, form.verb) }]} />
+        : form.state === 'failed' ? <InlineError role="status" message={form.error ?? agentBulkText.readFailed} actions={[{ label: 'Retry', run: () => void service.retryForm(id) }]} />
         : children}
       <p className="agent-bulk-form-buttons">
         <button type="button" className="primary" disabled={!!why} title={why} onClick={() => void service.submitForm(id)}>{submit}</button>
