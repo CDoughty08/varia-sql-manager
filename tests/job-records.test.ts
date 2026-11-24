@@ -238,7 +238,10 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     expect(source).toContain('const orphans = jobRecords.withoutTab([...keys, ...kept]).filter(record => record.createdAt < asked)')
     expect(source).toContain('if (value.disconnected) connectionProfiles.delete(connectionId)')
     // Show in Job History is offered only when a project can be shown: connected now, or with its saved connection.
-    expect(source).toContain('const show = jobsByProject(running, profileIds, new Set(liveProjects))')
+    expect(source).toContain('const show = jobsByProject(running, profiles, new Set(liveProjects))')
+    // Saved connections that cannot be read say so (null), rather than that they were removed.
+    expect(source).toContain('.catch(() => null)\n    const show')
+    expect(source).toContain("${profiles === null ? 'Varia could not read the saved connections' : `the saved connection that started")
     expect(source).toContain("const buttons = showable ? [one ? 'Cancel Job' : 'Cancel Jobs', 'Show in Job History', 'Keep'] : [one ? 'Cancel Job' : 'Cancel Jobs', 'Keep']")
     expect(source).toContain('buttons, defaultId: buttons.length - 1, cancelId: buttons.length - 1')
     // Show in Job History drops the records as Keep does and hands the jobs, by project, to Job History.

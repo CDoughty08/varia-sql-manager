@@ -93,7 +93,11 @@ describe('Job History rules', () => {
   })
   it('ask before a Re-run that may change table data or runs another user\'s job, naming it; the cost prompt names it too', () => {
     expect(rerunAsks(row({ statement: 'SELECT' }))).toBe(false)
-    expect(['INSERT', 'UPDATE', 'DELETE', 'MERGE', 'TRUNCATE_TABLE', 'SCRIPT'].every(statement => rerunAsks(row({ statement })))).toBe(true)
+    // Anything but a SELECT asks: DML, DDL that drops or replaces a table, a script, and a statement BigQuery did not name.
+    expect(['INSERT', 'UPDATE', 'DELETE', 'MERGE', 'TRUNCATE_TABLE', 'SCRIPT', 'DROP_TABLE', 'CREATE_TABLE_AS_SELECT', 'ALTER_TABLE'].every(statement => rerunAsks(row({ statement })))).toBe(true)
+    expect(rerunAsks(row({ statement: undefined }))).toBe(true)
+    expect(rerunQuestion(row({ statement: 'DROP_TABLE' }))).toBe('Re-run job job_1? Its DROP_TABLE may change tables or data again.')
+    expect(rerunQuestion(row({ statement: undefined }))).toBe('Re-run job job_1? BigQuery did not say what kind of statement it is.')
     expect(rerunAsks(row({ statement: 'SELECT', mine: false }))).toBe(true)
     expect(rerunQuestion(row({ statement: 'DELETE' }), '2 hours ago')).toBe('Re-run job job_1 2 hours ago? Its DELETE changes table data again.')
     expect(rerunQuestion(row({ statement: 'SCRIPT', mine: false, user: 'ana@example.com' }))).toBe('Re-run job job_1 started by ana@example.com? It is a script, which may change table data. It runs as you.')
@@ -114,9 +118,15 @@ describe('Job History rules', () => {
       { jobId: 'c_3', project: 'varia-gamma', profileId: 'p-gone', createdAt: 3 }, { jobId: 'd_1', project: 'varia-delta', profileId: 'p-gone', createdAt: 1 },
       { jobId: 'e_1', project: 'varia-alpha', profileId: 'p-new', createdAt: 1 }
     ]
-    expect(jobsByProject(owned, new Set(['p-old', 'p-new']), new Set(['varia-alpha'])).map(({ jobs: _jobs, ...rest }) => rest)).toEqual([
+    const profiles = new Map([['p-old', 'varia-gamma'], ['p-new', 'varia-gamma']])
+    expect(jobsByProject(owned, profiles, new Set(['varia-alpha'])).map(({ jobs: _jobs, ...rest }) => rest)).toEqual([
       { project: 'varia-gamma', profileId: 'p-new' }, { project: 'varia-delta', unavailable: jobsUnavailableText('varia-delta') }, { project: 'varia-alpha' }
     ])
+    // A saved connection since edited to another project would open the wrong project's history: the older one is used.
+    expect(jobsByProject(owned, new Map([['p-old', 'varia-gamma'], ['p-new', 'varia-omega']]))[0]).toMatchObject({ project: 'varia-gamma', profileId: 'p-old' })
+    // Saved connections that could not be read say so rather than that they were removed.
+    expect(jobsByProject(owned, null)[1]).toMatchObject({ project: 'varia-delta', unavailable: jobsUnavailableText('varia-delta', true) })
+    expect(jobsUnavailableText('varia-delta', true)).toMatch(/^Varia could not read the saved connections/)
   })
   it('keep every action offered while a job\'s cells are read, and none once the connection is gone', () => {
     const pending = { ...row({ state: 'done', type: 'other', mine: false }), pending: true as const }
@@ -420,6 +430,20 @@ describe('Job History documents', () => {
     // The active row's own row is the selected job.
     await commands.execute('bigquery.copyJobId', argsFor({ ...target, row: 0 }), 'menu')
     expect(api.writeClipboardText).toHaveBeenLastCalledWith('varia-alpha:US.job_1')
+  })
+  it('act on the job the menu was opened on when a refresh moves the rows meanwhile', async () => {
+    const { service, grid, api, commands } = history()
+    const id = service.open('bq1')
+    service.attachGrid(id, grid as unknown as LiveGrid)
+    grid.select(cells(), { 3: cells({ job: 'job_3', jobId: 'job_3' }) })
+    await settled()
+    // The menu opens on row 3, then a new job is listed and row 3 holds another job before the action runs.
+    service.pressRow(id, 3)
+    grid.select(cells({ job: 'job_new', jobId: 'job_new' }), { 3: cells({ job: 'job_2', jobId: 'job_2' }) })
+    await settled()
+    const target = { kind: 'jobHistory' as const, tabId: id, row: 3 }
+    await commands.execute('bigquery.copyJobId', argsFor(target), 'menu')
+    expect(api.writeClipboardText).toHaveBeenLastCalledWith('varia-alpha:US.job_3')
   })
   it('copy the qualified job id and the console link as text', async () => {
     const { service, grid, api } = history()

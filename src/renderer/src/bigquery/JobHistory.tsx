@@ -238,7 +238,9 @@ export default function JobHistory({ documentId }: { readonly documentId: string
   // A row pressed outside the active row (inside a multi-row selection) rides in the target: the menu acts on its job.
   const menuTarget = useMenuTarget<HTMLDivElement>((element, from) => {
     const row = pressedRow(element, from), active = service.grid(documentId)?.getSnapshot().selection?.active.row
-    return { kind: 'jobHistory', tabId: documentId, ...row !== undefined && row !== active ? { row } : {} }
+    if (row === undefined || row === active) return { kind: 'jobHistory', tabId: documentId }
+    service.pressRow(documentId, row)
+    return { kind: 'jobHistory', tabId: documentId, row }
   })
   if (!state || !handle) return <EmptyState className="workspace-empty" icon="history" title={jobHistoryTitle} detail="This document has closed." />
   const probe = live.probes[jobHistoryProbe]

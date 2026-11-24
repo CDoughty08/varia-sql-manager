@@ -425,6 +425,24 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
   private async jobFor(id: string, row?: number): Promise<SelectedJob | undefined> {
     const entry = this.grids.get(id), snapshot = entry?.grid.getSnapshot()
     if (row === undefined || !entry || snapshot?.selection?.active.row === row) return this.selectedJob(id)
+    // The job read as the menu opened: a refresh that lists a new job meanwhile moves every row down one.
+    const pressed = this.pressed.get(id)
+    return pressed?.row === row ? pressed.job : this.readRow(id, row)
+  }
+  /**
+   * A menu opened on a row other than the active one: its job is read now, as the menu opens, and the menu's action acts
+   * on that job whatever the list shows by then (Job History is live and newest first). The menu asks again for its target
+   * while it opens, so the same row pressed within a second is read once.
+   */
+  pressRow(id: string, row: number): void {
+    const pressed = this.pressed.get(id), now = this.now()
+    if (pressed?.row === row && now - pressed.at < 1000) return
+    const job = this.readRow(id, row)
+    this.pressed.set(id, { row, at: now, job })
+  }
+  private readonly pressed = new Map<string, { readonly row: number; readonly at: number; readonly job: Promise<SelectedJob | undefined> }>()
+  private async readRow(id: string, row: number): Promise<SelectedJob | undefined> {
+    const entry = this.grids.get(id), snapshot = entry?.grid.getSnapshot()
     const table = snapshot?.table
     if (!table || !Number.isSafeInteger(row) || row < 0) return undefined
     let window: Awaited<ReturnType<typeof table.handle.getWindow>>
@@ -623,6 +641,7 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     this.watches.delete(id)
     this.handles.get(id)?.dispose()
     this.handles.delete(id)
+    this.pressed.delete(id)
     this.gridStates.delete(id)
     this.publish({ documents: Object.fromEntries(Object.entries(this.getSnapshot().documents).filter(([key]) => key !== id)) })
     this.publishContext()

@@ -204,7 +204,10 @@ describe('BigQuery credential material (main)', () => {
     // A background reconnect never asks about an ADC token file (decision 49 fails closed); a request the user waits on may.
     expect(main).toContain('credential: await bigQueryCredentials.material(params as BigQueryConnectionOptions, { interactive: !(params as { nonInteractive?: boolean }).nonInteractive })')
     expect(main).toContain(`if (method === 'bigquery.account' || method === 'bigquery.projects') {`)
-    expect(main).toContain('const credential = await bigQueryCredentials.material(params, { interactive: true })')
+    // The account line reads itself as fields change, so it never asks; Browse may.
+    expect(main).toContain(`const credential = await bigQueryCredentials.material(params, { interactive: method === 'bigquery.projects' })`)
+    // A second ask queued behind an open box shows nothing once the first's Use It confirmed the same file.
+    expect(main).toContain('await store.sourceConfirmed(keyPath, source) ? { response: 0, checkboxChecked: false } : dialog.showMessageBox(window, {')
     // Main's recorded-job cancels have no one waiting on a question: they never ask.
     expect(main).toContain('const credential = await bigQueryCredentials.material(params)\n')
     expect(main).toContain(`['connections.connect', 'connections.databases', 'actions.execute', 'bigquery.account', 'bigquery.projects'].includes(method)`)

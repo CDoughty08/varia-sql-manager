@@ -157,14 +157,16 @@ const bigQueryCredentials = new BigQueryCredentials(bigQueryKeyFiles, {
   sourceConfirmed: async (keyPath, source) => !!bigQueryStore && await bigQueryStore.sourceConfirmed(keyPath, source),
   // Decision 49 for gcloud's ADC file: Connect's own question, asked here since no file was picked. Use It is remembered.
   askSource: async (keyPath, source) => {
-    if (!bigQueryStore) return false
-    const { response } = await pageDialog((window, signal) => dialog.showMessageBox(window, {
+    const store = bigQueryStore
+    if (!store) return false
+    // A second Connect that asked while the first box was open waits its turn: the first's Use It answers it too.
+    const { response } = await pageDialog(async (window, signal) => await store.sourceConfirmed(keyPath, source) ? { response: 0, checkboxChecked: false } : dialog.showMessageBox(window, {
       type: 'question', title: 'Use this token file?', message: 'Your Application Default Credentials sign in with a token that Varia reads from this file each time it connects:',
       detail: `${source}\n\nUse it only if you know what writes this file. Varia asks again if the credentials name another file.`,
       buttons: ['Use It', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, signal
     }), { response: 1, checkboxChecked: false }, true)
     if (response !== 0) return false
-    await bigQueryStore.confirmSource(keyPath, source)
+    await store.confirmSource(keyPath, source)
     return true
   },
   restoreKeyFiles: async () => { await bigQueryStore?.load() }
@@ -1331,7 +1333,8 @@ app.whenReady().then(async () => {
       // BigQuery before connecting: main adds the credential material the renderer never holds.
       if (method === 'bigquery.account' || method === 'bigquery.projects') {
         const params = validated as RpcMethods['bigquery.projects']['params']
-        const credential = await bigQueryCredentials.material(params, { interactive: true })
+        // The account line reads itself as the dialog's fields change, so only Browse (bigquery.projects) may ask decision 49's question.
+        const credential = await bigQueryCredentials.material(params, { interactive: method === 'bigquery.projects' })
         return { ok: true, value: validateResult(method, await backend.request(method, { ...params, credential })) }
       }
 
@@ -1596,12 +1599,12 @@ app.whenReady().then(async () => {
     const one = running.length === 1
     // Show in Job History opens a project the page is connected to, or connects the saved connection that started its jobs;
     // with neither for any project it is not offered, and the box says why.
-    const profileIds = new Set(await (bigQueryStore?.load().then(store => store.library.profiles.map(profile => profile.id)) ?? Promise.resolve([])).catch(() => []))
-    const show = jobsByProject(running, profileIds, new Set(liveProjects))
+    const profiles = await (bigQueryStore ? bigQueryStore.load().then(store => new Map(store.library.profiles.map(profile => [profile.id, profile.options.project] as const))) : Promise.resolve(new Map<string, string>())).catch(() => null)
+    const show = jobsByProject(running, profiles, new Set(liveProjects))
     const showable = show.some(item => !item.unavailable)
     const keepText = `Keep leaves ${one ? 'it' : 'them'} running; Job History lists ${one ? 'it' : 'them'}, and a kept job's session, with its temporary tables billed as storage, ends 24 hours after the job finishes.`
     const showText = showable ? `Show in Job History lists ${one ? 'it' : 'them'} in Job History, where Re-attach opens ${one ? 'it' : 'each'} in a new tab. ` : ''
-    const noShow = showable ? '' : `\n\nShow in Job History is not offered: the saved connection that started ${one ? 'this job' : 'these jobs'} was removed. Connect to ${one ? 'its' : 'their'} project to see ${one ? 'it' : 'them'} in Job History.`
+    const noShow = showable ? '' : `\n\nShow in Job History is not offered: ${profiles === null ? 'Varia could not read the saved connections' : `the saved connection that started ${one ? 'this job' : 'these jobs'} was removed`}. Connect to ${one ? 'its' : 'their'} project to see ${one ? 'it' : 'them'} in Job History.`
     const buttons = showable ? [one ? 'Cancel Job' : 'Cancel Jobs', 'Show in Job History', 'Keep'] : [one ? 'Cancel Job' : 'Cancel Jobs', 'Keep']
     const { response } = await pageDialog((window, signal) => dialog.showMessageBox(window, {
       type: 'question', title: 'BigQuery jobs without a tab', message: one ? '1 BigQuery job from the last session has no tab.' : `${running.length} BigQuery jobs from the last session have no tab.`,

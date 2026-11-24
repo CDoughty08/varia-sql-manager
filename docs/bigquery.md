@@ -715,8 +715,8 @@ without going to BigQuery Studio. Everything comes from BigQuery's free REST cal
     already holds the job is focused instead. Both need the job's creator, who alone can read its result table.
   - **Open SQL in New Tab** and **Re-run** open the job's whole SQL in a new query tab on the connection, with the job's
     default dataset when it is in the billing project; Re-run then executes it with the usual cost prompts, unless the SQL
-    was longer than Varia reads. Re-run asks first, naming the job, when it may change table data (an INSERT, UPDATE,
-    DELETE, MERGE, TRUNCATE TABLE or a script) or another user ran it (it runs as you); the cost prompts name the job too
+    was longer than Varia reads. Re-run asks first, naming the job, for anything but a SELECT (DML, DDL such as DROP TABLE
+    or CREATE OR REPLACE TABLE, a script, or a statement BigQuery did not name) and when another user ran it (it runs as you); the cost prompts name the job too
     ("Re-run this job?"). Re-run and Cancel Job are not in the palette, where their words would outrank Execute and
     Cancel Executing Query.
   - **Cancel Job…** on a running or pending job asks first ("Cancel job … started by … 12 minutes ago?"), then calls

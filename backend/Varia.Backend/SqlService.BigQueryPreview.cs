@@ -189,7 +189,6 @@ internal sealed partial class SqlService
         events.RowsChanged();
     }
 
-    /// <summary>A preview's failure: ROW_ACCESS when row access policies refused tabledata.list, else the usual mapping.</summary>
     /// <summary>Why Preview Rows stopped reading early, from its result's truncation: the result budget, or the computer's
     /// low memory, which closing results alone may not cure. Null when it read every page it meant to.</summary>
     internal static string? PreviewStopNote(IEnumerable<string?> truncated)
@@ -202,6 +201,7 @@ internal sealed partial class SqlService
             : null;
     }
 
+    /// <summary>A preview's failure: ROW_ACCESS when row access policies refused tabledata.list, else the usual mapping.</summary>
     internal static RequestException PreviewFailure(Exception error, string project)
     {
         if (error is RequestException own) return own;

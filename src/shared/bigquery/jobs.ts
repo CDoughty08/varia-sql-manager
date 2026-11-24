@@ -90,19 +90,22 @@ export interface JobsShowProject {
 /** What the records dialog offers the page: Show in Job History only when some project can be shown (connected or with a saved connection). */
 export const jobsWithoutTabRequestSchema = z.object({ keys: z.array(jobKeySchema).max(jobLimits.keys), liveProjects: z.array(jobProjectSchema).max(jobLimits.keys) }).strict()
 export type JobsWithoutTabRequest = z.infer<typeof jobsWithoutTabRequestSchema>
-export const jobsUnavailableText = (project: string) => `The saved connection that started the jobs in BigQuery project ${project} was removed. Connect to ${project} to see them in Job History.`
+export const jobsUnavailableText = (project: string, unreadable = false) => unreadable
+  ? `Varia could not read the saved connections, so it cannot connect to BigQuery project ${project} for you. Connect to ${project} to see its jobs in Job History.`
+  : `The saved connection that started the jobs in BigQuery project ${project} was removed. Connect to ${project} to see them in Job History.`
 /** Show in Job History's jobs, grouped by their billing project, at most 64 a project (Job History's pinned jobs). Without
- *  `profiles` (the saved connections' ids) and `live` (the page's connected projects), every project is just listed. */
-export function jobsByProject(records: readonly (Pick<JobRecord, 'jobId' | 'project' | 'location'> & Partial<Pick<JobRecord, 'profileId' | 'createdAt'>>)[], profiles?: ReadonlySet<string>, live?: ReadonlySet<string>): JobsShowProject[] {
+ *  `profiles` (the saved connections' ids, each with its project; null when they could not be read) and `live` (the page's
+ *  connected projects), every project is just listed. A saved connection since edited to another project is not used. */
+export function jobsByProject(records: readonly (Pick<JobRecord, 'jobId' | 'project' | 'location'> & Partial<Pick<JobRecord, 'profileId' | 'createdAt'>>)[], profiles?: ReadonlyMap<string, string> | null, live?: ReadonlySet<string>): JobsShowProject[] {
   const projects = new Map<string, { jobs: { jobId: string; location?: string }[]; profileId?: string; newest: number }>()
   for (const record of records) {
     const entry = projects.get(record.project) ?? { jobs: [], newest: -1 }
     if (entry.jobs.length < 64) entry.jobs.push({ jobId: record.jobId, ...record.location ? { location: record.location } : {} })
-    if (record.profileId && profiles?.has(record.profileId) && (record.createdAt ?? 0) > entry.newest) { entry.profileId = record.profileId; entry.newest = record.createdAt ?? 0 }
+    if (record.profileId && profiles?.get(record.profileId) === record.project && (record.createdAt ?? 0) > entry.newest) { entry.profileId = record.profileId; entry.newest = record.createdAt ?? 0 }
     projects.set(record.project, entry)
   }
   return [...projects].map(([project, { jobs, profileId }]) => {
-    if (!profiles || live?.has(project)) return { project, jobs }
-    return profileId ? { project, jobs, profileId } : { project, jobs, unavailable: jobsUnavailableText(project) }
+    if (profiles === undefined || live?.has(project)) return { project, jobs }
+    return profileId ? { project, jobs, profileId } : { project, jobs, unavailable: jobsUnavailableText(project, profiles === null) }
   })
 }
