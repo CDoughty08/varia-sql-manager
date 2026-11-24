@@ -213,6 +213,14 @@ describe('a run after Leave it running', () => {
 })
 
 describe('re-attaching restored tabs', () => {
+  it("opens a job's results without taking over its session when Job History asks (adopt false), and adopts otherwise", async () => {
+    const f = fixture()
+    f.documents.update(f.tab.id, { jobKey: '6f2b8f84-2b7c-4b55-9c55-9d6f8c2a1b10' })
+    f.queries.restoreJobs(f.tab.id, [job('job_seen', { state: 'done', adopt: false })])
+    await settle(); await settle(); await settle()
+    expect(f.queryApi.attach).toHaveBeenCalledTimes(1)
+    expect(f.queryApi.attach.mock.calls[0][0]).toMatchObject({ jobId: 'job_seen', adoptSession: false })
+  })
   it("re-attaches a connected tab's newest job, adopting its session with the record's transaction, and never an older one over its results", async () => {
     const f = fixture()
     f.documents.update(f.tab.id, { jobKey: '6f2b8f84-2b7c-4b55-9c55-9d6f8c2a1b10' })
@@ -840,6 +848,21 @@ describe('jobs without a tab', () => {
     reviewJobsWithoutTab.mockResolvedValueOnce({ ok: true, value: { answer: 'keep', jobIds: ['job_7'] } })
     await f.queries.reviewJobsWithoutTab({ reviewJobsWithoutTab })
     expect(notifyJobs).toHaveBeenCalledTimes(1)
+  })
+  it('hands Show in Job History its jobs by project, and finds the tab that holds a job of a project', async () => {
+    const f = fixture(), show = vi.fn(), notifyJobs = vi.fn()
+    f.queries.notifyJobs = notifyJobs
+    const projects = [{ project: 'example-project', jobs: [{ jobId: 'job_9', location: 'US' }] }]
+    await f.queries.reviewJobsWithoutTab({ reviewJobsWithoutTab: async () => ({ ok: true, value: { answer: 'show', jobIds: ['job_9'], show: projects } }) }, show)
+    expect(show).toHaveBeenCalledExactlyOnceWith(projects)
+    expect(notifyJobs).not.toHaveBeenCalled()
+    const update = (patch: object) => (f.queries as unknown as { update: (id: string, patch: object) => void }).update(f.tab.id, patch)
+    expect(f.queries.tabHoldingJob('job_1', 'example-project')).toBeUndefined()
+    update({ summary: { job: { jobId: 'job_1', project: 'example-project' } } })
+    expect(f.queries.tabHoldingJob('job_1', 'example-project')).toBe(f.tab.id)
+    expect(f.queries.tabHoldingJob('job_1', 'other-project')).toBeUndefined()
+    update({ summary: undefined, running: { queryId: 'q-1', connectionId: 'bq-a', startedAt: 0, jobId: 'job_2' } })
+    expect(f.queries.tabHoldingJob('job_2', 'example-project')).toBe(f.tab.id)
   })
 })
 

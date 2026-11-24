@@ -8,6 +8,7 @@ import type { BigQueryLibraryView, BigQueryProfileInput, PickedKeyFile } from '.
 import type { BigQueryDryRunRequest, BigQueryDryRunResult } from './bigquery/dry-run'
 import type { ResultsRemoteQueryParams } from './bigquery/remote-view'
 import type { BigQueryPreviewTarget, BigQueryProperties, BigQueryPropertiesRequest } from './bigquery/objects'
+import type { JobHistoryCancelResult, JobHistoryDetails, JobHistoryGetParams, JobHistoryJobParams } from './bigquery/history'
 import type { CancelJobsResult, JobsWithoutTabReview, QueryAttachParams, RecordedJobsCancel } from './bigquery/jobs'
 import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } from './theme/types'
 import type { CommandId, RendererRole } from './commands/catalog'
@@ -688,6 +689,10 @@ export interface RpcMethods {
   'bigquery.projects': { params: BigQueryCredentialParams & { pageToken?: string }; result: BigQueryProjectList }
   'bigquery.dryRun': { params: BigQueryDryRunRequest; result: BigQueryDryRunResult }
   'bigquery.properties': { params: BigQueryPropertiesRequest; result: BigQueryProperties }
+  /** Job History: one job's details and full SQL, and a script's children (docs/bigquery.md, Job History). */
+  'bigquery.jobs.get': { params: JobHistoryGetParams; result: JobHistoryDetails }
+  /** Job History's Cancel Job: jobs.cancel, which BigQuery answers at once. */
+  'bigquery.jobs.cancel': { params: JobHistoryJobParams; result: JobHistoryCancelResult }
   'bigquery.indexEstimate': { params: BigQueryIndexEstimateRequest; result: BigQueryIndexEstimateResult }
   'connections.identity': { params: Record<string, never>; result: IntegratedIdentity }
   'databases.list': { params: { connectionId: string }; result: DatabaseInfo[] }
@@ -969,6 +974,10 @@ export interface VariaApi {
    *  cost prompts and dry-run diagnostics). It sends the text to Google. */
   bigQueryDryRun(params: BigQueryDryRunRequest): Promise<ApiResult<BigQueryDryRunResult>>
   bigQueryProperties(params: BigQueryPropertiesRequest): Promise<ApiResult<BigQueryProperties>>
+  /** Job History's details pane: one job of the connection's billing project (jobs.get, free) and a script's children. */
+  bigQueryJob(params: JobHistoryGetParams): Promise<ApiResult<JobHistoryDetails>>
+  /** Job History's Cancel Job: asks BigQuery to cancel one job of the connection's billing project. */
+  bigQueryCancelJob(params: JobHistoryJobParams): Promise<ApiResult<JobHistoryCancelResult>>
   /** The billed bulk index path's estimate: free dry runs of each location's INFORMATION_SCHEMA queries (docs/object-search.md, Bulk index). */
   bigQueryIndexEstimate(params: BigQueryIndexEstimateRequest): Promise<ApiResult<BigQueryIndexEstimateResult>>
   /** "Don't ask again for this connection" (docs/bigquery.md, Cost): sets the saved BigQuery entry's cost-prompt choice;

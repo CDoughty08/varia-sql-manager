@@ -25,18 +25,24 @@ internal sealed record LiveTableJson(string Id, string Mode, List<LiveColumnJson
 internal sealed record LiveGatesJson(int MinMajor, List<int> Editions);
 /// <summary>FilterMode is memory, restart or none (the probe refuses filters). BudgetMs bounds a statement's budget (0.8 × the
 /// interval), MinGapMs is the least time between two samples a refresh may cause, MaxDutyCycle the load guard's share of the
-/// interval, Gates where the probe runs (null: everywhere its source runs), and Permission serverState or none.</summary>
+/// interval, Gates where the probe runs (null: everywhere its source runs), Permission serverState or none, and IdleIntervalMs
+/// the interval while the sampler reports nothing open (0: none; LiveSubscription.InForce). LoadGuard false: the load guard
+/// leaves the probe alone (a REST listing, whose cost is network and quota waits).</summary>
 internal sealed record LiveProbeJson(string Id, string Source, string Label, string Description, LiveIntervalJson IntervalMs, List<LiveSeriesJson> Series,
     List<LiveTableJson> Tables, List<string> Status, List<string> Views, string FilterMode, LiveIntervalBoundsJson? BudgetMs = null, int MinGapMs = 0,
-    double MaxDutyCycle = 0.25, LiveGatesJson? Gates = null, string Permission = "none")
+    double MaxDutyCycle = 0.25, LiveGatesJson? Gates = null, string Permission = "none", int IdleIntervalMs = 0, bool LoadGuard = true)
 {
     /// <summary>The budget when the entry names none: cheap DMV reads.</summary>
     public static readonly LiveIntervalBoundsJson DefaultBudget = new(500, 5000);
     public LiveIntervalBoundsJson Budget => BudgetMs ?? DefaultBudget;
 }
-/// <summary>Scope is server, ssisdb or none (a test source that touches no SQL Server); Hidden is pause or statusOnly (what the
-/// renderer does while the view is hidden).</summary>
-internal sealed record LiveSourceJson(string Id, string Label, string Description, string Scope, bool TestOnly, List<string> Probes, string Hidden = "pause");
+/// <summary>Scope is server, ssisdb, bigquery (a BigQuery connection's REST API) or none (a test source that touches no server);
+/// Hidden is pause or statusOnly (what the renderer does while the view is hidden); Providers the engines it samples (null: SQL
+/// Server only).</summary>
+internal sealed record LiveSourceJson(string Id, string Label, string Description, string Scope, bool TestOnly, List<string> Probes, string Hidden = "pause", List<string>? Providers = null)
+{
+    public IReadOnlyList<string> Engines => Providers is { Count: > 0 } named ? named : [Varia.Backend.Providers.SqlServer];
+}
 /// <summary>limits.live of src/shared/ipc/wire/protocol.ts, plus the event body limit.</summary>
 internal sealed record LiveLimitsJson(int PortStreams, int BackendSubscriptions, int PerServer, int Probes, int TablesPerProbe, int AppendPerProbe, int TablesPerTick,
     int Series, int Statuses, int StatusCharacters, int Errors, int MessageCharacters, int NoteCharacters, int Columns, LiveIntervalBoundsJson IntervalMs, int InitialCredit,

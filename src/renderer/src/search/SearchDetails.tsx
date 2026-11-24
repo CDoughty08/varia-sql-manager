@@ -35,7 +35,7 @@ export function shownText(text: string): string {
 }
 
 /** A run of definition text in one SQL scope's colour. */
-interface Run { readonly text: string; readonly style?: SyntaxStyle }
+export interface Run { readonly text: string; readonly style?: SyntaxStyle }
 
 /**
  * Monaco's SQL tokens for the first `colouredLines` lines (at most `colouredChars`), merged into runs; the rest of the text is one plain run. SQL's
@@ -54,20 +54,24 @@ export function colouredEnd(text: string): number {
   return code >= 0xd800 && code <= 0xdbff ? colouredChars - 1 : colouredChars
 }
 
-function useRuns(text: string | undefined): readonly Run[] {
+/** A token's theme scope: T-SQL's and GoogleSQL's grammars both end their tokens with `.sql` (tokenPostfix). */
+export const sqlScopeOf = (type: string): string => type.replace(/\.sql$/, '')
+
+/** `language`: Monaco's language id (Job History's details pane colours GoogleSQL). */
+export function useRuns(text: string | undefined, language = 'sql'): readonly Run[] {
   const { monaco, theme } = useWorkbench()
   const { active } = useServiceSnapshot(theme)
   const [sqlLoaded, setSqlLoaded] = useState(false)
   useEffect(() => {
     let live = true
-    monaco.editor.colorize('', 'sql', {}).then(() => { if (live) setSqlLoaded(true) }, onUnexpectedError)
+    monaco.editor.colorize('', language, {}).then(() => { if (live) setSqlLoaded(true) }, onUnexpectedError)
     return () => { live = false }
-  }, [monaco])
+  }, [monaco, language])
   return useMemo(() => {
     if (text === undefined) return []
     try {
       const cut = colouredEnd(text)
-      const head = text.slice(0, cut).split('\n'), tokens = monaco.editor.tokenize(head.join('\n'), 'sql')
+      const head = text.slice(0, cut).split('\n'), tokens = monaco.editor.tokenize(head.join('\n'), language)
       const runs: Run[] = []
       const push = (piece: string, style?: SyntaxStyle) => {
         const last = runs[runs.length - 1]
@@ -78,7 +82,7 @@ function useRuns(text: string | undefined): readonly Run[] {
         const lineTokens = tokens[index] ?? []
         lineTokens.forEach((token, at) => {
           const end = lineTokens[at + 1]?.offset ?? line.length
-          const scope = token.type.replace(/\.sql$/, '')
+          const scope = sqlScopeOf(token.type)
           push(line.slice(token.offset, end), isSqlScope(scope) ? active.syntax[scope] : undefined)
         })
         if (!lineTokens.length) push(line)
@@ -90,7 +94,7 @@ function useRuns(text: string | undefined): readonly Run[] {
       onUnexpectedError(error)
       return [{ text }]
     }
-  }, [text, monaco, active, sqlLoaded])
+  }, [text, monaco, active, sqlLoaded, language])
 }
 
 const views = [{ value: 'definition', label: 'Definition' }, { value: 'columns', label: 'Columns' }] as const

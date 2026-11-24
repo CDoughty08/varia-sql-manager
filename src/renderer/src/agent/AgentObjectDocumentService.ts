@@ -22,6 +22,10 @@ import type { LiveConnection } from '../services/connections'
 import { CustomDocumentTargets, type CustomDocumentTargetOptions } from '../services/custom-document-targets'
 import type { CustomDocumentProvider, DocumentService } from '../services/documents'
 import { SecretSlot, type SecretSlotField } from './SecretSlot'
+import { decodeKeptState, encodeKeptState, keptAgentText, rebaseKeptDraft, sameShape } from '../../../shared/agent/kept.ts'
+import type { KeptCustomDocument } from '../services/documents'
+import type { QueryDocument } from '../documents'
+import { liveConnectionOn } from './kept-documents'
 
 export type AgentObjectDocumentPhase = 'loading' | 'loadFailed' | 'ready' | 'saving'
 export interface AgentObjectDocumentState<Model, Draft> {
@@ -54,12 +58,14 @@ export interface AgentObjectDocumentState<Model, Draft> {
   readonly scriptRevision?: number
   readonly scriptDatabase?: string
   readonly scriptNotice?: string
+  /** Reopened by hot exit or AutoRecover (AG-6g) and not read since: the model is the one the draft began from (its secret was never kept). */
+  readonly restored?: true
 }
 export interface AgentObjectDocumentSnapshot<Model, Draft> { readonly documents: Readonly<Record<string, AgentObjectDocumentState<Model, Draft>>> }
 
 export interface AgentObjectDocumentServiceOptions extends CustomDocumentTargetOptions {
   readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions' | 'writeClipboardText'>
-  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'setDirty' | 'activate' | 'getSnapshot' | 'subscribe'> & DeliverScriptDeps['documents']
+  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'setDirty' | 'activate' | 'getSnapshot' | 'subscribe'> & Partial<Pick<DocumentService, 'openKeptCustom'>> & DeliverScriptDeps['documents']
   readonly files: DeliverScriptDeps['files']
   readonly connections: ExternalStore<readonly LiveConnection[]>
   readonly focus?: (id: string) => void
@@ -95,6 +101,8 @@ export abstract class AgentObjectDocumentService<Model, Draft, Field extends str
   private readonly registration: Disposable
   private readonly unsubscribe: (() => void)[]
   private readonly requests = new Map<string, { readonly id: string; readonly kind: 'describe' | 'save'; readonly connectionId?: string; dropped: boolean }>()
+  /** The connection each reopened document last tried its first read on (AG-6g), so a failed read is tried again only on a new connection. */
+  private readonly rereadOn = new Map<string, string>()
   private readonly previews = new Map<string, string>()
   private readonly previewTimers = new Map<string, unknown>()
   private readonly saving = new Map<string, Promise<boolean>>()
@@ -129,7 +137,8 @@ export abstract class AgentObjectDocumentService<Model, Draft, Field extends str
     this.newId = options.newId ?? (() => crypto.randomUUID())
     this.timers = options.timers ?? browserTimers
     this.registration = options.documents.registerProvider(this)
-    this.unsubscribe = [options.connections.subscribe(() => { try { this.connectionsChanged() } catch (failure) { onUnexpectedError(failure) } })]
+    const changed = () => { try { this.connectionsChanged(); this.readRestored() } catch (failure) { onUnexpectedError(failure) } }
+    this.unsubscribe = [options.connections.subscribe(changed), options.documents.subscribe(changed)]
   }
 
   get(id: string): AgentObjectDocumentState<Model, Draft> | undefined { return this.getSnapshot().documents[id] }
@@ -218,7 +227,8 @@ export abstract class AgentObjectDocumentService<Model, Draft, Field extends str
     this.patch(id, { phase: 'loading', error: undefined, notice: undefined })
     void this.describe(id)
   }
-  private async describe(id: string, notice?: string): Promise<void> {
+  /** With `kept` (a reopened document's first read, AG-6g), the user's draft is put on the object as read now rather than replaced. */
+  private async describe(id: string, notice?: string, kept?: { readonly model: Model; readonly draft: Draft }): Promise<void> {
     const state = this.get(id), connectionId = this.connectionOf(id)
     if (!state || !connectionId) return
     const requestId = this.begin(id, 'describe')
@@ -233,7 +243,15 @@ export abstract class AgentObjectDocumentService<Model, Draft, Field extends str
       this.patch(id, { phase: current.model ? 'ready' : 'loadFailed', error: notice ? { ...shown, message: `${this.text.savedUnread} ${shown.message}` } : shown })
       return
     }
-    this.patch(id, { phase: 'ready', model, draft: this.initialDraft(model, current), revision: current.revision + 1, changes: 0, error: undefined, unread: undefined, notice, script: { state: 'idle', message: noScriptNotice }, scriptRevision: undefined })
+    if (kept) {
+      const rebased = rebaseKeptDraft(this.initialDraft(kept.model, current), this.initialDraft(model, current), kept.draft)
+      this.patch(id, { phase: 'ready', model, draft: rebased.draft, revision: current.revision + 1, error: undefined, unread: undefined, notice: rebased.conflicts.length ? keptAgentText.conflicts(this.noun) : keptAgentText.reread(this.noun) })
+      this.afterDraft(id)
+      return
+    }
+    // A read that replaces the draft (Reload) ends a reopened document's wait for its first read too.
+    this.rereadOn.delete(id)
+    this.patch(id, { phase: 'ready', model, draft: this.initialDraft(model, current), revision: current.revision + 1, changes: 0, error: undefined, unread: undefined, restored: undefined, notice, script: { state: 'idle', message: noScriptNotice }, scriptRevision: undefined })
     this.options.documents.setDirty(id, !this.hasObject(model))
     this.schedulePreview(id, 0)
   }
@@ -242,7 +260,7 @@ export abstract class AgentObjectDocumentService<Model, Draft, Field extends str
 
   canSave(id: string): boolean {
     const state = this.get(id)
-    if (!state?.model || !state.draft || !this.canEdit(id) || !this.live(id)) return false
+    if (!state?.model || !state.draft || state.restored || !this.canEdit(id) || !this.live(id)) return false
     return (!this.hasObject(state.model) || state.changes > 0) && savable(this.problems(id)) && !!this.buildSave(state.model, state.draft)
   }
   save(id: string): Promise<boolean> {
@@ -257,6 +275,7 @@ export abstract class AgentObjectDocumentService<Model, Draft, Field extends str
     const state = this.get(id)
     if (!state?.model || !state.draft) return false
     if (!this.live(id)) { this.patch(id, { error: fallback('CONNECTION_LOST', this.text.disconnected) }); return false }
+    if (state.restored) { this.patch(id, { error: fallback('SQL_ERROR', keptAgentText.notReread(this.noun)) }); return false }
     if (!this.canSave(id)) return false
     const built = this.buildSave(state.model, state.draft)
     if (!built) return true
@@ -377,6 +396,57 @@ export abstract class AgentObjectDocumentService<Model, Draft, Field extends str
   // --- CustomDocumentProvider ----------------------------------------------------------------------------------------
 
   canClose(id: string): string | undefined { return this.get(id)?.phase === 'saving' ? this.text.saving : undefined }
+
+  // --- Hot exit and AutoRecover (AG-6g) --------------------------------------------------------------------------------
+
+  private get noun(): string { return this.kind === 'agentProxy' ? 'proxy' : 'credential' }
+  /** The object's unsaved state: the target, the read the draft began from and the draft. Never the secret slot's value. */
+  keep(id: string): string | undefined {
+    const state = this.get(id)
+    // A typed password is never kept, so a document holding one is not kept at all: the close asks about it instead of losing it quietly.
+    if (!state?.model || !state.draft || state.secrets.secret === 'set' || !state.secrets.matches) return undefined
+    return encodeKeptState({ version: 1, kind: this.kind, target: state.target, server: state.server, ...state.login ? { login: state.login } : {}, model: state.model, draft: state.draft, ...state.preset ? { extra: { preset: state.preset } } : {} })
+  }
+  /** A kept document reopened disconnected on its target, its password fields empty; it reads the object again once the target connects. */
+  reopenKept(kept: KeptCustomDocument): QueryDocument {
+    if (this.disposed || !this.options.documents.openKeptCustom) throw new Error(keptAgentText.unreadable(kept.name))
+    const value = decodeKeptState(kept.state, this.kind)
+    const preset = typeof value?.extra?.['preset'] === 'string' ? value.extra['preset'].slice(0, 128) : undefined
+    const model = value?.model as Model | undefined, draft = value?.draft as Draft | undefined
+    let shaped = false
+    try { shaped = !!value && !!model && draft !== undefined && sameShape(this.initialDraft(model, { preset } as AgentObjectDocumentState<Model, Draft>), draft) } catch { shaped = false }
+    if (!value || !model || draft === undefined || !shaped) throw new Error(keptAgentText.unreadable(kept.name))
+    const document = this.options.documents.openKeptCustom(this.kind, this.tabName(value.target), kept.database ?? (this.kind === 'agentProxy' ? 'msdb' : 'master'), kept.targetId)
+    if (kept.targetId) this.targetBindings.bindTarget(document.id, kept.targetId)
+    this.put({
+      id: document.id, target: value.target, server: value.server, ...value.login ? { login: value.login } : {}, phase: 'ready', model, draft, secrets: emptySecretFacts, secretEpoch: 0,
+      revision: 1, edits: 0, changes: 0, ...preset ? { preset } : {}, restored: true, error: fallback('CONNECTION_LOST', keptAgentText.restored(this.noun, value.server)),
+      frame: initialFrameState(this.sectionIds), script: { state: 'idle', message: noScriptNotice }
+    })
+    this.afterDraft(document.id)
+    this.options.documents.setDirty(document.id, true)
+    const live = liveConnectionOn(this.options.connections, this.options.targetIdOf, kept.targetId)
+    if (live) this.options.documents.update(document.id, { connectionId: live })
+    return document
+  }
+  attachesOnReconnect(id: string): boolean { return !!this.get(id)?.restored }
+  /** Reopened documents whose target is now connected read their object again, keeping the draft. */
+  private readRestored(): void {
+    for (const state of Object.values(this.getSnapshot().documents)) {
+      const connectionId = this.options.documents.get(state.id)?.connectionId
+      if (!state.restored || !state.model || state.draft === undefined || !connectionId || !this.live(state.id) || this.requests.has(state.id) || this.rereadOn.get(state.id) === connectionId) continue
+      this.rereadOn.set(state.id, connectionId)
+      const kept = { model: state.model, draft: state.draft }
+      this.patch(state.id, { phase: 'loading', restored: undefined, error: undefined, notice: undefined })
+      void this.describe(state.id, undefined, kept).finally(() => {
+        // A read that did not land (the connection lost, or a refusal or failure while connected) leaves the document as kept: Save
+        // waits, since the draft is still on last session's read, and the next connection reads again.
+        const after = this.get(state.id)
+        if (after && after.model === kept.model) this.patch(state.id, { restored: true, ...after.phase === 'loading' ? { phase: 'ready' as const } : {} })
+        else this.rereadOn.delete(state.id)
+      })
+    }
+  }
   revision(id: string): number { return this.get(id)?.edits ?? 0 }
   focus(id: string): void { this.options.focus?.(id) }
   follows(_id: string, _server: string): boolean { return false }
@@ -384,6 +454,7 @@ export abstract class AgentObjectDocumentService<Model, Draft, Field extends str
   coalesceTarget(id: string, fromTargetId: string, toTargetId: string): boolean { return this.targetBindings.coalesceTarget(id, fromTargetId, toTargetId) }
   closed(id: string): void {
     this.targetBindings.forget(id)
+    this.rereadOn.delete(id)
     this.slot.clear(id)
     const request = this.requests.get(id), preview = this.previews.get(id)
     this.cancel([request?.id, preview].filter((value): value is string => !!value))

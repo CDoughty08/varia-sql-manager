@@ -1,6 +1,7 @@
 import type { ApiResult, ReloadPins, RestoredSession, SessionDocumentWrite, SessionWrite, SqlFile, VariaApi } from '../../../shared/contracts'
 import { sessionLimits } from '../../../shared/files/session'
 import { withExplorerExpansion } from '../../../shared/connection-targets'
+import { isKeptAgentKind, keptAgentText } from '../../../shared/agent/kept'
 import { isCustomKind, type QueryDocument } from '../documents'
 import type { DocumentService } from './documents'
 import type { FileService } from './files'
@@ -32,7 +33,7 @@ const associations = (documents: readonly QueryDocument[]) => JSON.stringify(doc
  * designer with unsaved changes asks as before), and neither is a value still being appended or a tab past the caps.
  * With editor groups, the documents are in group order, and the groups they are in are kept by each one's place.
  */
-export function keptSession(documents: Pick<DocumentService, 'getSnapshot' | 'getModel' | 'isFilling'>, server: (connectionId: string) => string | undefined,
+export function keptSession(documents: Pick<DocumentService, 'getSnapshot' | 'getModel' | 'isFilling'> & Partial<Pick<DocumentService, 'keepCustom' | 'closeRefusal'>>, server: (connectionId: string) => string | undefined,
   { budget = sessionLimits.totalBytes - sessionLimits.slackBytes, pinnedOnly = false, groups, connectionTargets, explorerExpansion, assertConnectionsReady }: {
     budget?: number; pinnedOnly?: boolean; groups?: Pick<EditorGroupService, 'capture'>; connectionTargets?: Pick<ConnectionTargetService, 'exportWorkspace'>
     /** Object Explorer's expanded nodes per target (`ExplorerService.savedExpansion`), kept with the workspace for the next start. */
@@ -49,7 +50,26 @@ export function keptSession(documents: Pick<DocumentService, 'getSnapshot' | 'ge
   for (const document of tabs) {
     const model = documents.getModel(document.id)
     if (written.length >= sessionLimits.documents) break
-    if ((pinnedOnly && !document.pinned) || !model || isCustomKind(document.kind) || documents.isFilling(document.id)) continue
+    if (pinnedOnly && !document.pinned) continue
+    // A SQL Server Agent document with unsaved changes (AG-6g) keeps its state, without secrets, on its connection target; one whose target
+    // is not kept, or whose state is past its limit, is left out and asked about. One still saving is left out too, so its close refusal stands.
+    if (isKeptAgentKind(document.kind)) {
+      const state = document.dirty && !documents.closeRefusal?.(document.id) ? documents.keepCustom?.(document.id) : undefined
+      const targetId = document.targetId && targetIds.has(document.targetId) ? document.targetId : undefined
+      if (state === undefined || !targetId) continue
+      const entry: SessionDocumentWrite = {
+        name: document.name.slice(0, sessionLimits.nameChars), kind: document.kind, eol: 'lf', dirty: true,
+        targetId, attachWanted: true, database: document.database.slice(0, sessionLimits.databaseChars), text: state
+      }
+      const size = bytes(entry) + 2
+      if (used + size > budget) continue
+      used += size
+      if (document.id === activeId) activeIndex = written.length
+      written.push(entry)
+      kept.add(document.id)
+      continue
+    }
+    if (!model || isCustomKind(document.kind) || documents.isFilling(document.id)) continue
     const kind = document.kind && !isCustomKind(document.kind) ? document.kind : 'sql', connected = document.connectionId ? server(document.connectionId) : document.lastServer
     const at = kind === 'sql' && connected ? connected.slice(0, sessionLimits.serverChars) : undefined
     const targetId = kind === 'sql' && document.targetId && targetIds.has(document.targetId) ? document.targetId : undefined
@@ -81,7 +101,7 @@ export function keptSession(documents: Pick<DocumentService, 'getSnapshot' | 'ge
 }
 
 /** Reload uses the same eligibility as hot exit and takes its last checkpoint as the old page unloads. */
-export function reloadSession(documents: Pick<DocumentService, 'getSnapshot' | 'getModel' | 'isFilling'>, server: (connectionId: string) => string | undefined,
+export function reloadSession(documents: Pick<DocumentService, 'getSnapshot' | 'getModel' | 'isFilling'> & Partial<Pick<DocumentService, 'keepCustom' | 'closeRefusal'>>, server: (connectionId: string) => string | undefined,
   { restoreQueries, recoveryId, ...options }: Parameters<typeof keptSession>[2] & {
     restoreQueries: boolean; recoveryId: (tabId: string) => string | undefined
   }): ReloadPins | undefined {
@@ -95,7 +115,9 @@ export function reloadSession(documents: Pick<DocumentService, 'getSnapshot' | '
 
 export interface SessionRestoreOptions {
   readonly api: Pick<VariaApi, 'hotExit' | 'takeSession' | 'finishSessionRestore'>
-  readonly documents: Pick<DocumentService, 'getSnapshot' | 'reopen' | 'activate' | 'setPinned'>
+  readonly documents: Pick<DocumentService, 'getSnapshot' | 'reopen' | 'activate' | 'setPinned'> & Partial<Pick<DocumentService, 'reopenKept'>>
+  /** SQL Server Agent's release gate (`agentEnabled`): kept Agent documents reopen only while it is on. */
+  readonly agentEnabled?: boolean
   readonly files: Pick<FileService, 'later' | 'release' | 'reportError'>
   /** Where the reopened tabs go back into their editor groups. */
   readonly groups?: Pick<EditorGroupService, 'restore'>
@@ -113,7 +135,7 @@ export interface SessionRestoreOptions {
  * goes to the file banner, and files that are gone are named there as a warning.
  */
 /** How many tabs the restore reopened, or -1 when it failed. */
-export async function restoreSession({ api, documents, files, groups, connectionTargets, resumeRecovery, restoredJobs, otherwise }: SessionRestoreOptions): Promise<number> {
+export async function restoreSession({ api, documents, files, groups, connectionTargets, resumeRecovery, restoredJobs, otherwise, agentEnabled }: SessionRestoreOptions): Promise<number> {
   if (!api.hotExit) return 0
   let opened = 0, failed = false
   await files.later(async () => {
@@ -124,11 +146,22 @@ export async function restoreSession({ api, documents, files, groups, connection
   async function restore(): Promise<void> {
     let restored: RestoredSession
     try { restored = unwrap(await api.takeSession()) } catch (error) { throw new Error(`The queries open when Varia SQL Manager last closed could not be reopened: ${error instanceof Error ? error.message : 'The operation failed.'}`) }
-    const registered: SqlFile[] = [], ids: string[] = []
-    let active: string | undefined
+    const registered: SqlFile[] = [], ids: (string | undefined)[] = [], problems = [...restored.problems]
+    let active: string | undefined, agentsOff = false
     try {
       if (restored.workspace && connectionTargets && !connectionTargets.restore(restored.workspace)) throw new Error('The connection workspace cannot be restored while a connection is active.')
       for (const [index, document] of restored.documents.entries()) {
+        // A kept SQL Server Agent document (AG-6g) reopens through its own service, and only behind the release gate; one that cannot is named.
+        if (isKeptAgentKind(document.kind)) {
+          if (!agentEnabled || !documents.reopenKept) { agentsOff = true; continue }
+          let id: string
+          try { id = documents.reopenKept(document.kind, { name: document.name, state: document.text, targetId: document.targetId, database: document.database }).id } catch { problems.push(keptAgentText.unreadable(document.name)); continue }
+          if (document.recoveryId) resumeRecovery?.(id, document.recoveryId)
+          opened++
+          ids[index] = id
+          if (index === restored.activeIndex) active = id
+          continue
+        }
         if (document.file) registered.push(document.file)
         const open = document.file ? documents.getSnapshot().documents.find(tab => tab.file?.id === document.file?.id) : undefined
         const id = open?.id ?? documents.reopen(document).id
@@ -144,6 +177,7 @@ export async function restoreSession({ api, documents, files, groups, connection
       if (active) documents.activate(active)
       if (restored.restoreGeneration !== undefined) unwrap(await api.finishSessionRestore(restored.restoreGeneration))
     } finally { await files.release(registered) }
-    if (restored.problems.length) files.reportError(restored.problems.join(' '), 'warning')
+    if (agentsOff) problems.push(keptAgentText.unavailable)
+    if (problems.length) files.reportError(problems.join(' '), 'warning')
   }
 }

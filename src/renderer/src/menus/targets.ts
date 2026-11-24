@@ -152,6 +152,8 @@ export type MenuTarget =
   | { readonly kind: 'tableDesigner'; readonly tabId: string }
   /** An Integration Services Operations grid; its commands act on the selected operation. */
   | { readonly kind: 'ssisOperations'; readonly tabId: string }
+  /** A BigQuery Job History grid; its commands act on the selected job. */
+  | { readonly kind: 'jobHistory'; readonly tabId: string }
   | OutputTarget
   /** A panel's tab or ⋯ button; `popout` when the panel is in a window of its own. */
   | { readonly kind: 'dockTab'; readonly pane: PaneId; readonly floating: boolean; readonly popout: boolean }
@@ -166,13 +168,13 @@ export type MenuTarget =
 
 export const menuForTarget: Readonly<Record<MenuTarget['kind'], ContextMenuId>> = {
   editor: 'editor.context', explorer: 'explorer.context', tableDesigner: 'tableDesigner.context', documentTab: 'documentTab.context', output: 'output.context', dockTab: 'dockTab.context', input: 'input.context',
-  ssisOperations: 'ssis.operation.context', searchHit: 'search.hit.context', resultsTools: 'output.tools', peekProperties: 'peek.properties.context',
+  ssisOperations: 'ssis.operation.context', jobHistory: 'bigquery.jobs.context', searchHit: 'search.hit.context', resultsTools: 'output.tools', peekProperties: 'peek.properties.context',
   planOutline: 'plan.outline.context', planProperties: 'plan.properties.context'
 }
 /** Each context menu's accessible name. */
 export const contextMenuLabels: Readonly<Record<ContextMenuId, string>> = {
   'editor.context': 'Query editor', 'explorer.context': 'Object Explorer', 'tableDesigner.context': 'Table Designer', 'documentTab.context': 'Query tab', 'output.context': 'Query output',
-  'dockTab.context': 'Panel tab', 'input.context': 'Text field', 'ssis.operation.context': 'Integration Services Operations',
+  'dockTab.context': 'Panel tab', 'input.context': 'Text field', 'ssis.operation.context': 'Integration Services Operations', 'bigquery.jobs.context': 'Job History',
   'search.hit.context': 'Search result', 'output.tools': 'More results tools', 'peek.properties.context': 'Peek properties',
   'plan.outline.context': 'Plan outline', 'plan.properties.context': 'Plan properties'
 }
@@ -221,7 +223,7 @@ export function argsFor(target: MenuTarget): CommandArgs {
   // The results toolbar's ⋯ runs its items as the toolbar's buttons do: with the toolbar's query and no target, so a command
   // that reads a grid from its target falls back to that query's focused grid.
   if (target.kind === 'resultsTools') return { tabId: target.tabId }
-  const tabId = target.kind === 'editor' || target.kind === 'documentTab' || target.kind === 'output' || target.kind === 'tableDesigner' || target.kind === 'ssisOperations' ? target.tabId : undefined
+  const tabId = target.kind === 'editor' || target.kind === 'documentTab' || target.kind === 'output' || target.kind === 'tableDesigner' || target.kind === 'ssisOperations' || target.kind === 'jobHistory' ? target.tabId : undefined
   const state = target.kind === 'searchHit' ? target.state : target.kind === 'output' && target.view === 'grid'
     ? { resultsGridTransposed: !!target.transposed, resultsGridComparison: target.resultKind === 'diff', comparisonInputsOpen: target.resultKind === 'diff' && !!target.inputsOpen,
       // The menu's row, when it was opened on one; else (the keyboard's menu on the grid) the focused grid's active row.

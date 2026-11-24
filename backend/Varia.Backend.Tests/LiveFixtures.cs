@@ -62,6 +62,9 @@ internal sealed class ScriptedSampler(int? periodMs = 10) : ILiveSampler
     public IReadOnlyList<LiveCursor>? ResumedFrom { get; private set; }
     public int? PeriodMs => periodMs;
     public bool Ended => false;
+    /// <summary>What IsIdle answers after a sample (a probe with an idle interval slows down while it is true).</summary>
+    public bool Quiet { get; set; }
+    public bool IsIdle(string probe) => Quiet;
 
     public Task<LiveOpening> OpenAsync(IReadOnlyList<LiveProbeState> probes, IReadOnlyList<LiveCursor> resume, CancellationToken token)
     {

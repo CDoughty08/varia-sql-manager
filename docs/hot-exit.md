@@ -49,10 +49,37 @@ Never kept: results, live connections, SQL session IDs, transactions, access tok
 strings.
 
 - Table designers, Database Properties, monitors and other custom tabs are not kept; one with unsaved changes still asks.
+  SQL Server Agent documents with unsaved changes are the exception (below).
 - Unpinned tabs past the caps (64 tabs, 64 MB as written) are skipped, and unsaved ones among them ask. If a pin cannot be
   kept, the window stays open and names the tab.
 - Open transactions and running queries still ask (the connections close either way).
 - If main cannot write the session, the window stays open and the banner says so; nothing is lost.
+
+## SQL Server Agent documents
+
+With the Agent preview on (`VARIA_AGENT_PREVIEW=1`, docs/sql-server-agent.md), a job, schedule list (Schedules), alert,
+operator, Operators and Notifications grid, proxy or credential document with unsaved changes is kept like an unsaved
+query, following the setting and the pinned shelf as a query does; a clean one is not kept.
+
+- **What is kept** (`src/shared/agent/kept.ts`): the document's connection target, the object it edits (kind and name),
+  the read its changes began from and the changes themselves, as bounded JSON in the record's text (at most 4,194,304
+  characters; a larger document is not kept and asks). A credential's or proxy's password is never kept: a document with a
+  password typed is not kept, so the close asks about it as before (AutoRecover keeps
+  only its last copy from before the password was typed).
+- **Reopening.** The tab reopens with its changes and its unsaved mark, disconnected, saying the changes were kept and
+  that its server must connect. When that target connects (at start, by Connect, or by reconnecting), the document reads
+  the object again and puts the changes on top, saying so. Where the object was also changed on the server, the
+  document's own values win and the notice asks to check them before saving; a job changed since opens the job document's
+  field-by-field comparison, with Reload and keep my changes.
+  If that read fails, the changes stay on last session's read: a proxy's, credential's, alert's or operator's Save waits
+  until a later connection reads the object again, and a job's or schedule's save is still refused if the object changed. A schedule draft whose schedule was deleted on the server is dropped, and the notice says so.
+  A Create Job Like This copy comes back as a New Job with its changes; its link to the source job (Changes from
+  source, Compare with source) is not kept.
+- **Release gate.** Started without the preview, Varia reopens no Agent document and says that their unsaved changes were
+  discarded; AutoRecover leaves their copies out of its Recover dialog.
+- **AutoRecover** keeps the same state for an unsaved Agent document at its interval (once per change), with its target
+  (a document with no saved connection target is not copied), and Recover reopens it the same way. A kept state that cannot be read (a different shape, a damaged file) reopens
+  nothing for that document and names it.
 
 ## Storage
 
@@ -140,6 +167,8 @@ need an explicit connection choice.
 
 `tests/session-store.test.ts` (store, schemas, limits, Save As suggestion), `tests/hot-exit.test.ts` (rename, keeping,
 close flow, restore, remembered database), `tests/close-intent.test.ts` (which session ends are held),
-`tests/recovery-service.test.ts` (`file.autoRecoverNow`), and `scripts/hot-exit-smoke.mjs` (rename three ways, quit,
+`tests/recovery-service.test.ts` (`file.autoRecoverNow`), `tests/agent-hot-exit.test.ts` (Agent documents: records,
+reopening, the reread and its conflicts, the gate, secrets never kept, AutoRecover), `scripts/agent-hot-exit-smoke.mjs` (a
+job with an unsaved edit kept by a quit, reopened and read again), and `scripts/hot-exit-smoke.mjs` (rename three ways, quit,
 relaunch, crashes during and after a restore, a Windows session end). Other smoke suites run with `VARIA_TEST_HOT_EXIT=0`
 (the fixture's default) so their save prompts stay.

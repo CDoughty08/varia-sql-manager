@@ -128,7 +128,7 @@ describe('result page access', () => {
         if (!/^\s*\/\//.test(line)) for (const match of line.matchAll(/([\w)\]]+)[?!]?\.Find\b/g)) receivers.add(match[1])
       }
     }
-    expect([...receivers].sort()).toEqual(['DefinitionNames', 'IdentityMatches', 'Probes', 'Samples', 'accounts', 'all', 'bigQuery', 'cache', 'matcher', 'store'])
+    expect([...receivers].sort()).toEqual(['DefinitionNames', 'IdentityMatches', 'Probes', 'Samples', 'accounts', 'all', 'bigQuery', 'cache', 'matcher', 'service', 'store'])
     // SqlService's Stored is the only one that takes a set.
     const storedDeclaration = /\bStored\s*(?:<[^>]*>)?\s*\(\s*(?:this\s+|in\s+|ref\s+)?[\w.<>?\[\]]+\s+\w+\s*(?:=[^)]*)?\)/g
     expect(' private static ResultSetBuffer? Stored( ResultSetBuffer? set) => set;'.match(storedDeclaration)).toHaveLength(1)

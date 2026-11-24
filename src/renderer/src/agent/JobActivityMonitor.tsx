@@ -4,7 +4,7 @@
 // JobActivityService keeps every state; this only draws it.
 import { useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from 'react'
 import {
-  agentBanner, agentBulkCommands, agentBulkTitles, agentBulkVerbs, agentJobFilterColumns, agentJobFilterLimits, agentJobTiles, agentJobViewSpecs, agentJobsProbe, agentServiceProbe,
+  agentBanner, agentBulkCommands, agentBulkFormVerbs, agentBulkTitles, agentBulkVerbs, agentJobFilterColumns, agentJobFilterLimits, agentJobTiles, agentJobViewSpecs, agentJobsProbe, agentServiceProbe,
   agentStatusOverride, jobActivityTitle, tileValue, viewCount
 } from '../../../shared/agent/jobs'
 import { liveProbes, type LiveTone } from '../../../shared/live/catalog'
@@ -22,6 +22,7 @@ import type { LiveSnapshot } from '../live/LiveService'
 import { probePillStatus } from '../live/status'
 import { formatCount, plural } from '../results/status'
 import { activeFilters, listProblems, pillNote, type BulkLine, type JobActivityState } from './JobActivityService'
+import JobBulkForm from './JobBulkForms'
 
 const listSpec = liveProbes[agentJobsProbe]
 const noSubscribe = () => () => {}
@@ -159,6 +160,8 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
           <span className="agent-bulk-count">{state.overCap ? `More than ${formatCount(selected.length)} jobs selected: select at most ${formatCount(selected.length)}` : selected.length ? `${formatCount(selected.length)} ${plural(selected.length, 'job')} selected` : 'No job selected'}</span>
           {agentBulkVerbs.map(verb => <button key={verb} type="button" disabled={!!bulkWhy} title={bulkWhy ?? agentBulkTitles[verb].dialog}
             onClick={() => void workbench.commands.execute(agentBulkCommands[verb], { tabId: documentId }, 'toolbar')}>{agentBulkTitles[verb].button}</button>)}
+          {agentBulkFormVerbs.map(verb => <button key={verb} type="button" disabled={!!bulkWhy} title={bulkWhy ?? agentBulkTitles[verb].dialog} aria-expanded={state.form?.verb === verb}
+            onClick={() => void workbench.commands.execute(agentBulkCommands[verb], { tabId: documentId }, 'toolbar')}><Icon name={verb === 'changeOwner' ? 'person' : 'agent-schedule'} />{agentBulkTitles[verb].button}</button>)}
           <button type="button" disabled={!one} title={one ? `Open ${one.name} (Enter)` : 'Select one job to open it'}
             onClick={() => void workbench.commands.execute('agent.openJob', { tabId: documentId }, 'toolbar')}>Open</button>
           <button type="button" className="agent-chevron" aria-expanded={expandedHere} disabled={!one} title={one ? 'Show the last run of the selected job below the list' : 'Select one job to see its last run'}
@@ -168,6 +171,7 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
           <button type="button" disabled={!one} title={one ? `Create a job like ${one.name}` : 'Select one job to create a job like it'}
             onClick={() => void workbench.commands.execute('agent.createJobLike', { tabId: documentId }, 'toolbar')}><Icon name="copy" />Create Job Like This…</button>
         </div>
+        <JobBulkForm id={documentId} service={service} form={state.form} />
         <div className="agent-jobs-grid" onDoubleClick={event => {
           // Only on a job's row (GridView's own hit test): a header's border fits its column, and the area below the rows is no job.
           // The grid's pointer layer lies over its rows, so every element under the pointer is asked, not just the event's target.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { MessageEntry } from '../src/shared/contracts'
-import { messageTail } from '../src/renderer/src/results/MessagesView'
+import { jobLinkConnection, messageTail } from '../src/renderer/src/results/MessagesView'
 import { completionSentence, formatCount, formatDuration, formatElapsed, messagesSummary, runSummary, statusSentence, timeOfDay } from '../src/renderer/src/results/status'
 import { summaryOf } from './fixtures/results'
 
@@ -80,5 +80,16 @@ describe('Messages and the status line', () => {
     expect(messagesSummary([info('a'), { text: 'Msg 8134, Level 16, State 1, Line 3\nDivide by zero error encountered.', kind: 'error' }, { text: 'Msg 2', kind: 'error' }]))
       .toMatchObject({ text: '3 · 2 errors', label: 'Messages, 3 messages, 2 errors', firstError: 'Divide by zero error encountered.', readable: true })
     expect(messagesSummary([{ text: 'The query was cancelled.', kind: 'error' }])).toMatchObject({ text: '1 · 1 error', label: 'Messages, 1 message, 1 error', firstError: 'The query was cancelled.' })
+  })
+})
+
+describe('the Messages job line', () => {
+  it('links to Job History only while the tab is still on the project of the job', () => {
+    const connection = (id: string, project: string) => ({ id, options: { provider: 'bigquery' as const, project } }) as unknown as Parameters<typeof jobLinkConnection>[2][number]
+    const connections = [connection('bq-a', 'alpha'), connection('bq-b', 'beta')]
+    expect(jobLinkConnection('alpha', 'bq-a', connections)).toBe('bq-a')
+    expect(jobLinkConnection('alpha', 'bq-b', connections)).toBeUndefined()
+    expect(jobLinkConnection('alpha', undefined, connections)).toBeUndefined()
+    expect(jobLinkConnection('alpha', 'gone', connections)).toBeUndefined()
   })
 })

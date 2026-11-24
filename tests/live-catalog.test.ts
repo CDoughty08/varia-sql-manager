@@ -115,7 +115,20 @@ describe('live catalogue', () => {
     expect(Object.keys(liveArgsSchemas).sort()).toEqual([...liveSourceIds].sort())
     expect(productionSourceIds).toEqual(liveSourceIds.filter(id => !liveSources[id].testOnly))
     expect(liveSources['debug.synthetic']).toMatchObject({ testOnly: true, scope: 'none' })
-    expect(productionSourceIds).toEqual(['activity', 'explorer', 'ssis.catalog', 'ssis.operations', 'query.plan', 'agent.jobs', 'agent.history'])
+    expect(productionSourceIds).toEqual(['activity', 'explorer', 'ssis.catalog', 'ssis.operations', 'query.plan', 'agent.jobs', 'agent.history', 'bigquery.jobs'])
+    // BigQuery's Job History (BQ-9): the bigquery scope and engine only, 5 s while a job is open and 60 s otherwise (idleIntervalMs,
+    // within the protocol's maximum), the protocol's 10 s budget, a memory text filter, and one snapshot table keyed by the job id
+    // that holds the newest 1,000 jobs and the children of the expanded scripts, its tone column last.
+    expect(liveSources['bigquery.jobs']).toMatchObject({ testOnly: false, scope: 'bigquery', providers: ['bigquery'], probes: ['bigquery.jobs.list'], hidden: 'pause' })
+    const history = liveProbes['bigquery.jobs.list']
+    expect(history).toMatchObject({ intervalMs: { default: 5000 }, idleIntervalMs: 60_000, budgetMs: { max: L.budgetMs.max }, filterMode: 'memory' })
+    expect(history.idleIntervalMs!).toBeLessThanOrEqual(L.intervalMs.max)
+    expect(history.tables).toHaveLength(1)
+    expect(history.tables![0]).toMatchObject({ id: 'jobs', mode: 'snapshot', key: ['job'], rowCap: 1000 + 4 * 1000 })
+    expect(history.tables![0].rowCap!).toBeLessThanOrEqual(L.snapshotRows)
+    expect(history.tables![0].columns.at(-1)).toMatchObject({ id: 'tone', role: 'tone' })
+    // No other probe has an idle interval yet, and none is below its probe's default.
+    for (const id of liveProbeIds) if (liveProbes[id].idleIntervalMs !== undefined) expect(liveProbes[id].idleIntervalMs!, id).toBeGreaterThan(liveProbes[id].intervalMs.default)
     expect(liveSources.activity).toMatchObject({ testOnly: false, scope: 'server', probes: ['activity.overview', 'activity.sessions', 'activity.resources', 'activity.queries'] })
     // Object Explorer's status chips: database states need no permission (a low-privilege login still gets them), the
     // DMV probes need server state, the Agent probe skips Express and the availability probe runs only where Always On can.

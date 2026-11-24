@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (426)
+## Commands (439)
 
 ### File
 
@@ -451,6 +451,8 @@ keys it uses are listed below.
 | Stop Jobs | `agent.stopJobs` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
 | Enable Jobs | `agent.enableJobs` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
 | Disable Jobs | `agent.disableJobs` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
+| Change Job Owner… | `agent.changeJobOwner` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
+| Attach Schedule to Jobs… | `agent.attachJobSchedule` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
 | Open Job… | `agent.openJob` | Enter (`activeDocumentIsJobActivity && outputGridFocus`) | Enter (`activeDocumentIsJobActivity && outputGridFocus`) | ↩ (`activeDocumentIsJobActivity && outputGridFocus`) | `agentEnabled && backendReady && hasConnection` | — |
 | New Job… | `agent.newJob` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › New Job… |
 | Save Job | `agentJob.save` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentJob` | — |
@@ -487,6 +489,22 @@ keys it uses are listed below.
 | Refresh Schedules | `agentSchedules.refresh` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentSchedules` | — |
 | Delete Schedule | `agentSchedules.delete` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentSchedules` | — |
 | Create Job Like This… | `agent.createJobLike` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › Create Job Like This… |
+
+### BigQuery
+
+| Command | Id | Windows | Linux | macOS | Available when | Menus |
+| --- | --- | --- | --- | --- | --- | --- |
+| Job History | `bigquery.jobHistory` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › Job History |
+| Open Results | `bigquery.openJobResults` | — | — | — | `activeDocumentIsJobHistory && jobHistoryCanOpenResults` | BigQuery Job History context menu › Open Results |
+| Re-attach | `bigquery.reattachJob` | — | — | — | `activeDocumentIsJobHistory && jobHistoryCanReattach` | BigQuery Job History context menu › Re-attach |
+| Open SQL in New Tab | `bigquery.openJobSql` | — | — | — | `activeDocumentIsJobHistory && jobHistoryCanOpenSql` | BigQuery Job History context menu › Open SQL in New Tab |
+| Re-run… (not in the palette) | `bigquery.rerunJob` | — | — | — | `activeDocumentIsJobHistory && jobHistoryCanRerun` | BigQuery Job History context menu › Re-run… |
+| Cancel Job… (not in the palette) | `bigquery.cancelJob` | — | — | — | `activeDocumentIsJobHistory && jobHistoryCanCancel` | BigQuery Job History context menu › Cancel Job… |
+| Copy Job ID | `bigquery.copyJobId` | — | — | — | `activeDocumentIsJobHistory && jobHistoryJobSelected` | BigQuery Job History context menu › Copy Job ID |
+| Copy Console Link | `bigquery.copyJobLink` | — | — | — | `activeDocumentIsJobHistory && jobHistoryJobSelected` | BigQuery Job History context menu › Copy Console Link |
+| Job Details | `bigquery.jobDetails` | Enter (`activeDocumentIsJobHistory && !activeDocumentIsJobActivity && liveGridFocus`) | Enter (`activeDocumentIsJobHistory && !activeDocumentIsJobActivity && liveGridFocus`) | ↩ (`activeDocumentIsJobHistory && !activeDocumentIsJobActivity && liveGridFocus`) | `activeDocumentIsJobHistory && jobHistoryJobSelected` | BigQuery Job History context menu › Details |
+| Refresh Job History | `bigquery.refreshJobs` | F5 (`activeDocumentIsJobHistory && !activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus`) | F5 (`activeDocumentIsJobHistory && !activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus`) | F5 (`activeDocumentIsJobHistory && !activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus`) | `backendReady && activeDocumentIsJobHistory && jobHistoryRefreshable` | BigQuery Job History context menu › Refresh |
+| Pause Job History | `bigquery.pauseJobs` | — | — | — | `activeDocumentIsJobHistory && jobHistoryPausable`; checked when `jobHistoryPaused` | BigQuery Job History context menu › Pause |
 
 ### Preferences
 
@@ -788,6 +806,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `0_new` | **R**estore Database… | `explorer.restoreDatabase` | `explorerActionRestore != '' && explorerNode == 'folder'` |
 | `0_new` | R**e**store Files and Filegroups… | `explorer.restoreFiles` | `explorerActionRestoreFiles != '' && explorerNode == 'folder'` |
 | `1_monitor` | **J**ob Activity Monitor | `agent.jobActivity` | `(explorerNode == 'agent' \|\| explorerNode == 'agentJobActivity') && !explorerServerLost` |
+| `1_monitor` | **J**ob History | `bigquery.jobHistory` | `((explorerNode == 'server' && explorerProvider == 'bigquery') \|\| explorerNode == 'bqProject') && !explorerServerLost` |
 | `1_monitor` | View **H**istory | `agent.viewHistory` | `(explorerNode == 'agent' \|\| (explorerNode == 'folder' && explorerFolder == 'agentJobs') \|\| explorerNode == 'agentJob') && !explorerServerLost` |
 | `1_monitor` | **M**anage Schedules | `agent.schedules` | `explorerNode == 'folder' && explorerFolder == 'agentJobs' && !explorerServerLost` |
 | `1_operations` | A**c**tive Operations | `ssis.activeOperations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
@@ -1110,6 +1129,23 @@ Right-click the Integration Services Operations grid (a right-click outside the 
 | `8_view` | **R**efresh | `ssis.refreshOperations` | Always |
 | `8_view` | **P**ause | `ssis.pauseOperations` | Always |
 
+#### BigQuery Job History context menu (`bigquery.jobs.context`)
+
+Right-click the BigQuery Job History grid (a right-click outside the selection selects that row first), or press Shift+F10 or the context-menu key in it. Items act on the selected job; one that does not apply to it is greyed once the selected row's cells are read, and its reason shows in the details pane.
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_open` | **O**pen Results | `bigquery.openJobResults` | Always |
+| `1_open` | Re-**a**ttach | `bigquery.reattachJob` | Always |
+| `2_sql` | Open **S**QL in New Tab | `bigquery.openJobSql` | Always |
+| `2_sql` | **R**e-run… | `bigquery.rerunJob` | Always |
+| `3_cancel` | Ca**n**cel Job… | `bigquery.cancelJob` | Always |
+| `5_copy` | **C**opy Job ID | `bigquery.copyJobId` | Always |
+| `5_copy` | Copy Console **L**ink | `bigquery.copyJobLink` | Always |
+| `8_view` | Re**f**resh | `bigquery.refreshJobs` | Always |
+| `8_view` | **P**ause | `bigquery.pauseJobs` | Always |
+| `9_details` | **D**etails | `bigquery.jobDetails` | Always |
+
 #### Search Objects result context menu (`search.hit.context`)
 
 Right-click a Search Objects result (in the Search Objects tab or Object Explorer's search), which selects it, or press Shift+F10 or the context-menu key on the selected result. Items act on that object: Select Top N Rows, Modify and Script … as are Object Explorer's, for the object's kind; Rename, Delete and Properties are left to the tree (Reveal in Object Explorer first).
@@ -1191,7 +1227,7 @@ Right-click the execution plan's Properties pane, or press Shift+F10 or the cont
 | `1_copy` | **C**opy | `plan.copyProperties` | Always |
 | `1_copy` | Copy **V**alue | `plan.copyPropertyValues` | Always |
 
-## Context keys (192)
+## Context keys (203)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1210,6 +1246,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `textInputFocus` | boolean | focus | `editorTextFocus \|\| inputFocus \|\| peekEditorFocus`: focus is where keys type or move a caret. |
 | `activePanel` | `'explorer'`, `'editor'`, `'output'`, `''` | focus | The pane that holds focus: Object Explorer, the query editor, an output panel (Results, Messages or Execution plan), or '' for none. |
 | `outputGridFocus` | boolean | focus | Focus is in a results grid (a query's, or a live view's with Query Output's menu), which copies its selected cells rather than text. |
+| `liveGridFocus` | boolean | focus | Focus is in a live view's grid (an Activity Monitor pane's, Integration Services Operations', BigQuery Job History's), with Query Output's menu or its owner's own. |
 | `messagesFocus` | boolean | focus | Focus is in a Messages view; activePanel is then 'output'. |
 | `resultsFocus` | boolean | focus | Focus is in the Results pane (either layout) or its overflow picker; activePanel is then 'output', except in the picker. |
 | `searchHitsFocus` | boolean | focus | Focus is on a Search Objects result (the Search Objects tab's or Object Explorer's search), whose Copy copies the object's name. |
@@ -1242,6 +1279,16 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `activeDocumentIsAgentProxy` | boolean | state | The active document is a SQL Server Agent proxy (Proxy Account Properties, or New Proxy). |
 | `activeDocumentIsCredential` | boolean | state | The active document is a credential (Credential Properties, or New Credential). |
 | `activeDocumentIsLogViewer` | boolean | state | The active document is SQL Server Agent's Log File Viewer (job history). |
+| `activeDocumentIsJobHistory` | boolean | state | The active document is BigQuery Job History. |
+| `jobHistoryPaused` | boolean | state | The active Job History document is paused (Pause): it reads nothing until resumed. |
+| `jobHistoryRefreshable` | boolean | state | The active Job History document reads its jobs, or stopped on a failure that Refresh may get past. |
+| `jobHistoryPausable` | boolean | state | The active Job History document has not stopped, so Pause applies. |
+| `jobHistoryJobSelected` | boolean | state | A job is selected in the active Job History document and its connection is live. |
+| `jobHistoryCanOpenResults` | boolean | state | The job selected in Job History is a finished query job of the connection's principal (Open Results). |
+| `jobHistoryCanReattach` | boolean | state | The job selected in Job History is a running or pending top-level query job of the connection's principal (Re-attach). |
+| `jobHistoryCanOpenSql` | boolean | state | The job selected in Job History is a query job whose SQL BigQuery shows (Open SQL in New Tab). |
+| `jobHistoryCanRerun` | boolean | state | The job selected in Job History is a top-level query job whose SQL BigQuery shows (Re-run). |
+| `jobHistoryCanCancel` | boolean | state | The job selected in Job History is running or pending, no cancel of it is on its way, and BigQuery has not refused cancelling other users' jobs on this connection. |
 | `activeDocumentIsAgentSchedules` | boolean | state | The active document is SQL Server Agent's Schedules document (Manage Schedules). |
 | `ssisOperationStoppable` | boolean | state | The operation selected in the active Integration Services Operations document is an execution or validation that is running or pending, and no stop of it is on its way. |
 | `ssisOperationsPaused` | boolean | state | The active Integration Services Operations document is paused (Pause): it reads nothing until resumed. |

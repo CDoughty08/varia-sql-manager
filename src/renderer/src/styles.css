@@ -2693,6 +2693,28 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 @media (forced-colors: active) {
   .ssis-tile[aria-pressed="true"] .tile { outline: 2px solid Highlight; outline-offset: -2px; }
 }
+/* BigQuery Job History (BQ-9): Job Activity Monitor's layout, SSIS Operations' filters, a status line and the details pane beside the grid. */
+.bq-jobs-status { margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.bq-jobs-body { display: flex; flex: 1; gap: var(--varia-space-2); min-height: 0; }
+.bq-jobs-body > .agent-jobs-grid { min-width: 0; }
+.bq-jobs-details { display: flex; flex-direction: column; flex: 0 0 38%; min-width: 280px; max-width: 640px; border: 1px solid var(--varia-panel-border); }
+.bq-jobs-details-head { display: flex; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-2); font-size: var(--varia-size-sm); }
+.bq-jobs-details-head > strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bq-jobs-actions { display: flex; flex-wrap: wrap; gap: var(--varia-space-1); padding: 0 var(--varia-space-2) var(--varia-space-1); }
+.bq-jobs-details-body { flex: 1; min-height: 0; overflow: auto; padding: 0 var(--varia-space-2) var(--varia-space-2); }
+.bq-jobs-facts { display: grid; grid-template-columns: max-content 1fr; gap: var(--varia-space-0) var(--varia-space-3); margin: 0 0 var(--varia-space-2); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.bq-jobs-facts > div { display: contents; }
+.bq-jobs-facts dt { color: var(--varia-descriptionForeground); }
+.bq-jobs-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.bq-jobs-sql { max-height: 40vh; overflow: auto; }
+.bq-jobs-children-title { margin: var(--varia-space-2) 0 var(--varia-space-1); font-size: var(--varia-size-sm); }
+.bq-jobs-children { margin: 0; padding-left: var(--varia-space-4); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.bq-jobs-child-sql { color: var(--varia-descriptionForeground); }
+.bq-jobs .ssis-filter-field input.bq-jobs-field-wide { width: 28ch; }
+.bq-jobs .ssis-filter-field input[type="datetime-local"] { width: auto; }
+.bq-jobs-pinned { display: inline-flex; align-items: center; gap: var(--varia-space-1); font-size: var(--varia-size-sm); }
+.bq-jobs-pinned > button { padding: 0 var(--varia-space-1); border-color: transparent; background: transparent; }
+.message-job-line { display: flex; align-items: center; gap: var(--varia-space-2); }
 /* SQL Server Agent's Job Activity Monitor (AG-3): the SSIS Operations document's layout, with Agent's banner, a bulk bar, the
    expanded job's last run under the grid and the bulk verbs' result lines. */
 .agent-jobs { display: flex; flex-direction: column; gap: var(--varia-space-2); box-sizing: border-box; height: 100%; min-height: 360px; padding: var(--varia-space-3) var(--varia-space-4) var(--varia-space-4); }
@@ -3681,6 +3703,11 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
   .agent-proxy-new-credential .link-button { color: LinkText; }
   .agent-proxy-chip[data-changed], .agent-proxy-checks label[data-changed] { outline: 1px solid Highlight; }
 }
+/* Job Activity Monitor's Change owner and Attach schedule forms (AG-3b). */
+.agent-bulk-form-body { display: flex; flex-direction: column; gap: var(--varia-space-1); padding: 0 var(--varia-space-2) var(--varia-space-2); font-size: var(--varia-size-sm); }
+.agent-bulk-form-body > .property-input { max-width: 360px; }
+.agent-bulk-form-buttons { display: flex; gap: var(--varia-space-2); margin: var(--varia-space-1) 0 0; }
+.agent-bulk-schedules { max-height: 280px; overflow: auto; }
 /* The job document's History section (AG-6d): the run durations' bars with the usual time, the runs beside the selected run's detail, and the live run view. */
 .agent-history { display: flex; flex-direction: column; gap: var(--varia-space-2); }
 .agent-history-head { display: flex; align-items: baseline; gap: var(--varia-space-2); font-size: var(--varia-size-sm); }
@@ -3780,7 +3807,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .inspector-tab-more[aria-expanded="true"] { border-color: var(--varia-chip-activeBorder); background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); transition: none; }
 .inspector-tab-more:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; transition: none; }
 .inspector-tab-nav > .codicon, .inspector-tab-more > .codicon { font-size: var(--varia-glyph-sm); }
-.inspector-tab-menu { position: absolute; top: calc(100% + var(--varia-space-0)); right: var(--varia-space-2); z-index: 12000; display: flex; flex-direction: column; gap: var(--varia-space-0); min-width: 220px; max-width: 300px; max-height: 320px; overflow-y: auto; padding: var(--varia-space-1); border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-sm); background: var(--varia-menu-background); color: var(--varia-menu-foreground); box-shadow: var(--varia-shadow-menu) var(--varia-widget-shadow); animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease); }
+.inspector-tab-menu { position: absolute; top: calc(100% + var(--varia-space-0)); right: var(--varia-space-2); z-index: 12000; display: flex; flex-direction: column; gap: var(--varia-space-0); min-width: 220px; max-width: 300px; max-height: 320px; overflow-y: auto; scrollbar-color: var(--varia-scrollbarSlider-background) transparent; padding: var(--varia-space-1); border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-sm); background: var(--varia-menu-background); color: var(--varia-menu-foreground); box-shadow: var(--varia-shadow-menu) var(--varia-widget-shadow); animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease); }
 .inspector-tab-menu-item { display: flex; align-items: center; gap: var(--varia-space-2); width: 100%; min-height: 26px; padding: 0 var(--varia-space-2); border: 1px solid transparent; border-radius: var(--varia-radius-sm); background: transparent; color: var(--varia-menu-foreground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); text-align: left; }
 .inspector-tab-menu-item:hover:not(:disabled) { background: var(--varia-list-hoverBackground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
 .inspector-tab-menu-item[aria-checked="true"] { background: var(--varia-list-inactiveSelectionBackground); font-weight: 600; transition: none; }
@@ -3791,7 +3818,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .inspector-tab-menu-key { flex: none; color: var(--varia-keybindingLabel-foreground); font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
 /* Main split and single-scroller pane archetypes. */
 .inspector-split { flex: 1; min-height: 0; min-width: 0; display: flex; overflow: hidden; }
-.inspector-pane-flow { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: var(--varia-space-4) var(--varia-space-4) var(--varia-space-5); container: inspector-pane / inline-size; }
+.inspector-pane-flow { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-color: var(--varia-scrollbarSlider-background) transparent; padding: var(--varia-space-4) var(--varia-space-4) var(--varia-space-5); container: inspector-pane / inline-size; }
 .inspector-pane-fill { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; padding: 0; }
 /* Resizable right Vitals rail (5 px hit target, 1 px visual line). */
 .inspector-vitals-sash { position: relative; z-index: 4; flex: none; width: 5px; margin-left: -2px; margin-right: -2px; cursor: col-resize; touch-action: none; outline: none; }
@@ -3802,7 +3829,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .inspector-vitals-head { flex: none; display: flex; align-items: center; gap: var(--varia-space-2); height: var(--varia-bar); padding: 0 var(--varia-space-2) 0 var(--varia-space-4); border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); color: var(--varia-sideBarTitle-foreground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
 .inspector-vitals-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inspector-vitals-close { flex: none; }
-.inspector-vitals-body { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.inspector-vitals-body { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-color: var(--varia-scrollbarSlider-background) transparent; }
 .vitals-block { padding: var(--varia-space-3) var(--varia-space-4); border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
 .vitals-block:last-child { border-bottom: 0; }
 .vitals-block-title { margin: 0 0 var(--varia-space-2); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-weight: 600; }
@@ -3835,12 +3862,20 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .fact-grid-copy:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; transition: none; }
 .fact-grid-copy.copied { color: var(--varia-successForeground); transition: none; }
 .fact-grid-copy > .codicon { font-size: var(--varia-glyph-sm); }
-.inspector-pane-flow .property-field { grid-template-columns: minmax(156px, 28%) minmax(0, 360px); }
+/* Align editable PropertyField rows on FactGrid's exact label rail and match Options / toolbar control sizing. */
+.inspector-pane-flow .property-field { grid-template-columns: minmax(156px, 28%) minmax(0, 1fr); column-gap: 0; min-height: var(--varia-control); padding: var(--varia-space-1) 0; }
+.inspector-pane-flow .property-field-label { padding-right: var(--varia-space-4); color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.inspector-pane-flow .property-field-control > .property-input, .inspector-pane-flow .property-field-control > select { width: min(100%, 240px); }
+.inspector-pane-flow .property-field-control > select, .inspector-pane-flow select.property-input { height: var(--varia-control); min-width: 0; padding: 0; border: 1px solid transparent; border-inline: var(--varia-space-0) solid transparent; border-radius: var(--varia-radius-sm); background: var(--varia-input-background); color: var(--varia-input-foreground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.inspector-pane-flow .property-field-control > select:not(:focus-visible), .inspector-pane-flow select.property-input:not(:focus-visible) { outline: 1px solid var(--varia-input-border); outline-offset: -1px; }
+.inspector-pane-flow .property-field-control > select:focus-visible, .inspector-pane-flow select.property-input:focus-visible { outline: var(--varia-space-0) solid var(--varia-focusBorder); outline-offset: calc(-1 * var(--varia-space-0)); }
+.inspector-pane-flow .property-field-control > .switch-field { min-height: var(--varia-control); }
 @container inspector-pane (max-width: 520px) {
   .fact-grid:not(.compact) { grid-template-columns: minmax(0, 1fr); }
   .fact-grid:not(.compact) .fact-grid-row > dt { border-bottom: 0; padding-bottom: 0; padding-top: var(--varia-space-2); }
   .fact-grid:not(.compact) .fact-grid-row > dd { padding-top: var(--varia-space-0); padding-bottom: var(--varia-space-2); }
-  .inspector-pane-flow .property-field { grid-template-columns: minmax(0, 1fr); }
+  .inspector-pane-flow .property-field { grid-template-columns: minmax(0, 1fr); row-gap: var(--varia-space-1); }
+  .inspector-pane-flow .property-field-label { padding-right: 0; }
   .inspector-pane-flow .property-field-note, .inspector-pane-flow .property-field-error { grid-column: 1; }
 }
 /* Signal-first CapabilityChips. */
@@ -3879,6 +3914,8 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .ratio-bar-swatch { display: inline-block; flex: none; width: var(--varia-space-2); height: var(--varia-space-2); border-radius: 50%; }
 .ratio-bar-legend-value { color: var(--varia-foreground); font-weight: 600; }
 @media (forced-colors: active) {
+  .inspector-pane-flow, .inspector-vitals-body, .inspector-tab-menu { scrollbar-color: auto; }
+  .inspector-pane-flow .property-field-control > select:focus-visible, .inspector-pane-flow select.property-input:focus-visible { outline-color: Highlight; }
   .inspector-tab[aria-selected="true"] { border-bottom-color: Highlight; }
   .inspector-vitals-sash::after { forced-color-adjust: none; background: CanvasText; }
   .inspector-vitals-sash:hover::after, .inspector-vitals-sash[data-dragging]::after, .inspector-vitals-sash:focus-visible::after { forced-color-adjust: none; background: Highlight; }

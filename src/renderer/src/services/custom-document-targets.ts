@@ -11,6 +11,10 @@ export class CustomDocumentTargets {
   bind(id: string, connectionId: string): void {
     this.bindings.set(id, { connectionId, targetId: this.options.targetIdOf?.(connectionId) })
   }
+  /** A kept document reopened on its target (hot exit, AutoRecover): no handle yet, so only that target's connections match it. */
+  bindTarget(id: string, targetId: string): void {
+    this.bindings.set(id, { connectionId: '', targetId })
+  }
   canFollowTarget(id: string, targetId: string): boolean {
     const binding = this.bindings.get(id)
     return binding?.targetId !== undefined && binding.targetId === targetId

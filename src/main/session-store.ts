@@ -8,11 +8,15 @@ import { editorGroupsLayoutSchema, layoutViews, remapEditorGroups } from '../sha
 import { connectionWorkspaceSchema } from '../shared/connection-targets'
 import { providerIds } from '../shared/providers'
 import { jobKeySchema } from '../shared/bigquery/jobs'
+import { isKeptAgentKind, keptAgentKinds, keptAgentLimits, type KeptAgentKind } from '../shared/agent/kept'
 import { workspaceSealSchema, type WorkspaceSeal } from './connection-workspace-seal'
 import { quarantine, readJsonFile, replaceFile, writeBytesAtomic } from './json-file'
 import { fileKinds, maxDocumentCharacters } from './sql-files'
 
-const fits = (value: { kind: DocumentKind; text?: string }) => value.text === undefined || value.text.length <= fileKinds[value.kind].maxChars
+const fits = (value: { kind: DocumentKind | KeptAgentKind; text?: string }) => value.text === undefined || value.text.length <= (isKeptAgentKind(value.kind) ? keptAgentLimits.stateChars : fileKinds[value.kind].maxChars)
+/** A SQL Server Agent document (AG-6g) keeps its state as text and its target: never a file, a provider or a job key. */
+const agentShaped = (document: { kind: string; text?: string; fileId?: string; path?: string; fileSha256?: string; provider?: string; jobKey?: string }) => !isKeptAgentKind(document.kind)
+  || (document.text !== undefined && document.fileId === undefined && document.path === undefined && document.fileSha256 === undefined && document.provider === undefined && document.jobKey === undefined)
 const name = z.string().min(1).max(sessionLimits.nameChars)
 const server = z.string().min(1).max(sessionLimits.serverChars)
 const database = z.string().max(sessionLimits.databaseChars)
@@ -21,10 +25,10 @@ const legacyFields = { name, baseName: name.optional(), kind: z.enum(documentKin
 const fields = { ...legacyFields, database: database.optional(), targetId: z.uuid().optional(), attachWanted: z.boolean().optional() }
 /** Version 3: the tab's provider, a BigQuery tab's dataset at BigQuery's length (SQL Server's 128 characters otherwise), and
  *  its job key (docs/bigquery.md, Re-attaching to jobs). */
-const providerFields = { ...fields, provider: z.enum(providerIds).optional(), database: dataset.optional(), jobKey: jobKeySchema.optional() }
+const providerFields = { ...fields, kind: z.enum([...documentKinds, ...keptAgentKinds]), provider: z.enum(providerIds).optional(), database: dataset.optional(), jobKey: jobKeySchema.optional() }
 const databaseFits = (document: { provider?: string; database?: string }) => document.provider === 'bigquery' || (document.database ?? '').length <= sessionLimits.databaseChars
 const associated = (document: { kind: string; targetId?: string; attachWanted?: boolean; database?: string }) => document.targetId
-  ? document.kind === 'sql' && document.attachWanted !== undefined && document.database !== undefined
+  ? (document.kind === 'sql' || isKeptAgentKind(document.kind)) && document.attachWanted !== undefined && document.database !== undefined
   : document.attachWanted === undefined
 const targetsPresent = (session: { documents: readonly { targetId?: string }[]; workspace?: { targets: readonly { id: string }[] } }) => {
   const ids = new Set(session.workspace?.targets.map(target => target.id))
@@ -36,7 +40,8 @@ export const sessionWriteSchema = z.object({
     .refine(associated, 'A query target requires its database and attachment preference.')
     .refine(databaseFits, 'A database name has at most 128 characters.')
     .refine(fits, 'A query is too large to keep for the next start.')
-    .refine(document => document.text !== undefined || (!!document.fileId && !document.dirty), 'A query without a file must keep its text.')).max(sessionLimits.documents),
+    .refine(document => document.text !== undefined || (!!document.fileId && !document.dirty), 'A query without a file must keep its text.')
+    .refine(agentShaped, 'A SQL Server Agent document keeps only its state and connection target.')).max(sessionLimits.documents),
   activeIndex: z.int().min(-1).max(sessionLimits.documents - 1),
   groups: editorGroupsLayoutSchema.optional(), workspace: connectionWorkspaceSchema.optional()
 }).strict().refine(session => !session.groups || layoutViews(session.groups).every(view => view < session.documents.length), 'An editor group names a query that is not kept.')
@@ -65,7 +70,7 @@ const recordSchema = z.object({
   ...recordFields, version: z.literal(3), workspace: connectionWorkspaceSchema.optional(), seal: workspaceSealSchema.optional(),
   documents: z.array(z.object({
     ...providerFields, ...fileFields
-  }).strict().refine(fits).refine(associated).refine(databaseFits)
+  }).strict().refine(fits).refine(associated).refine(databaseFits).refine(agentShaped)
     .refine(document => document.text !== undefined || (!!document.path && !document.dirty))
     .refine(document => document.fileSha256 === undefined || (!!document.path && document.text !== undefined))).max(sessionLimits.documents),
 }).strict().refine(session => !session.groups || layoutViews(session.groups).every(view => view < session.documents.length)).refine(targetsPresent)

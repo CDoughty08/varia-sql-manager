@@ -128,6 +128,9 @@ import { agentObjectsContribution } from '../contributions/agent-objects'
 import { SchedulesService } from '../agent/SchedulesService'
 import { ProxyDocumentService } from '../agent/ProxyDocumentService'
 import { CredentialDocumentService } from '../agent/CredentialDocumentService'
+import { bigQueryJobsContribution } from '../contributions/bigquery-jobs'
+import { JobHistoryService } from '../bigquery/JobHistoryService'
+import type { JobsWithoutTabReview } from '../../../shared/bigquery/jobs'
 import { agentProxyContribution } from '../contributions/agent-proxy'
 import { SearchDetailsService } from '../search/SearchDetailsService'
 import { ObjectSearchService } from '../search/ObjectSearchService'
@@ -291,6 +294,8 @@ export interface Workbench extends Disposable {
   readonly activity: ActivityMonitorService
   /** Integration Services Operations (Active Operations, All Executions…): each connection's document, filters and Stop Operation. */
   readonly operations: SsisOperationsService
+  /** BigQuery Job History (BQ-9): each BigQuery connection's document, its filters, details and row actions. */
+  readonly jobHistory: JobHistoryService
   /** SQL Server Agent's Job Activity Monitors (AG-3): one per connection, each a live view of its jobs. */
   readonly jobActivity: JobActivityService
   readonly logViewer: LogViewerService
@@ -462,7 +467,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const recovery = new RecoveryService({
     api, documents, files, settings, warn: message => commands.reportWarning(message),
     server: id => { const connection = connections.get(id); return connection ? connection.displayName || connection.server : undefined },
-    restoredJobs: (tabId, jobs) => queries.restoreJobs(tabId, jobs)
+    restoredJobs: (tabId, jobs) => queries.restoreJobs(tabId, jobs), agentEnabled: api.agentPreview
   })
   // A tab holding BigQuery jobs it does not follow re-attaches once its connection is live (docs/bigquery.md, Re-attaching to jobs).
   let reattachQueued = false
@@ -553,6 +558,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const operations = new SsisOperationsService({
     api, documents, panes, groups: editorGroups, live, connections, settings, targetIdOf,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-ssis-operations="${CSS.escape(id)}"] [role="grid"]`)?.focus())
+  })
+  const jobHistory = new JobHistoryService({
+    api, documents, panes, groups: editorGroups, live, connections, settings, queries, targetIdOf,
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-bq-jobs="${CSS.escape(id)}"] [role="grid"]`)?.focus())
   })
   const agentJobs = new AgentJobStatusService({ api, live, connections })
   // The SQL Server Agent job document (AG-6a): its first section's item in the list once loaded, or New Job's start panel.
@@ -663,6 +672,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     updates,
     activity: activity.context,
     ssis: operations.context,
+    jobHistory: jobHistory.context,
     editorGroups,
     editor: () => documents.boundEditor
   })
@@ -786,6 +796,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     restore,
     activity,
     operations,
+    jobHistory,
     jobActivity,
     logViewer,
     agentJobs,
@@ -850,6 +861,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       searchDetails.dispose()
       objectSearch.dispose()
       operations.dispose()
+      jobHistory.dispose()
       jobActivity.dispose()
       logViewer.dispose()
       agentJobs.dispose()
@@ -948,6 +960,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     ssisContribution(workbench),
     activityContribution(workbench),
     agentContribution(workbench, { agentEnabled: api.agentPreview }),
+    bigQueryJobsContribution(workbench),
     agentObjectsContribution(workbench, { agentEnabled: api.agentPreview }),
     agentProxyContribution(workbench, { agentEnabled: api.agentPreview }),
     searchContribution(workbench, api),
@@ -974,14 +987,24 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // The tabs the last close kept (hot exit), else the welcome query; what an earlier run or page left unsaved is offered
   // once the workbench is up.
   const welcome = () => { if (!disposed) documents.create('SQLQuery1.sql', welcomeQueryText, 'master') }
-  if (api.hotExit) void restoreSession({ api, documents, files, groups: editorGroups, connectionTargets, resumeRecovery: (tabId, id) => recovery.resume(tabId, id), restoredJobs: (tabId, jobs) => queries.restoreJobs(tabId, jobs), otherwise: welcome })
+  // Show in Job History (the records dialog): each project's Job History filtered to its jobs; a project with no live
+  // connection opens Connect, and its Job History opens once a connection to it is live.
+  const showJobsWithoutTab = (projects: NonNullable<JobsWithoutTabReview['show']>) => {
+    let connect = false
+    for (const { project, jobs } of projects) {
+      try { if (!jobHistory.show(project, jobs)) { connect = true; notifications.notify({ severity: 'info', message: `Connect to BigQuery project ${project}: Job History opens with its ${jobs.length === 1 ? 'job' : `${jobs.length} jobs`} once connected.` }) } }
+      catch (error) { commands.reportError(error instanceof Error ? error.message : 'Job History could not open.') }
+    }
+    if (connect) void commands.execute('connection.connect', undefined, 'toolbar')
+  }
+  if (api.hotExit) void restoreSession({ api, documents, files, groups: editorGroups, connectionTargets, resumeRecovery: (tabId, id) => recovery.resume(tabId, id), restoredJobs: (tabId, jobs) => queries.restoreJobs(tabId, jobs), otherwise: welcome, agentEnabled: api.agentPreview })
     .then(opened => opened >= 0, () => false).then(restored => {
       connectionRestored()
       if (disposed) return
       void recovery.start()
       // A session that could not be restored may still reopen its tabs (previous.json): their jobs are not asked about.
-      if (restored) void queries.reviewJobsWithoutTab(api)
+      if (restored) void queries.reviewJobsWithoutTab(api, showJobsWithoutTab)
     })
-  else { welcome(); connectionRestored(); void recovery.start(); void queries.reviewJobsWithoutTab(api) }
+  else { welcome(); connectionRestored(); void recovery.start(); void queries.reviewJobsWithoutTab(api, showJobsWithoutTab) }
   return workbench
 }

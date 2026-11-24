@@ -20,7 +20,9 @@ export const focusSamples: readonly { readonly name: string; readonly keys: Part
   { name: 'explorerRename', keys: { activePanel: 'explorer', explorerFocus: true, inputFocus: true, textInputFocus: true } },
   { name: 'explorerSearchBox', keys: { activePanel: 'explorer', inputFocus: true, textInputFocus: true } },
   { name: 'activityMonitor', keys: { activePanel: 'editor', activityMonitorFocus: true } },
-  { name: 'activityMonitorGrid', keys: { activePanel: 'editor', activityMonitorFocus: true, outputGridFocus: true } },
+  { name: 'activityMonitorGrid', keys: { activePanel: 'editor', activityMonitorFocus: true, outputGridFocus: true, liveGridFocus: true } },
+  // A live grid whose owner has its own menu (Integration Services Operations, Job History): no Query Output keys.
+  { name: 'ownedLiveGrid', keys: { activePanel: 'editor', liveGridFocus: true } },
   { name: 'activityMonitorFilter', keys: { activePanel: 'editor', activityMonitorFocus: true, inputFocus: true, textInputFocus: true } },
   { name: 'documentTab', keys: { activePanel: 'editor', documentTabFocus: true } },
   { name: 'documentTabRename', keys: { activePanel: 'editor', documentTabFocus: true, inputFocus: true, textInputFocus: true } },
