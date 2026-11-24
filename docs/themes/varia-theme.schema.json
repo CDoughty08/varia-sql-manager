@@ -177,13 +177,13 @@
         },
         "controlBorder": {
           "$ref": "#/definitions/value",
-          "description": "Outlined buttons, the Dark dialog border, result splitters, and docking compass borders. Varia Dark #6b7286 · Varia Light #878e9b",
-          "markdownDescription": "Outlined buttons, the Dark dialog border, result splitters, and docking compass borders. Varia Dark `#6b7286` · Varia Light `#878e9b`"
+          "description": "Outlined buttons, the Dark dialog border, command centre, chips, and docking compass borders. Varia Dark #3a404d · Varia Light #c2c8d4",
+          "markdownDescription": "Outlined buttons, the Dark dialog border, command centre, chips, and docking compass borders. Varia Dark `#3a404d` · Varia Light `#c2c8d4`"
         },
         "inputBorder": {
           "$ref": "#/definitions/value",
-          "description": "Input borders. Varia Dark #6a7184 · Varia Light #878e9b",
-          "markdownDescription": "Input borders. Varia Dark `#6a7184` · Varia Light `#878e9b`"
+          "description": "Input borders. Varia Dark #3a404d · Varia Light #c2c8d4",
+          "markdownDescription": "Input borders. Varia Dark `#3a404d` · Varia Light `#c2c8d4`"
         },
         "accent": {
           "$ref": "#/definitions/value",
@@ -453,8 +453,8 @@
         },
         "widget.border": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Border of floating dock groups and widgets. Default @editorWidget.border (Dark #6b7286, Light #d4d8df).",
-          "markdownDescription": "(VS Code) Border of floating dock groups and widgets. Default `@editorWidget.border` (Dark `#6b7286`, Light `#d4d8df`)."
+          "description": "(VS Code) Border of floating dock groups and widgets. Default @editorWidget.border (Dark #3a404d, Light #d4d8df).",
+          "markdownDescription": "(VS Code) Border of floating dock groups and widgets. Default `@editorWidget.border` (Dark `#3a404d`, Light `#d4d8df`)."
         },
         "textPreformat.foreground": {
           "$ref": "#/definitions/value",
@@ -533,8 +533,8 @@
         },
         "commandCenter.border": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Outline of the search box. Default $controlBorder/45 (Dark #6b728673, Light #878e9b73).",
-          "markdownDescription": "(VS Code) Outline of the search box. Default `$controlBorder/45` (Dark `#6b728673`, Light `#878e9b73`)."
+          "description": "(VS Code) Outline of the search box. Default $controlBorder (Dark #3a404d, Light #c2c8d4).",
+          "markdownDescription": "(VS Code) Outline of the search box. Default `$controlBorder` (Dark `#3a404d`, Light `#c2c8d4`)."
         },
         "menubar.selectionBackground": {
           "$ref": "#/definitions/value",
@@ -583,8 +583,8 @@
         },
         "menu.border": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Menu border. Default @editorWidget.border (Dark #6b7286, Light #d4d8df).",
-          "markdownDescription": "(VS Code) Menu border. Default `@editorWidget.border` (Dark `#6b7286`, Light `#d4d8df`)."
+          "description": "(VS Code) Menu border. Default @editorWidget.border (Dark #3a404d, Light #d4d8df).",
+          "markdownDescription": "(VS Code) Menu border. Default `@editorWidget.border` (Dark `#3a404d`, Light `#d4d8df`)."
         },
         "toolbar.background": {
           "$ref": "#/definitions/value",
@@ -638,8 +638,8 @@
         },
         "button.border": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Outline of secondary buttons. Default $controlBorder (Dark #6b7286, Light #878e9b).",
-          "markdownDescription": "(VS Code) Outline of secondary buttons. Default `$controlBorder` (Dark `#6b7286`, Light `#878e9b`)."
+          "description": "(VS Code) Outline of secondary buttons. Default $controlBorder (Dark #3a404d, Light #c2c8d4).",
+          "markdownDescription": "(VS Code) Outline of secondary buttons. Default `$controlBorder` (Dark `#3a404d`, Light `#c2c8d4`)."
         },
         "button.secondaryForeground": {
           "$ref": "#/definitions/value",
@@ -668,8 +668,8 @@
         },
         "input.border": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Input and select border. Default $inputBorder (Dark #6a7184, Light #878e9b).",
-          "markdownDescription": "(VS Code) Input and select border. Default `$inputBorder` (Dark `#6a7184`, Light `#878e9b`)."
+          "description": "(VS Code) Input and select border. Default $inputBorder (Dark #3a404d, Light #c2c8d4).",
+          "markdownDescription": "(VS Code) Input and select border. Default `$inputBorder` (Dark `#3a404d`, Light `#c2c8d4`)."
         },
         "input.placeholderForeground": {
           "$ref": "#/definitions/value",
@@ -943,8 +943,8 @@
         },
         "dock.guideBorder": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Border of docking compass cells. Default $controlBorder (Dark #6b7286, Light #878e9b).",
-          "markdownDescription": "(Varia) Border of docking compass cells. Default `$controlBorder` (Dark `#6b7286`, Light `#878e9b`)."
+          "description": "(Varia) Border of docking compass cells. Default $controlBorder (Dark #3a404d, Light #c2c8d4).",
+          "markdownDescription": "(Varia) Border of docking compass cells. Default `$controlBorder` (Dark `#3a404d`, Light `#c2c8d4`)."
         },
         "dock.guideShadow": {
           "$ref": "#/definitions/value",
@@ -1118,8 +1118,8 @@
         },
         "editorWidget.border": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Border of dialogs and editor widgets. Default Dark $controlBorder, Light $borderStrong (Dark #6b7286, Light #d4d8df).",
-          "markdownDescription": "(VS Code) Border of dialogs and editor widgets. Default Dark `$controlBorder`, Light `$borderStrong` (Dark `#6b7286`, Light `#d4d8df`)."
+          "description": "(VS Code) Border of dialogs and editor widgets. Default Dark $controlBorder, Light $borderStrong (Dark #3a404d, Light #d4d8df).",
+          "markdownDescription": "(VS Code) Border of dialogs and editor widgets. Default Dark `$controlBorder`, Light `$borderStrong` (Dark `#3a404d`, Light `#d4d8df`)."
         },
         "emptyState.foreground": {
           "$ref": "#/definitions/value",
@@ -1428,8 +1428,8 @@
         },
         "resultsGrid.splitterBackground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Splitters between stacked result grids; hovered or dragged, they take sash.hoverBorder. Default $controlBorder (Dark #6b7286, Light #878e9b).",
-          "markdownDescription": "(Varia) Splitters between stacked result grids; hovered or dragged, they take sash.hoverBorder. Default `$controlBorder` (Dark `#6b7286`, Light `#878e9b`)."
+          "description": "(Varia) Splitters between stacked result grids; hovered or dragged, they take sash.hoverBorder. Default $iconMuted (Dark #7f8694, Light #6b7280).",
+          "markdownDescription": "(Varia) Splitters between stacked result grids; hovered or dragged, they take sash.hoverBorder. Default `$iconMuted` (Dark `#7f8694`, Light `#6b7280`)."
         },
         "resultsMessages.foreground": {
           "$ref": "#/definitions/value",
@@ -1583,8 +1583,8 @@
         },
         "notifications.border": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Notification border. Default @widget.border (Dark #6b7286, Light #d4d8df).",
-          "markdownDescription": "(VS Code) Notification border. Default `@widget.border` (Dark `#6b7286`, Light `#d4d8df`)."
+          "description": "(VS Code) Notification border. Default @widget.border (Dark #3a404d, Light #d4d8df).",
+          "markdownDescription": "(VS Code) Notification border. Default `@widget.border` (Dark `#3a404d`, Light `#d4d8df`)."
         },
         "notificationsErrorIcon.foreground": {
           "$ref": "#/definitions/value",
@@ -1728,8 +1728,8 @@
         },
         "chip.border": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Outline of a filter chip while off. Default $controlBorder/45 (Dark #6b728673, Light #878e9b73).",
-          "markdownDescription": "(Varia) Outline of a filter chip while off. Default `$controlBorder/45` (Dark `#6b728673`, Light `#878e9b73`)."
+          "description": "(Varia) Outline of a filter chip while off. Default $controlBorder (Dark #3a404d, Light #c2c8d4).",
+          "markdownDescription": "(Varia) Outline of a filter chip while off. Default `$controlBorder` (Dark `#3a404d`, Light `#c2c8d4`)."
         },
         "chip.activeBackground": {
           "$ref": "#/definitions/value",

@@ -231,8 +231,8 @@ describe('property sheet styles', () => {
   })
   it('sizes its fields from the control token and checks the controls\' contrast on the document', () => {
     expect(densityUse.control).toContain('.property-input')
-    const on = (foreground: string, background: readonly string[]) => contrastPairs.some(pair => pair.foreground === foreground && pair.background.join() === background.join() && pair.minimum >= 3)
-    expect(on('input.border', ['editor.background'])).toBe(true)
+    const on = (foreground: string, background: readonly string[], minimum = 3) => contrastPairs.some(pair => pair.foreground === foreground && pair.background.join() === background.join() && pair.minimum >= minimum)
+    expect(on('input.border', ['editor.background'], 1.5)).toBe(true)
     expect(on('button.background', ['editor.background'])).toBe(true)
     expect(on('button.foreground', ['editor.background', 'button.background'])).toBe(true)
     expect(on('descriptionForeground', ['input.background'])).toBe(true)
