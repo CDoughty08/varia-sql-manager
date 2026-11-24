@@ -420,7 +420,8 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   selectStep(id: string, key: string): void {
     const state = this.get(id)
     if (!state?.draft?.steps.steps.some(step => step.key === key) || state.step === key) return
-    this.patch(id, { step: key, ...state.parse && state.parse.key !== key ? { parse: undefined } : {} })
+    // A refused file's message belongs to the step it was refused for, as Parse's does (a running load stays, and drops its answer itself).
+    this.patch(id, { step: key, ...state.parse && state.parse.key !== key ? { parse: undefined } : {}, ...state.stepFile && !state.stepFile.running && state.stepFile.key !== key ? { stepFile: undefined } : {} })
   }
   /** Add step: a new step of `subsystem` after the last, selected; T-SQL in master. Its key is never the pending delete's, so Undo still
    *  finds the deleted step missing and puts it back. */
@@ -478,7 +479,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     if (!changed) return
     this.updateDraft(id, { steps: { ...state.draft.steps, steps } })
     if (state.parse?.key === key && patch.command !== undefined) this.patch(id, { parse: undefined })
-    if (state.stepFile?.key === key && !state.stepFile.running && patch.command !== undefined) this.patch(id, { stepFile: undefined })
+    if (state.stepFile?.key === key && !state.stepFile.running && (patch.command !== undefined || patch.subsystem !== undefined)) this.patch(id, { stepFile: undefined })
   }
   /** Load from file… (AG-11, SSMS's Open… on a CmdExec or PowerShell step): main's open dialog and read (`openAgentStepScript`). Resolves the
    *  file's text for the step's editor to put in as one undoable edit, or undefined when cancelled, refused (said under the command) or when
