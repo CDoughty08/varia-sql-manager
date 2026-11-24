@@ -26,6 +26,9 @@ export function runsTable(runs: readonly SsisPackageRun[]): LocalTableData {
   }
 }
 
+/** Task rows the run page's timeline shows before Show all (failed tasks and the chosen one always show). */
+export const timelineRows = 8
+
 /** Where a parameter's value came from, in SSMS's words. */
 export const parameterSource = (parameter: SsisExecutionParameter): string =>
   parameter.runtimeOverride ? 'Set for this run' : parameter.valueSet ? 'Configured' : 'Default'

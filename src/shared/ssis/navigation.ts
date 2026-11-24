@@ -7,8 +7,9 @@
 export interface SsisListPlace { readonly kind: 'list'; readonly key: string }
 /** One package's runs. */
 export interface SsisPackagePlace { readonly kind: 'package'; readonly key: string; readonly folder: string; readonly project: string; readonly package: string }
-/** One run's page: `types` are the event chips chosen (absent: All), `source` the task the timeline filters to. */
-export interface SsisExecutionPlace { readonly kind: 'execution'; readonly key: string; readonly executionId: number; readonly types?: readonly number[]; readonly source?: string }
+/** One run's page: `types` are the event chips chosen (absent: All), `source` the task the timeline filters to, `view` Details
+ *  in place of Messages. */
+export interface SsisExecutionPlace { readonly kind: 'execution'; readonly key: string; readonly executionId: number; readonly types?: readonly number[]; readonly source?: string; readonly view?: 'details' }
 export type SsisPlace = SsisListPlace | SsisPackagePlace | SsisExecutionPlace
 /** A place before the history gives it its key. */
 export type SsisPlaceTarget = Omit<SsisListPlace, 'key'> | Omit<SsisPackagePlace, 'key'> | Omit<SsisExecutionPlace, 'key'>

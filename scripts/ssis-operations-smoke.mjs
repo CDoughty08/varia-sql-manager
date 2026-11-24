@@ -234,18 +234,40 @@ try {
   await messages.locator(gridPart.cell).filter({ hasText: /^Violation of PRIMARY KEY/ }).click()
   await page.keyboard.press(`${mod}+c`)
   await expect.poll(clipboard).toMatch(/^Violation of PRIMARY KEY constraint 'PK_Fact'/)
+  // The selected message shows whole beside the grid, with its own Copy.
+  const pane = execution.getByRole('region', { name: 'Message', exact: true })
+  await expect(pane.getByLabel('Message text', { exact: true })).toHaveText("Violation of PRIMARY KEY constraint 'PK_Fact'. Cannot insert duplicate key.")
+  await expect(pane).toContainText('Error')
+  // No grid scrolls inside another vertical scroll: nothing between the grid and the document region scrolls.
+  expect(await messages.evaluate(grid => {
+    const scrolling = []
+    for (let element = grid.parentElement; element && element.getAttribute('role') !== 'region'; element = element.parentElement) {
+      const overflow = getComputedStyle(element).overflowY
+      if ((overflow === 'auto' || overflow === 'scroll') && element.scrollHeight > element.clientHeight) scrolling.push(element.tagName)
+    }
+    return scrolling
+  })).toEqual([])
   await events.getByRole('button', { name: /^All/ }).click()
   await execution.getByRole('table', { name: 'Tasks', exact: true }).getByRole('button', { name: 'Load facts' }).click()
   await expect(events.getByRole('button', { name: 'Task: Load facts' })).toBeVisible()
   expect((await calls('ssis.execution')).at(-1)).toMatchObject({ executionId: 103, source: 'Load facts' })
   await expect(messages).toHaveAttribute('aria-label', /^Messages, 4 rows, 7 columns$/)
+  // Details shows the run's facts and the parameters it used in place of the messages, without reading again.
+  const runView = execution.getByRole('tablist', { name: 'Run view', exact: true })
+  const readsBefore = (await calls('ssis.execution')).length
+  await runView.getByRole('tab', { name: 'Details' }).click()
+  await expect(localGrid(page, 'Parameters used')).toHaveAttribute('aria-label', /^Parameters used, 2 rows, /)
+  await expect(execution.getByLabel('Details', { exact: true })).toContainText('SERVER-A')
+  expect((await calls('ssis.execution')).length).toBe(readsBefore)
+  await runView.getByRole('tab', { name: /^Messages/ }).click()
+  await expect(messages).toHaveAttribute('aria-label', /^Messages, 4 rows, 7 columns$/)
   await page.screenshot({ path: 'artifacts/ssis-execution-dark.png' })
-  console.log('Run page passed: Open drills down to the run, the event chips and a task filter its messages and Copy copies the selection.')
+  console.log('Run page passed: Open drills down to the run, the event chips and a task filter its messages, the selected message shows whole, Details swaps in place, and no grid scrolls inside a scroll.')
 
   step = 'history'
   // Back returns to the list as it was, Forward to the run without reading it again; the mouse's back button steps too.
   const reads = (await calls('ssis.execution')).length
-  await execution.getByRole('heading', { name: 'Tasks' }).click()
+  await execution.getByRole('region', { name: 'Tasks', exact: true }).click({ position: { x: 2, y: 2 } })
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+BracketLeft' : 'Alt+ArrowLeft')
   await expect(crumbs()).toHaveText(['server-a', 'SSISDB'])
   await expect(history()).toContainText('1 of 2')
@@ -253,7 +275,7 @@ try {
   await expect(crumbs()).toHaveText(['server-a', 'SSISDB', 'Finance', 'Loads', 'Daily.dtsx', 'Execution 103'])
   await expect(events.getByRole('button', { name: 'Task: Load facts' })).toBeVisible()
   expect((await calls('ssis.execution')).length).toBe(reads)
-  await execution.getByRole('heading', { name: 'Tasks' }).dispatchEvent('mouseup', { button: 3, bubbles: true })
+  await execution.getByRole('region', { name: 'Tasks', exact: true }).dispatchEvent('mouseup', { button: 3, bubbles: true })
   await expect(crumbs()).toHaveText(['server-a', 'SSISDB'])
   await history().getByRole('button', { name: 'Forward', exact: true }).click()
   // The package crumb opens the package's runs; a run's row opens that run, as a new step after it.

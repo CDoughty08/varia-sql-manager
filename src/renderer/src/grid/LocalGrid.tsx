@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { maxClipboardText } from '../../../shared/contracts'
+import { gridTarget } from './anchor'
 import { boundTable, LocalCopyTooLarge, localCopyText, localTableLimits, type LocalTableData } from '../../../shared/results/local-table'
 import { onUnexpectedError } from '../core/errors'
 import { useWorkbench } from '../core/WorkbenchContext'
@@ -267,7 +268,10 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
           if (activateActive()) { event.preventDefault(); event.stopPropagation() }
         },
         onDoubleClick: event => {
-          if (event.button !== 0 || !(event.target as Element).closest('.rg-c')) return
+          // Only on a row: GridView's own hit test through its pointer layer (the event's target is that layer, not a cell),
+          // never a header, whose border's double-click fits its column.
+          const root = event.currentTarget
+          if (event.button !== 0 || !root.ownerDocument.elementsFromPoint(event.clientX, event.clientY).some(element => root.contains(element) && gridTarget(root, element).target?.row !== undefined)) return
           if (activateActive()) { event.preventDefault(); event.stopPropagation() }
         }
       } : {}

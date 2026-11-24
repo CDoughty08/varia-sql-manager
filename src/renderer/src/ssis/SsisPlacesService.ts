@@ -60,7 +60,6 @@ export class SsisPlacesService extends SnapshotStore<SsisPlacesSnapshot> impleme
   private readonly newId: () => string
   private readonly now: () => number
   private readonly requests = new Map<string, string>()
-  private readonly scrolls = new Map<string, number>()
   private disposed = false
 
   constructor(private readonly options: SsisPlacesServiceOptions) {
@@ -88,9 +87,6 @@ export class SsisPlacesService extends SnapshotStore<SsisPlacesSnapshot> impleme
     void this.read(key)
   }
 
-  /** A page's scroll position, kept as the user leaves it so Back puts it back. */
-  scrollOf(key: string): number { return this.scrolls.get(key) ?? 0 }
-  keepScroll(key: string, top: number): void { if (this.get(key)) this.scrolls.set(key, top) }
 
   /** Refresh (F5), Retry, a run page's new filters: read once more; the shown model stays until the answer. */
   refresh(key: string, types?: readonly number[], source?: string): void { if (this.get(key)) void this.read(key, types, source) }
@@ -110,7 +106,7 @@ export class SsisPlacesService extends SnapshotStore<SsisPlacesSnapshot> impleme
   keepOnly(keep: ReadonlySet<string>, among: Iterable<string>): void {
     const drop = [...among].filter(key => !keep.has(key) && this.get(key))
     if (!drop.length) return
-    this.cancel(drop.flatMap(key => { const id = this.requests.get(key); this.requests.delete(key); this.scrolls.delete(key); return id ? [id] : [] }))
+    this.cancel(drop.flatMap(key => { const id = this.requests.get(key); this.requests.delete(key); return id ? [id] : [] }))
     this.publish({ places: Object.fromEntries(Object.entries(this.getSnapshot().places).filter(([key]) => !drop.includes(key))) })
   }
 

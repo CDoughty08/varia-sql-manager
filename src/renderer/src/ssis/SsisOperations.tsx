@@ -1,15 +1,15 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
 import { displayText } from '../../../shared/explorer/refs.ts'
 import { liveProbes } from '../../../shared/live/catalog'
 import type { LocalTableData } from '../../../shared/results/local-table.ts'
 import { messageTypeOf, operationKinds, operationKindSpecs, operationStatuses, operationTiles, runCountTypes } from '../../../shared/ssis/catalog'
 import {
   durationText, executionRunning, executionSeconds, executionText, firstError, isProblems, messageEventName, problemCount, problemTypes, statusLabel, statusTone,
-  toggleType, totalMessages, typeCounts, usualSeconds
+  sourceTypeLabel, toggleType, totalMessages, typeCounts, usualSeconds
 } from '../../../shared/ssis/execution.ts'
 import { canGoBack, canGoForward, placeName, type SsisExecutionPlace, type SsisPackagePlace, type SsisPlace } from '../../../shared/ssis/navigation.ts'
 import { operationStatusOrder, operationsPresetSpecs, operationsTitle, operationsWindows, windowLabel } from '../../../shared/ssis/operations'
-import type { SsisExecutionModel, SsisPackageRun } from '../../../shared/ssis/schema.ts'
+import type { SsisExecutionMessage, SsisExecutionModel, SsisPackageRun } from '../../../shared/ssis/schema.ts'
 import type { StatusTone } from '../../../shared/theme/tones'
 import type { CommandId } from '../core/types'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
@@ -35,7 +35,7 @@ import {
 } from './SsisOperationsService'
 import type { SsisPackageState, SsisPlaceError, SsisRunState } from './SsisPlacesService'
 import { ssisTime } from './properties-view'
-import { messagesTable, overviewRows, parametersTable, runStrip, runsTable, timeline } from './run-page'
+import { messagesTable, overviewRows, parametersTable, runStrip, runsTable, timeline, timelineRows } from './run-page'
 
 const probeSpec = liveProbes[operationsProbe]
 const textFields: readonly { readonly field: TextFilter; readonly label: string }[] = [
@@ -230,14 +230,6 @@ function NavBar({ documentId, state, run }: { readonly documentId: string; reado
   </nav>
 }
 
-/** A page's scroll position, kept as the user leaves it and put back when Back or Forward returns to it. */
-function usePageScroll(key: string) {
-  const { ssisPlaces } = useWorkbench()
-  const ref = useRef<HTMLDivElement>(null)
-  useLayoutEffect(() => { if (ref.current) ref.current.scrollTop = ssisPlaces.scrollOf(key) }, [ssisPlaces, key])
-  return { ref, onScroll: () => { if (ref.current) ssisPlaces.keepScroll(key, ref.current.scrollTop) } }
-}
-
 /** A page read's state in the header: reading, gone, failed, out of date, or what it shows (`shown`). */
 function readState(read: SsisRunState | SsisPackageState | undefined, connected: boolean, shown?: ReactNode): ReactNode {
   if (!read || (read.loading && !read.model)) return <StatusPill tone="running" label="Loading" />
@@ -279,9 +271,13 @@ const percent = (fraction: number) => `${(fraction * 100).toFixed(2)}%`
 /** The run's tasks against its time: each bar from its start to its end, the dashed tick at its usual end; a task's name
  *  filters the messages to it. */
 function Timeline({ model, source, onTask }: { readonly model: SsisExecutionModel; readonly source?: string; readonly onTask: (name: string) => void }) {
-  const rows = useMemo(() => timeline(model), [model])
-  if (rows.length === 0) return <p className="ssis-properties-note">The catalog recorded no tasks for this run. Its logging level may be None.</p>
-  return <div className="ssis-timeline" role="table" aria-label="Tasks">
+  const all = useMemo(() => timeline(model), [model])
+  const [expanded, setExpanded] = useState(false)
+  if (all.length === 0) return <p className="ssis-properties-note">The catalog recorded no tasks for this run. Its logging level may be None.</p>
+  // The failed tasks and the chosen one always show; the rest up to the cap, in the order they ran.
+  const rows = expanded || all.length <= timelineRows ? all : all.filter((row, index) => index < timelineRows || row.failed || row.name === source)
+  const hidden = all.length - rows.length
+  return <div className="ssis-timeline-wrap"><div className="ssis-timeline" role="table" aria-label="Tasks">
     <div role="row" className="ssis-timeline-head">
       <span role="columnheader">Task</span><span role="columnheader">Timeline (dashed: usual end)</span><span role="columnheader">This run</span><span role="columnheader">Against usual</span>
     </div>
@@ -299,6 +295,33 @@ function Timeline({ model, source, onTask }: { readonly model: SsisExecutionMode
       <span role="cell" className="ssis-task-delta" data-tone={row.failed ? 'error' : row.slower ? 'warning' : undefined}>{row.delta}</span>
     </div>)}
   </div>
+  {(hidden > 0 || expanded) && all.length > timelineRows && <button type="button" className="link-button ssis-timeline-more" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+    {expanded ? 'Show fewer tasks' : `Show all ${all.length.toLocaleString('en-US')} tasks`}
+  </button>}
+  </div>
+}
+
+/** The selected message whole, beside the grid: the grid's row shows one line, and a real message is often a paragraph. */
+function MessagePane({ message, onShowErrors }: { readonly message?: SsisExecutionMessage; readonly onShowErrors?: () => void }) {
+  const [copied, setCopied] = useState(false)
+  useEffect(() => setCopied(false), [message])
+  if (!message) return <section className="ssis-message-pane" aria-label="Message">
+    <p className="ssis-message-empty" role="status">Select a message to read it whole.</p>
+  </section>
+  const icon = eventIcon(message.type)
+  const meta = [message.source && displayText(message.source), message.path && displayText(message.path), sourceTypeLabel(message.sourceType), message.code !== undefined && message.code !== null ? `Code ${message.code}` : ''].filter(Boolean).join(' · ')
+  const copy = () => { void window.varia.writeClipboardText(message.message).then(result => setCopied(result.ok), () => setCopied(false)) }
+  return <section className="ssis-message-pane" aria-label="Message">
+    <div className="ssis-message-head">
+      {icon && <Icon name={icon} />}
+      <strong>{messageEventName(message.type)}</strong>
+      <span className="ssis-message-time">{ssisTime(message.time)}</span>
+      <button type="button" className="ssis-tool" onClick={copy} aria-label="Copy the message" title="Copy the message"><Icon name={copied ? 'check' : 'copy'} />{copied ? 'Copied' : 'Copy'}</button>
+    </div>
+    {meta && <p className="ssis-message-meta">{meta}</p>}
+    <pre className="ssis-message-text" tabIndex={0} aria-label="Message text">{message.message || '(No message)'}</pre>
+    {onShowErrors && <button type="button" className="link-button ssis-message-more" onClick={onShowErrors}>Show only errors</button>}
+  </section>
 }
 
 // --- The package page ----------------------------------------------------------------------------------------------------
@@ -315,7 +338,6 @@ function PackagePage({ documentId, state, place }: { readonly documentId: string
   const { operations, ssisPlaces } = useWorkbench()
   const read = ssisPlaces.package(place.key)
   const connected = operations.connected(documentId)
-  const scroll = usePageScroll(place.key)
   const model = read?.model
   const open = (executionId: number) => operations.go(documentId, { kind: 'execution', executionId })
   const failed = model?.runs.filter(run => run.status === 4 || run.status === 6).length ?? 0
@@ -328,12 +350,12 @@ function PackagePage({ documentId, state, place }: { readonly documentId: string
   ] : []
   const verbs: Verb[] = [{ command: 'ssis.refreshOperations', args: { tabId: documentId }, label: 'Refresh' }]
   const tools = last && <button type="button" className="ssis-tool" onClick={() => open(last.id)} title={`Open execution ${last.id}`}>Last execution<Icon name="arrow-right" /></button>
-  const body = <div className="ssis-page" ref={scroll.ref} onScroll={scroll.onScroll} data-ssis-page="package">
+  const body = <div className="ssis-page" data-ssis-page="package">
     <ReadProblem error={read?.error} gone={!!read?.gone} connected={connected} server={state.label} context={`Reading ${place.package}'s runs on ${state.label}`}
       onRetry={() => operations.refreshPlace(documentId)} onBack={canGoBack(state.trail) ? () => operations.step(documentId, -1) : undefined} />
     {!model ? !read?.gone && <Skeleton rows={6} label={`Reading ${place.package}'s runs`} /> : <>
       <RunStrip runs={model.runs.slice(0, ssisRunStrip)} now={model.now} label={`The last ${Math.min(model.runs.length, ssisRunStrip)} runs of ${place.package}`} onOpen={open} />
-      <div className="ssis-page-grid">
+      <div className="ssis-fill-grid">
         <LocalGrid table={tableOf(model, () => runsTable(model.runs))} label="Runs" preset="page" filterable empty={operationsText.noRuns(place.package)} suggestedName={`${place.package}-Runs`}
           state={read!.grid} onActivateRow={row => { const run = model.runs[row]; if (!run) return false; open(run.id); return true }} />
       </div>
@@ -352,16 +374,18 @@ const sum = (model: SsisExecutionModel, types: readonly number[]) => model.count
 const eventIcon = (type: number) => type === 120 || type === 130 ? 'error' as const : type === 110 ? 'warning' as const : undefined
 
 /**
- * One run on one scroll: its facts; what failed; this run against the package's recent runs; the task timeline (a task filters
- * the messages); every message of the chosen SSIS events in a core grid, the first error pinned above it; and its details and
- * parameters folded at the end. The chips and the task are this step's, so Back shows the page as it was left.
+ * One run on one screen, with no page scroll (a grid never scrolls inside another scroll): its facts; what failed and its
+ * first error; this run against the package's recent runs beside the task timeline (a task filters the messages); then
+ * Messages, every message of the chosen SSIS events in a core grid filling the rest with the selected message whole beside
+ * it, or Details, the run's details and the parameters it used. The chips, the task and the view are this step's, so Back
+ * shows the page as it was left.
  */
 function RunPage({ documentId, state, place }: { readonly documentId: string; readonly state: SsisOperationsState; readonly place: SsisExecutionPlace }) {
   const { operations, ssisPlaces } = useWorkbench()
   const read = ssisPlaces.run(place.key)
   const connected = operations.connected(documentId)
-  const scroll = usePageScroll(place.key)
   const model = read?.model
+  const [selected, setSelected] = useState<number | undefined>(undefined)
   const set = (change: { readonly types?: readonly number[] | null; readonly source?: string | null }) => operations.setRunFilters(documentId, change)
   const open = (executionId: number) => operations.go(documentId, { kind: 'execution', executionId })
   const messages = useMemo(() => model ? messagesTable(model.messages) : undefined, [model])
@@ -400,27 +424,34 @@ function RunPage({ documentId, state, place }: { readonly documentId: string; re
   const counts = typeCounts(model), total = totalMessages(model), problems = problemCount(model)
   const pinned = firstError(model.messages)
   const shown = model.messages.length
-  const body = <div className="ssis-page" ref={scroll.ref} onScroll={scroll.onScroll} data-ssis-page="execution">
+  const details = place.view === 'details'
+  const errorsOnly = place.types?.length === 1 && place.types[0] === 120
+  const message = selected === undefined ? undefined : model.messages[selected]
+  const body = <div className="ssis-page ssis-run" data-ssis-page="execution">
     <ReadProblem error={read!.error} gone={read!.gone} connected={connected} server={state.label} context={`Reading execution ${place.executionId} on ${state.label}`}
       onRetry={() => operations.refreshPlace(documentId)} onBack={canGoBack(state.trail) ? () => operations.step(documentId, -1) : undefined} />
     {failedRun && <div className="ssis-callout" role="note" data-tone="error">
       <Icon name="error" />
-      <span><b>{failedAt.length ? `Failed at ${failedAt.join(', ')}` : statusLabel(overview.status)}</b>{duration && ` after ${duration}`} · {errors.toLocaleString('en-US')} {errors === 1 ? 'error' : 'errors'}{notRun.length > 0 && ` · ${notRun.join(', ')} did not run.`}</span>
+      <span className="ssis-callout-text">
+        <b>{failedAt.length ? `Failed at ${failedAt.join(', ')}` : statusLabel(overview.status)}</b>{duration && ` after ${duration}`} · {errors.toLocaleString('en-US')} {errors === 1 ? 'error' : 'errors'}{notRun.length > 0 && ` · ${notRun.join(', ')} did not run.`}
+        {pinned && <span className="ssis-callout-first" title={pinned.message}><span className="ssis-callout-where">First error · {ssisTime(pinned.time)} · {displayText(pinned.source ?? overview.package)}: </span>{displayText(pinned.message)}</span>}
+      </span>
+      {pinned && !errorsOnly && <button type="button" className="ssis-tool" disabled={!connected} onClick={() => set({ types: [120] })}>Show errors</button>}
     </div>}
     {executionRunning(overview.status) && <p className="ssis-properties-note" role="status">{executionText.running}</p>}
-    <RunStrip runs={model.runs} current={overview.id} now={overview.now} label={`This run against the last ${model.runs.length} runs of ${overview.package}`} onOpen={open} />
-    <h2 className="ssis-section-title">Tasks</h2>
-    <Timeline model={model} source={place.source} onTask={name => set({ source: place.source === name ? null : name })} />
-    {model.tasksTruncated && <p className="ssis-properties-note">Showing the first {model.tasks.length.toLocaleString('en-US')} tasks.</p>}
-    <h2 className="ssis-section-title">Messages</h2>
-    {pinned && <div className="ssis-callout" role="note" data-tone="error">
-      <Icon name="error" />
-      <span className="ssis-callout-text"><b>First error</b> · {ssisTime(pinned.time)} · {displayText(pinned.source ?? overview.package)}{pinned.path && <span className="ssis-callout-where"> {displayText(pinned.path)}</span>}<br />{displayText(pinned.message)}</span>
-      {!(place.types?.length === 1 && place.types[0] === 120) && <button type="button" className="ssis-tool" onClick={() => set({ types: [120] })}>Show errors</button>}
-    </div>}
-    <div className="ssis-filter-row">
-      <span className="ssis-filter-label" aria-hidden="true">Event</span>
-      <ChipGroup label="Message events">
+    <div className="ssis-run-summary">
+      <RunStrip runs={model.runs} current={overview.id} now={overview.now} label={`This run against the last ${model.runs.length} runs of ${overview.package}`} onOpen={open} />
+      <section className="ssis-run-tasks" aria-label="Tasks">
+        <Timeline model={model} source={place.source} onTask={name => set({ source: place.source === name ? null : name })} />
+        {model.tasksTruncated && <p className="ssis-properties-note">Showing the first {model.tasks.length.toLocaleString('en-US')} tasks.</p>}
+      </section>
+    </div>
+    <div className="ssis-filter-row ssis-run-bar">
+      <div className="ssis-view-switch" role="tablist" aria-label="Run view">
+        <button type="button" role="tab" aria-selected={!details} onClick={() => operations.setRunView(documentId, undefined)}>Messages <span className="chip-count">{formatCount(total)}</span></button>
+        <button type="button" role="tab" aria-selected={details} onClick={() => operations.setRunView(documentId, 'details')}>Details</button>
+      </div>
+      {!details && <ChipGroup label="Message events" scroll>
         <Chip label="All" count={total} pressed={place.types === undefined} disabled={!connected} onToggle={() => set({ types: null })} />
         {problems > 0 && <Chip label="Problems" count={problems} icon="warning" pressed={isProblems(place.types)} disabled={!connected} title="Warnings, errors and failed tasks"
           onToggle={() => set({ types: isProblems(place.types) ? null : problemTypes })} />}
@@ -430,24 +461,29 @@ function RunPage({ documentId, state, place }: { readonly documentId: string; re
             title={`${messageEventName(type)} messages (message type ${type})`} onToggle={() => set({ types: toggleType(place.types, type) ?? null })} />
         })}
         {place.source && <Chip label={`Task: ${displayText(place.source)}`} pressed icon="close" disabled={!connected} title="Show every task's messages" onToggle={() => set({ source: null })} />}
-      </ChipGroup>
+      </ChipGroup>}
     </div>
-    <div className="ssis-run-messages">
-      <LocalGrid table={messages!} label="Messages" preset="page" filterable empty={total === 0 ? executionText.noMessages : executionText.noMatch}
-        suggestedName={`Execution ${overview.id}-Messages`} state={read!.grids.messages} />
-    </div>
-    <p className="ssis-properties-note" role="status">
-      {model.truncated ? executionText.truncated(shown) : `${shown.toLocaleString('en-US')} ${shown === 1 ? 'message' : 'messages'}, newest first.`} {executionText.cut}
-    </p>
-    <details className="ssis-run-details">
-      <summary className="ssis-section-title">Details: environment, executed as, server and the parameters used</summary>
+    {!details ? <>
+      <div className="ssis-run-messages">
+        <div className="ssis-fill-grid">
+          <LocalGrid table={messages!} label="Messages" preset="page" filterable empty={total === 0 ? executionText.noMessages : executionText.noMatch}
+            suggestedName={`Execution ${overview.id}-Messages`} state={read!.grids.messages} onActiveRow={setSelected} />
+        </div>
+        <MessagePane message={message} {...message && message.type !== 120 && pinned && !errorsOnly && connected ? { onShowErrors: () => set({ types: [120] }) } : {}} />
+      </div>
+      <p className="ssis-properties-note ssis-run-note" role="status">
+        {model.truncated ? executionText.truncated(shown) : `${shown.toLocaleString('en-US')} ${shown === 1 ? 'message' : 'messages'}, newest first.`} {executionText.cut}
+      </p>
+    </> : <div className="ssis-run-details">
       <dl className="ssis-properties ssis-execution-overview" aria-label="Details">
         {overviewRows(overview, usual).map(([label, value]) => <div key={label}><dt>{label}</dt><dd title={value}><bdi>{value === '' ? <span className="ssis-properties-none"><span aria-hidden="true">—</span><span className="visually-hidden">None</span></span> : displayText(value)}</bdi></dd></div>)}
       </dl>
-      <h3 className="ssis-subsection-title">Parameters used</h3>
-      {model.parameters.length === 0 ? <p className="ssis-properties-note">The catalog recorded no parameter values for this run.</p>
-        : <LocalGrid table={parameters!} label="Parameters used" preset="page" fit filterable suggestedName={`Execution ${overview.id}-Parameters`} state={read!.grids.parameters} />}
-    </details>
+      <section className="ssis-run-parameters" aria-label="Parameters used">
+        <h3 className="ssis-subsection-title">Parameters used</h3>
+        {model.parameters.length === 0 ? <p className="ssis-properties-note">The catalog recorded no parameter values for this run.</p>
+          : <div className="ssis-fill-grid"><LocalGrid table={parameters!} label="Parameters used" preset="page" filterable suggestedName={`Execution ${overview.id}-Parameters`} state={read!.grids.parameters} /></div>}
+      </section>
+    </div>}
   </div>
   return <DocumentFrame id={`ssis-operations-${documentId}`} title={`Execution ${overview.id}`} subtitle={pathText(overview.folder, overview.project, overview.package)}
     state={readState(read, connected, <StatusPill tone={runTone(overview.status)} label={statusLabel(overview.status)} />)} tools={tools} verbs={verbs} facts={facts} body={body}

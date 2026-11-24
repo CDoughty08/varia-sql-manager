@@ -274,6 +274,27 @@ describe('The Integration Services document', () => {
     await commands.execute('ssis.refreshOperations', { tabId: tab }, 'toolbar')
     expect(requests()).toHaveLength(before + 1)
   })
+  it('switches a run page to Details and back without reading again, keeping the view through filters and history', async () => {
+    const { operations, requests, place } = document()
+    const tab = operations.openExecution('c1', 7)
+    await settled()
+    const before = requests().length
+    operations.setRunView(tab, 'details')
+    expect(place(tab)).toMatchObject({ kind: 'execution', executionId: 7, view: 'details' })
+    expect(requests()).toHaveLength(before)
+    // A filter keeps the view; Messages drops it.
+    operations.setRunFilters(tab, { types: [120] })
+    expect(place(tab)).toMatchObject({ view: 'details', types: [120] })
+    operations.setRunView(tab, undefined)
+    expect(place(tab)).not.toHaveProperty('view')
+    // Each step keeps its own view.
+    operations.setRunView(tab, 'details')
+    operations.go(tab, { kind: 'execution', executionId: 8 })
+    await settled()
+    expect(place(tab)).not.toHaveProperty('view')
+    operations.step(tab, -1)
+    expect(place(tab)).toMatchObject({ executionId: 7, view: 'details' })
+  })
   it('opens a package\'s runs and its last run from Object Explorer\'s package node', async () => {
     const { operations, api, place, ssisPlaces, requests } = document()
     const tab = operations.openPackage('c1', 'Finance', 'Loads', 'Daily.dtsx')

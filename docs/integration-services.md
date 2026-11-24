@@ -18,18 +18,25 @@ F5 or Refresh reads the shown step again. A new step after Back drops the steps 
 - **Operations** (SSISDB's Active Operations, All Executions, All Validations and All Operations): the live list described
   under Operations below. Open (Enter, a double-click, or Open on a row's menu) goes to that execution's run.
 - **A package's runs** (the package node's Executions, the package crumb): a run strip of the last runs (bar height is the
-  duration, failed runs in the error colour, the usual time dashed) and every run in a core grid, newest first (ID, Status,
+  duration, failed runs in the error colour, the usual time dashed) and every run in a core grid filling the page, newest first (ID, Status,
   Started, Duration, Errors, Warnings, Caller); Last execution, a strip bar, or opening a row goes to that run. `ssis.packageRuns` reads it.
-- **A run** (Open on an operation, the package node's Last Execution, a SQL Server Agent job's SSIS execution link): one page that
-  scrolls, SSMS's Overview, All Messages and Execution Performance reports in one place. The header shows the status, started,
-  duration (with the package's usual time), error and warning counts, caller and environment, with Older run and Newer run.
-  Below it: a callout with where a failed run failed and which tasks never ran; this run against the package's recent runs; the
-  task timeline (each task's bar against the run, its usual end dashed, its time and how far it is from usual; a task in a loop
-  says how many times it ran), where choosing a task shows only its messages; chips for the SSIS events the run logged, in the
-  order a run logs them (All, Problems, then PreValidate, PostValidate, PreExecute, Information, Warning, Error, TaskFailed and the
-  rest, each with its count); the first error pinned above the messages; and the messages in a core grid, newest first, with
-  the grid's column filters, sort, Copy and Save Results As. Details (folder, project, package, times, who ran it and where)
-  and the parameters the run used (in their own grid; a sensitive one's value is never read) are folded at the end.
+- **A run** (Open on an operation, the package node's Last Execution, a SQL Server Agent job's SSIS execution link): one screen,
+  SSMS's Overview, All Messages and Execution Performance reports in one place. The header shows the status, started, duration
+  (with the package's usual time), error and warning counts, caller and environment, with Older run and Newer run. Below it: a
+  callout with where a failed run failed, which tasks never ran and its first error (Show errors keeps only the errors); this run
+  against the package's recent runs beside the task timeline (each task's bar against the run, its usual end dashed, its time
+  and how far it is from usual; a task in a loop says how many times it ran; the first 8 tasks, the failed ones and the chosen
+  one show, and Show all lists the rest), where choosing a task shows only its messages. Then Messages or Details:
+  - **Messages**: chips for the SSIS events the run logged, in the order a run logs them (All, Problems, then PreValidate,
+    PostValidate, PreExecute, Information, Warning, Error, TaskFailed and the rest, each with its count), and the messages in a
+    core grid filling the rest of the page, newest first, with the grid's column filters, sort, Copy and Save Results As.
+    Beside it (below it in a narrow document) the selected message reads whole, with its source, path, source type and code,
+    and its own Copy: the grid shows one line of a message, and real ones run to paragraphs.
+  - **Details**: folder, project, package, times, who ran it and where, beside the parameters the run used in their own grid (a
+    sensitive one's value is never read). Switching reads nothing again; each step keeps its view, chips and task for Back.
+
+  No grid scrolls inside another scroll: the page itself never scrolls, and each grid (and the message, and a long task list)
+  scrolls on its own.
 
 `ssis.execution` reads a run on the SSIS read pool, bounded (the newest 5,000 messages of the chosen events and task, each cut at
 4,000 characters, said when it happens). A purged execution (the catalog's retention cleanup), a server without the catalog,

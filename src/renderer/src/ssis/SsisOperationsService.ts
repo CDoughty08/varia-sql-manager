@@ -334,9 +334,16 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
     // undefined keeps what the place had; null clears it (All, or every task).
     const types = change.types === undefined ? place.types : change.types ?? undefined
     const source = change.source === undefined ? place.source : change.source ?? undefined
-    const next: SsisPlace = { kind: 'execution', key: place.key, executionId: place.executionId, ...types ? { types } : {}, ...source ? { source } : {} }
+    const next: SsisPlace = { kind: 'execution', key: place.key, executionId: place.executionId, ...types ? { types } : {}, ...source ? { source } : {}, ...place.view ? { view: place.view } : {} }
     this.patch(id, { trail: updatePlace(state.trail, () => next) })
     if (this.live(id)) this.options.places.refresh(place.key, next.types, next.source)
+  }
+  /** The run page's Messages (undefined) or Details, kept by its step; nothing is read again. */
+  setRunView(id: string, view: 'details' | undefined): void {
+    const state = this.get(id), place = state && currentPlace(state.trail)
+    if (!state || place?.kind !== 'execution' || place.view === view) return
+    const { view: _view, ...rest } = place
+    this.patch(id, { trail: updatePlace(state.trail, () => view ? { ...rest, view } : rest) })
   }
 
   private moved(id: string, trail: SsisTrail): void {
