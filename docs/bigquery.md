@@ -631,7 +631,19 @@ Script As serves BigQuery's tables, snapshots, views, materialized views, extern
 Properties on a table-like object opens a read-only document tab from one `tables.get` (free, `bigquery.properties`): Table
 (full name, type, location, description, labels, base table of a snapshot or clone), Storage (rows, logical, long-term and
 physical size), Layout (partitioning, partition filter, clustering, column count) and History (created, last modified,
-expires, snapshot time), in UTC and binary units. Empty facts are left out and values are clipped at 2,000 characters.
+expires, snapshot time), in UTC and binary units. Empty facts are left out and values are clipped at 2,000 characters
+without splitting surrogate pairs.
+
+Alongside the formatted `groups` and Search Objects' flattened `columns` (`columnsCut`, up to 1,000 path rows),
+`bigquery.properties` returns bounded structured fields from the same `tables.get` response (`src/shared/bigquery/objects.ts`,
+`BigQueryService.Properties.cs`): identity and timestamps (`fullName`, `location`, `description`, `baseTable`, `createdUtc`,
+`modifiedUtc`, `expiresUtc`, `snapshotTimeUtc`), `storage` (non-negative safe integers for rows, logical, long-term logical
+and physical bytes), `layout` (`partitioning`, `requirePartitionFilter`, up to 16 `clustering` fields), `schema` (nested
+`STRUCT` fields up to 7 levels deep to stay within protocol v2's 16-container MessagePack depth limit, at most 10,000 total
+fields and a 6 MiB text budget, with `schemaTruncated` when capped), deterministically sorted `labels` (up to 64), and free
+SQL `definition` for views, materialized views and routines (`table.view.query`, `table.materializedView.query`,
+`routine.definitionBody`, up to 1,000,000 characters with `definitionCut`/`definitionTruncated`; omitted for native,
+external, snapshot and clone tables so Properties never runs a billed query).
 
 Refresh on a project or dataset node also re-reads it in the Search Objects index, on a node below a dataset that dataset,
 and on the connection's node the whole index ([Search Objects › BigQuery](object-search.md#bigquery)).
@@ -787,7 +799,9 @@ and TIME columns, writes BYTES base64-encoded twice and exits on ARRAY columns; 
   `tests/queries.test.ts` Execute's cost gate. The emulator does not dry-run, so no live check covers it.
   `BigQueryExplorerChecks` covers Object Explorer: every name rule against hostile names, the Script As templates, the
   listers, cursors and STRUCT fields against the REST fixtures, the rate limiter and its retry, Preview Rows (no job,
-  `tabledata.list`'s request, a refused view, `ROW_ACCESS`), Script As › CREATE's dry run, and Properties' facts;
+  `tabledata.list`'s request, a refused view, `ROW_ACCESS`), Script As › CREATE's dry run, and Properties' facts and
+  structured metadata (storage bounds, nested schema depth and field/byte caps, labels, free view/materialized-view SQL,
+  and protocol v2 wire round-trip);
   `tests/bigquery-explorer.test.ts` the shared rules and schemas, `tests/scripting-service.test.ts` CREATE's cost gate, and
   `tests/queries.test.ts` Preview Rows' path.
   `BigQueryJobHistoryChecks` covers Job History: reading `jobs.list` and `jobs.get` JSON (states, previews, hidden details,
