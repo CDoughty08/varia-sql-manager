@@ -49,6 +49,171 @@ export interface PeekLinkTarget {
   readonly label: string
 }
 
+export interface PeekFkActionPill {
+  readonly label: string
+  readonly tone: StatusTone
+}
+
+export interface PeekFkRelationModel {
+  readonly parentTable: { readonly label: string; readonly link?: PeekLinkTarget }
+  readonly referencedTable?: { readonly label: string; readonly link?: PeekLinkTarget }
+  readonly parentColumns: readonly string[]
+  readonly referencedColumns: readonly string[]
+  readonly columnsTruncated?: true
+  readonly onDelete?: PeekFkActionPill
+  readonly onUpdate?: PeekFkActionPill
+  readonly statusPills: readonly PeekStatePill[]
+}
+
+export interface PeekKeyColumnItem {
+  readonly name: string
+  readonly descending: boolean
+  readonly type?: string
+}
+
+export interface PeekKeySummaryModel {
+  readonly keyTypeLabel: string
+  readonly indexType?: string
+  readonly parentTable?: { readonly label: string; readonly link?: PeekLinkTarget }
+  readonly columns: readonly PeekKeyColumnItem[]
+  readonly columnsTruncated?: true
+  readonly statusPills: readonly PeekStatePill[]
+}
+
+export interface PeekConstraintModel {
+  readonly constraintType: string
+  readonly column?: string
+  readonly expression?: string
+  readonly statusPills: readonly PeekStatePill[]
+}
+
+export const isForeignKeyFacts = (facts: Readonly<Record<string, PeekValue>>): boolean =>
+  facts.keyType === 'Foreign key' || facts.keyType === 'FOREIGN_KEY_CONSTRAINT'
+
+function referentialActionPill(raw: PeekValue | undefined): PeekFkActionPill | undefined {
+  const code = str(raw)
+  if (!code) return undefined
+  const label = formatPeekValue({ format: 'code' }, code)
+  const upper = code.toUpperCase()
+  const tone: StatusTone = upper === 'CASCADE' ? 'warning' : upper === 'SET_NULL' || upper === 'SET_DEFAULT' ? 'info' : 'neutral'
+  return { label, tone }
+}
+
+/** Visual Foreign Key relationship card model for MSSQL `key` objects that are foreign keys. */
+export function peekFkRelationModel(open: OpenPeek, onFollow?: (target: ObjectRef, label: string) => void): PeekFkRelationModel | undefined {
+  if (open.kind !== 'key' || open.facts.status !== 'ready') return undefined
+  const f = open.facts.value
+  if (!isForeignKeyFacts(f)) return undefined
+  const parentFallback = peekParentTarget(open)
+  const parentRaw = str(f.parentTable)
+  const parentLabel = parentRaw ? displayText(parentRaw) : parentFallback?.label
+  if (!parentLabel) return undefined
+  const parentLink = onFollow ? (parentRaw ? peekFactLink(open, 'parentTable', parentRaw) : parentFallback ? { target: parentFallback.target, label: parentFallback.label } : undefined) : undefined
+
+  const refRaw = str(f.referencedTable)
+  const referencedTable = refRaw
+    ? { label: displayText(refRaw), ...(onFollow ? { link: peekFactLink(open, 'referencedTable', refRaw) } : {}) }
+    : undefined
+
+  const keyList = open.lists?.keyColumns
+  const parentColumns: string[] = []
+  const referencedColumns: string[] = []
+  for (const row of keyList?.rows ?? []) {
+    const col = str(row[0])
+    const refCol = str(row[1])
+    if (col) parentColumns.push(displayText(col))
+    if (refCol) referencedColumns.push(displayText(refCol))
+  }
+
+  const statusPills: PeekStatePill[] = []
+  if (f.disabled === true) statusPills.push({ id: 'disabled', label: 'Disabled', tone: 'critical' })
+  else if (f.disabled === false) statusPills.push({ id: 'enabled', label: 'Enabled', tone: 'success' })
+  if (f.notTrusted === true) statusPills.push({ id: 'notTrusted', label: 'Not trusted', tone: 'warning', title: 'SQL Server did not validate existing rows when enabling this foreign key.' })
+  else if (f.notTrusted === false && f.disabled !== true) statusPills.push({ id: 'trusted', label: 'Trusted', tone: 'success' })
+  if (f.notForReplication === true) statusPills.push({ id: 'nfr', label: 'Not for replication', tone: 'neutral' })
+
+  return {
+    parentTable: { label: parentLabel, ...(parentLink ? { link: parentLink } : {}) },
+    ...(referencedTable ? { referencedTable } : {}),
+    parentColumns,
+    referencedColumns,
+    ...(keyList?.truncated ? { columnsTruncated: true } : {}),
+    ...(referentialActionPill(f.deleteAction) ? { onDelete: referentialActionPill(f.deleteAction) } : {}),
+    ...(referentialActionPill(f.updateAction) ? { onUpdate: referentialActionPill(f.updateAction) } : {}),
+    statusPills
+  }
+}
+
+/** Key-column summary card model for MSSQL Primary Key and Unique Constraint objects. */
+export function peekKeySummaryModel(open: OpenPeek, onFollow?: (target: ObjectRef, label: string) => void): PeekKeySummaryModel | undefined {
+  if (open.kind !== 'key' || open.facts.status !== 'ready') return undefined
+  const f = open.facts.value
+  if (isForeignKeyFacts(f)) return undefined
+  const keyTypeRaw = str(f.keyType)
+  if (!keyTypeRaw) return undefined
+  const indexType = str(f.indexType)
+  const parentFallback = peekParentTarget(open)
+  const parentRaw = str(f.parentTable)
+  const parentLabel = parentRaw ? displayText(parentRaw) : parentFallback?.label
+  const parentLink = onFollow && parentLabel ? (parentRaw ? peekFactLink(open, 'parentTable', parentRaw) : parentFallback ? { target: parentFallback.target, label: parentFallback.label } : undefined) : undefined
+
+  const keyList = open.lists?.keyColumns
+  const columns: PeekKeyColumnItem[] = []
+  for (const row of keyList?.rows ?? []) {
+    const col = str(row[0])
+    if (!col) continue
+    const colType = str(row[3])
+    columns.push({ name: displayText(col), descending: row[2] === true, ...(colType ? { type: displayText(colType) } : {}) })
+  }
+
+  const isPk = keyTypeRaw === 'Primary key' || keyTypeRaw === 'PRIMARY_KEY_CONSTRAINT'
+  const statusPills: PeekStatePill[] = [
+    { id: 'keyType', label: isPk ? 'Primary key' : displayText(keyTypeRaw), tone: isPk ? 'info' : 'neutral' }
+  ]
+  if (indexType) {
+    const clustered = /^clustered\b/i.test(indexType)
+    statusPills.push({ id: 'indexType', label: displayText(indexType), tone: clustered ? 'info' : 'neutral' })
+  }
+  if (f.disabled === true) statusPills.push({ id: 'disabled', label: 'Disabled', tone: 'critical' })
+  else if (f.disabled === false) statusPills.push({ id: 'enabled', label: 'Enabled', tone: 'success' })
+
+  return {
+    keyTypeLabel: displayText(keyTypeRaw),
+    ...(indexType ? { indexType: displayText(indexType) } : {}),
+    ...(parentLabel ? { parentTable: { label: parentLabel, ...(parentLink ? { link: parentLink } : {}) } } : {}),
+    columns,
+    ...(keyList?.truncated ? { columnsTruncated: true } : {}),
+    statusPills
+  }
+}
+
+/** Structured constraint card model (`CHECK`, `DEFAULT`, `EDGE`) for Overview and Definition fallback. */
+export function peekConstraintModel(open: OpenPeek): PeekConstraintModel | undefined {
+  if (open.kind !== 'constraint' || open.facts.status !== 'ready') return undefined
+  const f = open.facts.value
+  const constraintType = str(f.constraintType) ?? 'Constraint'
+  const column = str(f.column)
+  const expression = str(f.expression)
+  const statusPills: PeekStatePill[] = []
+  if (f.disabled === true) statusPills.push({ id: 'disabled', label: 'Disabled', tone: 'critical' })
+  else if (f.disabled === false) statusPills.push({ id: 'enabled', label: 'Enabled', tone: 'success' })
+  if (f.notTrusted === true) statusPills.push({ id: 'notTrusted', label: 'Not trusted', tone: 'warning' })
+  else if (f.notTrusted === false && f.disabled !== true) statusPills.push({ id: 'trusted', label: 'Trusted', tone: 'success' })
+  if (f.systemNamed === true) statusPills.push({ id: 'systemNamed', label: 'System-named', tone: 'neutral' })
+  return {
+    constraintType: displayText(constraintType),
+    ...(column ? { column: displayText(column) } : {}),
+    ...(expression ? { expression } : {}),
+    statusPills
+  }
+}
+
+/** Constraint definition expression when present in `facts.expression` (for CHECK/DEFAULT constraints). */
+export function constraintExpressionText(open: OpenPeek): string | undefined {
+  if (open.kind !== 'constraint' || open.facts.status !== 'ready') return undefined
+  return str(open.facts.value.expression)
+}
+
 /** Monospace facts: schemas, types, collations, filegroups, filters and expressions. */
 const monoFactIds = new Set([
   'schema', 'filegroup', 'textFilegroup', 'partitionScheme', 'filter', 'expression', 'column',
@@ -209,13 +374,28 @@ export function peekStatePills(open: OpenPeek): readonly PeekStatePill[] {
     if (f.primaryKey === true) add('pk', 'Primary key', 'info')
     else if (f.unique === true) add('unique', 'Unique', 'neutral')
     if (str(f.filter)) add('filtered', 'Filtered', 'info')
-  } else if (open.kind === 'key' || open.kind === 'constraint') {
+  } else if (open.kind === 'key') {
+    if (isForeignKeyFacts(f)) {
+      if (f.disabled === true) add('disabled', 'Disabled', 'critical')
+      else if (f.disabled === false) add('enabled', 'Enabled', 'success')
+      if (f.notTrusted === true) add('untrusted', 'Not trusted', 'warning')
+      else if (f.disabled !== true) add('trusted', 'Trusted', 'success')
+    } else {
+      const kt = str(f.keyType)
+      if (kt === 'Primary key' || kt === 'PRIMARY_KEY_CONSTRAINT') add('pk', 'Primary key', 'info')
+      else if (kt === 'Unique constraint' || kt === 'UNIQUE_CONSTRAINT') add('uq', 'Unique', 'neutral')
+      const idxType = str(f.indexType)
+      if (idxType) add('indexType', displayText(idxType), /^clustered\b/i.test(idxType) ? 'info' : 'neutral')
+      if (f.disabled === true) add('disabled', 'Disabled', 'critical')
+    }
+  } else if (open.kind === 'constraint') {
     if (f.disabled === true) add('disabled', 'Disabled', 'critical')
+    else if (f.disabled === false) add('enabled', 'Enabled', 'success')
     if (f.notTrusted === true) add('untrusted', 'Not trusted', 'warning')
     else if (f.disabled !== true && (
-      f.keyType === 'Foreign key' || f.keyType === 'FOREIGN_KEY_CONSTRAINT' ||
-      f.constraintType === 'Check constraint' || f.constraintType === 'CHECK_CONSTRAINT'
+      f.notTrusted === false || f.constraintType === 'Check constraint' || f.constraintType === 'CHECK_CONSTRAINT'
     )) add('trusted', 'Trusted', 'success')
+    if (f.systemNamed === true) add('systemNamed', 'System-named', 'neutral')
   } else if (open.kind === 'trigger' || open.kind === 'databaseTrigger' || open.kind === 'serverTrigger') {
     if (f.disabled === true) add('disabled', 'Disabled', 'critical')
     if (f.insteadOf === true) add('insteadOf', 'Instead of', 'info')
@@ -350,7 +530,24 @@ function toFactItem(open: OpenPeek, fact: PeekFact, raw: PeekValue, onFollow?: (
   }
 }
 
-function toCapabilityItem(fact: PeekFact, value: boolean): CapabilityItem {
+function toCapabilityItem(kind: OpenPeek['kind'], fact: PeekFact, value: boolean): CapabilityItem {
+  if (kind === 'key' || kind === 'constraint') {
+    if (fact.id === 'disabled') {
+      return value
+        ? { id: fact.id, label: 'Disabled', notable: true, tone: 'error' }
+        : { id: fact.id, label: 'Enabled', notable: true, tone: 'success' }
+    }
+    if (fact.id === 'notTrusted') {
+      return value
+        ? { id: fact.id, label: 'Not trusted', notable: true, tone: 'warning' }
+        : { id: fact.id, label: 'Trusted', notable: true, tone: 'success' }
+    }
+    if (fact.id === 'systemNamed') {
+      return value
+        ? { id: fact.id, label: 'System-named', notable: true, tone: 'neutral' }
+        : { id: fact.id, label: 'System-named', value: 'No', notable: false, tone: 'neutral' }
+    }
+  }
   if (defaultTrueBooleans.has(fact.id)) {
     const notable = !value
     return {
@@ -378,6 +575,7 @@ function toCapabilityItem(fact: PeekFact, value: boolean): CapabilityItem {
 
 /** Subtype-filtered groups for `open`. */
 export function visiblePeekGroups(open: OpenPeek) {
+  if (!isPeekKind(open.kind)) return []
   const subtype = open.node.subtype
   return peekSpecs[open.kind].groups.filter(group => !group.subtypes || (subtype !== undefined && group.subtypes.includes(subtype)))
 }
@@ -411,7 +609,7 @@ export function peekOverviewModel(open: OpenPeek, onFollow?: (target: ObjectRef,
       if (!Object.hasOwn(values, fact.id)) continue
       const raw = values[fact.id]
       if (fact.format === 'bool' && typeof raw === 'boolean') {
-        capabilities.push(toCapabilityItem(fact, raw))
+        capabilities.push(toCapabilityItem(open.kind, fact, raw))
       } else {
         facts.push(toFactItem(open, fact, raw, onFollow))
       }
@@ -424,7 +622,7 @@ export function peekOverviewModel(open: OpenPeek, onFollow?: (target: ObjectRef,
 
 /** Builds FactGrid items for the Storage & Layout tab (`table`). */
 export function peekStorageModel(open: OpenPeek): { readonly meter?: PeekRatioMeter; readonly facts: readonly FactItem[] } {
-  if (open.facts.status !== 'ready') return { facts: [] }
+  if (open.facts.status !== 'ready' || !isPeekKind(open.kind)) return { facts: [] }
   const group = peekSpecs[open.kind].groups.find(item => item.id === 'storage')
   if (!group) return { facts: [] }
   const values = open.facts.value
@@ -434,7 +632,7 @@ export function peekStorageModel(open: OpenPeek): { readonly meter?: PeekRatioMe
 
 /** Builds RatioBar and FactGrid items (or refused words) for the Usage Telemetry tab (`index`). */
 export function peekUsageModel(open: OpenPeek): { readonly meter?: PeekRatioMeter; readonly facts: readonly FactItem[]; readonly refused?: string } {
-  if (open.facts.status !== 'ready') return { facts: [] }
+  if (open.facts.status !== 'ready' || !isPeekKind(open.kind)) return { facts: [] }
   const group = peekSpecs[open.kind].groups.find(item => item.id === 'usage')
   if (!group) return { facts: [] }
   if (group.refused && open.refused?.includes(group.id)) return { facts: [], refused: group.refused }

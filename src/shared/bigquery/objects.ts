@@ -16,12 +16,16 @@ export const bigQueryPreviewRows = 1000
 export interface BigQueryPreviewTarget { project: string; dataset: string; table: string }
 export const bigQueryPreviewTargetSchema = z.object({ project: name('project'), dataset: name('dataset'), table: name('table') }).strict() satisfies z.ZodType<BigQueryPreviewTarget>
 
-/** The kinds Properties describes: tables.get's objects. */
-export const bigQueryPropertyKinds = ['bqTable', 'bqView', 'bqMaterializedView', 'bqExternalTable'] as const
+/** The table-like kinds backed by tables.get (which expose columns/schema). */
+export const bigQueryTablePropertyKinds = ['bqTable', 'bqView', 'bqMaterializedView', 'bqExternalTable'] as const
+export type BigQueryTablePropertyKind = typeof bigQueryTablePropertyKinds[number]
+/** The kinds BigQuery Properties and Peek describe: tables.get objects, routines.get routines, and datasets.get datasets. */
+export const bigQueryPropertyKinds = [...bigQueryTablePropertyKinds, 'bqRoutine', 'bqDataset'] as const
 export type BigQueryPropertyKind = typeof bigQueryPropertyKinds[number]
-/** The kinds bigquery.properties answers: the Properties tab's, and routines for Search Objects' details pane. */
-export const bigQueryDetailKinds = [...bigQueryPropertyKinds, 'bqRoutine'] as const
-export type BigQueryDetailKind = typeof bigQueryDetailKinds[number]
+export const isBigQueryPropertyKind = (kind: string): kind is BigQueryPropertyKind => (bigQueryPropertyKinds as readonly string[]).includes(kind)
+/** The kinds bigquery.properties answers. */
+export const bigQueryDetailKinds = bigQueryPropertyKinds
+export type BigQueryDetailKind = BigQueryPropertyKind
 
 /** The longest view text or routine body bigquery.properties answers (BigQueryService.MaxDefinition). */
 export const bigQueryMaxDefinition = 1_000_000
@@ -58,6 +62,9 @@ export const bigQueryPropertiesLimits = {
   labels: 64,
   labelKey: 128,
   labelValue: 256,
+  routineArguments: 256,
+  routineTypeText: 512,
+  kmsKeyName: 1024,
   definitionChars: bigQueryMaxDefinition
 } as const
 
@@ -70,11 +77,31 @@ export interface BigQueryStorageInfo { rows?: number; logicalBytes?: number; lon
 export interface BigQueryLayoutInfo { partitioning?: string; requirePartitionFilter?: boolean; clustering?: string[] }
 export interface BigQuerySchemaField { name: string; type: string; mode?: string; description?: string; fields?: BigQuerySchemaField[] }
 export interface BigQueryLabel { key: string; value: string }
+export interface BigQueryRoutineArgument { name: string; type?: string; mode?: string; kind?: string }
+export interface BigQueryRoutineInfo {
+  routineType?: string
+  language?: string
+  determinism?: string
+  returnType?: string
+  signature?: string
+  arguments?: BigQueryRoutineArgument[]
+  argumentsTruncated?: boolean
+}
+export interface BigQueryDatasetInfo {
+  friendlyName?: string
+  defaultTableExpirationMs?: number
+  defaultPartitionExpirationMs?: number
+  kmsKeyName?: string
+  defaultCollation?: string
+  isCaseInsensitive?: boolean
+  maxTimeTravelHours?: number
+  storageBillingModel?: string
+}
 /**
- * Groups: Table, Storage, Layout and History (a routine's: Routine and History), each left out when it has no facts.
+ * Groups: Table, Storage, Layout and History (a routine's: Routine and History; a dataset's: Dataset and History), each left out when it has no facts.
  * Definition: a view's or materialized view's query or a routine's body (`definitionCut` / `definitionTruncated` when cut).
  * Columns: the first 1,000 flattened columns and nested fields for Search Objects' details pane (`columnsCut`).
- * Structured fields (`storage`, `layout`, `schema`, `labels`, identity/timestamps) come from the same free `tables.get` call.
+ * Structured fields (`storage`, `layout`, `schema`, `labels`, `routine`, `dataset`, identity/timestamps) come from the single free metadata call (`tables.get`, `routines.get`, or `datasets.get`).
  */
 export interface BigQueryProperties {
   name: string
@@ -99,11 +126,18 @@ export interface BigQueryProperties {
   schema?: BigQuerySchemaField[]
   schemaTruncated?: boolean
   labels?: BigQueryLabel[]
+  routine?: BigQueryRoutineInfo
+  dataset?: BigQueryDatasetInfo
 }
 
 export const bigQueryPropertiesRequestSchema = z.object({
   connectionId: z.uuid(), requestId: z.uuid(), kind: z.enum(bigQueryDetailKinds), project: name('project'), dataset: name('dataset'), name: z.string().min(1).max(1024)
-}).strict().refine(request => isBigQueryName(request.kind === 'bqRoutine' ? 'routine' : 'table', request.name), { message: 'This is not a BigQuery object name.', path: ['name'] }) satisfies z.ZodType<BigQueryPropertiesRequest>
+}).strict().refine(
+  request => request.kind === 'bqDataset'
+    ? request.name === request.dataset && isBigQueryName('dataset', request.name)
+    : isBigQueryName(request.kind === 'bqRoutine' ? 'routine' : 'table', request.name),
+  { message: 'This is not a BigQuery object name.', path: ['name'] }
+) satisfies z.ZodType<BigQueryPropertiesRequest>
 const line = (max: number) => z.string().max(max)
 const nonEmpty = (max: number) => z.string().min(1).max(max)
 const safeCount = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER)
@@ -125,6 +159,34 @@ export const bigQueryLabelSchema = z.object({
   key: nonEmpty(bigQueryPropertiesLimits.labelKey),
   value: line(bigQueryPropertiesLimits.labelValue)
 }).strict() satisfies z.ZodType<BigQueryLabel>
+
+export const bigQueryRoutineArgumentSchema = z.object({
+  name: line(bigQueryPropertiesLimits.columnName),
+  type: nonEmpty(bigQueryPropertiesLimits.routineTypeText).optional(),
+  mode: nonEmpty(bigQueryPropertiesLimits.columnMode).optional(),
+  kind: nonEmpty(bigQueryPropertiesLimits.columnMode).optional()
+}).strict() satisfies z.ZodType<BigQueryRoutineArgument>
+
+export const bigQueryRoutineInfoSchema = z.object({
+  routineType: nonEmpty(bigQueryPropertiesLimits.type).optional(),
+  language: nonEmpty(bigQueryPropertiesLimits.type).optional(),
+  determinism: nonEmpty(bigQueryPropertiesLimits.type).optional(),
+  returnType: nonEmpty(bigQueryPropertiesLimits.routineTypeText).optional(),
+  signature: nonEmpty(bigQueryPropertiesLimits.factValue).optional(),
+  arguments: z.array(bigQueryRoutineArgumentSchema).max(bigQueryPropertiesLimits.routineArguments).optional(),
+  argumentsTruncated: z.boolean().optional()
+}).strict() satisfies z.ZodType<BigQueryRoutineInfo>
+
+export const bigQueryDatasetInfoSchema = z.object({
+  friendlyName: nonEmpty(bigQueryPropertiesLimits.name).optional(),
+  defaultTableExpirationMs: safeCount.optional(),
+  defaultPartitionExpirationMs: safeCount.optional(),
+  kmsKeyName: nonEmpty(bigQueryPropertiesLimits.kmsKeyName).optional(),
+  defaultCollation: nonEmpty(bigQueryPropertiesLimits.type).optional(),
+  isCaseInsensitive: z.boolean().optional(),
+  maxTimeTravelHours: safeCount.optional(),
+  storageBillingModel: nonEmpty(bigQueryPropertiesLimits.type).optional()
+}).strict() satisfies z.ZodType<BigQueryDatasetInfo>
 
 function schemaFieldSchema(depth: number): z.ZodType<BigQuerySchemaField> {
   const base = {
@@ -181,7 +243,9 @@ export const bigQueryPropertiesSchema = z.object({
   layout: bigQueryLayoutInfoSchema.optional(),
   schema: z.array(bigQuerySchemaFieldSchema).max(bigQueryPropertiesLimits.schemaFields).optional(),
   schemaTruncated: z.boolean().optional(),
-  labels: z.array(bigQueryLabelSchema).max(bigQueryPropertiesLimits.labels).optional()
+  labels: z.array(bigQueryLabelSchema).max(bigQueryPropertiesLimits.labels).optional(),
+  routine: bigQueryRoutineInfoSchema.optional(),
+  dataset: bigQueryDatasetInfoSchema.optional()
 }).strict().refine(
   value => !value.schema || countSchemaFields(value.schema, bigQueryPropertiesLimits.schemaFields) <= bigQueryPropertiesLimits.schemaFields,
   'BigQuery properties schema exceeds the maximum total field count.'
