@@ -101,7 +101,7 @@ export async function start(root: Root): Promise<void> {
           render: (props, tile) => chart.render(<WorkbenchProvider workbench={workbench}>{tile ? <Tile caption={tile}><LiveChart {...props} /></Tile> : <LiveChart {...props} />}</WorkbenchProvider>),
           unmount: () => chart.unmount()
         }
-      }, workbench.ssisTree)
+      }, workbench.ssisTree, workbench.agentTree)
     })
   }
   root.render(<React.StrictMode><ShellErrorBoundary><WorkbenchProvider workbench={workbench}><ShellFaultProbe /><App /></WorkbenchProvider></ShellErrorBoundary></React.StrictMode>)

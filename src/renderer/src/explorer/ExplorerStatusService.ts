@@ -14,6 +14,7 @@ import type { ConnectionService, LiveConnection } from '../services/connections'
 import { isBigQueryConnection } from '../services/connection-availability'
 import type { PaneService } from '../services/panes'
 import type { TreeNode } from './tree-model'
+import type { AgentTreeLive } from '../agent/AgentTreeLive'
 
 /** A row's live status: its chips, and whether they stand for the row's state (a database's sublabel then gives way). */
 export interface RowStatus {
@@ -27,6 +28,10 @@ export interface RowStatus {
   readonly state?: 'unavailable' | 'readOnly'
   /** A sublabel the row shows after its name (SQL Server Agent's "Agent XPs disabled"); its words include it. */
   readonly sublabel?: string
+  /** A job row's enabled state as the live read found it (AgentTreeLive), in place of its listing's; undefined: the listing's. */
+  readonly enabled?: boolean
+  /** When the read that found `enabled` was sampled (epoch ms): a job listed later keeps its listing's state. */
+  readonly enabledAt?: number
 }
 export interface ServerStatus {
   /** The server row's chips (running Agent jobs, availability group health); undefined while none are known. */
@@ -59,6 +64,8 @@ const probes = [...new Set([...statusChipKinds.database, ...statusChipKinds.serv
 type TableProbe = 'explorer.databases' | 'explorer.progress' | 'explorer.availability'
 /** At most this many rows of a status table are read: the catalogue caps them at 1,000, a window at 4,096. */
 const maxRows = 1000
+/** The most rows one window read returns. */
+const windowRows = 4096
 const noChips: readonly StatusChip[] = []
 /** A database the probe does not list: online, writable and open to everyone. */
 export const onlineStatus: RowStatus = { chips: noChips, live: true, words: '' }
@@ -84,18 +91,21 @@ export function statusKey(connection: Pick<LiveConnection, 'id' | 'generation' |
 }
 
 /** Reads a status table's rows as cell texts (null for NULL), and whether they are all of them. */
-async function readRows(table: LiveTable): Promise<{ rows: (string | null)[][]; complete: boolean }> {
-  const { descriptor } = table, columns = descriptor.columns.length, count = Math.min(maxRows, descriptor.rowsAvailable)
-  const complete = !descriptor.truncated && descriptor.rowsAvailable <= maxRows && (descriptor.rowsRead ?? 0) <= descriptor.rowsAvailable
-  if (count === 0) return { rows: [], complete }
-  const window = await table.handle.getWindow(0, count, { colStart: 0, colEnd: columns })
-  return {
-    rows: Array.from({ length: window.count }, (_, row) => Array.from({ length: columns }, (_, column) => {
+export async function readRows(table: LiveTable, max = maxRows, span?: { readonly start: number; readonly end: number }): Promise<{ rows: (string | null)[][]; complete: boolean }> {
+  // Only the columns in `span` when given (each row then holds just those), so a caller that needs a few reads no more.
+  const { descriptor } = table, colStart = span?.start ?? 0, colEnd = span?.end ?? descriptor.columns.length, columns = colEnd - colStart, count = Math.min(max, descriptor.rowsAvailable)
+  const complete = !descriptor.truncated && descriptor.rowsAvailable <= max && (descriptor.rowsRead ?? 0) <= descriptor.rowsAvailable
+  const rows: (string | null)[][] = []
+  // A window holds at most windowRows rows, so a longer table (Agent's job list) is read a window at a time.
+  while (rows.length < count) {
+    const window = await table.handle.getWindow(rows.length, Math.min(windowRows, count - rows.length), { colStart, colEnd })
+    for (let row = 0; row < window.count; row++) rows.push(Array.from({ length: columns }, (_, column) => {
       const at = row * columns + column
       return window.flags[at] & 1 ? null : window.text[at]
-    })),
-    complete: complete && window.count === descriptor.rowsAvailable
+    }))
+    if (window.count === 0) break
   }
+  return { rows, complete: complete && rows.length === descriptor.rowsAvailable }
 }
 
 /** One server's view and what it last read. */
@@ -250,7 +260,9 @@ class ServerView {
 
 /** A row's live status: a server's chips, or a database's (online when a complete list does not name it). The objects are
  *  the service's own and stay the same while the chips do, so memoised rows render again only when theirs change. */
-export function rowStatus(server: ServerStatus | undefined, node: Pick<TreeNode, 'parent' | 'kind' | 'ref'>): RowStatus | undefined {
+export function rowStatus(server: ServerStatus | undefined, node: Pick<TreeNode, 'parent' | 'kind' | 'ref'> & Partial<Pick<TreeNode, 'connectionId' | 'jobId'>>, agentTree?: Pick<AgentTreeLive, 'job'>): RowStatus | undefined {
+  // A job row's chips come from its Jobs folder's own agent.jobs view (AG-12), not the server's status view.
+  if (node.kind === 'agentJob') return node.connectionId === undefined ? undefined : agentTree?.job(node.connectionId, node.jobId)
   if (!server) return undefined
   if (node.parent === 0) return server.server
   if (node.kind === 'agent') return server.agent

@@ -449,6 +449,9 @@ count and connection dot keep their size, and the label gives up the row's empty
 | agent | PAUSING | running | the Agent service's state 6: SQL Server Agent is pausing. |
 | agent | PAUSED | warning | the Agent service's state 7: SQL Server Agent is paused. |
 | agent | n jobs running | running | as the server's chip; the node's sublabel says "Agent XPs disabled" while that option is 0, and an unknown service state shows no chip |
+| agentJob | Running · step n/m | running | the job is executing, waiting for a worker thread or performing completion actions (Job Activity Monitor's agent.jobs read, while its Jobs folder is open); the step count where msdb gives it |
+| agentJob | Between retries / Suspended | warning | that is the job's execution status |
+| agentJob | Failed | critical | the job is not running and its last run failed. While SQL Server Agent cannot run jobs (stopped, Agent XPs off, or neither readable) only this chip shows. A job the read finds disabled, or enabled, is dimmed with the disabled badge, or not, unless the row was listed after that read (a Disable or Enable lists it again at once), until the next read |
 
 ## Peek
 
@@ -492,10 +495,16 @@ its header, so an encrypted one shows none). Copying the Definition column gives
 a module's parameter lines for a `CREATE PROCEDURE` or `CREATE FUNCTION` header. Constraints (keys, checks), Always Encrypted's
 `ENCRYPTED WITH` and a vector's base type other than the default are left to Script As.
 
+A table's **Indexes & keys** list shows each key, index, constraint and trigger with its kind, name, status and **Summary**: a key's
+or index's type and columns, a foreign key's columns and referenced table, a check's or default's expression, a trigger's
+timing and events. Names are bracketed as scripts write them (`[Order]]Id]`). A summary is a description, not T-SQL to paste;
+Script As writes that. The columns, foreign-key pairs and trigger events behind the summaries are read up to a fixed number of rows;
+when a table has more, the summaries the cap reached partway or not at all end in `…`, and the cut removes no row from the list.
+
 | List | Kinds | Columns |
 | --- | --- | --- |
 | Columns | `table`, `view`, `tableType` | Name, Type, Nullable, Key, Identity, Computed, Default, Definition |
-| Indexes & keys | `table` | Kind, Name, Definition, Status |
+| Indexes & keys | `table` | Kind, Name, Summary, Status |
 | Parameters | `procedure`, `function` | Name, Type, Direction, Default, Definition |
 | Columns | `index` | Column, Included, Descending, Type |
 | Key columns | `key` | Column, Referenced column, Descending, Type |
