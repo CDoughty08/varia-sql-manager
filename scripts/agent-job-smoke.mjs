@@ -56,7 +56,8 @@ try {
   await expect(documentTab(page, 'Job Properties - Nightly')).toHaveAttribute('aria-selected', 'true')
   await expect(job('Nightly').getByLabel('Description', { exact: true })).toHaveValue('Nightly maintenance.')
   await expect(documentState(job('Nightly'))).toContainText('Idle · Last run failed')
-  expect((await calls('live.subscribe')).some(call => call.source === 'agent.jobs' && call.args?.watch?.length === 1 && call.probes.some(probe => probe.probe === 'agent.jobs.watched'))).toBe(true)
+  // The header can already show the state from Job Activity Monitor's snapshot before the watched subscribe lands in calls.jsonl.
+  await expect.poll(async () => (await calls('live.subscribe')).some(call => call.source === 'agent.jobs' && call.args?.watch?.length === 1 && call.probes.some(probe => probe.probe === 'agent.jobs.watched'))).toBe(true)
   await expect(job('Nightly').getByRole('table', { name: 'Alerts that run this job', exact: true })).toContainText('Nightly failed')
   // Enter on another selected job opens a second tab; the first stays open.
   await documentTab(page, 'Job Activity Monitor - server-a').click()
