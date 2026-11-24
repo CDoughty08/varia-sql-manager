@@ -5,7 +5,8 @@ import {
   clampVitalsWidth, defaultInspectorVitals, defaultInspectorVitalsPrefs, parseInspectorVitalsFile,
   parseInspectorVitalsPrefs, vitalsLimits, vitalsMaxWidth, vitalsWidthKey
 } from '../src/shared/inspector-vitals'
-import { InspectorVitalsStore } from '../src/main/inspector-vitals-store'
+import { InspectorVitalsStore, inspectorVitalsSentences } from '../src/main/inspector-vitals-store'
+import { quarantine, readJsonFile, writeBytesAtomic } from '../src/main/json-file'
 import { InspectorService } from '../src/renderer/src/services/inspector'
 
 let directory: string
@@ -127,6 +128,69 @@ describe('InspectorVitalsStore persistence', () => {
       expect(await readFile(join(directory, kept))).toEqual(Buffer.from(content))
     }
   })
+
+  it('refuses saves with a fixed sentence after a failed read or quarantine, leaves the file untouched, and recovers on the next successful load', async () => {
+    const original = JSON.stringify({ version: 1, full: { open: false, width: 340 }, peek: { open: true, width: 215 } }, null, 2) + '\n'
+    await writeFile(path(), original)
+
+    // Simulate antivirus holding the file at startup (EACCES with full userData path).
+    let locked = true
+    const store = new InspectorVitalsStore(path(), {
+      readJsonFile: async (filePath, limit) => {
+        if (locked) throw Object.assign(new Error(`EACCES: permission denied, open '${filePath}'`), { code: 'EACCES' })
+        return readJsonFile(filePath, limit)
+      },
+      quarantine,
+      writeBytesAtomic
+    })
+
+    await expect(store.load()).rejects.toThrow(inspectorVitalsSentences.unreadable)
+    // A subsequent save must be refused with the fixed sentence (no path leak) and never overwrite the existing file.
+    const saveError = await store.save({ full: { open: true, width: 272 }, peek: { open: false, width: 250 } }).catch((err: unknown) => err as Error)
+    expect(saveError).toBeInstanceOf(Error)
+    expect((saveError as Error).message).toBe(inspectorVitalsSentences.unreadable)
+    expect((saveError as Error).message).not.toContain(directory)
+    expect(await readFile(path(), 'utf8')).toBe(original)
+
+    // Once the lock clears, the next successful load clears readFailed and allows saves again.
+    locked = false
+    expect(await store.load()).toEqual({ prefs: { full: { open: false, width: 340 }, peek: { open: true, width: 215 } } })
+    await store.save({ full: { open: false, width: 340 }, peek: { open: false, width: 250 } })
+    expect(JSON.parse(await readFile(path(), 'utf8'))).toEqual({
+      version: 1, full: { open: false, width: 340 }, peek: { open: false, width: 250 }
+    })
+
+    // Quarantine failure before first successful load also sets readFailed and leaves the invalid file untouched.
+    const corrupt = '{not json'
+    await writeFile(path(), corrupt)
+    const quarantineFailStore = new InspectorVitalsStore(path(), {
+      readJsonFile,
+      quarantine: async filePath => { throw Object.assign(new Error(`EPERM: operation not permitted, rename '${filePath}'`), { code: 'EPERM' }) },
+      writeBytesAtomic
+    })
+    await expect(quarantineFailStore.load()).rejects.toThrow(inspectorVitalsSentences.unreadable)
+    await expect(quarantineFailStore.save({ full: { open: true, width: 272 }, peek: { open: true, width: 236 } })).rejects.toThrow(inspectorVitalsSentences.unreadable)
+    expect(await readFile(path(), 'utf8')).toBe(corrupt)
+
+    // Directory at path: fails with fixed sentence and writes nothing; write error also reports fixed sentence without path.
+    await rm(path(), { force: true })
+    await mkdir(path())
+    const dirStore = new InspectorVitalsStore(path())
+    const dirErr = await dirStore.load().catch((err: unknown) => err as Error)
+    expect((dirErr as Error).message).toBe(inspectorVitalsSentences.unreadable)
+    expect((dirErr as Error).message).not.toContain(directory)
+    await expect(dirStore.save({ full: { open: true, width: 272 }, peek: { open: true, width: 236 } })).rejects.toThrow(inspectorVitalsSentences.unreadable)
+    expect(await readdir(directory)).toEqual(['inspector-vitals.json'])
+
+    const writeFailStore = new InspectorVitalsStore(path(), {
+      readJsonFile,
+      quarantine,
+      writeBytesAtomic: async filePath => { throw new Error(`ENOSPC: no space left on '${filePath}'`) }
+    })
+    const writeErr = await writeFailStore.save({ full: { open: true, width: 272 }, peek: { open: true, width: 236 } }).catch((err: unknown) => err as Error)
+    expect((writeErr as Error).message).toBe(inspectorVitalsSentences.saveFailed)
+    expect((writeErr as Error).message).not.toContain(directory)
+  })
 })
 
 describe('InspectorService', () => {
@@ -155,14 +219,29 @@ describe('InspectorService', () => {
     service.dispose()
   })
 
-  it('buffers load errors that occur before setReporter is attached', async () => {
-    const loadInspectorVitals = vi.fn(async () => ({ ok: false as const, error: 'Disk unavailable' }))
+  it('buffers load errors that occur before setReporter is attached and preserves edits made during a failed load for recovery', async () => {
+    let finishFirst!: (value: { ok: false; error: string }) => void
+    const loadInspectorVitals = vi.fn()
+      .mockImplementationOnce(() => new Promise<{ ok: false; error: string }>(resolve => { finishFirst = resolve }))
+      .mockResolvedValueOnce({ ok: true as const, value: { prefs: { full: { open: false, width: 320 }, peek: { open: true, width: 210 } } } })
     const saveInspectorVitals = vi.fn(async prefs => ({ ok: true as const, value: prefs }))
     const report = vi.fn()
     const service = new InspectorService({ api: { loadInspectorVitals, saveInspectorVitals }, platform: 'win32' })
-    await service.load()
+    const first = service.load()
+    // Edit made while the failing load is in flight is held without writing.
+    service.setVitals('peek', { open: false, width: 250 })
+    expect(saveInspectorVitals).not.toHaveBeenCalled()
+    finishFirst({ ok: false, error: inspectorVitalsSentences.unreadable })
+    await first
+    expect(saveInspectorVitals).not.toHaveBeenCalled()
     service.setReporter(report)
-    expect(report).toHaveBeenCalledWith('Disk unavailable', 'error')
+    expect(report).toHaveBeenCalledWith(inspectorVitalsSentences.unreadable, 'error')
+
+    // When a subsequent load succeeds, the preserved peek edit merges with the loaded full surface and persists once.
+    await service.load()
+    expect(service.vitals.getSnapshot()).toEqual({ full: { open: false, width: 320 }, peek: { open: false, width: 250 } })
+    expect(saveInspectorVitals).toHaveBeenCalledTimes(1)
+    expect(saveInspectorVitals).toHaveBeenCalledWith({ full: { open: false, width: 320 }, peek: { open: false, width: 250 } })
     service.dispose()
   })
 

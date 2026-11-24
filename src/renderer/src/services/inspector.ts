@@ -41,6 +41,7 @@ export class InspectorService implements Disposable {
   private readonly modHeldStore = new ValueStore<boolean>(false)
   private readonly frames = new Set<RegisteredInspector>()
   private readonly dirty = new Set<InspectorSurface>()
+  private loaded = false
   private loading = false
   private report?: (message: string, kind: 'warning' | 'error') => void
   private pendingReport?: { readonly message: string; readonly kind: 'warning' | 'error' }
@@ -85,17 +86,20 @@ export class InspectorService implements Disposable {
         return
       }
       const { prefs, warning } = result.value
+      this.loaded = true
       const current = this.vitalsStore.getSnapshot()
       const next: InspectorVitalsPrefs = {
         full: this.dirty.has('full') ? current.full : { open: prefs.full.open, width: clampVitalsWidth(prefs.full.width, 'full') },
         peek: this.dirty.has('peek') ? current.peek : { open: prefs.peek.open, width: clampVitalsWidth(prefs.peek.width, 'peek') }
       }
+      const hadDirty = this.dirty.size > 0
+      this.dirty.clear()
       if (next.full.open !== current.full.open || next.full.width !== current.full.width || next.peek.open !== current.peek.open || next.peek.width !== current.peek.width) {
         this.vitalsStore.set(next)
       }
       if (warning) this.notify(warning, 'warning')
-      // Persist any local mutation deferred while the initial load was in flight, merged with the loaded surface.
-      if (this.dirty.size > 0) this.persist(next)
+      // Persist any local mutation deferred while the initial or failed load was in flight, merged with the loaded surface.
+      if (hadDirty) this.persist(next)
     } catch (error) {
       if (!this.disposed) onUnexpectedError(error)
     } finally {
@@ -110,10 +114,10 @@ export class InspectorService implements Disposable {
     const open = patch.open ?? prev.open
     const width = patch.width !== undefined ? clampVitalsWidth(patch.width, surface, containerWidth) : prev.width
     if (open === prev.open && width === prev.width) return
-    this.dirty.add(surface)
+    if (this.loading || !this.loaded) this.dirty.add(surface)
     const next: InspectorVitalsPrefs = { ...current, [surface]: { open, width } }
     this.vitalsStore.set(next)
-    // Defer writes while initial load is in flight so an unloaded surface's default never clobbers disk.
+    // Defer writes while load is in flight so an unloaded surface's default never clobbers disk.
     if (!this.loading) this.persist(next)
   }
 

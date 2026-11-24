@@ -73,8 +73,10 @@ export interface ObjectInspectorFrameViewProps {
   readonly scriptSize?: number
   readonly onScriptToggle?: () => void
   readonly onScriptResize?: (size: number) => void
-  /** Shows `1`–`9` tab shortcut cues on `surface="full"` while the platform modifier key is held. */
+  /** Shows `1`–`9` tab shortcut cues on `surface="full"` while the platform modifier key is held and this frame holds focus. */
   readonly modHeld?: boolean
+  /** Marks this frame as a registered `Ctrl+1`–`9` inspector scope (`data-object-inspector`); enabled automatically by connected `ObjectInspectorFrame`. */
+  readonly shortcutScope?: boolean
   readonly platform?: Platform
   readonly gestures?: Pick<GestureService, 'matches'>
   readonly attributes?: Readonly<Record<`data-${string}`, string>>
@@ -106,7 +108,7 @@ export function ObjectInspectorFrameView(props: ObjectInspectorFrameViewProps) {
     id, title, crumbs, subtitle, state, tools, verbs = [], surface = 'full', kpis = [], banner,
     tabs, activeTab, onSelectTab, vitals, vitalsTitle = 'Vitals', vitalsOpen = true, vitalsWidth,
     onVitalsOpenChange, onVitalsWidthChange, onVitalsWidthReset, hint, script, scriptOpen = false,
-    scriptSize = 0.35, onScriptToggle, onScriptResize, modHeld = false, platform = 'win32',
+    scriptSize = 0.35, onScriptToggle, onScriptResize, modHeld = false, shortcutScope = false, platform = 'win32',
     gestures, attributes, onKeyDown, rootRef
   } = props
 
@@ -121,12 +123,27 @@ export function ObjectInspectorFrameView(props: ObjectInspectorFrameViewProps) {
   const hasTabs = tabs.length > 0
   const selectableIds = tabs.filter(tab => !tab.disabled).map(tab => tab.id)
 
-  // Track whether focus resides inside this inspector so unmounting a tab panel on Ctrl+1..9 keeps focus inside the frame.
+  // Track whether focus resides inside this inspector so unmounting a tab panel on Ctrl+1..9 keeps focus inside the frame,
+  // and Full-surface shortcut badges only show while this frame holds focus.
   const hadFocusRef = useRef(false)
-  const handleRootFocus = () => { hadFocusRef.current = true }
+  const [hasFocus, setHasFocus] = useState(false)
+  useEffect(() => {
+    const root = localRootRef.current
+    const active = root?.ownerDocument.activeElement
+    if (root && active && root.contains(active)) {
+      hadFocusRef.current = true
+      setHasFocus(true)
+    }
+  }, [])
+  const handleRootFocus = () => {
+    hadFocusRef.current = true
+    setHasFocus(true)
+  }
   const handleRootBlur = (event: FocusEvent<HTMLDivElement>) => {
     const next = event.relatedTarget as Node | null
-    if (next && !event.currentTarget.contains(next)) hadFocusRef.current = false
+    if (next && event.currentTarget.contains(next)) return
+    if (next) hadFocusRef.current = false
+    setHasFocus(false)
   }
 
   // Clear FieldHintStrip immediately on tab switches as well as pointer leave / blur.
@@ -391,13 +408,14 @@ export function ObjectInspectorFrameView(props: ObjectInspectorFrameViewProps) {
     if (next !== effectiveVitalsWidth) onVitalsWidthChange?.(next)
   }
 
-  const showShortcutCues = surface === 'peek' || modHeld
+  const showShortcutCues = surface === 'peek' || (modHeld && hasFocus)
   const hiddenCount = offEdge.size
-  const showVitals = !!vitals && vitalsOpen
-  const vitalsToggle = vitals && onVitalsOpenChange ? (
-    <button type="button" className="document-verb inspector-vitals-toggle" aria-pressed={vitalsOpen}
-      aria-controls={`${id}-vitals`} aria-label={vitalsOpen ? `Hide ${vitalsTitle} panel` : `Show ${vitalsTitle} panel`}
-      title={vitalsOpen ? `Hide ${vitalsTitle}` : `Show ${vitalsTitle}`}
+  const narrow = containerWidth !== undefined && containerWidth <= vitalsLimits.narrowHideWidth
+  const showVitals = !!vitals && vitalsOpen && !narrow
+  const vitalsToggle = vitals && onVitalsOpenChange && !narrow ? (
+    <button type="button" className="document-verb inspector-vitals-toggle" aria-pressed={showVitals}
+      aria-controls={`${id}-vitals`} aria-label={showVitals ? `Hide ${vitalsTitle} panel` : `Show ${vitalsTitle} panel`}
+      title={showVitals ? `Hide ${vitalsTitle}` : `Show ${vitalsTitle}`}
       onClick={() => onVitalsOpenChange(!vitalsOpen)}>
       <Icon name="layout" /><span className="document-verb-label">{vitalsTitle}</span>
     </button>
@@ -406,7 +424,7 @@ export function ObjectInspectorFrameView(props: ObjectInspectorFrameViewProps) {
   const headerTools = tools || vitalsToggle ? <>{tools}{vitalsToggle}</> : undefined
 
   return <div ref={setRoot} className="document-frame inspector-frame" role="region" aria-labelledby={`${id}-title`}
-    data-document-frame={id} data-object-inspector={id} data-inspector-surface={surface}
+    data-document-frame={id} data-object-inspector={shortcutScope ? id : undefined} data-inspector-surface={surface}
     data-mod-held={showShortcutCues || undefined} {...attributes}
     onFocusCapture={handleRootFocus} onBlurCapture={handleRootBlur} onKeyDown={onKeyDown}>
     <DocumentHeader id={id} title={title} crumbs={crumbs} subtitle={subtitle} state={state} tools={headerTools} verbs={verbs} />
@@ -572,6 +590,7 @@ export default function ObjectInspectorFrame({ verbs = [], surface = 'full', ...
     platform={props.platform ?? workbench.platform}
     gestures={props.gestures ?? workbench.gestures}
     modHeld={props.modHeld ?? modHeld}
+    shortcutScope={props.shortcutScope ?? true}
     vitalsOpen={props.vitalsOpen ?? surfacePrefs.open}
     vitalsWidth={props.vitalsWidth ?? surfacePrefs.width}
     onVitalsOpenChange={props.onVitalsOpenChange ?? (open => workbench.inspector.setVitals(surface, { open }))}

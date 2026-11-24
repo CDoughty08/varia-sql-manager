@@ -110,21 +110,35 @@ describe('ObjectInspectorFrameView keyboard, overflow, archetypes and Vitals sas
     content: createElement('div', { 'data-pane-body': `sec-${i + 1}` }, `Body ${i + 1}`)
   }))
 
-  it('omits Hero KPIs on peek surface, renders them on full surface, and exposes shortcut cues on peek or modHeld', () => {
+  it('omits Hero KPIs on peek surface, renders them on full surface, scopes shortcut badges to focus, and omits data-object-inspector on bare view', () => {
     const kpis = [{ id: 'rows', label: 'Rows', value: '12,400', sub: 'est.', ratio: [{ id: 'd', label: 'Data', value: 70 }, { id: 'i', label: 'Index', value: 30 }] }]
     const full = mount(createElement(ObjectInspectorFrameView, {
       id: 'insp', title: 'Sales.Orders', surface: 'full', kpis, tabs: makeTabs(3), activeTab: 'sec-1', onSelectTab: () => {}
     }))
+    const frame = () => full.querySelector('.inspector-frame')!
     expect(full.querySelector('.inspector-kpi-strip')).not.toBeNull()
     expect(full.querySelector('.ratio-bar-mini')).not.toBeNull()
-    expect(full.querySelector('[data-object-inspector="insp"]')?.hasAttribute('data-mod-held')).toBe(false)
+    // Bare ObjectInspectorFrameView does not claim data-object-inspector so Ctrl+1..9 still routes to document tabs.
+    expect(frame().hasAttribute('data-object-inspector')).toBe(false)
+    expect(frame().hasAttribute('data-mod-held')).toBe(false)
 
+    // Holding Ctrl/Cmd while unfocused must NOT reveal shortcut badges on Full surface.
     act(() => {
       root!.render(createElement(ObjectInspectorFrameView, {
         id: 'insp', title: 'Sales.Orders', surface: 'full', modHeld: true, kpis, tabs: makeTabs(3), activeTab: 'sec-1', onSelectTab: () => {}
       }))
     })
-    expect(full.querySelector('[data-object-inspector="insp"]')?.hasAttribute('data-mod-held')).toBe(true)
+    expect(frame().hasAttribute('data-mod-held')).toBe(false)
+
+    // Focusing inside the Full inspector while modHeld is true reveals shortcut badges; blurring hides them again.
+    const firstTab = full.querySelector<HTMLButtonElement>('[data-inspector-tab="sec-1"]')!
+    act(() => { firstTab.focus() })
+    expect(frame().hasAttribute('data-mod-held')).toBe(true)
+    const outside = document.createElement('button')
+    document.body.append(outside)
+    act(() => { outside.focus() })
+    expect(frame().hasAttribute('data-mod-held')).toBe(false)
+    outside.remove()
 
     act(() => {
       root!.render(createElement(ObjectInspectorFrameView, {
@@ -132,7 +146,42 @@ describe('ObjectInspectorFrameView keyboard, overflow, archetypes and Vitals sas
       }))
     })
     expect(full.querySelector('.inspector-kpi-strip')).toBeNull()
-    expect(full.querySelector('[data-object-inspector="insp"]')?.hasAttribute('data-mod-held')).toBe(true)
+    expect(frame().hasAttribute('data-mod-held')).toBe(true)
+  })
+
+  it('hides the Vitals rail, sash, and toggle below 680 px container width without mutating open state', () => {
+    const observers: (() => void)[] = []
+    class StubResizeObserver {
+      constructor(cb: () => void) { observers.push(cb) }
+      observe() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', StubResizeObserver)
+    const onOpen = vi.fn()
+    const el = mount(createElement(ObjectInspectorFrameView, {
+      id: 'insp', title: 'Orders', surface: 'full', tabs: makeTabs(2), activeTab: 'sec-1', onSelectTab: () => {},
+      vitals: createElement('div', null, 'Vitals body'), vitalsOpen: true, onVitalsOpenChange: onOpen
+    }))
+    const split = el.querySelector<HTMLElement>('.inspector-split')!
+    Object.defineProperty(split, 'clientWidth', { configurable: true, value: 900 })
+    act(() => { observers.forEach(cb => cb()) })
+    expect(el.querySelector('.inspector-vitals-rail')).not.toBeNull()
+    expect(el.querySelector('.inspector-vitals-toggle')?.getAttribute('title')).toBe('Hide Vitals')
+
+    // Below 680 px, rail, sash and toggle all disappear so no toggle reads "Hide Vitals" while hidden.
+    Object.defineProperty(split, 'clientWidth', { configurable: true, value: 640 })
+    act(() => { observers.forEach(cb => cb()) })
+    expect(el.querySelector('.inspector-vitals-rail')).toBeNull()
+    expect(el.querySelector('.inspector-vitals-sash')).toBeNull()
+    expect(el.querySelector('.inspector-vitals-toggle')).toBeNull()
+    expect(onOpen).not.toHaveBeenCalled()
+
+    // Widening back above 680 px restores Vitals and its toggle.
+    Object.defineProperty(split, 'clientWidth', { configurable: true, value: 800 })
+    act(() => { observers.forEach(cb => cb()) })
+    expect(el.querySelector('.inspector-vitals-rail')).not.toBeNull()
+    expect(el.querySelector('.inspector-vitals-toggle')?.getAttribute('aria-pressed')).toBe('true')
+    vi.unstubAllGlobals()
   })
 
   it('uses roving tabindex where arrows move focus without selecting lazy tabs, and Enter/Space selects', () => {
@@ -145,7 +194,7 @@ describe('ObjectInspectorFrameView keyboard, overflow, archetypes and Vitals sas
     const tabs = [...el.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
     expect(tabs.map(t => t.tabIndex)).toEqual([0, -1, -1, -1])
 
-    tabs[0].focus()
+    act(() => { tabs[0].focus() })
     act(() => { tabs[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })) })
     expect(document.activeElement).toBe(tabs[1])
     expect(tabs.map(t => t.tabIndex)).toEqual([-1, 0, -1, -1])
@@ -364,7 +413,7 @@ describe('focus-scoped Ctrl+1..9 commands and context keys', () => {
       }
       const el = mount(createElement(Harness))
       const insideBtn = el.querySelector<HTMLButtonElement>('#btn-1')!
-      insideBtn.focus()
+      act(() => { insideBtn.focus() })
 
       // Focus facts set both objectInspectorFocus and peekFocus cleanly.
       const facts = focusFacts(insideBtn, undefined)
@@ -392,7 +441,7 @@ describe('focus-scoped Ctrl+1..9 commands and context keys', () => {
       // Focus outside inspector: Ctrl+2 switches to Query 2.
       const outside = document.createElement('button')
       document.body.append(outside)
-      outside.focus()
+      act(() => { outside.focus() })
       expect(focusFacts(outside, undefined).objectInspectorFocus).toBe(false)
       act(() => {
         fixture.keybindings.handleKeyDown(new KeyboardEvent('keydown', { key: '2', ctrlKey: true, cancelable: true }))
@@ -400,6 +449,36 @@ describe('focus-scoped Ctrl+1..9 commands and context keys', () => {
       await Promise.resolve()
       expect(fixture.documents.getSnapshot().activeId).toBe(q2)
       outside.remove()
+    } finally {
+      fixture.dispose()
+    }
+  })
+
+  it('lets Ctrl+1..9 route to document tabs when focus is inside an unconnected ObjectInspectorFrameView', async () => {
+    const fixture = workbenchFixture({ platform: 'win32', activeElement: () => document.activeElement })
+    try {
+      fixture.documents.create('Query1.sql', 'SELECT 1', 'master')
+      fixture.documents.create('Query2.sql', 'SELECT 2', 'master')
+      const [q1, q2] = fixture.documents.getSnapshot().documents.map(d => d.id)
+      fixture.documents.activate(q1)
+      const onSelectTab = vi.fn()
+      const el = mount(createElement(ObjectInspectorFrameView, {
+        id: 'bare-insp', title: 'Orders',
+        tabs: [
+          { id: 't1', title: 'Overview', layout: 'flow', content: createElement('button', { type: 'button', id: 'bare-btn' }, 'Inside') },
+          { id: 't2', title: 'Storage', layout: 'flow', content: createElement('div', null, 'Storage') }
+        ],
+        activeTab: 't1', onSelectTab
+      }))
+      const btn = el.querySelector<HTMLButtonElement>('#bare-btn')!
+      act(() => { btn.focus() })
+      expect(focusFacts(btn, undefined).objectInspectorFocus).toBe(false)
+      act(() => {
+        fixture.keybindings.handleKeyDown(new KeyboardEvent('keydown', { key: '2', ctrlKey: true, cancelable: true }))
+      })
+      await Promise.resolve()
+      expect(onSelectTab).not.toHaveBeenCalled()
+      expect(fixture.documents.getSnapshot().activeId).toBe(q2)
     } finally {
       fixture.dispose()
     }
