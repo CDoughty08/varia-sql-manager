@@ -572,6 +572,13 @@ describe('Job Activity Monitor\'s Start Agent, F5, View menu and row menu (AG-10
     const grid = new FakeGrid({ newRows: 0, following: true, lost: false })
     jobActivity.attachGrid(id, grid as unknown as LiveGrid)
     expect(commands.unavailableReason('agent.viewHistory', { tabId: id })).toBe('Select one or more jobs to view their history.')
+    // The palette names no tab: over a monitor with nothing selected it still opens every job.
+    const fromPalette = vi.spyOn(logViewer, 'open')
+    expect(commands.isEnabled('agent.viewHistory')).toBe(true)
+    expect(await commands.execute('agent.viewHistory', undefined, 'palette')).toBe(true)
+    await vi.waitFor(() => expect(fromPalette).toHaveBeenCalled())
+    expect(fromPalette.mock.calls.at(-1)![1]).toEqual({})
+    fromPalette.mockRestore()
     grid.select([row(nightly, 'Nightly')])
     await settled()
     // A right-click on Backup selects it just before the menu's View History runs: the viewer opens on Backup, not Nightly.

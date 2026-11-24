@@ -43,9 +43,10 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
     const selected = monitor ? await jobActivity.settledSelection(monitor) : []
     return selected.length ? { jobs: selected.map(job => job.id) } : {}
   }
-  /** From Job Activity Monitor, View History needs its bar's selection: one job up to the bulk cap (the over-cap rows are not all read). */
+  /** From Job Activity Monitor's own bar and row menu (which name its tab), View History needs its selection: one job up to the bulk
+   *  cap (the over-cap rows are not all read). The palette keeps opening every job when none is selected. */
   const historyUnavailable = (args?: CommandArgs): string | undefined => {
-    const id = explorerNodeOf(args) ? undefined : monitorOf(args)
+    const id = explorerNodeOf(args) || !args?.tabId ? undefined : monitorOf(args)
     if (!id) return undefined
     const count = jobActivity.selectedCount(id)
     return count === 0 ? 'Select one or more jobs to view their history.' : count > agentLimits.startJobs ? bulkUnavailable(count) : undefined
