@@ -40,4 +40,20 @@ describe('DocumentSections reveal', () => {
     await act(async () => { root.render(render(all)) })
     expect(column.scrollTop).toBe(300)
   })
+
+  it('scrolls a mounted frame to a section the owner reveals again (a second link to an open job)', async () => {
+    cleanups.push(laidOut())
+    const all = [general, history]
+    const start = initialFrameState(all)
+    const host = document.createElement('div')
+    document.body.append(host)
+    const root = createRoot(host)
+    cleanups.unshift(() => { act(() => root.unmount()); host.remove() })
+    const render = (frame: FrameState) => createElement(DocumentSections, { id: 'job-2', title: 'Nightly', sections: all, frame, onFrame: () => {} })
+    await act(async () => { root.render(render(start)) })
+    const column = host.querySelector<HTMLElement>('.document-content')!
+    expect(column.scrollTop).toBe(0)
+    await act(async () => { root.render(render(revealSection(start, all, 'history'))) })
+    expect(column.scrollTop).toBe(300)
+  })
 })
