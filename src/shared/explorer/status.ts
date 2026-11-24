@@ -3,6 +3,7 @@
 // Only a probe's own rows or the listing's own columns make a chip; nothing here guesses. Erasable TypeScript (no enums), so Node's type stripping can load it as well.
 import type { IconId } from '../icons.ts'
 import type { StatusTone } from '../theme/tones.ts'
+import type { NodeStatus } from './catalog.ts'
 
 /** A database's runtime state: sys.databases' state, user_access, is_read_only and is_in_standby. A database node's listing
  *  carries it (`ExplorerNode.database`), and so does each live status row. */
@@ -202,3 +203,11 @@ export const statusChipDocs: readonly { readonly kind: 'server' | 'database' | '
   { kind: 'agentJob', chip: 'Between retries / Suspended', tone: 'warning', when: 'that is the job\'s execution status' },
   { kind: 'agentJob', chip: 'Failed', tone: 'critical', when: 'the job is not running and its last run failed. While SQL Server Agent cannot run jobs (stopped, Agent XPs off, or neither readable) only this chip shows. A job the read finds disabled, or enabled, is dimmed with the disabled badge, or not, unless the row was listed after that read (a Disable or Enable lists it again at once), until the next read' }
 ]
+
+/** A job row's status as its live read shows it (AG-12): disabled when the read found it disabled, not when it found it
+ *  enabled, unless the row was listed after that read (a Disable or Enable lists it again at once); otherwise the listing's.
+ *  The row and its menu (Enable Job or Disable Job) both follow it. */
+export function liveJobStatus(listed: NodeStatus | undefined, listedAt: number | undefined, live: { readonly enabled?: boolean; readonly enabledAt?: number } | undefined): NodeStatus | undefined {
+  if (live?.enabled === undefined || (live.enabledAt !== undefined && listedAt !== undefined && live.enabledAt <= listedAt)) return listed
+  return live.enabled ? (listed === 'disabled' ? undefined : listed) : 'disabled'
+}

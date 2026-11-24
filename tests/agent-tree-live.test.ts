@@ -422,9 +422,13 @@ describe('AgentTreeLive: job rows\' chips from agent.jobs', () => {
     expect(running.listedAt).toBeTypeOf('number')
     expect(rowStatus(undefined, running, f.tree)?.enabledAt).toBeTypeOf('number')
     expect(rowStatus(undefined, f.explorer.node(f.find('Nightly'))!, f.tree)).toMatchObject({ words: 'Last run failed', enabled: false })
-    // An unchanged sample keeps the same objects, so memoised rows do not render again.
+    // An unchanged sample keeps the same objects, so memoised rows do not render again (once the first read, which had no
+    // earlier tick to date it, has been dated by the next one).
+    const unchanged = () => view.emit([{ probe: 'agent.jobs.list', costMs: 1, effectiveIntervalMs: 5000, tables: [{ table: 0, descriptor: view.table().descriptor, revision: 9, diff: { added: 0, removed: 0, changed: 0 } }] }] as LiveTick['samples'])
+    unchanged()
+    await settle()
     const before = f.tree.getSnapshot()
-    view.emit([{ probe: 'agent.jobs.list', costMs: 1, effectiveIntervalMs: 5000, tables: [{ table: 0, descriptor: view.table().descriptor, revision: 9, diff: { added: 0, removed: 0, changed: 0 } }] }] as LiveTick['samples'])
+    unchanged()
     await settle()
     expect(f.tree.getSnapshot()).toBe(before)
     f.explorer.collapse(f.find('Jobs'))
@@ -438,24 +442,37 @@ describe('AgentTreeLive: job rows\' chips from agent.jobs', () => {
     await f.open('SQL Server Agent', 'Jobs')
     const [view] = f.viewsOf('agent.jobs')
     const shown = () => { const node = f.explorer.node(f.find('Index maintenance'))!; const status = rowStatus(undefined, node, f.tree); return status ? liveJob(node, status).status : node.status }
-    const unchanged = (sampledAt: number, costMs = 1) => {
-      const tick: LiveTick = { type: 'live.tick', seq: ++view.seq, sampledAt, samples: [{ probe: 'agent.jobs.list', costMs, effectiveIntervalMs: 5000, tables: [{ table: 0, descriptor: view.table().descriptor, revision: view.seq, diff: { added: 0, removed: 0, changed: 0 } }] }] as LiveTick['samples'] }
-      for (const listener of [...view.listeners]) listener({ subscriptionId: view.id, tick })
-    }
-    // Listed enabled; the read, after the listing, finds it disabled elsewhere.
+    // Ticks stamped by the clock, later than what came before them.
+    const later = () => new Promise(resolve => setTimeout(resolve, 5))
+    const unchanged = () => view.emit([{ probe: 'agent.jobs.list', costMs: 1, effectiveIntervalMs: 5000, tables: [{ table: 0, descriptor: view.table().descriptor, revision: view.seq, diff: { added: 0, removed: 0, changed: 0 } }] }] as LiveTick['samples'])
+    // Listed enabled; the first read finds it disabled elsewhere, but nothing dates it after the listing yet, so the listing stays.
+    await later()
     view.jobs([job(jobA, { enabled: 'No' })])
     await settle()
+    expect(shown()).toBeUndefined()
+    // The next tick dates those rows after the listing: the read wins.
+    await later()
+    unchanged()
+    await settle()
     expect(shown()).toBe('disabled')
-    // The folder lists again later (as a Disable or Enable re-lists it at once): until a newer read, the listing wins.
+    // The job's menu follows it too: Enable Job, not Disable Job (the actions catalogue reads the target's status).
+    const jobs = f.explorer.useJobStatus(f.tree)
+    expect(f.explorer.menuNode(f.find('Index maintenance'))?.status).toBe('disabled')
+    jobs.dispose()
+    expect(f.explorer.menuNode(f.find('Index maintenance'))?.status).toBeUndefined()
+    // The folder lists again (as a Disable or Enable re-lists it at once): the listing wins over rows read before it.
+    await later()
     f.explorer.reconcile(f.find('Jobs'))
     await settle()
     expect(shown()).toBeUndefined()
-    // A sample that ended after the listing but began before it (it read msdb first) does not win.
-    unchanged(Date.now() + 60_000, 120_000)
+    // A tick that arrives after the listing may have read msdb before it (the backend stamps a tick when it ends): it does not win.
+    await later()
+    unchanged()
     await settle()
     expect(shown()).toBeUndefined()
-    // The next sample finds the list unchanged: as of that sample it still says disabled, so it wins again.
-    unchanged(Date.now() + 60_000)
+    // The tick after it read msdb after the listing, and the list still says disabled: the read wins again.
+    await later()
+    unchanged()
     await settle()
     expect(shown()).toBe('disabled')
   })

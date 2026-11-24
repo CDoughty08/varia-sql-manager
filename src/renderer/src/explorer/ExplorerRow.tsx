@@ -3,7 +3,7 @@ import { explorerLimits, folderSpecs, kindSpecs } from '../../../shared/explorer
 import { displayText } from '../../../shared/explorer/refs.ts'
 import { environmentTag } from '../../../shared/environments'
 import EnvironmentTag from '../EnvironmentTag'
-import { loginChips, type StatusChip } from '../../../shared/explorer/status.ts'
+import { liveJobStatus, loginChips, type StatusChip } from '../../../shared/explorer/status.ts'
 import { codiconClass } from '../../../shared/icons'
 import { isPeekKind } from '../../../shared/explorer/peek.ts'
 import Icon from '../Icon'
@@ -155,8 +155,7 @@ export function liveDatabase(node: TreeNode, status: RowStatus): { node: TreeNod
  *  row was listed after that read (a Disable re-lists it at once); the same node object when that is what the listing said,
  *  so the memoised row does not change for it. */
 export function liveJob(node: TreeNode, status: RowStatus): TreeNode {
-  if (status.enabled === undefined || (status.enabledAt !== undefined && node.listedAt !== undefined && status.enabledAt <= node.listedAt)) return node
-  const effective = status.enabled ? (node.status === 'disabled' ? undefined : node.status) : 'disabled'
+  const effective = liveJobStatus(node.status, node.listedAt, status)
   return effective === node.status ? node : { ...node, status: effective }
 }
 

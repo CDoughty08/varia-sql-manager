@@ -66,7 +66,7 @@ interface View { readonly handle: LiveHandle; readonly stops: (() => void)[] }
 /** A connection's view that ended: when it opens again (after `timer`), or `final` when it will not until a Refresh. */
 interface Stopped { attempts: number; timer: unknown; final: boolean }
 /** A jobs view's last read: the rows by job id, the subscription they came from, and the newest read in flight. */
-interface JobRead { subscriptionId?: string; at?: number; reading?: boolean; rows?: Map<string, { enabled: string | null; status: string | null; step: string | null; lastOutcome: string | null }>; seq: number; service?: AgentServiceSample }
+interface JobRead { subscriptionId?: string; at?: number; reading?: boolean; lastTickAt?: number; rows?: Map<string, { enabled: string | null; status: string | null; step: string | null; lastOutcome: string | null }>; seq: number; service?: AgentServiceSample }
 
 export class AgentTreeLive extends SnapshotStore<AgentTreeSnapshot> implements Disposable {
   private readonly views = new Map<string, View>()
@@ -334,7 +334,12 @@ export class AgentTreeLive extends SnapshotStore<AgentTreeSnapshot> implements D
     const read = this.reads.get(connectionId)
     if (!read) return
     // A new subscription (out of dormancy, after a slot came back) starts from nothing.
-    if (read.subscriptionId !== subscriptionId) { read.subscriptionId = subscriptionId; read.rows = undefined; read.service = undefined }
+    if (read.subscriptionId !== subscriptionId) { read.subscriptionId = subscriptionId; read.rows = undefined; read.service = undefined; read.lastTickAt = undefined }
+    // A probe of this tick read msdb after the subscription's previous tick was stamped (the backend samples one tick at a time
+    // and stamps it when all its probes are done), so that stamp is when this tick's rows were at the latest read: a listing that
+    // arrived after it wins over them. The first tick has no such bound, so its rows lose to any listing until the next one.
+    const readAt = read.lastTickAt ?? 0
+    read.lastTickAt = tick.sampledAt
     this.stopped.delete('jobs:' + connectionId)
     for (const sample of tick.samples) {
       if (sample.probe === agentServiceProbe) {
@@ -348,9 +353,6 @@ export class AgentTreeLive extends SnapshotStore<AgentTreeSnapshot> implements D
       if (sample.probe !== agentJobsProbe) continue
       const entry = sample.tables?.find(table => table.table === 0)
       if (!entry) continue
-      // The backend stamps a sample when it ends; msdb was read up to its cost before, so the rows are dated from its start,
-      // and a listing that arrived while the sample ran wins over it.
-      const readAt = tick.sampledAt - Math.max(0, sample.costMs)
       // An unchanged revision needs no read: its rows are the ones already read, now as of this sample (unless a read of a
       // newer revision is on its way, which dates them itself).
       if (entry.diff && entry.diff.added + entry.diff.removed + entry.diff.changed === 0 && read.rows) {

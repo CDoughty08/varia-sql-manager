@@ -425,6 +425,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const explorerRuntime = explorer.useStatus(explorerStatus)
   const ssisTree = new SsisTreeProbe({ explorer, live, settings, events, explorerVisible: { visible: () => panes.getSnapshot().explorer, subscribe: panes.subscribe, popout: () => panes.location('explorer') === 'window' } })
   const agentTree = new AgentTreeLive({ explorer, live, settings, events, explorerVisible: { visible: () => panes.getSnapshot().explorer, subscribe: panes.subscribe, popout: () => panes.location('explorer') === 'window' } })
+  // A job's menu follows its live enabled state as its row does (Enable Job once a read shows it disabled elsewhere).
+  const explorerJobs = explorer.useJobStatus(agentTree)
   const gridStats = api.testMode ? new GridStats() : undefined
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values, retainedPlans)
   // A BigQuery close's note shows in the query's Messages while it stays, else as a notification (docs/bigquery.md, Sessions).
@@ -875,6 +877,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       activity.dispose()
       // Before the client: its views cancel their subscriptions while the port is still there.
       ssisTree.dispose()
+      explorerJobs.dispose()
       agentTree.dispose()
       explorerRuntime.dispose()
       explorerStatus.dispose()

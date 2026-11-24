@@ -6,7 +6,7 @@ import { isPeekKind } from '../../../shared/explorer/peek.ts'
 import { explorerNodeProvider, type ProviderContext } from '../../../shared/providers.ts'
 import { isDependencyKind } from '../../../shared/explorer/dependencies.ts'
 import { explorerFilterSchema } from '../../../shared/explorer/schema.ts'
-import { currentDatabaseRuntime, type DatabaseRuntime, type DatabaseStatusRow } from '../../../shared/explorer/status.ts'
+import { currentDatabaseRuntime, liveJobStatus, type DatabaseRuntime, type DatabaseStatusRow } from '../../../shared/explorer/status.ts'
 import { actionContextValues, actionMenuState, type ActionContextValues, type AgentServiceTarget } from '../../../shared/actions/catalog.ts'
 import { scriptContextValues, scriptMenuState, type ScriptContextValues } from '../../../shared/scripting/catalog.ts'
 import { ssisVerbContextValues, ssisVerbMenuState, type SsisVerbContextValues } from '../../../shared/ssis/catalog.ts'
@@ -129,6 +129,12 @@ export interface DatabaseRuntimeSource {
   databaseRuntime(connectionId: string, database: string): { readonly at: number; readonly row: DatabaseStatusRow | undefined; readonly complete: boolean } | undefined
   /** The SQL Server Agent service's last sampled state and startup type (`explorer.agentService`), for the Agent node's verbs. */
   agentServiceOf?(connectionId: string): { readonly state?: number; readonly startup?: number } | undefined
+  subscribe(listener: () => void): () => void
+}
+
+/** Each job row's live enabled state (AgentTreeLive, AG-12), for a job's Enable Job or Disable Job. */
+export interface JobStatusSource {
+  job(connectionId: string, jobId: string | undefined): { readonly enabled?: boolean; readonly enabledAt?: number } | undefined
   subscribe(listener: () => void): () => void
 }
 
@@ -280,6 +286,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   /** The filter the rows were last flattened with, so a change of filter is announced once. */
   private readonly now: () => number
   private status?: DatabaseRuntimeSource
+  private jobs?: JobStatusSource
   /** The child `reconcile` selects when a page of its folder brings it. */
   private pendingSelect?: { readonly folder: number; readonly key: string; readonly name: string | undefined }
   /** The node `seek` walks towards, re-tried as each page arrives. */
@@ -568,13 +575,21 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.updateContext()
     return { dispose: () => { stop(); if (this.status === source) { this.status = undefined; this.updateContext() } } }
   }
+  /** Offers a job's Enable Job or Disable Job by the live read too, as its row shows it (AG-12). */
+  useJobStatus(source: JobStatusSource): Disposable {
+    this.jobs = source
+    const stop = source.subscribe(() => this.guard(() => this.updateContext()))
+    this.updateContext()
+    return { dispose: () => { stop(); if (this.jobs === source) { this.jobs = undefined; this.updateContext() } } }
+  }
   private targetOf(node: TreeNode): ExplorerTarget {
     const name = node.kind === 'database' && node.ref.type === 'object' ? node.ref.object.name : undefined
     const runtime = name === undefined ? node.database : currentDatabaseRuntime(node.database, node.listedAt, this.status?.databaseRuntime(node.connectionId, name))
     // The Agent node's verbs follow its service's sampled state (actions catalogue, agentServiceRules).
     const service = node.kind === 'agent' ? this.status?.agentServiceOf?.(node.connectionId) : undefined
     const agent = node.kind === 'agent' ? { windowsClient: this.windowsClient, ...(service?.state !== undefined ? { state: service.state } : {}), ...(service?.startup !== undefined ? { startup: service.startup } : {}) } : undefined
-    return targetOf(node, this.connectionOf(node.connectionId), runtime, agent)
+    const status = node.kind === 'agentJob' ? liveJobStatus(node.status, node.listedAt, this.jobs?.job(node.connectionId, node.jobId)) : node.status
+    return targetOf(status === node.status ? node : { ...node, status }, this.connectionOf(node.connectionId), runtime, agent)
   }
   /** A row's node (a synthetic row's owner) as a context menu's target, with its id; undefined for a removed node. */
   menuNode(rowId: number | undefined): ExplorerMenuNode | undefined {
