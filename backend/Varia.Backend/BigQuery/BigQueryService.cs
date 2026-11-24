@@ -404,13 +404,18 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
 
     /// <summary>A dry run (free): the bytes a query would process. Emulator mode answers a faked estimate.</summary>
     internal async Task<BigQueryEstimate> EstimateAsync(BigQueryConnection connection, string sql, CancellationToken token, string? dataset = null,
-        IList<QueryParameter>? parameters = null, string? location = null)
+        IList<QueryParameter>? parameters = null, string? location = null, (string Id, string? Location)? session = null)
     {
         if (environment.Emulator) return new(0, Faked: true);
         if (BigQueryErrors.IsLegacySql(sql)) throw new RequestException("LEGACY_SQL", BigQueryErrors.LegacySql);
         Exception failure;
         // Connecting already proved bigquery.jobs.create, so a 403 here is about what the query reads: Google's text stays.
-        try { return Estimate(await DryRunAsync(connection.Client, connection.Options.Project, location ?? connection.Location, sql, dataset, token, parameters)); }
+        try { return Estimate(await DryRunAsync(connection.Client, connection.Options.Project, session?.Location ?? location ?? connection.Location, sql, dataset, token, parameters, session?.Id)); }
+        // An expired session estimates as a new one would (Execute starts one and says so), without the old temp tables.
+        catch (Exception error) when (session is { } held && !token.IsCancellationRequested && SessionGone(error, held.Id))
+        {
+            return await EstimateAsync(connection, sql, token, dataset, parameters, location);
+        }
         catch (Exception error) { failure = BigQueryErrors.Map(error, connection.Options.Project, token: token); }
         if (failure is not RequestException { Code: "NOT_FOUND" } missing) throw failure;
         // A dataset in another location is told apart as Execute tells it; a table or dataset that does not exist is the
@@ -427,8 +432,12 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
         if (string.IsNullOrWhiteSpace(args.Sql) || args.Sql.Length > MaxDryRunCharacters) throw new RequestException("INVALID_PARAMS", "The query text is empty or too long.");
         if (args.Dataset is { } dataset && (dataset.Length is 0 or > BigQueryLimits.Dataset || !BigQueryLimits.DatasetId().IsMatch(dataset)))
             throw new RequestException("INVALID_PARAMS", "A dataset name has only letters, numbers and underscores.");
+        if (args.SessionId is { } tab && (tab.Length > 36 || !Guid.TryParseExact(tab, "D", out _))) throw new RequestException("INVALID_PARAMS", "The session id is not valid.");
         var connection = Find(args.ConnectionId) ?? throw new RequestException("NOT_CONNECTED", "The connection is no longer open.");
-        var estimate = await EstimateAsync(connection, args.Sql, token, args.Dataset ?? connection.Options.Dataset);
+        // The tab's session when it already has one on this handle: read, never created (an estimate starts no session). A dry
+        // run is not a job, so it does not wait in the session's queue.
+        (string Id, string? Location)? session = args.SessionId is { } sessionId && FindSession(sessionId) is { Id: { } id } held && held.Connection == connection ? (id, held.Location) : null;
+        var estimate = await EstimateAsync(connection, args.Sql, token, args.Dataset ?? connection.Options.Dataset, session: session);
         return new(estimate.BytesProcessed, estimate.Incomplete, estimate.StatementType, estimate.Faked);
     }
 
@@ -462,7 +471,8 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
         or "CREATE_TABLE_FUNCTION" or "CREATE_PROCEDURE" or "CREATE_ROW_ACCESS_POLICY" or "TRUNCATE_TABLE" or "CREATE_SNAPSHOT_TABLE"
         or "LOAD_DATA" or "CREATE_SEARCH_INDEX" or "CREATE_VECTOR_INDEX");
 
-    static async Task<Job> DryRunAsync(BigQueryClient client, string project, string? location, string sql, string? dataset, CancellationToken token, IList<QueryParameter>? parameters = null)
+    static async Task<Job> DryRunAsync(BigQueryClient client, string project, string? location, string sql, string? dataset, CancellationToken token, IList<QueryParameter>? parameters = null,
+        string? sessionId = null)
     {
         var job = new Job
         {
@@ -474,7 +484,8 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
                 {
                     Query = sql, UseLegacySql = false,
                     QueryParameters = parameters, ParameterMode = parameters is null ? null : "NAMED",
-                    DefaultDataset = dataset is null ? null : new DatasetReference { ProjectId = project, DatasetId = dataset }
+                    DefaultDataset = dataset is null ? null : new DatasetReference { ProjectId = project, DatasetId = dataset },
+                    ConnectionProperties = sessionId is null ? null : [new ConnectionProperty { Key = "session_id", Value = sessionId }]
                 }
             }
         };

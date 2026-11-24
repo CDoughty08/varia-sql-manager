@@ -39,7 +39,9 @@ and Remember password do not exist for BigQuery: Varia keeps no BigQuery secret.
 A federation configuration whose `credential_source` is a file: when it is picked, the dialog asks **Use
 this token file?**, naming the token file; a file source main cannot show as one full local path is refused. **Use It** records the confirmation (`connections-confirm-source`); main
 refuses the configuration's sign-in until then, and fails closed where it cannot ask (a background reconnect). A changed
-token path asks again.
+token path asks again. gcloud credentials whose ADC file is such a configuration (`gcloud auth application-default login
+--cred-file`, or the file `GOOGLE_APPLICATION_CREDENTIALS` names) ask the same question in a box from main the first time
+a Connect, Test Connection, Browse or the Default dataset list (which loads when the field is focused) needs them; a background reconnect and main's own job cancels never ask, and refuse.
 
 ## Saved connections
 
@@ -50,8 +52,8 @@ saved connections when a reference is first needed (a reconnect at startup inclu
 target whose entry has left the history (pruned or removed) asks for the key file again. The file also keeps the newest 64 confirmed federation token files. The dialog's history
 lists both engines by recency: a BigQuery row shows the project where SQL Server shows the server, then `BigQuery`, the
 default dataset and the sign-in (with the key file's name). Object Explorer, tabs, the query bar and the status bar show
-the project where SQL Server shows the server; the query tab's **Dataset** box lists the project's datasets with
-`<no default dataset>`, and the status bar shows Project, Account and Dataset. Saved BigQuery targets reconnect at
+the project where SQL Server shows the server; the query tab's **Dataset** box, and the palette's Change Database, list the
+project's datasets with `<no default dataset>`, and the status bar shows Project, Account and Dataset. Saved BigQuery targets reconnect at
 startup with their pinned account, like SQL Server's.
 
 ## Packages
@@ -414,7 +416,7 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
   (and any overrun after: a block too wide for the window cache answers that its rows are too wide; an overrun
   waits for the result's other fetches to settle; blocks a read waits for that do not fit together may pass the window
   cache, up to twice it, until the read is done; past that, the refusal says to raise it), and
-  shows as Window cache in the Memory panel. Each grid on the result reads one block ahead either side, and one more the
+  shows as Window cache in the Memory panel (and in the results row's figure of rows held). Each grid on the result reads one block ahead either side, and one more the
   way it is scrolling (fewer when the cache holds few blocks, the one ahead first); a jump drops reads the grid no longer needs. A read waits up to 20 s for its blocks (less near its
   deadline), then the grid shows the rows it has and asks again, waiting longer each time; rows that still do not come
   after a few tries show Retry (a screen reader hears their cells as not loaded); a block only read ahead stops where the cache is full, never evicting the rows on screen,
@@ -447,7 +449,8 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
   `REMOTE_EXPIRED` and leaves no file. Save reads the table itself, so it carries on through a load or Close Results. A sort or filter run in BigQuery saves as its own result.
 - **Expiry.** A destination table lasts about 24 hours: once it has expired, a read answers with the cached rows from the
   start of its window, and one that starts on rows not cached answers `REMOTE_EXPIRED`. The grid keeps the rows it has, and
-  its strip says BigQuery no longer keeps the result and offers Re-run…: `results.remoteQuery` kind `rerun` runs the
+  its strip says BigQuery no longer keeps the result and offers Re-run…; so does a result whose Load into memory or Load
+  sample BigQuery answered `REMOTE_EXPIRED`, and an expired result offers neither of those again. `results.remoteQuery` kind `rerun` runs the
   result's own statement again in BigQuery (read from its job with `jobs.get`, free, with the default dataset it ran
   with: a script statement's alone), after its estimate and the cost prompts, outside the tab's session, and the new
   result replaces the old one in place, keeping its number, column widths and place; its sort and filters are removed
@@ -464,8 +467,9 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
   value lists run in BigQuery, below) answer "This result is windowed in BigQuery" (`REMOTE_RESULT`) for now; a request whose result switches to
   windowed while it runs gets the same answer, and a grid's sort and filters are removed when its result switches (the
   screen reader hears so). The grid does not offer them where it can tell first: a transposed grid's strip does not
-  suggest filtering, the Pivot builder says the result cannot be pivoted yet, the Compare popover leaves it out, and Search
-  skips it.
+  suggest filtering, the Pivot builder says the result cannot be pivoted yet, the Compare popover leaves it out, Search
+  skips it, and the Highlight commands are greyed. A result kept short by Rows kept per execution says where that limit
+  is set (Query Results › SQL Server › Results to Grid, which BigQuery results follow too) and that the query ran in full.
 
 ### Sort and filter in BigQuery
 
@@ -491,7 +495,7 @@ BigQuery" in their tooltips.
   sent), and the filter keeps the list for as long as it applies; once the list's table expires, the filter says to open
   the column's filter again. A checklist keeps the ticked values when the list is whole and they are no more than the
   others, and otherwise drops the unticked ones, as in memory. In a FLOAT64 column NaN is one value, which a filter keeps
-  or drops like any other.
+  or drops like any other. Between's bounds are values: the backend refuses a NULL row as one (`INVALID_PARAMS`).
   Filters that name the grid's rows rather than values (Filter by Selection, duplicates, Keep Selected Rows) say they need
   the rows in memory.
 - **The view.** It is held under the source's budget, and windowed in its turn when it is large. It reads the whole result
@@ -499,8 +503,9 @@ BigQuery" in their tooltips.
   value list counts every row. A filter
   with no sort shows the rows in BigQuery's order, which need not be the query's own, and rows that tie on the sort keys
   come in any order; sort to fix one. A newer sort or filter
-  replaces it (the old one is released once the grid shows the new one); Stop cancels the BigQuery job; closing the
-  results or the tab releases both. BigQuery's resource errors on a large sort suggest filtering first.
+  replaces it (the old one is released once the grid shows the new one); Stop cancels the BigQuery job, even one pressed
+  while `jobs.insert` is still on its way (once the insert settles, its job is cancelled, waiting up to 10 s for BigQuery to
+  know it); closing the results or the tab releases both. BigQuery's resource errors on a large sort suggest filtering first.
 - **An expired table.** Once the source's temporary table has expired, a sort or filter answers `REMOTE_EXPIRED`, and a
   value list that has expired answers the same when a filter names it. In emulator mode, where jobs run outside the
   tab's session, the estimate notices the table is gone and the original query runs again with the sort or filter
@@ -546,7 +551,10 @@ beside them, "< $0.01" below a cent. The price is an estimate: projects with cap
 Query Execution › BigQuery › Cost's **Show cost as: Bytes only** leaves the dollars out everywhere (`prices: false` for
 Messages).
 
-- **The estimate.** `bigquery.dryRun` (free) answers the bytes a query would process. A query tab shows it in a chip
+- **The estimate.** `bigquery.dryRun` (free) answers the bytes a query would process. A tab that holds a BigQuery session
+  dry-runs in it (`sessionId`, the tab's id; the session's own id stays in the backend), so its temp tables and variables
+  resolve and the estimate runs where the session does; a tab without one is never given one for an estimate, and a session
+  BigQuery has ended is dropped from the dry run, which runs once more without it. A query tab shows it in a chip
   beside Execute ("≈ 1.24 GiB · < $0.01"): neutral, amber above the cost-prompt threshold (its tooltip says whether
   Execute asks on this connection), and after a run what the job processed and cost, unless the text changed while it
   ran. Its tooltip says the estimate is free and on demand, and why it may be low.
@@ -625,7 +633,8 @@ Preview Rows (Object Explorer's context menu on a table, snapshot or clone) open
 `SELECT * … LIMIT 1000` it stands for, then fills its results from `tabledata.list`, which is free and runs no job, so no cost
 prompt appears. It rides on `query.execute` with a `preview` target: the tab's earlier results are released, and Stop, Close
 Results and tab close behave as for a query. It reads at most 1,000 rows through the query results' converter and budget; the
-rows past them are counted, not read. Views, materialized views and external tables have no stored rows to list, so the menu
+rows past them are counted, not read; when the result budget or the computer's low memory stops it early, Messages says
+which. Views, materialized views and external tables have no stored rows to list, so the menu
 does not offer it (Script As › SELECT queries them, billed). A table with row access policies answers `ROW_ACCESS`, since
 `tabledata.list` cannot apply them. Execute on the tab runs its text as a normal, billed query.
 
@@ -675,8 +684,11 @@ without going to BigQuery Studio. Everything comes from BigQuery's free REST cal
   project's Object Explorer menu (an extra project's is greyed: jobs belong to the billing project), the palette's
   "BigQuery: Job History" (the active document's connection, the one live BigQuery connection, or a pick), "Show in Job
   History" under a finished BigQuery tab's Messages (filtered to that job), and Show in Job History in the dialog about
-  running jobs left without a tab (filtered to them, per project; with the project not connected, the Connect dialog opens
-  and Job History follows once a connection to it is live, within 10 minutes). The Messages link shows only while the tab is
+  running jobs left without a tab (filtered to them, per project). A project the page is not connected to is connected
+  with the saved connection that started its newest job, without the Connect dialog (interactively, so a sign-in it needs is
+  still asked for), and Job History opens once that connection is live; a connect that fails says so. When no project can be
+  shown (none connected, and the saved connections that started their jobs are gone), the dialog offers only Cancel and
+  Keep and says why; one such project among others is named in a notification. The Messages link shows only while the tab is
   still on the job's project. A filtered document says so beside the filters, where × shows
   every job again.
 - **Scope.** My jobs (the default) lists the principal's jobs. All users lists the project's (`allUsers`): it needs
@@ -721,14 +733,20 @@ without going to BigQuery Studio. Everything comes from BigQuery's free REST cal
   characters), and a script's statements. Another user's job without `bigquery.jobs.get` is refused once, remembered for
   the connection, and shown as hidden from then on.
 - **Actions** (the grid's context menu, the details pane, and Cancel Job in the header), each greyed with its reason where
-  it does not apply:
+  it does not apply. A menu opened on a row other than the active one (a right-click inside a multi-row selection, which
+  keeps the selection) acts on the row pressed: every action is offered, and one that does not apply to that job says why
+  when chosen.
   - **Open Results** on a finished query job of the principal's opens a query tab on the connection that re-attaches to the
-    job ([Re-attaching to jobs](#re-attaching-to-jobs)) without taking over its session, which is free; an expired result
-    says so there. **Re-attach** on a running one does the same and adopts its session, so Stop cancels it. A tab that
+    job ([Re-attaching to jobs](#re-attaching-to-jobs)) without taking over its session, which is free. The tab holds the
+    job's SQL (from `jobs.get`, free, with its default dataset when it is in the billing project; empty when BigQuery hid or
+    cut it), so when the result has expired, Messages says so and that Execute runs the SQL again, after its estimate and the
+    cost prompts. **Re-attach** on a running one does the same and adopts its session, so Stop cancels it. A tab that
     already holds the job is focused instead. Both need the job's creator, who alone can read its result table.
   - **Open SQL in New Tab** and **Re-run** open the job's whole SQL in a new query tab on the connection, with the job's
     default dataset when it is in the billing project; Re-run then executes it with the usual cost prompts, unless the SQL
-    was longer than Varia reads. Re-run and Cancel Job are not in the palette, where their words would outrank Execute and
+    was longer than Varia reads. Re-run asks first, naming the job, for anything but a SELECT (DML, DDL such as DROP TABLE
+    or CREATE OR REPLACE TABLE, a script, or a statement BigQuery did not name) and when another user ran it (it runs as you); the cost prompts name the job too
+    ("Re-run this job?"). Re-run and Cancel Job are not in the palette, where their words would outrank Execute and
     Cancel Executing Query.
   - **Cancel Job…** on a running or pending job asks first ("Cancel job … started by … 12 minutes ago?"), then calls
     `bigquery.jobs.cancel`. Cancelling another user's job needs `bigquery.jobs.update`; a refusal greys it for the
@@ -783,7 +801,8 @@ It also refuses `jobTimeoutMs` sent as a JSON number, answers a repeated job id 
 errors (syntax errors included) as `jobInternalError`, and reports no bytes statistics.
 
 Storage Read against the emulator needs its gRPC port: `VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT` (a loopback http address,
-honoured only with `VARIA_TEST_BIGQUERY_ENDPOINT`; main does not forward it, so the app reads the emulator through REST).
+honoured only with `VARIA_TEST_BIGQUERY_ENDPOINT`; main forwards it to unpackaged builds on the same terms, so the app
+reads emulator results through Storage Read too).
 The emulator serves one stream per session, sends each batch as a whole Arrow stream (schema first), fails on DATETIME
 and TIME columns, writes BYTES base64-encoded twice and exits on ARRAY columns; the offline golden check covers those.
 

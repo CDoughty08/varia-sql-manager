@@ -54,6 +54,11 @@ internal static partial class BigQueryExecutionChecks
         public Queue<(int Status, string Body)?> InsertReplies = new();
         /// <summary>Holds getQueryResults until the request is cancelled.</summary>
         public bool Hang;
+        /// <summary>Holds jobs.insert until the request is cancelled, while BigQuery goes on creating the job: the first
+        /// jobs.cancel about it answers 404 (not created yet, <see cref="MissedCancels"/>), later ones find it.</summary>
+        public volatile bool HangInsert;
+        public readonly ConcurrentDictionary<string, bool> Unborn = new();
+        public readonly ConcurrentQueue<string> MissedCancels = new();
         /// <summary>Holds only the later pages (a finished job's rows still loading).</summary>
         public bool HangPages;
         /// <summary>Holds tabledata.list (a windowed result's block reads) until the request is cancelled.</summary>
@@ -84,6 +89,12 @@ internal static partial class BigQueryExecutionChecks
             fake.Hang = request =>
             {
                 if (HangTable && request.Url.EndsWith("/data", StringComparison.Ordinal)) { Polling.TrySetResult(); return true; }
+                if (HangInsert && request.Method == "POST" && request.Url == Base + "/jobs" && JsonNode.Parse(request.Body)?["jobReference"]?["jobId"]?.GetValue<string>() is { } unborn)
+                {
+                    Unborn[unborn] = true;
+                    Polling.TrySetResult();
+                    return true;
+                }
                 if (!request.Url.Contains("/queries/", StringComparison.Ordinal) || !(Hang || HangPages && request.Uri.Query.Contains("pageToken=", StringComparison.Ordinal))) return false;
                 Polling.TrySetResult();
                 return true;
@@ -106,7 +117,13 @@ internal static partial class BigQueryExecutionChecks
                     }),
                 }.ToJsonString()));
             // Stop's jobs.cancel, best-effort.
-            fake.On("POST", Base + "/jobs/[^/]+/cancel", request => { Cancels.Enqueue(request.Url.Split('/')[^2]); return new(200, "{\"kind\":\"bigquery#jobCancelResponse\"}"); });
+            fake.On("POST", Base + "/jobs/[^/]+/cancel", request =>
+            {
+                var id = request.Url.Split('/')[^2];
+                if (Unborn.TryRemove(id, out _)) { MissedCancels.Enqueue(id); return BigQueryFake.Fixture("error-not-found", 404); }
+                Cancels.Enqueue(id);
+                return new(200, "{\"kind\":\"bigquery#jobCancelResponse\"}");
+            });
             fake.On("GET", Base + "/datasets/[^/]+/tables/[^/]+", Table);
             fake.On("GET", Base + "/datasets/[^/]+/tables/[^/]+/data", TableData);
             return fake;

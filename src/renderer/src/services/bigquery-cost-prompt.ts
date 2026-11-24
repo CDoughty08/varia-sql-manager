@@ -70,9 +70,12 @@ export function costPromptText(request: CostPromptRequest): { readonly title: st
   const { prompt, prices } = request
   const cap = request.cap === undefined ? 'No maximum bytes billed is set for this query.' : `BigQuery will not bill more than ${formatBytes(request.cap)} for it (its maximum bytes billed).`
   const estimate = 'Estimate from a free dry run.' + (prices ? ' Projects that use reserved capacity are not billed per byte.' : '')
+  // A Job History Re-run names the job it runs again.
+  const job = request.rerunOf === undefined ? undefined : request.rerunOf.length > 40 ? request.rerunOf.slice(0, 39) + '…' : request.rerunOf
+  const title = job ? 'Re-run this job?' : 'Run this query?'
   if (prompt.kind === 'threshold')
-    return { title: 'Run this query?', sentence: `This query will process ${figure(prompt.bytes, prices)}, more than the ${formatBytes(request.thresholdBytes)} threshold. Run it?`,
+    return { title, sentence: `${job ? `Re-running job ${job}` : 'This query'} will process ${figure(prompt.bytes, prices)}, more than the ${formatBytes(request.thresholdBytes)} threshold. Run it?`,
       note: `${estimate} ${cap}`, optOut: `Don't ask again for ${request.connection}` }
-  return { title: 'Run this query?', sentence: `The estimate for this query, ${figure(prompt.bytes, prices)}, may be low. ${incompleteText[prompt.reason]} Run it?`,
+  return { title, sentence: `The estimate for ${job ? `re-running job ${job}` : 'this query'}, ${figure(prompt.bytes, prices)}, may be low. ${incompleteText[prompt.reason]} Run it?`,
     note: `${estimate} ${cap}`, optOut: "Don't warn me about incomplete estimates again" }
 }
