@@ -88,6 +88,11 @@ try {
   await expect(overview.getByRole('heading', { name: 'Needs attention', exact: true })).toBeVisible()
   expect((await calls('live.subscribe')).find(call => call.source === 'agent.overview')).toMatchObject({ source: 'agent.overview', probes: [{ probe: 'agent.overview.read' }] })
   await page.screenshot({ path: 'artifacts/agent-overview-dark.png' })
+  // The tiles share one height whether or not they have a subline (Running has none here), and a name links inside its check's sentence.
+  const tileHeights = await overview.getByRole('group', { name: 'SQL Server Agent at a glance', exact: true }).getByRole('group').evaluateAll(tiles => tiles.map(tile => Math.round(tile.getBoundingClientRect().height)))
+  expect(tileHeights).toHaveLength(4)
+  expect(new Set(tileHeights).size).toBe(1)
+  await expect(overview.getByRole('listitem', { name: 'Warning: 1 job notifies no one when it fails', exact: true }).getByRole('button', { name: 'Backup', exact: true })).toBeVisible()
   await overview.getByRole('listitem', { name: 'Problem: 1 job failed in the last 24 hours', exact: true }).getByRole('button', { name: 'Show them', exact: true }).click()
   await expect(documentTab(page, tabName)).toHaveAttribute('aria-selected', 'true')
   await expect(chip('Failed')).toHaveAttribute('aria-pressed', 'true')

@@ -2,7 +2,7 @@
 // Check again and Properties), the tiles (jobs, failed in the last 24 hours, running, alerts) and the health checks, each with its
 // severity, the objects it names (links) and its fix. AgentOverviewService keeps every state; this only draws it.
 import { useSyncExternalStore } from 'react'
-import { agentOverviewProbe, agentOverviewTitle, namesText, needsAttention, serviceWords, type OverviewCheck, type OverviewSeverity } from '../../../shared/agent/overview'
+import { agentOverviewProbe, agentOverviewTitle, detailParts, needsAttention, serviceWords, type OverviewCheck, type OverviewObject, type OverviewSeverity } from '../../../shared/agent/overview'
 import { liveProbes } from '../../../shared/live/catalog'
 import type { IconId } from '../../../shared/icons'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
@@ -26,19 +26,21 @@ const severityIcons: Readonly<Record<OverviewSeverity, IconId>> = { error: 'erro
 const severityWords: Readonly<Record<OverviewSeverity, string>> = { error: 'Problem', warning: 'Warning', info: 'Note', ok: 'Passed', unread: 'Not checked' }
 
 function Check({ check, documentId, service }: { readonly check: OverviewCheck; readonly documentId: string; readonly service: AgentOverviewService }) {
-  // A detail that only lists the objects is left out: their links below say the same.
-  const namesOnly = check.objects.length > 0 && check.objects.length <= shownObjects && check.detail === `${namesText(check.objects.map(object => object.name), 5)}.`
+  // Each name links where the detail says it; the objects past its "and N more" follow as links, up to shownObjects in all.
+  const { parts, rest } = detailParts(check.detail, check.objects)
+  const link = (object: OverviewObject, key: string) => <button key={key} type="button" className="link-button agent-check-object"
+    title={object.kind === 'job' ? `Open the job ${object.name}` : `Open Schedules (${object.name})`} onClick={() => service.openObject(documentId, object)}>{object.name}</button>
+  const more = rest.slice(0, Math.max(0, shownObjects - (check.objects.length - rest.length)))
   return <li className="agent-check" data-severity={check.severity} aria-label={`${severityWords[check.severity]}: ${check.title}`}>
     <span className="agent-check-icon" aria-hidden="true"><Icon name={severityIcons[check.severity]} /></span>
     <span className="agent-check-title">{check.title}</span>
     <span className="agent-check-fix">{check.fix && <button type="button" onClick={() => void service.fix(documentId, check.fix!.action)}>{check.fix.label}</button>}</span>
-    <span className="agent-check-detail">{namesOnly ? null : check.detail}
-      {check.objects.length > 0 && <span className="agent-check-objects" role="list" aria-label={`${check.title}: objects`}>
-        {check.objects.slice(0, shownObjects).map((object, at) => <span key={`${object.kind}:${at}:${object.name}`} role="listitem">
-          <button type="button" className="link-button agent-check-object" title={object.kind === 'job' ? `Open the job ${object.name}` : `Open Schedules (${object.name})`}
-            onClick={() => service.openObject(documentId, object)}><Icon name={object.kind === 'job' ? 'agent-job' : 'agent-schedule'} />{object.name}</button></span>)}
+    {(parts.length > 0 || more.length > 0) && <span className="agent-check-detail">
+      {parts.map((part, at) => typeof part === 'string' ? part : link(part, `${part.kind}:${at}:${part.name}`))}
+      {more.length > 0 && <span className="agent-check-objects" role="list" aria-label={`${check.title}: more objects`}>
+        {more.map((object, at) => <span key={`${object.kind}:${at}:${object.name}`} role="listitem">{link(object, 'link')}</span>)}
       </span>}
-    </span>
+    </span>}
   </li>
 }
 

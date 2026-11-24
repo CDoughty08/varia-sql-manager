@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  alertsCheck, failedCheck, historyCheck, historyShortfalls, mailCheck, namesText, needsAttention, notifyCheck, overviewChecks, overviewStatus, overviewTiles, ownerCheck, schedulesCheck,
+  alertsCheck, failedCheck, historyCheck, historyShortfalls, mailCheck, detailParts, namesText, needsAttention, notifyCheck, overviewChecks, overviewStatus, overviewTiles, ownerCheck, schedulesCheck,
   serviceCheck, serviceWords, spanText, stampMs, unreadText, overviewTruncatedText, type OverviewFacts, type OverviewJob, type OverviewReadState
 } from '../src/shared/agent/overview'
 import { recommendedAlerts } from '../src/shared/actions/agent-alert'
@@ -34,6 +34,14 @@ const facts = (patch: Partial<OverviewFacts> = {}): OverviewFacts => ({
 })
 
 describe("the Agent overview's helpers", () => {
+  it("links each name where a check's detail says it, as a whole word, longest first, and keeps the rest", () => {
+    const purge = { kind: 'job' as const, name: 'Purge' }, audit = { kind: 'job' as const, name: 'Purge audit rows' }, a = { kind: 'job' as const, name: 'a' }, late = { kind: 'job' as const, name: 'Late' }
+    expect(detailParts('Purge audit rows and Purge failed.', [purge, audit])).toEqual({ parts: [audit, ' and ', purge, ' failed.'], rest: [] })
+    expect(detailParts('Backup is owned by a disabled login.', [a])).toEqual({ parts: ['Backup is owned by ', a, ' disabled login.'], rest: [] })
+    expect(detailParts('Ab and 2 more.', [a, late])).toEqual({ parts: ['Ab and 2 more.'], rest: [a, late] })
+    expect(detailParts('', [])).toEqual({ parts: [], rest: [] })
+  })
+
   it('reads server-local stamps and says spans and names in words', () => {
     expect(stampMs('2026-11-23T12:00:00')! - stampMs('2026-11-23T00:00:00')!).toBe(12 * 3_600_000)
     expect(stampMs('23/11/2026')).toBeUndefined()

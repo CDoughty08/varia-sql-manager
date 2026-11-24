@@ -93,7 +93,7 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   Overview (Ctrl+Q finds it as a command), opens one document per connection ("Agent Overview - server"). Its header shows
   Agent's state, startup type, service account and the server's version, with Check again and Properties; tiles count jobs,
   jobs failed in the last 24 hours (by the server's clock), running jobs and alerts (those fired this week); then the health
-  checks, each with a severity, the jobs or schedules it names (links that open them) and a fix that opens the usual editor
+  checks, each with a severity, the jobs or schedules it names (each name a link in its sentence that opens it) and a fix that opens the usual editor
   or confirmation. Nothing is written by the overview itself:
   - **Agent not running** (only then): Start for sysadmin on Windows, AG-2's service control on the Agent node.
   - **Failed jobs**: a job whose last run failed and started within 24 hours ("(retrying)" while it retries); Show

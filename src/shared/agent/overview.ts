@@ -108,6 +108,28 @@ export function namesText(names: readonly string[], shown = 3): string {
   return `${names.slice(0, shown).join(', ')} and ${names.length - shown} more`
 }
 
+/** A check's detail split at the objects it names, so each name links where the text says it (the mock's plain sentence); `rest` holds the
+ *  objects the text leaves out (past "and N more"), in their order. A name matches only as a whole word, longest names first. */
+export function detailParts(detail: string, objects: readonly OverviewObject[]): { readonly parts: readonly (string | OverviewObject)[]; readonly rest: readonly OverviewObject[] } {
+  const word = (at: number) => at >= 0 && at < detail.length && /[\p{L}\p{N}_]/u.test(detail[at]!)
+  const found: { readonly at: number; readonly end: number; readonly object: OverviewObject }[] = []
+  for (const object of [...objects].sort((a, b) => b.name.length - a.name.length)) {
+    if (!object.name) continue
+    for (let at = detail.indexOf(object.name); at >= 0; at = detail.indexOf(object.name, at + 1)) {
+      const end = at + object.name.length
+      if (word(at - 1) || word(end) || found.some(item => at < item.end && end > item.at)) continue
+      found.push({ at, end, object }); break
+    }
+  }
+  found.sort((a, b) => a.at - b.at)
+  const parts: (string | OverviewObject)[] = []
+  let from = 0
+  for (const item of found) { if (item.at > from) parts.push(detail.slice(from, item.at)); parts.push(item.object); from = item.end }
+  if (from < detail.length) parts.push(detail.slice(from))
+  const linked = new Set(found.map(item => item.object))
+  return { parts, rest: objects.filter(object => !linked.has(object)) }
+}
+
 // --- Checks ----------------------------------------------------------------------------------------------------------
 
 export type OverviewCheckId = 'service' | 'failedJobs' | 'owners' | 'notify' | 'history' | 'alerts' | 'mail' | 'schedules'
