@@ -5,6 +5,7 @@ import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
 import { MetricRing } from '../live/ring'
 import type { ResultClient } from './ResultClient'
+import { formatBytes } from './status'
 
 /** A budget's figures. Results also has what the store holds (`detail`, from the backend's events; a summary's budget keeps
  *  the last one) and the backend generation it came from, whose result ids it names; the index what it holds (`index`, from
@@ -57,4 +58,16 @@ export function memoryLevel({ usedBytes, globalBytes }: MemoryUsage, feature: Me
   const fraction = usedBytes / globalBytes
   if (fraction >= 0.95) return 'critical'
   return fraction >= (feature === 'index' ? 0.75 : 0.9) ? 'warning' : 'normal'
+}
+
+/** Compact live memory total shown beside the dual rings on the status bar (e.g. "147 MB"), or undefined when 0 MB / unavailable. */
+export function memoryTotalLabel(...usages: readonly MemoryUsage[]): string | undefined {
+  let total = 0, available = false
+  for (const usage of usages) {
+    if (usage.globalBytes > 0) {
+      available = true
+      total += Math.max(0, usage.usedBytes)
+    }
+  }
+  return available && total > 0 ? formatBytes(total) : undefined
 }

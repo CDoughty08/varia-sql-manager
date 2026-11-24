@@ -150,7 +150,9 @@ export default function App() {
   // The active query's facts are in the window's status bar. Options can bring back SSMS's query window status bar, below
   // the query unless it puts it above. Either way the tooltip names the SMO and SqlClient versions.
   const statusTop = settings['textEditor.statusBar.location'] === 'top'
-  const queryStatus = active.id && !isCustom ? <QueryStatusBar tab={active} connection={connection} versions={versions} variant={shell.queryStatusBar ? 'bar' : 'segment'} /> : null
+  const compactConnection = backendState.status === 'ready' && !!liveConnection && isQuery && !shell.queryStatusBar
+  const backendTooltip = backendState.status === 'ready' ? ['SQL backend: ' + backendState.runtime, versions].filter(Boolean).join('\n') : undefined
+  const queryStatus = active.id && !isCustom ? <QueryStatusBar tab={active} connection={connection} versions={versions} variant={shell.queryStatusBar ? 'bar' : 'segment'} compact={compactConnection} /> : null
   const statusBar = shell.queryStatusBar ? queryStatus : null
 
   /** The output view the active query shows, whose panel revealing the output shows. */
@@ -363,8 +365,13 @@ export default function App() {
     <OutputAnnouncer tabId={active.id} />
     {/* Neutral until work runs: tinted while the active query executes, or while the backend is down. */}
     <footer className="status-bar" aria-label="Status bar" data-state={backendDown ? 'error' : activeRunning ? 'executing' : !liveConnection ? 'disconnected' : 'ready'} style={{ borderTop: accent ? `2px solid ${accent}` : undefined }}>
-      <span className="backend-status" title={backendState.status === 'ready' ? ['SQL backend: ' + backendState.runtime, versions].filter(Boolean).join('\n') : undefined}><span className={`status-dot ${backendState.status === 'ready' ? 'online' : ''}`} />{backendStatusText(backendState)}</span>
-      {environmentTag(connection?.options.environment) && <span className="status-environment"><span className="visually-hidden">Active connection environment: </span><EnvironmentTag environment={connection?.options.environment} place="status" about={connection?.displayName || connection?.server} /></span>}
+      {compactConnection ? <>
+        {environmentTag(connection?.options.environment) && <span className="status-environment"><span className="visually-hidden">Active connection environment: </span><EnvironmentTag environment={connection?.options.environment} place="status" about={connection?.displayName || connection?.server} /></span>}
+        <span className="backend-status compact" title={backendTooltip}><span className="status-dot online" /><span className="visually-hidden">Ready</span></span>
+      </> : <>
+        <span className="backend-status" title={backendTooltip}><span className={`status-dot ${backendState.status === 'ready' ? 'online' : ''}`} />{backendStatusText(backendState)}</span>
+        {environmentTag(connection?.options.environment) && <span className="status-environment"><span className="visually-hidden">Active connection environment: </span><EnvironmentTag environment={connection?.options.environment} place="status" about={connection?.displayName || connection?.server} /></span>}
+      </>}
       {!shell.queryStatusBar && queryStatus}<ScriptingStatus /><IndexStatus /><EditorStatus /><DiscardStatus /><MemoryIndicator /><UpdateStatus /><AgentJobStatus />
     </footer>
     {environmentFor && <EnvironmentDialog key={environmentFor} connectionId={environmentFor} onClose={() => setEnvironmentFor(undefined)} />}

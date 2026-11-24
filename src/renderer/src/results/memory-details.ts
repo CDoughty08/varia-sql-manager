@@ -39,6 +39,8 @@ export interface Segment { readonly part: 'raw' | 'packed' | 'cache' | 'window' 
 export interface Bar { readonly label: string; readonly total: number; readonly segments: readonly Segment[] }
 /** A result's name in Biggest results in its two parts: its query tab's, which gives way first, and the Results part. */
 export interface ResultLabel { readonly tab?: string; readonly result: string }
+/** Owning tab and entry key for a Biggest results row that can be released directly from the Memory popover. */
+export interface ResultTarget { readonly tabId: string; readonly entryKey: string; readonly running: boolean }
 export interface BiggestRow { readonly resultId: number; readonly name: string; readonly label: ResultLabel; readonly logical: string; readonly stored: string; readonly state: ResultMemoryEntry['state']; readonly stateLabel: string; readonly logicalShare: number; readonly storedShare: number }
 export interface Counter { readonly label: string; readonly value: string }
 export interface NerdMetricsModel {
@@ -134,6 +136,24 @@ export function resultNames(tabs: Readonly<Record<string, { readonly sets: reado
     for (const set of tab.sets) if (set.descriptor.generation === generation) names.set(set.descriptor.resultId, { ...document ? { tab: document } : {}, result: numberedName(set) })
   }
   return entry => names.get(entry.resultId) ?? { result: entry.live ? 'Live view table' : 'Unlisted result' }
+}
+
+/** Maps each backend resultId (in `generation`) to its owning query tab, entry key and running state for quick-free actions. */
+export function resultTargets(
+  tabs: Readonly<Record<string, { readonly status?: string; readonly bare?: true; readonly sets: readonly { readonly key?: string; readonly descriptor: { readonly generation: number; readonly resultId: number } }[] }>>,
+  generation: number | undefined,
+  isRunning?: (tabId: string) => boolean
+): ReadonlyMap<number, ResultTarget> {
+  const targets = new Map<number, ResultTarget>()
+  for (const [tabId, tab] of Object.entries(tabs)) {
+    if (tab.bare || tab.status === 'closed') continue
+    const running = tab.status === 'running' || !!isRunning?.(tabId)
+    for (const set of tab.sets) {
+      if (set.descriptor.generation === generation && set.key !== undefined)
+        targets.set(set.descriptor.resultId, { tabId, entryKey: set.key, running })
+    }
+  }
+  return targets
 }
 
 /** The Search Indexer part of Nerd metrics, from an explorer.index.memory event's detail. */
