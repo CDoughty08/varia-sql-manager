@@ -162,11 +162,11 @@ const fingerprints = (changes: Record<string, number> = {}) => new Map(agentTree
 const disposals: (() => void)[] = []
 afterEach(() => { disposals.splice(0).forEach(dispose => dispose()) })
 
-function fixture(options: { agent?: boolean; settings?: Partial<SettingsValues> } = {}) {
+function fixture(options: { settings?: Partial<SettingsValues> } = {}) {
   const backend = fakeBackend()
   const connections = new ConnectionService(), events = new EventBus()
   let ids = 0
-  const explorer = new ExplorerService({ api: backend.api, connections, events, schedule: callback => callback(), newId: () => uuid(++ids), agentEnabled: true })
+  const explorer = new ExplorerService({ api: backend.api, connections, events, schedule: callback => callback(), newId: () => uuid(++ids) })
   const views: FakeView[] = []
   const refuse: { next?: { code: string; message: string } } = {}
   const live = { open: (spec: LiveSpec, owner: LiveOwner) => { const view = new FakeView(spec, owner, refuse.next); refuse.next = undefined; views.push(view); return view as unknown as LiveHandle } }
@@ -179,7 +179,7 @@ function fixture(options: { agent?: boolean; settings?: Partial<SettingsValues> 
   const settingListeners = new Set<() => void>()
   const settings = { getSnapshot: () => ({ values }), subscribe: (listener: () => void) => { settingListeners.add(listener); return () => settingListeners.delete(listener) } }
   const setSettings = (patch: Partial<SettingsValues>) => { values = { ...values, ...patch }; settingListeners.forEach(listener => listener()) }
-  const tree = new AgentTreeLive({ explorer, live, explorerVisible, settings, events, timers, agent: options.agent ?? true })
+  const tree = new AgentTreeLive({ explorer, live, explorerVisible, settings, events, timers })
   disposals.push(() => { tree.dispose(); explorer.dispose() })
   const connect = (n = 1) => connections.add({ ...connectionInfo(cid(n), 1), server: `server-${n}.example` }, connectionOptions)
   const rows = () => Array.from(explorer.getSnapshot().rows.ids).filter(id => id > 0).map(id => explorer.node(id)!)
@@ -235,12 +235,7 @@ describe('AgentTreeLive: the views\' life', () => {
     await settle()
     expect(f.tree.keys).toEqual([])
   })
-  it('opens nothing without the Agent release gate or with live status off, and closes its views when that setting goes off', async () => {
-    const gated = fixture({ agent: false })
-    gated.connect()
-    await settle()
-    await gated.open('SQL Server Agent', 'Jobs')
-    expect(gated.views).toHaveLength(0)
+  it('opens nothing with live status off, and closes its views when that setting goes off', async () => {
     const f = fixture({ settings: { 'liveData.explorerStatus': false } })
     f.connect()
     await settle()

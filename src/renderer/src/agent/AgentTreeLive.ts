@@ -58,8 +58,6 @@ export interface AgentTreeLiveOptions {
   readonly settings: LiveSettingsSource
   /** The user's refreshes: one of the server or of the Agent node (or anything in it) opens a view that stopped again. */
   readonly events: { subscribe(listener: (event: WorkbenchEvent) => void): Disposable }
-  /** The Agent release gate: without it there is no Agent node, so nothing opens. */
-  readonly agent: boolean
   readonly timers?: Timers
 }
 
@@ -90,7 +88,6 @@ export class AgentTreeLive extends SnapshotStore<AgentTreeSnapshot> implements D
   constructor(private readonly o: AgentTreeLiveOptions) {
     super({ jobs: new Map() })
     this.timers = o.timers ?? browserTimers
-    if (!o.agent) { this.stops = []; return }
     const events = o.events.subscribe(event => this.guard(() => { if (event.type === 'explorer.refreshed') this.refreshed(event.connectionId, event.nodeId) }))
     this.stops = [
       o.explorer.subscribe(() => this.guard(() => { this.sync(); this.settled() })),

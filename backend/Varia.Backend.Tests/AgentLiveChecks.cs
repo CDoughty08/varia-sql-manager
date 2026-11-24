@@ -186,26 +186,13 @@ internal static class AgentLiveChecks
             check(folder is { Error: null, Nodes: [{ Label: var label, Icon: "agent-job", HasChildren: false, Ref.Object: { Kind: "agentJob", Name: var name, Database: null } } row0] } && label == job && name == job
                 && row0.JobId == id.ToString("D") && row0.Detail?.StartsWith("Owner ", StringComparison.Ordinal) == true,
                 "Object Explorer's Jobs folder lists the scratch job by name (filtered to it) with its owner, as an agentJob ref named alone: " + JsonSerializer.Serialize(folder));
-            // Search Objects indexes it only behind the release gate: shut, the build reads nothing from msdb and skips nothing.
-            async Task<(ObjectIndexStatus Index, List<ObjectSearchHit> Hits)> Indexed(bool gate)
-            {
-                service.Search.AgentEnabled = gate;
-                var built = await service.Search.IndexAsync(new(info.Id, Guid.NewGuid().ToString(), false), CancellationToken.None);
-                var found = (ObjectSearchResult)await service.DispatchAsync("explorer.search", JsonSerializer.SerializeToElement(
-                    new ObjectSearchArgs(info.Id, Guid.NewGuid().ToString(), job, WholeWord: true, In: "names"), json), json);
-                return (built.Status, found.Hits);
-            }
-            try
-            {
-                // Shut first: the gate never changes while the backend runs, and a shut build leaves the Agent slot as it was.
-                var shut = await Indexed(false);
-                var open = await Indexed(true);
-                check(open.Index.Skipped.All(skip => skip.Database != "msdb") && open.Hits is [{ Object: { Kind: "agentJob", Database: null } hit, Folder: "agentJobs", Modified: not null }] && hit.Name == job
-                    && shut.Index.Skipped.All(skip => skip.Database != "msdb") && shut.Hits.All(item => !item.Object.Kind.StartsWith("agent", StringComparison.Ordinal)),
-                    "Search Objects finds the scratch job as an agentJob with its modify date behind the release gate, and reads no Agent objects with it shut: "
-                    + JsonSerializer.Serialize(open.Hits) + " " + JsonSerializer.Serialize(shut.Hits) + " " + JsonSerializer.Serialize(open.Index.Skipped));
-            }
-            finally { service.Search.AgentEnabled = Varia.Backend.Agent.AgentGate.Enabled; }
+            // Search Objects indexes it with no environment variable set (AG-9 removed the release gate).
+            var built = await service.Search.IndexAsync(new(info.Id, Guid.NewGuid().ToString(), false), CancellationToken.None);
+            var found = (ObjectSearchResult)await service.DispatchAsync("explorer.search", JsonSerializer.SerializeToElement(
+                new ObjectSearchArgs(info.Id, Guid.NewGuid().ToString(), job, WholeWord: true, In: "names"), json), json);
+            check(built.Status.Skipped.All(skip => skip.Database != "msdb") && found.Hits is [{ Object: { Kind: "agentJob", Database: null } hit, Folder: "agentJobs", Modified: not null }] && hit.Name == job,
+                "Search Objects finds the scratch job as an agentJob with its modify date, with no release gate to open: "
+                + JsonSerializer.Serialize(found.Hits) + " " + JsonSerializer.Serialize(built.Status.Skipped));
             // Job Activity Monitor's live source (AG-3) lists it, reads its last run and watches it through live.subscribe.
             await AgentJobsChecks.LiveAsync(check, service, info, json, job, id);
             // SQL Server Agent Properties (AG-8a) purges only rows it plants on this job, so it runs while the job exists.

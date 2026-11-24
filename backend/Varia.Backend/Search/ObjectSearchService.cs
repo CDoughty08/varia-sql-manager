@@ -96,8 +96,6 @@ internal sealed partial class ObjectSearchService : IDisposable
     }
 
     public ObjectIndexLimits Limits { get; }
-    /// <summary>SQL Server Agent's release gate: shut, an index build reads no Agent objects (jobs, alerts, operators; checks open it per service).</summary>
-    public bool AgentEnabled { get; set; } = Varia.Backend.Agent.AgentGate.Enabled;
     /// <summary>The memory every connection's index holds (the checks read it).</summary>
     public long MemoryUsed => budget.Used;
     /// <summary>The shared resource sets and their distinct definitions (the checks read it).</summary>
@@ -221,7 +219,7 @@ internal sealed partial class ObjectSearchService : IDisposable
             state.Index.Keep(names.ToHashSet(StringComparer.Ordinal));
             if (await ReadServerAsync(args.ConnectionId, state, !explorer.Cloud, definitions, source.Token) is { } serverSkip)
                 lock (state.Gate) state.Skipped.Add(SkipList.Server, serverSkip);
-            if (AgentEnabled && explorer.Agent is { } platform && await ReadAgentAsync(args.ConnectionId, state, Varia.Backend.Agent.AgentCatalog.Current.Offers("alerts", platform), source.Token) is { } agentSkip)
+            if (explorer.Agent is { } platform && await ReadAgentAsync(args.ConnectionId, state, Varia.Backend.Agent.AgentCatalog.Current.Offers("alerts", platform), source.Token) is { } agentSkip)
                 lock (state.Gate) state.Skipped.Add(SkipList.Agent, agentSkip);
             if (await ReadResourceAsync(args.ConnectionId, profile, state, definitions, source.Token) is { } resourceSkip)
                 lock (state.Gate) state.Skipped.Add(SkipList.Resource, resourceSkip);

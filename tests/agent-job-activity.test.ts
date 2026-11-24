@@ -46,7 +46,7 @@ class FakeGrid extends SnapshotStore<LiveGridSnapshot> {
 }
 
 function monitor() {
-  const fixture = workbenchFixture({ agentPreview: true })
+  const fixture = workbenchFixture()
   cleanups.push(() => fixture.dispose())
   fixture.api.push(readyBackend())
   fixture.connect(connectionInfo('c1'))
@@ -196,12 +196,9 @@ describe("agent.jobs' shared rules", () => {
 })
 
 describe('Job Activity Monitor', () => {
-  it('registers its commands only behind the release gate', () => {
-    for (const agentPreview of [false, true]) {
-      const fixture = workbenchFixture({ agentPreview })
-      expect(['agent.jobActivity', 'agent.refreshJobs', 'agent.startJobs'].map(id => fixture.commands.has(id as never))).toEqual([agentPreview, agentPreview, agentPreview])
-      fixture.dispose()
-    }
+  it('registers its commands with no environment variable set (AG-9 removed the release gate)', () => {
+    const fixture = workbenchFixture()
+    try { expect(['agent.jobActivity', 'agent.refreshJobs', 'agent.startJobs'].map(id => fixture.commands.has(id as never))).toEqual([true, true, true]) } finally { fixture.dispose() }
   })
   it('opens one document per connection on the list and service probes, and sends view, filter box, column filters and the expanded job', async () => {
     const { jobActivity, documents, handle, live, context } = monitor()

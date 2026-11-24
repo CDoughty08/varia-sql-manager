@@ -41,7 +41,7 @@ export interface ServerStatus {
   /** The database probe listed every database that is not plainly online, so one it does not list is online. False when
    *  its table was cut at its row cap: a database past the cut says nothing. */
   readonly complete: boolean
-  /** The SQL Server Agent node's chips and sublabel (behind the Agent release gate); undefined while none are known. */
+  /** The SQL Server Agent node's chips and sublabel; undefined while none are known. */
   readonly agent?: RowStatus
   /** `explorer.agentService`'s last fresh sample: Agent XPs, the service's state and startup type. */
   readonly agentService?: AgentServiceState
@@ -59,9 +59,8 @@ export interface StatusVisibility {
   popout?(): boolean
 }
 
-/** The probes a view samples: each once, though the server and Agent rows both show running jobs. The Agent node's own
- *  probe only behind the Agent release gate, so a hidden node runs no SQL. */
-const probesFor = (agent: boolean) => [...new Set([...statusChipKinds.database, ...statusChipKinds.server, ...agent ? statusChipKinds.agent : []])] as LiveProbeId[]
+/** The probes a view samples: each once, though the server and Agent rows both show running jobs. */
+const probes = [...new Set([...statusChipKinds.database, ...statusChipKinds.server, ...statusChipKinds.agent])] as LiveProbeId[]
 type TableProbe = 'explorer.databases' | 'explorer.progress' | 'explorer.availability'
 /** At most this many rows of a status table are read: the catalogue caps them at 1,000, a window at 4,096. */
 const maxRows = 1000
@@ -131,8 +130,8 @@ class ServerView {
   /** What was published last, so unchanged rows keep their objects (rows are memoised on them). */
   private published: ServerStatus = { server: undefined, databases: undefined, complete: false }
 
-  constructor(connectionId: string, live: LiveService, owner: LiveOwner, private readonly changed: () => void, private readonly agent = false) {
-    this.handle = live.open({ connectionId, source: 'explorer', probes: probesFor(agent).map(probe => ({ probe })), background: true }, owner)
+  constructor(connectionId: string, live: LiveService, owner: LiveOwner, private readonly changed: () => void) {
+    this.handle = live.open({ connectionId, source: 'explorer', probes: probes.map(probe => ({ probe })), background: true }, owner)
     const disposeTick = this.handle.onTick(({ subscriptionId, tick }) => {
       this.follow(subscriptionId)
       for (const sample of tick.samples) {
@@ -229,9 +228,9 @@ class ServerView {
     const complete = !!databases && this.complete
     const chips = serverChips(fresh('explorer.agent') ? this.jobs : undefined, fresh('explorer.availability') ? this.groups : undefined)
     const server = chips.length === 0 ? undefined : previous.server && sameChips(previous.server.chips, chips) ? previous.server : statusOf(chips)
-    const agentService = this.agent && fresh('explorer.agentService') ? this.agentService : undefined
-    const agentNode = this.agent ? agentChips(agentService, fresh('explorer.agent') ? this.jobs : undefined) : undefined
-    const agent = !agentNode ? undefined : previous.agent && previous.agent.sublabel === agentNode.sublabel && sameChips(previous.agent.chips, agentNode.chips) ? previous.agent : agentStatusOf(agentNode.chips, agentNode.sublabel)
+    const agentService = fresh('explorer.agentService') ? this.agentService : undefined
+    const agentNode = agentChips(agentService, fresh('explorer.agent') ? this.jobs : undefined)
+    const agent = previous.agent && previous.agent.sublabel === agentNode.sublabel && sameChips(previous.agent.chips, agentNode.chips) ? previous.agent : agentStatusOf(agentNode.chips, agentNode.sublabel)
     const sameService = agentService?.xps === previous.agentService?.xps && agentService?.state === previous.agentService?.state && agentService?.startup === previous.agentService?.startup
     if (server === previous.server && databases === previous.databases && complete === previous.complete && agent === previous.agent && sameService) return
     this.published = { server, databases, complete, ...agent ? { agent } : {}, ...agentService ? { agentService: sameService ? previous.agentService! : agentService } : {} }
@@ -302,8 +301,6 @@ export class ExplorerStatusService extends SnapshotStore<ExplorerStatusSnapshot>
     visibility?: StatusVisibility
     /** Coalesces publications: an animation frame in the app. */
     schedule?: (callback: () => void) => void
-    /** The Agent release gate: the SQL Server Agent node's probe samples only while it is on. */
-    agent?: boolean
   }) {
     super({ servers: new Map() })
     this.visibility = o.visibility ?? { get: () => o.panes.getSnapshot().explorer, subscribe: listener => o.panes.subscribe(listener), popout: () => o.panes.location?.('explorer') === 'window' }
@@ -365,7 +362,7 @@ export class ExplorerStatusService extends SnapshotStore<ExplorerStatusSnapshot>
       for (const key of keys) {
         if (this.views.has(key)) continue
         const first = this.members(key)[0]
-        if (first !== undefined) this.views.set(key, new ServerView(first, this.o.live, this.owner(key, first), () => this.changed(), this.o.agent ?? false))
+        if (first !== undefined) this.views.set(key, new ServerView(first, this.o.live, this.owner(key, first), () => this.changed()))
       }
     }
     this.changed()

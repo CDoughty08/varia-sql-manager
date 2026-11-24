@@ -1,5 +1,5 @@
-// SQL Server Agent's Job Activity Monitor against the fake backend's jobs (tests/fixtures/backend.mjs, VARIA_TEST_BACKEND=workbench;
-// the smoke runs open the release gate): the Agent node's menu opens one live document per connection listing the jobs with
+// SQL Server Agent's Job Activity Monitor against the fake backend's jobs (tests/fixtures/backend.mjs, VARIA_TEST_BACKEND=workbench):
+// the Agent node's menu opens one live document per connection listing the jobs with
 // tiles and tones, the expanded Jobs folder's rows show their state chips (AG-12), list a job created elsewhere without Refresh
 // and end their view when collapsed, a view chip and Clear filters narrow and restore the list through live.update, two selected jobs get Start
 // as one request each with a result line per job, the status bar follows the newest started job to its outcome, the Last run

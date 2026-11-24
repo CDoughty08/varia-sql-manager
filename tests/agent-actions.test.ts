@@ -17,18 +17,12 @@ afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 const agent = (facts: Partial<NonNullable<ActionTarget['agent']>> = {}, target: Partial<ActionTarget> = {}): ActionTarget => ({ kind: 'agent', engine: 'box', agent: { windowsClient: true, ...facts }, ...target })
 const service = (target: ActionTarget) => { const state = actionMenuState(target); return [state.startAgent, state.stopAgent, state.restartAgent] }
 
-describe('the release gate', () => {
-  it('registers no Agent command without VARIA_AGENT_PREVIEW=1, so the palette offers none', () => {
+describe('no release gate (AG-9)', () => {
+  it('registers the Agent job and service verbs with no environment variable set, so the palette offers them', () => {
     const ids = ['explorer.startJob', 'explorer.stopJob', 'explorer.startAgent', 'explorer.stopAgent', 'explorer.restartAgent'] as const
-    const registered = (agentEnabled: boolean) => {
-      const commands = new CommandService()
-      const contribution = actionsContribution({ commands } as never, { agentEnabled })
-      const has = ids.map(id => commands.has(id))
-      contribution.dispose()
-      return has
-    }
-    expect(registered(false)).toEqual(ids.map(() => false))
-    expect(registered(true)).toEqual(ids.map(() => true))
+    const commands = new CommandService()
+    const contribution = actionsContribution({ commands } as never)
+    try { expect(ids.map(id => commands.has(id))).toEqual(ids.map(() => true)) } finally { contribution.dispose() }
   })
 })
 

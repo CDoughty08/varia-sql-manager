@@ -293,9 +293,9 @@ keys it uses are listed below.
 | New Database… | `explorer.newDatabase` | — | — | — | `backendReady && (explorerSelectionFolder == 'databases' \|\| explorerSelectionKind == 'database') && explorerSelectionServerEngine == 'box'` | Object Explorer context menu › New Database… |
 | New Database… (not in the palette) | `explorer.newDatabaseOnDatabase` | — | — | — | `backendReady && (explorerSelectionFolder == 'databases' \|\| explorerSelectionKind == 'database') && explorerSelectionServerEngine == 'box'` | Object Explorer context menu › New Database… |
 | New Table… | `explorer.newTable` | — | — | — | `backendReady && explorerSelectionFolder == 'tables' && !documentBusy` | Object Explorer context menu › New › Table… |
-| New Credential… | `agent.newCredential` | — | — | — | `agentEnabled && backendReady && (explorerSelectionFolder == 'credentials' \|\| explorerSelectionKind == 'credential')` | Object Explorer context menu › New Credential… |
-| Save Credential | `credential.save` | — | — | — | `agentEnabled && backendReady && activeDocumentIsCredential` | — |
-| Reload Credential | `credential.reload` | — | — | — | `agentEnabled && backendReady && activeDocumentIsCredential` | — |
+| New Credential… | `agent.newCredential` | — | — | — | `backendReady && (explorerSelectionFolder == 'credentials' \|\| explorerSelectionKind == 'credential')` | Object Explorer context menu › New Credential… |
+| Save Credential | `credential.save` | — | — | — | `backendReady && activeDocumentIsCredential` | — |
+| Reload Credential | `credential.reload` | — | — | — | `backendReady && activeDocumentIsCredential` | — |
 | Script as CREATE to New Query Editor Window (not in the palette) | `explorer.scriptCreateToNewQuery` | — | — | — | `backendReady && explorerScriptCreate == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › CREATE To › New Query Editor Window |
 | Script as CREATE to File… (not in the palette) | `explorer.scriptCreateToFile` | — | — | — | `backendReady && explorerScriptCreate == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › CREATE To › File… |
 | Script as CREATE to Clipboard (not in the palette) | `explorer.scriptCreateToClipboard` | — | — | — | `backendReady && explorerScriptCreate == 'enabled'` | Object Explorer context menu › Script … as › CREATE To › Clipboard |
@@ -436,52 +436,52 @@ keys it uses are listed below.
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
-| Job Activity Monitor | `agent.jobActivity` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › Job Activity Monitor |
-| Refresh Jobs | `agent.refreshJobs` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
-| Start Jobs | `agent.startJobs` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
-| Stop Jobs | `agent.stopJobs` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
-| Enable Jobs | `agent.enableJobs` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
-| Disable Jobs | `agent.disableJobs` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
-| Change Job Owner… | `agent.changeJobOwner` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
-| Attach Schedule to Jobs… | `agent.attachJobSchedule` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
-| Open Job… | `agent.openJob` | Enter (`activeDocumentIsJobActivity && outputGridFocus`) | Enter (`activeDocumentIsJobActivity && outputGridFocus`) | ↩ (`activeDocumentIsJobActivity && outputGridFocus`) | `agentEnabled && backendReady && hasConnection` | — |
-| New Job… | `agent.newJob` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › New Job… |
-| Save Job | `agentJob.save` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentJob` | — |
-| Start Job | `agentJob.start` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentJob` | — |
-| Start Job at Step… | `agentJob.startAtStep` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentJob` | — |
-| Stop Job | `agentJob.stop` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentJob` | — |
-| Reload Job | `agentJob.reload` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentJob` | — |
-| New Alert… | `agent.newAlert` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › New Alert… |
-| Alert… (not in the palette) | `agent.newAlertOnAgent` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › New › Alert… |
-| Open Alert… | `agent.openAlert` | — | — | — | `agentEnabled && backendReady && hasConnection` | — |
-| Add Recommended Alerts… | `agent.addRecommendedAlerts` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › Add Recommended Alerts… |
-| Save Alert | `agentAlert.save` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentAlert` | — |
-| Reload Alert | `agentAlert.reload` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentAlert` | — |
-| New Operator… | `agent.newOperator` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › New Operator… |
-| Operator… (not in the palette) | `agent.newOperatorOnAgent` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › New › Operator… |
-| Open Operator… | `agent.openOperator` | — | — | — | `agentEnabled && backendReady && hasConnection` | — |
-| Operators and Notifications… | `agent.operators` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › Operators and Notifications… |
-| Save Operator | `agentOperator.save` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentOperator` | — |
-| Reload Operator | `agentOperator.reload` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentOperator` | — |
-| Send Test E-mail | `agentOperator.sendTest` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentOperator` | — |
-| Save Notifications | `agentOperators.save` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentOperators` | — |
-| Reload Notifications | `agentOperators.reload` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentOperators` | — |
-| New Proxy… | `agent.newProxy` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › New Proxy… |
-| Proxy… (not in the palette) | `agent.newProxyOnAgent` | — | — | — | `agentEnabled && backendReady && explorerSelectionKind == 'agent'` | Object Explorer context menu › New › Proxy… |
-| Save Proxy | `agentProxy.save` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentProxy` | — |
-| Reload Proxy | `agentProxy.reload` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentProxy` | — |
-| View History | `agent.viewHistory` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › View History |
-| Refresh History | `agent.refreshHistory` | — | — | — | `agentEnabled && backendReady && activeDocumentIsLogViewer` | — |
-| Delete History… | `agent.deleteHistory` | — | — | — | `agentEnabled && backendReady && activeDocumentIsLogViewer` | — |
-| View Agent Log | `agent.viewAgentLog` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › View Agent Log |
-| Recycle Agent Error Log… | `agent.recycleErrorLog` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › Recycle |
-| Manage Schedules | `agent.schedules` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › Manage Schedules |
-| New Schedule… | `agent.newSchedule` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › New › Schedule… |
-| Job… (not in the palette) | `agent.newJobOnAgent` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › New › Job… |
-| Save Schedule | `agentSchedules.save` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentSchedules` | — |
-| Refresh Schedules | `agentSchedules.refresh` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentSchedules` | — |
-| Delete Schedule | `agentSchedules.delete` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentSchedules` | — |
-| Create Job Like This… | `agent.createJobLike` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › Create Job Like This… |
+| Job Activity Monitor | `agent.jobActivity` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › Job Activity Monitor |
+| Refresh Jobs | `agent.refreshJobs` | — | — | — | `backendReady && activeDocumentIsJobActivity` | — |
+| Start Jobs | `agent.startJobs` | — | — | — | `backendReady && activeDocumentIsJobActivity` | — |
+| Stop Jobs | `agent.stopJobs` | — | — | — | `backendReady && activeDocumentIsJobActivity` | — |
+| Enable Jobs | `agent.enableJobs` | — | — | — | `backendReady && activeDocumentIsJobActivity` | — |
+| Disable Jobs | `agent.disableJobs` | — | — | — | `backendReady && activeDocumentIsJobActivity` | — |
+| Change Job Owner… | `agent.changeJobOwner` | — | — | — | `backendReady && activeDocumentIsJobActivity` | — |
+| Attach Schedule to Jobs… | `agent.attachJobSchedule` | — | — | — | `backendReady && activeDocumentIsJobActivity` | — |
+| Open Job… | `agent.openJob` | Enter (`activeDocumentIsJobActivity && outputGridFocus`) | Enter (`activeDocumentIsJobActivity && outputGridFocus`) | ↩ (`activeDocumentIsJobActivity && outputGridFocus`) | `backendReady && hasConnection` | — |
+| New Job… | `agent.newJob` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › New Job… |
+| Save Job | `agentJob.save` | — | — | — | `backendReady && activeDocumentIsAgentJob` | — |
+| Start Job | `agentJob.start` | — | — | — | `backendReady && activeDocumentIsAgentJob` | — |
+| Start Job at Step… | `agentJob.startAtStep` | — | — | — | `backendReady && activeDocumentIsAgentJob` | — |
+| Stop Job | `agentJob.stop` | — | — | — | `backendReady && activeDocumentIsAgentJob` | — |
+| Reload Job | `agentJob.reload` | — | — | — | `backendReady && activeDocumentIsAgentJob` | — |
+| New Alert… | `agent.newAlert` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › New Alert… |
+| Alert… (not in the palette) | `agent.newAlertOnAgent` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › New › Alert… |
+| Open Alert… | `agent.openAlert` | — | — | — | `backendReady && hasConnection` | — |
+| Add Recommended Alerts… | `agent.addRecommendedAlerts` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › Add Recommended Alerts… |
+| Save Alert | `agentAlert.save` | — | — | — | `backendReady && activeDocumentIsAgentAlert` | — |
+| Reload Alert | `agentAlert.reload` | — | — | — | `backendReady && activeDocumentIsAgentAlert` | — |
+| New Operator… | `agent.newOperator` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › New Operator… |
+| Operator… (not in the palette) | `agent.newOperatorOnAgent` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › New › Operator… |
+| Open Operator… | `agent.openOperator` | — | — | — | `backendReady && hasConnection` | — |
+| Operators and Notifications… | `agent.operators` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › Operators and Notifications… |
+| Save Operator | `agentOperator.save` | — | — | — | `backendReady && activeDocumentIsAgentOperator` | — |
+| Reload Operator | `agentOperator.reload` | — | — | — | `backendReady && activeDocumentIsAgentOperator` | — |
+| Send Test E-mail | `agentOperator.sendTest` | — | — | — | `backendReady && activeDocumentIsAgentOperator` | — |
+| Save Notifications | `agentOperators.save` | — | — | — | `backendReady && activeDocumentIsAgentOperators` | — |
+| Reload Notifications | `agentOperators.reload` | — | — | — | `backendReady && activeDocumentIsAgentOperators` | — |
+| New Proxy… | `agent.newProxy` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › New Proxy… |
+| Proxy… (not in the palette) | `agent.newProxyOnAgent` | — | — | — | `backendReady && explorerSelectionKind == 'agent'` | Object Explorer context menu › New › Proxy… |
+| Save Proxy | `agentProxy.save` | — | — | — | `backendReady && activeDocumentIsAgentProxy` | — |
+| Reload Proxy | `agentProxy.reload` | — | — | — | `backendReady && activeDocumentIsAgentProxy` | — |
+| View History | `agent.viewHistory` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › View History |
+| Refresh History | `agent.refreshHistory` | — | — | — | `backendReady && activeDocumentIsLogViewer` | — |
+| Delete History… | `agent.deleteHistory` | — | — | — | `backendReady && activeDocumentIsLogViewer` | — |
+| View Agent Log | `agent.viewAgentLog` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › View Agent Log |
+| Recycle Agent Error Log… | `agent.recycleErrorLog` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › Recycle |
+| Manage Schedules | `agent.schedules` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › Manage Schedules |
+| New Schedule… | `agent.newSchedule` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › New › Schedule… |
+| Job… (not in the palette) | `agent.newJobOnAgent` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › New › Job… |
+| Save Schedule | `agentSchedules.save` | — | — | — | `backendReady && activeDocumentIsAgentSchedules` | — |
+| Refresh Schedules | `agentSchedules.refresh` | — | — | — | `backendReady && activeDocumentIsAgentSchedules` | — |
+| Delete Schedule | `agentSchedules.delete` | — | — | — | `backendReady && activeDocumentIsAgentSchedules` | — |
+| Create Job Like This… | `agent.createJobLike` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › Create Job Like This… |
 
 ### BigQuery
 
@@ -783,9 +783,9 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `0_connect` | **R**econnect… | `connection.reconnect` | `explorerServerLost` |
 | `0_connect` | Rem**o**ve from Explorer | `connection.removeFromExplorer` | `explorerServerLost` |
 | `0_connect` | En**v**ironment… | `connection.environment` | `explorerNode == 'server' && !explorerServerLost` |
-| `0_new` | **N**ew › | Submenu: Object Explorer context menu › New | `(explorerNode == 'folder' && (explorerFolder == 'tables' \|\| (explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance') && !explorerServerLost))) \|\| (explorerNode == 'agent' && agentEnabled)` |
+| `0_new` | **N**ew › | Submenu: Object Explorer context menu › New | `(explorerNode == 'folder' && (explorerFolder == 'tables' \|\| (explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance') && !explorerServerLost))) \|\| explorerNode == 'agent'` |
 | `0_new` | **N**ew Alert… | `agent.newAlert` | `((explorerNode == 'folder' && explorerFolder == 'agentAlerts') \|\| explorerNode == 'agentAlert') && !explorerServerLost` |
-| `0_new` | **N**ew Credential… | `agent.newCredential` | `agentEnabled && ((explorerNode == 'folder' && explorerFolder == 'credentials') \|\| explorerNode == 'credential') && !explorerServerLost && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance')` |
+| `0_new` | **N**ew Credential… | `agent.newCredential` | `((explorerNode == 'folder' && explorerFolder == 'credentials') \|\| explorerNode == 'credential') && !explorerServerLost && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance')` |
 | `0_new` | **N**ew Database… | `explorer.newDatabase` | `explorerNode == 'folder' && explorerFolder == 'databases' && !explorerServerLost && explorerServerEngine == 'box'` |
 | `0_new` | **N**ew Job… | `agent.newJob` | `((explorerNode == 'folder' && explorerFolder == 'agentJobs') \|\| explorerNode == 'agentJob') && !explorerServerLost` |
 | `0_new` | **N**ew Login… | `explorer.newLogin` | `((explorerNode == 'folder' && explorerFolder == 'logins') \|\| explorerNode == 'login') && !explorerServerLost && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance')` |
@@ -1222,7 +1222,7 @@ Right-click the execution plan's Properties pane, or press Shift+F10 or the cont
 | `1_copy` | **C**opy | `plan.copyProperties` | Always |
 | `1_copy` | Copy **V**alue | `plan.copyPropertyValues` | Always |
 
-## Context keys (202)
+## Context keys (201)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1234,7 +1234,6 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `isMac` | boolean | static | The app runs on macOS. |
 | `isWindows` | boolean | static | The app runs on Windows. |
 | `isLinux` | boolean | static | The app runs on Linux or another platform treated like it. |
-| `agentEnabled` | boolean | static | SQL Server Agent's surfaces show: main was started with `VARIA_AGENT_PREVIEW=1` (the release gate until 0.11.0). While it is false, Object Explorer shows no SQL Server Agent node and every Agent command, menu item and document is left out. |
 | `editorFocus` | boolean | focus | Focus is in the query editor, including its find widget. |
 | `editorTextFocus` | boolean | focus | The query editor's text has focus. |
 | `inputFocus` | boolean | focus | Focus is on an input, text area, select, or editable element other than the editor text. The find widget's inputs count. |
