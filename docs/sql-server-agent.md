@@ -49,8 +49,8 @@ alerts, operators and who is notified, behind the same gate until 0.11.0.
   in one background view per connection: **Running · step n/m** (Executing, Waiting for worker thread, Performing
   completion actions), **Between retries** or **Suspended**, otherwise **Failed** when the last run failed; a job the list
   reads as disabled is dimmed with ", disabled". The chip's words join the row's accessible name and tooltip. Collapsing or
-  hiding the folder ends the view; with Agent stopped or Agent XPs off only **Failed** stays, as Running and the retry
-  states would be out of date. While the Agent node
+  hiding the folder ends the view; with Agent stopped or Agent XPs off (the list then stops on `AGENT_DISABLED`)
+  the last read's **Failed** chips and disabled jobs stay, and Running and the retry states go, as they would be out of date. While the Agent node
   is expanded and shown, the `agent.tree` source reads Agent XPs and the service state (explorer.agentService's text) and,
   for each of `sysjobs_view`, `sysalerts`, `sysoperators`, `sysproxies` and `sysproxysubsystem`, a row count and a checksum
   of the columns the tree shows, each table only where `HAS_PERMS_BY_NAME` lets the login read it. When Agent XPs or the

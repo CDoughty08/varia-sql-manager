@@ -424,21 +424,32 @@ describe('AgentTreeLive: job rows\' chips from agent.jobs', () => {
     await settle()
     expect(rowStatus(undefined, f.explorer.node(f.find('Nightly'))!, f.tree)).toMatchObject({ words: 'Last run failed' })
   })
-  it('drops the chips that say what Agent is doing while Agent is stopped or its XPs off, and reads again once Agent can run jobs', async () => {
+  it('keeps only what stays true while Agent is stopped or its XPs off, and reads again once Agent can run jobs', async () => {
     const f = fixture()
     f.connect()
     await settle()
     await f.open('SQL Server Agent', 'Jobs')
     const [view] = f.viewsOf('agent.jobs')
-    view.jobs([job(jobA, { status: 'Executing', lastOutcome: 'Failed' })], { agentXps: 0, serviceState: 1 })
+    view.jobs([job(jobA, { status: 'Executing', step: 'Step 1 of 2 · Load', lastOutcome: 'Failed' }), job(jobB, { lastOutcome: 'Failed', enabled: 'No' })])
     await settle()
-    expect(f.tree.job(cid(1), jobA)?.chips.map(chip => chip.label)).toEqual(['Failed'])
-    // The list stopped on AGENT_DISABLED; the first service sample that reads Agent usable asks for a read at once.
+    expect(f.tree.job(cid(1), jobA)?.chips.map(chip => chip.label)).toEqual(['Running · step 1/2'])
+    // Agent stops: its service sample reads it stopped, and the list's next sample stops on AGENT_DISABLED (15281), as the
+    // real backend's does. The last rows stay for a failed last run and a disabled job, not for what was running.
+    view.emit([{ probe: 'agent.jobs.service', costMs: 1, effectiveIntervalMs: 10_000, status: [{ id: 'agentXps', value: 0 }, { id: 'serviceState', value: 1 }] }] as LiveTick['samples'])
     view.set({ probes: { ...view.snapshot.probes, 'agent.jobs.list': { state: 'failing', intervalMs: 5000, effectiveIntervalMs: 5000, error: { probe: 'agent.jobs.list', code: 'AGENT_DISABLED', message: 'Agent XPs is off.', retryInMs: 5000, terminal: true } } } })
     await settle()
-    expect(f.tree.job(cid(1), jobA)).toBeUndefined()
+    expect(f.tree.job(cid(1), jobA)?.chips.map(chip => chip.label)).toEqual(['Failed'])
+    expect(f.tree.job(cid(1), jobB)).toMatchObject({ words: 'Last run failed', enabled: false })
+    // The list stopped on AGENT_DISABLED even before a service sample says so: what was running is not shown either.
     view.emit([{ probe: 'agent.jobs.service', costMs: 1, effectiveIntervalMs: 10_000, status: [{ id: 'agentXps', value: 1 }, { id: 'serviceState', value: 4 }] }] as LiveTick['samples'])
+    await settle()
+    expect(f.tree.job(cid(1), jobA)?.chips.map(chip => chip.label)).toEqual(['Failed'])
+    // That service sample, reading Agent usable, asked the stopped list for a read at once.
     expect(view.refreshes).toBe(1)
+    // Another failure is not Agent's stop: no rows are shown for it.
+    view.set({ probes: { ...view.snapshot.probes, 'agent.jobs.list': { state: 'failing', intervalMs: 5000, effectiveIntervalMs: 5000, error: { probe: 'agent.jobs.list', code: 'TIMEOUT', message: 'It timed out.', retryInMs: 5000, terminal: false } } } })
+    await settle()
+    expect(f.tree.job(cid(1), jobA)).toBeUndefined()
   })
   it('shows nothing of an earlier subscription once the view subscribes again', async () => {
     const f = fixture()

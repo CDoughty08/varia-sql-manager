@@ -386,9 +386,13 @@ export class AgentTreeLive extends SnapshotStore<AgentTreeSnapshot> implements D
         const handle = this.views.get('jobs:' + connectionId)?.handle
         const snapshot = handle?.getSnapshot()
         const live = (snapshot?.status === 'live' || snapshot?.status === 'paused') && snapshot.subscriptionId === read.subscriptionId
-        if (!read.rows || !live || !usable.has(snapshot.probes[agentJobsProbe]?.state ?? '')) continue
+        const list = snapshot?.probes[agentJobsProbe]
+        // A list stopped because Agent XPs went off (Agent's own stop sets it to 0) keeps its last rows for what stays true
+        // with Agent stopped (a failed last run, a disabled job), not what it was doing.
+        const disabled = list?.state === 'failing' && list.error?.code === 'AGENT_DISABLED'
+        if (!read.rows || !live || !(usable.has(list?.state ?? '') || disabled)) continue
         const availability = agentAvailability(read.service)
-        const current = availability === 'running' || availability === 'pending'
+        const current = !disabled && (availability === 'running' || availability === 'pending')
         const before = previous.get(connectionId)
         const statuses = new Map<string, AgentJobRowStatus>()
         let same = !!before
