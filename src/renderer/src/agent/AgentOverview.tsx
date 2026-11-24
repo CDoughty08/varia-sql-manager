@@ -34,7 +34,7 @@ function Check({ check, documentId, service }: { readonly check: OverviewCheck; 
     <span className="agent-check-fix">{check.fix && <button type="button" onClick={() => void service.fix(documentId, check.fix!.action)}>{check.fix.label}</button>}</span>
     <span className="agent-check-detail">{namesOnly ? null : check.detail}
       {check.objects.length > 0 && <span className="agent-check-objects" role="list" aria-label={`${check.title}: objects`}>
-        {check.objects.slice(0, shownObjects).map(object => <span key={`${object.kind}:${object.name}`} role="listitem">
+        {check.objects.slice(0, shownObjects).map((object, at) => <span key={`${object.kind}:${at}:${object.name}`} role="listitem">
           <button type="button" className="link-button agent-check-object" title={object.kind === 'job' ? `Open the job ${object.name}` : `Open Schedules (${object.name})`}
             onClick={() => service.openObject(documentId, object)}><Icon name={object.kind === 'job' ? 'agent-job' : 'agent-schedule'} />{object.name}</button></span>)}
       </span>}

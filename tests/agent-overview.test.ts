@@ -172,6 +172,8 @@ describe("the Agent overview's checks", () => {
   it('names unused schedules (sysadmin) with Open Schedules', () => {
     const check = schedulesCheck(facts({ schedules: [{ id: 1, name: 'Nightly 02:30', enabled: true, jobs: 1 }, { id: 2, name: 'Quarter end', enabled: true, jobs: 0 }] }))
     expect(check).toMatchObject({ severity: 'info', title: '1 schedule is unused', detail: 'Quarter end.', objects: [{ kind: 'schedule', name: 'Quarter end' }], fix: { action: { kind: 'schedules' } } })
+    // Schedule names need not be unique (msdb's 14371): two unused schedules of one name are two objects, keyed apart by position in the view.
+    expect(schedulesCheck(facts({ schedules: [{ id: 2, name: 'Daily', enabled: true, jobs: 0 }, { id: 3, name: 'Daily', enabled: true, jobs: 0 }] })).objects).toEqual([{ kind: 'schedule', name: 'Daily' }, { kind: 'schedule', name: 'Daily' }])
     expect(schedulesCheck(facts({ reads: { ...allRead, schedules: { state: 'role' } } })).severity).toBe('unread')
   })
 
