@@ -1414,7 +1414,9 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
    colour, or the warning colour over half of it (GridView.paintSize). */
 .rg-rn { isolation: isolate; }
 .rg-rn::before { content: ''; position: absolute; top: 0; bottom: 0; left: 0; z-index: -1; width: calc(var(--rg-rs, 0) * 100%); background: var(--varia-charts-blue); opacity: 0.18; pointer-events: none; }
-.rg-rn[data-large]::before { background: var(--varia-warningForeground); opacity: 0.26; box-shadow: inset 2px 0 0 var(--varia-warningForeground); }
+.rg-rn[data-large]::before { background: var(--varia-warningForeground); opacity: 0.22; }
+/* Dockview's 4 px sash overlaps a docked pane's outer 2 px, so 4 px inset leaves a crisp 2 px left warning edge visible. */
+.rg:not([data-gutter='diff']) .rg-rn[data-large] { box-shadow: inset 4px 0 0 var(--varia-warningForeground); }
 @media (forced-colors: active) { .rg-rn[style*='--rg-rs']::before { background: Highlight; opacity: 0.4; forced-color-adjust: none; } }
 .rg-rn.sel { background: var(--varia-resultsGrid-headerSelectionBackground); color: var(--varia-resultsGrid-headerSelectionForeground); }
 /* A transposed grid (GridView's `transposed`): the frozen first column names the result's columns, each name cell with a
@@ -1430,6 +1432,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .rg-rn.sel .rg-ct, .rg-rn.sel .rg-cs, .rg-rn.sel .rg-cf { color: inherit; }
 .rg-rn.hit:not(.sel), .rg-rn.cur:not(.sel) { background: var(--varia-banner-warningBackground); }
 .rg-rn.cur { box-shadow: inset 0 -2px 0 var(--varia-warningForeground); }
+.rg:not([data-gutter='diff']) .rg-rn.cur[data-large] { box-shadow: inset 4px 0 0 var(--varia-warningForeground), inset 0 -2px 0 var(--varia-warningForeground); }
 .rg-rn.dim { opacity: 0.4; }
 .rg-bands { position: sticky; top: 22px; height: 0; pointer-events: none; }
 .rg-band { position: absolute; top: 0; }
@@ -1446,7 +1449,8 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .rg-ch.hl:not(.sel) { color: var(--varia-resultsGrid-highlightRowNumberForeground); }
 .rg[data-orientation='transposed'] .rg-ch { isolation: isolate; }
 .rg[data-orientation='transposed'] .rg-ch::before { content: ''; position: absolute; top: 0; bottom: 0; left: 0; z-index: -1; width: calc(var(--rg-rs, 0) * 100%); background: var(--varia-charts-blue); opacity: 0.18; pointer-events: none; }
-.rg[data-orientation='transposed'] .rg-ch[data-large]::before { background: var(--varia-warningForeground); opacity: 0.26; box-shadow: inset 0 2px 0 var(--varia-warningForeground); }
+.rg[data-orientation='transposed'] .rg-ch[data-large]::before { background: var(--varia-warningForeground); opacity: 0.22; }
+.rg[data-orientation='transposed'] .rg-ch[data-large] { box-shadow: inset 0 2px 0 var(--varia-warningForeground); }
 @media (forced-colors: active) {
   .rg[data-orientation='transposed'] .rg-ch[style*='--rg-rs']::before { background: Highlight; opacity: 0.4; forced-color-adjust: none; }
   /* Forced colors drop the tints: a highlighted row's header gets a bar, as a highlighted row's number does, and a matched name an outline. */
