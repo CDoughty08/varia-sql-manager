@@ -1,7 +1,9 @@
 import { memo, useCallback, useLayoutEffect, useRef, useSyncExternalStore } from 'react'
-import type { MessageEntry } from '../../../shared/contracts'
+import { qualifiedJobId } from '../../../shared/bigquery/history'
+import type { BigQueryJobSummary, MessageEntry } from '../../../shared/contracts'
 import type { TabResults } from './ResultsService'
-import { useWorkbench } from '../core/WorkbenchContext'
+import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
+import { bigQueryProject } from '../bigquery/JobHistoryService'
 import type { Workbench } from '../core/workbench'
 import Icon from '../Icon'
 
@@ -21,6 +23,26 @@ const Message = memo(function Message({ entry, tabId, queryId, index, canReveal,
     </button>}
   </div>
 })
+
+/** The connection Show in Job History opens on: the tab's, only while it is still on the job's project (Change Connection
+ *  keeps the results), since another project's Job History would not list the job. */
+export function jobLinkConnection(project: string, connectionId: string | undefined, connections: readonly Parameters<typeof bigQueryProject>[0][]): string | undefined {
+  return connectionId && bigQueryProject(connections.find(item => item?.id === connectionId)) === project ? connectionId : undefined
+}
+
+/** A BigQuery query's job (its summary's), named after the messages with a link that opens Job History filtered to it. */
+function JobLine({ job, connectionId, commands }: { readonly job: BigQueryJobSummary; readonly connectionId?: string } & Pick<Workbench, 'commands'>) {
+  const id = qualifiedJobId(job.project, job.jobId, job.location)
+  const { connections } = useWorkbench()
+  const linked = jobLinkConnection(job.project, connectionId, useServiceSnapshot(connections))
+  return <div className="message-entry message-job-line">
+    <pre className="msg">Job ID: {id}</pre>
+    {linked && <button type="button" className="message-source-link" title="Open Job History filtered to this job"
+      onClick={() => void commands.execute('bigquery.jobHistory', { bigQueryJobs: { connectionId: linked, jobs: [{ jobId: job.jobId, ...job.location ? { location: job.location } : {} }] } }, 'toolbar')}>
+      <Icon name="history" /><span>Show in Job History</span>
+    </button>}
+  </div>
+}
 
 /** What Messages show after the last message: SSMS's line when SQL Server sent nothing (Varia's own notices do not
  *  count), then the completion time. */
@@ -65,6 +87,7 @@ export default function MessagesView({ id, tabId, tab, firstError }: { id?: stri
     onScroll={event => { const element = event.currentTarget; atBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight <= 4 }}>
     {tab.messages.map((entry, index) => <Message key={index} entry={entry} index={index} tabId={tabId} queryId={tab.queryId} commands={commands} gestures={gestures}
       canReveal={entry.kind === 'error' && queries.sourceLine(tabId, tab.queryId, entry.line) !== undefined} />)}
+    {tab.status !== 'running' && tab.summary?.job && <JobLine job={tab.summary.job} connectionId={documents.get(tabId)?.connectionId} commands={commands} />}
     {tail.map((line, index) => <pre key={'tail' + index} className="msg">{line || ' '}</pre>)}
   </div>
 }

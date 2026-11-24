@@ -50,7 +50,7 @@ import { toPlatform } from '../shared/commands/keybindings'
 import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWriteSchema, retentionDays } from './recovery-store'
 import { migrateProfile, profileFiles } from './profile-migration'
 import { JobRecordStore, noteJobConnection, profileDeleteJobs } from './job-records'
-import { cancelJobsResultSchema, jobKeySchema, jobLimits, restoredJobs, type JobRecord, type RecordedJobsCancel } from '../shared/bigquery/jobs'
+import { cancelJobsResultSchema, jobKeySchema, jobLimits, jobsByProject, restoredJobs, type JobRecord, type RecordedJobsCancel } from '../shared/bigquery/jobs'
 import { connectionKey } from '../shared/connections'
 import { encodeReloadSession, SessionStore, sessionWriteSchema, type SessionInput, type SessionRecord, type SessionRecordDocument } from './session-store'
 import { sessionLimits, type ReloadPins, type RestoredDocument, type RestoredSession, type SessionWrite } from '../shared/files/session'
@@ -1584,12 +1584,15 @@ app.whenReady().then(async () => {
     const one = running.length === 1
     const { response } = await pageDialog((window, signal) => dialog.showMessageBox(window, {
       type: 'question', title: 'BigQuery jobs without a tab', message: one ? '1 BigQuery job from the last session has no tab.' : `${running.length} BigQuery jobs from the last session have no tab.`,
-      detail: `${shown.join('\n')}\n\nCancel Jobs stops ${one ? 'it' : 'them'} in BigQuery. Keep leaves ${one ? 'it' : 'them'} running; BigQuery's job history lists ${one ? 'it' : 'them'}, and a kept job's session, with its temporary tables billed as storage, ends 24 hours after the job finishes.`,
-      buttons: [one ? 'Cancel Job' : 'Cancel Jobs', 'Keep'], defaultId: 1, cancelId: 1, noLink: true, signal
+      detail: `${shown.join('\n')}\n\nCancel Jobs stops ${one ? 'it' : 'them'} in BigQuery. Show in Job History lists ${one ? 'it' : 'them'} in Job History, where Re-attach opens ${one ? 'it' : 'each'} in a new tab. Keep leaves ${one ? 'it' : 'them'} running; Job History lists ${one ? 'it' : 'them'}, and a kept job's session, with its temporary tables billed as storage, ends 24 hours after the job finishes.`,
+      buttons: [one ? 'Cancel Job' : 'Cancel Jobs', 'Show in Job History', 'Keep'], defaultId: 2, cancelId: 2, noLink: true, signal
     }), { response: -1, checkboxChecked: false }, true)
     // A box a reload, crash or close took away decided nothing: the records stay for the next page's review.
     if (response < 0) return null
     const jobIds = running.map(record => record.jobId)
+    // Show in Job History hands the jobs (by project) to Job History, which waits for a connection when it must; their
+    // records go as Keep's do, since the jobs are the user's to find there now.
+    if (response === 1) { jobRecords.dropJobs(jobIds); return { answer: 'show' as const, jobIds, show: jobsByProject(running) } }
     if (response !== 0) { jobRecords.dropJobs(jobIds); return { answer: 'keep' as const, jobIds } }
     const cancel = await cancelRecordedJobs(running)
     // What could not be cancelled stays in BigQuery's job history; no tab will ask about it again.

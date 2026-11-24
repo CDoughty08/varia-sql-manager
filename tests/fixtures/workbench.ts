@@ -100,6 +100,8 @@ import { agentObjectsContribution } from '../../src/renderer/src/contributions/a
 import { SchedulesService } from '../../src/renderer/src/agent/SchedulesService'
 import { ProxyDocumentService } from '../../src/renderer/src/agent/ProxyDocumentService'
 import { CredentialDocumentService } from '../../src/renderer/src/agent/CredentialDocumentService'
+import { bigQueryJobsContribution } from '../../src/renderer/src/contributions/bigquery-jobs'
+import { JobHistoryService } from '../../src/renderer/src/bigquery/JobHistoryService'
 import { agentProxyContribution } from '../../src/renderer/src/contributions/agent-proxy'
 import { ObjectSearchService } from '../../src/renderer/src/search/ObjectSearchService'
 import { fakeLive } from './live-handle'
@@ -333,6 +335,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     runRole: vi.fn<VariaApi['runRole']>(async () => ({ ok: true, value: undefined })),
     clearEntraTokenCache: vi.fn<VariaApi['clearEntraTokenCache']>(async () => ({ ok: true, value: true })),
     writeClipboardText: vi.fn<VariaApi['writeClipboardText']>(async () => ({ ok: true, value: undefined })),
+    bigQueryJob: vi.fn<VariaApi['bigQueryJob']>(async () => ({ ok: false, error: 'Not in this fixture.', code: 'BACKEND_ERROR' })),
+    bigQueryCancelJob: vi.fn<VariaApi['bigQueryCancelJob']>(async () => ({ ok: true, value: { cancelled: true } })),
     // The Activity Monitor's session actions: an ended session and an untried kill unless a test says otherwise.
     activityDetails: vi.fn<VariaApi['activityDetails']>(async params => ({ ok: true, value: { sessionId: params.sessionId, state: 'ended', elapsedMs: 1 } })),
     activityKill: vi.fn<VariaApi['activityKill']>(async () => ({ ok: true, value: { results: [], elapsedMs: 1 } })),
@@ -454,6 +458,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const activity = new ActivityMonitorService({ api, documents, connections, live: liveViews, targetIdOf, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values })
   const live = fakeLive()
   const operations = new SsisOperationsService({ api, documents, panes, live, connections, settings, targetIdOf })
+  const jobHistory = new JobHistoryService({ api, documents, panes, live, connections, settings, queries, targetIdOf })
   const agentJobs = new AgentJobStatusService({ api, live, connections })
   const jobActivity = new JobActivityService({ api, documents, panes, live, connections, targetIdOf, started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt) })
   const jobDocuments = new JobDocumentService({ api, documents, files, connections, live, targetIdOf, openQuery: (sql, name, connectionId, database) => { documents.newQuery(sql, name, connectionId, database) }, ...(options.timers ? { timers: options.timers } : {}) })
@@ -504,6 +509,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     updates,
     activity: activity.context,
     ssis: operations.context,
+    jobHistory: jobHistory.context,
     activeElement
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen: options.modal })
@@ -596,6 +602,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     gestures,
     activity,
     operations,
+    jobHistory,
     jobActivity,
     logViewer,
     agentJobs,
@@ -639,6 +646,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     ssisContribution(workbench),
     activityContribution(workbench),
     agentContribution(workbench, { agentEnabled: api.agentPreview }),
+    bigQueryJobsContribution(workbench),
     agentObjectsContribution(workbench, { agentEnabled: api.agentPreview }),
     agentProxyContribution(workbench, { agentEnabled: api.agentPreview }),
     searchContribution(workbench, api),
@@ -700,6 +708,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     newDatabase.dispose()
     restore.dispose()
     operations.dispose()
+    jobHistory.dispose()
     jobActivity.dispose()
     logViewer.dispose()
     agentJobs.dispose()
@@ -762,6 +771,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     activity,
     liveViews,
     operations,
+    jobHistory,
     jobActivity,
     jobDocuments,
     alertDocuments,
