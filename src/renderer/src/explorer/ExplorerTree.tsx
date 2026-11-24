@@ -32,9 +32,11 @@ interface FollowedQuery {
  * arrows, Home and End, Page Up and Down, Enter, `*`, Numpad plus and minus, and type-ahead.
  */
 export default function ExplorerTree({ activeConnectionId, activeQueryId }: { readonly activeConnectionId?: string; readonly activeQueryId?: string }) {
-  const { explorer, commands, connections, actions: objectActions, explorerStatus, settings, menuTargets, peek, gestures, serverDrop } = useWorkbench()
+  const { explorer, commands, connections, actions: objectActions, explorerStatus, agentTree, settings, menuTargets, peek, gestures, serverDrop } = useWorkbench()
   const snapshot = useServiceSnapshot(explorer)
   const { servers: statuses } = useServiceSnapshot(explorerStatus)
+  // Job rows' chips (AG-12): subscribing renders the rows again when they change; rowStatus reads them from the service.
+  useServiceSnapshot(agentTree)
   const { explorerLoading } = useServiceSnapshot(explorer.context)
   const servers = useServiceSnapshot(connections)
   const { 'objectExplorer.pinnedServerHeadersTop': topLimit, 'objectExplorer.pinnedServerHeadersBottom': bottomLimit,
@@ -436,7 +438,7 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
             node={node} rev={node?.rev ?? 0} text={kind === RowKind.Node ? '' : explorer.rowText(rowId)} selected={rowId === selected} draggable={kind === RowKind.Node && (explorer.canInsert(rowId) || (explorer.serverPlace(rowId)?.count ?? 0) > 1 || (node?.kind === 'server' && explorer.queryTarget(rowId) !== undefined))}
             active={!!node && node.parent === 0 && node.connectionId === activeConnectionId} color={node?.parent === 0 ? accents.get(node.connectionId) : undefined} environment={node?.parent === 0 ? environments.get(node.connectionId) : undefined}
             actions={actions} menuTarget={rowTarget} renaming={renaming !== undefined && rowId === renaming}
-            status={kind === RowKind.Node && node ? rowStatus(statuses.get(node.connectionId), node) : undefined}
+            status={kind === RowKind.Node && node ? rowStatus(statuses.get(node.connectionId), node, agentTree) : undefined}
             recovery={label && recovery ? { label, run: () => act(recovery, rows) } : undefined} drop={dropAt?.end ? (index === rows.count - 1 ? 'after' : undefined) : dropAt?.rowId === rowId ? dropAt.edge : undefined} />
         })}
       </div>

@@ -155,13 +155,50 @@ export function agentChips(service: AgentServiceState | undefined, runningJobs: 
   return service?.xps === 0 ? { chips, sublabel: agentXpsSublabel } : { chips }
 }
 
+/** A job row of `agent.jobs.list` as a chip reads it: its cells' texts (Job Activity Monitor's columns, src/shared/live/catalog.ts). */
+export interface AgentJobStatusRow { readonly enabled: string | null; readonly status: string | null; readonly step: string | null; readonly lastOutcome: string | null }
+/** The job states with a chip, by `sp_help_job`'s execution status label (src/shared/agent/catalog.ts executionStatuses); Idle and
+ *  a multi-server job's untracked state have none. Running statuses carry the step, as the mock's "Running · step 2/4". */
+const agentJobStates: Readonly<Record<string, { label: string; words: string; tone: StatusTone; running: boolean }>> = {
+  'Executing': { label: 'Running', words: 'Running', tone: 'running', running: true },
+  'Waiting for worker thread': { label: 'Running', words: 'Running, waiting for a worker thread', tone: 'running', running: true },
+  'Performing completion actions': { label: 'Running', words: 'Running, performing completion actions', tone: 'running', running: true },
+  'Between retries': { label: 'Between retries', words: 'Between retries', tone: 'warning', running: false },
+  'Suspended': { label: 'Suspended', words: 'Suspended', tone: 'warning', running: false }
+}
+/** Job Activity Monitor's Step cell ("Step 2 of 4 · Rebuild", AgentJobsReader): the step, the step count when known, and its name. */
+const stepPattern = /^Step (\d+)(?: of (\d+))?(?: · ([\s\S]*))?$/
+/**
+ * A job row's live chips (AG-12), from Job Activity Monitor's own `agent.jobs` read: Running with its step ("Running · step 2/4"),
+ * Between retries or Suspended while that is its execution status, else Failed when its last run failed; and whether it is
+ * enabled (undefined when the cell is not one the read writes). What Agent is doing now is not current while Agent cannot run
+ * jobs (`live` false: stopped, Agent XPs off, or neither readable), so only the last outcome, which msdb keeps, shows then.
+ */
+export function agentJobChips(row: AgentJobStatusRow, live: boolean): { readonly chips: StatusChip[]; readonly enabled?: boolean } {
+  const chips: StatusChip[] = []
+  const state = live && row.status !== null && Object.hasOwn(agentJobStates, row.status) ? agentJobStates[row.status] : undefined
+  if (state) {
+    const step = state.running && row.step ? stepPattern.exec(row.step) : null
+    const label = step ? `${state.label} · step ${step[1]}${step[2] ? '/' + step[2] : ''}` : state.label
+    const words = step ? `${state.words}, step ${step[1]}${step[2] ? ' of ' + step[2] : ''}` : state.words
+    const title = `${row.status}${step ? `: step ${step[1]}${step[2] ? ' of ' + step[2] : ''}${step[3] ? ` (${step[3]})` : ''}` : ''}.`
+    // A still glyph, as the server's running-jobs chip: a job that never ends (a replication agent) would spin for ever.
+    chips.push({ id: 'state', tone: state.tone, label, words, title, ...state.running ? { icon: 'agent-job' as const } : {} })
+  } else if (row.lastOutcome === 'Failed') chips.push({ id: 'state', tone: 'critical', label: 'Failed', words: 'Last run failed', title: 'The job\'s last run failed.' })
+  const enabled = row.enabled === 'Yes' ? true : row.enabled === 'No' ? false : undefined
+  return enabled === undefined ? { chips } : { chips, enabled }
+}
+
 /** Every chip a database or server can show, for docs/object-explorer.md. */
-export const statusChipDocs: readonly { readonly kind: 'server' | 'database' | 'agent'; readonly chip: string; readonly tone: string; readonly when: string }[] = [
+export const statusChipDocs: readonly { readonly kind: 'server' | 'database' | 'agent' | 'agentJob'; readonly chip: string; readonly tone: string; readonly when: string }[] = [
   ...Object.entries(states).filter(([state]) => state !== '10').map(([state, value]) => ({ kind: 'database' as const, chip: value.label + (value.tone === 'running' && state !== '7' ? ' n %' : ''), tone: value.tone, when: `state ${state}${state === '6' ? ' or 10' : ''}: ${value.title}` })),
   { kind: 'database', chip: 'READ-ONLY / STANDBY', tone: 'warning', when: 'is_read_only, or is_in_standby (a log-shipping standby)' },
   { kind: 'database', chip: 'SINGLE USER / RESTRICTED USER', tone: 'warning', when: 'user_access 1 or 2' },
   { kind: 'server', chip: 'n Agent jobs running', tone: 'running', when: 'SQL Server Agent jobs of its current session that started and have not stopped (none while none runs)' },
   { kind: 'server', chip: '<group> healthy / partially healthy / not healthy', tone: 'success, warning, critical', when: 'the least healthy availability group (several: "n AGs …"); its tooltip names each group with its health and this replica\'s role' },
   ...Object.entries(agentStates).map(([state, value]) => ({ kind: 'agent' as const, chip: value.label, tone: value.tone, when: `the Agent service's state ${state}: ${value.title}` })),
-  { kind: 'agent', chip: 'n jobs running', tone: 'running', when: 'as the server\'s chip; the node\'s sublabel says "Agent XPs disabled" while that option is 0, and an unknown service state shows no chip' }
+  { kind: 'agent', chip: 'n jobs running', tone: 'running', when: 'as the server\'s chip; the node\'s sublabel says "Agent XPs disabled" while that option is 0, and an unknown service state shows no chip' },
+  { kind: 'agentJob', chip: 'Running · step n/m', tone: 'running', when: 'the job is executing, waiting for a worker thread or performing completion actions (Job Activity Monitor\'s agent.jobs read, while its Jobs folder is open); the step count where msdb gives it' },
+  { kind: 'agentJob', chip: 'Between retries / Suspended', tone: 'warning', when: 'that is the job\'s execution status' },
+  { kind: 'agentJob', chip: 'Failed', tone: 'critical', when: 'the job is not running and its last run failed. While SQL Server Agent cannot run jobs (stopped, Agent XPs off, or neither readable) only this chip shows. A job the read finds disabled, or enabled, is dimmed with the disabled badge, or not, whatever its listing said' }
 ]

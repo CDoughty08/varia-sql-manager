@@ -57,6 +57,7 @@ import { ServerDropService } from '../editor-groups/server-drop'
 import { ExplorerStatusService } from '../explorer/ExplorerStatusService'
 import { DatabaseListService } from '../services/database-list'
 import { SsisTreeProbe } from '../ssis/SsisTreeProbe'
+import { AgentTreeLive } from '../agent/AgentTreeLive'
 import { ResultSelectionService } from '../services/result-selection'
 import { PeekService } from '../explorer/PeekService'
 import { PeekTabService } from '../explorer/PeekTabService'
@@ -241,6 +242,8 @@ export interface Workbench extends Disposable {
   readonly explorerStatus: ExplorerStatusService
   /** The SSIS Catalog's live tree: one catalog probe per connection whose SSISDB node is open, reconciling what changed. */
   readonly ssisTree: SsisTreeProbe
+  /** SQL Server Agent's live tree (AG-12): the agent.tree change source while an Agent node is open, and job rows' chips while a Jobs folder is. */
+  readonly agentTree: AgentTreeLive
   /** The databases of each connected server, for the toolbar's database picker. */
   readonly databaseList: DatabaseListService
   /** The cells selected in each query's results grid. */
@@ -421,6 +424,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // A database's menu follows its live state (Take Offline greys once a sample shows it offline), not only its listing.
   const explorerRuntime = explorer.useStatus(explorerStatus)
   const ssisTree = new SsisTreeProbe({ explorer, live, settings, events, explorerVisible: { visible: () => panes.getSnapshot().explorer, subscribe: panes.subscribe, popout: () => panes.location('explorer') === 'window' } })
+  const agentTree = new AgentTreeLive({ explorer, live, settings, events, agent: api.agentPreview, explorerVisible: { visible: () => panes.getSnapshot().explorer, subscribe: panes.subscribe, popout: () => panes.location('explorer') === 'window' } })
   const gridStats = api.testMode ? new GridStats() : undefined
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values, retainedPlans)
   // A BigQuery close's note shows in the query's Messages while it stays, else as a notification (docs/bigquery.md, Sessions).
@@ -767,6 +771,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     explorer,
     explorerStatus,
     ssisTree,
+    agentTree,
     databaseList,
     resultSelection,
     settings,
@@ -871,6 +876,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       activity.dispose()
       // Before the client: its views cancel their subscriptions while the port is still there.
       ssisTree.dispose()
+      agentTree.dispose()
       explorerRuntime.dispose()
       explorerStatus.dispose()
       live.dispose()

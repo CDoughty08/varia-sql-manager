@@ -14,6 +14,7 @@ import type { ConnectionService, LiveConnection } from '../services/connections'
 import { isBigQueryConnection } from '../services/connection-availability'
 import type { PaneService } from '../services/panes'
 import type { TreeNode } from './tree-model'
+import type { AgentTreeLive } from '../agent/AgentTreeLive'
 
 /** A row's live status: its chips, and whether they stand for the row's state (a database's sublabel then gives way). */
 export interface RowStatus {
@@ -27,6 +28,8 @@ export interface RowStatus {
   readonly state?: 'unavailable' | 'readOnly'
   /** A sublabel the row shows after its name (SQL Server Agent's "Agent XPs disabled"); its words include it. */
   readonly sublabel?: string
+  /** A job row's enabled state as the live read found it (AgentTreeLive), in place of its listing's; undefined: the listing's. */
+  readonly enabled?: boolean
 }
 export interface ServerStatus {
   /** The server row's chips (running Agent jobs, availability group health); undefined while none are known. */
@@ -85,7 +88,7 @@ export function statusKey(connection: Pick<LiveConnection, 'id' | 'generation' |
 }
 
 /** Reads a status table's rows as cell texts (null for NULL), and whether they are all of them. */
-async function readRows(table: LiveTable): Promise<{ rows: (string | null)[][]; complete: boolean }> {
+export async function readRows(table: LiveTable): Promise<{ rows: (string | null)[][]; complete: boolean }> {
   const { descriptor } = table, columns = descriptor.columns.length, count = Math.min(maxRows, descriptor.rowsAvailable)
   const complete = !descriptor.truncated && descriptor.rowsAvailable <= maxRows && (descriptor.rowsRead ?? 0) <= descriptor.rowsAvailable
   if (count === 0) return { rows: [], complete }
@@ -251,7 +254,9 @@ class ServerView {
 
 /** A row's live status: a server's chips, or a database's (online when a complete list does not name it). The objects are
  *  the service's own and stay the same while the chips do, so memoised rows render again only when theirs change. */
-export function rowStatus(server: ServerStatus | undefined, node: Pick<TreeNode, 'parent' | 'kind' | 'ref'>): RowStatus | undefined {
+export function rowStatus(server: ServerStatus | undefined, node: Pick<TreeNode, 'parent' | 'kind' | 'ref'> & Partial<Pick<TreeNode, 'connectionId' | 'jobId'>>, agentTree?: Pick<AgentTreeLive, 'job'>): RowStatus | undefined {
+  // A job row's chips come from its Jobs folder's own agent.jobs view (AG-12), not the server's status view.
+  if (node.kind === 'agentJob') return node.connectionId === undefined ? undefined : agentTree?.job(node.connectionId, node.jobId)
   if (!server) return undefined
   if (node.parent === 0) return server.server
   if (node.kind === 'agent') return server.agent
