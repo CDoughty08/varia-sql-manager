@@ -150,6 +150,24 @@ alerts, operators and who is notified, behind the same gate until 0.11.0.
   refusing a step that takes another's old name. New Job's steps are its `sp_add_jobstep` calls between `sp_add_job` and
   `sp_add_jobserver`. A refused step call lands on Steps ("Saving step 2 was refused"). The Schedules section's calls follow the steps (below).
   Pager duty is not yet checked against the job's schedules.
+  **Create several…** (AG-6f; mocks `rx-create-several`, `rx-create-several-review`) on Changes from source turns the copy into a table in
+  the same tab ("Create several jobs"), one row per new job; the copy as it stands is the template. An empty cell uses the template's value
+  (grey); a typed one overrides that field for that row only (accent edge); clearing it goes back to the template's. Columns opens with Name,
+  each step's key fields but its command, each schedule's Share, Copy or Leave out, and Enabled, and offers every other field: Owner
+  (sysadmin only), Category, Description, the e-mail and pager operators and levels, the event log and delete levels, and each step's
+  name, command, retries, retry minutes, output file and Run as. A row copying a schedule names it after the row's job ("Job – Schedule")
+  unless it was renamed. Fill: Add row, Duplicate row, Paste rows (tab-separated lines, one cell per visible column, also when pasted into
+  a cell; at most 100 rows) and Fill names (`{n}`, `{package}`, `{database}`, `{source}`). The selected row's details list every field it
+  differs in from the template, with Reset for those not in a visible column; **Open full editor** opens the row as an unsaved job tab
+  ("Row n · name") with every section, whose edits go straight back to the row as its whole draft (shown as Other changes), and Back to
+  the table closes it; Save and Reload are off there, it is read-only while the table shows its review or results, and a row removed or created meanwhile leaves the editor a copy of its own. Checks
+  run before anything is sent: a duplicate name among the rows, a name msdb already lists, a cell that cannot be used and every error New
+  Job's save refuses block a row; warnings (a required SSIS parameter without a value, an operator not notified) only show. **Review and
+  create** lists what each row sends and the rows it skips; Create sends each row as its own `agentJob` save (New Job's one transaction),
+  one after another, each with its own result: created rows lock with Open, a failed row says msdb's error and was rolled back, and a
+  lost connection marks the row on its way unknown and sends no more. Back to the table keeps the rows not created to fix and retry;
+  **Enable the created jobs** reads the job list once for their ids, then enables each (AG-2's `enable`) with its own result. No new
+  RPC or backend write.
 - **Schedules** (`src/shared/agent/schedule.ts` for the encoding, sentences, presets, runs and free-slot check;
   `src/shared/actions/agent-schedule.ts` for the saves). The job document's **Schedules** section lists the job's schedules, each
   with its short "when" and whether other jobs share it, and edits the selected one in place with SSMS's own fields (Occurs,

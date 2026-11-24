@@ -74,7 +74,8 @@ query, following the setting and the pinned shelf as a query does; a clean one i
   If that read fails, the changes stay on last session's read: a proxy's, credential's, alert's or operator's Save waits
   until a later connection reads the object again, and a job's or schedule's save is still refused if the object changed. A schedule draft whose schedule was deleted on the server is dropped, and the notice says so.
   A Create Job Like This copy comes back as a New Job with its changes; its link to the source job (Changes from
-  source, Compare with source) is not kept.
+  source, Compare with source) is not kept. A Create several jobs table is not kept, so closing it asks; a row's full
+  editor is clean while its row takes its edits, and comes back as a New Job only once it is a copy of its own.
 - **Release gate.** Started without the preview, Varia reopens no Agent document and says that their unsaved changes were
   discarded; AutoRecover leaves their copies out of its Recover dialog.
 - **AutoRecover** keeps the same state for an unsaved Agent document at its interval (once per change), with its target

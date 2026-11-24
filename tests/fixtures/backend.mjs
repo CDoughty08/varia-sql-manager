@@ -1964,7 +1964,8 @@ function agentApplySteps(job, save) {
 function agentJobDocument(params) {
   const base = { login: 'sa', sysadmin: true, platform: 'windows', categories: ['[Uncategorized (Local)]', 'Database Maintenance'], operators: agentOperators, owners: ['sa', 'CONTOSO\agent'], alertsEditable: true, mail: { checked: true, xps: true, profiles: 1, sysadmin: true, useDatabaseMail: true, agentProfile: 'Varia Mail' },
     subsystems: ['TSQL', 'CmdExec', 'PowerShell', 'SSIS'], databases: ['master', 'model', 'msdb', 'Sales', 'tempdb'], proxies: [{ id: 1, name: 'FileShareWriter', enabled: true, subsystems: ['CmdExec', 'PowerShell'], identity: 'CONTOSO\\svc-fswriter' }] }
-  if (params.target.kind === 'agent') return { agentJobDocument: { ...base, steps: [], jobs: agentJobs.map(job => job.name).sort(), now: '2026-11-22T14:30:00' }, elapsedMs: 1 }
+  // jobIds parallel to jobs, as the backend lists them (Create several's Enable the created jobs finds each new job's id there).
+  if (params.target.kind === 'agent') { const listed = [...agentJobs].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0); return { agentJobDocument: { ...base, steps: [], jobs: listed.map(job => job.name), jobIds: listed.map(job => job.id), now: '2026-11-22T14:30:00' }, elapsedMs: 1 } }
   const job = agentJobs.find(item => item.name === params.target.name)
   if (!job) return undefined
   const doc = agentJobDoc(job)
