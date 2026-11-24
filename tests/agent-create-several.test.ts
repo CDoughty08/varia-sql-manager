@@ -199,7 +199,7 @@ describe('Create several: the table', () => {
 
 /** A workbench whose describe answers the source job and New Job's model; executes answer in order from `answers`. */
 function opened(first = model()) {
-  const fixture = workbenchFixture({ agentPreview: true })
+  const fixture = workbenchFixture()
   cleanups.push(() => fixture.dispose())
   fixture.api.push(readyBackend())
   fixture.connect(connectionInfo('c1'))

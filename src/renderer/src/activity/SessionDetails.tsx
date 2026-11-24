@@ -36,7 +36,7 @@ export default function SessionDetails({ monitorId, details }: { readonly monito
     close()
   }
   const shown = result && detailsState(result)
-  const copy = () => { if (result) void window.varia.writeClipboardText(detailsText(result, session.job, activity.agentEnabled)).then(answer => setCopied(answer.ok), () => setCopied(false)) }
+  const copy = () => { if (result) void window.varia.writeClipboardText(detailsText(result, session.job)).then(answer => setCopied(answer.ok), () => setCopied(false)) }
   return <aside ref={panel} className="activity-details" role="dialog" aria-modal="false" aria-labelledby={titleId} tabIndex={-1} onKeyDown={keyDown} data-activity-details={session.sessionId}>
     <div className="activity-details-head">
       <h2 id={titleId} className="activity-details-title">Session {session.sessionId}{session.login && <span className="activity-details-login"> · {session.login}</span>}</h2>
@@ -70,7 +70,7 @@ function Sections({ monitorId, details, result }: { readonly monitorId: string; 
   }
   const session = result.session!
   // AG-16: the Agent job step it runs, a link to the job's document where msdb named the job.
-  const job = activity.agentEnabled ? detailsJob(result, details.session.job) : undefined
+  const job = detailsJob(result, details.session.job)
   const openJob = () => { const why = activity.openJob(monitorId, details.session); if (why) commands.reportWarning(why) }
   // A table object is the grid's table: built once per answer, so a re-render (Copy's notice) keeps each grid's selection.
   const waits = useMemo(() => waitsTable(result.waits ?? []), [result.waits])

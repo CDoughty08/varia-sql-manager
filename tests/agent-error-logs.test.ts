@@ -30,7 +30,7 @@ const sysadmin = { ok: true, value: { elapsedMs: 1, profile: { sysadmin: true, m
 const operator = { ok: true, value: { elapsedMs: 1, profile: { sysadmin: false, msdbAccess: true, operatorRole: true, purgeHistory: true } as never } } as const
 
 function viewer() {
-  const fixture = workbenchFixture({ agentPreview: true })
+  const fixture = workbenchFixture()
   cleanups.push(() => fixture.dispose())
   fixture.api.push(readyBackend())
   fixture.connect(connectionInfo('c1'))
@@ -86,11 +86,11 @@ describe("the Agent error logs' shared rules", () => {
     expect(errorLogLabel({ archive: 0, date: '2026-11-22T14:31:09' })).toBe('Current - 2026-11-22 14:31')
     expect(errorLogLabel({ archive: 3 })).toBe('Archive #3')
   })
-  it('offers View Agent Log and Recycle on the Error Logs folder and its logs, behind the release gate', () => {
+  it('offers View Agent Log and Recycle on the Error Logs folder and its logs, with no release gate (AG-9)', () => {
     const entries = errorLogCommandEntries()
     for (const id of ['agent.viewAgentLog', 'agent.recycleErrorLog'] as const) {
       expect(commandDescriptor(id).precondition).toBe(entries[id].precondition)
-      expect(entries[id].precondition).toContain('agentEnabled')
+      expect(entries[id].precondition).not.toContain('agentEnabled')
       const when = compileWhen(commandDescriptor(id).menus![0].when!)
       const on = (keys: Record<string, unknown>) => evaluateWhen(when, { explorerServerLost: false, explorerServerEngine: 'box', ...keys } as never)
       expect(on({ explorerNode: 'agentErrorLog' }) && on({ explorerNode: 'folder', explorerFolder: 'agentErrorLogs' })).toBe(true)

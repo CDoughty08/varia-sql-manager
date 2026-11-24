@@ -170,8 +170,6 @@ export interface ActivityMonitorServiceOptions extends CustomDocumentTargetOptio
   readonly api?: Pick<VariaApi, 'activityDetails' | 'activityKill' | 'cancelActivity'> & Partial<Pick<VariaApi, 'executeObjectAction'>>
   /** Open Job and the Agent Job links (AG-16): the job's document on the connection, focused if open, at its History. */
   readonly openJob?: (connectionId: string, name: string) => void
-  /** SQL Server Agent's release gate (VARIA_AGENT_PREVIEW): shut, Open Job and Stop Job say so, as every Agent surface hides. */
-  readonly agentEnabled?: boolean
   readonly newId?: () => string
 }
 
@@ -474,13 +472,10 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
   }
   // --- Agent jobs (AG-16): Open Job and Stop Job on a session that runs a job step ------------------------------------------
 
-  /** SQL Server Agent's release gate: shut, sessions show no job (the backend leaves the Agent Job column empty too). */
-  get agentEnabled(): boolean { return !!this.options.agentEnabled }
   /** Why Open Job or Stop Job cannot act on a session now, or undefined when it can. */
   jobUnavailable(id: string, session: SessionRef | undefined, verb: 'open' | 'stop'): string | undefined {
     const why = jobUnavailable(session, verb)
     if (why) return why
-    if (!this.options.agentEnabled) return `${verb === 'open' ? 'Open Job' : 'Stop Job'} comes with SQL Server Agent support, which is not on in this build.`
     if (!this.live(id)) return `Reconnect this Activity Monitor before ${verb === 'open' ? 'opening' : 'stopping'} a job.`
     if (verb === 'open' ? !this.options.openJob : !this.options.api?.executeObjectAction) return `${verb === 'open' ? 'Open Job' : 'Stop Job'} is not available here.`
     if (verb === 'stop' && this.get(id)?.stopping?.includes(session!.job!.jobId)) return `Stop Job is already stopping ${session!.job!.name}.`

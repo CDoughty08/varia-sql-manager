@@ -66,8 +66,7 @@ describe('command catalogue', () => {
     expect(commandIds.filter(id => id.startsWith('explorer.script') && id.includes('To'))).toEqual([...scriptCommandIds])
   })
   it('has a handler for every command once all contributions have run', () => {
-    // With SQL Server Agent's release gate on, since its commands are registered only then (tests/agent-actions.test.ts).
-    const fixture = workbenchFixture({ agentPreview: true })
+    const fixture = workbenchFixture()
     try { expect(commandIds.filter(id => !fixture.commands.has(id))).toEqual([]) }
     finally { fixture.dispose() }
   })

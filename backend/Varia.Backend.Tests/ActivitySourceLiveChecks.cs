@@ -528,9 +528,6 @@ internal static class ActivitySourceLiveChecks
     public static async Task AgentJobAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json, string job, Func<string, string, Task<SqlRun>> sql)
     {
         static string Quote(string value) => "N'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
-        // The Agent suite runs whether or not this process has the release gate's variable; the gate is opened for this check.
-        var gate = ActivityReader.AgentJobsEnabled;
-        ActivityReader.AgentJobsEnabled = true;
         var created = await sql("DECLARE @id uniqueidentifier;\n"
             + "EXEC msdb.dbo.sp_add_job @job_name = " + Quote(job) + ", @description = " + Quote(ScratchDatabase.JobMarker) + ", @job_id = @id OUTPUT;\n"
             + "EXEC msdb.dbo.sp_add_jobstep @job_id = @id, @step_name = N'Wait', @subsystem = N'TSQL', @command = N'WAITFOR DELAY ''00:02:00'';';\n"
@@ -564,7 +561,6 @@ internal static class ActivitySourceLiveChecks
         }
         finally
         {
-            ActivityReader.AgentJobsEnabled = gate;
             // sp_add_job commits alone, so a later call's failure leaves the job: drop it by its run-unique name, stopping it first.
             await sql("IF EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name = " + Quote(job) + ") BEGIN\n"
                 + "BEGIN TRY EXEC msdb.dbo.sp_stop_job @job_name = " + Quote(job) + "; END TRY BEGIN CATCH END CATCH;\n"

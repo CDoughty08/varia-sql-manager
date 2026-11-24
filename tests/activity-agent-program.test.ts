@@ -59,8 +59,5 @@ describe('session rows that run a job step', () => {
     const result = { sessionId: 61, state: 'present' as const, elapsedMs: 1, session: { sessionId: 61, loginTime: '2026-11-09T08:00:00.000', isUserProcess: true, application: program } as ActivityDetailsResult['session'] }
     expect(detailsText(result, job)).toContain('Job: Nightly, step 2 (Load)')
     // A row whose job no longer matches the session's program is not trusted.
-    expect(detailsText(result, { ...job!, step: 3 })).toContain(`Job: Job ${jobId}, step 2`)
-    // Without SQL Server Agent's release gate, no job line.
-    expect(detailsText(result, job, false)).not.toContain('Job:')
-  })
+    expect(detailsText(result, { ...job!, step: 3 })).toContain(`Job: Job ${jobId}, step 2`)  })
 })

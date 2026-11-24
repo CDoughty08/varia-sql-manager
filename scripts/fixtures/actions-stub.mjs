@@ -357,7 +357,7 @@ GO
   function children({ node }) {
     if (node.type === 'object') {
       const ids = statics.objects[node.object.kind] ?? []
-      // The server lists its SQL Server Agent node after its folders, as the backend does behind the release gate.
+      // The server lists its SQL Server Agent node after its folders, as the backend does.
       const agent = node.object.kind === 'server' ? [object({ kind: 'agent' }, 'SQL Server Agent', 'agent')] : []
       return ok({ nodes: [...folders(node.object, ids), ...agent], total: ids.length + agent.length, elapsedMs: 1 })
     }

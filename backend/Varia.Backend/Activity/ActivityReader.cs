@@ -31,9 +31,6 @@ internal sealed class ActivityReader : ILiveSqlReader
     private readonly ActivityQueryRows queries;
     /// <summary>The Agent job and step names the sessions' program names lead to (AG-16), kept for this connection.</summary>
     private readonly AgentJobNames jobNames;
-    /// <summary>SQL Server Agent's release gate (Agent/AgentGate.cs): shut, the Agent Job column stays empty and no msdb read runs.
-    /// The live checks open it for their run.</summary>
-    internal static bool AgentJobsEnabled { get; set; } = Varia.Backend.Agent.AgentGate.Enabled;
     /// <summary>Statements that failed for good on this connection, by probe, render and statement: reported each sample, not
     /// run again until a new connection's capability probe.</summary>
     private readonly Dictionary<string, LiveProbeError> skipped = new(StringComparer.Ordinal);
@@ -165,7 +162,7 @@ internal sealed class ActivityReader : ILiveSqlReader
         if (spec.Id == OverviewProbe) return new(ActivityOverview.Raw([.. spec.Series.Select(series => series.Id)], results, catalog, io), [], errors);
         if (spec.Id == ResourcesProbe) return Resources(spec, sampleTime, results, errors);
         if (spec.Id != SessionsProbe) throw Bug("No reader for this Activity Monitor probe.");
-        if (AgentJobsEnabled && capabilities.ServerState && results.TryGetValue("sessions", out var sessionRows)) await AgentJobsAsync(connection, prologue, sessionRows, testText, token).ConfigureAwait(false);
+        if (capabilities.ServerState && results.TryGetValue("sessions", out var sessionRows)) await AgentJobsAsync(connection, prologue, sessionRows, testText, token).ConfigureAwait(false);
         return Sessions(spec, sampleTime, results, errors, capabilities);
     }
 
@@ -318,7 +315,7 @@ internal sealed class ActivityReader : ILiveSqlReader
         }
         var (msTicks, startTicks) = ActivityOverview.Clock(results);
         var varia = new VariaSessions(catalog, Environment.ProcessId, host.Clients, host.OwnSessions(connectionId));
-        var built = sessions.Build(results, at, varia, capabilities.Spid, focusSession, hideMonitor: capabilities.ServerState, jobs: AgentJobsEnabled ? jobNames.Resolve : null);
+        var built = sessions.Build(results, at, varia, capabilities.Spid, focusSession, hideMonitor: capabilities.ServerState, jobs: jobNames.Resolve);
         ActivityFilter Filter(string table) => current.GetValueOrDefault(table) ?? ActivityFilter.Compile(catalog, new(table));
         var tables = new List<LiveReaderTable>();
         if (results.ContainsKey("sessions"))

@@ -749,9 +749,6 @@ refused); its answer shows above the tiles, as Kill's, and the monitor samples a
 login msdb names no job to is told why instead. The Details flyout lists the job under Identity and Now, as a link, and Copy
 includes it.
 
-Job links come with the rest of SQL Server Agent support, behind its preview (`VARIA_AGENT_PREVIEW=1`): without it the column
-stays empty, no msdb read runs, and Open Job and Stop Job say why they are unavailable.
-
 ## Differences from SSMS
 
 - A failing query never pauses the monitor; each probe fails alone and says why.

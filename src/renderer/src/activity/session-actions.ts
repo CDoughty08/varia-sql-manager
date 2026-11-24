@@ -210,15 +210,14 @@ export function detailsJob(result: ActivityDetailsResult, row: SessionJob | unde
   return row && row.jobId === parsed.jobId && row.step === parsed.step ? row : { jobId: parsed.jobId, step: parsed.step, text: agentJobText(parsed) }
 }
 
-/** Copy's text: every section the flyout shows, as plain text (headings, "Label: value" lines, texts whole as read); the job
- *  line only with SQL Server Agent's release gate open (`agent`). */
-export function detailsText(result: ActivityDetailsResult, job?: SessionJob, agent = true): string {
+/** Copy's text: every section the flyout shows, as plain text (headings, "Label: value" lines, texts whole as read). */
+export function detailsText(result: ActivityDetailsResult, job?: SessionJob): string {
   const lines: string[] = []
   const heading = (title: string) => { if (lines.length) lines.push(''); lines.push(title, '-'.repeat(title.length)) }
   if (result.session) {
     heading(sectionTitle('session'))
     for (const [label, value] of sessionRows(result.session)) lines.push(`${label}: ${value}`)
-    const shown = agent ? detailsJob(result, job) : undefined
+    const shown = detailsJob(result, job)
     if (shown) lines.push(`Job: ${shown.text}`)
   }
   for (const section of ['statement', 'batch', 'inputBuffer'] as const) {
