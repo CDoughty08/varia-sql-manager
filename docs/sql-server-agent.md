@@ -385,9 +385,9 @@ docs/agent-plan.md (AG-10 to AG-16) or to its Later row.
 | Surface | SSMS 2022 | Varia |
 | --- | --- | --- |
 | Agent node | After the server's folders; children Jobs, Job Activity Monitor, Alerts, Operators, Proxies, Error Logs | Same order and names; which children show follows the login's Agent role, as SSMS's do; Managed Instance has no Alerts or Proxies, as in SSMS |
-| Agent node menu | New › Job…, Alert…, Operator…, Proxy…, Schedule…; Start, Stop, Restart; View History; Properties | Same items, plus Job Activity Monitor (first after New); Start, Stop and Restart through the Service Control Manager as the Windows user, as SSMS |
+| Agent node menu | New › Job…, Alert…, Operator…, Proxy…, Schedule…; Start, Stop, Restart; View History; Properties | Same items, grouped differently (Job Activity Monitor and View History after New, then Start, Stop and Restart); Start, Stop and Restart through the Service Control Manager as the Windows user, as SSMS |
 | Jobs folder menu | New Job…, Manage Schedules, View History | Same (Manage Schedules opens the Schedules document) |
-| Job menu | New Job…, Script Job as, Start Job at Step…, Stop Job, Enable/Disable, View History, Rename, Delete, Properties | Same names and order, plus Create Job Like This… after New Job… |
+| Job menu | New Job…, Script Job as, Start Job at Step…, Stop Job, Enable/Disable, View History, Rename, Delete, Properties | Same names, grouped as Varia's menus are: New Job… and Create Job Like This…, View History, Start Job at Step… and Stop Job, Script Job as, Enable/Disable, Rename and Delete, Properties |
 | Job Activity Monitor node | Double-click or View Job Activity opens it | Double-click, Enter or Job Activity Monitor opens it, one per server |
 | Alerts, Operators, Proxies menus | New Alert… / New Operator… / New Proxy…; Script … as; Enable/Disable (alerts); Rename; Delete; Properties | Same; Proxies list one folder per subsystem, then Unassigned Proxies, as SSMS |
 | Error Logs menu | View Agent Log, Recycle | Same (Recycle asks first; not on Managed Instance) |

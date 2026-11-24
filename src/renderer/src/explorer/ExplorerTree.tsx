@@ -237,7 +237,7 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
     // A job opens its document (AG-6a), as SSMS opens Job Properties.
     // So do alerts and operators (AG-7).
     if (node?.kind === 'agentJob' || node?.kind === 'agentAlert' || node?.kind === 'agentOperator') { run('explorer.properties', rowId); return }
-    // A proxy and a credential open their documents (AG-8b), behind the same gate.
+    // A proxy and a credential open their documents (AG-8b).
     if (node?.kind === 'agentProxy' || node?.kind === 'credential') { run('explorer.properties', rowId); return }
     const verb = ssisDefaultVerb(node?.kind)
     if (verb) run(ssisVerbSpecs[verb].command, rowId)
