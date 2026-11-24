@@ -145,7 +145,7 @@ export function paletteContribution(workbench: PaletteWorkbench, history = new C
   /** Reveal in Object Explorer, as a Search Objects hit's: the tree loads and expands its way to the object, and takes focus as F8 gives it. */
   const revealObject = (connectionId: string, hit: ObjectSearchHit) => {
     const { objectSearch, explorer, jobDocuments } = workbench
-    // A job opens its document (AG-6a): Search lists jobs only behind SQL Server Agent's release gate.
+    // A job opens its document (AG-6a).
     if (hit.object.kind === 'agentJob' && hit.object.name !== undefined && jobDocuments) {
       try { jobDocuments.openJob(connectionId, hit.object.name) } catch (error) { commands.reportError(error instanceof Error ? error.message : 'The job could not be opened.') }
       return

@@ -16,7 +16,7 @@ afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 
 describe("The status bar's Agent stopped item", () => {
   it('opens Job Activity Monitor on the server whose Agent is stopped', async () => {
-    const fixture = workbenchFixture({ agentPreview: true })
+    const fixture = workbenchFixture()
     cleanups.push(() => fixture.dispose())
     fixture.api.push(readyBackend())
     fixture.connect(connectionInfo('c1'))
@@ -45,7 +45,7 @@ describe("The status bar's Agent stopped item", () => {
     expect(host.querySelector('.agent-job-status')?.textContent).toContain(`Nightly: Succeeded (started ${String(stamp).slice(0, 4)}-${String(stamp).slice(4, 6)}-${String(stamp).slice(6, 8)} 14:00:00, server time)`)
   })
   it('offers only the stopped servers when several are down, and forgets a server whose connection is gone', async () => {
-    const fixture = workbenchFixture({ agentPreview: true })
+    const fixture = workbenchFixture()
     cleanups.push(() => fixture.dispose())
     fixture.api.push(readyBackend())
     fixture.connect(connectionInfo('c1'))

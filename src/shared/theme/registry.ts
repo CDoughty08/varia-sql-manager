@@ -335,7 +335,7 @@ const groups = {
     'charts.foreground': ['V', '$textTertiary', 'Chart labels, legends, and the crosshair.', 'css script'],
     'charts.lines': ['V', '$border', 'Chart grid lines and baseline.', 'script'],
     'charts.blue': ['V', '$chart1', 'First series of a chart; series take blue, orange, green, yellow, then purple.', 'css script'],
-    'charts.orange': ['V', '$chart2', 'Second series of a chart.', 'script'],
+    'charts.orange': ['V', '$chart2', 'Second series of a chart.', 'css script'],
     'charts.green': ['V', '$chart3', 'Third series of a chart; also the block cache of windowed BigQuery results in the Memory panel.', 'css script'],
     'charts.yellow': ['V', '$chart4', 'Fourth series of a chart; also the cache of unpacked pages in the Memory panel.', 'css script'],
     'charts.purple': ['V', '$chart5', 'Fifth series of a chart.', 'css script'],

@@ -29,7 +29,7 @@ export interface FocusFacts {
   readonly editorFocus: boolean; readonly editorTextFocus: boolean; readonly inputFocus: boolean; readonly activePanel: 'explorer' | 'editor' | 'output' | ''; readonly outputGridFocus: boolean; readonly liveGridFocus: boolean
   readonly searchHitsFocus: boolean; readonly planOutlineFocus: boolean
   readonly designerFocus: boolean; readonly queryBarFocus: boolean; readonly activityMonitorFocus: boolean; readonly documentTabFocus: boolean
-  readonly peekFocus: boolean; readonly peekTabFocus: boolean; readonly peekEditorFocus: boolean
+  readonly peekFocus: boolean; readonly peekTabFocus: boolean; readonly peekEditorFocus: boolean; readonly objectInspectorFocus: boolean
   readonly agentStepsFocus: boolean
   readonly messagesFocus: boolean; readonly resultsFocus: boolean; readonly explorerFocus: boolean; readonly explorerTypeAhead: boolean; readonly optionsDialogFocus: boolean
 }
@@ -60,7 +60,7 @@ export interface JobHistoryContextState { readonly byDocument: Readonly<Record<s
 export interface FocusElement { matches(selector: string): boolean; closest(selector: string): { getAttribute(name: string): string | null } | null }
 export interface FocusEditor<E> { getContainerDomNode(): { contains(node: E): boolean }; getId?(): string; hasTextFocus(): boolean }
 
-const noFocus: FocusFacts = { editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: '', outputGridFocus: false, liveGridFocus: false, searchHitsFocus: false, planOutlineFocus: false, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false, documentTabFocus: false, peekFocus: false, peekTabFocus: false, peekEditorFocus: false, agentStepsFocus: false,
+const noFocus: FocusFacts = { editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: '', outputGridFocus: false, liveGridFocus: false, searchHitsFocus: false, planOutlineFocus: false, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false, documentTabFocus: false, peekFocus: false, peekTabFocus: false, peekEditorFocus: false, objectInspectorFocus: false, agentStepsFocus: false,
   messagesFocus: false, resultsFocus: false, explorerFocus: false, explorerTypeAhead: false, optionsDialogFocus: false }
 const panels: ReadonlySet<string> = new Set(['explorer', 'editor'])
 
@@ -83,7 +83,7 @@ export function focusFacts<E extends FocusElement>(element: E | null, editor: Fo
     liveGridFocus: !!element.closest('[data-live-probe]') && !element.closest('button, a, input, select, textarea'),
     searchHitsFocus: !!element.closest('[data-search-hits]'), planOutlineFocus: !!element.closest('[data-plan-outline]'),
     designerFocus: !!element.closest('[data-designer]'), queryBarFocus: !!element.closest('[data-query-bar]'), activityMonitorFocus: !!element.closest('[data-activity-monitor]'),
-    documentTabFocus: !!element.closest('[data-document-tab]'), peekFocus: !!element.closest('[data-peek-card]'), peekTabFocus: !!element.closest('[data-peek-tab]'), peekEditorFocus: !!element.closest(`[${peekEditorAttribute}]`), messagesFocus: !!element.closest('[data-output-view="messages"]'),
+    documentTabFocus: !!element.closest('[data-document-tab]'), peekFocus: !!element.closest('[data-peek-card]'), peekTabFocus: !!element.closest('[data-peek-tab]'), peekEditorFocus: !!element.closest(`[${peekEditorAttribute}]`), objectInspectorFocus: !!element.closest('[data-object-inspector]'), messagesFocus: !!element.closest('[data-output-view="messages"]'),
     // The Results pane (not its Messages strip, which takes the query keys as the Messages pane does), or its overflow
     // picker, which is drawn over the page outside any pane.
     resultsFocus: (pane === 'results' && !element.closest('[data-messages-strip]') && !element.closest('[data-output-view="messages"]')) || !!element.closest('[data-results-picker]'),
@@ -97,8 +97,6 @@ export function focusFacts<E extends FocusElement>(element: E | null, editor: Fo
 
 export interface ContextInputs {
   readonly platform: Platform
-  /** SQL Server Agent's release gate (`agentEnabled`): main's VARIA_AGENT_PREVIEW=1, fixed for the run. */
-  readonly agentEnabled?: boolean
   readonly focus?: FocusFacts
   readonly documents: DocumentSnapshot
   readonly queries: QuerySnapshot
@@ -183,7 +181,6 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
   const history = active ? inputs.jobHistory?.byDocument[active.id] : undefined
   const groups = inputs.editorGroups?.groups ?? [], activeGroup = active ? groups.find(group => group.documents.includes(active.id)) : undefined
   return contextRecord(inputs.platform, {
-    agentEnabled: !!inputs.agentEnabled,
     ...focus, textInputFocus: focus.editorTextFocus || focus.inputFocus || focus.peekEditorFocus,
     quickInputVisible: inputs.quickInputVisible, backendStatus: inputs.backendStatus, backendReady: inputs.backendStatus === 'ready', editorWordWrap: inputs.wordWrap,
     editorWhitespace: !!inputs.whitespace, editorLineNumbers: !!inputs.lineNumbers,
@@ -227,8 +224,6 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
 
 export interface ContextKeyOptions {
   readonly platform: Platform
-  /** SQL Server Agent's release gate (`agentEnabled`, `window.varia.agentPreview`); fixed for the run, so not a store. */
-  readonly agentEnabled?: boolean
   readonly documents: ExternalStore<DocumentSnapshot>
   readonly queries: ExternalStore<QuerySnapshot>
   readonly connections: ExternalStore<readonly LiveConnection[]>
@@ -301,7 +296,7 @@ export class ContextKeyService implements Disposable {
   private inputs(focus?: FocusFacts): ContextInputs {
     const { options } = this, editor = options.editorOptions.getSnapshot()
     return {
-      platform: options.platform, agentEnabled: options.agentEnabled, focus, documents: options.documents.getSnapshot(), queries: options.queries.getSnapshot(), connections: options.connections.getSnapshot(),
+      platform: options.platform, focus, documents: options.documents.getSnapshot(), queries: options.queries.getSnapshot(), connections: options.connections.getSnapshot(),
       quickInputVisible: !!options.quickInput?.getSnapshot().visible, wordWrap: editor.wordWrap, whitespace: editor.whitespace, lineNumbers: editor.lineNumbers, resultsWhitespace: options.settings?.getSnapshot().values['queryResults.grid.whitespace'], resultsSortText: options.settings?.getSnapshot().values['queryResults.grid.sortText'], resultsColumnProfile: options.settings?.getSnapshot().values['queryResults.grid.columnProfile'], resultsProfileSelectedOnly: options.settings?.getSnapshot().values['queryResults.grid.columnProfileSelectedOnly'], resultsRowSize: options.settings?.getSnapshot().values['queryResults.grid.rowSize'], resultsLayout: options.settings?.getSnapshot().values['queryResults.grid.layout'], bookmarks: options.bookmarks?.getSnapshot().counts, backendStatus: options.backend.getSnapshot().state.status,
       panes: options.panes?.getSnapshot(), panelTabs: options.shell?.getSnapshot().panelTabs, explorer: options.explorer?.getSnapshot(), results: options.results?.getSnapshot(), resultSets: options.resultSets?.getSnapshot(), resultsSteppable: options.resultsSteppable?.getSnapshot(), resultsTurned: options.resultsTurned?.getSnapshot(), resultsComparing: options.resultsComparing?.getSnapshot(), comparisonToggles: options.comparisonToggles?.getSnapshot(), scriptingRunning: options.scripting?.getSnapshot(),
       overtype: options.inputMode?.getSnapshot().mode === 'overtype', recentFiles: !!options.recentFiles?.getSnapshot().length,

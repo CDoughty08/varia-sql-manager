@@ -46,7 +46,7 @@ class FakeGrid extends SnapshotStore<LiveGridSnapshot> {
 }
 
 function monitor() {
-  const fixture = workbenchFixture({ agentPreview: true })
+  const fixture = workbenchFixture()
   cleanups.push(() => fixture.dispose())
   fixture.api.push(readyBackend())
   fixture.connect(connectionInfo('c1'))
@@ -196,12 +196,9 @@ describe("agent.jobs' shared rules", () => {
 })
 
 describe('Job Activity Monitor', () => {
-  it('registers its commands only behind the release gate', () => {
-    for (const agentPreview of [false, true]) {
-      const fixture = workbenchFixture({ agentPreview })
-      expect(['agent.jobActivity', 'agent.refreshJobs', 'agent.startJobs'].map(id => fixture.commands.has(id as never))).toEqual([agentPreview, agentPreview, agentPreview])
-      fixture.dispose()
-    }
+  it('registers its commands with no environment variable set (AG-9 removed the release gate)', () => {
+    const fixture = workbenchFixture()
+    try { expect(['agent.jobActivity', 'agent.refreshJobs', 'agent.startJobs'].map(id => fixture.commands.has(id as never))).toEqual([true, true, true]) } finally { fixture.dispose() }
   })
   it('opens one document per connection on the list and service probes, and sends view, filter box, column filters and the expanded job', async () => {
     const { jobActivity, documents, handle, live, context } = monitor()
@@ -465,7 +462,7 @@ describe('Job Activity Monitor\'s Start Agent, F5 and row menu (AG-10)', () => {
     expect(off.commands.isEnabled('explorer.startAgent', greyed.args)).toBe(false)
     expect(agentBanner('stopped', off.jobActivity.get(id)?.service, !!greyed.reason, false)?.start).toBe(true)
 
-    const fixture = workbenchFixture({ agentPreview: true, windowsClient: true })
+    const fixture = workbenchFixture({ windowsClient: true })
     cleanups.push(() => fixture.dispose())
     fixture.api.push(readyBackend())
     fixture.connect(connectionInfo('c1'))
@@ -481,7 +478,7 @@ describe('Job Activity Monitor\'s Start Agent, F5 and row menu (AG-10)', () => {
     expect(fixture.dialogs.current).toMatchObject({ dialog: 'startAgent', connectionId: 'c1', target: { kind: 'agent' } })
   })
   it('follows the Agent node only while the banner offers Start', () => {
-    const fixture = workbenchFixture({ agentPreview: true, windowsClient: true })
+    const fixture = workbenchFixture({ windowsClient: true })
     cleanups.push(() => fixture.dispose())
     fixture.api.push(readyBackend())
     fixture.connect(connectionInfo('c1'))
@@ -496,7 +493,7 @@ describe('Job Activity Monitor\'s Start Agent, F5 and row menu (AG-10)', () => {
     expect(fixture.jobActivity.startAgentOffered(id)).toBe(false)
   })
   it("greys Start Agent on a failover cluster instance from the monitor's own service probe, with no Object Explorer sample", () => {
-    const fixture = workbenchFixture({ agentPreview: true, windowsClient: true })
+    const fixture = workbenchFixture({ windowsClient: true })
     cleanups.push(() => fixture.dispose())
     fixture.api.push(readyBackend())
     fixture.connect(connectionInfo('c1'))
@@ -517,8 +514,8 @@ describe('Job Activity Monitor\'s Start Agent, F5 and row menu (AG-10)', () => {
     // Object Explorer's own F5 and the query editor's keep theirs.
     expect(evaluateWhen(when, { activeDocumentIsJobActivity: true, activePanel: 'explorer' } as never)).toBe(false)
     expect(evaluateWhen(when, { activeDocumentIsJobActivity: true, activePanel: 'editor', editorFocus: true } as never)).toBe(false)
-    // A menubar item cannot carry the release gate (agentEnabled), so View › Job Activity Monitor waits for AG-9 to remove it.
-    expect(commandDescriptor('agent.jobActivity').menus?.some(menu => menu.menu === 'view')).toBe(false)
+    // View › Job Activity Monitor sits with the other monitors.
+    expect(commandDescriptor('agent.jobActivity').menus?.find(menu => menu.menu === 'view')).toMatchObject({ group: '2_monitor', order: 3 })
     // Enter opens the selected job in the list, which carries no Query Output menu now (its row menu is the job's).
     expect(commandDescriptor('agent.openJob').keybindings?.[0]?.when).toBe('activeDocumentIsJobActivity && liveGridFocus')
   })
@@ -593,7 +590,7 @@ describe('Job Activity Monitor\'s Start Agent, F5 and row menu (AG-10)', () => {
     expect(commands.unavailableReason('agent.viewHistory', { tabId: id })).toBe(bulkUnavailable(agentLimits.startJobs + 1))
   })
   it("lets the monitor's own service reading win for Start, and reads again at once when a start of Agent ends on its connection", () => {
-    const fixture = workbenchFixture({ agentPreview: true, windowsClient: true })
+    const fixture = workbenchFixture({ windowsClient: true })
     cleanups.push(() => fixture.dispose())
     fixture.api.push(readyBackend())
     fixture.connect(connectionInfo('c1'))

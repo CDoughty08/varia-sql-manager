@@ -94,8 +94,8 @@ describe("the job document's shared rules", () => {
     expect(rebaseAgentJobDraft(opened, current, draft, new Set(['description']))).toMatchObject({ description: 'Theirs', enabled: false })
     expect(createFromDraft(opened, 'dana', false)).toMatchObject({ name: 'Copy of Nightly load', owner: 'dana', emailOperator: 'DBA', enabled: false, removeAlerts: [] })
   })
-  it('keeps every command behind the release gate, and Properties on a job a document', () => {
-    for (const [id, entry] of Object.entries(agentJobCommandEntries())) expect(entry.precondition, id).toContain('agentEnabled')
+  it('needs no release gate for any command (AG-9), and Properties on a job a document', () => {
+    for (const [id, entry] of Object.entries(agentJobCommandEntries())) expect(entry.precondition, id).not.toContain('agentEnabled')
     expect(commandDescriptor('agent.newJob').menus?.[0].when).toContain("explorerFolder == 'agentJobs'")
     expect(actionMenuState({ kind: 'agentJob' }).properties).toBe('enabled')
     expect(dialogSpecs.agentJob).toMatchObject({ surface: 'document', action: 'agentJob' })
@@ -110,7 +110,7 @@ describe("the job document's shared rules", () => {
 
 /** A workbench whose describe answers the job document's model. */
 function opened(first = model()) {
-  const fixture = workbenchFixture({ agentPreview: true })
+  const fixture = workbenchFixture()
   cleanups.push(() => fixture.dispose())
   fixture.api.push(readyBackend())
   fixture.connect(connectionInfo('c1'))

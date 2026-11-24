@@ -184,8 +184,8 @@ describe('ExplorerStatusService', () => {
     connections.add(info(first), { server: 'a' } as never)
     connections.add(info(second), { server: 'b' } as never)
     expect(client.streams.map(stream => [stream.params.connectionId, stream.params.source, stream.params.probes.map(probe => [probe.probe, probe.intervalMs])])).toEqual([
-      [first, 'explorer', [['explorer.databases', 5000], ['explorer.progress', 5000], ['explorer.agent', 10_000], ['explorer.availability', 10_000]]],
-      [second, 'explorer', [['explorer.databases', 5000], ['explorer.progress', 5000], ['explorer.agent', 10_000], ['explorer.availability', 10_000]]]
+      [first, 'explorer', [['explorer.databases', 5000], ['explorer.progress', 5000], ['explorer.agent', 10_000], ['explorer.availability', 10_000], ['explorer.agentService', 10_000]]],
+      [second, 'explorer', [['explorer.databases', 5000], ['explorer.progress', 5000], ['explorer.agent', 10_000], ['explorer.availability', 10_000], ['explorer.agentService', 10_000]]]
     ])
     expect(live.getSnapshot().handles.map(handle => handle.ownerKey)).toEqual(['explorer:' + first, 'explorer:' + second])
     // Removing a server ends its view; a lost one ends too.
@@ -196,9 +196,7 @@ describe('ExplorerStatusService', () => {
     expect(status.getSnapshot().servers.size).toBe(0)
   })
 
-  it('samples the Agent node\'s probe only behind the release gate, each probe once, and shows its chips and sublabel (AG-1)', async () => {
-    status.dispose()
-    status = new ExplorerStatusService({ live, connections, panes, settings, schedule: callback => callback(), agent: true })
+  it('samples the Agent node\'s probe with no release gate to open (AG-9), each probe once, and shows its chips and sublabel (AG-1)', async () => {
     connections.add(info(first), { server: 'a' } as never)
     const fake = streamOf(first)
     expect(fake.params.probes.map(probe => probe.probe)).toEqual(['explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability', 'explorer.agentService'])

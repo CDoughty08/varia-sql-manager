@@ -1,5 +1,5 @@
 // SQL Server Agent's proxy and Credential documents (AG-8b) against the fake backend's proxy and credential (tests/fixtures/backend.mjs,
-// VARIA_TEST_BACKEND=workbench; the smoke runs open the release gate): New › Proxy… on the SQL Server Agent node opens New Proxy, whose
+// VARIA_TEST_BACKEND=workbench): New › Proxy… on the SQL Server Agent node opens New Proxy, whose
 // credential is created in place with a password typed into masked fields; Create sends one agentProxy action whose secret the call log
 // shows only as sent, and the tab becomes the proxy's. Properties on a proxy under its subsystem's folder opens one tab per proxy with its
 // references; an edit counts on Save. Enter on a credential opens its document with Used by; "Change identity and password" sends both

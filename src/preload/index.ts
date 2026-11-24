@@ -5,7 +5,6 @@ import type { ConnectionBindingsChanged } from '../shared/connection-bindings'
 import type { CommandId } from '../shared/commands/catalog'
 import type { ContextMenuCommand } from '../shared/commands/menus'
 import { menuStyleFromArgv } from '../shared/menu-style'
-import { agentPreviewFromArgv } from '../shared/agent/gate'
 import type { ThemeState } from '../shared/theme/types'
 import type { ActionProgress } from '../shared/actions/schema'
 import type { ObjectIndexProgress } from '../shared/explorer/search'
@@ -170,7 +169,6 @@ const api: VariaApi = {
   },
   testMode: process.argv.includes('--varia-test-mode'),
   followSystemMotion: process.argv.includes('--varia-follow-system-motion'),
-  agentPreview: agentPreviewFromArgv(process.argv),
   openSqlFiles: () => ipcRenderer.invoke('varia:files-open'),
   saveSqlFile: options => ipcRenderer.invoke('varia:files-save', options),
   releaseSqlFile: fileId => ipcRenderer.invoke('varia:files-release', fileId),
@@ -222,6 +220,8 @@ const api: VariaApi = {
   closeWindowCancelled: () => { ipcRenderer.send('varia:close-cancelled') },
   loadLayouts: () => ipcRenderer.invoke('varia:layouts-load'),
   saveLayouts: state => ipcRenderer.invoke('varia:layouts-save', state),
+  loadInspectorVitals: () => ipcRenderer.invoke('varia:inspector-vitals-load'),
+  saveInspectorVitals: prefs => ipcRenderer.invoke('varia:inspector-vitals-save', prefs),
   importLayout: () => ipcRenderer.invoke('varia:layout-import'),
   exportLayout: layout => ipcRenderer.invoke('varia:layout-export', layout),
   onCommand: callback => {

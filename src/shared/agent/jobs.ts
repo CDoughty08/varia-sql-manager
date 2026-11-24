@@ -281,29 +281,31 @@ export interface JobActivityCommandEntry {
 }
 const openJobActivity = 'Open Job Activity Monitor first (SQL Server Agent: Job Activity Monitor).'
 /**
- * Job Activity Monitor's commands, all behind the release gate (agentEnabled; the renderer registers none without it): the
+ * Job Activity Monitor's commands: the
  * monitor on the Agent node's and the Job Activity Monitor node's menus and in the palette, and its Refresh and bulk verbs,
  * which act on the jobs selected in the active monitor.
  */
 export function jobActivityCommandEntries(): { readonly [K in JobActivityCommandId]: JobActivityCommandEntry } {
   const bulk = (verb: AgentBulkVerb | AgentBulkFormVerb, icon: JobActivityCommandEntry['icon'], keywords: readonly string[], row?: { readonly title: string; readonly group: string; readonly order: number; readonly mnemonic: string }): JobActivityCommandEntry => ({
     title: agentBulkTitles[verb].dialog, category: 'SQL Server Agent', icon, keywords: ['agent', 'job', 'jobs', ...keywords],
-    precondition: 'agentEnabled && backendReady && activeDocumentIsJobActivity', unavailableHint: 'Select jobs in Job Activity Monitor first.',
+    precondition: 'backendReady && activeDocumentIsJobActivity', unavailableHint: 'Select jobs in Job Activity Monitor first.',
     // AG-10: the list's row menu runs the bar's verb on the selected jobs, in SSMS's words for its Job Activity Monitor menu.
     ...row ? { menus: [{ menu: 'agent.jobs.context' as const, ...row }] } : {}
   })
   return {
     'agent.jobActivity': {
       title: jobActivityTitle, category: 'SQL Server Agent', icon: 'agent-activity', keywords: ['agent', 'jobs', 'activity', 'monitor', 'running', 'sqlserveragent', 'live'],
-      precondition: 'agentEnabled && backendReady && hasConnection', unavailableHint: 'Connect to a SQL Server whose SQL Server Agent you can see first.',
+      precondition: 'backendReady && hasConnection', unavailableHint: 'Connect to a SQL Server whose SQL Server Agent you can see first.',
       menus: [
-        { menu: 'explorer.context', group: '1_monitor', order: 1, mnemonic: 'j', when: "(explorerNode == 'agent' || explorerNode == 'agentJobActivity') && !explorerServerLost" }
+        { menu: 'explorer.context', group: '1_monitor', order: 1, mnemonic: 'j', when: "(explorerNode == 'agent' || explorerNode == 'agentJobActivity') && !explorerServerLost" },
+        // View beside Activity Monitor and Integration Services Operations (AG-10): it asks for the server when more than one is connected.
+        { menu: 'view', group: '2_monitor', order: 3, mnemonic: 'b' }
       ]
     },
     // F5 refreshes the active monitor (AG-10), as in SSMS's Job Activity Monitor and Varia's other live documents; Refresh ends the row menu.
     'agent.refreshJobs': {
       title: 'Refresh Jobs', category: 'SQL Server Agent', icon: 'refresh', keywords: ['agent', 'jobs', 'activity', 'reload', 'now'],
-      precondition: 'agentEnabled && backendReady && activeDocumentIsJobActivity', unavailableHint: openJobActivity,
+      precondition: 'backendReady && activeDocumentIsJobActivity', unavailableHint: openJobActivity,
       keybindings: [{ key: 'f5', when: "activeDocumentIsJobActivity && !activeDocumentIsJobHistory && !activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus" }],
       menus: [{ menu: 'agent.jobs.context', group: '9_view', order: 1, title: 'Refresh', mnemonic: 'f' }]
     },
@@ -314,7 +316,7 @@ export function jobActivityCommandEntries(): { readonly [K in JobActivityCommand
     // AG-10: the one job selected in the monitor, scripted as Object Explorer's Script Job as › CREATE To › New Query Editor Window does.
     'agent.scriptJob': {
       title: 'Script Job as CREATE', category: 'SQL Server Agent', icon: 'code', keywords: ['agent', 'job', 'script', 'create', 'sql', 'tsql'],
-      precondition: 'agentEnabled && backendReady && activeDocumentIsJobActivity', unavailableHint: 'Select one job in Job Activity Monitor first.',
+      precondition: 'backendReady && activeDocumentIsJobActivity', unavailableHint: 'Select one job in Job Activity Monitor first.',
       menus: [{ menu: 'agent.jobs.context', group: '4_script', order: 1, mnemonic: 'r' }]
     },
     // AG-3b: each asks for its value in the monitor, then sends one request per job.

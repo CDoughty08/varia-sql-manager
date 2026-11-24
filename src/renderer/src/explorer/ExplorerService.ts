@@ -106,9 +106,6 @@ export interface ExplorerServiceOptions {
   readonly now?: () => number
   /** Whether Group by Schema is on (the `objectExplorer.groupBySchema` setting), and a signal when it may have changed. */
   readonly groupBySchema?: GroupBySchemaSource
-  /** SQL Server Agent's release gate (`agentEnabled`, `VARIA_AGENT_PREVIEW=1`): while off, the server's Agent node is dropped and the
-   *  tree is today's. */
-  readonly agentEnabled?: boolean
   /** Varia runs on Windows: only there can the SQL Server Agent node's Start, Stop and Restart reach a Service Control Manager (AG-2). */
   readonly windowsClient?: boolean
   /** The connection workspace: the servers' saved order and expansion (`ConnectionTargetService`). */
@@ -307,7 +304,6 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private readonly grouping?: GroupBySchemaSource
   private readonly unsubscribeGrouping?: () => void
   private grouped = false
-  private readonly agentEnabled: boolean
   private readonly windowsClient: boolean
   private readonly targets?: ExplorerTargets
   /** Per server row, what its saved expansion still has to restore as pages arrive. */
@@ -334,7 +330,6 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.loader = new ExplorerLoader({ api: options.api, timers: this.timers, newId: options.newId, limits: this.limits, onPendingChange: () => this.updateContext() })
     this.unsubscribe = this.connections.subscribe(() => this.guard(() => this.syncConnections()))
     this.grouping = options.groupBySchema
-    this.agentEnabled = options.agentEnabled ?? false
     this.windowsClient = options.windowsClient ?? false
     this.targets = options.targets
     this.grouped = !!this.grouping?.get()
@@ -1297,7 +1292,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     const root = this.rootOf(node)
     if (outcome.ok && !outcome.result.error) {
       if (root?.connectionError) { root.connectionError = undefined; root.rev++ }
-      const { nodes, total } = this.gated(outcome.result.nodes, outcome.result.total)
+      const { nodes, total } = outcome.result
       if (running.mode === 'more') this.appendPage(node, nodes, outcome.result.cursor)
       else if (running.mode === 'reconcile') this.reconcileFirst(node, nodes, outcome.result.cursor, total, running.deep)
       else this.firstPage(node, nodes, outcome.result.cursor, total)
@@ -1317,12 +1312,6 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.invalidate()
     this.advanceSeek()
     if (this.opened?.chain) this.advanceOpen()
-  }
-  /** A page without the SQL Server Agent node while Agent's release gate is off (the backend serves it wherever Agent runs). */
-  private gated(nodes: readonly WireNode[], total: number | undefined): { readonly nodes: readonly WireNode[]; readonly total: number | undefined } {
-    if (this.agentEnabled) return { nodes, total }
-    const kept = nodes.filter(node => !(node.ref.type === 'object' && node.ref.object.kind === 'agent'))
-    return kept.length === nodes.length ? { nodes, total } : { nodes: kept, total: total === undefined ? undefined : total - (nodes.length - kept.length) }
   }
   private firstPage(node: TreeNode, wires: readonly WireNode[], cursor: string | undefined, total: number | undefined): void {
     const truncated = this.replaceChildren(node, wires)
@@ -1891,9 +1880,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     const next: ExplorerContextState = {
       ...selectionContextOf(node && this.targetOf(node), { filtered: !!node?.filtered, insertable: !!node && (node.kind === 'server' || this.insertable(node)) }),
       explorerLoading: this.loader.pending > 0,
-      explorerGroupBySchema: this.grouped,
-      // A credential's Properties is its document (AG-8b), behind SQL Server Agent's release gate; Security › Credentials lists either way.
-      ...!this.agentEnabled && node?.kind === 'credential' ? { explorerActionProperties: '' as const } : {}
+      explorerGroupBySchema: this.grouped
     }
     const current = this.contextStore.getSnapshot()
     if ((Object.keys(next) as (keyof ExplorerContextState)[]).some(key => next[key] !== current[key])) this.contextStore.set(next)

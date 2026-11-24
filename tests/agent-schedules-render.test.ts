@@ -25,7 +25,7 @@ const profile = { platform: 'windows', engineEdition: 3, msdbAccess: true, sysad
 
 describe('The Schedules grid', () => {
   it("enables the Enabled box on another login's schedule once the operator role is read", async () => {
-    const fixture = workbenchFixture({ agentPreview: true })
+    const fixture = workbenchFixture()
     cleanups.push(() => fixture.dispose())
     fixture.api.push(readyBackend())
     fixture.connect(connectionInfo('c1'))

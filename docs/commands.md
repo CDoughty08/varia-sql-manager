@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (435)
+## Commands (444)
 
 ### File
 
@@ -93,15 +93,24 @@ keys it uses are listed below.
 | Reset Layout | `layout.reset` | — | — | — | Always | View › Reset Layout; Window › Reset Window Layout |
 | Next Query | `document.next` | Ctrl+Tab, Ctrl+PageDown (`!resultsFocus \|\| !multipleResults`) | Ctrl+Tab, Ctrl+PageDown (`!resultsFocus \|\| !multipleResults`) | ⌃⇥ | `multipleDocuments` | Window › Next Query |
 | Previous Query | `document.previous` | Ctrl+Shift+Tab, Ctrl+PageUp (`!resultsFocus \|\| !multipleResults`) | Ctrl+Shift+Tab, Ctrl+PageUp (`!resultsFocus \|\| !multipleResults`) | ⌃⇧⇥ | `multipleDocuments` | Window › Previous Query |
-| Go to Query 1 | `document.goToQuery1` | Ctrl+1 (`!resultsFocus \|\| !multipleResults`) | Ctrl+1 (`!resultsFocus \|\| !multipleResults`) | ⌘1 (`!resultsFocus \|\| !multipleResults`) | `hasActiveDocument` | — |
-| Go to Query 2 | `document.goToQuery2` | Ctrl+2 (`!resultsFocus \|\| !multipleResults`) | Ctrl+2 (`!resultsFocus \|\| !multipleResults`) | ⌘2 (`!resultsFocus \|\| !multipleResults`) | `hasActiveDocument` | — |
-| Go to Query 3 | `document.goToQuery3` | Ctrl+3 (`!resultsFocus \|\| !multipleResults`) | Ctrl+3 (`!resultsFocus \|\| !multipleResults`) | ⌘3 (`!resultsFocus \|\| !multipleResults`) | `hasActiveDocument` | — |
-| Go to Query 4 | `document.goToQuery4` | Ctrl+4 (`!resultsFocus \|\| !multipleResults`) | Ctrl+4 (`!resultsFocus \|\| !multipleResults`) | ⌘4 (`!resultsFocus \|\| !multipleResults`) | `hasActiveDocument` | — |
-| Go to Query 5 | `document.goToQuery5` | Ctrl+5 (`!resultsFocus \|\| !multipleResults`) | Ctrl+5 (`!resultsFocus \|\| !multipleResults`) | ⌘5 (`!resultsFocus \|\| !multipleResults`) | `hasActiveDocument` | — |
-| Go to Query 6 | `document.goToQuery6` | Ctrl+6 (`!resultsFocus \|\| !multipleResults`) | Ctrl+6 (`!resultsFocus \|\| !multipleResults`) | ⌘6 (`!resultsFocus \|\| !multipleResults`) | `hasActiveDocument` | — |
-| Go to Query 7 | `document.goToQuery7` | Ctrl+7 (`!resultsFocus \|\| !multipleResults`) | Ctrl+7 (`!resultsFocus \|\| !multipleResults`) | ⌘7 (`!resultsFocus \|\| !multipleResults`) | `hasActiveDocument` | — |
-| Go to Query 8 | `document.goToQuery8` | Ctrl+8 (`!resultsFocus \|\| !multipleResults`) | Ctrl+8 (`!resultsFocus \|\| !multipleResults`) | ⌘8 (`!resultsFocus \|\| !multipleResults`) | `hasActiveDocument` | — |
-| Go to Last Query | `document.goToLastQuery` | Ctrl+9 (`!resultsFocus \|\| !multipleResults`) | Ctrl+9 (`!resultsFocus \|\| !multipleResults`) | ⌘9 (`!resultsFocus \|\| !multipleResults`) | `hasActiveDocument` | — |
+| Go to Query 1 | `document.goToQuery1` | Ctrl+1 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | Ctrl+1 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | ⌘1 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | `hasActiveDocument` | — |
+| Go to Query 2 | `document.goToQuery2` | Ctrl+2 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | Ctrl+2 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | ⌘2 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | `hasActiveDocument` | — |
+| Go to Query 3 | `document.goToQuery3` | Ctrl+3 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | Ctrl+3 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | ⌘3 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | `hasActiveDocument` | — |
+| Go to Query 4 | `document.goToQuery4` | Ctrl+4 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | Ctrl+4 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | ⌘4 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | `hasActiveDocument` | — |
+| Go to Query 5 | `document.goToQuery5` | Ctrl+5 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | Ctrl+5 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | ⌘5 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | `hasActiveDocument` | — |
+| Go to Query 6 | `document.goToQuery6` | Ctrl+6 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | Ctrl+6 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | ⌘6 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | `hasActiveDocument` | — |
+| Go to Query 7 | `document.goToQuery7` | Ctrl+7 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | Ctrl+7 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | ⌘7 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | `hasActiveDocument` | — |
+| Go to Query 8 | `document.goToQuery8` | Ctrl+8 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | Ctrl+8 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | ⌘8 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | `hasActiveDocument` | — |
+| Go to Last Query | `document.goToLastQuery` | Ctrl+9 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | Ctrl+9 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | ⌘9 (`(!resultsFocus \|\| !multipleResults) && !objectInspectorFocus`) | `hasActiveDocument` | — |
+| Go to Inspector Section 1 (not in the palette) | `inspector.goToTab1` | Ctrl+1 (`objectInspectorFocus`) | Ctrl+1 (`objectInspectorFocus`) | ⌘1 (`objectInspectorFocus`) | Always | — |
+| Go to Inspector Section 2 (not in the palette) | `inspector.goToTab2` | Ctrl+2 (`objectInspectorFocus`) | Ctrl+2 (`objectInspectorFocus`) | ⌘2 (`objectInspectorFocus`) | Always | — |
+| Go to Inspector Section 3 (not in the palette) | `inspector.goToTab3` | Ctrl+3 (`objectInspectorFocus`) | Ctrl+3 (`objectInspectorFocus`) | ⌘3 (`objectInspectorFocus`) | Always | — |
+| Go to Inspector Section 4 (not in the palette) | `inspector.goToTab4` | Ctrl+4 (`objectInspectorFocus`) | Ctrl+4 (`objectInspectorFocus`) | ⌘4 (`objectInspectorFocus`) | Always | — |
+| Go to Inspector Section 5 (not in the palette) | `inspector.goToTab5` | Ctrl+5 (`objectInspectorFocus`) | Ctrl+5 (`objectInspectorFocus`) | ⌘5 (`objectInspectorFocus`) | Always | — |
+| Go to Inspector Section 6 (not in the palette) | `inspector.goToTab6` | Ctrl+6 (`objectInspectorFocus`) | Ctrl+6 (`objectInspectorFocus`) | ⌘6 (`objectInspectorFocus`) | Always | — |
+| Go to Inspector Section 7 (not in the palette) | `inspector.goToTab7` | Ctrl+7 (`objectInspectorFocus`) | Ctrl+7 (`objectInspectorFocus`) | ⌘7 (`objectInspectorFocus`) | Always | — |
+| Go to Inspector Section 8 (not in the palette) | `inspector.goToTab8` | Ctrl+8 (`objectInspectorFocus`) | Ctrl+8 (`objectInspectorFocus`) | ⌘8 (`objectInspectorFocus`) | Always | — |
+| Go to Last Inspector Section (not in the palette) | `inspector.goToLastTab` | Ctrl+9 (`objectInspectorFocus`) | Ctrl+9 (`objectInspectorFocus`) | ⌘9 (`objectInspectorFocus`) | Always | — |
 | Move Query Left | `document.moveLeft` | Ctrl+Shift+PageUp | Ctrl+Shift+PageUp | ⌃⇧⇞ | `multipleDocuments` | Query tab context menu › Move Left |
 | Move Query Right | `document.moveRight` | Ctrl+Shift+PageDown | Ctrl+Shift+PageDown | ⌃⇧⇟ | `multipleDocuments` | Query tab context menu › Move Right |
 | Rename Tab… | `document.rename` | F2 (`documentTabFocus && !inputFocus`) | F2 (`documentTabFocus && !inputFocus`) | F2 (`documentTabFocus && !inputFocus`) | `hasActiveDocument` | Query tab context menu › Rename Tab… |
@@ -293,9 +302,9 @@ keys it uses are listed below.
 | New Database… | `explorer.newDatabase` | — | — | — | `backendReady && (explorerSelectionFolder == 'databases' \|\| explorerSelectionKind == 'database') && explorerSelectionServerEngine == 'box'` | Object Explorer context menu › New Database… |
 | New Database… (not in the palette) | `explorer.newDatabaseOnDatabase` | — | — | — | `backendReady && (explorerSelectionFolder == 'databases' \|\| explorerSelectionKind == 'database') && explorerSelectionServerEngine == 'box'` | Object Explorer context menu › New Database… |
 | New Table… | `explorer.newTable` | — | — | — | `backendReady && explorerSelectionFolder == 'tables' && !documentBusy` | Object Explorer context menu › New › Table… |
-| New Credential… | `agent.newCredential` | — | — | — | `agentEnabled && backendReady && (explorerSelectionFolder == 'credentials' \|\| explorerSelectionKind == 'credential')` | Object Explorer context menu › New Credential… |
-| Save Credential | `credential.save` | — | — | — | `agentEnabled && backendReady && activeDocumentIsCredential` | — |
-| Reload Credential | `credential.reload` | — | — | — | `agentEnabled && backendReady && activeDocumentIsCredential` | — |
+| New Credential… | `agent.newCredential` | — | — | — | `backendReady && (explorerSelectionFolder == 'credentials' \|\| explorerSelectionKind == 'credential')` | Object Explorer context menu › New Credential… |
+| Save Credential | `credential.save` | — | — | — | `backendReady && activeDocumentIsCredential` | — |
+| Reload Credential | `credential.reload` | — | — | — | `backendReady && activeDocumentIsCredential` | — |
 | Script as CREATE to New Query Editor Window (not in the palette) | `explorer.scriptCreateToNewQuery` | — | — | — | `backendReady && explorerScriptCreate == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › CREATE To › New Query Editor Window |
 | Script as CREATE to File… (not in the palette) | `explorer.scriptCreateToFile` | — | — | — | `backendReady && explorerScriptCreate == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › CREATE To › File… |
 | Script as CREATE to Clipboard (not in the palette) | `explorer.scriptCreateToClipboard` | — | — | — | `backendReady && explorerScriptCreate == 'enabled'` | Object Explorer context menu › Script … as › CREATE To › Clipboard |
@@ -436,55 +445,55 @@ keys it uses are listed below.
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
-| Job Activity Monitor | `agent.jobActivity` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › Job Activity Monitor |
-| Refresh Jobs | `agent.refreshJobs` | F5 (`activeDocumentIsJobActivity && !activeDocumentIsJobHistory && !activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus`) | F5 (`activeDocumentIsJobActivity && !activeDocumentIsJobHistory && !activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus`) | F5 (`activeDocumentIsJobActivity && !activeDocumentIsJobHistory && !activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus`) | `agentEnabled && backendReady && activeDocumentIsJobActivity` | Job Activity Monitor context menu › Refresh |
-| Start Jobs | `agent.startJobs` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | Job Activity Monitor context menu › Start Job |
-| Stop Jobs | `agent.stopJobs` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | Job Activity Monitor context menu › Stop Job |
-| Enable Jobs | `agent.enableJobs` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | Job Activity Monitor context menu › Enable Job |
-| Disable Jobs | `agent.disableJobs` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | Job Activity Monitor context menu › Disable Job |
-| Script Job as CREATE | `agent.scriptJob` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | Job Activity Monitor context menu › Script Job as CREATE |
-| Change Job Owner… | `agent.changeJobOwner` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
-| Attach Schedule to Jobs… | `agent.attachJobSchedule` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
-| Open Job… | `agent.openJob` | Enter (`activeDocumentIsJobActivity && liveGridFocus`) | Enter (`activeDocumentIsJobActivity && liveGridFocus`) | ↩ (`activeDocumentIsJobActivity && liveGridFocus`) | `agentEnabled && backendReady && hasConnection` | Job Activity Monitor context menu › Open |
-| New Job… | `agent.newJob` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › New Job… |
-| Save Job | `agentJob.save` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentJob` | — |
-| Start Job | `agentJob.start` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentJob` | — |
-| Start Job at Step… | `agentJob.startAtStep` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentJob` | — |
-| Stop Job | `agentJob.stop` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentJob` | — |
-| Reload Job | `agentJob.reload` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentJob` | — |
-| Move Step Up | `agentJob.moveStepUp` | Alt+Up (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | Alt+Up (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | ⌥↑ (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | `agentEnabled && backendReady && activeDocumentIsAgentJob` | — |
-| Move Step Down | `agentJob.moveStepDown` | Alt+Down (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | Alt+Down (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | ⌥↓ (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | `agentEnabled && backendReady && activeDocumentIsAgentJob` | — |
-| New Alert… | `agent.newAlert` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › New Alert… |
-| Alert… (not in the palette) | `agent.newAlertOnAgent` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › New › Alert… |
-| Open Alert… | `agent.openAlert` | — | — | — | `agentEnabled && backendReady && hasConnection` | — |
-| Add Recommended Alerts… | `agent.addRecommendedAlerts` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › Add Recommended Alerts… |
-| Save Alert | `agentAlert.save` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentAlert` | — |
-| Reload Alert | `agentAlert.reload` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentAlert` | — |
-| New Operator… | `agent.newOperator` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › New Operator… |
-| Operator… (not in the palette) | `agent.newOperatorOnAgent` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › New › Operator… |
-| Open Operator… | `agent.openOperator` | — | — | — | `agentEnabled && backendReady && hasConnection` | — |
-| Operators and Notifications… | `agent.operators` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › Operators and Notifications… |
-| Save Operator | `agentOperator.save` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentOperator` | — |
-| Reload Operator | `agentOperator.reload` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentOperator` | — |
-| Send Test E-mail | `agentOperator.sendTest` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentOperator` | — |
-| Save Notifications | `agentOperators.save` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentOperators` | — |
-| Reload Notifications | `agentOperators.reload` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentOperators` | — |
-| New Proxy… | `agent.newProxy` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › New Proxy… |
-| Proxy… (not in the palette) | `agent.newProxyOnAgent` | — | — | — | `agentEnabled && backendReady && explorerSelectionKind == 'agent'` | Object Explorer context menu › New › Proxy… |
-| Save Proxy | `agentProxy.save` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentProxy` | — |
-| Reload Proxy | `agentProxy.reload` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentProxy` | — |
-| View History | `agent.viewHistory` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › View History; Job Activity Monitor context menu › View History |
-| Refresh History | `agent.refreshHistory` | — | — | — | `agentEnabled && backendReady && activeDocumentIsLogViewer` | — |
-| Delete History… | `agent.deleteHistory` | — | — | — | `agentEnabled && backendReady && activeDocumentIsLogViewer` | — |
-| View Agent Log | `agent.viewAgentLog` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › View Agent Log |
-| Recycle Agent Error Log… | `agent.recycleErrorLog` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › Recycle |
-| Manage Schedules | `agent.schedules` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › Manage Schedules |
-| New Schedule… | `agent.newSchedule` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › New › Schedule… |
-| Job… (not in the palette) | `agent.newJobOnAgent` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › New › Job… |
-| Save Schedule | `agentSchedules.save` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentSchedules` | — |
-| Refresh Schedules | `agentSchedules.refresh` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentSchedules` | — |
-| Delete Schedule | `agentSchedules.delete` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentSchedules` | — |
-| Create Job Like This… | `agent.createJobLike` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › Create Job Like This…; Job Activity Monitor context menu › Create Job Like This… |
+| Job Activity Monitor | `agent.jobActivity` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › Job Activity Monitor; View › Job Activity Monitor |
+| Refresh Jobs | `agent.refreshJobs` | F5 (`activeDocumentIsJobActivity && !activeDocumentIsJobHistory && !activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus`) | F5 (`activeDocumentIsJobActivity && !activeDocumentIsJobHistory && !activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus`) | F5 (`activeDocumentIsJobActivity && !activeDocumentIsJobHistory && !activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus`) | `backendReady && activeDocumentIsJobActivity` | Job Activity Monitor context menu › Refresh |
+| Start Jobs | `agent.startJobs` | — | — | — | `backendReady && activeDocumentIsJobActivity` | Job Activity Monitor context menu › Start Job |
+| Stop Jobs | `agent.stopJobs` | — | — | — | `backendReady && activeDocumentIsJobActivity` | Job Activity Monitor context menu › Stop Job |
+| Enable Jobs | `agent.enableJobs` | — | — | — | `backendReady && activeDocumentIsJobActivity` | Job Activity Monitor context menu › Enable Job |
+| Disable Jobs | `agent.disableJobs` | — | — | — | `backendReady && activeDocumentIsJobActivity` | Job Activity Monitor context menu › Disable Job |
+| Script Job as CREATE | `agent.scriptJob` | — | — | — | `backendReady && activeDocumentIsJobActivity` | Job Activity Monitor context menu › Script Job as CREATE |
+| Change Job Owner… | `agent.changeJobOwner` | — | — | — | `backendReady && activeDocumentIsJobActivity` | — |
+| Attach Schedule to Jobs… | `agent.attachJobSchedule` | — | — | — | `backendReady && activeDocumentIsJobActivity` | — |
+| Open Job… | `agent.openJob` | Enter (`activeDocumentIsJobActivity && liveGridFocus`) | Enter (`activeDocumentIsJobActivity && liveGridFocus`) | ↩ (`activeDocumentIsJobActivity && liveGridFocus`) | `backendReady && hasConnection` | Job Activity Monitor context menu › Open |
+| New Job… | `agent.newJob` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › New Job… |
+| Save Job | `agentJob.save` | — | — | — | `backendReady && activeDocumentIsAgentJob` | — |
+| Start Job | `agentJob.start` | — | — | — | `backendReady && activeDocumentIsAgentJob` | — |
+| Start Job at Step… | `agentJob.startAtStep` | — | — | — | `backendReady && activeDocumentIsAgentJob` | — |
+| Stop Job | `agentJob.stop` | — | — | — | `backendReady && activeDocumentIsAgentJob` | — |
+| Reload Job | `agentJob.reload` | — | — | — | `backendReady && activeDocumentIsAgentJob` | — |
+| Move Step Up | `agentJob.moveStepUp` | Alt+Up (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | Alt+Up (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | ⌥↑ (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | `backendReady && activeDocumentIsAgentJob` | — |
+| Move Step Down | `agentJob.moveStepDown` | Alt+Down (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | Alt+Down (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | ⌥↓ (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | `backendReady && activeDocumentIsAgentJob` | — |
+| New Alert… | `agent.newAlert` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › New Alert… |
+| Alert… (not in the palette) | `agent.newAlertOnAgent` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › New › Alert… |
+| Open Alert… | `agent.openAlert` | — | — | — | `backendReady && hasConnection` | — |
+| Add Recommended Alerts… | `agent.addRecommendedAlerts` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › Add Recommended Alerts… |
+| Save Alert | `agentAlert.save` | — | — | — | `backendReady && activeDocumentIsAgentAlert` | — |
+| Reload Alert | `agentAlert.reload` | — | — | — | `backendReady && activeDocumentIsAgentAlert` | — |
+| New Operator… | `agent.newOperator` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › New Operator… |
+| Operator… (not in the palette) | `agent.newOperatorOnAgent` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › New › Operator… |
+| Open Operator… | `agent.openOperator` | — | — | — | `backendReady && hasConnection` | — |
+| Operators and Notifications… | `agent.operators` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › Operators and Notifications… |
+| Save Operator | `agentOperator.save` | — | — | — | `backendReady && activeDocumentIsAgentOperator` | — |
+| Reload Operator | `agentOperator.reload` | — | — | — | `backendReady && activeDocumentIsAgentOperator` | — |
+| Send Test E-mail | `agentOperator.sendTest` | — | — | — | `backendReady && activeDocumentIsAgentOperator` | — |
+| Save Notifications | `agentOperators.save` | — | — | — | `backendReady && activeDocumentIsAgentOperators` | — |
+| Reload Notifications | `agentOperators.reload` | — | — | — | `backendReady && activeDocumentIsAgentOperators` | — |
+| New Proxy… | `agent.newProxy` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › New Proxy… |
+| Proxy… (not in the palette) | `agent.newProxyOnAgent` | — | — | — | `backendReady && explorerSelectionKind == 'agent'` | Object Explorer context menu › New › Proxy… |
+| Save Proxy | `agentProxy.save` | — | — | — | `backendReady && activeDocumentIsAgentProxy` | — |
+| Reload Proxy | `agentProxy.reload` | — | — | — | `backendReady && activeDocumentIsAgentProxy` | — |
+| View History | `agent.viewHistory` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › View History; Job Activity Monitor context menu › View History |
+| Refresh History | `agent.refreshHistory` | — | — | — | `backendReady && activeDocumentIsLogViewer` | — |
+| Delete History… | `agent.deleteHistory` | — | — | — | `backendReady && activeDocumentIsLogViewer` | — |
+| View Agent Log | `agent.viewAgentLog` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › View Agent Log |
+| Recycle Agent Error Log… | `agent.recycleErrorLog` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › Recycle |
+| Manage Schedules | `agent.schedules` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › Manage Schedules |
+| New Schedule… | `agent.newSchedule` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › New › Schedule… |
+| Job… (not in the palette) | `agent.newJobOnAgent` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › New › Job… |
+| Save Schedule | `agentSchedules.save` | — | — | — | `backendReady && activeDocumentIsAgentSchedules` | — |
+| Refresh Schedules | `agentSchedules.refresh` | — | — | — | `backendReady && activeDocumentIsAgentSchedules` | — |
+| Delete Schedule | `agentSchedules.delete` | — | — | — | `backendReady && activeDocumentIsAgentSchedules` | — |
+| Create Job Like This… | `agent.createJobLike` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › Create Job Like This…; Job Activity Monitor context menu › Create Job Like This… |
 
 ### BigQuery
 
@@ -660,6 +669,7 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `1_layout` | **R**eset Layout | `layout.reset` | Always |
 | `2_monitor` | Activity **M**onitor | `activity.open` | Always |
 | `2_monitor` | I**n**tegration Services Operations | `ssis.allOperations` | Always |
+| `2_monitor` | Jo**b** Activity Monitor | `agent.jobActivity` | Always |
 | `3_theme` | T**h**eme › | Submenu: View › Theme | Always |
 | `4_zoom` | Zoom **I**n | `view.zoomIn` | Always |
 | `4_zoom` | Zoom **O**ut | `view.zoomOut` | Always |
@@ -786,9 +796,9 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `0_connect` | **R**econnect… | `connection.reconnect` | `explorerServerLost` |
 | `0_connect` | Rem**o**ve from Explorer | `connection.removeFromExplorer` | `explorerServerLost` |
 | `0_connect` | En**v**ironment… | `connection.environment` | `explorerNode == 'server' && !explorerServerLost` |
-| `0_new` | **N**ew › | Submenu: Object Explorer context menu › New | `(explorerNode == 'folder' && (explorerFolder == 'tables' \|\| (explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance') && !explorerServerLost))) \|\| (explorerNode == 'agent' && agentEnabled)` |
+| `0_new` | **N**ew › | Submenu: Object Explorer context menu › New | `(explorerNode == 'folder' && (explorerFolder == 'tables' \|\| (explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance') && !explorerServerLost))) \|\| explorerNode == 'agent'` |
 | `0_new` | **N**ew Alert… | `agent.newAlert` | `((explorerNode == 'folder' && explorerFolder == 'agentAlerts') \|\| explorerNode == 'agentAlert') && !explorerServerLost` |
-| `0_new` | **N**ew Credential… | `agent.newCredential` | `agentEnabled && ((explorerNode == 'folder' && explorerFolder == 'credentials') \|\| explorerNode == 'credential') && !explorerServerLost && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance')` |
+| `0_new` | **N**ew Credential… | `agent.newCredential` | `((explorerNode == 'folder' && explorerFolder == 'credentials') \|\| explorerNode == 'credential') && !explorerServerLost && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance')` |
 | `0_new` | **N**ew Database… | `explorer.newDatabase` | `explorerNode == 'folder' && explorerFolder == 'databases' && !explorerServerLost && explorerServerEngine == 'box'` |
 | `0_new` | **N**ew Job… | `agent.newJob` | `((explorerNode == 'folder' && explorerFolder == 'agentJobs') \|\| explorerNode == 'agentJob') && !explorerServerLost` |
 | `0_new` | **N**ew Login… | `explorer.newLogin` | `((explorerNode == 'folder' && explorerFolder == 'logins') \|\| explorerNode == 'login') && !explorerServerLost && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance')` |
@@ -1253,7 +1263,6 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `isMac` | boolean | static | The app runs on macOS. |
 | `isWindows` | boolean | static | The app runs on Windows. |
 | `isLinux` | boolean | static | The app runs on Linux or another platform treated like it. |
-| `agentEnabled` | boolean | static | SQL Server Agent's surfaces show: main was started with `VARIA_AGENT_PREVIEW=1` (the release gate until 0.11.0). While it is false, Object Explorer shows no SQL Server Agent node and every Agent command, menu item and document is left out. |
 | `editorFocus` | boolean | focus | Focus is in the query editor, including its find widget. |
 | `editorTextFocus` | boolean | focus | The query editor's text has focus. |
 | `inputFocus` | boolean | focus | Focus is on an input, text area, select, or editable element other than the editor text. The find widget's inputs count. |
@@ -1276,6 +1285,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `peekFocus` | boolean | focus | Focus is in Object Explorer's Peek card, which floats outside every pane (activePanel is then ''). |
 | `peekTabFocus` | boolean | focus | Focus is in the active Peek tab; activePanel is then 'editor'. |
 | `peekEditorFocus` | boolean | focus | Focus is in Peek's read-only definition editor (a card's or a Peek tab's), its find widget included. It is not the query editor: editorFocus and editorTextFocus stay false, so query commands (Execute, Parse and the rest) leave it alone. |
+| `objectInspectorFocus` | boolean | focus | Focus is inside a unified object inspector (Peek card, Peek tab or Properties document), so Ctrl+1 to Ctrl+9 (⌘1 to ⌘9 on macOS) jump between its sections. |
 | `quickInputVisible` | boolean | state | The command palette or a picker is open. |
 | `backendStatus` | `'starting'`, `'ready'`, `'unresponsive'`, `'restarting'`, `'failed'`, `'stopped'`, `''` | state | The SQL backend's state; '' before the workbench has heard from main. |
 | `backendReady` | boolean | state | `backendStatus == 'ready'`. |

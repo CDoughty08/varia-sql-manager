@@ -2,7 +2,7 @@ import type { VariaApi } from '../../../shared/contracts'
 import { belowSchema, folderSpecs, kindSpecs, type FolderId } from '../../../shared/explorer/catalog.ts'
 import type { ExplorerNodeRef, ObjectRef } from '../../../shared/explorer/refs.ts'
 import type { BigQueryDryRunResult } from '../../../shared/bigquery/dry-run.ts'
-import { objectSearchLimits, type BigQueryBulkIndex, type BigQueryIndexScope, type ObjectIndexProgress, type ObjectIndexStatus, type ObjectSearchHit, type ObjectSearchResult, type SearchScope, type SearchType, agentSearchKinds, providerSearchKinds, searchTypeKinds } from '../../../shared/explorer/search.ts'
+import { objectSearchLimits, type BigQueryBulkIndex, type BigQueryIndexScope, type ObjectIndexProgress, type ObjectIndexStatus, type ObjectSearchHit, type ObjectSearchResult, type SearchScope, type SearchType, providerSearchKinds, searchTypeKinds } from '../../../shared/explorer/search.ts'
 import type { WorkbenchEvent } from '../core/types'
 import type { SettingKey, SettingValue } from '../../../shared/settings/catalog'
 import { onUnexpectedError } from '../core/errors'
@@ -104,8 +104,6 @@ export interface ObjectSearchOptions extends CustomDocumentTargetOptions {
   readonly focus?: (id: string) => void
   readonly timers?: Timers
   readonly newId?: () => string
-  /** The Agent release gate: SQL Server Agent's kinds are searched only while it is on. */
-  readonly agentEnabled?: boolean
   /** The workbench's events: a BigQuery query whose DDL may have changed objects re-reads the datasets it marked (`stale`). */
   readonly events?: { subscribe(listener: (event: WorkbenchEvent) => void): Disposable }
   /** BigQuery's cost prompts before a full build's billed bulk path runs (BigQueryCostService.beforeScript); without it the bulk path never runs. */
@@ -721,9 +719,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const typed = searchTypeKinds(asked.types)
     const own = typed && providerSearchKinds(bigQuery ? 'bigquery' : 'sqlserver', typed)
     if (own && !own.length) return Promise.resolve({ ok: true as const, value: noHits(this.getSnapshot().indexes[connectionId]?.status) })
-    const kinds = bigQuery || this.o.agentEnabled ? own : (own ?? providerSearchKinds('sqlserver')).filter(kind => !(agentSearchKinds as readonly string[]).includes(kind))
     return this.o.api.explorerSearch({
-      connectionId, requestId, text: asked.text, caseSensitive: asked.caseSensitive, wholeWord: asked.wholeWord, regex: asked.regex, in: asked.scope, ...kinds ? { kinds } : {},
+      connectionId, requestId, text: asked.text, caseSensitive: asked.caseSensitive, wholeWord: asked.wholeWord, regex: asked.regex, in: asked.scope, ...own ? { kinds: own } : {},
       ...asked.fuzzy && !asked.regex ? { match: 'fuzzy' as const } : {}, ...asked.database !== undefined && !bigQuery ? { database: asked.database } : {},
       ...asked.limit !== undefined ? { limit: asked.limit } : {}
     })
