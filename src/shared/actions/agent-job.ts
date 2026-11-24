@@ -513,10 +513,10 @@ export interface AgentJobCommandEntry {
   readonly keybindings?: readonly { readonly key: string; readonly when: string }[]
   readonly menus?: readonly { readonly menu: 'explorer.context'; readonly group: string; readonly order: number; readonly mnemonic?: string; readonly when?: string }[]
 }
-const inJob = 'agentEnabled && backendReady && activeDocumentIsAgentJob'
+const inJob = 'backendReady && activeDocumentIsAgentJob'
 const openJobFirst = 'Open a job first (SQL Server Agent: Open Job…, or Properties on a job in Object Explorer).'
 /**
- * The job document's commands, all behind the release gate (agentEnabled; the renderer registers none without it): Open Job… and
+ * The job document's commands: Open Job… and
  * New Job… (on the Jobs folder's menu and in the palette; Open Job opens the job selected in Job Activity Monitor when run from it), and the document's own verbs, which act on the job document whose header
  * runs them (`tabId`), else the active one. Properties on a job opens the document through the object actions' Properties.
  */
@@ -524,13 +524,13 @@ export function agentJobCommandEntries(): { readonly [K in AgentJobCommandId]: A
   return {
     'agent.openJob': {
       title: 'Open Job…', category: 'SQL Server Agent', icon: 'go-to-file', keywords: ['agent', 'job', 'properties', 'edit', 'sqlserveragent'],
-      precondition: 'agentEnabled && backendReady && hasConnection', unavailableHint: 'Connect to a SQL Server whose SQL Server Agent you can see first.',
+      precondition: 'backendReady && hasConnection', unavailableHint: 'Connect to a SQL Server whose SQL Server Agent you can see first.',
       // Enter in Job Activity Monitor's list opens the selected job, as a double-click does.
       keybindings: [{ key: 'enter', when: 'activeDocumentIsJobActivity && outputGridFocus' }]
     },
     'agent.newJob': {
       title: 'New Job…', category: 'SQL Server Agent', icon: 'add', keywords: ['agent', 'job', 'create', 'add', 'copy', 'sqlserveragent'],
-      precondition: 'agentEnabled && backendReady && hasConnection', unavailableHint: 'Connect to a SQL Server whose SQL Server Agent you can see first.',
+      precondition: 'backendReady && hasConnection', unavailableHint: 'Connect to a SQL Server whose SQL Server Agent you can see first.',
       menus: [{ menu: 'explorer.context', group: '0_new', order: 1, mnemonic: 'n', when: "((explorerNode == 'folder' && explorerFolder == 'agentJobs') || explorerNode == 'agentJob') && !explorerServerLost" }]
     },
     'agentJob.save': {

@@ -69,7 +69,6 @@ import { closeAction, holdsSessionEnd, mergeCloseIntent, type CloseIntent } from
 import { processAlive, RendererWatchdog } from './renderer-watchdog'
 import { ContextMenuPopups } from './context-menu'
 import { menuStyleArgument, menuStyleFor } from '../shared/menu-style'
-import { agentPreviewArgument, agentPreviewEnabled } from '../shared/agent/gate'
 import { contentSecurityPolicy } from '../shared/csp'
 import { homedir, userInfo } from 'node:os'
 import { parseWorkspaceLayout } from '../shared/layouts'
@@ -326,8 +325,6 @@ let sessionTaken = false
 const hotExitAvailable = !(testSeams && process.env.VARIA_TEST_HOT_EXIT === '0')
 // Smoke suites read colours and boxes as soon as a state changes, so they reduce motion under emulated media without the setting.
 const followSystemMotion = testSeams && process.env.VARIA_TEST_FOLLOW_SYSTEM_MOTION === '1'
-// SQL Server Agent's release gate, read once: its surfaces show only with VARIA_AGENT_PREVIEW=1 until 0.11.0 (src/shared/agent/gate.ts).
-const agentPreview = agentPreviewEnabled(process.env)
 /** The crash, hang and reload prompts' details for `generation`'s page: AutoRecover's wording once it kept that page's
  *  queries. A page has records only after a write, which waited for settings, so `current()` holds the loaded values. */
 // Taken before a crash's reset restarts the backend (which forgets its providers), so the prompt still says what became of BigQuery jobs.
@@ -753,7 +750,7 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
     titleBarStyle: 'hidden',
     // The header is one --varia-header row; the traffic lights and the window-controls overlay are centred in it.
     ...(process.platform === 'darwin' ? { trafficLightPosition: controls.trafficLights } : { titleBarOverlay: { ...chrome.overlay, height: controls.overlayHeight } }),
-    webPreferences: { preload: join(here, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: process.env.VARIA_SMOKE_TEST !== '1', additionalArguments: [menuStyleArgument(menuStyle), ...(testSeams ? ['--varia-test-mode'] : []), ...(hotExitAvailable ? [] : ['--varia-no-hot-exit']), ...(followSystemMotion ? ['--varia-follow-system-motion'] : []), ...(agentPreview ? [agentPreviewArgument] : [])],
+    webPreferences: { preload: join(here, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: process.env.VARIA_SMOKE_TEST !== '1', additionalArguments: [menuStyleArgument(menuStyle), ...(testSeams ? ['--varia-test-mode'] : []), ...(hotExitAvailable ? [] : ['--varia-no-hot-exit']), ...(followSystemMotion ? ['--varia-follow-system-motion'] : [])],
       // Every build has developer tools, as VS Code does; the page keeps its sandbox, isolation and CSP under them.
       devTools: true }
   })

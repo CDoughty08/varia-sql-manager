@@ -364,7 +364,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const reducedMotion = followReducedMotion(document.documentElement, { enabled: () => api.followSystemMotion || settings.get('environment.reduceMotionWithSystem'), subscribe: settings.subscribe,
     media: typeof matchMedia === 'function' ? matchMedia(reducedMotionQuery) : undefined })
   if (api.testMode) Object.assign(window, { __variaMotion: { refresh: () => reducedMotion.refresh() } })
-  const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame, groupBySchema, targets: connectionTargets, agentEnabled: api.agentPreview, windowsClient: platform === 'win32' }), databaseList = new DatabaseListService(api, connections, events)
+  const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame, groupBySchema, targets: connectionTargets, windowsClient: platform === 'win32' }), databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
   const notifications = new NotificationService()
   const updates = new UpdateService(api)
@@ -420,7 +420,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const indexMemory = new MemoryUsageService(resultClient, 'index')
   // The backend caps live views per server it reaches; a typed name is the closest this side knows.
   const live = new LiveService({ client: resultClient, settings, page: mainPage, schedule: callback => { frame(callback) }, serverOf: id => connections.get(id)?.server.trim().toLowerCase() })
-  const explorerStatus = new ExplorerStatusService({ live, connections, panes, settings, schedule: callback => { frame(callback) }, agent: api.agentPreview })
+  const explorerStatus = new ExplorerStatusService({ live, connections, panes, settings, schedule: callback => { frame(callback) } })
   // A database's menu follows its live state (Take Offline greys once a sample shows it offline), not only its listing.
   const explorerRuntime = explorer.useStatus(explorerStatus)
   const ssisTree = new SsisTreeProbe({ explorer, live, settings, events, explorerVisible: { visible: () => panes.getSnapshot().explorer, subscribe: panes.subscribe, popout: () => panes.location('explorer') === 'window' } })
@@ -466,7 +466,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const recovery = new RecoveryService({
     api, documents, files, settings, warn: message => commands.reportWarning(message),
     server: id => { const connection = connections.get(id); return connection ? connection.displayName || connection.server : undefined },
-    restoredJobs: (tabId, jobs) => queries.restoreJobs(tabId, jobs), agentEnabled: api.agentPreview
+    restoredJobs: (tabId, jobs) => queries.restoreJobs(tabId, jobs)
   })
   // A tab holding BigQuery jobs it does not follow re-attaches once its connection is live (docs/bigquery.md, Re-attaching to jobs).
   let reattachQueued = false
@@ -609,7 +609,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     recycled: connectionId => { const folder = explorer.folderNode(connectionId, { kind: 'agent' }, 'agentErrorLogs'); if (folder !== undefined) explorer.reconcile(folder) }
   })
   const objectSearch = new ObjectSearchService({
-    api, documents, connections, settings, targetIdOf, events, agentEnabled: api.agentPreview,
+    api, documents, connections, settings, targetIdOf, events,
     billedGate: (connectionId, estimate, signal) => bigQueryCost.beforeScript(connectionId, estimate, signal),
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-object-search="${CSS.escape(id)}"] [data-object-search-focus]`)?.focus())
   })
@@ -646,7 +646,6 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const searchDetails = new SearchDetailsService({ api, peek, connections, searches: objectSearch, scriptingOptions, billedGate: (connectionId, estimate, signal) => bigQueryCost.beforeScript(connectionId, estimate, signal) })
   const context = new ContextKeyService({
     platform,
-    agentEnabled: api.agentPreview,
     settings,
     documents,
     queries,
@@ -960,14 +959,14 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     helpContribution(workbench, api),
     updatesContribution(workbench, api),
     scriptingContribution(workbench),
-    actionsContribution(workbench, { agentEnabled: api.agentPreview }),
+    actionsContribution(workbench),
     designerContribution(workbench),
     ssisContribution(workbench),
     activityContribution(workbench),
-    agentContribution(workbench, { agentEnabled: api.agentPreview }),
+    agentContribution(workbench),
     bigQueryJobsContribution(workbench),
-    agentObjectsContribution(workbench, { agentEnabled: api.agentPreview }),
-    agentProxyContribution(workbench, { agentEnabled: api.agentPreview }),
+    agentObjectsContribution(workbench),
+    agentProxyContribution(workbench),
     searchContribution(workbench, api),
     settingsContribution(workbench),
     notificationsContribution(workbench)
@@ -999,7 +998,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     }
     if (connect) void commands.execute('connection.connect', undefined, 'toolbar')
   }
-  if (api.hotExit) void restoreSession({ api, documents, files, groups: editorGroups, connectionTargets, resumeRecovery: (tabId, id) => recovery.resume(tabId, id), restoredJobs: (tabId, jobs) => queries.restoreJobs(tabId, jobs), otherwise: welcome, agentEnabled: api.agentPreview })
+  if (api.hotExit) void restoreSession({ api, documents, files, groups: editorGroups, connectionTargets, resumeRecovery: (tabId, id) => recovery.resume(tabId, id), restoredJobs: (tabId, jobs) => queries.restoreJobs(tabId, jobs), otherwise: welcome })
     .then(opened => opened >= 0, () => false).then(restored => {
       connectionRestored()
       if (disposed) return

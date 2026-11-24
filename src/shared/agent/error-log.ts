@@ -96,7 +96,7 @@ export interface ErrorLogCommandEntry {
 }
 const onErrorLogs = "((explorerNode == 'folder' && explorerFolder == 'agentErrorLogs') || explorerNode == 'agentErrorLog') && !explorerServerLost"
 /**
- * The error logs' commands, behind the release gate (the renderer registers none without it): SSMS's Error Logs menu (View Agent Log,
+ * The error logs' commands: SSMS's Error Logs menu (View Agent Log,
  * Recycle, then Refresh, which every folder has), on the folder and on each log. View Agent Log opens the Log File Viewer with the log
  * checked (Current from the folder); Recycle opens it on Current with Recycle's confirmation, and from the palette acts on the active viewer.
  */
@@ -104,12 +104,12 @@ export function errorLogCommandEntries(): { readonly [K in ErrorLogCommandId]: E
   return {
     'agent.viewAgentLog': {
       title: 'View Agent Log', category: 'SQL Server Agent', icon: 'output', keywords: ['agent', 'error', 'log', 'errorlog', 'view', 'viewer', 'current', 'archive'],
-      precondition: 'agentEnabled && backendReady && hasConnection', unavailableHint: 'Connect to a SQL Server whose SQL Server Agent you can see first.',
+      precondition: 'backendReady && hasConnection', unavailableHint: 'Connect to a SQL Server whose SQL Server Agent you can see first.',
       menus: [{ menu: 'explorer.context', group: '1_monitor', order: 3, mnemonic: 'g', when: onErrorLogs }]
     },
     'agent.recycleErrorLog': {
       title: 'Recycle Agent Error Log…', category: 'SQL Server Agent', icon: 'refresh', keywords: ['agent', 'error', 'log', 'errorlog', 'recycle', 'cycle', 'new', 'archive'],
-      precondition: 'agentEnabled && backendReady && hasConnection', unavailableHint: 'Connect to a SQL Server as sysadmin first.',
+      precondition: 'backendReady && hasConnection', unavailableHint: 'Connect to a SQL Server as sysadmin first.',
       // Managed Instance manages its log itself: Recycle is offered on SQL Server (box) alone.
       menus: [{ menu: 'explorer.context', group: '1_monitor', order: 4, title: 'Recycle', mnemonic: 'y', when: `${onErrorLogs} && explorerServerEngine == 'box'` }]
     }

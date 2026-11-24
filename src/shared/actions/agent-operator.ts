@@ -284,10 +284,10 @@ export const notifyOperatorRequestSchema = z.object({
 
 export type AgentOperatorCommandId = 'agent.newOperator' | 'agent.newOperatorOnAgent' | 'agent.openOperator' | 'agent.operators' | 'agentOperator.save' | 'agentOperator.reload' | 'agentOperator.sendTest'
   | 'agentOperators.save' | 'agentOperators.reload'
-const connected = 'agentEnabled && backendReady && hasConnection'
+const connected = 'backendReady && hasConnection'
 const connectFirst = 'Connect to a SQL Server whose SQL Server Agent you can see first.'
 /**
- * The operator document's and the grid's commands, behind the release gate: New Operator… (the Agent node's New › Operator…, the Operators
+ * The operator document's and the grid's commands: New Operator… (the Agent node's New › Operator…, the Operators
  * folder and an operator's menus), New › Job… on the Agent node (a command of its own, as explorer.newLoginOnSecurity is, so macOS context
  * menus do not show New Job twice), Operators and Notifications… (the Operators and Alerts folders), and the documents' Save, Reload and Send
  * test e-mail.
@@ -315,23 +315,23 @@ export function agentOperatorCommandEntries(): { readonly [K in AgentOperatorCom
     },
     'agentOperator.save': {
       title: 'Save Operator', category: 'SQL Server Agent', icon: 'save', keywords: ['agent', 'operator', 'apply', 'ok', 'update'],
-      precondition: 'agentEnabled && backendReady && activeDocumentIsAgentOperator', unavailableHint: 'Change the operator first; a read-only operator cannot be saved.'
+      precondition: 'backendReady && activeDocumentIsAgentOperator', unavailableHint: 'Change the operator first; a read-only operator cannot be saved.'
     },
     'agentOperator.reload': {
       title: 'Reload Operator', category: 'SQL Server Agent', icon: 'refresh', keywords: ['agent', 'operator', 'refresh', 'read', 'discard'],
-      precondition: 'agentEnabled && backendReady && activeDocumentIsAgentOperator', unavailableHint: 'Open an operator first (Properties on an operator in Object Explorer).'
+      precondition: 'backendReady && activeDocumentIsAgentOperator', unavailableHint: 'Open an operator first (Properties on an operator in Object Explorer).'
     },
     'agentOperator.sendTest': {
       title: 'Send Test E-mail', category: 'SQL Server Agent', icon: 'agent-operator', keywords: ['agent', 'operator', 'mail', 'test', 'databasemail', 'notify'],
-      precondition: 'agentEnabled && backendReady && activeDocumentIsAgentOperator', unavailableHint: 'Open an operator with an e-mail address first.'
+      precondition: 'backendReady && activeDocumentIsAgentOperator', unavailableHint: 'Open an operator with an e-mail address first.'
     },
     'agentOperators.save': {
       title: 'Save Notifications', category: 'SQL Server Agent', icon: 'save', keywords: ['agent', 'operator', 'alert', 'notification', 'apply'],
-      precondition: 'agentEnabled && backendReady && activeDocumentIsAgentOperators', unavailableHint: 'Change a notification first.'
+      precondition: 'backendReady && activeDocumentIsAgentOperators', unavailableHint: 'Change a notification first.'
     },
     'agentOperators.reload': {
       title: 'Reload Notifications', category: 'SQL Server Agent', icon: 'refresh', keywords: ['agent', 'operator', 'alert', 'notification', 'refresh'],
-      precondition: 'agentEnabled && backendReady && activeDocumentIsAgentOperators', unavailableHint: 'Open Operators and Notifications first.'
+      precondition: 'backendReady && activeDocumentIsAgentOperators', unavailableHint: 'Open Operators and Notifications first.'
     }
   }
 }

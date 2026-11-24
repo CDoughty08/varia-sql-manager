@@ -39,6 +39,15 @@ export const guideCatalog = {
     related: ['run-query'], commands: [{ id: 'output.nextResult', context: 'workbench' }, { id: 'output.previousResult', context: 'workbench' }, { id: 'output.goToResult', context: 'workbench' }, { id: 'output.goToResult1', context: 'resultsGrid' }, { id: 'output.goToLastResult', context: 'resultsGrid' }, { id: 'output.toggleResultsTabs', context: 'workbench' }, { id: 'output.filterSelection', context: 'resultsGrid' }, { id: 'output.filterColumnValues', context: 'resultsGrid' }, { id: 'output.copy', context: 'resultsGrid' }, { id: 'output.copyWithHeaders', context: 'resultsGrid' }, { id: 'output.saveResultsAs', context: 'resultsGrid' }, { id: 'output.compareMatch', context: 'workbench' }, { id: 'output.compareNextDifference', context: 'comparisonGrid' }, { id: 'output.comparePreviousDifference', context: 'comparisonGrid' }, { id: 'output.compareGoToPossibleMatch', context: 'workbench' }, { id: 'query.cancel', context: 'queryEditor' }],
     settings: ['queryResults.grid.layout', 'queryResults.compare.layout', 'queryResults.compare.rows', 'queryResults.grid.copyColumnHeaders', 'queryResults.grid.saveColumnHeaders', 'queryResults.grid.discardResults', 'queryResults.bigQuery.residence'], gestures: ['grid.addToSelection'],
     sourceAreas: ['src/renderer/src/results', 'src/renderer/src/grid/ResultGrid.tsx', 'src/renderer/src/grid/ResultsTabs.tsx', 'src/renderer/src/grid/ResultsPicker.tsx', 'src/main/results-jobs.ts', 'src/shared/settings/query-results.ts', 'backend/Varia.Backend/Results/ResultPacker.cs']
+  },
+  'sql-server-agent': {
+    title: 'Schedule work with SQL Server Agent', summary: 'Watch jobs run, read their history, and create or change jobs, schedules and alerts.',
+    keywords: ['Agent', 'job', 'jobs', 'schedule', 'step', 'history', 'Job Activity Monitor', 'alert', 'operator', 'proxy', 'credential', 'error log', 'msdb'],
+    sections: [{ id: 'find', title: 'Find SQL Server Agent' }, { id: 'watch', title: 'Watch jobs and read history' }, { id: 'jobs', title: 'Create and change jobs' }, { id: 'objects', title: 'Alerts, operators and proxies' }, { id: 'trouble', title: 'If Agent is unavailable' }],
+    related: ['connect', 'run-query'],
+    commands: [{ id: 'agent.jobActivity', context: 'workbench' }, { id: 'agent.viewHistory', context: 'workbench' }, { id: 'agent.newJob', context: 'workbench' }, { id: 'agentJob.save', context: 'workbench' }, { id: 'agent.createJobLike', context: 'workbench' }, { id: 'agent.schedules', context: 'workbench' }, { id: 'agent.newAlert', context: 'workbench' }, { id: 'agent.newOperator', context: 'workbench' }, { id: 'agent.newProxy', context: 'workbench' }, { id: 'explorer.startAgent', context: 'workbench' }],
+    settings: [], gestures: [],
+    sourceAreas: ['src/shared/agent/', 'src/shared/actions/agent-job.ts', 'src/renderer/src/agent/', 'src/renderer/src/contributions/agent.ts', 'src/shared/explorer/catalog.ts', 'backend/Varia.Backend/Agent/', 'docs/sql-server-agent.md']
   }
 } as const satisfies Record<string, GuideMetadata>
 export type GuideId = keyof typeof guideCatalog

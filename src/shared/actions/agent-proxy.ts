@@ -427,13 +427,13 @@ export interface AgentProxyCommandEntry {
   readonly palette?: false
   readonly menus?: readonly { readonly menu: 'explorer.context' | 'explorer.new'; readonly group: string; readonly order: number; readonly mnemonic?: string; readonly when?: string }[]
 }
-const inProxy = 'agentEnabled && backendReady && activeDocumentIsAgentProxy'
-const inCredential = 'agentEnabled && backendReady && activeDocumentIsCredential'
+const inProxy = 'backendReady && activeDocumentIsAgentProxy'
+const inCredential = 'backendReady && activeDocumentIsCredential'
 const proxyNodes = "((explorerNode == 'folder' && (explorerFolder == 'agentProxies' || explorerFolder == 'agentUnassignedProxies')) || explorerNode == 'agentProxySubsystem' || explorerNode == 'agentProxy')"
 const credentialNodes = "((explorerNode == 'folder' && explorerFolder == 'credentials') || explorerNode == 'credential')"
 const serverEngines = "(explorerServerEngine == 'box' || explorerServerEngine == 'managedInstance')"
 /**
- * The proxy and credential documents' commands, all behind the release gate (agentEnabled; the renderer registers none without it): New
+ * The proxy and credential documents' commands: New
  * Proxy… on the Proxies folder, its subsystem folders, Unassigned Proxies and a proxy, and Proxy… in the SQL Server Agent node's New submenu
  * (SQL Server only: Managed Instance has no proxies); New Credential… on Security › Credentials and a credential; and each document's Save
  * and Reload, which act on the document whose header runs them (`tabId`), else the active one. Properties on a proxy or a credential opens
@@ -443,13 +443,13 @@ export function agentProxyCommandEntries(): { readonly [K in AgentProxyCommandId
   return {
     'agent.newProxy': {
       title: 'New Proxy…', category: 'SQL Server Agent', icon: 'agent-proxy', keywords: ['agent', 'proxy', 'create', 'credential', 'cmdexec', 'powershell', 'sqlserveragent'],
-      precondition: 'agentEnabled && backendReady && hasConnection', unavailableHint: 'Connect to a SQL Server where you are sysadmin first.',
+      precondition: 'backendReady && hasConnection', unavailableHint: 'Connect to a SQL Server where you are sysadmin first.',
       menus: [{ menu: 'explorer.context', group: '0_new', order: 1, mnemonic: 'n', when: `${proxyNodes} && !explorerServerLost` }]
     },
     // The same document as New Proxy…: a command of its own because macOS context menus show placements by command id.
     'agent.newProxyOnAgent': {
       title: 'Proxy…', category: 'SQL Server Agent', icon: 'agent-proxy', keywords: ['agent', 'proxy', 'create'], palette: false,
-      precondition: "agentEnabled && backendReady && explorerSelectionKind == 'agent'", unavailableHint: 'Select SQL Server Agent in Object Explorer.',
+      precondition: "backendReady && explorerSelectionKind == 'agent'", unavailableHint: 'Select SQL Server Agent in Object Explorer.',
       menus: [{ menu: 'explorer.new', group: '2_agent', order: 4, mnemonic: 'p', when: "explorerNode == 'agent' && explorerServerEngine == 'box'" }]
     },
     'agentProxy.save': {
@@ -462,9 +462,9 @@ export function agentProxyCommandEntries(): { readonly [K in AgentProxyCommandId
     },
     'agent.newCredential': {
       title: 'New Credential…', category: 'Object Explorer', icon: 'key', keywords: ['credential', 'security', 'secret', 'identity', 'create', 'proxy'],
-      precondition: "agentEnabled && backendReady && (explorerSelectionFolder == 'credentials' || explorerSelectionKind == 'credential')",
+      precondition: "backendReady && (explorerSelectionFolder == 'credentials' || explorerSelectionKind == 'credential')",
       unavailableHint: 'Select Security › Credentials of a SQL Server or Managed Instance in Object Explorer.',
-      menus: [{ menu: 'explorer.context', group: '0_new', order: 1, mnemonic: 'n', when: `agentEnabled && ${credentialNodes} && !explorerServerLost && ${serverEngines}` }]
+      menus: [{ menu: 'explorer.context', group: '0_new', order: 1, mnemonic: 'n', when: `${credentialNodes} && !explorerServerLost && ${serverEngines}` }]
     },
     'credential.save': {
       title: 'Save Credential', category: 'Object Explorer', icon: 'save', keywords: ['credential', 'apply', 'ok', 'password', 'secret'],

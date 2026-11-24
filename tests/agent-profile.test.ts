@@ -1,6 +1,6 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { agentPreviewArgument, agentPreviewEnabled, agentPreviewFromArgv } from '../src/shared/agent/gate'
 import { agentProfileResultSchema, agentProfileSchema, agentRoleOf, agentRoleReason, agentRoleValues, type AgentProfile, type AgentProfileState } from '../src/shared/agent/profile'
 import { agentLimits } from '../src/shared/agent/catalog'
 import { methodPolicies, methodProviders } from '../src/shared/ipc/methods'
@@ -14,27 +14,24 @@ const profile: AgentProfile = {
 }
 const ready = (patch: Partial<AgentProfile>): AgentProfileState => ({ status: 'ready', profile: { ...profile, ...patch } })
 
-describe('SQL Server Agent release gate', () => {
-  it('opens only for VARIA_AGENT_PREVIEW=1, passed to the preload as one argument', () => {
-    expect(agentPreviewEnabled({ VARIA_AGENT_PREVIEW: '1' })).toBe(true)
-    for (const value of [undefined, '', '0', 'true', ' 1']) expect(agentPreviewEnabled({ VARIA_AGENT_PREVIEW: value })).toBe(false)
-    expect(agentPreviewFromArgv(['electron', agentPreviewArgument])).toBe(true)
-    expect(agentPreviewFromArgv(['electron', '--varia-agent-preview=0', '--varia-test-mode'])).toBe(false)
+// AG-9 removed SQL Server Agent's release gate: Agent is on for every SQL Server connection with no environment variable.
+describe('SQL Server Agent ships without a release gate', () => {
+  const sources = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+    const path = join(dir, entry.name)
+    if (entry.isDirectory()) return entry.name === 'bin' || entry.name === 'obj' || entry.name === 'node_modules' ? [] : sources(path)
+    return /\.(ts|tsx|mjs|cjs|js|cs|yml|sh)$/.test(entry.name) ? [path] : []
   })
-  it('is read once in main, whatever the build, and smoke runs open it', () => {
-    const main = readFileSync('src/main/index.ts', 'utf8')
-    expect(main).toContain('const agentPreview = agentPreviewEnabled(process.env)')
-    expect(main).toContain('...(agentPreview ? [agentPreviewArgument] : [])')
-    expect(main.match(/VARIA_AGENT_PREVIEW|--varia-agent-preview/g)).toHaveLength(1)
-    expect(readFileSync('src/preload/index.ts', 'utf8')).toContain('agentPreview: agentPreviewFromArgv(process.argv)')
-    expect(readFileSync('scripts/fixtures/smoke.mjs', 'utf8')).toContain("env.VARIA_AGENT_PREVIEW ??= '1'")
+  it('leaves no VARIA_AGENT_PREVIEW read, renderer argument or agentEnabled key in the code, scripts or CI', () => {
+    const files = [...sources('src'), ...sources('backend'), ...sources('scripts'), ...sources('.github'), ...sources('.claude/hooks')]
+    expect(files.length).toBeGreaterThan(100)
+    const found = files.filter(file => /VARIA_AGENT_PREVIEW|varia-agent-preview|agentEnabled|agentPreview|AgentGate\.Enabled/.test(readFileSync(file, 'utf8')))
+    expect(found).toEqual([])
   })
-  it('is the static key agentEnabled, false unless the workbench was given the gate', () => {
-    expect(contextKeys.agentEnabled).toMatchObject({ type: 'boolean', scope: 'static' })
-    expect(contextRecord('win32').agentEnabled).toBe(false)
+  it('has no agentEnabled context key, so no when clause can hide Agent', () => {
+    expect(Object.keys(contextKeys)).not.toContain('agentEnabled')
     const inputs = { platform: 'linux' as const, documents: { documents: [], activeId: undefined, busy: false }, queries: {}, connections: [], quickInputVisible: false, wordWrap: false } as unknown as Parameters<typeof computeContextKeys>[0]
-    expect(computeContextKeys(inputs).agentEnabled).toBe(false)
-    expect(computeContextKeys({ ...inputs, agentEnabled: true }).agentEnabled).toBe(true)
+    expect(computeContextKeys(inputs)).not.toHaveProperty('agentEnabled')
+    expect(contextRecord('win32')).not.toHaveProperty('agentEnabled')
   })
 })
 
