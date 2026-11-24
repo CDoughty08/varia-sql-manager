@@ -24,6 +24,21 @@ export async function gettingStartedSmoke(page, menu, application) {
   await expect(query).toContainText('Only the selected second statement would run: one result set.')
   await query.getByRole('navigation', { name: 'Sections', exact: true }).getByRole('button', { name: 'Choose what runs', exact: true }).click()
   await query.screenshot({ path: 'artifacts/getting-started-query.png' })
+  // The BigQuery guide's windowed-results sample follows Keep results and connects to nothing.
+  await query.getByRole('button', { name: 'All guides', exact: true }).click()
+  await search.fill('gcloud')
+  await home.getByRole('button', { name: /Connect to BigQuery/ }).click()
+  const bigquery = helpPage(page, 'Connect to BigQuery')
+  await expect(bigquery.getByRole('button', { name: 'All guides', exact: true })).toBeFocused()
+  const sizes = bigquery.getByRole('group', { name: 'Sample result size', exact: true })
+  await expect(bigquery).toContainText('Windowed in BigQuery')
+  await sizes.getByRole('button', { name: /^400 million rows/ }).click()
+  await expect(bigquery).toContainText('Too large to load into memory')
+  await sizes.getByRole('button', { name: /^250,000 rows/ }).click()
+  await expect(bigquery).toContainText('Kept in memory: every result tool works')
+  await bigquery.screenshot({ path: 'artifacts/getting-started-bigquery.png' })
+  await bigquery.getByRole('button', { name: 'All guides', exact: true }).click()
+  await home.getByRole('button', { name: /Run your first query/ }).click()
 
   // The reference stays mounted while main pushes an effective keyboard change and then restores it.
   const changed = await page.evaluate(async () => {

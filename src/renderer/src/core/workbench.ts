@@ -16,6 +16,7 @@ import { QueryService } from '../services/queries'
 import { ConnectionService } from '../services/connections'
 import { ConnectionTargetService } from '../services/connection-targets'
 import { bindStartupReconnect } from '../services/connection-startup'
+import { connectBigQueryProfile } from '../services/connect-profile'
 import { bindConnectionPruning } from '../services/connection-pruning'
 import type { StartupReconnectService } from '../services/startup-reconnect'
 import { createDisconnectCoordinator } from '../services/disconnect-workbench'
@@ -61,6 +62,8 @@ import { ResultSelectionService } from '../services/result-selection'
 import { PeekService } from '../explorer/PeekService'
 import { PeekTabService } from '../explorer/PeekTabService'
 import { BigQueryPropertiesService } from '../explorer/BigQueryPropertiesService'
+import { InspectorService } from '../services/inspector'
+import { inspectorContribution } from '../contributions/inspector'
 import type { ThemeService } from '../services/theme'
 import { queryContribution } from '../contributions/query'
 import { providerSwitchToast, switchModelLanguage } from '../languages/query-language'
@@ -256,6 +259,8 @@ export interface Workbench extends Disposable {
   /** Peek promoted to document tabs: each tab's view. */
   readonly peekTabs: PeekTabService
   readonly bigQueryProperties: BigQueryPropertiesService
+  /** Shared ObjectInspectorFrame state: per-surface Vitals persistence, modifier-hold badge state and focused Ctrl+1-9 routing. */
+  readonly inspector: InspectorService
   /** The column profile's Ctrl+hover peek at the selected columns: the tab whose panel peeks. */
   readonly profilePeek: ProfilePeekService
   /** Go To and Peek Definition in SQL editors: F12's script, the card at a name (Alt+F12, Ctrl+hover), a Peek tab (Ctrl+click). */
@@ -440,7 +445,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const bigQueryCost = new BigQueryCostService({ api, documents, connections, settings, events, monaco, ask: (request, signal, stillAsks, onAnswer) => costPrompts.ask(request, signal, stillAsks, onAnswer), optOut: costOptOut(api, () => costChoiceChanged()) })
   costChoiceChanged = () => bigQueryCost.optOutChanged()
   queries.estimateOf = (id, sql) => bigQueryCost.estimateFor(id, sql)
-  queries.setCostGate((tabId, sql, origin, signal) => bigQueryCost.beforeExecute(tabId, sql, origin, signal))
+  queries.setCostGate((tabId, sql, origin, signal, rerunOf) => bigQueryCost.beforeExecute(tabId, sql, origin, signal, rerunOf))
   const queryPlans = new QueryPlansService(live, documents, queries, panes, results)
   const planPreparation = new PlanPreparationCache()
   const planReleases = resultClient.onRelease(keys => planPreparation.release(keys))
@@ -614,6 +619,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const bigQueryProperties = new BigQueryPropertiesService({
     api, documents, focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-bigquery-properties="${CSS.escape(id)}"] [role="region"]`)?.focus())
   })
+  const inspector = new InspectorService({ api, platform })
   const editorPeek = new EditorPeekService({ sqlLanguage, connections, scripting, peek, peekTabs })
   // A dependency is shown as Search Objects' Reveal shows a hit; a failed walk says why in the command banner.
   const dependencies = new DependenciesService({
@@ -687,8 +693,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     keyArgs: command => { const tabId = actsOnTab(command) ? editorGroups.focusedDocument() : undefined; return tabId ? { tabId } : undefined }, // Peek's editor waits for a chord's second key after Ctrl+K as a query's does (folding works there; the bridge's chords do not).
     editorHasTextFocus: () => (documents.boundEditor?.hasTextFocus() ?? false) || peekEditorHasTextFocus(windows.activeElement()),
     editorContains: target => target instanceof Node && !!documents.boundEditor?.getContainerDomNode().contains(target),
-    keyDown: event => { peek.keyDown(event.key, event.repeat); profilePeek.keyDown(event.key, event.repeat) },
-    keyUp: event => { peek.keyUp(event.key); profilePeek.keyUp(event.key) }, blur: () => { peek.blur(); profilePeek.blur() } })
+    keyDown: event => { peek.keyDown(event.key, event.repeat); profilePeek.keyDown(event.key, event.repeat); inspector.keyDown(event.key, event.repeat) },
+    keyUp: event => { peek.keyUp(event.key); profilePeek.keyUp(event.key); inspector.keyUp(event.key) }, blur: () => { peek.blur(); profilePeek.blur(); inspector.blur() } })
   const shortcutsBinding = userShortcuts.bind({ keybindings, gestures: gesturesFor(platform) })
   if (!shortcuts) void userShortcuts.load()
   const menuState = new MenuStatePublisher({ commands, context, send: state => api.setMenuState(state) })
@@ -700,6 +706,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   })
   const cleanup = events.subscribe(event => { if (event.type === 'documents.closed') queries.forget(event.tabId) })
   let disposed = false
+  // Connects Show in Job History started end with the workbench.
+  const lifetime = new AbortController()
   const reloadPins = (): ReloadPins | undefined => {
     if (!api.hotExit) return
     return reloadSession(documents, id => connections.get(id)?.server, {
@@ -774,6 +782,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     peek,
     peekTabs,
     bigQueryProperties,
+    inspector,
     profilePeek,
     editorPeek,
     actions,
@@ -817,6 +826,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     dispose: () => {
       if (disposed) return
       disposed = true
+      lifetime.abort()
       stopConnectionBindings()
       startup.dispose()
       connectionPruning.dispose()
@@ -846,6 +856,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       // Before the results: each tab's view releases its Top rows there (the card's are released with it below, or by the results).
       peekTabs.dispose()
       bigQueryProperties.dispose()
+      inspector.dispose()
       results.dispose()
       resultMemory.dispose()
       indexMemory.dispose()
@@ -959,7 +970,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     agentProxyContribution(workbench),
     searchContribution(workbench, api),
     settingsContribution(workbench),
-    notificationsContribution(workbench)
+    notificationsContribution(workbench),
+    inspectorContribution(workbench)
   ]
   // Capture on window runs before Monaco's own listeners and React's handlers.
   const listeners = [
@@ -975,18 +987,25 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // file, or a failed load, shows in the command banner, including one from before the workbench existed.
   settings.setReporter((message, kind) => kind === 'warning' ? commands.reportWarning(message) : commands.reportError(message))
   userShortcuts.setReporter((message, kind) => kind === 'warning' ? commands.reportWarning(message) : commands.reportError(message))
+  inspector.setReporter((message, kind) => kind === 'warning' ? commands.reportWarning(message) : commands.reportError(message))
+  void inspector.load()
   // The tabs the last close kept (hot exit), else the welcome query; what an earlier run or page left unsaved is offered
   // once the workbench is up.
   const welcome = () => { if (!disposed) documents.create('SQLQuery1.sql', welcomeQueryText, 'master') }
-  // Show in Job History (the records dialog): each project's Job History filtered to its jobs; a project with no live
-  // connection opens Connect, and its Job History opens once a connection to it is live.
+  // Show in Job History (docs/bigquery.md, Job History): a connected project opens at once; another connects the saved
+  // connection that started its jobs, with no Connect dialog, and opens once connected; one without says why.
   const showJobsWithoutTab = (projects: NonNullable<JobsWithoutTabReview['show']>) => {
-    let connect = false
-    for (const { project, jobs } of projects) {
-      try { if (!jobHistory.show(project, jobs)) { connect = true; notifications.notify({ severity: 'info', message: `Connect to BigQuery project ${project}: Job History opens with its ${jobs.length === 1 ? 'job' : `${jobs.length} jobs`} once connected.` }) } }
-      catch (error) { commands.reportError(error instanceof Error ? error.message : 'Job History could not open.') }
+    for (const { project, jobs, profileId, unavailable } of projects) {
+      try {
+        if (jobHistory.show(project, jobs)) continue
+        if (!profileId) { jobHistory.forget(project); notifications.notify({ severity: 'info', message: unavailable ?? `Connect to BigQuery project ${project} to see its jobs in Job History.` }); continue }
+        void connectBigQueryProfile({ api, connections, targets, backend, documents, startupReconnect: startup.scheduler, signal: lifetime.signal }, profileId).then(result => {
+          if (result.ok) return
+          jobHistory.forget(project)
+          if (!result.cancelled && !lifetime.signal.aborted) commands.reportError(`BigQuery project ${project} could not be connected for Job History: ${result.error}`)
+        }, onUnexpectedError)
+      } catch (error) { commands.reportError(error instanceof Error ? error.message : 'Job History could not open.') }
     }
-    if (connect) void commands.execute('connection.connect', undefined, 'toolbar')
   }
   if (api.hotExit) void restoreSession({ api, documents, files, groups: editorGroups, connectionTargets, resumeRecovery: (tabId, id) => recovery.resume(tabId, id), restoredJobs: (tabId, jobs) => queries.restoreJobs(tabId, jobs), otherwise: welcome })
     .then(opened => opened >= 0, () => false).then(restored => {
@@ -994,8 +1013,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       if (disposed) return
       void recovery.start()
       // A session that could not be restored may still reopen its tabs (previous.json): their jobs are not asked about.
-      if (restored) void queries.reviewJobsWithoutTab(api, showJobsWithoutTab)
+      if (restored) void queries.reviewJobsWithoutTab(api, showJobsWithoutTab, () => jobHistory.liveProjects())
     })
-  else { welcome(); connectionRestored(); void recovery.start(); void queries.reviewJobsWithoutTab(api, showJobsWithoutTab) }
+  else { welcome(); connectionRestored(); void recovery.start(); void queries.reviewJobsWithoutTab(api, showJobsWithoutTab, () => jobHistory.liveProjects()) }
   return workbench
 }

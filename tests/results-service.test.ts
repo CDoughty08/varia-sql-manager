@@ -3,7 +3,7 @@ import type { ApiResult, ResolvedViewFilter, ResultColumn, ResultsJobProgress, R
 import type { ResultHandle, ResultView } from '../src/renderer/src/results/ResultClient'
 import type { DocumentService } from '../src/renderer/src/services/documents'
 import { EventBus } from '../src/renderer/src/core/events'
-import { entryName, filterLabel, filteredColumns, fitsFreeMemory, kindLabel, ResultsService, resultLimits, transposedView } from '../src/renderer/src/results/ResultsService'
+import { entryName, expiredRefusal, filterLabel, filteredColumns, fitsFreeMemory, kindLabel, ResultsService, resultLimits, transposedView } from '../src/renderer/src/results/ResultsService'
 import { limits } from '../src/shared/ipc/wire/protocol'
 import { selectAll } from '../src/renderer/src/grid/selection'
 import { openEnd } from '../src/renderer/src/grid/constants'
@@ -625,6 +625,32 @@ describe('results service', () => {
     flush()
     expect(tab()!.messages.at(-1)).toEqual({ text: 'Could not load the result into memory: Another result of this query is loading into memory.', kind: 'error' })
     expect(tab()!.loads).toBeUndefined()
+    expect(service.isExpired('t1', key)).toBe(false)
+    // A load BigQuery answers with REMOTE_EXPIRED marks the result expired: Load into memory and Load sample are no longer
+    // offered (its grid shows the Re-run strip), and one asked for anyway says why without asking BigQuery.
+    api.remoteQuery.mockResolvedValueOnce({ ok: false, error: 'BigQuery no longer has this result.', code: 'REMOTE_EXPIRED' })
+    await service.loadIntoMemory('t1', key)
+    flush()
+    expect(service.isExpired('t1', key)).toBe(true)
+    expect(service.canLoadIntoMemory('t1', key)).toBe(false)
+    expect(service.loadNeedsRoom('t1', key)).toBe(false)
+    expect(service.canLoadSample('t1', key)).toBe(false)
+    expect(await service.loadIntoMemory('t1', key)).toBe(expiredRefusal)
+    expect(api.remoteQuery).toHaveBeenCalledTimes(2)
+    service.dispose()
+  })
+  it('marks a windowed result expired when its grid finds it so, and never an in-memory one', () => {
+    const { service, flush } = fixture()
+    service.begin('t1', 'q1')
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 0, rowsTotal: 5_000 }), descriptor(2, { index: 1 })]) })
+    flush()
+    const windowed = keyAt(service, 't1', 0), memory = keyAt(service, 't1', 1)
+    expect(service.canLoadIntoMemory('t1', windowed)).toBe(true)
+    service.markExpired('t1', windowed)
+    service.markExpired('t1', memory)
+    expect(service.isExpired('t1', windowed)).toBe(true)
+    expect(service.isExpired('t1', memory)).toBe(false)
+    expect(service.canLoadIntoMemory('t1', windowed)).toBe(false)
     service.dispose()
   })
   it('saves a set through main, shows its strip 300 ms after the file is chosen, and says how the save ended', async () => {

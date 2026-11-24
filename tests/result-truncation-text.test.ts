@@ -24,12 +24,16 @@ describe('the truncation strip\'s budget figure', () => {
     // A windowed result of exactly the cap that is not truncated (the backend truncates only past it) says nothing either.
     expect(truncationText({ rowsStored: 0, rowsRead: 2_147_483_647, residence: 'remote', rowsAvailable: 2_147_483_647 })).toBeUndefined()
     // Capped by Rows kept per execution instead: the strip names that limit, with the rows the grid can read.
-    expect(truncationText({ truncated: 'rowLimit', rowsStored: 0, rowsRead: 1_000_000, residence: 'remote', rowsAvailable: 1000 }))
+    // It says where that limit is set, which BigQuery results follow too, and that BigQuery ran the query in full.
+    const bigQueryLimit = 'Only the first 1,000 of 1,000,000 rows are shown: the limit on rows kept per execution was reached (Rows kept per execution, in Tools › Options › Query Results › SQL Server › Results to Grid, applies to BigQuery results too). The query ran in full.'
+    expect(truncationText({ truncated: 'rowLimit', rowsStored: 0, rowsRead: 1_000_000, residence: 'remote', rowsAvailable: 1000 })).toBe(bigQueryLimit)
+    expect(truncationText({ truncated: 'rowLimit', rowsStored: 1000, rowsRead: 1_000_000, residence: 'memory', bigQuery: true })).toBe(bigQueryLimit)
+    expect(truncationText({ truncated: 'rowLimit', rowsStored: 1000, rowsRead: 1_000_000 }))
       .toBe('Only the first 1,000 of 1,000,000 rows are shown: the limit on rows kept per execution was reached (Tools › Options › Query Results › SQL Server › Results to Grid). Execution continued.')
     // The grid hands it the snapshot whole, so its residence and the rows it can read are never left out.
     const grid = readFileSync(join(__dirname, '..', 'src', 'renderer', 'src', 'grid', 'ResultGrid.tsx'), 'utf8')
     expect(grid.match(/truncationText\(/g)).toHaveLength(2)
-    expect(grid).toContain('truncationText({ ...snapshot, budget })')
+    expect(grid).toContain("truncationText({ ...snapshot, budget, bigQuery: provider === 'bigquery' })")
   })
 
   it('falls back to the current half or whole budget without one', () => {

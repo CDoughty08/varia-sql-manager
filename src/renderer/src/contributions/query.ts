@@ -23,10 +23,13 @@ const databaseGroups = ['system databases', 'databases', 'database snapshots'] a
  * system databases come first (Object Explorer also lists them first), so a server with more databases than the picker
  * shows at once never hides master or tempdb.
  */
-export function databaseItems(databases: readonly DatabaseInfo[]): QuickPickItem[] {
+export function databaseItems(databases: readonly DatabaseInfo[], datasets = false): QuickPickItem[] {
+  // A BigQuery query's datasets, with no default dataset first as a choice (the query bar's box offers it too).
+  if (datasets) return [{ id: '', label: noDefaultDataset, icon: 'circle-slash' }, ...databases.map((database): QuickPickItem => ({ id: database.name, label: database.name, icon: 'database', group: 'datasets' }))]
   const rank = (database: DatabaseInfo) => database.isSnapshot ? 2 : database.isSystem ? 0 : 1
   return [...databases].sort((a, b) => rank(a) - rank(b)).map(database => ({ id: database.name, label: database.name, icon: 'database', group: databaseGroups[rank(database)] }))
 }
+export const noDefaultDataset = '<no default dataset>'
 
 export function queryContribution({ commands, queries, documents, connections, targets, quickInput, events, backend }: Pick<Workbench, 'commands' | 'queries' | 'documents' | 'connections' | 'targets' | 'quickInput' | 'events' | 'backend'>,
   api: Pick<VariaApi, 'databases'>): Disposable {
@@ -83,10 +86,10 @@ export function queryContribution({ commands, queries, documents, connections, t
     commands.register('query.changeDatabase', { run: () => {
       const tab = documents.active, connectionId = tab?.connectionId
       if (!tab || !connectionId) return
-      const tabId = tab.id
+      const tabId = tab.id, datasets = connections.get(connectionId)?.providerId === 'bigquery'
       quickInput.show({
-        ariaLabel: 'Change Database', placeholder: 'Select a database for this query', noun: 'databases', activeId: tab.database,
-        items: async () => databaseItems(unwrap(await api.databases(connectionId))),
+        ariaLabel: 'Change Database', placeholder: datasets ? 'Select a default dataset for this query' : 'Select a database for this query', noun: datasets ? 'datasets' : 'databases', activeId: tab.database,
+        items: async () => databaseItems(unwrap(await api.databases(connectionId)), datasets),
         onDidAccept: item => {
           // The query may have moved to another server, started running, or be saving while the list loaded.
           if (documents.get(tabId)?.connectionId !== connectionId || queries.isRunning(tabId) || documents.getSnapshot().busy) return

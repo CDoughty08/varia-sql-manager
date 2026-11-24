@@ -1,4 +1,4 @@
-// BigQuery's name rules per kind (docs/bigquery-plan.md, Provider in the connection model), checked in zod and again in C#
+// BigQuery's name rules per kind (docs/bigquery.md, Object Explorer), checked in zod and again in C#
 // (BqNames), and the backtick quoting Copy Name and drag use. Erasable TypeScript with no imports outside .ts files, so the
 // Explorer catalogue (loaded by Node's type stripping) can import it.
 

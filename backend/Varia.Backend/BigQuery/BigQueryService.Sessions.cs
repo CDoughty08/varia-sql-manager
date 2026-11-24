@@ -235,8 +235,10 @@ internal sealed partial class BigQueryService
     internal TimeSpan OwnCancelLimit { get; set; } = TimeSpan.FromSeconds(15);
 
     /// <summary>jobs.cancel, best-effort: BigQuery may already have finished the job, and may still bill work done before it
-    /// stops. Leases the client, so a Stop that comes with a Disconnect still reaches BigQuery.</summary>
-    internal void CancelJob(BigQueryConnection connection, string project, string jobId, string? location)
+    /// stops. Leases the client, so a Stop that comes with a Disconnect still reaches BigQuery. With <paramref name="maybeUnborn"/>
+    /// the job's insert was cut off in flight, so BigQuery may still be creating it: a 404 is asked again for a while
+    /// (<see cref="UnbornCancelLimit"/>) rather than read as a job that never ran.</summary>
+    internal void CancelJob(BigQueryConnection connection, string project, string jobId, string? location, bool maybeUnborn = false)
     {
         var lease = connection.Lease();
         if (lease is null) return;
@@ -247,15 +249,23 @@ internal sealed partial class BigQueryService
                 try
                 {
                     using var limit = CancellationTokenSource.CreateLinkedTokenSource(stopping.Token);
-                    limit.CancelAfter(TimeSpan.FromSeconds(15));
+                    limit.CancelAfter(maybeUnborn ? UnbornCancelLimit + TimeSpan.FromSeconds(15) : TimeSpan.FromSeconds(15));
                     var request = connection.Client.Service.Jobs.Cancel(project, jobId);
                     request.Location = location;
-                    await ReadAsync(t => request.ExecuteAsync(t), limit.Token);
+                    var giveUp = DateTime.UtcNow + UnbornCancelLimit;
+                    while (true)
+                    {
+                        try { await ReadAsync(t => request.ExecuteAsync(t), limit.Token); return; }
+                        catch (GoogleApiException error) when (maybeUnborn && error.HttpStatusCode == HttpStatusCode.NotFound && DateTime.UtcNow < giveUp) { await Task.Delay(UnbornCancelPoll, limit.Token); }
+                    }
                 }
                 catch (Exception) { /* Best-effort: the next execution and the close wait for DONE either way. */ }
             }
         });
     }
+    /// <summary>How long a cancel of a job whose insert was cut off keeps asking while jobs.cancel answers 404, and how often.</summary>
+    internal TimeSpan UnbornCancelLimit { get; set; } = TimeSpan.FromSeconds(10);
+    internal TimeSpan UnbornCancelPoll { get; set; } = TimeSpan.FromMilliseconds(500);
 
     /// <summary>
     /// Waits for the session's last job to reach DONE and applies what it ran: its children in statement order when it has

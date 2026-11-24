@@ -215,6 +215,23 @@ export function cancelQuestion(row: Pick<JobHistoryRow, 'jobId' | 'user' | 'mine
   return `Cancel job ${id}${by}${startedAgo ? ` ${startedAgo}` : ''}?`
 }
 
+/** Statement types that change table data: Re-run asks before running one again. A script may hold any of them. */
+const changesData: ReadonlySet<string> = new Set(['INSERT', 'UPDATE', 'DELETE', 'MERGE', 'TRUNCATE_TABLE'])
+/** Whether Re-run asks first: anything but a SELECT may change data or tables (DML, DDL such as DROP TABLE or CREATE OR
+ *  REPLACE TABLE, a script, or a statement BigQuery did not name), and another user's job runs again as the current user. */
+export function rerunAsks(row: Pick<JobHistoryRow, 'mine' | 'statement'>): boolean { return !row.mine || row.statement !== 'SELECT' }
+/** "Re-run job varia_1f2e… started by ana@example.com 2 hours ago? Its MERGE changes table data again.": Re-run's question. */
+export function rerunQuestion(row: Pick<JobHistoryRow, 'jobId' | 'user' | 'mine' | 'statement'>, startedAgo?: string): string {
+  const id = row.jobId.length > 40 ? row.jobId.slice(0, 39) + '…' : row.jobId
+  const by = row.mine ? '' : row.user ? ` started by ${row.user}` : ' started by another user'
+  const statement = row.statement ?? ''
+  const data = statement === 'SELECT' ? '' : changesData.has(statement) ? ` Its ${statement} changes table data again.`
+    : statement === 'SCRIPT' ? ' It is a script, which may change table data.' : statement ? ` Its ${statement} may change tables or data again.`
+      : ' BigQuery did not say what kind of statement it is.'
+  const as = row.mine ? '' : ' It runs as you.'
+  return `Re-run job ${id}${by}${startedAgo ? ` ${startedAgo}` : ''}?${data}${as}`
+}
+
 /** "12 minutes ago": how long ago a job was created, for the cancel prompt. */
 export function agoText(createdMs: number, nowMs: number): string {
   const seconds = Math.max(0, Math.round((nowMs - createdMs) / 1000))

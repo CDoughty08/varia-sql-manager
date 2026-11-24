@@ -115,19 +115,225 @@ internal static class BigQueryExplorerChecks
     static void Facts(Action<bool, string> check)
     {
         var table = JsonSerializer.Deserialize<Table>(BigQueryFake.FixtureText("table-orders"), new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
-        var (type, groups) = BigQueryService.Facts(table, "varia-alpha.sales.orders");
+        var mapped = BigQueryService.MapTable(table, "orders", "varia-alpha.sales.orders", 12);
+        var (type, groups) = (mapped.Type, mapped.Groups);
         string? Fact(string group, string label) => groups.FirstOrDefault(item => item.Title == group)?.Facts.FirstOrDefault(fact => fact.Label == label)?.Value;
         check(type == "table" && groups.Select(group => group.Title).SequenceEqual(["Table", "Storage", "Layout", "History"])
             && Fact("Table", "Labels") == "env: dev, team: sales" && Fact("Storage", "Rows") == "1,234,567" && Fact("Storage", "Long-term logical size") is not null
             && Fact("Layout", "Partitioning") == "DAY on placed, partitions expire after 90 days" && Fact("Layout", "Clustering") == "customer, region" && Fact("Layout", "Columns") == "6"
             && Fact("History", "Created") == "2023-11-14 22:13:20 UTC" && Fact("History", "Expires") is null,
             "Properties' facts come from tables.get, formatted, empty facts left out: " + string.Join(" | ", groups.SelectMany(group => group.Facts.Select(fact => group.Title + "." + fact.Label + "=" + fact.Value))));
+
+        // Structured metadata from the same free tables.get payload: identity, storage, layout, nested schema, labels, no native DDL.
+        var address = mapped.Schema?.FirstOrDefault(column => column.Name == "address");
+        var geo = address?.Fields?.FirstOrDefault(field => field.Name == "geo");
+        var lat = geo?.Fields?.FirstOrDefault(field => field.Name == "lat");
+        check(mapped.FullName == "varia-alpha.sales.orders" && mapped.Location == "US" && mapped.Description == "Orders placed online."
+            && mapped.BaseTable is null && mapped.CreatedUtc == "2023-11-14 22:13:20 UTC" && mapped.ModifiedUtc == "2023-11-15 22:13:20 UTC"
+            && mapped.ExpiresUtc is null && mapped.SnapshotTimeUtc is null
+            && mapped.Storage == new BigQueryStorageInfo(1_234_567, 5_368_709_120, 0, 1_073_741_824)
+            && mapped.Layout is { Partitioning: "DAY on placed, partitions expire after 90 days", RequirePartitionFilter: true }
+            && mapped.Layout.Clustering is ["customer", "region"]
+            && mapped.Labels is [BigQueryLabel { Key: "env", Value: "dev" }, BigQueryLabel { Key: "team", Value: "sales" }]
+            && mapped.Schema is { Count: 6 } && mapped.SchemaTruncated is null
+            && mapped.Schema[0] is { Name: "id", Type: "INT64", Mode: "REQUIRED", Fields: null }
+            && mapped.Schema[2] is { Name: "tags", Type: "STRING", Mode: "REPEATED", Fields: null }
+            && address is { Type: "STRUCT" } && geo is { Type: "STRUCT" } && lat is { Type: "FLOAT64", Fields: null }
+            && mapped.Definition is null && mapped.DefinitionCut is null && mapped.DefinitionTruncated is null,
+            "Properties' structured fields map native table identity, storage, layout, nested STRUCT/REPEATED schema and sorted labels with no definition");
+
+        // Parameterized column types and surrogate-pair-safe clipping.
+        var surrogateDescription = new string('a', BigQueryPropertiesLimits.ColumnDescription - 2) + "😀tail";
+        var richSchema = BigQueryService.MapTable(new Table
+        {
+            Type = "TABLE",
+            Schema = new TableSchema
+            {
+                Fields =
+                [
+                    new TableFieldSchema { Name = "code", Type = "STRING", MaxLength = 16, Description = surrogateDescription },
+                    new TableFieldSchema { Name = "amount", Type = "DECIMAL", Precision = 10, Scale = 2 },
+                    new TableFieldSchema { Name = "big", Type = "BIGDECIMAL", Precision = 38 },
+                    new TableFieldSchema { Name = "flag", Type = "BOOLEAN" },
+                    new TableFieldSchema { Name = "span", Type = "RANGE", RangeElementType = new TableFieldSchema.RangeElementTypeData { Type = "date" } },
+                    new TableFieldSchema { Name = "", Type = "STRING" }
+                ]
+            }
+        }, "typed", "p.d.typed", 1);
+        var clippedDescription = richSchema.Schema![0].Description!;
+        check(richSchema.Schema.Count == 5
+            && richSchema.Schema[0].Type == "STRING(16)" && clippedDescription.Length == BigQueryPropertiesLimits.ColumnDescription - 1
+            && clippedDescription.EndsWith('…') && !char.IsSurrogate(clippedDescription[^2])
+            && richSchema.Schema[1].Type == "NUMERIC(10, 2)" && richSchema.Schema[2].Type == "BIGNUMERIC(38)"
+            && richSchema.Schema[3].Type == "BOOL" && richSchema.Schema[4].Type == "RANGE<DATE>",
+            "Parameterized column types normalize to GoogleSQL and surrogate pairs are never split on clip");
+
+        // Views and materialized views expose their SQL free from tables.get; native/external/snapshot/clone never do.
+        var view = BigQueryService.MapTable(new Table
+        {
+            Type = "VIEW",
+            View = new ViewDefinition { Query = "SELECT id, customer FROM `varia-alpha.sales.orders`" }
+        }, "orders_v", "varia-alpha.sales.orders_v", 2);
+        var mv = BigQueryService.MapTable(new Table
+        {
+            Type = "MATERIALIZED_VIEW",
+            MaterializedView = new MaterializedViewDefinition { Query = "SELECT customer, COUNT(*) AS n FROM `varia-alpha.sales.orders` GROUP BY 1" }
+        }, "orders_mv", "varia-alpha.sales.orders_mv", 3);
+        var longView = BigQueryService.MapTable(new Table
+        {
+            Type = "VIEW",
+            View = new ViewDefinition { Query = new string('x', BigQueryPropertiesLimits.DefinitionChars - 1) + "😀" }
+        }, "huge_v", "varia-alpha.sales.huge_v", 4);
+        var nativeWithStrayView = BigQueryService.MapTable(new Table
+        {
+            Type = "TABLE",
+            View = new ViewDefinition { Query = "SELECT 1" },
+            MaterializedView = new MaterializedViewDefinition { Query = "SELECT 2" }
+        }, "orders", "varia-alpha.sales.orders", 5);
+        var externalWithStrayView = BigQueryService.MapTable(new Table
+        {
+            Type = "EXTERNAL",
+            View = new ViewDefinition { Query = "SELECT 1" }
+        }, "ext", "varia-alpha.sales.ext", 6);
+        var untypedView = BigQueryService.MapTable(new Table
+        {
+            View = new ViewDefinition { Query = "SELECT 42" }
+        }, "emu_v", "varia-alpha.sales.emu_v", 7);
+        var untypedMv = BigQueryService.MapTable(new Table
+        {
+            Type = "",
+            MaterializedView = new MaterializedViewDefinition { Query = "SELECT 99" }
+        }, "emu_mv", "varia-alpha.sales.emu_mv", 8);
+        check(view is { Type: "view", Definition: "SELECT id, customer FROM `varia-alpha.sales.orders`", DefinitionCut: null, DefinitionTruncated: null }
+            && mv is { Type: "materialized view", Definition: "SELECT customer, COUNT(*) AS n FROM `varia-alpha.sales.orders` GROUP BY 1", DefinitionCut: null, DefinitionTruncated: null }
+            && longView is { DefinitionCut: true, DefinitionTruncated: true } && longView.Definition!.Length == BigQueryPropertiesLimits.DefinitionChars - 1 && !char.IsSurrogate(longView.Definition[^1])
+            && nativeWithStrayView is { Definition: null, DefinitionCut: null, DefinitionTruncated: null }
+            && externalWithStrayView is { Type: "external table", Definition: null, DefinitionCut: null, DefinitionTruncated: null }
+            && untypedView is { Definition: "SELECT 42", DefinitionCut: null, DefinitionTruncated: null }
+            && untypedMv is { Definition: "SELECT 99", DefinitionCut: null, DefinitionTruncated: null },
+            "View and materialized view SQL come from tables.get with surrogate-safe truncation (including when type is omitted by an emulator); native and external tables omit definition");
+
+        // Snapshot, clone and malformed base table reference.
+        var snapshotTime = new DateTimeOffset(2025, 6, 1, 12, 30, 0, TimeSpan.Zero);
+        var snapshot = BigQueryService.MapTable(new Table
+        {
+            Type = "SNAPSHOT",
+            SnapshotDefinition = new SnapshotDefinition
+            {
+                BaseTableReference = new TableReference { ProjectId = "varia-alpha", DatasetId = "sales", TableId = "orders" },
+                SnapshotTimeDateTimeOffset = snapshotTime
+            },
+            View = new ViewDefinition { Query = "SELECT 1" }
+        }, "orders_snap", "varia-alpha.sales.orders_snap", 1);
         table.CloneDefinition = new CloneDefinition { BaseTableReference = new TableReference { ProjectId = "varia-alpha", DatasetId = "sales", TableId = "base" } };
         table.Description = new string('x', 5000);
         var (clone, cloneGroups) = BigQueryService.Facts(table, "varia-alpha.sales.orders");
+        var cloneMapped = BigQueryService.MapTable(table, "orders", "varia-alpha.sales.orders", 1);
         var description = cloneGroups[0].Facts.First(fact => fact.Label == "Description").Value;
-        check(clone == "clone" && cloneGroups[0].Facts.Any(fact => fact.Label == "Base table" && fact.Value == "varia-alpha.sales.base") && description.Length == BigQueryService.MaxFactValue && description.EndsWith('…'),
-            "a clone names its base table, and a long value is clipped");
+        var partialRef = BigQueryService.MapTable(new Table { Type = "SNAPSHOT", SnapshotDefinition = new SnapshotDefinition { BaseTableReference = new TableReference { ProjectId = "p" } } }, "s", "p.d.s", 1);
+        check(snapshot is { Type: "snapshot", BaseTable: "varia-alpha.sales.orders", SnapshotTimeUtc: "2025-06-01 12:30:00 UTC", Definition: null }
+            && clone == "clone" && cloneGroups[0].Facts.Any(fact => fact.Label == "Base table" && fact.Value == "varia-alpha.sales.base")
+            && cloneMapped is { Type: "clone", BaseTable: "varia-alpha.sales.base", Definition: null }
+            && description.Length == BigQueryService.MaxFactValue && description.EndsWith('…') && partialRef.BaseTable is null,
+            "snapshot and clone expose baseTable and snapshotTimeUtc cleanly, and a long value is clipped");
+
+        // Storage clamps > MAX_SAFE_INTEGER and omits negatives; empty/minimal table omits optional fields.
+        var extremeStorage = BigQueryService.MapTable(new Table
+        {
+            NumRows = ulong.MaxValue,
+            NumBytes = long.MaxValue,
+            NumLongTermBytes = -5,
+            NumTotalPhysicalBytes = -1
+        }, "huge", "p.d.huge", -10);
+        var minimal = BigQueryService.MapTable(new Table(), "empty", "p.d.empty", 0);
+        check(extremeStorage.ElapsedMs == 0
+            && extremeStorage.Storage == new BigQueryStorageInfo(BigQueryLimits.MaxSafeInteger, BigQueryLimits.MaxSafeInteger, null, null)
+            && minimal is { Type: "table", Storage: null, Layout: null, Columns: null, ColumnsCut: null, Schema: null, SchemaTruncated: null, Labels: null, Definition: null, DefinitionCut: null, DefinitionTruncated: null, Location: null, Description: null, BaseTable: null, CreatedUtc: null, ModifiedUtc: null, ExpiresUtc: null, SnapshotTimeUtc: null },
+            "Storage clamps safe-integer overflows, drops negatives, and minimal tables omit empty structured sections");
+
+        // Deep nesting (> SchemaDepth = 7), huge column count (> SchemaFields = 10,000), huge text bytes, and label/clustering caps.
+        TableFieldSchema Nest(int levels)
+        {
+            var leaf = new TableFieldSchema { Name = "l" + levels, Type = "INT64" };
+            for (var i = levels - 1; i >= 1; i--) leaf = new TableFieldSchema { Name = "l" + i, Type = "RECORD", Fields = [leaf] };
+            return leaf;
+        }
+        var deep = BigQueryService.MapTable(new Table { Schema = new TableSchema { Fields = [Nest(12)] } }, "deep", "p.d.deep", 1);
+        var depthCount = 0;
+        for (var cur = deep.Schema!.Single(); cur is not null; cur = cur.Fields?.SingleOrDefault()) depthCount++;
+        var wide = BigQueryService.MapTable(new Table
+        {
+            Schema = new TableSchema { Fields = [.. Enumerable.Range(0, BigQueryPropertiesLimits.SchemaFields + 50).Select(i => new TableFieldSchema { Name = "c" + i, Type = "STRING" })] },
+            Labels = Enumerable.Range(0, 80).ToDictionary(i => $"k{i:D2}", i => $"v{i:D2}"),
+            Clustering = new Clustering { Fields = [.. Enumerable.Range(0, 20).Select(i => "cl" + i)] }
+        }, "wide", "p.d.wide", 1);
+        var heavyText = BigQueryService.MapTable(new Table
+        {
+            Type = "VIEW",
+            View = new ViewDefinition { Query = new string('é', BigQueryPropertiesLimits.DefinitionChars) },
+            Schema = new TableSchema { Fields = [.. Enumerable.Range(0, 6000).Select(i => new TableFieldSchema { Name = "h" + i, Type = "STRING", Description = new string('é', 1000) })] }
+        }, "heavy", "p.d.heavy", 1);
+        check(depthCount == BigQueryPropertiesLimits.SchemaDepth && deep.SchemaTruncated == true
+            && wide.Schema!.Count == BigQueryPropertiesLimits.SchemaFields && wide.SchemaTruncated == true
+            && wide.Labels!.Count == BigQueryPropertiesLimits.Labels && wide.Labels[0].Key == "k00" && wide.Labels[^1].Key == "k63"
+            && wide.Layout!.Clustering!.Count == BigQueryPropertiesLimits.ClusteringFields
+            && heavyText.SchemaTruncated == true && heavyText.Schema!.Count < 6000,
+            $"Schema depth, field count, text byte budget, labels and clustering enforce bounds cleanly: depth={depthCount} wide={wide.Schema?.Count} heavy={heavyText.Schema?.Count}");
+
+        // Wire round-trip at exact RESPONSE depth=1 proves 7-level nested schema + max safe counts + worst-case combined heavy payload fit protocol v2 (MaxDepth=16, 16 MiB).
+        byte[] EncodeResponse(BigQueryProperties payload)
+        {
+            var buffer = new System.Buffers.ArrayBufferWriter<byte>();
+            var writer = new Varia.Backend.Protocol.MsgPackWriter(buffer);
+            writer.WriteMapHeader(1);
+            writer.WriteString("result");
+            Varia.Backend.Protocol.JsonBridge.FromJson(JsonSerializer.SerializeToUtf8Bytes(payload, Wire), writer, depth: 1);
+            return buffer.WrittenSpan.ToArray();
+        }
+        var deepWire = EncodeResponse(deep);
+        var decodedDeep = Varia.Backend.Protocol.JsonBridge.ParseControl(deepWire);
+        var heavyWire = EncodeResponse(heavyText);
+        check(decodedDeep.GetProperty("result").GetProperty("schemaTruncated").GetBoolean()
+            && heavyWire.Length < Varia.Backend.Protocol.ProtocolLimits.ResponseBody,
+            $"7-level nested schema and combined worst-case heavy payload round-trip within protocol v2 depth and 16 MiB limits ({heavyWire.Length} bytes)");
+
+        // Adversarial timestamps, cyclic/degenerate schemas, and range/non-positive-expiration partitioning.
+        var badTimes = BigQueryService.MapTable(new Table
+        {
+            Type = "SNAPSHOT",
+            CreationTime = 0,
+            LastModifiedTime = ulong.MaxValue,
+            ExpirationTime = -100,
+            SnapshotDefinition = new SnapshotDefinition { SnapshotTimeRaw = "not-a-timestamp" }
+        }, "bad_times", "p.d.bad_times", 1);
+        var maxLongTimes = BigQueryService.MapTable(new Table
+        {
+            CreationTime = long.MaxValue,
+            LastModifiedTime = 0,
+            ExpirationTime = long.MaxValue
+        }, "max_times", "p.d.max_times", 1);
+        var cycle = new TableFieldSchema { Name = "loop", Type = "RECORD" };
+        cycle.Fields = [cycle];
+        var cyclic = BigQueryService.MapTable(new Table { Schema = new TableSchema { Fields = [cycle] } }, "cyclic", "p.d.cyclic", 1);
+        var cycleDepth = 0;
+        for (var cur = cyclic.Schema!.Single(); cur is not null; cur = cur.Fields?.SingleOrDefault()) cycleDepth++;
+        var emptyFields = BigQueryService.MapTable(new Table
+        {
+            Schema = new TableSchema { Fields = [.. Enumerable.Range(0, BigQueryPropertiesLimits.SchemaFields * 4 + 5).Select(_ => new TableFieldSchema { Name = "", Type = "STRING" })] }
+        }, "empty_fields", "p.d.empty_fields", 1);
+        var rangeWithField = BigQueryService.MapTable(new Table { RangePartitioning = new RangePartitioning { Field = "bucket" } }, "r1", "p.d.r1", 1);
+        var rangeNoField = BigQueryService.MapTable(new Table { RangePartitioning = new RangePartitioning() }, "r2", "p.d.r2", 1);
+        var zeroExpiry = BigQueryService.MapTable(new Table { TimePartitioning = new TimePartitioning { Type = "DAY", Field = "ts", ExpirationMs = 0 } }, "t0", "p.d.t0", 1);
+        var negExpiry = BigQueryService.MapTable(new Table { TimePartitioning = new TimePartitioning { Type = "HOUR", ExpirationMs = -5 } }, "tn", "p.d.tn", 1);
+        check(badTimes is { CreatedUtc: null, ModifiedUtc: null, ExpiresUtc: null, SnapshotTimeUtc: null }
+            && maxLongTimes is { CreatedUtc: null, ModifiedUtc: null, ExpiresUtc: null }
+            && cycleDepth == BigQueryPropertiesLimits.SchemaDepth && cyclic.SchemaTruncated == true
+            && emptyFields is { Schema: null, SchemaTruncated: true }
+            && rangeWithField.Layout?.Partitioning == "integer range on bucket"
+            && rangeNoField.Layout?.Partitioning == "integer range"
+            && zeroExpiry.Layout?.Partitioning == "DAY on ts"
+            && negExpiry.Layout?.Partitioning == "HOUR on _PARTITIONTIME",
+            "Malformed timestamps, cyclic and degenerate schemas, range partitioning and non-positive expirations degrade cleanly without throwing");
     }
 
     static async Task LimiterAsync(Action<bool, string> check)
@@ -541,6 +747,11 @@ internal static class BigQueryExplorerChecks
         var pages = small.Fake.To(Sales + "/tables/preview/data").Count();
         check(full is { Status: "completed" } && full.ResultSets.Single() is { Truncated: "queryBudget" or "globalBudget" } && pages < 20,
             $"a preview the result budget stops completes without reading the table's other pages: {full?.Status} {full?.ResultSets.FirstOrDefault()?.Truncated} {pages} pages");
+        check(full?.Messages.Any(message => message.Text.Contains("result memory budget is full", StringComparison.Ordinal)) == true, "a preview the result budget stops says so in Messages");
+        // A low-memory stop says so, not that the budget is full.
+        check(SqlService.PreviewStopNote(["systemMemory"]) is { } low && low.Contains("low on memory", StringComparison.Ordinal) && !low.Contains("budget", StringComparison.Ordinal)
+            && SqlService.PreviewStopNote(["globalBudget", "systemMemory"])!.Contains("budget is full", StringComparison.Ordinal) && SqlService.PreviewStopNote([null, "rowLimit"]) is null,
+            "Preview Rows says a low-memory stop is the computer's memory, and a budget stop the budget's");
     }
 
     static async Task PropertiesAsync(Action<bool, string> check, JsonObject key)
@@ -554,13 +765,14 @@ internal static class BigQueryExplorerChecks
         var connected = harness.Fake.Seen.Count;
         var (code, result, _) = await harness.Call("bigquery.properties", Args("bqTable", "orders"));
         var properties = result as BigQueryProperties;
+        var tableGets = harness.Fake.To(Sales + "/tables/orders").Count();
         var (model, _, _) = await harness.Call("bigquery.properties", Args("bqModel", "orders"));
         var (badRoutine, _, _) = await harness.Call("bigquery.properties", Args("bqRoutine", "a.b"));
         // The details pane's columns: the fields flattened depth first as the index has them (a bad name left out), descriptions beside them.
         var columns = properties?.Columns?.Select(column => column.Name + ":" + column.Type + (column.Description is { } description ? ":" + description : "")).ToArray() ?? [];
         check(columns.SequenceEqual(["id:INT64", "customer:STRING", "tags:ARRAY<STRING>", "placed:TIMESTAMP", "address:STRUCT", "address.city:STRING", "address.geo:STRUCT", "address.geo.lat:FLOAT64"])
-            && properties is { Definition: null, DefinitionCut: null, ColumnsCut: null },
-            $"bigquery.properties answers a table's columns as the index flattens them, with no definition: {string.Join(" ", columns)}");
+            && properties is { Definition: null, DefinitionCut: null, DefinitionTruncated: null, ColumnsCut: null, Storage.Rows: 1_234_567, Schema.Count: 6, Labels.Count: 2 } && tableGets == 1,
+            $"bigquery.properties answers a table's flat columns, structured metadata and no definition in one tables.get: {string.Join(" ", columns)}");
         var described = JsonNode.Parse(BigQueryFake.FixtureText("table-orders"))!;
         described["schema"]!["fields"]![1]!["description"] = "Who placed it.";
         described["schema"]!["fields"]![4]!["fields"]![0]!["description"] = new string('d', 2000);
@@ -582,12 +794,19 @@ internal static class BigQueryExplorerChecks
         var view = (await harness.Call("bigquery.properties", Args("bqView", "daily"))).Result as BigQueryProperties;
         check(view is { Type: "view", Definition: { } query } && query.StartsWith("SELECT DATE(placed)", StringComparison.Ordinal) && view.Columns?.Count == 2,
             $"bigquery.properties answers a view's query text and columns: {view?.Type} {view?.Columns?.Count}");
+        harness.Fake.On("GET", Sales + "/tables/daily_mv", new BigQueryFake.Reply(200,
+            "{\"type\":\"MATERIALIZED_VIEW\",\"location\":\"US\",\"materializedView\":{\"query\":\"SELECT customer, COUNT(*) AS n FROM `varia-alpha.sales.orders` GROUP BY 1\"}}"));
+        var (mvCode, mvResult, _) = await harness.Call("bigquery.properties", Args("bqMaterializedView", "daily_mv"));
+        var mvProps = mvResult as BigQueryProperties;
+        check(mvCode == "ok" && mvProps is { Type: "materialized view", Definition: "SELECT customer, COUNT(*) AS n FROM `varia-alpha.sales.orders` GROUP BY 1", DefinitionCut: null, DefinitionTruncated: null }
+            && harness.Fake.To(Sales + "/tables/daily_mv").Count() == 1,
+            $"bigquery.properties answers a materialized view's query text in one free tables.get: {mvCode}");
         harness.Fake.On("GET", Sales + "/tables/long", new BigQueryFake.Reply(200, new JsonObject
         {
             ["type"] = "VIEW", ["view"] = new JsonObject { ["query"] = "SELECT '" + new string('x', BigQueryService.MaxDefinition) + "'" }
         }.ToJsonString()));
         var longView = (await harness.Call("bigquery.properties", Args("bqView", "long"))).Result as BigQueryProperties;
-        check(longView is { DefinitionCut: true, Definition.Length: BigQueryService.MaxDefinition, Columns: null },
+        check(longView is { DefinitionCut: true, DefinitionTruncated: true, Definition.Length: BigQueryService.MaxDefinition, Columns: null },
             $"bigquery.properties cuts a view's text at 1,000,000 characters: {longView?.Definition?.Length} {longView?.DefinitionCut}");
         harness.Fake.On("GET", Sales + "/routines/to_cents", new BigQueryFake.Reply(200, """
             {"routineReference":{"projectId":"varia-alpha","datasetId":"sales","routineId":"to_cents"},"routineType":"SCALAR_FUNCTION","language":"SQL",

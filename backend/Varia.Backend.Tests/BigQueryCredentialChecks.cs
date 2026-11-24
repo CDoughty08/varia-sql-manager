@@ -5,8 +5,8 @@ using Varia.Backend.BigQuery;
 namespace Varia.Backend.Tests;
 
 /// <summary>
-/// The credential shapes Varia loads and refuses, offline (docs/bigquery-plan.md, Authentication): each mode's types, every
-/// URL pinned to Google's endpoints for every credential type (decision 48), and the federation sources decision 23
+/// The credential shapes Varia loads and refuses, offline (docs/bigquery.md, Authentication): each mode's types, every
+/// URL pinned to Google's endpoints for every credential type, and the federation sources Varia
 /// allows. A refusal is AUTH_KEY_FILE naming the field and never the file's secrets.
 /// </summary>
 internal static class BigQueryCredentialChecks
@@ -103,7 +103,7 @@ internal static class BigQueryCredentialChecks
         foreach (var (value, mode, source, name) in accepted)
             check(Outcome(value, mode, source) == "ok", name + " is accepted: " + Outcome(value, mode, source));
 
-        // Refused, naming the field (decision 48 per type, decision 23 for federation sources).
+        // Refused, naming the field (per credential type, and for federation sources).
         (JsonNode Value, string Mode, string Source, string Field, string Name)[] refused =
         [
             (With(key, value => value["token_uri"] = "https://tokens.example.com/token"), "serviceAccountKey", "file", "token_uri", "a service account key's token_uri on another host"),
@@ -272,7 +272,7 @@ internal static class BigQueryCredentialChecks
         check(Options(valid with { Credential = new("anonymous") }, emulator: true) == "ok" && Options(valid, emulator: true) == "INVALID_PARAMS",
             "emulator mode takes only anonymous material, so no Google credential is ever resolved for it");
 
-        // Legacy SQL is refused before a job exists (decision 13); comments and blank lines may come first.
+        // Legacy SQL is refused before a job exists; comments and blank lines may come first.
         check(BigQueryErrors.IsLegacySql("#legacySQL\nSELECT 1") && BigQueryErrors.IsLegacySql("  -- note\n/* x */ #legacysql\nSELECT [p:d.t]")
             && !BigQueryErrors.IsLegacySql("SELECT '#legacySQL'") && !BigQueryErrors.IsLegacySql("# a comment\nSELECT 1") && !BigQueryErrors.IsLegacySql("#legacySQLx\nSELECT 1")
             && !BigQueryErrors.IsLegacySql("#standardSQL\nSELECT 1"),

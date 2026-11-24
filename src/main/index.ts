@@ -31,6 +31,7 @@ import { deliverLaunchFiles as deliverWaiting, droppedPathsSchema, fileArguments
 import { recentFilesMenuModel } from '../shared/files/recent'
 import { legacyCodePage } from './text-encoding'
 import { LayoutStore } from './layout-store'
+import { InspectorVitalsStore } from './inspector-vitals-store'
 import { ConnectionStore } from './connection-store'
 import { SavedPasswordStore } from './saved-passwords'
 import { ConnectionAuthenticationGuard } from './connection-authentication'
@@ -50,7 +51,7 @@ import { toPlatform } from '../shared/commands/keybindings'
 import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWriteSchema, retentionDays } from './recovery-store'
 import { migrateProfile, profileFiles } from './profile-migration'
 import { JobRecordStore, noteJobConnection, profileDeleteJobs } from './job-records'
-import { cancelJobsResultSchema, jobKeySchema, jobLimits, jobsByProject, restoredJobs, type JobRecord, type RecordedJobsCancel } from '../shared/bigquery/jobs'
+import { cancelJobsResultSchema, jobKeySchema, jobLimits, jobsByProject, jobsWithoutTabRequestSchema, restoredJobs, type JobRecord, type RecordedJobsCancel } from '../shared/bigquery/jobs'
 import { connectionKey } from '../shared/connections'
 import { encodeReloadSession, SessionStore, sessionWriteSchema, type SessionInput, type SessionRecord, type SessionRecordDocument } from './session-store'
 import { sessionLimits, type ReloadPins, type RestoredDocument, type RestoredSession, type SessionWrite } from '../shared/files/session'
@@ -156,11 +157,25 @@ let bigQueryStore: BigQueryConnectionStore | undefined
 const bigQueryCredentials = new BigQueryCredentials(bigQueryKeyFiles, {
   env: process.env, platform: process.platform, home: homedir(), emulator: bigQueryEmulatorEndpoint({ packaged: app.isPackaged, env: process.env }) !== undefined,
   sourceConfirmed: async (keyPath, source) => !!bigQueryStore && await bigQueryStore.sourceConfirmed(keyPath, source),
+  // Decision 49 for gcloud's ADC file: Connect's own question, asked here since no file was picked. Use It is remembered.
+  askSource: async (keyPath, source) => {
+    const store = bigQueryStore
+    if (!store) return false
+    // A second Connect that asked while the first box was open waits its turn: the first's Use It answers it too.
+    const { response } = await pageDialog(async (window, signal) => await store.sourceConfirmed(keyPath, source) ? { response: 0, checkboxChecked: false } : dialog.showMessageBox(window, {
+      type: 'question', title: 'Use this token file?', message: 'Your Application Default Credentials sign in with a token that Varia reads from this file each time it connects:',
+      detail: `${source}\n\nUse it only if you know what writes this file. Varia asks again if the credentials name another file.`,
+      buttons: ['Use It', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, signal
+    }), { response: 1, checkboxChecked: false }, true)
+    if (response !== 0) return false
+    await store.confirmSource(keyPath, source)
+    return true
+  },
   restoreKeyFiles: async () => { await bigQueryStore?.load() }
 })
 /** BigQuery's options as the backend takes them: main adds the credential material the renderer never holds. */
 const withBigQueryCredential = async (params: unknown): Promise<unknown> => isBigQueryOptions(params as { provider?: string })
-  ? { ...params as BigQueryConnectionOptions, credential: await bigQueryCredentials.material(params as BigQueryConnectionOptions) } : params
+  ? { ...params as BigQueryConnectionOptions, credential: await bigQueryCredentials.material(params as BigQueryConnectionOptions, { interactive: !(params as { nonInteractive?: boolean }).nonInteractive }) } : params
 const reloadRequest = z.object({
   role: z.literal('reload'), session: sessionWriteSchema,
   recoveryIds: z.array(recoveryTakeSchema.shape.id.nullable()).max(sessionLimits.documents)
@@ -1045,6 +1060,7 @@ app.whenReady().then(async () => {
   if (testSeams) testHooks = installTestHooks(backend, results)
   backend.start()
   layouts = new LayoutStore(join(app.getPath('userData'), 'workspace-layouts.json'))
+  const inspectorVitals = new InspectorVitalsStore(join(app.getPath('userData'), 'inspector-vitals.json'))
   const connectionStore = new ConnectionStore(join(app.getPath('userData'), profileFiles.connections.current))
   bigQueryStore = new BigQueryConnectionStore(join(app.getPath('userData'), profileFiles.bigQueryConnections.current), bigQueryKeyFiles)
   const history = connectionHistory(connectionStore, bigQueryStore)
@@ -1240,6 +1256,8 @@ app.whenReady().then(async () => {
   handle('varia:shortcuts-export', shortcutIpc.exportFile)
   handle('varia:layouts-load', () => layouts.load())
   handle('varia:layouts-save', value => layouts.save(value))
+  handle('varia:inspector-vitals-load', () => inspectorVitals.load())
+  handle('varia:inspector-vitals-save', value => inspectorVitals.save(value))
   handle('varia:layout-import', async () => {
     const selection = await pageDialog(window => dialog.showOpenDialog(window, { title: 'Load workspace layout', filters: [{ name: 'Varia layout', extensions: ['json'] }], properties: ['openFile'] }), { canceled: true, filePaths: [] })
     return selection.canceled || !selection.filePaths[0] ? null : layouts.import(selection.filePaths[0])
@@ -1326,7 +1344,8 @@ app.whenReady().then(async () => {
       // BigQuery before connecting: main adds the credential material the renderer never holds.
       if (method === 'bigquery.account' || method === 'bigquery.projects') {
         const params = validated as RpcMethods['bigquery.projects']['params']
-        const credential = await bigQueryCredentials.material(params)
+        // The account line reads itself as the dialog's fields change, so only Browse (bigquery.projects) may ask decision 49's question.
+        const credential = await bigQueryCredentials.material(params, { interactive: method === 'bigquery.projects' })
         return { ok: true, value: validateResult(method, await backend.request(method, { ...params, credential })) }
       }
 
@@ -1569,7 +1588,7 @@ app.whenReady().then(async () => {
   })
   // After a restore: running jobs no open tab will re-attach to are asked about once (a decision, so main's box).
   handle('varia:jobs-without-tab', async value => {
-    const keys = z.array(jobKeySchema).max(jobLimits.keys).parse(value)
+    const { keys, liveProjects } = jobsWithoutTabRequestSchema.parse(value)
     // Only jobs from before this review: one a tab started meanwhile has a tab the page's list did not have yet.
     const asked = Date.now(), generation = rendererGeneration
     // Records unread decide nothing: a Keep dropped from memory alone would come back with the file at the next write.
@@ -1589,17 +1608,26 @@ app.whenReady().then(async () => {
     const shown = running.slice(0, 10).map(record => `• ${record.jobId} (started ${agoText(Date.now() - record.createdAt)})`)
     if (running.length > shown.length) shown.push(`… and ${running.length - shown.length} more`)
     const one = running.length === 1
+    // Show in Job History opens a project the page is connected to, or connects the saved connection that started its jobs;
+    // with neither for any project it is not offered, and the box says why.
+    const profiles = await (bigQueryStore ? bigQueryStore.load().then(store => new Map(store.library.profiles.map(profile => [profile.id, profile.options.project] as const))) : Promise.resolve(new Map<string, string>())).catch(() => null)
+    const show = jobsByProject(running, profiles, new Set(liveProjects))
+    const showable = show.some(item => !item.unavailable)
+    const keepText = `Keep leaves ${one ? 'it' : 'them'} running; Job History lists ${one ? 'it' : 'them'}, and a kept job's session, with its temporary tables billed as storage, ends 24 hours after the job finishes.`
+    const showText = showable ? `Show in Job History lists ${one ? 'it' : 'them'} in Job History, where Re-attach opens ${one ? 'it' : 'each'} in a new tab. ` : ''
+    const noShow = showable ? '' : `\n\nShow in Job History is not offered: ${profiles === null ? 'Varia could not read the saved connections' : `the saved connection that started ${one ? 'this job' : 'these jobs'} was removed`}. Connect to ${one ? 'its' : 'their'} project to see ${one ? 'it' : 'them'} in Job History.`
+    const buttons = showable ? [one ? 'Cancel Job' : 'Cancel Jobs', 'Show in Job History', 'Keep'] : [one ? 'Cancel Job' : 'Cancel Jobs', 'Keep']
     const { response } = await pageDialog((window, signal) => dialog.showMessageBox(window, {
       type: 'question', title: 'BigQuery jobs without a tab', message: one ? '1 BigQuery job from the last session has no tab.' : `${running.length} BigQuery jobs from the last session have no tab.`,
-      detail: `${shown.join('\n')}\n\nCancel Jobs stops ${one ? 'it' : 'them'} in BigQuery. Show in Job History lists ${one ? 'it' : 'them'} in Job History, where Re-attach opens ${one ? 'it' : 'each'} in a new tab. Keep leaves ${one ? 'it' : 'them'} running; Job History lists ${one ? 'it' : 'them'}, and a kept job's session, with its temporary tables billed as storage, ends 24 hours after the job finishes.`,
-      buttons: [one ? 'Cancel Job' : 'Cancel Jobs', 'Show in Job History', 'Keep'], defaultId: 2, cancelId: 2, noLink: true, signal
+      detail: `${shown.join('\n')}\n\nCancel Jobs stops ${one ? 'it' : 'them'} in BigQuery. ${showText}${keepText}${noShow}`,
+      buttons, defaultId: buttons.length - 1, cancelId: buttons.length - 1, noLink: true, signal
     }), { response: -1, checkboxChecked: false }, true)
     // A box a reload, crash or close took away decided nothing: the records stay for the next page's review.
     if (response < 0) return null
     const jobIds = running.map(record => record.jobId)
-    // Show in Job History hands the jobs (by project) to Job History, which waits for a connection when it must; their
+    // Show in Job History hands the jobs (by project, each with the saved connection that opens it) to Job History; their
     // records go as Keep's do, since the jobs are the user's to find there now.
-    if (response === 1) { jobRecords.dropJobs(jobIds); return { answer: 'show' as const, jobIds, show: jobsByProject(running) } }
+    if (showable && response === 1) { jobRecords.dropJobs(jobIds); return { answer: 'show' as const, jobIds, show } }
     if (response !== 0) { jobRecords.dropJobs(jobIds); return { answer: 'keep' as const, jobIds } }
     const cancel = await cancelRecordedJobs(running)
     // What could not be cancelled stays in BigQuery's job history; no tab will ask about it again.
