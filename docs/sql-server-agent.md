@@ -417,7 +417,7 @@ docs/agent-plan.md (AG-10 to AG-16) or to its Later row.
 | Error Logs menu | View Agent Log, Recycle | Same (Recycle asks first; not on Managed Instance) |
 | Log File Viewer | Select logs, runs with their steps, message details, Delete history | Same layout (master/detail), with Agent's error logs in the same viewer |
 | Job dialog pages | General, Steps, Schedules, Alerts, Notifications, Targets | Same sections, plus History (rethink); Targets shows the local server only |
-| Job Step dialog | General (name, type, Run as, database, command, Parse, Open), Advanced (on success, on failure, retries, output file, log to table) | Same fields on the Steps page beside the list; Advanced is the folded More options |
+| Job Step dialog | General (name, type, Run as, database, command, Parse, Open), Advanced (on success, on failure, retries, output file, log to table) | Same fields on the Steps page beside the list, with Open as Load from file… on PowerShell and CmdExec steps; Advanced is the folded More options |
 | Job Schedule dialog | Schedule type, frequency, daily frequency, duration, summary sentence | Same fields and SSMS's sentence, plus presets and the next runs (rethink) |
 | Alert dialog | General (event, performance condition, WMI), Response (job, operators), Options | One screen with When / Then / Options; WMI alerts read-only (editing is Later) |
 | Operator dialog | General (e-mail, pager, on-duty schedule), Notifications, History | General, Pager duty and Notifications, plus Send test e-mail and the Operators and Notifications grid; the History page (last notification attempts) is Later |
@@ -443,7 +443,6 @@ docs/agent-plan.md (AG-10 to AG-16) or to its Later row.
 
 | Gap | Where it goes |
 | --- | --- |
-| Load from file… for CmdExec and PowerShell steps | AG-11 |
 | Job-state chips on job nodes, and reloading the Agent node when Agent XPs flips | AG-12 |
 | An SSIS execution messages view for the job history's SSIS link (a query window today) | AG-13 |
 | Schedules timeline; schedule occurrences across midnight and for every N months; an Agent live suite for schedules | AG-14 |
