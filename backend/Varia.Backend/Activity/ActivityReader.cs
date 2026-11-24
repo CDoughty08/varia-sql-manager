@@ -43,7 +43,8 @@ internal sealed class ActivityReader : ILiveSqlReader
     private bool focusMoved;
     private ServerProfile? profile;
 
-    public ActivityReader(ILiveHost host, string connectionId, ActivityLiveArgs? args = null, ActivityCatalog? catalog = null)
+    /// <param name="jobClock">The Agent name cache's clock in milliseconds; checks pass one they can move.</param>
+    public ActivityReader(ILiveHost host, string connectionId, ActivityLiveArgs? args = null, ActivityCatalog? catalog = null, Func<long>? jobClock = null)
     {
         this.host = host;
         this.connectionId = connectionId;
@@ -51,7 +52,7 @@ internal sealed class ActivityReader : ILiveSqlReader
         sessions = new(this.catalog);
         resources = new(this.catalog);
         queries = new(this.catalog);
-        jobNames = new(this.catalog);
+        jobNames = new(this.catalog, jobClock);
         if (args is not null) Apply(args);
     }
 

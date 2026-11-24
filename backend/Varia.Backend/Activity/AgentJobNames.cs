@@ -21,7 +21,8 @@ internal static class AgentPrograms
         Match match;
         try { match = catalog.AgentStepPattern.Match(program); }
         catch (RegexMatchTimeoutException) { return null; }
-        if (!match.Success) return null;
+        // .NET's $ also matches before a final newline, which JavaScript's does not: the match must be the whole name.
+        if (!match.Success || match.Length != program.Length) return null;
         if (!int.TryParse(match.Groups["step"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var step) || step < 1) return null;
         return new(new Guid(Convert.FromHexString(match.Groups["job"].Value)), step);
     }

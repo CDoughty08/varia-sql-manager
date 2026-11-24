@@ -344,7 +344,7 @@ internal static class ActivityChecks
         [
             null, "", "SSMS", "SQLAgent - Generic Refresher", "SQLAgent - Job invocation engine", "sqlagent - TSQL JobStep (Job 0x" + stored + " : Step 2)",
             program.Replace(" : Step 2)", " : Step 0)", StringComparison.Ordinal), program.Replace(" : Step 2)", " : Step 2147483648)", StringComparison.Ordinal),
-            program.Replace(stored, stored[2..], StringComparison.Ordinal), program.Replace(stored, stored[..31] + "G", StringComparison.Ordinal), program[..^1], program + " ",
+            program.Replace(stored, stored[2..], StringComparison.Ordinal), program.Replace(stored, stored[..31] + "G", StringComparison.Ordinal), program[..^1], program + " ", program + "\n",
             "SQLAgent - " + new string('x', 118) + " (Job 0x" + stored + " : Step 2)"
         ];
         var accepted = bad.Where(text => AgentPrograms.Parse(text, Catalog) is not null).ToList();

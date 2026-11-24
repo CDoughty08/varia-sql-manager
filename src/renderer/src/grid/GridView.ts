@@ -499,7 +499,7 @@ export class GridView {
           // A held Enter opens one tab, not one per repeat.
           if (event.repeat) return true
           const active = this.o.state.selection?.active
-          if (!active || !this.links[active.column] || active.row >= (this.rotated ? this.drawnColumns() : this.rows())) return false
+          if (!active || !this.links[active.column] || active.row >= (this.rotated ? this.drawnColumns() : this.rows()) || this.emptyLink(active.row, active.column)) return false
           this.o.onOpenValue?.(active.row, active.column)
           return true
         }
@@ -1206,7 +1206,7 @@ export class GridView {
     // A link opens on a single click: the second press of a double-click lands before the first one's tab has opened.
     if (drag.dragging || drag.modifiers || drag.hit.kind !== 'cell' || this.clicks > 1) return
     const row = this.rotated ? drag.hit.column : drag.hit.row, column = this.rotated ? drag.hit.row : drag.hit.column
-    if (this.links[column]) this.o.onOpenValue?.(row, column)
+    if (this.links[column] && !this.emptyLink(row, column)) this.o.onOpenValue?.(row, column)
   }
 
   private endDrag(): void {
@@ -2126,6 +2126,16 @@ export class GridView {
     if (!window || row - window.first >= window.count || column >= window.colEnd || column < window.colStart) return undefined
     const index = (row - window.first) * (window.colEnd - window.colStart) + column - window.colStart, flags = window.flags[index]
     return flags & (FLAG_NULL | FLAG_ERROR) ? { text: null, bits: flags & FLAG_ERROR ? ERR : 0 } : { text: window.text[index], bits: flags & FLAG_TRUNCATED ? TRUNC : 0 }
+  }
+
+  /** A live table's link cell (role `link`, in the result's rows and columns) that names nothing: NULL, unreadable or not read
+   *  yet, such as the Agent Job cell of an Activity Monitor session that runs no job. Enter and the click then go on as on any
+   *  other cell. XML, JSON and plan cells open as before. */
+  private emptyLink(row: number, column: number): boolean {
+    if (this.descriptor.columns[column]?.role !== 'link') return false
+    const window = this.data.peek(tileKey(Math.floor(row / this.tiles.rows), Math.floor(column / this.tiles.columns)))
+    if (!window || row - window.first >= window.count || column >= window.colEnd || column < window.colStart) return true
+    return !!(window.flags[(row - window.first) * (window.colEnd - window.colStart) + column - window.colStart] & (FLAG_NULL | FLAG_ERROR))
   }
 
   /** A hidden suffix cell's text: null for NULL, undefined while its tile is not read. */

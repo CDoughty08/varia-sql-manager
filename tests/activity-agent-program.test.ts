@@ -26,7 +26,7 @@ describe('SQL Server Agent program names', () => {
       `SQLAgent - TSQL JobStep (Job 0x${stored.slice(2)} : Step 2)`, `SQLAgent - TSQL JobStep (Job 0x${stored}00 : Step 2)`,
       `SQLAgent - TSQL JobStep (Job 0x${stored.slice(0, 31)}G : Step 2)`, `SQLAgent - TSQL JobStep (Job 0x${stored} : Step 0)`,
       `SQLAgent - TSQL JobStep (Job 0x${stored} : Step 2147483648)`, `SQLAgent - TSQL JobStep (Job 0x${stored} : Step 2`,
-      `SQLAgent - TSQL JobStep (Job 0x${stored} : Step 2) `, `SQLAgent - TSQL JobStep (Job ${stored} : Step 2)`, `SQLAgent - (Job 0x${stored} : Step 2)`,
+      `SQLAgent - TSQL JobStep (Job 0x${stored} : Step 2) `, `SQLAgent - TSQL JobStep (Job 0x${stored} : Step 2)\n`,`SQLAgent - TSQL JobStep (Job ${stored} : Step 2)`, `SQLAgent - (Job 0x${stored} : Step 2)`,
       `SQLAgent - TSQL JobStep (Job 0x${stored} : Step -1)`, `SQLAgent - Odd (thread)`, `SQLAgent - ${'x'.repeat(120)}`
     ]
     for (const program of bad) expect(parseAgentProgram(program), String(program)).toBeUndefined()

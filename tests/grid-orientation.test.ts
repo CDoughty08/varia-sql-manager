@@ -18,9 +18,9 @@ import type { GridViewState } from '../src/renderer/src/results/ResultsService'
 // its columns as rows and its rows as columns, with nothing stored. GridView turns what it draws at its seams; its state,
 // its marks and everything it reports stay in the result's own rows and columns.
 
-const column = (name: string, role?: 'xml') => ({ name, dataType: 'nvarchar', wire: 'text' as const, nullable: true, ...role ? { role } : {} })
+const column = (name: string, role?: 'xml' | 'link') => ({ name, dataType: 'nvarchar', wire: 'text' as const, nullable: true, ...role ? { role } : {} })
 /** A result of `rows` × `columns` whose cell (r, c) reads "r:c" (or `text`'s answer), answered from a cache keyed as ResultClient keys its windows. */
-function source(rows: number, columns: number, text: (row: number, column: number) => string | null = (row, col) => `${row}:${col}`) {
+function source(rows: number, columns: number, text: (row: number, column: number) => string | null = (row, col) => `${row}:${col}`, role: 'xml' | 'link' = 'xml') {
   const cache = new Map<string, RowWindow>(), reads: { first: number; count: number; o: WindowShape }[] = []
   const keyOf = (first: number, count: number, s: WindowShape) => `${first}:${count}:${s.colStart}:${s.colEnd}`
   const state = { rows }
@@ -29,7 +29,7 @@ function source(rows: number, columns: number, text: (row: number, column: numbe
   const listeners = new Set<() => void>()
   const handle = {
     key: { generation: 1, resultId: 1 },
-    columns: Array.from({ length: columns }, (_, index) => column(index === 5 ? '' : 'c' + index, index === 2 ? 'xml' : undefined)),
+    columns: Array.from({ length: columns }, (_, index) => column(index === 5 ? '' : 'c' + index, index === 2 ? role : undefined)),
     getSnapshot: () => current,
     subscribe: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener) },
     getWindow: async (first: number, count: number, s: WindowOptions = {}) => {
@@ -154,8 +154,8 @@ describe('the name column\'s border', () => {
 })
 
 /** A GridView over a stand-in result, in a scroller that reports a size (happy-dom lays nothing out). */
-function mount(o: { rows: number; columns: number; transposed?: boolean; headerColumn?: number; state?: GridViewState; rowSize?: boolean; text?: (row: number, column: number) => string | null; before?: (made: ReturnType<typeof source>) => void }) {
-  const made = source(o.rows, o.columns, o.text)
+function mount(o: { rows: number; columns: number; role?: 'xml' | 'link'; transposed?: boolean; headerColumn?: number; state?: GridViewState; rowSize?: boolean; text?: (row: number, column: number) => string | null; before?: (made: ReturnType<typeof source>) => void }) {
+  const made = source(o.rows, o.columns, o.text, o.role)
   o.before?.(made)
   const root = document.createElement('div'), scroller = document.createElement('div')
   for (const [name, value] of Object.entries({ 'data-output-view': 'grid', 'data-tab-id': 'query', 'data-result-entry': 'e1', 'data-result-generation': '1', 'data-result-id': '1' })) root.setAttribute(name, value)
@@ -284,6 +284,24 @@ describe('a grid transposed', () => {
     expect(grid.onOpenValue).toHaveBeenLastCalledWith(4, 2)
     expect(grid.onOpenValue).toHaveBeenCalledTimes(2)
     grid.view.dispose()
+  })
+  it('opens nothing from a live table\'s empty link cell, so Enter goes on as on any cell; a NULL XML cell still opens', async () => {
+    const empty = (row: number, col: number) => col === 2 && row === 3 ? null : `${row}:${col}`
+    const link = mount({ rows: 10, columns: 6, transposed: false, role: 'link', text: empty })
+    await link.frame()
+    link.state.selection = cells([3, 2])
+    expect(link.key('Enter')).toBe(false)
+    expect(link.onOpenValue).not.toHaveBeenCalled()
+    link.state.selection = cells([4, 2])
+    expect(link.key('Enter')).toBe(true)
+    expect(link.onOpenValue).toHaveBeenLastCalledWith(4, 2)
+    link.view.dispose()
+    const xml = mount({ rows: 10, columns: 6, transposed: false, text: empty })
+    await xml.frame()
+    xml.state.selection = cells([3, 2])
+    expect(xml.key('Enter')).toBe(true)
+    expect(xml.onOpenValue).toHaveBeenLastCalledWith(3, 2)
+    xml.view.dispose()
   })
   it('stops at the cap: 4,095 rows are drawn, Ctrl+End goes to the last of them, and a match past it is reported', async () => {
     const grid = mount({ rows: 6000, columns: 6 })

@@ -1477,7 +1477,7 @@ function activityKill(params) {
   })
   return { results, elapsedMs: 6 }
 }
-const sessionTextColumns = ['login', 'database', 'application', 'hostName', 'command', 'waitType', 'status']
+const sessionTextColumns = ['login', 'database', 'application', 'job', 'hostName', 'command', 'waitType', 'status']
 function sessionsShown(filter) {
   const view = filter.view ?? 'all'
   if (agentSessionShown() && !agentRuns.has(agentJobs[0].id)) agentRuns.set(agentJobs[0].id, { samples: 0, started: '2026-11-09 08:04:00' })
