@@ -480,9 +480,10 @@ function walkRuns(schedule: AgentScheduleTiming, times: DayTimes, cycle: Schedul
   const startDay = dayNumber(schedule.activeStartDate)
   const lastDay = schedule.activeEndDate >= noEndDate || !validDate(schedule.activeEndDate) ? dayNumber(noEndDate) : dayNumber(schedule.activeEndDate)
   const firstDay = Math.max(startDay, Math.floor(fromSeconds / 86_400))
-  // A day's own runs, and the morning after a run day carries the rest of its window (so the walk looks one day past the last).
+  // A day's own runs, and the morning after a run day carries the rest of its window, but never past the end date (a live Agent writes
+  // no next run for a window whose last run day was yesterday, though its window still runs this morning).
   const runDay = (day: number) => day >= startDay && day <= lastDay && runsOn(schedule, day, cycle)
-  for (let day = firstDay; day <= lastDay + 1 && day - firstDay <= scheduleSearchDays && runs.length < count; day++) {
+  for (let day = firstDay; day <= lastDay && day - firstDay <= scheduleSearchDays && runs.length < count; day++) {
     if (until !== undefined && day * 86_400 > until) break
     const carried = times.carried.length && runDay(day - 1) ? times.carried : []
     const own = runDay(day) ? times.own : []
@@ -526,20 +527,39 @@ export function scheduleRuns(schedule: AgentScheduleTiming & { readonly enabled?
 /** The next five runs, as the editor lists them. */
 /** The next runs from now; `anchor` is Agent's own next run where known (an every-n cycle counts from it, see scheduleRuns). */
 export const nextRuns = (schedule: AgentScheduleTiming & { readonly enabled?: boolean }, now: AgentMoment, count = 5, anchor?: AgentMoment) => scheduleRuns(schedule, now, count, undefined, anchor)
-/** A schedule link as sysadmin's read has it, with the next run Agent wrote to sysjobschedules (absent until Agent writes one). */
-export interface AgentNextRunLink { readonly scheduleId: number; readonly jobId: string; readonly nextRunDate?: number; readonly nextRunTime?: number }
-/** Agent's own next run for a schedule: one job's link, or without `jobId` the earliest of its links; undefined when none is known. An
- *  every-n-weeks or every-n-months cycle keeps counting from Agent's runs once the schedule is saved, so callers showing a saved schedule's
- *  runs pass this as the anchor; an edited timing restarts the cycle at the save, so they pass none. */
-export function agentNextRun(links: readonly AgentNextRunLink[] | undefined, scheduleId: number, jobId?: string): AgentMoment | undefined {
-  let best: AgentMoment | undefined
-  for (const link of links ?? []) {
-    if (link.scheduleId !== scheduleId || (jobId !== undefined && link.jobId.toLowerCase() !== jobId.toLowerCase())) continue
-    if (link.nextRunDate === undefined || link.nextRunTime === undefined) continue
-    const at = { date: link.nextRunDate, time: link.nextRunTime }
-    if (!best || momentSeconds(at) < momentSeconds(best)) best = at
-  }
-  return best
+/** A schedule link as sysadmin's read has it: sysjobschedules' next run for the pair (absent until Agent's periodic write, and from then on
+ *  as of that write, so it can predate the schedule's last change) and the job's next run from sysjobactivity (rewritten at once). */
+export interface AgentNextRunLink {
+  readonly scheduleId: number
+  readonly jobId: string
+  readonly nextRunDate?: number
+  readonly nextRunTime?: number
+  readonly jobNextRunDate?: number
+  readonly jobNextRunTime?: number
+}
+/** Whether `at` is itself a run of `timing` (its day and its time). */
+function isRunOf(timing: AgentScheduleTiming, at: AgentMoment): boolean {
+  return scheduleRuns({ ...timing, enabled: true }, at, 1, momentSeconds(at), at).length === 1
+}
+/** One link's anchor: the job's next run when the job has only this schedule (sysjobactivity, current), else sysjobschedules' next run if
+ *  it is still a run of the timing as read (an older write for another timing is dropped); undefined when neither is known. */
+export function linkAnchor(links: readonly AgentNextRunLink[], link: AgentNextRunLink, timing: AgentScheduleTiming): AgentMoment | undefined {
+  const job = link.jobId.toLowerCase()
+  if (link.jobNextRunDate !== undefined && link.jobNextRunTime !== undefined && links.filter(item => item.jobId.toLowerCase() === job).length === 1)
+    return { date: link.jobNextRunDate, time: link.jobNextRunTime }
+  if (link.nextRunDate === undefined || link.nextRunTime === undefined) return undefined
+  const at = { date: link.nextRunDate, time: link.nextRunTime }
+  return isRunOf(timing, at) ? at : undefined
+}
+/** Agent's own next run for a saved schedule, the anchor of its every-n cycle: for one job (`jobId`), or for the schedule itself when every
+ *  job using it that has a known anchor agrees (jobs attached in different weeks keep different cycles, and then there is none). An edited
+ *  timing or a new attachment restarts the cycle at the save, so callers pass this only for a saved, unchanged schedule already attached. */
+export function agentNextRun(links: readonly AgentNextRunLink[] | undefined, scheduleId: number, timing: AgentScheduleTiming, jobId?: string): AgentMoment | undefined {
+  if (!links) return undefined
+  const anchors = links.filter(link => link.scheduleId === scheduleId && (jobId === undefined || link.jobId.toLowerCase() === jobId.toLowerCase()))
+    .map(link => linkAnchor(links, link, timing)).filter((at): at is AgentMoment => !!at)
+  if (!anchors.length) return undefined
+  return anchors.every(at => momentSeconds(at) === momentSeconds(anchors[0])) ? anchors[0] : undefined
 }
 
 /** Why a schedule has no next runs, or undefined when it has some. */

@@ -7,7 +7,7 @@ import { jobScheduleProblems, jobScheduleText, ownsSchedule, scheduleFieldsOf, t
 import type { AgentJobDocumentModel, AgentJobDraft } from '../../../shared/actions/agent-job.ts'
 import { agentLimits } from '../../../shared/agent/catalog.ts'
 import {
-  agentNextRun, formatRun, freeSlotCheck, freeSlotText, freq, nextRuns, noRunsReason, sameTiming, scheduleMatches, scheduleProblems, scheduleSentence, scheduleText, scheduleWhen, type AgentMoment, type ScheduledJob
+  agentNextRun, formatRun, linkAnchor, freeSlotCheck, freeSlotText, freq, nextRuns, noRunsReason, sameTiming, scheduleMatches, scheduleProblems, scheduleSentence, scheduleText, scheduleWhen, type AgentMoment, type ScheduledJob
 } from '../../../shared/agent/schedule.ts'
 import Icon from '../Icon'
 import ScheduleEditor from './ScheduleEditor'
@@ -46,7 +46,7 @@ function scheduledJobsOf(shared: AgentSchedulesModel, self: string): { readonly 
   const linked = new Map<string, ScheduledJob['schedules'][number][]>()
   for (const link of shared.links ?? []) {
     const record = records.get(link.scheduleId), job = link.jobId.toLowerCase()
-    const nextRun = agentNextRun([link], link.scheduleId)
+    const nextRun = record ? linkAnchor(shared.links ?? [], link, record) : undefined
     if (record) linked.set(job, [...linked.get(job) ?? [], nextRun ? { ...record, nextRun } : record])
   }
   const others: ScheduledJob[] = (shared.jobs ?? []).filter(job => job.id.toLowerCase() !== self).map(job => {
@@ -62,7 +62,7 @@ function savedAnchor(state: JobDocumentState, model: AgentJobDocumentModel, entr
   const shared = state.shared?.model, job = model.job?.jobId
   if (entry.id === undefined || entry.attached || !job || !shared?.links) return undefined
   const record = shared.schedules.find(item => item.id === entry.id)
-  return record && sameTiming(entry.fields, record) ? agentNextRun(shared.links, entry.id, job) : undefined
+  return record && sameTiming(entry.fields, record) ? agentNextRun(shared.links, entry.id, record, job) : undefined
 }
 /** The free-slot check, where the shared read knows every job's schedules and durations (sysadmin); undefined otherwise. */
 function freeSlot(state: JobDocumentState, model: AgentJobDocumentModel, entry: JobScheduleEntry, now: ReturnType<JobDocumentService['now']>): string | undefined {
@@ -90,7 +90,8 @@ function EntryRow({ entry, selected, record, invalid, onSelect }: { readonly ent
 function PickPreview(props: Props & { readonly record: AgentScheduleRecord }) {
   const { state, model, draft, editable, service, record } = props
   const now = service.now(state.id)
-  const runs = nextRuns(record, now, 5, agentNextRun(state.shared?.model?.links, record.id))
+  // A preview of attaching it: a new attachment counts from now, whatever cycle the jobs already using it keep.
+  const runs = nextRuns(record, now, 5)
   const jobs = otherJobs(state, model, record.id)
   const read = state.scheduleJobs?.[record.id]
   const idle = record.freqType === freq.idle && state.shared?.model?.idleDefined === false

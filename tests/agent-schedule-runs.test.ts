@@ -83,9 +83,12 @@ describe('runs over a window', () => {
   it('continues a daily window from its starting time past midnight, never restarting at 00:00', () => {
     // Every 90 minutes from 22:00 to 04:00: 22:00, 23:30, then 01:00, 02:30 and 04:00 the next morning (00:00 alignment would give 00:00, 01:30, 03:00).
     expect(list({ freqSubdayType: subday.minutes, freqSubdayInterval: 90, activeStartTime: 220000, activeEndTime: 40000 }, 5)).toEqual(['Sun 2026-11-22 22:00', 'Sun 2026-11-22 23:30', 'Mon 2026-11-23 01:00', 'Mon 2026-11-23 02:30', 'Mon 2026-11-23 04:00'])
-    // The day after the end date still gets the rest of the last day's window, and the first day's morning has none.
+    // The window stops at the end date, as a live Agent does (ended yesterday, a 21:30-21:20 window gave no next run at 20:52), and the
+    // first day's morning has none.
     expect(list({ freqSubdayType: subday.hours, freqSubdayInterval: 3, activeStartTime: 220000, activeEndTime: 30000, activeStartDate: 20261122, activeEndDate: 20261123 }, 9, { date: 20261122, time: 0 }))
-      .toEqual(['Sun 2026-11-22 22:00', 'Mon 2026-11-23 01:00', 'Mon 2026-11-23 22:00', 'Tue 2026-11-24 01:00'])
+      .toEqual(['Sun 2026-11-22 22:00', 'Mon 2026-11-23 01:00', 'Mon 2026-11-23 22:00'])
+    expect(list({ freqSubdayType: subday.minutes, freqSubdayInterval: 5, activeStartTime: 213000, activeEndTime: 212000, activeStartDate: 20261118, activeEndDate: 20261122 }, 1, { date: 20261123, time: 205228 })).toEqual([])
+    expect(list({ freqSubdayType: subday.minutes, freqSubdayInterval: 5, activeStartTime: 213000, activeEndTime: 212000, activeStartDate: 20261118, activeEndDate: 20261123 }, 1, { date: 20261123, time: 205228 })).toEqual(['Mon 2026-11-23 20:55'])
     // A weekly window ends at midnight.
     expect(list({ freqType: freq.weekly, freqInterval: 1, freqRecurrenceFactor: 1, freqSubdayType: subday.hours, freqSubdayInterval: 1, activeStartTime: 220000, activeEndTime: 20000 }, 3))
       .toEqual(['Sun 2026-11-22 22:00', 'Sun 2026-11-22 23:00', 'Sun 2026-11-29 22:00'])
@@ -108,13 +111,21 @@ describe('runs over a window', () => {
     const fortnightly = timing({ freqType: freq.weekly, freqInterval: 2, freqRecurrenceFactor: 2, activeStartDate: 20260105, activeStartTime: 30000 })
     const tuesday = { date: 20261124, time: 120000 }
     // It last ran Monday 23 November, so Agent's next run is 7 December; counted from Tuesday it would be the off week, 30 November.
-    const links = [{ scheduleId: 7, jobId: 'A', nextRunDate: 20261207, nextRunTime: 30000 }, { scheduleId: 7, jobId: 'B', nextRunDate: 20261221, nextRunTime: 30000 }, { scheduleId: 7, jobId: 'C' }]
-    expect(agentNextRun(links, 7)).toEqual({ date: 20261207, time: 30000 })
-    expect(agentNextRun(links, 7, 'b')).toEqual({ date: 20261221, time: 30000 })
-    expect(agentNextRun(links, 7, 'C')).toBeUndefined()
-    expect(agentNextRun(undefined, 7)).toBeUndefined()
+    // A and B also run another schedule, so only sysjobschedules' pair value (as of Agent's last periodic write) says their cycle.
+    const others = [{ scheduleId: 8, jobId: 'A' }, { scheduleId: 8, jobId: 'B' }]
+    const links = [{ scheduleId: 7, jobId: 'A', nextRunDate: 20261207, nextRunTime: 30000 }, { scheduleId: 7, jobId: 'B', nextRunDate: 20261207, nextRunTime: 30000 }, { scheduleId: 7, jobId: 'C' }, ...others]
+    expect(agentNextRun(links, 7, fortnightly)).toEqual({ date: 20261207, time: 30000 })
+    expect(agentNextRun(links, 7, fortnightly, 'b')).toEqual({ date: 20261207, time: 30000 })
+    expect(agentNextRun(links, 7, fortnightly, 'C')).toBeUndefined()
+    expect(agentNextRun(undefined, 7, fortnightly)).toBeUndefined()
+    // Jobs attached in different weeks keep different cycles: the schedule itself then has none.
+    expect(agentNextRun([...links, { scheduleId: 7, jobId: 'D', nextRunDate: 20261130, nextRunTime: 30000 }, { scheduleId: 8, jobId: 'D' }], 7, fortnightly)).toBeUndefined()
+    // A value written for an older timing (Monday 03:00, now Wednesday 02:30) is not a run of the current one, so it is dropped.
+    expect(agentNextRun(links, 7, { ...fortnightly, freqInterval: 8, activeStartTime: 23000 })).toBeUndefined()
+    // A job with only this schedule takes sysjobactivity's next run, which Agent rewrites at once after a change (a pair value may be stale).
+    expect(agentNextRun([{ scheduleId: 7, jobId: 'E', nextRunDate: 20261130, nextRunTime: 30000, jobNextRunDate: 20261207, jobNextRunTime: 30000 }], 7, fortnightly)).toEqual({ date: 20261207, time: 30000 })
     expect(nextRuns(fortnightly, tuesday, 2).map(formatRun)).toEqual(['Mon 2026-11-30 03:00', 'Mon 2026-12-14 03:00'])
-    expect(nextRuns(fortnightly, tuesday, 2, agentNextRun(links, 7)).map(formatRun)).toEqual(['Mon 2026-12-07 03:00', 'Mon 2026-12-21 03:00'])
+    expect(nextRuns(fortnightly, tuesday, 2, agentNextRun(links, 7, fortnightly)).map(formatRun)).toEqual(['Mon 2026-12-07 03:00', 'Mon 2026-12-21 03:00'])
     // The free-slot check counts this job's runs and each other job's from their anchors: a weekly 03:00 job on Agent's other week never clashes.
     const other = { name: 'Other', enabled: true, usualSeconds: 600, schedules: [{ ...fortnightly, nextRun: { date: 20261130, time: 30000 } }] }
     expect(freeSlotCheck(fortnightly, tuesday, 600, [other], 3, { date: 20261207, time: 30000 }).clashes).toEqual([])

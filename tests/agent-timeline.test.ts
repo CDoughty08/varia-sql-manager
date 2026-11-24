@@ -59,8 +59,13 @@ describe('the Schedules Timeline', () => {
     const capped = timelineModel({ now, seconds: 7 * 86_400, jobs: many })
     // The total is shared out evenly over the rows drawn: every poller draws its share, none is left looking as if it never runs.
     const share = Math.floor(timelineLimits.runs / 30)
-    expect(capped.rows.every(row => row.runs.length === share && row.truncated)).toBe(true)
-    expect(capped.rows.reduce((total, row) => total + row.runs.length, 0)).toBeLessThanOrEqual(timelineLimits.runs)
+    expect(capped.rows.every(row => row.runs.length >= share && row.runs.length <= share + 1 && row.truncated)).toBe(true)
+    expect(capped.rows.reduce((total, row) => total + row.runs.length, 0)).toBe(timelineLimits.runs)
+    // Rows needing less than an even share leave the rest to the busy ones: 199 daily jobs and one every 15 minutes over a week.
+    const daily = Array.from({ length: 199 }, (_, index) => job(`D${index}`, `Daily ${index}`, {}, {}, index + 1_000))
+    const mixed = timelineModel({ now, seconds: 7 * 86_400, jobs: [...daily, { ...logs, id: 'L', name: 'Log every 15' }] })
+    expect(mixed.rows.find(row => row.name === 'Log every 15')?.runs).toHaveLength(7 * 96)
+    expect(mixed.runsCut).toBe(false)
     const wide = timelineModel({ now, seconds: 86_400, jobs: Array.from({ length: timelineLimits.rows + 5 }, (_, index) => job(`R${index}`, `Job ${index}`, {}, {}, index + 1)) })
     expect(wide.rows).toHaveLength(timelineLimits.rows)
     expect(timelineText.rowsLeftOut(wide.rowsLeftOut)).toBe('5 more rows not drawn (the Timeline draws at most 200).')
@@ -84,6 +89,14 @@ describe('the Schedules Timeline', () => {
     const cut = timelineModel({ now, seconds: 86_400, jobs: crowd })
     expect(cut.overlapsCut).toBe(true)
     expect(timelineText.overlapsCut).toMatch(/not flagged/)
+  })
+  it('counts two schedules starting a job together as one start', () => {
+    const long = job('L', 'Long', { usualSeconds: 3_600 }, { activeStartTime: 150000 }, 40)
+    const quick = { ...job('Q', 'Quick', { usualSeconds: 60 }, { activeStartTime: 151000 }, 41) }
+    const twice = { ...quick, schedules: [quick.schedules[0], { ...quick.schedules[0], id: 42 }] }
+    const model = timelineModel({ now, seconds: 86_400, jobs: [long, twice] })
+    expect(model.overlaps.map(overlap => timelineText.overlap(model, overlap))).toEqual(['Overlap 15:00–16:00: Quick starts once during Long.'])
+    expect(model.rows.find(row => row.name === 'Quick')?.runs.every(run => run.overlap)).toBe(true)
   })
   it('gives two schedules starting one job together one note, and no self-overlap of nothing', () => {
     const twin = { ...backup, usualSeconds: 600, schedules: [backup.schedules[0], { ...backup.schedules[0], id: 2, name: 'Twin' }] }

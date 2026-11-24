@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-  dateOfDay, dayNumber, formatRun, freq, momentSeconds, nextRuns, noEndDate, scheduleRuns, subday, timeOf, type AgentMoment, type AgentScheduleTiming
+  dateOfDay, dayNumber, formatRun, freq, momentOfSeconds, momentSeconds, nextRuns, noEndDate, scheduleRuns, subday, timeOf, type AgentMoment, type AgentScheduleTiming
 } from '../src/shared/agent/schedule'
 import { connectLive, liveServer } from './fixtures/live-sql'
 
@@ -70,7 +70,9 @@ describe.runIf(enabled)('schedule occurrences against SQL Server Agent', () => {
     const list = shapes(before)
     const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14)
     const jobs = list.map(() => `VariaScratch_${stamp}_${crypto.randomUUID().replaceAll('-', '').slice(0, 8)}`)
-    cleanups.push(async () => { await run(jobs.map(prefix => `IF EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name = ${quote(prefix + '_job')}) EXEC msdb.dbo.sp_delete_job @job_name = ${quote(prefix + '_job')}, @delete_unused_schedule = 1;`).join('\n'), 'msdb') })
+    cleanups.push(async () => { await run(jobs.map(prefix => `IF EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name = ${quote(prefix + '_job')}) EXEC msdb.dbo.sp_delete_job @job_name = ${quote(prefix + '_job')}, @delete_unused_schedule = 1;\n` +
+      // A create that failed before its attach leaves its schedule on its own.
+      `IF EXISTS (SELECT 1 FROM msdb.dbo.sysschedules WHERE name = ${quote(prefix + '_sch')}) EXEC msdb.dbo.sp_delete_schedule @schedule_name = ${quote(prefix + '_sch')}, @force_delete = 1;`).join('\n'), 'msdb') })
     const created = await run('DECLARE @job uniqueidentifier, @schedule int;\n' + list.map(({ timing }, index) => [
       `SET @job = NULL; EXEC msdb.dbo.sp_add_job @job_name = ${quote(jobs[index] + '_job')}, @enabled = 1, @description = N'varia.scratch', @job_id = @job OUTPUT;`,
       "EXEC msdb.dbo.sp_add_jobstep @job_id = @job, @step_name = N'noop', @command = N'SELECT 1;'; EXEC msdb.dbo.sp_add_jobserver @job_id = @job;",
@@ -90,12 +92,13 @@ describe.runIf(enabled)('schedule occurrences against SQL Server Agent', () => {
       if (Date.now() > until) break
       await wait(500)
     }
-    // Agent computes some time after the attach, and a short schedule may even run while the loop above waits, so Agent then writes the
-    // run after it: any run Varia lists from the clock read before the create up to its next run after the wait is Agent's answer.
+    // Agent computes some time after the attach, passes over a run less than about a minute ahead of that (seen at 20:45:30: it wrote
+    // 20:53, not 20:46), and a short schedule may even run while the loop above waits: any run Varia lists from the clock read before
+    // the create up to its next run two minutes after the read after the wait is Agent's answer.
     const after = await clock()
     const ours = (timing: AgentScheduleTiming, now: AgentMoment) => { const next = nextRuns(timing, now, 1)[0]; return next ? formatRun(next) : 'none' }
     const between = (timing: AgentScheduleTiming) => {
-      const last = nextRuns(timing, after, 1)[0]
+      const last = nextRuns(timing, momentOfSeconds(momentSeconds(after) + 120), 1)[0]
       return last ? scheduleRuns(timing, before, 1_000, momentSeconds(last)).map(formatRun) : []
     }
     const report = list.map(({ label, timing }, index) => {

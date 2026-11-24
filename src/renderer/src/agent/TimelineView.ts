@@ -56,6 +56,8 @@ export class TimelineView implements Disposable {
   private readonly tooltipText: Text
   private frame?: number
   private resize?: Disposable
+  /** Ends every lane listener at dispose (a lane cell outlives a view React's StrictMode replays). */
+  private readonly listening = new AbortController()
   private readonly requestFrame: (callback: () => void) => number
   private readonly cancelFrame: (handle: number) => void
 
@@ -65,7 +67,8 @@ export class TimelineView implements Disposable {
     const document = options.root.ownerDocument
     this.tooltip = document.createElement('div')
     this.tooltip.className = 'agent-timeline-tooltip'
-    this.tooltip.setAttribute('role', 'tooltip')
+    // Inside the grid, so kept out of the accessibility tree: the live region announces the active run, and a grid holds only rows.
+    this.tooltip.setAttribute('aria-hidden', 'true')
     this.tooltip.hidden = true
     this.tooltipText = document.createTextNode('')
     this.tooltip.appendChild(this.tooltipText)
@@ -74,7 +77,7 @@ export class TimelineView implements Disposable {
   }
 
   setModel(model: TimelineModel | undefined): void { this.model = model; this.hideTooltip(); this.schedule() }
-  setViewport(viewport: TimelineViewport): void { this.viewport = viewport; this.schedule() }
+  setViewport(viewport: TimelineViewport): void { this.viewport = viewport; this.hideTooltip(); this.schedule() }
   setActive(active: TimelineActive | undefined): void { this.active = active; this.schedule() }
   /** The lane cells, one per row in the model's order; lanes no longer listed lose their bars. */
   setLanes(lanes: readonly HTMLElement[]): void {
@@ -84,9 +87,10 @@ export class TimelineView implements Disposable {
       const found = kept.get(lane)
       if (found) return found
       const pool: LanePool = { lane, bars: [], used: 0 }
-      lane.addEventListener('pointermove', event => this.hover(pool, event))
-      lane.addEventListener('pointerleave', () => this.hideTooltip())
-      lane.addEventListener('click', event => this.click(pool, event))
+      const { signal } = this.listening
+      lane.addEventListener('pointermove', event => this.hover(pool, event), { signal })
+      lane.addEventListener('pointerleave', () => this.hideTooltip(), { signal })
+      lane.addEventListener('click', event => this.click(pool, event), { signal })
       return pool
     })
     this.schedule()
@@ -110,6 +114,7 @@ export class TimelineView implements Disposable {
 
   dispose(): void {
     if (this.frame !== undefined) this.cancelFrame(this.frame)
+    this.listening.abort()
     this.resize?.dispose()
     for (const pool of this.lanes) for (const bar of pool.bars) bar.remove()
     for (const element of [...this.ticks, ...this.marks]) element.remove()

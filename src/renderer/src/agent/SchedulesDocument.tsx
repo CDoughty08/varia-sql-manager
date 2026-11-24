@@ -42,7 +42,7 @@ function Detail({ state, service }: { readonly state: SchedulesState; readonly s
     </div>
     {readOnly && <p className="field-note" role="note"><Icon name="lock" />{readOnly}</p>}
     <ScheduleEditor idPrefix={idPrefix} fields={draft.fields} {...record ? { base: scheduleFieldsOf(record) } : {}} disabled={!!readOnly || busy}
-      problems={scheduleProblems(draft.fields, now, service.server(state.id))} now={now} platform={state.model?.platform} {...record ? { anchor: agentNextRun(state.model?.links, record.id) } : {}} onChange={fields => service.update(state.id, fields)}
+      problems={scheduleProblems(draft.fields, now, service.server(state.id))} now={now} platform={state.model?.platform} {...record ? { anchor: agentNextRun(state.model?.links, record.id, record) } : {}} onChange={fields => service.update(state.id, fields)}
       aside={<section aria-label="Jobs using it">
         <h4>Jobs using it <span className="field-note">{jobs.length}</span></h4>
         {jobs.length ? <ul className="agent-schedule-jobs">{jobs.map(job => {

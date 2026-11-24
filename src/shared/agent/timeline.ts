@@ -6,7 +6,7 @@
 // TypeScript: no React, no I/O; times are the server's wall clock as seconds (schedule.ts momentSeconds).
 import type { AgentSchedulesModel } from '../actions/agent-schedule.ts'
 import type { AgentScheduleTiming, AgentMoment } from './schedule.ts'
-import { formatTime, freq, momentOfSeconds, momentSeconds, scheduleRuns, scheduleWhen, unmeasuredSeconds } from './schedule.ts'
+import { formatTime, freq, linkAnchor, momentOfSeconds, momentSeconds, scheduleRuns, scheduleWhen, unmeasuredSeconds } from './schedule.ts'
 
 export const timelineSpans = [
   { id: 'day', label: 'Next 24 hours', seconds: 86_400 },
@@ -137,18 +137,22 @@ export function timelineModel(input: { readonly now: AgentMoment; readonly secon
     // Disabled jobs and schedules are drawn too, dashed: where they would run if enabled.
     scheduleRuns({ ...schedule.timing, enabled: true }, now, count, until - 1, schedule.nextRun ?? now).map(run => ({ schedule, start: momentSeconds(run) - from })))
   // Rows in the order they next run (rows without a run in the window last, by name), cut to the row limit before any run is collected,
-  // so the run budget goes only to rows drawn, shared out evenly: no row is left looking as if it never runs.
+  // so the run budget goes only to rows drawn, shared out so that no row is left looking as if it never runs: rows needing less than an
+  // even share get what they need, and the rest is split among the busier ones (at most runsPerRow each).
   const ordered = inputs.map(row => ({ row, first: Math.min(Infinity, ...runsOf(row, 1).map(run => run.start)) }))
     .sort((a, b) => a.first - b.first || a.row.name.localeCompare(b.row.name))
   const rowsLeftOut = Math.max(0, ordered.length - timelineLimits.rows)
-  const share = Math.max(1, Math.min(timelineLimits.runsPerRow, Math.floor(timelineLimits.runs / Math.max(1, Math.min(ordered.length, timelineLimits.rows)))))
+  const found = ordered.slice(0, timelineLimits.rows).map(({ row }) => ({ row, runs: runsOf(row, timelineLimits.runsPerRow + 1).sort((a, b) => a.start - b.start || a.schedule.id - b.schedule.id) }))
+  const shares = new Array<number>(found.length)
+  let left: number = timelineLimits.runs
+  found.map((entry, index) => ({ index, need: Math.min(timelineLimits.runsPerRow, entry.runs.length) })).sort((a, b) => a.need - b.need)
+    .forEach(({ index, need }, rank) => { shares[index] = Math.min(need, Math.floor(left / (found.length - rank))); left -= shares[index] })
   let runsCut = false
-  const shown = ordered.slice(0, timelineLimits.rows).map(({ row }) => {
+  const shown = found.map(({ row, runs: all }, index) => {
     const drawn = Math.max(1, row.usualSeconds ?? unmeasuredSeconds)
-    const found = runsOf(row, share + 1).sort((a, b) => a.start - b.start || a.schedule.id - b.schedule.id)
-    const truncated = found.length > share
+    const truncated = all.length > shares[index]
     if (truncated) runsCut = true
-    const runs = found.slice(0, share).map(run => ({ start: run.start, seconds: drawn, scheduleId: run.schedule.id, off: !row.enabled || !run.schedule.enabled }))
+    const runs = all.slice(0, shares[index]).map(run => ({ start: run.start, seconds: drawn, scheduleId: run.schedule.id, off: !row.enabled || !run.schedule.enabled }))
     return { row, runs, truncated, drawn }
   })
 
@@ -168,6 +172,8 @@ export function timelineModel(input: { readonly now: AgentMoment; readonly secon
   const endOf = (row: number, at: number) => { const run = shown[row].runs[on[row][at]]; return run.start + run.seconds }
   for (const item of flat) {
     if (checks > timelineLimits.overlapChecks) { overlapsCut = true; break }
+    // Two schedules starting a job at the same moment are one start to Agent: flagged like the first, counted once.
+    const twin = tail[item.row] > 0 && shown[item.row].runs[on[item.row][tail[item.row] - 1]].start === item.start
     let met = false
     for (const row of going) {
       checks++
@@ -177,6 +183,7 @@ export function timelineModel(input: { readonly now: AgentMoment; readonly secon
       met = true
       for (let at = Math.max(head[row], flaggedTo[row]); at < tail[row]; at++) flagged[row][on[row][at]] = 1
       flaggedTo[row] = tail[row]
+      if (twin) continue
       const run = on[row][head[row]], key = row * timelineLimits.runsPerRow + run
       const note = hosts.get(key) ?? { row, run, others: new Map<number, number>() }
       note.others.set(item.row, (note.others.get(item.row) ?? 0) + 1)
@@ -270,7 +277,7 @@ export function timelineInputs(model: AgentSchedulesModel): { readonly jobs?: Ti
   for (const link of model.links) {
     const record = records.get(link.scheduleId)
     if (!record) continue
-    const next = link.nextRunDate !== undefined && link.nextRunTime !== undefined ? { date: link.nextRunDate, time: link.nextRunTime } : undefined
+    const next = linkAnchor(model.links, link, timingOf(record))
     const key = link.jobId.toLowerCase()
     byJob.set(key, [...byJob.get(key) ?? [], schedule(record, next)])
   }

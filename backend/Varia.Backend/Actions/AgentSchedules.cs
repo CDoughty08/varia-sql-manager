@@ -182,9 +182,16 @@ internal sealed partial class ActionService
             IntOf(rows.Value(row, "enabled")) == 1, TextOf(rows.Value(row, "owner")), IntOf(rows.Value(row, "version_number"))))
             .OrderBy(job => job.Name, StringComparer.CurrentCultureIgnoreCase)];
 
-    /// <summary>A link with sysjobschedules' next run when Agent has written a valid one (next_run_date is 0 until it does).</summary>
-    internal static AgentScheduleLinkDto NextRunOf(AgentScheduleLinkDto link, int date, int time) =>
-        date is >= 19_900_101 and <= 99_991_231 && time is >= 0 and <= 235_959 ? link with { NextRunDate = date, NextRunTime = time } : link;
+    /// <summary>A link with sysjobschedules' next run when Agent has written a valid one (next_run_date is 0 until it does, and it is only
+    /// rewritten on Agent's periodic write, so it can predate the schedule's last change), and the job's next run from sysjobactivity, which
+    /// Agent rewrites as soon as a schedule is attached or changed.</summary>
+    internal static AgentScheduleLinkDto NextRunOf(AgentScheduleLinkDto link, int date, int time, object? jobNext = null)
+    {
+        var withLink = date is >= 19_900_101 and <= 99_991_231 && time is >= 0 and <= 235_959 ? link with { NextRunDate = date, NextRunTime = time } : link;
+        return jobNext is DateTime at && at.Year is >= 1990 and <= 9999
+            ? withLink with { JobNextRunDate = at.Year * 10_000 + at.Month * 100 + at.Day, JobNextRunTime = at.Hour * 10_000 + at.Minute * 100 + at.Second }
+            : withLink;
+    }
 
     /// <summary>Each job's usual duration: the median of its newest <see cref="DurationRuns"/> successful runs (run_duration hhmmss) in <paramref name="rows"/>.</summary>
     internal static List<AgentJobDurationDto> JobDurations(AgentResult rows)
@@ -254,7 +261,7 @@ internal sealed partial class ActionService
             if (ReadMore(AgentSql.JobDurations, out var durationRows)) durations = JobDurations(durationRows);
             if (ReadMore(AgentSql.ScheduleLinks, out var linkRows))
                 links = [.. linkRows.Rows.Where(row => linkRows.Value(row, "job_id") is Guid).Select(row => NextRunOf(new AgentScheduleLinkDto(IntOf(linkRows.Value(row, "schedule_id")), ((Guid)linkRows.Value(row, "job_id")!).ToString("D")),
-                    IntOf(linkRows.Value(row, "next_run_date")), IntOf(linkRows.Value(row, "next_run_time"))))];
+                    IntOf(linkRows.Value(row, "next_run_date")), IntOf(linkRows.Value(row, "next_run_time")), linkRows.Value(row, "job_next_run")))];
             // SSMS's Define idle CPU condition: the poller on with a percent and a duration.
             if (ReadMore(AgentSql.IdleCondition, out var idleRows) && idleRows.Rows.Count > 0)
                 idle = IntOf(idleRows.Value(idleRows.Rows[0], "cpu_poller_enabled")) == 1 && IntOf(idleRows.Value(idleRows.Rows[0], "idle_cpu_percent")) > 0;

@@ -49,8 +49,9 @@ internal static class AgentScheduleLiveChecks
             check(created.Error is null && record is { Enabled: true, JobCount: 1 } && TimingOf(record) == fortnightly && record.Version is not null && record.Modified is not null && link is not null,
                 "the Schedules document's create makes the shared schedule with the job attached, and its describe reads every timing field back as sent with the link: " + Said(created) + " " + JsonSerializer.Serialize(record));
             // sysjobschedules' next run is 0 until Agent writes it, so the describe sends none until then; once it does, it is a valid moment.
-            check(link is null || (link.NextRunDate is null && link.NextRunTime is null) || (link.NextRunDate is >= 19900101 and <= 99991231 && link.NextRunTime is >= 0 and <= 235959),
-                "a link's next run is absent until Agent writes one, and a valid date and time after: " + JsonSerializer.Serialize(link));
+            check(link is null || ((link.NextRunDate is null && link.NextRunTime is null) || (link.NextRunDate is >= 19900101 and <= 99991231 && link.NextRunTime is >= 0 and <= 235959))
+                && ((link.JobNextRunDate is null && link.JobNextRunTime is null) || (link.JobNextRunDate is >= 19900101 and <= 99991231 && link.JobNextRunTime is >= 0 and <= 235959)),
+                "a link's next runs (sysjobschedules' and the job's from sysjobactivity) are absent until Agent writes them, and valid dates and times after: " + JsonSerializer.Serialize(link));
             if (record?.Version is not { } version || record.Modified is not { } modified) return;
 
             // Daily, every 90 minutes from 22:00 to 04:00 the next morning.

@@ -229,13 +229,17 @@ alerts, operators and who is notified, behind the same gate until 0.11.0.
 - **When schedules run.** The next runs, the free-slot check and the Timeline follow SQL Server Agent's own rules, checked shape by
   shape against the next run Agent writes (`tests/agent-schedule-live.test.ts`): a daily schedule's every-N days and a relative
   monthly one's every-N months count from its start date; a weekly or monthly every-N cycle counts from its first run on or after
-  now (or the start date) when the schedule is saved or attached, and from Agent's own runs after that, so wherever the read has
-  sysadmin's links (with `sysjobschedules.next_run_date`) the editor, the Pick preview, Attach schedule, the free-slot check and the
-  Timeline count a saved, unchanged schedule from Agent's next run (below sysadmin, and once its timing is edited, from now);
-  a repeating daily window that crosses midnight (22:00 to 04:00) runs on past midnight after a run day, stepping on from its
-  start time, while a weekly, monthly or relative one stops at midnight, which the editor says. Weeks start on Sunday. One
-  case is not followed: a relative schedule with a future start date whose start month's occurrence falls before that date,
-  for which Agent writes no next run at all.
+  now (or the start date) when the schedule is saved or attached, and from Agent's own runs after that. So wherever the read has
+  sysadmin's links, the editor, the free-slot check and the Timeline count a saved, unchanged, already attached schedule from Agent's
+  next run: the job's `sysjobactivity.next_scheduled_run_date` (rewritten as soon as a schedule changes) when the job has only that
+  schedule, else `sysjobschedules.next_run_date` (rewritten only on Agent's periodic write) if it is still a run of the timing as
+  read; for the schedule itself, only when every job using it agrees (jobs attached in different weeks keep different cycles). The
+  Pick preview, Attach schedule, an edited timing and below sysadmin count from now. A repeating daily window that crosses
+  midnight (22:00 to 04:00) runs on past midnight after a run day, stepping on from its start time, but not past the end date,
+  while a weekly, monthly or relative one stops at midnight, which the editor says. Weeks start on Sunday. Agent passes over a run
+  less than about a minute after it computes. Not followed: a relative schedule with a future start date whose start month's
+  occurrence falls before that date, for which Agent writes no next run at all, and a change of only the every-N count on a job
+  with several schedules, whose old `sysjobschedules` value still fits the new timing until Agent's next periodic write.
 - **Schedules Timeline** (the Schedules document's Timeline view, `src/shared/agent/timeline.ts`, `TimelineView.ts`). A Gantt
   chart from now over the next 24 hours or 7 days: for sysadmin one row per job, from the links and each job's usual duration
   (a job without one drawn for a minute), below sysadmin one row per schedule some job uses; rows in the order they next run, disabled jobs

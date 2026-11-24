@@ -4,6 +4,7 @@
 // Home and End), rows (Up and Down) and opens the job (Enter) or the schedule (Shift+Enter). React renders the rows only.
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { momentOfText, type AgentSchedulesModel } from '../../../shared/actions/agent-schedule'
+import { momentSeconds } from '../../../shared/agent/schedule'
 import { timelineClock, timelineInputs, timelineModel, timelineSpans, timelineText, type TimelineModel, type TimelineRow, type TimelineSpan } from '../../../shared/agent/timeline'
 import Icon from '../Icon'
 import Segmented from '../kit/Segmented'
@@ -62,9 +63,9 @@ export default function SchedulesTimeline({ documentId, model: read, span, onSpa
     return now ? timelineModel({ now, seconds, ...timelineInputs(read) }) : undefined
   }, [read, seconds])
   const [viewport, setViewport] = useState<TimelineViewport>({ start: 0, seconds })
-  // The active run by its row's key and its start, so a Refresh (rows re-sorted, now moved on) or the filter keeps it on the same run, or
-  // drops it when that run is gone; the view gets it as indexes.
-  const [picked, setPicked] = useState<{ readonly key: string; readonly start?: number }>()
+  // The active run by its row's key, its moment on the server's clock and its schedule (two schedules may start a job together), so a
+  // Refresh (rows re-sorted, the window's start moved on) or the filter keeps it on the same run, or drops it when that run is gone.
+  const [picked, setPicked] = useState<{ readonly key: string; readonly at?: number; readonly scheduleId?: number }>()
   const axis = useRef<HTMLDivElement>(null)
   const body = useRef<HTMLDivElement>(null)
   const lanes = useRef<(HTMLDivElement | null)[]>([])
@@ -73,10 +74,16 @@ export default function SchedulesTimeline({ documentId, model: read, span, onSpa
   const active = useMemo<TimelineActive | undefined>(() => {
     const row = picked ? rows.findIndex(item => item.key === picked.key) : -1
     if (row < 0) return undefined
-    const run = picked?.start === undefined ? -1 : rows[row].runs.findIndex(item => item.start === picked.start)
+    const origin = model ? momentSeconds(model.start) : 0
+    const run = picked?.at === undefined ? -1 : rows[row].runs.findIndex(item => origin + item.start === picked.at && item.scheduleId === picked.scheduleId)
     return { row, run }
-  }, [picked, rows])
-  const setActive = (row: number, run: number) => { const target = rows[row]; if (target) setPicked({ key: target.key, ...target.runs[run] ? { start: target.runs[run].start } : {} }) }
+  }, [picked, rows, model])
+  const setActive = (row: number, run: number) => {
+    const target = rows[row], item = target?.runs[run]
+    if (target) setPicked({ key: target.key, ...item && model ? { at: momentSeconds(model.start) + item.start, scheduleId: item.scheduleId } : {} })
+  }
+  const activator = useRef(setActive)
+  activator.current = setActive
   const open = (row: number, run: number, schedule: boolean) => {
     const target = model?.rows[row], item = target?.runs[run]
     if (!target || !item) return
@@ -91,7 +98,7 @@ export default function SchedulesTimeline({ documentId, model: read, span, onSpa
   const drawn = !!model
   useEffect(() => {
     if (!axis.current || !body.current) return
-    const created = new TimelineView({ axis: axis.current, root: body.current, open: (row, run, schedule) => opener.current(row, run, schedule) })
+    const created = new TimelineView({ axis: axis.current, root: body.current, open: (row, run, schedule) => { activator.current(row, run); opener.current(row, run, schedule) } })
     view.current = created
     return () => { created.dispose(); view.current = undefined }
   }, [drawn])
@@ -207,6 +214,6 @@ export default function SchedulesTimeline({ documentId, model: read, span, onSpa
     </div>}
     {model.rowsLeftOut > 0 && <p className="field-note">{timelineText.rowsLeftOut(model.rowsLeftOut)}</p>}
     {model.runsCut && <p className="field-note">{timelineText.runsCut}</p>}
-    <p className="field-note">{`The line at the left edge is now (${timelineClock({ start: model.start, seconds: 86_400 }, 0)} server time). Disabled jobs and schedules are dashed. Click a run to open its job; Shift+click opens its schedule.`}</p>
+    <p className="field-note">{`The line at the left edge is now (${timelineClock({ start: model.start, seconds: 86_400 }, 0)} server time). Disabled jobs and schedules are dashed. ${model.kind === 'job' ? 'Click a run to open its job; Shift+click opens its schedule.' : 'Click a run to open its schedule.'}`}</p>
   </div>
 }

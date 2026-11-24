@@ -288,8 +288,9 @@ internal static class AgentScheduleChecks
             "the Schedules describe reads job history only for sysadmin, with the links the free-slot check needs");
         var link = new AgentScheduleLinkDto(5, a.ToString("D"));
         check(ActionService.NextRunOf(link, 20_261_130, 30_000) is { NextRunDate: 20_261_130, NextRunTime: 30_000 } && ActionService.NextRunOf(link, 0, 0) is { NextRunDate: null, NextRunTime: null }
-            && ActionService.NextRunOf(link, 20_261_130, 240_000) is { NextRunDate: null } && AgentSql.ScheduleLinks.Columns.SequenceEqual(["schedule_id", "job_id", "next_run_date", "next_run_time"]),
-            "a schedule link carries the next run Agent wrote to sysjobschedules, and none while next_run_date is still 0 or out of range");
+            && ActionService.NextRunOf(link, 20_261_130, 240_000) is { NextRunDate: null } && AgentSql.ScheduleLinks.Columns.SequenceEqual(["schedule_id", "job_id", "next_run_date", "next_run_time", "job_next_run"])
+            && ActionService.NextRunOf(link, 0, 0, new DateTime(2026, 11, 26, 3, 0, 0)) is { NextRunDate: null, JobNextRunDate: 20_261_126, JobNextRunTime: 30_000 } && ActionService.NextRunOf(link, 0, 0, DBNull.Value) is { JobNextRunDate: null },
+            "a schedule link carries the next run Agent wrote to sysjobschedules (none while next_run_date is still 0 or out of range) and the job's next run from sysjobactivity");
         var rows = new AgentResult(["schedule_id", "schedule_name", "enabled", "freq_type", "freq_interval", "freq_subday_type", "freq_subday_interval", "freq_relative_interval", "freq_recurrence_factor",
             "active_start_date", "active_end_date", "active_start_time", "active_end_time", "job_count"],
             [[5, "Nightly", (byte)1, 4, 1, 1, 0, 0, 0, 20_260_101, 99_991_231, 23_000, 235_959, 2], [6, "Theirs", (byte)0, 64, 0, 0, 0, 0, 0, 20_260_101, 99_991_231, 0, 235_959, 1]], false);
