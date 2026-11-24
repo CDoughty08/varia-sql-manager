@@ -820,7 +820,7 @@ describe('BigQuery cost gate', () => {
     const gate = vi.fn(async () => false)
     f.queries.setCostGate(gate)
     await f.queries.execute(f.tab.id)
-    expect(gate).toHaveBeenCalledWith(f.tab.id, 'SELECT 1', { line: 1, column: 1 }, expect.any(AbortSignal))
+    expect(gate).toHaveBeenCalledWith(f.tab.id, 'SELECT 1', { line: 1, column: 1 }, expect.any(AbortSignal), undefined)
     expect(f.queryApi.execute).not.toHaveBeenCalled()
     expect(f.results.begin).not.toHaveBeenCalled()
     expect(f.queries.getSnapshot()[f.tab.id]).toBeUndefined()
@@ -883,7 +883,7 @@ describe('BigQuery cost gate', () => {
     const gate = vi.fn(async () => false)
     f.queries.setCostGate(gate)
     await f.queries.execute(f.tab.id)
-    expect(gate).toHaveBeenCalledWith(f.tab.id, 'SELECT x', { line: 12, column: 5 }, expect.any(AbortSignal))
+    expect(gate).toHaveBeenCalledWith(f.tab.id, 'SELECT x', { line: 12, column: 5 }, expect.any(AbortSignal), undefined)
   })
   it('never gates or sends BigQuery options for SQL Server', async () => {
     const f = fixture(undefined, undefined, { 'queryExecution.bigQuery.maximumBytesBilled': 5, 'queryExecution.bigQuery.showCost': 'bytes' })

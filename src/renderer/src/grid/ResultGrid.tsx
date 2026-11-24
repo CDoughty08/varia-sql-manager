@@ -95,7 +95,7 @@ export function loadingText(loading: string, snapshot: { rowsAvailable: number; 
 }
 
 /** Why the grid shows fewer rows than the query read, if it does (B8 strips). */
-export function truncationText(o: { truncated?: string; rowsStored: number; rowsRead: number; budget?: QueryResult['budget']; residence?: string; rowsAvailable?: number }): string | undefined {
+export function truncationText(o: { truncated?: string; rowsStored: number; rowsRead: number; budget?: QueryResult['budget']; residence?: string; rowsAvailable?: number; bigQuery?: boolean }): string | undefined {
   // A windowed BigQuery result keeps no rows here: what it can show is what the grid can read, capped by the rows-kept limit
   // or, past that, by 32-bit row indexes.
   const remote = o.residence === 'remote'
@@ -108,7 +108,10 @@ export function truncationText(o: { truncated?: string; rowsStored: number; rows
     const bytes = o.budget?.stoppedBytes ?? (o.truncated === 'queryBudget' ? o.budget?.queryBytes : o.budget?.globalBytes)
     return `${shown}: the result memory budget${bytes ? ` (${formatBytes(bytes)})` : ''} is full. Execution continued; close other results to free memory.`
   }
-  if (o.truncated === 'rowLimit') return `${shown}: the limit on rows kept per execution was reached (Tools › Options › Query Results › SQL Server › Results to Grid). Execution continued.`
+  // The one rows-kept limit lives with SQL Server's grid options; a BigQuery result follows it too, so its strip says where.
+  if (o.truncated === 'rowLimit') return remote || o.bigQuery
+    ? `${shown}: the limit on rows kept per execution was reached (Rows kept per execution, in Tools › Options › Query Results › SQL Server › Results to Grid, applies to BigQuery results too). The query ran in full.`
+    : `${shown}: the limit on rows kept per execution was reached (Tools › Options › Query Results › SQL Server › Results to Grid). Execution continued.`
   return undefined
 }
 
@@ -127,7 +130,9 @@ const keysOf = (sort: GridSort | undefined) => (sort?.keys.map(key => `${key.col
  * shell with its own source (LiveGridPane).
  */
 function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, group, bare, onFocus, onWide }: ResultGridProps) {
-  const { results, commands, gridStats, panes, settings, resultsSearch, highlights, compare, pivot, queries, resultVisibility, resultMemory, sampleDialog } = useWorkbench()
+  const { results, commands, gridStats, panes, settings, resultsSearch, highlights, compare, pivot, queries, resultVisibility, resultMemory, sampleDialog, documents } = useWorkbench()
+  // The tab's engine: a BigQuery result's strips say where its limits are set.
+  const provider = useSyncExternalStore(documents.subscribe, () => documents.get(tabId)?.provider)
   // The query still running that made the rows shown: an estimate runs without results, and a finished run's results stay
   // drawn until its tab's state catches up, so the tab's run must be this result's run and still running.
   const runningId = useSyncExternalStore(queries.subscribe, () => queries.getSnapshot()[tabId]?.running?.queryId)
@@ -284,7 +289,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
   const onApi = useCallback((api: GridShellApi | undefined) => { apiRef.current = api }, [])
   const setRootEl = useCallback((element: HTMLDivElement | null) => { rootEl.current = element }, [])
   const lost = snapshot.state === 'lost'
-  const truncation = truncationText({ ...snapshot, budget })
+  const truncation = truncationText({ ...snapshot, budget, bigQuery: provider === 'bigquery' })
   const sources = useMemo(() => { const tab = results.getSnapshot()[tabId]; return compared ? compareSources(tab, slotOf(tab, entry.key)?.sources ?? []) : undefined }, [compared, sourceKeys, results, tabId, entry])
   // A comparison's strip says what it found, with what its highlights say after it; its notices are under its toolbar.
   const compareNote = compared ? [compareText(compared, sources), highlightText(marked, { comparison: true })].filter(Boolean).join(' ') : undefined
@@ -304,6 +309,9 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
   const loadable = useSyncExternalStore(loadSubscribe, () => results.canLoadIntoMemory(tabId, key))
   const needsRoom = useSyncExternalStore(loadSubscribe, () => results.loadNeedsRoom(tabId, key))
   const sampleable = useSyncExternalStore(results.subscribe, () => results.canLoadSample(tabId, key))
+  // A result BigQuery no longer keeps (a load or sample said so, or a read here did) shows the Re-run strip at once.
+  const expiredMark = useSyncExternalStore(results.subscribe, () => results.isExpired(tabId, key))
+  const onExpired = useCallback(() => results.markExpired(tabId, key), [results, tabId, key])
   const loadNote = lost ? undefined : loadingText(loading, snapshot)
   const other = lost ? undefined : loadNote ?? (snapshot.incomplete ? incompleteText : truncation ?? highlightNote ?? (loadable ? windowedText : needsRoom ? sampleable ? windowedFullText : windowedNoRoomText : undefined))
   const note = cap && other ? `${cap} ${other}` : cap ?? other
@@ -369,7 +377,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
     }}
     sort={sort?.keys} onSort={(column, add) => results.cycleSort(tabId, key, column, add)} funnels={funnels} busy={busy} onHeld={() => results.operations.refused(tabId, key)}
     update={{ resultCount: count, showTypes, rowSize, ...turnedView ? { headerColumn: headerColumn ?? null } : {} }} gone={lost ? lostText : undefined}
-    strip={note ? { text: note, ...action ? { action } : {}, ...lead ? { lead } : {}, ...quiet ? { quiet } : {} } : undefined} {...rerun ? { expired: rerun } : {}} rootRef={setRootEl}
+    strip={note ? { text: note, ...action ? { action } : {}, ...lead ? { lead } : {}, ...quiet ? { quiet } : {} } : undefined} {...rerun ? { expired: { ...rerun, ...expiredMark ? { shown: true } : {}, seen: onExpired } } : {}} rootRef={setRootEl}
     head={compared && !bare && !lost ? <ComparisonToolbar tabId={tabId} entry={entry} info={compared} sources={sources} goTo={goTo} /> : undefined} />
 }
 

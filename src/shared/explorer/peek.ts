@@ -48,7 +48,7 @@ export const peekLists: { readonly [L in PeekListId]: PeekListSpec } = {
   },
   tableObjects: {
     id: 'tableObjects', title: 'Indexes & keys', empty: 'No indexes, keys, constraints or triggers.',
-    columns: [column('kind', 'Kind', 'text'), column('name', 'Name', 'text'), column('summary', 'Definition', 'text'), column('status', 'Status', 'text')]
+    columns: [column('kind', 'Kind', 'text'), column('name', 'Name', 'text'), column('summary', 'Summary', 'text'), column('status', 'Status', 'text')]
   },
   parameters: {
     id: 'parameters', title: 'Parameters', empty: 'No parameters.',
@@ -146,7 +146,7 @@ export const peekSpecs: { readonly [K in PeekKind]: PeekKindSpec } = {
   },
   key: {
     kind: 'key', definition: 'script', tabs: ['definition', 'keyColumns'], groups: [
-      { id: 'general', title: 'General', facts: [fact('keyType', 'Key type', 'code'), fact('parentTable', 'Parent table', 'text'), fact('referencedTable', 'Referenced table', 'text'),
+      { id: 'general', title: 'General', facts: [fact('keyType', 'Key type', 'text'), fact('parentTable', 'Parent table', 'text'), fact('referencedTable', 'Referenced table', 'text'),
         fact('deleteAction', 'Delete action', 'code'), fact('updateAction', 'Update action', 'code'), ...dated, fact('systemNamed', 'System named', 'bool')] },
       { id: 'status', title: 'Enforcement & Status', facts: [fact('disabled', 'Disabled', 'bool'), fact('notTrusted', 'Not trusted', 'bool'),
         fact('notForReplication', 'Not for replication', 'bool'), fact('indexType', 'Index type', 'text')] }
@@ -154,7 +154,7 @@ export const peekSpecs: { readonly [K in PeekKind]: PeekKindSpec } = {
   },
   constraint: {
     kind: 'constraint', definition: 'script', tabs: ['definition'], groups: [
-      { id: 'general', title: 'General', facts: [fact('constraintType', 'Constraint type', 'code'), fact('parentTable', 'Parent table', 'text'), fact('column', 'Column', 'text'),
+      { id: 'general', title: 'General', facts: [fact('constraintType', 'Constraint type', 'text'), fact('parentTable', 'Parent table', 'text'), fact('column', 'Column', 'text'),
         fact('expression', 'Expression', 'text'), ...dated, fact('systemNamed', 'System named', 'bool')] },
       { id: 'status', title: 'Enforcement & Status', facts: [fact('disabled', 'Disabled', 'bool'), fact('notTrusted', 'Not trusted', 'bool'),
         fact('notForReplication', 'Not for replication', 'bool')] }

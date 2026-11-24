@@ -12,7 +12,7 @@ const bigQuery = (id: string): ConnectionInfo => ({ ...connectionInfo(id), serve
 const providers: Record<string, 'sqlserver' | 'bigquery'> = { sql: 'sqlserver', bq: 'bigquery' }
 const fixture = () => documentFixture({ provider: id => providers[id], providerChanged: vi.fn() })
 
-describe('a query document\'s provider and language (docs/bigquery-plan.md, BQ-4)', () => {
+describe('a query document\'s provider and language (docs/googlesql.md)', () => {
   it('names each engine\'s Monaco language and caption, and keeps every other document Transact-SQL\'s or kind\'s own', () => {
     expect(queryLanguages).toEqual({ sqlserver: 'sql', bigquery: googleSqlLanguageId })
     expect(documentInfo({ provider: 'bigquery' })).toMatchObject({ language: 'googlesql', label: 'GoogleSQL', icon: 'database' })

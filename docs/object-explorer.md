@@ -495,10 +495,16 @@ its header, so an encrypted one shows none). Copying the Definition column gives
 a module's parameter lines for a `CREATE PROCEDURE` or `CREATE FUNCTION` header. Constraints (keys, checks), Always Encrypted's
 `ENCRYPTED WITH` and a vector's base type other than the default are left to Script As.
 
+A table's **Indexes & keys** list shows each key, index, constraint and trigger with its kind, name, status and **Summary**: a key's
+or index's type and columns, a foreign key's columns and referenced table, a check's or default's expression, a trigger's
+timing and events. Names are bracketed as scripts write them (`[Order]]Id]`). A summary is a description, not T-SQL to paste;
+Script As writes that. The columns, foreign-key pairs and trigger events behind the summaries are read up to a fixed number of rows;
+when a table has more, the summaries the cap reached partway or not at all end in `…`, and the cut removes no row from the list.
+
 | List | Kinds | Columns |
 | --- | --- | --- |
 | Columns | `table`, `view`, `tableType` | Name, Type, Nullable, Key, Identity, Computed, Default, Definition |
-| Indexes & keys | `table` | Kind, Name, Definition, Status |
+| Indexes & keys | `table` | Kind, Name, Summary, Status |
 | Parameters | `procedure`, `function` | Name, Type, Direction, Default, Definition |
 | Columns | `index` | Column, Included, Descending, Type |
 | Key columns | `key` | Column, Referenced column, Descending, Type |

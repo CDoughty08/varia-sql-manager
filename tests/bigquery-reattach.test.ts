@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ApiResult, ConnectionInfo, QueryResult, VariaApi } from '../src/shared/contracts'
-import { failedAbortsText, heldAfter, jobHeldAfterFailure, jobStillRunning, QueryService, restoredJobRunning, type QueryApi, type TabJob } from '../src/renderer/src/services/queries'
+import { attachExpiredRerun, failedAbortsText, heldAfter, jobHeldAfterFailure, jobStillRunning, QueryService, restoredJobRunning, type QueryApi, type TabJob } from '../src/renderer/src/services/queries'
 import type { ResultsService } from '../src/renderer/src/results/ResultsService'
 import { deferred, documentFixture } from './fixtures/documents'
 import { defaultSettings } from '../src/shared/settings/catalog'
@@ -260,6 +260,28 @@ describe('re-attaching restored tabs', () => {
     await settle()
     expect(f.queryApi.attach).toHaveBeenCalledTimes(2)
     expect(f.queries.getSnapshot()[f.tab.id].jobs).toBeUndefined()
+  })
+  it('says Execute runs the query again when BigQuery no longer keeps a re-attached job\'s results, in a tab that holds its SQL', async () => {
+    const f = fixture()
+    f.queryApi.attach.mockResolvedValueOnce({ ok: false, error: 'BigQuery no longer has the results of job job_1.', code: 'REMOTE_EXPIRED' })
+    f.queries.restoreJobs(f.tab.id, [job('job_1', { state: 'done', adopt: false })])
+    await settle()
+    expect(f.results.addMessage).toHaveBeenCalledWith(f.tab.id, attachExpiredRerun, 'info')
+    // An empty tab (Job History could not read the job's SQL) is not told to run what it does not hold.
+    const empty = f.documents.create('empty.sql', '', '', f.connection.id)
+    f.results.addMessage.mockClear()
+    f.queryApi.attach.mockResolvedValueOnce({ ok: false, error: 'Gone.', code: 'REMOTE_EXPIRED' })
+    f.queries.restoreJobs(empty.id, [job('job_2', { state: 'done', adopt: false })])
+    await settle()
+    expect(f.queryApi.attach).toHaveBeenCalledTimes(2)
+    expect(f.results.addMessage).not.toHaveBeenCalledWith(empty.id, attachExpiredRerun, 'info')
+    // A restored tab's re-attach (it adopts the session) may hold more than the job's SQL: it is not told Execute re-runs it.
+    f.results.addMessage.mockClear()
+    f.queryApi.attach.mockResolvedValueOnce({ ok: false, error: 'Gone.', code: 'REMOTE_EXPIRED' })
+    f.queries.restoreJobs(f.tab.id, [job('job_3', { state: 'done' })])
+    await settle()
+    expect(f.queryApi.attach).toHaveBeenCalledTimes(3)
+    expect(f.results.addMessage).not.toHaveBeenCalledWith(f.tab.id, attachExpiredRerun, 'info')
   })
   it("drops a job another principal ran, and Stop on a re-attach cancels it like a query's", async () => {
     const f = fixture(), pending = deferred<ApiResult<QueryResult>>()
@@ -842,8 +864,9 @@ describe('jobs without a tab', () => {
     f.documents.update(f.tab.id, { jobKey: key })
     f.queries.notifyJobs = notifyJobs
     const reviewJobsWithoutTab = vi.fn<VariaApi['reviewJobsWithoutTab']>(async () => ({ ok: true, value: { answer: 'cancel', jobIds: ['job_9', 'job_8'], cancel: { jobs: [{ jobId: 'job_9', cancelled: true }], uncancellable: ['job_8'] } } }))
-    await f.queries.reviewJobsWithoutTab({ reviewJobsWithoutTab })
-    expect(reviewJobsWithoutTab).toHaveBeenCalledWith([key])
+    await f.queries.reviewJobsWithoutTab({ reviewJobsWithoutTab }, undefined, () => ['varia-alpha'])
+    // Main offers Show in Job History for the projects the page is connected to.
+    expect(reviewJobsWithoutTab).toHaveBeenCalledWith({ keys: [key], liveProjects: ['varia-alpha'] })
     expect(notifyJobs).toHaveBeenCalledWith("BigQuery job job_8 could not be cancelled. Cancel it in BigQuery's job history.", ['job_8'])
     reviewJobsWithoutTab.mockResolvedValueOnce({ ok: true, value: { answer: 'keep', jobIds: ['job_7'] } })
     await f.queries.reviewJobsWithoutTab({ reviewJobsWithoutTab })

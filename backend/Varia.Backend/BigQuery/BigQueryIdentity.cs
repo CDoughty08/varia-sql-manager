@@ -9,7 +9,7 @@ namespace Varia.Backend.BigQuery;
 
 /// <summary>
 /// The account a connection signs in as. Kind and Account are what the dialog's account line shows; Pin is the identity
-/// evidence (docs/bigquery-plan.md, Identity pinning), pinned at connect and checked again on every credential refresh and
+/// evidence (docs/bigquery.md, Identity pins), pinned at connect and checked again on every credential refresh and
 /// reconnect. ConnectionInfo carries it as <c>bigquery:</c> + Pin, at most 256 characters.
 /// </summary>
 internal sealed record BigQueryPrincipal(string Kind, string Account, string Pin, string? Impersonated = null)
@@ -243,7 +243,7 @@ internal sealed class PinnedCredential(LoadedCredential credential, BigQueryPrin
         credential.Credential.UnderlyingCredential is IHttpUnsuccessfulResponseHandler inner ? inner.HandleResponseAsync(args) : Task.FromResult(false);
 }
 
-/// <summary>Emulator mode's credential: it signs nothing, so no Google token can reach the emulator's host (decision 15).</summary>
+/// <summary>Emulator mode's credential: it signs nothing, so no Google token can reach the emulator's host (docs/bigquery.md, Emulator mode).</summary>
 internal sealed class AnonymousCredential : ICredential
 {
     public static readonly AnonymousCredential Instance = new();
