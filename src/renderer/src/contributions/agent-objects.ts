@@ -6,15 +6,12 @@ import { explorerNodeOf } from '../menus/targets'
 import { serverItems } from './query'
 
 /**
- * SQL Server Agent's alert and operator commands (AG-7, docs/sql-server-agent.md › Alerts and operators), behind the release gate
- * (agentEnabled) like the rest of SQL Server Agent. New Alert…, New Operator… and the grid open on the server of the Object Explorer node
+ * SQL Server Agent's alert and operator commands (AG-7, docs/sql-server-agent.md › Alerts and operators). New Alert…, New Operator… and the grid open on the server of the Object Explorer node
  * their menu runs on, else the active document's, else the selected node's, else the one live connection or the one picked from several.
  * Each document's verbs act on the document whose header runs them (`tabId`), else the active one.
  */
 export function agentObjectsContribution({ commands, documents, connections, explorer, quickInput, alertDocuments, operatorDocuments, operatorsDocuments }:
-  Pick<Workbench, 'commands' | 'documents' | 'connections' | 'explorer' | 'quickInput' | 'alertDocuments' | 'operatorDocuments' | 'operatorsDocuments'>,
-  options: { readonly agentEnabled?: boolean } = {}): Disposable {
-  if (!options.agentEnabled) return { dispose: () => {} }
+  Pick<Workbench, 'commands' | 'documents' | 'connections' | 'explorer' | 'quickInput' | 'alertDocuments' | 'operatorDocuments' | 'operatorsDocuments'>): Disposable {
   const live = (id: string | undefined) => id !== undefined && connections.isLiveSqlServer(id) ? id : undefined
   const target = (args?: CommandArgs): string | undefined => {
     const node = explorerNodeOf(args)

@@ -41,8 +41,8 @@ const credentialModel = (): CredentialDocumentModel => ({
 const schedulesModel = (): AgentSchedulesModel => ({ login: 'sa', sysadmin: true, platform: 'windows', now: '2026-11-22T14:30:00', schedules: [], jobs: [], links: [], durations: [] })
 
 /** A workbench whose describe answers each Agent document from `models`, with registry-backed connection targets. */
-function bench(agentPreview = true) {
-  const fixture = workbenchFixture({ agentPreview })
+function bench() {
+  const fixture = workbenchFixture()
   cleanups.push(() => fixture.dispose())
   fixture.api.push(readyBackend())
   const models = { job: jobModel(), proxy: proxyModel(), schedules: schedulesModel() }
@@ -222,25 +222,17 @@ describe('hot exit for SQL Server Agent documents', () => {
     expect(() => f.documents.reopenKept('agentJob', { name, state: state.replace('"description":"Mine"', '"description":7') })).toThrow()
     expect(f.documents.getSnapshot().documents.length).toBe(before)
   })
-  it('restores Agent documents only behind the release gate, and names the ones it leaves out', async () => {
+  it('restores Agent documents with no release gate to open (AG-9), and names the ones it cannot read', async () => {
     const { state, name } = await keptJob()
-    for (const agentEnabled of [true, false]) {
-      const f = bench(agentEnabled)
-      const restored: RestoredSession = { documents: [{ name, kind: 'agentJob', eol: 'lf', dirty: true, targetId, attachWanted: true, database: 'msdb', text: state }, { name: 'Broken', kind: 'agentProxy', eol: 'lf', dirty: true, text: '{}' }], activeIndex: 0, problems: [] }
-      const api = { hotExit: true, takeSession: vi.fn(async () => ({ ok: true as const, value: restored })), finishSessionRestore: vi.fn(async () => ({ ok: true as const, value: undefined })) }
-      const warned = vi.spyOn(f.files, 'reportError')
-      const opened = await restoreSession({ api, documents: f.documents, files: f.files, agentEnabled })
-      const kinds = f.documents.getSnapshot().documents.map(document => document.kind)
-      if (agentEnabled) {
-        expect(opened).toBe(1)
-        expect(kinds).toContain('agentJob')
-        expect(f.documents.active?.kind).toBe('agentJob')
-        expect(warned).toHaveBeenCalledWith(keptAgentText.unreadable('Broken'), 'warning')
-      } else {
-        expect(kinds).not.toContain('agentJob')
-        expect(warned).toHaveBeenCalledWith(keptAgentText.unavailable, 'warning')
-      }
-    }
+    const f = bench()
+    const restored: RestoredSession = { documents: [{ name, kind: 'agentJob', eol: 'lf', dirty: true, targetId, attachWanted: true, database: 'msdb', text: state }, { name: 'Broken', kind: 'agentProxy', eol: 'lf', dirty: true, text: '{}' }], activeIndex: 0, problems: [] }
+    const api = { hotExit: true, takeSession: vi.fn(async () => ({ ok: true as const, value: restored })), finishSessionRestore: vi.fn(async () => ({ ok: true as const, value: undefined })) }
+    const warned = vi.spyOn(f.files, 'reportError')
+    const opened = await restoreSession({ api, documents: f.documents, files: f.files })
+    expect(opened).toBe(1)
+    expect(f.documents.getSnapshot().documents.map(document => document.kind)).toContain('agentJob')
+    expect(f.documents.active?.kind).toBe('agentJob')
+    expect(warned).toHaveBeenCalledWith(keptAgentText.unreadable('Broken'), 'warning')
   })
   it('never keeps a proxy\'s typed password: one with a password typed is asked about, and a kept one reopens with its password fields empty', async () => {
     const first = bench()
@@ -377,21 +369,19 @@ describe('AutoRecover for SQL Server Agent documents', () => {
     await f.recovery.flush()
     expect(writes().filter(write => write.name === 'Job Properties - Weekly load')).toHaveLength(0)
   })
-  it('recovers an Agent document\'s copy on its target behind the gate, and offers none while the gate is off', async () => {
+  it('offers and recovers an Agent document\'s copy on its target with no release gate to open (AG-9)', async () => {
     const { state } = await keptJob()
-    for (const agentEnabled of [true, false]) {
-      const f = bench(agentEnabled)
-      const id = uuid(70)
-      f.api.recoveryState.offered = [{ id, name: 'Job Properties - Nightly load', kind: 'agentJob', savedAt: '2026-11-22T10:00:00.000Z', characters: state.length }]
-      f.api.texts.set(id, { text: state, kind: 'agentJob', eol: 'lf', targetId })
-      const entries = await f.recovery.refresh()
-      if (!agentEnabled) { expect(entries).toEqual([]); continue }
-      await f.recovery.recover([id])
-      const document = f.documents.getSnapshot().documents.find(item => item.kind === 'agentJob')!
-      expect(document).toMatchObject({ targetId, dirty: true })
-      expect(f.jobDocuments.get(document.id)).toMatchObject({ restored: true, draft: { description: 'Mine' } })
-      expect(f.recovery.copyId(document.id)).toBe(id)
-    }
+    const f = bench()
+    const id = uuid(70)
+    f.api.recoveryState.offered = [{ id, name: 'Job Properties - Nightly load', kind: 'agentJob', savedAt: '2026-11-22T10:00:00.000Z', characters: state.length }]
+    f.api.texts.set(id, { text: state, kind: 'agentJob', eol: 'lf', targetId })
+    const entries = await f.recovery.refresh()
+    expect(entries.map(entry => entry.kind)).toEqual(['agentJob'])
+    await f.recovery.recover([id])
+    const document = f.documents.getSnapshot().documents.find(item => item.kind === 'agentJob')!
+    expect(document).toMatchObject({ targetId, dirty: true })
+    expect(f.jobDocuments.get(document.id)).toMatchObject({ restored: true, draft: { description: 'Mine' } })
+    expect(f.recovery.copyId(document.id)).toBe(id)
   })
 })
 

@@ -1,5 +1,5 @@
-// Hot exit for SQL Server Agent documents (AG-6g) against the fake backend's jobs (tests/fixtures/backend.mjs, VARIA_TEST_BACKEND=workbench;
-// the smoke runs open the release gate): a job document with an unsaved edit is kept by a quit that asks nothing, a relaunch on the same
+// Hot exit for SQL Server Agent documents (AG-6g) against the fake backend's jobs (tests/fixtures/backend.mjs, VARIA_TEST_BACKEND=workbench):
+// a job document with an unsaved edit is kept by a quit that asks nothing, a relaunch on the same
 // profile reopens it with the edit and the unsaved mark, and once its server reconnects the job is read again with the edit on top, ready
 // to save. Native message boxes are stubbed in main and recorded; the profile lives under artifacts/.
 import { closeMs, electron, expect, within } from './fixtures/smoke.mjs'

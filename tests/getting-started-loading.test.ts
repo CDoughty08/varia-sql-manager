@@ -5,7 +5,7 @@ import { createRoot } from 'react-dom/client'
 import { WorkbenchProvider, useServiceSnapshot, useWorkbench } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import HelpDocument from '../src/renderer/src/help/HelpDocument'
-import { ResultsSample } from '../src/renderer/src/help/Samples'
+import { AgentScheduleSample, ResultsSample } from '../src/renderer/src/help/Samples'
 import * as frames from '../src/renderer/src/core/frame'
 import { DocumentSections } from '../src/renderer/src/kit/DocumentFrame'
 import { initialFrameState } from '../src/renderer/src/kit/document-frame'
@@ -234,5 +234,24 @@ it('sorts numeric ranks consistently while text-sort and copy settings change li
     await act(async () => button('Sort Rank ascending').click())
     expect(ranks()).toEqual(['30', '20'])
     expect(view.fixture.api.execute).not.toHaveBeenCalled()
+  } finally { view.dispose() }
+})
+
+it('reads the SQL Server Agent schedule sample through the production schedule rules, on a fictional clock, without SQL', async () => {
+  const view = await mount(createElement(AgentScheduleSample))
+  const button = (name: string) => [...view.host.querySelectorAll('button')].find(button => button.textContent === name)!
+  const runs = () => [...view.host.querySelectorAll('[aria-label="Sample next runs"] li')].map(item => item.textContent)
+  const sentence = () => view.host.querySelector('[role="status"]')?.textContent
+  try {
+    expect(sentence()).toBe('Occurs every day at 02:30. Schedule will be used starting on 2026-01-05.')
+    expect(runs()).toEqual(['Tue 2026-01-06 02:30', 'Wed 2026-01-07 02:30', 'Thu 2026-01-08 02:30'])
+    await act(async () => button('Weekly on…').click())
+    expect(runs()).toEqual(['Mon 2026-01-12 02:30', 'Mon 2026-01-19 02:30', 'Mon 2026-01-26 02:30'])
+    await act(async () => button('Every N minutes').click())
+    expect(runs()).toEqual(['Mon 2026-01-05 09:00', 'Mon 2026-01-05 09:15', 'Mon 2026-01-05 09:30'])
+    // Only the first-tier presets; the More menu's (when Agent starts, CPU idle, one time) are not offered.
+    expect([...view.host.querySelectorAll('[aria-label="Sample schedule starting point"] button')].map(item => item.textContent)).toEqual(['Every day at…', 'Weekdays at…', 'Weekly on…', 'Every N minutes', 'Monthly on day…'])
+    expect(view.fixture.api.execute).not.toHaveBeenCalled()
+    expect(view.fixture.api.executeObjectAction).not.toHaveBeenCalled()
   } finally { view.dispose() }
 })

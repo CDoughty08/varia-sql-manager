@@ -651,8 +651,6 @@ internal static class SearchChecks
             "where the platform has no Alerts folder the Agent read drops alerts, and a login with no jobs set still reads alerts and operators");
         check(ObjectSearchSql.Agent.StartsWith("IF HAS_PERMS_BY_NAME(N'dbo.sysjobs_view', N'OBJECT', N'SELECT') = 1 SELECT 'AJ'", StringComparison.Ordinal),
             "the Agent batch reads jobs only where msdb lets the login read sysjobs_view, so a login in no Agent role skips nothing");
-        using var sql = new SqlService();
-        check(sql.Search.AgentEnabled == Varia.Backend.Agent.AgentGate.Enabled, "Search Objects' Agent read follows the release gate by default");
         // A failed Agent read is msdb's entry flagged as Agent's, listed before the server's and the databases'.
         var skips = new SkipList(8);
         skips.Add(0, new ObjectIndexSkip("Sales", "NO_DB_ACCESS", "m"));
