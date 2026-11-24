@@ -234,6 +234,16 @@ describe('hot exit for SQL Server Agent documents', () => {
     expect(f.documents.active?.kind).toBe('agentJob')
     expect(warned).toHaveBeenCalledWith(keptAgentText.unreadable('Broken'), 'warning')
   })
+  it('names a kept Agent document a window without the Agent document providers cannot reopen', async () => {
+    const restored: RestoredSession = { documents: [{ name: 'Job Properties - Nightly load', kind: 'agentJob', eol: 'lf', dirty: true, text: '{}' }], activeIndex: 0, problems: [] }
+    const api = { hotExit: true, takeSession: vi.fn(async () => ({ ok: true as const, value: restored })), finishSessionRestore: vi.fn(async () => ({ ok: true as const, value: undefined })) }
+    const f = bench()
+    const warned = vi.spyOn(f.files, 'reportError')
+    const d = f.documents
+    const documents = { getSnapshot: () => d.getSnapshot(), reopen: d.reopen.bind(d), activate: d.activate.bind(d), setPinned: d.setPinned.bind(d) }
+    expect(await restoreSession({ api, documents, files: f.files })).toBe(0)
+    expect(warned).toHaveBeenCalledWith(keptAgentText.notReopened('Job Properties - Nightly load'), 'warning')
+  })
   it('never keeps a proxy\'s typed password: one with a password typed is asked about, and a kept one reopens with its password fields empty', async () => {
     const first = bench()
     first.accept(uuid(50))
