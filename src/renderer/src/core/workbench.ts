@@ -61,6 +61,8 @@ import { ResultSelectionService } from '../services/result-selection'
 import { PeekService } from '../explorer/PeekService'
 import { PeekTabService } from '../explorer/PeekTabService'
 import { BigQueryPropertiesService } from '../explorer/BigQueryPropertiesService'
+import { InspectorService } from '../services/inspector'
+import { inspectorContribution } from '../contributions/inspector'
 import type { ThemeService } from '../services/theme'
 import { queryContribution } from '../contributions/query'
 import { providerSwitchToast, switchModelLanguage } from '../languages/query-language'
@@ -256,6 +258,8 @@ export interface Workbench extends Disposable {
   /** Peek promoted to document tabs: each tab's view. */
   readonly peekTabs: PeekTabService
   readonly bigQueryProperties: BigQueryPropertiesService
+  /** Shared ObjectInspectorFrame state: per-surface Vitals persistence, modifier-hold badge state and focused Ctrl+1-9 routing. */
+  readonly inspector: InspectorService
   /** The column profile's Ctrl+hover peek at the selected columns: the tab whose panel peeks. */
   readonly profilePeek: ProfilePeekService
   /** Go To and Peek Definition in SQL editors: F12's script, the card at a name (Alt+F12, Ctrl+hover), a Peek tab (Ctrl+click). */
@@ -614,6 +618,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const bigQueryProperties = new BigQueryPropertiesService({
     api, documents, focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-bigquery-properties="${CSS.escape(id)}"] [role="region"]`)?.focus())
   })
+  const inspector = new InspectorService({ api, platform })
   const editorPeek = new EditorPeekService({ sqlLanguage, connections, scripting, peek, peekTabs })
   // A dependency is shown as Search Objects' Reveal shows a hit; a failed walk says why in the command banner.
   const dependencies = new DependenciesService({
@@ -687,8 +692,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     keyArgs: command => { const tabId = actsOnTab(command) ? editorGroups.focusedDocument() : undefined; return tabId ? { tabId } : undefined }, // Peek's editor waits for a chord's second key after Ctrl+K as a query's does (folding works there; the bridge's chords do not).
     editorHasTextFocus: () => (documents.boundEditor?.hasTextFocus() ?? false) || peekEditorHasTextFocus(windows.activeElement()),
     editorContains: target => target instanceof Node && !!documents.boundEditor?.getContainerDomNode().contains(target),
-    keyDown: event => { peek.keyDown(event.key, event.repeat); profilePeek.keyDown(event.key, event.repeat) },
-    keyUp: event => { peek.keyUp(event.key); profilePeek.keyUp(event.key) }, blur: () => { peek.blur(); profilePeek.blur() } })
+    keyDown: event => { peek.keyDown(event.key, event.repeat); profilePeek.keyDown(event.key, event.repeat); inspector.keyDown(event.key, event.repeat) },
+    keyUp: event => { peek.keyUp(event.key); profilePeek.keyUp(event.key); inspector.keyUp(event.key) }, blur: () => { peek.blur(); profilePeek.blur(); inspector.blur() } })
   const shortcutsBinding = userShortcuts.bind({ keybindings, gestures: gesturesFor(platform) })
   if (!shortcuts) void userShortcuts.load()
   const menuState = new MenuStatePublisher({ commands, context, send: state => api.setMenuState(state) })
@@ -774,6 +779,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     peek,
     peekTabs,
     bigQueryProperties,
+    inspector,
     profilePeek,
     editorPeek,
     actions,
@@ -846,6 +852,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       // Before the results: each tab's view releases its Top rows there (the card's are released with it below, or by the results).
       peekTabs.dispose()
       bigQueryProperties.dispose()
+      inspector.dispose()
       results.dispose()
       resultMemory.dispose()
       indexMemory.dispose()
@@ -959,7 +966,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     agentProxyContribution(workbench),
     searchContribution(workbench, api),
     settingsContribution(workbench),
-    notificationsContribution(workbench)
+    notificationsContribution(workbench),
+    inspectorContribution(workbench)
   ]
   // Capture on window runs before Monaco's own listeners and React's handlers.
   const listeners = [
@@ -975,6 +983,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // file, or a failed load, shows in the command banner, including one from before the workbench existed.
   settings.setReporter((message, kind) => kind === 'warning' ? commands.reportWarning(message) : commands.reportError(message))
   userShortcuts.setReporter((message, kind) => kind === 'warning' ? commands.reportWarning(message) : commands.reportError(message))
+  inspector.setReporter((message, kind) => kind === 'warning' ? commands.reportWarning(message) : commands.reportError(message))
+  void inspector.load()
   // The tabs the last close kept (hot exit), else the welcome query; what an earlier run or page left unsaved is offered
   // once the workbench is up.
   const welcome = () => { if (!disposed) documents.create('SQLQuery1.sql', welcomeQueryText, 'master') }

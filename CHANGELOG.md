@@ -84,6 +84,7 @@
 
 ### Fixes
 
+- **Properties field hints clear cleanly:** Leaving or closing a described Properties field no longer leaves its hint text behind in the hint strip.
 - **AppImage updates keep the working version:** If the updated AppImage cannot start \(for example on a system without a library the new release needs\) or stops within 30 seconds, before it has started, Restart to Update now puts the previous AppImage back instead of leaving only the new one\.
 - **Reloading a changed file keeps what you type meanwhile:** Text typed into a query while Varia reads its file again, after the file changed outside Varia, is no longer replaced without asking: File changed asks first, as it does for any query with unsaved changes\.
 - **Recovered queries keep outside edits to their file:** After Recover Unsaved Queries reopens a query, Save asks before replacing edits another application made to its file while Varia was closed\.

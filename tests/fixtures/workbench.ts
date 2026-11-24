@@ -107,6 +107,8 @@ import { ObjectSearchService } from '../../src/renderer/src/search/ObjectSearchS
 import { fakeLive } from './live-handle'
 import { settingsContribution } from '../../src/renderer/src/contributions/settings'
 import { notificationsContribution } from '../../src/renderer/src/contributions/notifications'
+import { inspectorContribution } from '../../src/renderer/src/contributions/inspector'
+import { InspectorService } from '../../src/renderer/src/services/inspector'
 import { NotificationService } from '../../src/renderer/src/core/notifications'
 import { providerSwitchToast } from '../../src/renderer/src/languages/query-language'
 import { UpdateService } from '../../src/renderer/src/updates/UpdateService'
@@ -280,7 +282,7 @@ export function updatesApi(initial: UpdateState = { status: 'idle', currentVersi
  * The renderer's services and every command contribution, wired as createWorkbench does but with fake IPC and a fake
  * shell host, so command enablement can be tested in Node.
  */
-export function workbenchFixture(options: { platform?: Platform; modal?: () => boolean; storage?: HistoryStorage; timers?: Timers; settings?: Partial<SettingsValues>; recovery?: RecoveryEntry[]; helpFocus?: (id: string) => void; startupReady?: Promise<void> } = {}) {
+export function workbenchFixture(options: { platform?: Platform; modal?: () => boolean; storage?: HistoryStorage; timers?: Timers; settings?: Partial<SettingsValues>; recovery?: RecoveryEntry[]; helpFocus?: (id: string) => void; startupReady?: Promise<void>; activeElement?: () => Element | null } = {}) {
   // Settings apply to documents as createWorkbench applies them; `settings` exists before the first document does.
   const doc = documentFixture({ ...settingsDocumentOptions(() => settings.getSnapshot().values), target: id => targets.targetForConnection(id), server: id => connections.get(id)?.server,
     provider: id => { const connection = connections.get(id); return connection ? connection.providerId ?? 'sqlserver' : undefined },
@@ -426,7 +428,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const quickInput = new QuickInputService(focus.adapter, options.timers)
   const focused = { panel: '' as '' | 'explorer' | 'editor' | 'results' | 'messages' | 'plan' }
   // The focused element is a stand-in whose pane is `focused.panel`, so tests can put focus in Object Explorer.
-  const activeElement = () => focused.panel ? { matches: () => false, closest: (selector: string) => selector === '[data-pane]' ? { getAttribute: () => focused.panel } : null } as unknown as Element : null
+  const activeElement = options.activeElement ?? (() => focused.panel ? { matches: () => false, closest: (selector: string) => selector === '[data-pane]' ? { getAttribute: () => focused.panel } : null } as unknown as Element : null)
   settings.setReporter((message, kind) => kind === 'warning' ? commands.reportWarning(message) : commands.reportError(message))
   const scriptingOptions = { getSnapshot: () => ({ options: scriptingOptionsFrom(settings.getSnapshot().values) }), subscribe: settings.subscribe }
   const focusEditor = vi.fn()
@@ -519,7 +521,9 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     ...(options.timers ? { timers: options.timers } : {}),
     databases: databaseRenameHooks({ documents, queries, connections, targets, properties }), notify: notice => { notifications.notify(notice) }
   })
-  const keybindings = new KeybindingService({ platform, commands, context, modalOpen: options.modal ?? (() => false), editorHasTextFocus: () => false })
+  const inspector = new InspectorService({ platform, activeElement })
+  const keybindings = new KeybindingService({ platform, commands, context, modalOpen: options.modal ?? (() => false), editorHasTextFocus: () => false,
+    keyDown: event => inspector.keyDown(event.key, event.repeat), keyUp: event => inspector.keyUp(event.key), blur: () => inspector.blur() })
   const host: ShellHost = {
     disconnect: vi.fn(async () => {}), removeConnection: vi.fn(), reveal: vi.fn(), manageLayouts: vi.fn(), resetLayout: vi.fn(), flushLayout: vi.fn(async () => {}), layoutCloseCancelled: vi.fn(), showConnect: vi.fn(), reconnect: vi.fn(), editEnvironment: vi.fn(), closePane: vi.fn(),
     paneLocation: vi.fn<ShellHost['paneLocation']>(() => 'grid'), floatPane: vi.fn(), dockPane: vi.fn(), dockPaneAt: vi.fn(), tabPaneWith: vi.fn(), movePaneToWindow: vi.fn(), movePaneToMainWindow: vi.fn(),
@@ -612,7 +616,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     schedules,
     proxyDocuments,
     credentialDocuments,
-    objectSearch
+    objectSearch,
+    inspector
   }
   const contributions = [
     queryContribution(workbench, api),
@@ -650,7 +655,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     agentProxyContribution(workbench),
     searchContribution(workbench, api),
     settingsContribution(workbench),
-    notificationsContribution(workbench)
+    notificationsContribution(workbench),
+    inspectorContribution(workbench)
   ]
   /** Starts a query on the active document that stays running until `finish` is called. */
   const startQuery = () => {
@@ -712,6 +718,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     logViewer.dispose()
     agentJobs.dispose()
     objectSearch.dispose()
+    inspector.dispose()
     bookmarks.dispose()
     editorDialogs.dispose()
     shellOptions.dispose()
@@ -783,6 +790,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     logViewerRecycled,
     agentJobs,
     objectSearch,
+    inspector,
     live,
     focusEditor,
     notifications,
