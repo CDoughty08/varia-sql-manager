@@ -527,8 +527,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-properties="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus())
   })
   const tableProperties = new TablePropertiesService({
-    api, documents, files, connections, targetIdOf,
-    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-table-properties="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus())
+    api, documents, files, connections, targetIdOf, scriptingOptions, results,
+    focusEditor: () => focusLater(() => documents.focusActive()),
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-table-properties="${CSS.escape(id)}"] [role="tablist"][aria-label="Object sections"] [role="tab"][tabindex="0"]`)?.focus())
   })
   const newDatabase = new NewDatabaseService({
     api, documents, files, connections, explorer, longRuns, serverFiles, targetIdOf, focusEditor: () => focusLater(() => documents.focusActive()),
@@ -612,7 +613,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // BigQuery tabs' completion and hover, from the Search Objects index; the first lookup that finds none starts it as a search would.
   const indexCompletion = new IndexCompletionService(monaco, api, documents, connections, { ensureIndex: id => objectSearch.ensureIndex(id) })
   const peekTabs = new PeekTabService({
-    peek, documents, connections, targetIdOf,
+    peek, documents, connections, targetIdOf, tableProperties,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-peek-tab="${CSS.escape(id)}"] [role="tab"][aria-selected="true"]`)?.focus())
   })
   const bigQueryProperties = new BigQueryPropertiesService({
@@ -849,8 +850,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       compare.dispose()
       pivot.dispose()
       resultsSearch.dispose()
-      // Before the results: each tab's view releases its Top rows there (the card's are released with it below, or by the results).
+      // Before the results: each tab's view and Table Properties' Preview Rows release their Top rows there (the card's are released with it below, or by the results).
       peekTabs.dispose()
+      tableProperties.dispose()
       bigQueryProperties.dispose()
       inspector.dispose()
       results.dispose()
@@ -887,7 +889,6 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       ssisFocus.dispose()
       ssisProperties.dispose()
       properties.dispose()
-      tableProperties.dispose()
       newDatabase.dispose()
       restore.dispose()
       sqlDiagnostics.dispose()

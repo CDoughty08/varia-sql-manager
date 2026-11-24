@@ -344,6 +344,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     revealSqlFile: vi.fn<VariaApi['revealSqlFile']>(async () => ({ ok: true, value: undefined })),
     tableColumns: vi.fn<VariaApi['tableColumns']>(async () => ({ ok: true, value: { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false } })),
     explorerChildren: vi.fn<VariaApi['explorerChildren']>(async params => ({ ok: true, value: explorerAnswer(params) })),
+    explorerPeek: vi.fn<VariaApi['explorerPeek']>(async () => ({ ok: true, value: { facts: {}, elapsedMs: 1 } })),
+    explorerPeekDependencies: vi.fn<VariaApi['explorerPeekDependencies']>(async () => ({ ok: true, value: { uses: [], usedBy: [], elapsedMs: 1 } })),
     explorerCancel: vi.fn<VariaApi['explorerCancel']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
     // A script naming the object and verb, from the object's database (master for databases and server objects).
     scriptObjects: vi.fn<VariaApi['scriptObjects']>(async params => {
@@ -450,7 +452,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const designers = new TableDesignerService({ api, documents, files, connections, explorer, targetIdOf })
   const ssisProperties = new SsisPropertiesService({ api, documents, connections, targetIdOf })
   const properties = new DatabasePropertiesService({ api, documents, files, connections, explorer, targetIdOf, focusEditor, close: id => { void files.close(id) }, ...(options.timers ? { timers: options.timers } : {}) })
-  const tableProperties = new TablePropertiesService({ api, documents, files, connections, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) })
+  const tableProperties = new TablePropertiesService({ api, documents, files, connections, targetIdOf, scriptingOptions, results, focusEditor, ...(options.timers ? { timers: options.timers } : {}) })
   const newDatabase = new NewDatabaseService({ api, documents, files, connections, explorer, longRuns, focusEditor, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) })
   const actionProgress = new ActionProgressService(api)
   const restore = new RestoreService({ api, documents, files, connections, longRuns, progress: actionProgress, explorer, transactions: queries, focusEditor, targetIdOf, now: () => new Date(2026, 9, 30, 12, 0, 0), ...(options.timers ? { timers: options.timers } : {}) })

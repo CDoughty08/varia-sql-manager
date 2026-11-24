@@ -231,9 +231,10 @@ export const part = {
   /** The states kit's pill (src/renderer/src/kit/StatusPill.tsx), as a document header shows its state. */
   statusPill: '.status-pill',
   documentBanner: '.document-banner',
-  // Property sheets in documents (src/renderer/src/kit/PropertyField.tsx)
+  // Property sheets in documents (src/renderer/src/kit/PropertyField.tsx & FactGrid.tsx)
   propertyField: '.property-field',
-  propertyFact: '.property-fact',
+  propertyFact: '.property-fact, .fact-grid-row',
+  inspectorTabLabel: '.inspector-tab-label',
   fieldHint: '.field-hint',
   /** The frame's scrolling content under the header and fact line. */
   documentContent: '.document-content',
@@ -1054,6 +1055,11 @@ export const documentStaleBadge = frame => documentHeader(frame).locator(part.st
 /** The fact line's values, in order. */
 export const documentFactValues = frame => frame.locator(part.documentFacts).locator('dd')
 export const sectionList = frame => frame.getByRole('navigation', { name: 'Sections', exact: true })
+/** The unified ObjectInspectorFrame's horizontal tab strip and one tab by title prefix (ignoring trailing counts/marks). */
+export const inspectorTabs = frame => frame.getByRole('tablist', { name: 'Object sections', exact: true })
+export const inspectorTab = (frame, name) => inspectorTabs(frame).getByRole('tab', { name: new RegExp(`^${escaped(name)}(?:\\s|\\(|$)`) })
+export const inspectorTabLabels = frame => inspectorTabs(frame).getByRole('tab').locator(part.inspectorTabLabel)
+export const inspectorPanel = frame => frame.getByRole('tabpanel')
 /** A section's item in the list by the section's id (its name says when the section needs attention). */
 export const sectionItem = (frame, id) => sectionList(frame).locator(`[data-section="${id}"]`)
 export const currentSectionItem = frame => sectionList(frame).locator('[aria-current="location"]')
