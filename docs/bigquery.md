@@ -32,7 +32,7 @@ this token file?**, naming the token file; a file source main cannot show as one
 refuses the configuration's sign-in until then, and fails closed where it cannot ask (a background reconnect). A changed
 token path asks again. gcloud credentials whose ADC file is such a configuration (`gcloud auth application-default login
 --cred-file`, or the file `GOOGLE_APPLICATION_CREDENTIALS` names) ask the same question in a box from main the first time
-a Connect, Test Connection or Browse needs them; a background reconnect and main's own job cancels never ask, and refuse.
+a Connect, Test Connection, Browse or the Default dataset list (which loads when the field is focused) needs them; a background reconnect and main's own job cancels never ask, and refuse.
 
 ## Saved connections
 
