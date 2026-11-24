@@ -58,6 +58,7 @@ import { ServerDropService } from '../editor-groups/server-drop'
 import { ExplorerStatusService } from '../explorer/ExplorerStatusService'
 import { DatabaseListService } from '../services/database-list'
 import { SsisTreeProbe } from '../ssis/SsisTreeProbe'
+import { AgentTreeLive } from '../agent/AgentTreeLive'
 import { ResultSelectionService } from '../services/result-selection'
 import { PeekService } from '../explorer/PeekService'
 import { PeekTabService } from '../explorer/PeekTabService'
@@ -244,6 +245,8 @@ export interface Workbench extends Disposable {
   readonly explorerStatus: ExplorerStatusService
   /** The SSIS Catalog's live tree: one catalog probe per connection whose SSISDB node is open, reconciling what changed. */
   readonly ssisTree: SsisTreeProbe
+  /** SQL Server Agent's live tree (AG-12): the agent.tree change source while an Agent node is open, and job rows' chips while a Jobs folder is. */
+  readonly agentTree: AgentTreeLive
   /** The databases of each connected server, for the toolbar's database picker. */
   readonly databaseList: DatabaseListService
   /** The cells selected in each query's results grid. */
@@ -426,6 +429,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // A database's menu follows its live state (Take Offline greys once a sample shows it offline), not only its listing.
   const explorerRuntime = explorer.useStatus(explorerStatus)
   const ssisTree = new SsisTreeProbe({ explorer, live, settings, events, explorerVisible: { visible: () => panes.getSnapshot().explorer, subscribe: panes.subscribe, popout: () => panes.location('explorer') === 'window' } })
+  const agentTree = new AgentTreeLive({ explorer, live, settings, events, explorerVisible: { visible: () => panes.getSnapshot().explorer, subscribe: panes.subscribe, popout: () => panes.location('explorer') === 'window' } })
+  // A job's menu follows its live enabled state as its row does (Enable Job once a read shows it disabled elsewhere).
+  const explorerJobs = explorer.useJobStatus(agentTree)
   const gridStats = api.testMode ? new GridStats() : undefined
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values, retainedPlans)
   // A BigQuery close's note shows in the query's Messages while it stays, else as a notification (docs/bigquery.md, Sessions).
@@ -494,6 +500,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     hoverModifier: key => gesturesFor(platform).isModifierKey('explorer.peekHover', key) || gesturesFor(platform).isModifierKey('editor.peekHover', key) })
   const serverFiles = new ServerFilePickerService({ api, connections })
   const longRuns = new LongRunService({ api })
+  // The Agent node's Start, Stop and Restart grey while one of them runs on its server (agentServiceRules' busy).
+  const explorerLongRuns = explorer.useLongRuns(longRuns)
   const disconnectPrompts = new DisconnectPromptService()
   const disconnectCoordinator = createDisconnectCoordinator({
     connectionTargets, documents, queries, files, longRuns, api, prompts: disconnectPrompts,
@@ -595,7 +603,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const proxyDocuments = new ProxyDocumentService({ api, documents, files, connections, targetIdOf, focus: focusAgentObject('data-agent-proxy', 'data-agent-proxy-focus') })
   const credentialDocuments = new CredentialDocumentService({ api, documents, files, connections, targetIdOf, focus: focusAgentObject('data-credential', 'data-credential-focus') })
   const jobActivity = new JobActivityService({
-    api, documents, panes, groups: editorGroups, live, connections, targetIdOf,
+    api, documents, panes, groups: editorGroups, live, connections, targetIdOf, explorer, longRuns,
     started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt),
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-jobs="${CSS.escape(id)}"] [role="grid"]`)?.focus())
   })
@@ -617,7 +625,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-peek-tab="${CSS.escape(id)}"] [role="tab"][aria-selected="true"]`)?.focus())
   })
   const bigQueryProperties = new BigQueryPropertiesService({
-    api, documents, focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-bigquery-properties="${CSS.escape(id)}"] [role="region"]`)?.focus())
+    api, documents, connections, results, scriptingOptions,
+    billedGate: (connectionId, estimate, signal) => bigQueryCost.beforeScript(connectionId, estimate, signal),
+    focus: id => focusLater(() => {
+      const root = document.querySelector<HTMLElement>(`[data-bigquery-properties="${CSS.escape(id)}"]`)
+      ;(root?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? root?.querySelector<HTMLElement>('button'))?.focus()
+    })
   })
   const inspector = new InspectorService({ api, platform })
   const editorPeek = new EditorPeekService({ sqlLanguage, connections, scripting, peek, peekTabs })
@@ -774,6 +787,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     explorer,
     explorerStatus,
     ssisTree,
+    agentTree,
     databaseList,
     resultSelection,
     settings,
@@ -881,7 +895,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       activity.dispose()
       // Before the client: its views cancel their subscriptions while the port is still there.
       ssisTree.dispose()
+      explorerJobs.dispose()
+      agentTree.dispose()
       explorerRuntime.dispose()
+      explorerLongRuns.dispose()
       explorerStatus.dispose()
       live.dispose()
       resultVisibility.dispose()

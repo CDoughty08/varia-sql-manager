@@ -13,6 +13,9 @@ export interface CommandHandler {
   when?(args?: CommandArgs): boolean
   /** Why the command is unavailable now, when it can say (a greyed action's reason): a key that reaches it, or the palette's greyed row, shows this. */
   unavailable?(args?: CommandArgs): string | undefined
+  /** The palette's title for what the command acts on now, where it differs from the catalogue's (a shared Enable says "Enable Job"
+   *  with a job selected, "Enable Alert" with an alert); undefined keeps the catalogue's. */
+  title?(args?: CommandArgs): string | undefined
 }
 export interface CommandEvent { readonly id: CommandId; readonly source: CommandSource }
 /** The command banner's message; a warning (`kind`) is shown as a notice, not as a failure. */
@@ -75,6 +78,10 @@ export class CommandService extends SnapshotStore<CommandSnapshot> implements Di
   /** Why the command is unavailable now, when its handler can say; undefined otherwise (and for an enabled one, which callers check first). */
   unavailableReason(id: CommandId, args?: CommandArgs): string | undefined {
     try { return this.handlers.get(id)?.unavailable?.(args) } catch (error) { onUnexpectedError(error); return undefined }
+  }
+  /** The handler's title for the command's current target, or undefined to use the catalogue's (and its settings template). */
+  titleFor(id: CommandId, args?: CommandArgs): string | undefined {
+    try { return this.handlers.get(id)?.title?.(args) } catch (error) { onUnexpectedError(error); return undefined }
   }
   /** Whether a toggle command is on: for a menu's target (`args`), by the keys the target stands in (a results grid's own
    *  orientation, not the focused grid's). */
