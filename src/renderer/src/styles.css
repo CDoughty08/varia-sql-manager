@@ -962,8 +962,8 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .output-panel[data-output-panel="results"] { container: results-panel / inline-size; }
 /* The results head: the segmented views, the run summary, the copy and save strips and the panel menu. */
 .output-toolbar { display: flex; flex-shrink: 0; align-items: center; gap: 8px; height: var(--varia-bar); box-sizing: border-box; padding: 0 6px 0 8px; border-bottom: 1px solid var(--varia-panel-border); background: var(--varia-panelTitle-background); }
-/* Results, Messages and Execution plan as one segmented control: the selected view is a raised pill. */
-.output-views { display: inline-flex; flex-shrink: 0; gap: 1px; padding: 1px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); }
+/* Results, Messages and Execution plan: calm borderless tabs with a raised pill for the selected view. */
+.output-views { display: inline-flex; flex-shrink: 0; gap: 2px; }
 .output-views:empty { display: none; }
 .output-views button { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px; border-radius: var(--varia-radius-sm); color: var(--varia-panelTitle-inactiveForeground); font-size: var(--varia-size-sm); }
 .output-views button.active { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-panelTitle-activeForeground); font-weight: 600; transition: none; }
@@ -977,28 +977,51 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .output-status[data-tone="error"] .codicon { color: var(--varia-errorForeground); }
 .output-spacer { flex: 1; }
 .output-view { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; }
-/* The results toolbar, in the Results head after its views: tools for every grid in the run, as segmented controls. */
+/* The results toolbar, in the Results head after its views: calm borderless icon groups and progressive disclosure triggers. */
 /* The toolbar folds its groups as space gives way to the other controls. The clip margin keeps a focused button's ring. */
-.results-toolbar { display: flex; flex-shrink: 1; align-items: center; gap: 4px; min-width: 0; padding-left: 8px; border-left: 1px solid var(--varia-panel-border); overflow: clip; overflow-clip-margin: 2px; }
-.results-toolbar-label { display: inline-flex; align-items: center; gap: 5px; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); white-space: nowrap; }
+.results-toolbar { display: flex; flex-shrink: 1; align-items: center; gap: 4px; min-width: 0; padding-left: 8px; border-left: 1px solid var(--varia-toolbar-separatorBackground); overflow: clip; overflow-clip-margin: 2px; }
+.results-divider { flex: none; width: 1px; height: 16px; margin: 0 2px; background: var(--varia-toolbar-separatorBackground); }
 .results-segments { display: inline-flex; flex-shrink: 0; gap: 1px; padding: 1px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); }
-.results-segments button { height: 20px; padding: 0 8px; border-radius: var(--varia-radius-sm); color: var(--varia-panelTitle-inactiveForeground); font-size: var(--varia-size-xs); }
-.results-segments button { display: inline-flex; align-items: center; gap: 4px; }
+.results-segments button { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px; border-radius: var(--varia-radius-sm); color: var(--varia-panelTitle-inactiveForeground); font-size: var(--varia-size-xs); }
 .results-segments button.results-icon-toggle { padding: 0 4px; }
+.results-toolbar .results-segments { gap: 2px; padding: 0; border: 0; }
+.results-toolbar .results-segments button { height: 22px; }
 /* Headers, beside Transposed while the focused grid is drawn so: a long column name is cut short. */
 .results-segments button.results-headers { max-width: 180px; padding: 0 4px 0 6px; }
 .results-segments button.results-headers > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Held off while a sort or filter is built (ResultOperations): dimmed, and a click is refused, not queued. */
-.results-segments button[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
-@media (forced-colors: active) { .results-segments button[aria-disabled="true"] { color: GrayText; opacity: 1; } }
+.results-segments button[aria-disabled="true"], .results-choice-trigger[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
+@media (forced-colors: active) { .results-segments button[aria-disabled="true"], .results-choice-trigger[aria-disabled="true"] { color: GrayText; opacity: 1; } }
 .results-segments button[aria-pressed="true"], .results-segments button[aria-expanded="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-panelTitle-activeForeground); font-weight: 600; transition: none; }
 @media (forced-colors: active) { .results-segments button[aria-pressed="true"], .results-segments button[aria-expanded="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText; } }
+/* Progressive-disclosure triggers (White space, Sort text by): compact icon at default, tinted chip when non-default. */
+.results-choice-trigger { display: inline-flex; flex: none; align-items: center; gap: 4px; height: 22px; padding: 0 5px; border: 1px solid transparent; border-radius: var(--varia-radius-sm); color: var(--varia-panelTitle-inactiveForeground); font-size: var(--varia-size-xs); }
+.results-choice-trigger[aria-expanded="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-panelTitle-activeForeground); transition: none; }
+.results-choice-trigger[data-active] { padding: 0 7px 0 5px; background: var(--varia-chip-activeBackground); color: var(--varia-chip-activeForeground); border-color: var(--varia-chip-activeBorder); font-weight: 600; transition: none; }
+.results-choice-menu { position: fixed; z-index: 13000; display: flex; flex-direction: column; gap: 1px; min-width: 176px; padding: 4px; background: var(--varia-menu-background); color: var(--varia-menu-foreground); border: 1px solid var(--varia-menu-border); border-radius: var(--varia-radius-sm); box-shadow: var(--varia-shadow-menu) var(--varia-widget-shadow); font: var(--varia-size-sm)/var(--varia-line-sm) var(--varia-font-ui); animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease); }
+.results-choice-head { padding: 3px 8px 4px; margin-bottom: 2px; border-bottom: 1px solid var(--varia-menu-separatorBackground); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.results-choice-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 5px 8px; border: 0; border-radius: var(--varia-radius-sm); color: var(--varia-menu-foreground); text-align: left; }
+.results-choice-item:hover, .results-choice-item:focus-visible { background: var(--varia-menu-selectionBackground); color: var(--varia-menu-selectionForeground); outline: none; }
+.results-choice-item:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; transition: none; }
+.results-choice-item[aria-checked="true"] .results-choice-name { font-weight: 600; }
+.results-choice-item[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
+.results-choice-text { display: flex; flex-direction: column; min-width: 0; }
+.results-choice-name { font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.results-choice-hint { font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); color: var(--varia-descriptionForeground); }
+.results-choice-item:hover .results-choice-hint, .results-choice-item:focus-visible .results-choice-hint { color: inherit; }
+.results-choice-check { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 16px; color: var(--varia-focusBorder); }
+.results-choice-item:hover .results-choice-check, .results-choice-item:focus-visible .results-choice-check { color: inherit; }
+@media (forced-colors: active) {
+  .results-choice-trigger[aria-expanded="true"], .results-choice-trigger[data-active] { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
+  .results-choice-menu { border-color: CanvasText; }
+  .results-choice-item:focus-visible { forced-color-adjust: none; background: Highlight; color: HighlightText; outline-color: HighlightText; }
+}
 /* Search in results: the box, its count, Previous and Next, and Data or Columns. Its field gives way first in a narrow
    pane, down to the width of its whole placeholder and no further while a group is left to fold; then the toolbar folds (ResultsToolbar's toolbarFolds, by the
    toolbar's own width, so a narrow docked or popped-out pane folds as a narrow window does): Tabs goes, the groups tighten
-   (their icons, the box's magnifier and its Previous and Next go; Enter, Shift+Enter, F3 and Shift+F3 still step), then
+   (the box's magnifier and its Previous and Next go; Enter, Shift+Enter, F3 and Shift+F3 still step), then
    Transposed, Headers and Compare, Sort text by, White space and the Show group go. The ⋯ menu holds them all. */
-.results-search { display: flex; flex: 0 1 300px; align-items: center; gap: 3px; height: 24px; padding: 0 2px 0 6px; border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); background: var(--varia-input-background); color: var(--varia-descriptionForeground); }
+.results-search { display: flex; flex: 0 1 210px; align-items: center; gap: 3px; height: 24px; padding: 0 2px 0 6px; border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); background: var(--varia-input-background); color: var(--varia-descriptionForeground); }
 .results-search:hover:not(:focus-within) { border-color: var(--varia-descriptionForeground); }
 .results-search:focus-within { border-color: var(--varia-focusBorder); box-shadow: 0 0 0 1px var(--varia-focusBorder); }
 .results-search-field { display: grid; flex: 1 1 0; }
@@ -1011,13 +1034,14 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .results-search-count { flex-shrink: 0; font-size: var(--varia-size-xs); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .results-search > button { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 20px; height: 18px; border-radius: var(--varia-radius-sm); }
 .results-search > button:disabled { opacity: 0.4; }
-.results-search .results-segments button { height: 16px; padding: 0 3px; }
+.results-search .results-segments button { height: 18px; padding: 0 3px; }
 .results-toolbar[data-fold~="layout"] .results-layout { display: none; }
 .output-toolbar:has(> .results-toolbar[data-fold~="tight"]) { gap: 4px; }
 .output-toolbar:has(> :where(.results-toolbar[data-fold~="tight"])) .output-views button { padding: 0 6px; }
 .results-toolbar[data-fold~="tight"] { gap: 1px; padding-left: 6px; }
-.results-toolbar[data-fold~="tight"] .results-toolbar-label, .results-toolbar[data-fold~="tight"] .results-search > .results-search-icon, .results-toolbar[data-fold~="tight"] .results-search > button { display: none; }
-.results-toolbar[data-fold~="tight"] .results-segments button, .results-toolbar[data-fold~="tight"] .results-segments button.results-icon-toggle { padding: 0 3px; }
+.results-toolbar[data-fold~="tight"] .results-search > .results-search-icon, .results-toolbar[data-fold~="tight"] .results-search > button { display: none; }
+.results-toolbar[data-fold~="tight"] .results-segments button, .results-toolbar[data-fold~="tight"] .results-segments button.results-icon-toggle, .results-toolbar[data-fold~="tight"] .results-choice-trigger { padding: 0 3px; }
+.results-toolbar[data-fold~="tight"] .results-divider { margin: 0 1px; }
 .results-toolbar[data-fold~="tight"] .results-search { padding-left: 4px; }
 .results-toolbar[data-fold~="view"] .results-transpose, .results-toolbar[data-fold~="view"] .results-compare,
 .results-toolbar[data-fold~="sort"] .results-sort, .results-toolbar[data-fold~="space"] .results-space, .results-toolbar[data-fold~="show"] .results-show { display: none; }
@@ -1173,6 +1197,9 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .rt-tab .rt-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .rt-tab > [role="tab"] > .codicon, .rt-tab > .rt-close { flex: none; }
 .rt-overflow { display: inline-flex; flex: none; align-items: center; gap: 2px; align-self: center; height: 20px; margin: 0 0 3px auto; padding: 0 2px 0 6px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: transparent; color: var(--varia-panelTitle-inactiveForeground); font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; }
+.rt-root[data-compact] .rt-overflow { margin: 0 0 3px 4px; }
+.rt-inline-right { display: flex; flex: 0 1 auto; align-items: center; gap: 6px; align-self: center; min-width: 0; margin: 0 2px 2px auto; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); white-space: nowrap; }
+.rt-inline-right .rt-facts { flex: 0 1 auto; min-width: 0; }
 .rt-overflow:hover { background: var(--varia-toolbar-hoverBackground); }
 .rt-overflow[aria-expanded="true"] { background: var(--varia-list-inactiveSelectionBackground); transition: none; }
 .rt-overflow:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
@@ -1237,11 +1264,15 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .rg-corner { position: sticky; left: 0; z-index: 3; width: var(--rg-rhw); }
 .rg-ch:hover, .rg-corner:hover { background: var(--varia-resultsGrid-hoverBackground); }
 .rg-ch.unnamed { color: var(--varia-resultsGrid-headerDescriptionForeground); }
-/* The column's SQL type after its name (gridLimits.typeGap), muted and smaller. Name and type are each isolated, so bidi
-   controls in a name stay inside it. */
-.rg-cn { unicode-bidi: isolate; }
-.rg-ct { margin-left: 6px; unicode-bidi: isolate; font-size: var(--varia-size-xs); color: var(--varia-resultsGrid-headerDescriptionForeground); }
+/* The column's SQL type after its name (gridLimits.typeGap), muted mono and smaller. Name and type are each isolated,
+   so bidi controls in a name stay inside it. */
+.rg-cn { unicode-bidi: isolate; font-weight: 600; }
+.rg-ch.unnamed .rg-cn, .rg[data-orientation='transposed'] .rg-rn.unnamed .rg-cn { font-weight: 400; }
+.rg-ct { margin-left: 6px; unicode-bidi: isolate; font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); font-weight: 400; color: var(--varia-resultsGrid-headerDescriptionForeground); }
 .rg-ch.sel .rg-ct { color: inherit; }
+.rg-ch.rg-ch-num { text-align: right; }
+.rg-ch.rg-ch-num:has(> .rg-cf.on), .rg-ch.rg-ch-num:not(.fb):has(> .rg-cs.on) { padding-right: 22px; }
+.rg-ch.rg-ch-num.fb:has(> .rg-cs.on) { padding-right: 38px; }
 /* A header's sort button, over the header's right end on the header's own background; unsorted, only while hovered. */
 .rg-cs { position: absolute; top: 0; right: 0; display: flex; align-items: center; gap: 1px; height: 21px; padding: 0 3px; background: inherit; color: var(--varia-resultsGrid-headerDescriptionForeground); visibility: hidden; cursor: pointer; }
 .rg-ch:hover .rg-cs, .rg-cs.on { visibility: visible; }
@@ -1336,6 +1367,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
    before it. A changed row's unchanged values, and those of a changed row's halves, take the secondary colour. */
 .rg-row.tone-changed .rg-c.is-chg { --rg-tint: var(--varia-resultsGrid-diffChangedBackground); background-color: var(--rg-tint); }
 .rg-row.tone-changed .rg-c.is-chg:has(.rg-old) { display: flex; align-items: baseline; gap: 4px; }
+.rg-row.tone-changed .rg-c.is-chg.is-num:has(.rg-old) { justify-content: flex-end; }
 .rg-row:is(.tone-changed, .tone-changedOld, .tone-changedNew) .rg-c:not(.is-chg, .is-sel, .is-null, .is-link, .is-err) { color: var(--varia-resultsGrid-diffContextForeground); }
 .rg-old { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--varia-resultsGrid-diffOldForeground); text-decoration-line: line-through; }
 .rg-old.is-null { font-style: italic; }
@@ -1459,6 +1491,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
   .rg-rn.cur { outline: 2px solid Highlight; outline-offset: -2px; }
 }
 .rg-c { position: absolute; top: 0; height: 20px; box-sizing: border-box; padding: 0 6px; white-space: pre; overflow: hidden; text-overflow: clip; unicode-bidi: isolate; contain: strict; border-right: 1px solid var(--varia-resultsGrid-gridlines); border-bottom: 1px solid var(--varia-resultsGrid-gridlines); }
+.rg-c.is-num { text-align: right; font-variant-numeric: tabular-nums; }
 .rg-c.is-null { color: var(--varia-resultsGrid-nullForeground); background-color: var(--varia-resultsGrid-nullBackground); font-style: italic; }
 /* The ellipsis hides the text under it, so it is opaque: the grid's colour under the cell's own layers. */
 .rg-c.is-trunc::after { content: '…'; position: absolute; top: 0; right: 0; padding: 0 3px; color: var(--varia-resultsGrid-truncationForeground); background-color: var(--varia-resultsGrid-background);
@@ -1721,7 +1754,6 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 }
 @media (forced-colors: active) {
   /* The selected view's fill is dropped; an outline inside marks it, and focus a ring outside it in another colour. */
-  .output-views { border-color: CanvasText; }
   .output-views button.active { outline: 2px solid Highlight; outline-offset: -2px; }
   .output-views button.active:focus-visible { outline: 2px solid CanvasText; outline-offset: 2px; }
 }

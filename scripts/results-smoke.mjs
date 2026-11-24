@@ -2499,34 +2499,41 @@ try {
   await page.evaluate(() => window.varia.setThemePreference({ mode: 'dark' }))
   console.log('Results checks: NULL, truncated, failed and selected cells take their theme tokens, and a theme change keeps the grid\'s nodes.')
 
-  // 14b. White space: the results toolbar marks spaces and tabs, then line breaks and invisible characters too. The marks
-  // are drawn only: the active cell's name and Copy keep the value, and the grid's menu checks the choice that is on.
-  // A window as narrow as CI's 1024 px displays may fold White space into ⋯ (with Linux's fonts the search field's whole
-  // placeholder leaves it no room); its buttons still say the choice, and the grid's menu then makes it.
-  const whitespace = resultsToolbar(page).getByRole('group', { name: 'White space', exact: true, includeHidden: true })
-  const choice = name => whitespace.getByRole('button', { name, exact: true, includeHidden: true })
-  const whitespaceFolded = !(await whitespace.isVisible())
+  // 14b. White space: the results toolbar's progressive-disclosure popover marks spaces and tabs, then line breaks and
+  // invisible characters too. The marks are drawn only: the active cell's name and Copy keep the value, and the grid's
+  // menu checks the choice that is on. A window as narrow as CI's 1024 px displays may fold White space into ⋯; its
+  // trigger still reports the choice, and the grid's menu then makes it.
+  const whitespaceButton = resultsToolbar(page).getByRole('button', { name: /^White space:/, includeHidden: true })
+  const whitespaceMenu = page.getByRole('menu', { name: 'White space', exact: true })
+  const choice = name => whitespaceMenu.getByRole('menuitemradio', { name: new RegExp(`^${name}\\b`) })
+  const whitespaceFolded = !(await whitespaceButton.isVisible())
   const fromGridMenu = async name => {
     await cell(1, 0).click({ button: 'right' })
     await page.getByRole('menu', { name: 'Query output', exact: true }).getByRole('menuitemcheckbox', { name }).click()
   }
   const cellText = (row, column) => cell(row, column).evaluate(element => element.textContent)
-  await expect(choice('Off')).toHaveAttribute('aria-pressed', 'true')
+  await expect(whitespaceButton).toHaveAttribute('aria-label', 'White space: Off')
   expect(await cellText(3, 2)).toBe('😀 astral')
   if (whitespaceFolded) await fromGridMenu(/^Show Spaces and Tabs/)
-  else await choice('Spaces').click()
-  await expect(choice('Spaces')).toHaveAttribute('aria-pressed', 'true')
+  else {
+    await whitespaceButton.click()
+    await expect(whitespaceMenu).toBeVisible()
+    await choice('Spaces').click()
+  }
+  await expect(whitespaceButton).toHaveAttribute('aria-label', 'White space: Spaces')
   await expect.poll(() => cellText(3, 2)).toBe('😀·astral')
   // A line break Spaces does not mark stays one line, as it shows when off.
   expect(await cellText(5, 2)).toBe('tab→line quote"\\')
-  // Asked again: a pressed button is bold, so a group that only just fitted may have folded once Spaces was pressed.
-  if (whitespaceFolded || !(await whitespace.isVisible())) await fromGridMenu(/^Show All White Space/)
+  // Asked again: the expanded non-default chip widens the toolbar, so a pane that only just fitted may have folded it.
+  if (whitespaceFolded || !(await whitespaceButton.isVisible())) await fromGridMenu(/^Show All White Space/)
   else {
-    await choice('Spaces').press('ArrowRight')
+    await whitespaceButton.press('ArrowDown')
+    await expect(whitespaceMenu).toBeVisible()
+    await page.keyboard.press('End')
     await expect(choice('All')).toBeFocused()
     await page.keyboard.press('Enter')
   }
-  await expect(choice('All')).toHaveAttribute('aria-pressed', 'true')
+  await expect(whitespaceButton).toHaveAttribute('aria-label', 'White space: All')
   await expect.poll(() => cellText(5, 2)).toBe('tab→lineLFquote"\\')
   await expect(cell(5, 2).locator(gridPart.whitespaceBadge)).toHaveText('LF')
   expect(await cellText(4, 2)).toBe('BOMbom')
@@ -2540,7 +2547,7 @@ try {
   const shownAll = page.getByRole('menu', { name: 'Query output', exact: true }).getByRole('menuitemcheckbox', { name: /^Show All White Space/ })
   await expect(shownAll).toHaveAttribute('aria-checked', 'true')
   await shownAll.click()
-  await expect(choice('Off')).toHaveAttribute('aria-pressed', 'true')
+  await expect(whitespaceButton).toHaveAttribute('aria-label', 'White space: Off')
   await expect(grid().locator(gridPart.whitespaceMark)).toHaveCount(0)
   expect(await cellText(5, 2)).toBe('tab line quote"\\')
   console.log('Results checks: White space marks spaces, tabs, line breaks and a BOM, from the toolbar and the grid\'s menu, while Copy and the cell\'s name keep the value.')
@@ -2614,8 +2621,8 @@ try {
   await expect(operationAnnouncer(page)).toHaveText(/^Sorting Result 1. Sorting and filtering wait until it finishes; Cancel stops it.​?$/)
   await expect(header('clipped').locator(gridPart.busySortButton)).toHaveCount(1)
   await expect(header('maybe')).not.toHaveAttribute('aria-sort', /./)
-  // A pane too narrow for the strip and every tool folds Sort text by into ⋯; held, its buttons say so either way.
-  await expect(resultsToolbar(page).getByRole('group', { name: 'Sort text by', includeHidden: true }).getByRole('button', { name: 'Chars', includeHidden: true })).toHaveAttribute('aria-disabled', 'true')
+  // A pane too narrow for the strip and every tool folds Sort text by into ⋯; held, its trigger says so either way.
+  await expect(resultsToolbar(page).getByRole('button', { name: /^Sort text by:/, includeHidden: true })).toHaveAttribute('aria-disabled', 'true')
   await operationCancel(page, 'Cancel sort, Result 1').click()
   await resize(...fullSize)
   await expect(sorting).toHaveCount(0)
@@ -2702,10 +2709,8 @@ try {
       groups: [...tools.children].filter(child => child.getBoundingClientRect().width > 0).map(child => ({ name: child.getAttribute('aria-label'), width: child.getBoundingClientRect().width })) }
   })
   expect(toolsLayout.fits, JSON.stringify(toolsLayout)).toBe(true)
-  // Transposed and Compare give way in a narrow window (both are in the grid's menu and the palette), so the other groups
-  // fit; so does Tabs (in the palette and the Window menu).
-  await expect(resultsToolbar(page).getByRole('button', { name: 'Transposed', exact: true })).toBeHidden()
-  await expect(resultsToolbar(page).getByRole('button', { name: 'Compare', exact: true })).toBeHidden()
+  // Tabs gives way in a narrow window (it stays in the palette and the Window menu), so the rest of the toolbar fits
+  // (including Close Results); narrower panes fold Compare and Transposed too (grouped-results-smoke.mjs).
   await expect(resultsToolbar(page).getByRole('button', { name: 'Tabs', exact: true })).toBeHidden()
   await expect(resultsToolbar(page).getByRole('button', { name: 'Close Results', exact: true })).toBeInViewport({ ratio: 1 })
   await cell(0, 0).click()

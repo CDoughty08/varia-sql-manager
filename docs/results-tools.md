@@ -375,8 +375,15 @@ Stacked. It is the first toolbar tool to fold ([Narrow and short panes](#narrow-
 
 ![The same in the Light theme](images/results-tabs-light.png)
 
-- A tab row of results then comparisons, then the selected result's view tabs (**Table**, or **Plan set**, and **Pivot**
-  once built) with rows, columns, batch, filters and Save Results As beside them.
+- A tab row of results then comparisons. When the selected result is a solo **Table** (or **Plan set**) with no Pivot
+  and no active filters, its row/column facts and **Save Results As** sit inline at the right end of that row so the
+  grid reclaims the second bar's height. Once a Pivot exists, a comparison is selected, or filter chips are active, a
+  view bar appears beneath with the view tabs (**Table** / **Pivot**, or the **Comparison** label), facts, filter
+  chips, Pivot status and **Save Results As**.
+- Numeric columns (`int`, `bigint`, `smallint`, `tinyint`, `decimal`, `numeric`, `money`, `smallmoney`, `float`, `real`,
+  and BigQuery `INT64`, `NUMERIC`, `BIGNUMERIC`, `FLOAT64`) right-align their cells and column headers with tabular
+  figures; column names are semibold ahead of their muted monospace SQL types. Transposed grids keep cells left-aligned
+  because rows mix column types.
 - A comparison's tab reads old → new ("Result 1 → Result 3") beside the comparison icon, each side shortened in the
   middle past 16 characters ("Open ord…sult 1) → Open ord…sult 3)"); its tooltip and accessible name are its full name.
 - Only the shown grid is mounted; each returns with its scroll, widths, selection, orientation, sort and filters. The
@@ -461,12 +468,18 @@ Suggested file names (a copy's strip names the view the same way, "Copying Pivot
 
 ## Narrow and short panes
 
+The results toolbar uses borderless icon groups separated by hairline dividers, and collapses **White space** and **Sort
+text by** to compact 1-button popover menus when at their defaults (`Off` / `Value`), expanding into tinted state chips
+only when a non-default mode (`Spaces`, `All`, `Chars`, `Bytes`) is active so the run summary stays visible at desktop
+widths.
+
 The toolbar fits its own pane, so a docked or popped-out Results panel folds like a narrow window. Tools give way in
-order: **Tabs**; group icons and the search box's magnifier, Previous and Next (Enter, Shift+Enter, F3, Shift+F3 still
-step); **Transposed**, **Headers**, **Compare**; **Sort text by**; **White space**; the Profile, Row size and Pivot group.
-The search field keeps its placeholder ("Search all results" or "Search column names") and narrows last. Below 400 px,
-the tools move to a second row so the search field, **Data**, **Columns**, **⋯**, and **Close Results** stay available
-beside the pane's other controls. A short pane's Pivot builder drops its explanations so **Build Pivot** stays whole.
+order: **Tabs**; the search box's magnifier, Previous and Next (Enter, Shift+Enter, F3, Shift+F3 still step) and tighter
+padding; **Transposed**, **Headers**, **Compare**; **Sort text by**; **White space**; the Profile, Row size and Pivot
+group. The search field keeps its placeholder ("Search all results" or "Search column names") and narrows last. Below
+400 px, the tools move to a second row so the search field, **Data**, **Columns**, **⋯**, and **Close Results** stay
+available beside the pane's other controls. A short pane's Pivot builder drops its explanations so **Build Pivot** stays
+whole.
 
 **⋯** (More results tools) holds every tool: Results as Tabs, Go to
 Result…, Pivot…, Compare…, Transposed, Choose Headers… (while transposed), Column Profile, Row Size, Show Spaces and Tabs,
