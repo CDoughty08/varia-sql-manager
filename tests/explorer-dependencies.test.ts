@@ -32,7 +32,7 @@ function fakeLoader(levels: Record<string, readonly PeekDependency[] | Dependenc
   }
   return { loader, calls, cancelled, release: () => { for (const go of waiting.splice(0)) go() }, newId: () => `req-${++ids}` }
 }
-const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+const settle = () => new Promise(resolve => setImmediate(resolve))
 
 function plant(levels: Parameters<typeof fakeLoader>[0], direction: 'uses' | 'usedBy' = 'usedBy', hold = false) {
   const fake = fakeLoader(levels, hold)

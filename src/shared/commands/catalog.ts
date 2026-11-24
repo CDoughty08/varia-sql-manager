@@ -360,21 +360,26 @@ export const commandCatalog = {
     unavailableHint: 'The backend is still starting.',
     menus: [
       { menu: 'file', group: '0_connect', order: 1, mnemonic: 'e' }, { menu: 'query.connection', group: '1_connect', order: 1, title: 'Connect…', mnemonic: 'c' },
-      { menu: 'explorer.context', group: '0_connect', order: 1, title: 'Connect…', mnemonic: 'c', when: "explorerNode == 'server' || explorerNode == 'background'" }
+      { menu: 'explorer.context', group: '0_connect', order: 1, title: 'Connect…', mnemonic: 'c', when: "explorerNode == 'server' || explorerNode == 'background'" },
+      { menu: 'explorer.tools', group: '0_connect', order: 1, title: 'Connect…', mnemonic: 'o' }
     ]
   },
   'connection.disconnect': {
     title: 'Disconnect from Server…', category: 'Connection', icon: 'debug-disconnect', precondition: 'hasConnection && !documentBusy', unavailableHint: noServer, providers: both,
-    // A server node's menu (and Object Explorer's toolbar, for the selected node's server) disconnects that server without asking which.
+    // A server node's menu (and Object Explorer's ⋯ menu, for the selected node's server) disconnects that server without asking which.
     menus: [
       { menu: 'file', group: '0_connect', order: 2, mnemonic: 'd' },
-      { menu: 'explorer.context', group: '0_connect', order: 2, title: 'Disconnect', mnemonic: 'd', when: "explorerNode == 'server' && !explorerServerLost" }
+      { menu: 'explorer.context', group: '0_connect', order: 2, title: 'Disconnect', mnemonic: 'd', when: "explorerNode == 'server' && !explorerServerLost" },
+      { menu: 'explorer.tools', group: '0_connect', order: 2, title: 'Disconnect', mnemonic: 'd', when: '!explorerToolsLost' }
     ]
   },
   'connection.disconnectAndRemove': {
     title: 'Disconnect and Remove from Explorer', category: 'Connection', icon: 'close', keywords: ['disconnect', 'remove', 'explorer'],
     precondition: 'hasConnection && !documentBusy', unavailableHint: noServer, providers: both,
-    menus: [{ menu: 'explorer.context', group: '0_connect', order: 3, mnemonic: 'o', when: "explorerNode == 'server' && !explorerServerLost" }]
+    menus: [
+      { menu: 'explorer.context', group: '0_connect', order: 3, mnemonic: 'o', when: "explorerNode == 'server' && !explorerServerLost" },
+      { menu: 'explorer.tools', group: '0_connect', order: 3, mnemonic: 'v', when: '!explorerToolsLost' }
+    ]
   },
   // Not in SSMS: labels a connected server Production, Staging, Test, Development or a custom label, saved with its entry.
   // A server node's menu labels that server; elsewhere, the active query's server or one the user picks.
@@ -392,12 +397,17 @@ export const commandCatalog = {
     unavailableHint: 'No server is disconnected.', providers: both,
     menus: [
       { menu: 'file', group: '0_connect', order: 3, mnemonic: 'r' }, { menu: 'query.connection', group: '1_connect', order: 4, mnemonic: 'r' },
-      { menu: 'explorer.context', group: '0_connect', order: 3, mnemonic: 'r', when: 'explorerServerLost' }
+      { menu: 'explorer.context', group: '0_connect', order: 3, mnemonic: 'r', when: 'explorerServerLost' },
+      { menu: 'explorer.tools', group: '0_connect', order: 2, mnemonic: 'n', when: 'explorerToolsLost' }
     ]
   },
   'connection.removeFromExplorer': {
     title: 'Remove from Explorer', category: 'Connection', icon: 'close', keywords: ['disconnected', 'remove', 'explorer'], precondition: 'hasLostConnection && !documentBusy',
-    unavailableHint: 'No server is disconnected.', menus: [{ menu: 'explorer.context', group: '0_connect', order: 4, mnemonic: 'o', when: 'explorerServerLost' }]
+    unavailableHint: 'No server is disconnected.',
+    menus: [
+      { menu: 'explorer.context', group: '0_connect', order: 4, mnemonic: 'o', when: 'explorerServerLost' },
+      { menu: 'explorer.tools', group: '0_connect', order: 3, mnemonic: 'v', when: 'explorerToolsLost' }
+    ]
   },
   // Keep user shortcuts from earlier versions working while the visible action names Explorer membership precisely.
   'connection.removeLost': {
@@ -411,12 +421,18 @@ export const commandCatalog = {
   'explorer.refresh': {
     title: 'Refresh', category: 'Object Explorer', icon: 'refresh', precondition: 'hasConnection', unavailableHint: noServer, methods: ['explorer.children'], providers: both,
     keybindings: [{ key: 'f5', when: "activePanel == 'explorer' && !inputFocus" }],
-    menus: [{ menu: 'explorer.context', group: '8_refresh', order: 1, mnemonic: 'f', when: '!explorerServerLost' }]
+    menus: [
+      { menu: 'explorer.context', group: '8_refresh', order: 1, mnemonic: 'f', when: '!explorerServerLost' },
+      { menu: 'explorer.tools', group: '1_tools', order: 3, mnemonic: 'h' }
+    ]
   },
   // SSMS's Filter Settings for folders that list objects (Tables, Views, Databases, Logins…); the capped row's Enter opens it too.
   'explorer.filter': {
     title: 'Filter Settings…', category: 'Object Explorer', icon: 'filter', keywords: ['filter', 'narrow', 'search'], precondition: 'hasConnection', unavailableHint: 'Select a folder that can be filtered.',
-    menus: [{ menu: 'explorer.context', group: '3_filter', order: 1, mnemonic: 'i', when: 'explorerFolderFilterable' }]
+    menus: [
+      { menu: 'explorer.context', group: '3_filter', order: 1, mnemonic: 'i', when: 'explorerFolderFilterable' },
+      { menu: 'explorer.tools', group: '1_tools', order: 2, mnemonic: 'i' }
+    ]
   },
   // Focuses Object Explorer's search box, which searches the selected server's object index as Search Objects does, and
   // selects its text, so typing replaces it and End keeps it. Ctrl+Shift+F is SSMS's Find in Files, which Varia lacks;
@@ -456,7 +472,10 @@ export const commandCatalog = {
     unavailableHint: 'Select Security of a SQL Server or Managed Instance in Object Explorer.',
     menus: [{ menu: 'explorer.new', group: '1_security', order: 1, mnemonic: 'l', when: "explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' || explorerServerEngine == 'managedInstance')" }]
   },
-  'explorer.stop': { title: 'Stop', category: 'Object Explorer', icon: 'debug-stop', keywords: ['cancel'], precondition: 'explorerLoading', unavailableHint: 'Nothing is loading.' },
+  'explorer.stop': {
+    title: 'Stop', category: 'Object Explorer', icon: 'debug-stop', keywords: ['cancel'], precondition: 'explorerLoading', unavailableHint: 'Nothing is loading.',
+    menus: [{ menu: 'explorer.tools', group: '1_tools', order: 1, mnemonic: 'p' }]
+  },
   // Server order, kept across restarts in the connection workspace; dragging a server row does the same (gestures.ts).
   // Enablement is the command's own `when` on its menu's server (a pinned shortcut's too), not the selection's context.
   'explorer.moveServerUp': {
@@ -469,10 +488,14 @@ export const commandCatalog = {
     keybindings: [{ key: 'alt+down', when: 'explorerFocus && !textInputFocus' }],
     menus: [{ menu: 'explorer.context', group: '7_order', order: 2, mnemonic: 'w', when: "explorerNode == 'server'" }]
   },
-  'explorer.collapseAll': { title: 'Collapse All', category: 'Object Explorer', icon: 'collapse-all', precondition: 'hasConnection', unavailableHint: noServer, providers: both },
-  // SSMS 2022's Group by Schema: the toolbar button and the palette flip the objectExplorer.groupBySchema setting.
+  'explorer.collapseAll': {
+    title: 'Collapse All', category: 'Object Explorer', icon: 'collapse-all', precondition: 'hasConnection', unavailableHint: noServer, providers: both,
+    menus: [{ menu: 'explorer.tools', group: '1_tools', order: 5, mnemonic: 'a' }]
+  },
+  // SSMS 2022's Group by Schema: the inline toolbar button, ⋯ menu, and palette flip the objectExplorer.groupBySchema setting.
   'explorer.groupBySchema': {
-    title: 'Group by Schema', category: 'Object Explorer', icon: 'symbol-namespace', keywords: ['schema', 'group', 'folders', 'tree'], toggled: 'explorerGroupBySchema'
+    title: 'Group by Schema', category: 'Object Explorer', icon: 'symbol-namespace', keywords: ['schema', 'group', 'folders', 'tree'], toggled: 'explorerGroupBySchema',
+    menus: [{ menu: 'explorer.tools', group: '1_tools', order: 4, mnemonic: 'g' }]
   },
   'explorer.newQuery': {
     title: 'New Query', category: 'Object Explorer', icon: 'new-file', precondition: '!documentBusy', unavailableHint: 'Select a server or database in Object Explorer.', providers: both,
@@ -1456,27 +1479,27 @@ export const commandCatalog = {
   'output.openValue': { title: 'Open Value in New Tab', category: 'Query', icon: 'go-to-file', palette: false, providers: both },
   // A panel's menu, from its tab or its ⋯ button: the panel comes from the menu's target, so these have no keys and are
   // not in the palette. The Dock and Tab with items replace the panel header's old "Move…" list.
-  'pane.dockLeft': { title: 'Dock Left', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_move', order: 1, mnemonic: 'l' }], providers: both },
-  'pane.dockRight': { title: 'Dock Right', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_move', order: 2, mnemonic: 'r' }], providers: both },
-  'pane.dockTop': { title: 'Dock Top', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_move', order: 3, mnemonic: 't' }], providers: both },
-  'pane.dockBottom': { title: 'Dock Bottom', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_move', order: 4, mnemonic: 'b' }], providers: both },
+  'pane.dockLeft': { title: 'Dock Left', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_move', order: 1, mnemonic: 'l' }, { menu: 'explorer.tools', group: '2_move', order: 1, mnemonic: 'l' }], providers: both },
+  'pane.dockRight': { title: 'Dock Right', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_move', order: 2, mnemonic: 'r' }, { menu: 'explorer.tools', group: '2_move', order: 2, mnemonic: 'r' }], providers: both },
+  'pane.dockTop': { title: 'Dock Top', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_move', order: 3, mnemonic: 't' }, { menu: 'explorer.tools', group: '2_move', order: 3, mnemonic: 't' }], providers: both },
+  'pane.dockBottom': { title: 'Dock Bottom', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_move', order: 4, mnemonic: 'b' }, { menu: 'explorer.tools', group: '2_move', order: 4, mnemonic: 'b' }], providers: both },
   'pane.tabWithExplorer': { title: 'Tab with Object Explorer', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_tab', order: 1, mnemonic: 'o', when: "pane != 'explorer'" }], providers: both },
-  'pane.tabWithEditor': { title: 'Tab with Query Editor', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_tab', order: 2, mnemonic: 'e', when: "pane != 'editor'" }], providers: both },
-  'pane.tabWithResults': { title: 'Tab with Results', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_tab', order: 3, mnemonic: 'u', when: "pane != 'results'" }], providers: both },
-  'pane.tabWithMessages': { title: 'Tab with Messages', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_tab', order: 4, mnemonic: 'm', when: "pane != 'messages'" }], providers: both },
-  'pane.tabWithPlan': { title: 'Tab with Execution Plan', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_tab', order: 5, mnemonic: 'x', when: "pane != 'plan'" }] },
-  'pane.float': { title: 'Float', category: 'View', icon: 'multiple-windows', palette: false, menus: [{ menu: 'dockTab.context', group: '1_dock', order: 1, mnemonic: 'f', when: '!paneFloating' }], providers: both },
-  'pane.dock': { title: 'Dock', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '1_dock', order: 2, mnemonic: 'd', when: 'paneFloating' }], providers: both },
+  'pane.tabWithEditor': { title: 'Tab with Query Editor', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_tab', order: 2, mnemonic: 'e', when: "pane != 'editor'" }, { menu: 'explorer.tools', group: '3_tab', order: 1, mnemonic: 'e' }], providers: both },
+  'pane.tabWithResults': { title: 'Tab with Results', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_tab', order: 3, mnemonic: 'u', when: "pane != 'results'" }, { menu: 'explorer.tools', group: '3_tab', order: 2, mnemonic: 'u' }], providers: both },
+  'pane.tabWithMessages': { title: 'Tab with Messages', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_tab', order: 4, mnemonic: 'm', when: "pane != 'messages'" }, { menu: 'explorer.tools', group: '3_tab', order: 3, mnemonic: 'm' }], providers: both },
+  'pane.tabWithPlan': { title: 'Tab with Execution Plan', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_tab', order: 5, mnemonic: 'x', when: "pane != 'plan'" }, { menu: 'explorer.tools', group: '3_tab', order: 4, mnemonic: 'x' }] },
+  'pane.float': { title: 'Float', category: 'View', icon: 'multiple-windows', palette: false, menus: [{ menu: 'dockTab.context', group: '1_dock', order: 1, mnemonic: 'f', when: '!paneFloating' }, { menu: 'explorer.tools', group: '4_dock', order: 1, mnemonic: 'f', when: '!explorerToolsFloating' }], providers: both },
+  'pane.dock': { title: 'Dock', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '1_dock', order: 2, mnemonic: 'd', when: 'paneFloating' }, { menu: 'explorer.tools', group: '4_dock', order: 2, mnemonic: 'k', when: 'explorerToolsFloating' }], providers: both },
   // A panel in an OS window of its own, as VS Code's Move Editor into New Window (docs/popout-windows.md). The query
   // editor stays in the main window. Dragging a panel's tab out of the window does the same; dragging the popout's tab
   // onto the main window, or closing the popout, docks it back.
-  'pane.moveToNewWindow': { title: 'Move into New Window', category: 'View', icon: 'window', palette: false, menus: [{ menu: 'dockTab.context', group: '1_dock', order: 3, mnemonic: 'w', when: "pane != 'editor' && !panePopout" }], providers: both },
-  'pane.moveToMainWindow': { title: 'Move Back into Main Window', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '1_dock', order: 4, mnemonic: 'a', when: 'panePopout' }], providers: both },
-  'pane.close': { title: 'Close', category: 'View', icon: 'close', palette: false, menus: [{ menu: 'dockTab.context', group: '2_close', order: 1, mnemonic: 'c' }], providers: both },
+  'pane.moveToNewWindow': { title: 'Move into New Window', category: 'View', icon: 'window', palette: false, menus: [{ menu: 'dockTab.context', group: '1_dock', order: 3, mnemonic: 'w', when: "pane != 'editor' && !panePopout" }, { menu: 'explorer.tools', group: '4_dock', order: 3, mnemonic: 'w', when: '!explorerToolsPopout' }], providers: both },
+  'pane.moveToMainWindow': { title: 'Move Back into Main Window', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '1_dock', order: 4, mnemonic: 'a', when: 'panePopout' }, { menu: 'explorer.tools', group: '4_dock', order: 4, mnemonic: 'w', when: 'explorerToolsPopout' }], providers: both },
+  'pane.close': { title: 'Close', category: 'View', icon: 'close', palette: false, menus: [{ menu: 'dockTab.context', group: '2_close', order: 1, mnemonic: 'c' }, { menu: 'explorer.tools', group: '5_close', order: 1, mnemonic: 'c' }], providers: both },
   // A panel alone in its dock group hides its tab, as VS Code's single views do; this shows those tabs again for dragging.
   'window.togglePanelTabs': {
     title: 'Toggle Panel Tabs', category: 'View', icon: 'layout', keywords: ['panel', 'tab', 'header', 'dock', 'drag'], toggled: 'panelTabsVisible', providers: both,
-    menus: [{ menu: 'window', group: '1_panes', order: 7, title: 'Panel Tabs', mnemonic: 't' }, { menu: 'dockTab.context', group: '3_tabs', order: 1, title: 'Show Panel Tabs', mnemonic: 's' }]
+    menus: [{ menu: 'window', group: '1_panes', order: 7, title: 'Panel Tabs', mnemonic: 't' }, { menu: 'dockTab.context', group: '3_tabs', order: 1, title: 'Show Panel Tabs', mnemonic: 's' }, { menu: 'explorer.tools', group: '6_tabs', order: 1, title: 'Show Panel Tabs', mnemonic: 's' }]
   },
   // The header's search box: open queries, commands, and the servers' objects (Search Objects' search). SSMS 22's search box
   // (the Visual Studio shell's) is Ctrl+Q; Linux and macOS keep that key for quitting.

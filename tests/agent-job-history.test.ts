@@ -14,7 +14,7 @@ import type { LiveTable } from '../src/renderer/src/live/LiveService'
 import { connectionInfo, readyBackend, workbenchFixture } from './fixtures/workbench'
 import { fakeLive, type FakeLiveHandle } from './fixtures/live-handle'
 
-const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
+const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setImmediate(resolve)) }
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 

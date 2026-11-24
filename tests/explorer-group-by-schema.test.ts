@@ -9,7 +9,7 @@ import { ExplorerService } from '../src/renderer/src/explorer/ExplorerService'
 import { revealPaths } from '../src/renderer/src/search/ObjectSearchService'
 import { connectionInfo, connectionOptions } from './fixtures/workbench'
 
-const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+const settle = () => new Promise(resolve => setImmediate(resolve))
 const connectionId = '10000000-0000-4000-8000-000000000061'
 const uuid = (n: number) => `00000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`
 const folder = (owner: ObjectRef, id: FolderId): ExplorerNode => ({ ref: { type: 'folder', owner: { ...owner }, folder: id }, label: folderSpecs[id].label, icon: 'folder', hasChildren: true })

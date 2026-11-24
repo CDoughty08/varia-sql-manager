@@ -6,17 +6,28 @@ import { expect } from './smoke.mjs'
 async function resize(application, page, setter, width, height) {
   const size = () => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getContentSize())
   const before = await size()
+  if (setter === 'setContentSize' && before[0] === width && before[1] === height) return
   await page.evaluate(() => {
     window.variaResizeObserved = undefined
     window.variaResizeObserver = () => { window.variaResizeObserved = [innerWidth, innerHeight] }
     addEventListener('resize', window.variaResizeObserver)
   })
+  const apply = () => application.evaluate(({ BrowserWindow }, [method, dimensions]) => { BrowserWindow.getAllWindows()[0][method](...dimensions) }, [setter, [width, height]])
   try {
-    await application.evaluate(({ BrowserWindow }, [method, dimensions]) => { BrowserWindow.getAllWindows()[0][method](...dimensions) }, [setter, [width, height]])
+    await apply()
+    let unchanged = 0
     await expect.poll(async () => {
       const [current, observed] = await Promise.all([size(), page.evaluate(() => window.variaResizeObserved)])
-      return current[0] === before[0] && current[1] === before[1] || observed?.[0] === current[0] && observed[1] === current[1]
-    }).toBe(true)
+      if (observed?.[0] === current[0] && observed[1] === current[1]) return true
+      // X11/xvfb applies setSize/setContentSize asynchronously; a stale reading equal to `before` means the window has not
+      // moved yet (unless the platform clamped it to the same size, in which case a few re-applies confirm it).
+      if (current[0] === before[0] && current[1] === before[1]) {
+        if (++unchanged >= 6) return true
+        await apply()
+        return false
+      }
+      return false
+    }, { timeout: 15000 }).toBe(true)
   } finally {
     await page.evaluate(() => { removeEventListener('resize', window.variaResizeObserver); delete window.variaResizeObserver; delete window.variaResizeObserved }).catch(() => {})
   }

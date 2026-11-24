@@ -1,6 +1,6 @@
 :root { --varia-font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, Ubuntu, Cantarell, 'Noto Sans', sans-serif; --varia-font-mono: 'Cascadia Mono', Consolas, 'SF Mono', Menlo, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono', monospace; font-family: var(--varia-font-ui); color: var(--varia-foreground); background: var(--varia-editor-background); font-synthesis: none; }
 /* Metric tokens, as src/shared/theme/metrics.ts defines them (tests/theme-css.test.ts compares the two). */
-:root { --varia-size-xs: 11px; --varia-line-xs: 16px; --varia-size-sm: 12px; --varia-line-sm: 16px; --varia-size-md: 13px; --varia-line-md: 20px; --varia-size-lg: 15px; --varia-line-lg: 20px; --varia-size-xl: 20px; --varia-line-xl: 26px; --varia-space-0: 2px; --varia-space-1: 4px; --varia-space-2: 8px; --varia-space-3: 12px; --varia-space-4: 16px; --varia-space-5: 24px; --varia-space-6: 32px; --varia-radius-sm: 4px; --varia-radius-lg: 8px; --varia-radius-pill: 999px; --varia-shadow-menu: 0 4px 12px; --varia-shadow-popover: 0 8px 24px; --varia-shadow-dialog: 0 16px 48px; --varia-motion-fast: 80ms; --varia-motion-base: 120ms; --varia-motion-move: 180ms; --varia-motion-spin: 1500ms; --varia-motion-pulse: 2000ms; --varia-motion-delay: 300ms; --varia-motion-ease: cubic-bezier(0.2, 0, 0, 1); --varia-glyph-badge: 9px; --varia-glyph-sm: 12px; --varia-glyph-md: 16px; --varia-glyph-lg: 24px; --varia-progress: 4px; --varia-progressThin: 2px; --varia-resultTab: 240px; --varia-optionsLabel: 240px; --varia-optionsControl: 220px; --varia-header: 40px; --varia-bar: 36px; --varia-documentTab: 44px; --varia-control: 26px; --varia-row: 22px; --varia-status: 24px; }
+:root { --varia-size-xs: 11px; --varia-line-xs: 16px; --varia-size-sm: 12px; --varia-line-sm: 16px; --varia-size-md: 13px; --varia-line-md: 20px; --varia-size-lg: 15px; --varia-line-lg: 20px; --varia-size-xl: 20px; --varia-line-xl: 26px; --varia-space-0: 2px; --varia-space-1: 4px; --varia-space-2: 8px; --varia-space-3: 12px; --varia-space-4: 16px; --varia-space-5: 24px; --varia-space-6: 32px; --varia-radius-sm: 4px; --varia-radius-lg: 8px; --varia-radius-pill: 999px; --varia-shadow-menu: 0 4px 12px; --varia-shadow-popover: 0 8px 24px; --varia-shadow-dialog: 0 16px 48px; --varia-motion-fast: 80ms; --varia-motion-base: 120ms; --varia-motion-move: 180ms; --varia-motion-spin: 1500ms; --varia-motion-pulse: 2000ms; --varia-motion-delay: 300ms; --varia-motion-ease: cubic-bezier(0.2, 0, 0, 1); --varia-glyph-badge: 9px; --varia-glyph-sm: 12px; --varia-glyph-md: 16px; --varia-glyph-lg: 24px; --varia-progress: 4px; --varia-progressThin: 2px; --varia-resultTab: 240px; --varia-optionsLabel: 240px; --varia-optionsControl: 220px; --varia-header: 40px; --varia-bar: 36px; --varia-documentTab: 40px; --varia-control: 26px; --varia-row: 22px; --varia-status: 24px; }
 :root.varia-reduced-motion { --varia-motion-fast: 0ms; --varia-motion-base: 0ms; --varia-motion-move: 0ms; }
 @keyframes varia-appear { from { opacity: 0; } }
 /* VS Code variables standalone Monaco uses but never defines: the border width of the find widget's toggles, and the
@@ -216,18 +216,15 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .docking-guide-cell svg { width: 100%; height: 100%; }
 .docking-preview { position: fixed; background: var(--varia-dock-previewBackground); border: 2px solid var(--varia-dock-previewBorder); box-shadow: inset 0 0 0 1px var(--varia-dock-previewInnerBorder); }
 .explorer { width: 100%; height: 100%; min-height: 0; background: var(--varia-sideBar-background); display: flex; flex-direction: column; container: explorer / inline-size; }
-/* A panel alone in its dock group has no dock tab, so its own header names it and holds its ⋯ menu. */
-.explorer-header { height: var(--varia-bar); flex-shrink: 0; display: flex; align-items: center; gap: 2px; padding: 0 4px 0 12px; border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
+/* A panel alone in its dock group has no dock tab, so its own header names it and holds its ⋯ menu. Height matches Document Tabs so Row 1 aligns flush across the splitter. */
+.explorer-header { height: var(--varia-documentTab); flex-shrink: 0; display: flex; align-items: center; gap: 2px; padding: 0 4px 0 12px; border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
 .pane-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--varia-size-xs); font-weight: 600; color: var(--varia-sideBarTitle-foreground); }
-.explorer-header .icon-button { width: var(--varia-space-5); }
+.explorer-header .icon-button, .explorer-inline-toolbar .icon-button { width: var(--varia-space-5); }
 .explorer-toolbar { flex-shrink: 0; display: flex; align-items: center; gap: 1px; }
-/* Give the title and panel menu their own row when the title no longer fits beside the tools. */
-@container explorer (width < 328px) {
-  .explorer-header { display: grid; grid-template: 'title menu' 1fr 'tools tools' auto / minmax(0, 1fr) auto; gap: 0; min-block-size: calc(var(--varia-bar) + var(--varia-control)); padding: 0 var(--varia-space-1) var(--varia-space-1); }
-  .explorer-header .pane-title { grid-area: title; padding-inline-start: var(--varia-space-2); }
-  .explorer-header .pane-menu { grid-area: menu; }
-  .explorer-header .explorer-toolbar { grid-area: tools; }
-  .explorer-toolbar .icon-button { flex: 0 1 var(--varia-space-5); min-width: 0; padding-inline: var(--varia-space-0); }
+/* Keep the header on a single row even down to minimum dock widths (200 px), tightening button chrome without wrapping. */
+@container explorer (width < 224px) {
+  .explorer-header { padding: 0 var(--varia-space-0) 0 var(--varia-space-2); }
+  .explorer-header .icon-button { width: 22px; padding-inline: var(--varia-space-0); }
 }
 .pane-menu { flex-shrink: 0; }
 .pane-menu:focus-visible { outline-offset: -2px; }
@@ -240,49 +237,68 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
   .explorer-toolbar .icon-button[aria-pressed="true"]:focus-visible { outline-color: CanvasText; }
 }
 .explorer-body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
-/* Object Explorer's search box (SearchPanel's pane layout): the tab's search, compact, its hits in a band above the tree. */
-.object-search.object-search-pane { flex: 0 1 auto; height: auto; max-height: 50%; border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
+/* Object Explorer's search row (SearchPanel's pane layout) and disconnected fallback bar: locked to --varia-bar so Row 2 aligns flush with QueryBar across the splitter. */
+.object-search.object-search-pane { flex: 0 1 auto; height: auto; max-height: 50%; border-bottom: 0; }
+.object-search.object-search-pane[data-hits] { border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
 /* Sized by its splitter, the band keeps its share of the pane (an inline height) and the tree below takes the rest; in a
    pane too short for the header, the band and the footer, the band gives way so the footer stays. */
 .object-search.object-search-pane[data-sized] { flex: 0 1 auto; max-height: none; }
 .object-search-splitter { flex: none; height: 4px; margin-bottom: -1px; cursor: row-resize; touch-action: none; }
 .object-search-splitter:hover, .object-search-splitter:focus-visible { background: var(--varia-sash-hoverBorder); outline: none; }
-.object-search-pane .object-search-query { gap: var(--varia-space-1); padding: var(--varia-space-2) var(--varia-space-2) var(--varia-space-1); }
-.object-search-pane .object-search-field { max-width: none; }
+.object-search-pane .object-search-query { gap: 0; padding: 0; }
+.object-search-pane .object-search-bar { height: var(--varia-bar); flex-shrink: 0; display: flex; align-items: center; gap: var(--varia-space-1); padding: 0 var(--varia-space-2); border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
+.explorer-tools-bar { height: var(--varia-bar); flex-shrink: 0; display: flex; align-items: center; justify-content: flex-end; gap: var(--varia-space-1); padding: 0 var(--varia-space-2); border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
+.object-search-pane .object-search-field { flex: 1 1 0; min-width: 0; max-width: none; }
 .object-search-pane .object-search-field .icon-button { width: 20px; height: 20px; }
+.object-search-pane .object-search-pane-filters, .object-search-pane .object-search-pane-status, .object-search-pane > .object-search-query > .object-search-index { padding: var(--varia-space-1) var(--varia-space-2) 0; }
+.object-search-pane .object-search-pane-status { padding-bottom: var(--varia-space-1); }
 .object-search-pane .object-search-options { gap: var(--varia-space-2); }
 .object-search-pane .object-search-hit { padding: 0 var(--varia-space-1); }
 .object-search-pane .object-search-open { grid-template-columns: auto minmax(0, 1fr); }
 .object-search-pane .object-search-path { grid-column: 2; max-width: none; text-align: start; }
 .object-search-pane .empty-state { flex: none; padding: var(--varia-space-2) var(--varia-space-3); }
 /*
- * The footer: how fresh the selection's listing is, then the connected servers. It is one line as tall as the stale
- * badge's 20 px pill (.stale-badge[data-stale]), so a refresh that fails does not move the tree's bottom edge. The server
- * count shows whole or not at all: when it does not fit beside the freshness it wraps to a second line, which the
- * footer's height clips (each server row has its dot).
+ * The footer: how fresh the selection's listing is, then the connected servers pinned right so the server count never
+ * disappears on long listing names while the freshness scope ellipsizes. Height stays fixed to the stale badge's 20 px
+ * pill so a failed refresh never moves the tree's bottom edge.
  */
-.explorer-footer { flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; align-content: flex-start; column-gap: var(--varia-space-2); height: calc(20px + 2 * var(--varia-space-1) + 1px); min-width: 0; overflow: hidden; padding: var(--varia-space-1) var(--varia-space-3); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); white-space: nowrap; border-top: 1px solid var(--varia-sideBarSectionHeader-border); }
-.explorer-freshness { display: flex; align-items: center; gap: var(--varia-space-1); flex: 0 1 auto; height: 20px; min-width: 0; }
-.explorer-freshness-scope { min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
+.explorer-footer { flex-shrink: 0; display: flex; flex-wrap: nowrap; align-items: center; column-gap: var(--varia-space-2); height: calc(20px + 2 * var(--varia-space-1) + 1px); min-width: 0; overflow: hidden; padding: var(--varia-space-1) var(--varia-space-3); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); white-space: nowrap; border-top: 1px solid var(--varia-sideBarSectionHeader-border); }
+.explorer-freshness { display: flex; align-items: center; gap: var(--varia-space-1); flex: 1 1 0; height: 20px; min-width: 0; overflow: hidden; }
+.explorer-freshness-scope { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
+.explorer-freshness .stale-badge { flex-shrink: 0; }
+.explorer-servers { flex: 0 0 auto; margin-left: auto; line-height: 20px; }
 /* Alone on its line (no listing yet), the count may still ellipsize in a very narrow pane. */
-.explorer-servers { flex: 0 1 auto; min-width: 0; margin-left: auto; overflow: hidden; text-overflow: ellipsis; line-height: 20px; }
+.explorer-servers:only-child { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .explorer-tree-frame { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
 /* Windowed rows over a spacer as tall as every row: only the rows in view (and the selected one) are in the DOM. */
 .explorer-tree { position: relative; flex: 1; min-height: 0; overflow: auto; overflow-anchor: none; contain: strict; outline: none; padding: 0; }
 .explorer-spacer { position: relative; width: 100%; }
 .explorer-row { position: absolute; top: 0; left: 0; right: 0; container-type: inline-size; height: var(--varia-row); display: flex; align-items: center; gap: 4px; padding-right: 6px; font-size: var(--varia-size-md); line-height: var(--varia-line-md); white-space: nowrap; cursor: default; }
-/* A server leads its tree: taller (explorerLimits.serverRowHeight), its name in semibold, its version and login after it. */
-.explorer-row.server { height: 30px; }
+/* A server leads its tree as a flush 44 px 2-line band (explorerLimits.serverRowHeight) for 1:1 jump-free sticky handoff. */
+.explorer-row.server { height: 44px; flex-direction: column; align-items: stretch; justify-content: center; gap: 2px; padding: 3px var(--varia-space-2) 3px var(--varia-space-1); border-radius: 0; box-shadow: inset 0 -1px 0 var(--varia-sideBarSectionHeader-border); isolation: isolate; }
+/* Unified connection-color hairline and soft directional wash: driven strictly by --server-accent, neutral when unset. */
+.explorer-row.server[data-accent]::before { content: ''; position: absolute; inset: 0; z-index: 0; background: linear-gradient(90deg, var(--server-accent) 0%, transparent 72%); opacity: 0.1; pointer-events: none; }
+:root[data-theme-type="light"] .explorer-row.server[data-accent]::before { opacity: 0.08; }
+.explorer-row.server[data-accent]:hover::before { opacity: 0.14; }
+:root[data-theme-type="light"] .explorer-row.server[data-accent]:hover::before { opacity: 0.11; }
+.explorer-row.server[data-accent]::after { content: ''; position: absolute; inset: 0; z-index: 0; border-top: 1px solid var(--server-accent); border-bottom: 1px solid var(--server-accent); opacity: 0.36; pointer-events: none; }
+:root[data-theme-type="light"] .explorer-row.server[data-accent]::after { opacity: 0.32; }
+.oe-server-top { position: relative; z-index: 1; display: flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-line-md); min-width: 0; }
+.oe-server-sub { position: relative; z-index: 1; display: flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-line-xs); padding-left: 44px; min-width: 0; }
+.oe-server-sub .oe-sublabel { font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+.oe-server-sub-end { display: flex; flex: 0 1 auto; align-items: center; gap: var(--varia-space-1); min-width: 0; margin-left: auto; }
+.oe-server-sub-end:empty { display: none; }
 /* The active query's server (untinted by default; its glyph, .oe-active, marks it): hover and selection still show on it. */
 .explorer-row.active-connection { background: var(--varia-objectExplorer-activeConnectionBackground); transition: none; }
 .explorer-row:hover { background: var(--varia-list-hoverBackground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
 .explorer-row[aria-selected="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); transition: none; }
 .explorer-tree:focus .explorer-row[aria-selected="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); outline: 1px solid var(--varia-list-focusOutline); outline-offset: -1px; transition: none; }
 /* Pinned shortcuts overlay a fixed scroll window, stopping before its native scrollbars. */
-.explorer-pin-band { position: absolute; left: 0; z-index: 1; width: var(--explorer-tree-width); overflow: clip; background: var(--varia-editorGroupHeader-tabsBackground); }
+.explorer-pin-band { position: absolute; left: 0; z-index: 1; width: var(--explorer-tree-width); overflow: clip; background: var(--varia-sideBar-background); }
 .explorer-pin-band[data-edge="top"] { top: 0; anchor-name: --explorer-pins-top; }
 .explorer-pin-band[data-edge="bottom"] { bottom: var(--explorer-scrollbar-height); anchor-name: --explorer-pins-bottom; }
-.explorer-pinned-server.explorer-row, .explorer-pin-more { position: relative; width: 100%; padding: 0 var(--varia-space-2) 0 0; border: 0; border-radius: 0; color: inherit; text-align: start; cursor: pointer; }
+.explorer-pinned-server.explorer-row { position: relative; width: 100%; border: 0; border-radius: 0; color: inherit; text-align: start; cursor: pointer; }
+.explorer-pin-more { position: relative; width: 100%; padding: 0 var(--varia-space-2) 0 0; border: 0; border-radius: 0; color: inherit; text-align: start; cursor: pointer; }
 .explorer-pin-band > .explorer-pinned-server { position: absolute; }
 .explorer-pin-overflow { position: absolute; left: 0; right: 0; z-index: 1; overflow: clip; background: var(--varia-editorGroupHeader-tabsBackground); }
 .explorer-pin-band[data-edge="top"] > .explorer-pin-overflow { top: 0; }
@@ -290,15 +306,15 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .explorer-pin-band[data-edge="bottom"] > .explorer-pin-overflow > .explorer-pin-more { position: absolute; bottom: 0; }
 .explorer-pin-band > .explorer-pinned-server, .explorer-pin-more { box-shadow: inset 0 -1px var(--varia-sideBarSectionHeader-border); }
 .explorer-pin-band[data-edge="bottom"] > .explorer-pinned-server, .explorer-pin-band[data-edge="bottom"] .explorer-pin-more { box-shadow: inset 0 1px var(--varia-sideBarSectionHeader-border); }
-.explorer-pin-band > .explorer-pinned-server[data-current-section] { background: var(--varia-list-inactiveSelectionBackground); border-inline-start: 2px solid var(--varia-focusBorder); padding-inline-end: 6px; }
+.explorer-pin-band > .explorer-pinned-server[data-current-section] { background: var(--varia-list-inactiveSelectionBackground); box-shadow: inset 0 1px 0 var(--varia-sideBarSectionHeader-border), inset 0 -1px 0 var(--varia-sideBarSectionHeader-border); transition: none; }
 .explorer-pin-more { display: flex; align-items: center; justify-content: space-between; height: var(--varia-row); padding-inline-start: var(--varia-space-2); color: var(--varia-descriptionForeground); }
 .explorer-pinned-server.explorer-row:hover, .explorer-pin-more:hover:not(:disabled) { background: var(--varia-list-hoverBackground); color: inherit; }
 .explorer-pinned-server:focus-visible, .explorer-pin-more:focus-visible { outline-offset: -2px; }
 .explorer-pin-menu { position: fixed; inset: auto; margin: 0; width: anchor-size(width); max-height: var(--explorer-tree-height); padding: 2px 0; overflow: auto; overscroll-behavior: contain; color: var(--varia-menu-foreground); background: var(--varia-menu-background); border: 1px solid var(--varia-menu-border); border-radius: var(--varia-radius-sm); box-shadow: var(--varia-shadow-menu) var(--varia-widget-shadow); }
 .explorer-pin-band[data-edge="top"] .explorer-pin-menu { position-anchor: --explorer-pins-top; position-area: bottom; }
 .explorer-pin-band[data-edge="bottom"] .explorer-pin-menu { position-anchor: --explorer-pins-bottom; position-area: top; }
-.oe-accent { position: absolute; top: 0; bottom: 0; left: 0; width: 3px; }
-.oe-indent { flex: none; }
+/* 1 px vertical tree indent guides aligned beneath each ancestor chevron (16 px indent steps). */
+.oe-indent { flex: none; align-self: stretch; background-image: repeating-linear-gradient(to right, transparent 0, transparent 15px, var(--varia-tree-indentGuidesStroke) 15px, var(--varia-tree-indentGuidesStroke) 16px); }
 .oe-twistie { flex: none; width: 16px; height: 16px; display: grid; place-items: center; margin-left: 4px; color: var(--varia-objectExplorer-chevronForeground); }
 .oe-icon { position: relative; flex: none; width: 16px; height: 16px; display: grid; place-items: center; color: var(--varia-objectExplorer-objectIconForeground); }
 .oe-icon.folder { color: var(--varia-objectExplorer-folderIconForeground); }
@@ -323,8 +339,14 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
  */
 .oe-label { flex: 1000 1 0; width: min(35cqw, 10em); max-width: max-content; overflow: clip; text-overflow: ellipsis; unicode-bidi: isolate; }
 .explorer-row.folder .oe-label { color: var(--varia-objectExplorer-headingForeground); }
+.explorer-row.system-folder .oe-label { color: var(--varia-objectExplorer-sublabelForeground); }
+.explorer-row.system-folder .oe-icon.folder { opacity: 0.72; }
 .explorer-row.server .oe-label { font-weight: 600; }
 .explorer-row.dimmed .oe-label { color: var(--varia-disabledForeground); }
+/* Column rows prioritize column names ahead of SQL type sublabels so names stay legible before types truncate. */
+.explorer-row.column .oe-label { flex: 0 1 auto; width: auto; max-width: max-content; min-width: 0; }
+.explorer-row.column .oe-sublabel { flex: 1 1000 0; font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+.oe-pk-badge { display: inline-flex; align-items: center; flex: none; height: 15px; padding: 0 var(--varia-space-1); border-radius: var(--varia-radius-sm); background: var(--varia-statusPill-warningBackground); color: var(--varia-statusPill-warningForeground); font-size: var(--varia-size-xs); line-height: 1; font-weight: 600; }
 /* A login's static chips (M5): its name stays whole up to 65 % of the row, and the chips give way first (the end's shrink
    factor dwarfs the label's), each ending in an ellipsis; only a name longer than the room left after them shrinks. */
 .explorer-row.static-chips .oe-label { flex: 0 1 auto; width: auto; max-width: 65cqw; min-width: 0; }
@@ -793,6 +815,11 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
   .explorer-row.dimmed:not([aria-selected="true"]) .oe-label, .explorer-row.dimmed:not([aria-selected="true"]) .oe-sublabel { color: GrayText; }
   /* The theme's outline can vanish on the system's selection colour; the focused selection gets a wider one in its text colour. */
   .explorer-tree:focus .explorer-row[aria-selected="true"] { outline: 2px solid HighlightText; outline-offset: -2px; }
+  .oe-indent { background-image: none; }
+  .explorer-row.server[data-accent]::before { display: none; }
+  .explorer-row.server[data-accent]::after { border-color: CanvasText; opacity: 1; }
+  .oe-pk-badge { border: 1px solid CanvasText; background: Canvas; color: CanvasText; }
+  .explorer-row[aria-selected="true"] .oe-pk-badge { border-color: HighlightText; background: Highlight; color: HighlightText; }
 }
 .workspace { flex: 1; height: 100%; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
 /* Editor groups (docs/editor-groups.md): a Dockview inside the editor panel, each group's header its tab strip. A
@@ -819,17 +846,16 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
   .query-tab .tab-select { gap: 4px; padding-inline: 4px; }
 }
 /* Decoration yields in narrow splits; the environment and SID still have their own row. */
-@container (width < 200px) {
+@container (width < 176px) {
   .query-tab .tab-select { gap: 0; padding-inline: 0; }
   .query-tab .tab-select > .tab-icon { display: none; }
 }
 /* Tiny floating groups reserve the second line for the complete SID; the environment remains in the tab's description. */
 @container (width < 140px) {
   .query-tab .environment-tag[data-place="tab"] { display: none; }
-  .query-tab .tab-sid { padding-inline: var(--varia-space-0); }
   /* Keep both action targets intact; their outer gutter gives wider platform fonts room for the whole SID. */
   .query-tab .tab-close { margin-right: 0; }
-  .query-tab[data-dirty] .dirty-dot { right: 9px; }
+  .query-tab[data-dirty] .dirty-dot { right: 7px; }
 }
 /* A document tab's keyboard ring is a 1px inset outline, as the single strip drew it: the strip would clip the default ring,
    and forced colours drop box shadows. */
@@ -839,16 +865,20 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .editor-group-actions { display: flex; align-items: center; height: 100%; padding: 0 var(--varia-space-1); }
 .editor-groups .editor-container, .editor-host, .document-view { width: 100%; height: 100%; min-width: 0; min-height: 0; }
 .document-view { display: flex; flex-direction: column; overflow: hidden; }
+.editor-groups .document-view > .editor-container { flex: 1; height: auto; }
 .editor-empty { position: relative; height: 100%; }
 .editor-empty > .editor-group-actions { position: absolute; top: 0; right: 0; height: var(--varia-bar); }
 .query-tab { position: relative; display: flex; align-items: center; flex-shrink: 0; height: 100%; container-type: inline-size; border-right: 1px solid var(--varia-documentTabs-border); border-top: 2px solid transparent; color: var(--varia-documentTabs-inactiveForeground); }
 .query-tab.active { background: var(--varia-documentTabs-activeBackground); border-top-color: var(--varia-tab-activeBorderTop); color: var(--varia-documentTabs-activeForeground); }
+.query-tab.active .tab-name { font-weight: 600; }
 /* The selected tab of a group that is not the active one keeps its fill but not its top border. */
 .editor-groups .dv-groupview:not(.dv-active-group) .query-tab.active:not([style*="border-top-color"]) { border-top-color: transparent; }
 /* Forced colours: the active group's shown tab is marked with Highlight, another group's with GrayText. */
 @media (forced-colors: active) {
   .query-tab.active { border-top-color: Highlight; forced-color-adjust: none; }
   .editor-groups .dv-groupview:not(.dv-active-group) .query-tab.active { border-top-color: GrayText; }
+  .query-tab:not([data-pinned]) .tab-pin { opacity: 1; }
+  .query-tab[data-pinned] .tab-pin { color: Highlight; }
 }
 .tab-select { display: flex; flex: 1; min-width: 0; overflow: hidden; align-items: flex-start; gap: var(--varia-space-1); height: 100%; border: 0; border-radius: 0; padding: var(--varia-space-0) var(--varia-space-2) 0; color: inherit; }
 .tab-select:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
@@ -861,23 +891,27 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .tab-remembered-server { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab-renaming { padding-right: 6px; }
-.tab-rename { flex: 1; min-width: 0; width: 180px; height: 20px; padding: 0 4px; border-color: var(--varia-focusBorder); }
+.tab-rename { flex: 1; min-width: 0; width: 180px; height: var(--varia-line-sm); padding: 0 4px; border-color: var(--varia-focusBorder); }
 .tab-select .tab-readonly { font-size: var(--varia-glyph-sm); }
-/* A query's live SQL session, below its name beside the environment (a dash without a session). */
-.tab-sid { flex: none; padding: 1px 4px; border-radius: var(--varia-radius-sm); background: var(--varia-badge-background); color: var(--varia-badge-foreground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.tab-pin, .tab-close { display: flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 4px; color: var(--varia-documentTabs-closeForeground); }
+/* A query's live SQL session (or Disconnected), below its name beside the environment; omitted when idle without one. */
+.tab-sid { flex: none; color: var(--varia-documentTabs-inactiveForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* Fixed 20 px action slots prevent Pin and Close from shifting horizontally on hover. */
+.tab-pin, .tab-close { display: flex; flex: none; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0; color: var(--varia-documentTabs-closeForeground); }
 .tab-close { margin-right: 6px; }
 .tab-pin .codicon { font-size: var(--varia-glyph-sm); }
 .tab-close .codicon { font-size: var(--varia-glyph-sm); }
 .tab-pin:focus-visible, .tab-close:focus-visible { outline-offset: -2px; }
+.query-tab:not([data-pinned]) .tab-pin { opacity: 0.52; }
+.query-tab:not([data-pinned]):hover .tab-pin { opacity: 1; transition: opacity var(--varia-motion-fast) var(--varia-motion-ease); }
+.query-tab:not([data-pinned]) .tab-pin:focus-visible { opacity: 1; transition: none; }
 /* Pinned tabs come first in their group, filled as the pinned shelf was. */
 .query-tab[data-pinned]:not(.active) { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); }
-.query-tab[data-pinned] .tab-pin { color: var(--varia-documentTabs-activeForeground); }
+.query-tab[data-pinned] .tab-pin { opacity: 1; color: var(--varia-tab-activeBorderTop); }
 .tab-icon { color: var(--varia-documentTabs-iconForeground); }
 /* Running turns a spinner after the name; unsaved changes are a dot in the close button's place, which the pointer or
    keyboard focus on Close turns back into the X. */
 .tab-select .tab-running { font-size: var(--varia-glyph-sm); }
-.query-tab .dirty-dot { position: absolute; top: calc(50% - 3px); right: 15px; pointer-events: none; }
+.query-tab .dirty-dot { position: absolute; top: calc(50% - 3px); right: 13px; pointer-events: none; }
 .query-tab[data-dirty] .tab-close .codicon { visibility: hidden; }
 /* Transparent rather than hidden, so screen readers still hear that the query has unsaved changes. */
 .query-tab[data-dirty]:hover .dirty-dot, .query-tab[data-dirty]:has(.tab-close:focus-visible) .dirty-dot { opacity: 0; }
@@ -902,9 +936,13 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 /* A query's own bar: Execute, Cancel, Actual Plan, Live Plan, Estimated Plan and Client Statistics, then the connection pill. A narrow
    editor drops button words and key hints, then the lists give up width, then a long environment label is cut
    short, and the pill never wraps. Its own size keeps the tag's 12em as wide as elsewhere. */
-.query-bar { display: flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-bar); padding: 0 var(--varia-space-2); flex-shrink: 0; min-width: 0; overflow: hidden; container-type: inline-size; font-size: var(--varia-size-sm); background: var(--varia-editor-background); border-bottom: 1px solid var(--varia-editorGroup-border); }
-/* Activating a sibling editor group must leave its controls under the pointer. */
-.query-bar-spacer { flex: 0 0 var(--varia-bar); }
+.query-bar { position: relative; isolation: isolate; display: flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-bar); padding: 0 var(--varia-space-2); flex-shrink: 0; min-width: 0; overflow: hidden; container-type: inline-size; font-size: var(--varia-size-sm); background: var(--varia-editor-background); border-bottom: 1px solid var(--varia-editorGroup-border); }
+.query-bar > * { position: relative; z-index: 1; }
+/* Connection-color hairline + soft leading wash for any preset or custom accent; neutral when unset. */
+.query-bar[data-connection-accent]::before { content: ''; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(90deg, var(--query-bar-accent) 0%, transparent 48%); opacity: 0.08; }
+:root[data-theme-type="light"] .query-bar[data-connection-accent]::before { opacity: 0.065; }
+.query-bar[data-connection-accent]::after { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px; pointer-events: none; background: var(--query-bar-accent); opacity: 0.38; }
+:root[data-theme-type="light"] .query-bar[data-connection-accent]::after { opacity: 0.32; }
 .query-bar-actions { display: flex; align-items: center; flex-shrink: 0; gap: var(--varia-space-1); }
 .query-bar-action { flex-shrink: 0; }
 .query-bar-action.execute kbd { color: inherit; border-color: currentColor; }
@@ -920,6 +958,8 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .query-connection { --query-connection-start: calc(var(--varia-space-2) + 1px); position: relative; isolation: isolate; display: flex; align-items: center; gap: var(--varia-space-1); flex: 0 1 auto; min-width: 0; height: var(--varia-control); margin-left: auto; padding-inline-start: var(--query-connection-start); background: var(--varia-input-background); border-radius: var(--varia-radius-sm); }
 /* Draw the shared border over the unfocused controls so their boxes can reach the pill edges. */
 .query-connection::after { content: ''; position: absolute; inset: 0; pointer-events: none; border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); }
+.query-connection[data-connection-accent]::before { content: ''; position: absolute; inset: 0; z-index: 1; pointer-events: none; border: 1px solid var(--query-bar-accent); border-radius: var(--varia-radius-sm); opacity: 0.42; }
+.query-connection:hover:not(:has(select:disabled))::before { opacity: 0; }
 .query-connection:hover:not(:has(select:disabled))::after { border-color: var(--varia-descriptionForeground); }
 .query-connection:has(> select:first-child) { padding-inline-start: 0; }
 /* The connection colour as the history list draws it, a short bar at the pill's start. */
@@ -955,7 +995,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 @container (min-width: 300px) {
   .query-bar-environment:has(.environment-tag:not([data-custom])) { flex-shrink: 0; }
 }
-@media (forced-colors: active) { .query-connection .connection-swatch { forced-color-adjust: none; } .query-connection::after { border-color: CanvasText; } }
+@media (forced-colors: active) { .query-bar[data-connection-accent]::before, .query-bar[data-connection-accent]::after, .query-connection[data-connection-accent]::before { display: none; } .query-connection .connection-swatch { forced-color-adjust: none; } .query-connection::after { border-color: CanvasText; } }
 .editor-container { flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
 .editor-loading { padding: 30px; color: var(--varia-emptyState-foreground); }
 .output-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; background: var(--varia-panel-background); }
@@ -2579,12 +2619,9 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
    takes the server's name, the tab or the bar it sits in. */
 .environment-tag { display: inline-flex; flex: none; align-items: center; min-width: 0; max-width: 12em; }
 .environment-tag > .status-pill { flex: 0 1 auto; min-width: 0; }
-/* In a server row's end (.oe-end): the tag keeps its word whole while live chips give way, and gives way itself only to the
-   count and dot and to the share the server's name keeps (.oe-label) in a narrow row; a custom label stops at 40% of the row
-   (cqw: the row is the container; a percentage would resolve against .oe-end) and 12em. */
+/* In a server row's end (.oe-end on Line 1): the tag keeps its word whole while a custom label (up to 32 characters) stops
+   at 40% of the row (cqw: the row is the container; a percentage would resolve against .oe-end) and 12em. */
 .environment-tag[data-place="explorer"] { flex: 0 1 auto; max-width: min(40cqw, 12em); }
-/* Beside the active query's glyph (.oe-active and the gap before it), so the two together keep to that 40%. */
-.explorer-row.active-connection .environment-tag[data-place="explorer"] { max-width: min(40cqw - var(--varia-glyph-sm) - var(--varia-space-1), 12em); }
 .environment-tag[data-place="tab"] { max-width: 10em; }
 /* Metadata has its own row: a long environment yields only to the live session badge, never to the filename. */
 .query-tab .environment-tag[data-place="tab"] { flex: 0 1 auto; margin-left: 0; }
@@ -3269,6 +3306,8 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 /* Search Objects: the query (field, toggles, scope) above a list of hits, each a name, its path and a definition's line. */
 .object-search { display: flex; flex-direction: column; min-height: 0; height: 100%; }
 .object-search-query { flex-shrink: 0; display: flex; flex-direction: column; gap: var(--varia-space-2); padding: var(--varia-space-3) var(--varia-space-4) var(--varia-space-2); }
+.object-search-bar { display: flex; align-items: center; gap: var(--varia-space-1); min-width: 0; }
+.object-search-bar > .object-search-field { flex: 1 1 0; min-width: 0; }
 .object-search-field { display: flex; align-items: center; gap: var(--varia-space-1); max-width: 720px; height: var(--varia-control); padding: 0 var(--varia-space-1) 0 var(--varia-space-2); color: var(--varia-input-placeholderForeground); background: var(--varia-input-background); border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); }
 .object-search-field:has(input:focus-visible) { outline: 2px solid var(--varia-focusBorder); outline-offset: 2px; }
 .object-search-field input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--varia-input-foreground); font-size: var(--varia-size-sm); }
@@ -4154,4 +4193,31 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .inspector-pane-flow .peek-note, .inspector-vitals-body .peek-note { margin: 0; }
 @media (forced-colors: active) {
   .peek-dep-item .peek-follow { color: LinkText; }
+}
+/* Table Properties unified inspector (OP-3b): consumes OP-0 .inspector-*, .fact-grid, .cap-chip and .ratio-bar rules. */
+.table-inspector-badges { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); }
+.table-inspector-heading { margin: var(--varia-space-4) 0 var(--varia-space-2); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+.table-inspector-heading:first-child { margin-top: 0; }
+.table-inspector-toolbar { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-4); border-bottom: 1px solid var(--varia-panel-border); background: var(--varia-editor-background); }
+.table-inspector-toolbar-btn { font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+.table-inspector-editor-fill { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
+.table-inspector-editor-fill > .peek-editor { flex: 1; min-height: 0; }
+.table-inspector-grid-fill { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.table-inspector-grid-fill > .local-grid { flex: 1; min-height: 0; border: 0; border-radius: 0; }
+.table-inspector-preview { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.table-inspector-note { flex: none; display: flex; align-items: center; gap: var(--varia-space-2); margin: 0; padding: var(--varia-space-3) var(--varia-space-4); color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.table-inspector-note.error { color: var(--varia-errorForeground); }
+.table-inspector-deps { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: var(--varia-space-4); }
+.table-inspector-deps > section { min-width: 0; }
+.table-inspector-dep-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); overflow: hidden; }
+.table-inspector-dep-item { display: flex; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-3); border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.table-inspector-dep-item:last-child { border-bottom: 0; }
+.table-inspector-dep-item:hover { background: var(--varia-list-hoverBackground); }
+.table-inspector-dep-link { display: flex; align-items: center; gap: var(--varia-space-2); width: 100%; padding: 0; border: 0; background: transparent; color: var(--varia-resultsGrid-linkForeground); font: inherit; text-align: left; }
+.table-inspector-dep-link:hover:not(:disabled) { background: transparent; color: var(--varia-resultsGrid-linkForeground); text-decoration: underline; }
+.table-inspector-dep-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.table-inspector-dep-kind { margin-left: auto; flex: none; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+.table-inspector-vitals-caps { display: flex; flex-wrap: wrap; gap: var(--varia-space-1); margin: 0; padding: 0; list-style: none; }
+@media (forced-colors: active) {
+  .table-inspector-dep-link { color: LinkText; }
 }

@@ -33,7 +33,7 @@ function fixture(columns = 40, inflight = { value: 0 }, extra: { shape?: TileSha
   let now = 0
   const changed = vi.fn()
   const data = new GridData({ handle, columns, ...extra, clientInflight: () => inflight.value + data.reading, changed, timers: timers.timers, now: () => now })
-  const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+  const settle = () => new Promise(resolve => setImmediate(resolve))
   return { data, reads, cache, changed, timers, settle, advance: (ms: number) => { now += ms; timers.advance(ms) }, handle }
 }
 const range = (firstRow: number, lastRow: number, firstColumn = 0, lastColumn = 9) => ({ firstRow, lastRow, firstColumn, lastColumn })
@@ -453,7 +453,7 @@ describe('grid data stalls', () => {
     const timers = manualTimers()
     let now = 0
     const data = new GridData({ handle, columns: 8, clientInflight: () => data.reading, changed: () => {}, timers: timers.timers, now: () => now })
-    const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+    const settle = () => new Promise(resolve => setImmediate(resolve))
     const advance = (ms: number) => { now += ms; timers.advance(ms) }
     const frame = () => data.ensure({ firstRow: 0, lastRow: 40, firstColumn: 0, lastColumn: 7 }, 60, 0, 30)
     data.ensure({ firstRow: 0, lastRow: 40, firstColumn: 0, lastColumn: 7 }, 50, 0, 30)

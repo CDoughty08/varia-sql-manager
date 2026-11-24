@@ -17,7 +17,6 @@ export interface ColorKeyInfo {
 
 type Entry = readonly [origin: 'V' | 'X', fallback: ColorDefault, description: string, consumers: string, extra?: { reserved?: string; opaqueOver?: string }]
 const pair = (dark: string, light: string) => ({ dark, light })
-const tree = 'the Object Explorer tree'
 const searchable = 'the command palette and the Object Explorer tree'
 
 const groups = {
@@ -97,7 +96,7 @@ const groups = {
     'list.highlightForeground': ['V', '$accent', 'Characters that match a filter, such as in the command palette.', 'css monaco'],
     'list.focusHighlightForeground': ['V', '@quickInputList.focusForeground', 'Matching characters on the focused row of the editor\'s suggestions. The row\'s own text color by default, as the command palette\'s active row does: the match color is faint on that fill.', 'monaco'],
     'list.filterMatchBackground': ['V', '$accent/20', 'Rows that match a filter.', '', { reserved: searchable }],
-    'tree.indentGuidesStroke': ['V', '$borderSubtle', 'Tree indent guides.', '', { reserved: tree }],
+    'tree.indentGuidesStroke': ['V', '$borderSubtle', 'Tree indent guides in Object Explorer.', 'css'],
     'objectExplorer.activeConnectionBackground': ['X', '$sideBar', 'Row of the active query\'s server, under hover and selection; untinted by default, as its glyph marks it (a tint would read as a selection).', 'css'],
     'objectExplorer.activeConnectionForeground': ['X', '$accent', 'Glyph at the end of the active query\'s server row.', 'css'],
     'objectExplorer.headingForeground': ['X', '$text', 'Folder row labels.', 'css'],

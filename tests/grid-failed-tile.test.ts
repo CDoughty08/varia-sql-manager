@@ -34,7 +34,7 @@ function mountFailing(code: string, message: string) {
     root, scroller, handle, client: { windowsInFlight: 0 }, descriptor, state, entry: 'e1', resultNumber: 1, resultCount: 1, platform: 'win32',
     onSelection: () => {}, onFirstCell: () => {}, onCopy: () => {}, onEscape: () => false, onStatus: next => { status = next }, onError: error => { throw error }, onOpenValue: () => {}, onSort: () => {}, onFilter: () => {}
   })
-  const frame = async () => { await new Promise(done => setTimeout(done, 0)); view.invalidate(); await new Promise(done => requestAnimationFrame(() => done(undefined))); await new Promise(done => setTimeout(done, 0)) }
+  const frame = async () => { await new Promise(done => setImmediate(done)); view.invalidate(); await new Promise(done => requestAnimationFrame(() => done(undefined))); await new Promise(done => setImmediate(done)) }
   const activeLabel = () => { const id = root.getAttribute('aria-activedescendant'); return id ? root.ownerDocument.getElementById(id)?.getAttribute('aria-label') : undefined }
   const activeClass = () => { const id = root.getAttribute('aria-activedescendant'); return id ? root.ownerDocument.getElementById(id)?.className : undefined }
   return { view, root, frame, activeLabel, activeClass, status: () => status }
