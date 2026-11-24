@@ -15,6 +15,8 @@ import {
 } from '../../../shared/agent/ssis-step.ts'
 import type { AgentJobDocumentModel, AgentJobDraft } from '../../../shared/actions/agent-job.ts'
 import { useWorkbench } from '../core/WorkbenchContext'
+import { useKeybindingLabel } from '../core/useCommand'
+import { withKey } from '../query-context'
 import { createQueryEditor, type QueryEditorInstance } from '../editor/create-editor'
 import { registerSqlModel } from '../explorer/peek-editor'
 import Icon from '../Icon'
@@ -325,10 +327,12 @@ function StepEditor(props: StepsProps & { readonly step: AgentStepDraft; readonl
   const parse = state.parse?.key === step.key ? state.parse : undefined
   const databases = model.databases && step.databaseName && !model.databases.includes(step.databaseName) ? [step.databaseName, ...model.databases] : model.databases
   const count = state.draft!.steps.steps.length
+  // The keys are the catalogue's (remappable, shown with the platform's labels).
+  const upKey = useKeybindingLabel('agentJob.moveStepUp'), downKey = useKeybindingLabel('agentJob.moveStepDown')
   return <div className="agent-step-edit" role="group" aria-label={`Step ${position + 1}: ${step.name || 'unnamed'}`}>
     <div className="agent-step-tools">
-      <button type="button" disabled={!editable || position === 0} title="Move up (Alt+Up)" onClick={() => service.moveStepBy(state.id, step.key, -1)}><Icon name="arrow-up" />Move up</button>
-      <button type="button" disabled={!editable || position === count - 1} title="Move down (Alt+Down)" onClick={() => service.moveStepBy(state.id, step.key, 1)}><Icon name="arrow-down" />Move down</button>
+      <button type="button" disabled={!editable || position === 0} title={withKey('Move up', upKey)} onClick={() => service.moveStepBy(state.id, step.key, -1)}><Icon name="arrow-up" />Move up</button>
+      <button type="button" disabled={!editable || position === count - 1} title={withKey('Move down', downKey)} onClick={() => service.moveStepBy(state.id, step.key, 1)}><Icon name="arrow-down" />Move down</button>
       <button type="button" disabled={!editable || state.draft!.steps.startKey === step.key} onClick={() => service.setStartStep(state.id, step.key)}><Icon name="pin" />Make Start step</button>
       <button type="button" className="danger" disabled={!editable} onClick={() => service.deleteStepOf(state.id, step.key)}><Icon name="trash" />Delete</button>
     </div>
