@@ -504,8 +504,8 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
     try {
       const result = await this.options.api!.executeObjectAction!({ action: 'stopJob', connectionId, requestId: this.options.newId?.() ?? crypto.randomUUID(), target: { kind: 'agentJob', name }, agentIdentity: { jobId: job.jobId } })
       failure = !result.ok ? result.error : result.value.error?.message
-      // sp_stop_job may have run before the backend or the connection went: say the outcome is unknown, as Object Explorer does.
-      unknown = !result.ok && (result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST')
+      // sp_stop_job may have run before the backend or the connection went (a disconnect answers CANCELLED at once): the outcome is unknown.
+      unknown = !result.ok && (result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST' || result.code === 'CANCELLED')
     } catch (error) {
       failure = error instanceof Error ? error.message : 'The stop failed.'
     }

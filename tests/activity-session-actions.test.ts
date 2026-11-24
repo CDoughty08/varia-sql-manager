@@ -236,7 +236,7 @@ describe('ActivityMonitorService session actions', () => {
     await activity.stopJob(id, agent)
     expect(activity.get(id)?.killReport).toMatchObject({ tone: 'error', title: 'Job Nightly was not stopped.', detail: 'Nightly is not running.' })
     // A lost backend or connection may have come after sp_stop_job ran: the outcome is unknown, not a failure.
-    for (const code of ['BACKEND_LOST', 'CONNECTION_LOST'] as const) {
+    for (const code of ['BACKEND_LOST', 'CONNECTION_LOST', 'CANCELLED'] as const) {
       api.executeObjectAction.mockResolvedValueOnce({ ok: false, error: 'The connection was lost.', code })
       await activity.stopJob(id, agent)
       expect(activity.get(id)?.killReport).toMatchObject({ tone: 'error', title: 'Whether job Nightly stopped is unknown.' })
