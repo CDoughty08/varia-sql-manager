@@ -97,6 +97,8 @@ describe("the Agent overview's checks", () => {
     expect(mixed.title).toBe('3 jobs are owned by logins that cannot log in')
     expect(mixed.detail).toContain('BB is owned by sa (login that no longer exists)')
     expect(ownerCheck(facts({ jobs: [job('A', { ownerState: 1 }), job('BB', { ownerState: 1 })] })).title).toBe('2 jobs are owned by disabled logins')
+    expect(ownerCheck(facts({ jobs: [job('A', { ownerState: 2 }), job('BB', { ownerState: 2 })] })).title).toBe('2 jobs are owned by logins that no longer exist')
+    expect(ownerCheck(facts({ jobs: [job('A', { ownerState: 3 }), job('BB', { ownerState: 3 })] })).title).toBe('2 jobs are owned by logins denied CONNECT SQL')
     // Below sysadmin the owners read never ran: the check says so rather than guessing.
     expect(ownerCheck(facts({ sysadmin: false, reads: { ...allRead, owners: { state: 'role' } } }))).toMatchObject({ severity: 'unread' })
     expect(ownerCheck(facts()).severity).toBe('ok')

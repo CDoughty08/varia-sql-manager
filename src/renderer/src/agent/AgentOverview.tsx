@@ -20,19 +20,21 @@ const spec = liveProbes[agentOverviewProbe]
 const noSubscribe = () => () => {}
 const noLive: LiveSnapshot = { status: 'connecting', probes: {}, connectionId: '' }
 const noLiveSnapshot = () => noLive
+/** The object links a check shows; past them the detail ("and N more") stays. */
+const shownObjects = 12
 const severityIcons: Readonly<Record<OverviewSeverity, IconId>> = { error: 'error', warning: 'warning', info: 'info', ok: 'check', unread: 'lock' }
 const severityWords: Readonly<Record<OverviewSeverity, string>> = { error: 'Problem', warning: 'Warning', info: 'Note', ok: 'Passed', unread: 'Not checked' }
 
 function Check({ check, documentId, service }: { readonly check: OverviewCheck; readonly documentId: string; readonly service: AgentOverviewService }) {
   // A detail that only lists the objects is left out: their links below say the same.
-  const namesOnly = check.objects.length > 0 && check.detail === `${namesText(check.objects.map(object => object.name), 5)}.`
+  const namesOnly = check.objects.length > 0 && check.objects.length <= shownObjects && check.detail === `${namesText(check.objects.map(object => object.name), 5)}.`
   return <li className="agent-check" data-severity={check.severity} aria-label={`${severityWords[check.severity]}: ${check.title}`}>
     <span className="agent-check-icon" aria-hidden="true"><Icon name={severityIcons[check.severity]} /></span>
     <span className="agent-check-title">{check.title}</span>
     <span className="agent-check-fix">{check.fix && <button type="button" onClick={() => void service.fix(documentId, check.fix!.action)}>{check.fix.label}</button>}</span>
     <span className="agent-check-detail">{namesOnly ? null : check.detail}
       {check.objects.length > 0 && <span className="agent-check-objects" role="list" aria-label={`${check.title}: objects`}>
-        {check.objects.slice(0, 12).map(object => <span key={`${object.kind}:${object.name}`} role="listitem">
+        {check.objects.slice(0, shownObjects).map(object => <span key={`${object.kind}:${object.name}`} role="listitem">
           <button type="button" className="link-button agent-check-object" title={object.kind === 'job' ? `Open the job ${object.name}` : `Open Schedules (${object.name})`}
             onClick={() => service.openObject(documentId, object)}><Icon name={object.kind === 'job' ? 'agent-job' : 'agent-schedule'} />{object.name}</button></span>)}
       </span>}

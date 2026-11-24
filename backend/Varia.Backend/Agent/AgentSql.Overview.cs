@@ -13,14 +13,15 @@ internal static partial class AgentSql
 
     /// <summary>Whether each job's owner can log in (sysadmin: msdb grants the Agent roles no SELECT on sysjobs): 0 yes, 1 a disabled login,
     /// 2 no login for the owner's SID, 3 a login denied CONNECT SQL. A sysadmin owner reads 0 whatever its login's state: Agent runs a
-    /// sysadmin-owned job's steps as its own service account and never logs the owner in (the usual hardening disables sa, which owns jobs). A Windows-shaped SID with no login of its own (revision 1, eight bytes
+    /// sysadmin-owned job's steps as its own service account and never logs the owner in (the usual hardening disables sa, which owns jobs). The role test runs only for an owner that would fail otherwise, as a Windows
+    /// login's membership may ask the domain. A Windows-shaped SID with no login of its own (revision 1, eight bytes
     /// and four a sub-authority) may log in through a Windows group, so it reads 0: the engine alone knows, and the check never guesses.</summary>
     public static readonly AgentStatement OverviewOwners = new("overviewOwners",
         "SELECT j.job_id, CONVERT(int, CASE\n"
         + "WHEN p.principal_id IS NULL THEN CASE WHEN CONVERT(int, SUBSTRING(j.owner_sid, 1, 1)) = 1 AND DATALENGTH(j.owner_sid) = 8 + 4 * CONVERT(int, SUBSTRING(j.owner_sid, 2, 1)) THEN 0 ELSE 2 END\n"
-        + "WHEN IS_SRVROLEMEMBER(N'sysadmin', p.name) = 1 THEN 0\n"
-        + "WHEN p.is_disabled = 1 THEN 1\n"
-        + "WHEN EXISTS (SELECT 1 FROM sys.server_permissions AS d WHERE d.grantee_principal_id = p.principal_id AND d.type = 'COSQ' AND d.state = 'D') THEN 3\n"
+        + "WHEN p.is_disabled = 1 THEN CASE WHEN IS_SRVROLEMEMBER(N'sysadmin', p.name) = 1 THEN 0 ELSE 1 END\n"
+        + "WHEN EXISTS (SELECT 1 FROM sys.server_permissions AS d WHERE d.grantee_principal_id = p.principal_id AND d.type = 'COSQ' AND d.state = 'D')\n"
+        + "THEN CASE WHEN IS_SRVROLEMEMBER(N'sysadmin', p.name) = 1 THEN 0 ELSE 3 END\n"
         + "ELSE 0 END) AS owner_state\n"
         + "FROM msdb.dbo.sysjobs AS j LEFT JOIN sys.server_principals AS p ON p.sid = j.owner_sid;", ["job_id", "owner_state"], [], "listRows");
 

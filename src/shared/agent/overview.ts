@@ -200,6 +200,7 @@ export function failedCheck(facts: OverviewFacts): OverviewCheck {
 }
 
 const ownerWords: Record<number, string> = { [ownerStates.disabled]: 'a disabled login', [ownerStates.missing]: 'a login that no longer exists', [ownerStates.denied]: 'a login denied CONNECT SQL' }
+const ownerPlurals: Record<number, string> = { [ownerStates.disabled]: 'disabled logins', [ownerStates.missing]: 'logins that no longer exist', [ownerStates.denied]: 'logins denied CONNECT SQL' }
 /** Jobs whose owner cannot log in (the owners read, sysadmin only). */
 export function ownerCheck(facts: OverviewFacts): OverviewCheck {
   if (!readOk(facts, 'owners')) return unread('owners', facts, 'owners', 'the job owners\' logins')
@@ -207,7 +208,7 @@ export function ownerCheck(facts: OverviewFacts): OverviewCheck {
   if (!bad.length) return { id: 'owners', severity: 'ok', title: 'Every job\'s owner can log in', detail: 'No job is owned by a disabled, missing or denied login.', objects: [] }
   const states = new Set(bad.map(job => job.ownerState))
   const what = states.size === 1 ? ownerWords[bad[0]!.ownerState!]! : 'a login that cannot log in'
-  const title = bad.length === 1 ? `1 job is owned by ${what}` : `${count(bad.length, 'job', 'jobs')} are owned by ${states.size === 1 ? what.replace(/^a /, '').replace('login', 'logins') : 'logins that cannot log in'}`
+  const title = bad.length === 1 ? `1 job is owned by ${what}` : `${count(bad.length, 'job', 'jobs')} are owned by ${states.size === 1 ? ownerPlurals[bad[0]!.ownerState!]! : 'logins that cannot log in'}`
   const detail = bad.slice(0, 3).map(job => `${job.name} is owned by ${job.owner || 'an unknown login'}${states.size === 1 ? '' : ` (${ownerWords[job.ownerState!]!.replace(/^a /, '')})`}.`).join(' ')
     + (bad.length > 3 ? ` And ${bad.length - 3} more.` : '') + ' A job whose owner cannot log in fails when it starts.'
   return {
