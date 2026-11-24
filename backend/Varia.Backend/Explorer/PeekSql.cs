@@ -347,7 +347,7 @@ internal static class PeekSql
         + (kind == "tableType" ? "(SELECT tt.type_table_object_id FROM sys.table_types AS tt WHERE tt.user_type_id = @object_id)" : "@object_id")
         + " AND " + ExplorerQueries.ColumnVisibility(r) + " ORDER BY c.column_id;\n";
 
-    /// <summary>Maximum detail rows read beside <c>tableObjects</c> (one extra row detects overflow and marks the list truncated).</summary>
+    /// <summary>Maximum detail rows read beside <c>tableObjects</c> (one extra row detects overflow and names the owner it cut).</summary>
     internal const int TableObjectDetailCap = 16384;
 
     /// <summary>A table's keys, indexes, constraints and triggers (bounded at @take, in kind then name order) followed by a
@@ -689,7 +689,7 @@ internal static class PeekSql
                 }
                 if (!await reader.NextResultAsync(token)) throw new InvalidOperationException("Peek's batch ended before its list details " + list.Id + ".");
                 var details = await ReadTableObjectDetailsAsync(reader, detailColumns, token);
-                lists![list.Id] = new([.. rawRows.Select(row => TableObjectRow(row, details))], moreDetails || details.Truncated ? true : null);
+                lists![list.Id] = TableObjectList(rawRows, moreDetails, details);
                 continue;
             }
             var rows = new List<object?[]>();
@@ -755,14 +755,24 @@ internal static class PeekSql
     };
 
     /// <summary>The detail rows read beside a table's <c>tableObjects</c> list: index key/included columns, foreign-key column
-    /// pairs and trigger events.</summary>
+    /// pairs and trigger events. <see cref="Cut"/> is the owner (detail kind and owner id) whose rows the cap stopped in, when it
+    /// stopped.</summary>
     internal sealed class TableObjectDetails
     {
         public Dictionary<int, List<(string Name, bool Included, bool Descending)>> IndexColumns { get; } = [];
         public Dictionary<int, List<(string Column, string? ReferencedColumn)>> ForeignKeyColumns { get; } = [];
         public Dictionary<int, List<string>> TriggerEvents { get; } = [];
-        public bool Truncated { get; set; }
+        public (string Kind, int OwnerId)? Cut { get; set; }
+
+        /// <summary>Whether an owner's details may be missing rows: the cap stopped in this owner, or stopped before any of its
+        /// rows came (rows come in kind group then owner order, so an owner with no rows after a cut was never reached).</summary>
+        public bool Incomplete(string kind, int ownerId, bool anyRead) => Cut is { } cut && ((cut.Kind == kind && cut.OwnerId == ownerId) || !anyRead);
     }
+
+    /// <summary>The <c>tableObjects</c> list: truncated only when objects were left out. Details the cap cut mark the summaries
+    /// they cut short instead (<see cref="Incomplete"/>), since every object's row is still there.</summary>
+    internal static PeekList TableObjectList(IEnumerable<Dictionary<string, object?>> rawRows, bool moreObjects, TableObjectDetails details) =>
+        new([.. rawRows.Select(row => TableObjectRow(row, details))], moreObjects ? true : null);
 
     private static async Task<TableObjectDetails> ReadTableObjectDetailsAsync(SqlDataReader reader, IReadOnlyList<string> columns, CancellationToken token)
     {
@@ -770,11 +780,12 @@ internal static class PeekSql
         var count = 0;
         while (await reader.ReadAsync(token))
         {
-            if (count == TableObjectDetailCap) { details.Truncated = true; break; }
-            count++;
             var raw = Raw(reader, columns);
             var kind = (raw["detailKind"] as string)?.TrimEnd();
             var ownerId = Int(raw["ownerId"]);
+            // The row past the cap names the owner the cut landed in (its earlier rows, if any, were read).
+            if (count == TableObjectDetailCap) { details.Cut = (kind ?? "", ownerId); break; }
+            count++;
             if (raw["colName"] is not string colName) continue;
             switch (kind)
             {
@@ -795,7 +806,8 @@ internal static class PeekSql
         return details;
     }
 
-    /// <summary>One row of a table's <c>tableObjects</c> list: Kind, Name, Definition summary and Status.</summary>
+    /// <summary>One row of a table's <c>tableObjects</c> list: Kind, Name, Summary (names bracketed as scripts write them; a list
+    /// the detail cap cut short ends in <see cref="Incomplete"/>) and Status.</summary>
     internal static object?[] TableObjectRow(Dictionary<string, object?> raw, TableObjectDetails? details = null)
     {
         var kindCode = (raw["kindCode"] as string)?.TrimEnd();
@@ -808,17 +820,23 @@ internal static class PeekSql
             case "PK" or "UQ":
                 kind = kindCode == "PK" ? "Primary key" : "Unique constraint";
                 var keyType = raw.GetValueOrDefault("indexType") is not null ? IndexType(Int(raw["indexType"]), false) : null;
-                var keyCols = raw.GetValueOrDefault("indexId") is not null && details?.IndexColumns.TryGetValue(Int(raw["indexId"]), out var kCols) == true
-                    ? string.Join(", ", kCols.Where(c => !c.Included).Select(c => c.Descending ? c.Name + " DESC" : c.Name)) : "";
+                var keyIndex = raw.GetValueOrDefault("indexId") is not null ? Int(raw["indexId"]) : (int?)null;
+                var kCols = keyIndex is { } kId && details?.IndexColumns.TryGetValue(kId, out var kFound) == true ? kFound : null;
+                var keyCols = ColumnList(kCols?.Where(c => !c.Included).Select(c => KeyColumn(c.Name, c.Descending)),
+                    keyIndex is { } kOwner && details?.Incomplete("IC", kOwner, kCols is not null) == true);
                 summary = keyType is not null && keyCols.Length > 0 ? keyType + " (" + keyCols + ")" : keyCols.Length > 0 ? "(" + keyCols + ")" : keyType;
                 status = disabled ? "Disabled" : "Active";
                 break;
             case "F":
                 kind = "Foreign key";
-                var fkCols = raw.GetValueOrDefault("objectId") is not null && details?.ForeignKeyColumns.TryGetValue(Int(raw["objectId"]), out var fCols) == true ? fCols : null;
-                var parentCols = fkCols is { Count: > 0 } ? string.Join(", ", fkCols.Select(c => c.Column)) : "";
-                var refCols = fkCols is { Count: > 0 } && fkCols.All(c => c.ReferencedColumn is not null) ? string.Join(", ", fkCols.Select(c => c.ReferencedColumn)) : "";
-                var refTable = Qualified(raw.GetValueOrDefault("refSchema") as string, raw.GetValueOrDefault("refTable") as string);
+                var fkId = raw.GetValueOrDefault("objectId") is not null ? Int(raw["objectId"]) : (int?)null;
+                var fkCols = fkId is { } fId && details?.ForeignKeyColumns.TryGetValue(fId, out var fCols) == true ? fCols : null;
+                var fkIncomplete = fkId is { } fOwner && details?.Incomplete("FK", fOwner, fkCols is not null) == true;
+                var parentCols = ColumnList(fkCols?.Select(c => Bracket(c.Column)), fkIncomplete);
+                var refCols = fkCols is { Count: > 0 } && fkCols.All(c => c.ReferencedColumn is not null)
+                    ? ColumnList(fkCols.Select(c => Bracket(c.ReferencedColumn!)), fkIncomplete) : "";
+                var refTable = raw.GetValueOrDefault("refTable") is string refName
+                    ? (raw.GetValueOrDefault("refSchema") is string refSchema ? Bracket(refSchema) + "." : "") + Bracket(refName) : null;
                 summary = refTable is not null
                     ? (parentCols.Length > 0 ? "(" + parentCols + ") \u2192 " : "\u2192 ") + refTable + (refCols.Length > 0 ? " (" + refCols + ")" : "")
                     : parentCols.Length > 0 ? "(" + parentCols + ")" : null;
@@ -829,20 +847,25 @@ internal static class PeekSql
                 var idxTypeCode = Int(raw.GetValueOrDefault("indexType"));
                 var idxType = IndexType(idxTypeCode, Bool(raw.GetValueOrDefault("primaryXml")) == true);
                 var prefix = Bool(raw.GetValueOrDefault("isUnique")) == true && idxType.Length > 0 ? "Unique " + char.ToLowerInvariant(idxType[0]) + idxType[1..] : idxType;
-                var allCols = raw.GetValueOrDefault("indexId") is not null && details?.IndexColumns.TryGetValue(Int(raw["indexId"]), out var iCols) == true ? iCols : null;
+                var idxId = raw.GetValueOrDefault("indexId") is not null ? Int(raw["indexId"]) : (int?)null;
+                var allCols = idxId is { } iId && details?.IndexColumns.TryGetValue(iId, out var iCols) == true ? iCols : null;
+                var idxIncomplete = idxId is { } iOwner && details?.Incomplete("IC", iOwner, allCols is not null) == true;
                 var filter = raw.GetValueOrDefault("filter") as string;
                 var text = new StringBuilder(prefix);
                 // Columnstore indexes store their columns with is_included_column = 1 in sys.index_columns: a clustered
                 // columnstore covers every column (no column list), while a nonclustered columnstore lists its columns without INCLUDE.
                 if (idxTypeCode == 6)
                 {
-                    var csCols = allCols is not null ? string.Join(", ", allCols.Select(c => c.Name)) : "";
+                    var csCols = ColumnList(allCols?.Select(c => Bracket(c.Name)), idxIncomplete);
                     if (csCols.Length > 0) text.Append(" (").Append(csCols).Append(')');
                 }
                 else if (idxTypeCode != 5)
                 {
-                    var idxKeyCols = allCols is not null ? string.Join(", ", allCols.Where(c => !c.Included).Select(c => c.Descending ? c.Name + " DESC" : c.Name)) : "";
-                    var incCols = allCols is not null ? string.Join(", ", allCols.Where(c => c.Included).Select(c => c.Name)) : "";
+                    // Key columns come before included ones, so a cut with no included column read may have stopped in the
+                    // keys (and the INCLUDE list is unknown), while one after an included column stopped in INCLUDE.
+                    var cutInInclude = idxIncomplete && allCols?.Any(c => c.Included) == true;
+                    var idxKeyCols = ColumnList(allCols?.Where(c => !c.Included).Select(c => KeyColumn(c.Name, c.Descending)), idxIncomplete && !cutInInclude);
+                    var incCols = ColumnList(allCols?.Where(c => c.Included).Select(c => Bracket(c.Name)), cutInInclude);
                     if (idxKeyCols.Length > 0) text.Append(" (").Append(idxKeyCols).Append(')');
                     if (incCols.Length > 0) text.Append(" INCLUDE (").Append(incCols).Append(')');
                 }
@@ -859,7 +882,7 @@ internal static class PeekSql
                 kind = "Default constraint";
                 var expr = raw.GetValueOrDefault("expr") as string;
                 var colName = raw.GetValueOrDefault("colName") as string;
-                summary = colName is not null && expr is not null ? colName + " = " + expr : expr ?? colName;
+                summary = colName is not null && expr is not null ? Bracket(colName) + " = " + expr : expr ?? (colName is null ? null : Bracket(colName));
                 status = "Active";
                 break;
             case "EC":
@@ -870,8 +893,10 @@ internal static class PeekSql
             case "TR":
                 kind = "Trigger";
                 var timing = Bool(raw.GetValueOrDefault("insteadOf")) == true ? "INSTEAD OF" : "AFTER";
-                var events = raw.GetValueOrDefault("objectId") is not null && details?.TriggerEvents.TryGetValue(Int(raw["objectId"]), out var evs) == true ? evs : null;
-                summary = events is { Count: > 0 } ? timing + " " + string.Join(", ", events) : timing;
+                var trId = raw.GetValueOrDefault("objectId") is not null ? Int(raw["objectId"]) : (int?)null;
+                var events = trId is { } tId && details?.TriggerEvents.TryGetValue(tId, out var evs) == true ? evs : null;
+                var eventList = ColumnList(events, trId is { } tOwner && details?.Incomplete("TE", tOwner, events is not null) == true);
+                summary = eventList.Length > 0 ? timing + " " + eventList : timing;
                 status = disabled ? "Disabled" : "Active";
                 break;
             default:
@@ -882,6 +907,18 @@ internal static class PeekSql
         }
         return [kind, name, ClipExpression(summary), status];
     }
+
+    /// <summary>Ends a summary list the detail cap cut short.</summary>
+    internal const string Incomplete = "…";
+
+    /// <summary>A summary's comma-separated list, ending in <see cref="Incomplete"/> when the detail cap cut it short.</summary>
+    private static string ColumnList(IEnumerable<string>? items, bool incomplete)
+    {
+        var text = items is null ? "" : string.Join(", ", items);
+        return !incomplete ? text : text.Length > 0 ? text + ", " + Incomplete : Incomplete;
+    }
+
+    private static string KeyColumn(string name, bool descending) => descending ? Bracket(name) + " DESC" : Bracket(name);
 
     internal const int MaxExpressionChars = 4000;
 
@@ -1128,6 +1165,7 @@ internal static class PeekSql
             case "compression" when raw.GetValueOrDefault("compressions") is { } count && Convert.ToInt32(count, CultureInfo.InvariantCulture) > 1: return Mixed;
             case "indexType": return value is null ? null : IndexType(Convert.ToInt32(value, CultureInfo.InvariantCulture), Bool(raw.GetValueOrDefault("primaryXml")) == true);
             case "loginType": return value is string login ? LoginType(login) : null;
+            case "keyType" or "constraintType": return value is string typeDesc ? ConstraintType(typeDesc) : null;
             case "cache": return value is null ? null : CacheWord(Convert.ToBoolean(value, CultureInfo.InvariantCulture), raw.GetValueOrDefault("cacheSize") is { } size ? Convert.ToInt32(size, CultureInfo.InvariantCulture) : null);
             case "dataType" when value is string name: return name is "decimal" or "numeric" ? name + "(" + Int(raw.GetValueOrDefault("typePrecision")).ToString(CultureInfo.InvariantCulture) + ", 0)" : name;
             case "baseType": return value is string baseName ? ExplorerLabels.TypeText(new SqlTypeInfo(baseName, Int(raw.GetValueOrDefault("maxLength")), Int(raw.GetValueOrDefault("typePrecision")),
@@ -1187,6 +1225,18 @@ internal static class PeekSql
         6 => "Nonclustered columnstore",
         7 => "Nonclustered hash",
         _ => "Other"
+    };
+
+    /// <summary>A key's or constraint's type_desc in the words the Indexes &amp; keys list uses for its kind.</summary>
+    internal static string ConstraintType(string typeDesc) => typeDesc.TrimEnd() switch
+    {
+        "PRIMARY_KEY_CONSTRAINT" => "Primary key",
+        "UNIQUE_CONSTRAINT" => "Unique constraint",
+        "FOREIGN_KEY_CONSTRAINT" => "Foreign key",
+        "CHECK_CONSTRAINT" => "Check constraint",
+        "DEFAULT_CONSTRAINT" => "Default constraint",
+        "EDGE_CONSTRAINT" => "Edge constraint",
+        var other => other
     };
 
     /// <summary>sys.server_principals.type in Login Properties' words.</summary>

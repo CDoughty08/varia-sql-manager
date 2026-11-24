@@ -315,20 +315,82 @@ internal static partial class PeekChecks
         var ec = PeekSql.TableObjectRow(new() { ["kindCode"] = "EC", ["name"] = "EC_Link", ["deleteAction"] = "CASCADE", ["disabled"] = false, ["notTrusted"] = false }, details);
         var trAfter = PeekSql.TableObjectRow(new() { ["kindCode"] = "TR", ["name"] = "TR_Audit", ["objectId"] = 20, ["insteadOf"] = false, ["disabled"] = false }, details);
         var trInstead = PeekSql.TableObjectRow(new() { ["kindCode"] = "TR", ["name"] = "TR_Del", ["objectId"] = 21, ["insteadOf"] = true, ["disabled"] = true }, details);
-        check(pk is ["Primary key", "PK_Orders", "Clustered (Id)", "Active"]
-            && uq is ["Unique constraint", "UQ_Email", "Nonclustered (Email DESC)", "Disabled"]
-            && fk is ["Foreign key", "FK_Cust", "(CustomerId) \u2192 Sales.Customers (Id)", "Trusted"]
-            && fkHidden is ["Foreign key", "FK_Hidden", "(TenantId, OrderId)", "Not trusted"]
-            && ix is ["Index", "IX_Name", "Unique nonclustered (Name DESC, Id) INCLUDE (Amount) WHERE ([Name] IS NOT NULL)", "Active"]
+        check(pk is ["Primary key", "PK_Orders", "Clustered ([Id])", "Active"]
+            && uq is ["Unique constraint", "UQ_Email", "Nonclustered ([Email] DESC)", "Disabled"]
+            && fk is ["Foreign key", "FK_Cust", "([CustomerId]) \u2192 [Sales].[Customers] ([Id])", "Trusted"]
+            && fkHidden is ["Foreign key", "FK_Hidden", "([TenantId], [OrderId])", "Not trusted"]
+            && ix is ["Index", "IX_Name", "Unique nonclustered ([Name] DESC, [Id]) INCLUDE ([Amount]) WHERE ([Name] IS NOT NULL)", "Active"]
             && xmlIx is ["Index", "PXML_Doc", "Primary XML", "Active"]
             && cci is ["Index", "CCI_Orders", "Clustered columnstore", "Active"]
-            && ncci is ["Index", "NCCI_Orders", "Nonclustered columnstore (OrderDate, Amount) WHERE ([Amount]>(0))", "Active"]
+            && ncci is ["Index", "NCCI_Orders", "Nonclustered columnstore ([OrderDate], [Amount]) WHERE ([Amount]>(0))", "Active"]
             && ck is ["Check constraint", "CK_Amt", "([Amount]>=(0))", "Disabled"]
-            && df is ["Default constraint", "DF_Date", "OrderDate = (sysutcdatetime())", "Active"]
+            && df is ["Default constraint", "DF_Date", "[OrderDate] = (sysutcdatetime())", "Active"]
             && ec is ["Edge constraint", "EC_Link", "ON DELETE CASCADE", "Trusted"]
             && trAfter is ["Trigger", "TR_Audit", "AFTER INSERT, UPDATE", "Active"]
             && trInstead is ["Trigger", "TR_Del", "INSTEAD OF DELETE", "Disabled"],
-            "tableObjects composes Kind, Name, Definition summary and Status for every table child kind: " + Show(pk) + " " + Show(cci) + " " + Show(ncci) + " " + Show(trAfter));
+            "tableObjects composes Kind, Name, Summary and Status for every table child kind: " + Show(pk) + " " + Show(cci) + " " + Show(ncci) + " " + Show(trAfter));
+
+        // Names with commas, parentheses and brackets stay unambiguous: bracketed as scripts write them, ] doubled.
+        var hostile = new PeekSql.TableObjectDetails();
+        hostile.IndexColumns[7] = [("A, B", false, false), ("C)", false, true), ("x]y", true, false)];
+        hostile.ForeignKeyColumns[30] = [("Cust (Id)", "Id]")];
+        var hostileIx = PeekSql.TableObjectRow(new() { ["kindCode"] = "IX", ["name"] = "IX_H", ["indexId"] = 7, ["indexType"] = (byte)2, ["isUnique"] = false, ["disabled"] = false }, hostile);
+        var hostileFk = PeekSql.TableObjectRow(new() { ["kindCode"] = "F ", ["name"] = "FK_H", ["objectId"] = 30, ["refSchema"] = "S.x", ["refTable"] = "T]", ["disabled"] = false, ["notTrusted"] = false }, hostile);
+        var hostileDf = PeekSql.TableObjectRow(new() { ["kindCode"] = "D ", ["name"] = "DF_H", ["colName"] = "a = b", ["expr"] = "((1))" }, hostile);
+        check(hostileIx is [_, _, "Nonclustered ([A, B], [C)] DESC) INCLUDE ([x]]y])", _]
+            && hostileFk is [_, _, "([Cust (Id)]) \u2192 [S.x].[T]]] ([Id]]])", _]
+            && hostileDf is [_, _, "[a = b] = ((1))", _],
+            "tableObjects summaries bracket column and table names so commas, parentheses and brackets in them read unambiguously: "
+            + Show(hostileIx) + " " + Show(hostileFk) + " " + Show(hostileDf));
+
+        // The detail cap cut index 3 after its second key column (the row past the cap was index 3's): index 3 says its keys
+        // are cut and its INCLUDE list unknown, index 8 (never reached) says its columns are unknown, and earlier owners
+        // (FK 10, trigger 20, PK index 1) stay complete. Only objects left out truncate the list.
+        var cut = new PeekSql.TableObjectDetails { Cut = ("IC", 3) };
+        cut.ForeignKeyColumns[10] = [("CustomerId", "Id")];
+        cut.TriggerEvents[20] = ["INSERT"];
+        cut.IndexColumns[1] = [("Id", false, false)];
+        cut.IndexColumns[3] = [("Name", false, true), ("Id", false, false)];
+        Dictionary<string, object?> Ix(string name, int id) => new() { ["kindCode"] = "IX", ["name"] = name, ["indexId"] = id, ["indexType"] = (byte)2, ["isUnique"] = false, ["disabled"] = false };
+        var cutRaw = new List<Dictionary<string, object?>>
+        {
+            new() { ["kindCode"] = "PK", ["name"] = "PK_Orders", ["indexId"] = 1, ["indexType"] = (byte)1, ["disabled"] = false },
+            new() { ["kindCode"] = "F ", ["name"] = "FK_Cust", ["objectId"] = 10, ["refSchema"] = "Sales", ["refTable"] = "Customers", ["disabled"] = false, ["notTrusted"] = false },
+            Ix("IX_Cut", 3), Ix("IX_Unread", 8),
+            new() { ["kindCode"] = "IX", ["name"] = "CCI_Unread", ["indexId"] = 9, ["indexType"] = (byte)5, ["isUnique"] = false, ["disabled"] = false },
+            new() { ["kindCode"] = "TR", ["name"] = "TR_Audit", ["objectId"] = 20, ["insteadOf"] = false, ["disabled"] = false }
+        };
+        var cutList = PeekSql.TableObjectList(cutRaw, false, cut);
+        var moreList = PeekSql.TableObjectList(cutRaw, true, cut);
+        check(cutList.Truncated is null && moreList.Truncated is true
+            && cutList.Rows is [["Primary key", "PK_Orders", "Clustered ([Id])", _], ["Foreign key", "FK_Cust", "([CustomerId]) \u2192 [Sales].[Customers] ([Id])", _],
+                ["Index", "IX_Cut", "Nonclustered ([Name] DESC, [Id], \u2026)", _], ["Index", "IX_Unread", "Nonclustered (\u2026)", _],
+                ["Index", "CCI_Unread", "Clustered columnstore", _], ["Trigger", "TR_Audit", "AFTER INSERT", _]],
+            "a detail cut marks the owner it landed in and owners after it as incomplete, leaves earlier owners whole, and does not truncate the list: "
+            + JsonSerializer.Serialize(cutList));
+        // A cut after an included column was read lands in INCLUDE; cut FK and trigger owners end their lists in the marker too.
+        var cutInclude = new PeekSql.TableObjectDetails { Cut = ("IC", 3) };
+        cutInclude.IndexColumns[3] = [("Name", false, false), ("Amount", true, false)];
+        cutInclude.ForeignKeyColumns[10] = [("A", "X")];
+        var cutFk = new PeekSql.TableObjectDetails { Cut = ("FK", 10) };
+        cutFk.ForeignKeyColumns[10] = [("A", "X")];
+        var cutTr = new PeekSql.TableObjectDetails { Cut = ("TE", 20) };
+        cutTr.TriggerEvents[20] = ["INSERT"];
+        var fkRaw = new Dictionary<string, object?> { ["kindCode"] = "F ", ["name"] = "FK", ["objectId"] = 10, ["refSchema"] = "dbo", ["refTable"] = "P", ["disabled"] = false, ["notTrusted"] = false };
+        var trRaw = new Dictionary<string, object?> { ["kindCode"] = "TR", ["name"] = "TR", ["objectId"] = 20, ["insteadOf"] = false, ["disabled"] = false };
+        check(PeekSql.TableObjectRow(Ix("IX", 3), cutInclude) is [_, _, "Nonclustered ([Name]) INCLUDE ([Amount], \u2026)", _]
+            && PeekSql.TableObjectRow(fkRaw, cutInclude) is [_, _, "([A]) \u2192 [dbo].[P] ([X])", _]
+            && PeekSql.TableObjectRow(fkRaw, cutFk) is [_, _, "([A], \u2026) \u2192 [dbo].[P] ([X], \u2026)", _]
+            && PeekSql.TableObjectRow(trRaw, cutTr) is [_, _, "AFTER INSERT, \u2026", _]
+            && PeekSql.TableObjectRow(trRaw, cutFk) is [_, _, "AFTER \u2026", _]
+            && PeekSql.TableObjectRow(Ix("IX", 3), new PeekSql.TableObjectDetails()) is [_, _, "Nonclustered", _],
+            "a cut in INCLUDE, a foreign key's or a trigger's details ends that list in the marker, an owner never reached says so, and without a cut nothing is marked");
+
+        check(PeekSql.ConstraintType("PRIMARY_KEY_CONSTRAINT") == "Primary key" && PeekSql.ConstraintType("UNIQUE_CONSTRAINT") == "Unique constraint"
+            && PeekSql.ConstraintType("FOREIGN_KEY_CONSTRAINT") == "Foreign key" && PeekSql.ConstraintType("CHECK_CONSTRAINT") == "Check constraint"
+            && PeekSql.ConstraintType("DEFAULT_CONSTRAINT") == "Default constraint" && PeekSql.ConstraintType("EDGE_CONSTRAINT") == "Edge constraint"
+            && PeekSql.ConstraintType("SOMETHING_NEW") == "SOMETHING_NEW",
+            "key and constraint type codes read as the Indexes & keys list's kinds, and an unknown code passes through");
         var exact = new string('x', PeekSql.MaxExpressionChars);
         var over = new string('x', PeekSql.MaxExpressionChars + 1);
         var surrogate = new string('x', PeekSql.MaxExpressionChars - 1) + "\U0001F600";

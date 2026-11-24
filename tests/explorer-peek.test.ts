@@ -962,9 +962,9 @@ describe('Peek kinds beyond modules', () => {
     const keyColumns = peekListTable(peekLists.keyColumns, [['CustomerId', 'Id', null, 'int'], ['OrderId', null, true, 'bigint']])
     expect(keyColumns.columns.map(column => column.name)).toEqual(['Column', 'Referenced column', 'Descending', 'Type'])
     expect(keyColumns.rows).toEqual([['CustomerId', 'Id', null, 'int'], ['OrderId', null, 'True', 'bigint']])
-    const tableObjects = peekListTable(peekLists.tableObjects, [['Primary key', 'PK_Orders', 'Clustered (Id)', 'Active'], ['Foreign key', 'FK_Orders_Cust', '(CustomerId) → dbo.Customers (Id)', 'Trusted']])
-    expect(tableObjects.columns.map(column => column.name)).toEqual(['Kind', 'Name', 'Definition', 'Status'])
-    expect(tableObjects.rows).toEqual([['Primary key', 'PK_Orders', 'Clustered (Id)', 'Active'], ['Foreign key', 'FK_Orders_Cust', '(CustomerId) → dbo.Customers (Id)', 'Trusted']])
+    const tableObjects = peekListTable(peekLists.tableObjects, [['Primary key', 'PK_Orders', 'Clustered ([Id])', 'Active'], ['Foreign key', 'FK_Orders_Cust', '([CustomerId]) → [dbo].[Customers] ([Id])', 'Trusted']])
+    expect(tableObjects.columns.map(column => column.name)).toEqual(['Kind', 'Name', 'Summary', 'Status'])
+    expect(tableObjects.rows).toEqual([['Primary key', 'PK_Orders', 'Clustered ([Id])', 'Active'], ['Foreign key', 'FK_Orders_Cust', '([CustomerId]) → [dbo].[Customers] ([Id])', 'Trusted']])
     expect(peekLists.parameters.columns.map(column => column.label)).toEqual(['Name', 'Type', 'Direction', 'Default', 'Definition'])
     // Text keeps its control characters for the grid to show; a count is a number column, which sorts by value.
     expect(peekListTable({ columns: [{ id: 'a', label: 'A', format: 'text' }, { id: 'n', label: 'N', format: 'count' }] }, [['x\ty', 1024]])).toEqual({ columns: [{ name: 'A' }, { name: 'N', kind: 'number' }], rows: [['x\ty', '1,024']] })
