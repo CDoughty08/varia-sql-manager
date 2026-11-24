@@ -13,7 +13,7 @@ import type { ConnectionService, LiveConnection } from './connections'
 import { isBigQueryConnection } from './connection-availability'
 
 export const dryRunMarkerOwner = 'varia.googlesql.dryRun'
-/** The editing pause before a diagnostics dry run (docs/bigquery-plan.md, IntelliSense from the index). */
+/** The editing pause before a diagnostics dry run (docs/bigquery.md, Cost). */
 export const dryRunDebounceMs = 1000
 
 /** A remote estimate that failed: BigQuery's text, and its code (REMOTE_EXPIRED when the result's table is gone and its query
@@ -132,7 +132,7 @@ interface Entry {
   revision: number
   /** The text and dataset the current estimate is for, so Execute reuses it instead of dry-running the same text again. */
   estimated?: { readonly sql: string; readonly dataset?: string; readonly result: BigQueryDryRunResult }
-  /** The incomplete-estimate prompt asks once per tab (decision 22). */
+  /** The incomplete-estimate prompt asks once per tab (docs/bigquery.md, Cost). */
   warnedIncomplete?: boolean
   /** The revision Execute last ran: a run that finishes after an edit leaves the newer state alone. */
   executed?: number
@@ -157,7 +157,7 @@ export interface BigQueryCostDeps {
  * BigQuery's estimate and cost rules in the renderer (docs/bigquery.md, Cost): dry-run diagnostics after an editing pause
  * (markers at BigQuery's `[line:column]`, and the estimate beside Execute), the dry run before Execute, and its two prompts.
  * A dry run sends the editor's text to Google, so it runs only for a connected BigQuery tab, only after the user edits or
- * executes (decision 44: never by itself after a restore or a provider switch), and the diagnostics one only while Text
+ * executes (never by itself after a restore or a provider switch), and the diagnostics one only while Text
  * Editor › GoogleSQL turns it on. Nothing blocks by default: a dry run that fails leaves Execute to run and report the
  * query's own error, and the cap is the hard guard.
  */

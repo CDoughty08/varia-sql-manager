@@ -1,9 +1,18 @@
 # BigQuery
 
 Varia connects to Google BigQuery beside SQL Server. This page describes how it works now: the Connect dialog, saved
-connections, sign-in, identity pins, connect and disconnect, the pre-connect methods, execution, Object Explorer, errors,
-emulator mode and testing. Search Objects indexes BigQuery connections too ([Search Objects › BigQuery](object-search.md#bigquery));
-Object Explorer's status chips leave BigQuery out until a later lane (docs/bigquery-plan.md).
+connections, sign-in, identity pins, connect and disconnect, the pre-connect methods, execution, Object Explorer, Job
+History, errors, emulator mode, what Varia does not do yet and testing. Search Objects indexes BigQuery connections too
+([Search Objects › BigQuery](object-search.md#bigquery)), docs/googlesql.md describes GoogleSQL editing, and
+docs/language-services.md its [completion](language-services.md#completion-from-the-index).
+
+Varia runs GoogleSQL only; legacy SQL is refused (`LEGACY_SQL`). SQL Server-only features are hidden for a BigQuery
+connection rather than half-working, through the catalogues' `providers` and the method gate (docs/architecture.md,
+Provider gating): Activity Monitor, Integration Services, SQL Server Agent, Table Designer, object actions other than
+Properties, execution plans, client statistics, Peek and Go To Definition, and Object Explorer's live status chips (their
+probes are SQL Server's). A BigQuery connection's icon is Varia's own (a magnifier over bars), not Google's logo.
+[docs/mockups/bigquery-ui.html](mockups/bigquery-ui.html) mocks the BigQuery screens on Varia's own renderer; where it and
+this page differ, this page describes what ships.
 
 ## Connect dialog
 
@@ -27,7 +36,7 @@ job); **Connect** opens the connection through main's connection owner like SQL 
 principal pin), with Labels & Custom Properties (name, colour, environment) and Auto reconnect as for SQL Server. Password fields
 and Remember password do not exist for BigQuery: Varia keeps no BigQuery secret.
 
-A federation configuration whose `credential_source` is a file (decision 49): when it is picked, the dialog asks **Use
+A federation configuration whose `credential_source` is a file: when it is picked, the dialog asks **Use
 this token file?**, naming the token file; a file source main cannot show as one full local path is refused. **Use It** records the confirmation (`connections-confirm-source`); main
 refuses the configuration's sign-in until then, and fails closed where it cannot ask (a background reconnect). A changed
 token path asks again.
@@ -50,7 +59,9 @@ startup with their pinned account, like SQL Server's.
 The backend uses Google's REST client, `Google.Cloud.BigQuery.V2` 3.12.0, which brings `Google.Apis.Auth`,
 `Google.Apis.Bigquery.v2`, `Google.Api.Gax.Rest` and `Newtonsoft.Json`. Every client and credential takes its HTTP
 client from `BigQueryEnvironment.Http`, so requests use the system proxy and certificate store, and the offline checks
-replace it with a fake.
+replace it with a fake. On Windows and macOS that is the system's setting; on Linux .NET reads only `HTTPS_PROXY`,
+`ALL_PROXY` and `NO_PROXY`, and Varia started from a desktop does not inherit a shell's environment, so set them where
+the desktop session reads them. Storage Read's channel follows the same proxy ([Storage Read](#storage-read)).
 
 - **Licenses.** `backend/package-licenses.json` lists every package the backend resolves with the license its `.nuspec`
   declares (`node scripts/package-licenses.mjs` regenerates it after a restore). `tests/backend-licenses.test.ts` holds
@@ -541,16 +552,17 @@ Messages).
   ran. Its tooltip says the estimate is free and on demand, and why it may be low.
 - **Diagnostics.** After a 1 s pause in editing, a dry run (one in flight per tab; the latest text wins) marks the error
   BigQuery reports at its `[line:column]` (owner `varia.googlesql.dryRun`, so Alt+F8 reaches it) and updates the chip; the
-  status bar reads "BigQuery: 1 error" or "BigQuery: no issues". Executing a selection marks its error where the
+  status bar reads "BigQuery: 1 error" or "BigQuery: no issues". A dry run carries no session id, so it never waits
+  behind the tab's session. Executing a selection marks its error where the
   selection puts it in the document. Nothing dry-runs after a restore, a provider switch, a connection or dataset change,
-  or once the setting is off, until the user edits or executes (decision 44): an edit's dry run queued behind one in
+  or once the setting is off, until the user edits or executes: an edit's dry run queued behind one in
   flight is dropped too, as is one Execute makes redundant. A table or dataset that does not exist is the query's
   error (`SQL_ERROR` with Google's text), a dataset in another location is `LOCATION_MISMATCH` as Execute says, a missing
   project stays `NOT_FOUND`, and a refused table keeps Google's text, since connecting already proved the account can
   create jobs. Text Editor › GoogleSQL › **Check queries with a dry run
   while editing** turns it off. A dry run sends the text to Google (docs/architecture.md).
 - **Before Execute** the diagnostics estimate is reused when it is for the same text and dataset; otherwise Execute dry-runs
-  first, and a pending diagnostics run is dropped. Varia asks in only two cases (decision 22), each opening with focus on
+  first, and a pending diagnostics run is dropped. Varia asks in only two cases, each opening with focus on
   Cancel as an alert dialog with a **Cost settings…** link:
   - **Above the threshold** (default 10 GiB): "This query will process 1.41 TiB (about $8.81 on demand), more than the
     10.00 GiB threshold. Run it?", with Run, Cancel and **Don't ask again for** the connection's name. That choice is
@@ -600,6 +612,11 @@ listers; nothing in it runs a job.
 - **Names in SQL.** BigQuery has no `QUOTENAME` and takes no identifier as a parameter, so a name reaches SQL text only through
   `BqNames` (C#): its kind's rule (the same as `src/shared/bigquery/names.ts`), then backticks with backslashes and backticks
   escaped. A name the rule refuses throws `INVALID_PARAMS` before any text is built. Values are always query parameters.
+  The rules: a project is Google's project id (a domain-scoped `example.com:proj` included, at most 128 characters); a
+  dataset, routine or model letters, digits and underscores (1,024, 256 and 1,024 characters); a table Unicode letters,
+  marks, numbers, connectors, dashes and spaces (1,024 UTF-8 bytes); a column those and BigQuery's flexible-name
+  punctuation (300 characters, STRUCT fields up to 15 deep). They hold on BigQuery's branches of the zod schemas and C#
+  only; SQL Server's names keep their 128 characters.
 - **Copy and drag.** A node inserts its backtick-quoted path (`` `project.dataset.table` ``; a column each part quoted).
 
 ### Preview Rows
@@ -758,6 +775,28 @@ honoured only with `VARIA_TEST_BIGQUERY_ENDPOINT`; main does not forward it, so 
 The emulator serves one stream per session, sends each batch as a whole Arrow stream (schema first), fails on DATETIME
 and TIME columns, writes BYTES base64-encoded twice and exits on ARRAY columns; the offline golden check covers those.
 
+## Not yet
+
+- Browser sign-in (OAuth) through a Varia-owned Google client, which needs Google's verification, with refresh tokens
+  kept in `safeStorage`; and the external-account `executable` credential source behind an explicit opt-in.
+- Results past BigQuery's 10 GB limit on anonymous result tables: Save to a BigQuery table and a per-query destination
+  table setting.
+- Pivot, Compare and column profiles on a windowed result (or its sorted or filtered view) without loading it first,
+  pushed down to BigQuery as `GROUP BY` and `APPROX_*` queries, and Search and row identities on it (What waits, above); and an instant first page for an ordered result read
+  through Storage Read (keep the REST first page and read the rest from its end).
+- BigQuery's query plan stages and timeline in the plan canvas; Job History details for load, extract and copy jobs
+  beyond their statistics, editing job labels, and opening another user's named destination table.
+- A prompt for undeclared `@name` parameters (scripts declare theirs with `DECLARE` and `SET`), batch query priority,
+  TIMESTAMP in local time, and a custom API endpoint in the UI.
+- Table actions (delete, copy, expiration, labels), dataset creation and dataset actions (properties, default
+  expiration, labels, description), and a BigQuery Table Designer (columns, types, modes, partitioning, clustering).
+- Not yet scoped: a permissions page for datasets, tables and views from the IAM policy, with grant and revoke; an
+  authorized views manager, shown from both sides; row access policies (list, script, drop, and saying when they
+  filtered a result); time travel (`FOR SYSTEM_TIME AS OF`, restore and undelete); loading a local CSV or JSON file into
+  a table, and exporting a table to Cloud Storage.
+- Deleting the 0.9.0 profile files the startup migration leaves as a frozen snapshot (docs/architecture.md, Profile
+  files and the 0.9.0 migration).
+
 ## Testing
 
 - **Offline.** `BigQueryChecks` and `BigQueryCredentialChecks` (in the offline .NET run; alone with
@@ -811,8 +850,12 @@ and TIME columns, writes BYTES base64-encoded twice and exits on ARRAY columns; 
   Add `-p 9060:9060` for Storage Read. On Windows use `http://127.0.0.1:9050` (`localhost` may resolve to IPv6 first).
 - **Smoke.** `scripts/bigquery-results-smoke.mjs` runs the Release backend against a loopback REST fake
   (`scripts/fixtures/bigquery-rest.mjs`, set as `VARIA_TEST_BIGQUERY_ENDPOINT`, so emulator mode with no Google project): a
-  windowed result's Load Sample… of its first rows (no job) and at random (a `TABLESAMPLE` job), then its table expiring
-  and Re-run replacing it in place.
+  windowed result's Load Sample… of its first rows (no job) and at random (a `TABLESAMPLE` job), its table expiring and
+  Re-run replacing it in place; then, on the re-run result, a jump to its end reading that block with `tabledata.list`,
+  Copy of a whole column across blocks, Save Results As streaming every row, Load into memory in place, and Automatically,
+  by size keeping the same small result in memory. `scripts/bigquery-explorer-smoke.mjs` drives Object Explorer against the
+  same fake with `objects` (a table, a view, a routine and a model): the folders and objects, Columns with a STRUCT's
+  fields, Preview Rows with no job, a view's menu without Preview Rows, Script View as › SELECT To and Properties.
 - **Throughput.** `-- --bigquery-read-bench [--rows N] [--runs N]` times `query.execute` reading the same rows through
   REST and through Storage Read (four streams and one; uncompressed, LZ4 and Zstandard) against the offline fakes, so
   it measures decoding and storing, not the network or the fakes (the REST fake serializes each page once, and the
@@ -827,7 +870,9 @@ and TIME columns, writes BYTES base64-encoded twice and exits on ARRAY columns; 
   Downloading and decoding overlap, so a read takes about the longer of the two: at 100 Mbit/s the mixed table takes
   about 3.7 s uncompressed and 1.4 s with Zstandard; at 1 Gbit/s about 0.4 s uncompressed and 0.2 s with Zstandard, where
   decoding bounds it.
-- **Never a real project.** No check contacts Google Cloud. What only a real project can prove (tokeninfo and STS
-  answers, Google's exact error bodies, bytes billed and slot statistics, a 409 on a repeated job id, whether a script's
-  cap applies per statement, which fields `jobs.list` leaves out of other users' jobs and a script's children) stays on the
-  hand-written fixtures until the owner runs a check against one.
+- **A real project only by hand.** No check in `npm run check`, CI or the smoke suites contacts Google Cloud. What only a
+  real project can prove (tokeninfo answers, bytes billed, a 409 on a repeated job id, whether a script's cap applies per
+  statement, a script's children, which fields `jobs.list` leaves out of other users' jobs) is the opt-in, billed
+  `-- --bigquery-real-project` group, with its spending guard ([Testing › Real BigQuery project](testing.md#environment));
+  until the owner runs it, those answers rest on the hand-written fixtures. STS and federation answers and Google's
+  exact error bodies stay on the fixtures.

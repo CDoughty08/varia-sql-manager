@@ -88,7 +88,8 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   to the matching entry unless the file has one for the same credentials, AutoRecover records join within its caps, and a
   session folder 0.10.0 made (even empty) keeps what it holds while 0.9.0's unsaved tabs are offered through AutoRecover.
   Finished steps, and the records already copied, are recorded in `profile-migration.json`, so a store's own file neither
-  hides 0.9.0's nor brings back what the user discarded; a failed or partial step retries at the next start, and saved
+  hides 0.9.0's nor brings back what the user discarded (so what 0.9.0 changes after a downgrade is not carried forward
+  on the next upgrade); a failed or partial step retries at the next start, and saved
   passwords wait for the connections, whose library their store reconciles against. A marker that exists but cannot be
   used counts every step done (a newer version's is left alone; a corrupt one is quarantined and replaced). An unreadable
   0.9.0 file is quarantined. Logs carry only the step and an error code. A 0.9.0 workspace seal still verifies over the old `sqlServer` spelling (`connection-workspace-seal.ts`). Principals and targets carry `provider` (0.9.0's `sqlServer` reads as `sqlserver`); session

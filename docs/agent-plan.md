@@ -4,7 +4,7 @@ Status: **agreed with the owner on 2026-11-15** (decisions below), revised after
 on 2026-11-16, lanes rewritten to the document model on 2026-11-18. Implementation starts with AG-0a. This page is the plan of record for the Agent lanes; each lane's PR updates the area's own page (a new
 docs/sql-server-agent.md, generated below a marker like docs/integration-services.md) and moves the lane's row here to Done.
 
-Agent is planned for 0.11.0. 0.10.0 focuses on BigQuery (docs/bigquery-plan.md); Agent lanes run beside it without getting
+Agent is planned for 0.11.0. 0.10.0 focuses on BigQuery (docs/bigquery.md); Agent lanes run beside it without getting
 in its way (Coordination with BigQuery, after Lanes) and stay hidden until 0.11.0. SSMS 2022/22 is the parity target for names,
 menus, keys and behaviour; visuals follow Calm Pro.
 
@@ -41,7 +41,7 @@ updates the mock in the same PR when the design changes.
 
 ## Owner decisions (2026-11-15)
 
-- **Plan home**: this docs page plus the mocks, in a docs-only PR (as docs/bigquery-plan.md), pushed only with mocks for
+- **Plan home**: this docs page plus the mocks, in a docs-only PR (as BigQuery's plan was), pushed only with mocks for
   all new and changed UI in Varia's style.
 - **Agent service control**: Start, Stop and Restart in 0.11.0, behind a confirmation. **Must ship** (lane AG-2).
   Revised on 2026-11-18: the Windows route, not `xp_servicecontrol` (above).
@@ -1327,7 +1327,7 @@ Operators, alerts and proxies stay listable and scriptable from AG-1 and AG-4.
 
 ## Coordination with BigQuery
 
-BigQuery (docs/bigquery-plan.md) is the 0.10.0 milestone and runs at the same time, with BQ-0 in progress. Agent must not
+BigQuery (docs/bigquery.md) is the 0.10.0 milestone and runs at the same time, with BQ-0 in progress. Agent must not
 slow it down:
 
 - **Before BQ-0 merges, only AG-0a.** BQ-0 touches every registry (methods in the five places, context keys, the

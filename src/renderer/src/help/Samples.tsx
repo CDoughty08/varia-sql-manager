@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { authenticationCatalog, authenticationModes, type AuthenticationMode } from '../../../shared/auth'
+import { settingValueLabel } from '../../../shared/help/references'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 
 /** Bounded teaching illustrations, not another editor, connection dialog or result-grid implementation. */
@@ -39,5 +40,33 @@ export function ResultsSample() {
     <p className="help-muted">Rank is numeric, so it sorts by value regardless of your text-sort option.</p>
     <p><strong>Ordinary Copy currently {headers ? 'includes' : 'omits'} column headers.</strong> Copy with Headers includes them regardless of that option.</p>
     <p className="help-muted">Fictional rows only. Use the real grid to select, copy or save returned data.</p>
+  </figure>
+}
+
+/** Fictional result sizes against a fictional result memory with 4 GB free. Automatic keeps a result in memory when it fits
+ *  half of the room the query may still take (docs/bigquery.md, Residence); the sample keeps that one rule. */
+export const bigQuerySampleResults = [{ label: '250,000 rows (about 40 MB)', mb: 40 }, { label: '12 million rows (about 3 GB)', mb: 3_000 }, { label: '400 million rows (about 90 GB)', mb: 90_000 }] as const
+export const bigQuerySampleFreeMb = 4_000
+export function bigQuerySampleResidence(mode: string, mb: number): 'memory' | 'truncated' | 'windowed' {
+  if (mode === 'memory') return mb <= bigQuerySampleFreeMb ? 'memory' : 'truncated'
+  if (mode === 'windowed') return 'windowed'
+  return mb <= bigQuerySampleFreeMb / 2 ? 'memory' : 'windowed'
+}
+export function BigQueryResultsSample() {
+  const { settings } = useWorkbench(), { values } = useServiceSnapshot(settings)
+  const [size, setSize] = useState(1), result = bigQuerySampleResults[size], mode = values['queryResults.bigQuery.residence']
+  const residence = bigQuerySampleResidence(mode, result.mb), loadable = result.mb <= bigQuerySampleFreeMb
+  return <figure className="help-sample"><figcaption>Sample · where a BigQuery result’s rows stay</figcaption>
+    <div className="help-sample-controls" role="group" aria-label="Sample result size">{bigQuerySampleResults.map((entry, index) => <button key={entry.label} type="button" aria-pressed={size === index} onClick={() => setSize(index)}>{entry.label}</button>)}</div>
+    <p role="status">{residence === 'memory' ? 'Kept in memory: every result tool works on it, as on a SQL Server result.'
+      : residence === 'truncated' ? 'Kept in memory until the result memory is full: the rest is not read, and the grid says the result was truncated.'
+        : 'Windowed in BigQuery: the grid reads blocks of rows as you scroll, free, and the caption says windowed in BigQuery.'}</p>
+    {residence === 'windowed' && <ul aria-label="What a windowed result offers">
+      <li>Sort, filter and column value lists run in BigQuery as billed queries, estimated first.</li>
+      <li>Copy works within the Copy limit; Save Results As streams every row to the file.</li>
+      <li>{loadable ? 'Load into memory fits the free result memory, so the strip offers it; then every tool works.' : 'Too large to load into memory: Load Sample… reads some of its rows into a new result instead.'}</li>
+      <li>BigQuery keeps the result about 24 hours; after that the strip offers Re-run.</li>
+    </ul>}
+    <p className="help-muted">Follows your Keep results option ({settingValueLabel('queryResults.bigQuery.residence', values)}) with a fictional {bigQuerySampleFreeMb.toLocaleString('en-US')} MB of result memory free. Illustration only: it runs no query and connects to nothing.</p>
   </figure>
 }

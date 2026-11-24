@@ -47,7 +47,7 @@ internal static partial class BigQueryLimits
     public const int ExtraProjects = 16;
     public const int ServiceAccount = 254;
     public const int DisplayName = 128;
-    /// <summary>A key or federation configuration file main reads: at most 64 KiB (docs/bigquery-plan.md, Authentication).</summary>
+    /// <summary>A key or federation configuration file main reads: at most 64 KiB (docs/bigquery.md, Authentication).</summary>
     public const int CredentialBytes = 64 * 1024;
     public const int PageToken = 1024;
     public const int ProjectsPerPage = 1000;

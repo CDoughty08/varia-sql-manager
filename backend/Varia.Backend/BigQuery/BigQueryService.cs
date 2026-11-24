@@ -86,7 +86,7 @@ internal sealed record BigQueryEnvironment(Uri? Endpoint, IHttpClientFactory Htt
     public IBigQueryStorageRead StorageClient(BigQueryConnection connection) => Storage?.Invoke(connection)
         ?? new GrpcStorageRead(StorageEndpoint ?? GrpcStorageRead.GoogleEndpoint, Emulator ? null : connection.Credential, Proxy);
 
-    /// <summary>Google's endpoint with the system proxy and certificate store (decision 19).</summary>
+    /// <summary>Google's endpoint with the system proxy and certificate store (docs/bigquery.md, Packages).</summary>
     public static BigQueryEnvironment Production() => new(null, new MetadataSafeHttpClientFactory(), SubjectTokens.FromEnvironment());
 
     /// <summary>The backend process's environment. Main passes VARIA_TEST_BIGQUERY_ENDPOINT only to unpackaged builds
@@ -214,7 +214,7 @@ internal sealed record BigQueryEstimate(long BytesProcessed, bool Faked = false,
 internal sealed partial class BigQueryService(BigQueryEnvironment environment) : IDisposable
 {
     public const string ApplicationName = "VariaSqlManager";
-    /// <summary>The connect probe (docs/bigquery-plan.md, SQL the backend runs): a free dry run that proves bigquery.jobs.create.</summary>
+    /// <summary>The connect probe (docs/architecture.md, BigQuery): a free dry run that proves bigquery.jobs.create.</summary>
     public const string ProbeSql = "SELECT 1";
     public const string ProbePermission = "bigquery.jobs.create";
     /// <summary>Labels on every job Varia creates, so Job History can mark them.</summary>

@@ -1,7 +1,7 @@
 # Getting Started
 
 Open **Help > Getting Started**, or search for Getting Started in the command palette. The read-only tab contains
-offline guides for connecting to SQL Server, running a query, and working with results. Search matches titles,
+offline guides for connecting to SQL Server, connecting to BigQuery, running a query, and working with results. Search matches titles,
 summaries and topic keywords. Related guides link the workflows together.
 
 Command names, menu paths, shortcuts, mouse gestures and option values come from Varia's current catalogs and
@@ -14,7 +14,8 @@ no connection or SQL request. **Open Connect dialog** and **Open a blank query**
 real application. Options links open the relevant page; changes apply through the normal Options workflow.
 
 The results illustration sorts numeric ranks, so text-sort modes do not change its order. Its copy explanation uses
-your applied column-header option. Loading and unavailable guides keep their heading and All guides navigation;
+your applied column-header option. The BigQuery illustration picks between in memory and windowed for three fictional result sizes by your
+applied Keep results option, against a fictional amount of free result memory; it runs no query and connects to nothing. Loading and unavailable guides keep their heading and All guides navigation;
 a guide finishing its load leaves focus where you moved it.
 If a guide fails to load, you can read other guides from All guides. Restart Varia to retry the failed guide.
 
