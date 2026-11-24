@@ -25,19 +25,19 @@ const resolve = (file: Record<string, unknown>, variant: ThemeType = 'dark') => 
 const specValues = `
 foreground #d9dce3 #1c1f26|descriptionForeground #9298a4 #5c6370|disabledForeground #9298a4 #5c6370|errorForeground #f39a9a #b42229
 warningForeground #e4bb6a #875800|successForeground #74d19c #146f3b|infoForeground #8f9cff #4453d0|focusBorder #8f9cff #4453d0
-icon.foreground #a3a9b5 #4d5461|widget.shadow #00000085 #10182824|widget.border #6b7286 #d4d8df|textPreformat.foreground #bcc1cb #3a404b
+icon.foreground #a3a9b5 #4d5461|widget.shadow #00000085 #10182824|widget.border #3a404d #d4d8df|textPreformat.foreground #bcc1cb #3a404b
 sash.hoverBorder #8f9cff #4453d0|scrollbarSlider.background #9298a466 #5c637066|scrollbarSlider.hoverBackground #9298a48c #5c63708c
 scrollbarSlider.activeBackground #9298a4b3 #5c6370b3|titleBar.activeBackground #111317 #f7f8fa|titleBar.activeForeground #9298a4 #5c6370
 titleBar.inactiveBackground #111317 #f7f8fa|titleBar.inactiveForeground #9298a4 #5c6370|titleBar.border #262a31 #e3e6eb
-titleBar.iconForeground #8f9cff #4453d0|titleBar.controlsForeground #d9dce3 #1c1f26|commandCenter.background #1c1f25 #f1f3f6|commandCenter.foreground #a3a9b5 #4d5461|commandCenter.activeBackground #30343e #d6dae0|commandCenter.border #6b728673 #878e9b73|menubar.selectionBackground #30343e #d6dae0
+titleBar.iconForeground #8f9cff #4453d0|titleBar.controlsForeground #d9dce3 #1c1f26|commandCenter.background #1c1f25 #f1f3f6|commandCenter.foreground #a3a9b5 #4d5461|commandCenter.activeBackground #30343e #d6dae0|commandCenter.border #3a404d #c2c8d4|menubar.selectionBackground #30343e #d6dae0
 menubar.selectionForeground #f5f6f8 #0a0c10|menubar.selectionBorder #8f9cff00 #4453d000|menu.background #1d2026 #ffffff
 menu.foreground #d9dce3 #1c1f26|menu.selectionBackground #30343e #d6dae0|menu.selectionForeground #f5f6f8 #0a0c10
-menu.selectionBorder #8f9cff00 #4453d000|menu.separatorBackground #30343c #dcdfe5|menu.border #6b7286 #d4d8df|toolbar.background #111317 #f7f8fa
+menu.selectionBorder #8f9cff00 #4453d000|menu.separatorBackground #30343c #dcdfe5|menu.border #3a404d #d4d8df|toolbar.background #111317 #f7f8fa
 toolbar.border #262a31 #e3e6eb|toolbar.hoverBackground #d9dce31f #1c1f261f|toolbar.separatorBackground #30343c #dcdfe5
 toolbar.labelForeground #a3a9b5 #4d5461|keybindingLabel.foreground #9298a4 #5c6370|keybindingLabel.border #30343c #dcdfe5
-button.background #8f9cff #4453d0|button.foreground #0e1230 #ffffff|button.hoverBackground #a8b2ff #3744b8|button.border #6b7286 #878e9b
+button.background #8f9cff #4453d0|button.foreground #0e1230 #ffffff|button.hoverBackground #a8b2ff #3744b8|button.border #3a404d #c2c8d4
 button.secondaryForeground #bcc1cb #3a404b|button.secondaryHoverBackground #262a32 #dfe2e7|button.secondaryHoverForeground #f5f6f8 #0a0c10
-input.background #101216 #ffffff|input.foreground #d9dce3 #1c1f26|input.border #6a7184 #878e9b|input.placeholderForeground #9298a4 #5c6370
+input.background #101216 #ffffff|input.foreground #d9dce3 #1c1f26|input.border #3a404d #c2c8d4|input.placeholderForeground #9298a4 #5c6370
 inputValidation.errorBackground #3a1d22 #fdecec|inputValidation.errorForeground #f6bcc1 #8f1d24|sideBar.background #111317 #f7f8fa
 sideBarTitle.foreground #a3a9b5 #4d5461|sideBarSectionHeader.border #1f2228 #eceef2|list.hoverBackground #262a32 #dfe2e7
 list.activeSelectionBackground #29314f #d9e0fb|list.activeSelectionForeground #d9dce3 #1c1f26|list.inactiveSelectionBackground #21273b #e7ebfc
@@ -57,7 +57,7 @@ tab.inactiveBackground #111317 #f7f8fa|tab.unfocusedActiveBackground #16181d #ff
 tab.activeForeground #f5f6f8 #0a0c10|tab.inactiveForeground #9298a4 #5c6370|tab.unfocusedActiveForeground #a3a9b5 #4d5461
 tab.unfocusedInactiveForeground #9298a4 #5c6370|tab.border #262a31 #e3e6eb|tab.activeBorderTop #8f9cff #4453d0|editorGroup.border #262a31 #e3e6eb
 editorGroup.dropBackground #8f9cff4d #4453d04d|dock.background #16181d #ffffff|dock.guideBackground #1d2026 #ffffff
-dock.guideForeground #8f9cff #4453d0|dock.guideBorder #6b7286 #878e9b|dock.guideShadow #00000085 #10182824|dock.guideActiveBackground #29314f #d9e0fb
+dock.guideForeground #8f9cff #4453d0|dock.guideBorder #3a404d #c2c8d4|dock.guideShadow #00000085 #10182824|dock.guideActiveBackground #29314f #d9e0fb
 dock.guideActiveBorder #8f9cff #4453d0|dock.guideActiveRing #8f9cff99 #4453d099|dock.previewBackground #8f9cff2e #4453d02e
 dock.previewBorder #8f9cff #4453d0|dock.previewInnerBorder #8f9cff59 #4453d059|documentTabs.background #111317 #f7f8fa
 documentTabs.activeBackground #16181d #ffffff|documentTabs.activeForeground #d9dce3 #1c1f26|documentTabs.inactiveForeground #9298a4 #5c6370
@@ -69,7 +69,7 @@ editorWhitespace.foreground #9298a480 #5c637080|editorBookmark.foreground #8f9cf
 editorBracketHighlight.foreground2 #cd9ff0 #8338b4|editorBracketHighlight.foreground3 #74b4ef #1d68ad
 editorBracketHighlight.foreground4 #dcc06a #7a5c00|editorBracketHighlight.foreground5 #cd9ff0 #8338b4
 editorBracketHighlight.foreground6 #74b4ef #1d68ad|editorBracketHighlight.unexpectedBracket.foreground #f39a9a #b42229
-editorWidget.background #1d2026 #ffffff|editorWidget.foreground #d9dce3 #1c1f26|editorWidget.border #6b7286 #d4d8df
+editorWidget.background #1d2026 #ffffff|editorWidget.foreground #d9dce3 #1c1f26|editorWidget.border #3a404d #d4d8df
 emptyState.foreground #9298a4 #5c6370|emptyState.titleForeground #a3a9b5 #4d5461|emptyState.iconForeground #7f869499 #6b728099
 panel.background #16181d #ffffff|panel.border #262a31 #e3e6eb|panelTitle.background #16181d #ffffff|panelTitle.activeForeground #f5f6f8 #0a0c10
 panelTitle.inactiveForeground #9298a4 #5c6370|panelTitle.activeBorder #8f9cff #4453d0|badge.background #30343e #d6dae0
@@ -83,7 +83,7 @@ resultsGrid.nullForeground #9298a4 #5c6370|resultsGrid.nullBackground #d9dce300 
 resultsGrid.selectionBackground #29314f #d9e0fb|resultsGrid.selectionForeground #d9dce3 #1c1f26
 resultsGrid.inactiveSelectionBackground #21273b #e7ebfc|resultsGrid.selectionOverlay #8f9cff24 #4453d024|resultsGrid.inactiveSelectionOverlay #8f9cff1a #4453d01a|resultsGrid.hitOverlay #e4bb6a1a #8758001a|resultsGrid.activeCellBorder #8f9cff #4453d0|resultsGrid.hoverBackground #262a32 #dfe2e7
 resultsGrid.headerSelectionBackground #21273b #e7ebfc|resultsGrid.headerSelectionForeground #bcc5ff #3240b0|resultsGrid.linkForeground #8f9cff #4453d0
-resultsGrid.splitterBackground #6b7286 #878e9b|resultsMessages.foreground #d9dce3 #1c1f26|statusBar.background #111317 #f7f8fa
+resultsGrid.splitterBackground #7f8694 #6b7280|resultsMessages.foreground #d9dce3 #1c1f26|statusBar.background #111317 #f7f8fa
 statusBar.foreground #a3a9b5 #4d5461|statusBar.border #262a31 #e3e6eb|statusBar.separatorForeground #9298a4 #5c6370
 statusBar.onlineIndicator #74d19c #146f3b|statusBar.idleIndicator #9298a4 #5c6370|statusBar.executingBackground #232842 #dde1f9|statusBar.executingForeground #bcc5ff #3240b0
 statusBar.disconnectedBackground #111317 #f7f8fa|statusBar.disconnectedForeground #a3a9b5 #4d5461|statusBar.errorBackground #3a1d22 #fdecec
@@ -93,7 +93,7 @@ queryStatusBar.errorForeground #f6bcc1 #8f1d24|banner.errorBackground #3a1d22 #f
 banner.warningBackground #33291a #fff5dc|banner.warningForeground #f0d49e #6b4400|dialog.backdropBackground #0a0c10b3 #1c1f2652
 dialog.separatorBackground #30343c #dcdfe5|dialog.labelForeground #bcc1cb #3a404b|dialog.descriptionForeground #a3a9b5 #4d5461
 settings.headerForeground #f5f6f8 #0a0c10|notifications.background #1d2026 #ffffff|notifications.foreground #d9dce3 #1c1f26
-notifications.border #6b7286 #d4d8df|notificationsErrorIcon.foreground #f39a9a #b42229|notificationsWarningIcon.foreground #e4bb6a #875800
+notifications.border #3a404d #d4d8df|notificationsErrorIcon.foreground #f39a9a #b42229|notificationsWarningIcon.foreground #e4bb6a #875800
 notificationsInfoIcon.foreground #8f9cff #4453d0|quickInput.background #1d2026 #ffffff|quickInput.foreground #d9dce3 #1c1f26
 quickInputTitle.background #1c1f25 #f1f3f6|quickInputList.focusBackground #29314f #d9e0fb|quickInputList.focusForeground #d9dce3 #1c1f26
 pickerGroup.foreground #bcc5ff #3240b0|pickerGroup.border #30343c #dcdfe5
@@ -103,7 +103,7 @@ statusPill.criticalBackground #f39a9a24 #b4222924|statusPill.criticalForeground 
 statusPill.infoForeground #bcc5ff #3240b0|statusPill.neutralBackground #30343e #d6dae0|statusPill.neutralForeground #bcc1cb #3a404b
 memoryPanel.rawBackground #6ea4ea24 #2563a824|memoryPanel.rawForeground #6ea4ea #2563a8
 memoryPanel.packedBackground #ab95ea24 #7a4bbf24|memoryPanel.packedForeground #ab95ea #7a4bbf
-chip.background #d9dce300 #1c1f2600|chip.foreground #bcc1cb #3a404b|chip.border #6b728673 #878e9b73|chip.activeBackground #21273b #e7ebfc
+chip.background #d9dce300 #1c1f2600|chip.foreground #bcc1cb #3a404b|chip.border #3a404d #c2c8d4|chip.activeBackground #21273b #e7ebfc
 chip.activeForeground #bcc5ff #3240b0|chip.activeBorder #8f9cff #4453d0|live.indicator #74d19c #146f3b|live.pausedForeground #9298a4 #5c6370
 live.staleForeground #f0d49e #6b4400|live.staleBackground #e4bb6a24 #87580024|tile.background #16181d #ffffff|tile.border #262a31 #e3e6eb
 tile.warningBorder #e4bb6a #875800|tile.criticalBorder #f39a9a #b42229|skeleton.background #30343e #d6dae0

@@ -29,11 +29,22 @@ export function backendSpawnSpec(options: { packaged: boolean; root: string; res
 
 const resultMemoryVariable = 'VARIA_RESULT_MEMORY_MIB'
 const bigQueryEndpointVariable = 'VARIA_TEST_BIGQUERY_ENDPOINT'
+const bigQueryStorageVariable = 'VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT'
 
 /** The BigQuery emulator VARIA_TEST_BIGQUERY_ENDPOINT names, honoured only by unpackaged builds and only as a loopback http
  *  address with no path (BigQueryEnvironment.EmulatorEndpoint checks it again): emulator mode, with anonymous credentials. */
 export function bigQueryEmulatorEndpoint(options: { packaged: boolean; env?: NodeJS.ProcessEnv }): string | undefined {
-  const value = options.packaged ? undefined : options.env?.[bigQueryEndpointVariable]?.trim()
+  return loopbackEndpoint(options.packaged ? undefined : options.env?.[bigQueryEndpointVariable])
+}
+
+/** The emulator's gRPC port VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT names, so the app reads emulator results through Storage
+ *  Read: only beside an accepted emulator endpoint, and only as a loopback http address (the backend checks both again). */
+export function bigQueryEmulatorStorageEndpoint(options: { packaged: boolean; env?: NodeJS.ProcessEnv }): string | undefined {
+  return bigQueryEmulatorEndpoint(options) === undefined ? undefined : loopbackEndpoint(options.env?.[bigQueryStorageVariable])
+}
+
+function loopbackEndpoint(raw: string | undefined): string | undefined {
+  const value = raw?.trim()
   if (!value) return undefined
   try {
     const url = new URL(value)
@@ -41,14 +52,16 @@ export function bigQueryEmulatorEndpoint(options: { packaged: boolean; env?: Nod
   } catch { return undefined }
 }
 
-/** The backend gets VARIA_TEST_BIGQUERY_ENDPOINT only as bigQueryEmulatorEndpoint accepts it: never in a packaged build,
- *  whatever the shell sets (in any case: Windows ignores it), and never an address the backend would refuse to start with. */
+/** The backend gets VARIA_TEST_BIGQUERY_ENDPOINT and VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT only as the functions above accept
+ *  them: never in a packaged build, whatever the shell sets (in any case: Windows ignores it), and never an address the
+ *  backend would refuse to start with. */
 function withBigQueryEndpoint(env: NodeJS.ProcessEnv | undefined, options: { packaged: boolean; env?: NodeJS.ProcessEnv }): NodeJS.ProcessEnv | undefined {
   if (!env) return undefined
-  const endpoint = bigQueryEmulatorEndpoint(options)
+  const endpoint = bigQueryEmulatorEndpoint(options), storage = bigQueryEmulatorStorageEndpoint(options)
   const copy = { ...env }
-  for (const name of Object.keys(copy)) if (name.toUpperCase() === bigQueryEndpointVariable) delete copy[name]
+  for (const name of Object.keys(copy)) if ([bigQueryEndpointVariable, bigQueryStorageVariable].includes(name.toUpperCase())) delete copy[name]
   if (endpoint !== undefined) copy[bigQueryEndpointVariable] = endpoint
+  if (storage !== undefined) copy[bigQueryStorageVariable] = storage
   return copy
 }
 

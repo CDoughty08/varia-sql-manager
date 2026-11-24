@@ -6,8 +6,8 @@ import { isPeekKind } from '../../../shared/explorer/peek.ts'
 import { explorerNodeProvider, type ProviderContext } from '../../../shared/providers.ts'
 import { isDependencyKind } from '../../../shared/explorer/dependencies.ts'
 import { explorerFilterSchema } from '../../../shared/explorer/schema.ts'
-import { currentDatabaseRuntime, type DatabaseRuntime, type DatabaseStatusRow } from '../../../shared/explorer/status.ts'
-import { actionContextValues, actionMenuState, type ActionContextValues, type AgentServiceTarget } from '../../../shared/actions/catalog.ts'
+import { currentDatabaseRuntime, liveJobStatus, type DatabaseRuntime, type DatabaseStatusRow } from '../../../shared/explorer/status.ts'
+import { actionContextValues, actionMenuState, isAgentServiceAction, type ActionContextValues, type AgentServiceTarget } from '../../../shared/actions/catalog.ts'
 import { scriptContextValues, scriptMenuState, type ScriptContextValues } from '../../../shared/scripting/catalog.ts'
 import { ssisVerbContextValues, ssisVerbMenuState, type SsisVerbContextValues } from '../../../shared/ssis/catalog.ts'
 import { onUnexpectedError } from '../core/errors'
@@ -128,7 +128,19 @@ export interface GroupBySchemaSource { get(): boolean; subscribe(listener: () =>
 export interface DatabaseRuntimeSource {
   databaseRuntime(connectionId: string, database: string): { readonly at: number; readonly row: DatabaseStatusRow | undefined; readonly complete: boolean } | undefined
   /** The SQL Server Agent service's last sampled state and startup type (`explorer.agentService`), for the Agent node's verbs. */
-  agentServiceOf?(connectionId: string): { readonly state?: number; readonly startup?: number } | undefined
+  agentServiceOf?(connectionId: string): { readonly state?: number; readonly startup?: number; readonly clustered?: boolean } | undefined
+  subscribe(listener: () => void): () => void
+}
+/** The long-run registry (LongRunService), for the Agent node's `busy` rule: a start, stop or restart of SQL Server Agent that runs in
+ *  this window greys the other service verbs on its server, even after its dialog closes. */
+export interface AgentLongRunSource {
+  getSnapshot(): { readonly runs: readonly { readonly kind: string; readonly connectionId: string }[] }
+  subscribe(listener: () => void): () => void
+}
+
+/** Each job row's live enabled state (AgentTreeLive, AG-12), for a job's Enable Job or Disable Job. */
+export interface JobStatusSource {
+  job(connectionId: string, jobId: string | undefined): { readonly enabled?: boolean; readonly enabledAt?: number } | undefined
   subscribe(listener: () => void): () => void
 }
 
@@ -202,7 +214,7 @@ const sameParent = (a: ParentRef, b: ObjectRef) => a.kind === b.kind && a.schema
  *  runtime state is the one it has now (`runtime`: the listing's, or a newer live sample's). */
 const targetOf = (node: TreeNode, connection: Pick<LiveConnection, 'engineEdition' | 'linux' | 'options'> | undefined, runtime: DatabaseRuntime | undefined, agent?: AgentServiceTarget): ExplorerTarget => ({
   connectionId: node.connectionId, ref: node.ref, kind: node.kind, ...(node.folder ? { folder: node.folder } : {}), ...(node.subtype ? { subtype: node.subtype } : {}), label: node.label,
-  ...(node.status ? { status: node.status } : {}), ...(runtime ? { database: runtime } : {}), ...(node.listedAt !== undefined ? { listedAt: node.listedAt } : {}),
+  ...(node.status ? { status: node.status } : {}), ...(runtime ? { database: runtime } : {}), ...(node.listedAt !== undefined && node.database ? { listedAt: node.listedAt } : {}),
   engine: serverEngineOf(connection?.engineEdition), linux: !!connection?.linux, ...(connection?.options.provider === 'bigquery' ? { provider: 'bigquery' as const } : {}),
   ...(node.jobId !== undefined ? { jobId: node.jobId } : {}),
   ...(node.created !== undefined ? { created: node.created } : {}), ...(agent ? { agent } : {})
@@ -245,6 +257,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private readonly limits: ExplorerServiceLimits
   private readonly loader: ExplorerLoader
   private readonly nodes = new Map<number, TreeNode>()
+  /** Each connection's Agent node found last (`agentMenuNode`); checked on use, since a node can go. */
+  private readonly agentNodes = new Map<string, number>()
   private readonly states = new Map<number, NodeState>()
   private roots: number[] = []
   private readonly rootByConnection = new Map<string, number>()
@@ -280,6 +294,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   /** The filter the rows were last flattened with, so a change of filter is announced once. */
   private readonly now: () => number
   private status?: DatabaseRuntimeSource
+  private longRuns?: AgentLongRunSource
+  private jobs?: JobStatusSource
   /** The child `reconcile` selects when a page of its folder brings it. */
   private pendingSelect?: { readonly folder: number; readonly key: string; readonly name: string | undefined }
   /** The node `seek` walks towards, re-tried as each page arrives. */
@@ -558,6 +574,13 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     const node = this.selectedNode()
     return node && this.targetOf(node)
   }
+  /** Feeds the Agent node's `busy` rule from the long-run registry (AG-10); the context keys follow its runs. */
+  useLongRuns(source: AgentLongRunSource): Disposable {
+    this.longRuns = source
+    const stop = source.subscribe(() => this.guard(() => this.updateContext()))
+    this.updateContext()
+    return { dispose: () => { stop(); if (this.longRuns === source) { this.longRuns = undefined; this.updateContext() } } }
+  }
   /**
    * Narrows database menus by the live status samples too (D3a): a database a sample newer than its listing shows offline
    * greys Take Offline at once, before any listing. The context keys follow the samples; nothing subscribes for them but this.
@@ -568,13 +591,44 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.updateContext()
     return { dispose: () => { stop(); if (this.status === source) { this.status = undefined; this.updateContext() } } }
   }
+  /** Offers a job's Enable Job or Disable Job by the live read too, as its row shows it (AG-12). */
+  useJobStatus(source: JobStatusSource): Disposable {
+    this.jobs = source
+    const stop = source.subscribe(() => this.guard(() => this.updateContext()))
+    this.updateContext()
+    return { dispose: () => { stop(); if (this.jobs === source) { this.jobs = undefined; this.updateContext() } } }
+  }
   private targetOf(node: TreeNode): ExplorerTarget {
     const name = node.kind === 'database' && node.ref.type === 'object' ? node.ref.object.name : undefined
     const runtime = name === undefined ? node.database : currentDatabaseRuntime(node.database, node.listedAt, this.status?.databaseRuntime(node.connectionId, name))
-    // The Agent node's verbs follow its service's sampled state (actions catalogue, agentServiceRules).
-    const service = node.kind === 'agent' ? this.status?.agentServiceOf?.(node.connectionId) : undefined
-    const agent = node.kind === 'agent' ? { windowsClient: this.windowsClient, ...(service?.state !== undefined ? { state: service.state } : {}), ...(service?.startup !== undefined ? { startup: service.startup } : {}) } : undefined
-    return targetOf(node, this.connectionOf(node.connectionId), runtime, agent)
+    const status = node.kind === 'agentJob' ? liveJobStatus(node.status, node.listedAt, this.jobs?.job(node.connectionId, node.jobId)) : node.status
+    return targetOf(status === node.status ? node : { ...node, status }, this.connectionOf(node.connectionId), runtime, node.kind === 'agent' ? this.agentFacts(node.connectionId) : undefined)
+  }
+  /** The Agent node's service facts (actions catalogue, agentServiceRules): its service's sampled state, whether the server is a failover
+   *  cluster instance, and whether a start, stop or restart of it runs in this window (AG-10). */
+  private agentFacts(connectionId: string): AgentServiceTarget {
+    const service = this.status?.agentServiceOf?.(connectionId)
+    const busy = !!this.longRuns?.getSnapshot().runs.some(run => run.connectionId === connectionId && isAgentServiceAction(run.kind))
+    return {
+      windowsClient: this.windowsClient, ...(service?.state !== undefined ? { state: service.state } : {}), ...(service?.startup !== undefined ? { startup: service.startup } : {}),
+      ...(service?.clustered ? { clustered: true } : {}), ...(busy ? { busy: true } : {})
+    }
+  }
+  /**
+   * A connection's SQL Server Agent node as a menu target for its service verbs from elsewhere (AG-10, Job Activity Monitor's Start Agent):
+   * the tree's own row when it is loaded, else the object with the same facts and no row (id 0, so nothing is reloaded after the run). A
+   * `sample` (the monitor's own service probe, which draws its banner) wins over the tree's state and startup type, so the two never
+   * disagree; a cluster fact from either counts.
+   */
+  agentMenuNode(connectionId: string, sample?: { readonly state?: number; readonly startup?: number; readonly clustered?: boolean }): ExplorerMenuNode | undefined {
+    if (!this.connectionOf(connectionId)) return undefined
+    // The node found last is asked first: a monitor's banner asks again on every tree and status publish.
+    const cached = this.agentNodes.get(connectionId), known = cached === undefined ? undefined : this.nodes.get(cached)
+    let found = known?.kind === 'agent' && known.connectionId === connectionId ? this.menuNode(known.id) : undefined
+    if (!found) for (const node of this.nodes.values()) if (node.kind === 'agent' && node.connectionId === connectionId && (found = this.menuNode(node.id))) { this.agentNodes.set(connectionId, node.id); break }
+    const menu = found ?? { ...this.objectNode(connectionId, { kind: 'agent' }, 'SQL Server Agent'), id: 0, agent: this.agentFacts(connectionId) }
+    const facts = menu.agent ?? this.agentFacts(connectionId)
+    return { ...menu, agent: { ...facts, ...(sample?.state !== undefined ? { state: sample.state } : {}), ...(sample?.startup !== undefined ? { startup: sample.startup } : {}), ...(!facts.clustered && sample?.clustered ? { clustered: true } : {}) } }
   }
   /** A row's node (a synthetic row's owner) as a context menu's target, with its id; undefined for a removed node. */
   menuNode(rowId: number | undefined): ExplorerMenuNode | undefined {
@@ -1536,6 +1590,9 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private takeRuntime(node: TreeNode, wire: WireNode): void {
     if (wire.database) { node.database = wire.database; node.listedAt = this.now() }
     else if (node.database) { node.database = undefined; node.listedAt = undefined }
+    // A job row is stamped too, so a live read taken before the listing (a Disable's re-list) does not override its state; its
+    // row renders again for it, as the memoised row cannot see the stamp move (liveJob compares it).
+    if (wire.jobId !== undefined) { node.listedAt = this.now(); node.rev++ }
   }
   private createChild(parent: TreeNode, wire: WireNode): TreeNode {
     const ref = this.intern(parent, wire.ref)

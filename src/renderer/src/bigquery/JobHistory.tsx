@@ -17,6 +17,7 @@ import { LiveGridPane } from '../live/LiveGridPane'
 import type { LiveSnapshot } from '../live/LiveService'
 import { probePillStatus } from '../live/status'
 import { useMenuTarget } from '../menus/useMenuTarget'
+import { gridTarget } from '../grid/anchor'
 import { useRuns } from '../search/SearchDetails'
 import type { JobHistoryEnd, JobHistoryService, JobHistoryState } from './JobHistoryService'
 
@@ -113,19 +114,30 @@ function Filters({ state, service }: { readonly state: JobHistoryState; readonly
   </div>
 }
 
-/** Cancel Job's question, in the document: Escape or Keep running leaves the job alone; the safe answer has focus. */
-function CancelConfirm({ state, onAnswer }: { readonly state: JobHistoryState; readonly onAnswer: (cancel: boolean) => void }) {
+/** Cancel Job's or Re-run's question, in the document: Escape or the safe answer (Keep running, Don't Re-run) does
+ *  nothing; the safe answer has focus. */
+function JobConfirm({ state, onAnswer }: { readonly state: JobHistoryState; readonly onAnswer: (proceed: boolean) => void }) {
   const keep = useRef<HTMLButtonElement>(null)
-  useEffect(() => keep.current?.focus(), [state.confirm?.job.jobId])
+  useEffect(() => keep.current?.focus(), [state.confirm?.job.jobId, state.confirm?.action])
   if (!state.confirm) return null
-  const textId = `${state.id}-cancel-question`
-  return <div className="ssis-confirm" role="alertdialog" aria-label="Cancel Job" aria-describedby={textId}
+  const cancel = state.confirm.action === 'cancel'
+  const textId = `${state.id}-${state.confirm.action}-question`
+  return <div className="ssis-confirm" role="alertdialog" aria-label={cancel ? 'Cancel Job' : 'Re-run Job'} aria-describedby={textId}
     onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onAnswer(false) } }}>
     <Icon name="warning" />
     <p id={textId}>{state.confirm.question}</p>
-    <button type="button" className="danger" onClick={() => onAnswer(true)}>Cancel Job</button>
-    <button type="button" ref={keep} onClick={() => onAnswer(false)}>Keep running</button>
+    <button type="button" {...cancel ? { className: 'danger' } : {}} onClick={() => onAnswer(true)}>{cancel ? 'Cancel Job' : 'Re-run'}</button>
+    <button type="button" ref={keep} onClick={() => onAnswer(false)}>{cancel ? 'Keep running' : "Don't Re-run"}</button>
   </div>
+}
+
+/** The grid row under the element a menu was asked for, from the grid that drew it (undefined outside a row). */
+function pressedRow(container: Element, from: Element): number | undefined {
+  for (let node: Element | null = from; node && container.contains(node); node = node.parentElement) {
+    const hit = gridTarget(node, from)
+    if (hit.registered) return hit.target?.row
+  }
+  return undefined
 }
 
 /** The status line: how many jobs, whether more exist, whether the list is still loading, the locations not read. */
@@ -223,7 +235,13 @@ export default function JobHistory({ documentId }: { readonly documentId: string
   const state = documents[documentId]
   const handle = service.handle(documentId)
   const live = useSyncExternalStore(handle?.subscribe ?? noSubscribe, handle?.getSnapshot ?? noLiveSnapshot, handle?.getSnapshot ?? noLiveSnapshot)
-  const menuTarget = useMenuTarget<HTMLDivElement>(() => ({ kind: 'jobHistory', tabId: documentId }))
+  // A row pressed outside the active row (inside a multi-row selection) rides in the target: the menu acts on its job.
+  const menuTarget = useMenuTarget<HTMLDivElement>((element, from) => {
+    const row = pressedRow(element, from), active = service.grid(documentId)?.getSnapshot().selection?.active.row
+    if (row === undefined || row === active) return { kind: 'jobHistory', tabId: documentId }
+    service.pressRow(documentId, row)
+    return { kind: 'jobHistory', tabId: documentId, row }
+  })
   if (!state || !handle) return <EmptyState className="workspace-empty" icon="history" title={jobHistoryTitle} detail="This document has closed." />
   const probe = live.probes[jobHistoryProbe]
   const rows = handle.table(jobHistoryProbe, 0)?.descriptor.rowsAvailable
@@ -251,7 +269,7 @@ export default function JobHistory({ documentId }: { readonly documentId: string
       {stale && <StaleBadge updatedAt={probe?.lastSampleAt} stale={stale} />}
     </>} verbs={verbs} attributes={{ 'data-bq-jobs': documentId }}>
     <div className="agent-jobs bq-jobs">
-      <CancelConfirm state={state} onAnswer={cancel => service.answerCancel(documentId, cancel)} />
+      <JobConfirm state={state} onAnswer={proceed => service.answerConfirm(documentId, proceed)} />
       {state.notice && (state.notice.tone === 'error'
         ? <InlineError message={state.notice.text} code={state.notice.code} actions={[{ label: 'Dismiss', run: () => service.dismissNotice(documentId) }]} />
         : <div className="ssis-notice" role="status"><Icon name="info" /><span className="ssis-notice-text">{state.notice.text}</span><button type="button" aria-label="Dismiss notice" onClick={() => service.dismissNotice(documentId)}><Icon name="close" /></button></div>)}

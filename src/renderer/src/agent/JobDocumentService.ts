@@ -16,6 +16,7 @@ import {
 } from '../../../shared/actions/agent-schedule.ts'
 import { defaultSchedule, msdbTrim, type AgentMoment, type AgentScheduleFields } from '../../../shared/agent/schedule.ts'
 import { agentJobsSource, agentWatchedProbe, watchedGoneStatus, watchedServerNow, watchedSlot, type WatchedSample } from '../../../shared/agent/jobs.ts'
+import { isStepScriptSubsystem, stepScriptText } from '../../../shared/agent/step-file.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import type { ObjectRef } from '../../../shared/explorer/refs.ts'
 import { liveProbes } from '../../../shared/live/catalog.ts'
@@ -103,6 +104,8 @@ export interface JobDocumentState {
   readonly deletion?: StepDeletion
   /** The selected step's Parse: running, or its errors (none: it parsed). */
   readonly parse?: JobStepParse
+  /** The selected step's Load from file… (AG-11): main's open dialog is up, or why the file could not be loaded. */
+  readonly stepFile?: JobStepFile
   /** The SSIS step's catalog picker: SSISDB's folders, each folder's projects, and the project and package the selected step runs. */
   readonly ssis?: JobSsisPicker
   /** Reopened by hot exit or AutoRecover (AG-6g) and not read since: the model is the one the draft began from. Once its target connects,
@@ -143,6 +146,7 @@ export interface JobReplace {
   readonly matchCase: boolean
   readonly preview?: { readonly revision: number; readonly matches: readonly ReplaceMatch[]; readonly more: boolean; readonly chosen: readonly string[] }
 }
+export interface JobStepFile { readonly key: string; readonly running: boolean; readonly failure?: string }
 export interface JobStepParse { readonly key: string; readonly running: boolean; readonly errors?: readonly LanguageParseError[]; readonly truncated?: boolean; readonly failure?: string }
 export interface JobSsisPicker {
   readonly folders?: readonly string[]
@@ -163,7 +167,7 @@ export interface JobDocumentSnapshot { readonly documents: Readonly<Record<strin
 
 export interface JobDocumentServiceOptions extends CustomDocumentTargetOptions {
   readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions' | 'writeClipboardText'>
-    & Partial<Pick<VariaApi, 'languageParse' | 'describeSsis' | 'explorerChildren' | 'agentHistoryMessage'>>
+    & Partial<Pick<VariaApi, 'languageParse' | 'describeSsis' | 'explorerChildren' | 'agentHistoryMessage' | 'openAgentStepScript'>>
   /** Steps' Open in query window (AG-6b): a new query tab on the job's connection, in the step's database. */
   readonly openQuery?: (sql: string, name: string, connectionId: string, database?: string) => void
   readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'setDirty' | 'activate' | 'getSnapshot' | 'subscribe' | 'close'> & Partial<Pick<DocumentService, 'openKeptCustom'>> & DeliverScriptDeps['documents']
@@ -416,7 +420,8 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   selectStep(id: string, key: string): void {
     const state = this.get(id)
     if (!state?.draft?.steps.steps.some(step => step.key === key) || state.step === key) return
-    this.patch(id, { step: key, ...state.parse && state.parse.key !== key ? { parse: undefined } : {} })
+    // A refused file's message belongs to the step it was refused for, as Parse's does (a running load stays, and drops its answer itself).
+    this.patch(id, { step: key, ...state.parse && state.parse.key !== key ? { parse: undefined } : {}, ...state.stepFile && !state.stepFile.running && state.stepFile.key !== key ? { stepFile: undefined } : {} })
   }
   /** Add step: a new step of `subsystem` after the last, selected; T-SQL in master. Its key is never the pending delete's, so Undo still
    *  finds the deleted step missing and puts it back. */
@@ -426,18 +431,32 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const steps = state.draft.steps.steps
     const step = { ...newStepDraft(steps, subsystem), key: newStepKey(state.deletion ? [...steps, state.deletion.deleted] : steps) }
     this.updateDraft(id, { steps: addStep(state.draft.steps, step) })
-    this.patch(id, { step: step.key, parse: undefined })
+    this.patch(id, { step: step.key, parse: undefined, ...state.stepFile?.running ? {} : { stepFile: undefined } })
   }
   /** Moves a step to `index` (drag, Move up and Move down); go-to targets follow, being keys. */
   moveStepTo(id: string, key: string, index: number): void {
     const state = this.get(id)
     if (!state?.draft || !this.canEditSteps(id)) return
     const moved = moveStep(state.draft.steps, key, index)
-    if (moved !== state.draft.steps) this.updateDraft(id, { steps: moved })
+    if (moved === state.draft.steps) return
+    // The step shown by default (the first, none picked) stays shown as it moves, rather than whichever step becomes first.
+    const shown = this.selectedStep(id)?.key
+    this.updateDraft(id, { steps: moved })
+    if (shown && state.step !== shown) this.patch(id, { step: shown })
   }
   moveStepBy(id: string, key: string, delta: number): void {
     const at = this.get(id)?.draft?.steps.steps.findIndex(step => step.key === key) ?? -1
     if (at >= 0) this.moveStepTo(id, key, at + delta)
+  }
+  /** Move Step Up and Move Step Down (AG-10, Alt+Up and Alt+Down): the selected step can move one place that way. */
+  canMoveSelectedStep(id: string, delta: -1 | 1): boolean {
+    const steps = this.get(id)?.draft?.steps.steps ?? [], selected = this.selectedStep(id)
+    const at = selected ? steps.indexOf(selected) : -1
+    return this.canEditSteps(id) && at >= 0 && at + delta >= 0 && at + delta < steps.length
+  }
+  moveSelectedStep(id: string, delta: -1 | 1): void {
+    const selected = this.selectedStep(id)
+    if (selected && this.canMoveSelectedStep(id, delta)) this.moveStepBy(id, selected.key, delta)
   }
   /** Delete acts on the draft at once: steps that went to it quit reporting failure, the banner says which, and Undo puts it back. */
   deleteStepOf(id: string, key: string): void {
@@ -448,7 +467,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const steps = result.draft.steps
     const next = steps[Math.min(result.deletion.position, steps.length - 1)]
     this.updateDraft(id, { steps: result.draft })
-    this.patch(id, { deletion: result.deletion, step: next?.key, parse: undefined })
+    this.patch(id, { deletion: result.deletion, step: next?.key, parse: undefined, ...state.stepFile?.running ? {} : { stepFile: undefined } })
   }
   undoDeleteStep(id: string): void {
     const state = this.get(id)
@@ -474,6 +493,33 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     if (!changed) return
     this.updateDraft(id, { steps: { ...state.draft.steps, steps } })
     if (state.parse?.key === key && patch.command !== undefined) this.patch(id, { parse: undefined })
+    if (state.stepFile?.key === key && !state.stepFile.running && (patch.command !== undefined || patch.subsystem !== undefined)) this.patch(id, { stepFile: undefined })
+  }
+  /** Load from file… (AG-11, SSMS's Open… on a CmdExec or PowerShell step): main's open dialog and read (`openAgentStepScript`). Resolves the
+   *  file's text for the step's editor to put in as one undoable edit, or undefined when cancelled, refused (said under the command) or when
+   *  another step was selected, the step's type changed or the job was read again while the dialog was up (a popout's dialog is not modal
+   *  to it), so the text never lands in a step the user is not looking at. */
+  async loadStepScript(id: string, key: string): Promise<string | undefined> {
+    const state = this.get(id), step = state?.draft?.steps.steps.find(item => item.key === key), open = this.options.api.openAgentStepScript
+    if (!state || !step || !isStepScriptSubsystem(step.subsystem) || !this.canEditSteps(id) || state.stepFile?.running) return
+    if (!open) { this.patch(id, { stepFile: { key, running: false, failure: stepScriptText.unavailable } }); return }
+    const subsystem = step.subsystem, model = state.model
+    // This load's own entry: a re-read clears it, and a later load's entry is another object, so an answer that comes back after either
+    // (a popout's dialogs queue in main) touches nothing.
+    const started: JobStepFile = { key, running: true }
+    this.patch(id, { stepFile: started })
+    const result = await this.call(() => open(subsystem))
+    const current = this.get(id)
+    if (this.disposed || !current || current.stepFile !== started) return
+    const now = current.draft?.steps.steps.find(item => item.key === key)
+    // Still the step the user is looking at, as it was: otherwise the answer, a refusal included, goes nowhere.
+    const same = current.model === model && now?.subsystem === subsystem && this.selectedStep(id)?.key === key
+    if (!result.ok) { this.patch(id, { stepFile: same ? { key, running: false, failure: result.error } : undefined }); return }
+    // Edit rights lost meanwhile (a save still running, the job gone stale): said, so the choice does not vanish without a word.
+    const locked = result.value !== null && same && !this.canEditSteps(id)
+    this.patch(id, { stepFile: locked ? { key, running: false, failure: stepScriptText.locked } : undefined })
+    if (result.value === null || !same || !this.canEditSteps(id)) return
+    return result.value
   }
   setStartStep(id: string, key: string): void {
     const state = this.get(id)
@@ -588,7 +634,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const like = create ? current.like : undefined
     this.patch(id, {
       phase: create ? 'choosing' : 'ready', model, draft: create ? undefined : initialAgentJobDraft(model), revision: current.revision + 1, changes: 0, error: undefined, stale: undefined,
-      notice, script: { state: 'idle', message: noScriptNotice }, scriptRevision: undefined, deletion: undefined, parse: undefined,
+      notice, script: { state: 'idle', message: noScriptNotice }, scriptRevision: undefined, deletion: undefined, parse: undefined, stepFile: undefined,
       step: this.stepFollowing(current, model.steps.map(step => ({ key: `s${step.id}`, name: step.name }))),
       // The shared schedules and their jobs are read again when the section next asks: a save may have changed them.
       ...this.restartScheduleReads(id), scheduleSelected: undefined,
@@ -723,7 +769,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const { current, keepServer } = state.stale
     const draft = rebaseAgentJobDraft(state.model, current, state.draft, new Set(keepServer))
     // A pending delete's Undo would bring its step back with the id it was read under, which another session may since have changed.
-    this.patch(id, { model: current, draft, stale: undefined, error: undefined, revision: state.revision + 1, edits: state.edits + 1, deletion: undefined, parse: undefined,
+    this.patch(id, { model: current, draft, stale: undefined, error: undefined, revision: state.revision + 1, edits: state.edits + 1, deletion: undefined, parse: undefined, stepFile: undefined,
       step: this.stepFollowing(state, draft.steps.steps), ...this.restartScheduleReads(id) })
     this.afterDraft(id)
     // Picked schedules take their guards from the shared schedules as read now, as the job's own schedules just did; Save waits for it.
@@ -735,7 +781,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     if (!state?.stale) return
     const { current } = state.stale
     const draft = initialAgentJobDraft(current)
-    this.patch(id, { model: current, draft, stale: undefined, error: undefined, revision: state.revision + 1, edits: state.edits + 1, deletion: undefined, parse: undefined,
+    this.patch(id, { model: current, draft, stale: undefined, error: undefined, revision: state.revision + 1, edits: state.edits + 1, deletion: undefined, parse: undefined, stepFile: undefined,
       step: this.stepFollowing(state, draft.steps.steps), ...this.restartScheduleReads(id) })
     this.afterDraft(id)
   }

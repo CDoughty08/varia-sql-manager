@@ -94,7 +94,9 @@ export interface GridShellProps {
   readonly strip?: { readonly text: string; readonly error?: boolean; readonly action?: StripAction; readonly lead?: StripLead; readonly quiet?: boolean }
   /** A windowed BigQuery result whose rows BigQuery no longer keeps (a read answered REMOTE_EXPIRED): its strip says so and
    *  offers this (Re-run) in place of Retry, which cannot help; while the re-run runs, `text` says so and the action stops it. */
-  readonly expired?: StripAction & { readonly text?: string }
+  /** `shown`: the result is known to have expired without a failed read here (a load or sample said so); `seen` is told
+   *  when a read here finds it expired, so the result's other surfaces stop offering what cannot work. */
+  readonly expired?: StripAction & { readonly text?: string; readonly shown?: boolean; readonly seen?: () => void }
   /** Drawn above the grid in its frame (a comparison's toolbar), outside the grid's own focus and keys. */
   readonly head?: ReactNode
   /** What the render error strip calls the grid's contents. */
@@ -170,6 +172,9 @@ export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mo
       setStatus({})
     }
   }, [mountKey, resultClient, platform])
+  // A read here that found the result expired is told once, so its other surfaces stop offering loads that cannot work.
+  const expiredSeen = !!(status.tileError && status.expired), seen = expired?.seen
+  useEffect(() => { if (expiredSeen) seen?.() }, [expiredSeen, seen])
   const resultCount = update?.resultCount ?? 1, showTypes = update?.showTypes, rowSize = update?.rowSize, headerColumn = update?.headerColumn
   const filtered = funnels?.filtered, filterable = funnels?.filterable, notes = funnels?.notes
   const ring = busy?.shown && busy.column !== undefined ? busy.column : undefined, ringPercent = ring === undefined ? undefined : busy?.percent
@@ -219,7 +224,7 @@ export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mo
     {children}
     {gone && <div className="rg-overlay" role="status">{gone}</div>}
     {!gone && status.renderError ? <div className="rg-strip error" role="status">{failed} <button onClick={retry}>Retry</button></div>
-      : !gone && status.tileError && status.expired && expired ? <div className="rg-strip error has-action" role="status"><span className="rg-strip-text">{expired.text ?? expiredText}</span>
+      : !gone && (status.tileError && status.expired || expired?.shown) && expired ? <div className="rg-strip error has-action" role="status"><span className="rg-strip-text">{expired.text ?? expiredText}</span>
         <button type="button" className="rg-strip-action" title={expired.title} aria-keyshortcuts={expired.keys} onClick={expired.run}>{expired.icon && <Icon name={expired.icon} />}{expired.label}</button></div>
       : !gone && status.tileError ? <div className="rg-strip error" role="status">Some rows could not be loaded: {status.tileError} <button onClick={retry}>Retry</button></div>
         : strip ? <div className={(strip.error ? 'rg-strip error' : 'rg-strip') + (action ? ' has-action' : '')} role={strip.quiet ? undefined : 'status'} title={strip.text}>

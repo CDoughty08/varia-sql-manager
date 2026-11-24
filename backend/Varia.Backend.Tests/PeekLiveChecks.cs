@@ -452,13 +452,13 @@ internal static class PeekLiveChecks
             var pkKey = await Peek(service, connectionId, Child("key", "T]'表", "PK]'表"), json);
             var uqKey = await Peek(service, connectionId, Child("key", "T]'表", "UQ]'表"), json);
             var fkKey = await Peek(service, connectionId, Child("key", "FkChild", "FK]'表"), json);
-            check(pkKey is { Error: null, Definition: null } && pkKey.Facts["keyType"] as string == "PRIMARY_KEY_CONSTRAINT"
+            check(pkKey is { Error: null, Definition: null } && pkKey.Facts["keyType"] as string == "Primary key"
                 && pkKey.Facts["parentTable"] as string == schema + ".T]'表" && pkKey.Facts["referencedTable"] is null
                 && pkKey.Facts["indexType"] as string == "Clustered" && pkKey.Facts["disabled"] is false && pkKey.Facts["systemNamed"] is false
                 && pkKey.Lists?["keyColumns"].Rows is [["Id", null, false, "int"]]
-                && uqKey is { Error: null } && uqKey.Facts["keyType"] as string == "UNIQUE_CONSTRAINT" && uqKey.Facts["indexType"] as string == "Nonclustered"
+                && uqKey is { Error: null } && uqKey.Facts["keyType"] as string == "Unique constraint" && uqKey.Facts["indexType"] as string == "Nonclustered"
                 && uqKey.Lists?["keyColumns"].Rows is [["Name", null, false, string uqColType]] && uqColType.StartsWith("nvarchar", StringComparison.Ordinal)
-                && fkKey is { Error: null } && fkKey.Facts["keyType"] as string == "FOREIGN_KEY_CONSTRAINT"
+                && fkKey is { Error: null } && fkKey.Facts["keyType"] as string == "Foreign key"
                 && fkKey.Facts["parentTable"] as string == schema + ".FkChild" && fkKey.Facts["referencedTable"] as string == schema + ".T]'表"
                 && fkKey.Facts["deleteAction"] as string == "CASCADE" && fkKey.Facts["updateAction"] as string == "NO_ACTION"
                 && fkKey.Facts["disabled"] is false && fkKey.Facts["notTrusted"] is false && fkKey.Facts["indexType"] is null
@@ -468,12 +468,12 @@ internal static class PeekLiveChecks
             var ck = await Peek(service, connectionId, Child("constraint", "T]'表", "CK]'表"), json);
             var ckOff = await Peek(service, connectionId, Child("constraint", "FkChild", "CK_Off"), json);
             var df = await Peek(service, connectionId, Child("constraint", "T]'表", "DF]'表"), json);
-            check(ck is { Error: null, Definition: null } && ck.Facts["constraintType"] as string == "CHECK_CONSTRAINT"
+            check(ck is { Error: null, Definition: null } && ck.Facts["constraintType"] as string == "Check constraint"
                 && ck.Facts["parentTable"] as string == schema + ".T]'表" && ck.Facts["column"] as string == "Amount"
                 && ck.Facts["expression"] as string is { Length: > 0 } ckExpr && ckExpr.Contains("Amount", StringComparison.Ordinal)
                 && ck.Facts["disabled"] is false && ck.Facts["notTrusted"] is false
                 && ckOff is { Error: null } && ckOff.Facts["disabled"] is true && ckOff.Facts["notTrusted"] is true && ckOff.Facts["column"] is null
-                && df is { Error: null } && df.Facts["constraintType"] as string == "DEFAULT_CONSTRAINT"
+                && df is { Error: null } && df.Facts["constraintType"] as string == "Default constraint"
                 && df.Facts["column"] as string == "Amount" && df.Facts["expression"] as string == "((0))" && df.Facts["disabled"] is null,
                 "hostile-named CHECK (enabled and disabled) and DEFAULT constraints peek with their type, column, expression and enforcement status: "
                 + Facts(ck) + " | " + Facts(ckOff) + " | " + Facts(df));
@@ -482,7 +482,7 @@ internal static class PeekLiveChecks
                 var ec = await Peek(service, connectionId, Child("constraint", "GEdge", "EC]'表"), json);
                 var edgeTable = await Peek(service, connectionId, Own("table", "GEdge"), json);
                 var edgeObjs = edgeTable.Lists?.GetValueOrDefault("tableObjects")?.Rows ?? [];
-                check(ec is { Error: null } && ec.Facts["constraintType"] as string == "EDGE_CONSTRAINT" && ec.Facts["parentTable"] as string == schema + ".GEdge"
+                check(ec is { Error: null } && ec.Facts["constraintType"] as string == "Edge constraint" && ec.Facts["parentTable"] as string == schema + ".GEdge"
                     && ec.Facts["disabled"] is false && ec.Facts["notTrusted"] is false && ec.Facts["systemNamed"] is false
                     && edgeObjs.Any(row => row is ["Edge constraint", "EC]'表", "ON DELETE CASCADE", "Trusted"]),
                     "an edge constraint peeks on SQL Server 2019+ and appears in its table's tableObjects list: " + Facts(ec) + " | " + JsonSerializer.Serialize(edgeObjs));
@@ -492,13 +492,13 @@ internal static class PeekLiveChecks
             var childTablePeek = await Peek(service, connectionId, Own("table", "FkChild"), json);
             var childObjs = childTablePeek.Lists?.GetValueOrDefault("tableObjects")?.Rows ?? [];
             check(tablePeek is { Error: null }
-                && tableObjs.Any(row => row is ["Primary key", "PK]'表", "Clustered (Id)", "Active"])
-                && tableObjs.Any(row => row is ["Unique constraint", "UQ]'表", "Nonclustered (Name)", "Active"])
-                && tableObjs.Any(row => row is ["Index", "IX]'表", string ixSum, "Active"] && ixSum.Contains("Unique nonclustered (Name DESC, Id) INCLUDE (Amount) WHERE", StringComparison.Ordinal))
+                && tableObjs.Any(row => row is ["Primary key", "PK]'表", "Clustered ([Id])", "Active"])
+                && tableObjs.Any(row => row is ["Unique constraint", "UQ]'表", "Nonclustered ([Name])", "Active"])
+                && tableObjs.Any(row => row is ["Index", "IX]'表", string ixSum, "Active"] && ixSum.Contains("Unique nonclustered ([Name] DESC, [Id]) INCLUDE ([Amount]) WHERE", StringComparison.Ordinal))
                 && tableObjs.Any(row => row is ["Check constraint", "CK]'表", string ckSum, "Trusted"] && ckSum.Contains("Amount", StringComparison.Ordinal))
-                && tableObjs.Any(row => row is ["Default constraint", "DF]'表", "Amount = ((0))", "Active"])
+                && tableObjs.Any(row => row is ["Default constraint", "DF]'表", "[Amount] = ((0))", "Active"])
                 && tableObjs.Any(row => row is ["Trigger", "TR]'表", "AFTER INSERT, UPDATE", "Active"])
-                && childObjs.Any(row => row is ["Foreign key", "FK]'表", string fkSum, "Trusted"] && fkSum == "(ParentId) \u2192 " + schema + ".T]'表 (Id)")
+                && childObjs.Any(row => row is ["Foreign key", "FK]'表", string fkSum, "Trusted"] && fkSum == "([ParentId]) \u2192 [" + schema.Replace("]", "]]") + "].[T]]'表] ([Id])")
                 && childObjs.Any(row => row is ["Check constraint", "CK_Off", _, "Disabled"]),
                 "tableObjects lists PK, UQ, FK, Index, Check, Default and Trigger summaries and statuses cleanly: " + JsonSerializer.Serialize(tableObjs) + " | " + JsonSerializer.Serialize(childObjs));
 
@@ -584,7 +584,7 @@ internal static class PeekLiveChecks
                 "a table type's Columns list reads its table object's columns, with its key: " + JsonSerializer.Serialize(typeColumns));
             var ttPkName = (await sql("SELECT kc.name FROM sys.table_types AS tt JOIN sys.schemas AS sc ON sc.schema_id = tt.schema_id JOIN sys.key_constraints AS kc ON kc.parent_object_id = tt.type_table_object_id WHERE sc.name = N'Pk4]''Ü' AND tt.name = N'TT]''表';", database)).Scalar;
             var ttPk = ttPkName is { Length: > 0 } ? await Peek(service, connectionId, Child("key", "TT]'表", ttPkName, "tableType"), json) : null;
-            check(ttPk is { Error: null } && ttPk.Facts["keyType"] as string == "PRIMARY_KEY_CONSTRAINT" && ttPk.Facts["parentTable"] as string == schema + ".TT]'表"
+            check(ttPk is { Error: null } && ttPk.Facts["keyType"] as string == "Primary key" && ttPk.Facts["parentTable"] as string == schema + ".TT]'表"
                 && ttPk.Facts["systemNamed"] is true && ttPk.Lists?["keyColumns"].Rows is [["Id", null, false, "int"]],
                 "a table type's primary key peeks below its tableType parent with the table type's own name: " + (ttPk is null ? "missing pk name" : Facts(ttPk)));
 

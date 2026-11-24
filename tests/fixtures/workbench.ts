@@ -282,7 +282,7 @@ export function updatesApi(initial: UpdateState = { status: 'idle', currentVersi
  * The renderer's services and every command contribution, wired as createWorkbench does but with fake IPC and a fake
  * shell host, so command enablement can be tested in Node.
  */
-export function workbenchFixture(options: { platform?: Platform; modal?: () => boolean; storage?: HistoryStorage; timers?: Timers; settings?: Partial<SettingsValues>; recovery?: RecoveryEntry[]; helpFocus?: (id: string) => void; startupReady?: Promise<void>; activeElement?: () => Element | null } = {}) {
+export function workbenchFixture(options: { platform?: Platform; modal?: () => boolean; storage?: HistoryStorage; timers?: Timers; settings?: Partial<SettingsValues>; recovery?: RecoveryEntry[]; helpFocus?: (id: string) => void; startupReady?: Promise<void>; activeElement?: () => Element | null; windowsClient?: boolean } = {}) {
   // Settings apply to documents as createWorkbench applies them; `settings` exists before the first document does.
   const doc = documentFixture({ ...settingsDocumentOptions(() => settings.getSnapshot().values), target: id => targets.targetForConnection(id), server: id => connections.get(id)?.server,
     provider: id => { const connection = connections.get(id); return connection ? connection.providerId ?? 'sqlserver' : undefined },
@@ -393,7 +393,9 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const monaco = { editor: { registerCommand: vi.fn<BridgeMonaco['editor']['registerCommand']>(() => ({ dispose: vi.fn() })), addKeybindingRules: vi.fn<BridgeMonaco['editor']['addKeybindingRules']>(() => ({ dispose: vi.fn() })) } }
   const explorer = new ExplorerService({
     api, connections, events, schedule: callback => callback(), ...(options.timers ? { timers: options.timers } : {}),
-    groupBySchema: { get: () => settings.get('objectExplorer.groupBySchema'), subscribe: settings.subscribe }
+    groupBySchema: { get: () => settings.get('objectExplorer.groupBySchema'), subscribe: settings.subscribe },
+    // The Agent node's service verbs need Varia on Windows (AG-2); a test asks for it.
+    ...(options.windowsClient ? { windowsClient: true } : {})
   })
   const databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
@@ -442,6 +444,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     databaseGone: gone => databaseGone(gone), tabNames: ids => queries.tabNames(ids)
   })
   const longRuns = new LongRunService({ api })
+  const explorerLongRuns = explorer.useLongRuns(longRuns)
   const disconnectPrompts = new DisconnectPromptService()
   const disconnectCoordinator = createDisconnectCoordinator({
     connectionTargets, documents, queries, files, longRuns, api, prompts: disconnectPrompts,
@@ -463,7 +466,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const operations = new SsisOperationsService({ api, documents, panes, live, connections, settings, targetIdOf })
   const jobHistory = new JobHistoryService({ api, documents, panes, live, connections, settings, queries, targetIdOf })
   const agentJobs = new AgentJobStatusService({ api, live, connections })
-  const jobActivity = new JobActivityService({ api, documents, panes, live, connections, targetIdOf, started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt) })
+  const jobActivity = new JobActivityService({ api, documents, panes, live, connections, targetIdOf, explorer, longRuns, started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt) })
   const jobDocuments = new JobDocumentService({ api, documents, files, connections, live, targetIdOf, openQuery: (sql, name, connectionId, database) => { documents.newQuery(sql, name, connectionId, database) }, ...(options.timers ? { timers: options.timers } : {}) })
   const agentObjectOptions = { api, documents, files, connections, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) }
   const alertDocuments = new AlertOperatorDocumentService(alertSpec, agentObjectOptions)
@@ -706,6 +709,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     actions.dispose()
     dialogs.dispose()
     ssisCatalog.dispose()
+    explorerLongRuns.dispose()
     longRuns.dispose()
     designers.dispose()
     ssisProperties.dispose()
