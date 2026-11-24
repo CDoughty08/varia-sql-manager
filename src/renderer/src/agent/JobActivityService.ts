@@ -15,6 +15,9 @@ import {
   type AgentAvailability, type AgentBulkFormVerb, type AgentBulkVerb, type AgentJobColumnFilter, type AgentJobsArgs, type AgentJobView, type AgentServiceSample
 } from '../../../shared/agent/jobs'
 import { liveProbes } from '../../../shared/live/catalog'
+import { actionContextValues, actionMenuReasons, actionMenuState } from '../../../shared/actions/catalog'
+import type { CommandArgs } from '../core/types'
+import type { ExplorerService } from '../explorer/ExplorerService'
 import type { LiveFacet } from '../../../shared/live/schema'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
@@ -82,6 +85,8 @@ export interface JobActivitySnapshot { readonly documents: Readonly<Record<strin
 export interface JobActivityEnd { readonly code?: string; readonly message: string; readonly denied: boolean }
 
 export interface JobActivityServiceOptions extends CustomDocumentTargetOptions {
+  /** The Agent node's service verbs (AG-10): Start in the Agent-stopped banner runs explorer.startAgent on this node. */
+  readonly explorer?: Pick<ExplorerService, 'agentMenuNode'>
   readonly api: Pick<VariaApi, 'executeObjectAction' | 'describeObject'>
   readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'activate' | 'getSnapshot' | 'subscribe'>
   readonly panes: Pick<PaneService, 'getSnapshot' | 'subscribe'>
@@ -199,6 +204,20 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
   }
   /** What the banner and pill show: a lost connection's last service reading is no news, so they wait (pending) for a live one. */
   shownAvailability(id: string): AgentAvailability { return this.live(id) ? this.availability(id) : 'pending' }
+  /**
+   * What Start Agent in the Agent-stopped banner runs (AG-10): explorer.startAgent on the connection's Agent node (the tree's row, or the
+   * object with the same facts), with the monitor's own service reading where the tree has none, and why the verb is greyed (Varia off
+   * Windows, a Linux server, Managed Instance, a cluster, a start or stop already running, a Disabled service); undefined without a server.
+   */
+  startAgentTarget(id: string): { readonly args: CommandArgs; readonly reason?: string } | undefined {
+    const state = this.get(id)
+    if (!state?.connectionId || !this.live(id)) return undefined
+    const node = this.options.explorer?.agentMenuNode(state.connectionId, { ...state.service?.serviceState !== undefined ? { state: state.service.serviceState } : {}, ...state.service?.startupType !== undefined ? { startup: state.service.startupType } : {} })
+    if (!node) return undefined
+    const reason = actionMenuReasons(node).startAgent
+    // The verb's precondition reads the selection's action keys: the node's stand in for them, as a Search Objects result's do.
+    return { args: { target: { kind: 'explorer', node }, state: actionContextValues(actionMenuState(node)) }, ...reason ? { reason } : {} }
+  }
 
   // --- Opening ---------------------------------------------------------------------------------------------------------
 

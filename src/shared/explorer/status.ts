@@ -128,7 +128,8 @@ export function serverChips(runningJobs: number | null | undefined, groups: read
  * it (1 stopped, 2 start pending, 3 stop pending, 4 running, 5 continue pending, 6 pause pending, 7 paused) and its startup
  * type (2 automatic, 3 manual, 4 disabled). A value the login may not read is undefined: unknown, never guessed.
  */
-export interface AgentServiceState { readonly xps?: number; readonly state?: number; readonly startup?: number }
+/** `clustered`: SERVERPROPERTY('IsClustered'), a failover cluster instance, whose service verbs grey up front (AG-10). */
+export interface AgentServiceState { readonly xps?: number; readonly state?: number; readonly startup?: number; readonly clustered?: boolean }
 /** The Agent service states with a chip of their own; Running (4) has none. */
 const agentStates: Readonly<Record<number, { label: string; words: string; tone: StatusTone; title: string }>> = {
   1: { label: 'STOPPED', words: 'Stopped', tone: 'warning', title: 'SQL Server Agent is stopped: jobs, alerts and schedules do not run.' },

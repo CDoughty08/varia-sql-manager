@@ -18,6 +18,7 @@ import InlineError from '../kit/InlineError'
 import { LivePill, StaleBadge } from '../kit/LivePill'
 import Tile, { tileName } from '../kit/Tile'
 import { LiveGridPane, type LiveFilters } from '../live/LiveGridPane'
+import { useMenuTarget } from '../menus/useMenuTarget'
 import type { LiveSnapshot } from '../live/LiveService'
 import { probePillStatus } from '../live/status'
 import { formatCount, plural } from '../results/status'
@@ -90,6 +91,11 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
   const state = documents[documentId]
   const handle = service.handle(documentId)
   const live = useSyncExternalStore(handle?.subscribe ?? noSubscribe, handle?.getSnapshot ?? noLiveSnapshot, handle?.getSnapshot ?? noLiveSnapshot)
+  // The list's row menu (AG-10, agent.jobs.context through MenuService): the job verbs on the jobs selected there.
+  const menuTarget = useMenuTarget<HTMLDivElement>(() => ({ kind: 'jobActivity', tabId: documentId }))
+  // Start in the Agent-stopped banner (AG-10) follows the Agent node's service verb and its rules (a Linux server, Varia off Windows, a cluster).
+  useServiceSnapshot(workbench.explorer)
+  useServiceSnapshot(workbench.dialogs)
   if (!state || !handle) return <EmptyState className="workspace-empty" icon="agent-activity" title={jobActivityTitle} detail="This document has closed." />
   const probe = live.probes[agentJobsProbe]
   const table = handle.table(agentJobsProbe, 0)
@@ -98,7 +104,9 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
   const end = service.ended(documentId)
   // Tiles, chips and the Status note keep the last reading while lost (it is what the grid shows); the banner and pill wait.
   const availability = service.availability(documentId), shown = service.shownAvailability(documentId)
-  const banner = agentBanner(shown, state.service, false, state.linux)
+  const start = service.startAgentTarget(documentId)
+  const canStart = !!start && workbench.commands.isEnabled('explorer.startAgent', start.args)
+  const banner = agentBanner(shown, state.service, canStart || !!start?.reason, state.linux)
   const override = agentStatusOverride(availability)
   const problems = listProblems(probe)
   const waiting = service.lastRunWaiting(documentId)
@@ -129,7 +137,10 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
     state={pill}
     tools={stale && <StaleBadge updatedAt={probe?.lastSampleAt} stale={stale} />} verbs={verbs} attributes={{ 'data-agent-jobs': documentId }}>
     <div className="agent-jobs">
-      {banner && <div className="agent-banner" role="status"><Icon name="warning" /><span>{banner.text}</span></div>}
+      {banner && <div className="agent-banner" role="status"><Icon name="warning" /><span>{banner.text}</span>
+        {banner.start && start && <button type="button" className="agent-banner-start" disabled={!canStart} title={canStart ? 'Start SQL Server Agent' : start.reason ?? 'Start SQL Server Agent is not available right now.'}
+          onClick={() => void workbench.commands.execute('explorer.startAgent', start.args, 'toolbar')}><Icon name="play" />Start Agent…</button>}
+      </div>}
       {end ? <div className="agent-jobs-ended">
         {end.denied ? <div role="status"><EmptyState icon="lock" title="No access to SQL Server Agent" detail={end.message} /></div>
           : <InlineError role="status" message={end.message} code={end.code} actions={[{ label: 'Retry', run: () => service.refresh(documentId) }]} />}
@@ -172,7 +183,7 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
             onClick={() => void workbench.commands.execute('agent.createJobLike', { tabId: documentId }, 'toolbar')}><Icon name="copy" />Create Job Like This…</button>
         </div>
         <JobBulkForm id={documentId} service={service} form={state.form} />
-        <div className="agent-jobs-grid" onDoubleClick={event => {
+        <div className="agent-jobs-grid" ref={menuTarget} onDoubleClick={event => {
           // Only on a job's row (GridView's own hit test): a header's border fits its column, and the area below the rows is no job.
           // The grid's pointer layer lies over its rows, so every element under the pointer is asked, not just the event's target.
           const root = (event.target as Element).closest('[role="grid"]')
@@ -181,7 +192,7 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
         }}>
           {unavailable ? <EmptyState icon="agent-activity" title="Job Activity Monitor is not available" detail={unavailable} />
             : <>
-              <LiveGridPane live={handle} probe={agentJobsProbe} label="Jobs" toneLabel={toneLabel} filters={filters} state={service.gridState(documentId)} onGrid={grid => service.attachGrid(documentId, grid)} />
+              <LiveGridPane live={handle} probe={agentJobsProbe} label="Jobs" contextMenu={false} toneLabel={toneLabel} filters={filters} state={service.gridState(documentId)} onGrid={grid => service.attachGrid(documentId, grid)} />
               {rows === 0 && <EmptyState className="agent-jobs-empty" icon="agent-activity"
                 title={filtersOn ? 'No jobs match the filters' : 'No jobs'}
                 detail={filtersOn ? 'Clear the filters to see every job this login can see.' : 'msdb shows this login no SQL Server Agent jobs: a SQLAgentUserRole member sees only the jobs it owns.'}

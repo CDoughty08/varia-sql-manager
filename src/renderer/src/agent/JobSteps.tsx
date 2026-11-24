@@ -327,8 +327,8 @@ function StepEditor(props: StepsProps & { readonly step: AgentStepDraft; readonl
   const count = state.draft!.steps.steps.length
   return <div className="agent-step-edit" role="group" aria-label={`Step ${position + 1}: ${step.name || 'unnamed'}`}>
     <div className="agent-step-tools">
-      <button type="button" disabled={!editable || position === 0} onClick={() => service.moveStepBy(state.id, step.key, -1)}><Icon name="arrow-up" />Move up</button>
-      <button type="button" disabled={!editable || position === count - 1} onClick={() => service.moveStepBy(state.id, step.key, 1)}><Icon name="arrow-down" />Move down</button>
+      <button type="button" disabled={!editable || position === 0} title="Move up (Alt+Up)" onClick={() => service.moveStepBy(state.id, step.key, -1)}><Icon name="arrow-up" />Move up</button>
+      <button type="button" disabled={!editable || position === count - 1} title="Move down (Alt+Down)" onClick={() => service.moveStepBy(state.id, step.key, 1)}><Icon name="arrow-down" />Move down</button>
       <button type="button" disabled={!editable || state.draft!.steps.startKey === step.key} onClick={() => service.setStartStep(state.id, step.key)}><Icon name="pin" />Make Start step</button>
       <button type="button" className="danger" disabled={!editable} onClick={() => service.deleteStepOf(state.id, step.key)}><Icon name="trash" />Delete</button>
     </div>
@@ -437,7 +437,7 @@ export default function JobSteps(outer: StepsProps) {
       <button type="button" disabled={!editable} onClick={() => service.undoDeleteStep(state.id)}>{stepText.undo}</button>
       <button type="button" aria-label="Dismiss" onClick={() => service.dismissDeletion(state.id)}><Icon name="close" /></button>
     </div>}
-    <div className="agent-step-body">
+    <div className="agent-step-body" data-agent-steps="">
       <div className="agent-step-list">
         <div role="listbox" aria-label="Steps" tabIndex={steps.length ? 0 : -1} aria-activedescendant={selected ? `agent-step-${state.id}-${selected.key}` : undefined}
           onKeyDown={event => {

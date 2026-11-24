@@ -501,20 +501,22 @@ export function rebaseAgentJobDraft(opened: AgentJobDocumentModel, current: Agen
 
 // --- Commands ----------------------------------------------------------------------------------------------------------
 
-export type AgentJobCommandId = 'agent.openJob' | 'agent.newJob' | 'agentJob.save' | 'agentJob.start' | 'agentJob.startAtStep' | 'agentJob.stop' | 'agentJob.reload'
+export type AgentJobCommandId = 'agent.openJob' | 'agent.newJob' | 'agentJob.save' | 'agentJob.start' | 'agentJob.startAtStep' | 'agentJob.stop' | 'agentJob.reload' | 'agentJob.moveStepUp' | 'agentJob.moveStepDown'
 /** A command catalogue entry, in the shape of `CommandDescriptor`. */
 export interface AgentJobCommandEntry {
   readonly title: string
   readonly category: 'SQL Server Agent'
-  readonly icon: 'go-to-file' | 'add' | 'save' | 'play' | 'list-ordered' | 'debug-stop' | 'refresh'
+  readonly icon: 'go-to-file' | 'add' | 'save' | 'play' | 'list-ordered' | 'debug-stop' | 'refresh' | 'arrow-up' | 'arrow-down'
   readonly keywords: readonly string[]
   readonly precondition: string
   readonly unavailableHint: string
   readonly keybindings?: readonly { readonly key: string; readonly when: string }[]
-  readonly menus?: readonly { readonly menu: 'explorer.context'; readonly group: string; readonly order: number; readonly mnemonic?: string; readonly when?: string }[]
+  readonly menus?: readonly { readonly menu: 'explorer.context' | 'agent.jobs.context'; readonly title?: string; readonly group: string; readonly order: number; readonly mnemonic?: string; readonly when?: string }[]
 }
 const inJob = 'agentEnabled && backendReady && activeDocumentIsAgentJob'
 const openJobFirst = 'Open a job first (SQL Server Agent: Open Job…, or Properties on a job in Object Explorer).'
+const stepToMove = 'Select a step of a job you can change, with a step above or below it to swap with.'
+const stepKeys = 'activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus'
 /**
  * The job document's commands, all behind the release gate (agentEnabled; the renderer registers none without it): Open Job… and
  * New Job… (on the Jobs folder's menu and in the palette; Open Job opens the job selected in Job Activity Monitor when run from it), and the document's own verbs, which act on the job document whose header
@@ -525,8 +527,9 @@ export function agentJobCommandEntries(): { readonly [K in AgentJobCommandId]: A
     'agent.openJob': {
       title: 'Open Job…', category: 'SQL Server Agent', icon: 'go-to-file', keywords: ['agent', 'job', 'properties', 'edit', 'sqlserveragent'],
       precondition: 'agentEnabled && backendReady && hasConnection', unavailableHint: 'Connect to a SQL Server whose SQL Server Agent you can see first.',
-      // Enter in Job Activity Monitor's list opens the selected job, as a double-click does.
-      keybindings: [{ key: 'enter', when: 'activeDocumentIsJobActivity && outputGridFocus' }]
+      // Enter in Job Activity Monitor's list opens the selected job, as a double-click does; so does Open on its row menu (AG-10).
+      keybindings: [{ key: 'enter', when: 'activeDocumentIsJobActivity && liveGridFocus' }],
+      menus: [{ menu: 'agent.jobs.context', group: '1_open', order: 1, title: 'Open', mnemonic: 'o' }]
     },
     'agent.newJob': {
       title: 'New Job…', category: 'SQL Server Agent', icon: 'add', keywords: ['agent', 'job', 'create', 'add', 'copy', 'sqlserveragent'],
@@ -552,6 +555,18 @@ export function agentJobCommandEntries(): { readonly [K in AgentJobCommandId]: A
     'agentJob.reload': {
       title: 'Reload Job', category: 'SQL Server Agent', icon: 'refresh', keywords: ['agent', 'job', 'refresh', 'read', 'discard'],
       precondition: inJob, unavailableHint: openJobFirst
+    },
+    // AG-10: Alt+Up and Alt+Down in the Steps section move the selected step, as its Move up and Move down buttons do; not in a field or the
+    // step's command editor, where the keys open a list or move lines.
+    'agentJob.moveStepUp': {
+      title: 'Move Step Up', category: 'SQL Server Agent', icon: 'arrow-up', keywords: ['agent', 'job', 'step', 'order', 'reorder', 'move', 'earlier'],
+      precondition: inJob, unavailableHint: stepToMove,
+      keybindings: [{ key: 'alt+up', when: stepKeys }]
+    },
+    'agentJob.moveStepDown': {
+      title: 'Move Step Down', category: 'SQL Server Agent', icon: 'arrow-down', keywords: ['agent', 'job', 'step', 'order', 'reorder', 'move', 'later'],
+      precondition: inJob, unavailableHint: stepToMove,
+      keybindings: [{ key: 'alt+down', when: stepKeys }]
     }
   }
 }

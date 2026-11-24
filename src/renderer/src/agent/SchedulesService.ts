@@ -52,11 +52,14 @@ export interface SchedulesState {
   readonly revision: number
   /** Reopened by hot exit or AutoRecover (AG-6g) and not read since: the drafts keep the schedules they began from (their save guards). */
   readonly restored?: true
+  /** The login is in msdb's SQLAgentOperatorRole (agent.profile, read once below sysadmin; AG-10): it may enable or disable a schedule it does
+   *  not own, sending only the schedule and @enabled, as msdb's sp_update_schedule allows that role. */
+  readonly operatorRole?: true
 }
 export interface SchedulesSnapshot { readonly documents: Readonly<Record<string, SchedulesState>> }
 
 export interface SchedulesServiceOptions extends CustomDocumentTargetOptions {
-  readonly api: Pick<VariaApi, 'describeObject' | 'executeObjectAction' | 'cancelObjectActions'>
+  readonly api: Pick<VariaApi, 'describeObject' | 'executeObjectAction' | 'cancelObjectActions'> & Partial<Pick<VariaApi, 'agentProfile'>>
   readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'setDirty' | 'activate' | 'getSnapshot'> & Partial<Pick<DocumentService, 'openKeptCustom' | 'subscribe' | 'update'>>
   readonly connections: ExternalStore<readonly LiveConnection[]>
   /** Focus the document: its filter, or (`name`) the selected schedule's Name field, where New schedule puts the caret. */
@@ -76,6 +79,7 @@ export const schedulesText = {
   inUse: (count: number) => `${count === 1 ? 'A job uses' : `${count} jobs use`} it: detach ${count === 1 ? 'it' : 'them'} first, or keep the schedule. Varia never forces a delete.`,
   deleteConfirm: (name: string) => `Delete the schedule ${name}? It cannot be undone.`,
   readOnly: (owner: string | undefined) => `Owned by ${owner ?? 'another login'}: only its owner and sysadmin can change its settings. You can still attach and detach your own jobs.`,
+  operatorReadOnly: (owner: string | undefined) => `Owned by ${owner ?? 'another login'}: only its owner and sysadmin can change its settings. As a member of SQLAgentOperatorRole you can enable or disable it, and attach and detach your own jobs.`,
   unchangeable: 'Varia could not read this schedule\'s version, so it cannot change it.',
   truncated: `Only the first ${agentLimits.listRows} schedules are listed.`,
   unusedNote: 'Unused counts every job, including jobs you cannot see.',
@@ -199,6 +203,7 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
     this.generations.set(id, (this.generations.get(id) ?? 0) + 1)
     this.patch(id, { phase: 'ready', model, drafts, selected, scheduleJobs: undefined, error: undefined, notice, revision: current.revision + 1 })
     this.dirtyChanged(id)
+    if (!model.sysadmin && current.operatorRole === undefined) void this.readRole(id, connectionId)
     // Opened on a new schedule: its Name is drawn only once the first read is in, so the caret goes there now, and an untouched draft
     // made from the local date moves to the server's (its start date and weekday).
     if (!current.model && selected === newScheduleKey) {
@@ -262,7 +267,13 @@ ${scheduleId}`, pending = this.jobReads.get(key)
     const model = this.get(id)?.model
     if (!model || !record) return undefined
     if (record.version === undefined || !record.modified) return schedulesText.unchangeable
-    return model.sysadmin || ownsSchedule(record, model.login) ? undefined : schedulesText.readOnly(record.owner)
+    return model.sysadmin || ownsSchedule(record, model.login) ? undefined : this.get(id)?.operatorRole ? schedulesText.operatorReadOnly(record.owner) : schedulesText.readOnly(record.owner)
+  }
+  /** Whether the login may enable or disable a schedule (the grid's Enabled box): one it may change, or, in SQLAgentOperatorRole, any whose
+   *  version was read (msdb lets that role send sp_update_schedule with only the schedule and @enabled; AG-10). */
+  canToggle(id: string, record: AgentScheduleRecord | undefined): boolean {
+    if (!record || !this.get(id)?.model) return false
+    return !this.readOnly(id, record) || (!!this.get(id)?.operatorRole && record.version !== undefined && !!record.modified)
   }
   /** The selected schedule's draft, or its fields as read. */
   draft(id: string, key: string | undefined = this.get(id)?.selected): ScheduleDraft | undefined {
@@ -443,10 +454,20 @@ ${scheduleId}`, pending = this.jobReads.get(key)
     }
     return true
   }
+  /** Below sysadmin, whether the login is in SQLAgentOperatorRole (agent.profile), once per document; a failed read leaves the box greyed. */
+  private readonly roleReads = new Set<string>()
+  private async readRole(id: string, connectionId: string): Promise<void> {
+    const profile = this.options.api.agentProfile
+    if (!profile || this.roleReads.has(id)) return
+    this.roleReads.add(id)
+    const result = await this.request(id, requestId => profile({ connectionId, requestId }))
+    if (result?.ok && result.value.profile?.operatorRole && this.connectionOf(id) === connectionId) this.patch(id, { operatorRole: true })
+    else this.roleReads.delete(id)
+  }
   /** The grid's Enabled box: saved at once (enable or disable, guarded), whatever the schedule's draft holds. */
   async setEnabled(id: string, scheduleId: number, enabled: boolean): Promise<void> {
     const state = this.get(id), record = state?.model?.schedules.find(item => item.id === scheduleId)
-    if (!state || !record || state.busy || !this.live(id) || this.readOnly(id, record) || record.enabled === enabled) return
+    if (!state || !record || state.busy || !this.live(id) || !this.canToggle(id, record) || record.enabled === enabled) return
     const save: AgentScheduleSave = { op: enabled ? 'enable' : 'disable', schedule: { id: record.id, version: record.version!, modified: record.modified! } }
     if (!await this.execute(id, 'toggling', save)) return
     await this.readAfter(id, 'toggling', schedulesText.enabled(record.name, enabled))

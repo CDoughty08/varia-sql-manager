@@ -3718,11 +3718,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .agent-history { display: flex; flex-direction: column; gap: var(--varia-space-2); }
 .agent-history-head { display: flex; align-items: baseline; gap: var(--varia-space-2); font-size: var(--varia-size-sm); }
 .agent-history-head > :last-child { margin-left: auto; }
-.agent-history-spark { position: relative; display: flex; align-items: flex-end; gap: 3px; height: 40px; max-width: 360px; padding-bottom: 1px; border-bottom: 1px solid var(--varia-panel-border); }
-.agent-history-spark > i { flex: 1 1 0; min-width: 4px; max-width: 16px; border-top-left-radius: var(--varia-radius-sm); border-top-right-radius: var(--varia-radius-sm); background: var(--varia-list-highlightForeground); opacity: 0.55; }
-.agent-history-spark > i:last-of-type { opacity: 1; }
-.agent-history-spark > i[data-failed] { background: var(--varia-errorForeground); opacity: 1; }
-.agent-history-spark > b { position: absolute; left: 0; right: 0; height: 0; border-top: 1px dashed var(--varia-descriptionForeground); }
+.agent-history-spark { height: 40px; max-width: 360px; }
 .agent-history-filter { display: inline-flex; border: 1px solid var(--varia-button-border); border-radius: var(--varia-radius-sm); overflow: hidden; }
 .agent-history-filter > button { padding: 0 var(--varia-space-2); border: 0; border-radius: 0; background: none; font-size: var(--varia-size-xs); }
 .agent-history-filter > button[aria-checked="true"] { transition: none; background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); }
@@ -3747,8 +3743,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .agent-history-progress { height: 6px; border-radius: var(--varia-radius-pill); background: var(--varia-list-hoverBackground); overflow: hidden; }
 .agent-history-progress > i { display: block; height: 100%; background: var(--varia-list-highlightForeground); }
 @media (forced-colors: active) {
-  .agent-history-spark > i, .agent-history-progress > i { background: Highlight; forced-color-adjust: none; }
-  .agent-history-spark > i[data-failed] { background: Mark; }
+  .agent-history-progress > i { background: Highlight; forced-color-adjust: none; }
   .agent-history .link-button { color: LinkText; }
 }
 @media (max-width: 720px) { .agent-history-body { grid-template-columns: 1fr; } }

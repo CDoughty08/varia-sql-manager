@@ -4,7 +4,7 @@ import type { Workbench } from '../core/workbench'
 import { explorerNodeOf, objectNodeOf, type ExplorerMenuNode, type ObjectMenuNode } from '../menus/targets'
 import { jobActionMessages } from '../actions/ObjectActionService'
 import { newLoginTarget } from '../dialogs/new-login'
-import { actionDialog, isModalDialog } from '../../../shared/actions/catalog'
+import { actionDialog, actionKindSpecs, actionTitle, isModalDialog, type ObjectAction } from '../../../shared/actions/catalog'
 
 /**
  * Object Explorer's object actions (src/shared/actions/catalog.ts): Select Top 1000 Rows, Rename, Delete, Properties, a
@@ -38,6 +38,20 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
   // An action that needs no tree row also takes a Search Objects result's object (`searchResults` in the catalogue).
   const isJob = (node: ExplorerMenuNode) => node.ref.type === 'object' && node.ref.object.kind === 'agentJob'
   const isAgentObject = (node: ExplorerMenuNode) => node.ref.type === 'object' && (node.ref.object.kind === 'agentAlert' || node.ref.object.kind === 'agentOperator')
+  // The palette names a shared verb by what it acts on, as SSMS's menus do on each object: "Disable Job" with a job selected, "Enable
+  // Operator" with an operator. A kind the verb has no row for (a database) keeps the catalogue's title.
+  const kindTitle = (action: ObjectAction) => (args?: CommandArgs) => {
+    const node = nodeOf(args)
+    if (node?.ref.type !== 'object') return undefined
+    const kind = node.ref.object.kind
+    return (actionKindSpecs[kind]?.titles?.[action] || kind === 'login') ? actionTitle(kind, action) : undefined
+  }
+  // Its greyed row says what to select in the same words: "Select a disabled job in Object Explorer." for Enable with an enabled job.
+  const kindHint = (action: 'disable' | 'enable') => (args?: CommandArgs): string | undefined => {
+    const title = kindTitle(action)(args), node = nodeOf(args)
+    if (!title || node?.ref.type !== 'object' || node.ref.object.kind === 'login') return undefined
+    return `Select ${action === 'enable' ? 'a disabled' : 'an enabled'} ${title.slice(title.indexOf(' ') + 1).toLowerCase()} in Object Explorer.`
+  }
   const changeState = (node: ExplorerMenuNode, verb: 'disable' | 'enable') => isJob(node) ? actions.changeJobState(node, verb) : isAgentObject(node) ? actions.changeAgentObjectState(node, verb) : actions.changeLoginState(node, verb)
   const listedJob = (node: ExplorerMenuNode) => {
     if (!isJob(node)) return undefined
@@ -74,12 +88,14 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
     // A login's or a job's state: the facts, Disable's confirmation and the job run in ObjectActionService.
     commands.register('explorer.disable', {
       when: args => actions.canRun('disable', nodeOf(args)),
-      unavailable: args => actions.unavailable('disable', nodeOf(args)),
+      title: kindTitle('disable'),
+      unavailable: args => actions.unavailable('disable', nodeOf(args)) ?? kindHint('disable')(args),
       run: async args => { const node = nodeOf(args); if (node) await changeState(node, 'disable') }
     }),
     commands.register('explorer.enable', {
       when: args => actions.canRun('enable', nodeOf(args)),
-      unavailable: args => actions.unavailable('enable', nodeOf(args)),
+      title: kindTitle('enable'),
+      unavailable: args => actions.unavailable('enable', nodeOf(args)) ?? kindHint('enable')(args),
       run: async args => { const node = nodeOf(args); if (node) await changeState(node, 'enable') }
     }),
     // SQL Server Agent (AG-2), registered only behind the release gate so the palette offers none of them without it: Start Job at

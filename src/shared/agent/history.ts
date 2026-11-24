@@ -158,7 +158,7 @@ export interface LogViewerCommandEntry {
   readonly keywords: readonly string[]
   readonly precondition: string
   readonly unavailableHint: string
-  readonly menus?: readonly { readonly menu: 'explorer.context'; readonly group: string; readonly order: number; readonly mnemonic?: string; readonly when?: string }[]
+  readonly menus?: readonly { readonly menu: 'explorer.context' | 'agent.jobs.context'; readonly title?: string; readonly group: string; readonly order: number; readonly mnemonic?: string; readonly when?: string }[]
 }
 const openViewer = 'Open Log File Viewer first (SQL Server Agent: View History).'
 /**
@@ -173,7 +173,7 @@ export function logViewerCommandEntries(): { readonly [K in LogViewerCommandId]:
       menus: [{
         menu: 'explorer.context', group: '1_monitor', order: 2, mnemonic: 'h',
         when: "(explorerNode == 'agent' || (explorerNode == 'folder' && explorerFolder == 'agentJobs') || explorerNode == 'agentJob') && !explorerServerLost"
-      }]
+      }, { menu: 'agent.jobs.context', group: '5_history', order: 1, mnemonic: 'h' }]
     },
     'agent.refreshHistory': {
       title: 'Refresh History', category: 'SQL Server Agent', icon: 'refresh', keywords: ['agent', 'job', 'history', 'log', 'reload', 'now'],

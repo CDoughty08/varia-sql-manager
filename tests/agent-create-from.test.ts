@@ -144,7 +144,7 @@ describe('Create Job Like This: the copy', () => {
   it('puts Create Job Like This on a job\'s menu after New Job, behind the release gate', () => {
     const entry = createFromCommandEntries()['agent.createJobLike']
     expect(entry.precondition).toContain('agentEnabled')
-    expect(commandDescriptor('agent.createJobLike')).toMatchObject({ title: 'Create Job Like This…', menus: [{ menu: 'explorer.context', group: '0_new', order: 2, when: "explorerNode == 'agentJob' && !explorerServerLost" }] })
+    expect(commandDescriptor('agent.createJobLike')).toMatchObject({ title: 'Create Job Like This…', menus: [{ menu: 'explorer.context', group: '0_new', order: 2, when: "explorerNode == 'agentJob' && !explorerServerLost" }, { menu: 'agent.jobs.context', group: '1_open', order: 2 }] })
     expect(entry.keywords).toContain('existing')
   })
 })

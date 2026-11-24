@@ -97,8 +97,8 @@ internal static class AgentLiveChecks
         var dmv = await sql("SELECT COUNT(*) FROM sys.dm_server_services AS s WHERE s.servicename LIKE N'SQL Server Agent%';", "master");
         var listed = dmv.Sets is [[[var count, ..], ..], ..] && count is not null and not "0";
         var row = probe.Sets is [[var first, ..], ..] ? first : null;
-        check(probe.Status == "completed" && row is [var xps, var state, var startup] && xps == "1" && state == "4" && (!listed || startup is "2" or "3" or "4"),
-            "explorer.agentService reads Agent XPs 1 and running (4) on a server whose Agent is up, with a startup type where sys.dm_server_services lists Agent (it "
+        check(probe.Status == "completed" && row is [var xps, var state, var startup, var clustered] && xps == "1" && clustered == (await sql("SELECT CONVERT(nvarchar(1), CONVERT(int, SERVERPROPERTY('IsClustered')));", "master")).Scalar && state == "4" && (!listed || startup is "2" or "3" or "4"),
+            "explorer.agentService reads Agent XPs 1 and running (4) on a server whose Agent is up, with a startup type where sys.dm_server_services lists Agent and whether the server is clustered (it "
             + (listed ? "does" : "does not, so the session fallback answers") + " here): " + (row is null ? probe.Error : string.Join(",", row.Select(cell => cell ?? "NULL"))));
     }
 

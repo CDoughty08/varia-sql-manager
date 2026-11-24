@@ -224,7 +224,8 @@ internal static partial class LiveSql
     // the DMV has no Agent row, a connected Agent session says it runs, read only where the login sees other sessions (else
     // 0 sessions would read as stopped). From SQL Server 2022 the DMV answers VIEW SERVER SECURITY or PERFORMANCE STATE and
     // other sessions need PERFORMANCE STATE, as agent.profile reads them; VIEW SERVER STATE before. Managed Instance's Agent
-    // always runs.
+    // always runs. SERVERPROPERTY('IsClustered') needs no permission: a failover cluster instance's Start, Stop and Restart grey up front
+    // (AG-10) instead of after the backend's preflight refuses them.
     internal static string AgentServiceAt(int band)
     {
         static string Has(string permission) => "ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, N'" + permission + "'), 0) = 1";
@@ -239,10 +240,10 @@ internal static partial class LiveSql
             + "    IF @state IS NULL AND " + sessions + "\n"
             + "        SELECT @state = CASE WHEN EXISTS (SELECT 1 FROM sys.dm_exec_sessions AS e WHERE e.program_name LIKE N'SQLAgent - %') THEN 4 ELSE 1 END;\n"
             + "END\n"
-            + "SELECT @xps AS agent_xps, @state AS service_state, @startup AS startup_type;";
+            + "SELECT @xps AS agent_xps, @state AS service_state, @startup AS startup_type, CONVERT(int, SERVERPROPERTY('IsClustered')) AS is_clustered;";
     }
-    private static readonly string[] AgentServiceColumns = ["agent_xps", "service_state", "startup_type"];
-    private static readonly LiveStatusColumn[] AgentServiceStatus = [new("agentXps", "agent_xps"), new("serviceState", "service_state"), new("startupType", "startup_type")];
+    private static readonly string[] AgentServiceColumns = ["agent_xps", "service_state", "startup_type", "is_clustered"];
+    private static readonly LiveStatusColumn[] AgentServiceStatus = [new("agentXps", "agent_xps"), new("serviceState", "service_state"), new("startupType", "startup_type"), new("clustered", "is_clustered")];
 
     private const string Availability =
         "SELECT g.name, CONVERT(tinyint, s.synchronization_health) AS health, CONVERT(tinyint, ISNULL(r.role, 0)) AS role\n"

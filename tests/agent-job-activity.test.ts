@@ -452,3 +452,60 @@ describe("The status bar's running job", () => {
     expect(handles().at(-1)).toBe(view)
   })
 })
+
+describe('Job Activity Monitor\'s Start Agent, F5, View menu and row menu (AG-10)', () => {
+  const stopped = { type: 'live.tick', seq: 1, sampledAt: 1, samples: [{ probe: 'agent.jobs.service', costMs: 1, effectiveIntervalMs: 10_000, status: [{ id: 'agentXps', value: 1 }, { id: 'serviceState', value: 1 }, { id: 'startupType', value: 2 }] }] } as const
+  it('offers Start Agent through the Agent node\'s Start, greyed with its rule\'s reason, and opens its dialog where the rules allow', async () => {
+    const off = monitor()
+    const id = off.jobActivity.open('c1')
+    off.handle().deliver(stopped as never)
+    // Varia off Windows: the verb is greyed with the client rule's reason, so the banner shows Start disabled with it.
+    const greyed = off.jobActivity.startAgentTarget(id)!
+    expect(greyed.reason).toBe('Starting and stopping SQL Server Agent needs Varia on Windows.')
+    expect(off.commands.isEnabled('explorer.startAgent', greyed.args)).toBe(false)
+    expect(agentBanner('stopped', off.jobActivity.get(id)?.service, !!greyed.reason, false)?.start).toBe(true)
+
+    const fixture = workbenchFixture({ agentPreview: true, windowsClient: true })
+    cleanups.push(() => fixture.dispose())
+    fixture.api.push(readyBackend())
+    fixture.connect(connectionInfo('c1'))
+    const on = fixture.jobActivity.open('c1')
+    const handle = (fixture.live.handles as FakeLiveHandle[]).find(item => item.spec.probes.some(probe => probe.probe === 'agent.jobs.list'))!
+    handle.deliver(stopped as never)
+    const start = fixture.jobActivity.startAgentTarget(on)!
+    // The monitor's own reading stands in for a state the tree has not sampled: stopped, so Start is enabled and Stop greyed.
+    expect(start).toMatchObject({ args: { target: { kind: 'explorer', node: { kind: 'agent', connectionId: 'c1', agent: { windowsClient: true, state: 1, startup: 2 } } }, state: { explorerActionStartAgent: 'enabled', explorerActionStopAgent: 'disabled' } } })
+    expect(start.reason).toBeUndefined()
+    expect(fixture.commands.isEnabled('explorer.startAgent', start.args)).toBe(true)
+    expect(await fixture.commands.execute('explorer.startAgent', start.args, 'toolbar')).toBe(true)
+    expect(fixture.dialogs.current).toMatchObject({ dialog: 'startAgent', connectionId: 'c1', target: { kind: 'agent' } })
+  })
+  it('binds F5 to Refresh Jobs in the monitor and places Job Activity Monitor in View', () => {
+    const refresh = commandDescriptor('agent.refreshJobs')
+    const f5 = refresh.keybindings?.find(binding => 'key' in binding && binding.key === 'f5')
+    expect(f5).toBeDefined()
+    const when = compileWhen(f5!.when!)
+    expect(evaluateWhen(when, { activeDocumentIsJobActivity: true, activePanel: 'editor', liveGridFocus: true } as never)).toBe(true)
+    // Object Explorer's own F5 and the query editor's keep theirs.
+    expect(evaluateWhen(when, { activeDocumentIsJobActivity: true, activePanel: 'explorer' } as never)).toBe(false)
+    expect(evaluateWhen(when, { activeDocumentIsJobActivity: true, activePanel: 'editor', editorFocus: true } as never)).toBe(false)
+    expect(commandDescriptor('agent.jobActivity').menus?.some(menu => menu.menu === 'view')).toBe(true)
+    // Enter opens the selected job in the list, which carries no Query Output menu now (its row menu is the job's).
+    expect(commandDescriptor('agent.openJob').keybindings?.[0]?.when).toBe('activeDocumentIsJobActivity && liveGridFocus')
+  })
+  it('scripts the one job selected in the monitor from its row menu, and greys Script with several', async () => {
+    const { jobActivity, api, commands } = monitor()
+    const id = jobActivity.open('c1')
+    const grid = new FakeGrid({ newRows: 0, following: true, lost: false })
+    jobActivity.attachGrid(id, grid as unknown as LiveGrid)
+    grid.select([row(nightly, 'Nightly'), row(backup, 'Backup')])
+    await settled()
+    expect(commands.isEnabled('agent.scriptJob', { tabId: id })).toBe(false)
+    expect(commands.unavailableReason('agent.scriptJob', { tabId: id })).toBe('Select one job to script it.')
+    grid.select([row(nightly, 'Nightly')])
+    await settled()
+    expect(await commands.execute('agent.scriptJob', { target: { kind: 'jobActivity', tabId: id }, tabId: id }, 'menu')).toBe(true)
+    await vi.waitFor(() => expect(api.scriptObjects).toHaveBeenCalled())
+    expect(api.scriptObjects.mock.calls.at(-1)![0]).toMatchObject({ connectionId: 'c1', verb: 'create', targets: [{ kind: 'agentJob', name: 'Nightly' }] })
+  })
+})

@@ -2,7 +2,7 @@
 // the smoke runs open the release gate): the Agent node's menu opens one live document per connection listing the jobs with
 // tiles and tones, a view chip and Clear filters narrow and restore the list through live.update, two selected jobs get Start
 // as one request each with a result line per job, the status bar follows the newest started job to its outcome, the Last run
-// chevron shows the selected job's last run in place, Change owner and Attach schedule (AG-3b) send one request per job from their
+// chevron shows the selected job's last run in place, the list's row menu and F5 refresh it (AG-10), Change owner and Attach schedule (AG-3b) send one request per job from their
 // forms below the bulk bar (Escape closes one), View history opens the Log File Viewer (AG-5a) with the selected job
 // checked, whose sources, outcome filter, selected run, whole message and Delete History work against the fake history, the
 // SQL Server Agent error log (AG-5b) shows its rows and a row's message and Recycle asks first (Enter cancels), closing
@@ -11,7 +11,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { chooseExplorerMenuItem, expandExplorerPath, explorerMenuItems, revealExplorerRow } from './fixtures/explorer-tree.mjs'
-import { connectDialogWindow, documentFrame, documentTab, gridPart, gridTones, liveGrid, liveGridSelector, statusBar, submitConnect, toolbarButton } from './fixtures/ui.mjs'
+import { connectDialogWindow, documentFrame, documentTab, gridPart, gridTones, liveGrid, liveGridSelector, menuItemNames, statusBar, submitConnect, toolbarButton } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -124,6 +124,26 @@ try {
   await lastRun.getByRole('button', { name: 'Hide the last run', exact: true }).click()
   await expect(lastRun).toHaveCount(0)
   console.log('Last run passed: the chevron shows the selected job\'s last run in place and hides it again.')
+
+  step = 'row menu'
+  // AG-10: a right-click on a job opens the list's own menu (agent.jobs.context through MenuService), not Query Output's; its Refresh,
+  // like F5 in the list, reads the list again through live.update.
+  await jobCell('Purge').click({ button: 'right' })
+  const rowMenu = page.getByRole('menu', { name: 'Job Activity Monitor', exact: true })
+  await expect(rowMenu).toBeVisible()
+  const names = await menuItemNames(rowMenu)
+  for (const name of ['Open', 'Script Job as CREATE', 'Start Job', 'Stop Job', 'Enable Job', 'Disable Job', 'Refresh']) expect(names.some(item => item.startsWith(name))).toBe(true)
+  await expect(page.getByRole('menu', { name: 'Query output', exact: true })).toHaveCount(0)
+  const refreshes = async () => (await calls('live.update')).filter(update => update.refresh === true).length
+  const before = await refreshes()
+  await rowMenu.getByRole('menuitem', { name: /^Refresh/ }).click()
+  await expect(rowMenu).toHaveCount(0)
+  await expect.poll(refreshes).toBeGreaterThan(before)
+  await jobCell('Purge').click()
+  const afterMenu = await refreshes()
+  await page.keyboard.press('F5')
+  await expect.poll(refreshes).toBeGreaterThan(afterMenu)
+  console.log('Row menu passed: a right-click on a job opens the monitor\'s own menu, whose Refresh and F5 read the list again.')
 
   step = 'change owner'
   // Two jobs selected: Change owner reads the logins, then sends one changeJobOwner per job with its own result line; Escape closes a form.

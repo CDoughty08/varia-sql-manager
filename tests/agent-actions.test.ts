@@ -32,6 +32,26 @@ describe('the release gate', () => {
   })
 })
 
+describe('the palette\'s Enable and Disable (AG-10)', () => {
+  it('names the shared verbs by the selected object, with a greyed row saying what to select', () => {
+    let selected: Partial<ExplorerMenuNode> | undefined
+    const commands = new CommandService()
+    const contribution = actionsContribution({ commands, explorer: { menuNode: () => selected, getSnapshot: () => ({ selected: 1 }) }, actions: { canRun: () => false, unavailable: () => undefined } } as never, { agentEnabled: true })
+    cleanups.push(() => contribution.dispose())
+    const shown = (kind?: string) => {
+      selected = kind ? { id: 1, connectionId: 'c1', lost: false, ref: { type: 'object', object: { kind, name: 'x' } } } as never : undefined
+      return [commands.titleFor('explorer.enable'), commands.titleFor('explorer.disable'), commands.unavailableReason('explorer.enable')]
+    }
+    expect(shown('agentJob')).toEqual(['Enable Job', 'Disable Job', 'Select a disabled job in Object Explorer.'])
+    expect(shown('agentAlert')).toEqual(['Enable Alert', 'Disable Alert', 'Select a disabled alert in Object Explorer.'])
+    expect(shown('agentOperator')).toEqual(['Enable Operator', 'Disable Operator', 'Select a disabled operator in Object Explorer.'])
+    // A login keeps the catalogue's words and hint; anything else, or nothing selected, keeps the catalogue's title.
+    expect(shown('login')).toEqual(['Enable Login', 'Disable Login', undefined])
+    expect(shown('database')).toEqual([undefined, undefined, undefined])
+    expect(shown()).toEqual([undefined, undefined, undefined])
+  })
+})
+
 describe('SQL Server Agent service verbs (AG-2)', () => {
   it('offers Start when stopped and Stop and Restart when running', () => {
     expect(service(agent({ state: 1 }))).toEqual(['enabled', 'disabled', 'disabled'])

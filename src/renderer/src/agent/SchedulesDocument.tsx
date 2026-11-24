@@ -87,12 +87,12 @@ const ScheduleGrid = memo(function ScheduleGrid({ documentId, rows, selected: cu
     <tbody>
       {rows.map(record => {
         const key = String(record.id), selected = current === key
-        const readOnly = !!service.readOnly(documentId, record)
+        const toggle = service.canToggle(documentId, record)
         return <tr key={key} aria-selected={selected} data-disabled={record.enabled ? undefined : true} onClick={() => service.select(documentId, key)}>
           <td><button type="button" className="agent-schedules-row" aria-current={selected || undefined} onClick={event => { event.stopPropagation(); service.select(documentId, key) }}>
             {record.name}{drafts.has(key) && <span className="agent-schedule-tag"> · edited</span>}</button></td>
           <td>{scheduleWhen(record)}</td>
-          <td><input type="checkbox" aria-label={`Enabled: ${record.name}`} checked={record.enabled} disabled={readOnly || busy}
+          <td><input type="checkbox" aria-label={`Enabled: ${record.name}`} checked={record.enabled} disabled={!toggle || busy}
             onClick={event => event.stopPropagation()} onChange={event => { void service.setEnabled(documentId, record.id, event.target.checked) }} /></td>
           <td>{record.jobCount || <span className="agent-schedule-tag">unused</span>}</td>
           <td>{record.owner ?? ''}</td>

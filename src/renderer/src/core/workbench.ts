@@ -489,6 +489,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     hoverModifier: key => gesturesFor(platform).isModifierKey('explorer.peekHover', key) || gesturesFor(platform).isModifierKey('editor.peekHover', key) })
   const serverFiles = new ServerFilePickerService({ api, connections })
   const longRuns = new LongRunService({ api })
+  // The Agent node's Start, Stop and Restart grey while one of them runs on its server (agentServiceRules' busy).
+  const explorerLongRuns = explorer.useLongRuns(longRuns)
   const disconnectPrompts = new DisconnectPromptService()
   const disconnectCoordinator = createDisconnectCoordinator({
     connectionTargets, documents, queries, files, longRuns, api, prompts: disconnectPrompts,
@@ -590,7 +592,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const proxyDocuments = new ProxyDocumentService({ api, documents, files, connections, targetIdOf, focus: focusAgentObject('data-agent-proxy', 'data-agent-proxy-focus') })
   const credentialDocuments = new CredentialDocumentService({ api, documents, files, connections, targetIdOf, focus: focusAgentObject('data-credential', 'data-credential-focus') })
   const jobActivity = new JobActivityService({
-    api, documents, panes, groups: editorGroups, live, connections, targetIdOf,
+    api, documents, panes, groups: editorGroups, live, connections, targetIdOf, explorer,
     started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt),
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-jobs="${CSS.escape(id)}"] [role="grid"]`)?.focus())
   })
@@ -872,6 +874,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       // Before the client: its views cancel their subscriptions while the port is still there.
       ssisTree.dispose()
       explorerRuntime.dispose()
+      explorerLongRuns.dispose()
       explorerStatus.dispose()
       live.dispose()
       resultVisibility.dispose()

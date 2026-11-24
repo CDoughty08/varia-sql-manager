@@ -206,21 +206,22 @@ describe('ExplorerStatusService', () => {
     const agentNode = { parent: 1, kind: 'agent', ref: { type: 'object', object: { kind: 'agent' } } } as never
     fake.onEvent(tick([
       { probe: 'explorer.agent', costMs: 1, effectiveIntervalMs: 10_000, metrics: [0] },
-      { probe: 'explorer.agentService', costMs: 1, effectiveIntervalMs: 10_000, status: [{ id: 'agentXps', value: 0 }, { id: 'serviceState', value: 1 }, { id: 'startupType', value: 3 }] }
+      { probe: 'explorer.agentService', costMs: 1, effectiveIntervalMs: 10_000, status: [{ id: 'agentXps', value: 0 }, { id: 'serviceState', value: 1 }, { id: 'startupType', value: 3 }, { id: 'clustered', value: 0 }] }
     ]), 10)
     await settle()
     const stopped = status.server(first)!
-    expect(stopped.agentService).toEqual({ xps: 0, state: 1, startup: 3 })
+    expect(stopped.agentService).toEqual({ xps: 0, state: 1, startup: 3, clustered: false })
     expect(rowStatus(stopped, agentNode)).toMatchObject({ words: 'Stopped, Agent XPs disabled', sublabel: 'Agent XPs disabled' })
     expect(rowStatus(stopped, agentNode)?.chips.map(chip => chip.label)).toEqual(['STOPPED'])
     // Running with jobs: the jobs chip; a state the login may not read (no serviceState) shows no state chip.
     fake.onEvent(tick([
       { probe: 'explorer.agent', costMs: 1, effectiveIntervalMs: 10_000, metrics: [2] },
-      { probe: 'explorer.agentService', costMs: 1, effectiveIntervalMs: 10_000, status: [{ id: 'agentXps', value: 1 }] }
+      { probe: 'explorer.agentService', costMs: 1, effectiveIntervalMs: 10_000, status: [{ id: 'agentXps', value: 1 }, { id: 'clustered', value: 1 }] }
     ]), 10)
     await settle()
     const running = status.server(first)!
-    expect(running.agentService).toEqual({ xps: 1 })
+    // A failover cluster instance (AG-10): the Agent node's service verbs grey up front.
+    expect(running.agentService).toEqual({ xps: 1, clustered: true })
     expect(rowStatus(running, agentNode)).toMatchObject({ words: '2 jobs running' })
     expect(rowStatus(running, agentNode)?.sublabel).toBeUndefined()
   })

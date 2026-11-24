@@ -433,11 +433,25 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const state = this.get(id)
     if (!state?.draft || !this.canEditSteps(id)) return
     const moved = moveStep(state.draft.steps, key, index)
-    if (moved !== state.draft.steps) this.updateDraft(id, { steps: moved })
+    if (moved === state.draft.steps) return
+    // The step shown by default (the first, none picked) stays shown as it moves, rather than whichever step becomes first.
+    const shown = this.selectedStep(id)?.key
+    this.updateDraft(id, { steps: moved })
+    if (shown && state.step !== shown) this.patch(id, { step: shown })
   }
   moveStepBy(id: string, key: string, delta: number): void {
     const at = this.get(id)?.draft?.steps.steps.findIndex(step => step.key === key) ?? -1
     if (at >= 0) this.moveStepTo(id, key, at + delta)
+  }
+  /** Move Step Up and Move Step Down (AG-10, Alt+Up and Alt+Down): the selected step can move one place that way. */
+  canMoveSelectedStep(id: string, delta: -1 | 1): boolean {
+    const steps = this.get(id)?.draft?.steps.steps ?? [], selected = this.selectedStep(id)
+    const at = selected ? steps.indexOf(selected) : -1
+    return this.canEditSteps(id) && at >= 0 && at + delta >= 0 && at + delta < steps.length
+  }
+  moveSelectedStep(id: string, delta: -1 | 1): void {
+    const selected = this.selectedStep(id)
+    if (selected && this.canMoveSelectedStep(id, delta)) this.moveStepBy(id, selected.key, delta)
   }
   /** Delete acts on the draft at once: steps that went to it quit reporting failure, the banner says which, and Undo puts it back. */
   deleteStepOf(id: string, key: string): void {

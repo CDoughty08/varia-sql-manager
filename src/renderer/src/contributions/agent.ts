@@ -18,7 +18,7 @@ import { serverItems } from './query'
  * (AG-5b) opens the viewer on that log (Current from the folder) with no job checked, and their Recycle opens it on Current with Recycle's
  * confirmation; Recycle from the palette or the viewer's header asks in the viewer it runs on.
  */
-export function agentContribution({ commands, jobActivity, logViewer, documents, connections, explorer, quickInput, jobDocuments, schedules }: Pick<Workbench, 'commands' | 'jobActivity' | 'logViewer' | 'documents' | 'connections' | 'explorer' | 'quickInput' | 'jobDocuments' | 'schedules'>,
+export function agentContribution({ commands, jobActivity, logViewer, documents, connections, explorer, quickInput, jobDocuments, schedules, scripting }: Pick<Workbench, 'commands' | 'jobActivity' | 'logViewer' | 'documents' | 'connections' | 'explorer' | 'quickInput' | 'jobDocuments' | 'schedules'> & Partial<Pick<Workbench, 'scripting'>>,
   options: { readonly agentEnabled?: boolean } = {}): Disposable {
   if (!options.agentEnabled) return { dispose: () => {} }
   const live = (id: string | undefined) => id !== undefined && connections.isLiveSqlServer(id) ? id : undefined
@@ -173,6 +173,20 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
         withServer(args, 'Open Job', pickJob)
       }
     }),
+    // Script Job as CREATE (AG-10, the monitor's row menu): the one job selected there, through Object Explorer's Script As (ScriptingService), which
+    // need not have loaded the job's node; it opens a new query window, as Script Job as › CREATE To › New Query Editor Window does.
+    commands.register('agent.scriptJob', {
+      when: args => { const id = monitorOf(args), state = id ? jobActivity.get(id) : undefined; return !!scripting && !!state?.connectionId && connections.isLiveSqlServer(state.connectionId) && state.selected.length === 1 },
+      unavailable: args => { const id = monitorOf(args), state = id ? jobActivity.get(id) : undefined; return state && state.selected.length !== 1 ? 'Select one job to script it.' : undefined },
+      run: async args => {
+        const monitor = monitorOf(args)
+        if (!monitor || !scripting) return
+        const selected = await jobActivity.settledSelection(monitor)
+        const state = jobActivity.get(monitor), job = selected.length === 1 ? selected[0] : undefined
+        if (!state?.connectionId || !job) { commands.reportError('Select one job to script it.'); return }
+        await scripting.run('create', 'newQuery', explorer.objectNode(state.connectionId, { kind: 'agentJob', name: job.name }, job.name))
+      }
+    }),
     ...(['agent.newJob', 'agent.newJobOnAgent'] as const).map(id => commands.register(id, {
       when: args => { const node = explorerNodeOf(args); return !node || (!node.lost && connections.isLiveSqlServer(node.connectionId)) },
       run: args => withServer(args, 'New Job', connectionId => report(() => jobDocuments.newJob(connectionId), 'New Job could not open.'))
@@ -213,7 +227,9 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
       })
     })),
     commands.register('agentJob.stop', onJob(id => jobDocuments.canStop(id), id => jobDocuments.stop(id))),
-    commands.register('agentJob.reload', onJob(id => jobDocuments.canReload(id), id => jobDocuments.reload(id)))
+    commands.register('agentJob.reload', onJob(id => jobDocuments.canReload(id), id => jobDocuments.reload(id))),
+    commands.register('agentJob.moveStepUp', onJob(id => jobDocuments.canMoveSelectedStep(id, -1), id => jobDocuments.moveSelectedStep(id, -1))),
+    commands.register('agentJob.moveStepDown', onJob(id => jobDocuments.canMoveSelectedStep(id, 1), id => jobDocuments.moveSelectedStep(id, 1)))
   ]
   return { dispose: () => registrations.forEach(registration => registration.dispose()) }
 }
