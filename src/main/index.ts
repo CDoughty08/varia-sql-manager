@@ -70,6 +70,8 @@ import { processAlive, RendererWatchdog } from './renderer-watchdog'
 import { ContextMenuPopups } from './context-menu'
 import { menuStyleArgument, menuStyleFor } from '../shared/menu-style'
 import { agentPreviewArgument, agentPreviewEnabled } from '../shared/agent/gate'
+import { stepScriptFileKinds, stepScriptOpenSchema } from '../shared/agent/step-file'
+import { readStepScript } from './step-script-file'
 import { contentSecurityPolicy } from '../shared/csp'
 import { homedir, userInfo } from 'node:os'
 import { parseWorkspaceLayout } from '../shared/layouts'
@@ -1213,6 +1215,14 @@ app.whenReady().then(async () => {
     const current = await federationSource(await readCredentialFile(path, { json: true, what: 'The federation configuration file' }))
     if (current === undefined || current !== source) throw new Error('The configuration file changed. Choose it again.')
     await bigQueryStore!.confirmSource(path, source)
+  })
+  // agentStepScript.open (AG-11, Load from file… on a CmdExec or PowerShell step): main's open dialog, and only the chosen file's text goes
+  // back, never its path; the page names the step type and nothing else.
+  handle('varia:agent-step-script-open', async value => {
+    const kind = stepScriptFileKinds[stepScriptOpenSchema.parse(value).subsystem]
+    const selection = await pageDialog(window => dialog.showOpenDialog(window, { title: kind.title, filters: [{ name: kind.filter.name, extensions: [...kind.filter.extensions] }, { name: 'All files', extensions: ['*'] }], properties: ['openFile'] }), { canceled: true, filePaths: [] })
+    const path = selection.canceled ? undefined : selection.filePaths[0]
+    return path ? readStepScript(path, { legacyLabel: fileStoreOptions.legacyLabel() }) : null
   })
   handle('varia:settings-get', () => settings.load({ showsWarning: true }))
   handle('varia:settings-update', value => settings.update(value))

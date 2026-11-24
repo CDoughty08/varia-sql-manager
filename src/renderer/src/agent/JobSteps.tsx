@@ -2,7 +2,7 @@
 // rx-step-delete): the steps list (drag to reorder, ✓ and ✗ targets, the Start step) beside the selected step's editor, edited in place.
 // T-SQL commands are edited in the query editor with the step's database (completion, Parse, Open in query window); an SSIS step is one
 // scroll with an inline SSISDB picker; SSMS's Advanced page is the More options fold. JobDocumentService keeps every state.
-import { useEffect, useRef, useState, type DragEvent } from 'react'
+import { useEffect, useRef, useState, type DragEvent, type RefObject } from 'react'
 import type { editor } from 'monaco-editor'
 import { agentLimits, stepActions } from '../../../shared/agent/catalog.ts'
 import {
@@ -14,6 +14,7 @@ import {
   type SsisStepCommand
 } from '../../../shared/agent/ssis-step.ts'
 import type { AgentJobDocumentModel, AgentJobDraft } from '../../../shared/actions/agent-job.ts'
+import { isStepScriptSubsystem, stepScriptText } from '../../../shared/agent/step-file.ts'
 import { useWorkbench } from '../core/WorkbenchContext'
 import { createQueryEditor, type QueryEditorInstance } from '../editor/create-editor'
 import { registerSqlModel } from '../explorer/peek-editor'
@@ -47,13 +48,16 @@ function FieldMessages({ text, id }: { readonly text: { error?: string; note?: s
   </>
 }
 
+/** Puts `text` in place of step `key`'s whole command as one edit the editor's Undo takes back (Load from file…); false when that step's model
+ *  is not the one showing or the editor is read-only, so the caller writes the draft instead. */
+interface StepCommandHandle { replace(key: string, text: string): boolean }
 /** The command's editor: the query editor (Tools › Options, Find) on a model per step, served by the language service with the step's
  *  connection and database when it is T-SQL. */
 /** `epoch` changes each time the job is read: a save renumbers steps, so `s1` may then be another step, and a model (with its undo stack)
  *  is never carried from one read to the next. */
-function StepCommandEditor({ epoch, stepKey: key, value, subsystem, connectionId, database, readOnly, label, onChange }: {
+function StepCommandEditor({ epoch, stepKey: key, value, subsystem, connectionId, database, readOnly, label, onChange, handle }: {
   readonly epoch: string; readonly stepKey: string; readonly value: string; readonly subsystem: string; readonly connectionId?: string; readonly database?: string; readonly readOnly: boolean
-  readonly label: string; readonly onChange: (value: string) => void
+  readonly label: string; readonly onChange: (value: string) => void; readonly handle?: RefObject<StepCommandHandle | null>
 }) {
   const workbench = useWorkbench()
   const stepKey = `${epoch}|${key}`
@@ -96,6 +100,22 @@ function StepCommandEditor({ epoch, stepKey: key, value, subsystem, connectionId
     if (model && !model.isDisposed() && model.getValue() !== value) model.setValue(value)
   }, [stepKey, value])
   useEffect(() => { instance.current?.instance.updateOptions({ readOnly }) }, [readOnly])
+  useEffect(() => {
+    if (!handle) return
+    handle.current = {
+      replace: (target, text) => {
+        const view = instance.current?.instance, model = models.current.get(`${epoch}|${target}`)?.model
+        if (!view || readOnly || !model || model.isDisposed() || view.getModel() !== model) return false
+        // Stops on both sides, so one Undo takes back exactly the load; the content listener then writes the draft, which marks it dirty.
+        view.pushUndoStop()
+        const applied = view.executeEdits('agent-step-load-file', [{ range: model.getFullModelRange(), text, forceMoveMarkers: true }])
+        view.pushUndoStop()
+        if (applied) view.setPosition({ lineNumber: 1, column: 1 })
+        return applied
+      }
+    }
+    return () => { handle.current = null }
+  }, [handle, epoch, readOnly])
   return <div className="agent-step-editor"><div ref={host} className="agent-step-editor-host" /></div>
 }
 
@@ -325,6 +345,14 @@ function StepEditor(props: StepsProps & { readonly step: AgentStepDraft; readonl
   const parse = state.parse?.key === step.key ? state.parse : undefined
   const databases = model.databases && step.databaseName && !model.databases.includes(step.databaseName) ? [step.databaseName, ...model.databases] : model.databases
   const count = state.draft!.steps.steps.length
+  const commandEditor = useRef<StepCommandHandle | null>(null)
+  const stepFile = state.stepFile?.key === step.key ? state.stepFile : undefined
+  // Load from file… (AG-11): main's dialog and read; the text replaces the command as one undoable edit, or the draft when the editor no
+  // longer shows this step.
+  const loadFile = async () => {
+    const text = await service.loadStepScript(state.id, step.key)
+    if (text !== undefined && !commandEditor.current?.replace(step.key, text)) service.updateStep(state.id, step.key, { command: text })
+  }
   return <div className="agent-step-edit" role="group" aria-label={`Step ${position + 1}: ${step.name || 'unnamed'}`}>
     <div className="agent-step-tools">
       <button type="button" disabled={!editable || position === 0} onClick={() => service.moveStepBy(state.id, step.key, -1)}><Icon name="arrow-up" />Move up</button>
@@ -371,11 +399,13 @@ function StepEditor(props: StepsProps & { readonly step: AgentStepDraft; readonl
         <span className="agent-step-inline">
           {step.subsystem === 'TSQL' && <button type="button" onClick={() => void service.parseStep(state.id, step.key)} disabled={parse?.running}><Icon name="check" />Parse</button>}
           {step.subsystem === 'TSQL' && <button type="button" onClick={() => service.openStepInQuery(state.id, step.key)}><Icon name="link-external" />Open in query window</button>}
+          {isStepScriptSubsystem(step.subsystem) && <button type="button" disabled={!editable || stepFile?.running} onClick={() => void loadFile()}><Icon name="file" />{stepScriptText.load}</button>}
         </span>
       </div>
       <StepCommandEditor epoch={`${model.job?.jobId ?? 'new'} ${model.job?.version ?? 0} ${model.job?.modified ?? ''}`} stepKey={step.key} value={step.command} subsystem={step.subsystem} connectionId={service.connectionId(state.id)} {...step.subsystem === 'TSQL' && step.databaseName ? { database: step.databaseName } : {}}
-        readOnly={!editable} label={`Step ${position + 1} command`} onChange={value => update({ command: value })} />
+        readOnly={!editable} label={`Step ${position + 1} command`} onChange={value => update({ command: value })} handle={commandEditor} />
       <FieldMessages text={command} id={`${id}-command`} />
+      {stepFile?.failure && <p className="property-field-error" role="alert"><Icon name="error" />{stepFile.failure}</p>}
       {parse && <div className="agent-step-parse" role="status">
         {parse.running ? <p><Icon name="loading" spin />Parsing…</p>
           : parse.failure ? <p className="property-field-error"><Icon name="error" />{parse.failure}</p>

@@ -374,6 +374,42 @@ describe("the job document's Steps page", () => {
     jobDocuments.openStepInQuery(id, 's2')
     expect(documents.active).toMatchObject({ name: 'Load.sql', connectionId: 'c1', database: 'Sales' })
   })
+  it('loads a CmdExec or PowerShell command from main\'s open dialog, naming only the step type, and says why a file was refused', async () => {
+    const fixture = opened(stepped()), { jobDocuments } = fixture
+    const open = vi.fn<(subsystem: 'PowerShell' | 'CmdExec') => Promise<ApiResult<string | null>>>(async () => ({ ok: true, value: 'robocopy D:\\a \\\\fs\\b' }))
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    // Without the API (a test workbench) the step says so; a T-SQL step never asks.
+    jobDocuments.updateStep(id, 's1', { subsystem: 'CmdExec' })
+    expect(await jobDocuments.loadStepScript(id, 's1')).toBeUndefined()
+    expect(jobDocuments.get(id)?.stepFile).toMatchObject({ key: 's1', failure: 'Load from file is not available here.' })
+    Object.assign(fixture.api, { openAgentStepScript: open })
+    expect(await jobDocuments.loadStepScript(id, 's2')).toBeUndefined()
+    expect(open).not.toHaveBeenCalled()
+    expect(await jobDocuments.loadStepScript(id, 's1')).toBe('robocopy D:\\a \\\\fs\\b')
+    expect(open).toHaveBeenCalledWith('CmdExec')
+    expect(jobDocuments.get(id)?.stepFile).toBeUndefined()
+    // Cancel loads nothing; a refusal is shown under the command until the command changes.
+    open.mockResolvedValueOnce({ ok: true, value: null })
+    expect(await jobDocuments.loadStepScript(id, 's1')).toBeUndefined()
+    open.mockResolvedValueOnce({ ok: false, error: 'The file is longer than a step\'s command may be (100,000 characters).' })
+    expect(await jobDocuments.loadStepScript(id, 's1')).toBeUndefined()
+    expect(jobDocuments.get(id)?.stepFile).toMatchObject({ key: 's1', running: false, failure: expect.stringContaining('100,000') })
+    jobDocuments.updateStep(id, 's1', { command: 'dir' })
+    expect(jobDocuments.get(id)?.stepFile).toBeUndefined()
+    // The type changed while the dialog was up: the text is not for this step any more.
+    let answer!: (value: ApiResult<string | null>) => void
+    open.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    const pending = jobDocuments.loadStepScript(id, 's1')
+    expect(jobDocuments.get(id)?.stepFile).toMatchObject({ key: 's1', running: true })
+    expect(await jobDocuments.loadStepScript(id, 's1')).toBeUndefined()
+    expect(open).toHaveBeenCalledTimes(4)
+    jobDocuments.updateStep(id, 's1', { subsystem: 'PowerShell' })
+    answer({ ok: true, value: 'Get-Date' })
+    expect(await pending).toBeUndefined()
+    expect(await jobDocuments.loadStepScript(id, 's1')).toBe('robocopy D:\\a \\\\fs\\b')
+    expect(open).toHaveBeenLastCalledWith('PowerShell')
+  })
   it('drops a pending delete when Reload and keep my changes rebases the steps', async () => {
     const { jobDocuments, answers, setModel } = opened(stepped())
     const id = jobDocuments.openJob('c1', 'Nightly load')

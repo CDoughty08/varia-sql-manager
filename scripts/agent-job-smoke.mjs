@@ -12,7 +12,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { chooseExplorerMenuItem } from './fixtures/explorer-tree.mjs'
-import { closeDocumentButton, connectDialogWindow, documentFrame, documentState, documentTab, documentVerb, gridPart, liveGrid, quickInputRows, statusBar, submitConnect, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { closeDocumentButton, connectDialogWindow, documentFrame, documentState, documentTab, documentVerb, editorSurface, gridPart, liveGrid, quickInputRows, statusBar, submitConnect, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -236,6 +236,34 @@ try {
   await expect(list.getByRole('option').first()).toContainText('Start step')
   await expect(list.getByRole('option').first()).toContainText('Update statistics')
   console.log('Steps passed: targets follow a move, Parse reports, Delete undoes, and Save renumbers the steps with the Start step.')
+
+  step = 'load from file'
+  // Load from file… (AG-11): main's own open dialog (stubbed here), filtered to the type's scripts plus All files; the file's text (UTF-16
+  // with a byte order mark) replaces the command as one edit Undo takes back, and Save writes it.
+  const script = resolve(control, 'cleanup.ps1')
+  await writeFile(script, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('Write-Output "Grüße"\r\nGet-ChildItem D:\\Backups\r\n', 'utf16le')]))
+  await app.evaluate(({ dialog }, path) => {
+    globalThis.variaStepDialogs = []
+    dialog.showOpenDialog = async (_window, options) => { globalThis.variaStepDialogs.push(options); return { canceled: false, filePaths: [path] } }
+  }, script)
+  await list.getByRole('option', { name: /Rebuild indexes/ }).click()
+  const rebuild = job('Nightly').getByRole('group', { name: 'Step 3: Rebuild indexes', exact: true })
+  await expect(rebuild.getByRole('button', { name: 'Load from file…', exact: true })).toHaveCount(0)
+  await rebuild.getByRole('radio', { name: 'PowerShell', exact: true }).click()
+  await rebuild.getByRole('button', { name: 'Load from file…', exact: true }).click()
+  await expect(editorSurface(rebuild)).toContainText('Get-ChildItem')
+  expect(await app.evaluate(() => globalThis.variaStepDialogs)).toEqual([expect.objectContaining({ title: 'Load PowerShell script', filters: [{ name: 'PowerShell scripts', extensions: ['ps1', 'psm1', 'psd1'] }, { name: 'All files', extensions: ['*'] }] })])
+  await expect(unsavedMark(documentTab(page, 'Job Properties - Nightly'))).toBeVisible()
+  await editorSurface(rebuild).click()
+  await page.keyboard.press('ControlOrMeta+z')
+  await expect(editorSurface(rebuild)).not.toContainText('Get-ChildItem')
+  await expect(editorSurface(rebuild)).toContainText('SELECT')
+  await page.keyboard.press('ControlOrMeta+Shift+z')
+  await expect(editorSurface(rebuild)).toContainText('Get-ChildItem')
+  await job('Nightly').getByRole('group', { name: 'Nightly actions', exact: true }).getByRole('button', { name: /^Save · [0-9]+ changes?$/ }).click()
+  await expect(job('Nightly').getByRole('status').filter({ hasText: 'The job was saved.' })).toBeVisible()
+  expect((await saves()).at(-1).agentJob.steps.writes.find(write => write.name === 'Rebuild indexes')).toMatchObject({ subsystem: 'PowerShell', command: expect.stringMatching(/^Write-Output "Grüße"\r?\nGet-ChildItem D:\\Backups\r?\n$/) })
+  console.log('Load from file passed: the step type\'s filter, the text as one undoable edit, and Save writes it.')
 
   step = 'new job'
   // New Job from the palette: Copy an existing job fills General and Notifications; Create adds the job.

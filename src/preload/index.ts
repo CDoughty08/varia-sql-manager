@@ -74,6 +74,7 @@ const api: VariaApi = {
   setBigQueryCostPrompt: input => ipcRenderer.invoke('varia:bigquery-cost-prompt', input),
   pickKeyFile: authentication => ipcRenderer.invoke('varia:connections-pick-key-file', { authentication }),
   confirmFederationSource: (keyFile, source) => ipcRenderer.invoke('varia:connections-confirm-source', { keyFile, source }),
+  openAgentStepScript: subsystem => ipcRenderer.invoke('varia:agent-step-script-open', { subsystem }),
   disconnect: connectionId => request('connections.disconnect', { connectionId }),
   bigQueryAccount: params => request('bigquery.account', params),
   bigQueryProjects: params => request('bigquery.projects', params),
