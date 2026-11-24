@@ -16,6 +16,7 @@ import { QueryService } from '../services/queries'
 import { ConnectionService } from '../services/connections'
 import { ConnectionTargetService } from '../services/connection-targets'
 import { bindStartupReconnect } from '../services/connection-startup'
+import { connectBigQueryProfile } from '../services/connect-profile'
 import { bindConnectionPruning } from '../services/connection-pruning'
 import type { StartupReconnectService } from '../services/startup-reconnect'
 import { createDisconnectCoordinator } from '../services/disconnect-workbench'
@@ -57,6 +58,7 @@ import { ServerDropService } from '../editor-groups/server-drop'
 import { ExplorerStatusService } from '../explorer/ExplorerStatusService'
 import { DatabaseListService } from '../services/database-list'
 import { SsisTreeProbe } from '../ssis/SsisTreeProbe'
+import { AgentTreeLive } from '../agent/AgentTreeLive'
 import { ResultSelectionService } from '../services/result-selection'
 import { PeekService } from '../explorer/PeekService'
 import { PeekTabService } from '../explorer/PeekTabService'
@@ -244,6 +246,8 @@ export interface Workbench extends Disposable {
   readonly explorerStatus: ExplorerStatusService
   /** The SSIS Catalog's live tree: one catalog probe per connection whose SSISDB node is open, reconciling what changed. */
   readonly ssisTree: SsisTreeProbe
+  /** SQL Server Agent's live tree (AG-12): the agent.tree change source while an Agent node is open, and job rows' chips while a Jobs folder is. */
+  readonly agentTree: AgentTreeLive
   /** The databases of each connected server, for the toolbar's database picker. */
   readonly databaseList: DatabaseListService
   /** The cells selected in each query's results grid. */
@@ -428,6 +432,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // A database's menu follows its live state (Take Offline greys once a sample shows it offline), not only its listing.
   const explorerRuntime = explorer.useStatus(explorerStatus)
   const ssisTree = new SsisTreeProbe({ explorer, live, settings, events, explorerVisible: { visible: () => panes.getSnapshot().explorer, subscribe: panes.subscribe, popout: () => panes.location('explorer') === 'window' } })
+  const agentTree = new AgentTreeLive({ explorer, live, settings, events, explorerVisible: { visible: () => panes.getSnapshot().explorer, subscribe: panes.subscribe, popout: () => panes.location('explorer') === 'window' } })
+  // A job's menu follows its live enabled state as its row does (Enable Job once a read shows it disabled elsewhere).
+  const explorerJobs = explorer.useJobStatus(agentTree)
   const gridStats = api.testMode ? new GridStats() : undefined
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values, retainedPlans)
   // A BigQuery close's note shows in the query's Messages while it stays, else as a notification (docs/bigquery.md, Sessions).
@@ -447,7 +454,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const bigQueryCost = new BigQueryCostService({ api, documents, connections, settings, events, monaco, ask: (request, signal, stillAsks, onAnswer) => costPrompts.ask(request, signal, stillAsks, onAnswer), optOut: costOptOut(api, () => costChoiceChanged()) })
   costChoiceChanged = () => bigQueryCost.optOutChanged()
   queries.estimateOf = (id, sql) => bigQueryCost.estimateFor(id, sql)
-  queries.setCostGate((tabId, sql, origin, signal) => bigQueryCost.beforeExecute(tabId, sql, origin, signal))
+  queries.setCostGate((tabId, sql, origin, signal, rerunOf) => bigQueryCost.beforeExecute(tabId, sql, origin, signal, rerunOf))
   const queryPlans = new QueryPlansService(live, documents, queries, panes, results)
   const planPreparation = new PlanPreparationCache()
   const planReleases = resultClient.onRelease(keys => planPreparation.release(keys))
@@ -496,6 +503,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     hoverModifier: key => gesturesFor(platform).isModifierKey('explorer.peekHover', key) || gesturesFor(platform).isModifierKey('editor.peekHover', key) })
   const serverFiles = new ServerFilePickerService({ api, connections })
   const longRuns = new LongRunService({ api })
+  // The Agent node's Start, Stop and Restart grey while one of them runs on its server (agentServiceRules' busy).
+  const explorerLongRuns = explorer.useLongRuns(longRuns)
   const disconnectPrompts = new DisconnectPromptService()
   const disconnectCoordinator = createDisconnectCoordinator({
     connectionTargets, documents, queries, files, longRuns, api, prompts: disconnectPrompts,
@@ -599,7 +608,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const proxyDocuments = new ProxyDocumentService({ api, documents, files, connections, targetIdOf, focus: focusAgentObject('data-agent-proxy', 'data-agent-proxy-focus') })
   const credentialDocuments = new CredentialDocumentService({ api, documents, files, connections, targetIdOf, focus: focusAgentObject('data-credential', 'data-credential-focus') })
   const jobActivity = new JobActivityService({
-    api, documents, panes, groups: editorGroups, live, connections, targetIdOf,
+    api, documents, panes, groups: editorGroups, live, connections, targetIdOf, explorer, longRuns,
     started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt),
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-jobs="${CSS.escape(id)}"] [role="grid"]`)?.focus())
   })
@@ -621,7 +630,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-peek-tab="${CSS.escape(id)}"] [role="tab"][aria-selected="true"]`)?.focus())
   })
   const bigQueryProperties = new BigQueryPropertiesService({
-    api, documents, focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-bigquery-properties="${CSS.escape(id)}"] [role="region"]`)?.focus())
+    api, documents, connections, results, scriptingOptions,
+    billedGate: (connectionId, estimate, signal) => bigQueryCost.beforeScript(connectionId, estimate, signal),
+    focus: id => focusLater(() => {
+      const root = document.querySelector<HTMLElement>(`[data-bigquery-properties="${CSS.escape(id)}"]`)
+      ;(root?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? root?.querySelector<HTMLElement>('button'))?.focus()
+    })
   })
   const inspector = new InspectorService({ api, platform })
   const editorPeek = new EditorPeekService({ sqlLanguage, connections, scripting, peek, peekTabs })
@@ -710,6 +724,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   })
   const cleanup = events.subscribe(event => { if (event.type === 'documents.closed') queries.forget(event.tabId) })
   let disposed = false
+  // Connects Show in Job History started end with the workbench.
+  const lifetime = new AbortController()
   const reloadPins = (): ReloadPins | undefined => {
     if (!api.hotExit) return
     return reloadSession(documents, id => connections.get(id)?.server, {
@@ -776,6 +792,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     explorer,
     explorerStatus,
     ssisTree,
+    agentTree,
     databaseList,
     resultSelection,
     settings,
@@ -829,6 +846,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     dispose: () => {
       if (disposed) return
       disposed = true
+      lifetime.abort()
       stopConnectionBindings()
       startup.dispose()
       connectionPruning.dispose()
@@ -884,7 +902,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       activity.dispose()
       // Before the client: its views cancel their subscriptions while the port is still there.
       ssisTree.dispose()
+      explorerJobs.dispose()
+      agentTree.dispose()
       explorerRuntime.dispose()
+      explorerLongRuns.dispose()
       explorerStatus.dispose()
       live.dispose()
       resultVisibility.dispose()
@@ -995,15 +1016,20 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // The tabs the last close kept (hot exit), else the welcome query; what an earlier run or page left unsaved is offered
   // once the workbench is up.
   const welcome = () => { if (!disposed) documents.create('SQLQuery1.sql', welcomeQueryText, 'master') }
-  // Show in Job History (the records dialog): each project's Job History filtered to its jobs; a project with no live
-  // connection opens Connect, and its Job History opens once a connection to it is live.
+  // Show in Job History (docs/bigquery.md, Job History): a connected project opens at once; another connects the saved
+  // connection that started its jobs, with no Connect dialog, and opens once connected; one without says why.
   const showJobsWithoutTab = (projects: NonNullable<JobsWithoutTabReview['show']>) => {
-    let connect = false
-    for (const { project, jobs } of projects) {
-      try { if (!jobHistory.show(project, jobs)) { connect = true; notifications.notify({ severity: 'info', message: `Connect to BigQuery project ${project}: Job History opens with its ${jobs.length === 1 ? 'job' : `${jobs.length} jobs`} once connected.` }) } }
-      catch (error) { commands.reportError(error instanceof Error ? error.message : 'Job History could not open.') }
+    for (const { project, jobs, profileId, unavailable } of projects) {
+      try {
+        if (jobHistory.show(project, jobs)) continue
+        if (!profileId) { jobHistory.forget(project); notifications.notify({ severity: 'info', message: unavailable ?? `Connect to BigQuery project ${project} to see its jobs in Job History.` }); continue }
+        void connectBigQueryProfile({ api, connections, targets, backend, documents, startupReconnect: startup.scheduler, signal: lifetime.signal }, profileId).then(result => {
+          if (result.ok) return
+          jobHistory.forget(project)
+          if (!result.cancelled && !lifetime.signal.aborted) commands.reportError(`BigQuery project ${project} could not be connected for Job History: ${result.error}`)
+        }, onUnexpectedError)
+      } catch (error) { commands.reportError(error instanceof Error ? error.message : 'Job History could not open.') }
     }
-    if (connect) void commands.execute('connection.connect', undefined, 'toolbar')
   }
   if (api.hotExit) void restoreSession({ api, documents, files, groups: editorGroups, connectionTargets, resumeRecovery: (tabId, id) => recovery.resume(tabId, id), restoredJobs: (tabId, jobs) => queries.restoreJobs(tabId, jobs), otherwise: welcome })
     .then(opened => opened >= 0, () => false).then(restored => {
@@ -1011,8 +1037,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       if (disposed) return
       void recovery.start()
       // A session that could not be restored may still reopen its tabs (previous.json): their jobs are not asked about.
-      if (restored) void queries.reviewJobsWithoutTab(api, showJobsWithoutTab)
+      if (restored) void queries.reviewJobsWithoutTab(api, showJobsWithoutTab, () => jobHistory.liveProjects())
     })
-  else { welcome(); connectionRestored(); void recovery.start(); void queries.reviewJobsWithoutTab(api, showJobsWithoutTab) }
+  else { welcome(); connectionRestored(); void recovery.start(); void queries.reviewJobsWithoutTab(api, showJobsWithoutTab, () => jobHistory.liveProjects()) }
   return workbench
 }

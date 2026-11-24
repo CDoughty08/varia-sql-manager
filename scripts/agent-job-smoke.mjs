@@ -12,7 +12,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { chooseExplorerMenuItem } from './fixtures/explorer-tree.mjs'
-import { closeDocumentButton, connectDialogWindow, documentFrame, documentState, documentTab, documentVerb, gridPart, liveGrid, quickInputRows, statusBar, submitConnect, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { closeDocumentButton, connectDialogWindow, documentFrame, documentState, documentTab, documentVerb, editorSurface, gridPart, liveGrid, quickInputRows, statusBar, submitConnect, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -56,7 +56,8 @@ try {
   await expect(documentTab(page, 'Job Properties - Nightly')).toHaveAttribute('aria-selected', 'true')
   await expect(job('Nightly').getByLabel('Description', { exact: true })).toHaveValue('Nightly maintenance.')
   await expect(documentState(job('Nightly'))).toContainText('Idle · Last run failed')
-  expect((await calls('live.subscribe')).some(call => call.source === 'agent.jobs' && call.args?.watch?.length === 1 && call.probes.some(probe => probe.probe === 'agent.jobs.watched'))).toBe(true)
+  // The header can already show the state from Job Activity Monitor's snapshot before the watched subscribe lands in calls.jsonl.
+  await expect.poll(async () => (await calls('live.subscribe')).some(call => call.source === 'agent.jobs' && call.args?.watch?.length === 1 && call.probes.some(probe => probe.probe === 'agent.jobs.watched'))).toBe(true)
   await expect(job('Nightly').getByRole('table', { name: 'Alerts that run this job', exact: true })).toContainText('Nightly failed')
   // Enter on another selected job opens a second tab; the first stays open.
   await documentTab(page, 'Job Activity Monitor - server-a').click()
@@ -78,6 +79,8 @@ try {
   await expect(history.getByRole('list', { name: 'Runs', exact: true }).getByRole('button')).toHaveCount(2)
   await expect(history.getByRole('button', { name: /Failed at step 2/ })).toHaveAttribute('aria-pressed', 'true')
   await expect(history.getByRole('img', { name: /^Durations of the last 2 runs, 1 failed; usual 2 s$/ })).toBeVisible()
+  // AG-10: the sparkline draws through ChartView, whose canvas sits inside the named image.
+  await expect(history.getByRole('img', { name: /^Durations of the last 2 runs/ }).locator('canvas')).toHaveCount(1)
   expect((await calls('live.subscribe')).find(call => call.source === 'agent.history')).toMatchObject({ args: { jobs: ['a1b2c3d4-0000-4000-8000-000000000001'], usual: true } })
   await expect(history.getByRole('region', { name: 'Step 2 message', exact: true })).toContainText('Violation of PRIMARY KEY constraint.')
   await expect(history.getByRole('table', { name: 'Steps of the selected run', exact: true })).toContainText('Truncate')
@@ -240,6 +243,34 @@ try {
   await expect(list.getByRole('option').first()).toContainText('Start step')
   await expect(list.getByRole('option').first()).toContainText('Update statistics')
   console.log('Steps passed: targets follow a move, Parse reports, Delete undoes, and Save renumbers the steps with the Start step.')
+
+  step = 'load from file'
+  // Load from file… (AG-11): main's own open dialog (stubbed here), filtered to the type's scripts plus All files; the file's text (UTF-16
+  // with a byte order mark and CRLF line endings, which it keeps) replaces the command as one edit Undo takes back, and Save writes it.
+  const script = resolve(control, 'cleanup.ps1')
+  await writeFile(script, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('Write-Output "Grüße"\r\nGet-ChildItem D:\\Backups\r\n', 'utf16le')]))
+  await app.evaluate(({ dialog }, path) => {
+    globalThis.variaStepDialogs = []
+    dialog.showOpenDialog = async (_window, options) => { globalThis.variaStepDialogs.push(options); return { canceled: false, filePaths: [path] } }
+  }, script)
+  await list.getByRole('option', { name: /Rebuild indexes/ }).click()
+  const rebuild = job('Nightly').getByRole('group', { name: 'Step 3: Rebuild indexes', exact: true })
+  await expect(rebuild.getByRole('button', { name: 'Load from file…', exact: true })).toHaveCount(0)
+  await rebuild.getByRole('radio', { name: 'PowerShell', exact: true }).click()
+  await rebuild.getByRole('button', { name: 'Load from file…', exact: true }).click()
+  await expect(editorSurface(rebuild)).toContainText('Get-ChildItem')
+  expect(await app.evaluate(() => globalThis.variaStepDialogs)).toEqual([expect.objectContaining({ title: 'Load PowerShell script', filters: [{ name: 'PowerShell scripts', extensions: ['ps1', 'psm1', 'psd1'] }, { name: 'All files', extensions: ['*'] }] })])
+  await expect(unsavedMark(documentTab(page, 'Job Properties - Nightly'))).toBeVisible()
+  await editorSurface(rebuild).click()
+  await page.keyboard.press('ControlOrMeta+z')
+  await expect(editorSurface(rebuild)).not.toContainText('Get-ChildItem')
+  await expect(editorSurface(rebuild)).toContainText('SELECT')
+  await page.keyboard.press('ControlOrMeta+Shift+z')
+  await expect(editorSurface(rebuild)).toContainText('Get-ChildItem')
+  await job('Nightly').getByRole('group', { name: 'Nightly actions', exact: true }).getByRole('button', { name: /^Save · [0-9]+ changes?$/ }).click()
+  await expect(job('Nightly').getByRole('status').filter({ hasText: 'The job was saved.' })).toBeVisible()
+  expect((await saves()).at(-1).agentJob.steps.writes.find(write => write.name === 'Rebuild indexes')).toMatchObject({ subsystem: 'PowerShell', command: 'Write-Output "Grüße"\r\nGet-ChildItem D:\\Backups\r\n' })
+  console.log('Load from file passed: the step type\'s filter, the text as one undoable edit, and Save writes it.')
 
   step = 'new job'
   // New Job from the palette: Copy an existing job fills General and Notifications; Create adds the job.

@@ -87,7 +87,9 @@ describe('result page access', () => {
       // pages with tabledata.list, never the store's.
       'SqlService.BigQuerySample.cs: var set = store.Find(resultId) ?? throw Unavailable(resultId);',
       // A remote filter reads only the value list's table reference (ValueList), never its pages.
-      'SqlService.BigQueryViews.cs: var held = store.Find(id) ?? throw ValueListClosed();'
+      'SqlService.BigQueryViews.cs: var held = store.Find(id) ?? throw ValueListClosed();',
+      // A Between filter's bounds are rows of the value list, a local set: a NULL bound (cell size null) is refused.
+      'SqlService.BigQueryViews.cs: var held = store.Find(filter.List!.Value);'
     ].sort())
     // Nor does a reader reach a set around Find: no listing of the store's sets, and no store under another name.
     // A store held under a name the Find scan does not know: an alias, or a parameter, field or property of type ResultStore.

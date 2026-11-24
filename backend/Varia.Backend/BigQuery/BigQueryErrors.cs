@@ -9,7 +9,7 @@ using Varia.Backend.Entra;
 namespace Varia.Backend.BigQuery;
 
 /// <summary>
-/// Google's failures as Varia error values with user text and a recovery (docs/bigquery-plan.md, Errors). Google's own
+/// Google's failures as Varia error values with user text and a recovery (docs/bigquery.md, Errors). Google's own
 /// message is kept only where it says what to fix, as one line of at most 2,000 characters with tokens redacted; key file
 /// content never reaches a message.
 /// </summary>
@@ -183,7 +183,7 @@ internal static partial class BigQueryErrors
     }
 
     /// <summary>Whether GoogleSQL text opts into legacy SQL: a <c>#legacySQL</c> line before any statement, after blank lines
-    /// and comments (decision 13). Checked before a job is created; a legacy-only error from BigQuery maps the same way.</summary>
+    /// and comments (docs/bigquery.md, Execution). Checked before a job is created; a legacy-only error from BigQuery maps the same way.</summary>
     public static bool IsLegacySql(string text)
     {
         var position = 0;

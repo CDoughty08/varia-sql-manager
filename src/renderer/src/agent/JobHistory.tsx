@@ -3,17 +3,20 @@
 // its steps with an SSIS execution link, and the failed step's whole message with Copy, Edit step and Start at step. While the job runs,
 // the run view comes first: this run against the usual time and each step's state, with Stop. JobHistoryService and JobDocumentService
 // keep every state; this only draws it.
-import { useEffect } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import type { AgentJobDocumentModel } from '../../../shared/actions/agent-job.ts'
 import { historyRunKeyText } from '../../../shared/agent/history.ts'
 import {
-  durationText, durationWords, elapsedSeconds, invokedBy, jobHistoryLimits, lastStepOf, runIsInProgress, runningSteps, runProgress, runSummary, sameRun, sparkBars, ssisExecutionId,
+  durationText, durationWords, elapsedSeconds, invokedBy, jobHistoryLimits, lastStepOf, runIsInProgress, runningSteps, runProgress, runSummary, sameRun, sparkSamples, ssisExecutionId,
   type JobHistoryRun, type JobHistoryStep, type JobUsual
 } from '../../../shared/agent/job-history.ts'
 import { stampText } from '../../../shared/agent/jobs.ts'
 import type { StatusTone } from '../../../shared/theme/tones'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
+import { ChartView, type ChartSeries } from '../live/ChartView'
+import { MetricRing } from '../live/ring'
+import { chartCategorical, chartSeriesColors } from '../../../shared/theme/charts'
 import InlineError from '../kit/InlineError'
 import Skeleton from '../kit/Skeleton'
 import StatusPill from '../kit/StatusPill'
@@ -36,16 +39,46 @@ export const jobHistoryCopy = {
   stepsCut: (rows: number) => `Showing this run's first ${rows} rows.`
 } as const
 
-/** The run durations as bars, newest last, with the usual time as a line: plain elements with one accessible name (not a ChartView: runs are not samples over time). */
+/** The sparkline's series (AG-10): each run's duration over a faint fill, and the usual time as a gray line. */
+const sparkSeries: readonly ChartSeries[] = [{ index: 0, label: 'Duration', color: chartCategorical[0], style: 'area' }, { index: 1, label: 'Usual', color: chartSeriesColors.at(-1)! }]
+/** The run durations, newest last, with the usual time as a line, drawn through ChartView like every chart (AG-10), from a ring of the runs
+ *  the view read; it redraws when they change, with no timer of its own. */
 function Sparkline({ runs, usual }: { readonly runs: readonly JobHistoryRun[]; readonly usual?: number }) {
-  const { bars, usualAt } = sparkBars(runs, usual)
-  if (!bars.length) return null
-  const failed = bars.filter(bar => bar.failed).length
-  const label = `Durations of the last ${bars.length} ${bars.length === 1 ? 'run' : 'runs'}${failed ? `, ${failed} failed` : ''}${usual !== undefined ? `; usual ${durationWords(usual)}` : ''}`
-  return <div className="agent-history-spark" role="img" aria-label={label}>
-    {bars.map(bar => <i key={bar.key} title={bar.label} data-failed={bar.failed || undefined} style={{ height: `${Math.max(4, Math.round(bar.height * 100))}%` }} />)}
-    {usualAt !== undefined && <b aria-hidden="true" style={{ bottom: `${Math.round(usualAt * 100)}%` }} />}
-  </div>
+  const { theme, live } = useWorkbench()
+  const rootRef = useRef<HTMLDivElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), viewRef = useRef<ChartView | undefined>(undefined)
+  const ringRef = useRef<MetricRing | undefined>(undefined)
+  const { samples, top, label } = sparkSamples(runs, usual)
+  const shown = samples.length > 0
+  useLayoutEffect(() => {
+    if (!shown) return
+    const view = new ChartView({
+      canvas: canvasRef.current!, root: rootRef.current!, ring: () => ringRef.current, title: label, series: sparkSeries,
+      scale: { unit: 'seconds', min: 0, max: top }, window: { spanMs: 1, end: 0 }, colors: theme.getSnapshot().active.colors, current: false,
+      variant: 'sparkline', labels: 'none', surface: 'editor.background', page: live.page
+    })
+    viewRef.current = view
+    const themed = theme.subscribe(() => view.setTheme(theme.getSnapshot().active.colors))
+    return () => { themed(); view.dispose(); viewRef.current = undefined }
+    // The view is made once while the sparkline shows (its first title and scale); the effect below hands it each change.
+  }, [shown, theme, live])
+  // What the runs draw, so a render that changed none of it leaves the chart alone.
+  const drawn = `${label}|${top}|${samples.map(sample => sample.values.join(',')).join(';')}`
+  useLayoutEffect(() => {
+    const view = viewRef.current
+    if (!view) return
+    const ring = new MetricRing(jobHistoryLimits.sparkRuns, sparkSeries.length)
+    for (const sample of samples) ring.push(sample.time, sample.values)
+    ringRef.current = ring
+    const last = samples.at(-1)?.time ?? 0
+    view.setTitle(label)
+    view.setSeries(sparkSeries, { unit: 'seconds', min: 0, max: top })
+    view.setWindow({ spanMs: Math.max(1, last), end: last })
+    view.ringChanged()
+  }, [drawn, shown])
+  if (!shown) return null
+  // One image named by the summary (its children, ChartView's canvas among them, are presentational), which the pointer shows too: a
+  // sparkline has no crosshair, and each run's start, outcome and duration are in the list beside it.
+  return <div ref={rootRef} className="live-chart agent-history-spark" data-variant="sparkline" role="img" aria-label={label} title={label}><canvas ref={canvasRef} className="live-chart-canvas" /></div>
 }
 
 /** The running job's view: this run against the usual time, each step's state, and Stop. */

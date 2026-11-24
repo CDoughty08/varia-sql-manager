@@ -25,8 +25,6 @@ export function runsTable(runs: readonly SsisPackageRun[]): LocalTableData {
     rows: runs.map(run => [String(run.id), statusLabel(run.status), ssisTime(run.started ?? run.created), durationText(secondsBetween(run.started, run.ended)), count(run.errors), count(run.warnings), run.caller === undefined ? null : displayText(run.caller)])
   }
 }
-/** The grid's ID column: the run its row is. */
-export const runIdColumn = 0
 
 /** Where a parameter's value came from, in SSMS's words. */
 export const parameterSource = (parameter: SsisExecutionParameter): string =>

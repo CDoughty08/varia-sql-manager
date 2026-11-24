@@ -224,7 +224,7 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     expect(source).toMatch(/function profileOf\(connectionId: string\)[^]*?connectionProfiles\.delete\(connectionId\); connectionProfiles\.set\(connectionId, profile\)/)
     expect(source).toContain("jobRecords.record(jobKey, event, profileId)")
     expect(source).toContain("handle('varia:jobs-cancel-restored', async value => {\n    const keys = z.array(jobKeySchema).min(1).max(jobLimits.keys).parse(value)")
-    expect(source).toContain("handle('varia:jobs-without-tab', async value => {\n    const keys = z.array(jobKeySchema).max(jobLimits.keys).parse(value)")
+    expect(source).toContain("handle('varia:jobs-without-tab', async value => {\n    const { keys, liveProjects } = jobsWithoutTabRequestSchema.parse(value)")
     // A copy AutoRecover may still reopen keeps its jobs; a store that cannot be read asks about nothing.
     expect(source).toContain('const orphans = jobRecords.withoutTab([...keys, ...kept])')
     // A box a reload, crash or close took away (pageDialog's fallback) drops nothing.
@@ -237,9 +237,15 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     // Only jobs recorded before the review asked; a disconnected handle forgets its profile.
     expect(source).toContain('const orphans = jobRecords.withoutTab([...keys, ...kept]).filter(record => record.createdAt < asked)')
     expect(source).toContain('if (value.disconnected) connectionProfiles.delete(connectionId)')
-    expect(source).toContain("buttons: [one ? 'Cancel Job' : 'Cancel Jobs', 'Show in Job History', 'Keep'], defaultId: 2, cancelId: 2")
+    // Show in Job History is offered only when a project can be shown: connected now, or with its saved connection.
+    expect(source).toContain('const show = jobsByProject(running, profiles, new Set(liveProjects))')
+    // Saved connections that cannot be read say so (null), rather than that they were removed.
+    expect(source).toContain('.catch(() => null)\n    const show')
+    expect(source).toContain("${profiles === null ? 'Varia could not read the saved connections' : `the saved connection that started")
+    expect(source).toContain("const buttons = showable ? [one ? 'Cancel Job' : 'Cancel Jobs', 'Show in Job History', 'Keep'] : [one ? 'Cancel Job' : 'Cancel Jobs', 'Keep']")
+    expect(source).toContain('buttons, defaultId: buttons.length - 1, cancelId: buttons.length - 1')
     // Show in Job History drops the records as Keep does and hands the jobs, by project, to Job History.
-    expect(source).toContain("if (response === 1) { jobRecords.dropJobs(jobIds); return { answer: 'show' as const, jobIds, show: jobsByProject(running) } }")
+    expect(source).toContain("if (showable && response === 1) { jobRecords.dropJobs(jobIds); return { answer: 'show' as const, jobIds, show } }")
     // Deleting a profile with running jobs asks, and keeps the profile when a cancel fails.
     // A SQL Server delete reads no job records; Keep Connection after failed cancels still says what the others noted.
     expect(source).toContain('const unread = bigQuery && await jobRecords.load().then(() => false, () => true)')
@@ -260,7 +266,10 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     expect(source).toContain('(await bigQueryStore.load().catch(() => undefined))?.library.profiles.some(profile => profile.id === id)')
     // The review runs only after a restore that worked.
     const workbench = await readFile(join(__dirname, '..', 'src', 'renderer', 'src', 'core', 'workbench.ts'), 'utf8')
-    expect(workbench).toContain('if (restored) void queries.reviewJobsWithoutTab(api, showJobsWithoutTab)')
+    expect(workbench).toContain('if (restored) void queries.reviewJobsWithoutTab(api, showJobsWithoutTab, () => jobHistory.liveProjects())')
+    // Show in Job History connects the records' saved connection directly, never through the Connect dialog.
+    expect(workbench).toMatch(/const showJobsWithoutTab = [^]*?connectBigQueryProfile\([^]*?jobHistory\.forget\(project\)/)
+    expect(workbench).not.toMatch(/const showJobsWithoutTab = [^]*?'connection\.connect'[^]*?\n  if \(api\.hotExit\)/)
     expect(workbench).toContain('.then(opened => opened >= 0, () => false).then(restored => {')
     // What the cancels noted is said before the connection goes.
     expect(source).toContain("const notes = cancelNotesText('BigQuery', cancel.jobs)")

@@ -242,7 +242,7 @@ noted where it matters.
 | `bigquery.account`, `bigquery.projects` | invoke | unary | control | 30 s, sensitive. BigQuery before connecting: `{ authentication, keyFile?, impersonateServiceAccount? }` (`.projects` adds `pageToken?` ≤ 1,024). Main adds `credential` (`{ source: 'file' \| 'adc' \| 'metadata' \| 'anonymous', json? ≤ 64 KiB }`), which the renderer never holds. Answers `{ kind, account ≤ 256, impersonated? }` and `{ projects: { id, friendlyName? ≤ 256 }[] ≤ 1,000, nextPageToken? }` ([BigQuery](bigquery.md#pre-connect-methods)). |
 | `bigquery.endIdleSessions` | main only | unary | control | 10 s (main gives up after 15 s). Before every backend stop main makes, except of a backend that is not responding: `{ keepJobKeys?: uuid[] ≤ 1,024 }`; ends every idle BigQuery session but a kept key's with an open or unknown transaction, and answers `{ failedAborts }` ([Re-attaching to jobs](bigquery.md#re-attaching-to-jobs)) |
 | `bigquery.cancelJobs` | main only | unary | control | 60 s, sensitive. A saved profile's jobs without a handle: the credential fields of `bigquery.account` plus `project` and `jobs: { jobId ≤ 1,024, location? ≤ 64 }[] ≤ 64`; cancels each, waits for DONE, lists its children and aborts its session, answering `{ jobs: { jobId, cancelled, note?, error? }[] }` |
-| `bigquery.dryRun` | invoke | unary | metadata | 30 s. A free dry run on a connected BigQuery handle: `{ connectionId, sql ≤ 1,000,000, dataset? ≤ 1,024 }`, or `{ connectionId, remote }` for a sort, filter or value list of a windowed result ([Remote results](#remote-results)). Answers `{ bytesProcessed, incomplete?: 'script' \| 'lowerBound' \| 'unknown' \| 'zeroBytes', statementType?, faked?, fallback? }`; a query BigQuery refuses is `SQL_ERROR` with its `[line:column]` ([BigQuery's Cost](bigquery.md#cost)) |
+| `bigquery.dryRun` | invoke | unary | metadata | 30 s. A free dry run on a connected BigQuery handle: `{ connectionId, sql ≤ 1,000,000, dataset? ≤ 1,024, sessionId? }` (the tab's id: a tab that holds a BigQuery session dry-runs in it; none is created), or `{ connectionId, remote }` for a sort, filter or value list of a windowed result ([Remote results](#remote-results)). Answers `{ bytesProcessed, incomplete?: 'script' \| 'lowerBound' \| 'unknown' \| 'zeroBytes', statementType?, faked?, fallback? }`; a query BigQuery refuses is `SQL_ERROR` with its `[line:column]` ([BigQuery's Cost](bigquery.md#cost)) |
 | `databases.list` | invoke | unary | metadata | 45 s; for a BigQuery handle, the billing project's datasets |
 | `tables.columns` | invoke | unary | metadata | 45 s; the backend stops its own query after 30 s, answering with an envelope error (`TIMEOUT`, or `SQL_ERROR` when SqlClient reports the cancel), not a result `error` value. Tables and views, read through `QUOTENAME(@db) + '.sys.sp_executesql'` so no pooled connection stays in the database |
 | `language.status`, `language.close` | invoke | unary | control | 10 s |
@@ -932,8 +932,10 @@ gets Cancel.
 - BigQuery job records, all main-only: `varia:job-records-drop` (a job key), `varia:quit-keep-jobs` (the job keys a quit
   keeps, ≤ 1,024; their drops wait until the quit ends or stops), `varia:jobs-cancel-restored` (≤ 1,024 job keys; cancels
   their running jobs through their saved profiles with `bigquery.cancelJobs`, 64 jobs per call, answering each job's outcome and
-  the ids that cannot be cancelled without a connection) and `varia:jobs-without-tab` (the open tabs' job keys; main
-  adds AutoRecover's, asks Cancel Jobs or Keep for running jobs no tab holds, and answers what it did, or null). Main
+  the ids that cannot be cancelled without a connection) and `varia:jobs-without-tab` (`{ keys, liveProjects }`: the open tabs' job keys, ≤ 1,024, and
+  the BigQuery projects the page is connected to; main adds AutoRecover's, asks Cancel Jobs, Show in Job History (offered
+  only when a project is connected or has the saved connection that started its jobs) or Keep for running jobs no tab
+  holds, and answers what it did, Show's projects each with that saved connection's id or why it cannot be shown, or null). Main
   sends `varia:failed-aborts` (a count) for idle sessions whose end failed at a Reload or backend restart, once the page is
   ready.
 

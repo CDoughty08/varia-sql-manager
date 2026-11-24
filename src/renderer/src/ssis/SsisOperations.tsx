@@ -35,7 +35,7 @@ import {
 } from './SsisOperationsService'
 import type { SsisPackageState, SsisPlaceError, SsisRunState } from './SsisPlacesService'
 import { ssisTime } from './properties-view'
-import { messagesTable, overviewRows, parametersTable, runIdColumn, runStrip, runsTable, timeline } from './run-page'
+import { messagesTable, overviewRows, parametersTable, runStrip, runsTable, timeline } from './run-page'
 
 const probeSpec = liveProbes[operationsProbe]
 const textFields: readonly { readonly field: TextFilter; readonly label: string }[] = [
@@ -335,7 +335,7 @@ function PackagePage({ documentId, state, place }: { readonly documentId: string
       <RunStrip runs={model.runs.slice(0, ssisRunStrip)} now={model.now} label={`The last ${Math.min(model.runs.length, ssisRunStrip)} runs of ${place.package}`} onOpen={open} />
       <div className="ssis-page-grid">
         <LocalGrid table={tableOf(model, () => runsTable(model.runs))} label="Runs" preset="page" filterable empty={operationsText.noRuns(place.package)} suggestedName={`${place.package}-Runs`}
-          state={read!.grid} onRowActivate={row => { const id = Number(row[runIdColumn]); if (Number.isSafeInteger(id) && id > 0) open(id) }} />
+          state={read!.grid} onActivateRow={row => { const run = model.runs[row]; if (!run) return false; open(run.id); return true }} />
       </div>
       {model.truncated && <p className="ssis-properties-note" role="status">Showing the newest {model.runs.length.toLocaleString('en-US')} runs; older ones are left out.</p>}
     </>}

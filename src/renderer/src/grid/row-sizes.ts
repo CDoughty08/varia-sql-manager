@@ -1,14 +1,15 @@
 import type { ResultHandle } from '../results/ResultClient'
 import { browserTimers, type Timers } from '../core/timers'
 
-/** Rows one results.rowBytes asks for, blocks kept at most, blocks asked at once, and how long a failed block waits. */
-export const rowSizeLimits = { blockRows: 256, blocks: 64, inflight: 2, retryMs: 2000, unchangedWakes: 3 } as const
+/** Rows one results.rowBytes asks for, blocks kept at most, blocks asked at once, retry wait, and outlier thresholds. */
+export const rowSizeLimits = { blockRows: 256, blocks: 64, inflight: 2, retryMs: 2000, unchangedWakes: 3, outlierBytes: 4096, outlierFactor: 2.5 } as const
 
-/** A row's size as the row-size bar draws it: its share of the largest row (0 – 1), whether it is over half of it, and
- *  its exact bytes, `estimated` when an estimated cell took part. */
+/** A row's size as the row-size bar draws it: its share of the largest row (0 – 1), whether it is a large outlier
+ *  (over half the largest row and either at least 4 KiB or 2.5× the mean row), and its exact bytes, `estimated` when an
+ *  estimated cell took part. */
 export interface RowSize { readonly bytes: number; readonly share: number; readonly large: boolean; readonly estimated: boolean }
 
-interface Block { readonly bytes: readonly number[]; readonly estimated: ReadonlySet<number> }
+interface Block { readonly bytes: readonly number[]; readonly estimated: ReadonlySet<number>; readonly sum: number }
 
 /**
  * The row-size bar's data for one handle: each row's bytes (results.rowBytes, by view position through a view), read in
@@ -27,7 +28,10 @@ export class RowSizes {
   /** When the last profile failed (BUSY, TOO_LARGE): asked again once it has waited, as a failed block is. */
   private profileFailedAt: number | undefined
   private profileMax = 0
+  private profileAverage = 0
   private readMax = 0
+  private readSum = 0
+  private readCount = 0
   private disposed = false
   /** The result's revision the blocks were read under: a residence switch reads them again. */
   private revision: number | undefined
@@ -44,6 +48,8 @@ export class RowSizes {
 
   /** The bytes scaling the bars: the largest row known. */
   get max(): number { return Math.max(this.profileMax, this.readMax) }
+  /** Mean row bytes: the whole set's from profile once it arrives, else the held blocks' running mean. */
+  private get average(): number { return this.profileAverage > 0 ? this.profileAverage : this.readCount > 0 ? this.readSum / this.readCount : 0 }
 
   /** Asks for the blocks covering rows [first, last] that are not held, and for the result's largest row. */
   ensure(first: number, last: number): void {
@@ -55,6 +61,8 @@ export class RowSizes {
       for (const controller of this.pending.values()) controller.abort()
       this.pending.clear()
       this.blocks.clear()
+      this.readSum = 0
+      this.readCount = 0
       this.failed.clear()
       this.woken.clear()
     }
@@ -85,7 +93,9 @@ export class RowSizes {
     if (!block || at >= block.bytes.length) return undefined
     const bytes = block.bytes[at], max = this.max
     const share = max > 0 ? Math.min(1, bytes / max) : 0
-    return { bytes, share, large: share > 0.5, estimated: block.estimated.has(row) }
+    const average = this.average
+    const large = share > 0.5 && (bytes >= rowSizeLimits.outlierBytes || (average > 0 && bytes >= average * rowSizeLimits.outlierFactor))
+    return { bytes, share, large, estimated: block.estimated.has(row) }
   }
 
   dispose(): void {
@@ -95,6 +105,8 @@ export class RowSizes {
     this.abort.abort()
     this.pending.clear()
     this.blocks.clear()
+    this.readSum = 0
+    this.readCount = 0
   }
 
   private read(block: number): void {
@@ -107,9 +119,20 @@ export class RowSizes {
     this.handle.rowBytes(first, rowSizeLimits.blockRows, controller.signal).then(result => {
       if (this.disposed || revision !== this.revision) return
       const estimated = new Set(result.estimated)
-      this.blocks.set(block, { bytes: result.bytes, estimated })
-      while (this.blocks.size > rowSizeLimits.blocks) this.blocks.delete(this.blocks.keys().next().value!)
-      for (const bytes of result.bytes) if (bytes > this.readMax) this.readMax = bytes
+      let sum = 0
+      for (const bytes of result.bytes) { sum += bytes; if (bytes > this.readMax) this.readMax = bytes }
+      const previous = this.blocks.get(block)
+      if (previous) { this.readSum -= previous.sum; this.readCount -= previous.bytes.length }
+      this.blocks.set(block, { bytes: result.bytes, estimated, sum })
+      this.readSum += sum
+      this.readCount += result.bytes.length
+      while (this.blocks.size > rowSizeLimits.blocks) {
+        const oldestKey = this.blocks.keys().next().value!
+        const oldest = this.blocks.get(oldestKey)!
+        this.readSum -= oldest.sum
+        this.readCount -= oldest.bytes.length
+        this.blocks.delete(oldestKey)
+      }
       // A windowed result answers only the rows its block cache holds: a short block is asked again once it has waited, as a
       // failed one is, not on every paint (its rows may be fetching, or never fit the cache).
       const short = result.bytes.length < rowSizeLimits.blockRows && first + result.bytes.length < this.handle.getSnapshot().rowsAvailable
@@ -162,6 +185,7 @@ export class RowSizes {
     this.handle.profile([], this.abort.signal).then(result => {
       if (this.disposed) return
       this.profileMax = result.rowBytes?.max ?? 0
+      this.profileAverage = result.rowBytes?.average ?? 0
       this.profileFailedAt = undefined
       this.changed()
     }, () => {

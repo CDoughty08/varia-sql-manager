@@ -79,7 +79,7 @@ export interface TreeNode {
   updatedAt?: number
   /** When a refresh that kept the old children failed (epoch ms); cleared by the next first page. */
   staleSince?: number
-  /** A database row's runtime state as its listing read it, and when that row arrived (epoch ms). */
+  /** A database row's runtime state as its listing read it, and when that row (or a job row, for its live enabled state) arrived (epoch ms). */
   database?: DatabaseRuntime
   listedAt?: number
   /** A login denied CONNECT SQL, as its listing read it (with `status` 'disabled' when it is disabled too). */

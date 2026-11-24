@@ -4,7 +4,7 @@ import { uncategorizedCategory } from '../src/shared/actions/agent-job'
 import { agentLimits } from '../src/shared/agent/catalog'
 import { agentHistoryArgsSchema } from '../src/shared/agent/history'
 import {
-  durationSeconds, durationText, durationWords, elapsedSeconds, failedStep, invokedBy, jobHistoryArgs, lastStepOf, runningSteps, runProgress, runSummary, sparkBars, ssisExecutionId,
+  durationSeconds, durationText, durationWords, elapsedSeconds, failedStep, invokedBy, jobHistoryArgs, lastStepOf, runningSteps, runProgress, runSummary, sparkSamples, sparkStepMs, ssisExecutionId,
   type JobHistoryRun, type JobHistoryStep
 } from '../src/shared/agent/job-history'
 import { liveProbes } from '../src/shared/live/catalog'
@@ -56,12 +56,15 @@ describe("the job document's History rules", () => {
     expect(ssisExecutionId('Execution ID: 0')).toBeUndefined()
     expect(ssisExecutionId('The step succeeded.')).toBeUndefined()
   })
-  it('draws the newest finished runs oldest first against the tallest, with the usual time as a line', () => {
+  it('samples the newest finished runs oldest first for ChartView, evenly spaced, with the usual time as a second series (AG-10)', () => {
     const runs = [run(5, { tone: 'running', outcome: 'In progress', seconds: undefined, duration: '' }), run(4, { seconds: 120, tone: 'error' }), run(3, { seconds: 60 }), run(2, { seconds: undefined })]
-    const { bars, usualAt } = sparkBars(runs, 90)
-    expect(bars.map(bar => [bar.key.endsWith(':3'), bar.height, bar.failed])).toEqual([[true, 0.5, false], [false, 1, true]])
-    expect(usualAt).toBe(0.75)
-    expect(sparkBars(Array.from({ length: 30 }, (_, at) => run(at + 1))).bars).toHaveLength(14)
+    const { samples, top, label } = sparkSamples(runs, 90)
+    expect(samples).toEqual([{ time: 0, values: [60, 90] }, { time: sparkStepMs, values: [120, 90] }])
+    expect(top).toBe(120)
+    expect(label).toBe(`Durations of the last 2 runs, 1 failed; usual ${durationWords(90)}`)
+    expect(sparkSamples(runs).samples.map(sample => sample.values)).toEqual([[60, null], [120, null]])
+    expect(sparkSamples(Array.from({ length: 30 }, (_, at) => run(at + 1))).samples).toHaveLength(14)
+    expect(sparkSamples([])).toEqual({ samples: [], top: 1, label: '' })
   })
   it("opens a run's detail on its last failed step", () => {
     expect(failedStep([step(1, 0, { tone: 'error' }), step(2, 1, { tone: 'error' }), step(3, 2, { tone: 'error' }), step(4, 3)])?.instance).toBe(3)

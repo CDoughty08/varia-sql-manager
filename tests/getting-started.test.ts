@@ -11,6 +11,7 @@ import { defaultSettings, settingKeys } from '../src/shared/settings/catalog'
 import { HelpService } from '../src/renderer/src/help/HelpService'
 import HelpDocument, { guideLoaders } from '../src/renderer/src/help/HelpDocument'
 import { GuideAction } from '../src/renderer/src/help/References'
+import { BigQueryResultsSample, bigQuerySampleResidence, bigQuerySampleResults } from '../src/renderer/src/help/Samples'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import { documentFixture } from './fixtures/documents'
@@ -46,9 +47,32 @@ describe('Getting Started registration and dependencies', () => {
   it('searches all words across guide metadata and refuses inherited/unknown route names', () => {
     expect(matchingGuides('copy headers')).toEqual(['results'])
     expect(matchingGuides('  ENTRA ')).toEqual(['connect'])
+    expect(matchingGuides('gcloud key file')).toEqual(['bigquery'])
     expect(matchingGuides('not-a-feature')).toEqual([])
     expect(matchingGuides('')).toEqual(guideIds)
     for (const value of ['constructor', '__proto__', '../connect', 'connect'.repeat(1000), null]) expect(isGuideId(value)).toBe(false)
+  })
+})
+
+describe('BigQuery results sample', () => {
+  it('keeps the residence rule of each Keep results option for the fictional sizes', () => {
+    const [small, medium, large] = bigQuerySampleResults.map(result => result.mb)
+    expect([small, medium, large].map(mb => bigQuerySampleResidence('automatic', mb))).toEqual(['memory', 'windowed', 'windowed'])
+    expect([small, medium, large].map(mb => bigQuerySampleResidence('memory', mb))).toEqual(['memory', 'memory', 'truncated'])
+    expect([small, medium, large].map(mb => bigQuerySampleResidence('windowed', mb))).toEqual(['windowed', 'windowed', 'windowed'])
+  })
+  it('follows the applied Keep results option and never calls the backend', () => {
+    const render = (fixture: ReturnType<typeof workbenchFixture>) => renderToStaticMarkup(createElement(WorkbenchProvider, { workbench: fixture as unknown as Workbench, children: createElement(BigQueryResultsSample) }))
+    const automatic = workbenchFixture(), memory = workbenchFixture({ settings: { 'queryResults.bigQuery.residence': 'memory' } })
+    try {
+      // The default size is the middle one: too large to keep under Automatic, but it fits the free memory to load.
+      expect(render(automatic)).toContain('Windowed in BigQuery')
+      expect(render(automatic)).toContain('Load into memory fits')
+      expect(render(automatic)).toContain('Automatically, by size')
+      expect(render(memory)).toContain('Kept in memory: every result tool works')
+      expect(render(memory)).toContain('Always in memory')
+      expect(automatic.api.execute).not.toHaveBeenCalled()
+    } finally { automatic.dispose(); memory.dispose() }
   })
 })
 

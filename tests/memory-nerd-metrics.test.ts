@@ -348,5 +348,9 @@ describe('Memory panel', () => {
     expect(critical.panel().querySelector<HTMLElement>('.memory-row[data-feature="results"]')!.dataset.level).toBe('critical')
     expect(document.body.querySelector('.memory-indicator')!.getAttribute('data-level')).toBe('critical')
     expect(critical.panel().querySelector('.memory-packed')).not.toBeNull()
+    cleanups.splice(0).reverse().forEach(clean => clean())
+    // Windowed results' block caches count in the figure, as in the Nerd metrics: rows held, and what holds them.
+    const windowed = await mount({ usedBytes: 960 * MB, globalBytes: 1000 * MB, detail: { ...packed, windowCacheBytes: 30 * MB } }, { [key]: true })
+    expect(windowed.panel().querySelector('.memory-row[data-feature="results"] .memory-packed')!.textContent).toBe('−2,100 MB packed 4,440 MB of rows held in 2,340 MB')
   })
 })
