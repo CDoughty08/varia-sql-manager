@@ -470,9 +470,9 @@ selected properties, or all of them when none is selected, on the clipboard as `
 
 Database-scoped kinds are read in their database, as the tree reads them; a database, a login and a server trigger on the
 server (sys.databases and sys.master_files, so an offline or restoring database still peeks). An index or a trigger is found
-below its table or view. Some kinds have lists, read in the same batch as their facts and shown on tabs of their own, at most
-1,024 rows each: a table's, view's or table type's columns, a procedure's or function's parameters, an index's
-key and included columns, a trigger's events, a database's files, a login's server roles,
+below its table or view (or table type for an index); a key or a constraint below its table or table type. Some kinds have lists, read in the same batch as their facts and shown on tabs of their own, at most
+1,024 rows each: a table's, view's or table type's columns, a table's indexes, keys, constraints and triggers, a procedure's or function's parameters, an index's
+key and included columns, a key's columns, a trigger's events, a database's files, a login's server roles,
 and its user mapping, read after the batch in each database the login may enter (at most 256, in name order), through
 `QUOTENAME` as every database statement is, on the same connection; a database it cannot read is counted, not shown. Nothing
 reads LOGINPROPERTY or a password hash. An index's usage comes from `sys.dm_db_index_usage_stats` in a statement of its own,
@@ -495,8 +495,10 @@ a module's parameter lines for a `CREATE PROCEDURE` or `CREATE FUNCTION` header.
 | List | Kinds | Columns |
 | --- | --- | --- |
 | Columns | `table`, `view`, `tableType` | Name, Type, Nullable, Key, Identity, Computed, Default, Definition |
+| Indexes & keys | `table` | Kind, Name, Definition, Status |
 | Parameters | `procedure`, `function` | Name, Type, Direction, Default, Definition |
 | Columns | `index` | Column, Included, Descending, Type |
+| Key columns | `key` | Column, Referenced column, Descending, Type |
 | Events | `trigger`, `databaseTrigger`, `serverTrigger` | Event, First, Last |
 | Files | `database` | Logical name, Type, Size, Autogrowth / Maxsize, Path |
 | Server roles | `login` | Role, Fixed role |
@@ -543,11 +545,13 @@ tab owns its reads and its Top rows run as the card does; closing it releases th
 
 | Kind | Definition | Tabs |
 | --- | --- | --- |
-| `table` | Script As | Definition, Columns, Dependencies, Top rows |
+| `table` | Script As | Definition, Columns, Indexes & keys, Dependencies, Top rows |
 | `view` | sys.sql_modules | Definition, Columns, Dependencies, Top rows |
 | `procedure` | sys.sql_modules | Definition, Parameters, Dependencies |
 | `function` | sys.sql_modules | Definition, Parameters, Dependencies |
 | `index` | Script As | Definition, Columns |
+| `key` | Script As | Definition, Key columns |
+| `constraint` | Script As | Definition |
 | `trigger` | sys.sql_modules | Definition, Events, Dependencies |
 | `databaseTrigger` | sys.sql_modules | Definition, Events |
 | `serverTrigger` | sys.server_sql_modules | Definition, Events |
@@ -572,6 +576,10 @@ tab owns its reads and its Top rows run as the card does; closing it releases th
 | `index` | Options | Fill factor, Pad index, Ignore duplicate values, Allow row locks, Allow page locks, Statistics not recomputed, Optimize for sequential key (band 15+) |
 | `index` | Storage | Row count, Space used, Filegroup, Partition scheme, Partitions, Data compression |
 | `index` | Usage since the server started (may be refused) | User seeks, User scans, User lookups, User updates, Last seek, Last scan, Last lookup, Last update |
+| `key` | General | Key type, Parent table, Referenced table, Delete action, Update action, Created, Last modified, System named |
+| `key` | Enforcement & Status | Disabled, Not trusted, Not for replication, Index type |
+| `constraint` | General | Constraint type, Parent table, Column, Expression, Created, Last modified, System named |
+| `constraint` | Enforcement & Status | Disabled, Not trusted, Not for replication |
 | `trigger` | General | Created, Last modified, System object, Disabled, CLR, Instead of |
 | `trigger` | Options | Not for replication, Execute as, ANSI NULLs, Quoted identifier |
 | `databaseTrigger` | General | Created, Last modified, System object, Disabled, CLR |

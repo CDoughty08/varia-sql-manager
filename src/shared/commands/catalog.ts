@@ -13,6 +13,7 @@ import { agentScheduleCommandEntries } from '../actions/agent-schedule.ts'
 import { createFromCommandEntries } from '../agent/create-from.ts'
 import { agentProxyCommandEntries } from '../actions/agent-proxy.ts'
 import { logViewerCommandEntries } from '../agent/history.ts'
+import { errorLogCommandEntries } from '../agent/error-log.ts'
 import { jobHistoryCommandEntries } from '../bigquery/history-catalog.ts'
 import type { IconId } from '../icons.ts'
 import { ssisCommandEntries } from '../ssis/catalog.ts'
@@ -506,6 +507,8 @@ export const commandCatalog = {
   // The SQL Server Agent proxy and credential documents (AG-8b), from src/shared/actions/agent-proxy.ts.
   ...agentProxyCommandEntries(),
   ...logViewerCommandEntries(),
+  // The Agent error logs in the Log File Viewer (AG-5b): View Agent Log and Recycle, from src/shared/agent/error-log.ts.
+  ...errorLogCommandEntries(),
   // BigQuery Job History (BQ-9): the document on a connection's and billing project's menus and in the palette, and its row
   // actions, generated from src/shared/bigquery/history-catalog.ts.
   ...jobHistoryCommandEntries(),

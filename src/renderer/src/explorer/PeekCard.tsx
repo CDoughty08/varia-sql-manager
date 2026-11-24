@@ -299,14 +299,13 @@ export function PeekBody({ view, open, idPrefix, beforeScript, inEditorPane = fa
       <div className="peek-pane">
         <div className="peek-pane-title">
           <Tabs peek={open} idPrefix={idPrefix} />
-          <span className="peek-spacer" />
-          {open.tab === 'definition' && <>
+          {open.tab === 'definition' && <div className="peek-actions">
             <button type="button" className="peek-action" disabled={!copyable} title={definition?.text !== undefined && !copyable ? tooLongToCopy : undefined} onClick={() => { view.copyDefinition().catch(onUnexpectedError) }}>Copy</button>
             <button type="button" className="peek-action" disabled={!commands.isEnabled(script, target)}
               onClick={() => { beforeScript?.(); void commands.execute(script, target, 'toolbar') }}>Script to New Query</button>
             {modifiable && <button type="button" className="peek-action" disabled={!commands.isEnabled('explorer.modify', target)}
               onClick={() => { beforeScript?.(); void commands.execute('explorer.modify', target, 'toolbar') }}>Modify</button>}
-          </>}
+          </div>}
         </div>
         <div key={`${open.id}:${open.tab}`} className={fills ? 'peek-scroll peek-grid' : 'peek-scroll'} id={`${idPrefix}-panel`} role="tabpanel" aria-labelledby={`${idPrefix}-tab-${open.tab}`}>{panel(open, editor, preset)}</div>
       </div>

@@ -22,6 +22,7 @@ import { activityDetailsRequestSchema, activityKillRequestSchema } from '../shar
 import { agentProfileResultSchema, agentProfileSchema } from '../shared/agent/profile.ts'
 import { agentHistoryMessageResultSchema, agentHistoryMessageSchema } from '../shared/agent/history.ts'
 import { agentCounterValuesResultSchema, agentCounterValuesSchema } from '../shared/actions/agent-alert.ts'
+import { agentErrorLogsResultSchema, agentErrorLogsSchema } from '../shared/agent/error-log.ts'
 import { languageParseResultSchema, languageParseSchema } from '../shared/agent/parse.ts'
 import { languageCloseSchema, languageRequestSchema, languageCompletionsSchema, languageHoverSchema, languageStatusSchema, languageRefreshRequestSchema, languageRefreshResultSchema, languageDiagnosticResultSchema, languageDefinitionSchema } from '../shared/language-service'
 
@@ -98,6 +99,7 @@ export const requestSchemas = {
   'agent.profile': agentProfileSchema,
   'agent.historyMessage': agentHistoryMessageSchema,
   'agent.counterValues': agentCounterValuesSchema,
+  'agent.errorLogs': agentErrorLogsSchema,
   'language.parse': languageParseSchema,
   'language.lookup': languageLookupRequestSchema
 } satisfies Record<RpcMethod, z.ZodType>
@@ -144,6 +146,7 @@ export const resultSchemas: Partial<Record<RpcMethod, z.ZodType>> = {
   'agent.profile': agentProfileResultSchema,
   'agent.historyMessage': agentHistoryMessageResultSchema,
   'agent.counterValues': agentCounterValuesResultSchema,
+  'agent.errorLogs': agentErrorLogsResultSchema,
   'language.parse': languageParseResultSchema,
   'language.lookup': languageLookupResultSchema
 }

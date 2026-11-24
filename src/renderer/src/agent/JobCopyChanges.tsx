@@ -9,6 +9,7 @@ import { agentLimits } from '../../../shared/agent/catalog.ts'
 import {
   alsoCopiedText, canShareSchedule, changedPackages, copiedScheduleKey, copyScheduleChoice, createFromLimits, createFromText, stepKeyChanged, stepKeyFields, type CopyScheduleChoice, type StepKeyField
 } from '../../../shared/agent/create-from.ts'
+import { createSeveralText } from '../../../shared/agent/create-several.ts'
 import { scheduleWhen } from '../../../shared/agent/schedule.ts'
 import { parseSsisCommand, ssisPackagePath } from '../../../shared/agent/ssis-step.ts'
 import { stepTypeShort, type AgentStepDraft } from '../../../shared/agent/steps.ts'
@@ -188,6 +189,10 @@ export default function JobCopyChanges(props: Props) {
     <details className="agent-copy-more"><summary>{createFromText.notCopied}</summary><p>{createFromText.notCopiedText(alerts)}</p></details>
     {source.model.stepsTruncated && <p className="property-field-error" role="alert"><Icon name="error" />{createFromText.stepsTruncated}</p>}
     <p className="field-note">{agentJobText.newHint}</p>
+    {!state.row && <p className="agent-copy-inline agent-copy-several">
+      <button type="button" disabled={!props.editable || !!source.model.stepsTruncated} onClick={() => service.createSeveral(state.id)}><Icon name="copy" />{createSeveralText.start}</button>
+      <span className="field-note">{createSeveralText.startHint}</span>
+    </p>}
   </div>
 }
 

@@ -12,7 +12,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { chooseExplorerMenuItem } from './fixtures/explorer-tree.mjs'
-import { closeDocumentButton, connectDialogWindow, documentFrame, documentState, documentTab, documentVerb, gridPart, liveGrid, quickInputRows, statusBar, submitConnect, toolbarButton } from './fixtures/ui.mjs'
+import { closeDocumentButton, connectDialogWindow, documentFrame, documentState, documentTab, documentVerb, gridPart, liveGrid, quickInputRows, statusBar, submitConnect, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -329,6 +329,57 @@ try {
   expect(likeSave.agentJob.steps.writes.map(write => write.name)).toEqual(['Check integrity', 'Rebuild indexes'])
   expect(likeSave.agentIdentity).toBeUndefined()
   console.log('Create like passed: Job Activity Monitor opens a copy with Changes from source, Replace previews and applies, and Create saves it disabled with its steps.')
+
+  step = 'create several'
+  // Create several (AG-6f): the copy turned into a table. Paste rows adds a row per line; a name msdb has is flagged and skipped; Open full
+  // editor opens a row as a job tab whose edits come back as Other changes; each row is created on its own, then Enable the created jobs.
+  await chooseExplorerMenuItem(page, ['server-a', 'SQL Server Agent'], 'Job Activity Monitor')
+  await jobCell('Backup').click()
+  await page.getByRole('toolbar', { name: 'Selected jobs', exact: true }).getByRole('button', { name: 'Create Job Like This…', exact: true }).click()
+  await documentFrame(page, 'Copy of Backup').getByRole('button', { name: 'Create several…', exact: true }).click()
+  const several = documentFrame(page, 'Create several jobs')
+  await expect(documentTab(page, 'Create several jobs')).toHaveAttribute('aria-selected', 'true')
+  const severalBar = several.getByRole('toolbar', { name: 'Create several', exact: true })
+  await severalBar.getByRole('button', { name: 'Paste rows…', exact: true }).click()
+  await several.getByRole('group', { name: 'Paste rows', exact: true }).getByRole('textbox').fill('Backup HR\nBackup Payroll\nNightly\n')
+  await several.getByRole('button', { name: 'Add 3 rows', exact: true }).click()
+  const rows = several.getByRole('table', { name: 'Jobs to create', exact: true })
+  await rows.getByLabel('Name, row 1', { exact: true }).fill('Backup Ops')
+  await expect(rows.getByRole('row').nth(4)).toContainText('A job with this name exists.')
+  await expect(severalBar.getByRole('button', { name: 'Review and create 3 jobs', exact: true })).toBeEnabled()
+  await rows.getByRole('button', { name: 'Row 2', exact: true }).click()
+  await several.getByRole('button', { name: 'Open full editor', exact: true }).click()
+  await expect(documentTab(page, 'Row 2 · Backup HR')).toHaveAttribute('aria-selected', 'true')
+  const rowEditor = documentFrame(page, 'Backup HR')
+  await rowEditor.getByLabel('Description', { exact: true }).fill('HR backups.')
+  await rowEditor.getByRole('button', { name: 'Back to the table', exact: true }).click()
+  await expect(documentTab(page, 'Create several jobs')).toHaveAttribute('aria-selected', 'true')
+  await expect(documentTab(page, 'Row 2 · Backup HR')).toHaveCount(0)
+  await expect(several.getByRole('table', { name: 'Differences', exact: true })).toContainText('HR backups.')
+  await expect(rows.getByRole('row').nth(2)).toContainText('+1 field')
+  await page.screenshot({ path: 'artifacts/agent-job-create-several-dark.png' })
+  await severalBar.getByRole('button', { name: 'Review and create 3 jobs', exact: true }).click()
+  await several.getByRole('button', { name: 'Create 3 jobs', exact: true }).click()
+  await expect(several.getByRole('status').filter({ hasText: 'Done: 3 jobs created (disabled), 1 skipped. Each row was its own transaction.' })).toBeVisible()
+  const severalSaves = (await saves()).slice(-3)
+  expect(severalSaves.map(save => [save.target.kind, save.agentJob.name, save.agentJob.enabled])).toEqual([['agent', 'Backup Ops', false], ['agent', 'Backup HR', false], ['agent', 'Backup Payroll', false]])
+  expect(severalSaves[1].agentJob.description).toBe('HR backups.')
+  expect(new Set(severalSaves.map(save => save.requestId)).size).toBe(3)
+  await expect(several.getByRole('table', { name: 'Results', exact: true })).toContainText('Skipped: A job with this name exists.')
+  await page.screenshot({ path: 'artifacts/agent-job-create-several-results-dark.png' })
+  await several.getByRole('button', { name: 'Enable the 3 created jobs', exact: true }).click()
+  await expect(several.getByRole('status').filter({ hasText: 'Enabled 3 jobs.' })).toBeVisible()
+  const enabled = (await calls('actions.execute')).filter(call => call.action === 'enable').slice(-3)
+  expect(enabled.map(call => call.target.name)).toEqual(['Backup Ops', 'Backup HR', 'Backup Payroll'])
+  expect(enabled.every(call => /^[0-9a-f-]{36}$/.test(call.agentIdentity.jobId))).toBe(true)
+  // The skipped row keeps the tab unsaved; removing it leaves only created rows, so the tab is clean and the app can quit.
+  await expect(unsavedMark(documentTab(page, 'Create several jobs'))).toHaveCount(1)
+  await several.getByRole('button', { name: 'Back to the table', exact: true }).click()
+  await rows.getByRole('button', { name: 'Row 4', exact: true }).click()
+  await several.getByRole('button', { name: 'Remove row', exact: true }).click()
+  await expect(rows.getByRole('button', { name: 'Row 4', exact: true })).toHaveCount(0)
+  await expect(unsavedMark(documentTab(page, 'Create several jobs'))).toHaveCount(0)
+  console.log('Create several passed: pasted rows, a skipped existing name, a full-editor edit back on its row, one save per row and Enable the created jobs.')
 
   step = 'light'
   await page.evaluate(() => window.varia.setThemePreference({ mode: 'light' }))
