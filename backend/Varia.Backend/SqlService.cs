@@ -37,7 +37,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "results.setMemoryLimit", "results.distinct", "results.distinctRead", "results.distinctTick", "results.distinctClose",
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
-        "ssis.describe", "ssis.execute", "ssis.catalogSetup", "ssis.execution",
+        "ssis.describe", "ssis.execute", "ssis.catalogSetup", "ssis.execution", "ssis.packageRuns",
         "bigquery.account", "bigquery.projects", "bigquery.dryRun", "bigquery.properties", "bigquery.indexEstimate", "agent.profile", "agent.historyMessage", "agent.errorLogs", "agent.counterValues", "results.remoteQuery",
         "query.attach", "bigquery.endIdleSessions", "bigquery.cancelJobs", "bigquery.jobs.get", "bigquery.jobs.cancel",
         "results.diffSeek", "language.parse", "language.lookup"
@@ -458,7 +458,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "results.read" or "results.copy" or "results.export" or "results.view" or "results.identify" or "results.findRows" or "results.diff" or "results.search" or "results.profile" or "results.pivot" or "results.distinct" or "results.distinctRead" or "results.distinctTick" or "results.diffSeek" => RequestLane.Results,
         "explorer.children" or "explorer.peek" or "explorer.peekDependencies" or "explorer.peekDefinition" or "explorer.dependencies" or "explorer.index" or "explorer.search" or "agent.profile" => RequestLane.Explorer,
         "actions.execute" => RequestLane.Actions,
-        "ssis.describe" or "ssis.execute" or "ssis.catalogSetup" or "ssis.execution" => RequestLane.Ssis,
+        "ssis.describe" or "ssis.execute" or "ssis.catalogSetup" or "ssis.execution" or "ssis.packageRuns" => RequestLane.Ssis,
         "live.subscribe" or "activity.details" => RequestLane.Live,
         // Kill Process takes no metadata slot: it runs at once under its own gates, as object actions do under theirs.
         "activity.kill" => RequestLane.Actions,
@@ -612,6 +612,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "ssis.execute" => await ssisActions.ExecuteAsync(Read<SsisExecuteArgs>(parameters, json), Token(context)),
         "ssis.catalogSetup" => await ssis.CatalogSetupAsync(Read<SsisCatalogSetupArgs>(parameters, json), Token(context)),
         "ssis.execution" => await ssis.ExecutionAsync(Read<SsisExecutionArgs>(parameters, json), Token(context)),
+        "ssis.packageRuns" => await ssis.PackageRunsAsync(Read<SsisPackageRunsArgs>(parameters, json), Token(context)),
         "live.subscribe" => await live.SubscribeAsync(Read<LiveSubscribeArgs>(parameters, json), context, json),
         "live.update" => live.Update(Read<LiveUpdateArgs>(parameters, json), json),
         "activity.details" => await sessionActions.DetailsAsync(Read<ActivityDetailsArgs>(parameters, json), Token(context)),

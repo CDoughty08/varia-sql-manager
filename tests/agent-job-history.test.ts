@@ -185,7 +185,7 @@ describe("the job document's History section", () => {
     expect(jobDocuments.history.messageText(id)).toBe('ok')
   })
   it('keeps a picked run, sends the Failed filter, and opens an SSIS execution in a query window', async () => {
-    const { jobDocuments, history, deliver, documents } = opened()
+    const { jobDocuments, history, deliver, documents, operations } = opened()
     const id = jobDocuments.openJob('c1', 'Nightly load')
     await settled()
     jobDocuments.history.attach(id, job)
@@ -208,9 +208,10 @@ describe("the job document's History section", () => {
     await deliver({ 0: table(0, [runRow(18, { runOutcome: 'Failed', runTone: 'error' })]) })
     expect(jobDocuments.history.get(id)).toMatchObject({ selected: { instance: 18 }, pinned: false })
     expect(jobDocuments.history.get(id)?.spark.map(item => item.key.instance)).toEqual([21, 20, 19])
-    // The step's SSIS execution link opens the execution messages view (AG-13) on the job's connection, not a query window.
+    // The step's SSIS execution link opens its run page in the connection's Integration Services document, not a query window.
     jobDocuments.history.openSsisExecution(id, 48213)
-    expect(documents.active).toMatchObject({ connectionId: 'c1', kind: 'ssisExecution', name: 'Execution 48213', database: 'SSISDB' })
+    expect(documents.active).toMatchObject({ connectionId: 'c1', kind: 'ssisOperations', database: 'SSISDB' })
+    expect(operations.place(documents.active!.id)).toMatchObject({ kind: 'execution', executionId: 48213 })
   })
   it('says why the history cannot be read, and closes its view with the document', async () => {
     const { jobDocuments, history, documents } = opened()

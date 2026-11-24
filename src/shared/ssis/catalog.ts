@@ -47,40 +47,41 @@ export const openStatuses = [1, 2, 5, 8] as const
 export const finalStatuses = [3, 4, 6, 7, 9] as const
 
 export type MessageTone = 'error' | 'warning' | 'info' | 'muted'
-/** catalog.operation_messages.message_type, with the tone a log row takes. */
-export const messageTypes: readonly (CodeLabel & { readonly tone: MessageTone })[] = [
-  { code: -1, label: 'Unknown', tone: 'info' },
-  { code: 10, label: 'Pre-validate', tone: 'info' },
-  { code: 20, label: 'Post-validate', tone: 'info' },
-  { code: 30, label: 'Pre-execute', tone: 'info' },
-  { code: 40, label: 'Post-execute', tone: 'info' },
-  { code: 50, label: 'Status change', tone: 'info' },
-  { code: 60, label: 'Progress', tone: 'muted' },
-  { code: 70, label: 'Information', tone: 'info' },
-  { code: 80, label: 'Variable value changed', tone: 'info' },
-  { code: 90, label: 'Diagnostic', tone: 'muted' },
-  { code: 100, label: 'Query cancel', tone: 'info' },
-  { code: 110, label: 'Warning', tone: 'warning' },
-  { code: 120, label: 'Error', tone: 'error' },
-  { code: 130, label: 'Task failed', tone: 'error' },
-  { code: 140, label: 'Diagnostic (extended)', tone: 'info' },
-  { code: 200, label: 'Custom', tone: 'info' },
-  { code: 400, label: 'Non-diagnostic', tone: 'info' }
-]
 /**
- * The execution messages view's type filter (AG-13, SSMS's All Messages report): the message types each group holds. `other` is
- * every type the others do not name, known to the catalogue or not, so no message falls outside every group.
+ * catalog.operation_messages.message_type: its label, the SSIS event that logs it (the Integration Services document's event
+ * chips, named as SSIS names them), and the tone a log row takes. -1 (Unknown) also holds every type this list does not name,
+ * so the type filter leaves no message out.
  */
-export const messageGroups = ['error', 'warning', 'information', 'other'] as const
-export type MessageGroup = typeof messageGroups[number]
-export const messageGroupSpecs: { readonly [G in MessageGroup]: { readonly label: string; readonly types: readonly number[] } } = {
-  error: { label: 'Errors', types: [120, 130] },
-  warning: { label: 'Warnings', types: [110] },
-  information: { label: 'Information', types: [70] },
-  other: { label: 'Other', types: [] }
-}
-/** The group a message type belongs to. */
-export const messageGroupOf = (type: number): MessageGroup => messageGroups.find(group => messageGroupSpecs[group].types.includes(type)) ?? 'other'
+export const messageTypes: readonly (CodeLabel & { readonly event: string; readonly tone: MessageTone })[] = [
+  { code: -1, label: 'Unknown', event: 'Unknown', tone: 'info' },
+  { code: 10, label: 'Pre-validate', event: 'PreValidate', tone: 'info' },
+  { code: 20, label: 'Post-validate', event: 'PostValidate', tone: 'info' },
+  { code: 30, label: 'Pre-execute', event: 'PreExecute', tone: 'info' },
+  { code: 40, label: 'Post-execute', event: 'PostExecute', tone: 'info' },
+  { code: 50, label: 'Status change', event: 'StatusChange', tone: 'info' },
+  { code: 60, label: 'Progress', event: 'Progress', tone: 'muted' },
+  { code: 70, label: 'Information', event: 'Information', tone: 'info' },
+  { code: 80, label: 'Variable value changed', event: 'VariableValueChanged', tone: 'info' },
+  { code: 90, label: 'Diagnostic', event: 'Diagnostic', tone: 'muted' },
+  { code: 100, label: 'Query cancel', event: 'QueryCancel', tone: 'info' },
+  { code: 110, label: 'Warning', event: 'Warning', tone: 'warning' },
+  { code: 120, label: 'Error', event: 'Error', tone: 'error' },
+  { code: 130, label: 'Task failed', event: 'TaskFailed', tone: 'error' },
+  { code: 140, label: 'Diagnostic (extended)', event: 'DiagnosticEx', tone: 'info' },
+  { code: 200, label: 'Custom', event: 'Custom', tone: 'info' },
+  { code: 400, label: 'Non-diagnostic', event: 'NonDiagnostic', tone: 'info' }
+]
+/** The message types' order in the event chips: the order a run logs them (validate, execute, its messages, then post-execute),
+ *  then the rarer ones. Every messageTypes code appears once. */
+export const messageTypeOrder: readonly number[] = [10, 20, 30, 60, 70, 110, 120, 130, 40, 50, 80, 100, 90, 140, 200, 400, -1]
+/** The Problems preset: warnings, errors and failed tasks. */
+export const problemMessageTypes: readonly number[] = [110, 120, 130]
+/** The message types the package step counts as a run's errors and its warnings. */
+export const runCountTypes = { errors: [120], warnings: [110] } as const
+/** catalog.executions.status of a run that succeeded: the usual durations are the median of these runs. */
+export const succeededStatus = 7
+/** The type a message's code files under: its own when the catalogue names it, else -1 (Unknown). */
+export const messageTypeOf = (code: number): number => messageTypes.some(type => type.code === code) ? code : -1
 
 /** catalog.operation_messages.message_source_type. */
 export const messageSourceTypes: readonly CodeLabel[] = [
@@ -499,10 +500,19 @@ export const ssisLimits = {
   operationsDefaultWindowHours: 24,
   operationsCountMs: 30_000,
   operationsRebaseMs: 300_000,
-  /** The execution messages view (ssis.execution, AG-13): the newest messages one read holds (of the groups asked for; more set
-   *  `truncated`), and the characters of one message it keeps (a longer one ends in "…"). */
+  /** The run page (ssis.execution): the newest messages one read holds (of the types asked for; more set `truncated`), and the
+   *  characters of one message, path or parameter value it keeps (a longer one ends in "…"). */
   executionMessages: 5_000,
-  executionMessageChars: 4_000
+  executionMessageChars: 4_000,
+  /** The run page's task timeline: the executables one read holds (more set `truncated`). */
+  executionTasks: 1_000,
+  /** The run page's parameters used. */
+  executionParameters: 1_000,
+  /** The runs the run strip shows: this run and the package's runs before it. The usual durations are the median of the
+   *  package's last succeeded runs before this one, as many, read up to executionMessages task rows. */
+  executionRuns: 16,
+  /** The package step (ssis.packageRuns): the newest runs of one package it lists (more set `truncated`). */
+  packageRuns: 1_000
 } as const
 
 // Compact sorted-key JSON, as in explorerCatalogJson(), so each entry diffs as one line.
@@ -524,7 +534,6 @@ export function ssisCatalogJson(): string {
     `  "finalStatuses": ${line(finalStatuses)},`,
     `  "limits": ${line(ssisLimits)},`,
     `  "loggingLevels": ${line(loggingLevels)},`,
-    `  "messageGroups": ${line(messageGroups.map(group => ({ group, ...messageGroupSpecs[group] })))},`,
     `  "messageTypes": ${line(messageTypes)},`,
     `  "openStatuses": ${line(openStatuses)},`,
     `  "operationKinds": ${line(operationKinds.map(kind => ({ kind, ...operationKindSpecs[kind] })))},`,
@@ -532,7 +541,9 @@ export function ssisCatalogJson(): string {
     `  "operationTiles": ${line(operationTiles)},`,
     `  "operationTypes": ${line(operationTypes)},`,
     `  "parameterObjectTypes": ${line(parameterObjectTypes)},`,
+    `  "runCountTypes": ${line(runCountTypes)},`,
     `  "stoppableOperationTypes": ${line(stoppableOperationTypes)},`,
+    `  "succeededStatus": ${line(succeededStatus)},`,
     `  "version": 1,`,
     `  "views": ${block(describeViews.map(view => ({ view, kind: describeTargets[view] })))}`,
     '}',

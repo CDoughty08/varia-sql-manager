@@ -1,13 +1,14 @@
-// The SSIS execution messages view (AG-13): one execution's overview and its messages, SSMS's Overview and All Messages reports in
-// one document, read with ssis.execution. What opens it (an execution's row in Integration Services Operations, an SSIS step's
-// execution in a job's History), its words, its commands and the pure helpers its service and view share. Erasable TypeScript.
-import { messageGroupOf, messageGroups, messageGroupSpecs, messageSourceTypes, messageTypes, operationStatuses, ssisLimits, type MessageGroup } from './catalog.ts'
+// The Integration Services document's run page: one execution's facts, the package's recent runs, its task timeline, its messages
+// by SSIS event and its parameters, SSMS's Overview, All Messages and Execution Performance reports on one page, read with
+// ssis.execution; and the package page's runs (ssis.packageRuns). Their words, the commands that reach them and the pure helpers
+// the services and views share. Erasable TypeScript.
+import { messageSourceTypes, messageTypeOf, messageTypeOrder, messageTypes, operationStatuses, problemMessageTypes, ssisLimits, succeededStatus } from './catalog.ts'
 import type { SsisExecutionMessage, SsisExecutionModel, SsisExecutionOverview } from './schema.ts'
 
 /** The document's title and subtitle; its tab is named for the execution ("Execution 48213"). */
 export const executionTitle = (id: number): string => `Execution ${id}`
 export const executionSubtitle = 'Execution messages'
-/** catalog.operations.operation_type of an execution: what View Messages opens from Integration Services Operations. */
+/** catalog.operations.operation_type of an execution: what Open drills down to from Integration Services Operations. */
 export const executionOperationType = 200
 
 /** A positive integer id that crosses JSON exactly. */
@@ -31,22 +32,43 @@ export const sourceTypeLabel = (code: number | null | undefined): string => code
 /** Statuses an execution can still leave, so its duration runs on to the server's clock and Refresh finds more. */
 export const executionRunning = (status: number): boolean => status === 1 || status === 2 || status === 5 || status === 8
 
-/** Every message of the execution by group, from the counts by type (whatever groups the read kept). */
-export function groupCounts(model: Pick<SsisExecutionModel, 'counts'>): Readonly<Record<MessageGroup, number>> {
-  const counts = Object.fromEntries(messageGroups.map(group => [group, 0])) as Record<MessageGroup, number>
-  for (const { type, count } of model.counts) counts[messageGroupOf(type)] += count
-  return counts
+/** The SSIS event a message type is logged by ("PreValidate"); a type the catalogue does not name is Unknown's. */
+export const messageEventName = (code: number): string => messageTypes.find(type => type.code === messageTypeOf(code))?.event ?? 'Unknown'
+/** Every message of the execution by type in chip order, with the types the catalogue does not name under -1 (Unknown); types
+ *  without messages are left out, so the chips show only what the run logged. */
+export function typeCounts(model: Pick<SsisExecutionModel, 'counts'>): readonly { readonly type: number; readonly count: number }[] {
+  const counts = new Map<number, number>()
+  for (const { type, count } of model.counts) counts.set(messageTypeOf(type), (counts.get(messageTypeOf(type)) ?? 0) + count)
+  return messageTypeOrder.filter(type => (counts.get(type) ?? 0) > 0).map(type => ({ type, count: counts.get(type)! }))
 }
 export const totalMessages = (model: Pick<SsisExecutionModel, 'counts'>): number => model.counts.reduce((sum, item) => sum + item.count, 0)
+export const problemCount = (model: Pick<SsisExecutionModel, 'counts'>): number =>
+  model.counts.filter(item => problemMessageTypes.includes(item.type)).reduce((sum, item) => sum + item.count, 0)
 
-/** The groups with one turned on or off; never none (turning the last one off turns every group on again). */
-export function toggleGroup(groups: readonly MessageGroup[], group: MessageGroup): readonly MessageGroup[] {
-  const next = groups.includes(group) ? groups.filter(item => item !== group) : [...groups, group]
-  return next.length === 0 ? messageGroups : messageGroups.filter(item => next.includes(item))
+/**
+ * The event chips' selection after one is clicked; undefined is every type (All). From All, a click shows only that type; after
+ * that a click adds or removes one, and removing the last returns to All. The result is in chip order.
+ */
+export function toggleType(types: readonly number[] | undefined, type: number): readonly number[] | undefined {
+  if (types === undefined) return [type]
+  const next = types.includes(type) ? types.filter(item => item !== type) : [...types, type]
+  return next.length === 0 ? undefined : messageTypeOrder.filter(item => next.includes(item))
 }
-/** The groups a read sends: none when every group is on (the backend's default). */
-export const requestGroups = (groups: readonly MessageGroup[]): MessageGroup[] | undefined =>
-  groups.length === messageGroups.length ? undefined : messageGroups.filter(group => groups.includes(group))
+/** Whether a selection is the Problems preset. */
+export const isProblems = (types: readonly number[] | undefined): boolean =>
+  types !== undefined && types.length === problemMessageTypes.length && problemMessageTypes.every(type => types.includes(type))
+export const problemTypes: readonly number[] = messageTypeOrder.filter(type => problemMessageTypes.includes(type))
+/** An event chip's words: "Error 3". */
+export const typeChipLabel = (type: number, count: number): string => `${messageEventName(type)} ${count.toLocaleString('en-US')}`
+
+/** The earliest error the read holds (messages come newest first): the run page pins it above the list. */
+export const firstError = (messages: readonly SsisExecutionMessage[]): SsisExecutionMessage | undefined => messages.findLast(message => message.type === 120)
+
+/** The median of the package's earlier succeeded runs in the run strip (this run left out), in seconds: the usual duration. */
+export function usualSeconds(runs: readonly { readonly id: number; readonly status: number; readonly started?: string; readonly ended?: string }[], except?: number): number | undefined {
+  const seconds = runs.filter(run => run.id !== except && run.status === succeededStatus).map(run => secondsBetween(run.started, run.ended)).filter((value): value is number => value !== undefined).sort((a, b) => a - b)
+  return seconds.length === 0 ? undefined : seconds[Math.floor((seconds.length - 1) / 2)]
+}
 
 const instant = (iso: string | undefined): number | undefined => {
   if (!iso) return undefined
@@ -75,48 +97,62 @@ export const messageTone = (type: number): 'error' | 'warning' | 'info' | 'muted
 /** The list's columns, in order, and each message's text in them (the view adds nothing the copy would not have). */
 export const messageColumns: readonly { readonly title: string; readonly value: (message: SsisExecutionMessage) => string }[] = [
   { title: 'Time', value: message => messageTime(message.time) },
-  { title: 'Type', value: message => messageTypeLabel(message.type) },
+  { title: 'Event', value: message => messageEventName(message.type) },
   { title: 'Source', value: message => message.source ?? '' },
   { title: 'Message', value: message => message.message },
-  { title: 'Package', value: message => message.package ?? '' },
-  { title: 'Event', value: message => message.event ?? '' },
-  { title: 'Source type', value: message => sourceTypeLabel(message.sourceType) },
   { title: 'Execution path', value: message => message.path ?? '' },
-  { title: 'Message code', value: message => message.code == null ? '' : String(message.code) }
+  { title: 'Source type', value: message => sourceTypeLabel(message.sourceType) },
+  { title: 'Package', value: message => message.package ?? '' }
 ]
-/** The group chips' words with their counts: "Errors (3)". */
-export const groupChipLabel = (group: MessageGroup, count: number | undefined): string =>
-  count === undefined ? messageGroupSpecs[group].label : `${messageGroupSpecs[group].label} (${count.toLocaleString('en-US')})`
 
-export type ExecutionCommandId = 'ssis.viewExecutionMessages' | 'ssis.refreshExecution'
+export type ExecutionCommandId = 'ssis.openExecution' | 'ssis.goBack' | 'ssis.goForward' | 'ssis.packageExecutions' | 'ssis.lastRun'
 /** A command catalogue entry, in the shape of `CommandDescriptor`. */
 export interface ExecutionCommandEntry {
   readonly title: string
   readonly category: 'Integration Services'
-  readonly icon: 'output' | 'refresh'
+  readonly icon: 'output' | 'arrow-left' | 'arrow-right' | 'history' | 'go-to-file'
   readonly keywords: readonly string[]
   readonly precondition: string
   readonly unavailableHint: string
-  readonly keybindings?: readonly { readonly key: string; readonly when: string }[]
-  readonly menus?: readonly { readonly menu: 'ssis.operation.context'; readonly group: string; readonly order: number; readonly title?: string; readonly mnemonic?: string }[]
+  readonly keybindings?: readonly { readonly key?: string; readonly win?: string; readonly linux?: string; readonly mac?: string; readonly when: string }[]
+  readonly menus?: readonly { readonly menu: 'ssis.operation.context' | 'explorer.context'; readonly group: string; readonly order: number; readonly title?: string; readonly mnemonic?: string; readonly when?: string }[]
 }
+// Back and Forward act in the Integration Services document but leave a text box's Alt+Left and Alt+Right; macOS takes Cmd+[ and
+// Cmd+], as its browsers do, since its word moves are on Alt.
+const inDocument = 'activeDocumentIsSsisOperations && !textInputFocus'
+const packageNode = "explorerNode == 'ssisPackage' && !explorerServerLost"
 /**
- * View Messages on an execution's row in Integration Services Operations (its menu, its header, a double-click), and the
- * execution document's Refresh (F5 there, as in Object Explorer). A job's History opens the document from its SSIS step's link.
+ * Open on an execution's row in the Integration Services document's list (its menu, a double-click, Enter), which drills to the
+ * run's page in place; Back and Forward walk the places the document has shown (also the mouse's back and forward buttons,
+ * src/shared/commands/gestures.ts); a package's Executions and Last Run on its Object Explorer menu open the document at the
+ * package's runs or its newest run. A job's History opens a run's page from its SSIS step's link.
  */
 export function executionCommandEntries(): { readonly [K in ExecutionCommandId]: ExecutionCommandEntry } {
   return {
-    'ssis.viewExecutionMessages': {
-      title: 'View Execution Messages', category: 'Integration Services', icon: 'output', keywords: ['ssis', 'execution', 'messages', 'errors', 'log', 'report', 'overview'],
-      precondition: 'backendReady && activeDocumentIsSsisOperations', unavailableHint: 'Select an execution in Integration Services Operations.',
-      menus: [{ menu: 'ssis.operation.context', group: '1_operation', order: 2, title: 'View Messages', mnemonic: 'm' }]
+    'ssis.openExecution': {
+      title: 'Open Execution', category: 'Integration Services', icon: 'output', keywords: ['ssis', 'execution', 'messages', 'errors', 'log', 'report', 'overview', 'tasks', 'parameters'],
+      precondition: 'backendReady && activeDocumentIsSsisOperations', unavailableHint: 'Select an execution in Integration Services.',
+      menus: [{ menu: 'ssis.operation.context', group: '1_operation', order: 1, title: 'Open', mnemonic: 'o' }]
     },
-    // The conflict check reads each state key on its own, so the clause says what holds anyway: the execution document is
-    // neither an SSIS properties document, Operations, nor BigQuery's Job History.
-    'ssis.refreshExecution': {
-      title: 'Refresh Execution', category: 'Integration Services', icon: 'refresh', keywords: ['ssis', 'reload', 'execution', 'messages'],
-      precondition: 'backendReady && activeDocumentIsSsisExecution', unavailableHint: 'Open an SSIS execution\'s messages first.',
-      keybindings: [{ key: 'f5', when: "activeDocumentIsSsisExecution && !activeDocumentIsSsis && !activeDocumentIsSsisOperations && !activeDocumentIsJobHistory && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus" }]
+    'ssis.goBack': {
+      title: 'Go Back', category: 'Integration Services', icon: 'arrow-left', keywords: ['ssis', 'back', 'previous', 'history', 'navigate'],
+      precondition: 'activeDocumentIsSsisOperations && ssisCanGoBack', unavailableHint: 'Open a package or an execution in Integration Services first.',
+      keybindings: [{ win: 'alt+left', linux: 'alt+left', mac: 'mod+[', when: inDocument }]
+    },
+    'ssis.goForward': {
+      title: 'Go Forward', category: 'Integration Services', icon: 'arrow-right', keywords: ['ssis', 'forward', 'next', 'history', 'navigate'],
+      precondition: 'activeDocumentIsSsisOperations && ssisCanGoForward', unavailableHint: 'Go back in Integration Services first.',
+      keybindings: [{ win: 'alt+right', linux: 'alt+right', mac: 'mod+]', when: inDocument }]
+    },
+    'ssis.packageExecutions': {
+      title: 'Package Executions', category: 'Integration Services', icon: 'history', keywords: ['ssis', 'package', 'executions', 'runs', 'history', 'report'],
+      precondition: "backendReady && ssisVerbPackageProperties == 'enabled'", unavailableHint: 'Select an SSIS Catalog package in Object Explorer.',
+      menus: [{ menu: 'explorer.context', group: '1_operations', order: 1, title: 'Executions', mnemonic: 'x', when: packageNode }]
+    },
+    'ssis.lastRun': {
+      title: 'Package Last Execution', category: 'Integration Services', icon: 'go-to-file', keywords: ['ssis', 'package', 'last', 'latest', 'execution', 'messages'],
+      precondition: "backendReady && ssisVerbPackageProperties == 'enabled'", unavailableHint: 'Select an SSIS Catalog package in Object Explorer.',
+      menus: [{ menu: 'explorer.context', group: '1_operations', order: 2, title: 'Last Run', mnemonic: 'u', when: packageNode }]
     }
   }
 }

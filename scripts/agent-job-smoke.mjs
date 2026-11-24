@@ -82,10 +82,12 @@ try {
   await expect(history.getByRole('region', { name: 'Step 2 message', exact: true })).toContainText('Violation of PRIMARY KEY constraint.')
   await expect(history.getByRole('table', { name: 'Steps of the selected run', exact: true })).toContainText('Truncate')
   await history.getByRole('button', { name: 'SSIS execution 48213', exact: true }).click()
-  await expect(documentTab(page, 'Execution 48213')).toHaveAttribute('aria-selected', 'true')
+  // The server's Integration Services document opens at that run's page.
+  await expect(documentTab(page, 'Operations - server-a')).toHaveAttribute('aria-selected', 'true')
+  await expect(documentFrame(page, 'Execution 48213')).toBeVisible()
   await expect(page.getByRole('grid', { name: /^Messages, 6 rows, / })).toBeVisible()
   expect((await calls('ssis.execution')).at(-1)).toMatchObject({ executionId: 48213 })
-  await closeDocumentButton(page, 'Execution 48213').click()
+  await closeDocumentButton(page, 'Operations - server-a').click()
   await documentTab(page, 'Job Properties - Nightly').click()
   // Failed lists only the failed run; an older run picked shows its own steps and no failed message.
   await history.getByRole('radio', { name: 'Failed', exact: true }).click()

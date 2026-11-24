@@ -203,8 +203,8 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   and its steps with outcome, duration and retries. The run's last failed step opens with its whole message (agent.historyMessage
   where the grid's copy was cut), with Copy, **Edit step** (the step of that name as the job is now) and **Start at step**. A step
   whose message names an SSIS Catalog execution ("Execution ID: 48213", which a failed catalog step writes) has an **SSIS execution**
-  link that opens that execution's messages document ([Integration Services](integration-services.md#execution-messages)): its overview
-  and catalog messages, where the real error usually is. While the job runs, the section starts with the run view: the elapsed time from the run's start and the server's clock
+  link that opens that run's page in the server's Integration Services document ([Integration Services](integration-services.md#the-integration-services-document)):
+  where it failed, its task timeline and its catalog messages, where the real error usually is. While the job runs, the section starts with the run view: the elapsed time from the run's start and the server's clock
   (the header's `agent.jobs.watched` probe; no elapsed time where the start is unreadable, never a guess) against the usual time as a
   bar, each step's state (finished steps as their rows say, the step Agent reports as current Executing or Between retries, the rest
   Waiting; with this run not selected under All, or its rows not read yet, the others show — rather than a guess) with this run's and

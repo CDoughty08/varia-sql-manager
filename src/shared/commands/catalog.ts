@@ -498,7 +498,7 @@ export const commandCatalog = {
   // The Integration Services Operations document: its presets on the SSISDB node and View, and its own commands, generated
   // from src/shared/ssis/operations.ts.
   ...operationsCommandEntries(),
-  // The SSIS execution messages document (AG-13): View Messages on an execution's row and the document's Refresh, from src/shared/ssis/execution.ts.
+  // The Integration Services document's drill-down (AG-13): Open on an execution's row, Back and Forward, and a package node's Executions and Last Run, from src/shared/ssis/execution.ts.
   ...executionCommandEntries(),
   // SQL Server Agent's Job Activity Monitor (AG-3): the monitor and its verbs, generated from src/shared/agent/jobs.ts.
   ...jobActivityCommandEntries(),

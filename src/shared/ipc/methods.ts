@@ -187,6 +187,7 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'ssis.catalogSetup': { kind: 'unary', lane: 'ssis', deadlineMs: 45_000 },
   // The execution messages view's read answers its own 40 s budget as a TIMEOUT value, as a describe does.
   'ssis.execution': { kind: 'unary', lane: 'ssis', deadlineMs: 45_000 },
+  'ssis.packageRuns': { kind: 'unary', lane: 'ssis', deadlineMs: 45_000 },
   // Activity Monitor's session actions. Details answers its own 10 s budget as an error: TIMEOUT value, inside this deadline;
   // main cancels it from the renderer (varia:activity-cancel). Kill answers its own 25 s budget the same way, with the
   // outcomes of the sessions it tried, so the deadline never leaves a kill's outcome unknown; it is never re-sent.
