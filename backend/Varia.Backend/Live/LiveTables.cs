@@ -346,6 +346,9 @@ internal sealed class LiveSnapshotTable
     private (int Index, bool Descending)[] sorted = [];
     private List<LiveFacet>? sentFacets;
     private long revision;
+    /// <summary>Rows read anew under new args have not been stored yet (a write at the budget stored nothing): until one is, no
+    /// tracked row the old args showed lingers as departed.</summary>
+    private bool refiltered;
 
     public LiveSnapshotTable(LiveTableSet owner, LiveTableJson spec, int index)
     {
@@ -364,7 +367,8 @@ internal sealed class LiveSnapshotTable
     {
         var keyed = key.Length > 0;
         var facets = spec.Facets is { Count: > 0 } named ? Facets(source, named, settings.FacetScope) : null;
-        var lingers = spec.Departed && keyed && settings.Track is not null && !settings.Refiltered;
+        if (settings.Refiltered) refiltered = true;
+        var lingers = spec.Departed && keyed && settings.Track is not null && !refiltered;
         present.Clear();
         if (lingers) foreach (var row in source) present.Add(row.Key(key));
         var filter = Filter(settings.Filter);
@@ -444,6 +448,7 @@ internal sealed class LiveSnapshotTable
             return new(null, true);
         }
         revisions.Add(set);
+        if (!resort) refiltered = false;
         var stored = 0;
         foreach (var item in rows)
         {

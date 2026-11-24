@@ -33,6 +33,8 @@ internal interface ILiveSqlReader
     Task<LiveReaderSample> ReadAsync(SqlConnection connection, string prologue, LiveDue item, Func<string, string, string>? testText, CancellationToken token);
     /// <summary>New args from live.subscribe or live.update, already checked for the source.</summary>
     void Apply(object args);
+    /// <summary>Before Apply on live.update: the probes whose rows the args change (ILiveSampler.Rereads); null for every probe.</summary>
+    IReadOnlyCollection<string>? Rereads(object args) => null;
     /// <summary>The connection was lost and may reach another server: per-row rates start again.</summary>
     void Reset();
     /// <summary>The prologue the reader's statements run with once its session probe has chosen one (an SSISDB reader reads

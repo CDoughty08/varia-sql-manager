@@ -260,7 +260,7 @@ export function renderSsisDocs(): string {
     '',
     'The Operations document (Active Operations, All Executions, All Validations and All Operations) shows one live subscription of',
     'the `ssis.operations` source per connection, on the SSIS read pool at the live prologue (docs/live.md). Its args are the',
-    'document\'s filters; new args read the window again at once (`live.update` args read every probe again, as a view or filter',
+    'document\'s filters; new args read the window again at once (`live.update` args read the probes they change again, as a view or filter',
     'change does, never a renderer timer), and the first rows under them name no departed row, so a selected operation the new',
     'filters leave out goes at once instead of staying one more sample. Folder, Project and Package match whole names unless',
     'Names start with (`prefix`) is on, and an empty window says so when a name is set without it. The backend keeps the window:',

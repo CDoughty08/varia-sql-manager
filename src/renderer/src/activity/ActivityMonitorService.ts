@@ -237,7 +237,7 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
     return state
   }
 
-  /** Changes Sessions' filter; the backend filters the next sample (live.update args), and the SQL stays the same. */
+  /** Changes Sessions' filter; the backend samples Sessions again at once under it (live.update args), and the SQL stays the same. */
   setProcessesFilter(id: string, change: Partial<ProcessesFilter>): void {
     const state = this.get(id)
     if (!state) return

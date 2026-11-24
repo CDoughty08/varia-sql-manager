@@ -251,6 +251,17 @@ internal static class LiveTableChecks
         check(refused is { Sample: null, Budget: true } && back.Sample is { Retired: [var named1] } && named1 == a.Descriptor.ResultId && !back.Budget
             && full.Find(a.Descriptor.ResultId) is null && full.Find(b.Descriptor.ResultId) is { IsComplete: true },
             "a revision that cannot be stored reports BUDGET; the revisions released for it are named by the next stored one, so main forgets them");
+
+        // Rows read anew under new args that the budget refused: the next stored write still names no departed row for them.
+        var crowded = new ResultStore(1L << 30, 1L << 29);
+        var crowdedTable = new LiveTableSet(crowded, Guid.NewGuid().ToString(), Limits).Snapshot(Probe(ItemsTable(departed: true)), 0);
+        crowdedTable.Write(Items(1, 2, 3), new(Track: track));
+        crowded.ShareWithLive(0);
+        var refusedRefilter = crowdedTable.Write(Items(3, 4), new(Track: track, Refiltered: true));
+        crowded.ShareWithLive(0.25);
+        var storedRefilter = crowdedTable.Write(Items(3, 4), new(Track: track)).Sample;
+        check(refusedRefilter.Sample is null && storedRefilter is { Departed: null, Tracked.Rows: [-1] },
+            "rows read anew under new args keep no departed row though the budget refused their first write: the next stored one is still refiltered");
     }
 
     private static void CellChecks(Action<bool, string> check)
@@ -759,15 +770,16 @@ internal static class LiveTableChecks
         var service = new SqlService(new ResultStore(1L << 30, 1L << 29), hooks: true);
         var store = service.Results;
         // New args read again at once, as a view or filter change does: a 30 s view's next sample comes within its minimum gap
-        // (1 s), not 30 s later, under the new args. A filter chip on a slow view never waits out its interval.
+        // (1 s), not 30 s later, under the new args. A filter chip on a slow view never waits out its interval. The update goes
+        // after the baseline's quick second sample, so only the reread can bring a third within the check's wait.
         {
             var slow = Subscribe(service, [SyntheticSampler.TableProbe], new { tickMs = 30_000, rows = 5 }, id: 9);
-            await slow.Recorder.WaitAsync(recorder => recorder.Ticks.Count >= 1);
+            await slow.Recorder.WaitAsync(recorder => recorder.Ticks.Count >= 2);
             var clock = System.Diagnostics.Stopwatch.StartNew();
             service.Live.Update(new LiveUpdateArgs(slow.Id, SyntheticSampler.Source, Args: JsonSerializer.SerializeToElement(new { rows = 2 }, Json)), Json);
-            var reread = await slow.Recorder.WaitAsync(recorder => recorder.Ticks.Count >= 2, 10_000);
+            var reread = await slow.Recorder.WaitAsync(recorder => recorder.Ticks.Count >= 3, 10_000);
             var waited = clock.ElapsedMilliseconds;
-            var rows = reread && SampleOf(slow.Recorder.Ticks[1], SyntheticSampler.TableProbe)?.Tables?[0] is { } table ? table.Descriptor.RowsAvailable : -1;
+            var rows = reread && SampleOf(slow.Recorder.Ticks[2], SyntheticSampler.TableProbe)?.Tables?[0] is { } table ? table.Descriptor.RowsAvailable : -1;
             check(reread && waited < 5000 && rows == 2, "new args make a 30 s view read again within its minimum gap, under them (" + waited + " ms, " + rows + " rows)");
             await Stop(slow);
         }

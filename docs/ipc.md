@@ -1989,7 +1989,10 @@ with `BACKEND_ERROR`.
 - **View and filter.** An update that sets or clears a probe's view or filter reads that probe again as a refresh would
   (within its minimum gap and interval, and no sooner than its cost allows under the load guard's duty cycle), so the rows
   match without waiting a whole interval; a paused, backing-off, stopped or load-slowed probe keeps its schedule. New `args`
-  are a new filter for the whole source: every probe reads again the same way, so a filter chip on a slow view applies at once.
+  are a new filter for the probes they change (`ILiveSampler.Rereads`, every probe unless the source names fewer): those read
+  again the same way, so a filter chip on a slow view applies at once. Activity Monitor names the probes whose tables' filters
+  or focus changed, so a Sessions filter never runs the plan-cache probe early; BigQuery Job History names none for new expanded
+  scripts or prices, which change only what is written.
 - **Row tones.** A table may end with a tone column (catalogue `role: 'tone'`, nvarchar, never a key, facet, sort or filter
   column): `error`, `warning`, `running`, `muted` or NULL. `ResultColumn.role` `tone` keeps it hidden in the grid, and Copy
   and Save Results As leave it out (`ResultTextWriter.Hidden`).
