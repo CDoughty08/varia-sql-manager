@@ -1552,7 +1552,7 @@ try {
   // Hidden bars in a small scroller give Linux that geometry. The press a scroll-bar drag sends there (at the edge, and
   // 40 px in, where a zoomed-out window's bar still is) selects nothing and opens nothing; the same press on the plan
   // cell under it selects the cell and opens the plan.
-  const overlayStyle = await page.addStyleTag({ content: `[data-result-grid] ${gridPart.scroller} { max-width: 520px; max-height: 80px } [data-result-grid] ${gridPart.scroller}::-webkit-scrollbar { width: 0; height: 0 }` })
+  const overlayStyle = await page.addStyleTag({ content: `[data-result-grid] ${gridPart.scroller} { max-width: 520px; max-height: 80px; scrollbar-width: none } [data-result-grid] ${gridPart.scroller}::-webkit-scrollbar { width: 0; height: 0 }` })
   // Scroll a numeric cell into view and press it in the same task, before a scroll event or frame can update the grid.
   // The previous offset would put this point over the XML column: the press must select the numeric cell, opening no tab.
   const firstColumnWidth = await cell(0, 0).evaluate(element => element.getBoundingClientRect().width)

@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useState, type FocusEvent, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type FocusEvent, type ReactNode } from 'react'
 import Icon from '../Icon'
 
 /** The parts of a field besides its control: what it does, why it is greyed, and what is wrong with its value. */
@@ -20,8 +20,10 @@ type HintSource = 'hovered' | 'focused'
 /** The hovered and the focused field's hints, and which of them came last. */
 export interface Hints { readonly hovered?: FieldHint; readonly focused?: FieldHint; readonly last?: HintSource }
 type HintSetter = (source: HintSource, id: string, hint: FieldHint | undefined) => void
+type HintClear = (source?: HintSource) => void
 const HintSetterContext = createContext<HintSetter | undefined>(undefined)
 const HintContext = createContext<FieldHint | undefined>(undefined)
+const HintClearContext = createContext<HintClear | undefined>(undefined)
 
 /** The hint state after a field is entered (`hint`) or left (undefined): leaving clears only that field's own hint. */
 export function nextHints(current: Hints, source: HintSource, id: string, hint: FieldHint | undefined): Hints {
@@ -36,14 +38,26 @@ export function shownHint({ hovered, focused, last }: Hints): FieldHint | undefi
   return last === 'focused' ? focused ?? hovered : hovered ?? focused
 }
 
+/** Clears hovered, focused, or both hints inside the enclosing `FieldHints` provider (for example on pointer leave or tab change). */
+export function useClearFieldHints(): HintClear | undefined {
+  return useContext(HintClearContext)
+}
+
 /**
  * Holds which field's description the hint strip shows (shownHint). The fields only set it (a context that never
- * changes), so hovering re-renders the strip and nothing else.
+ * changes), so hovering re-renders the strip and nothing else. Passing `resetKey` (such as an active tab id) clears
+ * stale hover/focus hints immediately whenever it changes.
  */
-export function FieldHints({ children }: { readonly children: ReactNode }) {
+export function FieldHints({ children, resetKey }: { readonly children: ReactNode; readonly resetKey?: string | number }) {
   const [hints, setHints] = useState<Hints>({})
   const set = useCallback<HintSetter>((source, id, hint) => setHints(current => nextHints(current, source, id, hint)), [])
-  return <HintSetterContext.Provider value={set}><HintContext.Provider value={shownHint(hints)}>{children}</HintContext.Provider></HintSetterContext.Provider>
+  const clear = useCallback<HintClear>(source => setHints(current => {
+    if (source === 'hovered') return current.hovered ? { ...current, hovered: undefined } : current
+    if (source === 'focused') return current.focused ? { ...current, focused: undefined } : current
+    return current.hovered || current.focused ? {} : current
+  }), [])
+  useEffect(() => { clear() }, [resetKey, clear])
+  return <HintSetterContext.Provider value={set}><HintClearContext.Provider value={clear}><HintContext.Provider value={shownHint(hints)}>{children}</HintContext.Provider></HintClearContext.Provider></HintSetterContext.Provider>
 }
 
 /**
@@ -79,9 +93,16 @@ interface Props extends FieldText {
 export default function PropertyField({ id, label, changed, labelFor = true, description, note, error, children }: Props) {
   const setHint = useContext(HintSetterContext)
   const hint = useMemo(() => description ? { id, label, description } : undefined, [id, label, description])
+  // Unmounting while hovered or focused (for example when switching inspector tabs) must clear this field's hint.
+  useEffect(() => () => {
+    if (!setHint) return
+    setHint('hovered', id, undefined)
+    setHint('focused', id, undefined)
+  }, [setHint, id])
   const hints = setHint && hint ? {
     onMouseEnter: () => setHint('hovered', id, hint),
     onMouseLeave: () => setHint('hovered', id, undefined),
+    onPointerLeave: () => setHint('hovered', id, undefined),
     onFocus: () => setHint('focused', id, hint),
     onBlur: (event: FocusEvent<HTMLDivElement>) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setHint('focused', id, undefined) }
   } : {}

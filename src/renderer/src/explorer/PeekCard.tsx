@@ -220,7 +220,7 @@ export function PeekRowsPart({ part }: { part: PeekPart<PeekRows> | undefined })
 export function PeekListView({ id, part, list, preset, objectName }: { id: PeekListId; part: OpenPeek['facts']; list: PeekList | undefined; preset: LocalGridPreset; objectName: string }) {
   if (part.status !== 'ready') return <Pending part={part} loading="Loading…" />
   return <>
-    <PeekListGrid id={id} list={list} preset={preset} objectName={objectName} />
+    <PeekListGrid id={id} list={list} preset={preset} fill={preset === 'card'} objectName={objectName} />
     {list?.truncated && <p className="peek-note">There are more than the card lists.</p>}
     {list?.unread !== undefined && <p className="peek-note">{list.unread === 1 ? '1 database' : `${list.unread.toLocaleString()} databases`} could not be read.</p>}
   </>
@@ -291,9 +291,10 @@ export function PeekBody({ view, open, idPrefix, beforeScript, inEditorPane = fa
   // The model of a definition the view has moved on from goes at once, even while another tab shows.
   const shownKey = definition?.text === undefined ? undefined : String(open.id)
   useEffect(() => { editor?.keep(shownKey) }, [editor, shownKey])
-  // A promoted tab has a document's room: its lists fill the panel and offer Save Results As; the card's are sized to their rows.
+  // Both the card and a promoted tab fill the panel with their list grid so scrollbars sit cleanly at the viewport edge;
+  // promoted tabs additionally use the `page` preset to offer Save Results As.
   const preset: LocalGridPreset = inEditorPane ? 'page' : 'card'
-  const fills = open.tab === 'rows' || open.tab === 'definition' || (preset === 'page' && isPeekListTab(open.tab))
+  const fills = open.tab === 'rows' || open.tab === 'definition' || isPeekListTab(open.tab)
   return <PeekViewContext.Provider value={view}>
     <div className="peek-body">
       <div className="peek-pane">

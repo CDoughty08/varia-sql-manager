@@ -116,8 +116,6 @@ export function reloadSession(documents: Pick<DocumentService, 'getSnapshot' | '
 export interface SessionRestoreOptions {
   readonly api: Pick<VariaApi, 'hotExit' | 'takeSession' | 'finishSessionRestore'>
   readonly documents: Pick<DocumentService, 'getSnapshot' | 'reopen' | 'activate' | 'setPinned'> & Partial<Pick<DocumentService, 'reopenKept'>>
-  /** SQL Server Agent's release gate (`agentEnabled`): kept Agent documents reopen only while it is on. */
-  readonly agentEnabled?: boolean
   readonly files: Pick<FileService, 'later' | 'release' | 'reportError'>
   /** Where the reopened tabs go back into their editor groups. */
   readonly groups?: Pick<EditorGroupService, 'restore'>
@@ -135,7 +133,7 @@ export interface SessionRestoreOptions {
  * goes to the file banner, and files that are gone are named there as a warning.
  */
 /** How many tabs the restore reopened, or -1 when it failed. */
-export async function restoreSession({ api, documents, files, groups, connectionTargets, resumeRecovery, restoredJobs, otherwise, agentEnabled }: SessionRestoreOptions): Promise<number> {
+export async function restoreSession({ api, documents, files, groups, connectionTargets, resumeRecovery, restoredJobs, otherwise }: SessionRestoreOptions): Promise<number> {
   if (!api.hotExit) return 0
   let opened = 0, failed = false
   await files.later(async () => {
@@ -147,13 +145,13 @@ export async function restoreSession({ api, documents, files, groups, connection
     let restored: RestoredSession
     try { restored = unwrap(await api.takeSession()) } catch (error) { throw new Error(`The queries open when Varia SQL Manager last closed could not be reopened: ${error instanceof Error ? error.message : 'The operation failed.'}`) }
     const registered: SqlFile[] = [], ids: (string | undefined)[] = [], problems = [...restored.problems]
-    let active: string | undefined, agentsOff = false
+    let active: string | undefined
     try {
       if (restored.workspace && connectionTargets && !connectionTargets.restore(restored.workspace)) throw new Error('The connection workspace cannot be restored while a connection is active.')
       for (const [index, document] of restored.documents.entries()) {
-        // A kept SQL Server Agent document (AG-6g) reopens through its own service, and only behind the release gate; one that cannot is named.
+        // A kept SQL Server Agent document (AG-6g) reopens through its own service; one that cannot is named.
         if (isKeptAgentKind(document.kind)) {
-          if (!agentEnabled || !documents.reopenKept) { agentsOff = true; continue }
+          if (!documents.reopenKept) { problems.push(keptAgentText.notReopened(document.name)); continue }
           let id: string
           try { id = documents.reopenKept(document.kind, { name: document.name, state: document.text, targetId: document.targetId, database: document.database }).id } catch { problems.push(keptAgentText.unreadable(document.name)); continue }
           if (document.recoveryId) resumeRecovery?.(id, document.recoveryId)
@@ -177,7 +175,6 @@ export async function restoreSession({ api, documents, files, groups, connection
       if (active) documents.activate(active)
       if (restored.restoreGeneration !== undefined) unwrap(await api.finishSessionRestore(restored.restoreGeneration))
     } finally { await files.release(registered) }
-    if (agentsOff) problems.push(keptAgentText.unavailable)
     if (problems.length) files.reportError(problems.join(' '), 'warning')
   }
 }
