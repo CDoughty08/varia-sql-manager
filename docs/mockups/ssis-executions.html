@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Varia mock · SSIS executions · Navigation concepts</title>
+<!-- Design mock for re-imagining SSMS's Integration Services reports (All Executions, Overview, All Messages, Execution
+     Performance). Self-contained: no network, no build step. Not production code. Data is fictional. -->
+<style>
+/* Palette: src/shared/theme/palette.ts (Varia Dark, Varia Light). Metrics: src/shared/theme/metrics.ts (Compact). */
+:root {
+  --font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, Ubuntu, Cantarell, 'Noto Sans', sans-serif;
+  --font-mono: 'Cascadia Mono', Consolas, 'SF Mono', Menlo, 'DejaVu Sans Mono', 'Liberation Mono', monospace;
+  --size-xs: 11px; --size-sm: 12px; --size-md: 13px; --size-lg: 15px;
+  --radius-sm: 4px; --radius-lg: 8px; --radius-pill: 999px; --grid-row: 20px;
+}
+html[data-theme='dark'] {
+  color-scheme: dark;
+  --canvas: #16181d; --chrome: #111317; --raised: #1c1f25; --overlay: #1d2026; --input: #101216;
+  --accentSurface: #232842; --hover: #262a32; --active: #30343e; --selection: #21273b; --selectionStrong: #29314f;
+  --text: #d9dce3; --textStrong: #f5f6f8; --textSecondary: #bcc1cb; --textTertiary: #a3a9b5; --textMuted: #9298a4; --textAccent: #bcc5ff;
+  --border: #262a31; --borderSubtle: #1f2228; --borderStrong: #2e323a; --controlBorder: #6b7286; --inputBorder: #6a7184;
+  --accent: #8f9cff; --accentHover: #a8b2ff; --onAccent: #0e1230;
+  --error: #f39a9a; --warning: #e4bb6a; --success: #74d19c; --running: #8f9cff;
+  --errorSurface: #3a1d22; --errorSurfaceText: #f6bcc1; --warningSurface: #33291a; --warningSurfaceText: #f0d49e; --successSurface: #18301f;
+  --icon: #a3a9b5; --bar: #3a4160; --barUsual: #2a2e38; --shadow: #00000085;
+}
+html[data-theme='light'] {
+  color-scheme: light;
+  --canvas: #ffffff; --chrome: #f7f8fa; --raised: #f1f3f6; --overlay: #ffffff; --input: #ffffff;
+  --accentSurface: #dde1f9; --hover: #dfe2e7; --active: #d6dae0; --selection: #e7ebfc; --selectionStrong: #d9e0fb;
+  --text: #1c1f26; --textStrong: #0a0c10; --textSecondary: #3a404b; --textTertiary: #4d5461; --textMuted: #5c6370; --textAccent: #3240b0;
+  --border: #e3e6eb; --borderSubtle: #eceef2; --borderStrong: #d4d8df; --controlBorder: #878e9b; --inputBorder: #878e9b;
+  --accent: #4453d0; --accentHover: #3744b8; --onAccent: #ffffff;
+  --error: #b42229; --warning: #875800; --success: #146f3b; --running: #4453d0;
+  --errorSurface: #fdecec; --errorSurfaceText: #8f1d24; --warningSurface: #fff5dc; --warningSurfaceText: #6b4400; --successSurface: #e6f4ea;
+  --icon: #4d5461; --bar: #c3c9f2; --barUsual: #e6e8ee; --shadow: #10182830;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { display: flex; flex-direction: column; background: var(--chrome); color: var(--text); font: var(--size-md)/20px var(--font-ui); font-synthesis: none; }
+[hidden] { display: none !important; }
+button { font: inherit; color: inherit; background: none; border: 1px solid transparent; border-radius: var(--radius-sm); padding: 0; cursor: default; }
+button:focus-visible, input:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+input { font: inherit; color: var(--text); background: var(--input); border: 1px solid var(--inputBorder); border-radius: var(--radius-sm); height: 24px; padding: 0 8px; }
+svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
+svg.i.sm { width: 12px; height: 12px; }
+
+/* ---- Mock controls: not part of the app ---- */
+.mock-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 8px 12px; border-bottom: 1px dashed var(--controlBorder); background: var(--raised); font-size: var(--size-sm); }
+.mock-bar h1 { margin: 0; font-size: var(--size-md); font-weight: 600; color: var(--textStrong); }
+.mock-bar .tag { padding: 0 6px; border: 1px dashed var(--controlBorder); border-radius: var(--radius-pill); color: var(--textMuted); font-size: var(--size-xs); }
+.mock-bar .grow { flex: 1; }
+.seg { display: inline-flex; gap: 1px; padding: 1px; border: 1px solid var(--border); border-radius: var(--radius-sm); flex: none; }
+.seg button { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 9px; color: var(--textMuted); font-size: var(--size-sm); white-space: nowrap; }
+.seg button:hover { background: var(--hover); }
+.seg button[aria-pressed='true'] { background: var(--selection); color: var(--textStrong); font-weight: 600; }
+.mock-note { margin: 0; padding: 8px 12px; color: var(--textMuted); font-size: var(--size-sm); line-height: 18px; border-bottom: 1px dashed var(--border); background: var(--raised); }
+.mock-note b { color: var(--textSecondary); font-weight: 600; }
+.mock-note ul { margin: 4px 0 0; padding-left: 18px; }
+
+/* ---- Workbench frame ---- */
+.app { flex: 1; min-height: 0; display: grid; grid-template-columns: 250px minmax(0, 1fr); }
+.tree { position: relative; border-right: 1px solid var(--border); background: var(--chrome); padding: 6px 0; font-size: var(--size-md); overflow: auto; }
+.tree .head { padding: 2px 12px 6px; font-weight: 600; color: var(--textSecondary); font-size: var(--size-sm); }
+.node { display: flex; align-items: center; gap: 5px; height: 22px; padding-right: 8px; white-space: nowrap; color: var(--text); position: relative; }
+.node:hover { background: var(--hover); }
+.node.sel { background: var(--selection); }
+.node .tw { width: 12px; color: var(--textMuted); text-align: center; font-size: 9px; }
+.node .badge { margin-left: auto; font-size: var(--size-xs); color: var(--error); }
+.menu { position: absolute; left: 150px; top: 18px; z-index: 5; min-width: 230px; padding: 4px; background: var(--overlay); border: 1px solid var(--borderStrong); border-radius: var(--radius-lg); box-shadow: 0 8px 24px var(--shadow); }
+.menu .mi { display: flex; align-items: center; gap: 8px; height: 24px; padding: 0 10px; border-radius: var(--radius-sm); color: var(--text); font-size: var(--size-md); }
+.menu .mi:hover, .menu .mi.hl { background: var(--selectionStrong); color: var(--textStrong); }
+.menu .mi .k { margin-left: auto; color: var(--textMuted); font-size: var(--size-xs); }
+.menu .sep { height: 1px; margin: 4px 6px; background: var(--border); }
+.menu .new { margin-left: 6px; font-size: 10px; padding: 0 5px; border-radius: var(--radius-pill); background: var(--accentSurface); color: var(--textAccent); }
+.main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--canvas); }
+.tabs { display: flex; height: 34px; align-items: stretch; background: var(--chrome); border-bottom: 1px solid var(--border); }
+.tab { display: flex; align-items: center; gap: 6px; padding: 0 12px; font-size: var(--size-md); color: var(--textMuted); border-right: 1px solid var(--border); }
+.tab.on { color: var(--textStrong); background: var(--canvas); box-shadow: inset 0 2px var(--accent); }
+.doc { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.dhead { display: flex; align-items: center; gap: 10px; padding: 10px 16px 4px; }
+.crumbs { display: flex; align-items: center; gap: 4px; color: var(--textMuted); font-size: var(--size-sm); white-space: nowrap; }
+.crumbs .sep { opacity: .6; }
+.crumbs a { color: var(--textMuted); text-decoration: none; border-radius: var(--radius-sm); padding: 0 2px; }
+.crumbs a:hover { color: var(--textAccent); background: var(--hover); }
+.title { font-size: var(--size-lg); font-weight: 600; color: var(--textStrong); white-space: nowrap; }
+.sub { color: var(--textMuted); font-size: var(--size-sm); }
+.grow { flex: 1; }
+.pill { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px; border-radius: var(--radius-pill); font-size: var(--size-xs); font-weight: 600; white-space: nowrap; }
+.pill.failed { background: var(--errorSurface); color: var(--errorSurfaceText); }
+.pill.ok { background: var(--successSurface); color: var(--success); }
+.pill.running { background: var(--accentSurface); color: var(--textAccent); }
+.pill.warn { background: var(--warningSurface); color: var(--warningSurfaceText); }
+.btn { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px; color: var(--textSecondary); font-size: var(--size-sm); white-space: nowrap; }
+.btn:hover { background: var(--hover); color: var(--textStrong); }
+.btn.outline { border-color: var(--controlBorder); }
+.ib { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; color: var(--icon); }
+.ib:hover:not(:disabled) { background: var(--hover); color: var(--textStrong); }
+.ib:disabled { opacity: .35; }
+.facts { display: flex; gap: 16px; padding: 0 16px 8px; color: var(--textMuted); font-size: var(--size-sm); white-space: nowrap; overflow: hidden; }
+.facts b { color: var(--text); font-weight: 400; }
+.facts .err { color: var(--error); }
+.facts .warn { color: var(--warning); }
+.body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 16px 12px; gap: 8px; }
+.row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.chip { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 9px; border: 1px solid var(--controlBorder); border-radius: var(--radius-pill); font-size: var(--size-sm); color: var(--textSecondary); white-space: nowrap; }
+.chip[aria-pressed='true'] { background: var(--selection); border-color: var(--accent); color: var(--textStrong); }
+.chip.scope { border-style: dashed; color: var(--textAccent); }
+.chip .x { opacity: .7; }
+.label { color: var(--textMuted); font-size: var(--size-sm); }
+.vtabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); }
+.vtabs button { height: 28px; padding: 0 12px; color: var(--textMuted); border-radius: 0; border-bottom: 2px solid transparent; font-size: var(--size-md); }
+.vtabs button:hover { color: var(--textStrong); }
+.vtabs button[aria-selected='true'] { color: var(--textStrong); border-bottom-color: var(--accent); font-weight: 600; }
+.vtabs .n { margin-left: 5px; color: var(--textMuted); font-weight: 400; font-size: var(--size-xs); }
+.vtabs .n.e { color: var(--error); }
+.note { color: var(--textMuted); font-size: var(--size-sm); }
+
+/* ---- Grid ---- */
+.grid { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--border); font: var(--size-sm)/var(--grid-row) var(--font-mono); background: var(--canvas); position: relative; }
+.grid table { border-collapse: separate; border-spacing: 0; min-width: 100%; }
+.grid th { position: sticky; top: 0; z-index: 1; background: var(--raised); color: var(--textSecondary); font: 600 var(--size-sm)/22px var(--font-ui); text-align: left; padding: 0 8px; border-bottom: 1px solid var(--border); border-right: 1px solid var(--borderSubtle); white-space: nowrap; }
+.grid td { padding: 0 8px; white-space: nowrap; border-bottom: 1px solid var(--borderSubtle); border-right: 1px solid var(--borderSubtle); max-width: 520px; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.grid td.num { text-align: right; color: var(--textMuted); }
+.grid tr:hover td { background: var(--hover); }
+.grid tr.sel td { background: var(--selectionStrong); }
+.grid tr.e td.t { color: var(--error); }
+.grid tr.w td.t { color: var(--warning); }
+.grid tr.e td { background: color-mix(in srgb, var(--errorSurface) 45%, transparent); }
+.grid tr.pin td { background: var(--errorSurface); color: var(--errorSurfaceText); }
+.st { display: inline-flex; align-items: center; gap: 5px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.dot.failed { background: var(--error); } .dot.ok { background: var(--success); } .dot.running { background: var(--running); } .dot.warn { background: var(--warning); } .dot.muted { background: var(--textMuted); }
+
+/* ---- Overview ---- */
+.ov { display: grid; grid-template-columns: minmax(130px, max-content) 1fr minmax(130px, max-content) 1fr; gap: 3px 16px; font-size: var(--size-sm); padding: 8px 0; }
+.ov dt { color: var(--textMuted); }
+.ov dd { margin: 0; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.callout { border: 1px solid color-mix(in srgb, var(--error) 45%, transparent); background: var(--errorSurface); color: var(--errorSurfaceText); border-radius: var(--radius-lg); padding: 8px 12px; font-size: var(--size-sm); line-height: 18px; }
+.callout b { color: var(--textStrong); }
+.callout .where { color: var(--errorSurfaceText); opacity: .85; font-family: var(--font-mono); font-size: var(--size-xs); }
+.section-title { font-size: var(--size-sm); font-weight: 600; color: var(--textSecondary); margin-top: 4px; }
+
+/* ---- Performance ---- */
+.gantt { display: grid; grid-template-columns: 220px 1fr 90px 90px; align-items: center; gap: 2px 10px; font-size: var(--size-sm); }
+.gantt .h { color: var(--textMuted); font-size: var(--size-xs); }
+.gantt .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); border-radius: var(--radius-sm); padding: 0 4px; }
+.gantt .name.click:hover { background: var(--hover); color: var(--textAccent); }
+.gantt .name.on { background: var(--selection); color: var(--textStrong); }
+.track { position: relative; height: 16px; background: var(--barUsual); border-radius: 3px; }
+.track .usual { position: absolute; top: 0; bottom: 0; border-right: 2px dashed var(--textMuted); }
+.track .b { position: absolute; top: 2px; bottom: 2px; background: var(--bar); border-radius: 2px; }
+.track .b.failed { background: var(--error); }
+.gantt .dur { text-align: right; font-family: var(--font-mono); color: var(--text); }
+.gantt .delta { text-align: right; font-family: var(--font-mono); font-size: var(--size-xs); }
+.delta.up { color: var(--warning); } .delta.down { color: var(--success); }
+.spark { display: flex; align-items: flex-end; gap: 3px; height: 46px; padding: 4px 0; }
+.spark button { width: 16px; background: var(--bar); border-radius: 2px 2px 0 0; padding: 0; border: 0; }
+.spark button.failed { background: var(--error); }
+.spark button.cur { outline: 2px solid var(--accent); outline-offset: 1px; }
+.spark button:hover { filter: brightness(1.25); }
+.runs-strip { display: flex; align-items: center; gap: 10px; padding: 4px 10px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--raised); }
+
+/* ---- Concept layouts ---- */
+.split { flex: 1; min-height: 0; display: grid; grid-template-columns: 480px minmax(0, 1fr); gap: 0; border-top: 1px solid var(--border); }
+.split > .list { border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; padding: 8px 10px 10px 16px; gap: 8px; }
+.split > .detail { display: flex; flex-direction: column; min-height: 0; padding: 8px 16px 12px; gap: 8px; }
+.stack-vertical { flex: 1; min-height: 0; display: grid; grid-template-rows: auto auto 1fr; gap: 10px; }
+.navbar { display: flex; align-items: center; gap: 2px; padding: 6px 12px 0; }
+.navbar .crumbs { margin-left: 8px; font-size: var(--size-md); }
+.navbar .crumbs .cur { color: var(--textStrong); font-weight: 600; }
+.histhint { margin-left: auto; color: var(--textMuted); font-size: var(--size-xs); }
+.kbd { font: var(--size-xs)/16px var(--font-mono); padding: 0 4px; border: 1px solid var(--borderStrong); border-radius: 3px; color: var(--textSecondary); background: var(--raised); }
+.cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.card { border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 8px 12px; background: var(--raised); }
+.card .v { font-size: 20px; font-weight: 600; color: var(--textStrong); line-height: 28px; }
+.card .k { color: var(--textMuted); font-size: var(--size-sm); }
+.card button.v { padding: 0; }
+.card button.v:hover { color: var(--textAccent); }
+.card.err .v { color: var(--error); }
+</style>
+</head>
+<body>
+<header class="mock-bar">
+  <h1>SSIS executions — navigation concepts</h1><span class="tag">mock · fictional data</span>
+  <div class="seg" role="group" aria-label="Concept">
+    <button data-concept="A">A · Executions workspace</button>
+    <button data-concept="B">B · Run page</button>
+    <button data-concept="C">C · One document, real history</button>
+  </div>
+  <span class="grow"></span>
+  <div class="seg" role="group" aria-label="Theme"><button data-theme-set="dark">Dark</button><button data-theme-set="light">Light</button></div>
+</header>
+<p class="mock-note" id="note"></p>
+<div class="app">
+  <nav class="tree" aria-label="Object Explorer">
+    <div class="head">Object Explorer</div>
+    <div class="node"><span class="tw">▾</span>▤ server-a <span class="sub">16.0</span></div>
+    <div class="node" style="padding-left:14px"><span class="tw">▾</span>▢ Integration Services Catalogs</div>
+    <div class="node" style="padding-left:28px" id="n-ssisdb"><span class="tw">▾</span>⛁ SSISDB</div>
+    <div class="node" style="padding-left:42px"><span class="tw">▾</span>▢ Finance</div>
+    <div class="node" style="padding-left:56px"><span class="tw">▾</span>▢ Projects</div>
+    <div class="node" style="padding-left:70px"><span class="tw">▾</span>▣ Loads</div>
+    <div class="node" style="padding-left:84px"><span class="tw">▾</span>▢ Packages</div>
+    <div class="node sel" style="padding-left:98px" id="n-pkg"><span class="tw"></span>◇ Daily.dtsx <span class="badge" title="Last run failed">● failed</span></div>
+    <div class="node" style="padding-left:98px"><span class="tw"></span>◇ Child.dtsx</div>
+    <div class="node" style="padding-left:56px"><span class="tw">▸</span>▢ Environments</div>
+    <div class="node" style="padding-left:42px"><span class="tw">▸</span>▢ Marketing</div>
+    <div class="node" style="padding-left:14px"><span class="tw">▸</span>▢ SQL Server Agent</div>
+    <div class="menu" id="pkgmenu" style="top:184px;left:132px">
+      <div class="mi">Properties <span class="k">Alt+Enter</span></div>
+      <div class="sep"></div>
+      <div class="mi hl" id="menu-exec">Executions <span class="new">new</span> <span class="k"></span></div>
+      <div class="mi" id="menu-last">Last run <span class="new">new</span></div>
+      <div class="sep"></div>
+      <div class="mi">Script As</div><div class="mi">Copy Name</div><div class="mi">Refresh <span class="k">F5</span></div>
+    </div>
+  </nav>
+  <main class="main">
+    <div class="tabs" id="tabs"></div>
+    <div class="doc" id="doc"></div>
+  </main>
+</div>
+
+<script>
+// ---------- Fictional data ----------
+const icons = {
+  back: '<svg class="i" viewBox="0 0 16 16"><path d="M10 3 5 8l5 5"/></svg>',
+  fwd: '<svg class="i" viewBox="0 0 16 16"><path d="M6 3l5 5-5 5"/></svg>',
+  refresh: '<svg class="i" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5v3h-3"/></svg>',
+  search: '<svg class="i sm" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/></svg>',
+  jump: '<svg class="i sm" viewBox="0 0 16 16"><path d="M8 2v9M4 8l4 4 4-4M3 14h10"/></svg>',
+  copy: '<svg class="i sm" viewBox="0 0 16 16"><rect x="5" y="5" width="8" height="8" rx="1"/><path d="M3 11V3h8"/></svg>',
+  ext: '<svg class="i sm" viewBox="0 0 16 16"><path d="M9 3h4v4M13 3 7 9M11 9v4H3V5h4"/></svg>'
+}
+const statuses = { 7: ['Succeeded', 'ok'], 4: ['Failed', 'failed'], 2: ['Running', 'running'], 9: ['Completed (warnings)', 'warn'], 3: ['Canceled', 'muted'] }
+const pad = n => String(n).padStart(2, '0')
+const dur = s => `${pad(Math.floor(s / 3600))}:${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}`
+const execs = []
+;(() => {
+  const pkgs = [['Finance', 'Loads', 'Daily.dtsx'], ['Finance', 'Loads', 'Child.dtsx'], ['Marketing', 'Campaigns', 'Ingest.dtsx']]
+  let id = 48226
+  for (let d = 0; d < 16; d++) {
+    for (const [f, p, k] of pkgs) {
+      if (k !== 'Daily.dtsx' && d % 3) continue
+      const status = d === 0 && k === 'Ingest.dtsx' ? 2 : k === 'Daily.dtsx' && (d === 2 || d === 9) ? 4 : d === 5 && k === 'Daily.dtsx' ? 9 : d === 12 && k === 'Child.dtsx' ? 3 : 7
+      const base = k === 'Daily.dtsx' ? 312 : k === 'Child.dtsx' ? 64 : 1210
+      const s = status === 4 ? Math.round(base * 0.62) : Math.round(base * (0.85 + ((d * 37) % 30) / 100))
+      execs.push({ id: id--, folder: f, project: p, pkg: k, status, start: `2026-11-${pad(24 - d)} 02:30:00`, secs: status === 2 ? 431 : s, caller: 'CONTOSO\\sqlagent', errors: status === 4 ? 3 : 0, warnings: status === 9 ? 4 : status === 4 ? 1 : (d % 4 === 0 ? 1 : 0) })
+    }
+  }
+})()
+const daily = execs.filter(e => e.pkg === 'Daily.dtsx')
+const failed = daily.find(e => e.status === 4)
+const tasks = [
+  ['Truncate staging', 'Execute SQL Task', 0, 4, 4],
+  ['Load customers', 'Data Flow Task', 4, 61, 58],
+  ['Load orders', 'Data Flow Task', 65, 96, 92],
+  ['Load facts', 'Data Flow Task', 161, 33, 121, true],
+  ['Rebuild indexes', 'Execute SQL Task', null, 0, 28],
+  ['Notify', 'Send Mail Task', null, 0, 1]
+]
+function messagesFor(e) {
+  const out = []
+  let t = 0
+  const at = s => `02:${pad(30 + Math.floor(s / 60))}:${pad(s % 60)}.${String((s * 137) % 1000).padStart(3, '0')}`
+  const push = (type, src, msg, s) => out.push({ type, src, msg, time: at(s) })
+  push('Information', 'Daily', 'Package Daily.dtsx started on SERVER-A.', 0)
+  for (const [name, kind, start, len] of tasks) {
+    if (start === null) continue
+    push('Information', name, `${name}: validation has started.`, start)
+    push('Information', name, `${name}: validation is complete.`, start)
+    if (kind === 'Data Flow Task') for (let i = 1; i <= 24; i++) push(i % 6 ? 'Progress' : 'Information', name, i % 6 ? `${name}: ${Math.round(i * 4.1)}% complete` : `"OLE DB Destination" wrote ${(i * 1873).toLocaleString('en-US')} rows.`, start + Math.round(len * i / 25))
+    if (name === 'Load orders') push('Warning', name, 'Truncation may occur due to inserting data from data flow column "Notes" with a length of 4000 to database column "Notes" with a length of 1000.', start + 40)
+  }
+  if (e.status === 4) {
+    push('Error', 'Load facts', 'SSIS Error Code DTS_E_OLEDBERROR. An OLE DB error has occurred. Error code: 0x80004005. An OLE DB record is available. Source: "Microsoft OLE DB Driver for SQL Server" Hresult: 0x80004005 Description: "Violation of PRIMARY KEY constraint \'PK_FactSales\'. Cannot insert duplicate key in object \'dbo.FactSales\'. The duplicate key value is (20261122, 4471)."', 193)
+    push('Error', 'Load facts', 'SSIS Error Code DTS_E_INDUCEDTRANSFORMFAILUREONERROR. The "OLE DB Destination.Inputs[OLE DB Destination Input]" failed because error code 0xC020907B occurred.', 193)
+    push('Error', 'Load facts', 'SSIS Error Code DTS_E_PROCESSINPUTFAILED. The ProcessInput method on component "OLE DB Destination" (88) failed with error code 0xC0209029.', 194)
+    push('Task failed', 'Load facts', 'Task Load facts failed.', 194)
+    push('Information', 'Daily', 'Package Daily.dtsx finished: Failure.', 194)
+  } else push('Information', 'Daily', 'Package Daily.dtsx finished: Success.', e.secs)
+  return out.reverse()
+}
+const kindOf = m => m.type === 'Error' || m.type === 'Task failed' ? 'e' : m.type === 'Warning' ? 'w' : m.type === 'Information' ? 'i' : 'o'
+const groupLabel = { e: 'Errors', w: 'Warnings', i: 'Information', o: 'Other' }
+
+// ---------- State ----------
+const params = new URLSearchParams(location.search)
+let menuOpen = true
+const state = { concept: params.get('concept') ?? 'A', theme: params.get('theme') ?? 'dark', selected: failed.id, view: 'messages', groups: new Set(['e', 'w', 'i', 'o']), task: null, scope: 'package', search: '' }
+// Concept C's in-document history: each entry a full place (page plus its filters, selection and view).
+const trail = { stack: [{ page: 'list' }], at: 0 }
+
+// ---------- Shared pieces ----------
+const statusCell = e => `<span class="st"><span class="dot ${statuses[e.status][1]}"></span>${statuses[e.status][0]}</span>`
+const pill = e => `<span class="pill ${statuses[e.status][1]}">${statuses[e.status][0]}</span>`
+function listGrid(rows, selectable, compact, showPkg = state.scope !== 'package') {
+  return `<div class="grid" ${compact ? '' : ''}><table><thead><tr><th>ID</th><th>Status</th>${showPkg ? '<th>Package</th>' : ''}<th>Started</th><th>Duration</th><th>Errors</th><th>Warnings</th>${compact ? '' : '<th>Caller</th>'}</tr></thead><tbody>${
+    rows.map(e => `<tr data-exec="${e.id}" class="${selectable && e.id === state.selected ? 'sel' : ''}"><td class="num">${e.id}</td><td>${statusCell(e)}</td>${showPkg ? `<td>${e.pkg}</td>` : ''}<td>${e.start}</td><td>${dur(e.secs)}</td><td class="num" style="color:${e.errors ? 'var(--error)' : ''}">${e.errors}</td><td class="num" style="color:${e.warnings ? 'var(--warning)' : ''}">${e.warnings}</td>${compact ? '' : `<td>${e.caller}</td>`}</tr>`).join('')
+  }</tbody></table></div>`
+}
+const scopedExecs = () => state.scope === 'package' ? daily : execs
+function scopeChips() {
+  return `<span class="label">Scope</span>${state.scope === 'package' ? `<button class="chip scope" data-scope="all" title="Opened from Daily.dtsx's menu">Package: Finance \\ Loads \\ Daily.dtsx <span class="x">✕</span></button>` : '<button class="chip scope" data-scope="package">All packages on server-a</button>'}
+    <span class="label" style="margin-left:6px">Status</span><button class="chip" aria-pressed="true">Any</button><button class="chip">Failed</button><button class="chip">Running</button>
+    <span class="label" style="margin-left:6px">Window</span><button class="chip" aria-pressed="true">Last 7 days</button>`
+}
+function messagesView(e, opts = {}) {
+  const all = messagesFor(e)
+  const counts = { e: 0, w: 0, i: 0, o: 0 }
+  all.forEach(m => counts[kindOf(m)]++)
+  let shown = all.filter(m => state.groups.has(kindOf(m)))
+  if (state.task) shown = shown.filter(m => m.src === state.task)
+  if (state.search) shown = shown.filter(m => m.msg.toLowerCase().includes(state.search.toLowerCase()))
+  const firstError = all.filter(m => m.type === 'Error').at(-1)
+  return `
+    ${opts.pinError && firstError ? `<div class="callout"><b>First error</b> · ${firstError.time} · Load facts <span class="where">\\Daily\\Load facts\\OLE DB Destination</span><br>${firstError.msg.slice(0, 260)}… <button class="btn" data-jump style="color:inherit;height:20px">${icons.jump} Show in list</button></div>` : ''}
+    <div class="row">
+      ${['e', 'w', 'i', 'o'].map(g => `<button class="chip" data-group="${g}" aria-pressed="${state.groups.has(g)}">${groupLabel[g]} (${counts[g]})</button>`).join('')}
+      ${state.task ? `<button class="chip scope" data-task="">Task: ${state.task} <span class="x">✕</span></button>` : ''}
+      <span class="grow"></span>
+      <span style="display:inline-flex;align-items:center;gap:4px;color:var(--textMuted)">${icons.search}<input id="msgsearch" placeholder="Filter messages" value="${state.search}" style="width:180px"></span>
+      ${firstError && !opts.pinError ? `<button class="btn outline" data-jump>${icons.jump} First error</button>` : ''}
+    </div>
+    <div class="grid" id="msggrid"><table><thead><tr><th>Time</th><th>Type</th><th>Source</th><th style="width:100%">Message</th></tr></thead><tbody>${
+      shown.map(m => `<tr class="${kindOf(m)}"><td>${m.time}</td><td class="t">${m.type}</td><td>${m.src}</td><td title="${m.msg.replace(/"/g, '&quot;')}">${m.msg}</td></tr>`).join('')
+    }</tbody></table></div>
+    <div class="note">${shown.length.toLocaleString('en-US')} of ${all.length.toLocaleString('en-US')} messages, newest first · one continuous list (no pages) · Copy, Copy with Headers, sort and Save Results As from the grid's menu</div>`
+}
+function overviewView(e, opts = {}) {
+  return `
+    ${e.status === 4 ? `<div class="callout"><b>Failed at Load facts</b> after ${dur(e.secs)} · 3 errors. Violation of PRIMARY KEY constraint 'PK_FactSales'. Cannot insert duplicate key in object 'dbo.FactSales'. <button class="btn" data-view="messages" style="color:inherit;height:20px">See messages →</button></div>` : ''}
+    <dl class="ov">
+      <dt>Execution</dt><dd>${e.id}</dd><dt>Status</dt><dd>${statuses[e.status][0]}</dd>
+      <dt>Folder</dt><dd>${e.folder}</dd><dt>Started</dt><dd>${e.start} +00:00</dd>
+      <dt>Project</dt><dd>${e.project}</dd><dt>Ended</dt><dd>2026-11-${e.start.slice(8, 10)} ${'02:' + pad(30 + Math.floor(e.secs / 60))}:${pad(e.secs % 60)} +00:00</dd>
+      <dt>Package</dt><dd>${e.pkg}</dd><dt>Duration</dt><dd>${dur(e.secs)} <span class="note">(usual 00:05:12)</span></dd>
+      <dt>Environment</dt><dd>.\\Prod</dd><dt>Executed as</dt><dd>${e.caller}</dd>
+      <dt>Logging level</dt><dd>Basic</dd><dt>Caller</dt><dd>${e.caller} · Agent job "Nightly" step 2</dd>
+      <dt>32-bit runtime</dt><dd>No</dd><dt>Server · machine</dt><dd>SERVER-A · SERVER-A</dd>
+    </dl>
+    ${opts.params === false ? '' : `<div class="section-title">Parameters used</div>
+    <div class="grid" style="flex:none;max-height:120px"><table><thead><tr><th>Parameter</th><th>Value</th><th>Type</th><th>From</th></tr></thead><tbody>
+      <tr><td>Server</td><td>sql01</td><td>String</td><td>Environment Prod</td></tr><tr><td>Password</td><td>••••••</td><td>String</td><td>Sensitive</td></tr><tr><td>BatchSize</td><td>5000</td><td>Int32</td><td>Default</td></tr></tbody></table></div>`}`
+}
+function performanceView(e, opts = {}) {
+  const max = 260
+  return `
+    <div class="runs-strip"><span class="label">This run against the last ${daily.length} runs of Daily.dtsx</span>
+      <div class="spark">${daily.slice().reverse().map(r => `<button data-exec="${r.id}" class="${r.status === 4 ? 'failed' : ''} ${r.id === e.id ? 'cur' : ''}" style="height:${Math.round(r.secs / 400 * 40) + 4}px" title="Execution ${r.id} · ${statuses[r.status][0]} · ${dur(r.secs)}"></button>`).join('')}</div>
+      <span class="note">usual 00:05:12 (median of succeeded runs) · click a bar to open that run here</span></div>
+    <div class="section-title">Tasks</div>
+    <div class="gantt">
+      <span class="h">Task</span><span class="h">Timeline (dashed: usual end)</span><span class="h" style="text-align:right">This run</span><span class="h" style="text-align:right">vs usual</span>
+      ${tasks.map(([n, kind, s, len, usual, bad]) => {
+        const d = s === null ? null : len - usual
+        return `<span class="name ${opts.clickable ? 'click' : ''} ${state.task === n ? 'on' : ''}" ${opts.clickable ? `data-task="${n}"` : ''} title="${kind}">${n}</span>
+        <span class="track">${s === null ? '' : `<span class="b ${bad && e.status === 4 ? 'failed' : ''}" style="left:${s / max * 100}%;width:${Math.max(len, 1) / max * 100}%"></span>`}<span class="usual" style="width:${((s ?? 0) + usual) / max * 100}%"></span></span>
+        <span class="dur">${s === null ? '<span class="note">not run</span>' : dur(len)}</span>
+        <span class="delta ${d > 0 ? 'up' : 'down'}">${d === null ? '' : bad && e.status === 4 ? '<span style="color:var(--error)">failed</span>' : (d > 0 ? '+' : '−') + Math.abs(d) + ' s'}</span>`
+      }).join('')}
+    </div>
+    ${opts.clickable ? '<div class="note">Click a task to filter the messages below to it.</div>' : '<div class="note">From catalog.executable_statistics; data-flow component timings need Performance or Verbose logging.</div>'}`
+}
+
+// ---------- Concept A: one Executions workspace, master–detail ----------
+function conceptA() {
+  const e = execs.find(x => x.id === state.selected)
+  tabs([['Executions - server-a', true]])
+  return `
+    <div class="dhead"><span class="crumbs">server-a <span class="sep">›</span> Integration Services Catalogs <span class="sep">›</span> SSISDB</span><span class="title">Executions</span><span class="sub">${state.scope === 'package' ? 'Daily.dtsx' : 'all packages'}</span><span class="grow"></span><button class="btn">${icons.refresh} Refresh</button></div>
+    <div class="facts"><span>Live · every 5 s</span><span>Runs <b>${scopedExecs().length}</b></span><span>Failed <b class="err">${scopedExecs().filter(x => x.status === 4).length}</b></span><span>Running <b>${scopedExecs().filter(x => x.status === 2).length}</b></span></div>
+    <div class="split">
+      <div class="list">
+        <div class="row">${scopeChips()}</div>
+        ${listGrid(scopedExecs(), true, true)}
+        <div class="note">↑/↓ moves through runs; the detail keeps its tab, filters and scroll position per run.</div>
+      </div>
+      <div class="detail">
+        <div class="row"><span class="title" style="font-size:var(--size-md)">Execution ${e.id}</span>${pill(e)}<span class="sub">${e.folder} \\ ${e.project} \\ ${e.pkg} · ${e.start} · ${dur(e.secs)}</span><span class="grow"></span><button class="btn" title="Open this execution in its own tab">${icons.ext} Open in tab</button></div>
+        <div class="vtabs" role="tablist">${[['overview', 'Overview'], ['messages', 'Messages', e.errors], ['performance', 'Performance']].map(([v, l, n]) => `<button role="tab" data-view="${v}" aria-selected="${state.view === v}">${l}${n ? `<span class="n e">${n}</span>` : ''}</button>`).join('')}</div>
+        ${state.view === 'overview' ? overviewView(e) : state.view === 'messages' ? messagesView(e) : performanceView(e)}
+      </div>
+    </div>`
+}
+
+// ---------- Concept B: the run page (one execution per tab, everything on one scroll) ----------
+function conceptB() {
+  const e = execs.find(x => x.id === state.selected)
+  tabs([['Operations - server-a', false], [`Daily.dtsx · ${e.id}`, true]])
+  return `
+    <div class="dhead"><span class="crumbs">server-a <span class="sep">›</span> SSISDB <span class="sep">›</span> Finance <span class="sep">›</span> Loads</span><span class="title">Daily.dtsx</span><span class="sub">Execution ${e.id}</span>${pill(e)}<span class="grow"></span>
+      <button class="ib" data-step="1" title="Older run (Alt+Left)" ${daily.at(-1).id === e.id ? 'disabled' : ''}>${icons.back}</button><button class="ib" data-step="-1" title="Newer run (Alt+Right)" ${daily[0].id === e.id ? 'disabled' : ''}>${icons.fwd}</button>
+      <button class="btn">${icons.refresh} Refresh</button></div>
+    <div class="facts"><span>Started <b>${e.start}</b></span><span>Duration <b>${dur(e.secs)}</b> (usual 00:05:12)</span><span>Errors <b class="err">${e.errors}</b></span><span>Warnings <b class="warn">${e.warnings}</b></span><span>Caller <b>Agent job "Nightly" step 2</b></span><span>Environment <b>.\\Prod</b></span></div>
+    <div class="body" style="overflow:auto">
+      ${performanceView(e, { clickable: true })}
+      <div class="section-title">Messages</div>
+      <div style="display:flex;flex-direction:column;gap:8px;min-height:420px">${messagesView(e, { pinError: e.status === 4 })}</div>
+      <details><summary class="section-title" style="cursor:default">Details: parameters, environment, executed as, server</summary>${overviewView(e)}</details>
+    </div>`
+}
+
+// ---------- Concept C: one document, drill-in with real Back/Forward ----------
+function conceptC() {
+  const place = trail.stack[trail.at]
+  const e = place.exec ? execs.find(x => x.id === place.exec) : null
+  tabs([['Integration Services - server-a', true]])
+  const crumbs = [`<a href="#" data-go="list">SSISDB</a>`]
+  if (place.page !== 'list') crumbs.push(`<a href="#" data-go="pkg">Daily.dtsx</a>`)
+  if (e) crumbs.push(`<span class="cur">Execution ${e.id}</span>`)
+  const nav = `<div class="navbar"><button class="ib" data-hist="-1" ${trail.at === 0 ? 'disabled' : ''} title="Back (Alt+Left, mouse back)">${icons.back}</button><button class="ib" data-hist="1" ${trail.at === trail.stack.length - 1 ? 'disabled' : ''} title="Forward (Alt+Right, mouse forward)">${icons.fwd}</button><span class="crumbs">${crumbs.join('<span class="sep">›</span>')}</span>
+    <span class="histhint"><span class="kbd">Alt</span>+<span class="kbd">←</span> / <span class="kbd">→</span> and the mouse's back/forward buttons walk this document's history · ${trail.at + 1} of ${trail.stack.length}</span></div>`
+  if (place.page === 'list') {
+    const all = execs
+    return `${nav}<div class="dhead"><span class="title">Integration Services</span><span class="sub">server-a · last 7 days</span><span class="grow"></span><button class="btn">${icons.refresh} Refresh</button></div>
+      <div class="body">
+        <div class="cards">
+          <div class="card err"><button class="v" data-goexec="${failed.id}">${all.filter(x => x.status === 4).length}</button><div class="k">Failed executions</div></div>
+          <div class="card"><div class="v">${all.filter(x => x.status === 2).length}</div><div class="k">Running</div></div>
+          <div class="card"><div class="v">${all.filter(x => x.status === 7).length}</div><div class="k">Succeeded</div></div>
+          <div class="card"><div class="v">0</div><div class="k">Validations</div></div>
+        </div>
+        <div class="row"><span class="label">Kind</span><button class="chip" aria-pressed="true">Executions</button><button class="chip">Validations</button><button class="chip">Other operations</button><span class="label" style="margin-left:6px">Status</span><button class="chip" aria-pressed="true">Any</button><button class="chip">Failed</button></div>
+        ${listGrid(all, false, false, true)}
+        <div class="note">One list replaces All Executions, All Validations and All Operations. Opening a row drills in here; Back returns with the filters and scroll position as they were.</div>
+      </div>`
+  }
+  if (place.page === 'pkg') {
+    return `${nav}<div class="dhead"><span class="title">Daily.dtsx</span><span class="sub">Finance \\ Loads · ${daily.length} runs in 7 days</span><span class="grow"></span></div>
+      <div class="body">${performanceView(daily[0]).split('<div class="section-title">Tasks')[0]}${listGrid(daily, false, false, false)}</div>`
+  }
+  return `${nav}
+    <div class="dhead"><span class="title">Execution ${e.id}</span>${pill(e)}<span class="sub">${e.folder} \\ ${e.project} \\ ${e.pkg} · ${e.start} · ${dur(e.secs)}</span><span class="grow"></span><button class="btn">${icons.refresh} Refresh</button></div>
+    <div class="body">
+      <div class="vtabs" role="tablist">${[['overview', 'Overview'], ['messages', 'Messages', e.errors], ['performance', 'Performance']].map(([v, l, n]) => `<button role="tab" data-cview="${v}" aria-selected="${place.view === v}">${l}${n ? `<span class="n e">${n}</span>` : ''}</button>`).join('')}</div>
+      ${place.view === 'overview' ? overviewView(e) : place.view === 'messages' ? messagesView(e) : performanceView(e)}
+    </div>`
+}
+function go(place) { trail.stack = trail.stack.slice(0, trail.at + 1); trail.stack.push(place); trail.at++; render() }
+
+// ---------- Rendering ----------
+function tabs(list) { document.getElementById('tabs').innerHTML = `<div class="tab">SQLQuery1.sql</div>` + list.map(([n, on]) => `<div class="tab ${on ? 'on' : ''}">${n} <span style="opacity:.5">✕</span></div>`).join('') }
+const notes = {
+  A: `<b>A · Executions workspace.</b> One live document per server lists executions; picking one shows Overview, Messages and Performance beside the list, so nothing opens or jumps.
+      <ul><li>Right-click Daily.dtsx in Object Explorer for its menu. SSISDB's menu opens it for every package; a package's or project's <b>Executions</b> opens it scoped to that object (the dashed chip; ✕ widens it). A job History link and Operations' View Messages open it with that run selected.</li>
+      <li>↑/↓ walks runs with the same tab open: compare yesterday's failure with today's in place. <b>Open in tab</b> pins one run when you need two side by side.</li>
+      <li>Replaces: Dashboard, All Executions, Overview, All Messages, Execution Performance. Operations stays for validations, deploys and Stop.</li></ul>`,
+  B: `<b>B · Run page.</b> One tab per execution with everything on one scroll, like a CI run: duration against recent runs, the task timeline, then the messages with the first error pinned. No sub-pages at all.
+      <ul><li>Right-click Daily.dtsx for <b>Last run</b>. Click a task in the timeline to filter the messages to it; click a bar in the run strip, or Alt+←/→, to move to an older or newer run of the same package in place.</li>
+      <li>A package's <b>Last run</b> opens its newest run; Operations and job History open a specific one. Overview details (parameters, environment) fold away at the bottom.</li>
+      <li>Leaves the list of runs to Operations, so there are two surfaces: Operations and the run page.</li></ul>`,
+  C: `<b>C · One document with real history.</b> A single Integration Services document per server that drills in place: SSISDB → package → execution → Overview / Messages / Performance, with a breadcrumb and Back/Forward that work from Alt+←/→ and the mouse's buttons.
+      <ul><li>Every step keeps its filters, selection and scroll position, so Back restores the list exactly as you left it (SSMS's reports re-run and reset).</li>
+      <li>One list (cards plus kind chips) replaces All Executions, All Validations and All Operations. Try it: open a failed run, switch tabs, then use Back.</li>
+      <li>Closest to SSMS's flow, minus the teleporting; most navigation to build (a history stack per document).</li></ul>`
+}
+function render() {
+  document.documentElement.dataset.theme = state.theme
+  document.querySelectorAll('[data-concept]').forEach(b => b.setAttribute('aria-pressed', b.dataset.concept === state.concept))
+  document.querySelectorAll('[data-theme-set]').forEach(b => b.setAttribute('aria-pressed', b.dataset.themeSet === state.theme))
+  document.getElementById('note').innerHTML = notes[state.concept]
+  document.getElementById('pkgmenu').hidden = state.concept === 'C' || !menuOpen
+  document.getElementById('menu-last').style.display = state.concept === 'B' ? '' : 'none'
+  document.getElementById('menu-exec').style.display = state.concept === 'A' ? '' : 'none'
+  document.getElementById('doc').innerHTML = state.concept === 'A' ? conceptA() : state.concept === 'B' ? conceptB() : conceptC()
+  const search = document.getElementById('msgsearch')
+  if (search) search.oninput = () => { state.search = search.value; const pos = search.selectionStart; render(); const s = document.getElementById('msgsearch'); s.focus(); s.setSelectionRange(pos, pos) }
+  const u = new URL(location.href); u.searchParams.set('concept', state.concept); u.searchParams.set('theme', state.theme); window.history.replaceState(null, "", u)
+}
+
+document.addEventListener('contextmenu', ev => { if (ev.target.closest('#n-pkg')) { ev.preventDefault(); menuOpen = true; render() } })
+document.addEventListener('click', ev => {
+  if (menuOpen && !ev.target.closest('#pkgmenu')) { menuOpen = false; document.getElementById('pkgmenu').hidden = true }
+  const t = ev.target.closest('button, tr[data-exec], a[data-go], .mi')
+  if (!t) return
+  if (t.id === 'menu-exec') { menuOpen = false; state.scope = 'package'; state.concept = 'A'; return render() }
+  if (t.id === 'menu-last') { menuOpen = false; state.selected = daily[0].id; return render() }
+  if (t.classList.contains('mi')) { menuOpen = false; return render() }
+  if (t.dataset.concept) { state.concept = t.dataset.concept; state.task = null; state.search = ''; return render() }
+  if (t.dataset.themeSet) { state.theme = t.dataset.themeSet; return render() }
+  if (t.dataset.group) { state.groups.has(t.dataset.group) ? state.groups.delete(t.dataset.group) : state.groups.add(t.dataset.group); if (!state.groups.size) state.groups = new Set(['e', 'w', 'i', 'o']); return render() }
+  if (t.dataset.task !== undefined) { state.task = t.dataset.task && state.task !== t.dataset.task ? t.dataset.task : null; return render() }
+  if (t.dataset.scope) { state.scope = t.dataset.scope; return render() }
+  if (t.dataset.step) { const i = daily.findIndex(x => x.id === state.selected) + Number(t.dataset.step); if (daily[i]) state.selected = daily[i].id; return render() }
+  if (t.hasAttribute('data-jump')) { const grid = document.getElementById('msggrid'); const row = [...(grid?.querySelectorAll('tr.e') ?? [])].filter(r => r.cells[1].textContent === 'Error').at(-1); if (row) { row.scrollIntoView({ block: 'center' }); row.classList.add('sel') } return }
+  if (state.concept === 'C') {
+    if (t.dataset.hist) { trail.at = Math.max(0, Math.min(trail.stack.length - 1, trail.at + Number(t.dataset.hist))); return render() }
+    if (t.dataset.go) { ev.preventDefault(); return go(t.dataset.go === 'list' ? { page: 'list' } : { page: 'pkg' }) }
+    if (t.dataset.goexec) return go({ page: 'exec', exec: Number(t.dataset.goexec), view: 'overview' })
+    if (t.dataset.cview) { trail.stack[trail.at] = { ...trail.stack[trail.at], view: t.dataset.cview }; return go({ ...trail.stack[trail.at] }) }
+    if (t.dataset.view) { return go({ ...trail.stack[trail.at], view: t.dataset.view }) }
+    if (t.dataset.exec) return go({ page: 'exec', exec: Number(t.dataset.exec), view: 'overview' })
+    return
+  }
+  if (t.dataset.view) { state.view = t.dataset.view; return render() }
+  if (t.dataset.exec) { state.selected = Number(t.dataset.exec); return render() }
+})
+document.addEventListener('keydown', ev => {
+  if (ev.altKey && (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight')) {
+    ev.preventDefault()
+    const d = ev.key === 'ArrowLeft' ? -1 : 1
+    if (state.concept === 'C') { trail.at = Math.max(0, Math.min(trail.stack.length - 1, trail.at + d)); render() }
+    if (state.concept === 'B') { const i = daily.findIndex(x => x.id === state.selected) - d; if (daily[i]) { state.selected = daily[i].id; render() } }
+  }
+  if (state.concept === 'A' && (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') && ev.target.tagName !== 'INPUT') {
+    ev.preventDefault()
+    const list = scopedExecs(); const i = list.findIndex(x => x.id === state.selected) + (ev.key === 'ArrowDown' ? 1 : -1)
+    if (list[i]) { state.selected = list[i].id; render() }
+  }
+})
+document.addEventListener('mouseup', ev => { if (state.concept === 'C' && (ev.button === 3 || ev.button === 4)) { ev.preventDefault(); trail.at = Math.max(0, Math.min(trail.stack.length - 1, trail.at + (ev.button === 3 ? -1 : 1))); render() } })
+render()
+</script>
+</body>
+</html>
