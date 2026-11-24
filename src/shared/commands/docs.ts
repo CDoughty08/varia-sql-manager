@@ -22,7 +22,8 @@ const menuNames: Readonly<Record<MenuId, string>> = {
   'tableDesigner.context': 'Table designer context menu', 'documentTab.context': 'Query tab context menu', 'output.context': 'Query Output context menu', 'output.highlight': 'Query Output context menu › Highlight', 'output.filter': 'Query Output context menu › Filter', 'output.transposeMenu': 'Query Output context menu › Transpose', 'dockTab.context': 'Panel tab context menu', 'input.context': 'Text field context menu',
   'ssis.operation.context': 'Integration Services Operations context menu', 'bigquery.jobs.context': 'BigQuery Job History context menu', 'search.hit.context': 'Search Objects result context menu', 'search.copy': 'Search Objects result context menu › Copy',
   'output.tools': 'Results toolbar › More results tools', 'peek.properties.context': 'Peek Properties context menu',
-  'plan.outline.context': 'Execution plan outline context menu', 'plan.properties.context': 'Execution plan Properties context menu'
+  'plan.outline.context': 'Execution plan outline context menu', 'plan.properties.context': 'Execution plan Properties context menu',
+  'agent.jobs.context': 'Job Activity Monitor context menu'
 }
 /** How each context menu opens, and what its items act on. */
 const contextMenuUses: Readonly<Record<ContextMenuId, string>> = {
@@ -39,7 +40,8 @@ const contextMenuUses: Readonly<Record<ContextMenuId, string>> = {
   'peek.properties.context': 'Right-click Peek\x27s Properties pane (in the card or a Peek tab), or press Shift+F10 or the context-menu key in it. Copy puts the properties whose text is selected, or all of them when none is, on the clipboard as Name and Value lines separated by a tab.',
   'plan.outline.context': 'Right-click an operator in the execution plan\x27s outline, which selects it, or press Shift+F10 or the context-menu key in the outline. Copy puts the selected operator on the clipboard as one tab-separated line: its operator, object, estimated subtree cost and rows, after a header line when Include column headers when copying the results is on.',
   'plan.properties.context': 'Right-click the execution plan\x27s Properties pane, or press Shift+F10 or the context-menu key in it. Copy puts the properties whose text is selected, else the one right-clicked, else all of them, on the clipboard as Name and Value lines separated by a tab; Copy Value puts only their values, one a line.',
-  'input.context': 'Right-click a text field, including those in dialogs and the editor\'s find widget, or press Shift+F10 or the context-menu key in it. It is the only menu that opens while a dialog is open; the command palette\'s field has none.'
+  'input.context': 'Right-click a text field, including those in dialogs and the editor\'s find widget, or press Shift+F10 or the context-menu key in it. It is the only menu that opens while a dialog is open; the command palette\'s field has none.',
+  'agent.jobs.context': 'Right-click a job in Job Activity Monitor\'s list (a right-click outside the selection selects that row first), or press Shift+F10 or the context-menu key in it. Items act on the jobs selected there: Open, Create Job Like This and Script Job as CREATE on the one job selected, Start, Stop, Enable and Disable as the monitor\'s bar runs them, View History on the selected jobs, and Refresh.'
 }
 // The theme items need no real theme list: only their fixed labels and commands are documented.
 const themeItems = themeMenuModel({ preference: defaultThemePreference, themes: [] })

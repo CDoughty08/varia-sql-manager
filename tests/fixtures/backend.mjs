@@ -1421,7 +1421,7 @@ function explorerStatus() {
 function explorerSample(live, probe) {
   const status = explorerStatus() ?? {}
   if (probe.probe === 'explorer.agent') return { metrics: [status.jobs ?? 0] }
-  if (probe.probe === 'explorer.agentService') { const [agentXps, serviceState, startupType] = status.agent ?? [1, 4, 2]; return { status: [{ id: 'agentXps', value: agentXps }, { id: 'serviceState', value: serviceState }, { id: 'startupType', value: startupType }] } }
+  if (probe.probe === 'explorer.agentService') { const [agentXps, serviceState, startupType, clustered = 0] = status.agent ?? [1, 4, 2]; return { status: [{ id: 'agentXps', value: agentXps }, { id: 'serviceState', value: serviceState }, { id: 'startupType', value: startupType }, { id: 'clustered', value: clustered }] } }
   const rows = (probe.probe === 'explorer.databases' ? status.databases : probe.probe === 'explorer.progress' ? status.progress : status.groups) ?? []
   const columns = liveProbes[probe.probe].tables[0].columns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true }))
   const result = storeResult({ columns, rows: rows.map(row => row.map(cell => String(cell))) }, 0)
