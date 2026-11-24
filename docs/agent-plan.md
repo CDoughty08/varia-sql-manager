@@ -1369,7 +1369,7 @@ slow it down:
   until AG-9, every Agent surface (Explorer node, commands, menus, documents) was behind a context key `agentEnabled`,
   false unless the `VARIA_AGENT_PREVIEW=1` environment variable was set (smoke and live tests set it); while it was false
   the server listed no SQL Server Agent node and the tree was as it was before Agent. AG-9 deleted the key, the variable
-  and every check of them; Agent is on for every SQL Server connection. AG-0a had no user-visible surface.
+  and every check of them; Agent is on for every SQL Server that runs it. AG-0a had no user-visible surface.
 - After each BigQuery lane merges, open Agent branches merge main. Agent sessions note their shared-file changes in the
   shared notes folder (`agent-shared-infrastructure.md`).
 

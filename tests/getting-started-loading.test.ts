@@ -245,12 +245,12 @@ it('reads the SQL Server Agent schedule sample through the production schedule r
   try {
     expect(sentence()).toBe('Occurs every day at 02:30. Schedule will be used starting on 2026-01-05.')
     expect(runs()).toEqual(['Tue 2026-01-06 02:30', 'Wed 2026-01-07 02:30', 'Thu 2026-01-08 02:30'])
-    await act(async () => button('Weekly on…').click())
+    await act(async () => button('Weekly on').click())
     expect(runs()).toEqual(['Mon 2026-01-12 02:30', 'Mon 2026-01-19 02:30', 'Mon 2026-01-26 02:30'])
     await act(async () => button('Every N minutes').click())
     expect(runs()).toEqual(['Mon 2026-01-05 09:00', 'Mon 2026-01-05 09:15', 'Mon 2026-01-05 09:30'])
     // Only the first-tier presets; the More menu's (when Agent starts, CPU idle, one time) are not offered.
-    expect([...view.host.querySelectorAll('[aria-label="Sample schedule starting point"] button')].map(item => item.textContent)).toEqual(['Every day at…', 'Weekdays at…', 'Weekly on…', 'Every N minutes', 'Monthly on day…'])
+    expect([...view.host.querySelectorAll('[aria-label="Sample schedule starting point"] button')].map(item => item.textContent)).toEqual(['Every day at', 'Weekdays at', 'Weekly on', 'Every N minutes', 'Monthly on day'])
     expect(view.fixture.api.execute).not.toHaveBeenCalled()
     expect(view.fixture.api.executeObjectAction).not.toHaveBeenCalled()
   } finally { view.dispose() }

@@ -151,7 +151,7 @@ export async function restoreSession({ api, documents, files, groups, connection
       for (const [index, document] of restored.documents.entries()) {
         // A kept SQL Server Agent document (AG-6g) reopens through its own service; one that cannot is named.
         if (isKeptAgentKind(document.kind)) {
-          if (!documents.reopenKept) { problems.push(keptAgentText.unreadable(document.name)); continue }
+          if (!documents.reopenKept) { problems.push(keptAgentText.notReopened(document.name)); continue }
           let id: string
           try { id = documents.reopenKept(document.kind, { name: document.name, state: document.text, targetId: document.targetId, database: document.database }).id } catch { problems.push(keptAgentText.unreadable(document.name)); continue }
           if (document.recoveryId) resumeRecovery?.(id, document.recoveryId)

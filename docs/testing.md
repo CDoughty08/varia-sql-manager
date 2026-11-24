@@ -175,7 +175,7 @@ npm run test:smoke:wsl -- --all
   the server's machine); set it only on a server that exists for testing Varia. Only `npm run backend:test:agent-service`
   (exclusive machine lock) and `-- --live-suite AgentService` run that suite; other Agent suites never stop Agent.
   docs/sql-server-agent.md records what is verified.
-- **SQL Server Agent needs no variable.** Agent's surfaces show for every SQL Server connection; the 0.10.0 release
+- **SQL Server Agent needs no variable.** Agent's surfaces show for every SQL Server that runs Agent; the 0.10.0 release
   removed the `VARIA_AGENT_PREVIEW` gate, so smoke, live and vitest runs set nothing to see them
   (`tests/agent-profile.test.ts` keeps the variable from coming back).
 - **Smoke hooks.** Smoke tests set `VARIA_SMOKE_TEST=1` with an isolated user-data directory (`VARIA_TEST_USER_DATA`) and write screenshots to

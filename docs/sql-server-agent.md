@@ -1,8 +1,8 @@
 # SQL Server Agent
 
 SQL Server Agent ships in 0.10.0 ([docs/agent-plan.md](agent-plan.md), UI in
-[docs/agent-ui-rethink.md](agent-ui-rethink.md)), on for every SQL Server connection with no setting or environment variable
-(BigQuery connections have no Agent node). Object Explorer shows the SQL Server Agent node, a job's New Job…, View History,
+[docs/agent-ui-rethink.md](agent-ui-rethink.md)), on for every SQL Server connection to a server that runs Agent, with no setting or environment variable
+(Express, Azure SQL Database and BigQuery connections have no Agent node). Object Explorer shows the SQL Server Agent node, a job's New Job…, View History,
 Start Job at Step…, Stop Job, Enable, Disable, Rename, Delete and Properties, and the Agent node's Start, Stop, Restart and
 Properties; Search Objects finds jobs, alerts and operators, Script As scripts jobs, alerts, operators and proxies, Job
 Activity Monitor follows the jobs live, the Log File Viewer reads and deletes job history and reads Agent's error logs, the

@@ -55,7 +55,7 @@ export function AgentScheduleSample() {
   const schedule = preset.apply(start, agentSampleNow.date)
   return <figure className="help-sample"><figcaption>Sample · how a schedule reads before you save it</figcaption>
     <div className="help-sample-controls" role="group" aria-label="Sample schedule starting point">{agentSamplePresets.map(item =>
-      <button type="button" key={item.id} aria-pressed={item.id === preset.id} onClick={() => setPresetId(item.id)}>{item.label}</button>)}</div>
+      <button type="button" key={item.id} aria-pressed={item.id === preset.id} onClick={() => setPresetId(item.id)}>{item.label.replace(/…$/, '')}</button>)}</div>
     <p role="status"><strong>{scheduleSentence(schedule)}</strong></p>
     <p>Next runs of the fictional job “Nightly sales load”, counted from Monday 2026-01-05 09:00:</p>
     <ol aria-label="Sample next runs">{nextRuns(schedule, agentSampleNow, 3).map(run => <li key={formatRun(run)}>{formatRun(run)}</li>)}</ol>
