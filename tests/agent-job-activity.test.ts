@@ -566,6 +566,25 @@ describe('Job Activity Monitor\'s Start Agent, F5, View menu and row menu (AG-10
     expect(jobActivity.selectedCount(id)).toBe(0)
     expect(commands.isEnabled('agent.openJob', { tabId: id })).toBe(false)
   })
+  it("opens View History from the row menu on the rows a right-click selected, greyed as the bar's button is", async () => {
+    const { jobActivity, commands, logViewer } = monitor()
+    const id = jobActivity.open('c1')
+    const grid = new FakeGrid({ newRows: 0, following: true, lost: false })
+    jobActivity.attachGrid(id, grid as unknown as LiveGrid)
+    expect(commands.unavailableReason('agent.viewHistory', { tabId: id })).toBe('Select one or more jobs to view their history.')
+    grid.select([row(nightly, 'Nightly')])
+    await settled()
+    // A right-click on Backup selects it just before the menu's View History runs: the viewer opens on Backup, not Nightly.
+    const opened = vi.spyOn(logViewer, 'open')
+    grid.select([row(backup, 'Backup')])
+    expect(await commands.execute('agent.viewHistory', { target: { kind: 'jobActivity', tabId: id }, tabId: id }, 'menu')).toBe(true)
+    await vi.waitFor(() => expect(opened).toHaveBeenCalled())
+    expect(opened.mock.calls.at(-1)![1]).toEqual({ jobs: [backup] })
+    // More than the cap: its rows are not all read, so View History is greyed with the bar's reason.
+    grid.select(Array.from({ length: agentLimits.startJobs + 1 }, (_, at) => row(`00000000-0000-0000-0000-${String(at).padStart(12, '0')}`, `Job ${at}`)))
+    expect(commands.isEnabled('agent.viewHistory', { tabId: id })).toBe(false)
+    expect(commands.unavailableReason('agent.viewHistory', { tabId: id })).toBe(bulkUnavailable(agentLimits.startJobs + 1))
+  })
   it("lets the monitor's own service reading win for Start, and reads again at once when a start of Agent ends on its connection", () => {
     const fixture = workbenchFixture({ agentPreview: true, windowsClient: true })
     cleanups.push(() => fixture.dispose())

@@ -218,17 +218,17 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
   }
   /** What the banner and pill show: a lost connection's last service reading is no news, so they wait (pending) for a live one. */
   shownAvailability(id: string): AgentAvailability { return this.live(id) ? this.availability(id) : 'pending' }
-  /**
-   * What Start Agent in the Agent-stopped banner runs (AG-10): explorer.startAgent on the connection's Agent node (the tree's row, or the
-   * object with the same facts), with the monitor's own service reading where the tree has none, and why the verb is greyed (Varia off
-   * Windows, a Linux server, Managed Instance, a cluster, a start or stop already running, a Disabled service); undefined without a server.
-   */
   /** Whether the Agent-stopped banner offers Start (Agent stopped, its service not Disabled): only then does the monitor follow the
    *  Agent node's verb, so the tree's and the status's publishes cost a running monitor nothing. */
   startAgentOffered(id: string): boolean {
     const state = this.get(id)
     return !!state && agentBanner(this.shownAvailability(id), state.service, true, state.linux)?.start === true
   }
+  /**
+   * What Start Agent in the Agent-stopped banner runs (AG-10): explorer.startAgent on the connection's Agent node (the tree's row, or the
+   * object with the same facts), with the monitor's own service reading where the tree has none, and why the verb is greyed (Varia off
+   * Windows, a Linux server, Managed Instance, a cluster, a start or stop already running, a Disabled service); undefined without a server.
+   */
   startAgentTarget(id: string): { readonly args: CommandArgs; readonly reason?: string } | undefined {
     const state = this.get(id)
     if (!state?.connectionId || !this.live(id)) return undefined

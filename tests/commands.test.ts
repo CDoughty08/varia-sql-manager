@@ -435,7 +435,7 @@ describe('context keys', () => {
     expect(evaluateWhen(compileWhen(commandDescriptor('query.changeConnection').precondition!), computeContextKeys({ ...base, documents: { ...documents, busy: false } }))).toBe(true)
   })
   it('derive focus keys from the focused element', () => {
-    const element = (tag: 'input' | 'textarea' | 'button' | 'div', options: { pane?: string; editorOwner?: string; editable?: boolean; grid?: boolean; designer?: boolean; queryBar?: boolean; monitor?: boolean; tab?: boolean; hits?: boolean; messages?: boolean; strip?: boolean; live?: boolean; liveGrid?: boolean; tree?: 'idle' | 'typing'; options?: boolean; picker?: boolean } = {}): FocusElement & { tag: string } => ({
+    const element = (tag: 'input' | 'textarea' | 'button' | 'div', options: { pane?: string; editorOwner?: string; editable?: boolean; grid?: boolean; designer?: boolean; queryBar?: boolean; monitor?: boolean; tab?: boolean; hits?: boolean; messages?: boolean; strip?: boolean; live?: boolean; liveGrid?: boolean; tree?: 'idle' | 'typing'; options?: boolean; picker?: boolean; steps?: boolean; monaco?: boolean } = {}): FocusElement & { tag: string } => ({
       tag, matches: selector => selector.split(', ').includes(tag),
       closest: selector => selector === '[data-pane]' ? options.pane === undefined ? null : { getAttribute: () => options.pane! }
         : selector === '[data-query-editor-id]' ? options.editorOwner === undefined ? null : { getAttribute: () => options.editorOwner! }
@@ -451,6 +451,8 @@ describe('context keys', () => {
           : selector === '[data-explorer-tree]' ? options.tree ? { getAttribute: (name: string) => name === 'data-type-ahead' && options.tree === 'typing' ? '' : name === 'data-explorer-tree' ? '' : null } : null
           : selector === '[data-options-dialog]' ? options.options ? { getAttribute: () => '' } : null
           : selector === '[data-results-picker]' ? options.picker ? { getAttribute: () => '' } : null
+          : selector === '[data-agent-steps]' ? options.steps ? { getAttribute: () => '' } : null
+          : selector === '.monaco-editor' ? options.monaco ? { getAttribute: () => null } : null
           : selector === 'button, a, input, select, textarea' ? selector.split(', ').includes(tag) ? { getAttribute: () => '' } : null
           : options.editable ? { getAttribute: () => 'true' } : null
     })
@@ -461,6 +463,9 @@ describe('context keys', () => {
     expect(focusFacts(element('input', { pane: 'editor', tab: true }), editor(false))).toMatchObject({ documentTabFocus: true, inputFocus: true })
     expect(focusFacts(textArea, editor(true))).toEqual({ editorFocus: true, editorTextFocus: true, inputFocus: false, activePanel: 'editor', outputGridFocus: false, liveGridFocus: false, searchHitsFocus: false, planOutlineFocus: false, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false, documentTabFocus: false, messagesFocus: false, resultsFocus: false, explorerFocus: false, explorerTypeAhead: false, optionsDialogFocus: false, peekFocus: false, peekTabFocus: false, peekEditorFocus: false, agentStepsFocus: false })
     expect(focusFacts(findInput, editor(false))).toEqual({ editorFocus: true, editorTextFocus: false, inputFocus: true, activePanel: 'editor', outputGridFocus: false, liveGridFocus: false, searchHitsFocus: false, planOutlineFocus: false, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false, documentTabFocus: false, messagesFocus: false, resultsFocus: false, explorerFocus: false, explorerTypeAhead: false, optionsDialogFocus: false, peekFocus: false, peekTabFocus: false, peekEditorFocus: false, agentStepsFocus: false })
+    // A job's Steps section moves steps with Alt+Up/Down (AG-10), but not from the step's command editor, whose Monaco keeps them.
+    expect(focusFacts(element('div', { pane: 'editor', steps: true }), undefined)).toMatchObject({ agentStepsFocus: true, inputFocus: false })
+    expect(focusFacts(element('div', { pane: 'editor', steps: true, monaco: true }), undefined)).toMatchObject({ agentStepsFocus: false })
     const externalWidget = element('div', { editorOwner: 'active-editor' }), externalInput = element('input', { editorOwner: 'active-editor' })
     const externalWidgetEditor = { ...editor(false), getId: () => 'active-editor', hasWidgetFocus: () => true }
     expect(focusFacts(externalWidget, externalWidgetEditor)).toMatchObject({ editorFocus: true, editorTextFocus: false, inputFocus: false, activePanel: 'editor' })

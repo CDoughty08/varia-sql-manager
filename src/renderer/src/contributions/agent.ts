@@ -1,4 +1,5 @@
-import { agentBulkCommands, agentBulkFormVerbs, agentBulkVerbs } from '../../../shared/agent/jobs'
+import { agentLimits } from '../../../shared/agent/catalog'
+import { agentBulkCommands, agentBulkFormVerbs, agentBulkVerbs, bulkUnavailable } from '../../../shared/agent/jobs'
 import type { LogViewerOpen } from '../agent/LogViewerService'
 import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
@@ -34,11 +35,20 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
     try { logViewer.open(connectionId, where) } catch (error) { commands.reportError(error instanceof Error ? error.message : 'The Log File Viewer could not open.') }
   }
   /** Which jobs View History checks: a job node's, else Job Activity Monitor's selection (its tab given or active), else all. */
-  const historyWhere = (args?: CommandArgs): LogViewerOpen => {
+  const historyWhere = async (args?: CommandArgs): Promise<LogViewerOpen> => {
     const node = explorerNodeOf(args)
     if (node) return node.kind === 'agentJob' ? { jobName: node.label } : {}
-    const monitor = jobActivity.get(args?.tabId ?? documents.getSnapshot().activeId)
-    return monitor?.selected.length ? { jobs: monitor.selected.map(job => job.id) } : {}
+    const monitor = monitorOf(args)
+    // The rows a click just before selected (a right-click on another job) are read first.
+    const selected = monitor ? await jobActivity.settledSelection(monitor) : []
+    return selected.length ? { jobs: selected.map(job => job.id) } : {}
+  }
+  /** From Job Activity Monitor, View History needs its bar's selection: one job up to the bulk cap (the over-cap rows are not all read). */
+  const historyUnavailable = (args?: CommandArgs): string | undefined => {
+    const id = explorerNodeOf(args) ? undefined : monitorOf(args)
+    if (!id) return undefined
+    const count = jobActivity.selectedCount(id)
+    return count === 0 ? 'Select one or more jobs to view their history.' : count > agentLimits.startJobs ? bulkUnavailable(count) : undefined
   }
   const viewerOf = (args?: CommandArgs): string | undefined => { const id = args?.tabId ?? documents.getSnapshot().activeId; return logViewer.get(id) ? id : undefined }
   /** The error log an Error Logs menu names: a log node's archive number, else Current (the folder). */
@@ -103,9 +113,10 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
       }
     }),
     commands.register('agent.viewHistory', {
-      when: args => { const node = explorerNodeOf(args); return !node || (!node.lost && connections.isLiveSqlServer(node.connectionId)) },
-      run: args => {
-        const where = historyWhere(args)
+      when: args => { const node = explorerNodeOf(args); return (!node || (!node.lost && connections.isLiveSqlServer(node.connectionId))) && !historyUnavailable(args) },
+      unavailable: historyUnavailable,
+      run: async args => {
+        const where = await historyWhere(args)
         const connectionId = target(args)
         if (connectionId) return openHistory(connectionId, where)
         const choices = connections.liveSqlServer()

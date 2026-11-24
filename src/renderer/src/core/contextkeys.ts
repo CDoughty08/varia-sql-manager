@@ -90,7 +90,8 @@ export function focusFacts<E extends FocusElement>(element: E | null, editor: Fo
     // The tree marks itself while type-ahead collects a name (ExplorerTree), so Space types rather than peeks.
     explorerFocus: !!tree, explorerTypeAhead: tree?.getAttribute('data-type-ahead') != null, optionsDialogFocus: !!element.closest('[data-options-dialog]'),
     // A job document's Steps section (its list and the selected step's editor), where Alt+Up and Alt+Down move the selected step.
-    agentStepsFocus: !!element.closest('[data-agent-steps]')
+    // Not in a step's command editor: Monaco's focused element (native-edit-context) is no input, and Alt+Up/Down are its own there.
+    agentStepsFocus: !!element.closest('[data-agent-steps]') && !element.closest('.monaco-editor')
   }
 }
 
