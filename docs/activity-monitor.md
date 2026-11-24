@@ -96,6 +96,8 @@ A chosen value the facets no longer list stays in its funnel, ticked, with a cou
 | Previous Panel | `activity.previousPane` | Shift+F6 | ⇧F6 |
 | Session Details… | `activity.sessionDetails` | — | — |
 | Kill Process… | `activity.killProcess` | — | — |
+| Open Job | `activity.openJob` | — | — |
+| Stop Job | `activity.stopJob` | — | — |
 | Close Activity Monitor | `activity.close` | Shift+Escape | ⇧⎋ |
 
 SSMS opens Activity Monitor with Ctrl+Alt+A. On Windows and Linux, Ctrl+Alt+letter is AltGr, which types characters on
@@ -261,6 +263,8 @@ Probe `activity.sessions`; key `sessionId` (with `loginTime` for rates); at most
 | Database | `database` | text | — | Yes | SSMS | The request's database, else the session's. |
 | Command | `command` | text | — | Yes | SSMS | The request's command. |
 | Application | `application` | text | — | Yes | SSMS | program_name. |
+| Agent Job | `job` | text | — | Yes | New | The SQL Server Agent job step the session runs (program_name "SQLAgent - TSQL JobStep (Job 0x… : Step n)"): the job's name, the step and the step's name, read from msdb (sysjobs_view, and sysjobsteps for sysadmin) and kept a minute; "Job <id>, step n" when msdb names no job to this login. A link that opens the job at its History. |
+| Agent Job Name | `jobName` | text | — |  | New | The Agent job's name alone, when msdb gave it; Open Job and Stop Job act on it. |
 | Wait Type | `waitType` | text | — | Yes | SSMS | The request's wait type; for a parallel request, the longest blocking wait of its tasks. |
 | Wait Time (ms) | `waitTimeMs` | bigint | ms | Yes | SSMS | The request's current wait. |
 | Wait Resource | `waitResource` | text | — | Yes | SSMS | wait_resource, else the blocking task's resource description (512 characters). |
@@ -307,6 +311,8 @@ Probe `activity.sessions`; key `sessionId`; at most 2,000 rows. Order: lead bloc
 | Login | `login` | text | — | Yes | New | login_name. |
 | Host | `hostName` | text | — | Yes | New | host_name. |
 | Application | `application` | text | — | Yes | New | program_name. |
+| Agent Job | `job` | text | — | Yes | New | The SQL Server Agent job step the session runs (program_name "SQLAgent - TSQL JobStep (Job 0x… : Step n)"): the job's name, the step and the step's name, read from msdb (sysjobs_view, and sysjobsteps for sysadmin) and kept a minute; "Job <id>, step n" when msdb names no job to this login. A link that opens the job at its History. |
+| Agent Job Name | `jobName` | text | — |  | New | The Agent job's name alone, when msdb gave it; Open Job and Stop Job act on it. |
 | Database | `database` | text | — | Yes | New | The request's database, else the session's. |
 | Open Transactions | `openTransactions` | int | count | Yes | New | The session's open transactions. |
 | Cycle | `cycle` | bool | — | Yes | New | Part of a cycle (a deadlock SQL Server has not resolved yet); the chain is cut at its lowest session id. |
@@ -348,6 +354,9 @@ Probe `activity.sessions`; key `sessionId`, `requestId` (with `startTime` for ra
 | Login | `login` | text | — |  | New | The session's login_name, which Kill Process names. |
 | Host Name | `hostName` | text | — |  | New | The session's host_name, which Kill Process names. |
 | Open Transactions | `openTransactions` | int | count |  | New | The session's open transactions, which Kill Process warns about. |
+| Application | `application` | text | — |  | New | The session's program_name, from its Sessions row. |
+| Agent Job | `job` | text | — |  | New | The SQL Server Agent job step the session runs (program_name "SQLAgent - TSQL JobStep (Job 0x… : Step n)"): the job's name, the step and the step's name, read from msdb (sysjobs_view, and sysjobsteps for sysadmin) and kept a minute; "Job <id>, step n" when msdb names no job to this login. A link that opens the job at its History. |
+| Agent Job Name | `jobName` | text | — |  | New | The Agent job's name alone, when msdb gave it; Open Job and Stop Job act on it. |
 | Login Time | `loginTime` | datetime | — |  | New | The session's login_time; with the session id it identifies the session for Details and Kill Process. |
 | Host PID | `hostProcessId` | int | id |  | New | The session's host_process_id, which Kill Process checks. |
 | Varia | `varia` | text | — |  | New | What a Varia session is, as in Sessions; Kill Process is not offered for Varia's own pools. |
@@ -463,7 +472,7 @@ Filters run in the backend over the sample; the SQL never changes.
 | Rolling back | `rollingBack` | Sessions rolling back after KILL. |
 
 Toggles: System sessions (`activityMonitor.showSystemSessions`, off by default), Varia's own (`activityMonitor.showVariaSessions`, off by default). The filter box matches
-case-insensitively against Login, Database, Application, Host Name, Command, Wait Type, Status.
+case-insensitively against Login, Database, Application, Agent Job, Host Name, Command, Wait Type, Status.
 Header funnels (or Alt+Down in a cell) list each value with its count, and (Blanks), with the results grid's action list, for Login, Database, Application, Host Name, Wait Type, Command, Status.
 Several values in one column match any of them; filters on several columns must all match.
 Resource Waits has Hide benign waits (on by default), which leaves out benign wait types and the Idle category.
@@ -714,6 +723,35 @@ the session too: without it every other session answers `ended`, and nothing is 
 | `denied` | The login lacks ALTER ANY CONNECTION (sysadmin or processadmin). Nothing was killed. |
 | `failed` | Another error, which the message gives; when the connection broke during KILL, whether the session ended is unknown. |
 
+## SQL Server Agent jobs
+
+SQL Server Agent runs a T-SQL job step under a program name that names the job only by its id: `SQLAgent - TSQL JobStep
+(Job 0x8A1B… : Step 2)`. Sessions and Blocking show an **Agent Job** column beside Application that names it: "Nightly, step 2
+(Load)", the job's name, the step and the step's name. Active Expensive Queries carries the column hidden (with the session's
+Application), so its rows act on jobs too, and the filter box matches the job's words in Sessions and Blocking. Agent's own
+threads (Generic Refresher, Job invocation engine, Email Logger, …) run no job step and show none.
+
+The job id is the job_id's 16 bytes in hex, in the order SQL Server stores a uniqueidentifier; the backend decodes it and reads
+the names after each sessions sample, only for jobs it does not keep: one read of 16 job ids at most from
+`msdb.dbo.sysjobs_view` (which shows each login the jobs its Agent role may see) and one of as many job and step pairs from
+`msdb.dbo.sysjobsteps` (sysadmin only; an Agent role gets the job's name without its steps), on the monitor's pool with its
+prologue, constant text with every id a parameter, checked by the monitor's lint. A name, or msdb naming none, is kept
+60 s for the connection (at most 512 jobs), so a renamed job shows its new name within that and a running
+job costs one small read a minute. Neither read ever fails the sample or shows an error: a login without msdb access or an
+Agent role sees "Job 8A1B2C3D-…, step 2", the decoded id and step without names, and the read is not tried again on that
+connection; a lock wait or another passing failure waits out the keep time.
+
+The Agent Job cell is a link: a click, or Enter on it, opens the job's document (focused if it is open) at its History, which
+shows the run live. Query Output's menu in the three session panes adds **Open Job** (`activity.openJob`) and **Stop Job**
+(`activity.stopJob`), and the palette has both; they act on the row as Details does. Stop Job is the job menu's guarded
+Stop (the `stopJob` object action with the job id the program name carries, so a job since replaced under the name is
+refused); its answer shows above the tiles, as Kill's, and the monitor samples again at once. Both need the job's name, so a
+login msdb names no job to is told why instead. The Details flyout lists the job under Identity and Now, as a link, and Copy
+includes it.
+
+Job links come with the rest of SQL Server Agent support, behind its preview (`VARIA_AGENT_PREVIEW=1`): without it the column
+stays empty, no msdb read runs, and Open Job and Stop Job say why they are unavailable.
+
 ## Differences from SSMS
 
 - A failing query never pauses the monitor; each probe fails alone and says why.
@@ -786,3 +824,6 @@ the session too: without it every other session answers `ended`, and nothing is 
 | `sessionId` | 32,767 | The largest session id |
 | `fileLatencyMs` | 10,000 | The largest latency threshold a files filter may carry (`activityMonitor.fileLatency*`) |
 | `waitAverageMs` | 60,000 | Milliseconds of samples the 1-Minute Average of Resource Waits spans |
+| `agentJobSlots` | 16 | Agent job ids (and job and step pairs) one name read asks for |
+| `agentJobNamesMs` | 60,000 | Milliseconds an Agent job or step name (or msdb naming none) is kept before it is read again |
+| `agentJobCache` | 512 | Agent jobs (and as many steps) a monitor keeps names for |

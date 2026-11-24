@@ -5,6 +5,7 @@ import { activityLimits, detailsSections, killOutcomes, liveColumnId, tableSpecs
 import { loginTimePattern, type ActivityDetailsResult, type ActivityKillResult, type ActivityLock, type ActivitySessionDetails, type ActivitySessionWait, type ActivityText, type ActivityTransaction } from '../../../shared/activity/schema'
 import type { LocalTableData } from '../../../shared/results/local-table'
 import { formatCount, plural } from '../results/status'
+import { agentJobText, parseAgentProgram } from '../../../shared/activity/agent-program'
 
 /** The panes whose rows are sessions. */
 export const sessionTables = ['sessions', 'blocking', 'activeQueries'] as const
@@ -23,9 +24,20 @@ export interface SessionRef {
   readonly openTransactions?: number
   /** Varia's label when the session is this window's own (a query tab or a pool). */
   readonly varia?: string
+  /** The SQL Server Agent job step it runs (AG-16), from its row's Application and Agent Job cells. */
+  readonly job?: SessionJob
 }
 
-const rowColumns = ['sessionId', 'loginTime', 'hostProcessId', 'login', 'hostName', 'openTransactions', 'varia'] as const
+/** A session's Agent job step: the id and step its program name carries, the link's words, and the job's name where msdb gave it
+ *  (Open Job and Stop Job need it). */
+export interface SessionJob {
+  readonly jobId: string
+  readonly step: number
+  readonly text: string
+  readonly name?: string
+}
+
+const rowColumns = ['sessionId', 'loginTime', 'hostProcessId', 'login', 'hostName', 'openTransactions', 'varia', 'application', 'job', 'jobName'] as const
 type RowColumn = (typeof rowColumns)[number]
 /** The row cells a table has of those a session action reads, as the live layer's column ids. */
 export function sessionColumns(table: SessionTable): string[] {
@@ -52,11 +64,27 @@ export function sessionFromRow(table: SessionTable, cells: Readonly<Record<strin
   if (sessionId === undefined || sessionId < 1 || sessionId > activityLimits.sessionId || !loginTime) return undefined
   const text = (id: RowColumn) => { const value = cell(id); return value ? value : undefined }
   const hostProcessId = integer(cell('hostProcessId')), openTransactions = integer(cell('openTransactions'))
+  const job = sessionJob(text('application'), text('job'), text('jobName'))
   return {
     sessionId, loginTime, hostProcessId: hostProcessId !== undefined && hostProcessId >= -2_147_483_648 && hostProcessId <= 2_147_483_647 ? hostProcessId : null,
     ...text('login') ? { login: text('login') } : {}, ...text('hostName') ? { hostName: text('hostName') } : {},
-    ...openTransactions !== undefined ? { openTransactions } : {}, ...text('varia') ? { varia: text('varia') } : {}
+    ...openTransactions !== undefined ? { openTransactions } : {}, ...text('varia') ? { varia: text('varia') } : {}, ...job ? { job } : {}
   }
+}
+
+/** The Agent job step a row names: its Application parsed (the id and step), with the backend's words for the link and the job's
+ *  name; undefined for a session that runs no job step. Words the backend has not sent yet read as the decoded id. */
+export function sessionJob(application: string | undefined, text: string | undefined, name: string | undefined): SessionJob | undefined {
+  const parsed = parseAgentProgram(application)
+  if (parsed?.kind !== 'jobStep') return undefined
+  return { jobId: parsed.jobId, step: parsed.step, text: text ?? agentJobText(parsed), ...name ? { name } : {} }
+}
+
+/** Why Open Job or Stop Job cannot act on a session, or undefined when it can: it runs a job step msdb named to this login. */
+export function jobUnavailable(session: Pick<SessionRef, 'job'> | undefined, verb: 'open' | 'stop'): string | undefined {
+  if (!session?.job) return `Select a session that runs a SQL Server Agent job step to ${verb === 'open' ? 'open its job' : 'stop its job'}.`
+  if (!session.job.name) return `msdb did not name job ${session.job.jobId} to this login (it needs an Agent role on the server), so ${verb === 'open' ? 'Open Job' : 'Stop Job'} cannot find it.`
+  return undefined
 }
 export const sameSession = (a: Pick<SessionRef, 'sessionId' | 'loginTime'> | undefined, b: Pick<SessionRef, 'sessionId' | 'loginTime'> | undefined): boolean =>
   !!a && !!b && a.sessionId === b.sessionId && a.loginTime === b.loginTime
@@ -174,13 +202,24 @@ export function locksTable(locks: readonly ActivityLock[]): LocalTableData {
   }
 }
 
-/** Copy's text: every section the flyout shows, as plain text (headings, "Label: value" lines, texts whole as read). */
-export function detailsText(result: ActivityDetailsResult): string {
+/** The Agent job step a Details answer's session runs (AG-16): the row's job when the answer's Application names the same job and
+ *  step (the row's words carry the names), else what the Application alone says (the decoded id); undefined for no job step. */
+export function detailsJob(result: ActivityDetailsResult, row: SessionJob | undefined): SessionJob | undefined {
+  const parsed = parseAgentProgram(result.session?.application)
+  if (parsed?.kind !== 'jobStep') return undefined
+  return row && row.jobId === parsed.jobId && row.step === parsed.step ? row : { jobId: parsed.jobId, step: parsed.step, text: agentJobText(parsed) }
+}
+
+/** Copy's text: every section the flyout shows, as plain text (headings, "Label: value" lines, texts whole as read); the job
+ *  line only with SQL Server Agent's release gate open (`agent`). */
+export function detailsText(result: ActivityDetailsResult, job?: SessionJob, agent = true): string {
   const lines: string[] = []
   const heading = (title: string) => { if (lines.length) lines.push(''); lines.push(title, '-'.repeat(title.length)) }
   if (result.session) {
     heading(sectionTitle('session'))
     for (const [label, value] of sessionRows(result.session)) lines.push(`${label}: ${value}`)
+    const shown = agent ? detailsJob(result, job) : undefined
+    if (shown) lines.push(`Job: ${shown.text}`)
   }
   for (const section of ['statement', 'batch', 'inputBuffer'] as const) {
     const text = detailsTextOf(result, section)

@@ -29,6 +29,9 @@ export interface FrameState {
   readonly scriptOpen: boolean
   /** The open drawer's share of the document's height, within frameLimits. */
   readonly scriptSize: number
+  /** Bumped when the owner shows a section itself (revealSection: a link that opens a document at a section), so a mounted frame
+   *  scrolls to `section` as a choice in the list would; a frame that mounts later scrolls there anyway (restoredSection). */
+  readonly reveal?: number
 }
 
 export function initialFrameState(sections: readonly Pick<SectionInfo, 'id'>[], options: { readonly scriptOpen?: boolean; readonly collapsed?: readonly string[] } = {}): FrameState {
@@ -49,6 +52,12 @@ export function selectSection(state: FrameState, sections: readonly Pick<Section
  */
 export function restoredSection(state: FrameState, sections: readonly Pick<SectionInfo, 'id'>[]): string | undefined {
   return state.section !== sections[0]?.id && sections.some(section => section.id === state.section) ? state.section : undefined
+}
+
+/** The owner shows a section (a link to a document's History): current and open, and the mounted frame scrolls to it. */
+export function revealSection(state: FrameState, sections: readonly Pick<SectionInfo, 'id'>[], id: string): FrameState {
+  if (!sections.some(section => section.id === id)) return state
+  return { ...selectSection(state, sections, id), reveal: (state.reveal ?? 0) + 1 }
 }
 
 /** Scrolling moves the current section without opening anything. */

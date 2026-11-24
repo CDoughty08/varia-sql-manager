@@ -225,10 +225,10 @@ export interface ResultColumn {
   name: string
   dataType: string
   wire: WireKind
-  /** `xml`, `json`, `plan`, `udt` and `vector` are data. The rest are hidden (isHiddenColumn) and always come last: `tone`, a
+  /** `xml`, `json`, `plan`, `udt`, `vector` and `link` (a live table's link column, whose cells open what they name) are data. The rest are hidden (isHiddenColumn) and always come last: `tone`, a
    *  live table's or a diff's row tone (src/shared/live/catalog.ts), and a diff's suffix, `old` (a previous value), `mark`
    *  (the change marker) and `leftRow`/`rightRow` (each input's 1-based row). */
-  role?: 'xml' | 'json' | 'plan' | 'udt' | 'vector' | 'old' | 'mark' | 'leftRow' | 'rightRow' | 'tone'
+  role?: 'xml' | 'json' | 'plan' | 'udt' | 'vector' | 'old' | 'mark' | 'leftRow' | 'rightRow' | 'tone' | 'link'
   /** A previous-value column's (role `old`) pair index: the data column it belongs to. */
   of?: number
   maxLength?: number

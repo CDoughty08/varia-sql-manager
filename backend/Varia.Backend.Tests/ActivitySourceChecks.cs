@@ -218,10 +218,20 @@ internal static class ActivitySourceChecks
         // A full row: every column has a value, so no column of the live table is left unwritten.
         var everything = WithRequest(Session(60, cpu: 10, reads: 10), cpu: 1, reads: 1, blocker: 61, waitType: "LCK_M_S", waitTime: 900, percent: 5);
         var filled = new ActivitySessionRows(Catalog);
-        filled.Build(SessionResults([everything, Session(61)]), 10_000, Own(["App"]), 99, 0);
-        var row = filled.Build(SessionResults([everything, Session(61)], ticks: 11_000), 11_000, Own(["App"]), 99, 0).Sessions[0];
+        // The Agent Job cells come from the resolver the reader passes (AgentJobNames.Resolve), here one that names every program.
+        Func<string?, (string Text, string? Name)?> named = _ => ("Nightly, step 1 (Load)", "Nightly");
+        filled.Build(SessionResults([everything, Session(61)]), 10_000, Own(["App"]), 99, 0, jobs: named);
+        var row = filled.Build(SessionResults([everything, Session(61)], ticks: 11_000), 11_000, Own(["App"]), 99, 0, jobs: named).Sessions[0];
         var empty = Catalog.Table("sessions").Columns.Where(column => Cell(writer, row, column.Id) is null).Select(column => column.Id).ToList();
         check(empty.Count == 0, "a session with a request, a blocker and a Varia label fills every Processes column: " + string.Join(", ", empty));
+        // AG-16: a job step's session gets the resolver's words and the job's name; any other program, and a step msdb named no job
+        // for, leaves the name empty (the words then carry the decoded id).
+        const string program = "SQLAgent - TSQL JobStep (Job 0x3D2C1B8A5F4E71608293A4B5C6D7E8F9 : Step 2)";
+        var names = new AgentJobNames(Catalog);
+        var jobRows = new ActivitySessionRows(Catalog).Build(SessionResults([Session(80, program: program), Session(81)]), 0, Own(["App"]), 99, 0, jobs: names.Resolve);
+        check(Cell(writer, Row(jobRows, 80), "job") == "Job 8A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9, step 2" && Cell(writer, Row(jobRows, 80), "jobName") is null
+            && Cell(writer, Row(jobRows, 81), "job") is null && Cell(writer, Row(jobRows, 81), "jobName") is null,
+            "a job step's session shows its job and step in the Agent Job column (the decoded id until msdb names it), and other sessions none");
     }
 
     /// <summary>A MARS session's requests: one row each, ranked as the statement ranks them.</summary>

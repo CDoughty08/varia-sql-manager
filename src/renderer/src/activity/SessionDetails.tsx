@@ -11,7 +11,7 @@ import InlineError from '../kit/InlineError'
 import Skeleton from '../kit/Skeleton'
 import { formatCount } from '../results/status'
 import type { DetailsPanel } from './ActivityMonitorService'
-import { detailsState, detailsText, detailsTextOf, locksTable, sectionTitle, sessionRows, textNote, transactionsTable, waitsTable } from './session-actions'
+import { detailsJob, detailsState, detailsText, detailsTextOf, locksTable, sectionTitle, sessionRows, textNote, transactionsTable, waitsTable } from './session-actions'
 
 export default function SessionDetails({ monitorId, details }: { readonly monitorId: string; readonly details: DetailsPanel }) {
   const { activity } = useWorkbench()
@@ -36,7 +36,7 @@ export default function SessionDetails({ monitorId, details }: { readonly monito
     close()
   }
   const shown = result && detailsState(result)
-  const copy = () => { if (result) void window.varia.writeClipboardText(detailsText(result)).then(answer => setCopied(answer.ok), () => setCopied(false)) }
+  const copy = () => { if (result) void window.varia.writeClipboardText(detailsText(result, session.job, activity.agentEnabled)).then(answer => setCopied(answer.ok), () => setCopied(false)) }
   return <aside ref={panel} className="activity-details" role="dialog" aria-modal="false" aria-labelledby={titleId} tabIndex={-1} onKeyDown={keyDown} data-activity-details={session.sessionId}>
     <div className="activity-details-head">
       <h2 id={titleId} className="activity-details-title">Session {session.sessionId}{session.login && <span className="activity-details-login"> · {session.login}</span>}</h2>
@@ -59,7 +59,7 @@ export default function SessionDetails({ monitorId, details }: { readonly monito
 }
 
 function Sections({ monitorId, details, result }: { readonly monitorId: string; readonly details: DetailsPanel; readonly result: ActivityDetailsResult }) {
-  const { activity } = useWorkbench()
+  const { activity, commands } = useWorkbench()
   const problem = (section: DetailsSection) => result.sectionErrors?.find(item => item.section === section)
   const section = (id: DetailsSection, content: ReactNode, empty?: string) => {
     const failed = problem(id)
@@ -69,6 +69,9 @@ function Sections({ monitorId, details, result }: { readonly monitorId: string; 
     </section>
   }
   const session = result.session!
+  // AG-16: the Agent job step it runs, a link to the job's document where msdb named the job.
+  const job = activity.agentEnabled ? detailsJob(result, details.session.job) : undefined
+  const openJob = () => { const why = activity.openJob(monitorId, details.session); if (why) commands.reportWarning(why) }
   // A table object is the grid's table: built once per answer, so a re-render (Copy's notice) keeps each grid's selection.
   const waits = useMemo(() => waitsTable(result.waits ?? []), [result.waits])
   const transactions = useMemo(() => transactionsTable(result.transactions ?? []), [result.transactions])
@@ -76,6 +79,9 @@ function Sections({ monitorId, details, result }: { readonly monitorId: string; 
   return <>
     {section('session', <dl className="activity-details-fields">
       {sessionRows(session).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
+      {job && <div><dt>Job</dt><dd>{job.name
+        ? <button type="button" className="activity-job-link" title={`Open job ${job.name} at its History`} onClick={openJob}>{job.text}</button>
+        : <span title="msdb did not name this job to the login">{job.text}</span>}</dd></div>}
     </dl>)}
     {(['statement', 'batch', 'inputBuffer'] as const).map(id => {
       const text = detailsTextOf(result, id), note = text && textNote(text)

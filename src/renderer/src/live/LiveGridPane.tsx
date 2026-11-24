@@ -63,6 +63,9 @@ export interface LiveGridPaneProps {
   /** The owner's actions on the active row, offered in Query Output's menu and by their commands (an Activity Monitor
    *  pane's Details and Kill Process). Its presence and kind are read when the grid is built. */
   readonly rows?: LiveRowActions
+  /** A click or Enter on a link cell (a column of role `link`, such as the Activity Monitor's Agent Job): the owner opens what
+   *  the active row names. Without it no cell is a link. Its presence is read when the grid is built. */
+  onOpenLink?(): void
 }
 
 const defaultNewRows = (count: number) => `${formatCount(count)} new ${plural(count, 'row')} · Jump to latest`
@@ -76,14 +79,14 @@ const indexesOf = (ids: readonly string[], columns: readonly { readonly id: stri
  * the source's args, and the grid says so when its rows are gone. This adds the "n new rows" button. Until the view's
  * first sample the grid area is empty.
  */
-function LiveGridBody({ live, probe, table = 0, label, toneLabel, state, newRowsLabel = defaultNewRows, onGrid, filters, contextMenu = true, sortable = true, onFind, rows: rowActions }: LiveGridPaneProps) {
+function LiveGridBody({ live, probe, table = 0, label, toneLabel, state, newRowsLabel = defaultNewRows, onGrid, filters, contextMenu = true, sortable = true, onFind, rows: rowActions, onOpenLink }: LiveGridPaneProps) {
   const { commands, settings } = useWorkbench()
   const columns = liveProbes[probe]?.tables?.[table]?.columns ?? []
   const [grid, setGrid] = useState<LiveGrid>()
   const [notice, setNotice] = useState<string>()
   const apiRef = useRef<GridShellApi | undefined>(undefined)
-  const latest = useRef({ toneLabel, onGrid, filters, label, onFind, rowActions })
-  latest.current = { toneLabel, onGrid, filters, label, onFind, rowActions }
+  const latest = useRef({ toneLabel, onGrid, filters, label, onFind, rowActions, onOpenLink })
+  latest.current = { toneLabel, onGrid, filters, label, onFind, rowActions, onOpenLink }
   const rowKind = rowActions?.kind
   const report = useCallback((what: string) => (result: { ok: boolean; error?: string; code?: string } | undefined) =>
     setNotice(result && !result.ok && result.code !== 'CANCELLED' ? `Could not ${what}: ${result.error}` : undefined), [])
@@ -107,6 +110,8 @@ function LiveGridBody({ live, probe, table = 0, label, toneLabel, state, newRows
           else { beginCopy(); void created.copy(headers ?? settings.getSnapshot().values['queryResults.grid.copyColumnHeaders']).then(report('copy the rows'), onUnexpectedError) }
         },
         onEscape: () => false,
+        // A link cell's click selects its row first, so the owner reads the active row.
+        ...latest.current.onOpenLink ? { onOpenValue: () => latest.current.onOpenLink?.() } : {},
         toneLabel: tone => latest.current.toneLabel?.(tone)
       })
     })

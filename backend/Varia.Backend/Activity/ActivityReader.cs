@@ -29,6 +29,11 @@ internal sealed class ActivityReader : ILiveSqlReader
     private readonly ActivitySessionRows sessions;
     private readonly ActivityResourceRows resources;
     private readonly ActivityQueryRows queries;
+    /// <summary>The Agent job and step names the sessions' program names lead to (AG-16), kept for this connection.</summary>
+    private readonly AgentJobNames jobNames;
+    /// <summary>SQL Server Agent's release gate (Agent/AgentGate.cs): shut, the Agent Job column stays empty and no msdb read runs.
+    /// The live checks open it for their run.</summary>
+    internal static bool AgentJobsEnabled { get; set; } = Varia.Backend.Agent.AgentGate.Enabled;
     /// <summary>Statements that failed for good on this connection, by probe, render and statement: reported each sample, not
     /// run again until a new connection's capability probe.</summary>
     private readonly Dictionary<string, LiveProbeError> skipped = new(StringComparer.Ordinal);
@@ -49,6 +54,7 @@ internal sealed class ActivityReader : ILiveSqlReader
         sessions = new(this.catalog);
         resources = new(this.catalog);
         queries = new(this.catalog);
+        jobNames = new(this.catalog);
         if (args is not null) Apply(args);
     }
 
@@ -103,6 +109,7 @@ internal sealed class ActivityReader : ILiveSqlReader
         queries.Reset(texts: true);
         clocks.Clear();
         io.Reset();
+        jobNames.Reset();
         // The next connection may reach another server (a failover), with other views and permissions.
         skipped.Clear();
     }
@@ -158,6 +165,7 @@ internal sealed class ActivityReader : ILiveSqlReader
         if (spec.Id == OverviewProbe) return new(ActivityOverview.Raw([.. spec.Series.Select(series => series.Id)], results, catalog, io), [], errors);
         if (spec.Id == ResourcesProbe) return Resources(spec, sampleTime, results, errors);
         if (spec.Id != SessionsProbe) throw Bug("No reader for this Activity Monitor probe.");
+        if (AgentJobsEnabled && capabilities.ServerState && results.TryGetValue("sessions", out var sessionRows)) await AgentJobsAsync(connection, prologue, sessionRows, testText, token).ConfigureAwait(false);
         return Sessions(spec, sampleTime, results, errors, capabilities);
     }
 
@@ -251,6 +259,51 @@ internal sealed class ActivityReader : ILiveSqlReader
         }
     }
 
+    /// <summary>Reads the names of the Agent jobs and steps the sampled sessions run that are not kept (AG-16): one names read and
+    /// one steps read at most, each of agentJobSlots. Neither ever fails the sample or names an error: a refusal (no msdb access,
+    /// no Agent role, sysjobsteps below sysadmin) stops that read on this connection, any other failure waits out the keep time,
+    /// and the rows show the decoded job id and step. A lost connection or the budget is thrown, as the probe's own statements.</summary>
+    private async Task AgentJobsAsync(SqlConnection connection, string prologue, ActivityResult sessionRows, Func<string, string, string>? testText, CancellationToken token)
+    {
+        var running = sessionRows.Rows.Select(row => AgentPrograms.Parse(sessionRows.Text(row, "program_name"), catalog)).OfType<AgentJobRef>().ToList();
+        if (running.Count == 0) return;
+        var ids = jobNames.WantedJobs(running);
+        if (ids.Count > 0)
+        {
+            var result = await AgentReadAsync(connection, prologue, ActivitySql.AgentJobs, parameter => parameter.Name == "@take" ? ActivitySql.AgentJobSlots
+                : Slot(parameter.Name, "@job") is { } slot && slot < ids.Count ? ids[slot] : DBNull.Value, testText, jobNames.RefuseNames, token).ConfigureAwait(false);
+            if (result is not null) jobNames.AddJobs(ids, result);
+            else jobNames.MissedJobs(ids);
+        }
+        var steps = jobNames.WantedSteps(running);
+        if (steps.Count > 0)
+        {
+            var result = await AgentReadAsync(connection, prologue, ActivitySql.AgentSteps, parameter => parameter.Name == "@take" ? ActivitySql.AgentJobSlots
+                : Slot(parameter.Name, "@job") is { } job && job < steps.Count ? steps[job].JobId
+                : Slot(parameter.Name, "@step") is { } step && step < steps.Count ? steps[step].Step : DBNull.Value, testText, jobNames.RefuseSteps, token).ConfigureAwait(false);
+            if (result is not null) jobNames.AddSteps(steps, result);
+            else jobNames.MissedSteps(steps);
+        }
+
+        static int? Slot(string name, string prefix) =>
+            name.StartsWith(prefix, StringComparison.Ordinal) && int.TryParse(name.AsSpan(prefix.Length), NumberStyles.None, CultureInfo.InvariantCulture, out var slot) ? slot : null;
+    }
+
+    /// <summary>One Agent name read; null when it failed short of the connection (a refusal also calls <paramref name="refuse"/>).</summary>
+    private async Task<ActivityResult?> AgentReadAsync(SqlConnection connection, string prologue, ActivityStatement statement, Func<ActivityParameter, object> values,
+        Func<string, string, string>? testText, Action refuse, CancellationToken token)
+    {
+        try { return await Run(connection, prologue, statement, testText, values, token).ConfigureAwait(false); }
+        catch (SqlException error) when (!token.IsCancellationRequested)
+        {
+            var code = LiveErrors.From(SessionsProbe, error).Code;
+            if (LiveErrors.Breaks(code) || code == "LOGIN_FAILED") throw;
+            // 916: the login has no user in msdb (its guest disabled).
+            if (code is "PERMISSION_DENIED" or "NOT_SUPPORTED" || error.Number == 916) refuse();
+            return null;
+        }
+    }
+
     private LiveReaderSample Sessions(LiveProbeJson spec, long at, Dictionary<string, ActivityResult> results, List<LiveProbeError> errors, ActivityCapabilities capabilities)
     {
         Dictionary<string, ActivityFilter> current;
@@ -265,7 +318,7 @@ internal sealed class ActivityReader : ILiveSqlReader
         }
         var (msTicks, startTicks) = ActivityOverview.Clock(results);
         var varia = new VariaSessions(catalog, Environment.ProcessId, host.Clients, host.OwnSessions(connectionId));
-        var built = sessions.Build(results, at, varia, capabilities.Spid, focusSession, hideMonitor: capabilities.ServerState);
+        var built = sessions.Build(results, at, varia, capabilities.Spid, focusSession, hideMonitor: capabilities.ServerState, jobs: AgentJobsEnabled ? jobNames.Resolve : null);
         ActivityFilter Filter(string table) => current.GetValueOrDefault(table) ?? ActivityFilter.Compile(catalog, new(table));
         var tables = new List<LiveReaderTable>();
         if (results.ContainsKey("sessions"))

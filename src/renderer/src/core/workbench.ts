@@ -549,7 +549,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   })
   const activity = new ActivityMonitorService({
     api, documents, connections, live, targetIdOf, owner: id => documentOwner(id, documents, panes, editorGroups), settings: () => settings.getSnapshot().values,
-    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-activity-monitor="${CSS.escape(id)}"] [data-activity-focus]`)?.focus())
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-activity-monitor="${CSS.escape(id)}"] [data-activity-focus]`)?.focus()),
+    // AG-16: a session's Agent job link opens the job's document at its History (created below; called only later).
+    openJob: (connectionId, name) => { jobDocuments.openJob(connectionId, name, 'history') }, agentEnabled: api.agentPreview
   })
   const operations = new SsisOperationsService({
     api, documents, panes, groups: editorGroups, live, connections, settings, targetIdOf,

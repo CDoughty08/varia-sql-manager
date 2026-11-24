@@ -1,5 +1,6 @@
 using System.Collections.Frozen;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Varia.Backend.Activity;
 
@@ -54,7 +55,8 @@ internal sealed class ActivityCatalog
     private sealed record VariaJson(string Suffix, string Kind, string Label);
     private sealed record WaitJson(string Id, int Value, string Label, List<string> Names, List<string> Patterns);
     private sealed record LatencyJson(int Warning, int Error);
-    private sealed record CatalogJson(int Version, BandsJson Bands, List<string> Benign, List<string> BenignCategories, Dictionary<string, string> BlockerLabels, List<string> DetailsSections,
+    private sealed record AgentProgramJson(string Prefix, string Step);
+    private sealed record CatalogJson(int Version, AgentProgramJson AgentProgram, BandsJson Bands, List<string> Benign, List<string> BenignCategories, Dictionary<string, string> BlockerLabels, List<string> DetailsSections,
         List<string> DetailsTexts, Dictionary<string, EditionJson> Editions, List<ExceptionJson> Exceptions, LatencyJson FileLatency, List<string> FileViews, HideBenignJson HideBenign, List<string> KillOutcomes, Dictionary<string, long> Limits,
         List<string> LiveProbes, LoadGuardJson LoadGuard, Dictionary<string, string> Pending, string PoolSuffix, List<ProbeJson> Probes, string Source, List<string> Statuses, List<TableJson> Tables,
         Dictionary<string, string> Tones, string UnavailableMessage,
@@ -96,6 +98,8 @@ internal sealed class ActivityCatalog
         WaitLabels = json.Waits.ToFrozenDictionary(wait => wait.Id, wait => wait.Label, StringComparer.Ordinal);
         FileViews = json.FileViews;
         FileLatency = (json.FileLatency.Warning, json.FileLatency.Error);
+        AgentProgramPrefix = json.AgentProgram.Prefix;
+        AgentStepPattern = new Regex(json.AgentProgram.Step, RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
         var names = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var wait in json.Waits) foreach (var name in wait.Names) names[name] = wait.Id;
         foreach (var exception in json.Exceptions) names[exception.Name] = exception.Category;
@@ -152,6 +156,10 @@ internal sealed class ActivityCatalog
     public IReadOnlyList<string> DetailsSections { get; }
     public IReadOnlySet<string> DetailsTexts { get; }
     public IReadOnlyList<string> KillOutcomes { get; }
+    /// <summary>SQL Server Agent's program names (AG-16): every Agent session's prefix, and a job step's pattern (groups task, job and
+    /// step), the catalogue's own, which the renderer's parser uses too.</summary>
+    public string AgentProgramPrefix { get; }
+    public Regex AgentStepPattern { get; }
     /// <summary>What the monitor says for a server it does not serve.</summary>
     public string UnavailableMessage { get; }
     public IEnumerable<string> BenignWaits => benign;

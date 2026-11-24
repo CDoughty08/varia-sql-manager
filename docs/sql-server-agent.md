@@ -83,6 +83,9 @@ alerts, operators and who is notified, behind the same gate until 0.11.0.
   result is its own line, a refusal fails only that job, and Stop and Escape (which closes a form) work as for Start; Agent stopped or Agent XPs off is a banner,
   a note below the list says Status is msdb's last reading, and the list refreshes once Agent runs again. Double-click,
   Enter or Open on the selected job opens its job document.
+- **Activity Monitor job links** (docs/activity-monitor.md › SQL Server Agent jobs). A session running a job step shows the
+  job and step in the Activity Monitor's Agent Job column, a link to the job document at History; Open Job and Stop Job are on
+  the session's menu. Both are behind the release gate.
 - **Job document** (`agentJob`, object actions, docs/object-actions.md). One tab per job ("Job Properties - Nightly"), opened
   from a job's node (Enter, double-click or Properties), from Job Activity Monitor, from Ctrl+Q's object search and from the
   palette's SQL Server Agent: Open Job… (the job selected in Job Activity Monitor or Object Explorer, else a pick of the

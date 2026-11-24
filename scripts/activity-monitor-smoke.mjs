@@ -10,7 +10,7 @@
 // probe fills the tiles, and Pause stops it.
 import { electron, expect, within } from './fixtures/smoke.mjs'
 import {
-  activityBanner, backendReady, bannerGlyph, connectDialogWindow, documentActions, documentContent, documentFrame, documentTabs, documentTitle, explorerTree, gridCell, gridCellSelector, gridPart, livePill, outputPane, pane, quickInput, serverRows, staleBadge, submitConnect, tileCaptions, toolbarButton
+  activityBanner, backendReady, bannerGlyph, connectDialogWindow, documentActions, documentContent, documentFrame, documentTab, documentTabs, documentTitle, explorerTree, gridCell, gridCellSelector, gridPart, livePill, outputPane, pane, quickInput, serverRows, staleBadge, submitConnect, tileCaptions, toolbarButton
 } from './fixtures/ui.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -636,6 +636,37 @@ try {
   }).toPass()
   await showVaria.click()
   console.log('Session actions passed: Details opens from Sessions and Active Expensive Queries with its sections and locks; Kill asks, cancels, refuses without permission or for Varia\'s own, and reports a kill.')
+
+  step = 'agent job links'
+  // AG-16: SQL Server Agent runs step 2 of Nightly. Its session's Agent Job cell is a link to the job's document at History;
+  // the row menu's Stop Job sends AG-2's guarded stopJob with the id the program name carries.
+  await writeFile(join(control, 'activity-agent-job'), '')
+  const jobLink = sessionsGrid.getByRole('gridcell', { name: 'Nightly, step 2 (Load)', exact: true })
+  await expect(jobLink).toBeVisible({ timeout: 15_000 })
+  const jobMenu = await sessionMenu(sessionsGrid, 'DB-01')
+  await expect(jobMenu.getByRole('menuitem', { name: /^Open Job/ })).toBeEnabled()
+  await jobMenu.getByRole('menuitem', { name: /^Stop Job/ }).click()
+  await expect(monitor().getByRole('status').filter({ hasText: 'Stop requested for job Nightly.' })).toBeVisible()
+  expect((await calls('actions.execute')).filter(call => call.params.action === 'stopJob').at(-1)?.params)
+    .toMatchObject({ target: { kind: 'agentJob', name: 'Nightly' }, agentIdentity: { jobId: 'A1B2C3D4-0000-4000-8000-000000000001' } })
+  await monitor().getByRole('button', { name: 'Dismiss', exact: true }).click()
+  // Another session's row offers neither.
+  await sessionMenu(sessionsGrid, 'app_orders')
+  await expect(gridMenu.getByRole('menuitem', { name: /^Open Job/ })).toBeDisabled()
+  await page.keyboard.press('Escape')
+  await jobLink.click()
+  await expect(documentTab(page, 'Job Properties - Nightly')).toHaveAttribute('aria-selected', 'true')
+  await expect(documentFrame(page, 'Nightly').getByRole('button', { name: 'History', exact: true })).toHaveAttribute('aria-current', 'location')
+  // Back on the monitor, the link again focuses the one tab rather than opening another.
+  await documentTab(page, /^Activity Monitor/).click()
+  await jobLink.click()
+  await expect(documentTab(page, 'Job Properties - Nightly')).toHaveAttribute('aria-selected', 'true')
+  await expect(documentTab(page, 'Job Properties - Nightly')).toHaveCount(1)
+  await page.getByRole('button', { name: 'Close Job Properties - Nightly', exact: true }).click()
+  await documentTab(page, /^Activity Monitor/).click()
+  await rm(join(control, 'activity-agent-job'))
+  await expect(jobLink).toHaveCount(0, { timeout: 15_000 })
+  console.log('Agent job links passed: a job step\'s session links to its job at History, focused if open, and Stop Job sends the guarded verb with its id.')
 
   step = 'recent queries'
   // Recent Expensive Queries reads the query statistics probe: it resumes only while the pane shows, at its own interval.

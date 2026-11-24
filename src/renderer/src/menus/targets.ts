@@ -128,7 +128,8 @@ export interface LiveOutput {
    *  Details and Kill Process); none for a grid whose rows have no actions. */
   readonly rows?: LiveRowActions
 }
-export type LiveRowAction = 'details' | 'kill'
+/** Details and Kill Process on any session; Open Job and Stop Job (AG-16) on one that runs a SQL Server Agent job step. */
+export type LiveRowAction = 'details' | 'kill' | 'openJob' | 'stopJob'
 /** An owner's actions on a live grid's active row; `can` reads what the owner knows now, so the menu and keys agree. */
 export interface LiveRowActions {
   readonly kind: 'session'

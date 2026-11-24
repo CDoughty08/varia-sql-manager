@@ -939,6 +939,18 @@ export const commandCatalog = {
     precondition: 'activeDocumentIsActivityMonitor', unavailableHint: 'Select a session you may end in Sessions, Blocking or Active Expensive Queries first.',
     menus: [{ menu: 'output.context', group: '0_session', order: 2, mnemonic: 'k', when: "outputView == 'live' && outputLiveRows == 'session'" }]
   },
+  // AG-16: a session that runs a SQL Server Agent job step (its Agent Job link). Open Job opens the job's document at its History,
+  // focused if open; Stop Job is AG-2's guarded stopJob on the job the session's program name names, as the job's menu has it.
+  'activity.openJob': {
+    title: 'Open Job', category: 'Activity Monitor', icon: 'go-to-file', keywords: ['agent', 'job', 'step', 'history', 'sqlagent'],
+    precondition: 'activeDocumentIsActivityMonitor', unavailableHint: 'Select a session that runs a SQL Server Agent job step first.',
+    menus: [{ menu: 'output.context', group: '0_session', order: 3, mnemonic: 'j', when: "outputView == 'live' && outputLiveRows == 'session'" }]
+  },
+  'activity.stopJob': {
+    title: 'Stop Job', category: 'Activity Monitor', icon: 'debug-stop', keywords: ['agent', 'job', 'stop', 'cancel', 'sqlagent'], methods: ['actions.execute'],
+    precondition: 'activeDocumentIsActivityMonitor', unavailableHint: 'Select a session that runs a SQL Server Agent job step first.',
+    menus: [{ menu: 'output.context', group: '0_session', order: 4, mnemonic: 'p', when: "outputView == 'live' && outputLiveRows == 'session'" }]
+  },
   // SSMS's Shift+Esc.
   'activity.close': {
     title: 'Close Activity Monitor', category: 'Activity Monitor', icon: 'close', precondition: 'activeDocumentIsActivityMonitor && !documentBusy', unavailableHint: openMonitor,

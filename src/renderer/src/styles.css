@@ -3815,3 +3815,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
   .agent-several-cell[data-changed] { border-left-color: Highlight; }
   .agent-several-details .link-button, .agent-several-results .link-button, .agent-several-table .link-button { color: LinkText; }
 }
+
+/* AG-16: the Details flyout's Agent job link. */
+.activity-details-fields .activity-job-link { padding: 0; border: 0; background: none; color: var(--varia-resultsGrid-linkForeground); font: inherit; text-align: start; text-decoration: underline; cursor: pointer; }
+@media (forced-colors: active) { .activity-details-fields .activity-job-link { color: LinkText; } }

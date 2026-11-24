@@ -243,6 +243,14 @@ export function DocumentSections({ id, title, sections, frame, onFrame, hint }: 
   const reveal = useRef<string | undefined>(restored)
   const pending = useRef<(() => void) | undefined>(undefined)
   useEffect(() => () => pending.current?.(), [])
+  // The owner showed a section itself (revealSection): it scrolls there once it has rendered open, as a choice in the list does.
+  const revealed = useRef(frame.reveal)
+  if (frame.reveal !== revealed.current) {
+    revealed.current = frame.reveal
+    restoring.current = false
+    chosen.current = frame.section
+    reveal.current = frame.section
+  }
   // After a choice has rendered (a collapsed section opens first), its heading goes to the top of the column.
   useLayoutEffect(() => {
     const target = reveal.current, column = content.current
