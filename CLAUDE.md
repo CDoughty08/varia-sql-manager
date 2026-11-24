@@ -62,7 +62,8 @@ Security boundary:
 - Failures are values: IPC returns `{ ok: false, error }`, and the UI stays responsive.
 
 Results and live data:
-- Query rows stay in backend memory under the result budget, never on disk. DATA pages pass through main undecoded; only
+- Query rows stay in backend memory under the result budget, never on disk; a windowed BigQuery result keeps its rows in
+  BigQuery and reads pages on demand (docs/bigquery.md, Residence). DATA pages pass through main undecoded; only
   the results worker decodes them. Results are released on re-execute, tab close, Close Results and backend loss.
 - The grid renders only through `GridView` pools and text only through `nodeValue` (`tests/grid-lint.test.ts`); no React
   per row or cell. Copy and Save text is formatted only by `ResultTextWriter` and, for local tables, its TypeScript twin
@@ -158,7 +159,8 @@ Samples are fictional and never execute SQL or connect automatically.
 - Goal: SSMS 2022-level polish plus a VS Code-style F1 command palette. Windows, Linux and macOS are all first-class.
   Never freeze or crash; handle error states cleanly. SQL Server 2016-2025; SQL, Integrated (Kerberos off Windows) and
   Microsoft Entra ID authentication.
-- Results stay in memory under a backend budget with explicit truncation; no spill to disk.
+- Results stay in memory under a backend budget with explicit truncation; no spill to disk. BigQuery results too large
+  for memory stay windowed in BigQuery and are never read whole.
 - Menus: custom-rendered themed menus on Windows/Linux; native menu bar and context menus on macOS.
 - Visuals: the modern Calm Pro design language (graphite neutrals, one iris accent, Compact density by default), not
   SSMS's look; SSMS's features, behaviours, names and keys stay the parity target. Icons are codicons plus custom SVGs;
