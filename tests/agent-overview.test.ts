@@ -177,6 +177,15 @@ describe("the Agent overview's checks", () => {
     expect(schedulesCheck(facts({ reads: { ...allRead, schedules: { state: 'role' } } })).severity).toBe('unread')
   })
 
+  it('never passes a check over the jobs when the jobs read failed, and keeps a mail problem a warning while usage is unknown', () => {
+    const noJobs = { ...allRead, jobs: { state: 'AGENT_DISABLED' } }
+    const bad = facts({ reads: noJobs, jobs: [] })
+    expect([ownerCheck(bad), historyCheck(bad), notifyCheck(bad), failedCheck(bad)].map(check => check.severity)).toEqual(['unread', 'unread', 'unread', 'unread'])
+    expect(ownerCheck(bad).detail).toMatch(/^The jobs cannot be read while SQL Server Agent's extended procedures are off/)
+    expect(mailCheck(facts({ reads: noJobs, jobs: [], alerts: [], mailXps: 0 })).severity).toBe('warning')
+    expect(mailCheck(facts({ reads: { ...allRead, alerts: { state: 'platform' } }, alerts: [], jobs: [job('Quiet', { notifyEmail: 0 })], mailXps: 0 })).severity).toBe('info')
+  })
+
   it('says a check over a list Agent cut at its cap checked only part of it, and a pass there is a note', () => {
     const cut = facts({ reads: { ...allRead, jobs: { state: 'ok', truncated: true } } })
     const checks = overviewChecks(cut)

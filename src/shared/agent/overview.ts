@@ -204,6 +204,8 @@ const ownerPlurals: Record<number, string> = { [ownerStates.disabled]: 'disabled
 /** Jobs whose owner cannot log in (the owners read, sysadmin only). */
 export function ownerCheck(facts: OverviewFacts): OverviewCheck {
   if (!readOk(facts, 'owners')) return unread('owners', facts, 'owners', 'the job owners\' logins')
+  // The owner states ride on the jobs read's rows: without that read there is nothing to pass.
+  if (!readOk(facts, 'jobs')) return unread('owners', facts, 'jobs', 'the jobs')
   const bad = facts.jobs.filter(job => job.ownerState !== undefined && job.ownerState !== ownerStates.ok && ownerWords[job.ownerState])
   if (!bad.length) return { id: 'owners', severity: 'ok', title: 'Every job\'s owner can log in', detail: 'No job is owned by a disabled, missing or denied login.', objects: [] }
   const states = new Set(bad.map(job => job.ownerState))
@@ -255,6 +257,7 @@ export function historyShortfalls(facts: OverviewFacts): HistoryShortfall[] {
 }
 export function historyCheck(facts: OverviewFacts): OverviewCheck {
   if (!readOk(facts, 'history')) return unread('history', facts, 'history', 'the job history counts')
+  if (!readOk(facts, 'jobs')) return unread('history', facts, 'jobs', 'the jobs')
   if (facts.historyMaxRows === undefined || facts.historyMaxRowsPerJob === undefined) return unread('history', facts, 'properties', 'Agent\'s history settings')
   if (facts.historyMaxRows < 0) return { id: 'history', severity: 'ok', title: 'History is not limited by size', detail: 'SQL Server Agent keeps every history row until it is deleted.', objects: [] }
   const short = historyShortfalls(facts)
@@ -305,7 +308,9 @@ export function mailCheck(facts: OverviewFacts): OverviewCheck {
   }, platform) ?? (facts.agentProfileFound === 0 ? `SQL Server Agent's mail profile ${facts.agentProfile} is not a Database Mail profile any more.` : undefined)
   if (!problem && agentUnread) return { id: 'mail', severity: 'ok', title: 'Database Mail is set up', detail: `Database Mail is on with ${count(facts.mailProfiles ?? 0, 'profile', 'profiles')}. Varia could not read which profile SQL Server Agent uses: Agent Properties › Alert System in SSMS shows it.`, objects: [] }
   if (!problem) return { id: 'mail', severity: 'ok', title: 'Agent mail is set up', detail: facts.agentProfile ? `Database Mail profile ${facts.agentProfile}.` : 'Database Mail is on.', objects: [] }
-  const used = facts.jobs.some(job => job.enabled && job.notifyEmail > 0) || facts.alerts.some(alert => alert.notifies)
+  // Unread jobs or alerts may notify by e-mail: a problem then stays a warning (alerts a platform lacks notify no one).
+  const usageUnknown = !readOk(facts, 'jobs') || (!readOk(facts, 'alerts') && facts.reads.alerts?.state !== 'platform')
+  const used = usageUnknown || facts.jobs.some(job => job.enabled && job.notifyEmail > 0) || facts.alerts.some(alert => alert.notifies)
   return {
     id: 'mail', severity: used ? 'warning' : 'info', title: 'Agent mail is not set up',
     detail: `${problem} Varia does not set up Database Mail yet: use Database Mail Configuration, then Agent Properties › Alert System, in SSMS.`, objects: []
