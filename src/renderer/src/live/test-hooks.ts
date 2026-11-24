@@ -10,6 +10,7 @@ import { cssVariable, type ColorKey } from '../../../shared/theme/registry'
 import type { DocumentService } from '../services/documents'
 import type { PaneService } from '../services/panes'
 import type { SsisTreeProbe } from '../ssis/SsisTreeProbe'
+import type { AgentTreeLive } from '../agent/AgentTreeLive'
 import { chartColor, type ChartLabels, type ChartStyle, type ChartView } from './ChartView'
 import type { LiveChartProps } from './LiveChart'
 import type { LiveGridSnapshot, LiveGridState } from './LiveGrid'
@@ -90,7 +91,7 @@ function backgroundOf(element: Element): string {
   return ''
 }
 
-export function liveTestHooks(live: LiveService, documents: DocumentService, panes: PaneService, mount?: (handle: LiveHandle, probe: LiveProbeId, table: number, state?: LiveGridState) => TestGrid, renderChart?: RenderChart, ssisTree?: SsisTreeProbe) {
+export function liveTestHooks(live: LiveService, documents: DocumentService, panes: PaneService, mount?: (handle: LiveHandle, probe: LiveProbeId, table: number, state?: LiveGridState) => TestGrid, renderChart?: RenderChart, ssisTree?: SsisTreeProbe, agentTree?: AgentTreeLive) {
   const handles = new Map<string, LiveHandle>()
   let mounted: TestGrid | undefined
   /** Grid states an owner keeps across remounts (mountGrid's keepState), by view, probe and table. */
@@ -120,6 +121,8 @@ export function liveTestHooks(live: LiveService, documents: DocumentService, pan
     snapshot: (id?: string) => id === undefined ? live.getSnapshot() : (handle(id) ?? live.get(id))?.getSnapshot(),
     /** The SSIS tree's views: one per connection whose SSISDB node is open. */
     ssisTree: () => (ssisTree?.connections ?? []).map(connectionId => ({ connectionId, id: ssisTree?.handle(connectionId)?.id })),
+    /** The Agent tree's job chips (AG-12): each connection's job ids and their chips' words. */
+    agentJobs: () => Object.fromEntries([...agentTree?.getSnapshot().jobs ?? []].map(([connectionId, jobs]) => [connectionId, Object.fromEntries([...jobs].map(([id, status]) => [id, status.words]))])),
     frames: (id: string) => live.frames(id),
     setPageHidden: (hidden?: boolean) => live.setPageHidden(hidden),
     subscribeSynthetic: (o: SyntheticOptions = {}): string => {

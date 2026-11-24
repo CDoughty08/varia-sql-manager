@@ -10,6 +10,7 @@
 // Both pause with Object Explorer and the window (LiveService does that for their owner), both stop when the tree no longer
 // shows what they feed, and a view that ended opens again after a growing back-off, unless it ended for good: then a Refresh
 // of the server or of the Agent node tries again.
+import { agentLimits } from '../../../shared/agent/catalog'
 import { agentAvailability, agentJobsProbe, agentJobsSource, agentServiceProbe, type AgentServiceSample } from '../../../shared/agent/jobs'
 import { agentTreeChange, agentTreeFinalCodes, agentTreeFolders, agentTreeProbe, agentTreeRetryMs, agentTreeSource } from '../../../shared/agent/tree'
 import type { FolderId } from '../../../shared/explorer/catalog'
@@ -282,7 +283,7 @@ export class AgentTreeLive extends SnapshotStore<AgentTreeSnapshot> implements D
       if (this.busy(target)) {
         const waiting = this.settling.get(target.id)
         this.settling.set(target.id, waiting?.deep ? waiting : options)
-      } else if (target.children !== undefined) this.o.explorer.reconcile(target.id, options)
+      } else if (target.children !== undefined || failedAgent(target)) this.o.explorer.reconcile(target.id, options)
     }
     for (const agent of this.agents(connectionId)) {
       if (node) reconcile(agent, background)
@@ -321,7 +322,7 @@ export class AgentTreeLive extends SnapshotStore<AgentTreeSnapshot> implements D
       const node = this.o.explorer.node(id)
       if (node && this.busy(node)) continue
       this.settling.delete(id)
-      if (node?.load === 'loaded') this.o.explorer.reconcile(id, options)
+      if (node && (node.load === 'loaded' || failedAgent(node))) this.o.explorer.reconcile(id, options)
     }
   }
 
@@ -357,7 +358,8 @@ export class AgentTreeLive extends SnapshotStore<AgentTreeSnapshot> implements D
     if (!table) return
     const seq = ++read.seq
     const current = () => this.reads.get(connectionId) === read && read.seq === seq && read.subscriptionId === subscriptionId
-    readRows(table).then(({ rows }) => {
+    // Every job the list keeps, not only the explorer status tables' first 1,000.
+    readRows(table, agentLimits.listRows).then(({ rows }) => {
       if (!current() || this.disposed) return
       read.rows = new Map(rows.filter(row => row[jobColumns.jobId]).map(row => [row[jobColumns.jobId]!.toLowerCase(), {
         enabled: row[jobColumns.enabled], status: row[jobColumns.status], step: row[jobColumns.step], lastOutcome: row[jobColumns.lastOutcome]
@@ -404,6 +406,9 @@ export class AgentTreeLive extends SnapshotStore<AgentTreeSnapshot> implements D
     })
   }
 }
+
+/** An expanded Agent node whose listing failed with no rows to keep (first listed with Agent XPs off): a state change lists it again. */
+const failedAgent = (node: TreeNode): boolean => node.kind === 'agent' && node.load === 'error' && node.expanded
 
 const jobStatus = (chips: readonly StatusChip[], enabled: boolean | undefined): AgentJobRowStatus =>
   ({ chips, live: true, words: chips.map(chip => chip.words).join(', '), ...enabled !== undefined ? { enabled } : {} })

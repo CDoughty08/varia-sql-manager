@@ -1674,7 +1674,7 @@ function sendLive(live, value) {
   live.available -= body.length
   process.stdout.write(encodeFrame(FrameKind.EVENT, live.id, 0, body))
 }
-const periodOf = (live, probe) => probe.probe === 'ssis.catalogProbe' ? 200 : live.args.tickMs ?? probe.intervalMs
+const periodOf = (live, probe) => probe.probe === 'ssis.catalogProbe' || probe.probe === 'agent.treeProbe' ? 200 : live.args.tickMs ?? probe.intervalMs
 function wakeLive(live) {
   clearTimeout(live.timer)
   if (!lives.has(live.id)) return

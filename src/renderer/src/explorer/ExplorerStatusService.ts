@@ -63,6 +63,8 @@ const probesFor = (agent: boolean) => [...new Set([...statusChipKinds.database, 
 type TableProbe = 'explorer.databases' | 'explorer.progress' | 'explorer.availability'
 /** At most this many rows of a status table are read: the catalogue caps them at 1,000, a window at 4,096. */
 const maxRows = 1000
+/** The most rows one window read returns. */
+const windowRows = 4096
 const noChips: readonly StatusChip[] = []
 /** A database the probe does not list: online, writable and open to everyone. */
 export const onlineStatus: RowStatus = { chips: noChips, live: true, words: '' }
@@ -88,18 +90,20 @@ export function statusKey(connection: Pick<LiveConnection, 'id' | 'generation' |
 }
 
 /** Reads a status table's rows as cell texts (null for NULL), and whether they are all of them. */
-export async function readRows(table: LiveTable): Promise<{ rows: (string | null)[][]; complete: boolean }> {
-  const { descriptor } = table, columns = descriptor.columns.length, count = Math.min(maxRows, descriptor.rowsAvailable)
-  const complete = !descriptor.truncated && descriptor.rowsAvailable <= maxRows && (descriptor.rowsRead ?? 0) <= descriptor.rowsAvailable
-  if (count === 0) return { rows: [], complete }
-  const window = await table.handle.getWindow(0, count, { colStart: 0, colEnd: columns })
-  return {
-    rows: Array.from({ length: window.count }, (_, row) => Array.from({ length: columns }, (_, column) => {
+export async function readRows(table: LiveTable, max = maxRows): Promise<{ rows: (string | null)[][]; complete: boolean }> {
+  const { descriptor } = table, columns = descriptor.columns.length, count = Math.min(max, descriptor.rowsAvailable)
+  const complete = !descriptor.truncated && descriptor.rowsAvailable <= max && (descriptor.rowsRead ?? 0) <= descriptor.rowsAvailable
+  const rows: (string | null)[][] = []
+  // A window holds at most windowRows rows, so a longer table (Agent's job list) is read a window at a time.
+  while (rows.length < count) {
+    const window = await table.handle.getWindow(rows.length, Math.min(windowRows, count - rows.length), { colStart: 0, colEnd: columns })
+    for (let row = 0; row < window.count; row++) rows.push(Array.from({ length: columns }, (_, column) => {
       const at = row * columns + column
       return window.flags[at] & 1 ? null : window.text[at]
-    })),
-    complete: complete && window.count === descriptor.rowsAvailable
+    }))
+    if (window.count === 0) break
   }
+  return { rows, complete: complete && rows.length === descriptor.rowsAvailable }
 }
 
 /** One server's view and what it last read. */

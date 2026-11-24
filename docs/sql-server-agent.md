@@ -49,14 +49,15 @@ alerts, operators and who is notified, behind the same gate until 0.11.0.
   in one background view per connection: **Running · step n/m** (Executing, Waiting for worker thread, Performing
   completion actions), **Between retries** or **Suspended**, otherwise **Failed** when the last run failed; a job the list
   reads as disabled is dimmed with ", disabled". The chip's words join the row's accessible name and tooltip. Collapsing or
-  hiding the folder ends the view; with Agent stopped the chips go and the row keeps its listed state. While the Agent node
+  hiding the folder ends the view; with Agent stopped or Agent XPs off only **Failed** stays, as Running and the retry
+  states would be out of date. While the Agent node
   is expanded and shown, the `agent.tree` source reads Agent XPs and the service state (explorer.agentService's text) and,
   for each of `sysjobs_view`, `sysalerts`, `sysoperators`, `sysproxies` and `sysproxysubsystem`, a row count and a checksum
   of the columns the tree shows, each table only where `HAS_PERMS_BY_NAME` lets the login read it. When Agent XPs or the
   service state changes, the Agent node is listed again; when a table's fingerprint moves (a job, alert, operator or proxy
   created, renamed, enabled, disabled or deleted elsewhere), only its folders are, keeping expansion and selection, so
-  Refresh is not needed. A failure backs off from 2 s to a minute; a permission or unsupported-server failure stops the view
-  until Refresh. Both follow `liveData.explorerStatus` and pause with Object Explorer.
+  Refresh is not needed. A failing sample is retried as every live probe's is (docs/live.md); a view that ends opens again after a back-off
+  from 2 s to a minute, unless it ended on a permission, sign-in or unsupported-server failure, which waits for Refresh. Both follow `liveData.explorerStatus` and pause with Object Explorer.
 - **Service control** (`AgentServiceControl`). The Agent node's Start, Stop and Restart ask before they run ("Are you sure
   you want to stop the SQLAgent$SALES service on DB01?", with the state the Service Control Manager reports) and then show
   their steps in place: Restart stops the service, waits for Stopped, starts it and waits for Running. They go through

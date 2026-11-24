@@ -134,7 +134,8 @@ class FakeView {
     return {
       probe: 'agent.jobs.list', index: 0, mode: 'snapshot', descriptor,
       handle: { getWindow: async (first: number, count: number) => {
-        const shown = rows.slice(first, first + count)
+        // As the results worker's windows, at most 4,096 rows each.
+        const shown = rows.slice(first, first + Math.min(count, 4096))
         return { first, count: shown.length, colStart: 0, colEnd: columns, text: shown.flatMap(cells => cells.map(cell => cell ?? '')), flags: Uint8Array.from(shown.flatMap(cells => cells.map(cell => cell === null ? 1 : 0))) }
       } }
     } as unknown as LiveTable
@@ -336,6 +337,26 @@ describe('AgentTreeLive: agent.tree reloads only what changed', () => {
     await settle()
     expect(f.loads(from)).toEqual(['agent', 'agent', 'agent'])
   })
+  it('lists the Agent node when Agent XPs comes on after it was first listed with Agent XPs off (no rows to keep)', async () => {
+    const f = fixture()
+    f.msdb.xps = false
+    f.connect()
+    await settle()
+    await f.open('SQL Server Agent')
+    const agent = () => f.explorer.node(f.find('SQL Server Agent'))!
+    expect(agent()).toMatchObject({ load: 'error', error: { code: 'AGENT_DISABLED' }, children: undefined, expanded: true })
+    const [view] = f.viewsOf('agent.tree')
+    expect(view).toBeDefined()
+    view.tree(fingerprints({ agentXps: 0 }))
+    await settle()
+    const from = f.sent.length
+    f.msdb.xps = true
+    view.tree(fingerprints())
+    await settle()
+    expect(f.loads(from)).toEqual(['agent'])
+    expect(agent()).toMatchObject({ load: 'loaded', error: undefined })
+    expect(f.rows().map(node => node.label)).toContain('Jobs')
+  })
   it('reloads everything once when the node was listed before its view opened, and compares with the last fingerprints when it opens again', async () => {
     const f = fixture()
     f.connect()
@@ -391,6 +412,17 @@ describe('AgentTreeLive: job rows\' chips from agent.jobs', () => {
     f.explorer.collapse(f.find('Jobs'))
     await settle()
     expect(f.tree.job(cid(1), jobA)).toBeUndefined()
+  })
+  it('reads every job the list keeps, past the 1,000 rows of the explorer status tables and the 4,096 of one window', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    await f.open('SQL Server Agent', 'Jobs')
+    const [view] = f.viewsOf('agent.jobs')
+    const filler = Array.from({ length: 4_200 }, (_, n) => job(`00000000-0000-4000-8000-${String(n).padStart(12, '0')}`, {}))
+    view.jobs([...filler, job(jobB, { lastOutcome: 'Failed' })])
+    await settle()
+    expect(rowStatus(undefined, f.explorer.node(f.find('Nightly'))!, f.tree)).toMatchObject({ words: 'Last run failed' })
   })
   it('drops the chips that say what Agent is doing while Agent is stopped or its XPs off, and reads again once Agent can run jobs', async () => {
     const f = fixture()

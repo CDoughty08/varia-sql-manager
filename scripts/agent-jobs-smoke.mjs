@@ -1,6 +1,7 @@
 // SQL Server Agent's Job Activity Monitor against the fake backend's jobs (tests/fixtures/backend.mjs, VARIA_TEST_BACKEND=workbench;
 // the smoke runs open the release gate): the Agent node's menu opens one live document per connection listing the jobs with
-// tiles and tones, a view chip and Clear filters narrow and restore the list through live.update, two selected jobs get Start
+// tiles and tones, the expanded Jobs folder's rows show their state chips (AG-12), list a job created elsewhere without Refresh
+// and end their view when collapsed, a view chip and Clear filters narrow and restore the list through live.update, two selected jobs get Start
 // as one request each with a result line per job, the status bar follows the newest started job to its outcome, the Last run
 // chevron shows the selected job's last run in place, Change owner and Attach schedule (AG-3b) send one request per job from their
 // forms below the bulk bar (Escape closes one), View history opens the Log File Viewer (AG-5a) with the selected job
@@ -72,6 +73,27 @@ try {
   await expect(tile('Disabled')).toHaveAttribute('aria-label', /^Disabled: 1/)
   await page.screenshot({ path: 'artifacts/agent-jobs-dark.png' })
   console.log('Open passed: the Agent node\'s menu opens Job Activity Monitor with the jobs, their tones and the counts.')
+
+  step = 'tree'
+  // AG-12: the expanded Agent node watches agent.tree; the expanded Jobs folder opens its own agent.jobs view (beside the
+  // document's) whose rows give each job's chip, and collapsing the folder ends that view.
+  await expandExplorerPath(page, 'server-a', 'SQL Server Agent', 'Jobs')
+  await expect.poll(async () => (await page.evaluate(() => window.__variaLive.snapshot().handles.filter(handle => handle.source === 'agent.tree'))).length).toBe(1)
+  await expect.poll(async () => (await views()).length).toBe(2)
+  const jobRow = async name => revealExplorerRow(page, 'server-a', 'SQL Server Agent', 'Jobs', name)
+  await expect(await jobRow('Nightly')).toHaveAttribute('aria-label', /Last run failed/)
+  await expect(await jobRow('Purge')).toHaveAttribute('aria-label', /, disabled/)
+  await expect(await jobRow('Backup')).not.toHaveAttribute('aria-label', /Last run failed|Running|disabled/)
+  // A job created elsewhere moves the jobs fingerprint, and the folder lists it without Refresh.
+  await writeFile(resolve(control, 'agent-extra-job'), '')
+  // The folder lists it after the probe's next sample, so the search repeats until the row is there.
+  await expect(async () => { await expect(await jobRow('Archive')).toBeVisible() }).toPass({ timeout: 30000, intervals: [250, 500, 1000] })
+  const jobsFolder = await revealExplorerRow(page, 'server-a', 'SQL Server Agent', 'Jobs')
+  await jobsFolder.click()
+  await page.keyboard.press('ArrowLeft')
+  await expect(jobsFolder).toHaveAttribute('aria-expanded', 'false')
+  await expect.poll(async () => (await views()).length).toBe(1)
+  console.log('Tree passed: the Jobs folder shows each job\'s state chip, lists a job created elsewhere without Refresh, and ends its view when collapsed.')
 
   step = 'filters'
   // A view chip asks the backend for that view; Clear filters shows every job again.
@@ -260,26 +282,6 @@ try {
   await expect(documentTab(page, tabName)).toHaveAttribute('aria-selected', 'true')
   await expect.poll(async () => (await rows()).length).toBe(3)
   console.log('Close passed: closing ends the view, and the Job Activity Monitor node opens it again.')
-
-  step = 'tree'
-  // AG-12: the expanded Agent node watches agent.tree; the expanded Jobs folder opens its own agent.jobs view (beside the
-  // document's) whose rows give each job's chip, and collapsing the folder ends that view.
-  await expect.poll(async () => (await page.evaluate(() => window.__variaLive.snapshot().handles.filter(handle => handle.source === 'agent.tree'))).length).toBe(1)
-  await expandExplorerPath(page, 'server-a', 'SQL Server Agent', 'Jobs')
-  await expect.poll(async () => (await views()).length).toBe(2)
-  const jobRow = async name => revealExplorerRow(page, 'server-a', 'SQL Server Agent', 'Jobs', name)
-  await expect(await jobRow('Nightly')).toHaveAttribute('aria-label', /Last run failed/)
-  await expect(await jobRow('Purge')).toHaveAttribute('aria-label', /, disabled/)
-  await expect(await jobRow('Backup')).not.toHaveAttribute('aria-label', /Last run failed|Running|disabled/)
-  // A job created elsewhere moves the jobs fingerprint, and the folder lists it without Refresh.
-  await writeFile(resolve(control, 'agent-extra-job'), '')
-  await expect(await jobRow('Archive')).toBeVisible({ timeout: 30000 })
-  const jobsFolder = await revealExplorerRow(page, 'server-a', 'SQL Server Agent', 'Jobs')
-  await jobsFolder.click()
-  await page.keyboard.press('ArrowLeft')
-  await expect(jobsFolder).toHaveAttribute('aria-expanded', 'false')
-  await expect.poll(async () => (await views()).length).toBe(1)
-  console.log('Tree passed: the Jobs folder shows each job\'s state chip, lists a job created elsewhere without Refresh, and ends its view when collapsed.')
 
   if (failures.length) throw new Error('Page errors: ' + failures.join(' | '))
   console.log('Job Activity Monitor suite passed.')
