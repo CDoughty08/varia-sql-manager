@@ -31,6 +31,7 @@ import { deliverLaunchFiles as deliverWaiting, droppedPathsSchema, fileArguments
 import { recentFilesMenuModel } from '../shared/files/recent'
 import { legacyCodePage } from './text-encoding'
 import { LayoutStore } from './layout-store'
+import { InspectorVitalsStore } from './inspector-vitals-store'
 import { ConnectionStore } from './connection-store'
 import { SavedPasswordStore } from './saved-passwords'
 import { ConnectionAuthenticationGuard } from './connection-authentication'
@@ -1043,6 +1044,7 @@ app.whenReady().then(async () => {
   if (testSeams) testHooks = installTestHooks(backend, results)
   backend.start()
   layouts = new LayoutStore(join(app.getPath('userData'), 'workspace-layouts.json'))
+  const inspectorVitals = new InspectorVitalsStore(join(app.getPath('userData'), 'inspector-vitals.json'))
   const connectionStore = new ConnectionStore(join(app.getPath('userData'), profileFiles.connections.current))
   bigQueryStore = new BigQueryConnectionStore(join(app.getPath('userData'), profileFiles.bigQueryConnections.current), bigQueryKeyFiles)
   const history = connectionHistory(connectionStore, bigQueryStore)
@@ -1230,6 +1232,8 @@ app.whenReady().then(async () => {
   handle('varia:shortcuts-export', shortcutIpc.exportFile)
   handle('varia:layouts-load', () => layouts.load())
   handle('varia:layouts-save', value => layouts.save(value))
+  handle('varia:inspector-vitals-load', () => inspectorVitals.load())
+  handle('varia:inspector-vitals-save', value => inspectorVitals.save(value))
   handle('varia:layout-import', async () => {
     const selection = await pageDialog(window => dialog.showOpenDialog(window, { title: 'Load workspace layout', filters: [{ name: 'Varia layout', extensions: ['json'] }], properties: ['openFile'] }), { canceled: true, filePaths: [] })
     return selection.canceled || !selection.filePaths[0] ? null : layouts.import(selection.filePaths[0])

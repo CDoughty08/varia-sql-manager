@@ -1,4 +1,5 @@
 import type { LayoutLoad, LayoutState, WorkspaceLayout } from './layouts'
+import type { InspectorVitalsLoad, InspectorVitalsPrefs } from './inspector-vitals'
 import type { EstimatedPlanRequest, EstimatedPlanResult } from './estimated-plans'
 import type { ConnectContext, ConnectionEnvironmentInput, ConnectionLibraryView, ConnectionProfileInput, ConnectionSaveView, SecretStorageState } from './connections'
 import type { ConnectionAuthentication, ConnectionFailureReason } from './connection-targets'
@@ -1173,6 +1174,8 @@ export interface VariaApi {
   closeWindowCancelled(): void
   loadLayouts(): Promise<ApiResult<LayoutLoad>>
   saveLayouts(state: LayoutState): Promise<ApiResult<void>>
+  loadInspectorVitals(): Promise<ApiResult<InspectorVitalsLoad>>
+  saveInspectorVitals(prefs: InspectorVitalsPrefs): Promise<ApiResult<InspectorVitalsPrefs>>
   importLayout(): Promise<ApiResult<WorkspaceLayout | null>>
   exportLayout(layout: WorkspaceLayout): Promise<ApiResult<boolean>>
   onCommand(callback: (command: CommandId) => void): () => void

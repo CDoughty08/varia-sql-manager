@@ -64,6 +64,7 @@ export const contextKeys = {
   peekFocus: { type: 'boolean', scope: 'focus', description: "Focus is in Object Explorer's Peek card, which floats outside every pane (activePanel is then '')." },
   peekTabFocus: { type: 'boolean', scope: 'focus', description: "Focus is in the active Peek tab; activePanel is then 'editor'." },
   peekEditorFocus: { type: 'boolean', scope: 'focus', description: "Focus is in Peek's read-only definition editor (a card's or a Peek tab's), its find widget included. It is not the query editor: editorFocus and editorTextFocus stay false, so query commands (Execute, Parse and the rest) leave it alone." },
+  objectInspectorFocus: { type: 'boolean', scope: 'focus', description: 'Focus is inside a unified object inspector (Peek card, Peek tab or Properties document), so Ctrl+1 to Ctrl+9 (⌘1 to ⌘9 on macOS) jump between its sections.' },
   quickInputVisible: { type: 'boolean', scope: 'state', description: 'The command palette or a picker is open.' },
   backendStatus: { type: 'enum', scope: 'state', values: ['starting', 'ready', 'unresponsive', 'restarting', 'failed', 'stopped', ''], description: "The SQL backend's state; '' before the workbench has heard from main." },
   backendReady: { type: 'boolean', scope: 'state', description: "`backendStatus == 'ready'`." },

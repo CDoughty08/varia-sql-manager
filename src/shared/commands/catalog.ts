@@ -626,43 +626,80 @@ export const commandCatalog = {
     menus: [{ menu: 'window', group: '2_documents', order: 2, mnemonic: 'p' }]
   },
   // A browser's Ctrl+1 to Ctrl+9 (⌘ on macOS): the query tab at that place in tab order, Ctrl+9 the last. In the Results pane,
-  // while its query has two or more results, the same keys pick results (output.goToResult*). Browser tab keys took them from SSMS's query shortcuts (Ctrl+1 sp_who,
+  // while its query has two or more results, the same keys pick results (output.goToResult*); inside an object inspector they
+  // pick sections (inspector.goToTab*). Browser tab keys took them from SSMS's query shortcuts (Ctrl+1 sp_who,
   // Ctrl+2 sp_lock), whose procedures are palette commands instead (query.newSpWho and the others beside file.new).
   'document.goToQuery1': {
     title: 'Go to Query 1', category: 'View', keywords: ['tab', 'query', 'editor', 'jump', 'switch'], precondition: 'hasActiveDocument', unavailableHint: openFirst, providers: both,
-    keybindings: [{ key: 'mod+1', when: '!resultsFocus || !multipleResults' }]
+    keybindings: [{ key: 'mod+1', when: '(!resultsFocus || !multipleResults) && !objectInspectorFocus' }]
   },
   'document.goToQuery2': {
     title: 'Go to Query 2', category: 'View', keywords: ['tab', 'query', 'editor', 'jump', 'switch'], precondition: 'hasActiveDocument', unavailableHint: openFirst, providers: both,
-    keybindings: [{ key: 'mod+2', when: '!resultsFocus || !multipleResults' }]
+    keybindings: [{ key: 'mod+2', when: '(!resultsFocus || !multipleResults) && !objectInspectorFocus' }]
   },
   'document.goToQuery3': {
     title: 'Go to Query 3', category: 'View', keywords: ['tab', 'query', 'editor', 'jump', 'switch'], precondition: 'hasActiveDocument', unavailableHint: openFirst, providers: both,
-    keybindings: [{ key: 'mod+3', when: '!resultsFocus || !multipleResults' }]
+    keybindings: [{ key: 'mod+3', when: '(!resultsFocus || !multipleResults) && !objectInspectorFocus' }]
   },
   'document.goToQuery4': {
     title: 'Go to Query 4', category: 'View', keywords: ['tab', 'query', 'editor', 'jump', 'switch'], precondition: 'hasActiveDocument', unavailableHint: openFirst, providers: both,
-    keybindings: [{ key: 'mod+4', when: '!resultsFocus || !multipleResults' }]
+    keybindings: [{ key: 'mod+4', when: '(!resultsFocus || !multipleResults) && !objectInspectorFocus' }]
   },
   'document.goToQuery5': {
     title: 'Go to Query 5', category: 'View', keywords: ['tab', 'query', 'editor', 'jump', 'switch'], precondition: 'hasActiveDocument', unavailableHint: openFirst, providers: both,
-    keybindings: [{ key: 'mod+5', when: '!resultsFocus || !multipleResults' }]
+    keybindings: [{ key: 'mod+5', when: '(!resultsFocus || !multipleResults) && !objectInspectorFocus' }]
   },
   'document.goToQuery6': {
     title: 'Go to Query 6', category: 'View', keywords: ['tab', 'query', 'editor', 'jump', 'switch'], precondition: 'hasActiveDocument', unavailableHint: openFirst, providers: both,
-    keybindings: [{ key: 'mod+6', when: '!resultsFocus || !multipleResults' }]
+    keybindings: [{ key: 'mod+6', when: '(!resultsFocus || !multipleResults) && !objectInspectorFocus' }]
   },
   'document.goToQuery7': {
     title: 'Go to Query 7', category: 'View', keywords: ['tab', 'query', 'editor', 'jump', 'switch'], precondition: 'hasActiveDocument', unavailableHint: openFirst, providers: both,
-    keybindings: [{ key: 'mod+7', when: '!resultsFocus || !multipleResults' }]
+    keybindings: [{ key: 'mod+7', when: '(!resultsFocus || !multipleResults) && !objectInspectorFocus' }]
   },
   'document.goToQuery8': {
     title: 'Go to Query 8', category: 'View', keywords: ['tab', 'query', 'editor', 'jump', 'switch'], precondition: 'hasActiveDocument', unavailableHint: openFirst, providers: both,
-    keybindings: [{ key: 'mod+8', when: '!resultsFocus || !multipleResults' }]
+    keybindings: [{ key: 'mod+8', when: '(!resultsFocus || !multipleResults) && !objectInspectorFocus' }]
   },
   'document.goToLastQuery': {
     title: 'Go to Last Query', category: 'View', keywords: ['tab', 'query', 'editor', 'jump', 'switch', 'end'], precondition: 'hasActiveDocument', unavailableHint: openFirst, providers: both,
-    keybindings: [{ key: 'mod+9', when: '!resultsFocus || !multipleResults' }]
+    keybindings: [{ key: 'mod+9', when: '(!resultsFocus || !multipleResults) && !objectInspectorFocus' }]
+  },
+  'inspector.goToTab1': {
+    title: 'Go to Inspector Section 1', category: 'View', palette: false, keywords: ['inspector', 'properties', 'peek', 'section', 'tab', 'jump', 'switch'], providers: both,
+    keybindings: [{ key: 'mod+1', when: 'objectInspectorFocus' }]
+  },
+  'inspector.goToTab2': {
+    title: 'Go to Inspector Section 2', category: 'View', palette: false, keywords: ['inspector', 'properties', 'peek', 'section', 'tab', 'jump', 'switch'], providers: both,
+    keybindings: [{ key: 'mod+2', when: 'objectInspectorFocus' }]
+  },
+  'inspector.goToTab3': {
+    title: 'Go to Inspector Section 3', category: 'View', palette: false, keywords: ['inspector', 'properties', 'peek', 'section', 'tab', 'jump', 'switch'], providers: both,
+    keybindings: [{ key: 'mod+3', when: 'objectInspectorFocus' }]
+  },
+  'inspector.goToTab4': {
+    title: 'Go to Inspector Section 4', category: 'View', palette: false, keywords: ['inspector', 'properties', 'peek', 'section', 'tab', 'jump', 'switch'], providers: both,
+    keybindings: [{ key: 'mod+4', when: 'objectInspectorFocus' }]
+  },
+  'inspector.goToTab5': {
+    title: 'Go to Inspector Section 5', category: 'View', palette: false, keywords: ['inspector', 'properties', 'peek', 'section', 'tab', 'jump', 'switch'], providers: both,
+    keybindings: [{ key: 'mod+5', when: 'objectInspectorFocus' }]
+  },
+  'inspector.goToTab6': {
+    title: 'Go to Inspector Section 6', category: 'View', palette: false, keywords: ['inspector', 'properties', 'peek', 'section', 'tab', 'jump', 'switch'], providers: both,
+    keybindings: [{ key: 'mod+6', when: 'objectInspectorFocus' }]
+  },
+  'inspector.goToTab7': {
+    title: 'Go to Inspector Section 7', category: 'View', palette: false, keywords: ['inspector', 'properties', 'peek', 'section', 'tab', 'jump', 'switch'], providers: both,
+    keybindings: [{ key: 'mod+7', when: 'objectInspectorFocus' }]
+  },
+  'inspector.goToTab8': {
+    title: 'Go to Inspector Section 8', category: 'View', palette: false, keywords: ['inspector', 'properties', 'peek', 'section', 'tab', 'jump', 'switch'], providers: both,
+    keybindings: [{ key: 'mod+8', when: 'objectInspectorFocus' }]
+  },
+  'inspector.goToLastTab': {
+    title: 'Go to Last Inspector Section', category: 'View', palette: false, keywords: ['inspector', 'properties', 'peek', 'section', 'tab', 'jump', 'switch', 'end'], providers: both,
+    keybindings: [{ key: 'mod+9', when: 'objectInspectorFocus' }]
   },
   // VS Code's Move Editor Left/Right keys; the query tab menu's items move the tab it was opened for.
   'document.moveLeft': {

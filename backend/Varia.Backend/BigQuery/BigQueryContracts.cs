@@ -138,19 +138,71 @@ internal sealed record BigQueryDryRunResult(long BytesProcessed, string? Incompl
 /// <summary>query.execute's Preview Rows target (docs/bigquery.md, Preview Rows): the table whose first rows tabledata.list reads
 /// instead of running the query text, which is the SELECT the tab shows. BigQuery handles only.</summary>
 internal sealed record BigQueryPreviewTarget(string Project, string Dataset, string Table);
+/// <summary>The bounds zod sets on bigquery.properties (bigQueryPropertiesLimits in src/shared/bigquery/objects.ts).</summary>
+internal static class BigQueryPropertiesLimits
+{
+    public const int Name = 1024;
+    public const int Type = 64;
+    public const int FullName = 2200;
+    public const int Location = 64;
+    public const int Timestamp = 64;
+    public const int FactValue = 2000;
+    public const int Partitioning = 512;
+    public const int ClusteringFields = 16;
+    public const int ColumnName = 300;
+    public const int ColumnType = 64;
+    public const int ColumnMode = 32;
+    public const int ColumnDescription = 2000;
+    /// <summary>Seven field levels use all 16 MessagePack containers (0-based depth 15 in JsonBridge.FromJson) inside { result: { schema: [...] } }, leaving no headroom for a 7th-level fields array.</summary>
+    public const int SchemaDepth = 7;
+    public const int SchemaFields = 10_000;
+    /// <summary>Estimated UTF-8 byte budget for mapped nested schema fields so combined definition + flat columns + nested schema stays well under the 16 MiB response limit.</summary>
+    public const int SchemaTextBytes = 6 * 1024 * 1024;
+    public const int Labels = 64;
+    public const int LabelKey = 128;
+    public const int LabelValue = 256;
+    public const int DefinitionChars = 1_000_000;
+}
+
 /// <summary>bigquery.properties: a table-like object's facts from tables.get, or a routine's from routines.get (docs/bigquery.md,
 /// Properties; Search Objects' details pane asks for routines too).</summary>
 internal sealed record BigQueryPropertiesArgs(string ConnectionId, string RequestId, string Kind, string Project, string Dataset, string Name);
 internal sealed record BigQueryFact(string Label, string Value);
 internal sealed record BigQueryFactGroup(string Title, List<BigQueryFact> Facts);
-/// <summary>A column or nested field as the details pane lists it: its path, type text and description.</summary>
+/// <summary>A column or nested field as Search Objects' details pane lists it: its path, type text and description.</summary>
 internal sealed record BigQueryColumnFact(string Name, string Type, string? Description = null);
+internal sealed record BigQueryStorageInfo(long? Rows = null, long? LogicalBytes = null, long? LongTermLogicalBytes = null, long? PhysicalBytes = null);
+internal sealed record BigQueryLayoutInfo(string? Partitioning = null, bool? RequirePartitionFilter = null, List<string>? Clustering = null);
+internal sealed record BigQuerySchemaField(string Name, string Type, string? Mode = null, string? Description = null, List<BigQuerySchemaField>? Fields = null);
+internal sealed record BigQueryLabel(string Key, string Value);
 /// <summary>Type: tables.get's type in words ("table", "snapshot", "view"…) or the routine's. Groups: Table, Storage, Layout, History
 /// (a routine's: Routine, History), in that order, each left out when it has no facts. Definition: a view's or materialized view's
-/// query, or a routine's body, cut at 1,000,000 characters (DefinitionCut). Columns: the first 1,000 columns and nested fields
-/// (ColumnsCut when there were more).</summary>
-internal sealed record BigQueryProperties(string Name, string Type, List<BigQueryFactGroup> Groups, long ElapsedMs, string? Definition = null, bool? DefinitionCut = null,
-    List<BigQueryColumnFact>? Columns = null, bool? ColumnsCut = null);
+/// query, or a routine's body, cut at 1,000,000 characters (DefinitionCut / DefinitionTruncated). Columns: the first 1,000 flattened
+/// columns and nested fields (ColumnsCut). Structured fields (Storage, Layout, Schema, Labels, identity/timestamps) carry rich
+/// free tables.get metadata for the inspector UI.</summary>
+internal sealed record BigQueryProperties(
+    string Name,
+    string Type,
+    List<BigQueryFactGroup> Groups,
+    long ElapsedMs,
+    string? Definition = null,
+    bool? DefinitionCut = null,
+    List<BigQueryColumnFact>? Columns = null,
+    bool? ColumnsCut = null,
+    string? FullName = null,
+    string? Location = null,
+    string? Description = null,
+    string? BaseTable = null,
+    string? CreatedUtc = null,
+    string? ModifiedUtc = null,
+    string? ExpiresUtc = null,
+    string? SnapshotTimeUtc = null,
+    BigQueryStorageInfo? Storage = null,
+    BigQueryLayoutInfo? Layout = null,
+    List<BigQuerySchemaField>? Schema = null,
+    bool? SchemaTruncated = null,
+    List<BigQueryLabel>? Labels = null,
+    bool? DefinitionTruncated = null);
 
 /// <summary>
 /// query.attach (docs/bigquery.md, Re-attaching to jobs): re-attaches the tab <c>SessionId</c> to a job a previous run (or
