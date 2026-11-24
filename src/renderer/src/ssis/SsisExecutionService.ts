@@ -101,7 +101,7 @@ export class SsisExecutionService extends SnapshotStore<SsisExecutionSnapshot> i
     return document.id
   }
 
-  /** Whether Refresh can read now: open, connected, and not gone. A read in flight is replaced. */
+  /** Whether Refresh can read now: open and connected. A gone document may read again (a catalog created since, say). A read in flight is replaced. */
   canRefresh(id: string | undefined): boolean {
     const state = this.get(id)
     return !!state && !this.disposed && this.targetBindings.matchesConnection(state.id, state.connectionId) && this.options.documents.get(state.id)?.connectionId === state.connectionId && !!this.live(state.connectionId)
@@ -148,7 +148,8 @@ export class SsisExecutionService extends SnapshotStore<SsisExecutionSnapshot> i
       : { code: result.code ?? 'BACKEND_ERROR', message: result.error, retryable: result.code !== undefined && retryableCodes.has(result.code), ...result.details ? { details: result.details } : {} }
     // A purged execution drops what was shown: it no longer describes anything in the catalog.
     const gone = goneCodes.has(error.code)
-    this.patch(id, { loading: false, error, gone, ...gone ? { model: undefined, loadedAt: undefined } : {} })
+    // The chips follow the list that stays shown, so a failed type change does not leave them naming rows the grid lacks.
+    this.patch(id, { loading: false, error, gone, ...gone ? { model: undefined, loadedAt: undefined } : current.model ? { groups: current.model.groups } : {} })
   }
 
   // --- CustomDocumentProvider ------------------------------------------------------------------------------------------

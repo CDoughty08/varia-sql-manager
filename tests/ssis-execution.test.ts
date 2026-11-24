@@ -4,7 +4,7 @@ import { commandDescriptor } from '../src/shared/commands/catalog'
 import { compileWhen, evaluateWhen } from '../src/shared/commands/when'
 import { messageGroupOf, ssisLimits } from '../src/shared/ssis/catalog'
 import {
-  durationText, executionSeconds, executionTitle, groupChipLabel, groupCounts, isExecutionId, messageColumns, messageTime, requestGroups, secondsBetween, sourceTypeLabel, toggleGroup, totalMessages
+  durationText, executionSeconds, executionText, executionTitle, groupChipLabel, groupCounts, isExecutionId, messageColumns, messageTime, requestGroups, secondsBetween, sourceTypeLabel, toggleGroup, totalMessages
 } from '../src/shared/ssis/execution'
 import { ssisExecutionSchema, type SsisExecutionModel, type SsisExecutionResult } from '../src/shared/ssis/schema'
 import { isCustomKind, kindInfo } from '../src/renderer/src/documents'
@@ -37,8 +37,8 @@ const answer = (value: SsisExecutionResult): ApiResult<SsisExecutionResult> => (
 
 /** A LiveGrid stand-in for the Operations document: its active row is one operation, as the grid stores its cells. */
 class FakeGrid extends SnapshotStore<LiveGridSnapshot> {
-  select(key: string, cells: string[]) {
-    const handle = { getWindow: async () => ({ first: 0, count: 1, colStart: 0, colEnd: 7, text: cells, flags: new Uint8Array(7) }) }
+  select(key: string, cells: string[], read?: Promise<void>) {
+    const handle = { getWindow: async () => { await read; return { first: 0, count: 1, colStart: 0, colEnd: 7, text: cells, flags: new Uint8Array(7) } } }
     this.publish({ newRows: 0, following: true, lost: false, activeKey: key, selection: { entry: 'live', active: { row: 3, col: 1 }, anchor: { row: 3, col: 1 }, blocks: [] }, table: { handle } } as unknown as LiveGridSnapshot)
   }
 }
@@ -175,6 +175,14 @@ describe('SSIS execution messages documents', () => {
     service.refresh(shown)
     await settled()
     expect(state(shown).error).toEqual({ code: 'BACKEND_LOST', message: 'The SQL backend stopped.', retryable: true })
+    // A failed type change puts the chips back to the list still shown.
+    api.executionSsis.mockResolvedValueOnce(answer({ elapsedMs: 1, error: { code: 'TIMEOUT', message: 'Too slow.', retryable: true } }))
+    service.toggleGroup(shown, 'information')
+    expect(state(shown).groups).toEqual(['error', 'warning', 'other'])
+    await settled()
+    expect(state(shown)).toMatchObject({ groups: ['error', 'warning', 'information', 'other'], error: { code: 'TIMEOUT' } })
+    // A gone document may read again: a catalog created since answers.
+    expect(service.canRefresh(Object.values(service.getSnapshot().documents).find(item => item.executionId === 6)!.id)).toBe(true)
   })
   it('cancels a read when its tab closes or its server disconnects, keeping the last model', async () => {
     const { ssisExecutions: service, api, documents, requests, state, connections } = executions()
@@ -212,6 +220,11 @@ describe('SSIS execution messages documents', () => {
     grid.select('44', ['44', 'Deploy project', 'Succeeded', '', '', '', 'Loads'])
     await settled()
     expect(commands.isEnabled('ssis.viewExecutionMessages', { tabId: tab })).toBe(false)
+    // An operation whose cells are still being read when View Messages runs says why, once they arrive, instead of opening nothing.
+    grid.select('45', ['45', 'Deploy project', 'Succeeded', '', '', '', 'Loads'], new Promise(resolve => setTimeout(resolve, 0)))
+    expect(operations.executionSelected(tab)).toBe(true)
+    expect(await operations.selectedExecution(tab)).toBeUndefined()
+    expect(operations.get(tab)?.notice).toEqual({ tone: 'info', text: executionText.notExecution(45) })
     expect(commandDescriptor('ssis.viewExecutionMessages').menus?.some(menu => menu.menu === 'ssis.operation.context')).toBe(true)
   })
 })

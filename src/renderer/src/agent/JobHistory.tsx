@@ -27,7 +27,7 @@ export const jobHistoryCopy = {
   intro: 'The usual time is the median of the last 10 successful runs. It is a guide, not a promise.',
   running: (since?: string) => `Running${since ? ` since ${since} (server time)` : ''}. You can keep editing: saved changes apply from the next run.`,
   stopHint: 'Stop sends sp_stop_job; the current step is cancelled and the run is recorded as Canceled.',
-  ssisHint: 'For an SSIS step, its execution link opens that execution\'s overview and catalog messages, where the real error usually is.',
+  ssisHint: 'For an SSIS step, its execution link opens that execution\'s overview and catalog messages, where the real error usually is. It reads the SSIS Catalog of this job\'s server.',
   none: 'This job has no history yet. Runs show here as SQL Server Agent records them.',
   noneFailed: 'No failed runs in the history SQL Server Agent keeps.',
   logViewer: "All jobs' history in Log File Viewer",
