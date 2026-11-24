@@ -22,7 +22,7 @@ afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 const appData: ObjectRef = { kind: 'database', name: 'AppData' }
 const identity = { id: 7, created: '2026-01-02T03:04:05.678' }
 const node = (object: ObjectRef = appData, connectionId = 'c1', id = 12): ExplorerMenuNode => ({ id, connectionId, ref: { type: 'object', object }, kind: object.kind, label: object.name ?? '', lost: false })
-const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
+const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setImmediate(resolve)) }
 const files: DatabaseFileRef[] = [{ fileId: 1, name: 'AppData', type: 'rows', path: 'D:\\Data\\AppData.mdf' }, { fileId: 2, name: 'AppData_log', type: 'log', path: 'D:\\Data\\AppData_log.ldf' }]
 const model = (changes: Partial<DatabaseStateModel> = {}): DatabaseStateModel => ({
   name: 'AppData', identity, state: 0, userAccess: 0, readOnly: false, standby: false, sessions: 0, withTransaction: 0, sessionList: [], sessionsTruncated: false, warnings: [], files, filesTruncated: false, ...changes

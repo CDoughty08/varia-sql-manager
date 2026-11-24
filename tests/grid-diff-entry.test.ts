@@ -60,7 +60,7 @@ function mount(columns: readonly ResultColumn[], cells: readonly (readonly Cell[
     diffSides: { old: 'Result 1', new: 'Result 2', rows: cells.length }, ...o.diffChanged ? { diffChanged: o.diffChanged } : {}, ...o.diffKeys ? { diffKeys: o.diffKeys } : {}, ...o.onDiffRow ? { onDiffRow: o.onDiffRow } : {},
     onSelection: () => {}, onFirstCell: () => {}, onCopy: () => {}, onEscape: () => false, onStatus: () => {}, onError: error => { throw error }, onOpenValue: () => {}, onSort: () => {}, onFilter: () => {}
   })
-  const frame = async () => { await new Promise(done => setTimeout(done, 0)); view.invalidate(); await new Promise(done => requestAnimationFrame(() => done(undefined))); await new Promise(done => setTimeout(done, 0)) }
+  const frame = async () => { await new Promise(done => setImmediate(done)); view.invalidate(); await new Promise(done => requestAnimationFrame(() => done(undefined))); await new Promise(done => setImmediate(done)) }
   const cellAt = (row: number, col: number) => root.querySelector<HTMLElement>(`[role="row"][aria-rowindex="${row + 2}"] > [role="gridcell"][aria-colindex="${col + 2}"]`)
   const headerAt = (col: number) => root.querySelector<HTMLElement>(`[role="columnheader"][aria-colindex="${col + 2}"]`)
   const rowAt = (row: number) => root.querySelector<HTMLElement>(`[role="row"][aria-rowindex="${row + 2}"]`)

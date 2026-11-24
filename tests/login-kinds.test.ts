@@ -291,7 +291,7 @@ function setup() {
   const dialogs = new ObjectDialogService({ api, connections, explorer: { listingFolderOf: () => undefined, reconcile: vi.fn() }, documents: { newQuery: vi.fn() }, files: { saveCopy: vi.fn() }, newId: () => `id-${++ids}` })
   cleanups.push(() => dialogs.dispose())
   const node: ExplorerMenuNode = { id: 5, connectionId: 'server-a', ref: { type: 'folder', owner: server, folder: 'logins' }, kind: 'folder', folder: 'logins', label: 'Logins', lost: false, engine: 'box' }
-  const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+  const settle = () => new Promise(resolve => setImmediate(resolve))
   return { dialogs, api, check, node, settle }
 }
 

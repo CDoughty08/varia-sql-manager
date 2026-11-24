@@ -5,7 +5,7 @@ import { envelopeOutcome, ExplorerLoader, queueFullMessage, type LoaderLimits, t
 import { manualTimers } from './fixtures/workbench'
 
 const page: ExplorerChildrenResult = { nodes: [], elapsedMs: 1 }
-const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+const settle = () => new Promise(resolve => setImmediate(resolve))
 
 function fixture(limits: Partial<LoaderLimits> = {}) {
   const sent: { params: ExplorerChildrenParams; resolve: (result: ApiResult<ExplorerChildrenResult>) => void; reject: (error: unknown) => void }[] = []

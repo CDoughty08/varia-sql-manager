@@ -18,7 +18,7 @@ import { connectionInfo, connectionOptions } from './fixtures/workbench'
 import { explorerNodeProvider } from '../src/shared/providers'
 import { heavyTimeout, meterWork } from './fixtures/work-meter'
 
-const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+const settle = () => new Promise(resolve => setImmediate(resolve))
 const uuid = (n: number) => `00000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`
 /** Connection ids are uuids, as main's schema requires; servers are named `<name>.example`. */
 const cid = (name: string) => `10000000-0000-4000-8000-${Buffer.from(name.slice(-1)).toString('hex').padStart(12, '0')}`

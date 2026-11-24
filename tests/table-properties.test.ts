@@ -25,7 +25,7 @@ import { connectionInfo, connectionOptions, manualTimers, readyBackend, workbenc
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
-const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
+const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setImmediate(resolve)) }
 
 const orders: ObjectRef = { kind: 'table', database: 'AppData', schema: 'Sales', name: 'Orders' }
 export function tableModel(patch: Partial<TablePropertiesModel> = {}): TablePropertiesModel {

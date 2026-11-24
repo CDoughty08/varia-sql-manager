@@ -20,7 +20,7 @@ afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 const appData: ObjectRef = { kind: 'database', name: 'AppData' }
 const orders: ObjectRef = { kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' }
 const node = (object: ObjectRef = appData, connectionId = 'c1', id = 12): ExplorerMenuNode => ({ id, connectionId, ref: { type: 'object', object }, kind: object.kind, label: object.name ?? '', lost: false })
-const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
+const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setImmediate(resolve)) }
 const target = (changes: Partial<DeleteTarget> = {}): DeleteTarget => ({ name: 'AppData', type: 'Database', warnings: [], dependentsTruncated: false, isSnapshot: false, sessions: 0, ...changes })
 const dropped: ActionExecuteResult = { steps: [{ status: 'done', title: 'Close existing connections' }, { status: 'done', title: dropDatabaseStepTitle }], messages: [], elapsedMs: 1 }
 

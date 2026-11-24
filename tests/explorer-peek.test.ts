@@ -166,7 +166,7 @@ describe('PeekService', () => {
     return { service, api, timers, pages, resolvePeek: (value: ApiResult<PeekResult>) => resolvePeek(value), resolveScript: (text: string) => resolveScript(ok({ text, database: 'Sales', warnings: [], commands: 1, elapsedMs: 1 })),
       lose: () => { live = []; for (const listener of listeners) listener() } }
   }
-  const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+  const flush = () => new Promise(resolve => setImmediate(resolve))
 
   it('reads a module\'s facts and text in one request', async () => {
     const { service, api, resolvePeek } = setup()
@@ -568,7 +568,7 @@ describe('PeekService script cache', () => {
       changeOtherSetting: announce,
       kept: () => (service as unknown as { reads: { scripts: Map<string, unknown> } }).reads.scripts.size }
   }
-  const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+  const flush = () => new Promise(resolve => setImmediate(resolve))
 
   it('lets a replaced card\'s table script finish, and reuses it while the table\'s modified time is unchanged', async () => {
     const { service, api, facts, script, definition, scriptsSent } = setup()
@@ -742,7 +742,7 @@ describe('Peek tabs', () => {
     })
     return { service, api, peeks, children, executes, dependencies, results, open: () => service.getSnapshot().open! }
   }
-  const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+  const flush = () => new Promise(resolve => setImmediate(resolve))
   const facts = (extra: Partial<PeekResult> = {}): ApiResult<PeekResult> => ok({ facts: { schema: 'dbo', modified: '2024-01-02T03:04:05' }, elapsedMs: 1, ...extra })
 
   it('gives tables and views a Top rows tab and every kind canonical inspector tabs, with no rows request of its own', () => {
@@ -873,7 +873,7 @@ describe('Peek tabs', () => {
 
 describe('Peek kinds beyond modules', () => {
   const ok = <T>(value: T): ApiResult<T> => ({ ok: true, value })
-  const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+  const flush = () => new Promise(resolve => setImmediate(resolve))
   const embedded = () => (JSON.parse(explorerCatalogJson()) as { peek: ReturnType<typeof peekCatalogBlock> }).peek
 
   it('declares each kind\'s tabs in canonical order, Overview then Definition first, and lists only where the kind has them', () => {

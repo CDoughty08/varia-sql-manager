@@ -282,15 +282,23 @@ export const contextKeyValues = (key: ContextKey): readonly (boolean | string)[]
 export const staticContextKeys = (platform: Platform): Pick<ContextKeys, 'isMac' | 'isWindows' | 'isLinux'> =>
   ({ isMac: platform === 'darwin', isWindows: platform === 'win32', isLinux: platform === 'linux' })
 
+const defaultBase = (platform: Platform): Record<string, boolean | string> => {
+  const record: Record<string, boolean | string> = Object.create(null)
+  for (const key of contextKeyNames) { const info = declaration(key); record[key] = info.type === 'enum' ? '' : false }
+  Object.assign(record, staticContextKeys(platform))
+  return record
+}
+const baseRecordByPlatform: Readonly<Record<Platform, Record<string, boolean | string>>> = {
+  win32: defaultBase('win32'), linux: defaultBase('linux'), darwin: defaultBase('darwin')
+}
+
 /**
  * A complete context record with no prototype (so `__proto__` is an ordinary key): every key at its default (false, or
  * the enum's '' value), then the platform's static keys, then `values`.
  */
 export function contextRecord(platform: Platform, values: Partial<ContextKeys> = {}): ContextRecord & ContextKeys {
-  const record: Record<string, boolean | string> = Object.create(null)
-  for (const key of contextKeyNames) { const info = declaration(key); record[key] = info.type === 'enum' ? '' : false }
-  Object.assign(record, staticContextKeys(platform))
-  for (const key of contextKeyNames) if (Object.hasOwn(values, key) && values[key] !== undefined) record[key] = values[key]
+  const record: Record<string, boolean | string> = Object.assign(Object.create(null), baseRecordByPlatform[platform])
+  for (const key of Object.keys(values)) if (isContextKey(key) && values[key] !== undefined) record[key] = values[key]!
   return record as ContextRecord & ContextKeys
 }
 
