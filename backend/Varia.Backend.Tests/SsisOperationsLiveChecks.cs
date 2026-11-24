@@ -523,10 +523,12 @@ internal static class SsisOperationsLiveChecks
         var view = views.Subscribe(info.Id, new { windowHours = hours }, intervalMs: 10_000);
         try
         {
-            await views.Until(view.Recorder, rows => rows.Count > 0, 30_000);
+            var any = await views.Until(view.Recorder, rows => rows.Count > 0, 30_000);
             var package = views.Rows(view.Recorder).Select(row => row[5]).FirstOrDefault(name => name is { Length: > 0 });
             if (package is null)
             {
+                // A window that never read rows may be a broken read rather than an empty catalog: only the latter skips.
+                check(any || Views.Latest(view.Recorder) is not null, "the real catalog's window reads before the filter check");
                 Console.WriteLine("The real SSISDB has no execution in the window: the filter persistence check is skipped.");
                 return;
             }
