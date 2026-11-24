@@ -3590,6 +3590,10 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .agent-history-delete-older { display: flex; gap: var(--varia-space-1); padding-left: var(--varia-space-5); }
 .agent-history-delete-older > input { width: 72px; }
 .agent-history-delete-note { margin: var(--varia-space-2) 0 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); }
+/* The Agent error log's rows and the selected row's message (AG-5b). */
+.agent-history-errorlog { display: flex; flex: 1; flex-direction: column; gap: var(--varia-space-2); min-height: 0; }
+.agent-history-errorlog > .agent-history-details { flex: 0 0 140px; }
+.agent-history-sources > .inline-error, .agent-history-sources > .agent-history-note { margin: 0 var(--varia-space-2) var(--varia-space-1); }
 /* SQL Server Agent alerts and operators (AG-7): the alert document's When / Then / Options, its operator chips with E, P and N toggles, the
    operator document, and the Operators and notifications grid with its side pane. A pressed toggle, a changed cell and the selected operator
    column read from colour and weight, and from the system colours in forced colours. */

@@ -360,6 +360,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     scriptObjectAction: vi.fn<VariaApi['scriptObjectAction']>(async params => ({ ok: true, value: { text: `-- ${params.action} ${params.target.name}`, database: params.action === 'createTable' ? params.target.name : params.action === 'createDatabase' ? 'master' : params.target.database ?? 'master', warnings: [] } })),
     agentProfile: vi.fn<VariaApi['agentProfile']>(async () => ({ ok: true, value: { elapsedMs: 1, error: { code: 'NOT_SUPPORTED', message: 'No Agent here.', retryable: false } } })),
     agentHistoryMessage: vi.fn<VariaApi['agentHistoryMessage']>(async () => ({ ok: true, value: { message: '', elapsedMs: 1 } })),
+    agentErrorLogs: vi.fn<VariaApi['agentErrorLogs']>(async () => ({ ok: true, value: { logs: [{ archive: 0, date: '2026-11-22T14:31:00' }, { archive: 1, date: '2026-11-13T07:48:00' }], archives: true, elapsedMs: 1 } })),
     agentCounterValues: vi.fn<VariaApi['agentCounterValues']>(async () => ({ ok: true, value: { values: [], elapsedMs: 1 } })),
     executeObjectAction: vi.fn<VariaApi['executeObjectAction']>(async () => ({ ok: true, value: { steps: [{ status: 'done', title: 'Drop the object' }], messages: [], elapsedMs: 1 } })),
     cancelObjectActions: vi.fn<VariaApi['cancelObjectActions']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
@@ -469,7 +470,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const schedules = new SchedulesService({ api, documents, connections, targetIdOf })
   const proxyDocuments = new ProxyDocumentService({ api, documents, files, connections, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) })
   const credentialDocuments = new CredentialDocumentService({ api, documents, files, connections, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) })
-  const logViewer = new LogViewerService({ api, documents, panes, live, connections, targetIdOf })
+  const logViewerRecycled = vi.fn<(connectionId: string) => void>()
+  const logViewer = new LogViewerService({ api, documents, panes, live, connections, targetIdOf, recycled: logViewerRecycled })
   const objectSearch = new ObjectSearchService({ api, documents, connections, settings, targetIdOf })
   const inputMode = new InputModeService(fakeInputMode())
   const notifications = new NotificationService(options.timers ? { timers: options.timers } : {})
@@ -781,6 +783,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     proxyDocuments,
     credentialDocuments,
     logViewer,
+    logViewerRecycled,
     agentJobs,
     objectSearch,
     live,

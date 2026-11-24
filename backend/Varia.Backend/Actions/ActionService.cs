@@ -322,6 +322,8 @@ internal sealed partial class ActionService : IDisposable
         if (ValidateAgentJob(args, script) is { } jobTarget) return jobTarget;
         // The Log File Viewer's Delete History (AG-5a) is no catalogue action and validates itself.
         if (ValidateAgentHistory(args, script) is { } historyTarget) return historyTarget;
+        // Its Recycle of the Agent error log (AG-5b) likewise.
+        if (ValidateAgentErrorLog(args, script) is { } errorLogTarget) return errorLogTarget;
         // SQL Server Agent's job verbs and service control (AG-2) validate themselves.
         if (ValidateAgent(args, script) is { } agentTarget) return agentTarget;
         // SQL Server Agent Properties (AG-8a) validates itself too.
@@ -562,6 +564,7 @@ internal sealed partial class ActionService : IDisposable
         if (NewLoginEngineRefusal(args) is { } refused) return Task.FromResult(new ActionExecuteResult([], [], 0, refused));
         if (AgentServiceActions.Contains(args.Action)) return ExecuteAgentServiceAsync(args, token);
         if (args.Action == DeleteJobHistoryAction) return ExecuteAgentHistoryAsync(args, token);
+        if (args.Action == RecycleErrorLogAction) return ExecuteRecycleErrorLogAsync(args, token);
         if (args.Action == ChangeJobOwnerAction) return ExecuteChangeJobOwnerAsync(args, target, token);
         if (args.Action is "agentAlert" or "agentOperator" or AddRecommendedAlertsAction or NotifyOperatorAction || target.Kind is "agentAlert" or "agentOperator") return ExecuteAgentObjectRequestAsync(args, target, token);
         // Managed Instance refuses sp_set_sqlagent_properties (41905): refused before any connection opens, as the dialog opens read-only there.

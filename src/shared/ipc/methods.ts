@@ -196,6 +196,7 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // The Log File Viewer's whole message: the action service's read gates and DescribeBudget (TIMEOUT as a value) inside this deadline.
   'agent.historyMessage': { kind: 'unary', lane: 'metadata', deadlineMs: 45_000 },
   'agent.counterValues': { kind: 'unary', lane: 'metadata', deadlineMs: 45_000 },
+  'agent.errorLogs': { kind: 'unary', lane: 'metadata', deadlineMs: 45_000 },
   'language.parse': { kind: 'unary', lane: 'metadata', deadlineMs: 15_000 },
   // In-memory reads of the index: completion asks as the user types, so a lookup never waits long.
   'language.lookup': { kind: 'unary', lane: 'metadata', deadlineMs: 10_000, providers: ['bigquery'] },

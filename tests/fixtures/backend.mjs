@@ -1359,7 +1359,7 @@ const fixtures = {
 function liveSubscribe(id, credit, params) {
   if (credit === undefined) return fail(id, 'INVALID_PARAMS', 'A live subscription is a stream: it needs credit.')
   const explorer = params.source === 'explorer' && Array.isArray(params.probes) && explorerStatus() !== undefined, ssis = params.source === 'ssis.catalog'
-  const operations = params.source === 'ssis.operations', agent = params.source === 'agent.jobs' || params.source === 'agent.history'
+  const operations = params.source === 'ssis.operations', agent = params.source === 'agent.jobs' || params.source === 'agent.history' || params.source === 'agent.errorLog'
   if ((params.source !== 'debug.synthetic' && params.source !== 'activity' && !explorer && !ssis && !operations && !agent) || !Array.isArray(params.probes)) return fail(id, 'INVALID_PARAMS', 'Unknown live source.')
   if (!explorer && params.probes.some(probe => !(params.source === 'activity' ? liveProbes[probe.probe]?.source === 'activity' : ssis ? probe.probe === 'ssis.catalogProbe' : operations ? probe.probe === ssisOperationsProbe : agent ? liveProbes[probe.probe]?.source === params.source : syntheticProbes.includes(probe.probe)))) return fail(id, 'INVALID_PARAMS', 'The fake backend does not implement this probe.')
   if (explorer && !workbenchConnections.has(params.connectionId)) return fail(id, 'NOT_CONNECTED', 'Connect to a SQL Server first.')
@@ -1703,6 +1703,7 @@ function wakeLive(live) {
     else if (probe.probe === ssisOperationsProbe) samples.push({ ...sample, ...ssisSample(live, probe, n) })
     else if (live.source === 'agent.jobs') samples.push({ ...sample, ...agentJobsSample(live, probe) })
     else if (live.source === 'agent.history') samples.push({ ...sample, ...agentHistorySample(live, probe) })
+    else if (live.source === 'agent.errorLog') samples.push({ ...sample, ...agentErrorLogSample(live, probe) })
     else if (probe.probe === 'debug.synthetic.status') samples.push({ ...sample, status: [{ id: 'phase', value: n % 2 === 0 ? 'even' : 'odd' }, { id: 'samples', value: n }] })
     else if (probe.probe === 'ssis.catalogProbe') { const { gap, ...rest } = sample; samples.push({ ...rest, ...gap === 'late' ? { gap } : {}, status: catalogFingerprints() }) }
     else if (live.args.errorEvery && n % live.args.errorEvery === 0) errors.push({ probe: probe.probe, code: 'SQL_ERROR', message: 'The synthetic source failed this sample, as the test asked.', retryInMs: probe.intervalMs, terminal: false })
@@ -1819,7 +1820,7 @@ function liveUpdate(id, params) {
     if ((patch.view !== undefined || patch.filter !== undefined || patch.clear?.some(item => item === 'view' || item === 'filter')) && !probe.paused) probe.dueAt = Math.min(probe.dueAt, now)
   }
   for (const track of params.track ?? []) live.probes.get(track.probe)?.tracks.set(track.table, track)
-  if (params.args) live.args = live.source === 'ssis.operations' || live.source === 'agent.jobs' || live.source === 'agent.history' ? { ...params.args } : { ...live.args, ...params.args }
+  if (params.args) live.args = live.source === 'ssis.operations' || live.source === 'agent.jobs' || live.source === 'agent.history' || live.source === 'agent.errorLog' ? { ...params.args } : { ...live.args, ...params.args }
   if (params.paused !== undefined) { if (live.paused && !params.paused) for (const probe of live.probes.values()) resume(probe); live.paused = params.paused }
   if (params.refresh) for (const probe of live.probes.values()) if (!probe.paused) probe.dueAt = Math.min(probe.dueAt, now)
   respond(id, { applied: true, probes: [...live.probes.values()].map(probe => ({ probe: probe.probe, intervalMs: probe.intervalMs, effectiveIntervalMs: probe.intervalMs, paused: live.paused || !!probe.paused })) })
@@ -2184,6 +2185,37 @@ function agentDeleteHistory(params) {
   const before = agentHistory.length
   for (let at = agentHistory.length - 1; at >= 0; at--) if (jobs.includes(agentHistory[at].job)) agentHistory.splice(at, 1)
   return { steps: [{ status: 'done', title: 'Delete job history', detail: `${jobs.length} ${jobs.length === 1 ? 'job' : 'jobs'}` }], messages: [`${before - agentHistory.length} history runs purged.`], elapsedMs: 1 }
+}
+
+// The SQL Server Agent error logs (AG-5b): Current and one archive, newest row first as AgentErrorLogReader merges them; Recycle
+// starts a new Current and the old one becomes Archive #1.
+const errorLogColumns = () => liveProbes['agent.errorLog.read'].tables[0].columns.map(spec => ({ name: spec.name, dataType: spec.dataType, wire: 'text', nullable: true, ...spec.role ? { role: spec.role } : {} }))
+const agentErrorLogs = [
+  { date: '2026-11-22T14:31:00', rows: [
+    { date: '2026-11-22 14:31:00', level: 3, message: 'SQLServerAgent starting under Windows NT service control' },
+    { date: '2026-11-22 14:31:05', level: 2, message: 'SQLServerAgent is running as a non-sysadmin account' },
+    { date: '2026-11-22 14:40:12', level: 1, message: 'Step 2 of job Nightly failed: Violation of PRIMARY KEY constraint.' }] },
+  { date: '2026-11-13T07:48:00', rows: [{ date: '2026-11-13 07:48:00', level: 3, message: 'SQLServerAgent terminated (normally)' }] }
+]
+const errorLogLevels = { 1: ['Error', 'error'], 2: ['Warning', 'warning'], 3: ['Information', null] }
+function agentErrorLogSample(live, probe) {
+  const args = live.args ?? {}
+  const text = args.text?.toLowerCase()
+  const rows = (args.logs ?? []).filter(archive => archive < agentErrorLogs.length).flatMap(archive => agentErrorLogs[archive].rows.map((row, place) => ({ ...row, archive, place })))
+    .filter(row => !text || row.message.toLowerCase().includes(text))
+    .sort((a, b) => b.date.localeCompare(a.date) || a.archive - b.archive)
+  const entries = storeResult({ columns: errorLogColumns(), rows: rows.map(row => [row.date, row.archive === 0 ? 'Current' : `Archive #${row.archive}`, errorLogLevels[row.level][0], row.message, `${row.archive}:${row.place}`, String(row.archive), errorLogLevels[row.level][1]]) }, 0)
+  live.revisions.push(entries.resultId)
+  live.errorLogRevisions ??= []
+  live.errorLogRevisions.push(entries.resultId)
+  const retired = live.errorLogRevisions.length > 2 ? live.errorLogRevisions.splice(0, live.errorLogRevisions.length - 2) : []
+  for (const resultId of retired) { stored.delete(resultId); live.revisions.splice(live.revisions.indexOf(resultId), 1) }
+  return { tables: [{ table: 0, descriptor: describe(entries), revision: probe.samples, ...retired.length ? { retired } : {} }] }
+}
+function agentRecycleErrorLog() {
+  agentErrorLogs.unshift({ date: '2026-11-22T15:00:00', rows: [{ date: '2026-11-22 15:00:00', level: 2, message: '[412] Errorlog has been reinitialized.  See previous log for older entries.' }] })
+  agentErrorLogs.splice(10)
+  return { steps: [{ status: 'done', title: 'Recycle the SQL Server Agent error log' }], messages: [], elapsedMs: 1 }
 }
 
 function agentJobVerb(params) {
@@ -2675,6 +2707,7 @@ GO
       if (params.action === 'credential') return respond(id, credentialSave(params))
       if (params.target?.kind === 'agentJob') return respond(id, agentJobVerb(params))
       if (params.action === 'deleteJobHistory') return respond(id, agentDeleteHistory(params))
+      if (params.action === 'recycleAgentErrorLog') return respond(id, agentRecycleErrorLog())
       if (params.action === 'agentAlert' || params.action === 'agentOperator' || params.action === 'notifyOperator' || params.action === 'addRecommendedAlerts') return respond(id, agentObjectSave(params))
       for (const [step, percent] of [[0, 25], [0, 100], [0, 101], [1, 40]]) write(FrameKind.EVENT, id, 0, { type: 'action.progress', step, percent })
       return respond(id, { steps: [{ status: 'done', title: 'Drop the object' }], messages: [], elapsedMs: 1 })
@@ -2697,6 +2730,7 @@ GO
     case 'activity.kill': return respond(id, activityKill(params))
     // SQL Server Agent's capability read: a sysadmin on Windows with Agent XPs on, in no Agent role (sysadmin is dbo in msdb).
     case 'agent.historyMessage': return respond(id, agentHistoryMessage(params))
+    case 'agent.errorLogs': return respond(id, { logs: agentErrorLogs.map((log, archive) => ({ archive, date: log.date, bytes: log.rows.length * 120 })), archives: true, elapsedMs: 1 })
     case 'agent.profile': return respond(id, { profile: { platform: 'windows', engineEdition: 3, msdbAccess: true, sysadmin: true, userRole: false, readerRole: false, operatorRole: false, purgeHistory: true, serverServices: true, sessions: true, alterAnyCredential: true, clustered: false, agentXps: true, databaseMailXps: false, databaseMail: true }, elapsedMs: 1 })
     case 'ssis.execute': return respond(id, ssisExecute(params))
     case 'query.execute': {
