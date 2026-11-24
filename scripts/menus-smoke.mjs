@@ -950,17 +950,21 @@ try {
   await row(...ordersPath.slice(0, -1), 'dbo.Shipments')
   expect(await (await row(...ordersPath)).getAttribute('id')).toBe(kept)
   await rm(join(control, 'extra', 'tables'))
-  // The keyboard: Shift+F10 opens the selected table's menu below its row with its first item active; so does the
-  // context-menu key. Focus stays on the tree, which names the row as its active descendant.
+  // The keyboard: Shift+F10 opens the selected table's menu anchored flush to its row (below when it fits, or flipped
+  // above to stay inside the viewport) with its first item active; so does the context-menu key. Focus stays on the
+  // tree, which names the row as its active descendant.
   const table = await row(...ordersPath)
   await table.click()
   await expect(tree).toBeFocused()
   await page.keyboard.press('Shift+F10')
   await expect(explorerMenu.getByRole('menuitem', { name: 'Select Top 1000 Rows', exact: true })).toBeFocused()
   await expect(table).toHaveAttribute('data-menu-target', '')
-  const node = await table.boundingBox(), anchored = await explorerMenu.boundingBox()
-  expect(anchored.y).toBeGreaterThanOrEqual(node.y + node.height - 1)
-  expect(anchored.y).toBeLessThanOrEqual(node.y + node.height + 30)
+  const node = await table.boundingBox(), anchored = await explorerMenu.boundingBox(), windowBox = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }))
+  const anchoredBelow = anchored.y >= node.y + node.height - 1 && anchored.y <= node.y + node.height + 30
+  const anchoredAbove = anchored.y + anchored.height <= node.y + 1 && anchored.y + anchored.height >= node.y - 30
+  expect(anchoredBelow || anchoredAbove, `menu y=${anchored.y}..${anchored.y + anchored.height}, row y=${node.y}..${node.y + node.height}`).toBe(true)
+  expect(anchored.y).toBeGreaterThanOrEqual(0)
+  expect(anchored.y + anchored.height).toBeLessThanOrEqual(windowBox.height)
   await page.keyboard.press('Escape')
   await expect(tree).toBeFocused()
   await expect(table).not.toHaveAttribute('data-menu-target')
