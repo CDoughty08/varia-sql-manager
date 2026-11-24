@@ -54,6 +54,12 @@ export function restoredSection(state: FrameState, sections: readonly Pick<Secti
   return state.section !== sections[0]?.id && sections.some(section => section.id === state.section) ? state.section : undefined
 }
 
+/** A section the owner showed (revealSection) that the frame does not list yet, as a job's History before the job has loaded:
+ *  the frame scrolls there once it is listed. */
+export function pendingReveal(state: FrameState, sections: readonly Pick<SectionInfo, 'id'>[]): string | undefined {
+  return state.reveal && !sections.some(section => section.id === state.section) ? state.section : undefined
+}
+
 /** The owner shows a section (a link to a document's History): current and open, and the mounted frame scrolls to it. */
 export function revealSection(state: FrameState, sections: readonly Pick<SectionInfo, 'id'>[], id: string): FrameState {
   if (!sections.some(section => section.id === id)) return state

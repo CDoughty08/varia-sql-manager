@@ -9,7 +9,7 @@ import type { CommandArgs, CommandId } from '../core/types'
 import { useCommandsEnabled, useCommandsToggled, useKeybindingsRevision } from '../core/useCommand'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
-import { restoredSection, revealBy, scrolledTo, sectionKey, sectionLabel, selectSection, setScriptOpen, spySection, toggleSection, resizeScript, verbTooltip, type FrameState, type SectionInfo } from './document-frame'
+import { pendingReveal, restoredSection, revealBy, scrolledTo, sectionKey, sectionLabel, selectSection, setScriptOpen, spySection, toggleSection, resizeScript, verbTooltip, type FrameState, type SectionInfo } from './document-frame'
 import ScriptDrawer, { type ScriptDrawerProps } from './ScriptDrawer'
 
 /** One step of the path to the document's object: the server (connection), a folder, a database. Its tooltip is `title`, or the label, which may be cut. */
@@ -237,7 +237,8 @@ export function DocumentSections({ id, title, sections, frame, onFrame, hint }: 
   latest.current = { frame, onFrame, sections }
   // A tab switched back to remounts its frame: the column starts at the top, so it scrolls to the section its list marks
   // (the effect below), which counts as chosen so the end of the scroll keeps it marked.
-  const restored = useRef(restoredSection(frame, sections)).current
+  // A section the owner showed before it was listed (a job's History while the job loads) is scrolled to once it is.
+  const restored = useRef(restoredSection(frame, sections) ?? pendingReveal(frame, sections)).current
   const restoring = useRef(restored !== undefined)
   const chosen = useRef<string | undefined>(restored)
   const reveal = useRef<string | undefined>(restored)
@@ -254,7 +255,7 @@ export function DocumentSections({ id, title, sections, frame, onFrame, hint }: 
   // After a choice has rendered (a collapsed section opens first), its heading goes to the top of the column.
   useLayoutEffect(() => {
     const target = reveal.current, column = content.current
-    if (!target || !column) return
+    if (!target || !column || !sections.some(section => section.id === target)) return
     reveal.current = undefined
     const element = column.querySelector<HTMLElement>(`#${CSS.escape(sectionDomId(id, target))}`)
     if (element) column.scrollTop = element.offsetTop
@@ -272,6 +273,7 @@ export function DocumentSections({ id, title, sections, frame, onFrame, hint }: 
     if (!restoring.current) return
     restoring.current = false
     chosen.current = undefined
+    reveal.current = undefined
   }
   const scrollKey = (event: KeyboardEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement
