@@ -56,6 +56,8 @@ const pairs = (minimum: number, foregrounds: ContrastPair['foreground'][], ...ba
   foregrounds.flatMap(foreground => backgrounds.map(background => ({ foreground, background, minimum })))
 const text = (foregrounds: ContrastPair['foreground'][], ...backgrounds: ColorKey[][]) => pairs(4.5, foregrounds, ...backgrounds)
 const graphic = (foregrounds: ContrastPair['foreground'][], ...backgrounds: ColorKey[][]) => pairs(3, foregrounds, ...backgrounds)
+/** Resting 1 px control outlines (Approach B): calm at rest to avoid 1 px aliasing, while focusBorder and hover borders hold ≥ 3:1. */
+const restingOutline = (foregrounds: ContrastPair['foreground'][], ...backgrounds: ColorKey[][]) => pairs(1.5, foregrounds, ...backgrounds)
 
 /** WCAG 2.x AA pairs every built-in theme must pass: 4.5:1 for text, 3:1 for focus rings, glyphs, and indicators. */
 export const contrastPairs: readonly ContrastPair[] = [
@@ -125,7 +127,8 @@ export const contrastPairs: readonly ContrastPair[] = [
   // glyph too), their outline, and the focus ring. A theme can set notifications.background apart from editorWidget's.
   ...text(['notifications.foreground', 'descriptionForeground', 'button.secondaryForeground'], ['notifications.background']),
   ...text(['button.secondaryHoverForeground'], hovered('notifications.background')),
-  ...graphic(['button.border', 'focusBorder'], ['notifications.background']),
+  ...restingOutline(['button.border'], ['notifications.background']),
+  ...graphic(['focusBorder'], ['notifications.background']),
   ...text(['keybindingLabel.foreground'], toolbar, hover),
   ...text(['toolbar.labelForeground', 'titleBar.controlsForeground', 'successForeground'], toolbar),
   ...text(['descriptionForeground'], sideBar, widget, panelTitle, editor),
@@ -272,11 +275,11 @@ export const contrastPairs: readonly ContrastPair[] = [
   // A bookmark is the only sign of itself in the indicator margin.
   ...graphic(['editorBookmark.foreground'], editor),
   ...graphic(['button.background'], widget),
-  // Control outlines (WCAG 1.4.11) on every surface the controls sit on: fields and dialogs; the toolbar's server and
-  // database lists; Cancel on the Output toolbar; Object Explorer's buttons; the results grid's Retry; the empty
-  // workspace's buttons; and the failure screen's details (panel) and Copy details (editor).
-  ...graphic(['input.border'], input, widget, toolbar, panel),
-  ...graphic(['button.border'], input, widget, panelTitle, sideBar, panel, editor),
+  // Resting control outlines (Approach B: calm ≥ 1.5:1 at rest; focusBorder and hover borders carry ≥ 3:1) on every surface
+  // the controls sit on: fields and dialogs; the toolbar's server and database lists; Cancel on the Output toolbar; Object
+  // Explorer's buttons; the results grid's Retry; the empty workspace's buttons; and the failure screen's details and Copy details.
+  ...restingOutline(['input.border'], input, widget, toolbar, panel),
+  ...restingOutline(['button.border'], input, widget, panelTitle, sideBar, panel, editor),
   ...graphic(['notificationsErrorIcon.foreground', 'notificationsWarningIcon.foreground', 'notificationsInfoIcon.foreground'], ['notifications.background']),
   ...graphic(['dock.guideForeground'], ['dock.guideBackground'], ['dock.guideActiveBackground']),
   // Charts sit on documents, cards and widgets: their labels and legends are text, their series and status marks are
@@ -290,7 +293,7 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...(['critical', 'info', 'neutral'] as const).flatMap(tone => text([toneKeys(tone).foreground], [...activeSelection, toneKeys(tone).background])),
   // Empty states and inline errors: the title and line, the error glyph and message, and their outlined actions.
   ...text(['emptyState.titleForeground', 'emptyState.foreground', 'descriptionForeground', 'foreground', 'errorForeground', 'button.secondaryForeground'], ...contentSurfaces),
-  ...graphic(['button.border'], ...contentSurfaces),
+  ...restingOutline(['button.border'], ...contentSurfaces),
   // Filter chips, off and on; the outline of an on chip marks its state with the fill and the check mark.
   ...text(['chip.foreground'], ...contentSurfaces.map(surface => [...surface, 'chip.background'] as ColorKey[])),
   ...text(['chip.activeForeground'], ...contentSurfaces.map(surface => [...surface, 'chip.activeBackground'] as ColorKey[])),
@@ -315,7 +318,8 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...graphic(['sash.hoverBorder'], panel),
   // Property sheets in a document (Database Properties): a switch's outline and track, on and off, and its thumb in each
   // state; a segmented control's outline. The chosen segment is a chip's active state, checked with the chips above.
-  ...graphic(['input.border', 'button.background'], editor),
+  ...restingOutline(['input.border'], editor),
+  ...graphic(['button.background'], editor),
   ...graphic(['descriptionForeground'], input),
   ...graphic(['button.foreground'], [...editor, 'button.background']),
 

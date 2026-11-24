@@ -28,7 +28,7 @@ export const queryResultsSettings = [
   {
     key: 'queryResults.grid.rowSize', page: 'queryResults.sqlServer.grid', group: 'Grid display', label: 'Show row size behind row numbers', type: 'boolean', default: true, varia: true,
     keywords: ['row size', 'bytes', 'datalength', 'bar', 'gutter', 'row number'],
-    description: 'A bar behind each row number shows the row\'s size, the sum of DATALENGTH over its columns, scaled to the largest row of the result (or of its filtered rows); rows over half the largest stand out. Hover a row number for the exact bytes. The results toolbar changes this too.'
+    description: 'A bar behind each row number shows the row\'s size, the sum of DATALENGTH over its columns, scaled to the largest row of the result (or of its filtered rows); large outliers (over half the largest and at least 4 KiB or 2.5× the mean) stand out. Hover a row number for the exact bytes. The results toolbar changes this too.'
   },
   {
     key: 'queryResults.grid.columnProfile', page: 'queryResults.sqlServer.grid', group: 'Grid display', label: 'Show the column profile panel', type: 'boolean', default: false, varia: true,

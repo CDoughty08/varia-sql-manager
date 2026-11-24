@@ -271,9 +271,9 @@ describe('row sizes', () => {
     answer(0, row => row, [300])
     await settle()
     expect(changed).toHaveBeenCalled()
-    // Until the profile answers, the largest row read scales the bars.
+    // Until the profile answers, the largest row read scales the bars; row 300 is below the block mean (383.5) and under 4 KiB, so it is not flagged large.
     expect(sizes.max).toBe(511)
-    expect(sizes.get(300)).toEqual({ bytes: 300, share: 300 / 511, large: true, estimated: true })
+    expect(sizes.get(300)).toEqual({ bytes: 300, share: 300 / 511, large: false, estimated: true })
     profiles[0].resolve({ rows: 1000, complete: true, rowBytes: { min: 0, max: 2000, average: 500, exact: true }, columns: [] })
     await settle()
     expect(sizes.get(300)).toEqual({ bytes: 300, share: 0.15, large: false, estimated: true })
@@ -282,6 +282,43 @@ describe('row sizes', () => {
     sizes.ensure(300, 800)
     expect(reads.map(read => read.first)).toEqual([256, 512, 768])
     expect(profiles).toHaveLength(1)
+  })
+
+  it('flags only genuine outliers as large, keeping uniform ~180 B rows calm', async () => {
+    const uniform = fixture(100)
+    uniform.sizes.ensure(0, 99)
+    uniform.answer(0, row => 178 + (row % 5))
+    uniform.profiles[0].resolve({ rows: 100, complete: true, rowBytes: { min: 178, max: 182, average: 180, exact: true }, columns: [] })
+    await uniform.settle()
+    expect(uniform.sizes.get(0)).toEqual({ bytes: 178, share: 178 / 182, large: false, estimated: false })
+    expect(uniform.sizes.get(4)).toEqual({ bytes: 182, share: 1, large: false, estimated: false })
+    uniform.sizes.dispose()
+
+    const skewed = fixture(100)
+    skewed.sizes.ensure(0, 99)
+    skewed.answer(0, row => row === 42 ? 14_336 : 180)
+    skewed.profiles[0].resolve({ rows: 100, complete: true, rowBytes: { min: 180, max: 14_336, average: 321, exact: true }, columns: [] })
+    await skewed.settle()
+    expect(skewed.sizes.get(0)?.large).toBe(false)
+    expect(skewed.sizes.get(42)).toEqual({ bytes: 14_336, share: 1, large: true, estimated: false })
+    skewed.sizes.dispose()
+
+    const relativeOutlier = fixture(100)
+    relativeOutlier.sizes.ensure(0, 99)
+    relativeOutlier.answer(0, row => row === 10 ? 900 : 100)
+    relativeOutlier.profiles[0].resolve({ rows: 100, complete: true, rowBytes: { min: 100, max: 900, average: 108, exact: true }, columns: [] })
+    await relativeOutlier.settle()
+    expect(relativeOutlier.sizes.get(0)?.large).toBe(false)
+    expect(relativeOutlier.sizes.get(10)?.large).toBe(true)
+    relativeOutlier.sizes.dispose()
+
+    const allHuge = fixture(50)
+    allHuge.sizes.ensure(0, 49)
+    allHuge.answer(0, () => 8192)
+    allHuge.profiles[0].resolve({ rows: 50, complete: true, rowBytes: { min: 8192, max: 8192, average: 8192, exact: true }, columns: [] })
+    await allHuge.settle()
+    expect(allHuge.sizes.get(0)?.large).toBe(true)
+    allHuge.sizes.dispose()
   })
 
   it('profiles a loading set only once it completes, and rereads a block read short', async () => {
