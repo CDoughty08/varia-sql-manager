@@ -17,7 +17,8 @@ import {
 import { liveProbes } from '../../../shared/live/catalog'
 import { actionContextValues, actionMenuReasons, actionMenuState } from '../../../shared/actions/catalog'
 import type { CommandArgs } from '../core/types'
-import type { ExplorerService } from '../explorer/ExplorerService'
+import type { AgentLongRunSource, ExplorerService } from '../explorer/ExplorerService'
+import { isAgentServiceAction } from '../../../shared/actions/catalog'
 import type { LiveFacet } from '../../../shared/live/schema'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
@@ -87,6 +88,8 @@ export interface JobActivityEnd { readonly code?: string; readonly message: stri
 export interface JobActivityServiceOptions extends CustomDocumentTargetOptions {
   /** The Agent node's service verbs (AG-10): Start in the Agent-stopped banner runs explorer.startAgent on this node. */
   readonly explorer?: Pick<ExplorerService, 'agentMenuNode'>
+  /** The long-run registry: a start, stop or restart of Agent ending on a monitor's connection reads it again at once (AG-10). */
+  readonly longRuns?: AgentLongRunSource
   readonly api: Pick<VariaApi, 'executeObjectAction' | 'describeObject'>
   readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'activate' | 'getSnapshot' | 'subscribe'>
   readonly panes: Pick<PaneService, 'getSnapshot' | 'subscribe'>
@@ -181,7 +184,18 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
     this.registration = options.documents.registerProvider(this)
     const follow = () => { try { this.following() } catch (failure) { onUnexpectedError(failure) } }
     const stopDocuments = options.documents.subscribe(follow), stopConnections = options.connections.subscribe(follow)
-    this.stopFollowing = () => { stopDocuments(); stopConnections() }
+    let running = this.agentRuns()
+    const stopRuns = options.longRuns?.subscribe(() => {
+      const now = this.agentRuns()
+      const ended = [...running].filter(connectionId => !now.has(connectionId))
+      running = now
+      for (const state of Object.values(this.getSnapshot().documents)) if (state.connectionId && ended.includes(state.connectionId)) this.refresh(state.id)
+    })
+    this.stopFollowing = () => { stopDocuments(); stopConnections(); stopRuns?.() }
+  }
+  /** The connections a start, stop or restart of Agent runs on now. */
+  private agentRuns(): Set<string> {
+    return new Set((this.options.longRuns?.getSnapshot().runs ?? []).filter(run => isAgentServiceAction(run.kind)).map(run => run.connectionId))
   }
 
   get(id: string | undefined): JobActivityState | undefined { return id === undefined ? undefined : this.getSnapshot().documents[id] }

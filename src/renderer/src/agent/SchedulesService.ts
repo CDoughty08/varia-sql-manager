@@ -203,7 +203,8 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
     this.generations.set(id, (this.generations.get(id) ?? 0) + 1)
     this.patch(id, { phase: 'ready', model, drafts, selected, scheduleJobs: undefined, error: undefined, notice, revision: current.revision + 1 })
     this.dirtyChanged(id)
-    if (!model.sysadmin && !current.operatorRole) void this.readRole(id, connectionId)
+    if (current.operatorRole && this.roleReads.get(id) !== connectionId) this.patch(id, { operatorRole: undefined })
+    if (!model.sysadmin && this.roleReads.get(id) !== connectionId) void this.readRole(id, connectionId)
     // Opened on a new schedule: its Name is drawn only once the first read is in, so the caret goes there now, and an untouched draft
     // made from the local date moves to the server's (its start date and weekday).
     if (!current.model && selected === newScheduleKey) {
@@ -454,15 +455,15 @@ ${scheduleId}`, pending = this.jobReads.get(key)
     }
     return true
   }
-  /** Below sysadmin, whether the login is in SQLAgentOperatorRole (agent.profile), once per document; a failed read leaves the box greyed. */
-  private readonly roleReads = new Set<string>()
+  /** Below sysadmin, whether the login is in SQLAgentOperatorRole (agent.profile), once per document and connection (a reconnect as another login reads it again); a failed read leaves the box greyed. */
+  private readonly roleReads = new Map<string, string>()
   private async readRole(id: string, connectionId: string): Promise<void> {
     const profile = this.options.api.agentProfile
-    if (!profile || this.roleReads.has(id)) return
-    this.roleReads.add(id)
+    if (!profile || this.roleReads.get(id) === connectionId) return
+    this.roleReads.set(id, connectionId)
     const result = await this.request(id, requestId => profile({ connectionId, requestId }))
     // A read that answered settles it for the document (in the role or not); only a failed one is tried again with the next read.
-    if (!result?.ok) { this.roleReads.delete(id); return }
+    if (!result?.ok) { if (this.roleReads.get(id) === connectionId) this.roleReads.delete(id); return }
     if (result.value.profile?.operatorRole && this.connectionOf(id) === connectionId) this.patch(id, { operatorRole: true })
   }
   /** The grid's Enabled box: saved at once (enable or disable, guarded), whatever the schedule's draft holds. */
@@ -620,6 +621,7 @@ ${scheduleId}`, pending = this.jobReads.get(key)
     this.requests.delete(id)
     this.generations.delete(id)
     this.reads.delete(id)
+    this.roleReads.delete(id)
     this.targetBindings.forget(id)
     this.publish({ documents: Object.fromEntries(Object.entries(this.getSnapshot().documents).filter(([key]) => key !== id)) })
   }

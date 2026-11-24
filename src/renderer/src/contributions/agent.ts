@@ -48,6 +48,8 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
     return Number.isInteger(archive) && archive >= 0 ? archive : 0
   }
   const monitorOf = (args?: CommandArgs): string | undefined => { const id = args?.tabId ?? documents.getSnapshot().activeId; return jobActivity.get(id) ? id : undefined }
+  // Run from Job Activity Monitor, a one-job verb (Open, Create Job Like This) needs exactly one job selected there (AG-10, its row menu).
+  const oneInMonitor = (args?: CommandArgs): boolean => { const id = explorerNodeOf(args) ? undefined : monitorOf(args); return !id || jobActivity.get(id)?.selected.length === 1 }
   // The job document (AG-6a): Open Job and New Job on a server picked as Job Activity Monitor's is, and the document's verbs on the
   // job document whose header runs them, else the active one.
   const withServer = (args: CommandArgs | undefined, title: string, then: (connectionId: string) => void) => {
@@ -156,7 +158,8 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
     }))
     ,
     commands.register('agent.openJob', {
-      when: args => { const node = explorerNodeOf(args); return !node || (!node.lost && connections.isLiveSqlServer(node.connectionId)) },
+      when: args => { const node = explorerNodeOf(args); return (!node || (!node.lost && connections.isLiveSqlServer(node.connectionId))) && oneInMonitor(args) },
+      unavailable: args => oneInMonitor(args) ? undefined : 'Select one job to open it.',
       run: async args => {
         // From Job Activity Monitor (its Open, a double-click or Enter): the one job selected there.
         const monitor = monitorOf(args)
@@ -194,7 +197,8 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
     // Create Job Like This (AG-6e): the job of the menu's node, of Job Activity Monitor's one selected row, or of the active job document;
     // else the palette asks for a server and a job.
     commands.register('agent.createJobLike', {
-      when: args => { const node = explorerNodeOf(args); return !node || (!node.lost && connections.isLiveSqlServer(node.connectionId)) },
+      when: args => { const node = explorerNodeOf(args); return (!node || (!node.lost && connections.isLiveSqlServer(node.connectionId))) && oneInMonitor(args) },
+      unavailable: args => oneInMonitor(args) ? undefined : 'Select one job to create a job like it.',
       run: async args => {
         const like = (connectionId: string, name: string) => report(() => jobDocuments.createLike(connectionId, name), 'Create Job Like This could not open.')
         // A job's menu names its job, whichever document is active.

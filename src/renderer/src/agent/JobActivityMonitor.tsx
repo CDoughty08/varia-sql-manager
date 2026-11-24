@@ -2,7 +2,7 @@
 // cannot run jobs, the tiles, the view chips and filter box, the live grid of jobs (LiveGridPane: the results grid's GridView,
 // no React per row) with its funnels, the bulk bar, the selected job's last run in place, and the bulk verbs' result lines.
 // JobActivityService keeps every state; this only draws it.
-import { useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from 'react'
 import {
   agentBanner, agentBulkCommands, agentBulkFormVerbs, agentBulkTitles, agentBulkVerbs, agentJobFilterColumns, agentJobFilterLimits, agentJobTiles, agentJobViewSpecs, agentJobsProbe, agentServiceProbe,
   agentStatusOverride, jobActivityTitle, tileValue, viewCount
@@ -84,6 +84,21 @@ function BulkResults({ state, onStop, onClose }: { readonly state: JobActivitySt
 }
 
 /** A Job Activity Monitor document. */
+type StartAgentWorkbench = Pick<ReturnType<typeof useWorkbench>, 'explorer' | 'explorerStatus' | 'longRuns' | 'dialogs' | 'commands' | 'jobActivity'>
+/** Start Agent's state in a monitor's banner, as a string that changes only when the button would (AG-10). */
+function startAgentKey(workbench: StartAgentWorkbench, documentId: string): string {
+  const start = workbench.jobActivity.startAgentTarget(documentId)
+  return start ? `${workbench.commands.isEnabled('explorer.startAgent', start.args)}|${start.reason ?? ''}|${!!workbench.dialogs.current}` : ''
+}
+function useStartAgentButton(workbench: StartAgentWorkbench, documentId: string): string {
+  const subscribe = useCallback((listener: () => void) => {
+    const stops = [workbench.explorer.subscribe(listener), workbench.explorerStatus.subscribe(listener), workbench.longRuns.subscribe(listener), workbench.dialogs.subscribe(listener)]
+    return () => stops.forEach(stop => stop())
+  }, [workbench])
+  const snapshot = () => startAgentKey(workbench, documentId)
+  return useSyncExternalStore(subscribe, snapshot, snapshot)
+}
+
 export default function JobActivityMonitor({ documentId }: { readonly documentId: string }) {
   const workbench = useWorkbench()
   const service = workbench.jobActivity
@@ -94,12 +109,9 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
   // The list's row menu (AG-10, agent.jobs.context through MenuService): the job verbs on the jobs selected there.
   const menuTarget = useMenuTarget<HTMLDivElement>(() => ({ kind: 'jobActivity', tabId: documentId }))
   // Start in the Agent-stopped banner (AG-10) follows the Agent node's service verb and its rules (a Linux server, Varia off Windows, a cluster).
-  // It redraws when a start, stop or restart begins or ends, a status sample arrives or a dialog opens or closes, none of which
-  // changes the monitor's own state.
-  useServiceSnapshot(workbench.explorer)
-  useServiceSnapshot(workbench.explorerStatus)
-  useServiceSnapshot(workbench.longRuns)
-  useServiceSnapshot(workbench.dialogs)
+  // A start, stop or restart beginning or ending, a status sample or a dialog opening changes it without changing the monitor's own
+  // state: the monitor redraws when the button's enabled state or reason changes, not on every tree or status publish.
+  useStartAgentButton(workbench, documentId)
   if (!state || !handle) return <EmptyState className="workspace-empty" icon="agent-activity" title={jobActivityTitle} detail="This document has closed." />
   const probe = live.probes[agentJobsProbe]
   const table = handle.table(agentJobsProbe, 0)

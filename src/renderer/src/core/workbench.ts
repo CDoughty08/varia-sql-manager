@@ -592,7 +592,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const proxyDocuments = new ProxyDocumentService({ api, documents, files, connections, targetIdOf, focus: focusAgentObject('data-agent-proxy', 'data-agent-proxy-focus') })
   const credentialDocuments = new CredentialDocumentService({ api, documents, files, connections, targetIdOf, focus: focusAgentObject('data-credential', 'data-credential-focus') })
   const jobActivity = new JobActivityService({
-    api, documents, panes, groups: editorGroups, live, connections, targetIdOf, explorer,
+    api, documents, panes, groups: editorGroups, live, connections, targetIdOf, explorer, longRuns,
     started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt),
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-jobs="${CSS.escape(id)}"] [role="grid"]`)?.focus())
   })

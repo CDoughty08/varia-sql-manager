@@ -605,7 +605,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   /**
    * A connection's SQL Server Agent node as a menu target for its service verbs from elsewhere (AG-10, Job Activity Monitor's Start Agent):
    * the tree's own row when it is loaded, else the object with the same facts and no row (id 0, so nothing is reloaded after the run). A
-   * state, startup type or cluster fact the tree has not sampled is taken from `sample` (the monitor's own service probe).
+   * `sample` (the monitor's own service probe, which draws its banner) wins over the tree's state and startup type, so the two never
+   * disagree; a cluster fact from either counts.
    */
   agentMenuNode(connectionId: string, sample?: { readonly state?: number; readonly startup?: number; readonly clustered?: boolean }): ExplorerMenuNode | undefined {
     if (!this.connectionOf(connectionId)) return undefined
@@ -613,7 +614,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     for (const node of this.nodes.values()) if (node.kind === 'agent' && node.connectionId === connectionId && (found = this.menuNode(node.id))) break
     const menu = found ?? { ...this.objectNode(connectionId, { kind: 'agent' }, 'SQL Server Agent'), id: 0, agent: this.agentFacts(connectionId) }
     const facts = menu.agent ?? this.agentFacts(connectionId)
-    return { ...menu, agent: { ...facts, ...(facts.state === undefined && sample?.state !== undefined ? { state: sample.state } : {}), ...(facts.startup === undefined && sample?.startup !== undefined ? { startup: sample.startup } : {}), ...(!facts.clustered && sample?.clustered ? { clustered: true } : {}) } }
+    return { ...menu, agent: { ...facts, ...(sample?.state !== undefined ? { state: sample.state } : {}), ...(sample?.startup !== undefined ? { startup: sample.startup } : {}), ...(!facts.clustered && sample?.clustered ? { clustered: true } : {}) } }
   }
   /** A row's node (a synthetic row's owner) as a context menu's target, with its id; undefined for a removed node. */
   menuNode(rowId: number | undefined): ExplorerMenuNode | undefined {

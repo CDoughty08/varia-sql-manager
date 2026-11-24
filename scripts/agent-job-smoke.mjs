@@ -78,6 +78,8 @@ try {
   await expect(history.getByRole('list', { name: 'Runs', exact: true }).getByRole('button')).toHaveCount(2)
   await expect(history.getByRole('button', { name: /Failed at step 2/ })).toHaveAttribute('aria-pressed', 'true')
   await expect(history.getByRole('img', { name: /^Durations of the last 2 runs, 1 failed; usual 2 s$/ })).toBeVisible()
+  // AG-10: the sparkline draws through ChartView, whose canvas sits inside the named image.
+  await expect(history.getByRole('img', { name: /^Durations of the last 2 runs/ }).locator('canvas')).toHaveCount(1)
   expect((await calls('live.subscribe')).find(call => call.source === 'agent.history')).toMatchObject({ args: { jobs: ['a1b2c3d4-0000-4000-8000-000000000001'], usual: true } })
   await expect(history.getByRole('region', { name: 'Step 2 message', exact: true })).toContainText('Violation of PRIMARY KEY constraint.')
   await expect(history.getByRole('table', { name: 'Steps of the selected run', exact: true })).toContainText('Truncate')
