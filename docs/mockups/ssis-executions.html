@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Varia mock · SSIS executions · Navigation concepts</title>
+<title>Varia mock · SSIS executions</title>
 <!-- Design mock for re-imagining SSMS's Integration Services reports (All Executions, Overview, All Messages, Execution
      Performance). Self-contained: no network, no build step. Not production code. Data is fictional. -->
 <style>
@@ -93,7 +93,13 @@ svg.i.sm { width: 12px; height: 12px; }
 .pill.running { background: var(--accentSurface); color: var(--textAccent); }
 .pill.warn { background: var(--warningSurface); color: var(--warningSurfaceText); }
 .btn { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px; color: var(--textSecondary); font-size: var(--size-sm); white-space: nowrap; }
-.btn:hover { background: var(--hover); color: var(--textStrong); }
+.btn:hover:not(:disabled) { background: var(--hover); color: var(--textStrong); }
+.btn:disabled { opacity: .4; }
+.chip.preset { border-style: dotted; }
+.chip .c { color: var(--textMuted); font-size: var(--size-xs); }
+.chip.err .c { color: var(--error); } .chip.wrn .c { color: var(--warning); }
+.grid tr.m td.t, .grid tr.m td { color: var(--textMuted); }
+.mock-bar .earlier { color: var(--textMuted); font-size: var(--size-xs); }
 .btn.outline { border-color: var(--controlBorder); }
 .ib { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; color: var(--icon); }
 .ib:hover:not(:disabled) { background: var(--hover); color: var(--textStrong); }
@@ -183,7 +189,9 @@ svg.i.sm { width: 12px; height: 12px; }
 </head>
 <body>
 <header class="mock-bar">
-  <h1>SSIS executions — navigation concepts</h1><span class="tag">mock · fictional data</span>
+  <h1>SSIS executions</h1><span class="tag">mock · fictional data</span>
+  <div class="seg" role="group" aria-label="Design"><button data-concept="D">Agreed · C with B's run page</button></div>
+  <span class="earlier">Earlier concepts</span>
   <div class="seg" role="group" aria-label="Concept">
     <button data-concept="A">A · Executions workspace</button>
     <button data-concept="B">B · Run page</button>
@@ -208,6 +216,14 @@ svg.i.sm { width: 12px; height: 12px; }
     <div class="node" style="padding-left:56px"><span class="tw">▸</span>▢ Environments</div>
     <div class="node" style="padding-left:42px"><span class="tw">▸</span>▢ Marketing</div>
     <div class="node" style="padding-left:14px"><span class="tw">▸</span>▢ SQL Server Agent</div>
+    <div class="menu" id="dbmenu" style="top:76px;left:96px" hidden>
+      <div class="mi">Properties <span class="k">Alt+Enter</span></div>
+      <div class="sep"></div>
+      <div class="mi hl" id="menu-db-exec">Executions <span class="new">new</span></div>
+      <div class="mi">Operations</div>
+      <div class="sep"></div>
+      <div class="mi">Create Folder…</div><div class="mi">Refresh <span class="k">F5</span></div>
+    </div>
     <div class="menu" id="pkgmenu" style="top:184px;left:132px">
       <div class="mi">Properties <span class="k">Alt+Enter</span></div>
       <div class="sep"></div>
@@ -288,8 +304,8 @@ const groupLabel = { e: 'Errors', w: 'Warnings', i: 'Information', o: 'Other' }
 
 // ---------- State ----------
 const params = new URLSearchParams(location.search)
-let menuOpen = true
-const state = { concept: params.get('concept') ?? 'A', theme: params.get('theme') ?? 'dark', selected: failed.id, view: 'messages', groups: new Set(['e', 'w', 'i', 'o']), task: null, scope: 'package', search: '' }
+let menuOpen = 'pkg'
+const state = { concept: params.get('concept') ?? 'D', theme: params.get('theme') ?? 'dark', selected: failed.id, view: 'messages', groups: new Set(['e', 'w', 'i', 'o']), task: null, scope: 'package', search: '' }
 // Concept C's in-document history: each entry a full place (page plus its filters, selection and view).
 const trail = { stack: [{ page: 'list' }], at: 0 }
 
@@ -441,9 +457,161 @@ function conceptC() {
 }
 function go(place) { trail.stack = trail.stack.slice(0, trail.at + 1); trail.stack.push(place); trail.at++; render() }
 
+// ---------- Agreed design: C's one document with real history, B's run page for the execution step ----------
+// catalog.operation_messages.message_type, named after the SSIS event that logged it, in the order a run logs them.
+const eventTypes = [
+  [10, 'PreValidate', 'OnPreValidate'], [20, 'PostValidate', 'OnPostValidate'], [30, 'PreExecute', 'OnPreExecute'], [60, 'Progress', 'OnProgress'],
+  [70, 'Information', 'OnInformation'], [110, 'Warning', 'OnWarning'], [120, 'Error', 'OnError'], [130, 'TaskFailed', 'OnTaskFailed'], [40, 'PostExecute', 'OnPostExecute'],
+  [50, 'StatusChange', 'Status change'], [80, 'VariableValueChanged', 'OnVariableValueChanged'], [100, 'QueryCancel', 'OnQueryCancel'], [90, 'Diagnostic', 'Diagnostic'],
+  [140, 'DiagnosticEx', 'DiagnosticEx'], [200, 'Custom', 'Custom event'], [400, 'NonDiagnostic', 'Non-diagnostic'], [-1, 'Unknown', 'Unknown']
+]
+const typeName = code => eventTypes.find(t => t[0] === code)?.[1] ?? `Type ${code}`
+const toneOf = code => code === 120 || code === 130 ? 'e' : code === 110 ? 'w' : code === 60 ? 'm' : 'i'
+const problemTypes = [110, 120, 130]
+function eventsFor(e) {
+  const out = []
+  const at = s => `02:${pad(30 + Math.floor(s / 60))}:${pad(s % 60)}.${String((s * 137) % 1000).padStart(3, '0')}`
+  const push = (type, src, msg, s, path = src === 'Daily' ? '\\Daily' : `\\Daily\\${src}`) => out.push({ type, src, msg, time: at(s), path })
+  const failedRun = e.status === 4
+  // Validation: the package, then every task in it, whether or not the run reaches it.
+  push(10, 'Daily', 'Daily:Validation has started.', 0)
+  for (const [name, kind] of tasks) {
+    push(10, name, `${name}:Validation has started.`, 0)
+    if (kind === 'Data Flow Task') push(70, name, `${name}:Information: Validation phase is beginning.`, 0)
+    push(20, name, `${name}:Validation is complete.`, 0)
+  }
+  push(20, 'Daily', 'Daily:Validation is complete.', 0)
+  push(30, 'Daily', 'Daily:Execution has started.', 0)
+  for (const [name, kind, start, len] of tasks) {
+    if (start === null) continue
+    const end = start + len
+    push(30, name, `${name}:Execution has started.`, start)
+    if (kind === 'Data Flow Task') {
+      for (const phase of ['Prepare for Execute', 'Pre-Execute', 'Execute']) push(70, name, `${name}:Information: ${phase} phase is beginning.`, start)
+      for (let i = 1; i <= 12; i++) push(60, name, `${name}:Progress: Execute - ${Math.round(i * 8.3)} percent complete`, start + Math.round(len * i / 13))
+      if (name === 'Load orders') push(110, name, `${name}:Warning: Truncation may occur due to inserting data from data flow column "Notes" with a length of 4000 to database column "Notes" with a length of 1000.`, start + 40)
+    }
+    if (name === 'Load facts' && failedRun) {
+      push(120, name, 'Load facts:Error: SSIS Error Code DTS_E_OLEDBERROR. An OLE DB error has occurred. Error code: 0x80004005. An OLE DB record is available. Source: "Microsoft OLE DB Driver for SQL Server" Hresult: 0x80004005 Description: "Violation of PRIMARY KEY constraint \'PK_FactSales\'. Cannot insert duplicate key in object \'dbo.FactSales\'. The duplicate key value is (20261122, 4471)."', end, '\\Daily\\Load facts\\OLE DB Destination')
+      push(120, name, 'Load facts:Error: SSIS Error Code DTS_E_INDUCEDTRANSFORMFAILUREONERROR. The "OLE DB Destination.Inputs[OLE DB Destination Input]" failed because error code 0xC020907B occurred.', end, '\\Daily\\Load facts\\OLE DB Destination')
+      push(120, name, 'Load facts:Error: SSIS Error Code DTS_E_PROCESSINPUTFAILED. The ProcessInput method on component "OLE DB Destination" (88) failed with error code 0xC0209029.', end, '\\Daily\\Load facts\\OLE DB Destination')
+    }
+    if (kind === 'Data Flow Task') {
+      push(70, name, `${name}:Information: Post Execute phase is beginning.`, end)
+      push(70, name, `${name}:Information: "OLE DB Destination" wrote ${(len * 1873).toLocaleString('en-US')} rows.`, end)
+      push(70, name, `${name}:Information: Cleanup phase is beginning.`, end)
+    }
+    if (name === 'Load facts' && failedRun) push(130, name, 'Load facts:Task failed: Load facts', end)
+    push(40, name, `${name}:Execution is complete.`, end)
+    if (name === 'Load facts' && failedRun) break
+  }
+  const last = Math.max(e.secs, ...tasks.filter(t => t[2] !== null).map(t => t[2] + t[3]).filter(x => !failedRun || x <= 194))
+  if (failedRun) push(120, 'Daily', 'Daily:Error: The execution of the package failed. The step failed.', last)
+  push(40, 'Daily', 'Daily:Execution is complete.', last)
+  return out.reverse()
+}
+
+// The document's history: each entry is a place plus the filters, selection and scroll it had when you left it.
+const trailD = { stack: [{ page: 'list' }], at: 0 }
+const fresh = () => ({ types: null, task: null, scroll: 0 })
+let filtersD = fresh()
+function saveD() { const body = document.getElementById('dbody'); Object.assign(trailD.stack[trailD.at], { filters: { ...filtersD, scroll: body ? body.scrollTop : 0 } }) }
+function restoreD() { filtersD = trailD.stack[trailD.at].filters ? { ...trailD.stack[trailD.at].filters } : fresh(); render(); const body = document.getElementById('dbody'); if (body) body.scrollTop = filtersD.scroll }
+function goD(place) { saveD(); trailD.stack = trailD.stack.slice(0, trailD.at + 1); trailD.stack.push(place); trailD.at++; filtersD = fresh(); render(); const body = document.getElementById('dbody'); if (body) body.scrollTop = 0 }
+function moveD(d) { const at = Math.max(0, Math.min(trailD.stack.length - 1, trailD.at + d)); if (at === trailD.at) return; saveD(); trailD.at = at; restoreD() }
+const placeName = p => p.page === 'list' ? 'SSISDB' : p.page === 'pkg' ? 'Daily.dtsx' : `Execution ${p.exec}`
+
+// Grids are the core grid (LocalGrid): every header sorts and filters, and Copy, Copy with Headers and Save Results As come from its menu.
+const funnel = '<svg class="i sm" viewBox="0 0 16 16" style="opacity:.55;margin-left:4px;vertical-align:-2px"><path d="M2.5 3h11l-4.2 5v4.5l-2.6-1.3V8Z"/></svg>'
+const th = (label, extra = '') => `<th ${extra}>${label}${funnel}</th>`
+function coreListGrid(rows, showPkg) {
+  return `<div class="grid"><table><thead><tr>${th('ID')}${th('Status')}${showPkg ? th('Folder \\ project \\ package') : ''}${th('Started ▾')}${th('Duration')}${th('Errors')}${th('Warnings')}${th('Caller')}</tr></thead><tbody>${
+    rows.map(e => `<tr data-exec="${e.id}"><td class="num">${e.id}</td><td>${statusCell(e)}</td>${showPkg ? `<td>${e.folder} \\ ${e.project} \\ ${e.pkg}</td>` : ''}<td>${e.start}</td><td>${dur(e.secs)}</td><td class="num" style="color:${e.errors ? 'var(--error)' : ''}">${e.errors}</td><td class="num" style="color:${e.warnings ? 'var(--warning)' : ''}">${e.warnings}</td><td>${e.caller}</td></tr>`).join('')
+  }</tbody></table></div>`
+}
+function navD() {
+  const p = trailD.stack[trailD.at]
+  const e = p.exec ? execs.find(x => x.id === p.exec) : null
+  const crumbs = [p.page === 'list' ? '<span class="cur">SSISDB</span>' : '<a href="#" data-dgo="list">SSISDB</a>']
+  if (p.page !== 'list') crumbs.push(`${e?.folder ?? 'Finance'}`, `${e?.project ?? 'Loads'}`, p.page === 'pkg' ? '<span class="cur">Daily.dtsx</span>' : `<a href="#" data-dgo="pkg">${e.pkg}</a>`)
+  if (e) crumbs.push(`<span class="cur">Execution ${e.id}</span>`)
+  const prev = trailD.stack[trailD.at - 1], next = trailD.stack[trailD.at + 1]
+  return `<div class="navbar"><button class="ib" data-dhist="-1" ${prev ? '' : 'disabled'} title="${prev ? `Back to ${placeName(prev)}` : 'Back'} (Alt+Left, mouse back)">${icons.back}</button><button class="ib" data-dhist="1" ${next ? '' : 'disabled'} title="${next ? `Forward to ${placeName(next)}` : 'Forward'} (Alt+Right, mouse forward)">${icons.fwd}</button><span class="crumbs">${crumbs.join('<span class="sep">›</span>')}</span>
+    <span class="histhint"><span class="kbd">Alt</span>+<span class="kbd">←</span> / <span class="kbd">→</span> and the mouse's back/forward buttons walk this document's history · ${trailD.at + 1} of ${trailD.stack.length}</span></div>`
+}
+function listPageD() {
+  return `${navD()}<div class="dhead"><span class="title">Integration Services</span><span class="sub">server-a · SSISDB · last 7 days · live</span><span class="grow"></span><button class="btn">${icons.refresh} Refresh</button></div>
+    <div class="body">
+      <div class="cards">
+        <div class="card err"><button class="v" data-dexec="${failed.id}" title="Open the newest failed run">${execs.filter(x => x.status === 4).length}</button><div class="k">Failed executions</div></div>
+        <div class="card"><div class="v">${execs.filter(x => x.status === 2).length}</div><div class="k">Running</div></div>
+        <div class="card"><div class="v">${execs.filter(x => x.status === 7).length}</div><div class="k">Succeeded</div></div>
+        <div class="card"><div class="v">0</div><div class="k">Validations</div></div>
+      </div>
+      <div class="row"><span class="label">Kind</span><button class="chip" aria-pressed="true">Executions</button><button class="chip">Validations</button><button class="chip">Other operations</button><span class="label" style="margin-left:6px">Status</span><button class="chip" aria-pressed="true">Any</button><button class="chip">Failed</button><button class="chip">Running</button><span class="label" style="margin-left:6px">Window</span><button class="chip" aria-pressed="true">Last 7 days</button></div>
+      ${coreListGrid(execs, true)}
+      <div class="note">One list replaces All Executions, All Validations and All Operations. Opening a row drills in here; Back returns with the chips, the grid's sort and filters, and the scroll position as they were.</div>
+    </div>`
+}
+function pkgPageD() {
+  const ok = daily.filter(x => x.status === 7)
+  return `${navD()}<div class="dhead"><span class="title">Daily.dtsx</span><span class="sub">Finance \\ Loads</span><span class="grow"></span><button class="btn" data-dexec="${daily[0].id}">Last run ${icons.fwd}</button><button class="btn">${icons.refresh} Refresh</button></div>
+    <div class="facts"><span>Runs in 7 days <b>${daily.length}</b></span><span>Failed <b class="err">${daily.filter(x => x.status === 4).length}</b></span><span>Usual duration <b>00:05:12</b> (median of ${ok.length} succeeded)</span><span>Last run <b>${daily[0].start}</b> ${statuses[daily[0].status][0]}</span></div>
+    <div class="body">${performanceView(daily[0]).split('<div class="section-title">Tasks')[0].replace(/ cur"/, '"').replace('click a bar to open that run here', 'click a bar to open that run')}${coreListGrid(daily, false)}</div>`
+}
+function messagesViewD(e) {
+  const all = eventsFor(e)
+  const counts = new Map()
+  all.forEach(m => counts.set(m.type, (counts.get(m.type) ?? 0) + 1))
+  const present = eventTypes.filter(t => counts.has(t[0]))
+  const on = code => filtersD.types === null || filtersD.types.has(code)
+  let shown = all.filter(m => on(m.type))
+  if (filtersD.task) shown = shown.filter(m => m.src === filtersD.task)
+  const firstError = all.filter(m => m.type === 120).at(-1)
+  const problems = filtersD.types && filtersD.types.size === problemTypes.length && problemTypes.every(c => filtersD.types.has(c))
+  return `
+    ${firstError ? `<div class="callout"><b>First error</b> · ${firstError.time} · ${firstError.src} <span class="where">${firstError.path}</span><br>${firstError.msg.slice(0, 260)}… <button class="btn" data-jump style="color:inherit;height:20px">${icons.jump} Show in list</button></div>` : ''}
+    <div class="row">
+      <button class="chip preset" data-dpreset="all" aria-pressed="${filtersD.types === null}">All (${all.length})</button>
+      <button class="chip preset" data-dpreset="problems" aria-pressed="${!!problems}">Problems (${problemTypes.reduce((n, c) => n + (counts.get(c) ?? 0), 0)})</button>
+      <span class="label" style="margin-left:4px">Event</span>
+      ${present.map(([code, name, event]) => `<button class="chip ${toneOf(code) === 'e' ? 'err' : toneOf(code) === 'w' ? 'wrn' : ''}" data-dtype="${code}" aria-pressed="${filtersD.types !== null && on(code)}" title="${event} · message type ${code}">${name} <span class="c">${counts.get(code)}</span></button>`).join('')}
+      ${filtersD.task ? `<button class="chip scope" data-task="">Task: ${filtersD.task} <span class="x">✕</span></button>` : ''}
+    </div>
+    <div class="grid" id="msggrid"><table><thead><tr>${th('Time ▾')}${th('Event')}${th('Source')}${th('Message', 'style="width:100%"')}${th('Execution path')}</tr></thead><tbody>${
+      shown.map(m => `<tr class="${toneOf(m.type)}"><td>${m.time}</td><td class="t">${typeName(m.type)}</td><td>${m.src}</td><td title="${m.msg.replace(/"/g, '&quot;')}">${m.msg}</td><td>${m.path}</td></tr>`).join('')
+    }</tbody></table></div>
+    <div class="note">${shown.length.toLocaleString('en-US')} of ${all.length.toLocaleString('en-US')} messages, newest first, in one list (no pages). A chip picks event types: the first click shows only that type, later clicks add or remove one. Every column also sorts and filters from its header.</div>`
+}
+function execPageD(e) {
+  const i = daily.findIndex(x => x.id === e.id)
+  return `${navD()}
+    <div class="dhead"><span class="title">Execution ${e.id}</span>${pill(e)}<span class="sub">${e.folder} \\ ${e.project} \\ ${e.pkg}</span><span class="grow"></span>
+      <button class="btn" data-drun="1" ${i >= 0 && daily[i + 1] ? '' : 'disabled'} title="The previous run of ${e.pkg}">${icons.back} Older run</button><button class="btn" data-drun="-1" ${i > 0 ? '' : 'disabled'} title="The next run of ${e.pkg}">Newer run ${icons.fwd}</button>
+      <button class="btn">${icons.refresh} Refresh</button></div>
+    <div class="facts"><span>Started <b>${e.start}</b></span><span>Duration <b>${dur(e.secs)}</b> (usual 00:05:12)</span><span>Errors <b class="err">${e.errors}</b></span><span>Warnings <b class="warn">${e.warnings}</b></span><span>Caller <b>Agent job "Nightly" step 2</b></span><span>Environment <b>.\\Prod</b></span></div>
+    <div class="body" id="dbody" style="overflow:auto">
+      ${e.status === 4 ? `<div class="callout"><b>Failed at Load facts</b> after ${dur(e.secs)} · ${e.errors} errors · Rebuild indexes and Notify did not run.</div>` : ''}
+      ${performanceView(e, { clickable: true })}
+      <div class="section-title">Messages</div>
+      <div style="display:flex;flex-direction:column;gap:8px;min-height:440px">${messagesViewD(e)}</div>
+      <details><summary class="section-title" style="cursor:default">Details: environment, executed as, logging level, server, parameters used</summary>${overviewView(e).replace(/<div class="callout">[\s\S]*?<\/div>/, '').replace(/<th>([^<]*)<\/th>/g, (_, l) => th(l))}</details>
+    </div>`
+}
+function conceptD() {
+  tabs([['Integration Services - server-a', true]])
+  const p = trailD.stack[trailD.at]
+  return p.page === 'list' ? listPageD() : p.page === 'pkg' ? pkgPageD() : execPageD(execs.find(x => x.id === p.exec))
+}
+
 // ---------- Rendering ----------
 function tabs(list) { document.getElementById('tabs').innerHTML = `<div class="tab">SQLQuery1.sql</div>` + list.map(([n, on]) => `<div class="tab ${on ? 'on' : ''}">${n} <span style="opacity:.5">✕</span></div>`).join('') }
 const notes = {
+  D: `<b>Agreed · C with B's run page.</b> One Integration Services document per server that drills in place: SSISDB → package → execution. The execution step is B's run page on one scroll, with no sub-pages.
+      <ul><li><b>Open it from:</b> SSISDB's <b>Executions</b> (the list); a package's <b>Executions</b> (its page) or <b>Last run</b>; a job History link; Operations' View Messages. Right-click SSISDB or Daily.dtsx to see the menus.</li>
+      <li><b>History:</b> Back and Forward (Alt+←/→, the mouse's buttons) walk every place: list, package, run, and older/newer runs. Each place keeps its chips, task filter and scroll position.</li>
+      <li><b>Run page:</b> facts; this run against recent runs; the task timeline (click a task to filter the messages); every message in one list with the first error pinned. Event chips match SSIS's message types, PreValidate through PostExecute. Details fold away at the bottom.</li>
+      <li><b>Grids:</b> every grid is the core grid, so its header sort and filters, Copy and Save Results As come for free.</li></ul>`,
   A: `<b>A · Executions workspace.</b> One live document per server lists executions; picking one shows Overview, Messages and Performance beside the list, so nothing opens or jumps.
       <ul><li>Right-click Daily.dtsx in Object Explorer for its menu. SSISDB's menu opens it for every package; a package's or project's <b>Executions</b> opens it scoped to that object (the dashed chip; ✕ widens it). A job History link and Operations' View Messages open it with that run selected.</li>
       <li>↑/↓ walks runs with the same tab open: compare yesterday's failure with today's in place. <b>Open in tab</b> pins one run when you need two side by side.</li>
@@ -462,26 +630,48 @@ function render() {
   document.querySelectorAll('[data-concept]').forEach(b => b.setAttribute('aria-pressed', b.dataset.concept === state.concept))
   document.querySelectorAll('[data-theme-set]').forEach(b => b.setAttribute('aria-pressed', b.dataset.themeSet === state.theme))
   document.getElementById('note').innerHTML = notes[state.concept]
-  document.getElementById('pkgmenu').hidden = state.concept === 'C' || !menuOpen
-  document.getElementById('menu-last').style.display = state.concept === 'B' ? '' : 'none'
-  document.getElementById('menu-exec').style.display = state.concept === 'A' ? '' : 'none'
-  document.getElementById('doc').innerHTML = state.concept === 'A' ? conceptA() : state.concept === 'B' ? conceptB() : conceptC()
+  document.getElementById('pkgmenu').hidden = state.concept === 'C' || menuOpen !== 'pkg'
+  document.getElementById('dbmenu').hidden = state.concept !== 'D' || menuOpen !== 'db'
+  document.getElementById('menu-last').style.display = state.concept === 'B' || state.concept === 'D' ? '' : 'none'
+  document.getElementById('menu-exec').style.display = state.concept === 'A' || state.concept === 'D' ? '' : 'none'
+  document.getElementById('doc').innerHTML = state.concept === 'A' ? conceptA() : state.concept === 'B' ? conceptB() : state.concept === 'C' ? conceptC() : conceptD()
   const search = document.getElementById('msgsearch')
   if (search) search.oninput = () => { state.search = search.value; const pos = search.selectionStart; render(); const s = document.getElementById('msgsearch'); s.focus(); s.setSelectionRange(pos, pos) }
   const u = new URL(location.href); u.searchParams.set('concept', state.concept); u.searchParams.set('theme', state.theme); window.history.replaceState(null, "", u)
 }
 
-document.addEventListener('contextmenu', ev => { if (ev.target.closest('#n-pkg')) { ev.preventDefault(); menuOpen = true; render() } })
+document.addEventListener('contextmenu', ev => {
+  if (ev.target.closest('#n-pkg')) { ev.preventDefault(); menuOpen = 'pkg'; render() }
+  else if (ev.target.closest('#n-ssisdb') && state.concept === 'D') { ev.preventDefault(); menuOpen = 'db'; render() }
+})
 document.addEventListener('click', ev => {
-  if (menuOpen && !ev.target.closest('#pkgmenu')) { menuOpen = false; document.getElementById('pkgmenu').hidden = true }
-  const t = ev.target.closest('button, tr[data-exec], a[data-go], .mi')
+  if (menuOpen && !ev.target.closest('.menu')) { menuOpen = null; document.getElementById('pkgmenu').hidden = true; document.getElementById('dbmenu').hidden = true }
+  const t = ev.target.closest('button, tr[data-exec], a[data-go], a[data-dgo], [data-task], .mi')
   if (!t) return
-  if (t.id === 'menu-exec') { menuOpen = false; state.scope = 'package'; state.concept = 'A'; return render() }
-  if (t.id === 'menu-last') { menuOpen = false; state.selected = daily[0].id; return render() }
-  if (t.classList.contains('mi')) { menuOpen = false; return render() }
+  if (state.concept === 'D' && (t.id === 'menu-exec' || t.id === 'menu-last' || t.id === 'menu-db-exec')) { menuOpen = null; return goD(t.id === 'menu-exec' ? { page: 'pkg' } : t.id === 'menu-last' ? { page: 'exec', exec: daily[0].id } : { page: 'list' }) }
+  if (t.id === 'menu-exec') { menuOpen = null; state.scope = 'package'; state.concept = 'A'; return render() }
+  if (t.id === 'menu-last') { menuOpen = null; state.selected = daily[0].id; return render() }
+  if (t.classList.contains('mi')) { menuOpen = null; return render() }
   if (t.dataset.concept) { state.concept = t.dataset.concept; state.task = null; state.search = ''; return render() }
   if (t.dataset.themeSet) { state.theme = t.dataset.themeSet; return render() }
   if (t.dataset.group) { state.groups.has(t.dataset.group) ? state.groups.delete(t.dataset.group) : state.groups.add(t.dataset.group); if (!state.groups.size) state.groups = new Set(['e', 'w', 'i', 'o']); return render() }
+  if (state.concept === 'D') {
+    if (t.dataset.task !== undefined) { filtersD.task = t.dataset.task && filtersD.task !== t.dataset.task ? t.dataset.task : null; const y = document.getElementById('dbody')?.scrollTop; render(); document.getElementById('dbody').scrollTop = y; return }
+    if (t.dataset.dtype) {
+      const code = Number(t.dataset.dtype)
+      if (filtersD.types === null) filtersD.types = new Set([code])
+      else { filtersD.types.has(code) ? filtersD.types.delete(code) : filtersD.types.add(code); if (!filtersD.types.size) filtersD.types = null }
+      const y = document.getElementById('dbody')?.scrollTop; render(); document.getElementById('dbody').scrollTop = y; return
+    }
+    if (t.dataset.dpreset) { filtersD.types = t.dataset.dpreset === 'all' ? null : new Set(problemTypes); const y = document.getElementById('dbody')?.scrollTop; render(); document.getElementById('dbody').scrollTop = y; return }
+    if (t.dataset.dhist) return moveD(Number(t.dataset.dhist))
+    if (t.dataset.dgo) { ev.preventDefault(); return goD({ page: t.dataset.dgo }) }
+    if (t.dataset.drun) { const p = trailD.stack[trailD.at]; const i = daily.findIndex(x => x.id === p.exec) + Number(t.dataset.drun); if (daily[i]) goD({ page: 'exec', exec: daily[i].id }); return }
+    if (t.dataset.dexec) return goD({ page: 'exec', exec: Number(t.dataset.dexec) })
+    if (t.hasAttribute('data-jump')) { const row = [...document.querySelectorAll('#msggrid tr.e')].filter(r => r.cells[1].textContent === 'Error').at(-1); if (row) { row.scrollIntoView({ block: 'center' }); row.classList.add('sel') } return }
+    if (t.dataset.exec) { const id = Number(t.dataset.exec); if (trailD.stack[trailD.at].exec !== id) goD({ page: 'exec', exec: id }); return }
+    if (t.dataset.concept || t.dataset.themeSet) { /* falls through */ } else return
+  }
   if (t.dataset.task !== undefined) { state.task = t.dataset.task && state.task !== t.dataset.task ? t.dataset.task : null; return render() }
   if (t.dataset.scope) { state.scope = t.dataset.scope; return render() }
   if (t.dataset.step) { const i = daily.findIndex(x => x.id === state.selected) + Number(t.dataset.step); if (daily[i]) state.selected = daily[i].id; return render() }
@@ -502,6 +692,7 @@ document.addEventListener('keydown', ev => {
   if (ev.altKey && (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight')) {
     ev.preventDefault()
     const d = ev.key === 'ArrowLeft' ? -1 : 1
+    if (state.concept === 'D') moveD(d)
     if (state.concept === 'C') { trail.at = Math.max(0, Math.min(trail.stack.length - 1, trail.at + d)); render() }
     if (state.concept === 'B') { const i = daily.findIndex(x => x.id === state.selected) - d; if (daily[i]) { state.selected = daily[i].id; render() } }
   }
@@ -511,6 +702,7 @@ document.addEventListener('keydown', ev => {
     if (list[i]) { state.selected = list[i].id; render() }
   }
 })
+document.addEventListener('mouseup', ev => { if (state.concept === 'D' && (ev.button === 3 || ev.button === 4)) { ev.preventDefault(); moveD(ev.button === 3 ? -1 : 1) } })
 document.addEventListener('mouseup', ev => { if (state.concept === 'C' && (ev.button === 3 || ev.button === 4)) { ev.preventDefault(); trail.at = Math.max(0, Math.min(trail.stack.length - 1, trail.at + (ev.button === 3 ? -1 : 1))); render() } })
 render()
 </script>
