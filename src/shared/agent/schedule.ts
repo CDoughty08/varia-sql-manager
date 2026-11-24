@@ -552,25 +552,29 @@ const momentOfModified = (text: string | undefined): AgentMoment | undefined => 
 }
 /**
  * One link's anchor, the moment its every-n cycle counts from, as fresh as the read allows: the job's next run from sysjobactivity when it
- * is a run of this schedule (Agent rewrites it at once; it is the earliest across the job's schedules, so a run of another one is passed
- * over); else sysjobschedules' pair value when it is a run of this timing and the schedule was saved long enough ago for Agent's periodic
- * write to have followed; else the last save itself, where Agent restarted the cycle; undefined when none is known.
+ * is a run of this schedule on the cycle the pair value or a recent save gives (Agent rewrites it at once, but it is the earliest across
+ * the job's schedules, so another schedule's run on this one's off week must not move the cycle); else sysjobschedules' pair value when it
+ * is a run of this timing and the schedule was saved long enough ago for Agent's periodic write to have followed; else the last save
+ * itself, where Agent restarted the cycle; undefined when none is known.
  */
 export function linkAnchor(link: AgentNextRunLink, schedule: AnchoredSchedule, now: AgentMoment): AgentMoment | undefined {
   return writtenAnchor(link, schedule, now) ?? momentOfModified(schedule.modified)
 }
 /** The anchor Agent wrote for a link (linkAnchor's first two sources), or undefined. */
 function writtenAnchor(link: AgentNextRunLink, schedule: AnchoredSchedule, now: AgentMoment): AgentMoment | undefined {
-  if (link.jobNextRunDate !== undefined && link.jobNextRunTime !== undefined) {
-    const at = { date: link.jobNextRunDate, time: link.jobNextRunTime }
-    if (isRunOf(schedule, at)) return at
-  }
   const saved = momentOfModified(schedule.modified)
+  const savedLately = !!saved && momentSeconds(now) - momentSeconds(saved) < pairWriteSeconds
+  let pair: AgentMoment | undefined
   if (link.nextRunDate !== undefined && link.nextRunTime !== undefined) {
     const at = { date: link.nextRunDate, time: link.nextRunTime }
-    if (isRunOf(schedule, at) && (!saved || momentSeconds(now) - momentSeconds(saved) >= pairWriteSeconds)) return at
+    if (!savedLately && isRunOf(schedule, at)) pair = at
   }
-  return undefined
+  if (link.jobNextRunDate !== undefined && link.jobNextRunTime !== undefined) {
+    // Its cycle must be the pair's, or the save's when that is recent; with neither (a pair Agent has not written yet, just attached) its own.
+    const at = { date: link.jobNextRunDate, time: link.jobNextRunTime }
+    if (isRunOf(schedule, at, pair ?? (savedLately ? saved : undefined))) return at
+  }
+  return pair
 }
 /** Agent's own next run for a saved schedule, the anchor of its every-n cycle: for one job (`jobId`), or for the schedule itself when every
  *  job using it with a known anchor keeps the same cycle (jobs attached in different weeks keep different ones, and then there is none). An

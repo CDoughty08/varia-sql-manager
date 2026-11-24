@@ -189,9 +189,10 @@ export default function SchedulesTimeline({ documentId, model: read, span, onSpa
     <div className="agent-timeline-tools" role="toolbar" aria-label="Timeline">
       <span id={spanId} className="visually-hidden">Window</span>
       <Segmented id={`${spanId}-seg`} labelledBy={spanId} value={span} onChange={value => onSpan(value as TimelineSpan)} segments={timelineSpans.map(item => ({ value: item.id, label: item.label }))} />
-      <button type="button" aria-label="Zoom in" title="Zoom in (+)" disabled={viewport.seconds <= Math.min(minViewportSeconds, seconds)} onClick={() => zoom(0.5)}><Icon name="zoom-in" /></button>
-      <button type="button" aria-label="Zoom out" title="Zoom out (-)" disabled={!zoomed} onClick={() => zoom(2)}><Icon name="zoom-out" /></button>
-      <button type="button" disabled={!zoomed} onClick={() => setViewport({ start: 0, seconds })}>Show all</button>
+      {/* aria-disabled, not disabled: a button that disables itself under the keyboard would drop focus to the page (each is a no-op then). */}
+      <button type="button" className="agent-timeline-zoom" aria-label="Zoom in" title="Zoom in (+)" aria-disabled={viewport.seconds <= Math.min(minViewportSeconds, seconds)} onClick={() => zoom(0.5)}><Icon name="zoom-in" /></button>
+      <button type="button" className="agent-timeline-zoom" aria-label="Zoom out" title="Zoom out (-)" aria-disabled={!zoomed} onClick={() => zoom(2)}><Icon name="zoom-out" /></button>
+      <button type="button" className="agent-timeline-zoom" aria-disabled={!zoomed} onClick={() => setViewport({ start: 0, seconds })}>Show all</button>
       <input type="range" className="agent-timeline-scroll" aria-label="Scroll the timeline" min={0} max={Math.max(0, seconds - viewport.seconds)} step={60} value={Math.round(viewport.start)} disabled={!zoomed}
         aria-valuetext={`${timelineClock(model, viewport.start)} to ${timelineClock(model, viewport.start + viewport.seconds)}`}
         onChange={event => setViewport(current => fitViewport({ start: Number(event.target.value), seconds: current.seconds }, seconds))} />

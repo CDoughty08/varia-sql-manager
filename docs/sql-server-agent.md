@@ -237,7 +237,8 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   now (or the start date) when the schedule is saved or attached, and from Agent's own runs after that. So wherever the read has
   sysadmin's links, the editor, the free-slot check and the Timeline count a saved, unchanged, already attached schedule from Agent's
   next run: the job's `sysjobactivity.next_scheduled_run_date` (rewritten as soon as a schedule changes) when it is a run of that
-  schedule, else `sysjobschedules.next_run_date` (rewritten every 20 minutes) if it is a run of the timing as read and the schedule was
+  schedule on the cycle of the pair value below, or of a save less than 30 minutes old (it is the job's earliest run across its
+  schedules, so another schedule's run in this one's off week does not count), else `sysjobschedules.next_run_date` (rewritten every 20 minutes) if it is a run of the timing as read and the schedule was
   saved at least 30 minutes earlier, else the schedule's last save (`date_modified`), where Agent restarted the cycle; for the
   schedule itself, the cycle every job using it keeps, or none when they differ (jobs attached in different weeks). The
   Pick preview, Attach schedule, an edited timing and below sysadmin count from now. A repeating daily window that crosses

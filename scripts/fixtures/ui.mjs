@@ -265,6 +265,9 @@ export const part = {
   restoreTimelineLog: '.restore-timeline-track .restore-timeline-log',
   restoreTimelineCovered: '.restore-timeline-track .restore-timeline-covered',
   restoreTimelineSwatch: '.restore-timeline-swatch',
+  // The Schedules Timeline (src/renderer/src/agent/TimelineView.ts): a run's bar in a lane (hidden from assistive technology, as
+  // the live region announces the active run), to click one where it is drawn.
+  agentTimelineBar: '.agent-timeline-bar:not([hidden])',
   // Stand-ins: page code gives a probe element these classes to read what the stylesheet gives that surface (a menu's
   // entrance, a selected tree row, the current dialog page, an open menu-bar button) without opening one.
   menu: '.menu',

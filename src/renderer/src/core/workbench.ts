@@ -580,7 +580,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // The Schedules document (AG-6c): Manage Schedules, and New › Schedule… with a new schedule in its editor.
   const schedules = new SchedulesService({
     api, documents, connections, targetIdOf, openJob: (connectionId, name) => { jobDocuments.openJob(connectionId, name) },
-    focus: (id, target) => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-schedules="${CSS.escape(id)}"] ${target === 'name' ? '[data-schedule-name]' : '[data-agent-schedules-focus]'}`)?.focus())
+    focus: (id, target) => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-schedules="${CSS.escape(id)}"] ${target === 'name' ? '[data-schedule-name]' : target === 'selected' ? 'button[aria-current]' : '[data-agent-schedules-focus]'}`)?.focus())
   })
   // The proxy and Credential documents (AG-8b): New's name field, else the first section's item in the list.
   const focusAgentObject = (attribute: string, field: string) => (id: string) => focusLater(() => {

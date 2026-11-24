@@ -3818,6 +3818,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 /* The Schedules Timeline (AG-14, rx-timeline): TimelineView draws the bars, ticks and now line into the lanes. */
 .agent-timeline-wrap { display: flex; flex-direction: column; gap: var(--varia-space-2); flex: 1; min-height: 0; }
 .agent-timeline-tools { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); }
+.agent-timeline-zoom[aria-disabled="true"] { opacity: .4; cursor: default; pointer-events: none; }
 .agent-timeline-scroll { flex: 0 1 200px; min-width: 80px; }
 .agent-timeline-hint { flex: 1 1 260px; min-width: 0; }
 .agent-timeline { position: relative; display: flex; flex-direction: column; min-height: 0; overflow-y: auto; overflow-x: hidden; font-size: var(--varia-size-sm); background: var(--varia-editor-background); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); }

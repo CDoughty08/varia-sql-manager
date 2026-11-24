@@ -68,7 +68,8 @@ export interface SchedulesServiceOptions extends CustomDocumentTargetOptions {
   /** Opens a job's document (the Timeline's click and Enter, AG-14); throws when it cannot. */
   readonly openJob?: (connectionId: string, name: string) => void
   /** Focus the document: its filter, or (`name`) the selected schedule's Name field, where New schedule puts the caret. */
-  readonly focus?: (id: string, target?: 'name') => void
+  /** Focus a new schedule's Name, the selected schedule's row (after the Timeline's Open schedule unmounts the focused control), or the filter. */
+  readonly focus?: (id: string, target?: 'name' | 'selected') => void
   readonly newId?: () => string
 }
 
@@ -395,6 +396,7 @@ ${scheduleId}`, pending = this.jobReads.get(key)
     const shown = visibleSchedules(state.model, state.view, state.filter).includes(record)
     this.patch(id, { mode: 'grid', ...shown ? {} : { view: 'all' as const, filter: '' } })
     this.select(id, String(scheduleId))
+    this.options.focus?.(id, 'selected')
   }
   setFilter(id: string, filter: string): void { if (this.get(id)) this.patch(id, { filter: filter.slice(0, agentLimits.nameChars) }) }
   select(id: string, key: string | undefined): void {

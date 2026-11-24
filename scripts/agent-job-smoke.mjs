@@ -12,7 +12,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { chooseExplorerMenuItem } from './fixtures/explorer-tree.mjs'
-import { closeDocumentButton, connectDialogWindow, documentFrame, documentState, documentTab, documentVerb, gridPart, liveGrid, quickInputRows, statusBar, submitConnect, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { closeDocumentButton, connectDialogWindow, documentFrame, documentState, documentTab, documentVerb, gridPart, liveGrid, part, quickInputRows, statusBar, submitConnect, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -420,12 +420,34 @@ try {
   await page.getByRole('radio', { name: 'Next 7 days', exact: true }).click()
   // Backup has only Nightly 02:30: a run each day of the week from Monday.
   await expect(timeline.getByRole('gridcell', { name: /^Backup, .*7 runs, first Mon 02:30/ })).toBeVisible()
-  await page.getByRole('button', { name: 'Zoom in', exact: true }).click()
+  // The keys walk the runs: End the last (Sunday), Left the one before it (Saturday), Home the first (Weekly reports at Monday 00:00).
+  await nightlyLane.focus()
+  await page.keyboard.press('End')
+  await expect(page.getByText(/^Nightly: Sun 02:30 to Sun 02:48,/)).toHaveCount(1)
+  await page.keyboard.press('ArrowLeft')
+  await expect(page.getByText(/^Nightly: Sat 02:30 to Sat 02:48,/)).toHaveCount(1)
+  await page.keyboard.press('Home')
+  await expect(page.getByText(/^Nightly: Mon 00:00 to Mon 00:18, schedule Weekly reports,/)).toHaveCount(1)
+  // A click on a drawn bar opens that run's job (its tab, open since Enter above).
+  await nightlyLane.locator(part.agentTimelineBar).last().click()
+  await expect(documentTab(page, 'Job Properties - Nightly')).toHaveAttribute('aria-selected', 'true')
+  await documentTab(page, 'Schedules').click()
+  const zoomIn = page.getByRole('button', { name: 'Zoom in', exact: true })
+  await zoomIn.click()
   await expect(page.getByRole('slider', { name: 'Scroll the timeline', exact: true })).toBeEnabled()
-  await overlaps.getByRole('button', { name: 'Open Nightly 02:30', exact: true }).first().click()
+  // Show all turns itself off and keeps the focus.
+  const showAll = page.getByRole('button', { name: 'Show all', exact: true })
+  await showAll.focus()
+  await page.keyboard.press('Enter')
+  await expect(showAll).toHaveAttribute('aria-disabled', 'true')
+  await expect(showAll).toBeFocused()
+  // Open schedule from the keyboard lands on the schedule's row in the grid.
+  await overlaps.getByRole('button', { name: 'Open Nightly 02:30', exact: true }).first().focus()
+  await page.keyboard.press('Enter')
   await expect(page.getByRole('region', { name: 'Schedule Nightly 02:30', exact: true })).toBeVisible()
+  await expect(scheduleGrid.getByRole('button', { name: 'Nightly 02:30', exact: true })).toBeFocused()
   await documentTab(page, 'Job Properties - Nightly').click()
-  console.log('Timeline passed: an overlap flagged and explained, the keyboard walks runs and opens the job, Next 7 days, zoom and Open schedule.')
+  console.log('Timeline passed: an overlap flagged and explained, the keyboard walks runs and opens the job, Next 7 days, a bar click, zoom keeping focus and Open schedule focusing the row.')
 
   step = 'light'
   await page.evaluate(() => window.varia.setThemePreference({ mode: 'light' }))

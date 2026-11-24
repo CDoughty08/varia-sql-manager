@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { agentNextRun, formatRun, freeSlotCheck, freq, nextRuns, noEndDate, scheduleRuns, subday, type AgentMoment, type AgentScheduleTiming } from '../src/shared/agent/schedule'
+import { agentNextRun, formatRun, freeSlotCheck, freq, linkAnchor, nextRuns, noEndDate, scheduleRuns, subday, type AgentMoment, type AgentScheduleTiming } from '../src/shared/agent/schedule'
 
 // Every expectation in the first block is what a live SQL Server 2025 Agent computed (sysjobactivity.next_scheduled_run_date) for a scratch
 // job with that one schedule, created at the `now` shown (server time, Monday 2026-11-23). tests/agent-schedule-live.test.ts repeats the
@@ -135,7 +135,17 @@ describe('runs over a window', () => {
     expect(agentNextRun(links, 7, fresh, tuesday, 'b')).toEqual({ date: 20261124, time: 115000 })
     expect(nextRuns(fresh, tuesday, 2, agentNextRun(links, 7, fresh, tuesday, 'b')).map(formatRun)).toEqual(['Mon 2026-11-30 03:00', 'Mon 2026-12-14 03:00'])
     // The job's sysjobactivity value is current: taken when it is a run of this schedule, passed over when it belongs to another one.
-    expect(agentNextRun([{ scheduleId: 7, jobId: 'E', nextRunDate: 20261130, nextRunTime: 30000, jobNextRunDate: 20261207, jobNextRunTime: 30000 }], 7, saved, tuesday)).toEqual({ date: 20261207, time: 30000 })
+    // Just attached (an attach leaves date_modified alone), Agent has written no pair value yet: the job's value keeps its own cycle.
+    expect(agentNextRun([{ scheduleId: 7, jobId: 'E', jobNextRunDate: 20261207, jobNextRunTime: 30000 }], 7, saved, tuesday)).toEqual({ date: 20261207, time: 30000 })
+    // Another schedule of the job (monthly on the 30th at 03:00) lands on this one's off week: the job's value fits the timing but not the
+    // cycle of the pair value, which stands.
+    const offWeek = { scheduleId: 7, jobId: 'E', nextRunDate: 20261207, nextRunTime: 30000, jobNextRunDate: 20261130, jobNextRunTime: 30000 }
+    expect(linkAnchor(offWeek, saved, tuesday)).toEqual({ date: 20261207, time: 30000 })
+    expect(agentNextRun([offWeek], 7, saved, tuesday)).toEqual({ date: 20261207, time: 30000 })
+    expect(agentNextRun([{ ...offWeek, jobNextRunDate: 20261221 }], 7, saved, tuesday)).toEqual({ date: 20261221, time: 30000 })
+    // Saved ten minutes ago, the pair value may predate the save: the job's value must keep the save's cycle (30 November, not 7 December).
+    expect(agentNextRun([{ ...offWeek, jobNextRunDate: 20261207 }], 7, fresh, tuesday)).toEqual({ date: 20261124, time: 115000 })
+    expect(agentNextRun([{ ...offWeek, jobNextRunDate: 20261130 }], 7, fresh, tuesday)).toEqual({ date: 20261130, time: 30000 })
     expect(agentNextRun([{ scheduleId: 7, jobId: 'E', nextRunDate: 20261207, nextRunTime: 30000, jobNextRunDate: 20261125, jobNextRunTime: 10000 }], 7, saved, tuesday)).toEqual({ date: 20261207, time: 30000 })
     expect(nextRuns(fortnightly, tuesday, 2).map(formatRun)).toEqual(['Mon 2026-11-30 03:00', 'Mon 2026-12-14 03:00'])
     expect(nextRuns(fortnightly, tuesday, 2, agentNextRun(links, 7, saved, tuesday)).map(formatRun)).toEqual(['Mon 2026-12-07 03:00', 'Mon 2026-12-21 03:00'])
