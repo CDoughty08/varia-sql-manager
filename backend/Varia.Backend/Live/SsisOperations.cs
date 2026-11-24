@@ -422,15 +422,7 @@ internal sealed class SsisOperationsReader(SsisCatalog catalog, SsisOperationsLi
 
     public async Task<LiveReaderSample> ReadAsync(SqlConnection connection, string scopePrologue, LiveDue item, Func<string, string, string>? testText, CancellationToken token)
     {
-        SsisOperationsFilter filter;
-        lock (gate)
-        {
-            // New args (not a Reset, which reads the same filters again) until a sample under them is written.
-            if (changed && !ReferenceEquals(pending, window.Filter)) refiltering = true;
-            if (changed) window.Use(pending);
-            changed = false;
-            filter = window.Filter;
-        }
+        var filter = Take();
         var at = now();
         window.Begin(at);
         var baseline = window.NeedsBaseline;
@@ -496,9 +488,28 @@ internal sealed class SsisOperationsReader(SsisCatalog catalog, SsisOperationsLi
         // The final tiles repeat their last count between reads.
         for (var i = 0; i < tiles.Count; i++) if (tiles[i].LastHours is not null) values[i] = i < counts.Length ? counts[i] : null;
         var raw = new LiveRawSample(null, null, values, new double?[values.Length]);
+        return new(raw, [Table()], [], Status: [new LiveStatus("newest", window.Newest)]);
+    }
+
+    /// <summary>The filters a sample reads under: new ones (the subscribe args' at the first sample, then live.update's; never a
+    /// Reset, which reads the same filters again) mark the window refiltered until a sample under them returns its rows.</summary>
+    internal SsisOperationsFilter Take()
+    {
+        lock (gate)
+        {
+            if (changed && !ReferenceEquals(pending, window.Filter)) refiltering = true;
+            if (changed) window.Use(pending);
+            changed = false;
+            return window.Filter;
+        }
+    }
+
+    /// <summary>The window's rows as a sample returns them: refiltered when they are the first under new filters.</summary>
+    internal LiveReaderTable Table()
+    {
         var refiltered = refiltering;
         refiltering = false;
-        return new(raw, [new LiveReaderTable(0, window.Rows(), Refiltered: refiltered)], [], Status: [new LiveStatus("newest", window.Newest)]);
+        return new(0, window.Rows(), Refiltered: refiltered);
     }
 
     private void Bind(SqlCommand command, SsisOperationsFilter filter, long after, long[] open, SsisOperationsWatermarks marks)
