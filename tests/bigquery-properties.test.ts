@@ -518,6 +518,9 @@ describe('BigQueryPropertiesTab UI', () => {
       expect(el.querySelector('.inspector-kpi-strip')?.textContent).toContain('4.4×')
       expect(el.querySelector('.inspector-vitals-rail')).not.toBeNull()
       expect(el.querySelector('.inspector-vitals-rail .ratio-bar.flat')).not.toBeNull()
+      // Header verbs follow the unified inspector order: Vitals toggle before Refresh before object actions.
+      const headerActions = [...el.querySelectorAll<HTMLButtonElement>('.document-actions button')].map(btn => btn.textContent?.trim())
+      expect(headerActions).toEqual(['Vitals', 'Refresh', 'Script As…'])
 
       // Canonical tab order for a rich native table.
       const tabs = [...el.querySelectorAll<HTMLButtonElement>('[role="tab"]')]

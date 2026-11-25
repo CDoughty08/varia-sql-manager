@@ -3876,12 +3876,14 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 }
 /* Unified FactGrid: flush 16 px left alignment, label rail matched with editable PropertyField. */
 .fact-grid { display: grid; grid-template-columns: minmax(156px, 28%) minmax(0, 1fr); margin: 0; font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
-.fact-grid.compact { grid-template-columns: minmax(96px, 42%) minmax(0, 1fr); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+.fact-grid.compact { grid-template-columns: minmax(84px, 38%) minmax(0, 1fr); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
 .fact-grid-row { display: contents; }
 .fact-grid-row > dt, .fact-grid-row > dd { min-width: 0; padding: var(--varia-space-1) 0; border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
 .fact-grid-row:last-child > dt, .fact-grid-row:last-child > dd { border-bottom: 0; }
 .fact-grid-row > dt { padding-right: var(--varia-space-4); color: var(--varia-descriptionForeground); overflow-wrap: anywhere; }
+.fact-grid.compact .fact-grid-row > dt { padding-right: var(--varia-space-2); }
 .fact-grid-row > dd { display: flex; align-items: center; gap: var(--varia-space-2); margin: 0; color: var(--varia-foreground); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; user-select: text; }
+.fact-grid.compact .fact-grid-row > dd { position: relative; }
 .fact-grid-row:hover > dt, .fact-grid-row:hover > dd { background: var(--varia-list-hoverBackground); }
 .fact-grid-val { flex: 1; min-width: 0; unicode-bidi: isolate; }
 .fact-grid-val.mono { font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
@@ -3890,8 +3892,11 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .fact-grid-link:hover:not(:disabled) { text-decoration: underline; }
 .fact-grid-link:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: 1px; transition: none; }
 .fact-grid-copy { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0; border: 1px solid transparent; border-radius: var(--varia-radius-sm); background: transparent; color: var(--varia-descriptionForeground); opacity: 0; }
+.fact-grid.compact .fact-grid-copy { position: absolute; top: 50%; right: 0; transform: translateY(-50%); background: var(--varia-sideBar-background); }
+.fact-grid.compact .fact-grid-row:hover .fact-grid-copy { background: var(--varia-list-hoverBackground); }
 .fact-grid-row:hover .fact-grid-copy, .fact-grid-copy:focus-visible, .fact-grid-copy.copied { opacity: 1; }
 .fact-grid-copy:hover:not(:disabled) { background: var(--varia-button-secondaryHoverBackground); color: var(--varia-button-secondaryHoverForeground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
+.fact-grid.compact .fact-grid-copy:hover:not(:disabled) { background: var(--varia-button-secondaryHoverBackground); }
 .fact-grid-copy:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; transition: none; }
 .fact-grid-copy.copied { color: var(--varia-successForeground); transition: none; }
 .fact-grid-copy > .codicon { font-size: var(--varia-glyph-sm); }

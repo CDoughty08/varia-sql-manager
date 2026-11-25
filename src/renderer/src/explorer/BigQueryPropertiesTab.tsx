@@ -621,13 +621,14 @@ export function BigQueryInspectorBody({
   const verbs: Verb[] | undefined = surface === 'full' && view.kind !== 'bqDataset'
     ? [{ command: 'explorer.scriptAs', args: scriptArgs, label: 'Script As…' }]
     : undefined
-  const refreshTool = surface === 'full' ? (
-    <button type="button" className="document-verb" aria-label="Refresh" title="Refresh" disabled={!live || view.loading}
-      onClick={() => controller.refresh()}>
-      <Icon name="refresh" spin={view.loading} />
-      <span className="document-verb-label">Refresh</span>
-    </button>
-  ) : undefined
+  const leadingVerbs: HeaderVerb[] | undefined = surface === 'full' ? [{
+    key: 'refresh',
+    label: 'Refresh',
+    title: 'Refresh',
+    icon: 'refresh',
+    disabled: !live || view.loading,
+    run: () => controller.refresh()
+  }] : undefined
 
   const kpis = surface === 'full' ? bigQueryKpis(value) : []
   const schemaStats = countSchemaStats(value?.schema)
@@ -693,7 +694,7 @@ export function BigQueryInspectorBody({
     subtitle,
     crumbs,
     state,
-    tools: tools ?? refreshTool,
+    tools,
     surface,
     kpis,
     banner,
@@ -713,8 +714,8 @@ export function BigQueryInspectorBody({
   }
 
   return workbench.inspector
-    ? <ObjectInspectorFrame {...frameProps} verbs={verbs} extraVerbs={extraVerbs} />
-    : <ObjectInspectorFrameView {...frameProps} verbs={extraVerbs} />
+    ? <ObjectInspectorFrame {...frameProps} leadingVerbs={leadingVerbs} verbs={verbs} extraVerbs={extraVerbs} />
+    : <ObjectInspectorFrameView {...frameProps} verbs={[...(leadingVerbs ?? []), ...(extraVerbs ?? [])]} />
 }
 
 /**
