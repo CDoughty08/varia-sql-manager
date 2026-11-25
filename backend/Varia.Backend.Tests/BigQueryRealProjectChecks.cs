@@ -105,11 +105,12 @@ internal static partial class BigQueryRealProjectChecks
 
         /// <summary>The tables a dry run says the query reads (statistics.query.referencedTables): each must be allowed. With
         /// <paramref name="temporary"/> (a check reading its own session's or script's temp tables, named by one part), tables
-        /// in the project's hidden underscore datasets are allowed too.</summary>
+        /// in the project's hidden underscore datasets are allowed too. The dry run reports a <see cref="PublicViews"/> view
+        /// unquoted, its table id holding the view's two parts.</summary>
         public void AdmitReferenced(string name, IEnumerable<string> tables, string? temporary = null)
         {
             foreach (var table in tables)
-                if (!PublicTables.Contains(table, StringComparer.Ordinal) && !results.Contains(table) && !(temporary is not null && table.StartsWith(temporary + "._", StringComparison.Ordinal))) throw new RefusedException($"{name}: its dry run reads {table}, which is not one of the small public tables the checks may read.");
+                if (!PublicTables.Contains(table, StringComparer.Ordinal) && !PublicViews.Contains($"`{table}`", StringComparer.Ordinal) && !results.Contains(table) && !(temporary is not null && table.StartsWith(temporary + "._", StringComparison.Ordinal))) throw new RefusedException($"{name}: its dry run reads {table}, which is not one of the small public tables the checks may read.");
         }
 
         /// <summary>The project.dataset.table names a query names in backticks, whole (`p.d.t`) or by part (`p`.`d`.`t`).</summary>
@@ -167,6 +168,11 @@ internal static partial class BigQueryRealProjectChecks
         }
         check(Referenced(budget, "bigquery-public-data.samples.shakespeare") is null && Referenced(budget, "my-project.private.big") is RefusedException,
             "real project: a table the dry run reports reading must be on the allowlist, however the query names it");
+        // A dry run reports INFORMATION_SCHEMA.TABLES as project.dataset.INFORMATION_SCHEMA.TABLES, without backticks.
+        check(Referenced(budget, "bigquery-public-data.samples.INFORMATION_SCHEMA.TABLES") is null
+            && Referenced(budget, "bigquery-public-data.samples.INFORMATION_SCHEMA.COLUMNS") is RefusedException
+            && Referenced(budget, "my-project.region-us.INFORMATION_SCHEMA.JOBS") is RefusedException,
+            "real project: the dry run's report of the public table list is admitted, and no other INFORMATION_SCHEMA view");
         Exception? Temporary(string table, string? project)
         {
             try { new Budget().AdmitReferenced("check", [table], project); return null; } catch (Exception error) { return error; }
@@ -414,10 +420,11 @@ internal static partial class BigQueryRealProjectChecks
             return result as QueryResult;
         }
         QueryParameter Parameter(string name, string type, string value) => new() { Name = name, ParameterType = new QueryParameterType { Type = type }, ParameterValue = new QueryParameterValue { Value = value } };
-        async Task<string> Rows(Job job)
+        async Task<string> Rows(Job job, bool int64Timestamps = false)
         {
             var request = api.Jobs.GetQueryResults(project, job.JobReference.JobId);
             request.Location = job.JobReference.Location;
+            if (int64Timestamps) request.FormatOptionsUseInt64Timestamp = true;
             var answer = await request.ExecuteAsync();
             return api.Serializer.Serialize(new { answer.Schema, answer.Rows });
         }
@@ -472,7 +479,9 @@ internal static partial class BigQueryRealProjectChecks
 
             // R8. INFORMATION_SCHEMA estimates 0 bytes, though it bills the 10 MiB minimum.
             var ddl = $"SELECT ddl FROM {PublicViews[0]} WHERE table_name = 'shakespeare'" + nonce;
-            Note($"R8 an INFORMATION_SCHEMA dry run estimates {(await DryRun("R8", ddl))?.ToString("N0") ?? "nothing"} bytes.");
+            // An unanswered R8 is counted as skipped, so the run's summary shows it.
+            if (await DryRun("R8", ddl) is { } schemaBytes) Note($"R8 an INFORMATION_SCHEMA dry run estimates {schemaBytes:N0} bytes.");
+            else Skip("R8: the INFORMATION_SCHEMA dry run gave no estimate (the line above says why)");
             // R9. A value-list filter's list subqueries inside LOGICAL_OR.
             var list = $"SELECT word FROM {Shakespeare} WHERE (SELECT LOGICAL_OR(word = value) FROM UNNEST(['king', 'queen']) AS value) OR (SELECT LOGICAL_OR(corpus = value) FROM UNNEST(['hamlet']) AS value)";
             check(await DryRun("R9", list) is not null, "real project: R9 a value-list filter's LOGICAL_OR subqueries pass a dry run");
@@ -513,7 +522,11 @@ internal static partial class BigQueryRealProjectChecks
 
             // R12. The REST shape of RANGE<TIMESTAMP>, DATETIME and TIME (INTERVAL's Arrow shape needs Storage Read: by hand).
             if (await Run("R12", "SELECT RANGE(TIMESTAMP '2024-01-01 00:00:00 UTC', TIMESTAMP '2024-02-01 00:00:00 UTC') AS r, DATETIME '2024-01-02 03:04:05.123456' AS dt, TIME '01:02:03.5' AS t, INTERVAL 1 DAY AS i") is { } types)
+            {
                 Note("R12 REST rows: " + await Rows(types));
+                // Varia reads REST rows with formatOptions.useInt64Timestamp.
+                Note("R12 REST rows with useInt64Timestamp: " + await Rows(types, int64Timestamps: true));
+            }
 
             // R7 and R13. A session: does a dry run accept its id; ABORT_SESSION with a STRING parameter; the errorResult of a
             // failure inside a session transaction; the children's minimal projection.
@@ -533,7 +546,11 @@ internal static partial class BigQueryRealProjectChecks
                         children.ParentJobId = failed.JobReference.JobId;
                         children.Projection = Google.Apis.Bigquery.v2.JobsResource.ListRequest.ProjectionEnum.Minimal;
                         var listed = (await children.ExecuteAsync()).Jobs ?? [];
-                        Note($"R13 the minimal projection of its {listed.Count} children carries statementType on {listed.Count(child => child.Statistics?.Query?.StatementType is not null)}, numDmlAffectedRows on {listed.Count(child => child.Statistics?.Query?.NumDmlAffectedRows is not null)}.");
+                        Note($"R13 the minimal projection of its {listed.Count} children carries statementType on {listed.Count(child => child.Statistics?.Query?.StatementType is not null)}, numDmlAffectedRows on {listed.Count(child => child.Statistics?.Query?.NumDmlAffectedRows is not null)}, statistics.parentJobId on {listed.Count(child => child.Statistics?.ParentJobId is not null)}, creationTime on {listed.Count(child => child.Statistics?.CreationTime is not null)}, state on {listed.Count(child => child.State is not null || child.Status?.State is not null)}.");
+                        // Varia lists a script's children with the minimal projection: the full one shows what that leaves out.
+                        children.Projection = Google.Apis.Bigquery.v2.JobsResource.ListRequest.ProjectionEnum.Full;
+                        var full = (await children.ExecuteAsync()).Jobs ?? [];
+                        Note($"R13 the full projection of its {full.Count} children carries statementType on {full.Count(child => child.Statistics?.Query?.StatementType is not null)}, statistics.parentJobId on {full.Count(child => child.Statistics?.ParentJobId is not null)}.");
                     }
                     var aborted = await Run("R13 abort", "CALL BQ.ABORT_SESSION(@session)", parameters: [Parameter("session", "STRING", sessionId)]);
                     ended = aborted is { Status.ErrorResult: null };
