@@ -29,7 +29,7 @@ const record = (patch: Partial<AgentJobRecord> = {}): AgentJobRecord => ({
 const model = (patch: Partial<AgentJobDocumentModel> = {}): AgentJobDocumentModel => ({
   job: record(), login: 'sa', sysadmin: true, platform: 'windows', categories: [uncategorizedCategory, 'Data Collector', 'Database Maintenance'],
   operators: [operator('DBA'), operator('On-call', { pagerDays: 62, weekday: { start: 80000, end: 180000 } }), operator('Old', { enabled: false })],
-  owners: ['sa', 'CONTOSO\\dana'], steps: [{ id: 1, name: 'Extract', subsystem: 'TSQL' }, { id: 2, name: 'Load', subsystem: 'TSQL' }],
+  owners: ['sa', 'CONTOSO\\dana'], steps: [{ id: 1, name: 'Extract', subsystem: 'TSQL', onSuccessAction: 3 }, { id: 2, name: 'Load', subsystem: 'TSQL' }],
   alerts: [{ id: 11, name: 'Log full', enabled: true, severity: 0, messageId: 9002 }, { id: 12, name: 'Severity 017', enabled: true, severity: 17, messageId: 0 }], alertsEditable: true,
   mail: { checked: true, xps: true, profiles: 1, sysadmin: true, useDatabaseMail: true, agentProfile: 'Ops' }, ...patch
 })

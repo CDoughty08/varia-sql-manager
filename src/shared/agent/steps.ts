@@ -5,6 +5,7 @@
 // stand. No React here.
 import { z } from 'zod'
 import { agentLimits, stepActions, stepFlagMask, stepFlags, subsystems } from './catalog.ts'
+import { flowChecks } from './flow.ts'
 
 /** sysjobsteps.on_success_action / on_fail_action: quit reporting success, quit reporting failure, go to the next step, go to a step. */
 export type StepAction = 1 | 2 | 3 | 4
@@ -298,7 +299,7 @@ const listed = (numbers: readonly number[]) => numbers.length < 2 ? numbers.join
 
 // --- Problems: on the step, its field, the Steps tab and the header; only what msdb would refuse outright is an error -------
 
-export type AgentStepField = 'name' | 'type' | 'command' | 'database' | 'runAs' | 'onSuccess' | 'onFail' | 'output' | 'runAsUser' | 'package' | 'server'
+export type AgentStepField = 'flow' | 'name' | 'type' | 'command' | 'database' | 'runAs' | 'onSuccess' | 'onFail' | 'output' | 'runAsUser' | 'package' | 'server'
 export interface AgentStepProblem { readonly key: string; readonly field: AgentStepField; readonly severity: 'error' | 'warning'; readonly message: string }
 export interface AgentStepContext {
   readonly sysadmin: boolean
@@ -311,7 +312,7 @@ export interface AgentStepContext {
   readonly original?: AgentStepsDraft
 }
 /** The steps' problems. Errors (Save cannot send them): a missing, duplicate or reserved name, a go-to to itself, a too long command or path.
- *  Warnings: a target that no longer exists, a proxy not active for the type, an output file or run-as user only sysadmin may set, SSIS. */
+ *  Warnings: a target that no longer exists, a proxy not active for the type, an output file or run-as user only sysadmin may set, SSIS, and the flow checks (a step that never runs, a loop, a last step that goes to the next step). */
 export function agentStepProblems(draft: AgentStepsDraft, context: AgentStepContext): AgentStepProblem[] {
   const problems: AgentStepProblem[] = []
   const names = new Map<string, number>()
@@ -357,6 +358,8 @@ export function agentStepProblems(draft: AgentStepsDraft, context: AgentStepCont
     for (const message of context.ssis?.get(step.key) ?? []) push('package', 'warning', message)
   }
   if (saved && draft.steps.length > agentLimits.stepsPerJob) problems.push({ key: draft.steps[agentLimits.stepsPerJob]!.key, field: 'name', severity: 'error', message: stepText.tooMany })
+  // The flow checks (docs/agent-ui-rethink.md › Flow view): warnings in List and Flow alike, never a block on Save.
+  for (const check of flowChecks(draft)) problems.push({ key: check.key, field: check.field, severity: 'warning', message: `${check.title}. ${check.detail}` })
   if (saved && commandChars > agentLimits.stepCommandTotalChars) problems.push({ key: draft.steps[0]?.key ?? '', field: 'command', severity: 'error', message: `The steps' commands hold at most ${agentLimits.stepCommandTotalChars.toLocaleString('en-US')} characters together.` })
   return problems
 }
