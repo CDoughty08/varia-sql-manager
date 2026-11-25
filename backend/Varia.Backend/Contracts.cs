@@ -981,7 +981,9 @@ internal sealed record AgentScheduleRecordDto(int Id, string Name, bool Enabled,
 internal sealed record AgentSchedulesDto(string Login, bool Sysadmin, string Platform, string Now, List<AgentScheduleRecordDto> Schedules, bool? IdleDefined = null, bool? Truncated = null,
     List<AgentScheduleJobDto>? Jobs = null, List<AgentScheduleLinkDto>? Links = null, List<AgentJobDurationDto>? Durations = null, List<AgentScheduleJobDto>? ScheduleJobs = null);
 internal sealed record AgentScheduleJobDto(string Id, string Name, bool Enabled, string Owner, int Version);
-internal sealed record AgentScheduleLinkDto(int ScheduleId, string JobId);
+/// <summary>Which job uses which schedule, with sysjobschedules' next run (yyyymmdd, hhmmss) once Agent has written one, and the job's own
+/// next run from sysjobactivity (AG-14).</summary>
+internal sealed record AgentScheduleLinkDto(int ScheduleId, string JobId, int? NextRunDate = null, int? NextRunTime = null, int? JobNextRunDate = null, int? JobNextRunTime = null);
 internal sealed record AgentJobDurationDto(string JobId, int Seconds);
 internal sealed record AgentJobRecordDto(string JobId, string Name, bool Enabled, string Description, string Category, string Owner, int EmailLevel, string EmailOperator, int PageLevel,
     string PageOperator, int NetSendLevel, string NetSendOperator, int EventLogLevel, int DeleteLevel, string Created, string Modified, int Version, int StartStepId,
