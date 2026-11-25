@@ -4129,6 +4129,9 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
   .agent-timeline-now { background: Highlight; forced-color-adjust: none; }
 }
 
+/* AG-16: the Details flyout's Agent job link. */
+.activity-details-fields .activity-job-link { padding: 0; border: 0; background: none; color: var(--varia-resultsGrid-linkForeground); font: inherit; text-align: start; text-decoration: underline; cursor: pointer; }
+@media (forced-colors: active) { .activity-details-fields .activity-job-link { color: LinkText; } }
 /* The Integration Services document: the history bar over the shown place's frame. */
 .ssis-document { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .ssis-navbar { flex: none; display: flex; align-items: center; gap: var(--varia-space-1); min-width: 0; padding: var(--varia-space-1) var(--varia-space-3); border-bottom: 1px solid var(--varia-panel-border); background: var(--varia-editor-background); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }

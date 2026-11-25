@@ -86,7 +86,7 @@ export default function SessionTablePane({ table, state, handle, snapshot }: {
   return <div className="activity-pane-content" data-activity-grid={table} onFocus={sessionRows.onFocus}>
     <PaneState problem={problem} hasRows={!!current} waiting={facts.waiting} empty={emptyNote(table, facts, problem)}>
       <LiveGridPane live={handle} probe={probe} table={index} label={pane.label} toneLabel={pane.toneLabel} state={activity.gridState(state.id, table)} sortable={table !== 'blocking'}
-        onGrid={sessionRows.onGrid} rows={sessionRows.rows} />
+        onGrid={sessionRows.onGrid} rows={sessionRows.rows} onOpenLink={sessionRows.onOpenLink} />
     </PaneState>
     <p className="activity-pane-status">{pane.status(facts)}</p>
   </div>

@@ -520,4 +520,51 @@ internal static class ActivitySourceLiveChecks
                 + scratch.Login!.Replace("'", "''") + "';\nEXEC (@kill);");
         }
     }
+
+    /// <summary>AG-16, part of the Agent suite (VARIA_TEST_SQL_AGENT=1 with VARIA_TEST_SQL_SCRATCH=1): a scratch job whose step
+    /// waits is started, and Processes shows its session's program name with the job's and step's names read from msdb in the
+    /// Agent Job column (the job id decoded from the program name's bytes); Stop Job then ends it. The job is this run's own,
+    /// deleted in finally.</summary>
+    public static async Task AgentJobAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json, string job, Func<string, string, Task<SqlRun>> sql)
+    {
+        static string Quote(string value) => "N'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
+        var created = await sql("DECLARE @id uniqueidentifier;\n"
+            + "EXEC msdb.dbo.sp_add_job @job_name = " + Quote(job) + ", @description = " + Quote(ScratchDatabase.JobMarker) + ", @job_id = @id OUTPUT;\n"
+            + "EXEC msdb.dbo.sp_add_jobstep @job_id = @id, @step_name = N'Wait', @subsystem = N'TSQL', @command = N'WAITFOR DELAY ''00:02:00'';';\n"
+            + "EXEC msdb.dbo.sp_add_jobserver @job_id = @id;\nSELECT CONVERT(nvarchar(36), @id);", "msdb");
+        try
+        {
+            if (created.Status != "completed" || !Guid.TryParse(created.Scalar, out var id))
+            {
+                check(false, "a scratch Agent job that waits can be created for the Activity Monitor: " + created.Error);
+                return;
+            }
+            var started = await sql("EXEC msdb.dbo.sp_start_job @job_id = '" + id.ToString("D") + "';", "msdb");
+            var view = Subscribe(service, info.Id, json, null, ActivityReader.SessionsProbe);
+            try
+            {
+                var expected = job + ", step 1 (Wait)";
+                bool Named(LiveSample sample) => sample.Tables?.SingleOrDefault(table => table.Table == 0) is { } table && Rows(service, table).Any(row => row["job"] == expected);
+                var latest = started.Status == "completed" ? await Freeze(view, Named, 60_000) : null;
+                var rows = latest?.Tables?.SingleOrDefault(table => table.Table == 0) is { } processes ? Rows(service, processes) : [];
+                var row = rows.FirstOrDefault(row => row["jobName"] == job);
+                var agent = rows.Where(row => row["application"]?.StartsWith("SQLAgent - ", StringComparison.Ordinal) == true).Select(row => row["application"] + " = " + (row["job"] ?? "NULL")).ToList();
+                check(row is not null && row["job"] == expected && row["application"] is { } program && program.StartsWith("SQLAgent - TSQL JobStep (Job 0x", StringComparison.Ordinal) && program.EndsWith(" : Step 1)", StringComparison.Ordinal)
+                    && AgentPrograms.Parse(program, ActivityCatalog.Current) == new AgentJobRef(id, 1),
+                    "Processes shows a running job step's session with its job and step names read from msdb, the job id decoded from the program name: " + started.Error + " " + string.Join("; ", agent));
+                if (latest is not null) Resume(view);
+            }
+            finally { await Stop(view); }
+            var stopped = (ActionExecuteResult)await service.DispatchAsync("actions.execute", JsonSerializer.SerializeToElement(
+                new ActionArgs("stopJob", info.Id, Guid.NewGuid().ToString(), new ObjectRefDto("agentJob", Name: job), AgentIdentity: new(id.ToString("D"))), json), json);
+            check(stopped.Error is null, "Stop Job ends the job the Activity Monitor found: " + stopped.Error?.Code + " " + stopped.Error?.Message);
+        }
+        finally
+        {
+            // sp_add_job commits alone, so a later call's failure leaves the job: drop it by its run-unique name, stopping it first.
+            await sql("IF EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name = " + Quote(job) + ") BEGIN\n"
+                + "BEGIN TRY EXEC msdb.dbo.sp_stop_job @job_name = " + Quote(job) + "; END TRY BEGIN CATCH END CATCH;\n"
+                + "EXEC msdb.dbo.sp_delete_job @job_name = " + Quote(job) + ", @delete_history = 1, @delete_unused_schedule = 1; END;", "msdb");
+        }
+    }
 }

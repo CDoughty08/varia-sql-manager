@@ -402,6 +402,30 @@ internal static partial class ActivitySql
             ["state"], [Session(), LoginTime(), Int("@host_process_id"), Int("@backend_pid"), new("@pools", SqlDbType.NVarChar, -1)],
             ["kill"], new HashSet<string> { "N'KILL '", "N';'" });
 
+    // --- SQL Server Agent job names (AG-16) ------------------------------------------------------------------------------
+
+    /// <summary>Job ids (and job and step pairs) one name read asks for (TypeScript's activityLimits.agentJobSlots).</summary>
+    public const int AgentJobSlots = 16;
+    private static ActivityParameter JobId(string name) => new(name, SqlDbType.UniqueIdentifier);
+    private static readonly string[] AgentJobFeeds = ["sessions", "blocking", "activeQueries"];
+
+    /// <summary>The names of the jobs the sampled sessions run, by the ids their program names carry (AgentJobNames): msdb's
+    /// sysjobs_view, which shows each login the jobs its Agent role may see. Run after the sessions statement, only for ids not
+    /// kept, so it is not one of the probe's <see cref="Statements"/>; a refusal names nothing and the rows keep the decoded id.
+    /// Unused slots are NULL, which IN never matches.</summary>
+    public static readonly ActivityStatement AgentJobs = new("activity.sessions", "agentJobs",
+        "SELECT TOP (@take) j.job_id, j.name\nFROM msdb.dbo.sysjobs_view AS j\nWHERE j.job_id IN (" + string.Join(", ", Enumerable.Range(0, AgentJobSlots).Select(slot => "@job" + slot)) + ")\n"
+        + "ORDER BY j.job_id;",
+        ["job_id", "name"], [Int("@take"), .. Enumerable.Range(0, AgentJobSlots).Select(slot => JobId("@job" + slot))], AgentJobFeeds, NoLiterals);
+
+    /// <summary>The names of the steps the sampled sessions run, by job and step id: msdb's sysjobsteps, which only sysadmin may
+    /// read (an Agent role gets the job's name without its steps'). Unused pairs are NULL, which no row equals.</summary>
+    public static readonly ActivityStatement AgentSteps = new("activity.sessions", "agentSteps",
+        "SELECT TOP (@take) s.job_id, s.step_id, s.step_name\nFROM msdb.dbo.sysjobsteps AS s\nWHERE "
+        + string.Join("\n   OR ", Enumerable.Range(0, AgentJobSlots).Select(slot => $"(s.job_id = @job{slot} AND s.step_id = @step{slot})")) + "\n"
+        + "ORDER BY s.job_id, s.step_id;",
+        ["job_id", "step_id", "step_name"], [Int("@take"), .. Enumerable.Range(0, AgentJobSlots).SelectMany(slot => new[] { JobId("@job" + slot), Int("@step" + slot) })], AgentJobFeeds, NoLiterals);
+
     /// <summary>Statements of the session actions, which are methods rather than probes: their lint knows them by name.</summary>
     private static readonly HashSet<string> Methods = new(["activity.details", "activity.kill"], StringComparer.Ordinal);
 
@@ -551,6 +575,10 @@ internal static partial class ActivitySql
             foreach (var probe in ActivityCatalog.Current.Probes.Keys.Concat(Methods))
                 foreach (var statement in Statements(probe, render))
                     yield return ($"{probe} {statement.Id} ({render.Edition} band {render.Band}{(render.TotalSpills ? ", spills" : "")}{(render.ServerState ? "" : ", limited")})", Lint(statement, render));
+        // The Agent name reads run only with server state (no other session is seen without it), on every band and kind of server.
+        foreach (var render in Renders().Where(render => render.ServerState))
+            foreach (var statement in new[] { AgentJobs, AgentSteps })
+                yield return ($"activity.sessions {statement.Id} ({render.Edition} band {render.Band}{(render.TotalSpills ? ", spills" : "")})", Lint(statement, render));
         yield return ("capabilities", Lint(Capabilities, new(ActivityCatalog.Current.MinBand, "box")));
     }
 }
