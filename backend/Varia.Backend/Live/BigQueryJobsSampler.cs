@@ -43,6 +43,10 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
     /// <summary>The end of the running sample's first quarter (<see cref="Environment.TickCount64"/>).</summary>
     private long early;
     internal const int StallsBeforeTimeout = 3;
+    /// <summary>The last rate-limit refusal the running sample's reads retried (429, or rateLimitExceeded): a sample the budget cut
+    /// before any answer landed, after one, fails with QUOTA at once rather than say "still loading" and later TIMEOUT.</summary>
+    private Exception? throttled;
+    private void Throttled(Exception error) => Volatile.Write(ref throttled, error);
 
     /// <summary>What one listing holds: the top-level jobs by id, which of them are the principal's (All users), how far the
     /// first listing has read, the newest creation time held, and the children of expanded scripts.</summary>
@@ -143,6 +147,7 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
             LiveProbeError? failure = null;
             var answered = answers;
             stuck = false;
+            throttled = null;
             try
             {
                 loading = !await RefreshAsync(connection, view, item.BudgetMs, budget.Token);
@@ -152,11 +157,20 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
             catch (OperationCanceledException) when (!token.IsCancellationRequested)
             {
                 loading = true;
-                // Every stalled sample past the threshold fails, so the schedule's back-off grows; an answer starts the count again.
-                stalls = answers == answered ? stalls + 1 : 0;
-                // Also when another listing answered first (the refresh before the open jobs' listing): the cut one is stuck.
-                if (stalls > 0 || stuck) pageSize = Math.Max(1, pageSize / 4);
-                if (stalls >= StallsBeforeTimeout)
+                if (answers == answered && Volatile.Read(ref throttled) is { } limited)
+                {
+                    // The client's retries absorbed BigQuery's rate limit until the budget ran out: say so, and fail, so the
+                    // schedule backs off. A refusal says nothing about the page size, so it is kept and no stall counted.
+                    failure = Failure(limited, connection.Options.Project);
+                }
+                else
+                {
+                    // Every stalled sample past the threshold fails, so the schedule's back-off grows; an answer starts the count again.
+                    stalls = answers == answered ? stalls + 1 : 0;
+                    // Also when another listing answered first (the refresh before the open jobs' listing): the cut one is stuck.
+                    if (stalls > 0 || stuck) pageSize = Math.Max(1, pageSize / 4);
+                }
+                if (failure is null && stalls >= StallsBeforeTimeout)
                 {
                     failure = LiveErrors.Create(Probe, "TIMEOUT", "BigQuery did not answer the job listing within the refresh's time budget, several times in a row.");
                 }
@@ -348,7 +362,7 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
     /// so the renderer turns the toggle off and says why.</summary>
     private async Task<HistoryPage?> ListPageAsync(BigQueryConnection connection, View state, HistoryListing listing, string? pageToken, int size, int limit, CancellationToken token)
     {
-        try { return await service.ListHistoryAsync(connection, listing, pageToken, size, limit, token); }
+        try { return await service.ListHistoryAsync(connection, listing, pageToken, size, limit, token, Throttled); }
         catch (Exception error) when (listing.AllUsers && !token.IsCancellationRequested && error is not BigQueryOverLimit
             && BigQueryErrors.Map(error, connection.Options.Project) is RequestException { Code: "PERMISSION_DENIED" })
         {
@@ -455,7 +469,7 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
             var limit = Math.Min(left(), BigQueryJobHistory.JobBytes);
             try
             {
-                var read = await service.ReadHistoryJobAsync(connection, job.Id, job.Location, limit, detail: false, token);
+                var read = await service.ReadHistoryJobAsync(connection, job.Id, job.Location, limit, detail: false, token, Throttled);
                 spend(read.Bytes);
                 // Merged: a job that finished in a state the filters leave out is dropped.
                 if (read.Job is { } done && done.Id == job.Id) Merge(state, done);
@@ -544,7 +558,7 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
         {
             if (left() <= 0) return false;
             HistoryPage page;
-            try { page = await service.ListHistoryAsync(connection, listing, pageToken, BigQueryJobHistory.PageJobs, left(), token); }
+            try { page = await service.ListHistoryAsync(connection, listing, pageToken, BigQueryJobHistory.PageJobs, left(), token, Throttled); }
             catch (BigQueryOverLimit) { return false; }
             spend(page.Bytes);
             foreach (var job in page.Items.Where(job => state.Held.ContainsKey(job.Id))) state.Mine.Add(job.Id);
@@ -566,7 +580,7 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
             var limit = Math.Min(left(), BigQueryJobHistory.JobBytes);
             try
             {
-                var read = await service.ReadHistoryJobAsync(connection, reference.JobId, reference.Location, limit, detail: false, token);
+                var read = await service.ReadHistoryJobAsync(connection, reference.JobId, reference.Location, limit, detail: false, token, Throttled);
                 spend(read.Bytes);
                 // A pinned view shows its jobs whatever the other filters say.
                 if (read.Job is { } job && job.Id == reference.JobId) state.Held[job.Id] = job;
@@ -606,7 +620,7 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
             try
             {
                 // Past the soft deadline it keeps the statements read so far, with More, and reads them again next time.
-                var (items, more, spent) = await service.ChildJobsAsync(connection, id, allUsers, before, token, () => left() <= 0);
+                var (items, more, spent) = await service.ChildJobsAsync(connection, id, allUsers, before, token, () => left() <= 0, Throttled);
                 state.Children[id] = (items, more);
                 spend(spent);
             }

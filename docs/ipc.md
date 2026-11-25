@@ -1124,7 +1124,7 @@ Notes appended to the summary's messages:
 | `truncated` | Note |
 | --- | --- |
 | `rowLimit` (or truncated cells) | "Results were truncated by display limits. Display limits do not stop script execution." |
-| `queryBudget`, `globalBudget` | "Results were truncated because the result memory budget ({n} MB) is full. Execution continued; close other query results to free memory." {n} is `budget.stoppedBytes`, or the current half or whole budget when it did not stop |
+| `queryBudget`, `globalBudget` | "Results were truncated because the result memory budget ({n}) is full. Execution continued; close other query results to free memory." {n} is `budget.stoppedBytes`, or the current half or whole budget when it did not stop, written as the results strip writes it: "<1 MB" below a MiB, whole MB with thousands separators, then GB to one decimal |
 | `systemMemory` | "Results were truncated because the computer is low on memory. Execution continued." |
 | more than `maxResultSets` sets | "Only the first ten result sets are displayed. Display limits do not stop script execution." ("first {n}" for other limits) |
 | column lists past the summary's 8 MiB | "{n} later result sets are not displayed because their column lists are too large to return. Display limits do not stop script execution." |

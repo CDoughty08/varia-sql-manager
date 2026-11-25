@@ -194,6 +194,9 @@ export interface ColumnSpec {
   readonly parity: Parity
   /** What the value is and where it comes from; for `fix`, what SSMS shows instead. */
   readonly note: string
+  /** Never shown: an identity column the pane's actions or keys read (the live catalogue's role `hidden`). Hidden columns
+   *  come last. */
+  readonly hidden?: true
   /** Only when the server has the capability (spills from SQL Server 2016 SP2 and 2017 CU3). */
   readonly capability?: Capability
   /** A link (AG-16's Agent Job): its non-empty cells open what they name on a click or Enter. */
@@ -368,7 +371,6 @@ export const tableSpecs: { readonly [T in ActivityTable]: TableSpec } = {
     defaultSort: [{ column: 'waitRate', descending: true }],
     textColumns: ['category', 'topWaitType'],
     columns: [
-      c('categoryId', 'Category ID', 'text', '', false, 'new', 'The category\'s id in this catalogue.'),
       c('category', 'Wait Category', 'text', '', true, 'fix', 'Query Store\'s documented categories plus Varia\'s benign list, so every wait type counts. SSMS\'s 2008 table knows 241 of SQL Server 2025\'s 1,546 types and drops the rest.'),
       c('waitRate', 'Wait Time (ms/sec)', 'decimal', 'ms/s', true, 'ssms', 'Wait time less signal wait, per second over the interval.'),
       c('signalRate', 'Signal Wait (ms/sec)', 'decimal', 'ms/s', true, 'new', 'Time runnable tasks waited for a CPU, per second (SSMS computes it but does not show it).'),
@@ -376,7 +378,8 @@ export const tableSpecs: { readonly [T in ActivityTable]: TableSpec } = {
       c('averageWaiters', 'Average Waiter Count', 'decimal', 'count', true, 'ssms', 'Wait time per second divided by 1,000.'),
       c('currentWaiters', 'Current Waiters', 'int', 'count', true, 'new', 'Tasks waiting in the category now.'),
       c('cumulativeSeconds', 'Cumulative Wait Time (sec)', 'decimal', 's', true, 'ssms', 'Wait time less signal wait since SQL Server started or the statistics were cleared.'),
-      c('topWaitType', 'Top Wait Type', 'text', '', true, 'new', 'The category\'s largest wait type in the interval.')
+      c('topWaitType', 'Top Wait Type', 'text', '', true, 'new', 'The category\'s largest wait type in the interval.'),
+      { ...c('categoryId', 'Category ID', 'text', '', false, 'new', 'The category\'s id in this catalogue, which keys the row and its series.'), hidden: true }
     ]
   },
   waitTypes: {

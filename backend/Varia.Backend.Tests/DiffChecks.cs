@@ -605,9 +605,9 @@ internal static partial class DiffChecks
     /// same inputs keeps it, and the halves are not counted as repeated rows.</summary>
     private static void Suffix(Action<bool, string> check)
     {
-        check(new[] { "old", "mark", "leftRow", "rightRow", "tone" }.All(role => ResultTextWriter.Hidden(new ResultColumn("c", "int", "text", Role: role)))
+        check(new[] { "old", "mark", "leftRow", "rightRow", "tone", "hidden" }.All(role => ResultTextWriter.Hidden(new ResultColumn("c", "int", "text", Role: role)))
             && new[] { "xml", "json", "plan", "udt", "vector", null }.All(role => !ResultTextWriter.Hidden(new ResultColumn("c", "nvarchar", "text", Role: role))),
-            "the hidden roles are exactly old, mark, leftRow, rightRow and tone; xml, json, plan, udt and vector columns are data");
+            "the hidden roles are exactly old, mark, leftRow, rightRow, tone and hidden; xml, json, plan, udt and vector columns are data");
         var store = new ResultStore(1L << 30, 1L << 29);
         using var service = new SqlService(store);
         var (left, right) = Pair(store, [["1", "a", "1"], ["2", "b", "2"], ["4", "d", "4"]], [["1", "a", "1"], ["2", "b", "3"], ["3", "c", "3"]]);

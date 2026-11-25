@@ -61,7 +61,8 @@ export function renderLiveDocs(): string {
     'A probe whose filter mode is memory filters the stored cell text;',
     'restart starts its append tables again under the new predicate.',
     `A table's tone column (its last) names each row's tone (${liveTones.map(code).join(', ')} or NULL for none): the grid`,
-    'colours the row and hides the column, and Copy and Save leave it out.',
+    'colours the row and hides the column, and Copy and Save leave it out. Hidden columns, after the shown ones (before any tone), identify the row for',
+    "the owner's row actions: the grid never shows them, and Copy, Save and Find leave them out.",
     '',
     '| Probe | Interval (default, min, max) | Schedule | Runs on | Emits | Description |',
     '| --- | --- | --- | --- | --- | --- |',
@@ -69,7 +70,7 @@ export function renderLiveDocs(): string {
       const probe = liveProbes[id]
       const emits = [
         ...(probe.series ?? []).length ? ['series ' + (probe.series ?? []).map(series => `${code(series.id)} (${series.unit}, ${series.counter})`).join(', ')] : [],
-        ...(probe.tables ?? []).map((table, index) => `${table.mode} table ${index} ${code(table.id)}: ${table.columns.map(column => `${code(column.id)} ${column.dataType}${column.role === 'tone' ? ' (row tone)' : ''}`).join(', ')}; key ${table.key.map(code).join(', ') || 'none'}; ${tableRules(table)}`),
+        ...(probe.tables ?? []).map((table, index) => `${table.mode} table ${index} ${code(table.id)}: ${table.columns.map(column => `${code(column.id)} ${column.dataType}${column.role === 'tone' ? ' (row tone)' : column.role === 'hidden' ? ' (hidden)' : ''}`).join(', ')}; key ${table.key.map(code).join(', ') || 'none'}; ${tableRules(table)}`),
         ...(probe.status ?? []).length ? ['status ' + (probe.status ?? []).map(code).join(', ')] : []
       ]
       const settings = [...probe.views?.length ? ['views ' + probe.views.map(code).join(', ')] : [], ...probe.filterMode ? [`filter ${probe.filterMode}`] : []]

@@ -50,8 +50,9 @@ internal sealed partial class BigQueryService
     internal BigQueryRateLimiter Limiter { get; } = new();
 
     /// <summary>A free, idempotent metadata read under the principal's limiter: rate-limit refusals retry with jittered backoff until
-    /// <paramref name="token"/> ends; other transient failures retry <see cref="ReadAttempts"/> times.</summary>
-    internal async Task<T> MetadataAsync<T>(BigQueryConnection connection, Func<CancellationToken, Task<T>> call, CancellationToken token)
+    /// <paramref name="token"/> ends, each one told to <paramref name="throttled"/> (Job History reports QUOTA for a sample they
+    /// used up); other transient failures retry <see cref="ReadAttempts"/> times.</summary>
+    internal async Task<T> MetadataAsync<T>(BigQueryConnection connection, Func<CancellationToken, Task<T>> call, CancellationToken token, Action<Exception>? throttled = null)
     {
         using var slot = await Limiter.EnterAsync(connection.Principal.PrincipalId, token);
         for (int attempt = 1, transient = 1; ; attempt++)
@@ -59,6 +60,7 @@ internal sealed partial class BigQueryService
             try { return await CallAsync(call, token); }
             catch (Exception error) when (!token.IsCancellationRequested && BigQueryRateLimiter.RateLimited(error))
             {
+                throttled?.Invoke(error);
                 var wait = Backoff(Math.Min(attempt, 5));
                 await Task.Delay(wait + TimeSpan.FromMilliseconds(Random.Shared.NextDouble() * wait.TotalMilliseconds / 2), token);
             }

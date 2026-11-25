@@ -2,11 +2,12 @@ import type { ResultColumn, ResultDescriptor } from '../../../shared/contracts'
 
 /**
  * The column roles that are not data: a row's tone (a live table's or a diff's) and a diff's hidden suffix: previous
- * values (`old`), the change marker (`mark`) and each input's row number (`leftRow`, `rightRow`). They always come last,
+ * values (`old`), the change marker (`mark`) and each input's row number (`leftRow`, `rightRow`); and a live table's
+ * identity columns (`hidden`), which its owner's row actions read but nothing shows. They always come last,
  * so a result's visible columns are a prefix and visible indexes equal descriptor indexes. The backend's
  * ResultTextWriter.Hidden tests the same set; `xml`, `json`, `plan`, `udt` and `vector` columns are data.
  */
-export const hiddenRoles: ReadonlySet<string> = new Set(['old', 'mark', 'leftRow', 'rightRow', 'tone'])
+export const hiddenRoles: ReadonlySet<string> = new Set(['old', 'mark', 'leftRow', 'rightRow', 'tone', 'hidden'])
 
 /** Whether a column is hidden: never drawn, copied, searched, sorted, filtered or profiled. */
 export const isHiddenColumn = (column: Pick<ResultColumn, 'role'> | undefined): boolean => !!column?.role && hiddenRoles.has(column.role)

@@ -406,8 +406,9 @@ export async function writeColumns(writer: TextWriter, pageAt: PageAt, turned: T
   }
 }
 
-/** Columns that are not data (ResultTextWriter.Hidden): a tone, and a diff's previous values, marker and row numbers. */
-const hiddenRoles = new Set(['old', 'mark', 'leftRow', 'rightRow', 'tone'])
+/** Columns that are not data (ResultTextWriter.Hidden): a tone, a diff's previous values, marker and row numbers, and a
+ *  live table's identity columns. */
+const hiddenRoles = new Set(['old', 'mark', 'leftRow', 'rightRow', 'tone', 'hidden'])
 export const isHidden = (column: TextColumn | undefined): boolean => hiddenRoles.has(column?.role ?? '')
 /** The columns Save writes (ResultJobs.SavedColumns): the visible ones, a diff's marker and row numbers first. */
 export function savedColumns(columns: readonly TextColumn[], kind?: string): number[] {
