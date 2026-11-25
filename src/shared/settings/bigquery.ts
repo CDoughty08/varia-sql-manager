@@ -24,7 +24,7 @@ export const bigQuerySettings = [
   {
     key: 'queryExecution.bigQuery.costThreshold', page: 'queryExecution.bigQuery.cost', group: 'Prompt', label: 'Threshold', type: 'integer', min: 1, max: 1_048_576, default: 10, unit: 'GiB', varia: true,
     enabledBy: 'queryExecution.bigQuery.costPrompt', applies: 'nextExecution', keywords: ['bigquery', 'cost', 'bytes'],
-    description: 'Queries estimated to process more than this ask before running. The estimate beside Execute turns amber above it.'
+    description: 'Queries estimated to process more than this ask before running. The estimate beside Execute turns amber above it. A connection\'s own threshold (Advanced Properties › Prompt above) wins over this one.'
   },
   {
     key: 'queryExecution.bigQuery.incompleteEstimateWarning', page: 'queryExecution.bigQuery.cost', group: 'Prompt', label: 'Warn when an estimate may be low', type: 'boolean', default: true, varia: true,

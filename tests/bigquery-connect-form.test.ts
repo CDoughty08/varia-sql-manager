@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   bigQueryDefaults, bigQueryFormOptions, bigQueryReady, bigQueryRowDetail, bigQueryRowText, joinBytes, lastServerType, maxListedProjects, mergeProjects, parseExtraProjects,
-  projectError, serverOf, splitBytes, switchServerType, undoServerType, withAuthentication, advancedCostPrompt, bigQueryFormShape, savedCostPrompt, withoutCostPrompt } from '../src/renderer/src/bigquery-connect-form'
-import { bigQueryAdvancedSummary, accountText } from '../src/renderer/src/BigQueryConnectFields'
+  projectError, serverOf, splitBytes, switchServerType, undoServerType, withAuthentication, advancedCostPrompt, bigQueryFormShape, savedCostPrompt, withoutCostPreferences,
+  advancedCostThreshold, parseCostThreshold, savedCostThreshold, shownCostThreshold } from '../src/renderer/src/bigquery-connect-form'
+import { bigQueryAdvancedSummary, bigQueryAdvancedValidationError, bigQueryAdvancedDraftFrom, accountText } from '../src/renderer/src/BigQueryConnectFields'
 
 const keyFile = '6f0c2b8e-4d1a-4c3b-9e2f-1a2b3c4d5e6f'
 
@@ -97,7 +98,7 @@ describe('Connect dialog: BigQuery fields', () => {
   it("shows the saved entry's cost-prompt choice and names one only when Advanced Properties changes it", () => {
     const form = { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' } as const
     // The dialog's form never starts with a choice: a remembered true from an earlier connect cannot undo a later opt-out.
-    expect(withoutCostPrompt({ ...form, costPrompt: true })).toEqual(form)
+    expect(withoutCostPreferences({ ...form, costPrompt: true, costThreshold: 50 })).toEqual(form)
     const entries = [{ options: { ...form, dataset: 'other' } }, { options: { ...form, costPrompt: false as const } }]
     expect(savedCostPrompt(entries, form)).toBe(false)
     expect(savedCostPrompt(entries, { ...form, project: 'varia-beta' })).toBeUndefined()
@@ -109,6 +110,43 @@ describe('Connect dialog: BigQuery fields', () => {
     expect(advancedCostPrompt(form, undefined, true)).toBeUndefined()
     // A change made earlier in this dialog stays when OK leaves the box as it shows.
     expect(advancedCostPrompt({ ...form, costPrompt: true }, false, true)).toBe(true)
+  })
+  it("shows the saved entry's own threshold and names one only when Prompt above changes it", () => {
+    const form = { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' } as const
+    // Entries with the same settings share it; another dataset is another connection.
+    const entries = [{ options: { ...form, dataset: 'other', costThreshold: 7 } }, { options: { ...form, costThreshold: 50 } }]
+    expect(savedCostThreshold(entries, form)).toBe(50)
+    expect(savedCostThreshold(entries, { ...form, dataset: '' })).toBe(50)
+    expect(savedCostThreshold(entries, { ...form, project: 'varia-beta' })).toBeUndefined()
+    // The field shows the form's when it names one (0: Options', empty), else the saved one.
+    expect(shownCostThreshold(form, 50)).toBe(50)
+    expect(shownCostThreshold({ ...form, costThreshold: 20 }, 50)).toBe(20)
+    expect(shownCostThreshold({ ...form, costThreshold: 0 }, 50)).toBeUndefined()
+    // Typed: the field names what it shows, and empty names 0 (Options').
+    expect(advancedCostThreshold(20)).toBe(20)
+    expect(advancedCostThreshold(undefined)).toBe(0)
+    // Whole GiB, 1 to 1,048,576, as the Options threshold.
+    expect(parseCostThreshold('')).toEqual({ ok: true })
+    expect(parseCostThreshold(' 25 ')).toEqual({ ok: true, value: 25 })
+    expect(parseCostThreshold('1048576')).toEqual({ ok: true, value: 1_048_576 })
+    expect(parseCostThreshold('1,048,576')).toEqual({ ok: true, value: 1_048_576 })
+    for (const bad of ['0', '1048577', '1.5', '-3', '10 GiB', '99999999']) expect(parseCostThreshold(bad).ok, bad).toBe(false)
+    expect(bigQueryAdvancedValidationError({ ...bigQueryAdvancedDraftFrom({}), threshold: '0' })).toContain('Prompt above')
+    expect(bigQueryAdvancedValidationError({ ...bigQueryAdvancedDraftFrom({}), threshold: '12' })).toBe('')
+    expect(bigQueryAdvancedValidationError(bigQueryAdvancedDraftFrom({}))).toBe('')
+    // The form sends one it names, so Connect and Save keep it, and 0 clears the saved one.
+    expect(bigQueryFormOptions({ ...form, costThreshold: 20 })).toMatchObject({ costThreshold: 20 })
+    expect(bigQueryFormOptions({ ...form, costThreshold: 0 })).toMatchObject({ costThreshold: 0 })
+    expect(bigQueryFormOptions(form)).not.toHaveProperty('costThreshold')
+    expect(bigQueryAdvancedSummary({ ...form, costThreshold: 20 })).toBe('1 property set')
+    expect(bigQueryAdvancedSummary({ ...form, costThreshold: 0 })).toBe('')
+    // Compared as it shows: naming the saved value, or nothing, is no change; another value or clearing it is.
+    const saved = { ...form, costThreshold: 50 }
+    expect(bigQueryFormShape(form, 'inherit', undefined, 50)).toBe(bigQueryFormShape(saved, 'inherit'))
+    expect(bigQueryFormShape({ ...form, costThreshold: 50 }, 'inherit')).toBe(bigQueryFormShape(saved, 'inherit'))
+    expect(bigQueryFormShape({ ...form, costThreshold: 20 }, 'inherit')).not.toBe(bigQueryFormShape(saved, 'inherit'))
+    expect(bigQueryFormShape({ ...form, costThreshold: 0 }, 'inherit')).not.toBe(bigQueryFormShape(saved, 'inherit'))
+    expect(bigQueryFormShape({ ...form, costThreshold: 0 }, 'inherit')).toBe(bigQueryFormShape(form, 'inherit'))
   })
   it('compares the form with the saved entry by value, the cost-prompt choice as it shows', () => {
     const saved = { provider: 'bigquery', project: 'varia-alpha', costPrompt: false, authentication: 'gcloud', displayName: 'Sales' } as const

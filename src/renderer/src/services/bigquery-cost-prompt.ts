@@ -75,7 +75,7 @@ export function costPromptText(request: CostPromptRequest): { readonly title: st
   const title = job ? 'Re-run this job?' : 'Run this query?'
   if (prompt.kind === 'threshold')
     return { title, sentence: `${job ? `Re-running job ${job}` : 'This query'} will process ${figure(prompt.bytes, prices)}, more than the ${formatBytes(request.thresholdBytes)} threshold. Run it?`,
-      note: `${estimate} ${cap}`, optOut: `Don't ask again for ${request.connection}` }
+      note: `${estimate} ${cap}${request.ownThreshold ? ' The threshold is this connection\'s own, set in its Advanced Properties (Prompt above).' : ''}`, optOut: `Don't ask again for ${request.connection}` }
   return { title, sentence: `The estimate for ${job ? `re-running job ${job}` : 'this query'}, ${figure(prompt.bytes, prices)}, may be low. ${incompleteText[prompt.reason]} Run it?`,
     note: `${estimate} ${cap}`, optOut: "Don't warn me about incomplete estimates again" }
 }
