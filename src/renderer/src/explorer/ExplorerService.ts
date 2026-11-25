@@ -640,6 +640,12 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       ? { ...this.targetOf(node), id: node.id, lost: node.lost, ...(node.filtered ? { filtered: true } : {}), ...(node.kind === 'folder' && this.insertable(node) ? { insertable: true } : {}) }
       : undefined
   }
+  /** A connection's loaded SQL Server Agent node as a menu target (the Agent overview's Properties and Start fixes, AG-15); undefined until the
+   *  server's node lists it. */
+  agentNodeOf(connectionId: string): ExplorerMenuNode | undefined {
+    for (const node of this.nodes.values()) if (node.kind === 'agent' && node.connectionId === connectionId && this.attached(node)) return this.menuNode(node.id)
+    return undefined
+  }
   /**
    * An object Object Explorer has not necessarily loaded (a Search Objects result) as a context menu's node: what it is, and the
    * server it is on as the connection's profile reports it. It has no row, so commands that need one (Refresh, Rename,

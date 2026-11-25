@@ -186,8 +186,10 @@ internal static class ActionProgressLiveChecks
                 var stopped = actions.ExecuteStepsAsync(longInfo.Id, Guid.NewGuid().ToString(), "delete", Stopped, null, CancellationToken.None);
                 await started.Task.WaitAsync(Bound);
                 await Task.Delay(500);
-                longService.CancelAll();
+                // Timed from CancelAll: its token callbacks cancel the running read in place, which can take a second on Linux, and the
+                // cleanup step may start before CancelAll returns.
                 var watch = Stopwatch.StartNew();
+                longService.CancelAll();
                 longService.DrainCommitted();
                 drainedMs = watch.ElapsedMilliseconds;
                 cleanedBeforeReturn = Volatile.Read(ref cleaned) == 1;
