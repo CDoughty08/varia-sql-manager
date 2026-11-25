@@ -88,7 +88,7 @@ The model follows Microsoft's [Showplan schemas](https://schemas.microsoft.com/s
 
 ## Actual plans and capture
 
-**Include Actual Execution Plan** (Ctrl+M on Windows/Linux, query toolbar or Query menu, per query tab) captures completed plans through an observer-owned Extended Events collector on a
+**Include Actual Execution Plan** (Ctrl+M on Windows/Linux, the query bar's **Plan ▾** menu, the classic toolbar or Query menu, per query tab) captures completed plans through an observer-owned Extended Events collector on a
 separate connection. No capture SQL runs on the user's query connection, so `@@ROWCOUNT` and `@@ERROR` behave as in
 ordinary execution across runs. Statistics collection starts after capture setup and finishes before observer
 collection.
@@ -137,7 +137,7 @@ only (including the pre-2025 no-`MAX_DURATION` DDL); 2017-2022 and Azure have no
 
 ## Live plans
 
-Enable **Include Live Execution Plan** for a query tab from its toolbar, the Query menu or the command palette, then
+Enable **Include Live Execution Plan** for a query tab from its **Plan ▾** menu (or the classic toolbar), the Query menu or the command palette, then
 execute normally (F5, Execute or a selection). It applies to queries executed in Varia. The Execution Plan output shows
 Live and Actual modes and switches to Actual on completion. A cancelled, timed out or failed statement can keep a
 partial live snapshot beside completed captured statements; partial snapshots are labelled as such and never presented
@@ -184,7 +184,7 @@ References: [live XML API and permissions](https://learn.microsoft.com/en-us/sql
 
 ## Estimated plans
 
-Use **Query › Display Estimated Execution Plan**, the toolbar's **Estimated Plan**, the editor context menu or
+Use **Query › Display Estimated Execution Plan**, the query bar's **Plan ▾** menu (or the classic toolbar's **Estimated Plan**), the editor context menu or
 **Ctrl+L** (**⌘L** on macOS). A selection takes precedence over the whole editor. The query must be connected.
 **Cancel** stops acquisition, including compilation waiting on schema locks.
 
