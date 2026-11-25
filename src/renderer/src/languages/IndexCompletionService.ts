@@ -1,6 +1,7 @@
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import type { VariaApi } from '../../../shared/contracts'
 import { completeFromIndex } from '../../../shared/completion/complete'
+import { definitionFromIndex, IndexUnavailableError } from '../../../shared/completion/definition'
 import { hoverFromIndex } from '../../../shared/completion/hover'
 import { LookupCache } from '../../../shared/completion/lookup-cache'
 import type { CompletionDialect, CompletionItem, CompletionKind, IndexLookup } from '../../../shared/completion/model'
@@ -14,10 +15,13 @@ import { documentProvider, isQueryDocument } from '../documents'
 import type { ConnectionService } from '../services/connections'
 import { isBigQueryConnection, isLiveConnection } from '../services/connection-availability'
 import type { DocumentService } from '../services/documents'
+import { definitionErrors } from './definition'
 import { googleSqlLanguageId } from './googlesql'
 
 type LookupApi = Pick<VariaApi, 'languageLookup'>
 interface Snapshot { readonly errors: ReadonlyMap<string, string>; readonly indexes: ReadonlyMap<string, 'none' | 'building' | 'ready'> }
+/** What Go To Definition found in a BigQuery tab: an object of the index, on the tab's connection. */
+export interface FoundIndexObject { readonly connectionId: string; readonly kind: string; readonly subtype?: string; readonly project: string; readonly dataset: string; readonly name: string }
 interface Target { readonly documentId: string; readonly connectionId?: string; readonly key?: string; readonly dialect: CompletionDialect }
 export interface IndexCompletionOptions {
   /** Starts the connection's Search Objects index when it has none (and Options lets builds start on their own). */
@@ -84,6 +88,32 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
     }))
     const reconcile = () => this.reconcile()
     this.bindings.push({ dispose: connections.subscribe(reconcile) }, { dispose: documents.subscribe(reconcile) })
+  }
+
+  /**
+   * Go To Definition in a BigQuery tab: the project, dataset and object the name at `position` stands for, from the connection's
+   * Search Objects index, as completion resolves names (`definitionFromIndex`). Null when it names no indexed object, undefined
+   * when the text changed or `wanted` turned false meanwhile; throws `definitionErrors` when it cannot ask at all or the index
+   * could not answer (busy past its in-flight cap, or failed). A model that is no query tab's (Properties' read-only Definition
+   * editor) has no connection to ask: null.
+   */
+  async definition(model: Monaco.editor.ITextModel, position: Monaco.Position, wanted: () => boolean = () => true): Promise<FoundIndexObject | null | undefined> {
+    if (model.getValueLength() > languageLimits.documentCharacters) throw new Error(definitionErrors.tooLarge)
+    const target = this.target(model)
+    if (!target) return null
+    const { connectionId } = target
+    if (!connectionId) throw new Error(definitionErrors.connectBigQueryFirst)
+    const version = model.getVersionId()
+    let read: ReturnType<typeof readGoogleSqlHover>
+    try { read = readGoogleSqlHover(model.getValue(), model.getOffsetAt(position)) } catch { return null }
+    if (!read) return null
+    let found
+    try { found = await definitionFromIndex(read, target.dialect, this.lookup(target)) }
+    catch (error) { if (error instanceof IndexUnavailableError) throw new Error(definitionErrors.indexUnavailable); throw error }
+    if (!wanted() || model.isDisposed() || model.getVersionId() !== version) return undefined
+    if (!found || found.path.length !== 3) return null
+    const [project, dataset, name] = found.path as [string, string, string]
+    return { connectionId, kind: found.kind, ...found.subtype ? { subtype: found.subtype } : {}, project, dataset, name }
   }
 
   /** The status bar's IntelliSense segment for a BigQuery tab, or undefined for any other document (SqlLanguageService's). */

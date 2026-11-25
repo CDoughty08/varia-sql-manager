@@ -88,6 +88,8 @@ export function activityContribution({ commands, activity, documents, connection
     commands.register('activity.previousPane', on(id => { const element = root(id); if (element) cyclePanel(element, document.activeElement, -1) })),
     commands.register('activity.sessionDetails', rowAction('details')),
     commands.register('activity.killProcess', rowAction('kill')),
+    commands.register('activity.openJob', rowAction('openJob')),
+    commands.register('activity.stopJob', rowAction('stopJob')),
     commands.register('activity.close', { when: args => !!monitorOf(args), run: async args => { await commands.execute('file.close', { tabId: monitorOf(args) }, 'toolbar') } })
   ]
   return { dispose: () => registrations.forEach(registration => registration.dispose()) }

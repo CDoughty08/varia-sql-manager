@@ -88,7 +88,12 @@ describe('live catalogue', () => {
     let toned = 0
     for (const id of liveProbeIds) {
       for (const table of liveProbes[id].tables ?? []) {
-        const tones = table.columns.filter(column => column.role !== undefined)
+        // A link column (the Activity Monitor's Agent Job, AG-16) is data: text, never a key.
+        for (const link of table.columns.filter(column => column.role === 'link')) {
+          expect(link.dataType, `${id} ${link.id}`).toBe('nvarchar')
+          expect(table.key, id).not.toContain(link.id)
+        }
+        const tones = table.columns.filter(column => column.role !== undefined && column.role !== 'link')
         expect(tones.every(column => column.role === 'tone' && column.dataType === 'nvarchar'), id).toBe(true)
         expect(tones.length, id).toBeLessThanOrEqual(1)
         if (tones.length === 0) continue
@@ -176,7 +181,7 @@ describe('live catalogue', () => {
         // A table that tones its rows ends with the tone column (prefixed like the others, so ids stay unique in the probe).
         const tone = source.tones?.length ? [[liveColumnId(table.id as ActivityTable, 'tone'), 'tone', 'nvarchar', 'tone']] : []
         expect(table.columns.map(column => [column.id, column.name, column.dataType, ...column.role ? [column.role] : []]), table.id)
-          .toEqual([...source.columns.map(column => [liveColumnId(table.id as ActivityTable, column.id), column.caption, liveColumnTypes[column.type]]), ...tone])
+          .toEqual([...source.columns.map(column => [liveColumnId(table.id as ActivityTable, column.id), column.caption, liveColumnTypes[column.type], ...column.link ? ['link'] : []]), ...tone])
         expect(table.key, table.id).toEqual(source.key.map(column => liveColumnId(table.id as ActivityTable, column)))
         expect(table.facets ?? [], table.id).toEqual((source.facetColumns ?? []).map(column => liveColumnId(table.id as ActivityTable, column)))
         expect(table.departed ?? false, table.id).toBe(source.departedLinger ?? false)

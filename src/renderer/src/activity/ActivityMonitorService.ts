@@ -12,7 +12,7 @@ import {
 import type { ActivityColumnFilter, ActivityDetailsResult } from '../../../shared/activity/schema'
 import type { VariaApi } from '../../../shared/contracts'
 import type { LiveRowActions } from '../menus/targets'
-import { killOffer, killReport, sameSession, type KillReport, type SessionRef } from './session-actions'
+import { jobUnavailable, killOffer, killReport, sameSession, type KillReport, type SessionRef } from './session-actions'
 import type { LiveFacet, LiveArgs } from '../../../shared/live/schema'
 
 /** The activity source's args as the live layer sends them (src/shared/activity/schema.ts's ActivityLiveArgs, mutable). */
@@ -63,8 +63,10 @@ export interface MonitorState {
   readonly details?: DetailsPanel
   /** Kill Process's confirm, while it asks or runs. */
   readonly kill?: KillPanel
-  /** What the last Kill Process answered, until dismissed or the next Kill. */
+  /** What the last Kill Process or Stop Job answered, until dismissed or the next one: the monitor's one report banner. */
   readonly killReport?: KillReport & { readonly id: number }
+  /** A Stop Job (AG-16) on its way, by job id: a second Stop of the same job waits for it. */
+  readonly stopping?: readonly string[]
 }
 /** The Details flyout's session and what its last read answered. */
 export interface DetailsPanel {
@@ -163,8 +165,11 @@ export interface ActivityMonitorServiceOptions extends CustomDocumentTargetOptio
   readonly settings: () => SettingsValues
   /** Puts focus in the monitor's view once it has rendered. */
   readonly focus?: (documentId: string) => void
-  /** Details and Kill Process (activity.details, activity.kill, varia:activity-cancel); without it they say they are unavailable. */
-  readonly api?: Pick<VariaApi, 'activityDetails' | 'activityKill' | 'cancelActivity'>
+  /** Details and Kill Process (activity.details, activity.kill, varia:activity-cancel), and Stop Job (AG-2's guarded `stopJob`
+   *  object action); without it they say they are unavailable. */
+  readonly api?: Pick<VariaApi, 'activityDetails' | 'activityKill' | 'cancelActivity'> & Partial<Pick<VariaApi, 'executeObjectAction'>>
+  /** Open Job and the Agent Job links (AG-16): the job's document on the connection, focused if open, at its History. */
+  readonly openJob?: (connectionId: string, name: string) => void
   readonly newId?: () => string
 }
 
@@ -465,6 +470,56 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
     // The next sample shows the session gone, or rolling back, without waiting for the interval.
     if (report.tone === 'success') this.refresh(id)
   }
+  // --- Agent jobs (AG-16): Open Job and Stop Job on a session that runs a job step ------------------------------------------
+
+  /** Why Open Job or Stop Job cannot act on a session now, or undefined when it can. */
+  jobUnavailable(id: string, session: SessionRef | undefined, verb: 'open' | 'stop'): string | undefined {
+    const why = jobUnavailable(session, verb)
+    if (why) return why
+    if (!this.live(id)) return `Reconnect this Activity Monitor before ${verb === 'open' ? 'opening' : 'stopping'} a job.`
+    if (verb === 'open' ? !this.options.openJob : !this.options.api?.executeObjectAction) return `${verb === 'open' ? 'Open Job' : 'Stop Job'} is not available here.`
+    if (verb === 'stop' && this.get(id)?.stopping?.includes(session!.job!.jobId)) return `Stop Job is already stopping ${session!.job!.name}.`
+    return undefined
+  }
+  /** Open Job, or a click on an Agent Job link: the job's document, focused if open, at its History (its run shown live there).
+   *  Returns why it could not, for the caller to report. */
+  openJob(id: string, session: SessionRef): string | undefined {
+    const why = this.jobUnavailable(id, session, 'open'), connectionId = this.options.documents.get(id)?.connectionId
+    if (why || !connectionId) return why ?? 'Reconnect this Activity Monitor before opening a job.'
+    try { this.options.openJob!(connectionId, session.job!.name!) } catch (error) { return error instanceof Error ? error.message : 'The job could not be opened.' }
+    return undefined
+  }
+  /** Stop Job: AG-2's `stopJob` on the session's job, by the id its program name carries (the backend refuses a job since replaced
+   *  under the name), with the job's name for the words. Its answer is the monitor's report; the next sample shows the session gone. */
+  async stopJob(id: string, session: SessionRef): Promise<void> {
+    const state = this.get(id), connectionId = this.options.documents.get(id)?.connectionId
+    const why = this.jobUnavailable(id, session, 'stop')
+    if (!state || !connectionId || why) {
+      if (state) this.put({ ...state, killReport: { tone: 'error', title: 'Stop Job did not run.', detail: why ?? 'Reconnect this Activity Monitor first.', id: ++this.reports } })
+      return
+    }
+    const job = session.job!, name = job.name!
+    this.put({ ...state, stopping: [...state.stopping ?? [], job.jobId] })
+    let failure: string | undefined, unknown = false
+    try {
+      const result = await this.options.api!.executeObjectAction!({ action: 'stopJob', connectionId, requestId: this.options.newId?.() ?? crypto.randomUUID(), target: { kind: 'agentJob', name }, agentIdentity: { jobId: job.jobId } })
+      failure = !result.ok ? result.error : result.value.error?.message
+      // sp_stop_job may have run before the backend or the connection went (a disconnect answers CANCELLED at once): the outcome is unknown.
+      unknown = !result.ok && (result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST' || result.code === 'CANCELLED')
+    } catch (error) {
+      failure = error instanceof Error ? error.message : 'The stop failed.'
+    }
+    const now = this.get(id)
+    if (!now) return
+    const stopping = (now.stopping ?? []).filter(item => item !== job.jobId)
+    const report: KillReport = failure === undefined
+      ? { tone: 'success', title: `Stop requested for job ${name}.`, detail: 'SQL Server Agent stops the job at its current step; the session ends when the step does, and the job\'s history records it as cancelled.' }
+      : unknown ? { tone: 'error', title: `Whether job ${name} stopped is unknown.`, detail: 'The connection or the SQL backend was lost while the stop ran. The job\'s History shows whether it stopped.' }
+      : { tone: 'error', title: `Job ${name} was not stopped.`, detail: failure }
+    this.put({ ...now, ...stopping.length ? { stopping } : { stopping: undefined }, killReport: { ...report, id: ++this.reports } })
+    if (failure === undefined && this.live(id)) this.refresh(id)
+  }
+
   dismissKillReport(id: string): void {
     const state = this.get(id)
     if (state?.killReport) this.put({ ...state, killReport: undefined })

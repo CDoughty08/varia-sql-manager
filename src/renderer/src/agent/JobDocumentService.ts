@@ -25,7 +25,7 @@ import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
 import type { Disposable, ExternalStore } from '../core/types'
-import { initialFrameState, type FrameState } from '../kit/document-frame'
+import { initialFrameState, revealSection, type FrameState } from '../kit/document-frame'
 import type { ScriptContent } from '../kit/ScriptDrawer'
 import type { LiveHandle, LiveService } from '../live/LiveService'
 import { previewDelayMs } from '../properties/DatabasePropertiesService'
@@ -260,12 +260,15 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   /** The document is the active one and its History section is open. */
   private historyShows(id: string): boolean { return this.options.documents.getSnapshot().activeId === id && !!this.get(id) && !this.get(id)!.frame.collapsed.includes('history') }
 
-  /** A job's document: brought forward if open on this connection, otherwise a tab opens at once, loading. */
-  openJob(connectionId: string, name: string): string {
+  /** A job's document: brought forward if open on this connection, otherwise a tab opens at once, loading. With `section` (the
+   *  Activity Monitor's job link opens History, AG-16) the document shows that section, scrolled to. */
+  openJob(connectionId: string, name: string, section?: AgentJobSection): string {
     const connection = this.connection(connectionId)
     const existing = Object.values(this.getSnapshot().documents).find(state => state.target.kind === 'agentJob' && state.target.name === name && this.connectionOf(state.id) === connectionId && this.targetBindings.matchesConnection(state.id, connectionId))
-    if (existing) { this.options.documents.activate(existing.id); return existing.id }
-    return this.create(connection, { kind: 'agentJob', name })
+    const id = existing ? existing.id : this.create(connection, { kind: 'agentJob', name })
+    if (existing) this.options.documents.activate(id)
+    if (section) { const state = this.get(id); if (state) this.setFrame(id, revealSection(state.frame, jobSections, section)) }
+    return id
   }
   /** New Job: a tab with the start panel (Blank, or Copy an existing job); nothing is created until Save. */
   newJob(connectionId: string): string { return this.create(this.connection(connectionId), { kind: 'agent' }) }

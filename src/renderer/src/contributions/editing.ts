@@ -9,7 +9,8 @@ import { onUnexpectedError } from '../core/errors'
 import { snippetById, snippets, type Snippet } from '../editor/snippets'
 import { applyTextOp, caseEdits, checkSelectionSize, indentEdits, type TextSelection } from '../editor/text-ops'
 import { lexSql } from '../../../shared/sql/lexer.ts'
-import { moveCommaEdits, selectedRanges, sqlTransformMessages, sqlTransformOp, statementAt, toggleBracketEdits, transformText } from '../editor/sql-transforms'
+import { googleSqlTransformTokens, googleSqlTransforms, moveCommaEdits, selectedRanges, sqlTransformMessages, sqlTransformOp, statementAt, toggleBracketEdits, transformText, tsqlTransforms } from '../editor/sql-transforms'
+import { googleSqlLanguageId } from '../languages/googlesql'
 import type { QuickPickItem } from '../quickinput/QuickInputService'
 
 /** The part of Monaco's SnippetController2 that inserts a snippet, typed here because Monaco does not export it. */
@@ -83,19 +84,23 @@ export function editingContribution(workbench: Pick<Workbench, 'commands' | 'doc
     if (mode === 'none') { commands.reportWarning(sqlTransformMessages.nothingToBracket(!!ranges)); return }
     applyTextOp(target, 'varia.toggleBrackets', sqlTransformOp(model, text, edits, current))
   })
-  // Toggle Brackets and the comma commands read T-SQL tokens (`#` starts a GoogleSQL comment, not a temporary table), so they
-  // edit only a SQL Server query. An object target can supply another engine's context, so the bound model's language decides.
+  // Toggle Brackets reads T-SQL tokens (`#` starts a GoogleSQL comment, not a temporary table), so it edits only a SQL Server
+  // query. An object target can supply another engine's context, so the bound model's language decides.
   const boundModelIsTsql = () => {
     const model = documents.boundEditor?.getModel()
     return !model || model.getLanguageId() === 'sql'
   }
-  // In a GoogleSQL query the catalogue's "Open a query first" would mislead; other documents keep it.
-  const commasUnavailable = () => documents.boundEditor?.getModel()?.getLanguageId() === 'googlesql' ? 'Move Commas works only in SQL Server queries.' : undefined
+  // The comma commands read either language's tokens: GoogleSQL's through its own scanner, by the bound model's language.
+  const boundModelHasCommas = () => {
+    const language = documents.boundEditor?.getModel()?.getLanguageId()
+    return language === undefined || language === 'sql' || language === googleSqlLanguageId
+  }
   const moveCommas = (position: 'front' | 'end') => withEditor((target, model) => {
     const text = transformText(model), current = selections(target), selected = selectedRanges(model, current)
-    const tokens = lexSql(text)
-    const ranges = selected ?? current.map(selection => statementAt(text, model.getOffsetAt({ lineNumber: selection.positionLineNumber, column: selection.positionColumn }), tokens))
-    const edits = moveCommaEdits(text, ranges, position, tokens)
+    const google = model.getLanguageId() === googleSqlLanguageId
+    const tokens = google ? googleSqlTransformTokens(text) : lexSql(text), dialect = google ? googleSqlTransforms : tsqlTransforms
+    const ranges = selected ?? current.map(selection => statementAt(text, model.getOffsetAt({ lineNumber: selection.positionLineNumber, column: selection.positionColumn }), tokens, dialect))
+    const edits = moveCommaEdits(text, ranges, position, tokens, dialect)
     if (!edits.length) { commands.reportWarning(sqlTransformMessages.noCommas(position === 'front', !!selected)); return }
     applyTextOp(target, position === 'front' ? 'varia.commasToFront' : 'varia.commasToEnd', sqlTransformOp(model, text, edits, current))
   })
@@ -136,8 +141,8 @@ export function editingContribution(workbench: Pick<Workbench, 'commands' | 'doc
     commands.register('edit.increaseIndent', { run: indent('increase') }),
     commands.register('edit.decreaseIndent', { run: indent('decrease') }),
     commands.register('edit.toggleBrackets', { run: toggleBrackets, when: boundModelIsTsql }),
-    commands.register('edit.commasToFront', { run: moveCommas('front'), when: boundModelIsTsql, unavailable: commasUnavailable }),
-    commands.register('edit.commasToEnd', { run: moveCommas('end'), when: boundModelIsTsql, unavailable: commasUnavailable }),
+    commands.register('edit.commasToFront', { run: moveCommas('front'), when: boundModelHasCommas }),
+    commands.register('edit.commasToEnd', { run: moveCommas('end'), when: boundModelHasCommas }),
     commands.register('editor.toggleWhitespace', { run: () => editorOptions.toggleWhitespace() }),
     commands.register('editor.toggleLineNumbers', { run: () => editorOptions.toggleLineNumbers() }),
     commands.register('edit.toggleBookmark', { run: () => { focusedEditor(documents); bookmarks.toggle() } }),

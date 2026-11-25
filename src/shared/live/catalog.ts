@@ -36,8 +36,9 @@ export const liveTones = ['error', 'warning', 'running', 'muted'] as const
 export type LiveTone = typeof liveTones[number]
 /** `id` names the column in requests (sort, filter); `name` and `dataType` are what the stored result's columns carry.
  *  `role: 'tone'` marks the row's tone (one of liveTones, or NULL): the table's last column, an nvarchar, never a key. The
- *  grid hides it, and Copy and Save leave it out (ResultTextWriter), so it colours rows and is never data. */
-export interface LiveColumnSpec { readonly id: string; readonly name: string; readonly dataType: string; readonly role?: 'tone' }
+ *  grid hides it, and Copy and Save leave it out (ResultTextWriter), so it colours rows and is never data. `role: 'link'` is
+ *  data whose non-empty cells the grid draws as links, which open what they name through the owner (an Agent job, AG-16). */
+export interface LiveColumnSpec { readonly id: string; readonly name: string; readonly dataType: string; readonly role?: 'tone' | 'link' }
 export interface LiveTableSpec {
   readonly id: string
   readonly mode: LiveTableMode
@@ -236,7 +237,7 @@ function activityLiveEntries(): { readonly [P in ActivityLiveProbe]: LiveProbeSp
       return {
         // A table that tones its rows ends with the tone column, which the backend fills (NULL until it sets one).
         id: table, mode: 'snapshot',
-        columns: [...table$.columns.map(item => ({ id: liveColumnId(table, item.id), name: item.caption, dataType: liveColumnTypes[item.type] })), ...table$.tones?.length ? [{ ...toneColumn, id: liveColumnId(table, 'tone') }] : []],
+        columns: [...table$.columns.map((item): LiveColumnSpec => ({ id: liveColumnId(table, item.id), name: item.caption, dataType: liveColumnTypes[item.type], ...item.link ? { role: 'link' as const } : {} })), ...table$.tones?.length ? [{ ...toneColumn, id: liveColumnId(table, 'tone') }] : []],
         key: table$.key.map(item => liveColumnId(table, item)), rowCap: table$.rowCap,
         ...table$.departedLinger ? { departed: true } : {},
         ...table$.facetColumns?.length ? { facets: table$.facetColumns.map(item => liveColumnId(table, item)) } : {}

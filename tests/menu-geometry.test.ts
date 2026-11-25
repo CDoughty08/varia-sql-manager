@@ -69,6 +69,15 @@ describe('menu placement', () => {
     expect(placeMenu({ kind: 'point', x: 900, y: 10 }, small, viewport, avoid)).toMatchObject({ x: 900 - small.width, y: 34 + m })
     expect(placeMenu({ kind: 'point', x: 300, y: 10 }, small, viewport, avoid)).toMatchObject({ x: 300, y: 10 })
     expect(placeMenu({ kind: 'point', x: 900, y: 10 }, { width: 100, height: 800 }, viewport, avoid)).toEqual({ x: 900, y: 34 + m, maxHeight: 700 - m - 34 - m })
+    // A tall below-anchored menu under the window controls accounts for avoid when choosing above vs below and capping height,
+    // so it stays flush with the cell and never covers the cell or the window controls.
+    const tall = { width: 260, height: 600 }, cell = rect(760, 355, 140, 24)
+    const placedBelow = placeMenu({ kind: 'below', rect: cell }, tall, viewport, avoid)
+    expect(placedBelow).toEqual({ x: 760, y: cell.bottom, maxHeight: viewport.height - m - cell.bottom })
+    const lowerCell = rect(760, 420, 140, 24)
+    const placedAbove = placeMenu({ kind: 'below', rect: lowerCell }, tall, viewport, avoid)
+    expect(placedAbove).toEqual({ x: 760, y: avoid.bottom + m, maxHeight: lowerCell.top - (avoid.bottom + m) })
+    expect(placedAbove.y + placedAbove.maxHeight).toBe(lowerCell.top)
   })
 })
 

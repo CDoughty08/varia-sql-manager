@@ -127,6 +127,20 @@ function opened(first = model()) {
 }
 
 describe('the job document', () => {
+  it('opens at a section a link asks for, a collapsed one opened, and again in the tab already open (AG-16)', async () => {
+    const { jobDocuments, documents } = opened()
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    const frame = jobDocuments.get(id)!.frame
+    jobDocuments.setFrame(id, { ...frame, collapsed: [...frame.collapsed, 'history'] })
+    expect(jobDocuments.openJob('c1', 'Nightly load', 'history')).toBe(id)
+    expect(jobDocuments.get(id)!.frame).toMatchObject({ section: 'history', reveal: 1 })
+    expect(jobDocuments.get(id)!.frame.collapsed).not.toContain('history')
+    // Another click on the link scrolls there again in the one tab.
+    expect(jobDocuments.openJob('c1', 'Nightly load', 'history')).toBe(id)
+    expect(jobDocuments.get(id)!.frame.reveal).toBe(2)
+    expect(Object.values(documents.getSnapshot().documents).filter(item => item.kind === 'agentJob')).toHaveLength(1)
+  })
   it('opens one tab per job, saves only the changes under the STALE guard and reads the job again', async () => {
     const { jobDocuments, documents, executes, setModel } = opened()
     const id = jobDocuments.openJob('c1', 'Nightly load')

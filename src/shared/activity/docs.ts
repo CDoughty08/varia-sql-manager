@@ -33,6 +33,8 @@ export const documentCommands = {
   'activity.previousPane': { title: 'Previous Panel', other: 'Shift+F6', darwin: '⇧F6' },
   'activity.sessionDetails': { title: 'Session Details…', other: '—', darwin: '—' },
   'activity.killProcess': { title: 'Kill Process…', other: '—', darwin: '—' },
+  'activity.openJob': { title: 'Open Job', other: '—', darwin: '—' },
+  'activity.stopJob': { title: 'Stop Job', other: '—', darwin: '—' },
   'activity.close': { title: 'Close Activity Monitor', other: 'Shift+Escape', darwin: '⇧⎋' }
 } as const
 
@@ -94,7 +96,10 @@ const limitNotes: Readonly<Record<keyof typeof activityLimits, string>> = {
   cancelTombstoneMs: 'Milliseconds main remembers them',
   sessionId: 'The largest session id',
   fileLatencyMs: 'The largest latency threshold a files filter may carry (`activityMonitor.fileLatency*`)',
-  waitAverageMs: 'Milliseconds of samples the 1-Minute Average of Resource Waits spans'
+  waitAverageMs: 'Milliseconds of samples the 1-Minute Average of Resource Waits spans',
+  agentJobSlots: 'Agent job ids (and job and step pairs) one name read asks for',
+  agentJobNamesMs: 'Milliseconds an Agent job or step name (or msdb naming none) is kept before it is read again',
+  agentJobCache: 'Agent jobs (and as many steps) a monitor keeps names for'
 }
 
 function columnsTable(columns: readonly ColumnSpec[]): string {
@@ -465,6 +470,33 @@ export function renderActivityMonitorDocs(): string {
     'the session too: without it every other session answers `ended`, and nothing is killed.',
     '',
     table(['Outcome', 'Meaning'], (Object.keys(killOutcomes) as (keyof typeof killOutcomes)[]).map(outcome => [code(outcome), killOutcomes[outcome]])),
+    '',
+    '## SQL Server Agent jobs',
+    '',
+    'SQL Server Agent runs a T-SQL job step under a program name that names the job only by its id: `SQLAgent - TSQL JobStep',
+    '(Job 0x8A1B… : Step 2)`. Sessions and Blocking show an **Agent Job** column beside Application that names it: "Nightly, step 2',
+    '(Load)", the job\'s name, the step and the step\'s name. Active Expensive Queries carries the column hidden (with the session\'s',
+    'Application), so its rows act on jobs too, and the filter box matches the job\'s words in Sessions and Blocking. Agent\'s own',
+    'threads (Generic Refresher, Job invocation engine, Email Logger, …) run no job step and show none.',
+    '',
+    `The job id is the job_id's 16 bytes in hex, in the order SQL Server stores a uniqueidentifier; the backend decodes it and reads`,
+    `the names after each sessions sample, only for jobs it does not keep: one read of ${activityLimits.agentJobSlots} job ids at most from`,
+    '`msdb.dbo.sysjobs_view` (which shows each login the jobs its Agent role may see) and one of as many job and step pairs from',
+    '`msdb.dbo.sysjobsteps` (sysadmin only; an Agent role gets the job\'s name without its steps), on the monitor\'s pool with its',
+    `prologue, constant text with every id a parameter, checked by the monitor's lint. A name, or msdb naming none, is kept`,
+    `${seconds(activityLimits.agentJobNamesMs)} for the connection (at most ${number(activityLimits.agentJobCache)} jobs), so a renamed job shows its new name within that and a running`,
+    'job costs a small read a minute (two where the steps are named). Short of a lost connection, a timeout, a failed login or the sample time budget, which break the sample as any of its statements',
+    'would, neither read ever fails the sample or shows an error: a login without msdb access or an',
+    'Agent role sees "Job 8A1B2C3D-…, step 2", the decoded id and step without names, and the read is not tried again on that',
+    'connection; a lock wait or another passing failure waits out the keep time.',
+    '',
+    'The Agent Job cell is a link: a click, or Enter on it, opens the job\'s document (focused if it is open) at its History, which',
+    `shows the run live. Query Output's menu in the three session panes adds **Open Job** (${code('activity.openJob')}) and **Stop Job**`,
+    `(${code('activity.stopJob')}), and the palette has both; they act on the row as Details does. Stop Job is the job menu's guarded`,
+    'Stop, run without a confirm as Object Explorer\'s is (the `stopJob` object action with the job id the program name carries, so a job since replaced under the name is',
+    'refused); its answer shows above the tiles, as Kill\'s (a connection lost while it ran leaves the outcome unknown, and says so), and the monitor samples again at once. Both need the job\'s name, so a',
+    'login msdb names no job to is told why instead. The Details flyout lists the job under Identity and Now, as a link, and Copy',
+    'includes it.',
     '',
     '## Differences from SSMS',
     '',

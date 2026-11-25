@@ -6,6 +6,7 @@ import { BigQueryCostService, costOptOut } from '../services/bigquery-cost'
 import { CostPromptService } from '../services/bigquery-cost-prompt'
 import { languagesContribution } from '../contributions/languages'
 import { EditorPeekService } from '../languages/EditorPeekService'
+import { indexDefinitionOpener } from '../languages/bigquery-definition'
 import type { ReloadPins, VariaApi } from '../../../shared/contracts'
 import { actsOnTab } from '../../../shared/commands/catalog'
 import { toPlatform, type Platform } from '../../../shared/commands/keybindings'
@@ -567,7 +568,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   })
   const activity = new ActivityMonitorService({
     api, documents, connections, live, targetIdOf, owner: id => documentOwner(id, documents, panes, editorGroups), settings: () => settings.getSnapshot().values,
-    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-activity-monitor="${CSS.escape(id)}"] [data-activity-focus]`)?.focus())
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-activity-monitor="${CSS.escape(id)}"] [data-activity-focus]`)?.focus()),
+    // AG-16: a session's Agent job link opens the job's document at its History (created below; called only later).
+    openJob: (connectionId, name) => { jobDocuments.openJob(connectionId, name, 'history') }
   })
   const ssisPlaces = new SsisPlacesService({ api })
   const operations = new SsisOperationsService({
@@ -640,7 +643,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-peek-tab="${CSS.escape(id)}"] [role="tab"][aria-selected="true"]`)?.focus())
   })
   const inspector = new InspectorService({ api, platform })
-  const editorPeek = new EditorPeekService({ sqlLanguage, connections, scripting, peek, peekTabs })
+  const editorPeek = new EditorPeekService({
+    sqlLanguage, connections, scripting, peek, peekTabs, indexDefinition: indexCompletion,
+    openIndexDefinition: indexDefinitionOpener({ api, documents, connections, opened: () => focusLater(() => documents.focusActive()) })
+  })
   // A dependency is shown as Search Objects' Reveal shows a hit; a failed walk says why in the command banner.
   const dependencies = new DependenciesService({
     api, connections, explorer,
