@@ -90,6 +90,8 @@ export async function startBigQueryRest({ project = 'varia-emulator', dataset = 
       inserted.push({ id, query: config.query ?? '', parameters: config.queryParameters ?? [] })
       return [200, job(id)]
     }
+    // Object Explorer's running-jobs chip (explorer.bigquery) lists the principal's open jobs: the fake holds none open.
+    if (method === 'GET' && rest === '/jobs' && !query.has('parentJobId')) return [200, { kind: 'bigquery#jobList' }]
     match = /^\/jobs\/([^/]+)\/cancel$/.exec(rest)
     if (method === 'POST' && match) return jobs.has(match[1]) ? [200, { kind: 'bigquery#jobCancelResponse', job: job(match[1]) }] : notFound(match[1])
     match = /^\/jobs\/([^/]+)$/.exec(rest)

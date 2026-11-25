@@ -9,8 +9,8 @@ docs/language-services.md its [completion](language-services.md#completion-from-
 Varia runs GoogleSQL only; legacy SQL is refused (`LEGACY_SQL`). SQL Server-only features are hidden for a BigQuery
 connection rather than half-working, through the catalogues' `providers` and the method gate (docs/architecture.md,
 Provider gating): Activity Monitor, Integration Services, SQL Server Agent, Table Designer, object actions other than
-Properties, execution plans, client statistics, Go To Definition, and Object Explorer's live status chips (their
-probes are SQL Server's). A BigQuery connection's icon is Varia's own (a magnifier over bars), not Google's logo.
+Properties, execution plans, client statistics and Go To Definition. Object Explorer's live status chips have a
+BigQuery chip of their own ([Object Explorer](#object-explorer), Running jobs). A BigQuery connection's icon is Varia's own (a magnifier over bars), not Google's logo.
 [docs/mockups/bigquery-ui.html](mockups/bigquery-ui.html) mocks the BigQuery screens on Varia's own renderer; where it and
 this page differ, this page describes what ships.
 
@@ -48,8 +48,10 @@ a Connect, Test Connection, Browse or the Default dataset list (which loads when
 BigQuery entries live in `bigquery-connections.json` beside SQL Server's library: favourites, saved entries and the 30
 most recent connects, each keyed by its settings, with environment labels and the cost-prompt choice (`costPrompt: false`,
 [Cost](#cost)) per entry, written atomically and quarantined if unreadable. An entry with a key file keeps the file's path for main only; after a restart main reads the
-saved connections when a reference is first needed (a reconnect at startup included) and maps it back to its file. A
-target whose entry has left the history (pruned or removed) asks for the key file again. The file also keeps the newest 64 confirmed federation token files. The dialog's history
+saved connections when a reference is first needed (a reconnect at startup included) and maps it back to its file. An
+entry pruned from the 30 most recent leaves its key file's path behind (`keptKeyFiles`, the newest 48, for main only; with the 200 saved entries that stays within main's 256 remembered key files), so a
+connection still open from it reconnects after a restart without asking for the file again; a later connect from the
+history or the dialog takes the path back into an entry. Removing an entry forgets its path, a kept copy included, so a target whose entry was removed asks for the key file again. The file also keeps the newest 64 confirmed federation token files. The dialog's history
 lists both engines by recency: a BigQuery row shows the project where SQL Server shows the server, then `BigQuery`, the
 default dataset and the sign-in (with the key file's name). Object Explorer, tabs, the query bar and the status bar show
 the project where SQL Server shows the server; the query tab's **Dataset** box, and the palette's Change Database, list the
@@ -626,6 +628,14 @@ listers; nothing in it runs a job.
   punctuation (300 characters, STRUCT fields up to 15 deep). They hold on BigQuery's branches of the zod schemas and C#
   only; SQL Server's names keep their 128 characters.
 - **Copy and drag.** A node inserts its backtick-quoted path (`` `project.dataset.table` ``; a column each part quoted).
+- **Running jobs.** The connection node's status chip, "N jobs running", counts the connection principal's own pending and
+  running jobs in the billing project: jobs.list with `stateFilter` pending and running, without `allUsers`, projection
+  minimal, top-level jobs only (a running script counts once), through the rate limiter above. It is a free API call, never a
+  query. Jobs other principals run in the project, and jobs in the extra projects, are not counted; Job History's All users
+  shows those. It is the `explorer.bigquery` probe of the `bigquery.explorer` live source (docs/live.md), every 10 s, sampled
+  only while Object Explorer shows and paused while it is hidden, like SQL Server's chips (docs/object-explorer.md, Live
+  status); Options › Environment › Live data › Show live status in Object Explorer turns both off. It counts up to 10,000 ("10,000+" past that), shows
+  nothing while nothing runs or when the listing is refused, and has no click action. Datasets have no chips.
 
 ### Preview Rows
 

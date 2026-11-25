@@ -254,6 +254,8 @@ export const queryResultSchema = z.object({
     project: z.string().min(1).max(1024), jobId: z.string().min(1).max(1024), location: z.string().min(1).max(64).optional(), statementType: z.string().min(1).max(64).optional(),
     bytesProcessed: count.optional(), bytesBilled: count.optional(), cacheHit: z.boolean().optional(), slotMs: count.optional()
   }).strict().optional(),
+  // BigQuery: the newest stale mark the connection's Search Objects index has not spent (docs/object-search.md, BigQuery).
+  indexStale: count.min(1).optional(),
   budget: z.object({ usedBytes: count, globalBytes: count, queryBytes: count, seq: count, stoppedBytes: count.min(1).optional() }).strict(), completedAt: z.string().max(40),
   // The session's @@SPID (a smallint) and SUSER_SNAME(), read when it opened.
   ...session, spid: session.spid.optional()

@@ -3,10 +3,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { BigQueryConnectionStore } from '../src/main/bigquery-connection-store'
-import { BigQueryCredentials, BigQueryKeyFiles, federationSource } from '../src/main/bigquery-credentials'
+import { BigQueryCredentials, BigQueryKeyFiles, federationSource, maxKeyFiles } from '../src/main/bigquery-credentials'
 import { connectionHistory } from '../src/main/connection-history'
 import { connectionLibrary } from '../src/main/connection-library'
 import { BackendError } from '../src/main/backend/errors'
+import { bigQueryLibraryLimits } from '../src/shared/bigquery-connections'
 import type { BigQueryConnectionOptions } from '../src/shared/contracts'
 
 const directories: string[] = []
@@ -61,6 +62,41 @@ describe('BigQuery saved connections (bigquery-connections.json)', () => {
     // A connect without an environment keeps the entry's when asked to.
     const kept = await store.rememberEntry(gcloud('varia-project-31'), true)
     expect(kept.environment).toBe('Production')
+  })
+
+  it('keeps the key file of a history entry pruned past 30, so a target restored from it does not ask for the file again', async () => {
+    const directory = await folder(), path = join(directory, 'bigquery-connections.json'), keyFiles = new BigQueryKeyFiles()
+    const keyPath = join(directory, 'reader.json'), keyFile = keyFiles.register(keyPath)
+    const keyed: BigQueryConnectionOptions = { provider: 'bigquery', project: 'varia-keyed', authentication: 'serviceAccountKey', keyFile }
+    const store = new BigQueryConnectionStore(path, keyFiles)
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(Date.UTC(2026, 10, 1))
+      await store.rememberEntry(keyed)
+      for (let index = 1; index <= 30; index++) { vi.setSystemTime(Date.UTC(2026, 10, 1, 0, index)); await store.rememberEntry(gcloud(`varia-project-${String(index).padStart(2, '0')}`)) }
+    } finally { vi.useRealTimers() }
+    const { library } = await store.load()
+    expect(library.profiles.map(profile => profile.options.project)).not.toContain('varia-keyed')
+    expect(library.keptKeyFiles).toEqual([{ reference: keyFile, keyPath }])
+    // After a restart main knows the reference again from the file alone, so the restored target's connect finds its path.
+    const restarted = new BigQueryKeyFiles()
+    await new BigQueryConnectionStore(path, restarted).load()
+    expect(restarted.path(keyFile)).toBe(keyPath)
+    // Connecting through it again makes it an entry's once more, and the kept reference goes.
+    const again = await new BigQueryConnectionStore(path, restarted).rememberEntry(keyed)
+    expect(again.library.profiles.find(profile => profile.options.project === 'varia-keyed')).toMatchObject({ keyPath })
+    expect(again.library.keptKeyFiles).toBeUndefined()
+    // The renderer's view never carries kept paths.
+    expect(JSON.stringify(BigQueryConnectionStore.view(library))).not.toContain('keptKeyFiles')
+    // Removing an entry forgets its key file's path, a kept copy of it included.
+    const entry = again.library.profiles.find(profile => profile.options.project === 'varia-keyed')!
+    await writeFile(path, JSON.stringify({ ...again.library, keptKeyFiles: [{ reference: '0b6f2f8e-0b0e-4f6a-9d61-6d8c2b7f1e22', keyPath }] }))
+    const removed = await new BigQueryConnectionStore(path, new BigQueryKeyFiles()).remove(entry.id)
+    expect(removed.removed).toBe(true)
+    expect(removed.library.keptKeyFiles ?? []).toEqual([])
+    expect(await readFile(path, 'utf8')).not.toContain(JSON.stringify(keyPath).slice(1, -1))
+    // Kept references and every saved entry's fit main's key file registry together, so loading never evicts one of them.
+    expect(bigQueryLibraryLimits.profiles + bigQueryLibraryLimits.keptKeyFiles).toBeLessThanOrEqual(maxKeyFiles)
   })
 
   it('quarantines a file whose key file path is not absolute, rather than failing every later read', async () => {
