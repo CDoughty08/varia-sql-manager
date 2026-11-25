@@ -1568,7 +1568,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
    2 px padding each side, 1 px border); the sides' names are cut first. */
 .rg-compare-bar { flex-shrink: 0; display: flex; align-items: center; gap: var(--varia-space-2); height: 29px; box-sizing: border-box; padding: 2px 8px; overflow: hidden; border-bottom: 1px solid var(--varia-panel-border); font: var(--varia-size-xs)/16px var(--varia-font-ui); color: var(--varia-panelTitle-activeForeground); }
 .rg-compare-title { flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px; font-weight: 600; }
-.rg-compare-sides { flex-shrink: 0; display: inline-flex; align-items: center; gap: 2px; }
+.rg-compare-sides { flex-shrink: 1; min-width: 48px; overflow: hidden; display: inline-flex; align-items: center; gap: 2px; }
 .rg-compare-side { min-width: 0; max-width: 220px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; padding: 0 4px; border: 0; background: none; color: var(--varia-resultsGrid-linkForeground); font: inherit; text-decoration: underline; cursor: pointer; }
 .rg-compare-side.is-closed { color: var(--varia-panelTitle-inactiveForeground); text-decoration: none; cursor: default; }
 .rg-compare-swap, .rg-compare-exact { flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 4px; border: 1px solid transparent; border-radius: var(--varia-radius-sm); background: none; color: var(--varia-panelTitle-inactiveForeground); font: inherit; }

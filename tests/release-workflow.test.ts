@@ -86,7 +86,7 @@ describe('Release builds', () => {
     const prepareScript = readFileSync('scripts/package-prepare.mjs', 'utf8')
     expect(pack.indexOf('scripts/package-prepare.mjs')).toBeGreaterThan(-1)
     expect(pack.indexOf('scripts/package-prepare.mjs')).toBeLessThan(pack.indexOf('- name: Package application'))
-    expect(pack).toContain('node scripts/package-prepare.mjs --rid ${{ inputs.rid }} --updater')
+    expect(pack).toContain("node scripts/package-prepare.mjs --rid ${{ inputs.rid }} ${{ runner.os == 'Windows' && '--updater' || '' }}")
     expect(prepareScript).toContain('dotnet publish backend/Varia.Backend/Varia.Backend.csproj -c Release -r ${rid} --self-contained true -p:RestoreLockedMode=true -o artifacts/release-backend')
     expect(prepareScript).toContain('dotnet publish backend/Varia.Updater/Varia.Updater.csproj -c Release -r ${rid} -o artifacts/updater')
     expect(prepareScript).toContain('npm run sqltools:prepare -- --rid ${rid}')

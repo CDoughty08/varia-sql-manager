@@ -401,10 +401,10 @@ describe('a comparison\'s toolbar', () => {
     expect(view.button('Previous difference')!.title).toBe('Previous difference: no differences')
   })
 
-  it('keeps the sides group from shrinking under the match button at narrow widths', () => {
+  it('keeps the sides group wide enough for Swap sides while allowing labels to ellipsize', () => {
     const css = readFileSync('src/renderer/src/styles.css', 'utf8')
-    expect(css).toMatch(/\.rg-compare-sides\s*\{[^}]*flex-shrink:\s*0/)
-    expect(css).not.toMatch(/\.rg-compare-sides\s*\{[^}]*min-width:\s*0/)
+    expect(css).toMatch(/\.rg-compare-sides\s*\{[^}]*min-width:\s*48px/)
+    expect(css).toMatch(/\.rg-compare-sides\s*\{[^}]*overflow:\s*hidden/)
     expect(css).toMatch(/\.rg-compare-match\s*\{[^}]*overflow:\s*hidden/)
   })
 })

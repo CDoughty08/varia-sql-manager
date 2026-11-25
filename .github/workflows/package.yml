@@ -61,14 +61,9 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         run: npm run typecheck
       # Build application, prepare pinned SQL Tools Service, publish ReadyToRun backend and (on Windows) NativeAOT update helper concurrently.
+      # Runs in the runner's default shell (not Git Bash on Windows) so `tar` resolves to Windows's BSD tar rather than MSYS2 GNU tar.
       - name: Prepare application, SQL Tools Service, backend and update helper
-        shell: bash
-        run: |
-          if [ "$RUNNER_OS" = Windows ]; then
-            node scripts/package-prepare.mjs --rid ${{ inputs.rid }} --updater
-          else
-            node scripts/package-prepare.mjs --rid ${{ inputs.rid }}
-          fi
+        run: node scripts/package-prepare.mjs --rid ${{ inputs.rid }} ${{ runner.os == 'Windows' && '--updater' || '' }}
       # Tags, manual runs and the weekly x64 check build full compressed release artifacts (including macOS DMG/ZIP).
       # Non-tag main and PR pushes use store compression on Windows (still building and smoke-testing Setup.exe, Portable.exe,
       # win-x64.zip and the updater) and --mac dir on macOS (still building and smoke-testing the full .app bundle with fuses
