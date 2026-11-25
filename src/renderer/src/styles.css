@@ -1568,7 +1568,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
    2 px padding each side, 1 px border); the sides' names are cut first. */
 .rg-compare-bar { flex-shrink: 0; display: flex; align-items: center; gap: var(--varia-space-2); height: 29px; box-sizing: border-box; padding: 2px 8px; overflow: hidden; border-bottom: 1px solid var(--varia-panel-border); font: var(--varia-size-xs)/16px var(--varia-font-ui); color: var(--varia-panelTitle-activeForeground); }
 .rg-compare-title { flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px; font-weight: 600; }
-.rg-compare-sides { display: inline-flex; align-items: center; gap: 2px; min-width: 0; }
+.rg-compare-sides { flex-shrink: 0; display: inline-flex; align-items: center; gap: 2px; }
 .rg-compare-side { min-width: 0; max-width: 220px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; padding: 0 4px; border: 0; background: none; color: var(--varia-resultsGrid-linkForeground); font: inherit; text-decoration: underline; cursor: pointer; }
 .rg-compare-side.is-closed { color: var(--varia-panelTitle-inactiveForeground); text-decoration: none; cursor: default; }
 .rg-compare-swap, .rg-compare-exact { flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 4px; border: 1px solid transparent; border-radius: var(--varia-radius-sm); background: none; color: var(--varia-panelTitle-inactiveForeground); font: inherit; }
@@ -1581,7 +1581,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 @media (forced-colors: active) { .rg-compare-exact[aria-pressed="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText; } .rg-compare-bar [aria-disabled="true"] { color: GrayText; opacity: 1; } }
 /* The comparison toolbar's Match, Rows, chips, Profile and Save; a narrow pane folds them away in order (comparisonFolds),
    into More results tools; the chips first shrink to their sign and count. */
-.rg-compare-match { flex-shrink: 1; display: inline-flex; align-items: center; gap: 2px; min-width: 0; max-width: 200px; height: 22px; padding: 0 2px 0 6px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: none; color: var(--varia-panelTitle-activeForeground); font: inherit; }
+.rg-compare-match { flex-shrink: 1; display: inline-flex; align-items: center; gap: 2px; min-width: 0; max-width: 200px; height: 22px; overflow: hidden; padding: 0 2px 0 6px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: none; color: var(--varia-panelTitle-activeForeground); font: inherit; }
 .rg-compare-match > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Key columns' ⚷, which the button's name says as "key columns". */
 .rg-compare-match > .rg-compare-key::before { content: "\26B7\00a0" / ""; }
