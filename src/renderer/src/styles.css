@@ -2992,10 +2992,10 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .agent-flow-legend .agent-flow-legend-note { grid-column: 1 / -1; display: block; }
 .agent-flow-line { display: inline-block; width: 28px; border-top: 1.5px solid var(--varia-successForeground); }
 .agent-flow-line[data-which="fail"] { border-top: 1.5px dashed var(--varia-errorForeground); }
-.agent-flow-pill { display: inline-flex; align-items: center; gap: var(--varia-space-1); height: 18px; padding: 0 var(--varia-space-2); border: 1px solid var(--varia-panel-border); border-radius: 9px; white-space: nowrap; }
+.agent-flow-pill { display: inline-flex; align-items: center; gap: var(--varia-space-1); height: 18px; padding: 0 var(--varia-space-2); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-pill); white-space: nowrap; }
 .agent-flow-pill[data-tone="ok"] { color: var(--varia-successForeground); border-color: var(--varia-successForeground); }
 .agent-flow-pill[data-tone="bad"] { color: var(--varia-errorForeground); border-color: var(--varia-errorForeground); }
-.agent-flow-pill[data-tone="accent"] { color: var(--varia-foreground); border-color: var(--varia-focusBorder); background: var(--varia-list-inactiveSelectionBackground); }
+.agent-flow-pill[data-tone="accent"] { color: var(--varia-list-inactiveSelectionForeground); border-color: var(--varia-focusBorder); background: var(--varia-list-inactiveSelectionBackground); }
 .agent-flow-pill[data-tone="warning"] { border-color: var(--varia-warningForeground); }
 @media (forced-colors: active) {
   .agent-tile[aria-pressed="true"] .tile { outline: 2px solid Highlight; outline-offset: -2px; }

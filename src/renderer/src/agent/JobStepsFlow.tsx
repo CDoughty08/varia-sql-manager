@@ -126,7 +126,7 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
       never: !flow.reachable[at], changed: accent.has(flowEdgeKey(at, 'success')) || accent.has(flowEdgeKey(at, 'fail'))
     }))
     const chips = [
-      ...flow.loops.map(loop => ({ edge: flowEdgeKey(loop.back.from, loop.back.which), text: `Loop · ${loop.steps.map(step => step + 1).join(' ⇄ ')}` })),
+      ...flow.loops.map(loop => ({ edge: flowEdgeKey(loop.back.from, loop.back.which), text: `Loop · ${loop.steps.map(step => step + 1).join(loop.steps.length === 2 ? ' \u21C4 ' : ', ')}` })),
       ...[...accent].map(edge => ({ edge, text: 'changed', tone: 'accent' as const }))
     ]
     return { flow, layout, nodes, accent, hot: new Set(), fadeRest: false, chips, sequence: new Map() }
@@ -256,7 +256,7 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
                 const edge = edgeOf(which)!
                 return <div key={which} className="agent-flow-fact">
                   <dt>{which === 'success' ? 'On success' : 'On failure'}</dt>
-                  <dd><span className={which === 'success' ? 'agent-step-ok' : 'agent-step-bad'} aria-hidden="true">{which === 'success' ? '✓' : '✗'}</span> {actionLine(edge, steps)}
+                  <dd><span className={which === 'success' ? 'agent-step-ok' : 'agent-step-bad'}><Icon name={which === 'success' ? 'check' : 'close'} /></span> {actionLine(edge, steps)}
                     {loopOf(edge) && <span className="agent-step-tag" data-tone="warning">Loop</span>}</dd>
                 </div>
               })}
@@ -266,7 +266,7 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
               <button type="button" onClick={() => service.openStepEditor(state.id, selectedStep.key)}><Icon name="edit" />Edit step</button>
               <button type="button" disabled={!canStartHere} title={canStartHere ? undefined : 'Save the step first; the job must not be running.'} onClick={() => void service.startAtStep(state.id, selectedStep.key)}><Icon name="play" />{`Start at step ${selected + 1}`}</button>
             </span>
-            <p className="field-note">Double-click a step, or press Enter, to edit it here. Right-click it, or press Shift+F10, for its actions. Drag a ✓ or ✗ port onto a step to go to it.</p>
+            <p className="field-note">Double-click a step, or press Enter, to edit it here. Right-click it, or press Shift+F10, for its actions. Drag a step’s success or failure port onto a step to go to it.</p>
           </section>}
           <section className="agent-flow-sec" aria-labelledby={`agent-flow-${state.id}-checks`}>
             <h4 id={`agent-flow-${state.id}-checks`}>Flow checks<span className="agent-flow-sec-right">{problemCount === 0 ? 'No problems' : `${problemCount} ${problemCount === 1 ? 'problem' : 'problems'}`}</span></h4>
@@ -285,14 +285,14 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
           <section className="agent-flow-sec" aria-labelledby={`agent-flow-${state.id}-key`}>
             <h4 id={`agent-flow-${state.id}-key`}>Key</h4>
             <ul className="agent-flow-legend">
-              <li><span className="agent-flow-line" data-which="success" />✓ On success</li>
-              <li><span className="agent-flow-line" data-which="fail" />✗ On failure</li>
+              <li><span className="agent-flow-line" data-which="success" /><Icon name="check" />On success</li>
+              <li><span className="agent-flow-line" data-which="fail" /><Icon name="close" />On failure</li>
               <li><span className="agent-flow-pill" data-tone="ok">Quit · success</span></li>
               <li><span className="agent-flow-pill" data-tone="bad">Quit · failure</span></li>
               <li><span className="agent-flow-pill" data-tone="accent"><Icon name="play" />Start</span>Start step</li>
               <li><span className="agent-step-tag" data-tone="warning">Never runs</span>nothing reaches it</li>
               <li><span className="agent-flow-pill" data-tone="warning"><Icon name="warning" />End · job fails</span>last step goes to the next step</li>
-              <li className="agent-flow-legend-note">Steps stay in step order, top to bottom, as in List and History. Jumps run beside the column: success on the left, failure on the right. A go-to to the step just below is straight, marked → N.</li>
+              <li className="agent-flow-legend-note">Steps stay in step order, top to bottom, as in List and History. Jumps run beside the column: success on the left, failure on the right. A go-to to the step just below is straight, marked with its number.</li>
             </ul>
           </section>
         </>}

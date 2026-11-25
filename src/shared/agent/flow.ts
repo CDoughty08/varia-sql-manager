@@ -333,7 +333,8 @@ export function flowLayout(flow: StepsFlow, metrics: FlowMetrics): FlowLayout {
   const height = (nodes.length ? nodes[nodes.length - 1]!.y + h : top) + portDrop + endDrop + 30
   const chipLeft = x - laneGap - leftCount * laneStep, chipRight = x + w + laneGap + rightCount * laneStep
   return {
-    width: chipRight + margin + 120, height, x, nodes, edges, ports, quits, ...end ? { end } : {},
+    // Lane chips sit past the right lanes; with none, the Quit pills stay inside the node column.
+    width: chipRight + margin + (rightCount ? 120 : 0), height, x, nodes, edges, ports, quits, ...end ? { end } : {},
     ...startNode ? { start: { from: [margin + startWidth, sy] as const, to: [x - 2, sy] as const } } : {},
     chipLeft, chipRight
   }

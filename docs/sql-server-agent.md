@@ -195,6 +195,24 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   Reload and keep my changes matches steps by name: steps you did not touch take the job's version now (another session's renames,
   deletes, inserts and Start step stand), your edits land on the step you edited at its current number, and the compare's Steps row
   says what each side added, deleted, edited or reordered.
+  **Flow** (the switch at the top left of Steps, List | Flow; every document opens on List; `JobStepsFlow.tsx`, the rules in
+  `src/shared/agent/flow.ts`) draws the same draft as a graph with Pixi, as the execution plan viewer does (`FlowCanvas.ts`, sharing its
+  camera, zoom and label pool). Steps stay in step order, top to bottom; each has its number, name, type and icon, and its key field
+  (database, package, run as, retries or command). Its ✓ and ✗ ports lead to the next step (straight), to a Quit pill, to an
+  **End · job fails** node (the last step's Go to the next step), or along a lane beside the column (success on the left, failure on
+  the right; a go-to to the step just below is straight and marked "→ N"). The Start step has the entry arrow, a loop is tagged
+  ("Loop · 3 ⇄ 4"), a step nothing reaches is dashed and tagged Never runs, and an action changed since the job was read is drawn in the
+  accent and tagged "changed". Beside the graph: the selected step's summary (with **Reached from**), the **Flow checks** and the key.
+  The checks are warnings that never block Save, and List tags the same steps: a step that never runs (Make Start step when its paths
+  lead to the current Start step), a loop (Agent does not count passes), a loop with no way out, and the last step going to the next
+  step (Quit reporting success). Click selects; double-click, Enter or Edit step docks List's step editor beside the graph (Close
+  editor goes back); right-click or Shift+F10 opens the step's menu (Edit step, Start job at this step, Make Start step, On success ›
+  and On failure › with SSMS's four actions and every other step, Add step after ›, Move up, Move down, Delete step; on macOS, whose
+  native menus show no items built when they open, On success…, On failure… and Add step after… pick from the same lists). Dragging a
+  ✓ or ✗ port onto a step sets Go to step; dropping it on empty space opens that action's list. Steps are reordered in List or with Move
+  up and Move down, never by dragging nodes. The wheel scrolls, Ctrl+wheel zooms, and the toolbar has −, the zoom and +, and Fit. A
+  visually hidden tree of the steps, over their nodes, keeps focus and names each step with both actions, so the keyboard and screen
+  readers have the whole graph; arrows move the selection. Forced colours, or a GPU that cannot draw, leave List (Flow says why).
   Another owner's job below sysadmin opens read-only with the reason. Edits mark the tab dirty, Save counts them ("Save · 2
   changes"), closing asks to save, and Problems warn and only block what msdb would refuse (a missing name, owner or operator).
   **Save** sends only what changed with the version and modified date the describe read, as one batch in one transaction:
@@ -630,7 +648,9 @@ checks nothing committed, renames it to a hostile name and back, runs the script
 deletes one, reading `sysjobsteps` back after each save. The `agent-job` smoke suite opens jobs from
 Job Activity Monitor (double-click and Enter), saves an edit and a removed alert, loses a save to another session's (the fake
 backend's `job-save-race` control file) and saves after Reload and keep my changes, starts the job once at a step, reorders, parses,
-deletes and undoes steps on Steps and saves them, and creates a job by copying another from New Job.
+deletes and undoes steps on Steps and saves them, and creates a job by copying another from New Job. The `agent-flow` smoke suite
+switches Steps to Flow, fixes the End warning, sets an action from the step menu (Shift+F10, On failure ›) and by dragging a port,
+docks the editor with Enter, checks List shows the same draft and saves it.
 
 `AgentScheduleChecks` checks the schedules offline: the schedule saves' lint and its near misses (a missing guard, `@force_delete`,
 a write out of order), each save's batch for the job document and the Schedules document, the timing rules that mirror

@@ -166,7 +166,8 @@ export class FlowCanvas {
   }
   private home(): Camera {
     const { width } = this.options.model.layout
-    if (width > this.width) return fit({ x: 0, y: 0, width, height: this.options.model.layout.height }, this.width, this.height)
+    // Narrowed to the width only (a long job scrolls), from the top as at 100 %, so the Start step stays where the eye starts.
+    if (width > this.width) { const scale = Math.max(0.25, (this.width - 16) / width); return { scale, x: Math.round((this.width - width * scale) / 2), y: 0 } }
     return { scale: 1, x: Math.round((this.width - width) / 2), y: 0 }
   }
   private cancelFrame(): void { if (this.frame) this.owner.cancelAnimationFrame(this.frame); this.frame = 0 }
@@ -432,12 +433,18 @@ export class FlowCanvas {
       pill(`end:${key}`, '⚠ End · job fails', layout.end.at[0], layout.end.at[1], colors.warning, colors.background, colors.text, model.fadeRest && !model.hot.has(key) ? 0.35 : 1)
     }
     // Chips beside lanes (the loop tag, "changed") and the overlay's sequence badges.
+    // A lane's chips sit past the lanes on its side, one after another; a straight edge's or a Quit's beside its port, clear of the pill.
+    const used = new Map<string, number>()
     for (const chip of model.chips) {
       const item = layout.edges.find(edge => flowEdgeKey(edge.edge.from, edge.edge.which) === chip.edge)
       if (!item) continue
-      const left = item.edge.which === 'fail', color = this.tone(chip.tone ?? 'muted')
+      const right = item.edge.which === 'fail', color = this.tone(chip.tone ?? 'muted')
       const style = styled(this.styles.small, color), width = this.measure(chip.text, style) + 12
-      const x = left ? layout.chipRight + 8 : layout.chipLeft - 8 - width, y = item.mid[1] - 8
+      const before = used.get(chip.edge) ?? 0
+      used.set(chip.edge, before + width + 4)
+      const pilled = item.points.length === 0, gap = item.lane !== undefined ? 8 : pilled ? 44 : 10
+      const anchor = item.lane !== undefined ? (right ? layout.chipRight : layout.chipLeft) : item.mid[0] - (pilled ? 0 : 13)
+      const x = right ? anchor + gap + before : anchor - gap - before - width, y = item.mid[1] + (pilled ? 10 : 0) - 8
       this.cards.roundRect(x, y, width, 16, 3).fill(colors.card).stroke({ color: chip.tone === 'accent' ? colors.accent : colors.border, width: 1 })
       label(`chip:${chip.edge}:${chip.text}`, chip.text, x + 6, y + 2, style, color)
     }
