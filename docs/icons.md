@@ -9,7 +9,7 @@ half pixels, so they are sharp at 100 % zoom where the icon's box starts on a wh
 same name. Icons are sized with the `--varia-glyph-*` tokens ([metrics](themes/metrics.md)) and coloured
 with theme keys; Microsoft's SSMS icons are never used.
 
-## Varia's icons (30)
+## Varia's icons (33)
 
 | Id | Use |
 | --- | --- |
@@ -24,6 +24,9 @@ with theme keys; Microsoft's SSMS icons are never used.
 | `role` | Server, database and application roles. |
 | `shield` | Audits, audit specifications, security policies. |
 | `execution-plan` | Execution plan documents. |
+| `execution-plan-actual` | Include Actual Execution Plan toggle and menu item. |
+| `execution-plan-live` | Include Live Execution Plan toggle and menu item. |
+| `execution-plan-estimated` | Display Estimated Execution Plan action and menu item. |
 | `plan-join` | Execution plan joins and nested loops. |
 | `plan-sort` | Execution plan sorting. |
 | `plan-filter` | Execution plan filters and assertions. |

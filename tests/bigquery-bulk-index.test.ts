@@ -19,7 +19,7 @@ const bigQuery = (id: string) => ({ id, server: 'bigquery', database: 'sales', s
 const sqlServer = (id: string) => ({ id, server: 'srv', database: 'master', serverVersion: '16.0', options: {} }) as unknown as LiveConnection
 const status = (overrides: Partial<ObjectIndexStatus> = {}): ObjectIndexStatus => ({ state: 'ready', databases: 2, indexed: 2, objects: 40, modules: 5, cut: 0, skipped: [], definitions: true, provider: 'bigquery', ...overrides })
 const estimate: BigQueryIndexEstimateResult = { locations: [{ project: 'varia-alpha', location: 'US' }], estimate: { bytesProcessed: 50 * 2 ** 20, statementType: 'SELECT' }, cut: false, elapsedMs: 3 }
-const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+const settle = () => new Promise(resolve => setImmediate(resolve))
 
 function harness(options: { bulk?: boolean; extraProjects?: boolean; estimate?: ApiResult<BigQueryIndexEstimateResult> | 'throw'; gate?: false } = {}) {
   const index: Parameters<VariaApi['explorerIndex']>[0][] = []

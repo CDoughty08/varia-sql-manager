@@ -31,7 +31,6 @@ import UpdateStatus from './updates/UpdateStatus'
 import AboutDialog from './about/AboutDialog'
 import TitleBar from './TitleBar'
 import StandardToolbar, { CommandCentre } from './ShellToolbar'
-import QueryBar from './QueryBar'
 import { lostHint } from './query-context'
 import EditorArea from './editor-groups/EditorArea'
 import DockWorkspace, { type WorkspaceHandle } from './DockWorkspace'
@@ -351,10 +350,8 @@ export default function App() {
       : <div className="global-error" role="alert"><span>{commandError}</span><button aria-label="Dismiss command error" onClick={() => commands.clearError()}><Icon name="close" /></button></div>)}
     <ThemeNotice />
     <DockWorkspace ref={workspaceRef} explorer={<aside className="explorer"><ExplorerPane error={explorerError} activeConnectionId={liveConnection?.id} activeQueryId={isQuery ? active.id || undefined : undefined} /></aside>} editor={<main className="workspace">
-        {/* The active query's own bar, unless the classic toolbar brings back the global lists (for one release). */}
-        {!shell.classicToolbar && (active.id && isQuery ? <QueryBar /> : queryInSplit && <div className="query-bar-spacer" aria-hidden="true" />)}
         {statusTop && statusBar}
-        {/* Editor groups: each with its tab strip and editor; designers, properties and monitors render in their own panels. */}
+        {/* Editor groups: each with its tab strip, per-query bar inside SQL documents, and editor; designers, properties and monitors render in their own panels. */}
         <EditorArea />
         {!statusTop && statusBar}
       </main>} results={<OutputPane pane="results" tabId={active.id} query={isQuery} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />}

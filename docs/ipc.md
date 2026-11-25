@@ -293,6 +293,8 @@ noted where it matters.
 | `actions.execute` | invoke; `cancelObjectActions` (Stop); progress via `onActionProgress` | unary with EVENTs | actions | none, no backstop (note 2 below). Sensitive. Main checks the answer (`actionExecuteResultSchema`, every step field bounded). Never re-sent |
 | `ssis.describe` | invoke; `cancelSsis` | unary | ssis | 45 s, budget 40 s (lock wait ≤ 5 s, role checks 1 s: `BLOCKED`) |
 | `ssis.execute` | invoke; `cancelSsis` (Stop) | unary | ssis | none, no backstop: waits for locks as SSMS does; only CANCEL (reason 1) ends it, answered with its steps once SQL Server ends the statement (≤ 10 s later); preflight budget 25 s (lock timeout 10 s: `BLOCKED`). Sensitive. Never re-sent. Create Catalog: see **Create Catalog** below |
+| `ssis.execution` | invoke; `cancelSsis` | unary | ssis | 45 s, budget 40 s (lock wait ≤ 5 s: `BLOCKED`) |
+| `ssis.packageRuns` | invoke; `cancelSsis` | unary | ssis | 45 s, budget 40 s (lock wait ≤ 5 s: `BLOCKED`) |
 | `ssis.catalogSetup` | invoke; `cancelSsis` | unary | ssis | 45 s, budget 40 s (lock timeout 10 s: `BLOCKED`) |
 | `activity.details` | invoke; `cancelActivity` (closing Details) | unary | live (live gates) | 15 s, budget 10 s |
 | `activity.kill` | invoke | unary | actions (own gates) | 30 s, budget 25 s, answered with the outcomes of the sessions tried. Never re-sent |
@@ -471,6 +473,14 @@ the SSIS read pool (program name + " - Integration Services", Initial Catalog th
 - The SSIS profile is read once per connection (role checks `LOCK_TIMEOUT 1000`). `result.error` codes:
   `CATALOG_MISSING`, `NO_DB_ACCESS`, `DATABASE_UNAVAILABLE`, `BLOCKED`, `TIMEOUT`, `PERMISSION_DENIED`, `NOT_FOUND`,
   `NOT_SUPPORTED` (before 2016, Linux), `CONNECTION_LOST`, `AUTH_KERBEROS`, `AUTH_UNSUPPORTED`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `SQL_ERROR`.
+- `ssis.execution { connectionId, requestId, executionId: 1 – 2^53 − 1, types?: message type codes [1..all, distinct], source?: task name ≤ 4,000 }`
+  answers `{ model?, elapsedMs, error? }` on the same pool and prologue as `ssis.describe`: the execution's overview, its
+  messages counted by type, the newest ≤ 5,000 of the chosen types and task (all when left out), each message and path
+  ≤ 4,000 characters (a longer one ends in "…"; past the row bound or about 4,000,000 bytes, `truncated`), its tasks
+  (≤ 1,000), the parameter values it used (≤ 1,000, never a sensitive value), the package's runs up to this one (≤ 16)
+  and its next run. A missing (purged) execution is `NOT_FOUND`; the other codes are describe's.
+- `ssis.packageRuns { connectionId, requestId, folder, project ≤ 128, package ≤ 260 }` answers `{ model?, elapsedMs, error? }`:
+  one package's runs, newest first (≤ 1,000, then `truncated`), each with its error and warning counts; the codes are describe's.
 - **SSIS cancellation** is `varia:ssis-cancel`: an attention, answered `CANCELLED`.
 
 **SSIS writes.** `ssis.execute { connectionId, requestId, action: { verb: 'stopOperation', operationId: 1 – 2^53 − 1 },
@@ -1975,7 +1985,8 @@ with `BACKEND_ERROR`.
   NULL first ascending, text case-insensitively then exactly), then by the key (a table that no key names keeps the source's order), and stores at most the row cap (`rowLimit`,
   rows left out counted in `rowsRead`). `diff` counts keys added, removed and changed (a 64-bit hash of their texts);
   `tracked` gives each key of the latest track list its new row or −1. A key is its key cells' texts joined with U+001F, NULL
-  as empty. A table with `departed` keeps a tracked row that left the source (not one hidden by view or filter) for one more
+  as empty. A table with `departed` keeps a tracked row that left the source (not one hidden by view or filter, nor one new
+  args leave out: a source that filters in SQL marks the rows it read anew under new args, `LiveReaderTable.Refiltered`) for one more
   revision at its old row; only the first `linger` keys stay. Facet columns carry their distinct values over the rows the
   facet scope keeps (before view and filter; the Activity Monitor's Sessions counts only rows its chips show), most frequent
   first, at most 100 of at most 128 characters, sent only when changed; facet text overflowing the tick's 32 KiB is left
@@ -1987,7 +1998,11 @@ with `BACKEND_ERROR`.
   table with nothing held waits for its next sample.
 - **View and filter.** An update that sets or clears a probe's view or filter reads that probe again as a refresh would
   (within its minimum gap and interval, and no sooner than its cost allows under the load guard's duty cycle), so the rows
-  match without waiting a whole interval; a paused, backing-off, stopped or load-slowed probe keeps its schedule.
+  match without waiting a whole interval; a paused, backing-off, stopped or load-slowed probe keeps its schedule. New `args`
+  are a new filter for the probes they change (`ILiveSampler.Rereads`, every probe unless the source names fewer): those read
+  again the same way, so a filter chip on a slow view applies at once. Activity Monitor names the probes whose tables' filters
+  or focus changed, so a Sessions filter never runs the plan-cache probe early; BigQuery Job History names none for new expanded
+  scripts or prices, which change only what is written (its view asks `refresh` when it wants them at once).
 - **Row tones.** A table may end with a tone column (catalogue `role: 'tone'`, nvarchar, never a key, facet, sort or filter
   column): `error`, `warning`, `running`, `muted` or NULL. `ResultColumn.role` `tone` keeps it hidden in the grid, and Copy
   and Save Results As leave it out (`ResultTextWriter.Hidden`).

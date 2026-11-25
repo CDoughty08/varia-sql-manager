@@ -14,7 +14,7 @@ import { connectionInfo, connectionOptions, fakeFocus, manualTimers, memoryStora
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()); vi.restoreAllMocks(); vi.unstubAllGlobals() })
-const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+const settle = () => new Promise(resolve => setImmediate(resolve))
 /** Waits for a search's answer: it is asked after the service's pause in typing, on real timers, so the wait is generous. */
 const landed = (check: () => void) => vi.waitFor(check, { timeout: 15_000 })
 

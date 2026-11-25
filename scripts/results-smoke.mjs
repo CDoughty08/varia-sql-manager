@@ -13,8 +13,8 @@ import { enlargeOutput, pinStackedResults, sizeResultStack } from './fixtures/re
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, anyResultGrid, captionFits, comparisonTools, nameCut, namedResultGrid, resultFacts, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, explorerTree, gridCell, gridCellSelector, gridPart, jobNotice,
-  jobProgress, kindIcon, localGrid, localGridFrame, operationAnnouncer, operationCancel, operationNotice, operationProgress, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
-  outputPaneIds, outputPanel, outputToolbar, outputView, pane, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultsToolbarFit, resultToggle, statusBar,
+  jobProgress, kindIcon, localGrid, localGridFrame, moreResultsTools, operationAnnouncer, operationCancel, operationNotice, operationProgress, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
+  outputPaneIds, outputPanel, outputToolbar, outputView, pane, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryPlanButton, clickQueryPlanOption, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultsToolbarFit, resultsToolsMenu, resultToggle, statusBar,
   pivotFacts, pivotPanel, pivotSource, profileCard, resultEntryKey, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark, connectDialogWindow, dialogClosed, dialogWindow, pressToClose, submitConnect
 } from './fixtures/ui.mjs'
 
@@ -1454,10 +1454,10 @@ try {
   expect(await editorText()).toContain('SELECT SUM(Amount)')
   await page.keyboard.press('Control+W')
   await expect(queryTabs()).toHaveCount(1)
-  const actualPlan = page.getByRole('button', { name: 'Include Actual Execution Plan', exact: true })
-  await expect(actualPlan).toHaveAttribute('aria-pressed', 'false')
-  await actualPlan.click()
-  await expect(actualPlan).toHaveAttribute('aria-pressed', 'true')
+  const planTrigger = queryPlanButton(page)
+  await expect(planTrigger).toHaveText('Plan')
+  await clickQueryPlanOption(page, 'Include Actual Plan')
+  await expect(planTrigger).toHaveText('Actual Plan')
   await run('SELECT 42 -- ACTUAL_PLAN_FIXTURE')
   await expect(outputTab(/^Results/)).toHaveAttribute('aria-selected', 'true')
   await expect(page.locator('[data-result-grid]')).toHaveCount(1)
@@ -1470,7 +1470,7 @@ try {
   await expect(valueTab('ExecutionPlan3.sqlplan')).toHaveAttribute('aria-selected', 'true')
   await page.keyboard.press('Control+W')
   await expect(queryTabs()).toHaveCount(1)
-  await expect(actualPlan).toHaveAttribute('aria-pressed', 'true')
+  await expect(planTrigger).toHaveText('Actual Plan')
   await run('SELECT 42 -- ACTUAL_PLAN_FIXTURE UNREADABLE_PLAN')
   await outputTab(/^Execution plan/).click()
   await expect(planViewer(page).getByRole('status').filter({ hasText: 'Plan 2 · Batch 2' })).toBeVisible()
@@ -1521,7 +1521,7 @@ try {
   await expect(queryTabs()).toHaveCount(1)
   await textbox().focus()
   await page.keyboard.press('Control+M')
-  await expect(actualPlan).toHaveAttribute('aria-pressed', 'false')
+  await expect(planTrigger).toHaveText('Plan')
   await run('SELECT 42 -- ACTUAL_PLAN_FIXTURE')
   await expect(outputTab(/^Execution plan/)).toHaveCount(0)
   console.log('Results checks: actual plan capture keeps data grids separate, shows multiple plans on one canvas, and can be toggled off for the next run.')
@@ -2834,7 +2834,16 @@ try {
   await cell(0, 2, diff).click()
   await expect(cell(0, 2, diff)).toHaveAttribute('aria-label', 'Price, changed from 1.50 to 1.75')
   await expect(diffTools.getByRole('button', { name: 'One row', exact: true })).toHaveAttribute('aria-pressed', 'true')
-  await expect(diffTools.getByRole('button', { name: 'Exact text', exact: true })).toHaveAttribute('aria-pressed', 'false')
+  // Exact text is the first control ComparisonToolbar folds into ⋯ on a narrow pane (Linux 1024x768 has wider fonts).
+  const exactButton = diffTools.getByRole('button', { name: 'Exact text', exact: true })
+  if (await exactButton.isVisible()) {
+    await expect(exactButton).toHaveAttribute('aria-pressed', 'false')
+  } else {
+    await moreResultsTools(page).click()
+    await expect(resultsToolsMenu(page).getByRole('menuitemcheckbox', { name: 'Exact Text', exact: true })).toHaveAttribute('aria-checked', 'false')
+    await page.keyboard.press('Escape')
+    await expect(resultsToolsMenu(page)).toHaveCount(0)
+  }
   await expect(diffTools.getByRole('status')).toContainText('Comparison ready: matched by ItemId, 1 changed, 1 added, 1 removed.')
   await diffTools.getByRole('button', { name: 'Two rows', exact: true }).click()
   await expect(cell(5, 0, diff)).toHaveText('5')
@@ -3654,7 +3663,7 @@ try {
     await page.keyboard.press('Control+W')
     await expect(queryTabs()).toHaveCount(1)
     // Results can publish completion before the query service releases its execution reservation.
-    await expect(queryBarButton(page, 'Cancel')).toBeDisabled()
+    await expect(queryBarButton(page, /Execute|Run Selection/)).toBeEnabled()
     expect(failures).toEqual([])
     console.log('Results live checks passed: rows show while a million stream, Cancel keeps them, Save Results As and Copy match the server, FOR XML opens in a tab, errors keep their order, and the memory indicator survives a close racing a summary.')
   }

@@ -1,13 +1,11 @@
-import { useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type Ref } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type ReactNode, type Ref } from 'react'
 import { displayText } from '../../../shared/explorer/refs.ts'
-import { commandDescriptor } from '../../../shared/commands/catalog'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { useCommandEnabled, useCommandsEnabled, useKeybindingLabel } from '../core/useCommand'
 import type { CommandArgs, CommandId } from '../core/types'
 import type { IconId } from '../../../shared/icons'
 import { useMenuTarget } from '../menus/useMenuTarget'
 import Icon from '../Icon'
-import PaneMenuButton from '../PaneMenuButton'
 import EmptyState from '../kit/EmptyState'
 import { StaleBadge } from '../kit/LivePill'
 import SearchPanel from '../search/SearchPanel'
@@ -42,7 +40,9 @@ const focusTree = (near: Element | null | undefined) => (near?.ownerDocument ?? 
  * Home and End move between the enabled buttons. A focused button that turns disabled (Stop once loading ends,
  * Disconnect while it runs) would drop focus to the page, so focus moves on to the next enabled button, or the tree.
  */
-export function ExplorerToolbar({ tools }: { tools: readonly Tool[] }) {
+export function ExplorerToolbar({ tools, ariaLabel = 'Object Explorer toolbar', className = 'explorer-toolbar' }: {
+  tools: readonly Tool[]; ariaLabel?: string; className?: string
+}) {
   const enabled = useCommandsEnabled(tools)
   const buttons = useRef<(HTMLButtonElement | null)[]>([])
   const [current, setCurrent] = useState(0)
@@ -76,10 +76,30 @@ export function ExplorerToolbar({ tools }: { tools: readonly Tool[] }) {
     setCurrent(next)
     buttons.current[next]?.focus()
   }
-  return <div className="explorer-toolbar" role="toolbar" aria-label="Object Explorer toolbar" onKeyDown={onKeyDown}>
+  return <div className={className} role="toolbar" aria-label={ariaLabel} onKeyDown={onKeyDown}>
     {tools.map((tool, index) => <ToolbarButton key={index} tool={tool} enabled={enabled[index]} tabbable={index === stop}
       buttonRef={button => { buttons.current[index] = button }} onFocus={() => { focused.current = index; setCurrent(index) }} onBlur={event => blurred(index, event)} />)}
   </div>
+}
+
+/**
+ * Object Explorer's ⋯ button: keeps the header on one row while retaining Disconnect, Remove, Stop, Filter, Group by
+ * Schema, Refresh, Collapse All, and the panel docking menu (Dock Left…, Float, Move into New Window, Close).
+ */
+function ExplorerMenuButton() {
+  const { explorer, menus, panes } = useWorkbench()
+  const button = useRef<HTMLButtonElement | null>(null)
+  const register = useMenuTarget<HTMLButtonElement>(() => {
+    const selected = explorer.getSnapshot().selected
+    const selectedServer = explorer.menuNode(selected)?.connectionId
+    const node = selectedServer === undefined ? undefined : explorer.menuNode(explorer.rootIds.find(id => explorer.node(id)?.connectionId === selectedServer))
+    return { kind: 'explorerTools', pane: 'explorer', floating: panes.location('explorer') === 'floating', popout: panes.location('explorer') === 'window', ...(node ? { node } : {}) }
+  })
+  const ref = useCallback((element: HTMLButtonElement | null) => { button.current = element; register(element) }, [register])
+  const menuFor = useServiceSnapshot(menus.menuFor)
+  return <button type="button" ref={ref} className="icon-button pane-menu" aria-label="Object Explorer panel menu"
+    aria-haspopup="menu" aria-expanded={!!menuFor && menuFor === button.current} title="More Object Explorer actions and panel menu"
+    onClick={event => { menus.openForElement(event.currentTarget, { keyboard: event.detail === 0 }) }}><Icon name="ellipsis" /></button>
 }
 
 /**
@@ -88,14 +108,14 @@ export function ExplorerToolbar({ tools }: { tools: readonly Tool[] }) {
  * tree while there is text, and reveal their object in it. Escape clears the text, or, when there is none, returns to the
  * tree; so does ↓ or Enter in an empty box.
  */
-function ExplorerSearch({ connectionId }: { readonly connectionId: string | undefined }) {
+function ExplorerSearch({ connectionId, inlineTools }: { readonly connectionId: string | undefined; readonly inlineTools: ReactNode }) {
   const { objectSearch } = useWorkbench()
   const { paneFocus } = useServiceSnapshot(objectSearch)
   const input = useRef<HTMLInputElement>(null)
   useLayoutEffect(() => objectSearch.followExplorer(connectionId), [objectSearch, connectionId])
   // Search in Object Explorer asks for focus, perhaps before this pane was shown.
   useLayoutEffect(() => { if (objectSearch.takePaneFocus()) { input.current?.focus(); input.current?.select() } }, [objectSearch, paneFocus])
-  return <SearchPanel searchId={explorerSearchId} layout="pane" inputRef={input} onLeave={() => focusTree(input.current)} />
+  return <SearchPanel searchId={explorerSearchId} layout="pane" inputRef={input} onLeave={() => focusTree(input.current)} inlineTools={inlineTools} />
 }
 
 /**
@@ -117,9 +137,9 @@ function ExplorerFooter({ servers, live }: { readonly servers: number; readonly 
 }
 
 /**
- * Object Explorer: SSMS's toolbar (Connect, Disconnect, Stop, Filter, Refresh, Group by Schema, Collapse All) over the tree of connected
- * servers, or a prompt to connect. Disconnect acts on the selected node's server; with nothing selected it asks which.
- * Filter shows a filled funnel while the selected folder has a filter.
+ * Object Explorer: 1-row header (Connect, Refresh, Collapse All, and ⋯ for Disconnect, Remove, Stop and panel actions),
+ * inline search row with Filter Settings and Group by Schema (falling back cleanly when disconnected/empty), over the
+ * tree of connected servers or a prompt to connect. Filter shows a filled funnel while the selected folder has a filter.
  */
 export default function ExplorerPane({ error, activeConnectionId, activeQueryId }: { readonly error?: string; readonly activeConnectionId?: string; readonly activeQueryId?: string }) {
   const { explorer, connections, commands } = useWorkbench()
@@ -128,26 +148,19 @@ export default function ExplorerPane({ error, activeConnectionId, activeQueryId 
   const servers = useServiceSnapshot(connections).filter(connection => connection.inExplorer !== false)
   const connect = useCommandEnabled('connection.connect')
   const selectedServer = explorer.menuNode(selected)?.connectionId
-  const serverNode = selectedServer === undefined ? undefined : explorer.menuNode(explorer.rootIds.find(id => explorer.node(id)?.connectionId === selectedServer))
-  const disconnectArgs: CommandArgs | undefined = serverNode ? { target: { kind: 'explorer', node: serverNode } } : undefined
-  const offline = !!serverNode?.lost
-  const connectionTool = (id: CommandId, icon: IconId): Tool => {
-    const descriptor = commandDescriptor(id), label = descriptor.menus?.find(menu => menu.menu === 'explorer.context')?.title ?? descriptor.title
-    return { id, icon, label, ...(disconnectArgs ? { args: disconnectArgs } : {}) }
-  }
   // The empty area below the servers: Connect… and Refresh. Rows register their own menus.
   const background = useMenuTarget<HTMLDivElement>(() => ({ kind: 'explorer' }))
   const live = servers.filter(isLiveConnection).length
-  const tools: Tool[] = [
+  const headerTools: Tool[] = [
     { id: 'connection.connect', icon: 'plug', label: 'Connect Object Explorer' },
-    connectionTool(offline ? 'connection.reconnect' : 'connection.disconnect', offline ? 'plug' : 'debug-disconnect'),
-    connectionTool(offline ? 'connection.removeFromExplorer' : 'connection.disconnectAndRemove', 'close'),
-    { id: 'explorer.stop', icon: 'debug-stop', label: 'Stop' },
-    { id: 'explorer.filter', icon: filtered ? 'filter-filled' : 'filter', label: 'Filter Settings', hint: 'Filter the selected folder\'s contents. Select a folder such as Tables, Views, Databases, or Logins.' },
     { id: 'explorer.refresh', icon: 'refresh', label: 'Refresh' },
-    { id: 'explorer.groupBySchema', icon: 'symbol-namespace', label: 'Group by Schema', pressed: grouped },
     { id: 'explorer.collapseAll', icon: 'collapse-all', label: 'Collapse All' }
   ]
+  const filterTools: Tool[] = [
+    { id: 'explorer.filter', icon: filtered ? 'filter-filled' : 'filter', label: 'Filter Settings', hint: 'Filter the selected folder\'s contents. Select a folder such as Tables, Views, Databases, or Logins.' },
+    { id: 'explorer.groupBySchema', icon: 'symbol-namespace', label: 'Group by Schema', pressed: grouped }
+  ]
+  const inlineToolbar = <ExplorerToolbar tools={filterTools} ariaLabel="Object Explorer filter and view toolbar" className="explorer-toolbar explorer-inline-toolbar" />
   // When the last server goes, focus the tree held moves to the empty state's Connect button rather than the page; when
   // the first one comes, focus the Connect button or its dialog held moves to the tree, as SSMS focuses Object Explorer.
   const empty = !servers.length, connectButton = useRef<HTMLButtonElement>(null), wasEmpty = useRef(empty)
@@ -167,8 +180,8 @@ export default function ExplorerPane({ error, activeConnectionId, activeQueryId 
     if (!searchable && !empty && focusLost(paneDocument())) focusTree(header.current)
   }, [searchable, empty])
   return <>
-    <div className="explorer-header pane-header" ref={header}><span className="pane-title">Object Explorer</span><ExplorerToolbar tools={tools} /><PaneMenuButton pane="explorer" /></div>
-    {searchable && <ExplorerSearch connectionId={selectedServer} />}
+    <div className="explorer-header pane-header" ref={header}><span className="pane-title">Object Explorer</span><ExplorerToolbar tools={headerTools} /><ExplorerMenuButton /></div>
+    {searchable ? <ExplorerSearch connectionId={selectedServer} inlineTools={inlineToolbar} /> : <div className="explorer-tools-bar">{inlineToolbar}</div>}
     <div className="explorer-body" ref={background}>
       {servers.length ? <ExplorerErrorBoundary onReload={() => explorer.reset()} onReloaded={() => focusTree(header.current)}>
         <FaultProbe /><ExplorerTree activeConnectionId={activeConnectionId} activeQueryId={activeQueryId} /><PeekCard /></ExplorerErrorBoundary>

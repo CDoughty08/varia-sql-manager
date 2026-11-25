@@ -23,7 +23,7 @@ export interface MouseViewProps {
   readonly multiCursorModifier?: LinkedSettings['multiCursorModifier']
 }
 
-const actionWords: Readonly<Record<GestureRow['action'], string>> = { click: 'click', doubleClick: 'double-click', hover: 'hover', drag: 'drag', wheel: 'wheel' }
+const actionWords: Readonly<Record<GestureRow['action'], string>> = { click: 'click', doubleClick: 'double-click', hover: 'hover', drag: 'drag', wheel: 'wheel', backButton: 'back button', forwardButton: 'forward button' }
 const domId = (id: string) => 'mouse-' + id.replace(/\./g, '-')
 
 function Binding({ row, platform, onPick }: { row: GestureRow; platform: Platform; onPick(token: string): void }) {

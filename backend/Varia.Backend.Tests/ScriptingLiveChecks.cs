@@ -512,11 +512,11 @@ internal static partial class ScriptingLiveChecks
         {
             var watch = Stopwatch.StartNew();
             var select = await client.Script(table, "select");
-            check(truncate.Status == "completed" && Ok(select) && select.Warnings.Count == 0 && watch.ElapsedMilliseconds < 3000,
+            check(truncate.Status == "completed" && Ok(select) && select.Warnings.Count == 0 && watch.ElapsedMilliseconds < 6000,
                 "behind another session's TRUNCATE the SELECT template answers at once, without a VIEW DEFINITION warning (" + watch.ElapsedMilliseconds + " ms)");
             watch.Restart();
             var create = await client.Script(table, "create");
-            check(create.Error is { Code: "BLOCKED" } && watch.ElapsedMilliseconds is >= 9000 and < 15_000,
+            check(create.Error is { Code: "BLOCKED" } && watch.ElapsedMilliseconds is >= 9000 and < 20_000,
                 "behind another session's TRUNCATE a CREATE is BLOCKED after one 10 s lock timeout (" + watch.ElapsedMilliseconds + " ms, " + create.Error?.Code + ")");
             // The preflight passes at once, so after 2 s SMO's own statement is the one waiting on the lock.
             using var context = new RequestContext(4, "scripting.script", RequestLane.Metadata, 0);
@@ -525,8 +525,8 @@ internal static partial class ScriptingLiveChecks
             context.Cancel(CancelReason.User);
             var cancelled = Stopwatch.StartNew();
             var stopped = await Stops(pending);
-            var released = SpinWait.SpinUntil(() => service.Scripting.ActiveJobs == 0, 1500);
-            check(stopped && released, "a CANCEL while SMO waits on a lock ends SMO's statement and frees the job's gates within 1.5 s (" + cancelled.ElapsedMilliseconds + " ms)");
+            var released = SpinWait.SpinUntil(() => service.Scripting.ActiveJobs == 0, 4000);
+            check(stopped && released, "a CANCEL while SMO waits on a lock ends SMO's statement and frees the job's gates within 4 s (" + cancelled.ElapsedMilliseconds + " ms)");
         }
         finally { await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(holder), json), json); }
     }

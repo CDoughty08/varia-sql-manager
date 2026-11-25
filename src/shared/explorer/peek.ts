@@ -74,18 +74,20 @@ export const peekLists: { readonly [L in PeekListId]: PeekListSpec } = {
   }
 }
 /**
- * Peek's tabs (the card's and a promoted tab's): `definition` the object's text, `dependencies` what the object uses and what
- * uses it (explorer.peekDependencies), `rows` its first rows (Select Top N Rows' script through query.execute, shown in the
- * results grid), and the kind's lists (`peekLists`: Columns or Parameters among them), which come with the facts.
+ * Peek's tabs (the card's and a promoted tab's) in canonical inspector order: `overview` (identity facts & capabilities),
+ * `definition` (read-only SQL editor), `storage` (tables: Storage & Layout with Data vs. Index space meter), `usage`
+ * (indexes: Usage Telemetry with Seeks/Scans vs. Updates meter), the kind's lists (`peekLists`: Columns or Parameters among
+ * them, read with the facts), `dependencies` (what the object uses and what uses it, `explorer.peekDependencies`), and `rows`
+ * (its first rows via Select Top N Rows in the results grid).
  * Dependencies and Top rows are read the first time their tab is chosen, never with the facts: Dependencies stays its own
  * request so that a login refused sys.sql_expression_dependencies still sees the properties.
  */
-export const peekTabs = ['definition', 'dependencies', 'rows', ...peekListIds] as const
+export const peekTabs = ['overview', 'definition', 'storage', 'usage', 'dependencies', 'rows', ...peekListIds] as const
 export type PeekTab = typeof peekTabs[number]
 /**
  * `module`: the definition is the module's text from sys.sql_modules (sys.server_sql_modules for a server trigger), read with
  * the facts. `script`: the kind has no stored text, so the card asks Script As (scripting.script, CREATE) for it. `tabs`: the
- * card's tabs in order, Definition first.
+ * inspector's tabs in canonical order, Overview first.
  */
 export interface PeekKindSpec {
   readonly kind: PeekKind
@@ -103,7 +105,7 @@ const triggerOptions = [fact('executeAs', 'Execute as', 'text'), ...sqlOptions]
 
 export const peekSpecs: { readonly [K in PeekKind]: PeekKindSpec } = {
   table: {
-    kind: 'table', definition: 'script', tabs: ['definition', 'columns', 'tableObjects', 'dependencies', 'rows'], groups: [
+    kind: 'table', definition: 'script', tabs: ['overview', 'definition', 'storage', 'columns', 'tableObjects', 'dependencies', 'rows'], groups: [
       { id: 'general', title: 'General', facts: [...owned, fact('replicated', 'Replicated', 'bool'), fact('lockEscalation', 'Lock escalation', 'code'),
         fact('memoryOptimized', 'Memory optimized', 'bool'), fact('temporal', 'Temporal', 'code', 13), fact('ledger', 'Ledger', 'code', 16)] },
       { id: 'storage', title: 'Storage', facts: [fact('rowCount', 'Row count', 'count'), fact('dataSpace', 'Data space', 'kb'), fact('indexSpace', 'Index space', 'kb'),
@@ -111,19 +113,19 @@ export const peekSpecs: { readonly [K in PeekKind]: PeekKindSpec } = {
     ]
   },
   view: {
-    kind: 'view', definition: 'module', tabs: ['definition', 'columns', 'dependencies', 'rows'], groups: [
+    kind: 'view', definition: 'module', tabs: ['overview', 'definition', 'columns', 'dependencies', 'rows'], groups: [
       { id: 'general', title: 'General', facts: owned },
       { id: 'options', title: 'Options', facts: [fact('schemaBound', 'Schema bound', 'bool'), fact('indexed', 'Indexed', 'bool'), ...sqlOptions] }
     ]
   },
   procedure: {
-    kind: 'procedure', definition: 'module', tabs: ['definition', 'parameters', 'dependencies'], groups: [
+    kind: 'procedure', definition: 'module', tabs: ['overview', 'definition', 'parameters', 'dependencies'], groups: [
       { id: 'general', title: 'General', facts: owned },
       { id: 'options', title: 'Options', facts: [fact('executeAs', 'Execute as', 'text'), fact('recompile', 'Recompile', 'bool'), fact('nativelyCompiled', 'Natively compiled', 'bool'), ...sqlOptions] }
     ]
   },
   function: {
-    kind: 'function', definition: 'module', tabs: ['definition', 'parameters', 'dependencies'], groups: [
+    kind: 'function', definition: 'module', tabs: ['overview', 'definition', 'parameters', 'dependencies'], groups: [
       { id: 'general', title: 'General', facts: [...owned, fact('functionType', 'Function type', 'text')] },
       { id: 'options', title: 'Options', facts: [fact('executeAs', 'Execute as', 'text'), fact('schemaBound', 'Schema bound', 'bool'), fact('nativelyCompiled', 'Natively compiled', 'bool'),
         fact('nullOnNullInput', 'Returns NULL on NULL input', 'bool'), ...sqlOptions] }
@@ -131,7 +133,7 @@ export const peekSpecs: { readonly [K in PeekKind]: PeekKindSpec } = {
   },
   // Index Properties' General, Options and Storage pages, and the usage sys.dm_db_index_usage_stats has kept since the server started.
   index: {
-    kind: 'index', definition: 'script', tabs: ['definition', 'indexColumns'], groups: [
+    kind: 'index', definition: 'script', tabs: ['overview', 'definition', 'usage', 'indexColumns'], groups: [
       { id: 'general', title: 'General', facts: [fact('indexType', 'Index type', 'text'), fact('unique', 'Unique', 'bool'), fact('primaryKey', 'Primary key', 'bool'),
         fact('uniqueConstraint', 'Unique constraint', 'bool'), fact('disabled', 'Disabled', 'bool'), fact('filter', 'Filter', 'text')] },
       { id: 'options', title: 'Options', facts: [fact('fillFactor', 'Fill factor', 'count'), fact('padIndex', 'Pad index', 'bool'), fact('ignoreDupKey', 'Ignore duplicate values', 'bool'),
@@ -145,7 +147,7 @@ export const peekSpecs: { readonly [K in PeekKind]: PeekKindSpec } = {
     ]
   },
   key: {
-    kind: 'key', definition: 'script', tabs: ['definition', 'keyColumns'], groups: [
+    kind: 'key', definition: 'script', tabs: ['overview', 'definition', 'keyColumns'], groups: [
       { id: 'general', title: 'General', facts: [fact('keyType', 'Key type', 'text'), fact('parentTable', 'Parent table', 'text'), fact('referencedTable', 'Referenced table', 'text'),
         fact('deleteAction', 'Delete action', 'code'), fact('updateAction', 'Update action', 'code'), ...dated, fact('systemNamed', 'System named', 'bool')] },
       { id: 'status', title: 'Enforcement & Status', facts: [fact('disabled', 'Disabled', 'bool'), fact('notTrusted', 'Not trusted', 'bool'),
@@ -153,7 +155,7 @@ export const peekSpecs: { readonly [K in PeekKind]: PeekKindSpec } = {
     ]
   },
   constraint: {
-    kind: 'constraint', definition: 'script', tabs: ['definition'], groups: [
+    kind: 'constraint', definition: 'script', tabs: ['overview', 'definition'], groups: [
       { id: 'general', title: 'General', facts: [fact('constraintType', 'Constraint type', 'text'), fact('parentTable', 'Parent table', 'text'), fact('column', 'Column', 'text'),
         fact('expression', 'Expression', 'text'), ...dated, fact('systemNamed', 'System named', 'bool')] },
       { id: 'status', title: 'Enforcement & Status', facts: [fact('disabled', 'Disabled', 'bool'), fact('notTrusted', 'Not trusted', 'bool'),
@@ -161,19 +163,19 @@ export const peekSpecs: { readonly [K in PeekKind]: PeekKindSpec } = {
     ]
   },
   trigger: {
-    kind: 'trigger', definition: 'module', tabs: ['definition', 'events', 'dependencies'], groups: [
+    kind: 'trigger', definition: 'module', tabs: ['overview', 'definition', 'events', 'dependencies'], groups: [
       { id: 'general', title: 'General', facts: [...triggerGeneral, fact('insteadOf', 'Instead of', 'bool')] },
       { id: 'options', title: 'Options', facts: [fact('notForReplication', 'Not for replication', 'bool'), ...triggerOptions] }
     ]
   },
   databaseTrigger: {
-    kind: 'databaseTrigger', definition: 'module', tabs: ['definition', 'events'], groups: [
+    kind: 'databaseTrigger', definition: 'module', tabs: ['overview', 'definition', 'events'], groups: [
       { id: 'general', title: 'General', facts: triggerGeneral },
       { id: 'options', title: 'Options', facts: triggerOptions }
     ]
   },
   serverTrigger: {
-    kind: 'serverTrigger', definition: 'module', tabs: ['definition', 'events'], groups: [
+    kind: 'serverTrigger', definition: 'module', tabs: ['overview', 'definition', 'events'], groups: [
       { id: 'general', title: 'General', facts: triggerGeneral },
       { id: 'options', title: 'Options', facts: triggerOptions }
     ]
@@ -181,7 +183,7 @@ export const peekSpecs: { readonly [K in PeekKind]: PeekKindSpec } = {
   // Database Properties' General and Options pages, from sys.databases and sys.master_files on the server, so a database that is
   // offline or restoring still peeks.
   database: {
-    kind: 'database', definition: 'script', tabs: ['definition', 'files'], groups: [
+    kind: 'database', definition: 'script', tabs: ['overview', 'definition', 'files'], groups: [
       { id: 'general', title: 'General', facts: [fact('status', 'Status', 'code'), fact('owner', 'Owner', 'text'), fact('created', 'Date created', 'date'), fact('size', 'Size', 'kb'),
         fact('dataSize', 'Data files', 'kb'), fact('logSize', 'Log files', 'kb'), fact('userAccess', 'Restrict access', 'code'), fact('readOnly', 'Read only', 'bool')] },
       { id: 'options', title: 'Options', facts: [fact('recoveryModel', 'Recovery model', 'code'), fact('compatibilityLevel', 'Compatibility level', 'count'), fact('collation', 'Collation', 'text'),
@@ -194,7 +196,7 @@ export const peekSpecs: { readonly [K in PeekKind]: PeekKindSpec } = {
   // Login Properties' General and Status pages. Nothing reads LOGINPROPERTY or a password hash (CatalogSql.SecretUses), so
   // Must change and Locked out are not shown.
   login: {
-    kind: 'login', definition: 'script', tabs: ['definition', 'serverRoles', 'userMapping'], groups: [
+    kind: 'login', definition: 'script', tabs: ['overview', 'definition', 'serverRoles', 'userMapping'], groups: [
       { id: 'general', title: 'General', facts: [fact('loginType', 'Login type', 'text'), ...dated, fact('defaultDatabase', 'Default database', 'text'),
         fact('defaultLanguage', 'Default language', 'text')] },
       { id: 'status', title: 'Status', facts: [fact('disabled', 'Disabled', 'bool'), fact('connectDenied', 'Connect denied', 'bool'), fact('enforcePolicy', 'Enforce password policy', 'bool'),
@@ -202,14 +204,14 @@ export const peekSpecs: { readonly [K in PeekKind]: PeekKindSpec } = {
     ]
   },
   synonym: {
-    kind: 'synonym', definition: 'script', tabs: ['definition', 'dependencies'], groups: [
+    kind: 'synonym', definition: 'script', tabs: ['overview', 'definition', 'dependencies'], groups: [
       { id: 'general', title: 'General', facts: owned },
       { id: 'base', title: 'Base object', facts: [fact('baseObject', 'Base object', 'text'), fact('baseServer', 'Server', 'text'), fact('baseDatabase', 'Database', 'text'),
         fact('baseSchema', 'Object schema', 'text'), fact('baseName', 'Object name', 'text')] }
     ]
   },
   sequence: {
-    kind: 'sequence', definition: 'script', tabs: ['definition', 'dependencies'], groups: [
+    kind: 'sequence', definition: 'script', tabs: ['overview', 'definition', 'dependencies'], groups: [
       { id: 'general', title: 'General', facts: owned },
       { id: 'sequence', title: 'Sequence', facts: [fact('dataType', 'Data type', 'text'), fact('startValue', 'Start value', 'text'), fact('increment', 'Increment by', 'text'),
         fact('minimum', 'Minimum value', 'text'), fact('maximum', 'Maximum value', 'text'), fact('cycle', 'Cycle', 'bool'), fact('cache', 'Cache', 'text'),
@@ -217,7 +219,7 @@ export const peekSpecs: { readonly [K in PeekKind]: PeekKindSpec } = {
     ]
   },
   type: {
-    kind: 'type', definition: 'script', tabs: ['definition', 'dependencies'], groups: [
+    kind: 'type', definition: 'script', tabs: ['overview', 'definition', 'dependencies'], groups: [
       { id: 'general', title: 'General', facts: [fact('schema', 'Schema', 'text'), fact('allowNulls', 'Allow NULLs', 'bool'), fact('maxLength', 'Bytes', 'count')] },
       { id: 'alias', title: 'Alias type', subtypes: ['alias'], facts: [fact('baseType', 'Data type', 'text'), fact('collation', 'Collation', 'text'), fact('default', 'Default', 'text'),
         fact('rule', 'Rule', 'text')] },
@@ -226,7 +228,7 @@ export const peekSpecs: { readonly [K in PeekKind]: PeekKindSpec } = {
     ]
   },
   tableType: {
-    kind: 'tableType', definition: 'script', tabs: ['definition', 'columns', 'dependencies'], groups: [
+    kind: 'tableType', definition: 'script', tabs: ['overview', 'definition', 'columns', 'dependencies'], groups: [
       { id: 'general', title: 'General', facts: [fact('schema', 'Schema', 'text'), ...dated, fact('memoryOptimized', 'Memory optimized', 'bool')] }
     ]
   }
@@ -242,8 +244,10 @@ export const isPeekListTab = (tab: PeekTab): tab is PeekListId => (peekListIds a
 export const peekListsOf = (kind: PeekKind): readonly PeekListId[] => peekSpecs[kind].tabs.filter(isPeekListTab)
 /** A tab's title for a kind. */
 export const peekTabTitle = (_kind: PeekKind, tab: PeekTab): string =>
-  tab === 'definition' ? 'Definition' : tab === 'dependencies' ? 'Dependencies'
-    : tab === 'rows' ? 'Top rows' : peekLists[tab].title
+  tab === 'overview' ? 'Overview' : tab === 'definition' ? 'Definition'
+    : tab === 'storage' ? 'Storage & Layout' : tab === 'usage' ? 'Usage Telemetry'
+      : tab === 'dependencies' ? 'Dependencies' : tab === 'rows' ? 'Top rows'
+        : peekLists[tab].title
 
 /** A kind's facts in reply-column order. */
 export const peekFacts = (kind: PeekKind): readonly PeekFact[] => peekSpecs[kind].groups.flatMap(group => group.facts)

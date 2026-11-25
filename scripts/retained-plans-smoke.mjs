@@ -6,7 +6,7 @@ import { connectLive } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import { checkLargeComparison } from './fixtures/plan-comparison.mjs'
-import { backendReady, connectDialogWindow, documentTabs, gridCell, localGrid, outputView, planCanvas, planViewer, queryBarButton, quickInputActive, submitConnect } from './fixtures/ui.mjs'
+import { backendReady, clickQueryPlanOption, connectDialogWindow, documentTabs, gridCell, localGrid, outputView, planCanvas, planViewer, queryBarButton, quickInputActive, submitConnect } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 let application, page
@@ -16,7 +16,7 @@ const editor = () => page.locator('.monaco-editor [role="textbox"]')
 const history = () => page.getByRole('region', { name: 'Retained plans', exact: true })
 const snapshots = () => history().getByRole('combobox', { name: 'Retained plan', exact: true })
 async function text(sql) { await editor().focus(); await page.keyboard.press(`${mod}+a`); await page.keyboard.insertText(sql) }
-async function execute(sql) { await text(sql); await page.keyboard.press('F5'); await expect(queryBarButton(page, 'Display Estimated Execution Plan')).toBeEnabled() }
+async function execute(sql) { await text(sql); await page.keyboard.press('F5'); await expect(queryBarButton(page, /Execute|Run Selection/)).toBeEnabled() }
 async function palette(text, expected) { await page.keyboard.press('F1'); await page.keyboard.type(text); await expect(quickInputActive(page)).toContainText(expected); await page.keyboard.press('Enter') }
 async function showHistory() {
   await palette('show execution plan', 'View: Show Execution Plan')
@@ -121,7 +121,7 @@ try {
       await submitConnect(connectWin, dialog)
     }
     await enlargeOutput(page)
-    await queryBarButton(page, 'Include Actual Execution Plan').click()
+    await clickQueryPlanOption(page, 'Include Actual Plan')
     await queryBarButton(page, 'Include Client Statistics').click()
     const originalSql = live ? 'SELECT TOP (1) name AS retained_original FROM sys.objects;\nGO 2' : 'ACTUAL_PLAN_FIXTURE'
     await execute(originalSql)
@@ -154,8 +154,8 @@ try {
     // A toolbar estimate must keep just the selected SQL context even if the rest of the editor is invalid.
     await text('SELECT * FROM dbo.VariaRetainedMissing;\nSELECT name FROM sys.objects;')
     await page.keyboard.press('Home'); await page.keyboard.press('Shift+End')
-    await queryBarButton(page, 'Display Estimated Execution Plan').click()
-    await expect(queryBarButton(page, 'Display Estimated Execution Plan')).toBeEnabled()
+    await clickQueryPlanOption(page, 'Display Estimated Plan')
+    await expect(queryBarButton(page, /Execute|Run Selection/)).toBeEnabled()
     await showHistory(); await snapshots().selectOption({ index: 0 })
     await expect(history().getByLabel('Captured SQL context')).toHaveCount(1)
     await history().locator('summary').first().click()
@@ -170,7 +170,7 @@ try {
     // Mode and returned session identity are retained with a session-aware estimate after history removal.
     await page.getByRole('button', { name: /^Plan history \(/ }).click()
     await page.getByRole('button', { name: 'Estimate in query session', exact: true }).click()
-    await expect(queryBarButton(page, 'Display Estimated Execution Plan')).toBeEnabled()
+    await expect(queryBarButton(page, /Execute|Run Selection/)).toBeEnabled()
     await showHistory(); await snapshots().selectOption({ index: 0 })
     await expect(history().locator('summary').first()).toContainText('Estimated · Query session')
     await history().locator('summary').first().click()
@@ -183,7 +183,7 @@ try {
       await page.keyboard.press('F5')
       await expect(page.getByRole('gridcell').first()).toBeVisible()
       await queryBarButton(page, 'Cancel').click()
-      await expect(queryBarButton(page, 'Display Estimated Execution Plan')).toBeEnabled({ timeout: 30_000 })
+      await expect(queryBarButton(page, /Execute|Run Selection/)).toBeEnabled({ timeout: 30_000 })
       await showHistory(); await snapshots().selectOption({ index: 0 })
       await expect(history().locator('summary').first()).toContainText('cancelled · Partial execution')
       await compareHistory()

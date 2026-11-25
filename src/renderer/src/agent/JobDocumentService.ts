@@ -170,6 +170,8 @@ export interface JobDocumentServiceOptions extends CustomDocumentTargetOptions {
     & Partial<Pick<VariaApi, 'languageParse' | 'describeSsis' | 'explorerChildren' | 'agentHistoryMessage' | 'openAgentStepScript'>>
   /** Steps' Open in query window (AG-6b): a new query tab on the job's connection, in the step's database. */
   readonly openQuery?: (sql: string, name: string, connectionId: string, database?: string) => void
+  /** History's SSIS execution link (AG-13): the SSIS execution messages view on the job's connection. */
+  readonly openSsisExecution?: (connectionId: string, executionId: number) => void
   readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'setDirty' | 'activate' | 'getSnapshot' | 'subscribe' | 'close'> & Partial<Pick<DocumentService, 'openKeptCustom'>> & DeliverScriptDeps['documents']
   readonly files: DeliverScriptDeps['files']
   readonly connections: ExternalStore<readonly LiveConnection[]>
@@ -248,7 +250,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     this.unsubscribe = [options.connections.subscribe(changed), options.documents.subscribe(changed)]
     // History (AG-6d): its view runs while the document shows with History open.
     this.history = new JobHistoryService({
-      api: options.api, ...options.live ? { live: options.live } : {}, ...options.openQuery ? { openQuery: options.openQuery } : {}, newId: this.newId, connectionOf: id => this.live(id) ? this.connectionOf(id) : undefined,
+      api: options.api, ...options.live ? { live: options.live } : {}, ...options.openSsisExecution ? { openSsisExecution: options.openSsisExecution } : {}, newId: this.newId, connectionOf: id => this.live(id) ? this.connectionOf(id) : undefined,
       visible: id => this.historyShows(id),
       subscribe: listener => { const a = options.connections.subscribe(listener), b = options.documents.subscribe(listener), c = this.subscribe(listener); return () => { a(); b(); c() } }
     })
@@ -438,11 +440,25 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const state = this.get(id)
     if (!state?.draft || !this.canEditSteps(id)) return
     const moved = moveStep(state.draft.steps, key, index)
-    if (moved !== state.draft.steps) this.updateDraft(id, { steps: moved })
+    if (moved === state.draft.steps) return
+    // The step shown by default (the first, none picked) stays shown as it moves, rather than whichever step becomes first.
+    const shown = this.selectedStep(id)?.key
+    this.updateDraft(id, { steps: moved })
+    if (shown && state.step !== shown) this.patch(id, { step: shown })
   }
   moveStepBy(id: string, key: string, delta: number): void {
     const at = this.get(id)?.draft?.steps.steps.findIndex(step => step.key === key) ?? -1
     if (at >= 0) this.moveStepTo(id, key, at + delta)
+  }
+  /** Move Step Up and Move Step Down (AG-10, Alt+Up and Alt+Down): the selected step can move one place that way. */
+  canMoveSelectedStep(id: string, delta: -1 | 1): boolean {
+    const steps = this.get(id)?.draft?.steps.steps ?? [], selected = this.selectedStep(id)
+    const at = selected ? steps.indexOf(selected) : -1
+    return this.canEditSteps(id) && at >= 0 && at + delta >= 0 && at + delta < steps.length
+  }
+  moveSelectedStep(id: string, delta: -1 | 1): void {
+    const selected = this.selectedStep(id)
+    if (selected && this.canMoveSelectedStep(id, delta)) this.moveStepBy(id, selected.key, delta)
   }
   /** Delete acts on the draft at once: steps that went to it quit reporting failure, the banner says which, and Undo puts it back. */
   deleteStepOf(id: string, key: string): void {

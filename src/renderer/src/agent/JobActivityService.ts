@@ -11,10 +11,14 @@ import type { AgentSchedulesModel } from '../../../shared/actions/agent-schedule
 import { agentBulkText, attachPlan, ownerPlan, ownerUnavailable, type BulkJobPlan } from '../../../shared/agent/bulk'
 import { agentLimits } from '../../../shared/agent/catalog'
 import {
-  agentAvailability, agentBulkTitles, agentJobFilterLimits, agentJobTextColumns, agentJobsProbe, agentJobsSource, agentServiceProbe, bulkUnavailable, jobActivityTabName,
+  agentAvailability, agentBanner, agentBulkTitles, agentJobFilterLimits, agentJobTextColumns, agentJobsProbe, agentJobsSource, agentServiceProbe, bulkUnavailable, jobActivityTabName,
   type AgentAvailability, type AgentBulkFormVerb, type AgentBulkVerb, type AgentJobColumnFilter, type AgentJobsArgs, type AgentJobView, type AgentServiceSample
 } from '../../../shared/agent/jobs'
 import { liveProbes } from '../../../shared/live/catalog'
+import { actionContextValues, actionMenuReasons, actionMenuState } from '../../../shared/actions/catalog'
+import type { CommandArgs } from '../core/types'
+import type { AgentLongRunSource, ExplorerService } from '../explorer/ExplorerService'
+import { isAgentServiceAction } from '../../../shared/actions/catalog'
 import type { LiveFacet } from '../../../shared/live/schema'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
@@ -82,6 +86,10 @@ export interface JobActivitySnapshot { readonly documents: Readonly<Record<strin
 export interface JobActivityEnd { readonly code?: string; readonly message: string; readonly denied: boolean }
 
 export interface JobActivityServiceOptions extends CustomDocumentTargetOptions {
+  /** The Agent node's service verbs (AG-10): Start in the Agent-stopped banner runs explorer.startAgent on this node. */
+  readonly explorer?: Pick<ExplorerService, 'agentMenuNode'>
+  /** The long-run registry: a start, stop or restart of Agent ending on a monitor's connection reads it again at once (AG-10). */
+  readonly longRuns?: AgentLongRunSource
   readonly api: Pick<VariaApi, 'executeObjectAction' | 'describeObject'>
   readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'activate' | 'getSnapshot' | 'subscribe'>
   readonly panes: Pick<PaneService, 'getSnapshot' | 'subscribe'>
@@ -176,7 +184,18 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
     this.registration = options.documents.registerProvider(this)
     const follow = () => { try { this.following() } catch (failure) { onUnexpectedError(failure) } }
     const stopDocuments = options.documents.subscribe(follow), stopConnections = options.connections.subscribe(follow)
-    this.stopFollowing = () => { stopDocuments(); stopConnections() }
+    let running = this.agentRuns()
+    const stopRuns = options.longRuns?.subscribe(() => {
+      const now = this.agentRuns()
+      const ended = [...running].filter(connectionId => !now.has(connectionId))
+      running = now
+      for (const state of Object.values(this.getSnapshot().documents)) if (state.connectionId && ended.includes(state.connectionId)) this.refresh(state.id)
+    })
+    this.stopFollowing = () => { stopDocuments(); stopConnections(); stopRuns?.() }
+  }
+  /** The connections a start, stop or restart of Agent runs on now. */
+  private agentRuns(): Set<string> {
+    return new Set((this.options.longRuns?.getSnapshot().runs ?? []).filter(run => isAgentServiceAction(run.kind)).map(run => run.connectionId))
   }
 
   get(id: string | undefined): JobActivityState | undefined { return id === undefined ? undefined : this.getSnapshot().documents[id] }
@@ -199,6 +218,26 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
   }
   /** What the banner and pill show: a lost connection's last service reading is no news, so they wait (pending) for a live one. */
   shownAvailability(id: string): AgentAvailability { return this.live(id) ? this.availability(id) : 'pending' }
+  /** Whether the Agent-stopped banner offers Start (Agent stopped, its service not Disabled): only then does the monitor follow the
+   *  Agent node's verb, so the tree's and the status's publishes cost a running monitor nothing. */
+  startAgentOffered(id: string): boolean {
+    const state = this.get(id)
+    return !!state && agentBanner(this.shownAvailability(id), state.service, true, state.linux)?.start === true
+  }
+  /**
+   * What Start Agent in the Agent-stopped banner runs (AG-10): explorer.startAgent on the connection's Agent node (the tree's row, or the
+   * object with the same facts), with the monitor's own service reading where the tree has none, and why the verb is greyed (Varia off
+   * Windows, a Linux server, Managed Instance, a cluster, a start or stop already running, a Disabled service); undefined without a server.
+   */
+  startAgentTarget(id: string): { readonly args: CommandArgs; readonly reason?: string } | undefined {
+    const state = this.get(id)
+    if (!state?.connectionId || !this.live(id)) return undefined
+    const node = this.options.explorer?.agentMenuNode(state.connectionId, { ...state.service?.serviceState !== undefined ? { state: state.service.serviceState } : {}, ...state.service?.startupType !== undefined ? { startup: state.service.startupType } : {}, ...state.service?.clustered === 1 ? { clustered: true } : {} })
+    if (!node) return undefined
+    const reason = actionMenuReasons(node).startAgent
+    // The verb's precondition reads the selection's action keys: the node's stand in for them, as a Search Objects result's do.
+    return { args: { target: { kind: 'explorer', node }, state: actionContextValues(actionMenuState(node)) }, ...reason ? { reason } : {} }
+  }
 
   // --- Opening ---------------------------------------------------------------------------------------------------------
 
@@ -239,9 +278,9 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
         if (sample.probe === agentServiceProbe && sample.status) {
           // Every service sample carries what it read; a value left out is unknown, so the sample replaces the last whole.
           const value = (id: string) => { const entry = sample.status!.find(item => item.id === id); return typeof entry?.value === 'number' ? entry.value : undefined }
-          const service: AgentServiceSample = { agentXps: value('agentXps'), serviceState: value('serviceState'), startupType: value('startupType') }
+          const service: AgentServiceSample = { agentXps: value('agentXps'), serviceState: value('serviceState'), startupType: value('startupType'), clustered: value('clustered') }
           const before = this.get(state.id)?.service
-          if (before?.agentXps !== service.agentXps || before?.serviceState !== service.serviceState || before?.startupType !== service.startupType) patch = { ...patch, service }
+          if (before?.agentXps !== service.agentXps || before?.serviceState !== service.serviceState || before?.startupType !== service.startupType || before?.clustered !== service.clustered) patch = { ...patch, service }
           // Agent usable while the list stopped on AGENT_DISABLED (it may have restarted between two service samples): read again
           // so the list resumes by itself.
           if (agentAvailability(service) === 'running' && handle.getSnapshot().probes[agentJobsProbe]?.error?.code === 'AGENT_DISABLED') handle.refresh()
@@ -334,8 +373,7 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
     // Set while disconnected too: the subscription after a reconnect takes the args set meanwhile.
     handle.setArgs(jobActivityArgs(next))
     if (!this.live(id)) return
-    // The backend applies new args at the next sample: read now so the last run shown is the job just picked, and a view that
-    // failed subscribes again with them.
+    // New args read again at once (live.update); refresh as well, so a view that failed subscribes again with them.
     if (changed || handle.getSnapshot().status === 'ended') handle.refresh()
   }
 
@@ -355,6 +393,19 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
     const entry = this.grids.get(id)
     for (let reading = entry?.reading; entry && reading; reading = entry.reading === reading ? undefined : entry.reading) await reading.catch(() => {})
     return this.get(id)?.selected ?? []
+  }
+
+  /**
+   * How many jobs are selected now, as the grid knows at once (capped at one over the bulk cap). A menu or a button decides
+   * from this, since the selected jobs themselves are read from the rows after a click (a right-click selects its row just
+   * before its menu opens); a verb's run waits for them (`settledSelection`).
+   */
+  selectedCount(id: string): number {
+    const entry = this.grids.get(id)
+    if (!entry) return this.get(id)?.selected.length ?? 0
+    const { table, selection, activeKey } = entry.grid.getSnapshot()
+    if (!table || !selection || activeKey === undefined) return 0
+    return selectionRows(selection, table.descriptor.rowsAvailable, table.descriptor.columns.length, agentLimits.startJobs + 1).length
   }
 
   private selectionChanged(id: string): void {
@@ -399,8 +450,7 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
     const state = this.get(id)
     if (!state || !this.live(id)) return 'Connect to the server first.'
     if (state.bulk?.running) return 'A bulk action is running in this monitor.'
-    if (state.overCap) return bulkUnavailable(agentLimits.startJobs + 1)
-    return bulkUnavailable(state.selected.length)
+    return bulkUnavailable(this.selectedCount(id))
   }
   canBulk(id: string): boolean { return this.bulkUnavailable(id) === undefined }
 

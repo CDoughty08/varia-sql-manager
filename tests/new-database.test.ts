@@ -15,7 +15,7 @@ import { connectionInfo, manualTimers, workbenchFixture } from './fixtures/workb
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
-const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
+const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setImmediate(resolve)) }
 
 const windows: NewDatabaseFacts = { level: 16, separator: '\\', linux: false, filestreamLevel: 0, containedAuthentication: false }
 const linux: NewDatabaseFacts = { ...windows, separator: '/', linux: true }

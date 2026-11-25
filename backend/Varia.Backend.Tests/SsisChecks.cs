@@ -31,6 +31,7 @@ internal static class SsisChecks
         await GatesAsync(check);
         await SsisActionChecks.RunAsync(check);
         await SsisCreateChecks.RunAsync(check);
+        await SsisExecutionChecks.RunAsync(check);
     }
 
     private static void Catalog(Action<bool, string> check)

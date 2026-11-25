@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { electron, expect } from './fixtures/smoke.mjs'
 import { resizeContent, resizeWindow } from './fixtures/window-resize.mjs'
-import { backendReady, editorTextbox, editorText, memoryBreakdown, memoryIndicator, expectEditorShown, dialogClosed, dialogWindow } from './fixtures/ui.mjs'
+import { backendReady, clickToClose, editorTextbox, editorText, memoryBreakdown, memoryIndicator, expectEditorShown, dialogClosed, dialogWindow } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'options-resize-profile-'))
@@ -86,7 +86,7 @@ try {
   const optionsWindow = await dialogWindow(application, 'Options')
   const options = optionsWindow.getByRole('dialog', { name: 'Options', exact: true })
   await expect(options).toBeVisible()
-  await options.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await clickToClose(options.getByRole('button', { name: 'Cancel', exact: true }))
   await dialogClosed(optionsWindow, 'Options')
   await expect.poll(optionsOpen).toBe(false)
   await expect.poll(text).toBe('SELECT 1')

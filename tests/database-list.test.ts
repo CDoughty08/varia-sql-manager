@@ -5,7 +5,7 @@ import { ConnectionService } from '../src/renderer/src/services/connections'
 import { DatabaseListService } from '../src/renderer/src/services/database-list'
 import { connectionInfo, connectionOptions } from './fixtures/workbench'
 
-const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+const settle = () => new Promise(resolve => setImmediate(resolve))
 const list = (...names: string[]): DatabaseInfo[] => names.map(name => ({ name, isSystem: name === 'master', isSnapshot: false }))
 
 function fixture() {

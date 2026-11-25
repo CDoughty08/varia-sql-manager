@@ -130,18 +130,18 @@ try {
 
   // Execution scope follows the primary selection, while the position and mode status reuse the editor commands.
   await page.keyboard.press('Control+A')
-  await expect(queryBarButton(page, 'Execute selection')).toBeVisible()
+  await expect(queryBarButton(page, 'Run Selection')).toBeVisible()
   await expect(queryScope(page)).toHaveText('Lines 1–3')
   await page.keyboard.press('ArrowRight')
   await expect(queryBarButton(page, 'Execute')).toBeVisible()
-  await expect(queryScope(page)).toHaveText('Entire query')
+  await expect(queryScope(page)).toHaveText('All')
 
   // Click the start of the middle line, inside the selected text.
   await page.keyboard.press('Control+A')
   await expect(queryScope(page)).toHaveText('Lines 1–3')
   const middleLine = page.locator('.monaco-editor .view-lines').getByText('two', { exact: true })
   await middleLine.click({ position: { x: 1, y: 4 }, force: true })
-  await expect(queryScope(page)).toHaveText('Entire query')
+  await expect(queryScope(page)).toHaveText('All')
   await expect(caretStatus(page)).toHaveText('Ln 2Col 1Ch 1')
 
   const fontSize = () => middleLine.evaluate(line => parseFloat(getComputedStyle(line).fontSize))

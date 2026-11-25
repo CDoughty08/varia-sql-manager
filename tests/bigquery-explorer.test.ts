@@ -54,8 +54,11 @@ describe('BigQuery Object Explorer requests', () => {
     const request = { connectionId: uuid, requestId: uuid, kind: 'bqView', project: 'varia-alpha', dataset: 'sales', name: 'daily' }
     expect(() => validateRequest('bigquery.properties', request)).not.toThrow()
     expect(bigQueryPropertiesRequestSchema.safeParse({ ...request, kind: 'bqRoutine', name: 'to_cents' }).success).toBe(true)
-    // A routine name is checked by the routine rule (letters, digits and underscores), a table name by the table rule.
+    // A routine name is checked by the routine rule (letters, digits and underscores), a table name by the table rule, and a dataset must match dataset === name.
     expect(bigQueryPropertiesRequestSchema.safeParse({ ...request, kind: 'bqRoutine', name: 'daily view' }).success).toBe(false)
+    expect(bigQueryPropertiesRequestSchema.safeParse({ ...request, kind: 'bqDataset', dataset: 'sales', name: 'sales' }).success).toBe(true)
+    expect(bigQueryPropertiesRequestSchema.safeParse({ ...request, kind: 'bqDataset', dataset: 'sales', name: 'other' }).success).toBe(false)
+    expect(bigQueryPropertiesRequestSchema.safeParse({ ...request, kind: 'bqDataset', dataset: 'bad-ds', name: 'bad-ds' }).success).toBe(false)
     expect(bigQueryPropertiesRequestSchema.safeParse({ ...request, name: 'daily view' }).success).toBe(true)
     expect(bigQueryPropertiesRequestSchema.safeParse({ ...request, kind: 'bqModel' }).success).toBe(false)
     expect(bigQueryPropertiesRequestSchema.safeParse({ ...request, name: 'a\\b' }).success).toBe(false)
@@ -138,5 +141,59 @@ describe('BigQuery Object Explorer requests', () => {
     expect(bigQueryPropertiesSchema.safeParse({ ...rich, layout: { requirePartitionFilter: true, extra: 2 } }).success).toBe(false)
     expect(bigQueryPropertiesSchema.safeParse({ ...rich, labels: [{ key: 'a', value: 'b', extra: 1 }] }).success).toBe(false)
     expect(bigQueryPropertiesSchema.safeParse({ ...rich, schema: [{ name: 'a', type: 'STRING', extra: 1 }] }).success).toBe(false)
+
+    // Structured routine and dataset payloads round-trip cleanly and enforce bounds + strictness.
+    const routinePayload: BigQueryProperties = {
+      name: 'to_cents',
+      type: 'function',
+      elapsedMs: 4,
+      groups: [],
+      fullName: 'varia-alpha.sales.to_cents',
+      definition: 'CAST(x * 100 AS INT64)',
+      routine: {
+        routineType: 'SCALAR_FUNCTION',
+        language: 'SQL',
+        determinism: 'DETERMINISTIC',
+        returnType: 'INT64',
+        signature: '(x NUMERIC) RETURNS INT64',
+        arguments: [{ name: 'x', type: 'NUMERIC', mode: 'IN', kind: 'FIXED_TYPE' }]
+      }
+    }
+    expect(validateResult('bigquery.properties', (decodeControl(encodeControl({ result: routinePayload })) as { result: unknown }).result)).toEqual(routinePayload)
+    expect(bigQueryPropertiesSchema.safeParse({
+      ...routinePayload,
+      routine: { ...routinePayload.routine, arguments: Array.from({ length: bigQueryPropertiesLimits.routineArguments + 1 }, (_, i) => ({ name: `a${i}`, type: 'INT64' })) }
+    }).success).toBe(false)
+    expect(bigQueryPropertiesSchema.safeParse({
+      ...routinePayload,
+      routine: { ...routinePayload.routine, returnType: 'T'.repeat(bigQueryPropertiesLimits.routineTypeText + 1) }
+    }).success).toBe(false)
+    expect(bigQueryPropertiesSchema.safeParse({ ...routinePayload, routine: { ...routinePayload.routine, extra: 1 } }).success).toBe(false)
+
+    const datasetPayload: BigQueryProperties = {
+      name: 'sales',
+      type: 'dataset',
+      elapsedMs: 3,
+      groups: [],
+      fullName: 'varia-alpha.sales',
+      location: 'US',
+      labels: [{ key: 'env', value: 'prod' }],
+      dataset: {
+        friendlyName: 'Sales Data',
+        defaultTableExpirationMs: 7_776_000_000,
+        defaultPartitionExpirationMs: 2_592_000_000,
+        kmsKeyName: 'projects/varia-alpha/locations/us/keyRings/r/cryptoKeys/k',
+        defaultCollation: 'und:ci',
+        isCaseInsensitive: true,
+        maxTimeTravelHours: 168,
+        storageBillingModel: 'PHYSICAL'
+      }
+    }
+    expect(validateResult('bigquery.properties', (decodeControl(encodeControl({ result: datasetPayload })) as { result: unknown }).result)).toEqual(datasetPayload)
+    expect(bigQueryPropertiesSchema.safeParse({
+      ...datasetPayload,
+      dataset: { ...datasetPayload.dataset, kmsKeyName: 'k'.repeat(bigQueryPropertiesLimits.kmsKeyName + 1) }
+    }).success).toBe(false)
+    expect(bigQueryPropertiesSchema.safeParse({ ...datasetPayload, dataset: { ...datasetPayload.dataset, extra: 1 } }).success).toBe(false)
   })
 })

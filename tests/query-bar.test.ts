@@ -6,9 +6,10 @@ import type { Workbench } from '../src/renderer/src/core/workbench'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import QueryBar from '../src/renderer/src/QueryBar'
 import StandardToolbar from '../src/renderer/src/ShellToolbar'
-import { lostHint, queryContextModel, toolbarMove, toolbarRescue, toolbarReturn, toolbarStop, type QueryContextInput } from '../src/renderer/src/query-context'
+import { formatElapsed, lostHint, planButtonState, queryContextModel, toolbarMove, toolbarRescue, toolbarReturn, toolbarStop, type QueryContextInput } from '../src/renderer/src/query-context'
 import type { LiveConnection } from '../src/renderer/src/services/connections'
-import { densityUse } from '../src/shared/theme/metrics'
+import { densities, densityUse } from '../src/shared/theme/metrics'
+import { connectionColorNames } from '../src/shared/theme/connection-colors'
 import { stylesheetRules } from './fixtures/css-rules'
 import { documentUri } from '../src/renderer/src/services/documents'
 import { EditorStatusService } from '../src/renderer/src/services/editor-status'
@@ -42,7 +43,11 @@ describe('query context lists', () => {
   })
   it('list Disconnected and every live server, and the databases of the query\'s own one', () => {
     const model = queryContextModel(input({ connections: [live('a', { displayName: 'Orders' }), live('b')] }))
-    expect(model.servers).toEqual([{ id: '', label: 'Disconnected', disabled: false }, { id: 'a', label: 'Orders (a.example)', disabled: false }, { id: 'b', label: 'b.example', disabled: false }])
+    expect(model.servers).toEqual([
+      { id: '', label: 'Disconnected', shortLabel: 'Disconnected', disabled: false },
+      { id: 'a', label: 'Orders (a.example)', shortLabel: 'Orders', disabled: false },
+      { id: 'b', label: 'b.example', shortLabel: 'b.example', disabled: false }
+    ])
     expect([model.live, model.serverDisabled, model.databaseDisabled, model.database, model.serverName]).toEqual([true, false, false, 'AppData', 'Orders (a.example)'])
     expect(model.databases).toEqual(['master', 'AppData'])
   })
@@ -128,28 +133,103 @@ describe('query bar', () => {
     documents.update(query.id, { targetId, attachWanted: true, lastServer: 'obsolete-server' })
     const html = render(createElement(QueryBar))
     expect(html).toContain('Production environment')
-    expect(html).toContain(`<option value="remembered:${targetId}" disabled="" selected="">Reporting (server.example) Disconnected</option>`)
+    expect(html).toContain(`<option value="remembered:${targetId}" disabled="" title="Reporting (server.example) Disconnected" selected="">Reporting Disconnected</option>`)
+    expect(html).toContain('title="Server: Reporting (server.example) Disconnected"')
     expect(html).toContain('<option value="Unavailable" selected="">Unavailable</option>')
     expect(html).toContain('aria-label="Query database" title="Database: Unavailable" disabled=""')
     expect(api.execute).not.toHaveBeenCalled()
   })
-  it('is an ARIA toolbar with Execute, Cancel and the connection pill: colour, environment tag, server and database', () => {
+  it('formats live elapsed durations and computes unified Plan trigger states cleanly', () => {
+    expect([formatElapsed(-50), formatElapsed(0), formatElapsed(1420), formatElapsed(59_940), formatElapsed(60_000), formatElapsed(124_500)])
+      .toEqual(['0.0s', '0.0s', '1.4s', '59.9s', '1m 00s', '2m 04s'])
+    expect(planButtonState(false, false)).toEqual({ active: false, label: 'Plan', icon: 'execution-plan' })
+    expect(planButtonState(true, false)).toEqual({ active: true, label: 'Actual Plan', icon: 'execution-plan-actual' })
+    expect(planButtonState(false, true)).toEqual({ active: true, label: 'Live Plan', icon: 'execution-plan-live' })
+    expect(planButtonState(true, true)).toEqual({ active: true, label: 'Actual + Live', icon: 'execution-plan-live' })
+  })
+  it('is an ARIA toolbar with Execute, anchored scope pill, unified Plan menu and the connection pill', () => {
     const { connections, documents, render } = fixture()
     connections.add({ ...connectionInfo('prod'), color: 'red', displayName: 'Orders' }, { ...connectionOptions, color: 'red', displayName: 'Orders', environment: 'Production' })
+    connections.add({ ...connectionInfo('stg'), color: 'blue', displayName: 'Staging ERP' }, { ...connectionOptions, server: 'stg.example', color: 'blue', displayName: 'Staging ERP', environment: 'Staging' })
     documents.create('a.sql', 'SELECT 1', 'AppData', 'prod')
     const html = render(createElement(QueryBar))
     // data-query-bar gives queryBarFocus, so F5, which Execute shows, runs the query from the bar too.
-    expect(html).toMatch(/^<div class="query-bar" role="toolbar" aria-label="SQL Editor" data-query-bar="">/)
-    // Execute is the bar's only filled button and names its key; Cancel waits for a running query.
+    expect(html).toMatch(/^<div class="query-bar" role="toolbar" aria-label="SQL Editor" data-query-bar="" data-connection-accent="" style="--query-bar-accent:var\(--varia-connection-red\)">/)
+    // Idle Execute is the bar's only filled button, paired with the muted All scope pill; disabled Cancel is hidden.
     expect(html).toMatch(/<button type="button" class="ui-button query-bar-action execute primary" aria-label="Execute" aria-keyshortcuts="F5" title="Execute \(F5\)">.*<kbd aria-hidden="true">F5<\/kbd><\/button>/)
-    expect(html).toMatch(/<button type="button" class="ui-button query-bar-action" aria-label="Cancel" aria-keyshortcuts="Alt\+Pause" disabled="" title="Cancel Executing Query \(Alt\+Pause\)">/)
+    expect(html).toContain('<span class="query-scope" title="Execution scope: Entire query">All</span>')
+    expect(html).not.toContain('aria-label="Cancel"')
+    // One unified Plan ▾ trigger replaces the three separate plan buttons on the modern QueryBar.
+    expect(html).toMatch(/<button type="button" class="ui-button query-bar-action plan-menu-trigger" aria-label="Plan" aria-haspopup="menu" aria-expanded="false" title="Execution plan options">/)
+    expect(html).not.toContain('aria-label="Include Actual Execution Plan"')
+    expect(html).not.toContain('aria-label="Include Live Execution Plan"')
+    expect(html).not.toContain('aria-label="Display Estimated Execution Plan"')
     const pill = html.slice(html.indexOf('<div class="query-connection"'))
-    expect(pill).toMatch(/^<div class="query-connection" role="group" aria-label="Connection"><span class="connection-swatch" style="background:var\(--varia-connection-red\)" aria-hidden="true"><\/span>/)
+    expect(pill).toMatch(/^<div class="query-connection" role="group" aria-label="Connection" data-connection-accent="" style="--query-bar-accent:var\(--varia-connection-red\)"><span class="connection-swatch" style="background:var\(--varia-connection-red\)" aria-hidden="true"><\/span>/)
     expect(pill).toContain('<span class="query-bar-environment"><span class="visually-hidden">Environment: </span><span class="environment-tag" data-place="query" data-tone="critical">')
     expect(pill).toContain('title="Orders (prod.example): Production environment"')
-    // The tag is no control: the server list, which the toolbar's keys reach, describes the environment.
-    expect(pill).toMatch(/<select id="query-server" class="ui-field" aria-label="Query server" aria-description="Production environment" title="Server: Orders \(prod.example\)">.*<option value="prod" selected="">Orders \(prod.example\)<\/option><\/select>/)
+    // The collapsed selected option shows the friendly alias while other options and the tooltip keep the full host.
+    expect(pill).toMatch(/<select id="query-server" class="ui-field" aria-label="Query server" aria-description="Production environment" title="Server: Orders \(prod.example\)">.*<option value="prod" title="Orders \(prod.example\)" selected="">Orders<\/option><option value="stg">Staging ERP \(stg.example\)<\/option><\/select>/)
     expect(pill).toMatch(/<select id="query-database" class="ui-field" aria-label="Query database" title="Database: AppData"><option value="AppData" selected="">AppData<\/option><\/select>/)
+  })
+  it('scopes per-tab QueryBars in split groups with unique IDs, independent connection tinting, morphing Cancel and Plan state', () => {
+    const { connections, documents, queries, render } = fixture()
+    connections.add({ ...connectionInfo('prod'), color: 'red', displayName: 'Production ERP' }, { ...connectionOptions, color: 'red', displayName: 'Production ERP', environment: 'Production' })
+    connections.add({ ...connectionInfo('stg'), color: 'blue', displayName: 'Staging Analytics' }, { ...connectionOptions, server: 'stg.example', color: 'blue', displayName: 'Staging Analytics', environment: 'Staging' })
+    const q1 = documents.create('prod.sql', 'SELECT 1', 'AppData', 'prod')
+    const q2 = documents.create('stg.sql', 'SELECT 2', 'AnalyticsStg', 'stg')
+    documents.update(q1.id, { includeActualPlan: true })
+    documents.update(q2.id, { includeLivePlan: true })
+    documents.activate(q1.id)
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(10_000)
+    vi.spyOn(queries, 'getSnapshot').mockReturnValue({ [q1.id]: { running: { queryId: 'run-1', connectionId: 'prod', startedAt: 8_600 } } })
+    vi.spyOn(queries, 'isRunning').mockImplementation(id => id === q1.id)
+    const html1 = render(createElement(QueryBar, { tabId: q1.id }))
+    const html2 = render(createElement(QueryBar, { tabId: q2.id }))
+    nowSpy.mockRestore()
+    expect(html1).toContain(`id="query-server-${q1.id}"`)
+    expect(html1).toContain(`id="query-database-${q1.id}"`)
+    expect(html2).toContain(`id="query-server-${q2.id}"`)
+    expect(html2).toContain(`id="query-database-${q2.id}"`)
+    expect(html1).toContain('--query-bar-accent:var(--varia-connection-red)')
+    expect(html2).toContain('--query-bar-accent:var(--varia-connection-blue)')
+    // Running tab 1 morphs Execute into error-tinted Cancel with live elapsed time and disables its Plan menu.
+    expect(html1).not.toContain('aria-label="Execute"')
+    expect(html1).toMatch(/<button type="button" class="ui-button query-bar-action cancel" aria-label="Cancel" aria-keyshortcuts="Alt\+Pause" title="Cancel Executing Query \(Alt\+Pause\)">/)
+    expect(html1).toContain('<span class="query-elapsed" aria-hidden="true">1.4s</span>')
+    expect(html1).toMatch(/class="ui-button query-bar-action plan-menu-trigger" aria-label="Actual Plan"[^>]*data-active=""[^>]*disabled=""/)
+    expect(html1).toContain('data-icon="execution-plan-actual"')
+    // Idle tab 2 keeps Execute, hides Cancel, and shows its own enabled Live Plan state.
+    expect(html2).not.toContain('aria-label="Cancel"')
+    expect(html2).toMatch(/class="ui-button query-bar-action execute primary" aria-label="Execute"/)
+    expect(html2).not.toMatch(/aria-label="Execute"[^>]*disabled=""/)
+    expect(html2).toMatch(/class="ui-button query-bar-action plan-menu-trigger" aria-label="Live Plan"[^>]*data-active=""/)
+    expect(html2).not.toMatch(/plan-menu-trigger"[^>]*disabled=""/)
+    expect(html2).toContain('data-icon="execution-plan-live"')
+    expect(html1).toContain('<option value="prod" title="Production ERP (prod.example)" selected="">Production ERP</option>')
+    expect(html1).toContain('<option value="stg">Staging Analytics (stg.example)</option>')
+    expect(html2).toContain('<option value="stg" title="Staging Analytics (stg.example)" selected="">Staging Analytics</option>')
+    expect(html2).toContain('<option value="prod">Production ERP (prod.example)</option>')
+    // Even when a non-query tab is active, a visible SQL split group keeps its own enabled QueryBar.
+    const xml = documents.openText({ name: 'result.xml', text: '<a/>', kind: 'xml' })
+    expect(documents.active?.id).toBe(xml.id)
+    const html2WithXmlActive = render(createElement(QueryBar, { tabId: q2.id }))
+    expect(html2WithXmlActive).not.toMatch(/aria-label="Execute"[^>]*disabled=""/)
+    expect(html2WithXmlActive).toContain('<option value="AnalyticsStg" selected="">AnalyticsStg</option>')
+  })
+  it('tints QueryBar and its connection pill for every preset and custom hex color, and stays neutral when unset', () => {
+    const { connections, documents, render } = fixture()
+    for (const color of [...connectionColorNames, '#2266aa']) {
+      const id = `conn-${color}`
+      connections.add({ ...connectionInfo(id), color }, { ...connectionOptions, server: `${id}.example`, color })
+      const doc = documents.create(`${id}.sql`, 'SELECT 1', 'master', id)
+      const html = render(createElement(QueryBar, { tabId: doc.id }))
+      expect(html, color).toContain(`data-connection-accent="" style="--query-bar-accent:var(--varia-connection-${color})"`)
+    }
+    const plain = documents.create('plain.sql', 'SELECT 1', 'master')
+    const plainHtml = render(createElement(QueryBar, { tabId: plain.id }))
+    expect(plainHtml).not.toContain('data-connection-accent')
+    expect(plainHtml).not.toContain('--query-bar-accent')
   })
   it('gives each database its exact name as the option\'s value, spaces and all', () => {
     const { connections, documents, render } = fixture()
@@ -164,16 +244,30 @@ describe('query bar', () => {
     const { documents, render, editorStatus } = fixture()
     const query = documents.create('a.sql', 'SELECT 1\nSELECT 2', 'master')
     vi.spyOn(editorStatus, 'getSnapshot').mockReturnValue({ line: 2, column: 9, character: 9, eol: 'lf', selection: { uri: documentUri(query.id), startLine: 1, endLine: 2 } })
-    for (const bar of [createElement(QueryBar), createElement(StandardToolbar, { variant: 'classic' })]) {
-      const html = render(bar)
-      expect(html).toContain('aria-label="Execute selection"')
-      expect(html).toContain('Execute selection · Lines 1–2 (F5)')
-      expect(html).toContain('<span class="query-scope">Lines 1–2</span>')
-    }
+    const modernSelected = render(createElement(QueryBar))
+    expect(modernSelected).toContain('aria-label="Run Selection"')
+    expect(modernSelected).toContain('Run Selection · Lines 1–2 (F5)')
+    expect(modernSelected).toContain('<span class="query-scope" data-selection="" title="Execution scope: Lines 1–2">Lines 1–2</span>')
+    // Single-line selection uses "Line N".
+    vi.spyOn(editorStatus, 'getSnapshot').mockReturnValue({ line: 2, column: 5, character: 5, eol: 'lf', selection: { uri: documentUri(query.id), startLine: 2, endLine: 2 } })
+    expect(render(createElement(QueryBar))).toContain('<span class="query-scope" data-selection="" title="Execution scope: Line 2">Line 2</span>')
+    // Classic toolbar preserves its existing separate controls and distinct plan icons.
+    vi.spyOn(editorStatus, 'getSnapshot').mockReturnValue({ line: 2, column: 9, character: 9, eol: 'lf', selection: { uri: documentUri(query.id), startLine: 1, endLine: 2 } })
+    const classicSelected = render(createElement(StandardToolbar, { variant: 'classic' }))
+    expect(classicSelected).toContain('aria-label="Execute selection"')
+    expect(classicSelected).toContain('Execute selection · Lines 1–2 (F5)')
+    expect(classicSelected).toContain('<span class="query-scope">Lines 1–2</span>')
+    expect(classicSelected).toContain('aria-label="Include Actual Execution Plan"')
+    expect(classicSelected).toContain('aria-label="Include Live Execution Plan"')
+    expect(classicSelected).toContain('aria-label="Display Estimated Execution Plan"')
+    expect(classicSelected).toContain('data-icon="execution-plan-actual"')
+    expect(classicSelected).toContain('data-icon="execution-plan-live"')
+    expect(classicSelected).toContain('data-icon="execution-plan-estimated"')
     documents.create('b.sql', '', 'master')
     const html = render(createElement(QueryBar))
     expect(html).toContain('aria-label="Execute"')
-    expect(html).toContain('<span class="query-scope">Entire query</span>')
+    expect(html).toContain('<span class="query-scope" title="Execution scope: Entire query">All</span>')
+    expect(html).not.toContain('data-selection=""')
   })
   it('names the lost connection on Execute, and shows no colour or tag for a disconnected query', () => {
     const { connections, documents, render, api } = fixture()
@@ -217,6 +311,12 @@ describe('query bar', () => {
     expect([value('.query-bar', 'container-type'), value('.query-bar', 'overflow'), value('.query-connection', 'margin-left')]).toEqual(['inline-size', 'hidden', 'auto'])
     expect(value('.query-bar-label', 'display', ['@container (max-width: 500px)'])).toBe('none')
     expect(value('.query-bar-action.execute kbd', 'display', ['@container (max-width: 960px)'])).toBe('none')
+    expect(value('.query-bar .query-scope', 'display', ['@container (max-width: 700px)'])).toBe('none')
+    expect(value('.query-bar-sep, .query-elapsed', 'display', ['@container (max-width: 400px)'])).toBe('none')
+    expect(value('.query-elapsed', 'font-variant-numeric')).toBe('tabular-nums')
+    expect(value('.query-bar-action.cancel', 'background')).toBe('var(--varia-banner-errorBackground)')
+    expect(value('.query-bar .query-scope[data-selection]', 'background')).toBe('var(--varia-banner-warningBackground)')
+    expect(value('.query-bar-action.plan-menu-trigger[data-active]', 'background')).toBe('var(--varia-chip-activeBackground)')
     // The bar sets its own size, so the tag's 12em is as wide as on the status bar; the tag shrinks inside its wrapper
     // rather than running under the server list, and the lists give way first, by weight, down to their minimum.
     expect(value('.query-bar', 'font-size')).toBe('var(--varia-size-sm)')
@@ -224,6 +324,14 @@ describe('query bar', () => {
     expect([value('.query-connection select.ui-field', 'flex'), value('.query-connection select.ui-field', 'min-width')]).toEqual(['0 1000 auto', '64px'])
     expect(value('.ui-field', 'height')).toBe('var(--ui-control-height)')
     expect(value('.ui-button', 'min-height')).toBe('var(--ui-control-height)')
+    // Tabs sit above per-query bars: .query-bar-spacer is retired, and 2-line tabs use 40/44 px with a fixed 20 px Pin slot.
+    expect(rules.some(rule => rule.selector === '.query-bar-spacer')).toBe(false)
+    expect([densities.compact.documentTab, densities.comfortable.documentTab]).toEqual([40, 44])
+    expect([value('.tab-pin, .tab-close', 'width'), value('.tab-pin, .tab-close', 'height')]).toEqual(['20px', '20px'])
+    expect([value('.query-tab:not([data-pinned]) .tab-pin', 'opacity'), value('.query-tab:not([data-pinned]):hover .tab-pin', 'opacity'), value('.query-tab[data-pinned] .tab-pin', 'opacity')]).toEqual(['0.52', '1', '1'])
+    expect([value('.query-bar[data-connection-accent]::before', 'opacity'), value(':root[data-theme-type="light"] .query-bar[data-connection-accent]::before', 'opacity')]).toEqual(['0.08', '0.065'])
+    expect([value('.query-bar[data-connection-accent]::after', 'height'), value('.query-bar[data-connection-accent]::after', 'opacity'), value(':root[data-theme-type="light"] .query-bar[data-connection-accent]::after', 'opacity')]).toEqual(['1px', '0.38', '0.32'])
+    expect(value('.query-connection[data-connection-accent]::before', 'opacity')).toBe('0.42')
   })
   it('gives every list an opaque fill: Chromium draws an open list on its background, white for a transparent one', () => {
     // In Dark the options keep the list's light text, which on white is all but invisible.

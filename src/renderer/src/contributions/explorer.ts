@@ -22,7 +22,7 @@ export function explorerContribution({ commands, documents, connections, explore
   & { explorerStatus?: Pick<Workbench['explorerStatus'], 'refresh'>; settings?: Pick<Workbench['settings'], 'toggle'>; peek?: Pick<Workbench['peek'], 'canPeek' | 'peek' | 'getSnapshot' | 'close' | 'refresh'>
     peekTabs?: Pick<Workbench['peekTabs'], 'canOpen' | 'open' | 'view'>; dependencies?: Pick<Workbench['dependencies'], 'canOpen' | 'open'> },
   api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
-  const nodeOf = (args?: CommandArgs): ExplorerMenuNode | undefined => args?.target ? explorerNodeOf(args) : explorer.menuNode(explorer.getSnapshot().selected)
+  const nodeOf = (args?: CommandArgs): ExplorerMenuNode | undefined => args?.target && args.target.kind !== 'explorerTools' ? explorerNodeOf(args) : explorer.menuNode(explorer.getSnapshot().selected)
   const live = (node: ExplorerMenuNode | undefined): node is ExplorerMenuNode => !!node && !node.lost && connections.isLive(node.connectionId)
   const queryNode = (args?: CommandArgs) => { const node = nodeOf(args); return live(node) && (node.kind === 'server' || node.kind === 'database') ? node : undefined }
   // A BigQuery Search Objects result: New Query opens on its connection.

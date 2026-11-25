@@ -19,6 +19,7 @@ export const part = {
   statusBar: 'footer[aria-label="Status bar"]',
   queryStatus: '[role="status"][aria-label="Query status"]',
   explorerToolbar: '[role="toolbar"][aria-label="Object Explorer toolbar"]',
+  explorerFilterToolbar: '[role="toolbar"][aria-label="Object Explorer filter and view toolbar"]',
   /** The tree by role and name: it waits for nothing, so page code can look for a tree that is not there yet. */
   explorerTree: '[role="tree"][aria-label="Object Explorer"]',
   // Shell
@@ -59,7 +60,7 @@ export const part = {
   tabTitle: '.tab-title',
   tabMetadata: '.tab-metadata',
   /** Editor groups (src/renderer/src/editor-groups/): Dockview's groups inside the query editor panel, and the active one. */
-  /** The editor area in the Query editor panel: every editor group, under the active query's bar. */
+  /** The editor area in the Query editor panel: every editor group, each with its tab strip above per-query bars. */
   editorArea: '.editor-groups-root',
   editorGroup: '.editor-groups .dv-groupview',
   activeEditorGroup: '.editor-groups .dv-groupview.dv-active-group',
@@ -126,7 +127,11 @@ export const part = {
   explorerTwistie: '.oe-twistie',
   explorerIcon: '.oe-icon',
   explorerBadge: '.oe-badge',
-  explorerAccent: '.oe-accent',
+  explorerServerTop: '.oe-server-top',
+  explorerServerSub: '.oe-server-sub',
+  explorerServerSubEnd: '.oe-server-sub-end',
+  explorerPkBadge: '.oe-pk-badge',
+  explorerHeader: '.explorer-header',
   /** The tree's own box and rows, for page code that builds a probe tree to read the row styles. */
   explorerTreeView: '.explorer-tree',
   explorerRow: '.explorer-row',
@@ -147,7 +152,11 @@ export const part = {
   explorerSearch: '.object-search-pane',
   /** A Search Objects tab's document. */
   objectSearchTab: '[data-object-search]',
+  /** The Search Objects tab's summary status line (distinct from SearchDetails' FactGrid copy live region). */
+  objectSearchSummary: '.object-search-summary',
   explorerSearchField: '.object-search-pane .object-search-field',
+  explorerSearchBar: '.object-search-pane .object-search-bar',
+  explorerSearchFilters: '.object-search-pane .object-search-pane-filters',
   /** The pane's footer: the selection's listing and its freshness, then the connected servers. */
   explorerFooter: '.explorer-footer',
   explorerFreshness: '.explorer-freshness',
@@ -231,9 +240,10 @@ export const part = {
   /** The states kit's pill (src/renderer/src/kit/StatusPill.tsx), as a document header shows its state. */
   statusPill: '.status-pill',
   documentBanner: '.document-banner',
-  // Property sheets in documents (src/renderer/src/kit/PropertyField.tsx)
+  // Property sheets in documents (src/renderer/src/kit/PropertyField.tsx & FactGrid.tsx)
   propertyField: '.property-field',
-  propertyFact: '.property-fact',
+  propertyFact: '.property-fact, .fact-grid-row',
+  inspectorTabLabel: '.inspector-tab-label',
   fieldHint: '.field-hint',
   /** The frame's scrolling content under the header and fact line. */
   documentContent: '.document-content',
@@ -390,14 +400,27 @@ export const menubar = page => page.getByRole('menubar', { name: 'Application me
  */
 export const toolbar = page => page.getByRole('toolbar', { name: 'Standard', exact: true })
 export const toolbarButton = (page, name) => toolbar(page).getByRole('button', named(name))
-/** A query's own bar (SSMS's SQL Editor toolbar): Execute, Cancel, and the Connection group with the server and database lists. */
-export const queryBar = page => page.getByRole('toolbar', { name: 'SQL Editor', exact: true })
-export const queryBarButton = (page, name) => queryBar(page).getByRole('button', named(name))
-export const queryScope = page => queryBar(page).locator(part.queryScope)
-export const queryConnection = page => queryBar(page).getByRole('group', { name: 'Connection', exact: true })
+const activeQuerySurface = page => page.locator(`${part.activeEditorGroup}, ${part.toolbar}`)
+/** A query's own bar (SSMS's SQL Editor toolbar): Execute (morphing to Cancel while running), scope pill, unified Plan menu and Connection group. Scopes to the active group when given a page, or to a specific group locator. */
+export const queryBar = scope => ('mainFrame' in scope ? scope.locator(part.activeEditorGroup) : scope).getByRole('toolbar', { name: 'SQL Editor', exact: true })
+export const queryBarButton = (scope, name) => queryBar(scope).getByRole('button', named(name))
+/** The unified `Plan ▾` menu trigger on the modern QueryBar (`Plan`, `Actual Plan`, `Live Plan`, or `Actual + Live`). */
+export const queryPlanButton = scope => queryBar(scope).getByRole('button', { name: /^(?:Plan|Actual Plan|Live Plan|Actual \+ Live)$/ })
+/** The open `Plan ▾` popover menu (`Execution Plan Options`). */
+export const queryPlanMenu = page => page.getByRole('menu', { name: 'Execution Plan Options', exact: true })
+/** An item inside the open `Plan ▾` menu, matched by ARIA role and exact accessible name. */
+export const queryPlanOption = (page, name) => queryPlanMenu(page).getByRole('menuitemcheckbox', named(name)).or(queryPlanMenu(page).getByRole('menuitem', named(name)))
+/** Opens the unified `Plan ▾` menu (if closed) and clicks one of its items by exact name. */
+export async function clickQueryPlanOption(scope, name, page = 'mainFrame' in scope ? scope : scope.page()) {
+  const trigger = queryPlanButton(scope)
+  if (await trigger.getAttribute('aria-expanded') !== 'true') await trigger.click()
+  await queryPlanOption(page, name).click()
+}
+export const queryScope = scope => queryBar(scope).locator(part.queryScope)
+export const queryConnection = scope => queryBar(scope).getByRole('group', { name: 'Connection', exact: true })
 /** The active query's server and database lists: in its query bar, or in the classic toolbar when that is on. */
-export const queryServer = page => page.getByLabel('Query server', { exact: true })
-export const queryDatabase = page => page.getByLabel('Query database', { exact: true })
+export const queryServer = scope => ('mainFrame' in scope ? activeQuerySurface(scope) : scope).getByLabel('Query server', { exact: true })
+export const queryDatabase = scope => ('mainFrame' in scope ? activeQuerySurface(scope) : scope).getByLabel('Query database', { exact: true })
 /** What a server dragged from Object Explorer onto a query will do (the card under a tab, the editor's plate, the insert hint). */
 export const serverDropCard = page => page.getByRole('status', { name: 'Server drop', exact: true })
 export const banner = page => page.locator(part.banner)
@@ -631,10 +654,14 @@ export const closePaneButton = (page, id) => page.getByRole('button', { name: 'C
 export const paneMenuButton = (page, id) => page.getByRole('button', { name: paneTitles[id] + ' panel menu', exact: true })
 /** Moves a pane through its ⋯ menu: left, right, top, bottom, float, dock, close, or tab:<pane>. */
 export const movePane = async (page, id, where) => {
-  await paneMenuButton(page, id).click()
+  const button = paneMenuButton(page, id)
+  await expect(button).toBeVisible()
+  await button.click()
   const name = where.startsWith('tab:') ? 'Tab with ' + paneMenuTitles[where.slice(4)] : paneMoves[where]
   if (!name) throw new Error('No panel move ' + where)
-  await page.getByRole('menu').getByRole('menuitem', { name, exact: true }).click()
+  const item = page.getByRole('menu').getByRole('menuitem', { name, exact: true })
+  await expect(item).toBeVisible()
+  await item.click()
 }
 
 // Popout windows: a popout's page holds its panels' tabs, the button that docks them all back, and the panels themselves.
@@ -859,6 +886,7 @@ export const localGridFrame = (scope, name) => scope.locator(part.localGrid).fil
 // Object Explorer
 
 export const explorerToolbar = page => page.getByRole('toolbar', { name: 'Object Explorer toolbar', exact: true })
+export const explorerFilterToolbar = page => page.getByRole('toolbar', { name: 'Object Explorer filter and view toolbar', exact: true })
 export const explorerTree = page => page.getByRole('tree', { name: 'Object Explorer', exact: true })
 /** The servers: the tree's first level. */
 export const serverRows = page => explorerTree(page).locator('[role="treeitem"][aria-level="1"]')
@@ -890,6 +918,8 @@ export const objectSearchServerOptions = page => page.locator(part.objectSearchT
 export const objectSearchGroup = (page, server) => page.locator(part.objectSearchTab).getByRole('listbox', { name: `Results on ${server}`, exact: true })
 export const objectSearchHits = page => page.locator(part.objectSearchTab).getByRole('listbox', { name: 'Results', exact: true }).getByRole('option')
 export const objectSearchSelected = page => page.locator(part.objectSearchTab).getByRole('listbox', { name: 'Results', exact: true }).getByRole('option', { selected: true })
+/** The Search Objects tab's own summary status line (`role="status"`). */
+export const objectSearchSummary = page => page.locator(part.objectSearchTab).locator(part.objectSearchSummary)
 export const explorerSearchSplitter = page => page.locator(part.explorerSearch).getByRole('separator', { name: 'Resize search results', exact: true })
 export const explorerSearchToggle = (page, name) => page.locator(part.explorerSearch).getByRole('button', { name, exact: true })
 export const explorerSearchOptions = page => page.locator(part.explorerSearch).getByRole('button', { name: /^Search options/ })
@@ -1054,6 +1084,11 @@ export const documentStaleBadge = frame => documentHeader(frame).locator(part.st
 /** The fact line's values, in order. */
 export const documentFactValues = frame => frame.locator(part.documentFacts).locator('dd')
 export const sectionList = frame => frame.getByRole('navigation', { name: 'Sections', exact: true })
+/** The unified ObjectInspectorFrame's horizontal tab strip and one tab by title prefix (ignoring trailing counts/marks). */
+export const inspectorTabs = frame => frame.getByRole('tablist', { name: 'Object sections', exact: true })
+export const inspectorTab = (frame, name) => inspectorTabs(frame).getByRole('tab', { name: new RegExp(`^${escaped(name)}(?:\\s|\\(|$)`) })
+export const inspectorTabLabels = frame => inspectorTabs(frame).getByRole('tab').locator(part.inspectorTabLabel)
+export const inspectorPanel = frame => frame.getByRole('tabpanel')
 /** A section's item in the list by the section's id (its name says when the section needs attention). */
 export const sectionItem = (frame, id) => sectionList(frame).locator(`[data-section="${id}"]`)
 export const currentSectionItem = frame => sectionList(frame).locator('[aria-current="location"]')

@@ -1,13 +1,14 @@
 import type { AgentRole } from '../../../shared/agent/profile.ts'
 import type { ExplorerNode as WireNode, VariaApi } from '../../../shared/contracts'
-import { cloudEngineEditions, explorerLimits, filterProperties, folderFilterFor, folderSpecs, kindSpecs, nodeStatuses, parentKinds, serverEngineOf, type FolderId, type FilterProperty, type NodeKind, type NodeStatus, type ServerEngine } from '../../../shared/explorer/catalog.ts'
+import { cloudEngineEditions, explorerLimits, filterProperties, folderFilterFor, folderSpecs, kindSpecs, nodeStatuses, parentKinds, serverEngineOf, systemFolderIds, type FolderId, type FilterProperty, type NodeKind, type NodeStatus, type ServerEngine } from '../../../shared/explorer/catalog.ts'
 import { displayText, insertTextFor, refKey, type ExplorerFilter, type ExplorerNodeRef, type ExplorerTarget, type ObjectRef, type ParentRef } from '../../../shared/explorer/refs.ts'
+import { isBigQueryPropertyKind } from '../../../shared/bigquery/objects'
 import { isPeekKind } from '../../../shared/explorer/peek.ts'
 import { explorerNodeProvider, type ProviderContext } from '../../../shared/providers.ts'
 import { isDependencyKind } from '../../../shared/explorer/dependencies.ts'
 import { explorerFilterSchema } from '../../../shared/explorer/schema.ts'
 import { currentDatabaseRuntime, liveJobStatus, type DatabaseRuntime, type DatabaseStatusRow } from '../../../shared/explorer/status.ts'
-import { actionContextValues, actionMenuState, type ActionContextValues, type AgentServiceTarget } from '../../../shared/actions/catalog.ts'
+import { actionContextValues, actionMenuState, isAgentServiceAction, type ActionContextValues, type AgentServiceTarget } from '../../../shared/actions/catalog.ts'
 import { scriptContextValues, scriptMenuState, type ScriptContextValues } from '../../../shared/scripting/catalog.ts'
 import { ssisVerbContextValues, ssisVerbMenuState, type SsisVerbContextValues } from '../../../shared/ssis/catalog.ts'
 import { onUnexpectedError } from '../core/errors'
@@ -82,7 +83,7 @@ export function selectionContextOf(target: ExplorerTarget | undefined, row: { re
     explorerSelectionStatus: target?.status && (nodeStatuses as readonly string[]).includes(target.status) ? target.status : '',
     explorerSelectionServerEngine: target?.engine ?? '',
     explorerSelectionServerLinux: !!target?.linux,
-    explorerSelectionPeekable: !!target && target.kind !== 'folder' && isPeekKind(target.kind),
+    explorerSelectionPeekable: !!target && target.kind !== 'folder' && (isPeekKind(target.kind) || isBigQueryPropertyKind(target.kind)),
     explorerSelectionDependencies: !!target && target.kind !== 'folder' && isDependencyKind(target.kind),
     // No Agent node is served before AG-1 (docs/agent-plan.md › Object Explorer).
     explorerSelectionAgentRole: '',
@@ -128,7 +129,13 @@ export interface GroupBySchemaSource { get(): boolean; subscribe(listener: () =>
 export interface DatabaseRuntimeSource {
   databaseRuntime(connectionId: string, database: string): { readonly at: number; readonly row: DatabaseStatusRow | undefined; readonly complete: boolean } | undefined
   /** The SQL Server Agent service's last sampled state and startup type (`explorer.agentService`), for the Agent node's verbs. */
-  agentServiceOf?(connectionId: string): { readonly state?: number; readonly startup?: number } | undefined
+  agentServiceOf?(connectionId: string): { readonly state?: number; readonly startup?: number; readonly clustered?: boolean } | undefined
+  subscribe(listener: () => void): () => void
+}
+/** The long-run registry (LongRunService), for the Agent node's `busy` rule: a start, stop or restart of SQL Server Agent that runs in
+ *  this window greys the other service verbs on its server, even after its dialog closes. */
+export interface AgentLongRunSource {
+  getSnapshot(): { readonly runs: readonly { readonly kind: string; readonly connectionId: string }[] }
   subscribe(listener: () => void): () => void
 }
 
@@ -221,16 +228,18 @@ export function serverSublabel(connection: Pick<LiveConnection, 'serverVersion' 
 }
 const connectionAvailable = (connection: LiveConnection): boolean => !connection.lost && (!connection.lifecycle || connection.lifecycle.state === 'connected')
 /**
- * What the server row shows instead: the major and minor version, then the login ("16.0 · sa"). A Windows login loses its
- * domain or machine ("CONTOSO\dba" shows as "dba"), which would otherwise fill the narrow pane and look the same on every
- * server; the name and tooltip keep it.
+ * What the server band's second line shows: host (when an alias is set), major.minor version, and login ("prod-sql-01 · 16.0 · sa"
+ * or "16.0 · sa"). A Windows login loses its domain or machine ("CONTOSO\dba" shows as "dba"), which would otherwise fill
+ * the narrow pane and look the same on every server; the name and tooltip keep it.
  */
-export function serverBrief(connection: Pick<LiveConnection, 'serverVersion' | 'productVersion' | 'login'>): string {
+export function serverBrief(connection: Pick<LiveConnection, 'serverVersion' | 'productVersion' | 'login'> & { readonly displayName?: string; readonly server?: string; readonly options?: { readonly provider?: string } }): string {
+  const host = connection.displayName && connection.server && connection.displayName !== connection.server ? connection.server : undefined
+  if (connection.options?.provider === 'bigquery') return [host, 'BigQuery', connection.login].filter(Boolean).join(' · ')
   // "16.0.4135.4" from the profile, or "16.00.4135" as SqlClient reports it.
   const [major, minor] = (connection.productVersion || connection.serverVersion).split('.').map(part => /^\d+$/.test(part) ? String(Number(part)) : part)
   const version = minor === undefined ? major : `${major}.${minor}`
   const login = connection.productVersion ? connection.login?.slice(connection.login.lastIndexOf('\\') + 1) : undefined
-  return [version, login].filter(Boolean).join(' · ')
+  return [host, version, login].filter(Boolean).join(' · ')
 }
 
 /**
@@ -241,7 +250,7 @@ export function serverBrief(connection: Pick<LiveConnection, 'serverVersion' | '
  * or removed meanwhile is dropped by its generation.
  */
 /** The System folders listed first in Databases, Tables, Views and Stored Procedures, which an auto-expand never walks into. */
-const systemFolders: ReadonlySet<FolderId> = new Set<FolderId>(['systemDatabases', 'systemTables', 'systemViews', 'systemStoredProcedures'])
+const systemFolders: ReadonlySet<FolderId> = new Set<FolderId>(systemFolderIds)
 
 export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements Disposable {
   private readonly connections: ExplorerServiceOptions['connections']
@@ -251,6 +260,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private readonly limits: ExplorerServiceLimits
   private readonly loader: ExplorerLoader
   private readonly nodes = new Map<number, TreeNode>()
+  /** Each connection's Agent node found last (`agentMenuNode`); checked on use, since a node can go. */
+  private readonly agentNodes = new Map<string, number>()
   private readonly states = new Map<number, NodeState>()
   private roots: number[] = []
   private readonly rootByConnection = new Map<string, number>()
@@ -286,6 +297,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   /** The filter the rows were last flattened with, so a change of filter is announced once. */
   private readonly now: () => number
   private status?: DatabaseRuntimeSource
+  private longRuns?: AgentLongRunSource
   private jobs?: JobStatusSource
   /** The child `reconcile` selects when a page of its folder brings it. */
   private pendingSelect?: { readonly folder: number; readonly key: string; readonly name: string | undefined }
@@ -565,6 +577,13 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     const node = this.selectedNode()
     return node && this.targetOf(node)
   }
+  /** Feeds the Agent node's `busy` rule from the long-run registry (AG-10); the context keys follow its runs. */
+  useLongRuns(source: AgentLongRunSource): Disposable {
+    this.longRuns = source
+    const stop = source.subscribe(() => this.guard(() => this.updateContext()))
+    this.updateContext()
+    return { dispose: () => { stop(); if (this.longRuns === source) { this.longRuns = undefined; this.updateContext() } } }
+  }
   /**
    * Narrows database menus by the live status samples too (D3a): a database a sample newer than its listing shows offline
    * greys Take Offline at once, before any listing. The context keys follow the samples; nothing subscribes for them but this.
@@ -585,11 +604,34 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private targetOf(node: TreeNode): ExplorerTarget {
     const name = node.kind === 'database' && node.ref.type === 'object' ? node.ref.object.name : undefined
     const runtime = name === undefined ? node.database : currentDatabaseRuntime(node.database, node.listedAt, this.status?.databaseRuntime(node.connectionId, name))
-    // The Agent node's verbs follow its service's sampled state (actions catalogue, agentServiceRules).
-    const service = node.kind === 'agent' ? this.status?.agentServiceOf?.(node.connectionId) : undefined
-    const agent = node.kind === 'agent' ? { windowsClient: this.windowsClient, ...(service?.state !== undefined ? { state: service.state } : {}), ...(service?.startup !== undefined ? { startup: service.startup } : {}) } : undefined
     const status = node.kind === 'agentJob' ? liveJobStatus(node.status, node.listedAt, this.jobs?.job(node.connectionId, node.jobId)) : node.status
-    return targetOf(status === node.status ? node : { ...node, status }, this.connectionOf(node.connectionId), runtime, agent)
+    return targetOf(status === node.status ? node : { ...node, status }, this.connectionOf(node.connectionId), runtime, node.kind === 'agent' ? this.agentFacts(node.connectionId) : undefined)
+  }
+  /** The Agent node's service facts (actions catalogue, agentServiceRules): its service's sampled state, whether the server is a failover
+   *  cluster instance, and whether a start, stop or restart of it runs in this window (AG-10). */
+  private agentFacts(connectionId: string): AgentServiceTarget {
+    const service = this.status?.agentServiceOf?.(connectionId)
+    const busy = !!this.longRuns?.getSnapshot().runs.some(run => run.connectionId === connectionId && isAgentServiceAction(run.kind))
+    return {
+      windowsClient: this.windowsClient, ...(service?.state !== undefined ? { state: service.state } : {}), ...(service?.startup !== undefined ? { startup: service.startup } : {}),
+      ...(service?.clustered ? { clustered: true } : {}), ...(busy ? { busy: true } : {})
+    }
+  }
+  /**
+   * A connection's SQL Server Agent node as a menu target for its service verbs from elsewhere (AG-10, Job Activity Monitor's Start Agent):
+   * the tree's own row when it is loaded, else the object with the same facts and no row (id 0, so nothing is reloaded after the run). A
+   * `sample` (the monitor's own service probe, which draws its banner) wins over the tree's state and startup type, so the two never
+   * disagree; a cluster fact from either counts.
+   */
+  agentMenuNode(connectionId: string, sample?: { readonly state?: number; readonly startup?: number; readonly clustered?: boolean }): ExplorerMenuNode | undefined {
+    if (!this.connectionOf(connectionId)) return undefined
+    // The node found last is asked first: a monitor's banner asks again on every tree and status publish.
+    const cached = this.agentNodes.get(connectionId), known = cached === undefined ? undefined : this.nodes.get(cached)
+    let found = known?.kind === 'agent' && known.connectionId === connectionId ? this.menuNode(known.id) : undefined
+    if (!found) for (const node of this.nodes.values()) if (node.kind === 'agent' && node.connectionId === connectionId && (found = this.menuNode(node.id))) { this.agentNodes.set(connectionId, node.id); break }
+    const menu = found ?? { ...this.objectNode(connectionId, { kind: 'agent' }, 'SQL Server Agent'), id: 0, agent: this.agentFacts(connectionId) }
+    const facts = menu.agent ?? this.agentFacts(connectionId)
+    return { ...menu, agent: { ...facts, ...(sample?.state !== undefined ? { state: sample.state } : {}), ...(sample?.startup !== undefined ? { startup: sample.startup } : {}), ...(!facts.clustered && sample?.clustered ? { clustered: true } : {}) } }
   }
   /** A row's node (a synthetic row's owner) as a context menu's target, with its id; undefined for a removed node. */
   menuNode(rowId: number | undefined): ExplorerMenuNode | undefined {

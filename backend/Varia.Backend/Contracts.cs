@@ -1145,6 +1145,27 @@ internal sealed record SsisCatalogSetupArgs(string ConnectionId, string RequestI
 /// <summary>What Create Catalog will do on the server: SsisCatalogSetup in src/shared/ssis/schema.ts.</summary>
 internal sealed record SsisCatalogSetupDto(string Catalog, bool ClrEnabled, bool StartupDefault, string BackupFile, string DataFile, string LogFile);
 internal sealed record SsisCatalogSetupResult(SsisCatalogSetupDto? Setup, long ElapsedMs, SsisError? Error = null);
+/// <summary>ssis.execution (src/shared/ssis/schema.ts SsisExecutionRequest): one execution's run page; Types null keeps every type, Source null every task.</summary>
+internal sealed record SsisExecutionArgs(string ConnectionId, string RequestId, long ExecutionId, List<int>? Types = null, string? Source = null);
+/// <summary>SsisExecutionOverview in src/shared/ssis/schema.ts.</summary>
+internal sealed record SsisExecutionOverviewDto(long Id, string Folder, string Project, string Package, string? EnvironmentFolder, string? Environment, string ExecutedAs, string Caller,
+    bool Use32bit, int Status, string? Created, string? Started, string? Ended, string? StoppedBy, string? Server, string? Machine, string Now);
+/// <summary>SsisExecutionMessage in src/shared/ssis/schema.ts.</summary>
+internal sealed record SsisExecutionMessageDto(long? Id, string Time, int Type, int? SourceType, string? Source, string? Package, string? Event, string? Path, int? Code, string Message);
+internal sealed record SsisMessageCountDto(int Type, long Count);
+/// <summary>SsisExecutionTask in src/shared/ssis/schema.ts.</summary>
+internal sealed record SsisExecutionTaskDto(string Path, string Name, string? Started, string? Ended, long? DurationMs, long Runs, bool Failed, long? UsualMs);
+/// <summary>SsisExecutionParameter in src/shared/ssis/schema.ts; Value is null for a sensitive parameter.</summary>
+internal sealed record SsisExecutionParameterDto(int ObjectType, string Name, string DataType, string? Value, bool Sensitive, bool Required, bool ValueSet, bool RuntimeOverride);
+/// <summary>SsisPackageRun in src/shared/ssis/schema.ts.</summary>
+internal sealed record SsisPackageRunDto(long Id, int Status, string? Created, string? Started, string? Ended, string? Caller = null, long? Errors = null, long? Warnings = null);
+internal sealed record SsisExecutionModel(SsisExecutionOverviewDto Overview, List<SsisMessageCountDto> Counts, List<int>? Types, string? Source, List<SsisExecutionMessageDto> Messages, bool Truncated,
+    List<SsisExecutionTaskDto> Tasks, bool TasksTruncated, List<SsisExecutionParameterDto> Parameters, List<SsisPackageRunDto> Runs, long? Newer);
+internal sealed record SsisExecutionResult(SsisExecutionModel? Model, long ElapsedMs, SsisError? Error = null);
+/// <summary>ssis.packageRuns (src/shared/ssis/schema.ts SsisPackageRunsRequest): one package's newest runs.</summary>
+internal sealed record SsisPackageRunsArgs(string ConnectionId, string RequestId, string Folder, string Project, string Package);
+internal sealed record SsisPackageRunsModel(string Folder, string Project, string Package, List<SsisPackageRunDto> Runs, bool Truncated, string Now);
+internal sealed record SsisPackageRunsResult(SsisPackageRunsModel? Model, long ElapsedMs, SsisError? Error = null);
 /// <summary>agent.profile (src/shared/agent/profile.ts): one login's SQL Server Agent facts on one server.</summary>
 internal sealed record AgentProfileArgs(string ConnectionId, string RequestId);
 /// <summary>AgentProfile in src/shared/agent/profile.ts; AgentXps and DatabaseMailXps are absent when unreadable: msdb refused the login and the server-scope read failed too.</summary>
