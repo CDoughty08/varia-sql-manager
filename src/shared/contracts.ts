@@ -29,7 +29,7 @@ import type { ActionPromptAnswer, ActionPromptRequest } from './actions/prompts.
 import type { LongRunState } from './long-runs.ts'
 import type { ScriptRequest, ScriptResult } from './scripting/schema.ts'
 import type { ActionDescribeRequest, ActionDescribeResult, ActionExecuteRequest, ActionExecuteResult, ActionProgress, ActionScriptRequest, ActionScriptResult } from './actions/schema.ts'
-import type { SsisCatalogSetupRequest, SsisCatalogSetupResult, SsisDescribeRequest, SsisDescribeResult, SsisExecuteRequest, SsisExecuteResult, SsisExecutionRequest, SsisExecutionResult } from './ssis/schema.ts'
+import type { SsisCatalogSetupRequest, SsisCatalogSetupResult, SsisDescribeRequest, SsisDescribeResult, SsisExecuteRequest, SsisExecuteResult, SsisExecutionRequest, SsisExecutionResult, SsisPackageRunsRequest, SsisPackageRunsResult } from './ssis/schema.ts'
 import type { AgentProfileRequest, AgentProfileResult } from './agent/profile.ts'
 import type { AgentHistoryMessageRequest, AgentHistoryMessageResult } from './agent/history.ts'
 import type { AgentCounterValuesRequest, AgentCounterValuesResult } from './actions/agent-alert.ts'
@@ -744,6 +744,7 @@ export interface RpcMethods {
   'ssis.catalogSetup': { params: SsisCatalogSetupRequest; result: SsisCatalogSetupResult }
   /** One SSIS Catalog execution's overview and newest messages (the execution messages view), on the SSIS read pool; it changes nothing. */
   'ssis.execution': { params: SsisExecutionRequest; result: SsisExecutionResult }
+  'ssis.packageRuns': { params: SsisPackageRunsRequest; result: SsisPackageRunsResult }
   /** One session's Details flyout, read on the Activity Monitor's pool under the live gates; closing it cancels the read (varia:activity-cancel). */
   'activity.details': { params: ActivityDetailsRequest; result: ActivityDetailsResult }
   /** Kill Process: each session's identity is checked and KILL runs in one guarded batch on the object actions' own connection; never re-sent. */
@@ -1037,6 +1038,7 @@ export interface VariaApi {
   catalogSetupSsis(params: SsisCatalogSetupRequest): Promise<ApiResult<SsisCatalogSetupResult>>
   /** Reads one SSIS Catalog execution and its messages, or why it cannot (`result.error`: NOT_FOUND once the catalog purged it). */
   executionSsis(params: SsisExecutionRequest): Promise<ApiResult<SsisExecutionResult>>
+  packageRunsSsis(params: SsisPackageRunsRequest): Promise<ApiResult<SsisPackageRunsResult>>
   /** Reads what this login may do with SQL Server Agent on a server, or why it cannot (`result.error`). */
   agentProfile(params: AgentProfileRequest): Promise<ApiResult<AgentProfileResult>>
   agentHistoryMessage(params: AgentHistoryMessageRequest): Promise<ApiResult<AgentHistoryMessageResult>>

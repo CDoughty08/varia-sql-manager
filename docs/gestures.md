@@ -8,7 +8,7 @@ matches; a gesture matches when all of its modifiers are held. "Modifier" gestur
 pointing; "Command" gestures run a command that the keyboard also reaches; "Fixed" gestures belong to the platform,
 Chromium, or a library and cannot be remapped. "Choices" are the modifiers the Shortcuts page will offer.
 
-## Gestures (27)
+## Gestures (29)
 
 ### Global
 
@@ -75,6 +75,13 @@ Chromium, or a library and cannot be remapped. "Choices" are the modifiers the S
 | Change Tab Rows | `documentTabs.rows` | Scrolling down adds rows to the pinned or unpinned shelf under the pointer, and scrolling up removes rows from that shelf alone. | Fixed | Ctrl+Wheel a tab shelf | Ctrl+Wheel a tab shelf | ⌃ Wheel a tab shelf | Locked: Control+wheel changes shelf rows. Increase Tab Stack Height and Decrease Tab Stack Height in the tab menu and command palette provide the same action from the keyboard. | Increase Tab Stack Height (`editor.increaseTabRows`), Decrease Tab Stack Height (`editor.decreaseTabRows`) |
 | Rename Tab | `documentTabs.rename` | Opens the rename box on a query tab. | Command | Double-click a query tab | Double-click a query tab | Double-click a query tab | Locked: Only modifier gestures can be remapped in this version; F2 renames a focused tab. | Rename Tab… (`document.rename`) |
 | New Query in Group | `documentTabs.newQuery` | Creates a query in the editor group whose empty tab strip is double-clicked. | Fixed | Double-click empty query tab strip space | Double-click empty query tab strip space | Double-click empty query tab strip space | Locked: Double-clicking empty tab strip space creates a query; the New Query button and command provide the keyboard path. | New Query (`file.new`) |
+
+### Integration Services
+
+| Gesture | Id | What it does | Kind | Windows | Linux | macOS | Choices or lock | Keyboard |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Go Back | `ssis.mouseBack` | Goes back to the place an Integration Services document showed before: the list, a package or a run. | Fixed | Back button an Integration Services document | Back button an Integration Services document | Back button an Integration Services document | Locked: The mouse's back button walks the document's history, as a browser's does; Go Back's keys also work. | Go Back (`ssis.goBack`) |
+| Go Forward | `ssis.mouseForward` | Goes forward again to the place an Integration Services document went back from. | Fixed | Forward button an Integration Services document | Forward button an Integration Services document | Forward button an Integration Services document | Locked: The mouse's forward button walks the document's history, as a browser's does; Go Forward's keys also work. | Go Forward (`ssis.goForward`) |
 
 ### Connect Dialog
 

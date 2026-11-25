@@ -4032,10 +4032,100 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
   .agent-several-details .link-button, .agent-several-results .link-button, .agent-several-table .link-button { color: LinkText; }
 }
 
-/* SSIS execution messages (AG-13): the overview over the type chips and the messages grid, which takes the rest of the document. */
-.ssis-execution { display: flex; flex-direction: column; gap: var(--varia-space-2); box-sizing: border-box; height: 100%; min-height: 420px; padding: var(--varia-space-3) var(--varia-space-4) var(--varia-space-4); }
-.ssis-execution > .ssis-execution-overview { flex: none; }
-.ssis-execution-grid { position: relative; display: flex; flex: 1; min-height: 180px; border: 1px solid var(--varia-panel-border); }
+/* The Integration Services document: the history bar over the shown place's frame. */
+.ssis-document { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.ssis-navbar { flex: none; display: flex; align-items: center; gap: var(--varia-space-1); min-width: 0; padding: var(--varia-space-1) var(--varia-space-3); border-bottom: 1px solid var(--varia-panel-border); background: var(--varia-editor-background); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.ssis-nav-button { display: inline-flex; align-items: center; justify-content: center; width: var(--varia-control); height: var(--varia-control); padding: 0; border: none; background: none; color: var(--varia-foreground); }
+.ssis-nav-button:hover:not(:disabled) { background: var(--varia-toolbar-hoverBackground); }
+.ssis-nav-button:disabled { opacity: .4; }
+.ssis-crumbs { display: flex; flex: 1; align-items: center; gap: var(--varia-space-1); min-width: 0; margin: 0 0 0 var(--varia-space-2); padding: 0; list-style: none; overflow: hidden; white-space: nowrap; }
+.ssis-crumbs > li { display: inline-flex; min-width: 0; color: var(--varia-descriptionForeground); }
+.ssis-crumbs > li:last-child { flex: none; }
+.ssis-crumb { overflow: hidden; text-overflow: ellipsis; }
+.ssis-crumb[aria-current="page"] { color: var(--varia-foreground); font-weight: 600; }
+.ssis-crumbs .link-button { padding: 0; border: 0; background: none; color: var(--varia-list-highlightForeground); font: inherit; cursor: pointer; }
+.ssis-crumbs .link-button:hover { text-decoration: underline; }
+.ssis-crumb-separator > .codicon { font-size: var(--varia-glyph-sm); }
+.ssis-nav-position { flex: none; color: var(--varia-descriptionForeground); font-variant-numeric: tabular-nums; }
+.ssis-tool { display: inline-flex; align-items: center; gap: var(--varia-space-1); border-color: var(--varia-button-border); }
+/* A package's and a run's page: one screen, never a scroll around a grid. The summary sits above, and the grid takes the rest
+   of the height as the page's only vertical scroll. */
+.ssis-page { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: var(--varia-space-2); padding: var(--varia-space-3) var(--varia-space-4); }
+.ssis-page > * { flex: none; }
+.ssis-page > .ssis-fill-grid, .ssis-run-messages, .ssis-run-details { flex: 1 1 0; min-height: 160px; }
+.ssis-fill-grid { position: relative; display: flex; min-width: 0; min-height: 0; border: 1px solid var(--varia-panel-border); }
+/* The run's summary: the strip beside the tasks. A long task list (Show all) scrolls here, beside the grid, never around it. */
+.ssis-run-summary { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--varia-space-2) var(--varia-space-5); max-height: 38%; overflow-y: auto; }
+.ssis-run-summary > .ssis-run-strip { flex: 0 1 300px; }
+.ssis-run-tasks { flex: 1 1 520px; min-width: 0; }
+.ssis-timeline-more { margin-top: var(--varia-space-1); padding: 0; border: 0; background: none; color: var(--varia-list-highlightForeground); font: inherit; font-size: var(--varia-size-sm); cursor: pointer; }
+.ssis-timeline-more:hover { text-decoration: underline; }
+.ssis-callout-first { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssis-run-bar { align-items: center; }
+.ssis-view-switch { display: inline-flex; flex: none; border: 1px solid var(--varia-button-border); border-radius: var(--varia-radius-sm); overflow: hidden; }
+.ssis-view-switch > button { display: inline-flex; align-items: center; gap: var(--varia-space-1); padding: 0 var(--varia-space-3); height: var(--varia-control); border: 0; border-radius: 0; background: none; color: var(--varia-foreground); font-size: var(--varia-size-sm); }
+.ssis-view-switch > button + button { border-left: 1px solid var(--varia-button-border); }
+.ssis-view-switch > button[aria-selected="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); font-weight: 600; transition: none; }
+.ssis-view-switch > button:hover:not([aria-selected="true"]) { background: var(--varia-toolbar-hoverBackground); }
+/* Messages: the grid and, beside it, the selected message whole (below it in a narrow document). */
+.ssis-run { container-type: inline-size; }
+.ssis-run-messages { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 34%); gap: var(--varia-space-2); min-width: 0; }
+@container (max-width: 900px) { .ssis-run-messages { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(120px, 1fr) minmax(160px, 45%); } }
+.ssis-message-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--varia-panel-border); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.ssis-message-head { flex: none; display: flex; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-2); border-bottom: 1px solid var(--varia-panel-border); }
+.ssis-message-head > .codicon { flex: none; color: var(--varia-errorForeground); }
+.ssis-message-head > .ssis-tool { margin-left: auto; }
+.ssis-message-time { color: var(--varia-descriptionForeground); font-variant-numeric: tabular-nums; }
+.ssis-message-meta { flex: none; margin: 0; padding: var(--varia-space-1) var(--varia-space-2) 0; color: var(--varia-descriptionForeground); overflow-wrap: anywhere; user-select: text; }
+.ssis-message-text { flex: 1; min-height: 0; margin: 0; padding: var(--varia-space-2); overflow: auto; font-family: var(--varia-font-mono); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.ssis-message-empty { margin: var(--varia-space-3); color: var(--varia-descriptionForeground); }
+.ssis-message-more { flex: none; align-self: flex-start; margin: 0 var(--varia-space-2) var(--varia-space-2); padding: 0; border: 0; background: none; color: var(--varia-list-highlightForeground); font: inherit; cursor: pointer; }
+.ssis-message-more:hover { text-decoration: underline; }
+/* Details: the run's facts beside the parameters it used, which fill the rest. */
+.ssis-run-details { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--varia-space-3) var(--varia-space-5); min-width: 0; overflow: hidden; }
+.ssis-run-details > .ssis-execution-overview { flex: 0 1 380px; align-content: start; max-height: 100%; margin: 0; overflow-y: auto; }
+.ssis-run-parameters { flex: 1 1 420px; align-self: stretch; display: flex; flex-direction: column; min-width: 0; min-height: 0; max-height: 100%; }
+.ssis-run-parameters > .ssis-subsection-title { margin-top: 0; }
+.ssis-run-parameters > .ssis-fill-grid { flex: 1; }
+.ssis-section-title { margin: var(--varia-space-2) 0 0; color: var(--varia-foreground); font-size: var(--varia-size-md); line-height: var(--varia-line-md); font-weight: 600; }
+.ssis-subsection-title { margin: var(--varia-space-3) 0 var(--varia-space-1); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); font-weight: 600; }
+.ssis-callout { display: flex; align-items: flex-start; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-panel-border); border-left: 3px solid var(--varia-errorForeground); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); overflow-wrap: anywhere; }
+.ssis-callout > .codicon { flex: none; color: var(--varia-errorForeground); }
+.ssis-callout-text { flex: 1; min-width: 0; user-select: text; white-space: pre-wrap; }
+.ssis-callout-where { color: var(--varia-descriptionForeground); }
+.ssis-run-strip { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--varia-space-1) var(--varia-space-3); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.ssis-strip-label { flex-basis: 100%; color: var(--varia-descriptionForeground); }
+.ssis-strip-note { color: var(--varia-descriptionForeground); }
+.ssis-spark { position: relative; display: flex; align-items: flex-end; gap: 3px; height: 40px; min-width: 120px; max-width: 420px; padding-bottom: 1px; border-bottom: 1px solid var(--varia-panel-border); }
+.ssis-spark-bar { flex: 1 1 0; min-width: 6px; max-width: 18px; padding: 0; border: none; border-top-left-radius: var(--varia-radius-sm); border-top-right-radius: var(--varia-radius-sm); background: var(--varia-list-highlightForeground); opacity: .5; cursor: pointer; }
+.ssis-spark-bar:hover:not(:disabled) { opacity: .8; }
+.ssis-spark-bar[data-failed] { background: var(--varia-errorForeground); opacity: .8; }
+.ssis-spark-bar[data-running] { background: var(--varia-warningForeground); }
+/* This run: full strength and outlined, so it is told apart without colour alone (aria-current for assistive technology). */
+.ssis-spark-bar[aria-current="true"] { opacity: 1; outline: 1px solid var(--varia-foreground); outline-offset: 1px; cursor: default; }
+.ssis-spark-usual { position: absolute; left: 0; right: 0; height: 0; border-top: 1px dashed var(--varia-descriptionForeground); pointer-events: none; }
+.ssis-timeline { display: grid; grid-template-columns: minmax(140px, max-content) minmax(160px, 1fr) max-content max-content; column-gap: var(--varia-space-3); row-gap: 1px; font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.ssis-timeline-head, .ssis-timeline-row { display: contents; }
+.ssis-timeline-head > span { color: var(--varia-descriptionForeground); padding-bottom: var(--varia-space-1); }
+.ssis-timeline-head > span:nth-child(n+3), .ssis-task-duration, .ssis-task-delta { text-align: right; font-variant-numeric: tabular-nums; }
+.ssis-task-cell { min-width: 0; }
+.ssis-task { max-width: 100%; padding: 0 var(--varia-space-1); border: none; background: none; color: var(--varia-foreground); font: inherit; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssis-task:hover { text-decoration: underline; }
+.ssis-task[aria-pressed="true"] { color: var(--varia-list-highlightForeground); font-weight: 600; }
+.ssis-task-runs { margin-left: var(--varia-space-1); color: var(--varia-descriptionForeground); }
+.ssis-track { position: relative; align-self: center; height: 10px; border-radius: var(--varia-radius-sm); background: var(--varia-panel-border); }
+.ssis-track > i { position: absolute; top: 0; bottom: 0; border-radius: var(--varia-radius-sm); background: var(--varia-list-highlightForeground); }
+.ssis-timeline-row[data-failed] .ssis-track > i { background: var(--varia-errorForeground); }
+.ssis-track > b { position: absolute; top: -2px; bottom: -2px; width: 0; border-left: 1px dashed var(--varia-foreground); }
+.ssis-task-duration { color: var(--varia-foreground); }
+.ssis-task-delta { color: var(--varia-descriptionForeground); }
+.ssis-task-delta[data-tone="error"] { color: var(--varia-errorForeground); }
+.ssis-task-delta[data-tone="warning"] { color: var(--varia-warningForeground); }
+@media (forced-colors: active) {
+  .ssis-spark-bar, .ssis-track > i { background: Highlight; forced-color-adjust: none; }
+  .ssis-spark-bar[data-failed], .ssis-timeline-row[data-failed] .ssis-track > i { background: Mark; }
+  .ssis-crumbs .link-button { color: LinkText; }
+}
 /* BigQuery Properties inspector (OP-2b): surface-specific pills, flow section headers, fill toolbars and label chips. */
 .bq-props-pills { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); min-width: 0; }
 .bq-props-flow { display: flex; flex-direction: column; gap: var(--varia-space-4); }

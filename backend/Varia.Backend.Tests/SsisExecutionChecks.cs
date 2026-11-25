@@ -5,9 +5,10 @@ using Varia.Backend.Ssis;
 
 namespace Varia.Backend.Tests;
 
-/// <summary>Offline checks of ssis.execution (AG-13, the SSIS execution messages view): the catalogue's message groups, the
-/// batch's statements (in the SSIS lint through SsisSql.All, and their own shape here), request validation in the service and
-/// the dispatcher, parameter binding, and the refusals before any connection (old or Linux servers, sign-in failures as values).</summary>
+/// <summary>Offline checks of the Integration Services document's reads, ssis.execution (the run page) and ssis.packageRuns (the
+/// package step): the catalogue's message types and count types, the batches' statements (in the SSIS lint through SsisSql.All, and
+/// their own shape here), request validation in the service and the dispatcher, parameter binding, the usual-duration median, and
+/// the refusals before any connection (old or Linux servers, sign-in failures as values).</summary>
 internal static class SsisExecutionChecks
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
@@ -16,29 +17,44 @@ internal static class SsisExecutionChecks
         UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow
     };
 
-    private static SsisExecutionArgs Args(long id, List<string>? groups = null, string? connectionId = null) => new(connectionId ?? Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), id, groups);
+    private static SsisExecutionArgs Args(long id, List<int>? types = null, string? source = null) => new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), id, types, source);
+    private static SsisPackageRunsArgs Runs(string folder = "Finance", string project = "Loads", string package = "Daily.dtsx") => new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), folder, project, package);
 
     public static async Task RunAsync(Action<bool, string> check)
     {
         var catalog = SsisCatalog.Current;
-        check(catalog.MessageGroups.Select(group => group.Group).SequenceEqual(["error", "warning", "information", "other"])
-            && catalog.MessageGroups[0].Types.SequenceEqual([120, 130]) && catalog.MessageGroups[1].Types.SequenceEqual([110]) && catalog.MessageGroups[2].Types.SequenceEqual([70])
-            && catalog.MessageGroups[3].Types.Count == 0 && catalog.Limit("executionMessages") == 5000 && catalog.Limit("executionMessageChars") == 4000,
-            "the embedded catalogue's message groups name SSMS's error, warning and information types, and Other holds the rest");
+        check(catalog.MessageTypes.Keys.Order().SequenceEqual([-1, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 200, 400])
+            && catalog.ErrorMessageTypes.SequenceEqual([120]) && catalog.WarningMessageTypes.SequenceEqual([110]) && catalog.SucceededStatus == 7
+            && catalog.Limit("executionMessages") == 5000 && catalog.Limit("executionMessageChars") == 4000 && catalog.Limit("executionTasks") == 1000
+            && catalog.Limit("executionParameters") == 1000 && catalog.Limit("executionRuns") == 16 && catalog.Limit("packageRuns") == 1000,
+            "the embedded catalogue names SSIS's message types (PreValidate through NonDiagnostic, and Unknown), the run counts' error and warning types, and the reads' bounds");
 
         var statements = SsisSql.Execution(catalog);
-        var problems = statements.SelectMany((statement, index) => SsisSql.Lint(statement.Text, statement.List).Select(problem => "#" + index + ": " + problem)).ToList();
-        check(statements.Length == 3 && !statements[0].List && statements[1].List && statements[2].List && problems.Count == 0
-            && statements[0].Text.Contains("FROM [catalog].[executions] AS e WHERE e.execution_id = @execution_id;", StringComparison.Ordinal)
-            && statements[1].Text.Contains("COUNT_BIG(*) FROM [catalog].[event_messages] AS m WHERE m.operation_id = @execution_id GROUP BY m.message_type", StringComparison.Ordinal)
-            && statements[2].Text.Contains("(@error = 1 AND m.message_type IN (120, 130)) OR (@warning = 1 AND m.message_type IN (110)) OR (@information = 1 AND m.message_type IN (70)) OR (@other = 1 AND m.message_type NOT IN (120, 130, 110, 70))", StringComparison.Ordinal)
-            && statements[2].Text.Contains("LEFT(m.message, @chars + 1)", StringComparison.Ordinal) && statements[2].Text.EndsWith("ORDER BY m.message_time DESC, m.event_message_id DESC;", StringComparison.Ordinal)
-            && SsisSql.All(catalog.Views).Count(item => item.Id.StartsWith("execution #", StringComparison.Ordinal)) == 3,
-            "the execution batch reads the execution by its id, counts every message by type, and lists the newest messages of the groups whose bit is on, each bounded, ordered and in the SSIS lint: "
-            + string.Join("; ", problems));
-        check(SsisSql.Lint(statements[2].Text.Replace("TOP (@take) ", "", StringComparison.Ordinal), true).Contains("is not a TOP (@take) listing")
-            && SsisSql.Lint(statements[0].Text + " DELETE FROM [catalog].[executions];", false).Contains("is not a read: DELETE"),
-            "the SSIS lint refuses an unbounded message list and a write in the execution batch");
+        var runs = SsisSql.PackageRuns(catalog);
+        var problems = statements.Concat(runs).SelectMany((statement, index) => SsisSql.Lint(statement.Text, statement.List).Select(problem => "#" + index + ": " + problem)).ToList();
+        check(statements.Length == 9 && statements.Select(statement => statement.List).SequenceEqual([false, false, true, true, true, true, true, false, true]) && problems.Count == 0
+            && statements[0].Text.Contains("SELECT @folder = e.folder_name, @project = e.project_name, @package = e.package_name FROM [catalog].[executions] AS e WHERE e.execution_id = @execution_id;", StringComparison.Ordinal)
+            && statements[1].Text.Contains("FROM [catalog].[executions] AS e WHERE e.execution_id = @execution_id;", StringComparison.Ordinal)
+            && statements[2].Text.Contains("COUNT_BIG(*) FROM [catalog].[event_messages] AS m WHERE m.operation_id = @execution_id GROUP BY m.message_type", StringComparison.Ordinal)
+            && statements[3].Text.Contains("(@tunknown = 1 AND m.message_type NOT IN (10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 200, 400)) OR (@t10 = 1 AND m.message_type = 10) OR ", StringComparison.Ordinal)
+            && statements[3].Text.Contains("(@source IS NULL OR m.message_source_name = @source)", StringComparison.Ordinal)
+            && statements[3].Text.Contains("LEFT(m.message, @chars + 1)", StringComparison.Ordinal) && statements[3].Text.EndsWith("ORDER BY m.message_time DESC, m.event_message_id DESC;", StringComparison.Ordinal)
+            && statements[4].Text.Contains("FROM [catalog].[executables] AS x OUTER APPLY", StringComparison.Ordinal) && statements[4].Text.Contains("SUM(CAST(s.execution_duration AS bigint))", StringComparison.Ordinal)
+            && statements[5].Text.Contains("CASE WHEN p.sensitive = 1 THEN NULL ELSE LEFT(CONVERT(nvarchar(4000), p.parameter_value), @chars + 1) END", StringComparison.Ordinal)
+            && statements[6].Text.Contains("(SELECT TOP (@runs) e.execution_id", StringComparison.Ordinal) && statements[6].Text.Contains("e.execution_id <= @execution_id", StringComparison.Ordinal)
+            && statements[7].Text.Contains("e.execution_id > @execution_id ORDER BY e.execution_id;", StringComparison.Ordinal)
+            && statements[8].Text.Contains("e.status = @succeeded AND e.execution_id < @execution_id", StringComparison.Ordinal) && statements[8].Text.Contains("s.execution_result = 0", StringComparison.Ordinal)
+            && runs.Length == 1 && runs[0].List && runs[0].Text.Contains("m.message_type IN (120)", StringComparison.Ordinal) && runs[0].Text.Contains("m.message_type IN (110)", StringComparison.Ordinal)
+            && runs[0].Text.EndsWith("e.package_name = @package ORDER BY e.execution_id DESC;", StringComparison.Ordinal)
+            && SsisSql.All(catalog.Views).Count(item => item.Id.StartsWith("execution #", StringComparison.Ordinal)) == 9
+            && SsisSql.All(catalog.Views).Count(item => item.Id.StartsWith("packageRuns #", StringComparison.Ordinal)) == 1,
+            "the run page's batch looks up the package, reads the execution, counts its messages by type, lists the newest messages of the types whose bit is on and of @source's task, "
+            + "the executables with their statistics summed, the parameters (a sensitive value never read), the package's runs up to this one and the next, and the usual durations' history; "
+            + "the package step lists one package's runs with their counts; each bounded, ordered and in the SSIS lint: " + string.Join("; ", problems));
+        check(SsisSql.Lint(statements[3].Text.Replace("TOP (@take) ", "", StringComparison.Ordinal), true).Contains("is not a TOP (@take) listing")
+            && SsisSql.Lint(statements[1].Text + " DELETE FROM [catalog].[executions];", false).Contains("is not a read: DELETE")
+            && SsisSql.TypeParameter(-1) == "@tunknown" && SsisSql.TypeParameter(130) == "@t130",
+            "the SSIS lint refuses an unbounded message list and a write in the execution batch, and each message type has its own bit parameter");
 
         using var service = new SsisService(new SsisChecks.FakeHost());
         string Code(SsisExecutionArgs args)
@@ -48,19 +64,41 @@ internal static class SsisExecutionChecks
         }
         var cases = new (SsisExecutionArgs Args, string Expected)[]
         {
-            (Args(1), "ok"), (Args(9_007_199_254_740_991), "ok"), (Args(48213, ["error", "warning"]), "ok"), (Args(5, ["other"]), "ok"),
+            (Args(1), "ok"), (Args(9_007_199_254_740_991), "ok"), (Args(48213, [120, 110]), "ok"), (Args(5, [-1]), "ok"), (Args(5, source: "Load facts"), "ok"),
+            (Args(5, source: new string('s', 4000)), "ok"),
             (Args(0), "INVALID_PARAMS"), (Args(-3), "INVALID_PARAMS"), (Args(9_007_199_254_740_992), "INVALID_PARAMS"), (Args(5, []), "INVALID_PARAMS"),
-            (Args(5, ["error", "error"]), "INVALID_PARAMS"), (Args(5, ["fatal"]), "INVALID_PARAMS"), (Args(5) with { ConnectionId = "x" }, "INVALID_PARAMS"), (Args(5) with { RequestId = "y" }, "INVALID_PARAMS")
+            (Args(5, [120, 120]), "INVALID_PARAMS"), (Args(5, [121]), "INVALID_PARAMS"), (Args(5, source: ""), "INVALID_PARAMS"), (Args(5, source: new string('s', 4001)), "INVALID_PARAMS"),
+            (Args(5) with { ConnectionId = "x" }, "INVALID_PARAMS"), (Args(5) with { RequestId = "y" }, "INVALID_PARAMS")
         };
         var wrong = cases.Where(item => Code(item.Args) != item.Expected).Select(item => JsonSerializer.Serialize(item.Args, Json) + " " + Code(item.Args)).ToList();
-        check(wrong.Count == 0, "ssis.execution accepts a positive id that crosses JSON exactly and distinct groups of the catalogue, and refuses the rest: " + string.Join("; ", wrong));
+        check(wrong.Count == 0, "ssis.execution accepts a positive id that crosses JSON exactly, distinct message types of the catalogue and a bounded task, and refuses the rest: " + string.Join("; ", wrong));
+        string RunsCode(SsisPackageRunsArgs args)
+        {
+            try { service.Validate(args); return "ok"; }
+            catch (RequestException error) { return error.Code; }
+        }
+        var runCases = new (SsisPackageRunsArgs Args, string Expected)[]
+        {
+            (Runs(), "ok"), (Runs(new string('f', 128), new string('p', 128), new string('k', 260)), "ok"), (Runs(""), "INVALID_PARAMS"), (Runs(project: ""), "INVALID_PARAMS"),
+            (Runs(package: ""), "INVALID_PARAMS"), (Runs(new string('f', 129)), "INVALID_PARAMS"), (Runs(package: new string('k', 261)), "INVALID_PARAMS"), (Runs() with { RequestId = "y" }, "INVALID_PARAMS")
+        };
+        var wrongRuns = runCases.Where(item => RunsCode(item.Args) != item.Expected).Select(item => item.Args.Folder.Length + "/" + item.Args.Project.Length + "/" + item.Args.Package.Length + " " + RunsCode(item.Args)).ToList();
+        check(wrongRuns.Count == 0, "ssis.packageRuns accepts a folder, project and package within their bounds and refuses the rest: " + string.Join("; ", wrongRuns));
 
         static object? Value(SqlParameter[] parameters, string name) => parameters.Single(parameter => parameter.ParameterName == name).Value;
-        var bound = service.BindExecution(48213, ["error", "other"]);
-        check(bound.Select(parameter => parameter.ParameterName).SequenceEqual(["@execution_id", "@take", "@chars", "@error", "@warning", "@information", "@other"])
-            && Value(bound, "@execution_id") is 48213L && Value(bound, "@take") is 5001 && Value(bound, "@chars") is 4000
-            && Value(bound, "@error") is true && Value(bound, "@warning") is false && Value(bound, "@information") is false && Value(bound, "@other") is true,
-            "an execution read binds its id, one row past its bound, the message characters and one bit per group");
+        var bound = service.BindExecution(48213, [120, -1], "Load facts");
+        var every = service.BindExecution(48213, null, null);
+        check(bound.Take(6).Select(parameter => parameter.ParameterName).SequenceEqual(["@execution_id", "@take", "@chars", "@runs", "@succeeded", "@source"]) && bound.Length == 6 + 17
+            && Value(bound, "@execution_id") is 48213L && Value(bound, "@take") is 5001 && Value(bound, "@chars") is 4000 && Value(bound, "@runs") is 16 && Value(bound, "@succeeded") is 7
+            && Value(bound, "@source") is "Load facts" && Value(bound, "@t120") is true && Value(bound, "@tunknown") is true && Value(bound, "@t110") is false && Value(bound, "@t10") is false
+            && Value(every, "@source") == DBNull.Value && every.Skip(6).All(parameter => parameter.Value is true),
+            "an execution read binds its id, one row past its bound, the characters, the runs, the succeeded status, its task or NULL, and one bit per message type (every bit without a filter)");
+        var runsBound = service.BindPackageRuns(Runs());
+        check(runsBound.Select(parameter => parameter.ParameterName).SequenceEqual(["@take", "@folder", "@project", "@package"]) && Value(runsBound, "@take") is 1001
+            && Value(runsBound, "@package") is "Daily.dtsx" && runsBound[3].Size == 260,
+            "the package step binds one run past its bound and the package's names as parameters");
+        check(SsisService.Median([30, 10, 20]) == 20 && SsisService.Median([40, 10, 30, 20]) == 20 && SsisService.Median([5]) == 5,
+            "a usual duration is the median of the earlier runs, the lower middle one for an even count");
         check(SsisService.Clip(new string('m', 4001), 4000) is { Length: 4000 } clipped && clipped.EndsWith('…') && SsisService.Clip(new string('m', 4000), 4000).Length == 4000
             && SsisService.Clip(new string('m', 3998) + "\uD83D\uDE00" + "tail", 4000) == new string('m', 3998) + "…"
             && SsisService.ExecutionGone(7).StartsWith("Execution 7 is not in the SSIS Catalog: the catalog's retention cleanup may have removed it", StringComparison.Ordinal),
@@ -78,12 +116,24 @@ internal static class SsisExecutionChecks
             var codes = new[]
             {
                 await Dispatch("{\"connectionId\":\"" + connection + "\",\"requestId\":\"" + Guid.NewGuid() + "\",\"executionId\":0}"),
-                await Dispatch("{\"connectionId\":\"" + connection + "\",\"requestId\":\"" + Guid.NewGuid() + "\",\"executionId\":5,\"groups\":[\"nope\"]}"),
+                await Dispatch("{\"connectionId\":\"" + connection + "\",\"requestId\":\"" + Guid.NewGuid() + "\",\"executionId\":5,\"types\":[7]}"),
                 await Dispatch("{\"connectionId\":\"" + connection + "\",\"requestId\":\"" + Guid.NewGuid() + "\",\"executionId\":5,\"extra\":1}"),
                 await Dispatch("{\"connectionId\":\"" + connection + "\",\"requestId\":\"" + Guid.NewGuid() + "\",\"executionId\":5}")
             };
-            check(codes[0] == "INVALID_PARAMS" && codes[1] == "INVALID_PARAMS" && codes[2] is "INVALID_PARAMS" or "JSON" && codes[3] == "NOT_CONNECTED",
-                "the dispatcher validates ssis.execution before it looks for the connection, and refuses unknown members: " + string.Join(", ", codes));
+            var runCodes = new[]
+            {
+                await RunsDispatch("{\"connectionId\":\"" + connection + "\",\"requestId\":\"" + Guid.NewGuid() + "\",\"folder\":\"\",\"project\":\"p\",\"package\":\"k\"}"),
+                await RunsDispatch("{\"connectionId\":\"" + connection + "\",\"requestId\":\"" + Guid.NewGuid() + "\",\"folder\":\"f\",\"project\":\"p\",\"package\":\"k\"}")
+            };
+            check(codes[0] == "INVALID_PARAMS" && codes[1] == "INVALID_PARAMS" && codes[2] is "INVALID_PARAMS" or "JSON" && codes[3] == "NOT_CONNECTED"
+                && runCodes[0] == "INVALID_PARAMS" && runCodes[1] == "NOT_CONNECTED",
+                "the dispatcher validates ssis.execution and ssis.packageRuns before it looks for the connection, and refuses unknown members: " + string.Join(", ", codes.Concat(runCodes)));
+            async Task<string> RunsDispatch(string body)
+            {
+                try { await sql.DispatchAsync("ssis.packageRuns", JsonDocument.Parse(body).RootElement, Json); return "ok"; }
+                catch (RequestException error) { return error.Code; }
+                catch (JsonException) { return "JSON"; }
+            }
         }
 
         var old = new SsisChecks.FakeHost(12);
@@ -94,8 +144,10 @@ internal static class SsisExecutionChecks
         var host = new SsisChecks.FakeHost();
         using var hostService = new SsisService(host);
         var kerberos = await hostService.ExecutionAsync(Args(5), CancellationToken.None);
+        var oldRuns = await oldService.PackageRunsAsync(Runs(), CancellationToken.None);
+        var kerberosRuns = await hostService.PackageRunsAsync(Runs(), CancellationToken.None);
         check(refused.Error is { Code: "NOT_SUPPORTED" } && linux.Error is { Code: "NOT_SUPPORTED" } && old.Opens == 0 && refused.Model is null
-            && kerberos.Error is { Code: "AUTH_KERBEROS" } && host.Opens == 1,
-            "an execution read on a server without a catalog answers NOT_SUPPORTED without connecting, and a sign-in failure is a value");
+            && oldRuns.Error is { Code: "NOT_SUPPORTED" } && kerberos.Error is { Code: "AUTH_KERBEROS" } && kerberosRuns.Error is { Code: "AUTH_KERBEROS" } && host.Opens == 2,
+            "the run page's and package step's reads on a server without a catalog answer NOT_SUPPORTED without connecting, and a sign-in failure is a value");
     }
 }

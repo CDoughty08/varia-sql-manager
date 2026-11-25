@@ -6,19 +6,44 @@ document tab, which `ssis.describe` reads. Varia changes it in two ways so far: 
 Catalogs › Create Catalog…, S9a), which creates `SSISDB` as SSMS 22 does, and Stop Operation (`ssis.execute`), which the
 backend runs and the Operations view (S3) offers.
 
-## Execution messages
+## The Integration Services document
 
-One execution's overview and messages open as a read-only document tab, "Execution 48213", SSMS's Overview and All Messages
-reports in one place: from an execution's row in Integration Services Operations (View Messages on its menu, the Messages verb,
-or a double-click), and from an SSIS step's execution link in a SQL Server Agent job's History. The header shows the execution's
-status, package, duration and its error and warning counts; the overview lists folder, project, package, environment, times,
-who ran it and where. Below it, chips choose the message types (Errors, Warnings, Information, Other, each with the execution's
-count) and the results grid lists the newest messages of those types first, with Copy, Copy with Headers, sort and Save Results
-As. F5 or Refresh reads it again (a running execution's newest messages). `ssis.execution` reads it on the SSIS read pool,
-bounded (the newest 5,000 messages, each cut at 4,000 characters, said when it happens). A purged execution (the catalog's
-retention cleanup), a server without the catalog, and a login that may not open or read it are said in the document, not thrown.
-Its live checks (`SsisExecutionLiveChecks`, `VARIA_TEST_SQL_SCRATCH=1`) run against the fake catalog; the reference part below
-lists its statements and type groups.
+Each connection has one Integration Services document, "Operations - server-a", that drills down in place rather than opening
+a tab per report: the catalog's operations, then a package's runs, then one run. A history bar above it has Back and Forward
+(Alt+Left and Alt+Right, or Cmd+[ and Cmd+] on macOS, and the mouse's back and forward buttons), where the document is
+(server › SSISDB › folder › project › package › Execution 48213; each step before the shown one goes there) and the step's
+place in the history ("3 of 4"). Back and Forward show a step as it was left, with its filters and scroll, without reading it again;
+F5 or Refresh reads the shown step again. A new step after Back drops the steps that were ahead, as a browser does.
+
+- **Operations** (SSISDB's Active Operations, All Executions, All Validations and All Operations): the live list described
+  under Operations below. Open (Enter, a double-click, or Open on a row's menu) goes to that execution's run.
+- **A package's runs** (the package node's Executions, the package crumb): a run strip of the last runs (bar height is the
+  duration, failed runs in the error colour, the usual time dashed) and every run in a core grid filling the page, newest first (ID, Status,
+  Started, Duration, Errors, Warnings, Caller); Last execution, a strip bar, or opening a row goes to that run. `ssis.packageRuns` reads it.
+- **A run** (Open on an operation, the package node's Last Execution, a SQL Server Agent job's SSIS execution link): one screen,
+  SSMS's Overview, All Messages and Execution Performance reports in one place. The header shows the status, started, duration
+  (with the package's usual time), error and warning counts, caller and environment, with Older run and Newer run. Below it: a
+  callout with where a failed run failed, which tasks never ran and its first error (Show errors keeps only the errors); this run
+  against the package's recent runs beside the task timeline (each task's bar against the run, its usual end dashed, its time
+  and how far it is from usual; a task in a loop says how many times it ran; the first 8 tasks, the failed ones and the chosen
+  one show, and Show all lists the rest), where choosing a task shows only its messages. Then Messages or Details:
+  - **Messages**: chips for the SSIS events the run logged, in the order a run logs them (All, Problems, then PreValidate,
+    PostValidate, PreExecute, Information, Warning, Error, TaskFailed and the rest, each with its count), and the messages in a
+    core grid filling the rest of the page, newest first, with the grid's column filters, sort, Copy and Save Results As.
+    Beside it (below it in a narrow document) the selected message reads whole, with its source, path, source type and code,
+    and its own Copy: the grid shows one line of a message, and real ones run to paragraphs.
+  - **Details**: folder, project, package, times, who ran it and where, beside the parameters the run used in their own grid (a
+    sensitive one's value is never read). Switching reads nothing again; each step keeps its view, chips and task for Back.
+
+  No grid scrolls inside another scroll: the page itself never scrolls, and each grid (and the message, and a long task list)
+  scrolls on its own.
+
+`ssis.execution` reads a run on the SSIS read pool, bounded (the newest 5,000 messages of the chosen events and task, each cut at
+4,000 characters, said when it happens). A purged execution (the catalog's retention cleanup), a server without the catalog,
+and a login that may not open or read it are said in the page, with Back, not thrown. Its live checks
+(`SsisExecutionLiveChecks`, `VARIA_TEST_SQL_SCRATCH=1`) run against the fake catalog; the reference part below lists its
+reads and the event chips.
+
 This page records what is known about the catalog that the SSIS work builds on, how it was found out, and the test
 fixtures that stand in for a catalog where there is none; its last part, generated from `src/shared/ssis/catalog.ts`,
 is the reference for the tree, the reads, the catalog's code tables and the limits. The design is D-ssis (wave 4).
@@ -509,28 +534,48 @@ the selection's hue):
 | `8` | Stopping | warning |
 | `9` | Completed | — |
 
-### Execution messages (`ssis.execution`)
+### Run page reads (`ssis.execution`, `ssis.packageRuns`)
 
-The execution messages document (AG-13) is SSMS's Overview and All Messages reports for one execution: View Messages on an
-execution's row in Integration Services Operations (its menu, the header's Messages, or a double-click) and an SSIS step's
-execution link in a SQL Server Agent job's History open it, one tab per connection and execution ("Execution 48213"); opening it
-again shows that tab and reads it again, and Refresh (F5 in the document) reads it again while the last answer stays on screen.
-`ssis.execution { connectionId, requestId, executionId, groups? }` reads one batch on the SSIS read pool, under the read gates,
-the read prologue and the describe budget (40 s, then `TIMEOUT`): the execution's row in `catalog.executions`, every message of the
-execution counted by type, and the newest messages of the chosen groups from `catalog.event_messages` (newest first, ordered by
-`message_time` and id; at most 5,000, and fewer past the answer's size estimate, which set `truncated`). A message and its execution path keep
-4,000 characters (read one past, so a longer one ends in "…"). The type filter is one bit parameter per group, its types
-from the catalogue, so the text is constant; the counts ignore it. An execution the catalog no longer has (its retention cleanup
-removed it) or the login may not read (the catalog views' row-level security) answers `NOT_FOUND`, a server without SSISDB
-`CATALOG_MISSING`, and a login without access `NO_DB_ACCESS` or `PERMISSION_DENIED`, all as values the document shows. The list is
-the results grid (Copy, Copy with Headers, sort, Save Results As), each row's text as it shows it (line breaks kept).
+The Integration Services document's run page reads one execution with `ssis.execution { connectionId, requestId, executionId, types?, source? }`:
+one batch on the SSIS read pool, under the read gates, the read prologue and the describe budget
+(40 s, then `TIMEOUT`). It holds:
 
-| Group | Label | Message types |
+- the execution's row in `catalog.executions`, and every message of the execution counted by type (the counts ignore the filters);
+- the newest messages of the chosen types, and of one task when `source` names it (`message_source_name`), from `catalog.event_messages`, newest first: at most 5,000, and fewer past the answer's size estimate, which set `truncated`;
+- the task timeline: each of `catalog.executables`, its `catalog.executable_statistics` rows summed (a task in a loop runs more than once), in the order they started, at most 1,000;
+- the parameter values the run used (`catalog.execution_parameter_values`, at most 1,000); a sensitive one's value is never read;
+- this run and the package's 15 runs before it (the run strip), and the package's next run (Newer run);
+- each task's usual duration: the median of its successful runs in the package's last 16 succeeded runs (status 7) before this one.
+
+A message, path, task name or parameter value keeps 4,000 characters (read one past, so a longer one ends in "…"). The type filter is one
+bit parameter per message type, from the catalogue, so the text is constant; Unknown (`-1`) also keeps every type the catalogue does not name.
+An execution the catalog no longer has (its retention cleanup removed it) or the login may not read (the catalog views' row-level security)
+answers `NOT_FOUND`, a server without SSISDB `CATALOG_MISSING`, and a login without access `NO_DB_ACCESS` or `PERMISSION_DENIED`, all as values.
+
+`ssis.packageRuns { connectionId, requestId, folder, project, package }` lists one package's newest runs for the package step (at most 1,000,
+then `truncated`), each with its error (`120`) and warning (`110`) message counts. No runs is an empty list.
+
+The event chips, in the order a run logs them; Problems is `110`, `120`, `130`:
+
+| Chip | Message type | Logged by |
 | --- | --- | --- |
-| `error` | Errors | `120`, `130` |
-| `warning` | Warnings | `110` |
-| `information` | Information | `70` |
-| `other` | Other | every type but `120`, `130`, `110`, `70` |
+| PreValidate | `10` | Pre-validate |
+| PostValidate | `20` | Post-validate |
+| PreExecute | `30` | Pre-execute |
+| Progress | `60` | Progress |
+| Information | `70` | Information |
+| Warning | `110` | Warning |
+| Error | `120` | Error |
+| TaskFailed | `130` | Task failed |
+| PostExecute | `40` | Post-execute |
+| StatusChange | `50` | Status change |
+| VariableValueChanged | `80` | Variable value changed |
+| QueryCancel | `100` | Query cancel |
+| Diagnostic | `90` | Diagnostic |
+| DiagnosticEx | `140` | Diagnostic (extended) |
+| Custom | `200` | Custom |
+| NonDiagnostic | `400` | Non-diagnostic |
+| Unknown | `-1` | Unknown |
 
 ### Code tables
 
@@ -566,25 +611,25 @@ Operation statuses; open: `1`, `2`, `5`, `8`, final: `3`, `4`, `6`, `7`, `9`:
 
 Message types, with the tone a log row takes:
 
-| Code | Meaning | Tone |
-| --- | --- | --- |
-| `-1` | Unknown | info |
-| `10` | Pre-validate | info |
-| `20` | Post-validate | info |
-| `30` | Pre-execute | info |
-| `40` | Post-execute | info |
-| `50` | Status change | info |
-| `60` | Progress | muted |
-| `70` | Information | info |
-| `80` | Variable value changed | info |
-| `90` | Diagnostic | muted |
-| `100` | Query cancel | info |
-| `110` | Warning | warning |
-| `120` | Error | error |
-| `130` | Task failed | error |
-| `140` | Diagnostic (extended) | info |
-| `200` | Custom | info |
-| `400` | Non-diagnostic | info |
+| Code | Meaning | Event | Tone |
+| --- | --- | --- | --- |
+| `-1` | Unknown | Unknown | info |
+| `10` | Pre-validate | PreValidate | info |
+| `20` | Post-validate | PostValidate | info |
+| `30` | Pre-execute | PreExecute | info |
+| `40` | Post-execute | PostExecute | info |
+| `50` | Status change | StatusChange | info |
+| `60` | Progress | Progress | muted |
+| `70` | Information | Information | info |
+| `80` | Variable value changed | VariableValueChanged | info |
+| `90` | Diagnostic | Diagnostic | muted |
+| `100` | Query cancel | QueryCancel | info |
+| `110` | Warning | Warning | warning |
+| `120` | Error | Error | error |
+| `130` | Task failed | TaskFailed | error |
+| `140` | Diagnostic (extended) | DiagnosticEx | info |
+| `200` | Custom | Custom | info |
+| `400` | Non-diagnostic | NonDiagnostic | info |
 
 Message source types:
 
@@ -690,4 +735,8 @@ Environment reference types: `R` Relative, `A` Absolute. Parameter value types: 
 | `operationsCountMs` | 30,000 | How often the 24-hour counts are read, in ms |
 | `operationsRebaseMs` | 300,000 | How often the counts read every operation again instead of from their watermarks, and the window from scratch instead of above its settled id, in ms |
 | `executionMessages` | 5,000 | The newest messages of the chosen types one execution read holds (`ssis.execution`); more set `truncated` |
-| `executionMessageChars` | 4,000 | Characters of one execution message, and of its execution path, an execution read keeps; a longer one ends in "…" |
+| `executionMessageChars` | 4,000 | Characters of one message, execution path, task name or parameter value an execution read keeps; a longer one ends in "…" |
+| `executionTasks` | 1,000 | Executables one execution read holds for the task timeline; more set `tasksTruncated` |
+| `executionParameters` | 1,000 | Parameter values one execution read holds |
+| `executionRuns` | 16 | Runs in the run strip (this one and those before it), and the succeeded runs the usual durations come from |
+| `packageRuns` | 1,000 | Runs the package step lists (`ssis.packageRuns`); more set `truncated` |

@@ -17,7 +17,7 @@ import { bigQueryIndexEstimateRequestSchema, bigQueryIndexEstimateResultSchema, 
 import { languageLookupRequestSchema, languageLookupResultSchema } from '../shared/language-lookup.ts'
 import { scriptRequestSchema } from '../shared/scripting/schema.ts'
 import { actionDescribeSchema, actionExecuteRequestSchema, actionExecuteResultSchema, actionScriptRequestSchema } from '../shared/actions/schema.ts'
-import { ssisCatalogSetupSchema, ssisDescribeSchema, ssisExecuteSchema, ssisExecutionSchema } from '../shared/ssis/schema.ts'
+import { ssisCatalogSetupSchema, ssisDescribeSchema, ssisExecuteSchema, ssisExecutionSchema, ssisPackageRunsSchema } from '../shared/ssis/schema.ts'
 import { activityDetailsRequestSchema, activityKillRequestSchema } from '../shared/activity/schema.ts'
 import { agentProfileResultSchema, agentProfileSchema } from '../shared/agent/profile.ts'
 import { agentHistoryMessageResultSchema, agentHistoryMessageSchema } from '../shared/agent/history.ts'
@@ -95,6 +95,7 @@ export const requestSchemas = {
   'ssis.execute': ssisExecuteSchema,
   'ssis.catalogSetup': ssisCatalogSetupSchema,
   'ssis.execution': ssisExecutionSchema,
+  'ssis.packageRuns': ssisPackageRunsSchema,
   'activity.details': activityDetailsRequestSchema,
   'activity.kill': activityKillRequestSchema,
   'agent.profile': agentProfileSchema,

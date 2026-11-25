@@ -388,8 +388,9 @@ describe('menu state', () => {
       'edit.goToDefinition', 'edit.peekDefinition', 'edit.openPeekTab',
       // The Activity Monitor's header verbs and keys; only opening it is in the menu bar.
       'activity.togglePause', 'activity.refresh', 'activity.setInterval', 'activity.setChartWindow', 'activity.toggleSplit', 'activity.nextPane', 'activity.previousPane', 'activity.sessionDetails', 'activity.killProcess', 'activity.close',
-      // The SSISDB node's Active Operations and reports, and the Operations grid's menu and header; View has All Operations.
-      'ssis.activeOperations', 'ssis.allExecutions', 'ssis.allValidations', 'ssis.stopOperation', 'ssis.refreshOperations', 'ssis.pauseOperations', 'ssis.copyOperations', 'ssis.copyOperationsWithHeaders', 'ssis.viewExecutionMessages', 'ssis.refreshExecution',
+      // The SSISDB node's Active Operations and reports, a package's Executions and Last Execution, the Integration Services document's
+      // list menu, header and history (Back, Forward); View has All Operations.
+      'ssis.activeOperations', 'ssis.allExecutions', 'ssis.allValidations', 'ssis.stopOperation', 'ssis.refreshOperations', 'ssis.pauseOperations', 'ssis.copyOperations', 'ssis.copyOperationsWithHeaders', 'ssis.openExecution', 'ssis.goBack', 'ssis.goForward', 'ssis.packageExecutions', 'ssis.lastRun',
       // Search Objects' header and status bar verbs; Search Objects… itself is in View.
       'explorer.rebuildIndex', 'explorer.stopIndexing',
       // Object Explorer's Group by Schema: its toolbar button and the palette.

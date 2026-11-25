@@ -1,15 +1,17 @@
 // Integration Services Operations against the fake backend's SSIS catalog (tests/fixtures/backend.mjs, VARIA_TEST_BACKEND=workbench):
 // the SSISDB node's Active Operations and reports open one live document per connection; tiles count and filter, the
 // filter bar reads the window again, the grid updates in place with the selection kept on the same operation, Stop Operation
-// asks, stops and shows Stopping then Canceled, F5, Pause and Copy act on it, View Messages opens a failed execution's messages
-// (filtered by type, copied), hiding the tab pauses it and closing ends it,
+// asks, stops and shows Stopping then Canceled, F5, Pause and Copy act on it, Open drills down in place to a failed execution's
+// run page (its messages filtered by SSIS event and task, copied), Back and Forward (keys, buttons, the mouse's back button)
+// step through the history without reading again, the package crumb and the package node's Executions and Last Execution open the
+// package's runs, hiding the tab pauses it and closing ends it,
 // a server with no catalog says so in place of its rows (in view in a short window), and a view the catalog refuses offers
 // Retry, which subscribes again. Screenshots in Dark and Light go to artifacts/.
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { expandExplorerPath, revealExplorerRow } from './fixtures/explorer-tree.mjs'
-import { connectDialogWindow, documentCrumbs, documentFrame, documentTab, documentTabs, gridPart, gridTones, liveGrid, liveGridSelector, localGrid, menuItemNames, statusBar, submitConnect, toolbarButton } from './fixtures/ui.mjs'
+import { connectDialogWindow, documentFrame, documentTab, documentTabs, gridPart, gridTones, liveGrid, liveGridSelector, localGrid, menuItemNames, statusBar, submitConnect, toolbarButton } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -28,6 +30,9 @@ page.on('pageerror', error => failures.push(error.message))
 
 const title = 'Operations'
 const frame = () => documentFrame(page, title)
+/** The document's history bar: Back, Forward and where it is (the steps before the shown one are buttons). */
+const history = () => page.getByRole('navigation', { name: 'Integration Services history', exact: true })
+const crumbs = () => history().getByRole('list', { name: 'Location', exact: true }).getByRole('listitem')
 const grid = () => liveGrid(page, 'Operations')
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 const parts = { grid: liveGridSelector('Operations'), row: gridPart.row, cell: gridPart.cell, tones: gridTones }
@@ -64,7 +69,7 @@ async function selectOperation(id) {
 }
 async function size(width, height) { await app.evaluate(({ BrowserWindow }, dimensions) => { BrowserWindow.getAllWindows()[0].setContentSize(...dimensions) }, [width, height]) }
 /** Whether the header shows the server's crumb whole: its text is not cut. */
-const serverCrumbWhole = () => documentCrumbs(frame()).first().evaluate(item => { const text = item.firstElementChild; return !!text && text.clientWidth > 0 && text.scrollWidth <= text.clientWidth })
+const serverCrumbWhole = () => crumbs().first().evaluate(item => { const text = item.firstElementChild; return !!text && text.clientWidth > 0 && text.scrollWidth <= text.clientWidth })
 async function connect(server) {
   await toolbarButton(page, 'Connect').click()
   const { window: connectWin, dialog } = await connectDialogWindow(app)
@@ -94,7 +99,7 @@ try {
   await fromCatalog('server-a', 'Active Operations')
   await expect(documentTab(page, 'Operations - server-a')).toHaveAttribute('aria-selected', 'true')
   await expect(frame()).toBeVisible()
-  await expect(documentCrumbs(frame())).toHaveText(['server-a', 'SSISDB'])
+  await expect(crumbs()).toHaveText(['server-a', 'SSISDB'])
   await expect(frame()).toContainText('Active Operations')
   await expect(frame()).toContainText(/Live · every 1 s/)
   // Active Operations lists what has not ended: the running execution and the pending validation, newest first.
@@ -132,7 +137,7 @@ try {
   await grid().locator(gridPart.row, { has: page.locator(gridPart.cell, { hasText: /^108$/ }) }).locator(gridPart.cell).nth(2).click({ button: 'right' })
   const operationsMenu = menuNamed('Integration Services Operations')
   await expect(operationsMenu).toBeVisible()
-  expect(await menuItemNames(operationsMenu)).toEqual(['Stop Operation', 'View Messages', 'Copy', 'Copy with Headers', 'Refresh', 'Pause'])
+  expect(await menuItemNames(operationsMenu)).toEqual(['Open', 'Stop Operation', 'Copy', 'Copy with Headers', 'Refresh', 'Pause'])
   await operationsMenu.getByRole('menuitem', { name: 'Stop Operation', exact: true }).click()
   const question = frame().getByRole('alertdialog', { name: 'Stop Operation', exact: true })
   await expect(question).toContainText('Stop Daily.dtsx? It stops after its current work.')
@@ -208,31 +213,101 @@ try {
   await expect.poll(clipboard).toMatch(/^ID\tType\tStatus\tFolder.*\r?\n103\tCreate and start execution\tFailed\tFinance/s)
   console.log('Verbs passed: F5 refreshes, Pause stops and resumes, Copy with Headers copies the selected operation.')
 
-  step = 'messages'
-  // View Messages (AG-13) on a failed execution opens its overview and catalog messages, newest first; the type chips read it
-  // again with only the chosen groups, and the grid copies what is selected.
+  step = 'run page'
+  // Open on a failed execution drills down in place to its run page: the facts, what failed, the task timeline and every
+  // message in a core grid, newest first. The SSIS event chips and a task read it again with only those messages.
   await selectOperation('103')
-  await verb('Messages').click()
-  await expect(documentTab(page, 'Execution 103')).toHaveAttribute('aria-selected', 'true')
+  await verb('Open').click()
   const execution = documentFrame(page, 'Execution 103')
-  await expect(documentCrumbs(execution)).toHaveText(['server-a', 'Integration Services Catalogs', 'SSISDB', 'Finance', 'Loads'])
-  await expect(execution.getByLabel('Overview', { exact: true }).getByRole('definition').first()).toHaveText('103')
-  await expect(execution).toContainText('Failed')
+  await expect(execution).toBeVisible()
+  await expect(documentTab(page, 'Operations - server-a')).toHaveAttribute('aria-selected', 'true')
+  await expect(crumbs()).toHaveText(['server-a', 'SSISDB', 'Finance', 'Loads', 'Daily.dtsx', 'Execution 103'])
+  await expect(history()).toContainText('2 of 2')
+  await expect(execution).toContainText('Failed at Load facts')
   const messages = localGrid(page, 'Messages')
-  await expect(messages).toHaveAttribute('aria-label', /^Messages, 6 rows, 9 columns$/)
+  await expect(messages).toHaveAttribute('aria-label', /^Messages, 6 rows, 7 columns$/)
   expect((await calls('ssis.execution')).at(-1)).toMatchObject({ executionId: 103 })
-  const types = execution.getByRole('group', { name: 'Message types', exact: true })
-  await expect(types.getByRole('button')).toHaveText(['Errors (2)', 'Warnings (1)', 'Information (1)', 'Other (2)'])
-  for (const name of ['Warnings (1)', 'Information (1)', 'Other (2)']) await types.getByRole('button', { name, exact: true }).click()
-  await expect(messages).toHaveAttribute('aria-label', /^Messages, 2 rows, 9 columns$/)
-  expect((await calls('ssis.execution')).at(-1)).toMatchObject({ executionId: 103, groups: ['error'] })
+  const events = execution.getByRole('group', { name: 'Message events', exact: true })
+  await events.getByRole('button', { name: /^Error/ }).click()
+  await expect(messages).toHaveAttribute('aria-label', /^Messages, 1 rows?, 7 columns$/)
+  expect((await calls('ssis.execution')).at(-1)).toMatchObject({ executionId: 103, types: [120] })
   await messages.locator(gridPart.cell).filter({ hasText: /^Violation of PRIMARY KEY/ }).click()
   await page.keyboard.press(`${mod}+c`)
   await expect.poll(clipboard).toMatch(/^Violation of PRIMARY KEY constraint 'PK_Fact'/)
+  // The selected message shows whole beside the grid, with its own Copy.
+  const pane = execution.getByRole('region', { name: 'Message', exact: true })
+  await expect(pane.getByLabel('Message text', { exact: true })).toHaveText("Violation of PRIMARY KEY constraint 'PK_Fact'. Cannot insert duplicate key.")
+  await expect(pane).toContainText('Error')
+  // No grid scrolls inside another vertical scroll: nothing between the grid and the document region scrolls.
+  expect(await messages.evaluate(grid => {
+    const scrolling = []
+    for (let element = grid.parentElement; element && element.getAttribute('role') !== 'region'; element = element.parentElement) {
+      const overflow = getComputedStyle(element).overflowY
+      if ((overflow === 'auto' || overflow === 'scroll') && element.scrollHeight > element.clientHeight) scrolling.push(element.tagName)
+    }
+    return scrolling
+  })).toEqual([])
+  await events.getByRole('button', { name: /^All/ }).click()
+  await execution.getByRole('table', { name: 'Tasks', exact: true }).getByRole('button', { name: 'Load facts' }).click()
+  await expect(events.getByRole('button', { name: 'Task: Load facts' })).toBeVisible()
+  expect((await calls('ssis.execution')).at(-1)).toMatchObject({ executionId: 103, source: 'Load facts' })
+  await expect(messages).toHaveAttribute('aria-label', /^Messages, 4 rows, 7 columns$/)
+  // Details shows the run's facts and the parameters it used in place of the messages, without reading again.
+  const runView = execution.getByRole('tablist', { name: 'Run view', exact: true })
+  const readsBefore = (await calls('ssis.execution')).length
+  await runView.getByRole('tab', { name: 'Details' }).click()
+  await expect(localGrid(page, 'Parameters used')).toHaveAttribute('aria-label', /^Parameters used, 2 rows, /)
+  await expect(execution.getByLabel('Details', { exact: true })).toContainText('SERVER-A')
+  expect((await calls('ssis.execution')).length).toBe(readsBefore)
+  await runView.getByRole('tab', { name: /^Messages/ }).click()
+  await expect(messages).toHaveAttribute('aria-label', /^Messages, 4 rows, 7 columns$/)
   await page.screenshot({ path: 'artifacts/ssis-execution-dark.png' })
-  await page.getByRole('button', { name: 'Close Execution 103', exact: true }).click()
-  await documentTab(page, 'Operations - server-a').click()
-  console.log('Messages passed: View Messages opens the execution overview and messages, the type chips filter them and Copy copies the selection.')
+  console.log('Run page passed: Open drills down to the run, the event chips and a task filter its messages, the selected message shows whole, Details swaps in place, and no grid scrolls inside a scroll.')
+
+  step = 'history'
+  // Back returns to the list as it was, Forward to the run without reading it again; the mouse's back button steps too.
+  const reads = (await calls('ssis.execution')).length
+  await execution.getByRole('region', { name: 'Tasks', exact: true }).click({ position: { x: 2, y: 2 } })
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+BracketLeft' : 'Alt+ArrowLeft')
+  await expect(crumbs()).toHaveText(['server-a', 'SSISDB'])
+  await expect(history()).toContainText('1 of 2')
+  await history().getByRole('button', { name: 'Forward', exact: true }).click()
+  await expect(crumbs()).toHaveText(['server-a', 'SSISDB', 'Finance', 'Loads', 'Daily.dtsx', 'Execution 103'])
+  await expect(events.getByRole('button', { name: 'Task: Load facts' })).toBeVisible()
+  expect((await calls('ssis.execution')).length).toBe(reads)
+  await execution.getByRole('region', { name: 'Tasks', exact: true }).dispatchEvent('mouseup', { button: 3, bubbles: true })
+  await expect(crumbs()).toHaveText(['server-a', 'SSISDB'])
+  await history().getByRole('button', { name: 'Forward', exact: true }).click()
+  // The package crumb opens the package's runs; a run's row opens that run, as a new step after it.
+  await history().getByRole('button', { name: 'Daily.dtsx', exact: true }).click()
+  const daily = documentFrame(page, 'Daily.dtsx')
+  await expect(daily).toBeVisible()
+  await expect(crumbs()).toHaveText(['server-a', 'SSISDB', 'Finance', 'Loads', 'Daily.dtsx'])
+  expect((await calls('ssis.packageRuns')).at(-1)).toMatchObject({ folder: 'Finance', project: 'Loads', package: 'Daily.dtsx' })
+  const runs = localGrid(page, 'Runs')
+  await expect(runs).toHaveAttribute('aria-label', /^Runs, 4 rows, /)
+  await runs.locator(gridPart.cell).filter({ hasText: /^48214$/ }).dblclick()
+  await expect(documentFrame(page, 'Execution 48214')).toBeVisible()
+  await expect(history()).toContainText('4 of 4')
+  console.log('History passed: Back, Forward and the mouse button step without reading again, and the package crumb lists its runs.')
+
+  step = 'package node'
+  // The package node's Executions and Last Execution open the same document at the package and at its newest run.
+  const finance = ['server-a', 'Integration Services Catalogs', 'SSISDB', 'Finance']
+  await expandExplorerPath(page, ...finance, 'Projects', 'Loads', 'Packages')
+  const packageMenu = async item => {
+    await (await revealExplorerRow(page, ...finance, 'Projects', 'Loads', 'Packages', 'Daily.dtsx')).click({ button: 'right', force: true })
+    await menuNamed('Object Explorer').getByRole('menuitem', { name: item, exact: true }).click()
+  }
+  await packageMenu('Executions')
+  await expect(documentFrame(page, 'Daily.dtsx')).toBeVisible()
+  await expect(history()).toContainText('5 of 5')
+  await packageMenu('Last Execution')
+  await expect(documentFrame(page, 'Execution 48214')).toBeVisible()
+  await expect(history()).toContainText('6 of 6')
+  await history().getByRole('button', { name: 'SSISDB', exact: true }).click()
+  await expect(frame()).toBeVisible()
+  console.log('Package node passed: Executions and Last Execution open the package and its newest run in the document.')
 
   step = 'light'
   await page.evaluate(() => window.varia.setThemePreference({ mode: 'light' }))

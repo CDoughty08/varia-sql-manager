@@ -4,11 +4,13 @@ using Varia.Backend.Ssis;
 
 namespace Varia.Backend.Tests;
 
-/// <summary>Live checks of ssis.execution (AG-13) against the fake SSIS catalog (VARIA_TEST_SQL_SCRATCH=1), reached through the
-/// internal SsisOptions.CatalogDatabase: an execution's overview, its messages counted by type, the type filter, newest first,
-/// a message cut at its bound, the row bound with `truncated`, and as values a purged execution (NOT_FOUND), a missing catalog
-/// (CATALOG_MISSING), and a login that may not open or read the catalog (NO_DB_ACCESS, PERMISSION_DENIED). It only reads, and
-/// runs on SQL Server on Linux too (IgnoreLinuxHost). Nothing here claims real SSIS behaviour: the fake's messages are inserted.</summary>
+/// <summary>Live checks of ssis.execution (the run page) and ssis.packageRuns (the package step) against the fake SSIS catalog
+/// (VARIA_TEST_SQL_SCRATCH=1), reached through the internal SsisOptions.CatalogDatabase: an execution's overview, its messages counted
+/// by type, the type and task filters, newest first, the task timeline with its statistics summed and its usual durations, the
+/// parameters used (a sensitive value never read), the run strip and the next run, the package's runs with their counts, a message
+/// cut at its bound, the row bound with `truncated`, and as values a purged execution (NOT_FOUND), a missing catalog
+/// (CATALOG_MISSING), and a login that may not open or read the catalog (NO_DB_ACCESS, PERMISSION_DENIED). It only reads, and runs on
+/// SQL Server on Linux too (IgnoreLinuxHost). Nothing here claims real SSIS behaviour: the fake's rows are inserted.</summary>
 internal static class SsisExecutionLiveChecks
 {
     private static string Literal(string value) => "N'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
@@ -32,12 +34,39 @@ internal static class SsisExecutionLiveChecks
             options.CatalogDatabase = db;
             options.IgnoreLinuxHost = true;
             service.Ssis.Forget(info.Id);
-            Task<SsisExecutionResult> Read(long id, List<string>? groups = null, string? connectionId = null) =>
-                service.Ssis.ExecutionAsync(new(connectionId ?? info.Id, Guid.NewGuid().ToString(), id, groups), CancellationToken.None);
+            Task<SsisExecutionResult> Read(long id, List<int>? types = null, string? connectionId = null, string? source = null) =>
+                service.Ssis.ExecutionAsync(new(connectionId ?? info.Id, Guid.NewGuid().ToString(), id, types, source), CancellationToken.None);
 
             await Exec("EXEC [catalog].[varia_fake_seed] " + Literal(Folder) + ", N'Loads', N'Daily.dtsx';");
-            var id = long.Parse((await Exec("DECLARE @id bigint; EXEC [catalog].[create_execution] @folder_name = " + Literal(Folder) + ", @project_name = N'Loads', @package_name = N'Daily.dtsx', @execution_id = @id OUTPUT;\n"
-                + "EXEC [catalog].[start_execution] @execution_id = @id;\nSELECT @id;")).Scalar!, CultureInfo.InvariantCulture);
+            async Task<long> Create(bool start)
+                => long.Parse((await Exec("DECLARE @id bigint; EXEC [catalog].[create_execution] @folder_name = " + Literal(Folder) + ", @project_name = N'Loads', @package_name = N'Daily.dtsx', @execution_id = @id OUTPUT;\n"
+                    + (start ? "EXEC [catalog].[start_execution] @execution_id = @id;\n" : "") + "SELECT @id;")).Scalar!, CultureInfo.InvariantCulture);
+            // Two earlier runs that succeeded, with Load facts taking 1 s and 3 s: its usual duration is the lower middle, 1 s.
+            var earlier = new List<long>();
+            foreach (var ms in new[] { 1000, 3000 })
+            {
+                var run = await Create(false);
+                earlier.Add(run);
+                await Exec("UPDATE [catalog].[executions] SET status = 7, start_time = DATEADD(hour, -2, SYSDATETIMEOFFSET()), end_time = DATEADD(hour, -1, SYSDATETIMEOFFSET()) WHERE execution_id = " + run + ";\n"
+                    + "INSERT [catalog].[executables] (execution_id, executable_name, package_name, package_path) VALUES (" + run + ", N'Load facts', N'Daily.dtsx', N'\\Daily\\Load facts');\n"
+                    + "INSERT [catalog].[executable_statistics] (execution_id, executable_id, execution_path, start_time, end_time, execution_duration, execution_result) "
+                    + "SELECT " + run + ", x.executable_id, x.package_path, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET(), " + ms + ", 0 FROM [catalog].[executables] AS x WHERE x.execution_id = " + run + ";");
+            }
+            var id = await Create(true);
+            var later = await Create(false);
+            // This run's executables: the package, Load facts twice in a loop (one failed), and Notify, which never ran.
+            await Exec("DECLARE @t datetimeoffset(7) = DATEADD(minute, -10, SYSDATETIMEOFFSET());\n"
+                + "INSERT [catalog].[executables] (execution_id, executable_name, package_name, package_path) VALUES (" + id + ", N'Daily', N'Daily.dtsx', N'\\Daily'), "
+                + "(" + id + ", N'Load facts', N'Daily.dtsx', N'\\Daily\\Load facts'), (" + id + ", N'Notify', N'Daily.dtsx', N'\\Daily\\Notify');\n"
+                + "INSERT [catalog].[executable_statistics] (execution_id, executable_id, execution_path, start_time, end_time, execution_duration, execution_result) "
+                + "SELECT " + id + ", x.executable_id, x.package_path, @t, DATEADD(second, 5, @t), 5000, 1 FROM [catalog].[executables] AS x WHERE x.execution_id = " + id + " AND x.executable_name = N'Daily' UNION ALL "
+                + "SELECT " + id + ", x.executable_id, x.package_path, DATEADD(second, 1, @t), DATEADD(second, 2, @t), 500, 0 FROM [catalog].[executables] AS x WHERE x.execution_id = " + id + " AND x.executable_name = N'Load facts' UNION ALL "
+                + "SELECT " + id + ", x.executable_id, x.package_path, DATEADD(second, 2, @t), DATEADD(second, 4, @t), 3000, 1 FROM [catalog].[executables] AS x WHERE x.execution_id = " + id + " AND x.executable_name = N'Load facts';\n"
+                + "INSERT [catalog].[execution_parameter_values] (execution_id, object_type, parameter_data_type, parameter_name, parameter_value, sensitive, required, value_set, runtime_override) VALUES "
+                + "(" + id + ", 30, N'Int32', N'BatchSize', CAST(5000 AS int), 0, 0, 1, 1);\n"
+                // One row per INSERT: a VALUES list would give both sql_variant values one type.
+                + "INSERT [catalog].[execution_parameter_values] (execution_id, object_type, parameter_data_type, parameter_name, parameter_value, sensitive, required, value_set, runtime_override) VALUES "
+                + "(" + id + ", 20, N'String', N'VariaSecret', CAST(N'hunter2' AS nvarchar(20)), 1, 1, 1, 0);");
             // Messages a second apart, oldest first: progress, information, a warning, then a long error with an event row.
             var longMessage = "Error: " + new string('x', 4100);
             await Exec("DECLARE @t datetimeoffset(7) = DATEADD(minute, -10, SYSDATETIMEOFFSET());\n"
@@ -51,24 +80,45 @@ internal static class SsisExecutionLiveChecks
             check(all.Error is null && model is { Truncated: false } && model.Overview.Id == id && model.Overview.Folder == Folder && model.Overview.Project == "Loads" && model.Overview.Package == "Daily.dtsx"
                 && model.Overview.Status == 2 && model.Overview.Started is not null && model.Overview.Ended is null && model.Overview.Now.Length > 20
                 && model.Counts.Select(item => (item.Type, item.Count)).SequenceEqual([(60, 1L), (70, 1L), (110, 1L), (120, 1L)])
-                && model.Groups.SequenceEqual(["error", "warning", "information", "other"]) && model.Messages.Select(message => message.Type).SequenceEqual([120, 110, 70, 60]),
+                && model.Types is null && model.Source is null && model.Messages.Select(message => message.Type).SequenceEqual([120, 110, 70, 60]),
                 "an execution read answers its overview (folder, project, package, Running, started, the server's clock), every message counted by type, and its messages newest first: " + Dump(all.Error) + " " + Dump(model?.Counts));
             var error = model?.Messages.FirstOrDefault();
             check(error is { Package: "Daily.dtsx", Event: "OnError", Source: "Load facts", Path: "\\Daily\\Load facts", Code: -1071636471, SourceType: 40 } && error.Message.Length == 4000 && error.Message.EndsWith('…')
                 && model!.Messages[1] is { Package: null, Event: null, Message: "Truncation may occur" },
                 "an error message carries its event columns, and one past 4,000 characters is cut with an ellipsis; an operation-only message has none: " + error?.Message.Length);
 
-            var errors = await Read(id, ["error"]);
-            var quiet = await Read(id, ["warning", "other"]);
-            check(errors.Model is { Groups: ["error"] } && errors.Model.Messages.Select(message => message.Type).SequenceEqual([120]) && errors.Model.Counts.Count == 4
-                && quiet.Model is { Groups: ["warning", "other"] } && quiet.Model.Messages.Select(message => message.Type).SequenceEqual([110, 60]),
-                "the type filter keeps the chosen groups' messages, Other every type the others do not name, while the counts cover every message");
+            var errors = await Read(id, [120]);
+            var quiet = await Read(id, [110, 60]);
+            var task = await Read(id, source: "Load facts");
+            check(errors.Model is { Types: [120] } && errors.Model.Messages.Select(message => message.Type).SequenceEqual([120]) && errors.Model.Counts.Count == 4
+                && quiet.Model is { Types: [60, 110] } && quiet.Model.Messages.Select(message => message.Type).SequenceEqual([110, 60])
+                && task.Model is { Source: "Load facts" } && task.Model.Messages.Select(message => message.Type).SequenceEqual([120]) && task.Model.Counts.Count == 4,
+                "the type filter keeps the chosen message types and the task filter one task's messages, while the counts cover every message");
+
+            var tasks = model!.Tasks;
+            check(tasks.Select(item => item.Name).SequenceEqual(["Daily", "Load facts", "Notify"]) && !model.TasksTruncated
+                && tasks[1] is { Path: "\\Daily\\Load facts", Runs: 2, DurationMs: 3500, Failed: true, UsualMs: 1000 } && tasks[1].Started is not null && tasks[1].Ended is not null
+                && tasks[2] is { Started: null, Ended: null, DurationMs: null, Runs: 0, Failed: false, UsualMs: null } && tasks[0] is { DurationMs: 5000, Failed: true },
+                "the task timeline lists the executables in the order they started (one that never ran last), each with its statistics summed and its usual duration: " + Dump(tasks));
+            var batch = model.Parameters.SingleOrDefault(item => item.Name == "BatchSize");
+            var secret = model.Parameters.SingleOrDefault(item => item.Name == "VariaSecret");
+            check(batch is { ObjectType: 30, DataType: "Int32", Value: "5000", Sensitive: false, ValueSet: true, RuntimeOverride: true }
+                && secret is { ObjectType: 20, Value: null, Sensitive: true, Required: true } && !Dump(model).Contains("hunter2", StringComparison.Ordinal),
+                "the parameters used carry each value as text, and a sensitive parameter's value is never read: " + Dump(model.Parameters));
+            check(model.Runs.Select(run => run.Id).SequenceEqual([id, earlier[1], earlier[0]]) && model.Runs[1].Status == 7 && model.Runs[1].Started is not null && model.Newer == later,
+                "the run strip holds this run and the package's runs before it, newest first, and the package's next run: " + Dump(model.Runs) + " " + model.Newer);
+            var packageRuns = await service.Ssis.PackageRunsAsync(new(info.Id, Guid.NewGuid().ToString(), Folder, "Loads", "Daily.dtsx"), CancellationToken.None);
+            var none = await service.Ssis.PackageRunsAsync(new(info.Id, Guid.NewGuid().ToString(), Folder, "Loads", "Missing.dtsx"), CancellationToken.None);
+            check(packageRuns.Error is null && packageRuns.Model is { Truncated: false } && packageRuns.Model.Runs.Select(run => run.Id).SequenceEqual([later, id, earlier[1], earlier[0]])
+                && packageRuns.Model.Runs[1] is { Errors: 1, Warnings: 1 } && packageRuns.Model.Runs[0] is { Errors: 0, Warnings: 0 } && packageRuns.Model.Runs[1].Caller is not null
+                && none.Model is { Runs.Count: 0 } && none.Error is null,
+                "the package step lists the package's runs newest first with their error and warning counts, and a package without runs is an empty list: " + Dump(packageRuns.Error) + Dump(packageRuns.Model?.Runs));
 
             // Past the bound: the newest 5,000 of 5,004 messages, truncated, the oldest left out.
             await Exec("INSERT [catalog].[operation_messages] (operation_id, message_time, message_type, message_source_type, message) "
                 + "SELECT TOP (5000) " + id + ", SYSDATETIMEOFFSET(), 70, 40, N'bulk' FROM sys.all_columns AS a CROSS JOIN sys.all_columns AS b;");
             var many = await Read(id);
-            var after = await Read(id, ["warning"]);
+            var after = await Read(id, [110]);
             check(many.Model is { Truncated: true } && many.Model.Messages.Count == 5000 && many.Model.Messages.All(message => message.Message == "bulk")
                 && many.Model.Counts.Sum(item => item.Count) == 5004 && after.Model is { Truncated: false } && after.Model.Messages.Count == 1,
                 "a read holds the newest 5,000 messages and says it is truncated, and the next read on the pool works");

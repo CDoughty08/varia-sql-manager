@@ -21,13 +21,13 @@ internal sealed class SsisCatalog
     private sealed record ViewJson(string View, string Kind);
     private sealed record ActionJson(string Verb, string Title, List<string> Steps, List<string> Procedures, bool Revision, bool WindowsAuthOnBox, string Scope);
     private sealed record KindJson(string Kind, string Label, List<int> Types);
-    private sealed record GroupJson(string Group, string Label, List<int> Types);
+    private sealed record RunCountJson(List<int> Errors, List<int> Warnings);
     private sealed record BackupFileJson(int Since, string File);
     private sealed record CreateJson(List<BackupFileJson> BackupFiles, string AssemblyFile, string CleanupStep);
     private sealed record CatalogJson(int Version, List<ActionJson> Actions, string CatalogDatabase, CreateJson CreateCatalog, List<ErrorJson> Errors, List<string> Features, List<int> FinalStatuses,
-        Dictionary<string, long> Limits, List<CodeJson> LoggingLevels, List<GroupJson> MessageGroups, List<CodeJson> MessageTypes, List<int> OpenStatuses, List<KindJson> OperationKinds, List<CodeJson> OperationStatuses,
+        Dictionary<string, long> Limits, List<CodeJson> LoggingLevels, List<CodeJson> MessageTypes, List<int> OpenStatuses, List<KindJson> OperationKinds, List<CodeJson> OperationStatuses,
         List<OperationTile> OperationTiles, List<CodeJson> OperationTypes,
-        List<CodeJson> ParameterObjectTypes, List<int> StoppableOperationTypes, List<ViewJson> Views);
+        List<CodeJson> ParameterObjectTypes, RunCountJson RunCountTypes, List<int> StoppableOperationTypes, int SucceededStatus, List<ViewJson> Views);
 
     private readonly Dictionary<string, bool> errors;
     private readonly Dictionary<string, string> views;
@@ -57,7 +57,9 @@ internal sealed class SsisCatalog
         OperationTypes = json.OperationTypes.ToDictionary(row => row.Code, row => row.Label);
         ParameterObjectTypes = json.ParameterObjectTypes.ToDictionary(row => row.Code, row => row.Label);
         MessageTypes = json.MessageTypes.ToDictionary(row => row.Code, row => row.Label);
-        MessageGroups = json.MessageGroups.Select(row => (row.Group, (IReadOnlyList<int>)row.Types)).ToList();
+        ErrorMessageTypes = json.RunCountTypes.Errors;
+        WarningMessageTypes = json.RunCountTypes.Warnings;
+        SucceededStatus = json.SucceededStatus;
     }
 
     public static SsisCatalog Current => Embedded.Value;
@@ -85,9 +87,11 @@ internal sealed class SsisCatalog
     public IReadOnlyDictionary<int, string> OperationTypes { get; }
     public IReadOnlyDictionary<int, string> ParameterObjectTypes { get; }
     public IReadOnlyDictionary<int, string> MessageTypes { get; }
-    /// <summary>The execution messages view's type filter, in order: each group's message types; the one with none ("other") holds
-    /// every type the others do not name.</summary>
-    public IReadOnlyList<(string Group, IReadOnlyList<int> Types)> MessageGroups { get; }
+    /// <summary>The message types the package step counts as a run's errors, and as its warnings.</summary>
+    public IReadOnlyList<int> ErrorMessageTypes { get; }
+    public IReadOnlyList<int> WarningMessageTypes { get; }
+    /// <summary>catalog.executions.status of a succeeded run: the usual durations' runs.</summary>
+    public int SucceededStatus { get; }
     public IEnumerable<string> Views => views.Keys;
     /// <summary>The verbs ssis.execute runs, in the catalogue's order.</summary>
     public IEnumerable<SsisActionSpec> Actions => actions.Values;

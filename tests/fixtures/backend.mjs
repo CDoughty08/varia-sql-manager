@@ -2305,32 +2305,54 @@ async function ssisDescribe(id, { view, target }) {
   return respond(id, { model: view === 'project' && await controlled(join('ssis', 'many')) ? ssisMany(model) : model, revision: 'a'.repeat(64), elapsedMs: 1 })
 }
 
-/** ssis.execution (AG-13): one failed execution's overview and messages, newest first, filtered by the requested groups; the
- * ssis/missing control answers NOT_FOUND as a purged execution does. */
+/** ssis.execution: one failed execution's run page (its overview, messages newest first filtered by the requested message types and
+ * task, its tasks, the parameters used, the package's recent runs and the next one); the ssis/missing control answers NOT_FOUND as
+ * a purged execution does. ssis.packageRuns: Daily.dtsx's runs, newest first; another package has none. */
 const ssisExecutionMessages = [
-  { id: 6, time: '2026-11-15T02:31:04.250Z', type: 120, sourceType: 40, source: 'Load facts', package: 'Load.dtsx', event: 'OnError', path: '\\Load\\Load facts', code: -1071636471, message: 'Violation of PRIMARY KEY constraint \'PK_Fact\'. Cannot insert duplicate key.' },
-  { id: 5, time: '2026-11-15T02:31:04.100Z', type: 130, sourceType: 40, source: 'Load facts', package: 'Load.dtsx', event: 'OnTaskFailed', path: '\\Load\\Load facts', code: 0, message: 'Task Load facts failed.' },
-  { id: 4, time: '2026-11-15T02:31:03.000Z', type: 110, sourceType: 60, source: 'Load facts', package: 'Load.dtsx', event: 'OnWarning', path: '\\Load\\Load facts', code: -2147038388, message: 'Truncation may occur on column Name.' },
-  { id: 3, time: '2026-11-15T02:31:01.500Z', type: 70, sourceType: 40, source: 'Load facts', package: 'Load.dtsx', event: 'OnInformation', path: '\\Load\\Load facts', code: 1073450998, message: 'Rows read: 12.' },
-  { id: 2, time: '2026-11-15T02:31:00.750Z', type: 40, sourceType: 30, source: 'Load', package: 'Load.dtsx', event: 'OnPreExecute', path: '\\Load', code: null, message: 'Load started.' },
-  { id: 1, time: '2026-11-15T02:31:00.500Z', type: 30, sourceType: 10, message: 'Operation started.' }
+  { id: 6, time: '2026-11-15T02:31:04.250Z', type: 120, sourceType: 40, source: 'Load facts', package: 'Daily.dtsx', event: 'OnError', path: '\\Load\\Load facts', code: -1071636471, message: 'Violation of PRIMARY KEY constraint \'PK_Fact\'. Cannot insert duplicate key.' },
+  { id: 5, time: '2026-11-15T02:31:04.100Z', type: 130, sourceType: 40, source: 'Load facts', package: 'Daily.dtsx', event: 'OnTaskFailed', path: '\\Load\\Load facts', code: 0, message: 'Task Load facts failed.' },
+  { id: 4, time: '2026-11-15T02:31:03.000Z', type: 110, sourceType: 60, source: 'Load facts', package: 'Daily.dtsx', event: 'OnWarning', path: '\\Load\\Load facts', code: -2147038388, message: 'Load facts:Warning: Truncation may occur due to inserting data from data flow column "Name" with a length of 400 to database column "Name" with a length of 100.\nThe destination "OLE DB Destination" writes to [dbo].[FactLoad]; rows whose Name is longer than 100 characters fail the component, or are cut when its error output is set to truncate. Widen the column, or add a Derived Column that trims the value before the destination.' },
+  { id: 3, time: '2026-11-15T02:31:01.500Z', type: 70, sourceType: 40, source: 'Load facts', package: 'Daily.dtsx', event: 'OnInformation', path: '\\Load\\Load facts', code: 1073450998, message: 'Rows read: 12.' },
+  { id: 2, time: '2026-11-15T02:31:00.750Z', type: 30, sourceType: 30, source: 'Load', package: 'Daily.dtsx', event: 'OnPreExecute', path: '\\Load', code: null, message: 'Load started.' },
+  { id: 1, time: '2026-11-15T02:31:00.500Z', type: 10, sourceType: 30, source: 'Load', package: 'Daily.dtsx', event: 'OnPreValidate', path: '\\Load', code: null, message: 'Load: Validation has started.' }
 ]
-const ssisExecutionGroups = { error: [120, 130], warning: [110], information: [70] }
+const ssisPackageRuns = [
+  { id: 48214, status: 7, created: '2026-11-16T02:30:58.000Z', started: '2026-11-16T02:31:00.000Z', ended: '2026-11-16T02:31:04.000Z', caller: 'CONTOSO\\agent', errors: 0, warnings: 0 },
+  { id: 48213, status: 4, created: '2026-11-15T02:30:58.000Z', started: '2026-11-15T02:31:00.000Z', ended: '2026-11-15T02:31:05.000Z', caller: 'CONTOSO\\agent', errors: 1, warnings: 1 },
+  { id: 103, status: 4, created: '2026-11-14T02:30:58.000Z', started: '2026-11-14T02:31:00.000Z', ended: '2026-11-14T02:31:06.000Z', caller: 'CONTOSO\\agent', errors: 1, warnings: 1 },
+  { id: 102, status: 7, created: '2026-11-13T02:30:58.000Z', started: '2026-11-13T02:31:00.000Z', ended: '2026-11-13T02:31:03.000Z', caller: 'CONTOSO\\agent', errors: 0, warnings: 0 }
+]
 
-async function ssisExecution(id, { executionId, groups }) {
+async function ssisExecution(id, { executionId, types, source }) {
   if (await controlled(join('ssis', 'missing'))) return respond(id, { elapsedMs: 1, error: { code: 'NOT_FOUND', message: `Execution ${executionId} is not in the SSIS Catalog: the catalog's retention cleanup may have removed it, or this login may not read it.`, retryable: false } })
-  const chosen = groups ?? ['error', 'warning', 'information', 'other']
-  const named = Object.values(ssisExecutionGroups).flat()
-  const keep = type => chosen.some(group => group === 'other' ? !named.includes(type) : ssisExecutionGroups[group].includes(type))
+  const keep = message => (!types || types.includes(message.type)) && (!source || message.source === source)
   const counts = [...new Set(ssisExecutionMessages.map(message => message.type))].sort((a, b) => a - b).map(type => ({ type, count: ssisExecutionMessages.filter(message => message.type === type).length }))
+  const run = ssisPackageRuns.find(item => item.id === executionId)
+  const runs = [run ?? { id: executionId, status: 4, started: '2026-11-15T02:31:00.000Z', ended: '2026-11-15T02:31:05.000Z' }, ...ssisPackageRuns.filter(item => item.id < executionId)].slice(0, 16)
+  const newer = ssisPackageRuns.filter(item => item.id > executionId).at(-1)?.id
   return respond(id, {
     model: {
-      overview: { id: executionId, folder: 'Finance', project: 'Loads', package: 'Load.dtsx', executedAs: 'CONTOSO\\agent', caller: 'CONTOSO\\agent', use32bit: false, status: 4,
+      overview: { id: executionId, folder: 'Finance', project: 'Loads', package: 'Daily.dtsx', executedAs: 'CONTOSO\\agent', caller: 'CONTOSO\\agent', use32bit: false, status: run?.status ?? 4,
         created: '2026-11-15T02:30:58.000Z', started: '2026-11-15T02:31:00.000Z', ended: '2026-11-15T02:31:05.000Z', server: 'SERVER-A', machine: 'SERVER-A', now: '2026-11-15T08:00:00.000Z' },
-      counts, groups: chosen, messages: ssisExecutionMessages.filter(message => keep(message.type)), truncated: false
+      counts, ...types ? { types } : {}, ...source ? { source } : {}, messages: ssisExecutionMessages.filter(keep), truncated: false,
+      tasks: [
+        { path: '\\Load', name: 'Load', started: '2026-11-15T02:31:00.000Z', ended: '2026-11-15T02:31:05.000Z', durationMs: 5000, runs: 1, failed: true, usualMs: 3500 },
+        { path: '\\Load\\Load facts', name: 'Load facts', started: '2026-11-15T02:31:01.000Z', ended: '2026-11-15T02:31:04.300Z', durationMs: 3300, runs: 1, failed: true, usualMs: 2000 },
+        { path: '\\Load\\Notify', name: 'Notify', runs: 0, failed: false }
+      ],
+      tasksTruncated: false,
+      parameters: [
+        { objectType: 30, name: 'BatchSize', dataType: 'Int32', value: '5000', sensitive: false, required: false, valueSet: true, runtimeOverride: true },
+        { objectType: 20, name: 'Password', dataType: 'String', sensitive: true, required: true, valueSet: true, runtimeOverride: false }
+      ],
+      runs, ...newer !== undefined ? { newer } : {}
     },
     elapsedMs: 1
   })
+}
+function ssisPackageRunsOf(id, params) {
+  const runs = params.package === 'Daily.dtsx' ? ssisPackageRuns : []
+  return respond(id, { model: { folder: params.folder, project: params.project, package: params.package, runs, truncated: false, now: '2026-11-16T08:00:00.000Z' }, elapsedMs: 1 })
 }
 
 /** A sign-in waiting for the browser: the request ends only when a CANCEL frame names it (logged to cancels.jsonl). */
@@ -2782,6 +2804,7 @@ GO
     case 'explorer.search': return respond(id, searchFixture(params))
     case 'ssis.describe': return ssisDescribe(id, params)
     case 'ssis.execution': return ssisExecution(id, params)
+    case 'ssis.packageRuns': return ssisPackageRunsOf(id, params)
     case 'activity.details': return respond(id, activityDetails(params))
     case 'activity.kill': return respond(id, activityKill(params))
     // SQL Server Agent's capability read: a sysadmin on Windows with Agent XPs on, in no Agent role (sysadmin is dbo in msdb).
