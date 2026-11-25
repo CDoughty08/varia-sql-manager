@@ -902,7 +902,9 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .query-status-state .codicon { font-size: var(--varia-glyph-sm); }
 .query-status-segments { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; margin-left: auto; }
 .query-status-segment { flex-shrink: 0; }
-.query-status-segment + .query-status-segment::before { content: '|'; margin: 0 10px; opacity: 0.55; }
+.query-status-bar .query-status-segment + .query-status-segment::before { content: '|'; margin: 0 10px; opacity: 0.55; }
+.query-status .query-status-segment + .query-status-segment::before { content: '·'; margin: 0 6px; opacity: 0.55; }
+.query-status[data-compact="true"] .query-status-server { font-weight: 600; }
 /* Short of room, the server gives way first, then the login, then the database (each whole in the bar's tooltip); the
    time and rows keep their size. The weights make the shrinking all but sequential. */
 .query-status-server, .query-status-login, .query-status-database { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -1813,14 +1815,16 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .client-statistics-tools { display: flex; align-items: center; flex-wrap: wrap; gap: var(--varia-space-3); }
 .client-statistics-tools label { display: flex; align-items: center; gap: var(--varia-space-2); }
 .client-statistics p { color: var(--varia-descriptionForeground); margin: var(--varia-space-2) 0; }
-.memory-status { margin-left: var(--varia-space-2); }
+.memory-status { display: flex; align-items: center; margin-left: var(--varia-space-2); }
+.memory-status::before { content: ''; width: 1px; height: 12px; margin-right: var(--varia-space-2); background: var(--varia-statusBar-separatorForeground); opacity: 0.35; flex-shrink: 0; }
 /* Discard results after execution (DiscardStatus): shown only while it is on, as plain as the memory control beside it. */
 .discard-status { display: flex; margin-left: var(--varia-space-2); }
 .discard-status-button { display: flex; align-items: center; gap: var(--varia-space-1); padding: 0 var(--varia-space-2); color: inherit; font-size: inherit; border-color: transparent; background: transparent; cursor: pointer; }
 .discard-status-button:focus-visible { outline-offset: -2px; }
 .discard-status-button .codicon { font-size: var(--varia-glyph-sm); }
-.memory-indicator { anchor-name: --status-memory; display: flex; align-items: center; gap: var(--varia-space-1); padding: 0 var(--varia-space-2); color: inherit; font-size: inherit; }
+.memory-indicator { anchor-name: --status-memory; display: flex; align-items: center; gap: var(--varia-space-1); height: 20px; padding: 0 var(--varia-space-2); border: 0; border-radius: var(--varia-radius-sm); color: inherit; font-size: inherit; font-variant-numeric: tabular-nums; }
 .memory-indicator:focus-visible { outline-offset: -2px; }
+.memory-indicator-label { font-variant-numeric: tabular-nums; }
 .memory-status > .memory-indicator[aria-expanded="true"] { background: var(--varia-menu-selectionBackground); color: var(--varia-menu-selectionForeground); }
 .memory-indicator .codicon { font-size: var(--varia-glyph-sm); }
 .memory-status > .memory-indicator[data-level="warning"] { background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); }
@@ -1831,7 +1835,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .memory-ring[data-feature="results"] { color: var(--varia-charts-purple); }
 .memory-ring[data-level="unavailable"] { color: var(--varia-disabledForeground); }
 /* Over the dock and below notifications, quick input, dialogs, and menus. */
-.memory-details { position: fixed; z-index: 13000; position-anchor: --status-memory; inset: auto max(8px, anchor(right)) anchor(top) auto; margin: 0; width: min(384px, calc(100% - 16px)); max-height: calc(100vh - var(--varia-status) - 8px); overflow: auto; padding: var(--varia-space-3); background: var(--varia-menu-background); color: var(--varia-menu-foreground); border: 1px solid var(--varia-widget-border); border-radius: var(--varia-radius-lg); box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow); font-size: var(--varia-size-sm); font-variant-numeric: tabular-nums; line-height: var(--varia-line-sm); white-space: normal; }
+.memory-details { position: fixed; z-index: 13000; position-anchor: --status-memory; inset: auto max(8px, anchor(right)) anchor(top) auto; margin: 0; width: min(416px, calc(100% - 16px)); max-height: calc(100vh - var(--varia-status) - 8px); overflow: auto; padding: var(--varia-space-3); background: var(--varia-menu-background); color: var(--varia-menu-foreground); border: 1px solid var(--varia-widget-border); border-radius: var(--varia-radius-lg); box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow); font-size: var(--varia-size-sm); font-variant-numeric: tabular-nums; line-height: var(--varia-line-sm); white-space: normal; }
 .memory-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--varia-space-2); padding-bottom: var(--varia-space-2); }
 .memory-heading h2, .memory-row h3 { margin: 0; font-size: inherit; font-weight: 600; }
 .memory-heading span, .memory-level, .memory-remaining, .memory-row p { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
@@ -1868,9 +1872,12 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .memory-tile-value small { margin-left: var(--varia-space-1); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); font-weight: 400; }
 .memory-tile[data-tone="saved"] .memory-tile-value { color: var(--varia-successForeground); }
 .memory-group { display: grid; gap: var(--varia-space-1); }
-.memory-group h4 { display: flex; justify-content: space-between; margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+.memory-group h4 { display: flex; align-items: center; justify-content: space-between; margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
 .memory-group-aside { display: flex; align-items: center; gap: var(--varia-space-0); font-weight: 400; letter-spacing: 0; text-transform: none; }
 .memory-group-aside > .codicon { font-size: var(--varia-glyph-sm); }
+.memory-close-all { margin-left: var(--varia-space-2); padding: 0 var(--varia-space-1); border: 0; border-radius: var(--varia-radius-sm); background: transparent; color: var(--varia-statusPill-runningForeground); font-size: var(--varia-size-xs); font-weight: 600; line-height: inherit; letter-spacing: 0; text-transform: none; cursor: pointer; }
+.memory-close-all:hover { background: var(--varia-toolbar-hoverBackground); transition: background var(--varia-motion-fast) var(--varia-motion-ease); }
+.memory-close-all:focus-visible { outline-offset: -1px; }
 .memory-bar-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--varia-space-0) var(--varia-space-2); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
 .memory-figure { text-align: end; white-space: nowrap; }
 .memory-bar { grid-column: 1 / -1; display: flex; height: 8px; overflow: hidden; border-radius: var(--varia-radius-pill); background: var(--varia-badge-background); }
@@ -1886,9 +1893,11 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .memory-legend { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--varia-space-1) var(--varia-space-4); margin: var(--varia-space-1) 0 0; padding: 0; list-style: none; font-size: var(--varia-size-xs); }
 .memory-legend li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--varia-space-2); }
 .memory-swatch { width: 8px; height: 8px; border-radius: 2px; }
-/* One grid for every row, so names, bars, sizes and states line up down the list. */
-.memory-biggest { display: grid; grid-template-columns: minmax(0, 1fr) 28px auto auto auto; align-items: center; gap: var(--varia-space-2); margin: 0; padding: 0; list-style: none; }
-.memory-biggest li { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; }
+/* One grid for every row, so names, bars, sizes, states and quick-free actions line up down the list. */
+.memory-biggest { display: grid; grid-template-columns: minmax(0, 1fr) 28px auto auto auto; align-items: center; gap: var(--varia-space-1) var(--varia-space-2); margin: 0; padding: 0; list-style: none; }
+.memory-biggest.memory-biggest-actionable { grid-template-columns: minmax(0, 1fr) 28px auto auto auto 20px; }
+.memory-biggest li { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; padding: var(--varia-space-0) var(--varia-space-1); margin: 0 calc(-1 * var(--varia-space-1)); border-radius: var(--varia-radius-sm); }
+.memory-biggest li:hover, .memory-biggest li:focus-within { background: var(--varia-toolbar-hoverBackground); }
 .memory-biggest-name { display: flex; min-width: 0; white-space: nowrap; }
 .memory-biggest-name > span { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
 .memory-biggest-name > .memory-biggest-tab { flex: 0 1 auto; max-width: 42%; }
@@ -1902,6 +1911,12 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .memory-state[data-state="raw"] { background: var(--varia-memoryPanel-rawBackground); color: var(--varia-memoryPanel-rawForeground); }
 .memory-state:is([data-state="packed"], [data-state="partial"]) { background: var(--varia-memoryPanel-packedBackground); color: var(--varia-memoryPanel-packedForeground); }
 .memory-state[data-state="unpacking"] { background: var(--varia-statusPill-warningBackground); color: var(--varia-statusPill-warningForeground); }
+.memory-biggest-close { display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: var(--varia-radius-sm); background: transparent; color: var(--varia-descriptionForeground); opacity: 0; cursor: pointer; }
+.memory-biggest li:hover .memory-biggest-close, .memory-biggest li:focus-within .memory-biggest-close, .memory-biggest-close:focus-visible { opacity: 1; }
+.memory-biggest-close:hover:not(:disabled) { background: var(--varia-menu-selectionBackground); color: var(--varia-menu-selectionForeground); transition: background var(--varia-motion-fast) var(--varia-motion-ease); }
+.memory-biggest-close:disabled { opacity: 0.35; cursor: default; }
+.memory-biggest-close:focus-visible { outline-offset: -1px; }
+.memory-biggest-close-spacer { width: 20px; height: 20px; }
 /* The Search Indexer's part follows the results' under its own rule, in the same tiles, bars and counters. */
 .memory-index { display: grid; gap: var(--varia-space-3); padding-top: var(--varia-space-3); border-top: 1px solid var(--varia-menu-separatorBackground); }
 .memory-index > h4 { display: flex; justify-content: space-between; margin: 0; font-size: var(--varia-size-xs); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
@@ -1938,24 +1953,32 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .layout-notice { color: var(--varia-successForeground); font-size: var(--varia-size-sm); }
 
 /* The bar shares the chrome fill with Object Explorer, so its own top line keeps it apart; a connection color replaces it. */
-.status-bar { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; height: var(--varia-status); overflow: hidden; background: var(--varia-statusBar-background); color: var(--varia-statusBar-foreground); border-top: 1px solid var(--varia-statusBar-border); font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; line-height: 16px; padding: 0 13px; }
+.status-bar { position: relative; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; height: var(--varia-status); overflow: hidden; background: var(--varia-statusBar-background); color: var(--varia-statusBar-foreground); border-top: 1px solid var(--varia-statusBar-border); font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; line-height: 16px; padding: 0 13px; }
 .status-bar[data-state="executing"] { background: var(--varia-statusBar-executingBackground); color: var(--varia-statusBar-executingForeground); }
 .status-bar[data-state="disconnected"] { background: var(--varia-statusBar-disconnectedBackground); color: var(--varia-statusBar-disconnectedForeground); }
 .status-bar[data-state="error"] { background: var(--varia-statusBar-errorBackground); color: var(--varia-statusBar-errorForeground); }
-.status-bar > .backend-status { display: flex; align-items: center; gap: 8px; }
+.status-bar > .backend-status { position: relative; display: flex; align-items: center; gap: 8px; }
+.status-bar > .backend-status.compact { align-self: stretch; gap: 0; padding: 0 2px; }
+.status-bar > .status-environment + .backend-status.compact { margin-left: 8px; }
 /* The outer segments keep their size. Scripting, in the middle, takes the space left over down to a floor that keeps
    Cancel and the start of its text; past that the server and database give way. The bar itself never widens the page.
    The segment clips what still does not fit, and its padding and full height leave room for a focus ring. */
 .status-bar > :not(.status-scripting) { flex-shrink: 0; white-space: nowrap; }
 /* The active query's facts, after the backend's state: its run, then server, login (SPID) and database, time and rows. */
-.status-bar > .query-status { display: flex; align-items: center; gap: 12px; flex-shrink: 1; min-width: 0; overflow: hidden; margin-left: 16px; }
+.status-bar > .query-status { position: relative; display: flex; align-items: center; gap: 12px; flex-shrink: 1; min-width: 0; overflow: hidden; margin-left: 16px; }
+.status-bar > .backend-status.compact + .query-status { margin-left: 6px; gap: 0; }
 .query-status .query-status-segments { margin-left: 0; }
 /* The editor's facts are short and keep their size: the query's facts give way (and ellipsize) first. */
-.status-bar > .editor-status { display: flex; align-items: center; gap: 12px; flex-shrink: 0; margin: 0 12px; }
-.editor-status-position { display: flex; gap: 10px; }
-.editor-status-action { padding: 0 var(--varia-space-0); font-size: inherit; line-height: inherit; color: inherit; border: 0; }
-.editor-status > * + *::before { content: '|'; margin-right: 12px; color: var(--varia-statusBar-separatorForeground); }
+.status-bar > .editor-status { position: relative; display: flex; align-items: center; gap: var(--varia-space-2); flex-shrink: 0; margin: 0 var(--varia-space-2); }
+.editor-status-group { display: flex; align-items: center; gap: var(--varia-space-2); }
+.editor-status-group + .editor-status-group::before { content: ''; width: 1px; height: 12px; background: var(--varia-statusBar-separatorForeground); opacity: 0.35; flex-shrink: 0; }
+.editor-status-position { display: flex; gap: 8px; }
+.editor-status-action { display: inline-flex; align-items: center; gap: var(--varia-space-1); height: 20px; padding: 0 var(--varia-space-1); border-radius: var(--varia-radius-sm); font-size: inherit; line-height: inherit; color: inherit; border: 0; }
+.editor-status-action:focus-visible { outline-offset: -2px; }
+.editor-status-file { gap: 0; }
+.editor-status-file > * + *::before { content: '·'; margin: 0 6px; opacity: 0.55; }
 .editor-status-readonly { display: flex; align-items: center; gap: 4px; }
+.editor-status-sql[data-tone="muted"] { opacity: 0.85; }
 .editor-status .codicon { font-size: var(--varia-glyph-sm); }
 .status-scripting { display: flex; align-items: center; align-self: stretch; justify-content: safe center; gap: 8px; flex: 1 1 0; min-width: 0; overflow: hidden; margin: 0 8px; padding: 0 4px; }
 .status-scripting:not(:empty) { min-width: 20em; }
@@ -2675,6 +2698,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 /* Apart from the backend's state, which it does not describe: beside it, outside its tooltip. */
 .status-environment { display: flex; align-items: center; min-width: 0; padding-left: 8px; border-left: 1px solid var(--varia-statusBar-border); }
 .status-bar > .status-environment { margin-left: 8px; }
+.status-bar > .status-environment:first-child { margin-left: 0; padding-left: 0; border-left: 0; }
 .environment-preview { display: inline-flex; align-items: center; gap: var(--varia-space-1); min-width: 0; max-width: 100%; white-space: nowrap; }
 .environment-preview .environment-tag { flex: 0 1 auto; }
 .connection-choice-title { display: flex; align-items: center; min-width: 0; }
