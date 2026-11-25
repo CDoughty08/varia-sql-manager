@@ -134,12 +134,12 @@ interface ScanTok extends GoogleSqlToken { readonly text: string; readonly upper
 
 /** Keywords immediately preceding a BigQuery table, view, routine or model reference. */
 const objectLeadWords = new Set(['FROM', 'JOIN', 'INTO', 'INSERT', 'UPDATE', 'DELETE', 'MERGE', 'TABLE', 'VIEW', 'FUNCTION', 'PROCEDURE', 'MODEL', 'CALL', 'CLONE', 'COPY', 'EXISTS'])
-/** Keywords that end a FROM clause's comma-separated table list (ON and USING stay inside FROM so `JOIN t2 USING (id), proj.ds.tbl` still parses). */
-const fromEndWords = new Set(['WHERE', 'GROUP', 'HAVING', 'QUALIFY', 'WINDOW', 'ORDER', 'LIMIT', 'SET', 'SELECT', 'WHEN', 'OPTIONS', 'UNION', 'INTERSECT', 'EXCEPT', 'PIVOT', 'UNPIVOT'])
+/** Keywords that end a FROM clause's comma-separated table list (ON and USING stay inside FROM so `JOIN t2 USING (id), proj.ds.tbl` still parses; non-reserved OPTIONS/PIVOT/UNPIVOT require `(`). */
+const fromEndWords = new Set(['WHERE', 'GROUP', 'HAVING', 'QUALIFY', 'WINDOW', 'ORDER', 'LIMIT', 'SET', 'SELECT', 'WHEN', 'UNION', 'INTERSECT', 'EXCEPT'])
 /** Optional modifiers between CREATE and TABLE in GoogleSQL DDL. */
 const createTableModifiers = new Set(['OR', 'REPLACE', 'TEMP', 'TEMPORARY', 'EXTERNAL', 'SNAPSHOT'])
-/** Keywords that end a CREATE TABLE header before any subsequent query clauses. */
-const createTableEndWords = new Set(['AS', 'SELECT', 'WHERE', 'OPTIONS', 'PARTITION', 'CLUSTER'])
+/** Keywords that end a CREATE TABLE header before any subsequent query clauses (non-reserved OPTIONS requires `(` and CLUSTER requires `BY`). */
+const createTableEndWords = new Set(['AS', 'SELECT', 'WHERE', 'PARTITION'])
 
 /** Splits a backtick-quoted identifier into dotted parts while keeping domain-scoped projects (`example.com:proj`) intact. */
 function splitQuotedParts(token: ScanTok): string[] {
@@ -247,17 +247,20 @@ export function referencedBigQueryProjects(sql: string): string[] {
       || (isPunct(toks[index + 1], '-') && toks[index + 1].start === token.end
         && (toks[index + 2]?.kind === 'word' || toks[index + 2]?.kind === 'number')
         && toks[index + 2].start === toks[index + 1].end)
-    if (token.kind === 'word' && !startsPath) {
+    if (token.kind === 'word' && !startsPath && !isPunct(prev, '.')) {
+      const nextTok = toks[index + 1]
+      const parenClause = isPunct(nextTok, '(')
+      const byClause = nextTok?.kind === 'word' && nextTok.upper === 'BY'
       if (fromStack.length === 0) {
         if (token.upper === 'CREATE') createHeader = 'create'
         else if (createHeader === 'create') createHeader = token.upper === 'TABLE' ? 'table' : createTableModifiers.has(token.upper) ? 'create' : 'none'
-        else if (createHeader === 'table' && createTableEndWords.has(token.upper)) createHeader = 'none'
+        else if (createHeader === 'table' && (createTableEndWords.has(token.upper) || (token.upper === 'OPTIONS' && parenClause) || (token.upper === 'CLUSTER' && byClause))) createHeader = 'none'
         if (token.upper === 'MERGE') inMerge = true
         else if (token.upper === 'WHEN') inMerge = false
       }
       if (token.upper === 'FROM' && !parenExtract.at(-1) && !(prev?.kind === 'word' && prev.upper === 'DISTINCT')) { inFrom = true; continue }
       if (token.upper === 'JOIN') { inFrom = true; continue }
-      if (fromEndWords.has(token.upper)) { inFrom = false; continue }
+      if (fromEndWords.has(token.upper) || ((token.upper === 'OPTIONS' || token.upper === 'PIVOT' || token.upper === 'UNPIVOT') && parenClause)) { inFrom = false; continue }
     }
 
     if (!isNameTok(token)) continue

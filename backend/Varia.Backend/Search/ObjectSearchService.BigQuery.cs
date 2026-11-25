@@ -51,6 +51,23 @@ internal sealed partial class ObjectSearchService
         lock (state.Gate) return state.BigQuery ? state.StaleMark : null;
     }
 
+    /// <summary>Atomically marks a dataset stale if the connection's BigQuery index tracks <paramref name="project"/> (billing, starred, discovered, or held).</summary>
+    public void MarkStaleIfTracked(string connectionId, string billingProject, string project, string dataset)
+    {
+        if (!BqNames.IsProject(project) || !BqNames.IsDataset(dataset) || !states.TryGetValue(connectionId, out var state)) return;
+        lock (state.Gate)
+        {
+            if (!state.BigQuery) return;
+            if (project == billingProject
+                || state.StarredProjects.Contains(project, StringComparer.Ordinal)
+                || state.DiscoveredProjects.Contains(project, StringComparer.Ordinal)
+                || state.Index.Databases.Any(read => read.Dataset is not null && read.Database == project))
+            {
+                state.Stale[(project, dataset)] = ++state.StaleMarks;
+            }
+        }
+    }
+
     /// <summary>Whether the connection's BigQuery index tracks <paramref name="project"/> (starred, discovered, or held).</summary>
     public bool TracksBigQueryProject(string connectionId, string project)
     {
@@ -206,6 +223,7 @@ internal sealed partial class ObjectSearchService
                 }
                 foreach (var gone in state.StaleProjects.Keys.Where(project => !allowed.Contains(project)).ToList())
                     state.StaleProjects.Remove(gone);
+                state.DiscoveredProjects = [.. state.DiscoveredProjects.Where(allowed.Contains)];
                 state.PartialProjects.RemoveWhere(project => !allowed.Contains(project));
                 if (state.NamesOnly is { Count: > 0 } currentNamesOnly)
                 {
@@ -491,15 +509,17 @@ internal sealed partial class ObjectSearchService
                         if (held is not null) Interlocked.Exchange(ref scopedPassIncomplete, 1);
                     });
                 Report(detailsDone, wanted, "details", true);
-                // Whole-project scoped refresh that succeeded with full details clears any prior names-only or partial-project mark for that project.
-                if (scopedClean && Volatile.Read(ref scopedPassIncomplete) == 0 && scope is { Dataset: null })
+                // Whole-project scoped refresh whose dataset listing succeeded clears any Wave 2 partial-project mark (every dataset was attempted);
+                // clearing NamesOnly additionally requires full details without incomplete passes.
+                if (scopedClean && scope is { Dataset: null })
                 {
+                    var detailsClean = Volatile.Read(ref scopedPassIncomplete) == 0;
                     lock (state.Gate)
                     {
                         if (Current())
                         {
                             state.PartialProjects.Remove(scope.Project);
-                            if (state.NamesOnly is { Count: > 0 } currentNamesOnly && currentNamesOnly.Contains(scope.Project, StringComparer.Ordinal))
+                            if (detailsClean && state.NamesOnly is { Count: > 0 } currentNamesOnly && currentNamesOnly.Contains(scope.Project, StringComparer.Ordinal))
                             {
                                 var remaining = currentNamesOnly.Where(project => project != scope.Project).ToList();
                                 state.NamesOnly = remaining.Count > 0 ? remaining : null;
@@ -726,6 +746,7 @@ internal sealed partial class ObjectSearchService
                             state.StaleProjects.Remove(gone);
                             state.PartialProjects.Remove(gone);
                         }
+                        state.DiscoveredProjects = [.. state.DiscoveredProjects.Where(project => !noiseFilteredProjects.Contains(project))];
                         if (state.NamesOnly is { Count: > 0 } currentNamesOnly)
                         {
                             var remaining = currentNamesOnly.Where(project => !noiseFilteredProjects.Contains(project)).ToList();

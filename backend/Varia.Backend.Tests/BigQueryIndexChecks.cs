@@ -836,6 +836,26 @@ internal static partial class BigQueryIndexChecks
             var promotedLookup = search.LookupBigQuery(id, "varia-alpha");
             check(promotedLookup.ProjectState("disc-mid") == LookupState.Ready,
                 $"clean starred rebuild clears PartialProjects even when discovery fails ({promotedLookup.ProjectState("disc-mid")})");
+
+            // Whole-project scoped refresh whose dataset listing succeeds clears PartialProjects even if a table hits a detail error.
+            var scopedSource = new FakeBudgetSource(discoveredProjects: ["disc-mid"], tablesPerDiscovered: 40, columnsPerTable: 0)
+            {
+                CustomDatasets = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal) { ["disc-mid"] = ["ds1", "ds2", "ds3"] },
+                TablesPerDataset = new Dictionary<(string, string), int> { [("disc-mid", "ds1")] = 1, [("disc-mid", "ds2")] = 200, [("disc-mid", "ds3")] = 200 }
+            };
+            using var scopedSearch = new ObjectSearchService(new UnusedHost(), new ObjectIndexLimits { MemoryBytes = 6_000, NamesReserveBytes = 0 });
+            var scopedId = Guid.NewGuid().ToString();
+            await scopedSearch.IndexBigQueryAsync(new ObjectIndexArgs(scopedId, Guid.NewGuid().ToString()), scopedSource, CancellationToken.None);
+            var wasPartial = scopedSearch.LookupBigQuery(scopedId, "varia-alpha").ProjectState("disc-mid") == LookupState.Partial;
+            scopedSource.CustomDatasets["disc-mid"] = ["ds1", "ds2"];
+            scopedSource.TablesPerDataset = new Dictionary<(string, string), int> { [("disc-mid", "ds1")] = 1, [("disc-mid", "ds2")] = 1 };
+            scopedSource.FailTableForProject = "disc-mid";
+            await scopedSearch.IndexBigQueryAsync(new ObjectIndexArgs(scopedId, Guid.NewGuid().ToString(), Scope: new("disc-mid")), scopedSource, CancellationToken.None);
+            var afterScopedDetailErr = scopedSearch.LookupBigQuery(scopedId, "varia-alpha");
+            check(wasPartial
+                && afterScopedDetailErr.ProjectState("disc-mid") == LookupState.Ready
+                && afterScopedDetailErr.Dataset("disc-mid", "nonexistent_ds").State == LookupState.Absent,
+                $"whole-project scoped refresh clears PartialProjects even with detail errors ({afterScopedDetailErr.ProjectState("disc-mid")}/{afterScopedDetailErr.Dataset("disc-mid", "nonexistent_ds").State})");
         }
 
         // 12. Wave 2 budget-stop does not conflate NOT_FOUND or PERMISSION_DENIED on earlier projects with budget cuts,

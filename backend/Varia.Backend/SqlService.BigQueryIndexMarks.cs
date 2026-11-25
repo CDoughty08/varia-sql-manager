@@ -117,8 +117,7 @@ internal sealed partial class SqlService
     private void Record(string connectionId, BigQueryConnection connection, string project, BigQueryIndexMarks marks)
     {
         foreach (var (markProject, markDataset) in marks.Datasets)
-            if (markProject == connection.Options.Project || search.TracksBigQueryProject(connectionId, markProject))
-                search.MarkStale(connectionId, markProject, markDataset);
+            search.MarkStaleIfTracked(connectionId, connection.Options.Project, markProject, markDataset);
         if (marks.WholeProject) search.MarkProjectStale(connectionId, project);
     }
 
