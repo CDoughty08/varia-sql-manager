@@ -3,7 +3,7 @@ import { workbenchFixture } from './fixtures/workbench'
 import { updateErrors, type UpdateState } from '../src/shared/updates'
 
 const base = { currentVersion: '1.0.0', kind: 'nsis', enabled: true } as const
-const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+const flush = () => new Promise(resolve => setImmediate(resolve))
 const error = (change: Partial<Extract<UpdateState, { status: 'error' }>>): UpdateState => ({ ...base, status: 'error', code: 'proxy', during: 'check', manual: false, ...updateErrors.proxy, detail: 'net::ERR_TUNNEL_CONNECTION_FAILED', ...change })
 
 describe('updates in the workbench', () => {

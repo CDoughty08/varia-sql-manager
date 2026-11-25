@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { dialogQueue } from '../src/main/dialog-queue'
 
-const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+const settle = () => new Promise(resolve => setImmediate(resolve))
 /** A dialog that stays open until the test answers it. */
 function held<T>() {
   let answer!: (value: T) => void, fail!: (error: Error) => void

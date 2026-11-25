@@ -2,7 +2,7 @@
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { BigQueryProperties } from '../src/shared/bigquery/objects'
+import type { BigQueryProperties, BigQueryPropertyKind } from '../src/shared/bigquery/objects'
 import type { ApiResult, QueryResult, VariaApi } from '../src/shared/contracts'
 import type { ScriptingOptions } from '../src/shared/scripting/options'
 import { defaultScriptingOptions } from '../src/shared/scripting/options'
@@ -241,18 +241,47 @@ describe('BigQuery Properties pure formatters & schema tree', () => {
 })
 
 describe('BigQueryPropertiesService', () => {
-  it('opens for table-like objects only, live, and reads tables.get for the object', async () => {
-    const { service, api, documents } = setupService()
+  it('opens for tables, views, routines and datasets, live, deduplicates open tabs, and preserves promoted tab', async () => {
+    const { service, api, documents, replies } = setupService()
+    const datasetNode: ExplorerMenuNode = {
+      id: 2, connectionId: 'bq-1', lost: false, kind: 'bqDataset', label: 'sales',
+      ref: { type: 'object', object: { kind: 'bqDataset', project: 'varia-alpha', name: 'sales' } }
+    } as ExplorerMenuNode
     expect(service.canOpen(node('bqTable'))).toBe(true)
     expect(service.canOpen(node('bqExternalTable'))).toBe(true)
-    expect(service.canOpen(node('bqRoutine'))).toBe(false)
+    expect(service.canOpen(node('bqRoutine'))).toBe(true)
+    expect(service.canOpen(datasetNode)).toBe(true)
+    expect(service.canOpen(node('bqModel'))).toBe(false)
     expect(service.canOpen(node('bqTable', { lost: true }))).toBe(false)
     expect(service.canOpen(node('table'))).toBe(false)
-    expect(service.open(node('bqRoutine'))).toBeUndefined()
+    expect(service.open(node('bqModel'))).toBeUndefined()
     const id = service.open(node('bqView'))!
     expect(documents.openCustom).toHaveBeenCalledWith('bigQueryProperties', 'orders', 'bq-1', 'sales')
     expect(api.bigQueryProperties).toHaveBeenCalledWith(expect.objectContaining({ connectionId: 'bq-1', kind: 'bqView', project: 'varia-alpha', dataset: 'sales', name: 'orders' }))
     expect(service.view(id)).toMatchObject({ loading: true, activeTab: 'overview' })
+    // Re-opening the same object focuses/reuses the existing tab and switches to the requested canonical tab.
+    expect(service.open(node('bqView'), 'definition')).toBe(id)
+    expect(service.view(id)?.activeTab).toBe('definition')
+    expect(documents.openCustom).toHaveBeenCalledTimes(1)
+
+    // Opening a dataset calls bigquery.properties with dataset === name and refuses definition tab.
+    const dsId = service.open(datasetNode, 'definition')!
+    expect(api.bigQueryProperties).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'bqDataset', project: 'varia-alpha', dataset: 'sales', name: 'sales' }))
+    expect(service.view(dsId)?.activeTab).toBe('overview')
+    replies[1].resolve({ ok: true, value: { name: 'sales', type: 'dataset', elapsedMs: 2, groups: [], location: 'US', labels: [{ key: 'env', value: 'prod' }] } })
+    await Promise.resolve(); await Promise.resolve()
+    expect(service.canLoadDdl(dsId)).toBe(false)
+    expect(service.open(datasetNode, 'labels')).toBe(dsId)
+    expect(service.view(dsId)?.activeTab).toBe('labels')
+
+    // Promoting onto an already-open failed tab does not switch to an unrendered data-dependent tab.
+    const failedNode = node('bqTable', { label: 'broken', ref: { type: 'object', object: { kind: 'bqTable', project: 'varia-alpha', dataset: 'sales', name: 'broken' } } })
+    const failedId = service.open(failedNode)!
+    replies[2].resolve({ ok: false, error: 'Not found' })
+    await Promise.resolve(); await Promise.resolve()
+    expect(service.open(failedNode, 'columns')).toBe(failedId)
+    expect(service.view(failedId)?.activeTab).toBe('overview')
+
     // Never runs billed DDL or Preview Rows automatically on open.
     expect(api.scriptObjects).not.toHaveBeenCalled()
     expect(api.execute).not.toHaveBeenCalled()
@@ -265,16 +294,16 @@ describe('BigQueryPropertiesService', () => {
     replies[1].resolve({ ok: true, value: basicFacts('2') })
     await Promise.resolve(); await Promise.resolve()
     replies[0].resolve({ ok: true, value: basicFacts('1') })
-    await new Promise(resolve => setTimeout(resolve, 0))
+    await new Promise(resolve => setImmediate(resolve))
     expect(service.view(id)).toMatchObject({ loading: false, value: basicFacts('2') })
     void service.refresh(id)
     replies[2].resolve({ ok: false, error: 'Access Denied', code: 'PERMISSION_DENIED' })
-    await new Promise(resolve => setTimeout(resolve, 0))
+    await new Promise(resolve => setImmediate(resolve))
     expect(service.view(id)).toMatchObject({ loading: false, error: 'Access Denied', value: basicFacts('2') })
     void service.refresh(id)
     service.closed(id)
     replies[3].resolve({ ok: true, value: basicFacts('3') })
-    await new Promise(resolve => setTimeout(resolve, 0))
+    await new Promise(resolve => setImmediate(resolve))
     expect(service.view(id)).toBeUndefined()
   })
 
@@ -282,7 +311,7 @@ describe('BigQueryPropertiesService', () => {
     const { service, api, replies, scriptReplies, billedGate } = setupService()
     const id = service.open(node('bqTable'))!
     replies[0].resolve({ ok: true, value: richTableProps })
-    await new Promise(resolve => setTimeout(resolve, 0))
+    await new Promise(resolve => setImmediate(resolve))
 
     // Selecting the Definition tab does NOT run billed SQL.
     service.selectTab(id, 'definition')
@@ -302,7 +331,7 @@ describe('BigQueryPropertiesService', () => {
     // Approving the cost prompt runs the billed CREATE statement with maximumBytesBilled.
     const approved = service.loadDdl(id)
     scriptReplies[1].resolve({ ok: true, value: { database: 'sales', commands: 0, elapsedMs: 5, warnings: [], estimate: { bytesProcessed: 10_485_760, statementType: 'SELECT' } } })
-    await new Promise(resolve => setTimeout(resolve, 0))
+    await new Promise(resolve => setImmediate(resolve))
     expect(api.scriptObjects).toHaveBeenCalledTimes(3)
     expect(api.scriptObjects).toHaveBeenLastCalledWith(expect.objectContaining({ verb: 'create', maximumBytesBilled: 10_485_760 }))
     scriptReplies[2].resolve({ ok: true, value: { database: 'sales', commands: 1, elapsedMs: 12, warnings: [], text: 'CREATE TABLE `analytics_prod.commerce.orders` (...);' } })
@@ -314,7 +343,7 @@ describe('BigQueryPropertiesService', () => {
     const { service, api, replies, executeReplies, results } = setupService()
     const id = service.open(node('bqTable'))!
     replies[0].resolve({ ok: true, value: richTableProps })
-    await new Promise(resolve => setTimeout(resolve, 0))
+    await new Promise(resolve => setImmediate(resolve))
 
     expect(api.execute).not.toHaveBeenCalled()
     service.selectTab(id, 'columns')
@@ -339,7 +368,7 @@ describe('BigQueryPropertiesService', () => {
         completedAt: '2026-04-01T00:00:00.0000000'
       }
     })
-    await new Promise(resolve => setTimeout(resolve, 0))
+    await new Promise(resolve => setImmediate(resolve))
     expect(service.view(id)?.preview).toMatchObject({ status: 'ready', rowsRead: 5 })
     const previewKey = (service.view(id)?.preview as { readonly key: string }).key
 
@@ -398,7 +427,7 @@ describe('BigQueryPropertiesService', () => {
     service.cancelPreview(id)
     expect(service.view(id)?.preview).toEqual({ status: 'error', message: 'Preview cancelled.' })
     executeReplies[0].resolve({ ok: false, error: 'cancelled' })
-    await new Promise(resolve => setTimeout(resolve, 0))
+    await new Promise(resolve => setImmediate(resolve))
 
     vi.spyOn(console, 'error').mockImplementation(() => {})
     results.finish.mockRejectedValueOnce(new Error('worker disposed'))
@@ -419,7 +448,7 @@ describe('BigQueryPropertiesService', () => {
 })
 
 describe('BigQueryPropertiesTab UI', () => {
-  function setupUi(kind: 'bqTable' | 'bqView' | 'bqMaterializedView' | 'bqExternalTable', props: BigQueryProperties) {
+  function setupUi(kind: BigQueryPropertyKind, props: BigQueryProperties) {
     const fixture = workbenchFixture({ platform: 'win32', activeElement: () => document.activeElement })
     const writeClipboardText = vi.fn(async () => ({ ok: true as const, value: undefined }))
     ;(window as unknown as { varia?: unknown }).varia = { writeClipboardText }
@@ -463,7 +492,10 @@ describe('BigQueryPropertiesTab UI', () => {
       }
     }
     const wb = Object.assign(Object.create(null), fixture, { bigQueryProperties, monaco: fakeMonaco }) as unknown as Workbench
-    const docId = bigQueryProperties.open(node(kind, { label: props.name, ref: { type: 'object', object: { kind, project: 'analytics_prod', dataset: 'commerce', name: props.name } } }))!
+    const objectRef = kind === 'bqDataset'
+      ? { kind, project: 'analytics_prod', name: props.name }
+      : { kind, project: 'analytics_prod', dataset: 'commerce', name: props.name }
+    const docId = bigQueryProperties.open(node(kind, { label: props.name, ref: { type: 'object', object: objectRef } }))!
     const cleanup = () => { bigQueryProperties.dispose(); fixture.dispose() }
     return { wb, bigQueryProperties, docId, writeClipboardText, createdModels, cleanup }
   }
@@ -471,7 +503,7 @@ describe('BigQueryPropertiesTab UI', () => {
   it('renders unified ObjectInspectorFrame with KPIs, Vitals rail, canonical tabs, STRUCT expansion, on-demand table DDL, and lazy Preview Rows', async () => {
     const { wb, bigQueryProperties, docId, writeClipboardText, cleanup } = setupUi('bqTable', richTableProps)
     try {
-      await new Promise(resolve => setTimeout(resolve, 0))
+      await new Promise(resolve => setImmediate(resolve))
       const el = mount(createElement(WorkbenchProvider, { workbench: wb, children: createElement(BigQueryPropertiesTab, { documentId: docId }) }))
 
       // Shell & Chrome: breadcrumbs, engine badge, semantic pills, Hero KPIs, Vitals rail.
@@ -534,7 +566,7 @@ describe('BigQueryPropertiesTab UI', () => {
       // Definition tab explicit Load DDL loads Monaco GoogleSQL editor on click.
       act(() => { tabs[1].click() })
       const loadBtn = [...el.querySelectorAll('button')].find(btn => btn.textContent?.includes('Load DDL'))!
-      await act(async () => { loadBtn.click(); await new Promise(resolve => setTimeout(resolve, 0)) })
+      await act(async () => { loadBtn.click(); await new Promise(resolve => setImmediate(resolve)) })
       expect(el.querySelector('[data-bq-definition-editor]')).not.toBeNull()
       expect(el.textContent).toContain('Copy')
       expect(el.textContent).toContain('Open in New Query')
@@ -546,7 +578,7 @@ describe('BigQueryPropertiesTab UI', () => {
   it('renders free GoogleSQL definition immediately for views and omits Storage & Layout, Labels, and Preview Rows when N/A', async () => {
     const { wb, docId, createdModels, cleanup } = setupUi('bqView', { ...richViewProps, definitionTruncated: true, schemaTruncated: true })
     try {
-      await new Promise(resolve => setTimeout(resolve, 0))
+      await new Promise(resolve => setImmediate(resolve))
       const el = mount(createElement(WorkbenchProvider, { workbench: wb, children: createElement(BigQueryPropertiesTab, { documentId: docId }) }))
 
       const tabs = [...el.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
@@ -580,7 +612,7 @@ describe('BigQueryPropertiesTab UI', () => {
     }
     const { wb, docId, cleanup } = setupUi('bqExternalTable', extProps)
     try {
-      await new Promise(resolve => setTimeout(resolve, 0))
+      await new Promise(resolve => setImmediate(resolve))
       const el = mount(createElement(WorkbenchProvider, { workbench: wb, children: createElement(BigQueryPropertiesTab, { documentId: docId }) }))
       expect(el.textContent).toContain('External')
       const tabs = [...el.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
@@ -618,7 +650,7 @@ describe('BigQueryPropertiesTab UI', () => {
     const tbl1 = bigQueryProperties.open(node('bqTable', { label: 'tbl_a', ref: { type: 'object', object: { kind: 'bqTable', project: 'analytics_prod', dataset: 'commerce', name: 'tbl_a' } } }))!
     const tbl2 = bigQueryProperties.open(node('bqTable', { label: 'tbl_b', ref: { type: 'object', object: { kind: 'bqTable', project: 'analytics_prod', dataset: 'commerce', name: 'tbl_b' } } }))!
     try {
-      await new Promise(resolve => setTimeout(resolve, 0))
+      await new Promise(resolve => setImmediate(resolve))
       const el = mount(createElement(WorkbenchProvider, {
         workbench: wb,
         children: createElement('div', null,
@@ -646,6 +678,110 @@ describe('BigQueryPropertiesTab UI', () => {
     } finally {
       bigQueryProperties.dispose()
       pendingView.resolve({ ok: true, value: richViewProps })
+      fixture.dispose()
+    }
+  })
+
+  it('renders BigQuery Routine Properties with free routines.get definition, Parameters grid, pills and KPIs', async () => {
+    const routineProps: BigQueryProperties = {
+      name: 'to_cents',
+      type: 'function',
+      elapsedMs: 6,
+      fullName: 'analytics_prod.commerce.to_cents',
+      description: 'Convert dollars to integer cents.',
+      createdUtc: '2025-02-01 09:00:00 UTC',
+      modifiedUtc: '2026-06-01 14:30:00 UTC',
+      definition: 'CAST(ROUND(amount * 100) AS INT64)',
+      routine: {
+        routineType: 'SCALAR_FUNCTION',
+        language: 'SQL',
+        determinism: 'DETERMINISTIC',
+        returnType: 'INT64',
+        signature: '(amount NUMERIC) RETURNS INT64',
+        arguments: [
+          { name: 'amount', type: 'NUMERIC', mode: 'IN', kind: 'FIXED_TYPE' },
+          { name: 'currency', type: 'STRING', mode: 'IN', kind: 'FIXED_TYPE' }
+        ]
+      },
+      groups: []
+    }
+    const { wb, docId, cleanup } = setupUi('bqRoutine', routineProps)
+    try {
+      await act(async () => { await Promise.resolve(); await Promise.resolve() })
+      const el = mount(createElement(WorkbenchProvider, { workbench: wb, children: createElement(BigQueryPropertiesTab, { documentId: docId }) }))
+      const tabIds = [...el.querySelectorAll('[role="tab"]')].map(t => t.getAttribute('data-inspector-tab'))
+      expect(tabIds).toEqual(['overview', 'definition', 'parameters'])
+      expect(el.textContent).toContain('BigQuery Function')
+      expect(el.textContent).toContain('Deterministic')
+      expect(el.textContent).toContain('INT64')
+
+      // Definition displays free routines.get SQL immediately with zero billed queries.
+      act(() => { el.querySelector<HTMLButtonElement>('[data-inspector-tab="definition"]')!.click() })
+      expect(el.textContent).toContain('Free · routines.get')
+      expect(el.querySelector('[data-bq-definition-editor]')).not.toBeNull()
+
+      // Parameters tab renders filterable LocalGrid with count.
+      act(() => { el.querySelector<HTMLButtonElement>('[data-inspector-tab="parameters"]')!.click() })
+      expect(el.textContent).toContain('2 parameters')
+      expect(el.querySelector('input[aria-label="Filter parameters"]')).not.toBeNull()
+    } finally {
+      cleanup()
+    }
+  })
+
+  it('renders BigQuery Dataset Properties without Definition or Script As, with 2-level crumbs, KMS, expiration and Labels', async () => {
+    const datasetProps: BigQueryProperties = {
+      name: 'commerce',
+      type: 'dataset',
+      elapsedMs: 5,
+      fullName: 'analytics_prod.commerce',
+      location: 'EU',
+      description: 'Core commerce warehouse dataset.',
+      createdUtc: '2024-01-05 00:00:00 UTC',
+      modifiedUtc: '2026-11-20 12:00:00 UTC',
+      labels: [{ key: 'domain', value: 'commerce' }, { key: 'pii', value: 'restricted' }],
+      dataset: {
+        friendlyName: 'Commerce Warehouse',
+        defaultTableExpirationMs: 86_400_000 * 90,
+        defaultPartitionExpirationMs: 86_400_000 * 30,
+        kmsKeyName: 'projects/analytics_prod/locations/eu/keyRings/bq/cryptoKeys/main',
+        defaultCollation: 'und:ci',
+        isCaseInsensitive: true,
+        maxTimeTravelHours: 168,
+        storageBillingModel: 'PHYSICAL'
+      },
+      groups: []
+    }
+    const fixture = workbenchFixture({ platform: 'win32', activeElement: () => document.activeElement })
+    const bigQueryProperties = new BigQueryPropertiesService({
+      api: { bigQueryProperties: vi.fn(async () => ({ ok: true as const, value: datasetProps })) },
+      documents: fixture.documents,
+      connections: new ConnectionsStore([{ id: 'bq-1' }])
+    })
+    const wb = Object.assign(Object.create(null), fixture, { bigQueryProperties }) as unknown as Workbench
+    const dsNode: ExplorerMenuNode = {
+      id: 9, connectionId: 'bq-1', lost: false, kind: 'bqDataset', label: 'commerce',
+      ref: { type: 'object', object: { kind: 'bqDataset', project: 'analytics_prod', name: 'commerce' } }
+    } as ExplorerMenuNode
+    const docId = bigQueryProperties.open(dsNode)!
+    try {
+      await act(async () => { await Promise.resolve(); await Promise.resolve() })
+      const el = mount(createElement(WorkbenchProvider, { workbench: wb, children: createElement(BigQueryPropertiesTab, { documentId: docId }) }))
+      const tabIds = [...el.querySelectorAll('[role="tab"]')].map(t => t.getAttribute('data-inspector-tab'))
+      expect(tabIds).toEqual(['overview', 'labels'])
+      expect(el.textContent).toContain('BigQuery Dataset')
+      expect(el.textContent).toContain('CMEK')
+      expect(el.textContent).toContain('90 days')
+      expect(el.textContent).toContain('projects/analytics_prod/locations/eu/keyRings/bq/cryptoKeys/main')
+      // Dataset has no Script As button and 2-level crumbs (connection › project, not repeating dataset).
+      expect(el.textContent).not.toContain('Script As')
+      expect(el.querySelectorAll('.document-crumb')).toHaveLength(2)
+
+      act(() => { el.querySelector<HTMLButtonElement>('[data-inspector-tab="labels"]')!.click() })
+      expect(el.textContent).toContain('domain')
+      expect(el.textContent).toContain('restricted')
+    } finally {
+      bigQueryProperties.dispose()
       fixture.dispose()
     }
   })

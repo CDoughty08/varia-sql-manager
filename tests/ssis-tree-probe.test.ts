@@ -13,9 +13,9 @@ import { ConnectionService } from '../src/renderer/src/services/connections'
 import { ExplorerService, type TreeNode } from '../src/renderer/src/explorer/ExplorerService'
 import { rowTooltip } from '../src/renderer/src/explorer/ExplorerRow'
 import { shownInExplorer, SsisTreeProbe } from '../src/renderer/src/ssis/SsisTreeProbe'
+import { settle } from './fixtures/settle'
 import { connectionInfo, connectionOptions, manualTimers } from './fixtures/workbench'
 
-const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(resolve => setTimeout(resolve, 0)) }
 const uuid = (n: number) => `00000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`
 const cid = (n: number) => `10000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`
 

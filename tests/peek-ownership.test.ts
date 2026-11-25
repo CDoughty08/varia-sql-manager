@@ -16,7 +16,7 @@ import { compileWhen, evaluateWhen } from '../src/shared/commands/when'
 
 const connectionId = '11111111-1111-4111-8111-111111111111'
 const ok = <T>(value: T): ApiResult<T> => ({ ok: true, value })
-const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+const flush = () => new Promise(resolve => setImmediate(resolve))
 const node = (kind: 'table' | 'view' | 'procedure', id = 1, name = 'Customer'): ExplorerMenuNode => ({
   id, connectionId, kind, label: name, lost: false, ref: { type: 'object', object: { kind, database: 'Sales', schema: 'dbo', name } }
 })

@@ -45,7 +45,7 @@ const models = { folder, project, package: pkg, environment } as const
 const html = (element: ReactElement) => renderToStaticMarkup(element)
 /** A list section's grid, as its element gives it: the table it shows (and copies and saves), its name and its empty note. */
 const list = (section: { readonly content?: unknown } | undefined) => (section?.content as ReactElement<SsisListProps>).props
-const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
+const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setImmediate(resolve)) }
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 

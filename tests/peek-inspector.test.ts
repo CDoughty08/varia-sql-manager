@@ -2,17 +2,19 @@
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { BigQueryProperties } from '../src/shared/bigquery/objects'
 import type { ApiResult } from '../src/shared/contracts'
 import type { PeekResult } from '../src/shared/explorer/peek'
 import type { ScriptingOptions } from '../src/shared/scripting/options'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
+import { BigQueryPropertiesService } from '../src/renderer/src/explorer/BigQueryPropertiesService'
 import {
-  parseSchemaQualified, peekCrumbs, peekFactLink, peekHeroKpis, peekOverviewModel,
-  peekParentTarget, peekRatioMeter, peekStatePills, peekStorageModel, peekTabCount,
-  peekUsageModel, peekVitalsModel
+  constraintExpressionText, parseSchemaQualified, peekConstraintModel, peekCrumbs, peekFactLink, peekFkRelationModel,
+  peekHeroKpis, peekKeySummaryModel, peekOverviewModel, peekParentTarget, peekRatioMeter, peekStatePills,
+  peekStorageModel, peekTabCount, peekUsageModel, peekVitalsModel
 } from '../src/renderer/src/explorer/peek-inspector'
-import PeekCard, { PeekBody, propertiesMenu } from '../src/renderer/src/explorer/PeekCard'
+import PeekCard, { cardStops, PeekBody, propertiesMenu } from '../src/renderer/src/explorer/PeekCard'
 import { PeekService, type OpenPeek } from '../src/renderer/src/explorer/PeekService'
 import PeekTabView from '../src/renderer/src/explorer/PeekTab'
 import { PeekTabService } from '../src/renderer/src/explorer/PeekTabService'
@@ -342,7 +344,7 @@ describe('Unified PeekCard and PeekTab rendering on ObjectInspectorFrame', () =>
       const el = mount(createElement(WorkbenchProvider, { workbench, children: createElement(PeekTabView, { documentId: docId }) }))
       await act(async () => {
         finishPeek()
-        await new Promise(resolve => setTimeout(resolve, 0))
+        await new Promise(resolve => setImmediate(resolve))
       })
       const frame = el.querySelector<HTMLElement>('[data-peek-tab]')!
       expect(frame).not.toBeNull()
@@ -461,7 +463,7 @@ describe('Unified PeekCard and PeekTab rendering on ObjectInspectorFrame', () =>
       const el = mount(createElement(WorkbenchProvider, { workbench, children: createElement(PeekTabView, { documentId: docId }) }))
       // While loading, only the active pane renders role="status" (Vitals rail does not duplicate it).
       expect(el.querySelectorAll('[role="status"]')).toHaveLength(1)
-      await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+      await act(async () => { await new Promise(resolve => setImmediate(resolve)) })
 
       const frame = el.querySelector<HTMLElement>('[data-peek-tab]')!
       const link = frame.querySelector<HTMLButtonElement>('[aria-label="Peek dbo.Customers"]')!
@@ -471,7 +473,7 @@ describe('Unified PeekCard and PeekTab rendering on ObjectInspectorFrame', () =>
       expect(document.activeElement).toBe(link)
       await act(async () => {
         link.click()
-        await new Promise(resolve => setTimeout(resolve, 0))
+        await new Promise(resolve => setImmediate(resolve))
       })
       // Focus must stay inside the PeekTab on the active tab so Ctrl+1..9 and Back shortcuts keep working.
       expect(frame.contains(document.activeElement)).toBe(true)
@@ -483,7 +485,7 @@ describe('Unified PeekCard and PeekTab rendering on ObjectInspectorFrame', () =>
       act(() => { backBtn.focus() })
       await act(async () => {
         backBtn.click()
-        await new Promise(resolve => setTimeout(resolve, 0))
+        await new Promise(resolve => setImmediate(resolve))
       })
       expect(frame.querySelector('[aria-label="Back"]')).toBeNull()
       expect(frame.contains(document.activeElement)).toBe(true)
@@ -492,7 +494,7 @@ describe('Unified PeekCard and PeekTab rendering on ObjectInspectorFrame', () =>
       failNext = true
       await act(async () => {
         peekTabs.getSnapshot().views[docId]?.refresh()
-        await new Promise(resolve => setTimeout(resolve, 0))
+        await new Promise(resolve => setImmediate(resolve))
       })
       expect(frame.querySelectorAll('[role="alert"]')).toHaveLength(1)
 
@@ -500,7 +502,7 @@ describe('Unified PeekCard and PeekTab rendering on ObjectInspectorFrame', () =>
       failNext = false
       await act(async () => {
         peekTabs.getSnapshot().views[docId]?.refresh()
-        await new Promise(resolve => setTimeout(resolve, 0))
+        await new Promise(resolve => setImmediate(resolve))
       })
       expect(frame.querySelectorAll('.fact-grid-link').length).toBeGreaterThan(0)
       act(() => {
@@ -512,6 +514,260 @@ describe('Unified PeekCard and PeekTab rendering on ObjectInspectorFrame', () =>
       act(() => { root?.unmount() })
       root = undefined
       peekTabs.dispose()
+      peek.dispose()
+      fixture.dispose()
+    }
+  })
+
+  it('renders Foreign Key relationship diagram, PK/UQ key summary, and Constraint expression + Definition fallback', async () => {
+    const fk = makeOpen('key', {
+      facts: {
+        status: 'ready',
+        value: {
+          keyType: 'Foreign key', parentTable: 'dbo.Orders', referencedTable: 'Sales.Customers',
+          deleteAction: 'CASCADE', updateAction: 'NO_ACTION', disabled: false, notTrusted: false
+        }
+      },
+      lists: { keyColumns: { rows: [['CustomerId', 'Id', null, 'int'], ['TenantId', 'TenantId', null, 'int']] } }
+    })
+    const follow = vi.fn()
+    const fkModel = peekFkRelationModel(fk, follow)!
+    expect(fkModel.parentColumns).toEqual(['CustomerId', 'TenantId'])
+    expect(fkModel.referencedColumns).toEqual(['Id', 'TenantId'])
+    expect(fkModel.onDelete).toEqual({ label: 'Cascade', tone: 'warning' })
+    expect(fkModel.onUpdate).toEqual({ label: 'No action', tone: 'neutral' })
+    expect(fkModel.statusPills.map(p => p.label)).toEqual(['Enabled', 'Trusted'])
+    expect(peekStatePills(fk).map(p => p.label)).toEqual(['Enabled', 'Trusted'])
+    // Disabled FK must never emit a green Trusted pill even when notTrusted is false.
+    const disabledFk = makeOpen('key', {
+      facts: { status: 'ready', value: { keyType: 'Foreign key', parentTable: 'dbo.Orders', referencedTable: 'Sales.Customers', disabled: true, notTrusted: false } }
+    })
+    expect(peekFkRelationModel(disabledFk)?.statusPills.map(p => p.label)).toEqual(['Disabled'])
+
+    const pk = makeOpen('key', {
+      facts: { status: 'ready', value: { keyType: 'Primary key', parentTable: 'dbo.Orders', indexType: 'Clustered', disabled: false } },
+      lists: { keyColumns: { rows: [['OrderId', null, false, 'int'], ['CreatedAt', null, true, 'datetime2']] } }
+    })
+    const pkModel = peekKeySummaryModel(pk, follow)!
+    expect(pkModel.columns).toEqual([{ name: 'OrderId', descending: false, type: 'int' }, { name: 'CreatedAt', descending: true, type: 'datetime2' }])
+    expect(peekStatePills(pk).map(p => p.label)).toEqual(['Primary key', 'Clustered'])
+
+    const ck = makeOpen('constraint', {
+      facts: { status: 'ready', value: { constraintType: 'Check constraint', parentTable: 'dbo.Orders', column: 'TotalAmount', expression: '([TotalAmount] >= 0)', disabled: false, notTrusted: true, systemNamed: true } },
+      definition: { status: 'ready', value: {} }
+    })
+    expect(peekConstraintModel(ck)).toMatchObject({ constraintType: 'Check constraint', column: 'TotalAmount', expression: '([TotalAmount] >= 0)' })
+    expect(constraintExpressionText(ck)).toBe('([TotalAmount] >= 0)')
+    expect(peekOverviewModel(ck).capabilities.map(c => [c.label, c.notable, c.tone])).toEqual([
+      ['System-named', true, 'neutral'], ['Enabled', true, 'success'], ['Not trusted', true, 'warning']
+    ])
+
+    // Render FK card and Constraint Overview + Definition expression fallback in DOM.
+    const fixture = workbenchFixture({ platform: 'win32', activeElement: () => document.activeElement })
+    const writeClipboardText = vi.fn(async () => ok(undefined))
+    const api = {
+      explorerPeek: vi.fn(() => Promise.resolve(ok({ facts: ck.facts.status === 'ready' ? ck.facts.value : {}, elapsedMs: 1 }))),
+      explorerCancel: vi.fn(async () => ok({ cancelled: 0 })),
+      scriptObjects: vi.fn(() => Promise.resolve(ok({ warnings: [] }))),
+      cancelScripting: vi.fn(async () => ok({ cancelled: 0 })),
+      writeClipboardText
+    }
+    const peek = new PeekService({
+      api: api as never,
+      connections: { getSnapshot: () => [{ id: connectionId }], subscribe: () => () => {} },
+      scriptingOptions: { getSnapshot: () => ({ options: {} as ScriptingOptions }), subscribe: () => () => {} },
+      timers: { setTimeout: () => 1, clearTimeout: () => {} },
+      newId: () => 'id'
+    })
+    const wb = Object.assign(fixture, { peek, menus: { registerTarget: () => ({ dispose: () => {} }) } }) as unknown as Workbench
+    try {
+      const fkEl = mount(createElement(WorkbenchProvider, {
+        workbench: wb,
+        children: createElement(PeekBody, { view: peek, open: fk, idPrefix: 'fk-vis' })
+      }))
+      expect(fkEl.querySelector('[data-fk-relationship]')).not.toBeNull()
+      expect(fkEl.textContent).toContain('ON DELETE: Cascade')
+      expect(fkEl.textContent).toContain('ON UPDATE: No action')
+      expect(fkEl.textContent).toContain('CustomerId')
+      expect(fkEl.textContent).toContain('Sales.Customers')
+
+      // Check constraint shows expression block in Overview and expression cleanly in Definition tab when script text is absent.
+      const ckNode: ExplorerMenuNode = {
+        id: 12, connectionId, kind: 'constraint', label: 'CK_Orders_Total', lost: false,
+        ref: { type: 'object', object: { kind: 'constraint', database: 'Sales', parent: { kind: 'tableType', schema: 'dbo', name: 'OrderRows' }, name: 'CK_Orders_Total' } }
+      }
+      peek.peek(ckNode, 'keyboard')
+      await act(async () => { await Promise.resolve(); await Promise.resolve() })
+      const ckEl = mount(createElement(WorkbenchProvider, {
+        workbench: wb,
+        children: createElement(PeekBody, { view: peek, open: peek.getSnapshot().open!, idPrefix: 'ck-vis' })
+      }))
+      expect(ckEl.querySelector('[data-constraint-expression]')?.textContent).toContain('([TotalAmount] >= 0)')
+
+      act(() => { peek.selectTab('definition') })
+      const ckDefEl = mount(createElement(WorkbenchProvider, {
+        workbench: wb,
+        children: createElement(PeekBody, { view: peek, open: peek.getSnapshot().open!, idPrefix: 'ck-def' })
+      }))
+      expect(ckDefEl.textContent).toContain('Constraint Expression')
+      expect(ckDefEl.textContent).toContain('([TotalAmount] >= 0)')
+      await peek.copyDefinition()
+      expect(writeClipboardText).toHaveBeenCalledWith('([TotalAmount] >= 0)')
+    } finally {
+      peek.dispose()
+      fixture.dispose()
+    }
+  })
+
+  it('supports BigQuery Peek Card with zero billed queries on open, Back stack navigation, lazy Preview Rows, and Open as Tab promotion', async () => {
+    const fixture = workbenchFixture({ platform: 'win32', activeElement: () => document.activeElement })
+    const tableProps: BigQueryProperties = {
+      name: 'orders',
+      type: 'table',
+      elapsedMs: 8,
+      fullName: 'varia-alpha.sales.orders',
+      location: 'US',
+      storage: { rows: 500, logicalBytes: 4096, longTermLogicalBytes: 1024 },
+      schema: [{ name: 'id', type: 'INT64', mode: 'REQUIRED' }],
+      labels: [{ key: 'env', value: 'prod' }],
+      groups: []
+    }
+    const datasetProps: BigQueryProperties = {
+      name: 'sales',
+      type: 'dataset',
+      elapsedMs: 4,
+      fullName: 'varia-alpha.sales',
+      location: 'US',
+      dataset: { defaultTableExpirationMs: 86_400_000 * 30 },
+      groups: []
+    }
+    const results = { begin: vi.fn(), finish: vi.fn(() => Promise.resolve()), release: vi.fn() }
+    const api = {
+      explorerPeek: vi.fn(() => Promise.resolve(ok({ facts: {}, elapsedMs: 1 }))),
+      explorerCancel: vi.fn(async () => ok({ cancelled: 0 })),
+      scriptObjects: vi.fn(async () => ok({ warnings: [], text: 'CREATE TABLE `varia-alpha.sales.orders` (id INT64);' })),
+      cancelScripting: vi.fn(async () => ok({ cancelled: 0 })),
+      writeClipboardText: vi.fn(async () => ok(undefined)),
+      execute: vi.fn(async () => ok({ status: 'completed', resultSets: [{ rowsRead: 2 }], messages: [] })),
+      cancel: vi.fn(async () => ok({ cancelled: true })),
+      bigQueryProperties: vi.fn(async (params: { kind: string }) => ok(params.kind === 'bqDataset' ? datasetProps : tableProps))
+    }
+    const billedGate = vi.fn(async () => ({ run: true as const }))
+    const connectionList = [{ id: connectionId, server: 'varia-alpha', displayName: 'Analytics', providerId: 'bigquery' as const }]
+    const connectionsStore = {
+      getSnapshot: () => connectionList,
+      get: (id: string) => id === connectionId ? connectionList[0] : undefined,
+      subscribe: () => () => {}
+    }
+    const peek = new PeekService({
+      api: api as never,
+      connections: connectionsStore,
+      scriptingOptions: { getSnapshot: () => ({ options: {} as ScriptingOptions }), subscribe: () => () => {} },
+      results,
+      billedGate,
+      timers: { setTimeout: () => 1, clearTimeout: () => {} },
+      newId: () => 'bq-id'
+    })
+    const bigQueryProperties = new BigQueryPropertiesService({
+      api: api as never,
+      documents: fixture.documents,
+      connections: connectionsStore,
+      results,
+      billedGate
+    })
+    const peekTabs = new PeekTabService({
+      peek,
+      documents: fixture.documents,
+      targetIdOf: () => 'target-bq',
+      connections: connectionsStore,
+      bigQueryProperties
+    })
+    const wb = Object.assign(fixture, {
+      peek, peekTabs, bigQueryProperties, connections: connectionsStore,
+      menus: { registerTarget: () => ({ dispose: () => {} }) }
+    }) as unknown as Workbench
+
+    const bqTableNode: ExplorerMenuNode = {
+      id: 20, connectionId, kind: 'bqTable', provider: 'bigquery', label: 'orders', lost: false,
+      ref: { type: 'object', object: { kind: 'bqTable', project: 'varia-alpha', dataset: 'sales', name: 'orders' } }
+    }
+    const bqRoutineNode: ExplorerMenuNode = {
+      id: 21, connectionId, kind: 'bqRoutine', provider: 'bigquery', label: 'to_cents', lost: false,
+      ref: { type: 'object', object: { kind: 'bqRoutine', project: 'varia-alpha', dataset: 'sales', name: 'to_cents' } }
+    }
+    const bqDatasetNode: ExplorerMenuNode = {
+      id: 22, connectionId, kind: 'bqDataset', provider: 'bigquery', label: 'sales', lost: false,
+      ref: { type: 'object', object: { kind: 'bqDataset', project: 'varia-alpha', name: 'sales' } }
+    }
+    const bqModelNode: ExplorerMenuNode = {
+      id: 23, connectionId, kind: 'bqModel', provider: 'bigquery', label: 'churn', lost: false,
+      ref: { type: 'object', object: { kind: 'bqModel', project: 'varia-alpha', dataset: 'sales', name: 'churn' } }
+    }
+
+    try {
+      expect(peek.canPeek(bqTableNode)).toBe(true)
+      expect(peek.canPeek(bqRoutineNode)).toBe(true)
+      expect(peek.canPeek(bqDatasetNode)).toBe(true)
+      expect(peek.canPeek(bqModelNode)).toBe(false)
+
+      // Open BigQuery Peek Card: calls ONLY free bigquery.properties (zero billed queries, zero explorerPeek, zero preview).
+      peek.peek(bqTableNode, 'keyboard')
+      await act(async () => { await Promise.resolve(); await Promise.resolve() })
+      expect(api.bigQueryProperties).toHaveBeenCalledTimes(1)
+      expect(api.explorerPeek).not.toHaveBeenCalled()
+      expect(api.scriptObjects).not.toHaveBeenCalled()
+      expect(api.execute).not.toHaveBeenCalled()
+
+      mount(createElement(WorkbenchProvider, { workbench: wb, children: createElement(PeekCard) }))
+      const card = document.body.querySelector<HTMLElement>('[data-peek-card]')!
+      expect(card).not.toBeNull()
+      expect(card.getAttribute('data-inspector-surface')).toBe('peek')
+      expect(card.querySelectorAll('.inspector-tab-idx').length).toBeGreaterThanOrEqual(5)
+
+      // Clicking the Dataset cross-object link navigates in-place to the dataset and pushes onto Back stack.
+      const datasetLink = card.querySelector<HTMLButtonElement>('[aria-label="Peek varia-alpha.sales"]')!
+      expect(datasetLink).not.toBeNull()
+      await act(async () => {
+        datasetLink.click()
+        await Promise.resolve(); await Promise.resolve()
+      })
+      expect(peek.getSnapshot().open).toMatchObject({ kind: 'bqDataset', back: [{ kind: 'bqTable', tab: 'overview' }] })
+      expect(card.querySelector('[aria-label="Back"]')).not.toBeNull()
+
+      // Back returns to the table.
+      await act(async () => {
+        card.querySelector<HTMLButtonElement>('[aria-label="Back"]')!.click()
+        await Promise.resolve(); await Promise.resolve()
+      })
+      expect(peek.getSnapshot().open?.kind).toBe('bqTable')
+
+      // Selecting Preview Rows lazy-loads free tabledata.list; selecting Definition never auto-runs billed DDL.
+      act(() => { peek.selectTab('definition') })
+      expect(api.scriptObjects).not.toHaveBeenCalled()
+      await act(async () => {
+        peek.selectTab('preview')
+        await Promise.resolve(); await Promise.resolve()
+      })
+      expect(api.execute).toHaveBeenCalledWith(expect.objectContaining({ preview: { project: 'varia-alpha', dataset: 'sales', table: 'orders' } }))
+
+      // Open as Tab promotes BigQuery Peek directly into unified BigQueryPropertiesTab on the matching tab (no duplicate Peek tab).
+      act(() => { peek.selectTab('columns') })
+      const filterInput = card.querySelector<HTMLInputElement>('input[aria-label="Filter columns"]')!
+      expect(filterInput).not.toBeNull()
+      expect(cardStops(card)).toContain(filterInput)
+      const promotedId = peekTabs.open(peek.getSnapshot().open!.node, peek.getSnapshot().open!.tab)!
+      expect(bigQueryProperties.view(promotedId)).toMatchObject({ kind: 'bqTable', name: 'orders', activeTab: 'columns' })
+      expect(peekTabs.view(promotedId)).toBeUndefined()
+      // Promoting again focuses the existing BigQueryPropertiesTab on the new tab without opening a second tab.
+      expect(peekTabs.open(bqTableNode, 'labels')).toBe(promotedId)
+      expect(bigQueryProperties.view(promotedId)?.activeTab).toBe('labels')
+
+      // Closing the card releases the Preview Rows results entry.
+      act(() => { peek.close() })
+      expect(results.release).toHaveBeenCalled()
+    } finally {
+      peekTabs.dispose()
+      bigQueryProperties.dispose()
       peek.dispose()
       fixture.dispose()
     }

@@ -77,7 +77,10 @@ export const contextKeys = {
   activeDocumentIsText: { type: 'boolean', scope: 'state', description: 'The active document has text in the editor: a query or a value opened from the results, not a table designer, Database Properties, SSIS properties or an Activity Monitor.' },
   activeDocumentIsDesigner: { type: 'boolean', scope: 'state', description: 'The active document is a table designer.' },
   activeDocumentIsSsis: { type: 'boolean', scope: 'state', description: 'The active document is the properties of an SSIS Catalog folder, project, package or environment.' },
-  activeDocumentIsSsisOperations: { type: 'boolean', scope: 'state', description: 'The active document is Integration Services Operations.' },
+  activeDocumentIsSsisOperations: { type: 'boolean', scope: 'state', description: "The active document is Integration Services: the catalog's operations, a package's runs or a run's page." },
+  ssisPlace: { type: 'enum', scope: 'state', values: ['list', 'package', 'execution', ''], description: 'What the active Integration Services document shows: list, package or execution (empty outside it).' },
+  ssisCanGoBack: { type: 'boolean', scope: 'state', description: 'The active Integration Services document has a place to go Back to.' },
+  ssisCanGoForward: { type: 'boolean', scope: 'state', description: 'The active Integration Services document has a place to go Forward to.' },
   activeDocumentIsJobActivity: { type: 'boolean', scope: 'state', description: "The active document is SQL Server Agent's Job Activity Monitor." },
   activeDocumentIsAgentJob: { type: 'boolean', scope: 'state', description: 'The active document is a SQL Server Agent job (Job Properties, or New Job).' },
   activeDocumentIsAgentAlert: { type: 'boolean', scope: 'state', description: 'The active document is a SQL Server Agent alert (Alert Properties, or New Alert).' },
@@ -193,7 +196,7 @@ export const contextKeys = {
   },
   ...scriptVerbKeys,
   explorerSelectionModifiable: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer node offers Modify: a T-SQL stored procedure, function, or trigger.' },
-  explorerSelectionPeekable: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer node is of a kind Peek describes (`peekKinds` in `src/shared/explorer/peek.ts`).' },
+  explorerSelectionPeekable: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer node is of a kind Peek describes (`peekKinds` in `src/shared/explorer/peek.ts` or `bigQueryPropertyKinds` in `src/shared/bigquery/objects.ts`).' },
   explorerSelectionDependencies: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer node offers View Dependencies (`dependencyKinds` in `src/shared/explorer/dependencies.ts`).' },
   explorerSelectionAgentRole: {
     type: 'enum', scope: 'state', values: ['', ...agentRoleValues],
@@ -216,7 +219,7 @@ export const contextKeys = {
     type: 'enum', scope: 'target', menu: 'explorer.context', values: ['', ...folderIds],
     description: "The id of the Object Explorer folder the menu is for, from `src/shared/explorer/catalog.ts` ('tables' offers New › Table…), or '' for anything else."
   },
-  explorerNodePeekable: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for an Object Explorer node of a kind Peek describes (`peekKinds` in `src/shared/explorer/peek.ts`).' },
+  explorerNodePeekable: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for an Object Explorer node of a kind Peek describes (`peekKinds` in `src/shared/explorer/peek.ts` or `bigQueryPropertyKinds` in `src/shared/bigquery/objects.ts`).' },
   explorerNodeDependencies: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for an Object Explorer node that offers View Dependencies (`dependencyKinds` in `src/shared/explorer/dependencies.ts`).' },
   explorerFolderInsertable: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for a Columns folder whose columns have all loaded, so Copy Name copies their list.' },
   explorerNodeNameless: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for an Object Explorer node other than a server or folder whose kind has no name to copy (its `insert` style is `none`, such as an Agent error log), so Copy Name is hidden.' },
@@ -282,15 +285,23 @@ export const contextKeyValues = (key: ContextKey): readonly (boolean | string)[]
 export const staticContextKeys = (platform: Platform): Pick<ContextKeys, 'isMac' | 'isWindows' | 'isLinux'> =>
   ({ isMac: platform === 'darwin', isWindows: platform === 'win32', isLinux: platform === 'linux' })
 
+const defaultBase = (platform: Platform): Record<string, boolean | string> => {
+  const record: Record<string, boolean | string> = Object.create(null)
+  for (const key of contextKeyNames) { const info = declaration(key); record[key] = info.type === 'enum' ? '' : false }
+  Object.assign(record, staticContextKeys(platform))
+  return record
+}
+const baseRecordByPlatform: Readonly<Record<Platform, Record<string, boolean | string>>> = {
+  win32: defaultBase('win32'), linux: defaultBase('linux'), darwin: defaultBase('darwin')
+}
+
 /**
  * A complete context record with no prototype (so `__proto__` is an ordinary key): every key at its default (false, or
  * the enum's '' value), then the platform's static keys, then `values`.
  */
 export function contextRecord(platform: Platform, values: Partial<ContextKeys> = {}): ContextRecord & ContextKeys {
-  const record: Record<string, boolean | string> = Object.create(null)
-  for (const key of contextKeyNames) { const info = declaration(key); record[key] = info.type === 'enum' ? '' : false }
-  Object.assign(record, staticContextKeys(platform))
-  for (const key of contextKeyNames) if (Object.hasOwn(values, key) && values[key] !== undefined) record[key] = values[key]
+  const record: Record<string, boolean | string> = Object.assign(Object.create(null), baseRecordByPlatform[platform])
+  for (const key of Object.keys(values)) if (isContextKey(key) && values[key] !== undefined) record[key] = values[key]!
   return record as ContextRecord & ContextKeys
 }
 

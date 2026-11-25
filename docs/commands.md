@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (444)
+## Commands (449)
 
 ### File
 
@@ -343,7 +343,7 @@ keys it uses are listed below.
 | View Dependencies | `explorer.viewDependencies` | — | — | — | `backendReady && explorerSelectionDependencies` | Object Explorer context menu › View Dependencies |
 | Refresh Peek | `peek.refresh` | F5 (`peekFocus \|\| peekTabFocus`) | F5 (`peekFocus \|\| peekTabFocus`) | F5 (`peekFocus \|\| peekTabFocus`) | `backendReady` | — |
 | Preview Rows | `explorer.previewRows` | — | — | — | `backendReady && explorerSelectionKind == 'bqTable' && !documentBusy` | Object Explorer context menu › Preview Rows; Search Objects result context menu › Preview Rows |
-| BigQuery Properties | `explorer.bigQueryProperties` | — | — | — | `backendReady && (explorerSelectionKind == 'bqTable' \|\| explorerSelectionKind == 'bqView' \|\| explorerSelectionKind == 'bqMaterializedView' \|\| explorerSelectionKind == 'bqExternalTable')` | Object Explorer context menu › Properties |
+| BigQuery Properties | `explorer.bigQueryProperties` | — | — | — | `backendReady && explorerSelectionPeekable` | Object Explorer context menu › Properties |
 | Copy Name | `explorer.copyName` | — | — | — | `hasConnection` | Object Explorer context menu › Copy Name |
 | Search Objects… | `explorer.searchObjects` | — | — | — | `hasConnection` | View › Search Objects…; Object Explorer context menu › Search Objects… |
 | Rebuild Search Index | `explorer.rebuildIndex` | — | — | — | `hasConnection` | — |
@@ -414,6 +414,11 @@ keys it uses are listed below.
 | Pause Operations | `ssis.pauseOperations` | — | — | — | `activeDocumentIsSsisOperations && ssisOperationsPausable`; checked when `ssisOperationsPaused` | Integration Services Operations context menu › Pause |
 | Copy Operations | `ssis.copyOperations` | — | — | — | `activeDocumentIsSsisOperations` | Integration Services Operations context menu › Copy |
 | Copy Operations with Headers | `ssis.copyOperationsWithHeaders` | — | — | — | `activeDocumentIsSsisOperations` | Integration Services Operations context menu › Copy with Headers |
+| Open Execution | `ssis.openExecution` | — | — | — | `backendReady && activeDocumentIsSsisOperations` | Integration Services Operations context menu › Open |
+| Go Back | `ssis.goBack` | Alt+Left (`activeDocumentIsSsisOperations && !textInputFocus`) | Alt+Left (`activeDocumentIsSsisOperations && !textInputFocus`) | ⌘[ (`activeDocumentIsSsisOperations && !textInputFocus`) | `activeDocumentIsSsisOperations && ssisCanGoBack` | — |
+| Go Forward | `ssis.goForward` | Alt+Right (`activeDocumentIsSsisOperations && !textInputFocus`) | Alt+Right (`activeDocumentIsSsisOperations && !textInputFocus`) | ⌘] (`activeDocumentIsSsisOperations && !textInputFocus`) | `activeDocumentIsSsisOperations && ssisCanGoForward` | — |
+| Package Executions | `ssis.packageExecutions` | — | — | — | `backendReady && ssisVerbPackageProperties == 'enabled'` | Object Explorer context menu › Executions |
+| Package Last Execution | `ssis.lastRun` | — | — | — | `backendReady && ssisVerbPackageProperties == 'enabled'` | Object Explorer context menu › Last Execution |
 | Folder Properties | `ssis.folderProperties` | — | — | — | `backendReady && ssisVerbFolderProperties == 'enabled'` | Object Explorer context menu › Properties |
 | Project Properties | `ssis.projectProperties` | — | — | — | `backendReady && ssisVerbProjectProperties == 'enabled'` | Object Explorer context menu › Properties |
 | Package Properties | `ssis.packageProperties` | — | — | — | `backendReady && ssisVerbPackageProperties == 'enabled'` | Object Explorer context menu › Properties |
@@ -818,7 +823,9 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `1_monitor` | View A**g**ent Log | `agent.viewAgentLog` | `((explorerNode == 'folder' && explorerFolder == 'agentErrorLogs') \|\| explorerNode == 'agentErrorLog') && !explorerServerLost` |
 | `1_monitor` | Rec**y**cle | `agent.recycleErrorLog` | `((explorerNode == 'folder' && explorerFolder == 'agentErrorLogs') \|\| explorerNode == 'agentErrorLog') && !explorerServerLost && explorerServerEngine == 'box'` |
 | `1_operations` | A**c**tive Operations | `ssis.activeOperations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
+| `1_operations` | E**x**ecutions | `ssis.packageExecutions` | `explorerNode == 'ssisPackage' && !explorerServerLost` |
 | `1_operations` | All E**x**ecutions | `ssis.allExecutions` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
+| `1_operations` | Last Exec**u**tion | `ssis.lastRun` | `explorerNode == 'ssisPackage' && !explorerServerLost` |
 | `1_operations` | All Vali**d**ations | `ssis.allValidations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_operations` | All O**p**erations | `ssis.allOperations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_query` | **N**ew Database… | `explorer.newDatabaseOnDatabase` | `explorerNode == 'database' && !explorerServerLost && explorerServerEngine == 'box'` |
@@ -853,7 +860,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `9_properties` | **P**roperties | `ssis.projectProperties` | `explorerNode == 'ssisProject' && ssisVerbProjectProperties != ''` |
 | `9_properties` | **P**roperties | `ssis.packageProperties` | `explorerNode == 'ssisPackage' && ssisVerbPackageProperties != ''` |
 | `9_properties` | **P**roperties | `ssis.environmentProperties` | `explorerNode == 'ssisEnvironment' && ssisVerbEnvironmentProperties != ''` |
-| `9_properties` | P**r**operties | `explorer.bigQueryProperties` | `(explorerNode == 'bqTable' \|\| explorerNode == 'bqView' \|\| explorerNode == 'bqMaterializedView' \|\| explorerNode == 'bqExternalTable') && !explorerServerLost` |
+| `9_properties` | P**r**operties | `explorer.bigQueryProperties` | `(explorerNode == 'bqTable' \|\| explorerNode == 'bqView' \|\| explorerNode == 'bqMaterializedView' \|\| explorerNode == 'bqExternalTable' \|\| explorerNode == 'bqRoutine' \|\| explorerNode == 'bqDataset') && !explorerServerLost` |
 
 #### Object Explorer context menu › New
 
@@ -1131,6 +1138,7 @@ Right-click the Integration Services Operations grid (a right-click outside the 
 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
+| `1_operation` | **O**pen | `ssis.openExecution` | Always |
 | `1_operation` | **S**top Operation | `ssis.stopOperation` | Always |
 | `5_copy` | **C**opy | `ssis.copyOperations` | Always |
 | `5_copy` | Copy with **H**eaders | `ssis.copyOperationsWithHeaders` | Always |
@@ -1282,7 +1290,7 @@ Right-click a job in Job Activity Monitor's list (a right-click outside the sele
 | `5_history` | View **H**istory | `agent.viewHistory` | Always |
 | `9_view` | Re**f**resh | `agent.refreshJobs` | Always |
 
-## Context keys (206)
+## Context keys (209)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1325,7 +1333,10 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `activeDocumentIsText` | boolean | state | The active document has text in the editor: a query or a value opened from the results, not a table designer, Database Properties, SSIS properties or an Activity Monitor. |
 | `activeDocumentIsDesigner` | boolean | state | The active document is a table designer. |
 | `activeDocumentIsSsis` | boolean | state | The active document is the properties of an SSIS Catalog folder, project, package or environment. |
-| `activeDocumentIsSsisOperations` | boolean | state | The active document is Integration Services Operations. |
+| `activeDocumentIsSsisOperations` | boolean | state | The active document is Integration Services: the catalog's operations, a package's runs or a run's page. |
+| `ssisPlace` | `'list'`, `'package'`, `'execution'`, `''` | state | What the active Integration Services document shows: list, package or execution (empty outside it). |
+| `ssisCanGoBack` | boolean | state | The active Integration Services document has a place to go Back to. |
+| `ssisCanGoForward` | boolean | state | The active Integration Services document has a place to go Forward to. |
 | `activeDocumentIsJobActivity` | boolean | state | The active document is SQL Server Agent's Job Activity Monitor. |
 | `activeDocumentIsAgentJob` | boolean | state | The active document is a SQL Server Agent job (Job Properties, or New Job). |
 | `activeDocumentIsAgentAlert` | boolean | state | The active document is a SQL Server Agent alert (Alert Properties, or New Alert). |
@@ -1432,7 +1443,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerScriptDelete` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Script as › DELETE To: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerScriptExecute` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Script as › EXECUTE To: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerSelectionModifiable` | boolean | state | The selected Object Explorer node offers Modify: a T-SQL stored procedure, function, or trigger. |
-| `explorerSelectionPeekable` | boolean | state | The selected Object Explorer node is of a kind Peek describes (`peekKinds` in `src/shared/explorer/peek.ts`). |
+| `explorerSelectionPeekable` | boolean | state | The selected Object Explorer node is of a kind Peek describes (`peekKinds` in `src/shared/explorer/peek.ts` or `bigQueryPropertyKinds` in `src/shared/bigquery/objects.ts`). |
 | `explorerSelectionDependencies` | boolean | state | The selected Object Explorer node offers View Dependencies (`dependencyKinds` in `src/shared/explorer/dependencies.ts`). |
 | `explorerSelectionAgentRole` | `''`, `'sysadmin'`, `'operator'`, `'reader'`, `'user'`, `'none'`, `'unknown'`, `'profileFailed'` | state | The login's SQL Server Agent role on the server of the selected Object Explorer node, when that node is an Agent node (`agentRoleOf` in `src/shared/agent/profile.ts`): 'sysadmin', 'operator', 'reader', 'user', 'none', 'unknown' while `agent.profile` is being read, or 'profileFailed' when it failed; '' for any other node. Keep it out of keybinding `when` clauses. |
 | `explorerActionSelectTop` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Select Top 1000 Rows: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
@@ -1466,7 +1477,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerFolderFilterable` | boolean | target | The menu is for an Object Explorer folder that Filter Settings can filter. |
 | `explorerFolderFiltered` | boolean | target | The menu is for an Object Explorer folder that has a filter. |
 | `explorerFolder` | `''`, `'databases'`, `'systemDatabases'`, `'databaseSnapshots'`, `'serverSecurity'`, `'logins'`, `'serverRoles'`, `'credentials'`, `'cryptographicProviders'`, `'audits'`, `'serverAuditSpecifications'`, `'serverObjects'`, `'backupDevices'`, `'linkedServers'`, `'serverTriggers'`, `'tables'`, `'systemTables'`, `'fileTables'`, `'externalTables'`, `'graphTables'`, `'droppedLedgerTables'`, `'views'`, `'systemViews'`, `'droppedLedgerViews'`, `'externalResources'`, `'externalDataSources'`, `'externalFileFormats'`, `'synonyms'`, `'programmability'`, `'storedProcedures'`, `'systemStoredProcedures'`, `'functions'`, `'tableValuedFunctions'`, `'scalarValuedFunctions'`, `'aggregateFunctions'`, `'databaseTriggers'`, `'assemblies'`, `'types'`, `'userDefinedDataTypes'`, `'userDefinedTableTypes'`, `'userDefinedTypes'`, `'xmlSchemaCollections'`, `'rules'`, `'defaults'`, `'planGuides'`, `'sequences'`, `'storage'`, `'fullTextCatalogs'`, `'partitionSchemes'`, `'partitionFunctions'`, `'fullTextStoplists'`, `'searchPropertyLists'`, `'databaseSecurity'`, `'users'`, `'roles'`, `'databaseRoles'`, `'applicationRoles'`, `'schemas'`, `'asymmetricKeys'`, `'certificates'`, `'symmetricKeys'`, `'alwaysEncryptedKeys'`, `'columnMasterKeys'`, `'columnEncryptionKeys'`, `'databaseAuditSpecifications'`, `'securityPolicies'`, `'columns'`, `'keys'`, `'constraints'`, `'tableTriggers'`, `'indexes'`, `'statistics'`, `'parameters'`, `'integrationServicesCatalogs'`, `'ssisProjects'`, `'ssisEnvironments'`, `'ssisPackages'`, `'agentJobs'`, `'agentAlerts'`, `'agentOperators'`, `'agentProxies'`, `'agentUnassignedProxies'`, `'agentErrorLogs'`, `'bqTables'`, `'bqViews'`, `'bqMaterializedViews'`, `'bqExternalTables'`, `'bqRoutines'`, `'bqModels'`, `'bqColumns'` | target | The id of the Object Explorer folder the menu is for, from `src/shared/explorer/catalog.ts` ('tables' offers New › Table…), or '' for anything else. |
-| `explorerNodePeekable` | boolean | target | The menu is for an Object Explorer node of a kind Peek describes (`peekKinds` in `src/shared/explorer/peek.ts`). |
+| `explorerNodePeekable` | boolean | target | The menu is for an Object Explorer node of a kind Peek describes (`peekKinds` in `src/shared/explorer/peek.ts` or `bigQueryPropertyKinds` in `src/shared/bigquery/objects.ts`). |
 | `explorerNodeDependencies` | boolean | target | The menu is for an Object Explorer node that offers View Dependencies (`dependencyKinds` in `src/shared/explorer/dependencies.ts`). |
 | `explorerFolderInsertable` | boolean | target | The menu is for a Columns folder whose columns have all loaded, so Copy Name copies their list. |
 | `explorerNodeNameless` | boolean | target | The menu is for an Object Explorer node other than a server or folder whose kind has no name to copy (its `insert` style is `none`, such as an Agent error log), so Copy Name is hidden. |

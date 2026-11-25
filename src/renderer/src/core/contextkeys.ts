@@ -48,7 +48,11 @@ export interface RestoreContextState { readonly byDocument: Readonly<Record<stri
 /** An Activity Monitor's state for its commands: ActivityMonitorService publishes one per open monitor. */
 export interface ActivityContextState { readonly byDocument: Readonly<Record<string, { readonly paused: boolean; readonly split: boolean }>> }
 /** An Integration Services Operations document's state for its commands: SsisOperationsService publishes one per document. */
-export interface SsisOperationsKeys { readonly stoppable: boolean; readonly paused: boolean; readonly refreshable: boolean; readonly pausable: boolean }
+export interface SsisOperationsKeys {
+  readonly stoppable: boolean; readonly paused: boolean; readonly refreshable: boolean; readonly pausable: boolean
+  /** The Integration Services document's shown place, and whether Back and Forward have a step. */
+  readonly place: 'list' | 'package' | 'execution'; readonly canGoBack: boolean; readonly canGoForward: boolean
+}
 export interface SsisOperationsContextState { readonly byDocument: Readonly<Record<string, SsisOperationsKeys>> }
 /** A Job History document's state for its commands: JobHistoryService publishes one per document. */
 export interface JobHistoryKeys {
@@ -203,7 +207,7 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     activeDocumentIsAgentAlert: active?.kind === 'agentAlert', activeDocumentIsAgentOperator: active?.kind === 'agentOperator', activeDocumentIsAgentOperators: active?.kind === 'agentOperators',
     activeDocumentIsAgentProxy: active?.kind === 'agentProxy', activeDocumentIsCredential: active?.kind === 'credential',
     activeDocumentIsLogViewer: active?.kind === 'agentLogViewer', activeDocumentIsAgentSchedules: active?.kind === 'agentSchedules',
-    activeDocumentIsSsisOperations: active?.kind === 'ssisOperations', ssisOperationStoppable: !!operations?.stoppable, ssisOperationsPaused: !!operations?.paused, ssisOperationsRefreshable: !!operations?.refreshable, ssisOperationsPausable: !!operations?.pausable,
+    activeDocumentIsSsisOperations: active?.kind === 'ssisOperations', ssisPlace: active?.kind === 'ssisOperations' ? operations?.place ?? 'list' : '', ssisCanGoBack: !!operations?.canGoBack, ssisCanGoForward: !!operations?.canGoForward, ssisOperationStoppable: !!operations?.stoppable, ssisOperationsPaused: !!operations?.paused, ssisOperationsRefreshable: !!operations?.refreshable, ssisOperationsPausable: !!operations?.pausable,
     activeDocumentIsJobHistory: active?.kind === 'bigQueryJobs', jobHistoryPaused: !!history?.paused, jobHistoryRefreshable: !!history?.refreshable, jobHistoryPausable: !!history?.pausable,
     jobHistoryJobSelected: !!history?.selected, jobHistoryCanOpenResults: !!history?.openResults, jobHistoryCanReattach: !!history?.reattach, jobHistoryCanOpenSql: !!history?.openSql,
     jobHistoryCanRerun: !!history?.rerun, jobHistoryCanCancel: !!history?.cancel,

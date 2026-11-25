@@ -12,7 +12,7 @@ import { googleSqlLanguage } from '../src/renderer/src/languages/googlesql'
 import { Columns, sqlScopeOf, colouredEnd, shownChars, shownText, hitKindSpec, hitProperties, matchedLine, Properties, scrollKey } from '../src/renderer/src/search/SearchDetails'
 
 const ok = <T>(value: T): ApiResult<T> => ({ ok: true, value })
-const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+const flush = () => new Promise(resolve => setImmediate(resolve))
 const connectionId = 'server-a'
 const table: ObjectSearchHit = { object: { kind: 'table', database: 'Sales', schema: 'dbo', name: 'Orders' }, folder: 'tables', label: 'dbo.Orders' }
 const procedure: ObjectSearchHit = {

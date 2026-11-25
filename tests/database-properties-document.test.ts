@@ -20,7 +20,7 @@ afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 
 const appData: ObjectRef = { kind: 'database', name: 'AppData' }
 const node = (object: ObjectRef = appData, connectionId = 'c1', id = 12): ExplorerMenuNode => ({ id, connectionId, ref: { type: 'object', object }, kind: 'database', label: object.name ?? '', lost: false })
-const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
+const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setImmediate(resolve)) }
 const done: ApiResult<ActionExecuteResult> = { ok: true, value: { steps: [{ status: 'done', title: 'Set the options' }], messages: [], elapsedMs: 1 } }
 const inUse = { code: 'IN_USE', message: 'Other connections use the database.', retryable: true } as const
 /** Connects `id` to `server`, as the Connect dialog does (a new connection, even to a server connected before). */

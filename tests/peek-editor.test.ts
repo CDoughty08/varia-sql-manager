@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { contextRecord, type ContextKeys } from '../src/shared/commands/context-keys'
@@ -185,14 +185,19 @@ function keysIn(platform: Platform, element: FocusElement): ContextKeys {
   const queryEditor = { getContainerDomNode: () => ({ contains: () => false }), hasTextFocus: () => false }
   return computeContextKeys({ platform, focus: focusFacts(element, queryEditor), documents, queries: { byTab: {} } as never, connections: [{ id: 'c1' }], quickInputVisible: false, wordWrap: false, backendStatus: 'ready' })
 }
+/** One service per platform for every press: building one compiles and checks every rule, which the presses would repeat. */
+const pressed: { values: ContextKeys; ran: string[] } = { values: {} as ContextKeys, ran: [] }
+const services = new Map<Platform, KeybindingService>()
+afterAll(() => { for (const service of services.values()) service.dispose() })
 function press(platform: Platform, values: ContextKeys, code: string, keyValue: string, modifiers: { ctrl?: boolean; shift?: boolean; meta?: boolean; alt?: boolean } = {}) {
-  const ran: string[] = []
-  const service = new KeybindingService({ platform, commands: { execute: async id => { ran.push(id); return true } }, context: { get: () => values }, modalOpen: () => false, editorHasTextFocus: () => true, editorContains: () => false })
+  pressed.values = values
+  pressed.ran = []
+  let service = services.get(platform)
+  if (!service) services.set(platform, service = new KeybindingService({ platform, commands: { execute: async id => { pressed.ran.push(id); return true } }, context: { get: () => pressed.values }, modalOpen: () => false, editorHasTextFocus: () => true, editorContains: () => false }))
   const event: KeyDownEvent & { consumed: boolean } = { key: keyValue, code, ctrlKey: !!modifiers.ctrl, shiftKey: !!modifiers.shift, altKey: !!modifiers.alt, metaKey: !!modifiers.meta, repeat: false, isComposing: false, keyCode: 0,
     defaultPrevented: false, consumed: false, preventDefault: () => { event.consumed = true }, stopPropagation: () => { event.consumed = true } }
   service.handleKeyDown(event)
-  service.dispose()
-  return { ran, consumed: event.consumed }
+  return { ran: pressed.ran, consumed: event.consumed }
 }
 
 describe('Peek editor keys', () => {

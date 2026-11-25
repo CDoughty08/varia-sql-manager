@@ -36,7 +36,7 @@ async function mount(answer: () => Promise<ApiResult<DependenciesResult>>) {
   const rollback = () => change(connected)
   return { dependencies, api, select, reveal, lose, disconnect, rollback }
 }
-const settle = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+const settle = () => act(async () => { await new Promise(resolve => setImmediate(resolve)) })
 const key = (target: Element, name: string) => act(() => { target.dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true, cancelable: true })) })
 
 describe('View Dependencies dialog', () => {

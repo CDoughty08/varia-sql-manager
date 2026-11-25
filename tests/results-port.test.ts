@@ -151,7 +151,7 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
   }
   return { host, backend, reads, lives, updates, views, identifies, diffs, pivots, searches, profiles, distincts, distinctReads, ports, port, frame, read, live, setReady: (generation: number | undefined) => { ready = generation } }
 }
-const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+const settle = () => new Promise(resolve => setImmediate(resolve))
 const descriptor = (resultId: number, generation = 1): Pick<ResultDescriptor, 'generation' | 'resultId'> => ({ generation, resultId })
 
 describe('ResultsPortHost', () => {

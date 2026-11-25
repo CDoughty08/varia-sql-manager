@@ -14,7 +14,7 @@ function dirtyQuery(fixture: ReturnType<typeof workbenchFixture>, text = 'SELECT
   return document.id
 }
 /** The timer's flush and the calls queued behind it have finished: each awaits only answers that are already there. */
-async function settled(_fixture: ReturnType<typeof workbenchFixture>) { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
+async function settled(_fixture: ReturnType<typeof workbenchFixture>) { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setImmediate(resolve)) }
 
 describe('AutoRecover in the workbench', () => {
   it('saves, every 5 minutes, each query with unsaved changes whose text changed since its last copy', async () => {

@@ -693,8 +693,13 @@ try {
   // tab's center and the menu opens above it, over the tab's upper right.
   const contentSize = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getContentSize())
   const resizeTo = async ([width, height]) => {
-    await application.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setContentSize(size[0], size[1]), [width, height])
-    await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([width, height])
+    const apply = () => application.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setContentSize(size[0], size[1]), [width, height])
+    await apply()
+    await expect.poll(async () => {
+      const dims = await page.evaluate(() => [innerWidth, innerHeight])
+      if (dims[0] !== width || dims[1] !== height) await apply()
+      return dims
+    }, { timeout: 15000 }).toEqual([width, height])
     await settle()
   }
   await page.keyboard.press('Escape')
@@ -787,7 +792,11 @@ try {
   // its submenus; scrolling outside it, resizing, losing focus, and clicking elsewhere close it.
   const setContentSize = (width, height) => application.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setContentSize(size.width, size.height), { width, height })
   await setContentSize(1024, 700)
-  await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([1024, 700])
+  await expect.poll(async () => {
+    const dims = await page.evaluate(() => [innerWidth, innerHeight])
+    if (dims[0] !== 1024 || dims[1] !== 700) await setContentSize(1024, 700)
+    return dims
+  }, { timeout: 15000 }).toEqual([1024, 700])
   await textbox().focus()
   // Without the results the editor reaches the bottom of the window.
   await page.keyboard.press('Control+R')

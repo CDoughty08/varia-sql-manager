@@ -220,7 +220,7 @@ describe('ScriptingService', () => {
 describe('BigQuery Script As', () => {
   const bqOrders: ObjectRef = { kind: 'bqTable', project: 'varia-alpha', dataset: 'sales', name: 'orders' }
   const estimate = { bytesProcessed: 10_485_760, statementType: 'SELECT' }
-  const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+  const flush = () => new Promise(resolve => setImmediate(resolve))
 
   it('asks for CREATE\'s estimate, then the cost prompts, then runs it under their cap with a new request id', async () => {
     const gate = vi.fn(async () => ({ run: true, maximumBytesBilled: 20_000_000 }))
@@ -371,7 +371,7 @@ describe('Script As commands', () => {
     const task = deferred<void>(), busy = fixture.documents.runTask(() => task.promise)
     const first = scripting.run('create', 'file', orders)
     await vi.waitFor(() => expect(api.scriptObjects).toHaveBeenCalledOnce())
-    await new Promise(resolve => setTimeout(resolve, 0))
+    await new Promise(resolve => setImmediate(resolve))
     expect(api.saveSqlFile).not.toHaveBeenCalled()
     task.resolve(); await busy
     await vi.waitFor(() => expect(api.saveSqlFile).toHaveBeenCalledOnce())
@@ -379,7 +379,7 @@ describe('Script As commands', () => {
     // A second File… script waits for the first Save dialog, then gets its own.
     const second = scripting.run('drop', 'file', orders)
     await vi.waitFor(() => expect(api.scriptObjects).toHaveBeenCalledTimes(2))
-    await new Promise(resolve => setTimeout(resolve, 0))
+    await new Promise(resolve => setImmediate(resolve))
     expect(api.saveSqlFile).toHaveBeenCalledOnce()
     dialogs[0].resolve({ ok: true, value: { id: 'f1', name: 'dbo.Orders.sql', path: '/tmp/dbo.Orders.sql', encoding: 'utf8', readOnly: false } })
     await first

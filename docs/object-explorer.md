@@ -472,7 +472,12 @@ tables or `Usage Telemetry` for indexes, the kind's lists, `Dependencies`, and `
 controls, and focus-scoped `Ctrl+1`–`9` (`⌘1`–`9` on macOS, `9` = last tab) tab switching (numeric badges stay visible on
 Peek Card and appear on modifier hold in Peek Tab). **Overview** shows identity facts in `FactGrid` (with click-to-copy
 and clickable cross-object links such as parent table, referenced table and login default database pushing onto Peek's Back
-stack) and signal-first `CapabilityChips`. **Storage & Layout** (tables) shows a Data vs. Index space `RatioBar` and storage
+stack) and signal-first `CapabilityChips`. For SQL Server **Foreign Keys**, Overview leads with a visual **Foreign Key
+Relationship** diagram (`parent.table (cols) → referenced.table (cols)`) with clickable jump-links to both tables,
+referential action pills (`ON DELETE` / `ON UPDATE`), and Enabled/Trusted pills; **Primary Keys** and **Unique
+Constraints** show a **Key Summary** block with clustered/nonclustered pills and ordered column badges; **Constraints**
+(`CHECK`, `DEFAULT`, `EDGE`) show a copyable **Expression** block, target column, Enabled/Trusted/System-named capability
+chips, and expression fallback on **Definition** when no script is available. **Storage & Layout** (tables) shows a Data vs. Index space `RatioBar` and storage
 facts; **Usage Telemetry** (indexes) shows a Seeks/Scans vs. Updates `RatioBar` and usage facts. The collapsible, resizable
 right **Vitals** rail shows compact key facts, flat meters and notable flags, remembers width and open state separately for
 Peek Card and Full Tab, and hides below 680 px container width instead of stacking a second vertical scroller. Fact text can
@@ -557,8 +562,12 @@ shows another object or refreshes, and when the server or the backend is lost.
 
 Open Peek as Tab (the card's button, Ctrl+Enter in the card or the tree, or Ctrl+click on a row, Cmd on macOS) shows the
 same unified inspector in a document tab (`surface="full"`) with breadcrumbs, a Hero KPI strip, Back, Refresh, Script As…
-and, for a kind that has one, the Properties verb. A tab owns its reads and its Top rows run as the card does; closing it
-releases them.
+and, for a kind that has one, the Properties verb. Promoting a SQL Server table opens or focuses its unified Table
+Properties document on the matching tab. BigQuery tables, views, materialized views, external tables, routines and datasets
+also open in the floating Peek Card from free `bigquery.properties` metadata (zero billed queries on open; lazy free
+`tabledata.list` Preview Rows; on-demand native-table DDL with cost prompts), and **Open as Tab** opens or focuses the
+unified BigQuery Properties tab on the matching canonical tab (`docs/bigquery.md`). A tab owns its reads and its Top rows
+run as the card does; closing it releases them.
 
 | Kind | Definition | Tabs |
 | --- | --- | --- |

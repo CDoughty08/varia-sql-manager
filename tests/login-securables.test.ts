@@ -278,7 +278,7 @@ function setup(describe: Parameters<typeof loginPropertiesDescribe>[0] = {}) {
   let count = 0
   const dialogs = new ObjectDialogService({ api, connections, explorer: { listingFolderOf: vi.fn(() => 5 as number | undefined), reconcile: vi.fn() }, documents: { newQuery: vi.fn() }, files: { saveCopy: vi.fn() }, newId: () => `id-${++count}` })
   cleanups.push(() => dialogs.dispose())
-  const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+  const settle = () => new Promise(resolve => setImmediate(resolve))
   const node = (kind: 'login' | 'folder'): ExplorerMenuNode => kind === 'login'
     ? { id: 7, connectionId: 'server-a', ref: { type: 'object', object: appLogin }, kind: 'login', subtype: 'sql', label: 'app_login', lost: false, engine: 'box' }
     : { id: 5, connectionId: 'server-a', ref: { type: 'folder', owner: server, folder: 'logins' }, kind: 'folder', folder: 'logins', label: 'Logins', lost: false, engine: 'box' }

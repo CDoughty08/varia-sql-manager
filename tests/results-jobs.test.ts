@@ -46,7 +46,7 @@ function host(patch: Partial<JobHostDeps> = {}) {
   }
   return { jobs: new ResultsJobHost(deps), ...fake, clipboard, progress, dialog, tick: (ms: number) => { now += ms } }
 }
-const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+const settle = () => new Promise(resolve => setImmediate(resolve))
 
 describe('ResultsJobHost copy', () => {
   it('rejects invalid requests and results the renderer does not own', async () => {

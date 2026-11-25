@@ -189,7 +189,7 @@ describe('SQL Server Agent Properties in ObjectDialogService', () => {
       notify: vi.fn(), databaseState: vi.fn(), newId: () => `00000000-0000-4000-8000-${String(++ids).padStart(12, '0')}`
     } as never)
     cleanups.push(() => dialogs.dispose())
-    return { dialogs, api, settle: () => new Promise(resolve => setTimeout(resolve, 0)) }
+    return { dialogs, api, settle: () => new Promise(resolve => setImmediate(resolve)) }
   }
   it('runs Delete old history apart from OK, keeps the dialog and its unsaved draft open, and reads the history again', async () => {
     const { dialogs, api, settle } = setup(model())

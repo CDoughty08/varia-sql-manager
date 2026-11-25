@@ -170,6 +170,8 @@ export interface JobDocumentServiceOptions extends CustomDocumentTargetOptions {
     & Partial<Pick<VariaApi, 'languageParse' | 'describeSsis' | 'explorerChildren' | 'agentHistoryMessage' | 'openAgentStepScript'>>
   /** Steps' Open in query window (AG-6b): a new query tab on the job's connection, in the step's database. */
   readonly openQuery?: (sql: string, name: string, connectionId: string, database?: string) => void
+  /** History's SSIS execution link (AG-13): the SSIS execution messages view on the job's connection. */
+  readonly openSsisExecution?: (connectionId: string, executionId: number) => void
   readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'setDirty' | 'activate' | 'getSnapshot' | 'subscribe' | 'close'> & Partial<Pick<DocumentService, 'openKeptCustom'>> & DeliverScriptDeps['documents']
   readonly files: DeliverScriptDeps['files']
   readonly connections: ExternalStore<readonly LiveConnection[]>
@@ -248,7 +250,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     this.unsubscribe = [options.connections.subscribe(changed), options.documents.subscribe(changed)]
     // History (AG-6d): its view runs while the document shows with History open.
     this.history = new JobHistoryService({
-      api: options.api, ...options.live ? { live: options.live } : {}, ...options.openQuery ? { openQuery: options.openQuery } : {}, newId: this.newId, connectionOf: id => this.live(id) ? this.connectionOf(id) : undefined,
+      api: options.api, ...options.live ? { live: options.live } : {}, ...options.openSsisExecution ? { openSsisExecution: options.openSsisExecution } : {}, newId: this.newId, connectionOf: id => this.live(id) ? this.connectionOf(id) : undefined,
       visible: id => this.historyShows(id),
       subscribe: listener => { const a = options.connections.subscribe(listener), b = options.documents.subscribe(listener), c = this.subscribe(listener); return () => { a(); b(); c() } }
     })

@@ -78,6 +78,7 @@ import { actionsContribution } from '../../src/renderer/src/contributions/action
 import { designerContribution } from '../../src/renderer/src/contributions/designer'
 import { TableDesignerService } from '../../src/renderer/src/designer/TableDesignerService'
 import { SsisPropertiesService } from '../../src/renderer/src/ssis/SsisPropertiesService'
+import { SsisPlacesService } from '../../src/renderer/src/ssis/SsisPlacesService'
 import { ssisContribution } from '../../src/renderer/src/contributions/ssis'
 import { DatabasePropertiesService } from '../../src/renderer/src/properties/DatabasePropertiesService'
 import { TablePropertiesService } from '../../src/renderer/src/properties/TablePropertiesService'
@@ -371,6 +372,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
       backupFile: 'C:\\SSIS\\Binn\\SSISDBBackup.bak', dataFile: 'C:\\Data\\SSISDB.mdf', logFile: 'C:\\Data\\SSISDB.ldf' }, elapsedMs: 1 } })),
     executeSsis: vi.fn<VariaApi['executeSsis']>(async () => ({ ok: true, value: { steps: [{ status: 'done', title: 'Restore the catalog database' }], elapsedMs: 1 } })),
     // No catalog unless a test says otherwise.
+    executionSsis: vi.fn<VariaApi['executionSsis']>(async () => ({ ok: true, value: { elapsedMs: 1, error: { code: 'CATALOG_MISSING', message: 'The SSIS Catalog does not exist on this server.', retryable: false } } })),
+    packageRunsSsis: vi.fn<VariaApi['packageRunsSsis']>(async () => ({ ok: true, value: { elapsedMs: 1, error: { code: 'CATALOG_MISSING', message: 'The SSIS Catalog does not exist on this server.', retryable: false } } })),
     describeSsis: vi.fn<VariaApi['describeSsis']>(async () => ({ ok: true, value: { elapsedMs: 1, error: { code: 'CATALOG_MISSING', message: 'The SSIS Catalog does not exist on this server.', retryable: false } } })),
     cancelSsis: vi.fn<VariaApi['cancelSsis']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
     checkSqlFiles: vi.fn<VariaApi['checkSqlFiles']>(async () => ({ ok: true, value: [] })),
@@ -463,11 +466,12 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const liveViews = fakeLiveViews()
   const activity = new ActivityMonitorService({ api, documents, connections, live: liveViews, targetIdOf, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values })
   const live = fakeLive()
-  const operations = new SsisOperationsService({ api, documents, panes, live, connections, settings, targetIdOf })
+  const ssisPlaces = new SsisPlacesService({ api })
+  const operations = new SsisOperationsService({ api, documents, panes, live, places: ssisPlaces, connections, settings, targetIdOf })
   const jobHistory = new JobHistoryService({ api, documents, panes, live, connections, settings, queries, targetIdOf })
   const agentJobs = new AgentJobStatusService({ api, live, connections })
   const jobActivity = new JobActivityService({ api, documents, panes, live, connections, targetIdOf, explorer, longRuns, started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt) })
-  const jobDocuments = new JobDocumentService({ api, documents, files, connections, live, targetIdOf, openQuery: (sql, name, connectionId, database) => { documents.newQuery(sql, name, connectionId, database) }, ...(options.timers ? { timers: options.timers } : {}) })
+  const jobDocuments = new JobDocumentService({ api, documents, files, connections, live, targetIdOf, openQuery: (sql, name, connectionId, database) => { documents.newQuery(sql, name, connectionId, database) }, openSsisExecution: (connectionId, executionId) => { operations.openExecution(connectionId, executionId) }, ...(options.timers ? { timers: options.timers } : {}) })
   const agentObjectOptions = { api, documents, files, connections, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) }
   const alertDocuments = new AlertOperatorDocumentService(alertSpec, agentObjectOptions)
   const operatorDocuments = new AlertOperatorDocumentService(operatorSpec, agentObjectOptions)
@@ -598,6 +602,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     longRuns,
     designers,
     ssisProperties,
+    ssisPlaces,
     properties,
     tableProperties,
     newDatabase,
@@ -719,6 +724,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     newDatabase.dispose()
     restore.dispose()
     operations.dispose()
+    ssisPlaces.dispose()
     jobHistory.dispose()
     jobActivity.dispose()
     logViewer.dispose()
@@ -775,6 +781,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     longRuns,
     designers,
     ssisProperties,
+    ssisPlaces,
     properties,
     tableProperties,
     newDatabase,
