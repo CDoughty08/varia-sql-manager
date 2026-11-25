@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useSyncExternalStore, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent } from 'react'
+import { createPortal } from 'react-dom'
 import type { CommandId } from '../../../shared/commands/catalog'
 import type { ViewSortMode } from '../../../shared/contracts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { useCommandEnabled } from '../core/useCommand'
-import { observeResize } from '../core/windows'
+import { observeResize, windows } from '../core/windows'
 import { useMenuTarget } from '../menus/useMenuTarget'
 import { columnTitle } from '../grid/selection'
 import type { WhitespaceMode } from '../grid/whitespace'
@@ -12,19 +13,19 @@ import { entryOf } from './ResultsService'
 import { searchBoxKeyAction, searchCount, skippedText, type SearchMode } from './search'
 import { formatCount } from './status'
 
-interface Choice<T> { readonly mode: T; readonly label: string; readonly title: string; readonly command?: CommandId }
+interface Choice<T> { readonly mode: T; readonly label: string; readonly hint: string; readonly title: string; readonly command?: CommandId }
 
 /** The White space choices, each the command that turns it on (and, when it is already on, off). */
 const whitespaceChoices: readonly Choice<WhitespaceMode>[] = [
-  { mode: 'none', label: 'Off', title: 'Show values as they are' },
-  { mode: 'spaces', label: 'Spaces', title: 'Show spaces (·) and tabs (→)', command: 'output.showSpaces' },
-  { mode: 'all', label: 'All', title: 'Also name line breaks (CR, LF) and invisible spaces (NBSP, ZWSP, BOM…)', command: 'output.showAllWhitespace' }
+  { mode: 'none', label: 'Off', hint: 'Default', title: 'Show values as they are' },
+  { mode: 'spaces', label: 'Spaces', hint: 'Show spaces & tabs', title: 'Show spaces (·) and tabs (→)', command: 'output.showSpaces' },
+  { mode: 'all', label: 'All', hint: 'Also CR, LF, NBSP…', title: 'Also name line breaks (CR, LF) and invisible spaces (NBSP, ZWSP, BOM…)', command: 'output.showAllWhitespace' }
 ]
 /** How sorted grids order text columns (queryResults.grid.sortText), the same way. */
 const sortTextChoices: readonly Choice<ViewSortMode>[] = [
-  { mode: 'value', label: 'Value', title: 'Sort text as ORDER BY would, by the column\'s collation' },
-  { mode: 'chars', label: 'Chars', title: 'Sort text by its length in characters, spaces included', command: 'output.sortTextByChars' },
-  { mode: 'bytes', label: 'Bytes', title: 'Sort text and binary values by their length in bytes (DATALENGTH)', command: 'output.sortTextByBytes' }
+  { mode: 'value', label: 'Value', hint: 'Collation order (default)', title: 'Sort text as ORDER BY would, by the column\'s collation' },
+  { mode: 'chars', label: 'Chars', hint: 'Character length', title: 'Sort text by its length in characters, spaces included', command: 'output.sortTextByChars' },
+  { mode: 'bytes', label: 'Bytes', hint: 'Byte length (DATALENGTH)', title: 'Sort text and binary values by their length in bytes (DATALENGTH)', command: 'output.sortTextByBytes' }
 ]
 
 /** What the search box searches: cell values (in the backend) or column names. */
@@ -134,12 +135,186 @@ function useToolbarFold(): (element: HTMLDivElement | null) => void {
     const view = head.ownerDocument.defaultView
     const added = view ? new view.MutationObserver(() => { watch(); fit() }) : undefined
     added?.observe(head, { childList: true })
-    // A tool coming or going, or a choice pressed, anywhere in the toolbar: a group folded away has no size to watch, so
-    // Headers leaving the Show group it folded must still unfold it. fit writes only data-fold and tabIndex, never these.
-    added?.observe(element, { childList: true, subtree: true, attributeFilter: ['aria-pressed'] })
+    // A tool coming or going, or a choice pressed/expanded, anywhere in the toolbar: a group folded away has no size to
+    // watch, so Headers leaving the Show group it folded must still unfold it. fit writes only data-fold and tabIndex, never these.
+    added?.observe(element, { childList: true, subtree: true, attributeFilter: ['aria-pressed', 'data-active'] })
     return () => { added?.disconnect(); watched?.dispose() }
   }, [])
   return useCallback((element: HTMLDivElement | null) => { toolbar.current = element }, [])
+}
+
+const popoverMargin = 8
+
+/**
+ * Progressive-disclosure popover trigger for White space (¶) and Sort text by (📏): stays compact icon-only at default
+ * (`Off` / `Value`) and expands into a tinted state chip with its active mode label when non-default. Opens a keyboard-
+ * navigable `role="menu"` popover anchored below the button (in the button's own window for popouts), returning focus to
+ * the trigger on Escape or selection.
+ */
+function ToolbarChoiceMenu<T extends string>({ label, icon, choices, current, defaultMode, first, foldClass, held = false, open, onOpenChange, onChoose }: {
+  readonly label: string
+  readonly icon: 'whitespace' | 'symbol-ruler'
+  readonly choices: readonly Choice<T>[]
+  readonly current: T
+  readonly defaultMode: T
+  readonly first: boolean
+  readonly foldClass: string
+  readonly held?: boolean
+  readonly open: boolean
+  onOpenChange(open: boolean): void
+  onChoose(mode: T): void
+}) {
+  const menuId = useId()
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const focusOnOpen = useRef<'checked' | 'first' | 'last'>('checked')
+  const [host, setHost] = useState<HTMLElement | undefined>()
+  const [place, setPlace] = useState<CSSProperties | undefined>()
+  const [activeIndex, setActiveIndex] = useState(0)
+
+  const currentIndex = Math.max(0, choices.findIndex(choice => choice.mode === current))
+  const activeChoice = choices[currentIndex] ?? choices[0]
+  const nonDefault = current !== defaultMode
+
+  useLayoutEffect(() => {
+    if (!open) { setHost(undefined); setPlace(undefined); return }
+    const trigger = triggerRef.current
+    if (!trigger) return
+    setHost(trigger.ownerDocument.body)
+    const initial = focusOnOpen.current === 'first' ? 0 : focusOnOpen.current === 'last' ? choices.length - 1 : currentIndex
+    setActiveIndex(initial)
+  }, [open])
+
+  const openChangeRef = useRef(onOpenChange)
+  openChangeRef.current = onOpenChange
+
+  // Position below the trigger (or above when space below is tighter), clamped to the window.
+  useLayoutEffect(() => {
+    if (!open || !host) return
+    const trigger = triggerRef.current, menu = menuRef.current
+    if (!trigger || !menu) return
+    const update = () => {
+      const view = trigger.ownerDocument.defaultView ?? window
+      if (!trigger.isConnected || view.getComputedStyle(trigger).display === 'none') { openChangeRef.current(false); return }
+      const rect = trigger.getBoundingClientRect()
+      const menuWidth = Math.max(menu.offsetWidth, 172), menuHeight = menu.offsetHeight || menu.scrollHeight
+      const maxLeft = Math.max(popoverMargin, view.innerWidth - menuWidth - popoverMargin)
+      const left = Math.max(popoverMargin, Math.min(rect.left, maxLeft))
+      const below = view.innerHeight - popoverMargin - (rect.bottom + 4)
+      const above = rect.top - 4 - popoverMargin
+      const next: CSSProperties = below >= menuHeight || below >= above
+        ? { left, top: Math.max(popoverMargin, rect.bottom + 4) }
+        : { left, bottom: Math.max(popoverMargin, view.innerHeight - (rect.top - 4)) }
+      setPlace(prev => prev && prev.left === next.left && prev.top === next.top && prev.bottom === next.bottom ? prev : next)
+    }
+    update()
+    const view = trigger.ownerDocument.defaultView
+    view?.addEventListener('resize', update)
+    return () => { view?.removeEventListener('resize', update) }
+  }, [open, host])
+
+  // Focus the initial menu item once rendered in the portal.
+  useLayoutEffect(() => {
+    if (!open || !host) return
+    const items = menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')
+    items?.[activeIndex]?.focus({ preventScroll: true })
+  }, [open, host, activeIndex])
+
+  // Close on outside press, window blur, or adoption into another window.
+  useEffect(() => {
+    if (!open || !host) return
+    const trigger = triggerRef.current
+    if (!trigger) return
+    const doc = trigger.ownerDocument, view = doc.defaultView
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null
+      if (target && (menuRef.current?.contains(target) || trigger.contains(target))) return
+      openChangeRef.current(false)
+    }
+    const onBlur = () => openChangeRef.current(false)
+    const adoption = windows.onDidAdopt(() => { if (trigger.ownerDocument.body !== host) openChangeRef.current(false) })
+    doc.addEventListener('pointerdown', onPointerDown, true)
+    view?.addEventListener('blur', onBlur)
+    return () => { doc.removeEventListener('pointerdown', onPointerDown, true); view?.removeEventListener('blur', onBlur); adoption.dispose() }
+  }, [open, host])
+
+  const closeAndFocusTrigger = () => {
+    onOpenChange(false)
+    triggerRef.current?.focus({ preventScroll: true })
+  }
+
+  const pick = (mode: T) => {
+    closeAndFocusTrigger()
+    onChoose(mode)
+  }
+
+  const onTriggerKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      event.stopPropagation()
+      focusOnOpen.current = event.key === 'ArrowDown' ? 'first' : 'last'
+      onOpenChange(true)
+    }
+  }
+
+  const onMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      event.stopPropagation()
+      closeAndFocusTrigger()
+      return
+    }
+    if (event.key === 'Tab') {
+      onOpenChange(false)
+      return
+    }
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+    const count = choices.length
+    const next = event.key === 'ArrowDown' ? (activeIndex + 1) % count
+      : event.key === 'ArrowUp' ? (activeIndex + count - 1) % count
+      : event.key === 'Home' ? 0
+      : event.key === 'End' ? count - 1 : -1
+    if (next >= 0) {
+      event.preventDefault()
+      event.stopPropagation()
+      setActiveIndex(next)
+    }
+  }
+
+  const triggerTitle = held
+    ? `${label}: ${activeChoice.label} — Waits until the sort or filter being built finishes`
+    : `${label}: ${activeChoice.label} — ${activeChoice.title}`
+
+  return <>
+    <button ref={triggerRef} type="button" className={`results-choice-trigger ${foldClass}`} data-active={nonDefault ? 'true' : undefined}
+      aria-label={`${label}: ${activeChoice.label}`} aria-haspopup="menu" aria-expanded={open} aria-controls={open ? menuId : undefined}
+      aria-disabled={held || undefined} tabIndex={first ? 0 : -1} title={triggerTitle}
+      onKeyDown={onTriggerKeyDown}
+      onClick={() => { focusOnOpen.current = 'checked'; onOpenChange(!open) }}>
+      <Icon name={icon} />{nonDefault && <span>{activeChoice.label}</span>}
+    </button>
+    {open && host && createPortal(
+      <div ref={menuRef} id={menuId} className="results-choice-menu" role="menu" aria-label={label} style={place ?? { visibility: 'hidden' }} onKeyDown={onMenuKeyDown}>
+        <div className="results-choice-head" aria-hidden="true">{label}</div>
+        {choices.map((choice, index) => {
+          const checked = choice.mode === current
+          return <button key={choice.mode} type="button" role="menuitemradio" className="results-choice-item" aria-checked={checked}
+            aria-disabled={held || undefined} tabIndex={index === activeIndex ? 0 : -1}
+            title={held ? 'Waits until the sort or filter being built finishes' : choice.title}
+            onMouseEnter={() => setActiveIndex(index)}
+            onClick={() => pick(choice.mode)}>
+            <span className="results-choice-text">
+              <span className="results-choice-name">{choice.label}</span>
+              <span className="results-choice-hint">{choice.hint}</span>
+            </span>
+            <span className="results-choice-check" aria-hidden="true">{checked && <Icon name="check" />}</span>
+          </button>
+        })}
+      </div>,
+      host
+    )}
+  </>
 }
 
 /** The ⋯ at the toolbar's end: More results tools, every tool of the toolbar as a menu (`output.tools`), so whatever a narrow
@@ -158,12 +333,14 @@ function MoreTools({ tabId }: { tabId: string }) {
 
 /**
  * The results toolbar, in the Results panel's head beside its views: what it changes applies to every grid in the run. It
- * holds search, White space, Sort text by, and the Profile and Row size toggles; the other result tools join it. The controls follow the
- * ARIA toolbar pattern: one Tab stop, Left and Right (Home, End) move between them; the search box is a Tab stop of its own.
+ * holds search, progressive-disclosure White space and Sort text by popovers, and the Profile, Row size, Pivot, Compare,
+ * Transposed, Tabs, Close Results and ⋯ tools. The controls follow the ARIA toolbar pattern: one Tab stop, Left and Right
+ * (Home, End) move between them; the search box is a Tab stop of its own.
  */
 export default function ResultsToolbar({ tabId }: { tabId: string }) {
   const { commands, settings, results, pivot, compare } = useWorkbench()
   const values = useServiceSnapshot(settings).values
+  const [openMenu, setOpenMenu] = useState<'space' | 'sort' | null>(null)
   // The addressed query can update while another query is active; the command hook also follows global busy state.
   useServiceSnapshot(results)
   const canClose = useCommandEnabled('output.closeResults', { tabId })
@@ -191,6 +368,8 @@ export default function ResultsToolbar({ tabId }: { tabId: string }) {
   }
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+    // Ignore events bubbled from portaled choice popovers.
+    if (!event.currentTarget.contains(event.target as Node)) return
     // Only shown buttons: a narrow window hides some (styles.css).
     const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')].filter(item => item.getClientRects().length > 0), at = items.indexOf(event.target as HTMLButtonElement)
     if (at < 0) return
@@ -200,20 +379,14 @@ export default function ResultsToolbar({ tabId }: { tabId: string }) {
     event.preventDefault()
     items[next].focus()
   }
-  // The toolbar's one Tab stop: the first group's chosen button.
-  const tabStop = Math.max(0, whitespaceChoices.findIndex(choice => choice.mode === whitespace))
-  const group = <T extends string>(label: string, icon: 'whitespace' | 'symbol-ruler', choices: readonly Choice<T>[], current: T, first: boolean, fold: string, held = false) => <>
-    <span className={`results-toolbar-label ${fold}`} aria-hidden="true" title={label}><Icon name={icon} /></span>
-    <div className={`results-segments ${fold}`} role="group" aria-label={label}>
-      {choices.map((choice, index) => <button key={choice.mode} type="button" aria-pressed={choice.mode === current} title={held ? 'Waits until the sort or filter being built finishes' : choice.title} aria-disabled={held || undefined}
-        tabIndex={first && index === tabStop ? 0 : -1} onClick={() => choose(choices, current, choice.mode)}>{choice.label}</button>)}
-    </div>
-  </>
   const fold = useToolbarFold()
   return <div ref={fold} className="results-toolbar" role="toolbar" aria-label="Results tools" onKeyDown={keyDown}>
     <ResultsSearchBox tabId={tabId} />
-    {group('White space', 'whitespace', whitespaceChoices, whitespace, true, 'results-space')}
-    {group('Sort text by', 'symbol-ruler', sortTextChoices, sortText, false, 'results-sort', sortHeld)}
+    <ToolbarChoiceMenu label="White space" icon="whitespace" choices={whitespaceChoices} current={whitespace} defaultMode="none" first foldClass="results-space"
+      open={openMenu === 'space'} onOpenChange={next => setOpenMenu(next ? 'space' : null)} onChoose={mode => choose(whitespaceChoices, whitespace, mode)} />
+    <ToolbarChoiceMenu label="Sort text by" icon="symbol-ruler" choices={sortTextChoices} current={sortText} defaultMode="value" first={false} foldClass="results-sort" held={sortHeld}
+      open={openMenu === 'sort'} onOpenChange={next => setOpenMenu(next ? 'sort' : null)} onChoose={mode => choose(sortTextChoices, sortText, mode)} />
+    <span className="results-divider results-show" aria-hidden="true" />
     {/* Icons only, so the toolbar folds as little as it can in a narrow pane (the Show group folds last). */}
     <div className="results-segments results-show" role="group" aria-label="Show">
       <button type="button" className="results-icon-toggle" aria-label="Profile" aria-pressed={profile} tabIndex={-1} title="Column profile: NULLs, distinct values, lowest and highest, lengths and a histogram for each column"
@@ -233,6 +406,7 @@ export default function ResultsToolbar({ tabId }: { tabId: string }) {
         title={`Using Column as Headers: the drawn columns are headed by ${headerColumn ? `the values of ${headers}` : 'row numbers'}. Choose another column`}
         onClick={event => void commands.execute('output.transposeChooseHeaders', { tabId, anchor: event.currentTarget }, 'toolbar')}><span>Headers: {headers}</span><Icon name="chevron-down" /></button>}
     </div>
+    <span className="results-divider results-show" aria-hidden="true" />
     <div className="results-segments" role="group" aria-label="Results">
       <button type="button" className="results-icon-toggle results-layout" aria-label="Tabs" aria-pressed={tabs} tabIndex={-1}
         title="Tabs: show one result at a time, under a row of tabs, with its Table and Pivot as view tabs; off, every result is stacked"
