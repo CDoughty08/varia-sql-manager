@@ -206,7 +206,7 @@ failure goes, or whether a step can ever run, you check one step at a time. The 
 ### What it shows
 
 - **Steps**: one node per step with its number, name, type and icon (T-SQL, PowerShell, CmdExec, SSIS, Analysis Services
-  and the replication types), and its key field (for example database, package, command or run as).
+  and the replication types), and its key field (for example database, package, command, run as or retries).
 - **Edges**: two ports per node, ✓ On success and ✗ On failure. Success edges are solid, failure edges dashed. Each port
   has its glyph, so colour is never the only cue.
   - Go to the next step: a short straight edge.
@@ -254,7 +254,8 @@ failure goes, or whether a step can ever run, you check one step at a time. The 
      rows. A run with more rows than the cap says so in the panel;
    - the header's live run state, which gives only the current step (and whether it is retrying). Live run's finished steps
      come from History's rows of the in-progress run, so that run is selected while Live run shows. If it cannot be, the other
-     steps show as Unknown, as History's live run already does.
+     steps show a dash with History's note that their states
+     appear once that run is read and selected, as History's live run already does.
 
    Confirm these when the view is built. Two rules need work there:
    - **The failed step**: the Last run panel's outcome names the step that failed (step 5 in the mock), not the last step to
