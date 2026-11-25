@@ -67,6 +67,21 @@ export const messageTypes: readonly (CodeLabel & { readonly tone: MessageTone })
   { code: 200, label: 'Custom', tone: 'info' },
   { code: 400, label: 'Non-diagnostic', tone: 'info' }
 ]
+/**
+ * The execution messages view's type filter (AG-13, SSMS's All Messages report): the message types each group holds. `other` is
+ * every type the others do not name, known to the catalogue or not, so no message falls outside every group.
+ */
+export const messageGroups = ['error', 'warning', 'information', 'other'] as const
+export type MessageGroup = typeof messageGroups[number]
+export const messageGroupSpecs: { readonly [G in MessageGroup]: { readonly label: string; readonly types: readonly number[] } } = {
+  error: { label: 'Errors', types: [120, 130] },
+  warning: { label: 'Warnings', types: [110] },
+  information: { label: 'Information', types: [70] },
+  other: { label: 'Other', types: [] }
+}
+/** The group a message type belongs to. */
+export const messageGroupOf = (type: number): MessageGroup => messageGroups.find(group => messageGroupSpecs[group].types.includes(type)) ?? 'other'
+
 /** catalog.operation_messages.message_source_type. */
 export const messageSourceTypes: readonly CodeLabel[] = [
   { code: 10, label: 'Entry APIs' },
@@ -483,7 +498,11 @@ export const ssisLimits = {
   operationsWindowHours: 8_760,
   operationsDefaultWindowHours: 24,
   operationsCountMs: 30_000,
-  operationsRebaseMs: 300_000
+  operationsRebaseMs: 300_000,
+  /** The execution messages view (ssis.execution, AG-13): the newest messages one read holds (of the groups asked for; more set
+   *  `truncated`), and the characters of one message it keeps (a longer one ends in "…"). */
+  executionMessages: 5_000,
+  executionMessageChars: 4_000
 } as const
 
 // Compact sorted-key JSON, as in explorerCatalogJson(), so each entry diffs as one line.
@@ -505,6 +524,7 @@ export function ssisCatalogJson(): string {
     `  "finalStatuses": ${line(finalStatuses)},`,
     `  "limits": ${line(ssisLimits)},`,
     `  "loggingLevels": ${line(loggingLevels)},`,
+    `  "messageGroups": ${line(messageGroups.map(group => ({ group, ...messageGroupSpecs[group] })))},`,
     `  "messageTypes": ${line(messageTypes)},`,
     `  "openStatuses": ${line(openStatuses)},`,
     `  "operationKinds": ${line(operationKinds.map(kind => ({ kind, ...operationKindSpecs[kind] })))},`,

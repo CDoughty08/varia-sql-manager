@@ -14,6 +14,7 @@ import { LiveGridPane } from '../live/LiveGridPane'
 import type { LiveSnapshot } from '../live/LiveService'
 import { probePillStatus } from '../live/status'
 import { useMenuTarget } from '../menus/useMenuTarget'
+import { gridTarget } from '../grid/anchor'
 import { formatCount } from '../results/status'
 import {
   filterBounds, filtered, operationsProbe, operationsText, tilePressed, toggleKind, toggleStatus, toggleTile, withText,
@@ -130,6 +131,7 @@ export default function SsisOperations({ documentId }: { readonly documentId: st
   const unavailable = probe?.state === 'unavailable' ? probe.note ?? 'Integration Services Operations is not available on this server.' : undefined
   const verbs = [
     { command: 'ssis.stopOperation' as const, args: { tabId: documentId }, emphasis: 'danger' as const },
+    { command: 'ssis.viewExecutionMessages' as const, args: { tabId: documentId }, label: 'Messages' },
     { command: 'ssis.refreshOperations' as const, args: { tabId: documentId }, label: 'Refresh' },
     { command: 'ssis.pauseOperations' as const, args: { tabId: documentId }, label: 'Pause' }
   ]
@@ -160,7 +162,12 @@ export default function SsisOperations({ documentId }: { readonly documentId: st
           })}
         </div>
         <Filters state={state} onChange={change => service.update(documentId, change)} onClear={() => service.clearFilters(documentId)} />
-        <div className="ssis-operations-grid" ref={menuTarget}>
+        <div className="ssis-operations-grid" ref={menuTarget} onDoubleClick={event => {
+          // An execution's row opens its messages (AG-13); only a row (GridView's own hit test, through its pointer layer), not a header or the area below.
+          const root = (event.target as Element).closest('[role="grid"]')
+          const onRow = !!root && root.ownerDocument.elementsFromPoint(event.clientX, event.clientY).some(element => root.contains(element) && gridTarget(root, element).target?.row !== undefined)
+          if (onRow) void workbench.commands.execute('ssis.viewExecutionMessages', { tabId: documentId }, 'toolbar')
+        }}>
           {unavailable ? <EmptyState icon="pulse" title="Operations are not available" detail={unavailable} />
             : <>
               <LiveGridPane live={handle} probe={operationsProbe} label="Operations" contextMenu={false} sortable={false} state={service.gridState(documentId)} onGrid={grid => service.attachGrid(documentId, grid)} />

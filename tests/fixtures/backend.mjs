@@ -1978,7 +1978,7 @@ function agentApplySteps(job, save) {
   job.steps = steps.length
 }
 function agentJobDocument(params) {
-  const base = { login: 'sa', sysadmin: true, platform: 'windows', categories: ['[Uncategorized (Local)]', 'Database Maintenance'], operators: agentOperators, owners: ['sa', 'CONTOSO\agent'], alertsEditable: true, mail: { checked: true, xps: true, profiles: 1, sysadmin: true, useDatabaseMail: true, agentProfile: 'Varia Mail' },
+  const base = { login: 'sa', sysadmin: true, platform: 'windows', categories: ['[Uncategorized (Local)]', 'Database Maintenance'], operators: agentOperators, owners: ['sa', 'CONTOSO\\agent'], alertsEditable: true, mail: { checked: true, xps: true, profiles: 1, sysadmin: true, useDatabaseMail: true, agentProfile: 'Varia Mail' },
     subsystems: ['TSQL', 'CmdExec', 'PowerShell', 'SSIS'], databases: ['master', 'model', 'msdb', 'Sales', 'tempdb'], proxies: [{ id: 1, name: 'FileShareWriter', enabled: true, subsystems: ['CmdExec', 'PowerShell'], identity: 'CONTOSO\\svc-fswriter' }] }
   // jobIds parallel to jobs, as the backend lists them (Create several's Enable the created jobs finds each new job's id there).
   if (params.target.kind === 'agent') { const listed = [...agentJobs].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0); return { agentJobDocument: { ...base, steps: [], jobs: listed.map(job => job.name), jobIds: listed.map(job => job.id), now: '2026-11-22T14:30:00' }, elapsedMs: 1 } }
@@ -2303,6 +2303,34 @@ async function ssisDescribe(id, { view, target }) {
   if (await controlled(join('ssis', 'missing'))) return respond(id, { elapsedMs: 1, error: { code: 'NOT_FOUND', message: `The ${view} ${target.name} no longer exists in the SSIS Catalog.`, retryable: false } })
   const model = ssisModels[view](target)
   return respond(id, { model: view === 'project' && await controlled(join('ssis', 'many')) ? ssisMany(model) : model, revision: 'a'.repeat(64), elapsedMs: 1 })
+}
+
+/** ssis.execution (AG-13): one failed execution's overview and messages, newest first, filtered by the requested groups; the
+ * ssis/missing control answers NOT_FOUND as a purged execution does. */
+const ssisExecutionMessages = [
+  { id: 6, time: '2026-11-15T02:31:04.250Z', type: 120, sourceType: 40, source: 'Load facts', package: 'Load.dtsx', event: 'OnError', path: '\\Load\\Load facts', code: -1071636471, message: 'Violation of PRIMARY KEY constraint \'PK_Fact\'. Cannot insert duplicate key.' },
+  { id: 5, time: '2026-11-15T02:31:04.100Z', type: 130, sourceType: 40, source: 'Load facts', package: 'Load.dtsx', event: 'OnTaskFailed', path: '\\Load\\Load facts', code: 0, message: 'Task Load facts failed.' },
+  { id: 4, time: '2026-11-15T02:31:03.000Z', type: 110, sourceType: 60, source: 'Load facts', package: 'Load.dtsx', event: 'OnWarning', path: '\\Load\\Load facts', code: -2147038388, message: 'Truncation may occur on column Name.' },
+  { id: 3, time: '2026-11-15T02:31:01.500Z', type: 70, sourceType: 40, source: 'Load facts', package: 'Load.dtsx', event: 'OnInformation', path: '\\Load\\Load facts', code: 1073450998, message: 'Rows read: 12.' },
+  { id: 2, time: '2026-11-15T02:31:00.750Z', type: 40, sourceType: 30, source: 'Load', package: 'Load.dtsx', event: 'OnPreExecute', path: '\\Load', code: null, message: 'Load started.' },
+  { id: 1, time: '2026-11-15T02:31:00.500Z', type: 30, sourceType: 10, message: 'Operation started.' }
+]
+const ssisExecutionGroups = { error: [120, 130], warning: [110], information: [70] }
+
+async function ssisExecution(id, { executionId, groups }) {
+  if (await controlled(join('ssis', 'missing'))) return respond(id, { elapsedMs: 1, error: { code: 'NOT_FOUND', message: `Execution ${executionId} is not in the SSIS Catalog: the catalog's retention cleanup may have removed it, or this login may not read it.`, retryable: false } })
+  const chosen = groups ?? ['error', 'warning', 'information', 'other']
+  const named = Object.values(ssisExecutionGroups).flat()
+  const keep = type => chosen.some(group => group === 'other' ? !named.includes(type) : ssisExecutionGroups[group].includes(type))
+  const counts = [...new Set(ssisExecutionMessages.map(message => message.type))].sort((a, b) => a - b).map(type => ({ type, count: ssisExecutionMessages.filter(message => message.type === type).length }))
+  return respond(id, {
+    model: {
+      overview: { id: executionId, folder: 'Finance', project: 'Loads', package: 'Load.dtsx', executedAs: 'CONTOSO\\agent', caller: 'CONTOSO\\agent', use32bit: false, status: 4,
+        created: '2026-11-15T02:30:58.000Z', started: '2026-11-15T02:31:00.000Z', ended: '2026-11-15T02:31:05.000Z', server: 'SERVER-A', machine: 'SERVER-A', now: '2026-11-15T08:00:00.000Z' },
+      counts, groups: chosen, messages: ssisExecutionMessages.filter(message => keep(message.type)), truncated: false
+    },
+    elapsedMs: 1
+  })
 }
 
 /** A sign-in waiting for the browser: the request ends only when a CANCEL frame names it (logged to cancels.jsonl). */
@@ -2753,6 +2781,7 @@ GO
     }
     case 'explorer.search': return respond(id, searchFixture(params))
     case 'ssis.describe': return ssisDescribe(id, params)
+    case 'ssis.execution': return ssisExecution(id, params)
     case 'activity.details': return respond(id, activityDetails(params))
     case 'activity.kill': return respond(id, activityKill(params))
     // SQL Server Agent's capability read: a sysadmin on Windows with Agent XPs on, in no Agent role (sysadmin is dbo in msdb).

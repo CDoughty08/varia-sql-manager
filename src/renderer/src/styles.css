@@ -4031,6 +4031,11 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
   .agent-several-cell[data-changed] { border-left-color: Highlight; }
   .agent-several-details .link-button, .agent-several-results .link-button, .agent-several-table .link-button { color: LinkText; }
 }
+
+/* SSIS execution messages (AG-13): the overview over the type chips and the messages grid, which takes the rest of the document. */
+.ssis-execution { display: flex; flex-direction: column; gap: var(--varia-space-2); box-sizing: border-box; height: 100%; min-height: 420px; padding: var(--varia-space-3) var(--varia-space-4) var(--varia-space-4); }
+.ssis-execution > .ssis-execution-overview { flex: none; }
+.ssis-execution-grid { position: relative; display: flex; flex: 1; min-height: 180px; border: 1px solid var(--varia-panel-border); }
 /* BigQuery Properties inspector (OP-2b): surface-specific pills, flow section headers, fill toolbars and label chips. */
 .bq-props-pills { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); min-width: 0; }
 .bq-props-flow { display: flex; flex-direction: column; gap: var(--varia-space-4); }

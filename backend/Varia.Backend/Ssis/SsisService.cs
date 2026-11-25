@@ -141,7 +141,7 @@ internal sealed class SsisService : IDisposable
             // A request cancelled before it ran (a CANCEL frame read right after its REQUEST) takes no gate.
             token.ThrowIfCancellationRequested();
             source.CancelAfter(Options.Budget);
-            var (model, error) = await RunAsync(args.ConnectionId, args.View, target, served, source.Token);
+            var (model, error) = await RunAsync(args.ConnectionId, Subject(target), served, (connection, profile, ct) => ReadAsync(connection, args.View, target, profile, ct), source.Token);
             return error is not null ? Failed(error) : new(model, Revision(model!), watch.ElapsedMilliseconds);
         }
         catch (Exception error) when (error is OperationCanceledException or SqlException && source.IsCancellationRequested && !token.IsCancellationRequested)
@@ -247,7 +247,105 @@ internal sealed class SsisService : IDisposable
 
     private static RequestException Busy() => new("BUSY", "Other Integration Services requests are running on this server. Retry after they finish.");
 
-    private async Task<(object? Model, SsisError? Error)> RunAsync(string connectionId, string view, ObjectRefDto target, ExplorerProfile served, CancellationToken token)
+    /// <summary>Re-validates ssisExecutionSchema: ids, a positive execution id, and distinct groups of the catalogue.</summary>
+    public void Validate(SsisExecutionArgs args)
+    {
+        if (!Guid.TryParse(args.ConnectionId, out _)) throw Invalid("connectionId.");
+        if (!Guid.TryParse(args.RequestId, out _)) throw Invalid("requestId.");
+        // Ids past 2^53 - 1 cannot cross JSON exactly (src/shared/ssis/schema.ts).
+        if (args.ExecutionId < 1 || args.ExecutionId > 9_007_199_254_740_991) throw Invalid("executionId.");
+        if (args.Groups is { } groups && (groups.Count == 0 || groups.Count != groups.Distinct(StringComparer.Ordinal).Count()
+            || groups.Any(group => !catalog.MessageGroups.Any(known => known.Group == group)))) throw Invalid("groups.");
+    }
+
+    /// <summary>ssis.execution (AG-13): one execution's overview, its messages counted by type, and its newest messages of the groups
+    /// asked for, in one batch on the SSIS read pool under the read gates, the read prologue and the describe budget. An execution
+    /// the catalog no longer has (its retention cleanup) or the login may not read answers NOT_FOUND. It never writes.</summary>
+    public async Task<SsisExecutionResult> ExecutionAsync(SsisExecutionArgs args, CancellationToken token)
+    {
+        var watch = Stopwatch.StartNew();
+        Validate(args);
+        var server = host.Profile(args.ConnectionId);
+        var served = server.Explorer(explorer);
+        SsisExecutionResult Failed(SsisError error) => new(null, watch.ElapsedMilliseconds, error);
+        if (served.Band < 13) return Failed(SsisErrors.Create(catalog, "NOT_SUPPORTED", "The SSIS Catalog needs SQL Server 2016 or later."));
+        if (served.Linux && !Options.IgnoreLinuxHost) return Failed(SsisErrors.Create(catalog, "NOT_SUPPORTED", "The SSIS Catalog isn't supported on SQL Server on Linux."));
+        using var source = CancellationTokenSource.CreateLinkedTokenSource(token);
+        var entry = running.Register(args.RequestId, args.ConnectionId, source);
+        try
+        {
+            token.ThrowIfCancellationRequested();
+            source.CancelAfter(Options.Budget);
+            var subject = "execution " + args.ExecutionId.ToString(CultureInfo.InvariantCulture);
+            var (model, error) = await RunAsync(args.ConnectionId, subject, served, (connection, profile, ct) => ReadExecutionAsync(connection, profile, args, ct), source.Token);
+            return error is not null ? Failed(error) : new((SsisExecutionModel)model!, watch.ElapsedMilliseconds);
+        }
+        catch (Exception error) when (error is OperationCanceledException or SqlException && source.IsCancellationRequested && !token.IsCancellationRequested)
+        {
+            if (entry.Forgotten) throw new RequestException("CANCELLED", "The operation was cancelled.");
+            return Failed(SsisErrors.Create(catalog, "TIMEOUT", SsisErrors.Timeout(catalog)));
+        }
+        finally { running.Unregister(args.RequestId, entry); }
+    }
+
+    /// <summary>The words for an execution that is not there: removed by the catalog's retention cleanup, or hidden from this login.</summary>
+    internal static string ExecutionGone(long id) => "Execution " + id.ToString(CultureInfo.InvariantCulture)
+        + " is not in the SSIS Catalog: the catalog's retention cleanup may have removed it, or this login may not read it.";
+
+    /// <summary>The parameters the execution batch names: the id, the bounds, and one bit per message group.</summary>
+    internal SqlParameter[] BindExecution(long executionId, IReadOnlyList<string> groups) =>
+    [
+        Parameter("@execution_id", SqlDbType.BigInt, 0, executionId),
+        Parameter("@take", SqlDbType.Int, 0, catalog.Limit("executionMessages") + 1),
+        Parameter("@chars", SqlDbType.Int, 0, catalog.Limit("executionMessageChars")),
+        .. catalog.MessageGroups.Select(group => Parameter("@" + group.Group, SqlDbType.Bit, 0, groups.Contains(group.Group)))
+    ];
+
+    private async Task<(object? Model, SsisError? Error)> ReadExecutionAsync(SqlConnection connection, SsisProfile profile, SsisExecutionArgs args, CancellationToken token)
+    {
+        await using var command = connection.CreateCommand();
+        var delay = Options.TestDelay is { } wait ? "WAITFOR DELAY '" + wait.ToString(@"hh\:mm\:ss\.fff", CultureInfo.InvariantCulture) + "';\n" : "";
+        command.CommandText = SsisSql.ReadPrologue(profile.Rcsi) + delay + string.Join("\n", SsisSql.Execution(catalog).Select(statement => statement.Text));
+        command.CommandTimeout = 0;
+        var rows = catalog.Limit("executionMessages");
+        List<string> groups = args.Groups is { } asked ? [.. catalog.MessageGroups.Select(group => group.Group).Where(asked.Contains)] : [.. catalog.MessageGroups.Select(group => group.Group)];
+        command.Parameters.AddRange(BindExecution(args.ExecutionId, groups));
+        await using var reader = await command.ExecuteReaderAsync(token);
+        if (!await reader.ReadAsync(token)) { TryCancel(command); return (null, SsisErrors.Create(catalog, "NOT_FOUND", ExecutionGone(args.ExecutionId))); }
+        var overview = new SsisExecutionOverviewDto(reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), Text(reader, 4), Text(reader, 5), reader.GetString(6),
+            reader.GetString(7), reader.GetBoolean(8), reader.GetInt32(9), Time(reader, 10), Time(reader, 11), Time(reader, 12), Text(reader, 13), Text(reader, 14), Text(reader, 15),
+            Iso(reader.GetDateTimeOffset(16)));
+        await reader.NextResultAsync(token);
+        var counts = new List<SsisMessageCountDto>();
+        while (await reader.ReadAsync(token)) counts.Add(new(reader.GetInt16(0), reader.GetInt64(1)));
+        await reader.NextResultAsync(token);
+        var budget = new Budget(catalog);
+        var messages = new List<SsisExecutionMessageDto>();
+        var chars = catalog.Limit("executionMessageChars");
+        while (await reader.ReadAsync(token))
+        {
+            var path = reader.IsDBNull(7) ? null : Clip(reader.GetString(7), chars);
+            var message = reader.IsDBNull(9) ? "" : Clip(reader.GetString(9), chars);
+            if (!budget.Take(messages.Count, rows, message.Length + (path?.Length ?? 0) + Length(reader, 4) + Length(reader, 5) + Length(reader, 6))) break;
+            messages.Add(new(reader.IsDBNull(0) ? null : reader.GetInt64(0), Iso(reader.GetDateTimeOffset(1)), reader.GetInt16(2), reader.IsDBNull(3) ? null : reader.GetInt16(3),
+                Text(reader, 4), Text(reader, 5), Text(reader, 6), path, reader.IsDBNull(8) ? null : reader.GetInt32(8), message));
+        }
+        // Rows past the cap are not read: the attention ends the statement.
+        if (budget.Truncated) TryCancel(command);
+        return (new SsisExecutionModel(overview, counts, groups, messages, budget.Truncated), null);
+    }
+
+    /// <summary>A text read one character past <paramref name="max"/>, cut to it with an ellipsis when it is longer.</summary>
+    internal static string Clip(string text, int max)
+    {
+        if (text.Length <= max) return text;
+        // Never split a surrogate pair at the cut.
+        var keep = char.IsHighSurrogate(text[max - 2]) ? max - 2 : max - 1;
+        return text[..keep] + "…";
+    }
+
+    private async Task<(object? Model, SsisError? Error)> RunAsync(string connectionId, string subject, ExplorerProfile served,
+        Func<SqlConnection, SsisProfile, CancellationToken, Task<(object? Model, SsisError? Error)>> read, CancellationToken token)
     {
         var gate = gates.GetOrAdd(connectionId, _ => new SemaphoreSlim(Options.PerConnection));
         if (!await gate.WaitAsync(Options.GateWait, token)) throw Busy();
@@ -272,13 +370,13 @@ internal sealed class SsisService : IDisposable
                     var profile = await ProfileAsync(connection, connectionId, name, served, token);
                     for (var attempt = 0; ; attempt++)
                     {
-                        try { return await ReadAsync(connection, view, target, profile, token); }
+                        try { return await read(connection, profile, token); }
                         catch (SqlException error) when (error.Number == SsisErrors.DataMovement && attempt == 0 && !token.IsCancellationRequested) { }
                     }
                 }
                 catch (SqlException error) when (!token.IsCancellationRequested)
                 {
-                    var failure = SsisErrors.FromSql(catalog, error, connection, name, Subject(target));
+                    var failure = SsisErrors.FromSql(catalog, error, connection, name, subject);
                     if (failure.Code == "CATALOG_MISSING") profiles.TryRemove(connectionId, out _);
                     return (null, failure);
                 }

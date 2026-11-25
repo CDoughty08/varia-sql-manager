@@ -113,6 +113,7 @@ const api: VariaApi = {
   describeSsis: params => request('ssis.describe', params),
   executeSsis: params => request('ssis.execute', params),
   catalogSetupSsis: params => request('ssis.catalogSetup', params),
+  executionSsis: params => request('ssis.execution', params),
   agentProfile: params => request('agent.profile', params),
   agentHistoryMessage: params => request('agent.historyMessage', params),
   agentCounterValues: params => request('agent.counterValues', params),

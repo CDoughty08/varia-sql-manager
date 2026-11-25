@@ -34,6 +34,7 @@ import NewDatabase from '../new-database/NewDatabase'
 import RestoreDatabase from '../restore/RestoreDatabase'
 import ActivityMonitor from '../activity/ActivityMonitor'
 import SsisOperations from '../ssis/SsisOperations'
+import SsisExecution from '../ssis/SsisExecution'
 import JobActivityMonitor from '../agent/JobActivityMonitor'
 import JobDocument from '../agent/JobDocument'
 import AlertDocument from '../agent/AlertDocument'
@@ -163,6 +164,7 @@ function DocumentPanel({ api }: IDockviewPanelProps) {
     {kind === 'releaseNotes' && <ReleaseNotes documentId={id} />}
     {kind === 'help' && <HelpDocument documentId={id} />}
     {kind === 'ssisOperations' && <SsisOperations documentId={id} />}
+    {kind === 'ssisExecution' && <SsisExecution documentId={id} />}
     {kind === 'agentJobActivity' && <JobActivityMonitor documentId={id} />}
     {kind === 'agentJob' && <JobDocument documentId={id} />}
     {kind === 'agentAlert' && <AlertDocument documentId={id} />}

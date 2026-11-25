@@ -12,6 +12,7 @@ import {
   operationStatusByLabel, operationStoppable, operationsPresetSpecs, operationsTabName, operationTypeByLabel, type OperationsPreset
 } from '../../../shared/ssis/operations'
 import type { SsisExecuteResult, SsisOperationsArgs } from '../../../shared/ssis/schema'
+import { executionOperationType, executionText } from '../../../shared/ssis/execution'
 import type { SsisOperationsContextState, SsisOperationsKeys } from '../core/contextkeys'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
@@ -367,6 +368,21 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
     return !!selected && !!state.connectionId && (selected.pending || operationStoppable(selected.type, selected.status)) && !state.stopping.includes(selected.id) && this.live(id)
   }
   paused(id: string): boolean { return this.handles.get(id)?.getSnapshot().pausedBy === 'user' }
+
+  /** Whether View Messages can act on the selected operation: an execution (or a row whose cells are still being read), on a live view. */
+  executionSelected(id: string): boolean {
+    const state = this.get(id), selected = state?.selected
+    return !!selected && !!state.connectionId && (selected.pending || selected.type === executionOperationType) && this.live(id)
+  }
+  /** The selected execution once its cells are read, with the connection to read it on; an operation of another type says why
+   *  in the document's notice instead. */
+  async selectedExecution(id: string): Promise<{ readonly connectionId: string; readonly executionId: number } | undefined> {
+    await this.grids.get(id)?.reading
+    const state = this.get(id), selected = state?.selected
+    if (!selected || selected.pending || !state.connectionId || !this.live(id)) return undefined
+    if (selected.type !== executionOperationType) { this.patch(id, { notice: { tone: 'info', text: executionText.notExecution(selected.id) } }); return undefined }
+    return { connectionId: state.connectionId, executionId: selected.id }
+  }
 
   /** Stop Operation on the selected operation, once its cells are read: asks first unless Tools › Options says not to. */
   async requestStop(id: string): Promise<void> {

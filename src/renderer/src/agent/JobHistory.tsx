@@ -30,7 +30,7 @@ export const jobHistoryCopy = {
   intro: 'The usual time is the median of the last 10 successful runs. It is a guide, not a promise.',
   running: (since?: string) => `Running${since ? ` since ${since} (server time)` : ''}. You can keep editing: saved changes apply from the next run.`,
   stopHint: 'Stop sends sp_stop_job; the current step is cancelled and the run is recorded as Canceled.',
-  ssisHint: 'For an SSIS step, its execution link opens the catalog\'s messages for that execution in a query window, where the real error usually is.',
+  ssisHint: 'For an SSIS step, its execution link opens that execution\'s overview and catalog messages, where the real error usually is. It reads the SSIS Catalog of this job\'s server.',
   none: 'This job has no history yet. Runs show here as SQL Server Agent records them.',
   noneFailed: 'No failed runs in the history SQL Server Agent keeps.',
   logViewer: "All jobs' history in Log File Viewer",
@@ -146,7 +146,7 @@ function RunDetail({ state, model, run, service }: { readonly state: JobDocument
           <td><StatusPill tone={runTone(step.tone)} label={step.outcome} size="small" /></td>
           <td className="mono">{step.duration}</td>
           <td>{step.retries}</td>
-          <td>{execution !== undefined && <button type="button" className="link-button" disabled={!history.canOpenQuery(state.id)} title={jobHistoryCopy.ssisHint}
+          <td>{execution !== undefined && <button type="button" className="link-button" disabled={!history.canOpenSsisExecution(state.id)} title={jobHistoryCopy.ssisHint}
             onClick={() => history.openSsisExecution(state.id, execution)}><Icon name="link" />SSIS execution {execution}</button>}</td>
         </tr>
       })}</tbody>

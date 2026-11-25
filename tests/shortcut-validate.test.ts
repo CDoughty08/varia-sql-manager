@@ -76,7 +76,7 @@ describe('validateShortcut', () => {
     expect(save.conflicts.map(rule => rule.command)).toEqual(['output.saveResultsAs'])
     expect(save.narrowerScopes).toEqual([])
     // Custom clauses are not presets, so they never shadow: a Global F5 conflicts with the SSIS documents' F5, Job History's and Peek's.
-    expect(check({ command: 'file.new', key: 'f5' }).conflicts.map(rule => [rule.command, scopeOfWhen(rule.whenSource).id])).toEqual([['ssis.refreshOperations', 'custom'], ['agent.refreshJobs', 'custom'], ['bigquery.refreshJobs', 'custom'], ['ssis.refreshProperties', 'custom'], ['peek.refresh', 'custom']])
+    expect(check({ command: 'file.new', key: 'f5' }).conflicts.map(rule => [rule.command, scopeOfWhen(rule.whenSource).id])).toEqual([['ssis.refreshOperations', 'custom'], ['ssis.refreshExecution', 'custom'], ['agent.refreshJobs', 'custom'], ['bigquery.refreshJobs', 'custom'], ['ssis.refreshProperties', 'custom'], ['peek.refresh', 'custom']])
     expect(check({ command: 'file.new', key: 'mod+k mod+k', scope: 'queryEditor' }).conflicts.map(rule => rule.command)).toEqual(['edit.toggleBookmark'])
   })
   it('refuses with a reason', () => {
