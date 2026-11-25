@@ -14,6 +14,7 @@ import { PeekListGrid } from '../explorer/PeekListGrid'
 import { LocalGrid } from '../grid/LocalGrid'
 import { peekMessages } from '../explorer/PeekService'
 import Icon from '../Icon'
+import FactGrid, { type FactItem } from '../kit/FactGrid'
 import Segmented from '../kit/Segmented'
 import { argsFor } from '../menus/targets'
 import { hitIcon, hitKindSpec, searchHitTarget } from './hit-actions'
@@ -228,15 +229,29 @@ export function Properties({ details }: { readonly details: Details }) {
   const refused = spec ? spec.groups.filter(group => group.refused && details.refused?.includes(group.id)) : []
   const shown = facts?.status === 'ready' ? groups.flatMap(group => group.facts).filter(fact => fact.id !== 'schema' && Object.hasOwn(facts.value, fact.id)) : []
   const bigQuery = details.bigQuery
+  const items: FactItem[] = [
+    ...hitProperties(details.hit).map(row => ({
+      id: `hit-${row.label}`,
+      label: row.label,
+      value: displayText(row.value),
+      ...(row.label !== 'Type' ? { mono: true } : {})
+    })),
+    ...(facts?.status === 'ready' ? shown.map(fact => {
+      const raw = facts.value[fact.id]!
+      return {
+        id: `peek-${fact.id}`,
+        label: fact.label,
+        value: raw === null ? '' : formatPeekValue(fact, raw)
+      }
+    }) : []),
+    ...(bigQuery?.status === 'ready' ? bigQueryFacts(bigQuery.value).map((fact, index) => ({
+      id: `bq-${index}-${fact.label}`,
+      label: fact.label,
+      value: fact.value === '—' ? '' : fact.value
+    })) : [])
+  ]
   return <div className="search-details-properties">
-    <dl className="search-details-facts" aria-label="Properties">
-      {hitProperties(details.hit).map(row => <div key={row.label} className="search-details-fact"><dt>{row.label}</dt><dd title={displayText(row.value)}>{displayText(row.value)}</dd></div>)}
-      {facts?.status === 'ready' && shown.map(fact => {
-        const value = formatPeekValue(fact, facts.value[fact.id]!)
-        return <div key={fact.id} className="search-details-fact"><dt>{fact.label}</dt><dd title={value}>{value}</dd></div>
-      })}
-      {bigQuery?.status === 'ready' && bigQueryFacts(bigQuery.value).map(fact => <div key={fact.label} className="search-details-fact"><dt>{fact.label}</dt><dd title={fact.value}>{fact.value}</dd></div>)}
-    </dl>
+    <FactGrid key={details.key} compact ariaLabel="Properties" facts={items} />
     {facts?.status === 'ready' && refused.map(group => <p key={group.id} className="peek-note">{group.refused}</p>)}
     {(facts?.status === 'loading' || bigQuery?.status === 'loading') && <p className="peek-note">Loading properties…</p>}
     {facts?.status === 'error' && <p className="peek-note error" role="alert">{facts.message}</p>}

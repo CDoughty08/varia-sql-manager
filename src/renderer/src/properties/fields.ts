@@ -2,8 +2,9 @@
 // and the state the header shows. Node tests run it; the sections render what it decides.
 import type { PageId } from '../../../shared/actions/catalog.ts'
 import { databaseStatusText, type DatabaseOptionDef } from '../../../shared/actions/database.ts'
-import type { DatabasePropertiesModel } from '../../../shared/actions/schema.ts'
+import type { DatabaseGeneral, DatabasePropertiesModel } from '../../../shared/actions/schema.ts'
 import type { StatusTone } from '../../../shared/theme/tones'
+import type { RatioSegment } from '../kit/RatioBar'
 import { segmentedMaximum } from '../kit/Segmented'
 
 /**
@@ -53,3 +54,39 @@ export function switchStates(def: DatabaseOptionDef): { readonly on: string; rea
 export const megabytes = (value: number | undefined) => value === undefined ? '' : `${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MB`
 /** A date in the person's locale; 'None' (no backup) as is; unknown as blank. */
 export const dateText = (value: string | undefined) => value === undefined ? '' : value === 'None' ? 'None' : Number.isNaN(Date.parse(value)) ? value : new Date(value).toLocaleString()
+
+export interface DatabaseRatio {
+  readonly totalMb: number
+  readonly totalLabel: string
+  readonly segments: readonly RatioSegment[]
+}
+
+/** Used vs. available space proportion segments for Database Properties' General `RatioBar`. */
+export function databaseSpaceRatio(general: Pick<DatabaseGeneral, 'sizeMb' | 'spaceAvailableMb'>): DatabaseRatio | undefined {
+  if (!Number.isFinite(general.sizeMb) || general.sizeMb <= 0 || general.spaceAvailableMb === undefined || !Number.isFinite(general.spaceAvailableMb)) return undefined
+  const available = Math.max(0, Math.min(general.sizeMb, general.spaceAvailableMb))
+  const used = Math.max(0, general.sizeMb - available)
+  return {
+    totalMb: general.sizeMb,
+    totalLabel: megabytes(general.sizeMb),
+    segments: [
+      { id: 'used', label: 'Used', value: used, displayValue: megabytes(used), series: 1 },
+      { id: 'available', label: 'Space Available', value: available, displayValue: megabytes(available), series: 3 }
+    ]
+  }
+}
+
+/** Used vs. unused memory-optimized allocation segments for Database Properties' General `RatioBar`. */
+export function databaseMemoryRatio(general: Pick<DatabaseGeneral, 'memoryAllocatedMb' | 'memoryUsedMb'>): DatabaseRatio | undefined {
+  if (general.memoryAllocatedMb === undefined || !Number.isFinite(general.memoryAllocatedMb) || general.memoryAllocatedMb <= 0 || general.memoryUsedMb === undefined || !Number.isFinite(general.memoryUsedMb)) return undefined
+  const used = Math.max(0, Math.min(general.memoryAllocatedMb, general.memoryUsedMb))
+  const unused = Math.max(0, general.memoryAllocatedMb - used)
+  return {
+    totalMb: general.memoryAllocatedMb,
+    totalLabel: megabytes(general.memoryAllocatedMb),
+    segments: [
+      { id: 'used', label: 'Used', value: used, displayValue: megabytes(used), series: 1 },
+      { id: 'unused', label: 'Unused', value: unused, displayValue: megabytes(unused), series: 2 }
+    ]
+  }
+}

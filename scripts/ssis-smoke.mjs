@@ -324,12 +324,13 @@ try {
   await expect.poll(() => headingShown('Loads', 'references')).toEqual({ shown: true, scrolled: true })
   await expect(gridCell(references, 0, 0)).toHaveText('Environment 1')
   await bounded()
-  // Ctrl+End in the grid goes to its last row, in view: a list at the cap scrolls inside its section.
+  // Ctrl+End in the grid goes to its last row, scrolling the enclosing section column so it is in view (zero nested vertical scroll).
   await gridCell(references, 0, 0).click()
   await page.keyboard.press('Control+End')
   const last = gridCell(references, 2047, 0)
   await expect(last).toHaveText('Environment 2048')
   await expect.poll(() => rowShown(references, 'References', 2047)).toBe(true)
+  await expect(last).toBeInViewport()
   await sectionColumn(frame('Loads'), 'Loads').evaluate(column => { column.scrollTop = column.scrollHeight })
   await expect(last).toBeInViewport()
   await bounded()

@@ -56,7 +56,16 @@ export function FieldHints({ children, resetKey }: { readonly children: ReactNod
     if (source === 'focused') return current.focused ? { ...current, focused: undefined } : current
     return current.hovered || current.focused ? {} : current
   }), [])
-  useEffect(() => { clear() }, [resetKey, clear])
+  useEffect(() => {
+    setHints(current => {
+      if (!current.hovered && !current.focused) return current
+      // Always clear hovered on tab/section change; preserve focused only if the browser's activeElement still sits inside that field (e.g. scroll-spy updating the active section while focusing a control at a section boundary).
+      const activeField = typeof document !== 'undefined' ? document.activeElement?.closest<HTMLElement>('[data-field]')?.dataset.field : undefined
+      const keepFocused = current.focused !== undefined && activeField === current.focused.id
+      if (!keepFocused) return {}
+      return current.hovered ? { focused: current.focused, last: 'focused' } : current
+    })
+  }, [resetKey])
   return <HintSetterContext.Provider value={set}><HintClearContext.Provider value={clear}><HintContext.Provider value={shownHint(hints)}>{children}</HintContext.Provider></HintClearContext.Provider></HintSetterContext.Provider>
 }
 
