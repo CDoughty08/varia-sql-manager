@@ -184,7 +184,10 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   refused file (too long, holding NUL bytes, a folder) says why under the command; SSIS on one scroll, with
   the package picked inline from SSISDB's folders, projects and packages (or SQL Server and file system sources), its
   parameters, environment, 32-bit runtime and logging; Analysis Services Command and Query with the Server they run on. On success and On failure choose next step, quit with success, quit
-  with failure or go to a named step; More options (retries, output file and its append, log to table, history output)
+  with failure or go to a named step (on the last step, Go to the next step makes Agent fail the job, "JobManager tried to run a
+  non-existent step", even when the step succeeds, though msdb accepts it: so Add step gives a step added last Quit reporting success, the
+  new step it follows goes to the next step if it still quits reporting success, a step read from the job keeps its action, and the list shows
+  the last step's Go to the next step as "Next step (none: the job fails)"); More options (retries, output file and its append, log to table, history output)
   stays folded with a one-line summary. Problems block only what msdb refuses (a missing name, a go-to past the
   last step, a proxy not granted to the type) and warn on the rest. The describe reads at most 50 steps and each command up to
   100,000 characters (1,000,000 for all of them): a longer job lists its first 50 steps read-only, and a cut command only warns
