@@ -656,7 +656,7 @@ listers; nothing in it runs a job.
 - **Running jobs.** The connection node's status chip, "N jobs running", counts the connection principal's own pending and
   running jobs in the billing project: jobs.list with `stateFilter` pending and running, without `allUsers`, projection
   minimal, top-level jobs only (a running script counts once), through the rate limiter above. It is a free API call, never a
-  query. Jobs other principals run in the project, and jobs in the extra projects, are not counted; Job History's All users
+  query. Jobs other principals run in the project, and jobs in starred or session projects, are not counted; Job History's All users
   shows those. It is the `explorer.bigquery` probe of the `bigquery.explorer` live source (docs/live.md), every 10 s, sampled
   only while Object Explorer shows and paused while it is hidden, like SQL Server's chips (docs/object-explorer.md, Live
   status); Options › Environment › Live data › Show live status in Object Explorer turns both off. It counts up to 10,000 ("10,000+" past that), shows
@@ -762,7 +762,7 @@ without going to BigQuery Studio. Everything comes from BigQuery's free REST cal
 `jobs.cancel`) through the principal's rate limiter, never a query and never the billed `INFORMATION_SCHEMA.JOBS` views.
 
 - **Opening it.** One document per connection, opened again it is focused: Job History on the connection's or the billing
-  project's Object Explorer menu (an extra project's is greyed: jobs belong to the billing project), the palette's
+  project's Object Explorer menu (a non-billing project's is greyed: jobs belong to the billing project), the palette's
   "BigQuery: Job History" (the active document's connection, the one live BigQuery connection, or a pick), "Show in Job
   History" under a finished BigQuery tab's Messages (filtered to that job), and Show in Job History in the dialog about
   running jobs left without a tab (filtered to them, per project). A project the page is not connected to is connected

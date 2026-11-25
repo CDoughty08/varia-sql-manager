@@ -122,11 +122,7 @@ export function resolveMenu(menu: MenuId, options: ResolveOptions): readonly Res
   const level = (entries: readonly MenuEntry[], depth: number): Draft[] => pruneMenu(entries, keep, children, depth).map((entry): Draft => {
     // `keep` has already dropped roles.
     if (entry.kind === 'separator' || entry.kind === 'role') return { kind: 'separator' }
-    if (entry.kind === 'command') {
-      const title = (entry.id === 'bigquery.toggleStarProject' ? guarded(() => commands.titleFor?.(entry.id, args), undefined) : undefined)
-        ?? commandTitle(entry.id, options.settings, entry.title)
-      return command(entry.id, title, { key: entry.nativeId, mnemonic: entry.mnemonic, toggle: entry.toggle })
-    }
+    if (entry.kind === 'command') return command(entry.id, commandTitle(entry.id, options.settings, entry.title), { key: entry.nativeId, mnemonic: entry.mnemonic, toggle: entry.toggle })
     const provider = entry.dynamic && options.dynamic?.[entry.dynamic]
     const provided = provider ? guarded(provider, []) : []
     // Dynamic items share the level with the catalogue's, so `finish` assigns their mnemonics together.

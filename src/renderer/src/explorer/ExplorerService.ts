@@ -123,6 +123,7 @@ export const sessionProjectDetail = 'Shown for this session — star to keep in 
 const maxSessionProjectsPerConnection = 50
 /** Per-principal starred BigQuery projects source (`BigQueryStarredService`). */
 export interface BigQueryStarredSource {
+  readonly loaded?: boolean
   starredFor(principalId: string | undefined): readonly string[]
   isStarred(principalId: string | undefined, project: string): boolean
   subscribe(listener: () => void): () => void
@@ -1427,7 +1428,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       this.failed(node, error, running.mode, outcome.ok ? outcome.result.nodes : [])
       if (root && (outcome.ok ? error.code === 'CONNECTION_LOST' : outcome.connectionLost)) { root.connectionError = error; root.rev++ }
     }
-    if (this.restoring.size && (!node.cursor || node.more !== 'auto')) this.restoreLoaded(node)
+    const deferBigQueryRestore = node.kind === 'server' && this.bigQueryStarred?.loaded === false && this.connectionOf(node.connectionId)?.options.provider === 'bigquery'
+    if (this.restoring.size && (!node.cursor || node.more !== 'auto') && !deferBigQueryRestore) this.restoreLoaded(node)
     // The page may have detached nodes a restore waits on (a reconcile dropping rows, Group by Schema moving folders), whose
     // aborted loads never settle.
     if (this.restoring.size) this.pruneRestores()
@@ -1554,6 +1556,11 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     root.hasChildren = next.length > 0
     if (added) this.addDescendants(root, added)
     if (removed.length) this.detach(root, removed, false)
+    if (this.restoring.size && this.bigQueryStarred?.loaded !== false) {
+      this.restoreLoaded(root)
+      this.pruneRestores()
+    }
+    this.flushRestore()
     root.rev++
     this.invalidate()
     this.updateContext()

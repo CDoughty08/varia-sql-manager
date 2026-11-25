@@ -7,7 +7,7 @@ namespace Varia.Backend.BigQuery;
 
 /// <summary>
 /// Object Explorer for BigQuery handles (docs/bigquery.md, Object Explorer): explorer.children through BigQuery's free REST
-/// listers, never a job. The connection node lists the billing project and the extra projects; a project its datasets
+/// listers, never a job. The connection node lists the billing project (starred and session projects are managed in Object Explorer); a project its datasets
 /// (datasets.list); a dataset its six static folders; Tables, Views, Materialized Views and External Tables page tables.list
 /// filtered by type; Routines routines.list; Models models.list; a table-like object's Columns and a STRUCT column's fields
 /// come from tables.get. Every call goes through the principal's limiter (<see cref="MetadataAsync"/>); a failure is an

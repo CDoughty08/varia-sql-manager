@@ -250,7 +250,7 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
     activate,
     reconnect: rowId => run('connection.reconnect', rowId),
     remove: rowId => run('connection.removeFromExplorer', rowId),
-    toggleProjectStar: rowId => run('bigquery.toggleStarProject', rowId),
+    toggleProjectStar: rowId => run(explorer.node(rowId)?.bigQueryProjectRole === 'starred' ? 'bigquery.unstarProject' : 'bigquery.starProject', rowId),
     // The text goes as plain text too, so other apps take it; the query editor accepts only the Varia type. A server row
     // also carries its own type when there are servers to reorder among, and a connected server or database row carries
     // the retarget type: dropped on a query's tab or editor it moves the query there (ServerDropService).

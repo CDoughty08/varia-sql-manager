@@ -535,6 +535,29 @@ internal static partial class BigQueryIndexChecks
             "noise filtering ignores API_DISABLED/PERMISSION_DENIED/NOT_FOUND on discovered projects, keeps QUOTA and starred errors, and indexes id-only discovered projects: "
             + string.Join(" | ", skips.Select(skip => skip.Project + ":" + skip.Code)));
 
+        // Noise-filtered discovered projects (API_DISABLED/PERMISSION_DENIED/NOT_FOUND) are excluded from LookupBigQuery (autocomplete).
+        var lookupAfterNoise = harness.Service.Search.LookupBigQuery(harness.ConnectionId, "varia-alpha");
+        check(!lookupAfterNoise.Projects.Contains("disc-disabled", StringComparer.Ordinal)
+            && !lookupAfterNoise.Projects.Contains("disc-denied", StringComparer.Ordinal)
+            && !lookupAfterNoise.Projects.Contains("disc-missing", StringComparer.Ordinal)
+            && lookupAfterNoise.Projects.Contains("disc-ok", StringComparer.Ordinal),
+            "noise-filtered discovered projects do not pollute LookupBigQuery project suggestions");
+
+        // Pruning discovered projects with allProjects: false also clears orphaned stale marks so StaleMark returns to null.
+        harness.Service.Search.MarkStale(harness.ConnectionId, "disc-ok", "analytics");
+        check(harness.Service.Search.StaleMarkOf(harness.ConnectionId) is > 0, "stale mark is recorded on a tracked discovered project");
+        var pruned = await harness.Index(more => { more["allProjects"] = false; more["starredProjects"] = new JsonArray("varia-beta"); });
+        check(pruned.Status.StaleMark is null && harness.Service.Search.StaleOf(harness.ConnectionId).Count == 0,
+            "pruning discovered projects clears orphaned stale marks so StaleMark does not stay stuck non-null");
+        // Restore discovered projects before testing failed discovery retention.
+        await harness.Index(more => more["starredProjects"] = new JsonArray("varia-beta"));
+
+        // Invalid connectionId on bigquery.connectionProjects and bigquery.indexEstimate returns INVALID_PARAMS, never BACKEND_ERROR.
+        var (badProjConn, _, _) = await harness.Call("bigquery.connectionProjects", new JsonObject());
+        var (badEstConn, _, _) = await harness.Call("bigquery.indexEstimate", new JsonObject());
+        check(badProjConn == "INVALID_PARAMS" && badEstConn == "INVALID_PARAMS",
+            $"omitted connectionId on bigquery.connectionProjects and bigquery.indexEstimate returns INVALID_PARAMS: {badProjConn} {badEstConn}");
+
         // Discovery failure records one skip (Project: "") and keeps billing + starred + unpruned earlier reads.
         harness.Fake.On("GET", BigQueryFake.Projects, BigQueryFake.Fixture("error-access-denied", 403));
         var failedDiscovery = await harness.Index(more => more["starredProjects"] = new JsonArray("varia-beta"));

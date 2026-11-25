@@ -73,29 +73,62 @@ describe('BigQueryStarredService', () => {
     expect(service.starredFor(ada)).toEqual(['bigquery-public-data'])
     service.dispose()
   })
+  it('does not leave ghost starred projects when concurrent mutations both fail and tolerates IPC rejections', async () => {
+    const first = deferred<ApiResult<BigQueryStarredProjectsView>>()
+    const second = deferred<ApiResult<BigQueryStarredProjectsView>>()
+    let call = 0
+    const api: Pick<VariaApi, 'loadBigQueryStarredProjects' | 'setBigQueryProjectStar'> = {
+      loadBigQueryStarredProjects: vi.fn(async () => { throw new Error('IPC offline') }),
+      setBigQueryProjectStar: vi.fn(() => (++call === 1 ? first.promise : second.promise))
+    }
+    const service = new BigQueryStarredService({ api })
+    await service.load()
+    expect(service.loaded).toBe(true)
+    expect(service.starredFor('toString')).toEqual([])
+    expect(service.isStarred('toString', 'x')).toBe(false)
+
+    const p1 = service.setStarred(ada, 'proj-alpha', true)
+    const p2 = service.setStarred(ada, 'proj-beta', true)
+    expect(service.starredFor(ada)).toEqual(['proj-alpha', 'proj-beta'])
+    first.resolve({ ok: false, error: 'Fail 1' })
+    second.resolve({ ok: false, error: 'Fail 2' })
+    expect(await p1).toEqual({ ok: false, error: 'Fail 1' })
+    expect(await p2).toEqual({ ok: false, error: 'Fail 2' })
+    // Neither mutation persisted: both rolled back cleanly with no ghost entry.
+    expect(service.starredFor(ada)).toEqual([])
+    service.dispose()
+  })
 })
 
 describe('referencedBigQueryProjects', () => {
-  it('extracts 3-part BigQuery project IDs across backticked, unquoted, dashed, domain-scoped, DML, DDL and UDF forms', () => {
+  it('extracts 3-part BigQuery project IDs across backticked, unquoted, dashed, domain-scoped, digit-dataset, SAFE., DML, DDL and comma-FROM forms', () => {
     const sql = [
-      'SELECT a.id, `udf-project-1`.funcs.normalize(a.name)',
+      'SELECT a.id, `udf-project-1`.funcs.normalize(a.name), SAFE.safe-proj-9.funcs.parse(a.name)',
       'FROM `bigquery-public-data.samples.shakespeare` AS a',
       'JOIN `example.com:domain-proj.sales.orders` o ON o.id = a.id',
       'LEFT JOIN `other-proj-2`.analytics.events e ON e.id = a.id',
       'INNER JOIN `partial-proj.ds`.items i ON i.id = a.id',
-      ', plain_proj_3.metrics.daily d',
+      ', comma-proj-3.metrics.daily d',
       'JOIN dashed-proj-4.raw.logs l ON l.id = a.id;',
+      'SELECT * FROM UNNEST(arr) AS x, unnest-proj-8.2026_sales.orders;',
+      'SELECT * FROM digit-proj-1.2026_sales.orders;',
+      'INSERT insert-proj-10.staging.out VALUES (1);',
       'INSERT INTO `target-proj-5.staging.out` SELECT * FROM `bigquery-public-data.samples.shakespeare`;',
       'CALL `proc-proj-6.ops.refresh`();',
       'SELECT * FROM `info-proj-7`.region-us.INFORMATION_SCHEMA.TABLES;'
     ].join('\n')
     expect(referencedBigQueryProjects(sql)).toEqual([
       'udf-project-1',
+      'safe-proj-9',
       'bigquery-public-data',
       'example.com:domain-proj',
       'other-proj-2',
       'partial-proj',
+      'comma-proj-3',
       'dashed-proj-4',
+      'unnest-proj-8',
+      'digit-proj-1',
+      'insert-proj-10',
       'target-proj-5',
       'proc-proj-6',
       'info-proj-7'

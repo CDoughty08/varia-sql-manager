@@ -1546,6 +1546,14 @@ describe('Search Objects\' summary', () => {
     expect(indexSummary(undefined, status({ skipped: [{ database: 'msdb', code: 'NO_DB_ACCESS', message: 'm' }, { database: 'msdb', code: 'NO_DB_ACCESS', message: 'm', agent: true }] })))
       .toBe('Index: 40 objects, 5 definitions in 2 databases · 1 database skipped · SQL Server Agent objects skipped')
     expect(indexGap({ connectionId: 'c', done: 0, total: 0, objects: 0, status: status({ skipped: [{ database: 'msdb', code: 'TOO_LARGE', message: 'm', agent: true }] }) })).toBe('SQL Server Agent objects skipped')
+    // BigQuery namesOnly, global discovery skips, and projects discovery phase in All servers summaries.
+    expect(indexIncomplete(undefined, status({ provider: 'bigquery', namesOnly: ['disc-a', 'disc-b'] }))).toBe(true)
+    expect(indexGap({ connectionId: 'bq', done: 0, total: 0, objects: 0, status: status({ provider: 'bigquery', namesOnly: ['disc-a', 'disc-b'] }) })).toBe('names only in 2 projects')
+    expect(indexGap({ connectionId: 'bq', done: 0, total: 0, objects: 0, status: status({ provider: 'bigquery', skipped: [{ database: '', project: '', code: 'TOO_LARGE', message: 'cap' }] }) })).toBe('project list truncated')
+    expect(bigQueryIndexSummary(undefined, status({ provider: 'bigquery', indexed: 2, projects: 2, skipped: [{ database: '', project: '', code: 'TOO_LARGE', message: 'cap' }] }))).toContain('project list truncated')
+    expect(groupNote({ connectionId: 'bq', label: 'varia-alpha', start: 0, hits: [] }, { connectionId: 'bq', requestId: 'r', done: 0, total: 0, objects: 0, phase: 'projects' })).toBe('discovering projects…')
+    expect(allServersSummary({ id: 's', connectionId: 'bq', allServers: true, text: 'x', caseSensitive: false, wholeWord: false, regex: false, fuzzy: false, scope: 'all', types: [], servers: [{ connectionId: 'bq', label: 'varia-alpha' }] },
+      { bq: { connectionId: 'bq', requestId: 'r', done: 0, total: 0, objects: 0, phase: 'projects' } })).toContain('varia-alpha still discovering projects')
     expect(indexSummary(undefined, status({ skipped: [{ database: 'Big', code: childrenLeftOut, message: 'm' }] }))).toBe('Index: 40 objects, 5 definitions in 2 databases · columns and other children left out of 1 large database')
     expect(indexSummary(undefined, undefined)).toBe('This server has no index yet.')
     // Build index is offered for the servers with no index and none building.

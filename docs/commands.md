@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (456)
+## Commands (457)
 
 ### File
 
@@ -344,7 +344,8 @@ keys it uses are listed below.
 | Refresh Peek | `peek.refresh` | F5 (`peekFocus \|\| peekTabFocus`) | F5 (`peekFocus \|\| peekTabFocus`) | F5 (`peekFocus \|\| peekTabFocus`) | `backendReady` | — |
 | Preview Rows | `explorer.previewRows` | — | — | — | `backendReady && explorerSelectionKind == 'bqTable' && !documentBusy` | Object Explorer context menu › Preview Rows; Search Objects result context menu › Preview Rows |
 | BigQuery Properties | `explorer.bigQueryProperties` | — | — | — | `backendReady && explorerSelectionPeekable` | Object Explorer context menu › Properties |
-| Star Project | `bigquery.toggleStarProject` | — | — | — | `hasConnection` | Object Explorer context menu › Star Project |
+| Star Project | `bigquery.starProject` | — | — | — | `hasConnection` | Object Explorer context menu › Star Project |
+| Unstar Project | `bigquery.unstarProject` | — | — | — | `hasConnection` | Object Explorer context menu › Unstar Project |
 | Remove Project from Explorer | `bigquery.removeSessionProject` | — | — | — | `hasConnection` | Object Explorer context menu › Remove from Explorer |
 | Copy Name | `explorer.copyName` | — | — | — | `hasConnection` | Object Explorer context menu › Copy Name |
 | Search Objects… | `explorer.searchObjects` | — | — | — | `hasConnection` | View › Search Objects…; Object Explorer context menu › Search Objects… |
@@ -845,7 +846,8 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `1_query` | Searc**h** Objects… | `explorer.searchObjects` | `((explorerNode == 'server' \|\| explorerNode == 'bqProject' \|\| explorerNode == 'bqDataset') && !explorerServerLost) \|\| explorerNode == 'database'` |
 | `1_query` | Pee**k** | `explorer.peek` | `explorerNodePeekable && !explorerServerLost` |
 | `1_query` | Star a **P**roject… | `bigquery.starProjectPrompt` | `explorerNode == 'server' && explorerProvider == 'bigquery' && !explorerServerLost` |
-| `1_query` | **S**tar Project | `bigquery.toggleStarProject` | `explorerNode == 'bqProject' && (explorerBigQueryProjectRole == 'session' \|\| explorerBigQueryProjectRole == 'starred') && !explorerServerLost` |
+| `1_query` | **S**tar Project | `bigquery.starProject` | `explorerNode == 'bqProject' && explorerBigQueryProjectRole == 'session' && !explorerServerLost` |
+| `1_query` | **U**nstar Project | `bigquery.unstarProject` | `explorerNode == 'bqProject' && explorerBigQueryProjectRole == 'starred' && !explorerServerLost` |
 | `1_query` | Remove from **E**xplorer | `bigquery.removeSessionProject` | `explorerNode == 'bqProject' && explorerBigQueryProjectRole == 'session' && !explorerServerLost` |
 | `2_job` | S**t**art Job at Step… | `explorer.startJob` | `explorerActionStartJob != '' && explorerNode != 'background'` |
 | `2_job` | Stop **J**ob | `explorer.stopJob` | `explorerActionStopJob != '' && explorerNode != 'background'` |

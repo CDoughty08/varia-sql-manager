@@ -128,7 +128,8 @@ function tooltipFacts(node: TreeNode, note?: string): string[] {
   const error = node.error ?? node.connectionError, count = itemCount(node)
   const listed = listedChips(node)
   const status = serverConnectionStatus(node)?.sentence ?? (listed.length ? listed.map(chip => chip.title).join('\n') : node.status && statusSentences[node.status])
-  return [kind, node.lost && node.sublabel && displayText(node.sublabel), node.detail && displayText(node.detail), count !== undefined && items(count), status, note,
+  const role = node.kind === 'bqProject' && node.bigQueryProjectRole === 'starred' ? 'Starred project' : undefined
+  return [kind, role, node.lost && node.sublabel && displayText(node.sublabel), node.detail && displayText(node.detail), count !== undefined && items(count), status, note,
     error && `Could not load: ${displayText(error.message)}`, node.note && displayText(node.note.sentence)].filter((line): line is string => !!line)
 }
 /** The row's tooltip: name, kind and creation date, facts, status, `note` (such as a live state), any error, and another

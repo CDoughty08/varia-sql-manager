@@ -7,7 +7,6 @@ import { sessionLimits, type SessionWrite } from '../shared/files/session'
 import { editorGroupsLayoutSchema, layoutViews, remapEditorGroups } from '../shared/editor-groups'
 import { connectionWorkspaceSchema } from '../shared/connection-targets'
 import { bigQueryProjectSchema } from '../shared/connections'
-import { bigQueryStarredPrincipalSchema } from '../shared/bigquery-connections'
 import { providerIds } from '../shared/providers'
 import { jobKeySchema } from '../shared/bigquery/jobs'
 import { isKeptAgentKind, keptAgentKinds, keptAgentLimits, type KeptAgentKind } from '../shared/agent/kept'
@@ -92,26 +91,26 @@ const posix = process.platform !== 'win32'
 const leftover = /^((session|previous|jobs)\.json\.invalid-[0-9a-f-]{36}\.json|\.varia-[0-9a-f-]{36}\.tmp)$/i
 const dayMs = 86_400_000
 
-/** Legacy `extraProjects` stripped from pre-upgrade `ConnectionWorkspace` targets on disk. */
-export interface LegacyBigQueryExtraProjects {
-  readonly byPrincipal: ReadonlyMap<string, readonly string[]>
-  readonly unclaimed: readonly string[]
+/** Legacy BigQuery `extraProjects` stripped from a pre-upgrade session on disk, keyed by target ID (for seal verification and post-seal migration). */
+const legacyExtraProjectsByRecord = new WeakMap<SessionRecord, ReadonlyMap<string, readonly string[]>>()
+/** Returns legacy BigQuery `extraProjects` stripped from `record` on read, keyed by target ID (never persisted again). */
+export function legacyBigQueryExtraProjects(record: SessionRecord | undefined): ReadonlyMap<string, readonly string[]> | undefined {
+  return record ? legacyExtraProjectsByRecord.get(record) : undefined
 }
 
 /**
  * Tolerates pre-upgrade `session.json` / `previous.json` files whose BigQuery workspace targets still carry `extraProjects`:
- * strips `extraProjects` from each target's options and collects those valid project IDs (attributed to `expectedPrincipal.principal`
- * when present, else unclaimed) so the session restores cleanly without quarantining.
+ * strips `extraProjects` from each target's options and retains the raw arrays keyed by target ID so `ConnectionWorkspaceSealer`
+ * can verify the pre-upgrade HMAC seal and main can migrate them only after seal verification.
  */
-function migrateLegacySession(raw: unknown): { value: unknown; legacy?: LegacyBigQueryExtraProjects } {
+function migrateLegacySession(raw: unknown): { value: unknown; extraByTarget?: ReadonlyMap<string, readonly string[]> } {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { value: raw }
   const record = raw as Record<string, unknown>
   const workspace = record.workspace
   if (!workspace || typeof workspace !== 'object' || Array.isArray(workspace)) return { value: raw }
   const ws = workspace as Record<string, unknown>
   if (!Array.isArray(ws.targets)) return { value: raw }
-  const byPrincipal = new Map<string, string[]>()
-  const unclaimed: string[] = []
+  const extraByTarget = new Map<string, readonly string[]>()
   let migrated = false
   const targets = ws.targets.map(target => {
     if (!target || typeof target !== 'object' || Array.isArray(target)) return target
@@ -123,27 +122,12 @@ function migrateLegacySession(raw: unknown): { value: unknown; legacy?: LegacyBi
     const extra = opts.extraProjects
     if (extra !== undefined && (!Array.isArray(extra) || !extra.every(item => typeof item === 'string' && bigQueryProjectSchema.safeParse(item).success))) return target
     migrated = true
-    const billing = typeof opts.project === 'string' ? opts.project : ''
-    const projects = Array.isArray(extra) ? extra.filter((project, index) => project !== billing && extra.indexOf(project) === index) : []
-    if (projects.length) {
-      const expected = entry.expectedPrincipal && typeof entry.expectedPrincipal === 'object' && !Array.isArray(entry.expectedPrincipal)
-        ? entry.expectedPrincipal as Record<string, unknown> : undefined
-      const principal = expected?.provider === 'bigquery' && typeof expected.principal === 'string' && bigQueryStarredPrincipalSchema.safeParse(expected.principal).success
-        ? expected.principal : undefined
-      if (principal) {
-        const list = byPrincipal.get(principal) ?? []
-        for (const project of projects) if (!list.includes(project)) list.push(project)
-        byPrincipal.set(principal, list)
-      } else {
-        for (const project of projects) if (!unclaimed.includes(project)) unclaimed.push(project)
-      }
-    }
+    if (Array.isArray(extra) && typeof entry.id === 'string') extraByTarget.set(entry.id, [...extra])
     const { extraProjects: _extraProjects, ...rest } = opts
     return { ...entry, options: rest }
   })
   if (!migrated) return { value: raw }
-  const legacy = byPrincipal.size || unclaimed.length ? { byPrincipal, unclaimed } : undefined
-  return { value: { ...record, workspace: { ...ws, targets } }, legacy }
+  return { value: { ...record, workspace: { ...ws, targets } }, ...extraByTarget.size ? { extraByTarget } : {} }
 }
 
 export interface SessionStoreOptions {
@@ -152,8 +136,6 @@ export interface SessionStoreOptions {
   /** Hands out each kept tab without its file's path and baseline (sandbox-guard.ts's `profilePathsRefused`): whoever
    *  reopens it has no file to read, so a tab that kept its text reopens without a file and one that kept only its path does not reopen. */
   readonly pathsRefused?: boolean
-  /** Called when a pre-upgrade session file on disk had legacy BigQuery `extraProjects` stripped during read. */
-  readonly onLegacyBigQueryExtraProjects?: (migrated: LegacyBigQueryExtraProjects) => Promise<void> | void
 }
 
 /** Prepares the same bounded record for disk on quit or a one-use in-memory reload checkpoint. */
@@ -211,14 +193,7 @@ export class SessionStore {
   private kept: number | undefined
   /** A take handed out files no page has acknowledged reopening (`restored`). */
   private unrestored = false
-  private legacyBigQueryHandler: SessionStoreOptions['onLegacyBigQueryExtraProjects']
-  constructor(private readonly dir: string, private readonly options: SessionStoreOptions = {}) {
-    this.legacyBigQueryHandler = options.onLegacyBigQueryExtraProjects
-  }
-  /** Registers a handler for legacy BigQuery `extraProjects` stripped from pre-upgrade session files on disk. */
-  setLegacyBigQueryExtraProjectsHandler(handler: SessionStoreOptions['onLegacyBigQueryExtraProjects']): void {
-    this.legacyBigQueryHandler = handler
-  }
+  constructor(private readonly dir: string, private readonly options: SessionStoreOptions = {}) {}
 
   private serial<T>(task: () => Promise<T>): Promise<T> {
     const next = this.queue.then(task)
@@ -340,10 +315,9 @@ export class SessionStore {
     const migrated = read.kind === 'ok' ? migrateLegacySession(read.value) : undefined
     const parsed = migrated ? storedSessionSchema.safeParse(migrated.value) : undefined
     if (parsed?.success) {
-      if (migrated?.legacy && this.legacyBigQueryHandler) {
-        try { await this.legacyBigQueryHandler(migrated.legacy) } catch { /* Migration never blocks session restore. */ }
-      }
-      return this.options.pathsRefused ? { ...parsed.data, documents: parsed.data.documents.map(withoutFile) } : parsed.data
+      const record = this.options.pathsRefused ? { ...parsed.data, documents: parsed.data.documents.map(withoutFile) } : parsed.data
+      if (migrated?.extraByTarget?.size) legacyExtraProjectsByRecord.set(record, migrated.extraByTarget)
+      return record
     }
     await quarantine(path)
     return undefined

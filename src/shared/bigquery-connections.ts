@@ -24,14 +24,17 @@ export const bigQueryStoredProfileSchema = z.object({
 /** A federation configuration's `credential_source.file` the user confirmed in the Connect dialog (decision 49), by the
  *  configuration's path: a changed source path asks again. */
 export const confirmedSourceSchema = z.object({ keyPath: absolutePath, source: absolutePath }).strict()
+/** BigQuery's verified principal pin grammar (matches src/main/connection-principal.ts). */
+export const bigQueryPrincipalIdPattern = /^bigquery:(?:serviceAccount|user|computeEngine|external|aws|externalUser|impersonated|anonymous):[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+$/u
 /** Verified BigQuery principal pin (`bigquery:user:…`, `bigquery:serviceAccount:…`), used to scope Starred Projects. */
 export const bigQueryStarredPrincipalSchema = z.string().min(1).max(bigQueryLibraryLimits.principalChars)
-  .refine(value => value.startsWith('bigquery:') && !/[\u0000-\u001f]/.test(value), 'Invalid BigQuery principal id.')
+  .regex(bigQueryPrincipalIdPattern, 'Invalid BigQuery principal id.')
 /** Starred projects persisted per verified BigQuery principal (mirrors BigQuery Studio's explorer starring UX without
  *  altering connection identity). */
 export const bigQueryStarredEntrySchema = z.object({
   principal: bigQueryStarredPrincipalSchema,
-  projects: z.array(bigQueryProjectSchema).max(bigQueryLibraryLimits.starredPerPrincipal)
+  projects: z.array(bigQueryProjectSchema).min(1).max(bigQueryLibraryLimits.starredPerPrincipal)
+    .refine(projects => new Set(projects).size === projects.length, 'Duplicate starred projects.')
 }).strict()
 export const bigQueryStarProjectInputSchema = z.object({
   principal: bigQueryStarredPrincipalSchema,
@@ -51,7 +54,8 @@ export const bigQueryLibraryFileSchema = z.object({
   keptKeyFiles: z.array(keptKeyFileSchema).max(bigQueryLibraryLimits.keptKeyFiles).optional(),
   starredProjects: z.array(bigQueryStarredEntrySchema).max(bigQueryLibraryLimits.starredPrincipals).optional(),
   /** Legacy extraProjects stripped from pre-upgrade profiles whose principal was not yet known; claimed on the next BigQuery connect. */
-  migratedProjects: z.array(bigQueryProjectSchema).max(bigQueryLibraryLimits.starredPerPrincipal).optional()
+  migratedProjects: z.array(bigQueryProjectSchema).max(bigQueryLibraryLimits.starredPerPrincipal)
+    .refine(projects => new Set(projects).size === projects.length, 'Duplicate migrated projects.').optional()
 }).strict().refine(value => new Set(value.profiles.map(profile => profile.id)).size === value.profiles.length, 'Duplicate connection IDs.')
   .refine(value => !value.starredProjects || new Set(value.starredProjects.map(entry => entry.principal)).size === value.starredProjects.length, 'Duplicate starred project principals.')
 export type BigQueryStoredProfile = z.infer<typeof bigQueryStoredProfileSchema>

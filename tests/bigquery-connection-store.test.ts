@@ -202,6 +202,14 @@ describe('BigQuery saved connections (bigquery-connections.json)', () => {
     // Bulk workspace migration merges without duplicates.
     await store.addStarredProjects(ada, ['varia-beta', 'varia-gamma'])
     expect(await store.loadStarredProjects()).toEqual({ byPrincipal: { [ada]: ['varia-beta', 'bigquery-public-data', 'varia-gamma'] } })
+    // Anonymous emulator principals do not claim migratedProjects.
+    const anon = 'bigquery:anonymous:emulator'
+    await store.addMigratedProjects(['varia-delta'])
+    expect((await store.claimMigratedProjects(anon)).claimed).toEqual([])
+    expect((await store.load()).library.migratedProjects).toEqual(['varia-delta'])
+    // Claiming on a real principal moves migratedProjects into starredProjects and clears migratedProjects.
+    expect((await store.claimMigratedProjects(ada)).claimed).toEqual(['varia-delta'])
+    expect((await store.load()).library.migratedProjects).toBeUndefined()
     // Corrupt non-array extraProjects still quarantines the file.
     await writeFile(path, JSON.stringify({
       version: 1,
@@ -209,6 +217,14 @@ describe('BigQuery saved connections (bigquery-connections.json)', () => {
     }))
     const corrupt = await new BigQueryConnectionStore(path, new BigQueryKeyFiles()).load()
     expect(corrupt.warning).toContain('invalid')
+    // Corrupt migratedProjects alongside valid extraProjects also quarantines instead of silently dropping bad items.
+    await writeFile(path, JSON.stringify({
+      version: 1,
+      profiles: [{ id: legacyId, options: { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', extraProjects: ['varia-beta'] }, favorite: false }],
+      migratedProjects: [123, 'NOT A PROJECT']
+    }))
+    const corruptMigrated = await new BigQueryConnectionStore(path, new BigQueryKeyFiles()).load()
+    expect(corruptMigrated.warning).toContain('invalid')
   })
 })
 

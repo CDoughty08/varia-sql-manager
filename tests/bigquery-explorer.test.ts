@@ -329,6 +329,9 @@ describe('BigQuery Starred & Session Projects in Object Explorer', () => {
       if (name === 'secret-project') {
         return { ok: true, value: { nodes: [], elapsedMs: 1, error: { code: 'PERMISSION_DENIED', message: 'Permission denied on project “secret-project”.', retryable: false } } }
       }
+      if (name === 'reject-project') {
+        return Promise.reject(new Error('IPC channel closed'))
+      }
       if (name === 'slow-project') {
         return new Promise<ApiResult<ExplorerChildrenResult>>(resolve => { holdPendingVerify = resolve })
       }
@@ -352,11 +355,14 @@ describe('BigQuery Starred & Session Projects in Object Explorer', () => {
       return resolveMenu('explorer.context', { platform: 'win32', state: { backendReady: true, hasConnection: true }, target: targetKeys(target), args: argsFor(target), commands, keybindings: { lookup: () => undefined } })
     }
     const titles = (items: ReturnType<typeof menuFor>) => items.filter(item => item.kind === 'command').map(item => [item.id, item.title])
-    expect(titles(menuFor(billingNode))).not.toContainEqual(['bigquery.toggleStarProject', expect.any(String)])
+    expect(titles(menuFor(billingNode))).not.toContainEqual(['bigquery.starProject', expect.any(String)])
+    expect(titles(menuFor(billingNode))).not.toContainEqual(['bigquery.unstarProject', expect.any(String)])
     expect(titles(menuFor(billingNode))).not.toContainEqual(['bigquery.removeSessionProject', expect.any(String)])
-    expect(titles(menuFor(starredNode))).toContainEqual(['bigquery.toggleStarProject', 'Unstar Project'])
+    expect(titles(menuFor(starredNode))).toContainEqual(['bigquery.unstarProject', 'Unstar Project'])
+    expect(titles(menuFor(starredNode))).not.toContainEqual(['bigquery.starProject', expect.any(String)])
     expect(titles(menuFor(starredNode))).not.toContainEqual(['bigquery.removeSessionProject', expect.any(String)])
-    expect(titles(menuFor(sessionNode))).toContainEqual(['bigquery.toggleStarProject', 'Star Project'])
+    expect(titles(menuFor(sessionNode))).toContainEqual(['bigquery.starProject', 'Star Project'])
+    expect(titles(menuFor(sessionNode))).not.toContainEqual(['bigquery.unstarProject', expect.any(String)])
     expect(titles(menuFor(sessionNode))).toContainEqual(['bigquery.removeSessionProject', 'Remove from Explorer'])
 
     // Star a Project… loads all pages from bigQueryConnectionProjects.
@@ -398,6 +404,14 @@ describe('BigQuery Starred & Session Projects in Object Explorer', () => {
     expect(quickInput.visible).toBe(true)
     expect(quickInput.getSnapshot().message?.severity).toBe('error')
 
+    // A rejected explorerChildren call resets busy and shows an error instead of wedging the picker.
+    quickInput.filter('reject-project')
+    quickInput.accept(0)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(quickInput.getSnapshot().busy).toBe(false)
+    expect(quickInput.visible).toBe(true)
+    expect(quickInput.getSnapshot().message).toEqual({ text: 'Could not verify “reject-project”: IPC channel closed', severity: 'error' })
+
     // Editing the input while a verification check is in flight cancels the in-flight check and ignores its late reply.
     quickInput.filter('slow-project')
     quickInput.accept(0)
@@ -434,7 +448,7 @@ describe('BigQuery Starred & Session Projects in Object Explorer', () => {
     expect(root.children?.map(child => child.label)).not.toContain('session-only-1')
 
     // Unstar Project removes the starred project cleanly.
-    expect(await commands.execute('bigquery.toggleStarProject', { target: { kind: 'explorer', node: starredNode } }, 'menu')).toBe(true)
+    expect(await commands.execute('bigquery.unstarProject', { target: { kind: 'explorer', node: starredNode } }, 'menu')).toBe(true)
     expect(bigQueryStarred.isStarred(ada, 'varia-beta')).toBe(false)
     expect(root.children?.map(child => child.label)).not.toContain('varia-beta')
 

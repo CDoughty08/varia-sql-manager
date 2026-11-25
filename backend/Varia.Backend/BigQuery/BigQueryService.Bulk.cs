@@ -26,6 +26,7 @@ internal sealed partial class BigQueryService
     public async Task<BigQueryIndexEstimateResult> IndexEstimateAsync(BigQueryIndexEstimateArgs args, CancellationToken token)
     {
         var watch = Stopwatch.StartNew();
+        if (!Guid.TryParse(args.ConnectionId, out _)) throw new RequestException("INVALID_PARAMS", "Invalid connection id.");
         if (args.StarredProjects is { } rawStarred && (rawStarred.Count > BigQueryIndexLimits.StarredProjects || rawStarred.Any(project => !BqNames.IsProject(project))))
             throw new RequestException("INVALID_PARAMS", "Starred projects must be at most " + BigQueryIndexLimits.StarredProjects + " project ids.");
         var connection = Find(args.ConnectionId) ?? throw new RequestException("NOT_CONNECTED", "The connection is no longer open.");
@@ -51,6 +52,7 @@ internal sealed partial class BigQueryService
                     if (locations.Count == BigQueryBulkSql.MaxLocations) { cut = true; break; }
                     locations.Add(new(project, location));
                 }
+                if (cut) break;
             }
             // Each location's dry runs at once, through the principal's limiter; a location whose dry run fails is left out, so its
             // datasets get the free calls rather than a query no estimate covered.

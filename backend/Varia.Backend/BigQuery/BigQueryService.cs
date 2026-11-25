@@ -330,6 +330,7 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
     /// <summary>bigquery.connectionProjects: one page of projects.list on a live connection handle through the principal's limiter.</summary>
     public async Task<BigQueryProjectList> ConnectionProjectsAsync(BigQueryConnectionProjectsArgs args, CancellationToken token)
     {
+        if (!Guid.TryParse(args.ConnectionId, out _)) throw new RequestException("INVALID_PARAMS", "Invalid connection id.");
         BigQueryLimits.CheckPageToken(args.PageToken);
         var connection = Find(args.ConnectionId) ?? throw new RequestException("NOT_CONNECTED", "The connection is no longer open.");
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);

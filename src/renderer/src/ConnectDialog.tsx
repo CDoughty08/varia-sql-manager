@@ -315,7 +315,7 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
   const [dialogWidth, setDialogWidth] = useState<number>(dialogWindowKinds.connect.width)
   const [railWidth, setRailWidth] = useState(() => loadRailWidth(dialogWindowKinds.connect.width))
   const [draggingSplit, setDraggingSplit] = useState(false)
-  // Lifted Advanced drafts so switching tabs preserves invalid values, errors, and pending BigQuery extra-project text.
+  // Lifted Advanced drafts so switching tabs preserves invalid values and errors.
   const [sqlAdvancedDraft, setSqlAdvancedDraft] = useState<SqlAdvancedDraft>({})
   const sqlAdvancedEdited = useRef(new Set<string>())
   const [bigQueryAdvancedDraft, setBigQueryAdvancedDraft] = useState<BigQueryAdvancedDraft>(() => bigQueryAdvancedDraftFrom(initial.provider === 'bigquery' ? initial : bigQueryDefaults()))

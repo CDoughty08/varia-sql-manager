@@ -625,11 +625,17 @@ export const commandCatalog = {
     precondition: 'backendReady && hasConnection', unavailableHint: 'Connect to BigQuery first.', providers: ['bigquery'], methods: ['bigquery.connectionProjects'], providerContext: 'own',
     menus: [{ menu: 'explorer.context', group: '1_query', order: 8, title: 'Star a Project…', mnemonic: 'p', when: "explorerNode == 'server' && explorerProvider == 'bigquery' && !explorerServerLost" }]
   },
-  'bigquery.toggleStarProject': {
-    title: 'Star Project', category: 'Object Explorer', icon: 'star-full', keywords: ['bigquery', 'star', 'unstar', 'project', 'explorer', 'pin'],
+  'bigquery.starProject': {
+    title: 'Star Project', category: 'Object Explorer', icon: 'star-empty', keywords: ['bigquery', 'star', 'project', 'explorer', 'pin'],
     precondition: 'hasConnection',
-    unavailableHint: 'Select a non-billing BigQuery project in Object Explorer.', providers: ['bigquery'],
-    menus: [{ menu: 'explorer.context', group: '1_query', order: 9, title: 'Star Project', mnemonic: 's', when: "explorerNode == 'bqProject' && (explorerBigQueryProjectRole == 'session' || explorerBigQueryProjectRole == 'starred') && !explorerServerLost" }]
+    unavailableHint: 'Select an unstarred BigQuery project in Object Explorer.', providers: ['bigquery'],
+    menus: [{ menu: 'explorer.context', group: '1_query', order: 9, title: 'Star Project', mnemonic: 's', when: "explorerNode == 'bqProject' && explorerBigQueryProjectRole == 'session' && !explorerServerLost" }]
+  },
+  'bigquery.unstarProject': {
+    title: 'Unstar Project', category: 'Object Explorer', icon: 'star-full', keywords: ['bigquery', 'unstar', 'project', 'explorer', 'unpin'],
+    precondition: 'hasConnection',
+    unavailableHint: 'Select a starred BigQuery project in Object Explorer.', providers: ['bigquery'],
+    menus: [{ menu: 'explorer.context', group: '1_query', order: 9, title: 'Unstar Project', mnemonic: 'u', when: "explorerNode == 'bqProject' && explorerBigQueryProjectRole == 'starred' && !explorerServerLost" }]
   },
   'bigquery.removeSessionProject': {
     title: 'Remove Project from Explorer', category: 'Object Explorer', icon: 'close', keywords: ['bigquery', 'remove', 'session', 'project', 'explorer', 'hide'],

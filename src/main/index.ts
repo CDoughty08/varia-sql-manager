@@ -53,7 +53,7 @@ import { migrateProfile, profileFiles } from './profile-migration'
 import { JobRecordStore, noteJobConnection, profileDeleteJobs } from './job-records'
 import { cancelJobsResultSchema, jobKeySchema, jobLimits, jobsByProject, jobsWithoutTabRequestSchema, restoredJobs, type JobRecord, type RecordedJobsCancel } from '../shared/bigquery/jobs'
 import { connectionKey } from '../shared/connections'
-import { encodeReloadSession, SessionStore, sessionWriteSchema, type SessionInput, type SessionRecord, type SessionRecordDocument } from './session-store'
+import { encodeReloadSession, legacyBigQueryExtraProjects, SessionStore, sessionWriteSchema, type SessionInput, type SessionRecord, type SessionRecordDocument } from './session-store'
 import { sessionLimits, type ReloadPins, type RestoredDocument, type RestoredSession, type SessionWrite } from '../shared/files/session'
 import { remapEditorGroups } from '../shared/editor-groups'
 import { lossDetails } from '../shared/files/recovery'
@@ -244,11 +244,6 @@ const recent = new RecentFilesStore(join(app.getPath('userData'), 'recent-files.
 const recovery = new RecoveryStore(join(app.getPath('userData'), profileFiles.autoRecover.current), { pathsRefused })
 // Hot exit's copy of the open tabs, user-only, in the profile; see session-store.ts.
 const openSession = new SessionStore(join(app.getPath('userData'), profileFiles.session.current), { pathsRefused })
-openSession.setLegacyBigQueryExtraProjectsHandler(async migrated => {
-  if (!bigQueryStore) return
-  for (const [principal, projects] of migrated.byPrincipal) await bigQueryStore.addStarredProjects(principal, projects)
-  if (migrated.unclaimed.length) await bigQueryStore.addMigratedProjects(migrated.unclaimed)
-})
 // BigQuery jobs main heard of, under their tabs' job keys (docs/bigquery.md, Re-attaching to jobs); never their SQL or secrets.
 const jobRecords = new JobRecordStore(join(app.getPath('userData'), profileFiles.session.current), { onWriteError: () => console.error('The BigQuery job records could not be written.') })
 // Each running BigQuery request's job key and the jobs it reported, so Leave it running (query.cancel detach) marks only those.
@@ -1332,11 +1327,6 @@ app.whenReady().then(async () => {
         // Either engine: BigQuery's credential material is added when the owner sends it (withBigQueryCredential).
         const outcome = await connectionOpen.connect(validated as ProviderConnectionOptions, context)
         if (outcome.ok) await rememberConnectionProfile((outcome.value as { id: string }).id, validated as ProviderConnectionOptions, context).catch(() => {})
-        if (outcome.ok && (validated as ProviderConnectionOptions).provider === 'bigquery') {
-          const info = outcome.value as { principalId?: string; authentication?: { principal?: { provider?: string; principal?: string } } }
-          const principal = info.authentication?.principal?.provider === 'bigquery' ? info.authentication.principal.principal : info.principalId
-          if (principal?.startsWith('bigquery:')) await bigQueryStore?.claimMigratedProjects(principal).catch(() => {})
-        }
         if (!outcome.ok) return { ...failure(outcome.error, 'Connection failed.'), ...(outcome.passwordForgotten ? { passwordForgotten: true as const } : {}), ...(outcome.credentialRejected ? { credentialRejected: true as const } : {}), ...(outcome.connectionFailure ? { connectionFailure: outcome.connectionFailure } : {}) }
         return { ok: true, value: outcome.value }
       }
@@ -1551,8 +1541,26 @@ app.whenReady().then(async () => {
       // A disk file is pinned only as far as its seal proves main wrote it; an unsealed silent target waits for Reconnect.
       let workspace = record.workspace
       if (checkpoint.kind === 'disk') {
-        workspace = workspaceSealer ? await workspaceSealer.trusted(workspace, record.seal) : workspace
+        const legacyExtra = legacyBigQueryExtraProjects(record)
+        workspace = workspaceSealer ? await workspaceSealer.trusted(workspace, record.seal, legacyExtra) : workspace
         if (generation !== rendererGeneration || generation !== pageGeneration) return { documents: [], activeIndex: -1, problems: [] }
+        if (legacyExtra?.size && bigQueryStore) {
+          const unclaimed: string[] = []
+          for (const target of workspace.targets) {
+            const extra = legacyExtra.get(target.id)
+            if (!extra?.length) continue
+            const billing = target.options.provider === 'bigquery' ? target.options.project : ''
+            const projects = extra.filter((project, index) => project !== billing && extra.indexOf(project) === index)
+            if (!projects.length) continue
+            const principal = target.expectedPrincipal?.provider === 'bigquery' ? target.expectedPrincipal.principal : undefined
+            if (principal && !principal.startsWith('bigquery:anonymous:')) {
+              await bigQueryStore.addStarredProjects(principal, projects).catch(() => {})
+            } else {
+              for (const project of projects) if (!unclaimed.includes(project)) unclaimed.push(project)
+            }
+          }
+          if (unclaimed.length) await bigQueryStore.addMigratedProjects(unclaimed).catch(() => {})
+        }
         connectionAuthentication.restore(workspace)
       }
       record = { ...record, workspace: checkpoint.kind === 'disk' ? unprovenWithoutAccount(workspace, connectionAuthentication.project(workspace)) : connectionAuthentication.project(workspace) }

@@ -179,12 +179,18 @@ export function explorerContribution({ commands, documents, connections, explore
               })
               return
             }
-            quickInput.setAnswer({ items: [], ...loadNote && !trimmed ? { message: { text: loadNote, severity: 'info' } } : {} })
+            quickInput.setAnswer({ items: [], ...busy ? { busy: true } : {}, ...loadNote && !trimmed ? { message: { text: loadNote, severity: 'info' } } : {} })
+          }
+          const refreshPrincipalProject = (projectId: string) => {
+            if (!objectSearch?.refreshBigQuery) return
+            for (const candidate of connections.liveBigQuery()) {
+              if (bigQueryPrincipalOf(candidate) === principal) objectSearch.refreshBigQuery(candidate.id, { scope: { project: projectId } })
+            }
           }
           const starAndRefresh = async (projectId: string) => {
             const result = await bigQueryStarred.setStarred(principal, projectId, true)
             if (!result.ok) commands.reportError(result.error)
-            else objectSearch?.refreshBigQuery?.(connection.id, { scope: { project: projectId } })
+            else refreshPrincipalProject(projectId)
           }
           quickInput.show<QuickPickItem>({
             ariaLabel: 'Star a BigQuery project',
@@ -254,13 +260,19 @@ export function explorerContribution({ commands, documents, connections, explore
               activeVerify = { project: item.id, requestId }
               updateAnswer(currentValue, true)
               quickInput.setMessage({ text: `Checking access to “${item.id}”…`, severity: 'info' })
-              const check = await api.explorerChildren({
-                connectionId: connection.id,
-                requestId,
-                node: { type: 'object', object: { kind: 'bqProject', name: item.id } },
-                pageSize: 1
-              })
-              if (activeVerify?.requestId === requestId) activeVerify = undefined
+              let check: ApiResult<Awaited<ReturnType<NonNullable<typeof api.explorerChildren>>> extends ApiResult<infer T> ? T : never>
+              try {
+                check = await api.explorerChildren({
+                  connectionId: connection.id,
+                  requestId,
+                  node: { type: 'object', object: { kind: 'bqProject', name: item.id } },
+                  pageSize: 1
+                })
+              } catch (error) {
+                check = { ok: false, error: error instanceof Error ? error.message : 'The verification request failed.' }
+              } finally {
+                if (activeVerify?.requestId === requestId) activeVerify = undefined
+              }
               if (closed || seq !== verifySeq) return
               updateAnswer(currentValue, false)
               if (!check.ok) {
@@ -284,28 +296,37 @@ export function explorerContribution({ commands, documents, connections, explore
         if (!choices.length) { commands.reportError('Connect to BigQuery first.'); return }
         quickInput.show({
           ariaLabel: 'Star a Project', placeholder: 'Select a BigQuery connection', noun: 'connections', items: serverItems(choices),
-          onDidAccept: item => { const chosen = connections.get(item.id); if (chosen) openPicker(chosen) }
+          onDidAccept: item => {
+            if (!connections.isLiveBigQuery(item.id)) { commands.reportError('That BigQuery connection is no longer open.'); return }
+            const chosen = connections.get(item.id)
+            if (chosen) openPicker(chosen)
+          }
         })
       }
     }),
-    commands.register('bigquery.toggleStarProject', {
-      when: args => {
-        const node = nodeOf(args)
-        return live(node) && node.kind === 'bqProject' && (node.bigQueryProjectRole === 'starred' || node.bigQueryProjectRole === 'session') && !!bigQueryStarred
-      },
-      title: args => nodeOf(args)?.bigQueryProjectRole === 'starred' ? 'Unstar Project' : 'Star Project',
-      run: async args => {
-        const node = nodeOf(args)
-        if (!live(node) || node.kind !== 'bqProject' || node.ref.type !== 'object' || !node.ref.object.name || !bigQueryStarred) return
-        const connection = connections.get(node.connectionId), principal = bigQueryPrincipalOf(connection), project = node.ref.object.name
-        if (!principal || explorer.isBigQueryProjectBilling(node.connectionId, project)) return
-        const starred = bigQueryStarred.isStarred(principal, project)
-        if (starred) explorer.removeBigQuerySessionProject(node.connectionId, project)
-        const result = await bigQueryStarred.setStarred(principal, project, !starred)
-        if (!result.ok) commands.reportError(result.error)
-        else if (!starred) objectSearch?.refreshBigQuery?.(node.connectionId, { scope: { project } })
-      }
-    }),
+    ...([['bigquery.starProject', true, 'session'], ['bigquery.unstarProject', false, 'starred']] as const).map(([id, wantStarred, requiredRole]) =>
+      commands.register(id, {
+        when: args => {
+          const node = nodeOf(args)
+          return live(node) && node.kind === 'bqProject' && node.bigQueryProjectRole === requiredRole && !!bigQueryStarred
+        },
+        run: async args => {
+          const node = nodeOf(args)
+          if (!live(node) || node.kind !== 'bqProject' || node.ref.type !== 'object' || !node.ref.object.name || !bigQueryStarred) return
+          const connection = connections.get(node.connectionId), principal = bigQueryPrincipalOf(connection), project = node.ref.object.name
+          if (explorer.isBigQueryProjectBilling(node.connectionId, project)) return
+          if (!principal) { commands.reportError('The BigQuery account could not be verified.'); return }
+          if (!wantStarred) explorer.removeBigQuerySessionProject(node.connectionId, project)
+          const result = await bigQueryStarred.setStarred(principal, project, wantStarred)
+          if (!result.ok) commands.reportError(result.error)
+          else if (wantStarred && objectSearch?.refreshBigQuery) {
+            for (const candidate of connections.liveBigQuery()) {
+              if (bigQueryPrincipalOf(candidate) === principal) objectSearch.refreshBigQuery(candidate.id, { scope: { project } })
+            }
+          }
+        }
+      })
+    ),
     commands.register('bigquery.removeSessionProject', {
       when: args => {
         const node = nodeOf(args)
