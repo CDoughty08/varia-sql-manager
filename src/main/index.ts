@@ -243,7 +243,14 @@ const recent = new RecentFilesStore(join(app.getPath('userData'), 'recent-files.
 // AutoRecover's copies of unsaved queries, user-only, in the profile; see recovery-store.ts.
 const recovery = new RecoveryStore(join(app.getPath('userData'), profileFiles.autoRecover.current), { pathsRefused })
 // Hot exit's copy of the open tabs, user-only, in the profile; see session-store.ts.
-const openSession = new SessionStore(join(app.getPath('userData'), profileFiles.session.current), { pathsRefused })
+const openSession = new SessionStore(join(app.getPath('userData'), profileFiles.session.current), {
+  pathsRefused,
+  onLegacyBigQueryExtraProjects: async migrated => {
+    if (!bigQueryStore) return
+    for (const [principal, projects] of migrated.byPrincipal) await bigQueryStore.addStarredProjects(principal, projects)
+    if (migrated.unclaimed.length) await bigQueryStore.addMigratedProjects(migrated.unclaimed)
+  }
+})
 // BigQuery jobs main heard of, under their tabs' job keys (docs/bigquery.md, Re-attaching to jobs); never their SQL or secrets.
 const jobRecords = new JobRecordStore(join(app.getPath('userData'), profileFiles.session.current), { onWriteError: () => console.error('The BigQuery job records could not be written.') })
 // Each running BigQuery request's job key and the jobs it reported, so Leave it running (query.cancel detach) marks only those.
@@ -1206,6 +1213,8 @@ app.whenReady().then(async () => {
   })
   handle('varia:connections-environment', value => library.setEnvironment(value))
   handle('varia:bigquery-cost-prompt', value => library.setBigQueryCostPrompt(value))
+  handle('varia:bigquery-starred-projects', () => bigQueryStore!.loadStarredProjects())
+  handle('varia:bigquery-star-project', value => bigQueryStore!.setProjectStar(value))
   // connections.pickKeyFile (docs/bigquery.md, Connect dialog): main's open dialog; the renderer gets a reference and the file's
   // name, never its path, and for a federation configuration the token file it reads (decision 49).
   handle('varia:connections-pick-key-file', async value => {
@@ -1324,7 +1333,14 @@ app.whenReady().then(async () => {
         if (!connectionOpen) throw new Error('The connection owner is unavailable.')
         // Either engine: BigQuery's credential material is added when the owner sends it (withBigQueryCredential).
         const outcome = await connectionOpen.connect(validated as ProviderConnectionOptions, context)
-        if (outcome.ok) await rememberConnectionProfile((outcome.value as { id: string }).id, validated as ProviderConnectionOptions, context).catch(() => {})
+        if (outcome.ok) {
+          await rememberConnectionProfile((outcome.value as { id: string }).id, validated as ProviderConnectionOptions, context).catch(() => {})
+          if ((validated as ProviderConnectionOptions).provider === 'bigquery') {
+            const info = outcome.value as { principalId?: string; authentication?: { principal?: { provider?: string; principal?: string } } }
+            const principal = info.authentication?.principal?.provider === 'bigquery' ? info.authentication.principal.principal : info.principalId
+            if (principal?.startsWith('bigquery:')) await bigQueryStore?.claimMigratedProjects(principal).catch(() => {})
+          }
+        }
         if (!outcome.ok) return { ...failure(outcome.error, 'Connection failed.'), ...(outcome.passwordForgotten ? { passwordForgotten: true as const } : {}), ...(outcome.credentialRejected ? { credentialRejected: true as const } : {}), ...(outcome.connectionFailure ? { connectionFailure: outcome.connectionFailure } : {}) }
         return { ok: true, value: outcome.value }
       }

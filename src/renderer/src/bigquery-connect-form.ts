@@ -1,5 +1,5 @@
 import type { BigQueryConnectionOptions, BigQueryProject, ProviderConnectionOptions } from '../../shared/contracts'
-import { bigQueryConnectionOptionsSchema, bigQueryLimits, bigQueryProjectSchema, connectionKey } from '../../shared/connections'
+import { bigQueryConnectionOptionsSchema, bigQueryProjectSchema, connectionKey } from '../../shared/connections'
 import { usesKeyFile, type BigQueryAuthenticationMode } from '../../shared/auth'
 import type { ProviderId } from '../../shared/providers'
 import { bigQueryAuthenticationLabels, type BigQueryConnectionProfile } from '../../shared/bigquery-connections'
@@ -55,10 +55,9 @@ export function bigQueryReady(options: BigQueryConnectionOptions): boolean { ret
  */
 export function bigQueryFormOptions(form: BigQueryConnectionOptions): BigQueryConnectionOptions {
   const location = form.location?.trim(), dataset = form.dataset?.trim(), impersonate = form.impersonateServiceAccount?.trim()
-  const extraProjects = form.extraProjects?.map(value => value.trim()).filter(Boolean)
   const value: BigQueryConnectionOptions = {
     provider: 'bigquery', project: form.project.trim(), authentication: form.authentication,
-    ...location ? { location } : {}, ...dataset ? { dataset } : {}, ...extraProjects?.length ? { extraProjects } : {},
+    ...location ? { location } : {}, ...dataset ? { dataset } : {},
     ...usesKeyFile(form.authentication) && form.keyFile ? { keyFile: form.keyFile } : {},
     ...impersonate ? { impersonateServiceAccount: impersonate } : {}, ...form.maximumBytesBilled ? { maximumBytesBilled: form.maximumBytesBilled } : {},
     ...form.costPrompt !== undefined ? { costPrompt: form.costPrompt } : {},
@@ -126,17 +125,6 @@ export function joinBytes(amount: string, unit: ByteUnit): { ok: true; bytes?: n
   const bytes = Math.round(Number(text) * byteUnits.find(([name]) => name === unit)![1])
   if (bytes < 1 || !Number.isSafeInteger(bytes)) return { ok: false, error: 'Maximum bytes billed is out of range.' }
   return { ok: true, bytes }
-}
-
-/** Extra projects as typed (commas, spaces or new lines between them): each once, in order, or the first invalid one. */
-export function parseExtraProjects(text: string, billing: string): { ok: true; projects: string[] } | { ok: false; error: string } {
-  const projects: string[] = []
-  for (const value of text.split(/[\s,;]+/).map(item => item.trim()).filter(Boolean)) {
-    if (!bigQueryProjectSchema.safeParse(value).success) return { ok: false, error: `${value.slice(0, 64)} is not a Google Cloud project id.` }
-    if (value !== billing.trim() && !projects.includes(value)) projects.push(value)
-  }
-  if (projects.length > bigQueryLimits.extraProjects) return { ok: false, error: `List at most ${bigQueryLimits.extraProjects} extra projects.` }
-  return { ok: true, projects }
 }
 
 /** A History row's second line: the engine, default dataset and sign-in. */

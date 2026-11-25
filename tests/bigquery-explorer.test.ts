@@ -1,9 +1,25 @@
-import { describe, expect, it } from 'vitest'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { describe, expect, it, vi } from 'vitest'
 import { bigQueryFieldPathMax, bigQueryFieldText, bigQueryPath, isBigQueryFieldPath, isBigQueryName, quoteBigQuery } from '../src/shared/bigquery/names'
 import { bigQueryMaxColumnFacts, bigQueryMaxDefinition, bigQueryPreviewTargetSchema, bigQueryPropertiesLimits, bigQueryPropertiesRequestSchema, bigQueryPropertiesSchema, type BigQueryProperties, type BigQuerySchemaField } from '../src/shared/bigquery/objects'
+import type { BigQueryStarredProjectsView } from '../src/shared/bigquery-connections'
+import type { ExplorerChildrenResult, VariaApi } from '../src/shared/contracts'
 import { decodeControl, encodeControl } from '../src/shared/ipc/wire/msgpack'
 import { validateRequest, validateResult } from '../src/main/validation'
+import { contextRecord } from '../src/shared/commands/context-keys'
 import { optionsAllow } from '../src/shared/ipc/methods'
+import { CommandService } from '../src/renderer/src/core/commands'
+import { EventBus } from '../src/renderer/src/core/events'
+import { explorerContribution } from '../src/renderer/src/contributions/explorer'
+import ExplorerRow, { rowClick, type RowActions } from '../src/renderer/src/explorer/ExplorerRow'
+import { ExplorerService, sessionProjectDetail } from '../src/renderer/src/explorer/ExplorerService'
+import { RowKind, type TreeNode } from '../src/renderer/src/explorer/tree-model'
+import { resolveMenu } from '../src/renderer/src/menus/resolve'
+import { argsFor, targetKeys, type MenuTarget } from '../src/renderer/src/menus/targets'
+import { QuickInputService } from '../src/renderer/src/quickinput/QuickInputService'
+import { BigQueryStarredService } from '../src/renderer/src/services/bigquery-starred'
+import { ConnectionService, type LiveConnection } from '../src/renderer/src/services/connections'
 
 // BigQuery's Object Explorer names and requests (docs/bigquery.md, Object Explorer); BqNames (C#) checks the same rules again.
 const hostile = ['a`b', 'a\\b', 'a.b', 'a\nb', 'a;b', 'a"b', '']
@@ -195,5 +211,198 @@ describe('BigQuery Object Explorer requests', () => {
       dataset: { ...datasetPayload.dataset, kmsKeyName: 'k'.repeat(bigQueryPropertiesLimits.kmsKeyName + 1) }
     }).success).toBe(false)
     expect(bigQueryPropertiesSchema.safeParse({ ...datasetPayload, dataset: { ...datasetPayload.dataset, extra: 1 } }).success).toBe(false)
+  })
+})
+
+describe('BigQuery Starred & Session Projects in Object Explorer', () => {
+  const ada = 'bigquery:user:ada@example.com'
+  const connectionId = '9b6f3c1e-8a2d-4f5b-9c7e-1d2a3b4c5d6e'
+  const liveBigQuery = (): LiveConnection => ({
+    id: connectionId, generation: 1, server: 'varia-alpha', database: 'sales', serverVersion: 'BigQuery', login: 'ada@example.com',
+    providerId: 'bigquery', principalId: ada,
+    authentication: { principal: { provider: 'bigquery', project: 'varia-alpha', principal: ada } },
+    options: { provider: 'bigquery', project: 'varia-alpha', dataset: 'sales', authentication: 'gcloud' }
+  })
+
+  function setupExplorer(initialStarred: readonly string[] = []) {
+    let stored: Record<string, string[]> = initialStarred.length ? { [ada]: [...initialStarred] } : {}
+    const starredApi: Pick<VariaApi, 'loadBigQueryStarredProjects' | 'setBigQueryProjectStar'> = {
+      loadBigQueryStarredProjects: vi.fn(async () => ({ ok: true as const, value: { byPrincipal: Object.fromEntries(Object.entries(stored).map(([k, v]) => [k, [...v]])) } as BigQueryStarredProjectsView })),
+      setBigQueryProjectStar: vi.fn(async input => {
+        const list = stored[input.principal] ?? []
+        const next = input.starred ? (list.includes(input.project) ? list : [...list, input.project]) : list.filter(item => item !== input.project)
+        if (next.length) stored = { ...stored, [input.principal]: next }
+        else { const copy = { ...stored }; delete copy[input.principal]; stored = copy }
+        return { ok: true as const, value: { byPrincipal: Object.fromEntries(Object.entries(stored).map(([k, v]) => [k, [...v]])) } }
+      })
+    }
+    const bigQueryStarred = new BigQueryStarredService({ api: starredApi })
+    const connections = new ConnectionService()
+    const conn = liveBigQuery()
+    connections.add(conn, conn.options)
+    const explorerApi: Pick<VariaApi, 'explorerChildren' | 'explorerCancel'> = {
+      explorerChildren: vi.fn(async (params): Promise<{ ok: true; value: ExplorerChildrenResult }> => {
+        const ref = params.node
+        if (ref.type === 'object' && ref.object.kind === 'server') {
+          return { ok: true, value: { nodes: [{ ref: { type: 'object', object: { kind: 'bqProject', name: 'varia-alpha' } }, label: 'varia-alpha', icon: 'project', hasChildren: true, sublabel: 'billing project' }], total: 1, elapsedMs: 1 } }
+        }
+        if (ref.type === 'object' && ref.object.kind === 'bqProject') {
+          return { ok: true, value: { nodes: [{ ref: { type: 'object', object: { kind: 'bqDataset', project: ref.object.name, name: 'samples' } }, label: 'samples', icon: 'database', hasChildren: true }], total: 1, elapsedMs: 1 } }
+        }
+        return { ok: true, value: { nodes: [], total: 0, elapsedMs: 1 } }
+      }),
+      explorerCancel: vi.fn(async () => ({ ok: true as const, value: { cancelled: 0 } }))
+    }
+    const events = new EventBus()
+    const explorer = new ExplorerService({ api: explorerApi, connections, events, schedule: cb => cb(), bigQueryStarred })
+    return { explorer, bigQueryStarred, connections, events, starredApi, explorerApi }
+  }
+
+  it('orders billing project first, then starred (deduplicated), then session-only projects, and reconciles live while preserving expansion', async () => {
+    const { explorer, bigQueryStarred } = setupExplorer(['varia-alpha', 'varia-beta'])
+    await bigQueryStarred.load()
+    await Promise.resolve()
+    await Promise.resolve()
+    const root = explorer.node(explorer.rootIds[0]!)!
+    // Server auto-expanded on connect and loaded billing + deduplicated starred projects.
+    expect(root.children?.map(child => [child.label, child.bigQueryProjectRole, child.sublabel, child.detail])).toEqual([
+      ['varia-alpha', 'billing', 'billing project', undefined],
+      ['varia-beta', 'starred', undefined, undefined]
+    ])
+    expect(explorer.isBigQueryProjectBilling(connectionId, 'varia-alpha')).toBe(true)
+    expect(explorer.isBigQueryProjectStarred(connectionId, 'varia-beta')).toBe(true)
+
+    // ensureBigQueryProject adds a session-only project immediately so seek walks right into it.
+    explorer.ensureBigQueryProject(connectionId, 'bigquery-public-data')
+    expect(root.children?.map(child => [child.label, child.bigQueryProjectRole, child.detail])).toEqual([
+      ['varia-alpha', 'billing', undefined],
+      ['varia-beta', 'starred', undefined],
+      ['bigquery-public-data', 'session', sessionProjectDetail]
+    ])
+    const revealOutcome = await explorer.seek(connectionId, [[
+      { type: 'object', object: { kind: 'bqProject', name: 'bigquery-public-data' } },
+      { type: 'object', object: { kind: 'bqDataset', project: 'bigquery-public-data', name: 'samples' } }
+    ]])
+    expect(revealOutcome.ok).toBe(true)
+    const publicProject = root.children!.find(child => child.label === 'bigquery-public-data')!
+    expect(publicProject.expanded).toBe(true)
+    const publicId = publicProject.id
+
+    // Starring the session-only project upgrades its role in place without disrupting expansion or node identity.
+    await bigQueryStarred.setStarred(ada, 'bigquery-public-data', true)
+    expect(root.children!.find(child => child.label === 'bigquery-public-data')).toMatchObject({ id: publicId, expanded: true, bigQueryProjectRole: 'starred', detail: undefined })
+
+    // syncBigQueryReferencedProjects adds unstarred referenced projects and deduplicates billing & starred.
+    explorer.syncBigQueryReferencedProjects(connectionId, ['varia-alpha', 'bigquery-public-data', 'session-ref-1'])
+    expect(root.children?.map(child => [child.label, child.bigQueryProjectRole])).toEqual([
+      ['varia-alpha', 'billing'],
+      ['varia-beta', 'starred'],
+      ['bigquery-public-data', 'starred'],
+      ['session-ref-1', 'session']
+    ])
+
+    // removeBigQuerySessionProject removes session-only projects immediately.
+    explorer.removeBigQuerySessionProject(connectionId, 'session-ref-1')
+    expect(root.children?.map(child => child.label)).toEqual(['varia-alpha', 'varia-beta', 'bigquery-public-data'])
+    explorer.dispose()
+    bigQueryStarred.dispose()
+  })
+
+  it('registers Star a Project… (paging + typing any project ID), Star/Unstar Project, and Remove from Explorer commands', async () => {
+    const { explorer, bigQueryStarred, connections } = setupExplorer(['varia-beta'])
+    await bigQueryStarred.load()
+    await Promise.resolve()
+    await Promise.resolve()
+    explorer.ensureBigQueryProject(connectionId, 'session-only-1')
+
+    const commands = new CommandService({ state: () => contextRecord('win32', { backendReady: true, hasConnection: true, explorerSelectionProvider: 'bigquery' }) })
+    const quickInput = new QuickInputService({ capture: () => undefined, restore: () => {} })
+    const bigQueryConnectionProjects = vi.fn<VariaApi['bigQueryConnectionProjects']>(async params => params.pageToken
+      ? { ok: true, value: { projects: [{ id: 'varia-gamma', friendlyName: 'Gamma' }] } }
+      : { ok: true, value: { projects: [{ id: 'varia-alpha', friendlyName: 'Alpha' }, { id: 'varia-beta' }], nextPageToken: 'p2' } })
+    const contrib = explorerContribution(
+      { commands, documents: {} as never, connections, explorer, quickInput, bigQueryStarred },
+      { writeClipboardText: vi.fn(async () => ({ ok: true as const, value: undefined })), bigQueryConnectionProjects }
+    )
+
+    const root = explorer.node(explorer.rootIds[0]!)!
+    const billingNode = explorer.menuNode(root.children![0]!.id)!
+    const starredNode = explorer.menuNode(root.children![1]!.id)!
+    const sessionNode = explorer.menuNode(root.children![2]!.id)!
+
+    // Context menu resolves Star Project for session, Unstar Project for starred, and neither for billing.
+    const menuFor = (node: typeof billingNode) => {
+      const target: MenuTarget = { kind: 'explorer', node }
+      return resolveMenu('explorer.context', { platform: 'win32', state: { backendReady: true, hasConnection: true }, target: targetKeys(target), args: argsFor(target), commands, keybindings: { lookup: () => undefined } })
+    }
+    const titles = (items: ReturnType<typeof menuFor>) => items.filter(item => item.kind === 'command').map(item => [item.id, item.title])
+    expect(titles(menuFor(billingNode))).not.toContainEqual(['bigquery.toggleStarProject', expect.any(String)])
+    expect(titles(menuFor(billingNode))).not.toContainEqual(['bigquery.removeSessionProject', expect.any(String)])
+    expect(titles(menuFor(starredNode))).toContainEqual(['bigquery.toggleStarProject', 'Unstar Project'])
+    expect(titles(menuFor(starredNode))).not.toContainEqual(['bigquery.removeSessionProject', expect.any(String)])
+    expect(titles(menuFor(sessionNode))).toContainEqual(['bigquery.toggleStarProject', 'Star Project'])
+    expect(titles(menuFor(sessionNode))).toContainEqual(['bigquery.removeSessionProject', 'Remove from Explorer'])
+
+    // Star a Project… loads all pages from bigQueryConnectionProjects and accepts typing an unlisted valid project ID.
+    const serverNode = explorer.menuNode(root.id)!
+    expect(await commands.execute('bigquery.starProjectPrompt', { target: { kind: 'explorer', node: serverNode } }, 'menu')).toBe(true)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(bigQueryConnectionProjects).toHaveBeenCalledTimes(2)
+    expect(quickInput.getSnapshot().rows.map(row => [row.item.id, !!row.item.disabled])).toEqual([
+      ['varia-alpha', true],
+      ['varia-beta', true],
+      ['varia-gamma', false]
+    ])
+    quickInput.filter('bigquery-public-data')
+    expect(quickInput.getSnapshot().rows.map(row => row.item.id)).toEqual(['bigquery-public-data'])
+    quickInput.accept(0)
+    await Promise.resolve()
+    expect(bigQueryStarred.isStarred(ada, 'bigquery-public-data')).toBe(true)
+
+    // Remove from Explorer removes the session-only project.
+    expect(await commands.execute('bigquery.removeSessionProject', { target: { kind: 'explorer', node: sessionNode } }, 'menu')).toBe(true)
+    expect(root.children?.map(child => child.label)).not.toContain('session-only-1')
+
+    // Unstar Project removes the starred project cleanly.
+    expect(await commands.execute('bigquery.toggleStarProject', { target: { kind: 'explorer', node: starredNode } }, 'menu')).toBe(true)
+    expect(bigQueryStarred.isStarred(ada, 'varia-beta')).toBe(false)
+    expect(root.children?.map(child => child.label)).not.toContain('varia-beta')
+
+    contrib.dispose()
+    quickInput.dispose()
+    explorer.dispose()
+    bigQueryStarred.dispose()
+  })
+
+  it('renders a star toggle button on non-billing bqProject rows only and ignores clicks on it for row peek', () => {
+    const base = (role: TreeNode['bigQueryProjectRole'], label: string): TreeNode => ({
+      id: 2, parent: 1, connectionId, ref: { type: 'object', object: { kind: 'bqProject', name: label } }, kind: 'bqProject', folder: undefined,
+      level: 2, label, lower: label, sublabel: role === 'billing' ? 'billing project' : undefined,
+      detail: role === 'session' ? sessionProjectDetail : undefined, icon: 'project', subtype: undefined, status: undefined, created: undefined,
+      hasChildren: true, expanded: false, children: undefined, staticCount: 0, total: undefined, cursor: undefined, load: 'none', more: 'none',
+      error: undefined, connectionError: undefined, filtered: false, lost: false, showLoading: false, generation: 0, rev: 0, lastUsed: 0, descendants: 0,
+      bigQueryProjectRole: role
+    })
+    const actions: RowActions = {
+      select: vi.fn(), toggle: vi.fn(), activate: vi.fn(), reconnect: vi.fn(), remove: vi.fn(), toggleProjectStar: vi.fn(),
+      dragStart: () => false, dragOver: () => {}, dragEnd: () => {}, commitRename: async () => true, cancelRename: () => {}, peekHover: () => {}, click: vi.fn()
+    }
+    const renderRow = (node: TreeNode) => renderToStaticMarkup(createElement(ExplorerRow, {
+      rowId: node.id, kind: RowKind.Node, top: 0, level: node.level, posinset: 1, setsize: 3, node, rev: node.rev, text: '',
+      selected: false, draggable: false, active: false, color: undefined, actions, menuTarget: () => {}
+    }))
+    expect(renderRow(base('billing', 'varia-alpha'))).not.toContain('oe-star-button')
+    const starredHtml = renderRow(base('starred', 'varia-beta'))
+    expect(starredHtml).toContain('oe-star-button starred')
+    expect(starredHtml).toContain('data-icon="star-full"')
+    expect(starredHtml).toContain('aria-label="Unstar varia-beta"')
+    const sessionHtml = renderRow(base('session', 'bigquery-public-data'))
+    expect(sessionHtml).toContain('oe-star-button')
+    expect(sessionHtml).toContain('data-icon="star-empty"')
+    expect(sessionHtml).toContain('aria-label="Star bigquery-public-data"')
+    // Clicking the star button does not trigger rowClick (Open Peek as Tab).
+    rowClick(actions, 2, { detail: 1, ctrlKey: true, metaKey: false, shiftKey: false, altKey: false, target: { closest: (sel: string) => sel.includes('.oe-star-button') ? {} : null } as unknown as EventTarget })
+    expect(actions.click).not.toHaveBeenCalled()
   })
 })

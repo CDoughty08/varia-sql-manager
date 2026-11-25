@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
-import { connectionAutoReconnectSchema, connectionKey } from '../shared/connections'
+import { bigQueryProjectSchema, connectionAutoReconnectSchema, connectionKey } from '../shared/connections'
 import {
   bigQueryCostPromptInputSchema, bigQueryEnvironmentInputSchema, bigQueryLibraryFileSchema, bigQueryLibraryLimits, bigQueryProfileInputSchema,
-  type BigQueryConnectionProfile, type BigQueryLibraryFile, type BigQueryLibraryView, type BigQueryProfileInput, type BigQueryStoredProfile
+  bigQueryStarProjectInputSchema, bigQueryStarredPrincipalSchema,
+  type BigQueryConnectionProfile, type BigQueryLibraryFile, type BigQueryLibraryView, type BigQueryProfileInput, type BigQueryStarredProjectsView, type BigQueryStoredProfile
 } from '../shared/bigquery-connections'
 import type { BigQueryConnectionOptions } from '../shared/contracts'
 import { quarantine, readJsonFile, writeJsonAtomic } from './json-file'
@@ -14,6 +15,66 @@ const empty = (): BigQueryLibraryFile => ({ version: 1, profiles: [] })
 /** The options a profile keeps: the validated BigQuery options (they hold no secret; the key file is a reference). */
 const stored = (options: BigQueryConnectionOptions): BigQueryConnectionOptions => bigQueryProfileInputSchema.shape.options.parse(options)
 const keyOf = (options: BigQueryConnectionOptions) => connectionKey(options)
+
+/**
+ * Tolerates pre-upgrade `bigquery-connections.json` files whose saved BigQuery profiles still carry `extraProjects`:
+ * strips `extraProjects` from each profile's options and collects those valid project IDs into `migratedProjects`, so
+ * they are claimed into `starredProjects` on the next BigQuery connect instead of quarantining the library.
+ */
+function migrateLegacyLibrary(raw: unknown): { value: unknown; migrated: boolean } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { value: raw, migrated: false }
+  const record = raw as Record<string, unknown>
+  if (record.version !== 1 || !Array.isArray(record.profiles)) return { value: raw, migrated: false }
+  const collected: string[] = []
+  let migrated = false
+  const profiles = record.profiles.map(profile => {
+    if (!profile || typeof profile !== 'object' || Array.isArray(profile)) return profile
+    const entry = profile as Record<string, unknown>
+    const options = entry.options
+    if (!options || typeof options !== 'object' || Array.isArray(options)) return profile
+    const opts = options as Record<string, unknown>
+    if (opts.provider !== 'bigquery' || !Object.hasOwn(opts, 'extraProjects')) return profile
+    const extra = opts.extraProjects
+    if (extra !== undefined && (!Array.isArray(extra) || !extra.every(item => typeof item === 'string' && bigQueryProjectSchema.safeParse(item).success))) return profile
+    migrated = true
+    const billing = typeof opts.project === 'string' ? opts.project : ''
+    if (Array.isArray(extra)) {
+      for (const project of extra) if (project !== billing && !collected.includes(project)) collected.push(project)
+    }
+    const { extraProjects: _extraProjects, ...rest } = opts
+    return { ...entry, options: rest }
+  })
+  if (!migrated) return { value: raw, migrated: false }
+  const existing = Array.isArray(record.migratedProjects) ? record.migratedProjects.filter((item): item is string => typeof item === 'string' && bigQueryProjectSchema.safeParse(item).success) : []
+  const merged: string[] = [...existing]
+  for (const project of collected) if (!merged.includes(project) && merged.length < bigQueryLibraryLimits.starredPerPrincipal) merged.push(project)
+  const next: Record<string, unknown> = { ...record, profiles }
+  if (merged.length) next.migratedProjects = merged
+  return { value: next, migrated: true }
+}
+
+/** Merges valid, deduplicated project IDs into `principal`'s starred list within `bigQueryLibraryLimits`. Returns true when changed. */
+function mergeStarred(library: BigQueryLibraryFile, principal: string, projects: readonly string[]): boolean {
+  const valid: string[] = []
+  for (const project of projects) if (bigQueryProjectSchema.safeParse(project).success && !valid.includes(project)) valid.push(project)
+  if (!valid.length) return false
+  const list = library.starredProjects ?? []
+  const entry = list.find(item => item.principal === principal)
+  if (entry) {
+    let changed = false
+    for (const project of valid) {
+      if (entry.projects.includes(project)) continue
+      if (entry.projects.length >= bigQueryLibraryLimits.starredPerPrincipal) break
+      entry.projects.push(project)
+      changed = true
+    }
+    return changed
+  }
+  if (list.length >= bigQueryLibraryLimits.starredPrincipals) return false
+  const added = valid.slice(0, bigQueryLibraryLimits.starredPerPrincipal)
+  library.starredProjects = [...list, { principal, projects: added }]
+  return true
+}
 
 /** The cost-prompt choice of every entry with these settings (one connection, however many entries name it); true, the
  *  default, is not stored. */
@@ -42,12 +103,15 @@ export class BigQueryConnectionStore {
   private writes: Promise<unknown> = Promise.resolve()
   constructor(private readonly path: string, private readonly keyFiles: BigQueryKeyFiles) {}
 
-  private async read(): Promise<{ library: BigQueryLibraryFile; warning?: string }> {
+  private async read(): Promise<{ library: BigQueryLibraryFile; warning?: string; migrated?: boolean }> {
     const read = await readJsonFile(this.path, limit)
     let library: BigQueryLibraryFile | undefined
+    let migrated = false
     if (read.kind === 'missing') library = empty()
     else if (read.kind === 'ok') {
-      const parsed = bigQueryLibraryFileSchema.safeParse(read.value)
+      const legacy = migrateLegacyLibrary(read.value)
+      migrated = legacy.migrated
+      const parsed = bigQueryLibraryFileSchema.safeParse(legacy.value)
       if (parsed.success) library = parsed.data
     }
     if (!library) {
@@ -61,7 +125,7 @@ export class BigQueryConnectionStore {
       await quarantine(this.path)
       return { library: empty(), warning: 'The saved BigQuery connections were invalid. Their original file was preserved.' }
     }
-    return { library }
+    return { library, ...migrated ? { migrated: true } : {} }
   }
 
   /** The library as the renderer sees it: key files by reference and name, never their paths. */
@@ -69,15 +133,28 @@ export class BigQueryConnectionStore {
     return { profiles: library.profiles.map(({ keyPath, ...profile }): BigQueryConnectionProfile => ({ ...profile, ...keyPath ? { keyFileName: basename(keyPath) } : {} })) }
   }
 
-  async load(): Promise<{ library: BigQueryLibraryFile; warning?: string }> { await this.writes; return this.read() }
+  /** Starred projects indexed by verified principal, as the renderer sees them. */
+  static starredView(library: BigQueryLibraryFile): BigQueryStarredProjectsView {
+    const byPrincipal: Record<string, readonly string[]> = {}
+    for (const entry of library.starredProjects ?? []) byPrincipal[entry.principal] = [...entry.projects]
+    return { byPrincipal }
+  }
+
+  async load(): Promise<{ library: BigQueryLibraryFile; warning?: string }> {
+    await this.writes
+    const result = await this.read()
+    // Persist the stripped pre-upgrade library so disk stays migrated even before the next write.
+    if (result.migrated) await this.change(() => {}).catch(() => {})
+    return { library: result.library, ...result.warning ? { warning: result.warning } : {} }
+  }
 
   /** Reads, applies `update` and writes the result, unless `unchanged` says the update changed nothing. */
   private change<T>(update: (value: BigQueryLibraryFile) => T, unchanged?: (value: T) => boolean): Promise<{ library: BigQueryLibraryFile; value: T }> {
     const next = this.writes.then(async () => {
-      const { library } = await this.read()
+      const { library, migrated } = await this.read()
       const value = update(library)
       const valid = bigQueryLibraryFileSchema.parse(library)
-      if (unchanged?.(value)) return { library: valid, value }
+      if (!migrated && unchanged?.(value)) return { library: valid, value }
       await writeJsonAtomic(this.path, valid, limit, 'Too many saved BigQuery connections.')
       return { library: valid, value }
     })
@@ -192,5 +269,79 @@ export class BigQueryConnectionStore {
       kept.push({ keyPath, source })
       library.confirmedSources = kept.slice(-bigQueryLibraryLimits.confirmedSources)
     })
+  }
+
+  /** Per-principal starred projects persisted in `bigquery-connections.json`. */
+  async loadStarredProjects(): Promise<BigQueryStarredProjectsView> {
+    const { library } = await this.load()
+    return BigQueryConnectionStore.starredView(library)
+  }
+
+  /** Stars or unstars `project` for a verified BigQuery principal, bounded by `bigQueryLibraryLimits`. */
+  async setProjectStar(value: unknown): Promise<BigQueryStarredProjectsView> {
+    const input = bigQueryStarProjectInputSchema.parse(value)
+    const changed = await this.change(library => {
+      const list = library.starredProjects ?? []
+      const entry = list.find(item => item.principal === input.principal)
+      if (input.starred) {
+        if (entry) {
+          if (entry.projects.includes(input.project)) return false
+          if (entry.projects.length >= bigQueryLibraryLimits.starredPerPrincipal) throw new Error(`You can star at most ${bigQueryLibraryLimits.starredPerPrincipal} projects per account.`)
+          entry.projects.push(input.project)
+          return true
+        }
+        if (list.length >= bigQueryLibraryLimits.starredPrincipals) throw new Error(`Too many BigQuery accounts have starred projects (at most ${bigQueryLibraryLimits.starredPrincipals}).`)
+        library.starredProjects = [...list, { principal: input.principal, projects: [input.project] }]
+        return true
+      }
+      if (!entry || !entry.projects.includes(input.project)) return false
+      entry.projects = entry.projects.filter(project => project !== input.project)
+      if (!entry.projects.length) {
+        const remaining = list.filter(item => item !== entry)
+        if (remaining.length) library.starredProjects = remaining
+        else delete library.starredProjects
+      }
+      return true
+    }, changed => !changed)
+    return BigQueryConnectionStore.starredView(changed.library)
+  }
+
+  /** Bulk-adds starred projects for a verified principal (used when migrating legacy workspace `extraProjects`). */
+  async addStarredProjects(principal: string, projects: readonly string[]): Promise<BigQueryStarredProjectsView> {
+    const validPrincipal = bigQueryStarredPrincipalSchema.parse(principal)
+    const changed = await this.change(library => mergeStarred(library, validPrincipal, projects), changed => !changed)
+    return BigQueryConnectionStore.starredView(changed.library)
+  }
+
+  /** Records legacy `extraProjects` whose principal was not yet known, to be claimed on the next BigQuery connect. */
+  async addMigratedProjects(projects: readonly string[]): Promise<void> {
+    const valid = projects.filter(project => bigQueryProjectSchema.safeParse(project).success)
+    if (!valid.length) return
+    await this.change(library => {
+      const current = library.migratedProjects ?? []
+      let changed = false
+      const next = [...current]
+      for (const project of valid) {
+        if (next.includes(project)) continue
+        if (next.length >= bigQueryLibraryLimits.starredPerPrincipal) break
+        next.push(project)
+        changed = true
+      }
+      if (changed) library.migratedProjects = next
+      return changed
+    }, changed => !changed)
+  }
+
+  /** Claims any pending `migratedProjects` into `principal`'s `starredProjects` on BigQuery connect. */
+  async claimMigratedProjects(principal: string): Promise<{ claimed: readonly string[]; view: BigQueryStarredProjectsView }> {
+    const validPrincipal = bigQueryStarredPrincipalSchema.parse(principal)
+    const changed = await this.change(library => {
+      const pending = library.migratedProjects
+      if (!pending?.length) return [] as string[]
+      delete library.migratedProjects
+      mergeStarred(library, validPrincipal, pending)
+      return pending
+    }, claimed => !claimed.length)
+    return { claimed: changed.value, view: BigQueryConnectionStore.starredView(changed.library) }
   }
 }

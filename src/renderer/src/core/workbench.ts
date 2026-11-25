@@ -4,6 +4,7 @@ import { IndexCompletionService } from '../languages/IndexCompletionService'
 import { SqlDiagnosticsService } from '../languages/SqlDiagnosticsService'
 import { BigQueryCostService, costOptOut } from '../services/bigquery-cost'
 import { CostPromptService } from '../services/bigquery-cost-prompt'
+import { BigQueryStarredService, referencedBigQueryProjects } from '../services/bigquery-starred'
 import { languagesContribution } from '../contributions/languages'
 import { EditorPeekService } from '../languages/EditorPeekService'
 import type { ReloadPins, VariaApi } from '../../../shared/contracts'
@@ -12,6 +13,7 @@ import { toPlatform, type Platform } from '../../../shared/commands/keybindings'
 import { platformLineEnding } from '../../../shared/files/encoding'
 import { blockPrimaryPaste } from './primary-selection'
 import { DocumentService, settingsDocumentOptions, welcomeQueryText } from '../services/documents'
+import { isQueryDocument } from '../documents'
 import { QueryService } from '../services/queries'
 import { ConnectionService } from '../services/connections'
 import { ConnectionTargetService } from '../services/connection-targets'
@@ -182,6 +184,8 @@ export interface Workbench extends Disposable {
   /** BigQuery tabs' estimates, dry-run diagnostics and cost prompts (docs/bigquery.md, Cost). */
   readonly bigQueryCost: BigQueryCostService
   readonly costPrompts: CostPromptService
+  /** Per-principal BigQuery Starred Projects shown in Object Explorer. */
+  readonly bigQueryStarred: BigQueryStarredService
   readonly queries: QueryService
   readonly connections: ConnectionService
   readonly connectionTargets: ConnectionTargetService
@@ -372,7 +376,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const reducedMotion = followReducedMotion(document.documentElement, { enabled: () => api.followSystemMotion || settings.get('environment.reduceMotionWithSystem'), subscribe: settings.subscribe,
     media: typeof matchMedia === 'function' ? matchMedia(reducedMotionQuery) : undefined })
   if (api.testMode) Object.assign(window, { __variaMotion: { refresh: () => reducedMotion.refresh() } })
-  const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame, groupBySchema, targets: connectionTargets, windowsClient: platform === 'win32' }), databaseList = new DatabaseListService(api, connections, events)
+  const bigQueryStarred = new BigQueryStarredService({ api })
+  void bigQueryStarred.load()
+  const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame, groupBySchema, targets: connectionTargets, windowsClient: platform === 'win32', bigQueryStarred }), databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
   const notifications = new NotificationService()
   const updates = new UpdateService(api)
@@ -482,7 +488,36 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // A tab holding BigQuery jobs it does not follow re-attaches once its connection is live (docs/bigquery.md, Re-attaching to jobs).
   let reattachQueued = false
   const reattachSoon = () => { if (reattachQueued) return; reattachQueued = true; queueMicrotask(() => { reattachQueued = false; queries.reattach() }) }
-  const reattachSubscriptions = [connections.subscribe(reattachSoon), documents.subscribe(reattachSoon)]
+  // Sync open BigQuery query tabs' explicitly referenced projects into Object Explorer's session projects on restore/open/connect,
+  // and reload starred projects once a BigQuery principal connects so legacy migrated projects claimed by main appear immediately.
+  const seenBigQueryPrincipals = new Set<string>()
+  const seenBigQueryTabConnections = new Map<string, string>()
+  const syncBigQueryExplorerProjects = () => {
+    for (const connection of connections.liveBigQuery()) {
+      const principal = connection.authentication?.principal.provider === 'bigquery' ? connection.authentication.principal.principal : connection.principalId
+      if (principal?.startsWith('bigquery:') && !seenBigQueryPrincipals.has(principal)) {
+        seenBigQueryPrincipals.add(principal)
+        void bigQueryStarred.load()
+      }
+    }
+    const openIds = new Set<string>()
+    for (const doc of documents.getSnapshot().documents) {
+      openIds.add(doc.id)
+      const connectionId = doc.connectionId
+      if (!isQueryDocument(doc) || !connectionId || !connections.isLiveBigQuery(connectionId)) continue
+      if (seenBigQueryTabConnections.get(doc.id) === connectionId) continue
+      seenBigQueryTabConnections.set(doc.id, connectionId)
+      const text = documents.getModel(doc.id)?.getValue()
+      if (!text) continue
+      const referenced = referencedBigQueryProjects(text)
+      if (referenced.length) explorer.syncBigQueryReferencedProjects(connectionId, referenced)
+    }
+    for (const id of seenBigQueryTabConnections.keys()) if (!openIds.has(id)) seenBigQueryTabConnections.delete(id)
+  }
+  const reattachSubscriptions = [
+    connections.subscribe(() => { reattachSoon(); syncBigQueryExplorerProjects() }),
+    documents.subscribe(() => { reattachSoon(); syncBigQueryExplorerProjects() })
+  ]
   const resultSelection = new ResultSelectionService(results)
   const targets = new TargetService(documents, queries, connections, files, connectionTargets, (connectionId, dataset) => databaseList.get(connectionId).find(entry => entry.name === dataset)?.location)
   const serverDrop = new ServerDropService({ documents, queries, targets, connections })
@@ -753,6 +788,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     indexCompletion,
     bigQueryCost,
     costPrompts,
+    bigQueryStarred,
     queries,
     connections,
     backend,
@@ -928,6 +964,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       documents.dispose()
       backend.dispose()
       explorer.dispose()
+      bigQueryStarred.dispose()
       databaseList.dispose()
       scripting.dispose()
       actions.dispose()

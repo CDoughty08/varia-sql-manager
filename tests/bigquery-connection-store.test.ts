@@ -102,6 +102,77 @@ describe('BigQuery saved connections (bigquery-connections.json)', () => {
     const file = JSON.parse(await readFile(join(directory, 'bigquery-connections.json'), 'utf8')) as { confirmedSources: unknown[] }
     expect(file.confirmedSources).toHaveLength(64)
   })
+
+  it('persists per-principal starred projects, enforces bounds and rejects invalid input', async () => {
+    const directory = await folder(), path = join(directory, 'bigquery-connections.json')
+    const store = new BigQueryConnectionStore(path, new BigQueryKeyFiles())
+    const ada = 'bigquery:user:ada@example.com', grace = 'bigquery:user:grace@example.com'
+    expect(await store.loadStarredProjects()).toEqual({ byPrincipal: {} })
+    expect(await store.setProjectStar({ principal: ada, project: 'bigquery-public-data', starred: true })).toEqual({
+      byPrincipal: { [ada]: ['bigquery-public-data'] }
+    })
+    // Starring again is idempotent; a second principal keeps its own independent list.
+    expect(await store.setProjectStar({ principal: ada, project: 'bigquery-public-data', starred: true })).toEqual({
+      byPrincipal: { [ada]: ['bigquery-public-data'] }
+    })
+    expect(await store.setProjectStar({ principal: grace, project: 'varia-gamma', starred: true })).toEqual({
+      byPrincipal: { [ada]: ['bigquery-public-data'], [grace]: ['varia-gamma'] }
+    })
+    // Survives reload from disk.
+    const reloaded = new BigQueryConnectionStore(path, new BigQueryKeyFiles())
+    expect(await reloaded.loadStarredProjects()).toEqual({
+      byPrincipal: { [ada]: ['bigquery-public-data'], [grace]: ['varia-gamma'] }
+    })
+    // Unstarring the last project drops that principal's entry cleanly.
+    expect(await reloaded.setProjectStar({ principal: ada, project: 'bigquery-public-data', starred: false })).toEqual({
+      byPrincipal: { [grace]: ['varia-gamma'] }
+    })
+    await expect(reloaded.setProjectStar({ principal: 'not-bigquery', project: 'varia-alpha', starred: true })).rejects.toThrow()
+    await expect(reloaded.setProjectStar({ principal: ada, project: 'Bad_Project', starred: true })).rejects.toThrow()
+    await expect(reloaded.setProjectStar({ principal: ada, project: 'varia-alpha', starred: true, extra: 1 })).rejects.toThrow()
+  })
+
+  it('migrates legacy extraProjects from pre-upgrade bigquery-connections.json without quarantining and claims them on connect', async () => {
+    const directory = await folder(), path = join(directory, 'bigquery-connections.json')
+    const legacyId = '6f0c2b8e-4d1a-4c3b-9e2f-1a2b3c4d5e6f'
+    await writeFile(path, JSON.stringify({
+      version: 1,
+      profiles: [{
+        id: legacyId,
+        options: { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', extraProjects: ['varia-beta', 'bigquery-public-data', 'varia-alpha'] },
+        favorite: true
+      }]
+    }))
+    const store = new BigQueryConnectionStore(path, new BigQueryKeyFiles())
+    const loaded = await store.load()
+    expect(loaded.warning).toBeUndefined()
+    expect(loaded.library.profiles).toHaveLength(1)
+    expect(loaded.library.profiles[0]?.options).toEqual({ provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' })
+    expect(loaded.library.migratedProjects).toEqual(['varia-beta', 'bigquery-public-data'])
+    // Disk was upgraded without quarantining.
+    expect(await readdir(directory)).toEqual(['bigquery-connections.json'])
+    const onDisk = JSON.parse(await readFile(path, 'utf8')) as { profiles: { options: Record<string, unknown> }[]; migratedProjects?: string[] }
+    expect(onDisk.profiles[0]?.options).not.toHaveProperty('extraProjects')
+    expect(onDisk.migratedProjects).toEqual(['varia-beta', 'bigquery-public-data'])
+    // Claiming on connect moves migratedProjects into starredProjects for the verified principal and clears migratedProjects.
+    const ada = 'bigquery:user:ada@example.com'
+    const claimed = await store.claimMigratedProjects(ada)
+    expect(claimed.claimed).toEqual(['varia-beta', 'bigquery-public-data'])
+    expect(claimed.view).toEqual({ byPrincipal: { [ada]: ['varia-beta', 'bigquery-public-data'] } })
+    expect((await store.load()).library.migratedProjects).toBeUndefined()
+    // Second claim is a no-op.
+    expect((await store.claimMigratedProjects(ada)).claimed).toEqual([])
+    // Bulk workspace migration merges without duplicates.
+    await store.addStarredProjects(ada, ['varia-beta', 'varia-gamma'])
+    expect(await store.loadStarredProjects()).toEqual({ byPrincipal: { [ada]: ['varia-beta', 'bigquery-public-data', 'varia-gamma'] } })
+    // Corrupt non-array extraProjects still quarantines the file.
+    await writeFile(path, JSON.stringify({
+      version: 1,
+      profiles: [{ id: legacyId, options: { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', extraProjects: 'not-an-array' }, favorite: false }]
+    }))
+    const corrupt = await new BigQueryConnectionStore(path, new BigQueryKeyFiles()).load()
+    expect(corrupt.warning).toContain('invalid')
+  })
 })
 
 describe('BigQuery key files and federation sources (main)', () => {

@@ -51,7 +51,7 @@ export interface ResolveOptions {
   readonly target?: Partial<TargetKeys>
   /** Passed to every command item: enablement, and the handler when the item runs. */
   readonly args?: CommandArgs
-  readonly commands: Pick<CommandService, 'isEnabled' | 'isToggled'>
+  readonly commands: Pick<CommandService, 'isEnabled' | 'isToggled'> & Partial<Pick<CommandService, 'titleFor'>>
   readonly keybindings: { lookup(id: CommandId): KeybindingLabel | undefined }
   readonly dynamic?: { readonly [K in DynamicSubmenu]?: () => readonly DynamicMenuItem[] }
   /** Settings that titles follow ("Select Top 50 Rows"); the defaults without them. Applied here, not in the cached model. */
@@ -122,7 +122,11 @@ export function resolveMenu(menu: MenuId, options: ResolveOptions): readonly Res
   const level = (entries: readonly MenuEntry[], depth: number): Draft[] => pruneMenu(entries, keep, children, depth).map((entry): Draft => {
     // `keep` has already dropped roles.
     if (entry.kind === 'separator' || entry.kind === 'role') return { kind: 'separator' }
-    if (entry.kind === 'command') return command(entry.id, commandTitle(entry.id, options.settings, entry.title), { key: entry.nativeId, mnemonic: entry.mnemonic, toggle: entry.toggle })
+    if (entry.kind === 'command') {
+      const title = (entry.id === 'bigquery.toggleStarProject' ? guarded(() => commands.titleFor?.(entry.id, args), undefined) : undefined)
+        ?? commandTitle(entry.id, options.settings, entry.title)
+      return command(entry.id, title, { key: entry.nativeId, mnemonic: entry.mnemonic, toggle: entry.toggle })
+    }
     const provider = entry.dynamic && options.dynamic?.[entry.dynamic]
     const provided = provider ? guarded(provider, []) : []
     // Dynamic items share the level with the catalogue's, so `finish` assigns their mnemonics together.

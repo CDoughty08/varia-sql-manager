@@ -616,6 +616,24 @@ export const commandCatalog = {
     unavailableHint: 'Select a BigQuery dataset, table, view, or routine in Object Explorer.',
     menus: [{ menu: 'explorer.context', group: '9_properties', order: 2, title: 'Properties', mnemonic: 'r', when: "(explorerNode == 'bqTable' || explorerNode == 'bqView' || explorerNode == 'bqMaterializedView' || explorerNode == 'bqExternalTable' || explorerNode == 'bqRoutine' || explorerNode == 'bqDataset') && !explorerServerLost" }]
   },
+  // BigQuery Starred Projects: per-principal pinned projects in Object Explorer (separate from connection identity).
+  'bigquery.starProjectPrompt': {
+    title: 'Star a Project…', category: 'BigQuery', icon: 'star-empty', keywords: ['bigquery', 'star', 'project', 'explorer', 'pin', 'add'],
+    precondition: 'backendReady && hasConnection', unavailableHint: 'Connect to BigQuery first.', providers: ['bigquery'], methods: ['bigquery.connectionProjects'], providerContext: 'own',
+    menus: [{ menu: 'explorer.context', group: '1_query', order: 2, title: 'Star a Project…', mnemonic: 'p', when: "explorerNode == 'server' && explorerProvider == 'bigquery' && !explorerServerLost" }]
+  },
+  'bigquery.toggleStarProject': {
+    title: 'Star Project', category: 'Object Explorer', icon: 'star-full', keywords: ['bigquery', 'star', 'unstar', 'project', 'explorer', 'pin'],
+    precondition: 'hasConnection',
+    unavailableHint: 'Select a non-billing BigQuery project in Object Explorer.', providers: ['bigquery'],
+    menus: [{ menu: 'explorer.context', group: '1_query', order: 2, title: 'Star Project', mnemonic: 's', when: "explorerNode == 'bqProject' && (explorerBigQueryProjectRole == 'session' || explorerBigQueryProjectRole == 'starred') && !explorerServerLost" }]
+  },
+  'bigquery.removeSessionProject': {
+    title: 'Remove Project from Explorer', category: 'Object Explorer', icon: 'close', keywords: ['bigquery', 'remove', 'session', 'project', 'explorer', 'hide'],
+    precondition: 'hasConnection',
+    unavailableHint: 'Select an unstarred session BigQuery project in Object Explorer.', providers: ['bigquery'],
+    menus: [{ menu: 'explorer.context', group: '1_query', order: 3, title: 'Remove from Explorer', mnemonic: 'e', when: "explorerNode == 'bqProject' && explorerBigQueryProjectRole == 'session' && !explorerServerLost" }]
+  },
   'explorer.copyName': {
     title: 'Copy Name', category: 'Object Explorer', icon: 'copy', precondition: 'hasConnection', unavailableHint: 'Select an object that has a name.', providers: both,
     menus: [{ menu: 'explorer.context', group: '5_copy', order: 1, mnemonic: 'a', when: "(explorerNode != 'background' && explorerNode != 'folder' && !explorerNodeNameless && !explorerServerLost) || explorerFolderInsertable" }]

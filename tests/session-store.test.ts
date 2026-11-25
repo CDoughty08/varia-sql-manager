@@ -379,6 +379,57 @@ describe('the hot exit session store', () => {
     expect(refused({ activeIndex: sessionLimits.documents })).toBe(false)
     expect(sessionWriteSchema.safeParse({ activeIndex: 0, documents: Array.from({ length: sessionLimits.documents + 1 }, () => valid.documents[0]) }).success).toBe(false)
     expect(sessionWriteSchema.safeParse({ ...valid, extra: true }).success).toBe(false)
+    // Renderer session writes strictly reject legacy extraProjects on BigQuery workspace targets.
+    expect(sessionWriteSchema.safeParse({
+      activeIndex: -1, documents: [],
+      workspace: {
+        version: 1,
+        targets: [{
+          id: randomUUID(),
+          options: { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', extraProjects: ['varia-beta'] },
+          details: { autoReconnect: 'inherit' }, inExplorer: true, resumeWanted: true
+        }]
+      }
+    }).success).toBe(false)
+  })
+
+  it('tolerates and migrates legacy BigQuery extraProjects in pre-upgrade session.json without quarantining', async () => {
+    await mkdir(folder, { recursive: true })
+    const pinnedId = randomUUID(), unpinnedId = randomUUID(), ada = 'bigquery:user:ada@example.com'
+    await writeFile(join(folder, 'session.json'), JSON.stringify({
+      version: 3, savedAt: '2026-11-04T09:00:00.000Z', activeIndex: 0,
+      documents: [{ name: 'q.sql', kind: 'sql', eol: 'lf', dirty: true, text: 'SELECT 1', targetId: pinnedId, provider: 'bigquery', database: 'sales', attachWanted: true }],
+      workspace: {
+        version: 1,
+        targets: [
+          {
+            id: pinnedId,
+            options: { provider: 'bigquery', project: 'varia-alpha', dataset: 'sales', authentication: 'gcloud', extraProjects: ['varia-beta', 'bigquery-public-data', 'varia-alpha'] },
+            details: { autoReconnect: 'inherit' }, inExplorer: true, resumeWanted: true,
+            expectedPrincipal: { provider: 'bigquery', project: 'varia-alpha', principal: ada }
+          },
+          {
+            id: unpinnedId,
+            options: { provider: 'bigquery', project: 'varia-gamma', authentication: 'gcloud', extraProjects: ['varia-delta'] },
+            details: { autoReconnect: 'inherit' }, inExplorer: true, resumeWanted: false
+          }
+        ]
+      }
+    }))
+    const migrated: { byPrincipal: Map<string, readonly string[]>; unclaimed: readonly string[] }[] = []
+    const store = new SessionStore(folder, {
+      onLegacyBigQueryExtraProjects: value => { migrated.push({ byPrincipal: new Map(value.byPrincipal), unclaimed: value.unclaimed }) }
+    })
+    const taken = await store.take(true)
+    expect(taken?.documents).toHaveLength(1)
+    expect(taken?.workspace?.targets).toHaveLength(2)
+    expect(taken?.workspace?.targets[0]?.options).toEqual({ provider: 'bigquery', project: 'varia-alpha', dataset: 'sales', authentication: 'gcloud' })
+    expect(taken?.workspace?.targets[1]?.options).toEqual({ provider: 'bigquery', project: 'varia-gamma', authentication: 'gcloud' })
+    // File was NOT quarantined (moved to previous.json as normal).
+    expect(await files()).toEqual(['previous.json'])
+    expect(migrated).toHaveLength(1)
+    expect(migrated[0]?.byPrincipal.get(ada)).toEqual(['varia-beta', 'bigquery-public-data'])
+    expect(migrated[0]?.unclaimed).toEqual(['varia-delta'])
   })
 })
 

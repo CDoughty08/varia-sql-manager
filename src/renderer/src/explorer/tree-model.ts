@@ -84,6 +84,8 @@ export interface TreeNode {
   listedAt?: number
   /** A login denied CONNECT SQL, as its listing read it (with `status` 'disabled' when it is disabled too). */
   connectDenied?: boolean
+  /** A BigQuery project row's role: billing project, persisted starred project, or session-only. */
+  bigQueryProjectRole?: 'billing' | 'starred' | 'session'
   note?: NodeNote
 }
 export interface NodeTable { get(id: number): TreeNode | undefined }
