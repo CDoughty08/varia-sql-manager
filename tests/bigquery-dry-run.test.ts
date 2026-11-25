@@ -101,19 +101,21 @@ function fixture(settings: Partial<SettingsValues> = {}) {
   let answer: CostPromptAnswer | Promise<CostPromptAnswer> = { run: true }
   const signals: (AbortSignal | undefined)[] = []
   const declined = new Set<string>()
+  // Connections' own thresholds (GiB), as Advanced Properties saves them.
+  const thresholds = new Map<string, number>()
   const service = new BigQueryCostService({
     api, documents: docs.documents, connections, events: docs.events, monaco: { MarkerSeverity: { Error: 8 } as never, editor: { setModelMarkers: markers } },
     settings: { get: key => values[key] as never, subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener) }, choose: async (key: SettingKey, value: unknown) => { values[key] = value; listeners.forEach(listener => listener()) } },
     // As CostPromptService does: the answer is applied (onAnswer) before the promise settles.
     ask: async (request, signal, _stillAsks, onAnswer) => { asked.push(request); signals.push(signal); const given = await answer; onAnswer?.(given); return given },
-    optOut: { asks: c => !declined.has(c.id), refresh: async () => {}, dontAsk: async c => { declined.add(c.id) }, named: () => {} },
+    optOut: { asks: c => !declined.has(c.id), refresh: async () => {}, dontAsk: async c => { declined.add(c.id) }, named: () => {}, threshold: c => thresholds.get(c.id), namedThreshold: () => {} },
     schedule: (callback, ms) => { expect(ms).toBe(dryRunDebounceMs); timers.push(callback); return ++timerIds as unknown as ReturnType<typeof setTimeout> }
   })
   const tab = docs.documents.create('daily.sql', 'SELECT 1', 'sales', connectionId)
   const model = docs.model(tab.id)
   const tick = () => { for (const timer of timers.splice(0)) timer() }
   const settle = () => new Promise(resolve => { setTimeout(resolve, 0) })
-  return { docs, service, api, markers, timers, tick, settle, tab, model, replies, pending, asked, signals, values, declined, setAnswer: (value: CostPromptAnswer | Promise<CostPromptAnswer>) => { answer = value }, setLive: (value: boolean) => { live = value } }
+  return { docs, service, api, markers, timers, tick, settle, tab, model, replies, pending, asked, signals, values, declined, thresholds, setAnswer: (value: CostPromptAnswer | Promise<CostPromptAnswer>) => { answer = value }, setLive: (value: boolean) => { live = value } }
 }
 const estimate = (bytesProcessed: number, extra: Partial<BigQueryDryRunResult> = {}): ApiResult<BigQueryDryRunResult> => ({ ok: true, value: { bytesProcessed, ...extra } })
 
@@ -466,6 +468,46 @@ describe('the estimate before Execute', () => {
     expect(await f.service.beforeExecute(f.tab.id, 'SELECT 1')).toBe(false)
     expect(kinds).toEqual(['threshold', 'incomplete'])
   })
+  it("uses the connection's own threshold for Execute, Re-run, a windowed result's sort or filter, and Script As", async () => {
+    const f = fixture()
+    f.thresholds.set(connectionId, 50)
+    expect(f.service.thresholdFor(f.tab.id)).toBe(50)
+    // Execute (and Job History's Re-run, which goes through it): 20 GiB is under the connection's 50 GiB, though over Options' 10.
+    f.replies.push(estimate(20 * GiB))
+    await expect(f.service.beforeExecute(f.tab.id, 'SELECT 20')).resolves.toBe(true)
+    f.replies.push(estimate(60 * GiB))
+    await expect(f.service.beforeExecute(f.tab.id, 'SELECT 60', undefined, undefined, 'job_1')).resolves.toBe(true)
+    expect(f.asked).toEqual([expect.objectContaining({ prompt: { kind: 'threshold', bytes: 60 * GiB }, thresholdBytes: 50 * GiB, rerunOf: 'job_1', ownThreshold: true })])
+    expect(costPromptText(f.asked[0]!).note).toContain("this connection's own")
+    // A sort, filter, value list or sample of a windowed result.
+    const remote = { resultId: 1, generation: 1, kind: 'view' } as never
+    f.replies.push(estimate(20 * GiB))
+    await expect(f.service.beforeRemote(f.tab.id, remote)).resolves.toEqual({ bytesProcessed: 20 * GiB })
+    f.replies.push(estimate(60 * GiB))
+    await expect(f.service.beforeRemote(f.tab.id, remote)).resolves.toEqual({ bytesProcessed: 60 * GiB })
+    expect(f.asked).toHaveLength(2)
+    expect(f.asked[1]).toMatchObject({ thresholdBytes: 50 * GiB })
+    // Script As › CREATE, Peek and Properties' DDL, and the search index (beforeScript).
+    await expect(f.service.beforeScript(connectionId, { bytesProcessed: 20 * GiB })).resolves.toMatchObject({ run: true })
+    expect(f.asked).toHaveLength(2)
+    await expect(f.service.beforeScript(connectionId, { bytesProcessed: 60 * GiB })).resolves.toMatchObject({ run: true })
+    expect(f.asked).toHaveLength(3)
+    // A lower threshold of its own asks below Options'; none follows Options' again.
+    f.thresholds.set(connectionId, 2)
+    await f.service.beforeScript(connectionId, { bytesProcessed: 5 * GiB })
+    expect(f.asked.at(-1)).toMatchObject({ thresholdBytes: 2 * GiB })
+    f.thresholds.delete(connectionId)
+    expect(f.service.thresholdFor(f.tab.id)).toBe(10)
+    await f.service.beforeScript(connectionId, { bytesProcessed: 5 * GiB })
+    expect(f.asked).toHaveLength(4)
+    await f.service.beforeScript(connectionId, { bytesProcessed: 20 * GiB })
+    expect(f.asked.at(-1)).not.toHaveProperty('ownThreshold')
+    expect(costPromptText(f.asked.at(-1)!).note).not.toContain('own')
+  })
+  it("draws the chip against the connection's own threshold", () => {
+    expect(costChip({ phase: 'estimate', bytes: 11 * GiB }, defaultSettings, true, 50).tone).toBe('neutral')
+    expect(costChip({ phase: 'estimate', bytes: 3 * GiB }, defaultSettings, true, 2).tone).toBe('warning')
+  })
   it("says on the chip when the connection's prompt is off", () => {
     const over = costChip({ phase: 'estimate', bytes: 11 * GiB }, defaultSettings, false)
     expect(over.tone).toBe('warning')
@@ -513,9 +555,11 @@ describe('the saved prompt choice', () => {
     await optOut.dontAsk(connection)
     // Another connection with the same settings would read saved entries that still ask: the choice made here stands
     // without a read.
+    // (the read still looks for the connection's threshold).
     const other = { ...connection, id: 'b2d6c1aa-0000-4000-8000-000000000001', generation: 3 } as LiveConnection
-    await optOut.refresh(other)
-    expect(api.loadConnectionLibrary).not.toHaveBeenCalled()
+    const reading = optOut.refresh(other)
+    release()
+    await reading
     expect(optOut.asks(connection)).toBe(false)
     // Advanced Properties turns the prompt back on at Connect and main saves it: it asks at once, and reads resume.
     changed.mockClear()
@@ -524,24 +568,93 @@ describe('the saved prompt choice', () => {
     expect(changed).toHaveBeenCalled()
     // A read that began before a later named choice does not undo it.
     const before = optOut.refresh(connection)
-    expect(api.loadConnectionLibrary).toHaveBeenCalledTimes(1)
+    expect(api.loadConnectionLibrary).toHaveBeenCalledTimes(2)
     optOut.named({ ...options, costPrompt: false }, false, true)
     release()
     await before
     expect(optOut.asks(connection)).toBe(false)
     // A named choice main could not save holds for the session: the saved entry (which asks) does not undo it.
     optOut.named({ ...options, costPrompt: false }, false, false)
-    await optOut.refresh(connection)
+    const after = optOut.refresh(connection)
+    release()
+    await after
     expect(optOut.asks(connection)).toBe(false)
   })
-  it('follows the choice a connect names, and ignores connects that name none', () => {
+  it('follows the choice and threshold a connect names, and ignores connects that name none', () => {
     const f = fixture()
-    const named = vi.fn()
-    ;(f.service as unknown as { deps: { optOut: { named: typeof named } } }).deps.optOut.named = named
+    const named = vi.fn(), namedThreshold = vi.fn()
+    Object.assign((f.service as unknown as { deps: { optOut: object } }).deps.optOut, { named, namedThreshold })
     f.service.connectedWith({ provider: 'bigquery', project: 'acme-analytics', authentication: 'gcloud' })
     expect(named).not.toHaveBeenCalled()
+    expect(namedThreshold).not.toHaveBeenCalled()
     f.service.connectedWith({ provider: 'bigquery', project: 'acme-analytics', authentication: 'gcloud', costPrompt: true })
     expect(named).toHaveBeenCalledWith(expect.objectContaining({ costPrompt: true }), true, true)
+    f.service.connectedWith({ provider: 'bigquery', project: 'acme-analytics', authentication: 'gcloud', costThreshold: 0 }, false)
+    expect(namedThreshold).toHaveBeenCalledWith(expect.objectContaining({ costThreshold: 0 }), 0, false)
+  })
+  it("reads the connection's own threshold from its saved entries, and follows one a connect names", async () => {
+    let saved: number | undefined = 50
+    let hold = false
+    let release = () => {}
+    const api = {
+      loadConnectionLibrary: vi.fn(() => {
+        const value = { ok: true, value: { bigQuery: { profiles: [{ id: 'p', options: { ...options, ...saved ? { costThreshold: saved } : {} }, favorite: false }, { id: 'q', options: { ...options, dataset: 'other', costThreshold: 7 }, favorite: false }] } } }
+        return (hold ? new Promise(resolve => { release = () => resolve(value) }) : Promise.resolve(value)) as never
+      }),
+      setBigQueryCostPrompt: vi.fn(async () => ({ ok: true as const, value: true }))
+    }
+    const changed = vi.fn()
+    const optOut = costOptOut(api, changed)
+    expect(optOut.threshold(connection)).toBeUndefined()
+    await optOut.refresh(connection)
+    // Its own entry's, never another entry's (another dataset is another connection).
+    expect(optOut.threshold(connection)).toBe(50)
+    expect(changed).toHaveBeenCalled()
+    saved = undefined
+    await optOut.refresh(connection)
+    expect(optOut.threshold(connection)).toBeUndefined()
+    // A connect names one: it applies at once; 0 is Options' again.
+    optOut.namedThreshold({ ...options, costThreshold: 25 }, 25, true)
+    expect(optOut.threshold(connection)).toBe(25)
+    optOut.namedThreshold({ ...options, costThreshold: 0 }, 0, true)
+    expect(optOut.threshold(connection)).toBeUndefined()
+    // A read that began before a named threshold does not undo it.
+    saved = 50
+    hold = true
+    const reading = optOut.refresh(connection)
+    optOut.namedThreshold({ ...options, costThreshold: 30 }, 30, true)
+    release()
+    await reading
+    expect(optOut.threshold(connection)).toBe(30)
+    hold = false
+    // A choice named while a read is out does not drop the threshold that read finds.
+    hold = true
+    const choiceRace = optOut.refresh(connection)
+    optOut.named({ ...options, costPrompt: true }, true, true)
+    release()
+    await choiceRace
+    expect(optOut.threshold(connection)).toBe(50)
+    hold = false
+    // One main could not save holds for the session against the saved entry.
+    optOut.namedThreshold({ ...options, costThreshold: 4 }, 4, false)
+    await optOut.refresh(connection)
+    expect(optOut.threshold(connection)).toBe(4)
+  })
+  it('keeps the threshold last read when the saved connections cannot be read, rather than falling back to Options\'', async () => {
+    let unreadable = false
+    const api = {
+      loadConnectionLibrary: vi.fn(async () => (unreadable
+        ? { ok: true, value: { bigQuery: { profiles: [] }, bigQueryUnreadable: true, warning: 'The saved BigQuery connections could not be read.' } }
+        : { ok: true, value: { bigQuery: { profiles: [{ id: 'p', options: { ...options, costThreshold: 2, costPrompt: false }, favorite: false }] } } }) as never),
+      setBigQueryCostPrompt: vi.fn(async () => ({ ok: true as const, value: true }))
+    }
+    const optOut = costOptOut(api)
+    await optOut.refresh(connection)
+    expect(optOut.threshold(connection)).toBe(2)
+    unreadable = true
+    await optOut.refresh(connection)
+    expect(optOut.threshold(connection)).toBe(2)
+    expect(optOut.asks(connection)).toBe(false)
   })
   it("drops a read of the saved entries that began before Don't ask again", async () => {
     let release!: () => void

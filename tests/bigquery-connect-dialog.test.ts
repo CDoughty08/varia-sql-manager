@@ -312,22 +312,87 @@ describe('Connect dialog: BigQuery', () => {
     expect(view.connect.mock.calls[0]![0]).toMatchObject({ extraProjects: ['bigquery-public-data'] })
   })
 
+  it("shows the saved entry's own Prompt above threshold for a live connection's settings, and names one only when changed", async () => {
+    const options = { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' } as const
+    const profile: BigQueryConnectionProfile = { id: id(3), options: { ...options, costThreshold: 50 }, favorite: false, lastConnected: '2026-11-10T10:00:00.000Z' }
+    // Opened on a live connection's settings, which never carry the threshold: the field shows the saved entry's.
+    const view = await mount({ initial: options, bigQuery: [profile] })
+    await view.click('Advanced (1 set)')
+    const field = () => view.$<HTMLInputElement>('#bq-cost-threshold')!
+    expect(field().value).toBe('50')
+    expect(field().placeholder).toBe('Options default (10 GiB)')
+    // Left as it shows, Connect names none, so the saved one stands.
+    await view.click('Connect')
+    expect(view.connect.mock.calls.at(-1)![0]).not.toHaveProperty('costThreshold')
+    // Out of range: an alert, and nothing named.
+    await view.set('#bq-cost-threshold', '0')
+    expect(view.text()).toContain('Enter Prompt above as a whole number of GiB')
+    expect(field().getAttribute('aria-invalid')).toBe('true')
+    await view.set('#bq-cost-threshold', '20')
+    expect(view.text()).not.toContain('Enter Prompt above')
+    await view.click('Connect')
+    expect(view.connect.mock.calls.at(-1)![0]).toMatchObject({ costThreshold: 20 })
+    // Emptied: back to the Options threshold (0 clears the saved one).
+    await view.set('#bq-cost-threshold', '')
+    expect(view.button('Advanced').textContent).not.toContain('set')
+    await view.click('Connect')
+    expect(view.connect.mock.calls.at(-1)![0]).toMatchObject({ costThreshold: 0 })
+  })
+
+  it('does not ask on Cancel when Prompt above is typed back to the saved threshold', async () => {
+    const alpha = { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' } as const
+    const profiles: BigQueryConnectionProfile[] = [
+      { id: id(4), options: { ...alpha, costThreshold: 50 }, favorite: false, lastConnected: '2026-11-10T10:00:00.000Z' },
+      { id: id(5), options: { ...alpha, project: 'varia-beta', costThreshold: 100 }, favorite: false, lastConnected: '2026-11-09T10:00:00.000Z' }
+    ]
+    const view = await mount({ initial: alpha, bigQuery: profiles })
+    await view.click('Advanced (1 set)')
+    // Typed back to the saved value: no change, so closing does not ask.
+    await view.set('#bq-cost-threshold', '5')
+    await view.set('#bq-cost-threshold', '50')
+    await view.click('Cancel')
+    expect(view.onClose).toHaveBeenCalled()
+  })
+  it('sends what Prompt above shows after the settings change to another entry with its own saved threshold', async () => {
+    const alpha = { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' } as const
+    const profiles: BigQueryConnectionProfile[] = [
+      { id: id(4), options: { ...alpha, costThreshold: 50 }, favorite: false, lastConnected: '2026-11-10T10:00:00.000Z' },
+      { id: id(5), options: { ...alpha, project: 'varia-beta', costThreshold: 100 }, favorite: false, lastConnected: '2026-11-09T10:00:00.000Z' }
+    ]
+    const second = await mount({ initial: alpha, bigQuery: profiles })
+    await second.click('Advanced (1 set)')
+    await second.set('#bq-cost-threshold', '5')
+    await second.set('#bq-cost-threshold', '50')
+    // Now the settings become varia-beta's (saved 100): the field still shows 50, and Connect sends 50, not nothing.
+    await second.click('Connection Properties')
+    await second.set('#connect-bq-project', 'varia-beta')
+    await second.click('Advanced (1 set)')
+    expect(second.$<HTMLInputElement>('#bq-cost-threshold')!.value).toBe('50')
+    await second.click('Connect')
+    expect(second.connect.mock.calls.at(-1)![0]).toMatchObject({ project: 'varia-beta', costThreshold: 50 })
+  })
+
   it("resets BigQuery cost prompt back to asking when Reset Advanced runs on a saved Don't ask again entry", async () => {
     const profile: BigQueryConnectionProfile = {
       id: id(2),
-      options: { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', costPrompt: false, maximumBytesBilled: 50 * 2 ** 30 },
+      options: { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', costPrompt: false, maximumBytesBilled: 50 * 2 ** 30, costThreshold: 40 },
       favorite: false, lastConnected: '2026-11-10T10:00:00.000Z'
     }
     const view = await mount({ bigQuery: [profile] })
+    const connectedWith = vi.spyOn(view.bigQueryCost as unknown as { connectedWith: (options: unknown, saved?: boolean) => void }, 'connectedWith')
     const row = [...view.host.querySelectorAll<HTMLButtonElement>('.connection-choice')].find(value => value.textContent?.includes('varia-alpha'))!
     await act(async () => row.click())
-    await view.click('Advanced (2 set)')
+    await view.click('Advanced (3 set)')
+    expect(view.$<HTMLInputElement>('#bq-cost-threshold')!.value).toBe('40')
     const box = () => [...view.host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find(input => input.parentElement?.textContent?.includes('cost threshold'))!
     expect(box().checked).toBe(false)
     await view.click('Reset Advanced')
     expect(box().checked).toBe(true)
     expect(view.$<HTMLInputElement>('#bq-max-bytes')!.value).toBe('')
+    expect(view.$<HTMLInputElement>('#bq-cost-threshold')!.value).toBe('')
     await view.click('Save')
-    expect(view.api.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ options: expect.objectContaining({ costPrompt: true }) }))
+    expect(view.api.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ options: expect.objectContaining({ costPrompt: true, costThreshold: 0 }) }))
+    // A live connection with these settings follows what Save named at once.
+    expect(connectedWith).toHaveBeenLastCalledWith(expect.objectContaining({ costPrompt: true, costThreshold: 0 }), true)
   })
 })

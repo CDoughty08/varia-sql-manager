@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { bigQueryConnectionOptionsSchema, connectionKey, connectionOptionsSchema, connectionPrincipalSchema, credentialBinding, providerConnectionOptionsSchema } from '../src/shared/connections'
-import { connectionTargetOptionsSchema, persistedConnectionTargetSchema, principalFits, queryConnectionAssociationSchema, samePrincipal, targetServerName, targetUsesPassword } from '../src/shared/connection-targets'
+import { bigQueryConnectionOptionsSchema, bigQueryLimits, connectionKey, connectionOptionsSchema, connectionPrincipalSchema, credentialBinding, providerConnectionOptionsSchema } from '../src/shared/connections'
+import { bigQueryTargetOptions, connectionTargetOptionsSchema, persistedConnectionTargetSchema, principalFits, queryConnectionAssociationSchema, samePrincipal, targetServerName, targetUsesPassword } from '../src/shared/connection-targets'
 import { normalizedProvider, providerAllows, providerOf, providersOf } from '../src/shared/providers'
 import { storedSessionSchema } from '../src/main/session-store'
+import { settingDef } from '../src/shared/settings/catalog'
 import { recoveryRecordSchema } from '../src/main/recovery-store'
 
 const sqlServer = { server: 'sql-prod-01', database: 'Sales', authentication: 'windows' as const, trustServerCertificate: false }
@@ -54,6 +56,18 @@ describe('BigQuery connection options', () => {
     for (const project of ['Acme', 'ab', '1acme-analytics', 'acme_analytics', 'acme-analytics-', 'a'.repeat(31)]) expect(bigQueryConnectionOptionsSchema.safeParse({ ...bigQuery, project }).success, project).toBe(false)
     expect(bigQueryConnectionOptionsSchema.safeParse({ ...bigQuery, dataset: 'sales_2026', location: 'europe-west2', color: '#1a2B3c' }).success).toBe(true)
     for (const extra of [{ dataset: 'sales-2026' }, { dataset: 'x'.repeat(1025) }, { location: 'eu west' }, { color: '#12345g' }]) expect(bigQueryConnectionOptionsSchema.safeParse({ ...bigQuery, ...extra }).success, JSON.stringify(extra)).toBe(false)
+  })
+  it("bounds the connection's own cost threshold as Options' threshold, outside its identity and target", () => {
+    for (const costThreshold of [0, 1, 50, bigQueryLimits.costThresholdGiB]) expect(bigQueryConnectionOptionsSchema.safeParse({ ...bigQuery, costThreshold }).success, String(costThreshold)).toBe(true)
+    for (const costThreshold of [-1, 1.5, bigQueryLimits.costThresholdGiB + 1, '10']) expect(bigQueryConnectionOptionsSchema.safeParse({ ...bigQuery, costThreshold }).success, String(costThreshold)).toBe(false)
+    const setting = settingDef('queryExecution.bigQuery.costThreshold')
+    expect(setting.type === 'integer' && setting.max).toBe(bigQueryLimits.costThresholdGiB)
+    // C# bounds it the same (BigQueryLimits.Check).
+    const csharp = readFileSync('backend/Varia.Backend/BigQuery/BigQueryContracts.cs', 'utf8').match(/const int CostThresholdGiB = ([\d_]+);/)?.[1]
+    expect(Number(csharp?.replaceAll('_', ''))).toBe(bigQueryLimits.costThresholdGiB)
+    // A preference, like the cost-prompt choice: the same entry, and the same target (so it never opens a second connection).
+    expect(connectionKey({ ...bigQuery, costThreshold: 50 })).toBe(connectionKey(bigQuery))
+    expect(bigQueryTargetOptions({ ...bigQuery, costThreshold: 50, costPrompt: false })).toEqual(bigQueryTargetOptions(bigQuery))
   })
   it('requires a key file reference exactly for key file authentication, and never a path', () => {
     const keyFile = randomUUID()

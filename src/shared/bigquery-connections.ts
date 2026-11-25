@@ -20,6 +20,7 @@ export const bigQueryStoredProfileSchema = z.object({
   id: z.uuid(), options: savedOptionsSchema, favorite: z.boolean(), saved: z.boolean().optional(), lastConnected: z.iso.datetime().optional(),
   autoReconnect: connectionAutoReconnectSchema.optional(), keyPath: absolutePath.optional()
 }).strict().refine(value => (value.options.keyFile !== undefined) === (value.keyPath !== undefined), 'A saved key file reference needs its path.')
+  .refine(value => value.options.costThreshold !== 0, 'A saved cost threshold is at least 1 GiB.')
 /** A federation configuration's `credential_source.file` the user confirmed in the Connect dialog (decision 49), by the
  *  configuration's path: a changed source path asks again. */
 export const confirmedSourceSchema = z.object({ keyPath: absolutePath, source: absolutePath }).strict()
@@ -50,6 +51,9 @@ export const bigQueryProfileInputSchema = z.object({
 export const bigQueryEnvironmentInputSchema = z.object({ options: savedOptionsSchema, environment: environmentSchema.optional() }).strict()
 /** "Don't ask again for this connection" (docs/bigquery.md, Cost): the entry's cost-prompt choice, and nothing else, changes. */
 export const bigQueryCostPromptInputSchema = z.object({ options: savedOptionsSchema, costPrompt: z.boolean() }).strict()
+/** A connect that reused a live connection and named the connection's own threshold (Advanced Properties): only the
+ *  entry's threshold changes; 0 clears it. Main's only, never an IPC input. */
+export const bigQueryCostThresholdInputSchema = z.object({ options: savedOptionsSchema, costThreshold: bigQueryConnectionOptionsSchema.shape.costThreshold.unwrap() }).strict()
 export type BigQueryCostPromptInput = z.infer<typeof bigQueryCostPromptInputSchema>
 
 /** connections.pickKeyFile's answer: the reference to name the file by from now on, its name, and for a federation
