@@ -21,13 +21,18 @@ internal sealed partial class BigQueryService
     public const int MaxColumnText = 1024;
     /// <summary>Characters of flat column paths, types and descriptions returned in all, keeping the response well under the frame limit.</summary>
     public const int MaxColumnChars = 1_000_000;
-    static readonly string[] PropertyKinds = ["bqTable", "bqView", "bqMaterializedView", "bqExternalTable", "bqRoutine"];
+    static readonly string[] PropertyKinds = ["bqTable", "bqView", "bqMaterializedView", "bqExternalTable", "bqRoutine", "bqDataset"];
 
     public async Task<BigQueryProperties> PropertiesAsync(BigQueryPropertiesArgs args, CancellationToken token)
     {
         var routine = args.Kind == "bqRoutine";
-        if (!Guid.TryParse(args.RequestId, out _) || !PropertyKinds.Contains(args.Kind) || !BqNames.IsProject(args.Project) || !BqNames.IsDataset(args.Dataset)
-            || !(routine ? BqNames.IsRoutine(args.Name) : BqNames.IsTable(args.Name)))
+        var dataset = args.Kind == "bqDataset";
+        var validName = dataset
+            ? args.Name == args.Dataset
+            : routine
+                ? BqNames.IsRoutine(args.Name)
+                : BqNames.IsTable(args.Name);
+        if (!Guid.TryParse(args.RequestId, out _) || !PropertyKinds.Contains(args.Kind) || !BqNames.IsProject(args.Project) || !BqNames.IsDataset(args.Dataset) || !validName)
             throw new RequestException("INVALID_PARAMS", "The object is invalid.");
         var connection = Find(args.ConnectionId) ?? throw new RequestException("NOT_CONNECTED", "The connection is no longer open.");
         var watch = Stopwatch.StartNew();
@@ -35,32 +40,28 @@ internal sealed partial class BigQueryService
         budget.CancelAfter(PreConnectLimit);
         try
         {
+            if (dataset)
+            {
+                var found = await MetadataAsync(connection, t => connection.Client.Service.Datasets.Get(args.Project, args.Dataset).ExecuteAsync(t), budget.Token);
+                return MapDataset(found, args.Dataset, args.Project + "." + args.Dataset, watch.ElapsedMilliseconds);
+            }
             var fullName = args.Project + "." + args.Dataset + "." + args.Name;
             if (routine)
             {
                 var found = await MetadataAsync(connection, t => connection.Client.Service.Routines.Get(args.Project, args.Dataset, args.Name).ExecuteAsync(t), budget.Token);
-                var (kind, facts) = RoutineFacts(found, fullName);
-                var (body, bodyCut) = Definition(found.DefinitionBody);
-                return new(
-                    Clip(args.Name, BigQueryPropertiesLimits.Name),
-                    kind,
-                    facts,
-                    Math.Clamp(watch.ElapsedMilliseconds, 0, BigQueryLimits.MaxSafeInteger),
-                    Definition: body,
-                    DefinitionCut: bodyCut,
-                    FullName: Clip(fullName, BigQueryPropertiesLimits.FullName),
-                    Description: string.IsNullOrEmpty(found.Description) ? null : Clip(found.Description, BigQueryPropertiesLimits.FactValue),
-                    CreatedUtc: Time(found.CreationTime),
-                    ModifiedUtc: Time(found.LastModifiedTime),
-                    DefinitionTruncated: bodyCut);
+                return MapRoutine(found, args.Name, fullName, watch.ElapsedMilliseconds);
             }
             var table = await MetadataAsync(connection, t => connection.Client.Service.Tables.Get(args.Project, args.Dataset, args.Name).ExecuteAsync(t), budget.Token);
             return MapTable(table, args.Name, fullName, watch.ElapsedMilliseconds);
         }
-        catch (Exception error) when (error is not RequestException { Code: "INVALID_PARAMS" }) { throw BigQueryErrors.Map(error, args.Project, routine ? "bigquery.routines.get" : "bigquery.tables.get", token: token); }
+        catch (Exception error) when (error is not RequestException { Code: "INVALID_PARAMS" })
+        {
+            var permission = dataset ? "bigquery.datasets.get" : routine ? "bigquery.routines.get" : "bigquery.tables.get";
+            throw BigQueryErrors.Map(error, args.Project, permission, token: token);
+        }
     }
 
-    static (string? Text, bool? Cut) Definition(string? text) => text is null ? (null, null) : text.Length <= MaxDefinition ? (text, null)
+    static (string? Text, bool? Cut) Definition(string? text) => string.IsNullOrWhiteSpace(text) ? (null, null) : text.Length <= MaxDefinition ? (text, null)
         : (text[..(char.IsHighSurrogate(text[MaxDefinition - 1]) ? MaxDefinition - 1 : MaxDefinition)], true);
 
     /// <summary>The columns and nested fields as the index flattens them (Search.BigQueryEntries.FromTable): path, type and description.</summary>
@@ -82,13 +83,36 @@ internal sealed partial class BigQueryService
         return (kept, kept.Count < columns.Count || detail.ColumnsCut ? true : null);
     }
 
-    /// <summary>A routine's facts: Routine (full name, type, language, signature, description) and History.</summary>
+    /// <summary>A routine's facts: Routine (full name, type, language, determinism, signature, description) and History.</summary>
     internal static (string Type, List<BigQueryFactGroup> Groups) RoutineFacts(Routine routine, string fullName)
+    {
+        var mapped = MapRoutine(routine, routine.RoutineReference?.RoutineId ?? fullName, fullName, 0);
+        return (mapped.Type, mapped.Groups);
+    }
+
+    internal static BigQueryProperties MapRoutine(Routine routine, string name, string fullName, long elapsedMs)
     {
         var type = routine.RoutineType switch
         {
-            "PROCEDURE" => "procedure", "TABLE_VALUED_FUNCTION" => "table function", "AGGREGATE_FUNCTION" => "aggregate function", _ => "function"
+            "PROCEDURE" => "procedure",
+            "TABLE_VALUED_FUNCTION" => "table function",
+            "AGGREGATE_FUNCTION" => "aggregate function",
+            _ => "function"
         };
+        var clippedName = Clip(name, BigQueryPropertiesLimits.Name);
+        var clippedFullName = string.IsNullOrEmpty(fullName) ? null : Clip(fullName, BigQueryPropertiesLimits.FullName);
+        var description = string.IsNullOrEmpty(routine.Description) ? null : Clip(routine.Description, BigQueryPropertiesLimits.FactValue);
+        var routineType = string.IsNullOrEmpty(routine.RoutineType) ? null : Clip(routine.RoutineType.ToUpperInvariant(), BigQueryPropertiesLimits.Type);
+        var language = FormatRoutineLanguage(routine.Language);
+        var determinism = FormatDeterminism(routine.DeterminismLevel);
+        var returnType = FormatRoutineReturnType(routine);
+        var rawSignature = Search.BigQueryEntries.FromRoutine(routine).Signature;
+        var signature = string.IsNullOrEmpty(rawSignature) ? null : Clip(rawSignature, BigQueryPropertiesLimits.FactValue);
+        var (arguments, argumentsTruncated) = MapRoutineArguments(routine.Arguments);
+        var createdUtc = Time(routine.CreationTime);
+        var modifiedUtc = Time(routine.LastModifiedTime);
+        var (body, bodyCut) = Definition(routine.DefinitionBody);
+
         var groups = new List<BigQueryFactGroup>();
         void Group(string title, params (string Label, string? Value)[] facts)
         {
@@ -96,15 +120,171 @@ internal sealed partial class BigQueryService
             if (kept.Count > 0) groups.Add(new(title, kept));
         }
         Group("Routine",
-            ("Full name", fullName),
+            ("Full name", clippedFullName),
             ("Type", type),
-            ("Language", routine.Language is { Length: > 0 } language ? language.ToUpperInvariant() switch { "SQL" => "SQL", "JAVASCRIPT" => "JavaScript", "PYTHON" => "Python", "JAVA" => "Java", "SCALA" => "Scala", _ => language } : null),
-            ("Signature", Search.BigQueryEntries.FromRoutine(routine).Signature),
-            ("Description", routine.Description));
+            ("Language", language),
+            ("Determinism", determinism),
+            ("Return type", returnType),
+            ("Signature", signature),
+            ("Description", description));
         Group("History",
-            ("Created", Time(routine.CreationTime)),
-            ("Last modified", Time(routine.LastModifiedTime)));
-        return (type, groups);
+            ("Created", createdUtc),
+            ("Last modified", modifiedUtc));
+
+        BigQueryRoutineInfo? routineInfo = routineType is not null || language is not null || determinism is not null || returnType is not null || signature is not null || arguments is not null
+            ? new(routineType, language, determinism, returnType, signature, arguments, argumentsTruncated)
+            : null;
+
+        return new(
+            clippedName,
+            type,
+            groups,
+            Math.Clamp(elapsedMs, 0, BigQueryLimits.MaxSafeInteger),
+            Definition: body,
+            DefinitionCut: bodyCut,
+            FullName: clippedFullName,
+            Description: description,
+            CreatedUtc: createdUtc,
+            ModifiedUtc: modifiedUtc,
+            DefinitionTruncated: bodyCut,
+            Routine: routineInfo);
+    }
+
+    internal static BigQueryProperties MapDataset(Dataset dataset, string name, string fullName, long elapsedMs)
+    {
+        var type = dataset.Type switch
+        {
+            null or "" or "DEFAULT" => "dataset",
+            var other => Clip(other, BigQueryPropertiesLimits.Type).Replace('_', ' ').ToLowerInvariant()
+        };
+        var clippedName = Clip(name, BigQueryPropertiesLimits.Name);
+        var clippedFullName = string.IsNullOrEmpty(fullName) ? null : Clip(fullName, BigQueryPropertiesLimits.FullName);
+        var location = string.IsNullOrEmpty(dataset.Location) ? null : Clip(dataset.Location, BigQueryPropertiesLimits.Location);
+        var description = string.IsNullOrEmpty(dataset.Description) ? null : Clip(dataset.Description, BigQueryPropertiesLimits.FactValue);
+        var labels = MapLabels(dataset.Labels);
+        var createdUtc = Time(dataset.CreationTime);
+        var modifiedUtc = Time(dataset.LastModifiedTime);
+
+        var friendlyName = string.IsNullOrEmpty(dataset.FriendlyName) ? null : Clip(dataset.FriendlyName, BigQueryPropertiesLimits.Name);
+        var defaultTableExpirationMs = dataset.DefaultTableExpirationMs is > 0 ? SafeCount(dataset.DefaultTableExpirationMs) : null;
+        var defaultPartitionExpirationMs = dataset.DefaultPartitionExpirationMs is > 0 ? SafeCount(dataset.DefaultPartitionExpirationMs) : null;
+        var kmsKeyName = string.IsNullOrEmpty(dataset.DefaultEncryptionConfiguration?.KmsKeyName)
+            ? null
+            : Clip(dataset.DefaultEncryptionConfiguration.KmsKeyName, BigQueryPropertiesLimits.KmsKeyName);
+        var defaultCollation = string.IsNullOrEmpty(dataset.DefaultCollation) ? null : Clip(dataset.DefaultCollation, BigQueryPropertiesLimits.Type);
+        var isCaseInsensitive = dataset.IsCaseInsensitive;
+        var maxTimeTravelHours = dataset.MaxTimeTravelHours is > 0 ? SafeCount(dataset.MaxTimeTravelHours) : null;
+        var storageBillingModel = string.IsNullOrEmpty(dataset.StorageBillingModel)
+            ? null
+            : Clip(dataset.StorageBillingModel.ToUpperInvariant(), BigQueryPropertiesLimits.Type);
+
+        BigQueryDatasetInfo? datasetInfo = friendlyName is not null || defaultTableExpirationMs is not null || defaultPartitionExpirationMs is not null
+            || kmsKeyName is not null || defaultCollation is not null || isCaseInsensitive is not null
+            || maxTimeTravelHours is not null || storageBillingModel is not null
+            ? new(friendlyName, defaultTableExpirationMs, defaultPartitionExpirationMs, kmsKeyName, defaultCollation, isCaseInsensitive, maxTimeTravelHours, storageBillingModel)
+            : null;
+
+        var groups = new List<BigQueryFactGroup>();
+        void Group(string title, params (string Label, string? Value)[] facts)
+        {
+            var kept = facts.Where(fact => !string.IsNullOrEmpty(fact.Value)).Select(fact => new BigQueryFact(fact.Label, Clip(fact.Value!, MaxFactValue))).ToList();
+            if (kept.Count > 0) groups.Add(new(title, kept));
+        }
+        Group("Dataset",
+            ("Full name", clippedFullName),
+            ("Location", location),
+            ("Friendly name", friendlyName),
+            ("Description", description),
+            ("Default table expiration", defaultTableExpirationMs is { } tableExp ? Days(tableExp) : null),
+            ("Default partition expiration", defaultPartitionExpirationMs is { } partExp ? Days(partExp) : null),
+            ("Encryption (KMS)", kmsKeyName),
+            ("Default collation", defaultCollation),
+            ("Case-insensitive", isCaseInsensitive == true ? "yes" : null),
+            ("Time travel window", maxTimeTravelHours is { } hours ? hours.ToString("N0", CultureInfo.InvariantCulture) + " hours" : null),
+            ("Storage billing model", storageBillingModel),
+            ("Labels", labels is { Count: > 0 } ? string.Join(", ", labels.Select(item => item.Key + ": " + item.Value)) : null));
+        Group("History",
+            ("Created", createdUtc),
+            ("Last modified", modifiedUtc));
+
+        return new(
+            clippedName,
+            type,
+            groups,
+            Math.Clamp(elapsedMs, 0, BigQueryLimits.MaxSafeInteger),
+            FullName: clippedFullName,
+            Location: location,
+            Description: description,
+            CreatedUtc: createdUtc,
+            ModifiedUtc: modifiedUtc,
+            Labels: labels,
+            Dataset: datasetInfo);
+    }
+
+    static string? FormatRoutineLanguage(string? language) => language is { Length: > 0 }
+        ? Clip(language.ToUpperInvariant() switch { "SQL" => "SQL", "JAVASCRIPT" => "JavaScript", "PYTHON" => "Python", "JAVA" => "Java", "SCALA" => "Scala", _ => language }, BigQueryPropertiesLimits.Type)
+        : null;
+
+    static string? FormatDeterminism(string? level) => level is { Length: > 0 } && !string.Equals(level, "DETERMINISM_LEVEL_UNSPECIFIED", StringComparison.OrdinalIgnoreCase)
+        ? Clip(level.ToUpperInvariant(), BigQueryPropertiesLimits.Type)
+        : null;
+
+    static string? FormatRoutineReturnType(Routine routine)
+    {
+        if (routine.ReturnType is { } scalar)
+            return Clip(FormatStandardSqlType(scalar, 0), BigQueryPropertiesLimits.RoutineTypeText);
+        if (routine.ReturnTableType is { } table)
+        {
+            if (table.Columns is { Count: > 0 } cols)
+            {
+                var parts = new List<string>(Math.Min(cols.Count, BigQueryPropertiesLimits.RoutineArguments));
+                foreach (var col in cols.Take(BigQueryPropertiesLimits.RoutineArguments))
+                {
+                    if (col is null) continue;
+                    var colType = col.Type is { } t ? FormatStandardSqlType(t, 0) : "?";
+                    parts.Add(string.IsNullOrEmpty(col.Name) ? colType : col.Name + " " + colType);
+                }
+                return Clip("TABLE<" + string.Join(", ", parts) + ">", BigQueryPropertiesLimits.RoutineTypeText);
+            }
+            return "TABLE";
+        }
+        return null;
+    }
+
+    static (List<BigQueryRoutineArgument>? Arguments, bool? Truncated) MapRoutineArguments(IList<Argument>? arguments)
+    {
+        if (arguments is not { Count: > 0 }) return (null, null);
+        var kept = new List<BigQueryRoutineArgument>(Math.Min(arguments.Count, BigQueryPropertiesLimits.RoutineArguments));
+        var truncated = false;
+        foreach (var argument in arguments)
+        {
+            if (argument is null) continue;
+            if (kept.Count >= BigQueryPropertiesLimits.RoutineArguments) { truncated = true; break; }
+            var argName = Clip(argument.Name ?? "", BigQueryPropertiesLimits.ColumnName);
+            var argType = argument.DataType is { } dataType
+                ? Clip(FormatStandardSqlType(dataType, 0), BigQueryPropertiesLimits.RoutineTypeText)
+                : string.Equals(argument.ArgumentKind, "ANY_TYPE", StringComparison.OrdinalIgnoreCase)
+                    ? "ANY TYPE"
+                    : null;
+            var mode = string.IsNullOrEmpty(argument.Mode) ? null : Clip(argument.Mode.ToUpperInvariant(), BigQueryPropertiesLimits.ColumnMode);
+            var kind = string.IsNullOrEmpty(argument.ArgumentKind) ? null : Clip(argument.ArgumentKind.ToUpperInvariant(), BigQueryPropertiesLimits.ColumnMode);
+            kept.Add(new(argName, argType, mode, kind));
+        }
+        return (kept.Count > 0 ? kept : null, truncated ? true : null);
+    }
+
+    static string FormatStandardSqlType(StandardSqlDataType type, int depth)
+    {
+        if (depth >= 8) return type.TypeKind ?? "?";
+        return type.TypeKind switch
+        {
+            "ARRAY" => "ARRAY<" + (type.ArrayElementType is { } element ? FormatStandardSqlType(element, depth + 1) : "?") + ">",
+            "STRUCT" => "STRUCT<" + string.Join(", ", (type.StructType?.Fields ?? []).Take(64).Select(field =>
+                (string.IsNullOrEmpty(field?.Name) ? "" : field.Name + " ") + (field?.Type is { } inner ? FormatStandardSqlType(inner, depth + 1) : "?"))) + ">",
+            "RANGE" => "RANGE<" + (type.RangeElementType is { } range ? FormatStandardSqlType(range, depth + 1) : "?") + ">",
+            null or "" => "?",
+            var kind => kind
+        };
     }
 
     internal static (string Type, List<BigQueryFactGroup> Groups) Facts(Table table, string fullName)

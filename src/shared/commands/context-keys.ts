@@ -197,7 +197,7 @@ export const contextKeys = {
   },
   ...scriptVerbKeys,
   explorerSelectionModifiable: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer node offers Modify: a T-SQL stored procedure, function, or trigger.' },
-  explorerSelectionPeekable: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer node is of a kind Peek describes (`peekKinds` in `src/shared/explorer/peek.ts`).' },
+  explorerSelectionPeekable: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer node is of a kind Peek describes (`peekKinds` in `src/shared/explorer/peek.ts` or `bigQueryPropertyKinds` in `src/shared/bigquery/objects.ts`).' },
   explorerSelectionDependencies: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer node offers View Dependencies (`dependencyKinds` in `src/shared/explorer/dependencies.ts`).' },
   explorerSelectionAgentRole: {
     type: 'enum', scope: 'state', values: ['', ...agentRoleValues],
@@ -220,7 +220,7 @@ export const contextKeys = {
     type: 'enum', scope: 'target', menu: 'explorer.context', values: ['', ...folderIds],
     description: "The id of the Object Explorer folder the menu is for, from `src/shared/explorer/catalog.ts` ('tables' offers New › Table…), or '' for anything else."
   },
-  explorerNodePeekable: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for an Object Explorer node of a kind Peek describes (`peekKinds` in `src/shared/explorer/peek.ts`).' },
+  explorerNodePeekable: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for an Object Explorer node of a kind Peek describes (`peekKinds` in `src/shared/explorer/peek.ts` or `bigQueryPropertyKinds` in `src/shared/bigquery/objects.ts`).' },
   explorerNodeDependencies: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for an Object Explorer node that offers View Dependencies (`dependencyKinds` in `src/shared/explorer/dependencies.ts`).' },
   explorerFolderInsertable: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for a Columns folder whose columns have all loaded, so Copy Name copies their list.' },
   explorerNodeNameless: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for an Object Explorer node other than a server or folder whose kind has no name to copy (its `insert` style is `none`, such as an Agent error log), so Copy Name is hidden.' },

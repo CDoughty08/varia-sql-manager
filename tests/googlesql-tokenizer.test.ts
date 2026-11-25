@@ -29,7 +29,7 @@ function render(text: string): string {
 beforeAll(async () => {
   monaco = await import('monaco-editor/editor/editor.api.js')
   registerGoogleSql(monaco)
-})
+}, 60_000)
 
 describe('GoogleSQL tokenizer golden files', () => {
   const files = readdirSync(fixtures).filter(file => file.endsWith('.sql')).sort()

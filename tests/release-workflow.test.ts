@@ -34,7 +34,7 @@ describe('Release builds', () => {
     expect(triggers(release)).toMatch(/\n {2}push:\n {4}branches: \[main\]\n {4}tags: \['v\*'\]\n {2}schedule:\n {4}- cron: '[^']+'\n {2}workflow_dispatch:/)
     // Everything electron-builder, the fuses and the packaged smoke tests read, and nothing every pull request touches:
     // the smoke selectors (scripts/fixtures/ui.mjs) and main's index changed in a third of recent pull requests.
-    for (const path of ['.github/workflows/release.yml', '.github/workflows/package.yml', 'electron-builder.yml', 'build/**', 'package-lock.json', 'scripts/packaged-smoke.mjs', 'scripts/packaged-contents.mjs', 'scripts/portable-smoke.mjs', 'scripts/windows-installer-smoke.ps1', 'scripts/update-manifest.mjs', 'src/main/app-protocol.ts', 'src/main/backend/spawn-spec.ts', 'src/main/update-install.ts', 'src/main/update-staging.ts', 'backend/Varia.Updater/**', 'scripts/appimage-check.mjs']) expect(releasePaths).toContain(path)
+    for (const path of ['.github/workflows/release.yml', '.github/workflows/package.yml', 'electron-builder.yml', 'build/**', 'package-lock.json', 'scripts/packaged-smoke.mjs', 'scripts/packaged-contents.mjs', 'scripts/package-prepare.mjs', 'scripts/portable-smoke.mjs', 'scripts/windows-installer-smoke.ps1', 'scripts/update-manifest.mjs', 'src/main/app-protocol.ts', 'src/main/backend/spawn-spec.ts', 'src/main/update-install.ts', 'src/main/update-staging.ts', 'backend/Varia.Updater/**', 'scripts/appimage-check.mjs']) expect(releasePaths).toContain(path)
     expect(releasePaths).toContain('src/main/backend/sqltools-runtime.ts')
     expect(releasePaths).toContain('scripts/prepare-electron.mjs')
     for (const path of releasePaths) expect(path, path).not.toMatch(/^(src\/\*\*|src\/main\/index\.ts|scripts\/fixtures|package\.json|tests\/)/)
@@ -50,37 +50,46 @@ describe('Release builds', () => {
     expect(publish).toContain("if: ${{ !cancelled() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && needs.build.result == 'success' && needs.build-intel.result == 'success' }}")
     expect(publish).toContain('needs: [build, build-intel]')
   })
-  it('adds at most three jobs and one macOS job to a pull request push, and packages Intel macOS only for tags, manual runs and weekly', () => {
+  it('adds at most three jobs and one macOS job to a pull request push, and cross-builds Intel macOS on arm64 for tags, manual runs and weekly', () => {
     const matrix = release.slice(release.indexOf('  build:\n'), release.indexOf('  build-intel:\n'))
     const runners = [...matrix.matchAll(/- runner: (\S+)/g)].map(match => match[1])
     expect(runners.length).toBeLessThanOrEqual(3)
     expect(runners.filter(runner => runner.startsWith('macos')).length).toBeLessThanOrEqual(1)
     expect(runners).not.toContain('macos-15-intel')
     const intel = release.slice(release.indexOf('  build-intel:\n'), release.indexOf('  release:\n'))
-    expect(intel).toMatch(/runner: macos-15-intel/)
+    expect(intel).toMatch(/runner: macos-15\n/)
+    expect(intel).toMatch(/rid: osx-x64\n/)
     // Weekly, so an x64-only break (an Electron or runner image change) shows before the tag it would block; the other
     // packages, which every main push builds, skip that run.
     expect(intel).toMatch(/\n {4}if: startsWith\(github\.ref, 'refs\/tags\/'\) \|\| github\.event_name == 'workflow_dispatch' \|\| github\.event_name == 'schedule'\n/)
     expect(matrix).toMatch(/\n {4}if: github\.event_name != 'schedule'\n/)
     expect(release).toMatch(/needs: \[build, build-intel\]/)
   })
-  it('keeps the packaged checks, and leaves out the work CI already did or nobody uses', () => {
+  it('keeps the packaged checks, caches NuGet, and skips only unused non-tag archive compression and macOS DMG/ZIP', () => {
     // Each packaged check runs on every packaging run: a condition on the ref or the event would quietly drop it before tags.
     const steps = pack.slice(pack.indexOf('\n    steps:\n')).split(/\n {6}- /).slice(1)
-    for (const marker of ['scripts/packaged-smoke.mjs', 'scripts/portable-smoke.mjs', 'windows-installer-smoke.ps1', 'scripts/update-manifest.mjs dist', 'Check release assets', 'Package application', 'Publish self-contained backend', 'Publish update helper', 'Prepare pinned SQL Tools Service']) {
+    for (const marker of ['scripts/packaged-smoke.mjs', 'scripts/portable-smoke.mjs', 'windows-installer-smoke.ps1', 'Check release assets', 'Package application', 'scripts/package-prepare.mjs']) {
       const step = steps.find(candidate => candidate.includes(marker))
       expect(step, marker).toBeDefined()
       expect(/\n {8}if: (.*)/.exec(step!)?.[1] ?? '', marker).not.toMatch(/github\.ref|github\.event_name/)
     }
+    expect(pack).toContain('cache: true\n          cache-dependency-path: backend/Varia.Backend/packages.lock.json')
+    expect(pack).toContain('VARIA_PACKAGED_RID: ${{ inputs.rid }}')
+    expect(pack).toContain('--config.compression=store')
+    expect(pack).toContain('--mac dir --arm64')
     expect(pack).toMatch(/- name: Type check\n {8}if: startsWith\(github\.ref, 'refs\/tags\/'\)\n/)
     expect(pack).toMatch(/- name: Upload release assets\n {8}if: startsWith\(github\.ref, 'refs\/tags\/'\) \|\| github\.event_name == 'workflow_dispatch'\n/)
   })
   // The installed Windows build updates by unpacking the release's archive with the helper in its resources: a release
   // without either, or a helper built after packaging, would leave every copy on the installer.
   it('publishes the update helper before packaging, and releases the Windows archive with the installers', () => {
-    expect(pack.indexOf('- name: Publish update helper')).toBeGreaterThan(-1)
-    expect(pack.indexOf('- name: Publish update helper')).toBeLessThan(pack.indexOf('- name: Package application'))
-    expect(pack).toMatch(/dotnet publish backend\/Varia\.Updater\/Varia\.Updater\.csproj -c Release -r \$\{\{ inputs\.rid \}\} -o artifacts\/updater\n/)
+    const prepareScript = readFileSync('scripts/package-prepare.mjs', 'utf8')
+    expect(pack.indexOf('scripts/package-prepare.mjs')).toBeGreaterThan(-1)
+    expect(pack.indexOf('scripts/package-prepare.mjs')).toBeLessThan(pack.indexOf('- name: Package application'))
+    expect(pack).toContain("node scripts/package-prepare.mjs --rid ${{ inputs.rid }} ${{ runner.os == 'Windows' && '--updater' || '' }}")
+    expect(prepareScript).toContain('dotnet publish backend/Varia.Backend/Varia.Backend.csproj -c Release -r ${rid} --self-contained true -p:RestoreLockedMode=true -o artifacts/release-backend')
+    expect(prepareScript).toContain('dotnet publish backend/Varia.Updater/Varia.Updater.csproj -c Release -r ${rid} -o artifacts/updater')
+    expect(prepareScript).toContain('npm run sqltools:prepare -- --rid ${rid}')
     expect(pack).toContain('"dist/Varia-SQL-Manager-$version-win-x64.zip", "dist/win-unpacked/resources/updater/Varia.Updater.exe"')
     const windows = release.slice(release.indexOf('rid: win-x64'), release.indexOf('- runner: ubuntu'))
     expect(windows).toMatch(/target: --win nsis portable zip --x64\n/)

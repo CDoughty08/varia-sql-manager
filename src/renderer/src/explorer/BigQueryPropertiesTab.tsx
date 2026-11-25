@@ -1,22 +1,26 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState,
+  type CSSProperties, type KeyboardEvent, type ReactNode, type Ref
+} from 'react'
 import { formatBytes } from '../../../shared/bigquery/cost'
 import { bigQueryMaxDefinition, type BigQueryLabel, type BigQueryProperties } from '../../../shared/bigquery/objects'
 import { maxClipboardText } from '../../../shared/contracts'
-import { displayText, insertTextFor } from '../../../shared/explorer/refs'
+import { displayText, insertTextFor, type ObjectRef } from '../../../shared/explorer/refs'
 import { onUnexpectedError } from '../core/errors'
 import type { CommandArgs } from '../core/types'
 import { requestFrame } from '../core/windows'
 import { useServiceSelector, useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { createQueryEditor, type QueryEditorInstance } from '../editor/create-editor'
-import { LocalGrid } from '../grid/LocalGrid'
+import { LocalGrid, type LocalGridPreset } from '../grid/LocalGrid'
 import ResultsStack from '../grid/ResultsStack'
 import Icon from '../Icon'
 import CapabilityChips from '../kit/CapabilityChips'
-import type { Verb } from '../kit/DocumentFrame'
+import type { HeaderVerb, Verb } from '../kit/DocumentFrame'
 import EmptyState from '../kit/EmptyState'
 import FactGrid from '../kit/FactGrid'
 import InlineError from '../kit/InlineError'
-import ObjectInspectorFrame, { type InspectorTab } from '../kit/ObjectInspectorFrame'
+import ObjectInspectorFrame, { ObjectInspectorFrameView, type InspectorTab } from '../kit/ObjectInspectorFrame'
+import type { InspectorSurface } from '../kit/object-inspector'
 import RatioBar from '../kit/RatioBar'
 import Skeleton from '../kit/Skeleton'
 import StatusPill from '../kit/StatusPill'
@@ -30,8 +34,9 @@ import { settingsDocumentOptions } from '../services/documents'
 import {
   allStructPaths, bigQueryCapabilities, bigQueryHeaderPills, bigQueryKpis, bigQueryLifecycleFacts,
   bigQueryOverviewFacts, bigQueryStorageFacts, bigQueryVitalsStorageFacts, countSchemaStats, flatColumnsToLocalTable,
-  flattenSchemaRows, formatBigQuerySubtitle, hasColumnsTab, hasStorageOrLayout, schemaRowsToLocalTable,
-  storageRatioSegments, supportsPreviewTab, type BigQueryPropertiesTabId
+  flattenSchemaRows, formatBigQuerySubtitle, hasColumnsTab, hasDefinitionTab, hasParametersTab, hasStorageOrLayout,
+  routineArgumentsToLocalTable, schemaRowsToLocalTable, storageRatioSegments, supportsPreviewTab,
+  type BigQueryPropertiesTabId
 } from './bigquery-properties-format'
 import type { BigQueryPropertiesView } from './BigQueryPropertiesService'
 import { selectionContextOf } from './ExplorerService'
@@ -39,26 +44,26 @@ import { editorIdAttribute, peekEditorAttribute, peekEditorContextKey } from './
 
 const copiedResetMs = 1500
 
-const readOnlyGoogleSqlUse = {
+const readOnlyGoogleSqlUse = (inEditorPane: boolean) => ({
   readOnly: { message: 'BigQuery Properties is read-only. Open in New Query to edit or run this SQL.' },
   compact: true,
   ariaLabel: 'Definition SQL',
   contextKey: peekEditorContextKey,
-  inEditorPane: true,
+  inEditorPane,
   widgetHostAttribute: peekEditorAttribute
-} as const
+} as const)
 
 /** Read-only Monaco GoogleSQL editor mounted edge-to-edge inside a fill pane. */
-function GoogleSqlReadOnlyEditor({ text }: { readonly text: string }) {
+function GoogleSqlReadOnlyEditor({ text, inEditorPane = true }: { readonly text: string; readonly inEditorPane?: boolean }) {
   const workbench = useWorkbench()
   const slotRef = useRef<HTMLDivElement>(null)
-  const hostRef = useRef<{ readonly element: HTMLElement; readonly editor: QueryEditorInstance; readonly ownerDoc: Document } | undefined>(undefined)
+  const hostRef = useRef<{ readonly element: HTMLElement; readonly editor: QueryEditorInstance; readonly ownerDoc: Document; readonly inEditorPane: boolean } | undefined>(undefined)
   const modelRef = useRef<{ readonly text: string; readonly model: import('monaco-editor').editor.ITextModel } | undefined>(undefined)
 
   useLayoutEffect(() => {
     const slot = slotRef.current
-    if (!slot) return
-    if (hostRef.current && hostRef.current.ownerDoc !== slot.ownerDocument) {
+    if (!slot || !workbench.monaco) return
+    if (hostRef.current && (hostRef.current.ownerDoc !== slot.ownerDocument || hostRef.current.inEditorPane !== inEditorPane)) {
       hostRef.current.editor.dispose()
       hostRef.current.element.remove()
       hostRef.current = undefined
@@ -70,9 +75,9 @@ function GoogleSqlReadOnlyEditor({ text }: { readonly text: string }) {
       element.setAttribute(peekEditorAttribute, '')
       slot.append(element)
       try {
-        const editor = createQueryEditor(workbench, element, readOnlyGoogleSqlUse)
+        const editor = createQueryEditor(workbench, element, readOnlyGoogleSqlUse(inEditorPane))
         element.setAttribute(editorIdAttribute, editor.instance.getId())
-        host = hostRef.current = { element, editor, ownerDoc: slot.ownerDocument }
+        host = hostRef.current = { element, editor, ownerDoc: slot.ownerDocument, inEditorPane }
       } catch (error) {
         element.remove()
         onUnexpectedError(error)
@@ -102,7 +107,7 @@ function GoogleSqlReadOnlyEditor({ text }: { readonly text: string }) {
       model?.dispose()
       onUnexpectedError(error)
     }
-  }, [text, workbench])
+  }, [text, workbench, inEditorPane])
 
   useEffect(() => () => {
     const host = hostRef.current
@@ -155,7 +160,19 @@ function useCopyFeedback() {
   return { copiedId, announcement, copy }
 }
 
-function OverviewPane({ view }: { readonly view: BigQueryPropertiesView }) {
+export interface BigQueryInspectorController {
+  readonly view: BigQueryPropertiesView
+  readonly selectTab: (tab: BigQueryPropertiesTabId) => void
+  readonly refresh: () => void
+  readonly canLoadDdl: () => boolean
+  readonly loadDdl: () => void
+  readonly cancelDdl: () => void
+  readonly reloadPreview: () => void
+  readonly cancelPreview: () => void
+  readonly onFollow?: (target: ObjectRef, label: string) => void
+}
+
+function OverviewPane({ view, onFollow }: { readonly view: BigQueryPropertiesView; readonly onFollow?: (target: ObjectRef, label: string) => void }) {
   const idBase = useId()
   const { value } = view
   if (!value) {
@@ -165,7 +182,8 @@ function OverviewPane({ view }: { readonly view: BigQueryPropertiesView }) {
   const hasStructured = value.fullName !== undefined || value.location !== undefined || value.createdUtc !== undefined
     || value.modifiedUtc !== undefined || value.storage !== undefined || value.layout !== undefined || value.schema !== undefined
     || value.labels !== undefined || value.definition !== undefined || value.description !== undefined
-  const overviewFacts = bigQueryOverviewFacts(view, value)
+    || value.routine !== undefined || value.dataset !== undefined
+  const overviewFacts = bigQueryOverviewFacts(view, value, onFollow)
   const capabilities = bigQueryCapabilities(view.kind, value, view.subtype)
   const legacyGroups = !hasStructured ? value.groups : []
 
@@ -196,13 +214,15 @@ function OverviewPane({ view }: { readonly view: BigQueryPropertiesView }) {
   </div>
 }
 
-function DefinitionPane({ documentId, view, connection, live }: {
-  readonly documentId: string
-  readonly view: BigQueryPropertiesView
+function DefinitionPane({ controller, connection, live, inEditorPane, beforeOpenQuery }: {
+  readonly controller: BigQueryInspectorController
   readonly connection: LiveConnection | undefined
   readonly live: boolean
+  readonly inEditorPane: boolean
+  readonly beforeOpenQuery?: () => void
 }) {
-  const { bigQueryProperties, documents } = useWorkbench()
+  const { documents } = useWorkbench()
+  const { view } = controller
   const { copiedId, announcement, copy } = useCopyFeedback()
   const freeSql = view.value?.definition
   const ddl = view.ddl
@@ -213,6 +233,7 @@ function DefinitionPane({ documentId, view, connection, live }: {
 
   const openInNewQuery = () => {
     if (!sqlText || !live) return
+    beforeOpenQuery?.()
     const dataset = view.project === connection?.server ? view.dataset : (connection?.database ?? '')
     documents.newQuery(sqlText, undefined, view.connectionId, dataset, false)
     requestFrame(() => documents.boundEditor?.focus())
@@ -220,12 +241,16 @@ function DefinitionPane({ documentId, view, connection, live }: {
 
   const metadataPending = !view.value && view.loading
   const metadataFailed = !view.value && !!view.error
+  const isRoutine = view.kind === 'bqRoutine'
   const sourceLabel = freeSql !== undefined
-    ? 'Free · tables.get'
+    ? (isRoutine ? 'Free · routines.get' : 'Free · tables.get')
     : metadataPending
       ? 'Loading metadata…'
-      : 'On-demand · INFORMATION_SCHEMA.TABLES'
+      : (isRoutine ? 'On-demand · INFORMATION_SCHEMA.ROUTINES' : 'On-demand · INFORMATION_SCHEMA.TABLES')
   const titleLabel = freeSql !== undefined ? 'GoogleSQL Definition' : 'GoogleSQL DDL'
+  const emptyDetail = isRoutine
+    ? "This routine has no stored body in routines.get. BigQuery bills INFORMATION_SCHEMA.ROUTINES to read a routine's CREATE statement (typically at the 10 MiB minimum). Varia runs a free dry-run estimate first and applies your cost prompts before running."
+    : "BigQuery bills INFORMATION_SCHEMA.TABLES to read a table's CREATE statement (typically at the 10 MiB minimum). Varia runs a free dry-run estimate first and applies your cost prompts before running."
 
   return <>
     <div className="bq-props-fill-toolbar">
@@ -258,7 +283,7 @@ function DefinitionPane({ documentId, view, connection, live }: {
     </div>}
 
     {sqlText !== undefined
-      ? <GoogleSqlReadOnlyEditor text={sqlText} />
+      ? <GoogleSqlReadOnlyEditor text={sqlText} inEditorPane={inEditorPane} />
       : metadataPending
         ? <div className="bq-props-center" role="status">
           <p className="bq-props-loading-row"><Icon name="loading" spin /><span>Loading object metadata…</span></p>
@@ -266,26 +291,26 @@ function DefinitionPane({ documentId, view, connection, live }: {
         : metadataFailed
           ? <div className="bq-props-center">
             <InlineError message={view.error!} context={`Properties - ${view.project}.${view.dataset}.${view.name}`}
-              actions={live ? [{ label: 'Retry', run: () => { void bigQueryProperties.refresh(documentId) } }] : []} />
+              actions={live ? [{ label: 'Retry', run: () => controller.refresh() }] : []} />
           </div>
           : ddl?.status === 'loading'
             ? <div className="bq-props-center" role="status">
               <p className="bq-props-loading-row"><Icon name="loading" spin /><span>{ddl.phase === 'estimating' ? 'Estimating CREATE statement query…' : 'Loading CREATE statement…'}</span></p>
-              <button type="button" className="bq-props-tool-btn outline" onClick={() => bigQueryProperties.cancelDdl(documentId)}>Cancel</button>
+              <button type="button" className="bq-props-tool-btn outline" onClick={() => controller.cancelDdl()}>Cancel</button>
             </div>
             : ddl?.status === 'error'
               ? <div className="bq-props-center">
                 <InlineError message={ddl.message} context={`Load DDL - ${view.project}.${view.dataset}.${view.name}`}
-                  actions={live ? [{ label: 'Retry', run: () => { void bigQueryProperties.loadDdl(documentId) } }] : []} />
+                  actions={live ? [{ label: 'Retry', run: () => controller.loadDdl() }] : []} />
               </div>
               : <div className="bq-props-center">
                 <EmptyState icon="file-code" title="Load CREATE statement on demand"
-                  detail="BigQuery bills INFORMATION_SCHEMA.TABLES to read a table's CREATE statement (typically at the 10 MiB minimum). Varia runs a free dry-run estimate first and applies your cost prompts before running."
+                  detail={emptyDetail}
                   actions={[{
                     label: 'Load DDL',
                     primary: true,
-                    disabled: !bigQueryProperties.canLoadDdl(documentId),
-                    run: () => { void bigQueryProperties.loadDdl(documentId) }
+                    disabled: !controller.canLoadDdl(),
+                    run: () => controller.loadDdl()
                   }]} />
               </div>}
   </>
@@ -306,7 +331,7 @@ function StoragePane({ value }: { readonly value: BigQueryProperties }) {
   </div>
 }
 
-function ColumnsPane({ view, value }: { readonly view: BigQueryPropertiesView; readonly value: BigQueryProperties }) {
+function ColumnsPane({ view, value, preset }: { readonly view: BigQueryPropertiesView; readonly value: BigQueryProperties; readonly preset: LocalGridPreset }) {
   const [filter, setFilter] = useState('')
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set())
   const [activePath, setActivePath] = useState<string | undefined>(undefined)
@@ -388,9 +413,38 @@ function ColumnsPane({ view, value }: { readonly view: BigQueryPropertiesView; r
       <span>Some deeply nested fields or columns past the display limit were omitted.</span>
     </div>}
 
-    <LocalGrid table={table} label="Columns" preset="page" empty={filtering ? 'No columns match the filter.' : 'This object has no columns.'}
+    <LocalGrid table={table} label="Columns" preset={preset} fill={preset === 'card'} empty={filtering ? 'No columns match the filter.' : 'This object has no columns.'}
       suggestedName={`${view.name} Columns`} sortable={structPaths.length === 0} state={gridState}
       onActiveRow={handleActiveRow} onActivateRow={handleActivateRow} />
+  </>
+}
+
+function ParametersPane({ view, value, preset }: { readonly view: BigQueryPropertiesView; readonly value: BigQueryProperties; readonly preset: LocalGridPreset }) {
+  const [filter, setFilter] = useState('')
+  const gridState = useMemo<GridViewState>(() => ({ topRow: 0, virtualTop: 0, scrollLeft: 0, sized: false }), [])
+  const args = value.routine?.arguments ?? []
+  const filtering = filter.trim().length > 0
+  const table = useMemo(() => routineArgumentsToLocalTable(args, filter), [args, filter])
+  const countText = filtering
+    ? `${formatCount(table.rows.length)} shown`
+    : `${formatCount(args.length)}${value.routine?.argumentsTruncated ? '+' : ''} ${plural(args.length, 'parameter')}`
+
+  return <>
+    <div className="bq-props-fill-toolbar">
+      <div className="bq-props-search">
+        <Icon name="search" />
+        <input type="search" aria-label="Filter parameters" placeholder="Filter parameters or types…" value={filter} onChange={event => setFilter(event.target.value)} />
+      </div>
+      <span className="bq-props-toolbar-meta">{countText}</span>
+    </div>
+
+    {value.routine?.argumentsTruncated && <div className="bq-props-notice" role="status">
+      <Icon name="info" />
+      <span>Additional parameters past the display limit were omitted.</span>
+    </div>}
+
+    <LocalGrid table={table} label="Parameters" preset={preset} fill={preset === 'card'} empty={filtering ? 'No parameters match the filter.' : 'This routine has no parameters.'}
+      suggestedName={`${view.name} Parameters`} sortable state={gridState} />
   </>
 }
 
@@ -426,8 +480,9 @@ function LabelsPane({ labels }: { readonly labels: readonly BigQueryLabel[] }) {
   </div>
 }
 
-function PreviewPane({ documentId, view, live }: { readonly documentId: string; readonly view: BigQueryPropertiesView; readonly live: boolean }) {
-  const { bigQueryProperties, results } = useWorkbench()
+function PreviewPane({ controller, live }: { readonly controller: BigQueryInspectorController; readonly live: boolean }) {
+  const { results } = useWorkbench()
+  const { view } = controller
   const preview = view.preview
   const key = preview?.status === 'ready' ? preview.key : undefined
   const tab = useServiceSelector(results, all => key === undefined ? undefined : all[key])
@@ -438,7 +493,7 @@ function PreviewPane({ documentId, view, live }: { readonly documentId: string; 
       <StatusPill tone="success" size="small" icon={null} label="Free · tabledata.list (0 B billed)" />
       <span className="bq-props-toolbar-spacer" />
       <button type="button" className="bq-props-tool-btn" disabled={!live || preview?.status === 'loading'}
-        onClick={() => { void bigQueryProperties.reloadPreview(documentId) }}>
+        onClick={() => controller.reloadPreview()}>
         <Icon name="refresh" />
         <span>Reload</span>
       </button>
@@ -447,12 +502,12 @@ function PreviewPane({ documentId, view, live }: { readonly documentId: string; 
     {!preview || preview.status === 'loading'
       ? <div className="bq-props-center" role="status">
         <p className="bq-props-loading-row"><Icon name="loading" spin /><span>Reading preview rows via tabledata.list…</span></p>
-        {preview?.status === 'loading' && <button type="button" className="bq-props-tool-btn outline" onClick={() => bigQueryProperties.cancelPreview(documentId)}>Cancel</button>}
+        {preview?.status === 'loading' && <button type="button" className="bq-props-tool-btn outline" onClick={() => controller.cancelPreview()}>Cancel</button>}
       </div>
       : preview.status === 'error'
         ? <div className="bq-props-center">
           <InlineError message={preview.message} context={`Preview Rows - ${view.project}.${view.dataset}.${view.name}`}
-            actions={live ? [{ label: 'Retry', run: () => { void bigQueryProperties.reloadPreview(documentId) } }] : []} />
+            actions={live ? [{ label: 'Retry', run: () => controller.reloadPreview() }] : []} />
         </div>
         : !tab?.sets.length
           ? <div className="bq-props-center"><p className="bq-props-muted">Preview rows are no longer available.</p></div>
@@ -463,10 +518,11 @@ function PreviewPane({ documentId, view, live }: { readonly documentId: string; 
   </>
 }
 
-function VitalsRail({ value }: { readonly value: BigQueryProperties }) {
+function VitalsRail({ kind, value }: { readonly kind: BigQueryPropertiesView['kind']; readonly value: BigQueryProperties }) {
   const ratio = storageRatioSegments(value.storage)
   const storageFacts = bigQueryVitalsStorageFacts(value)
   const lifecycleFacts = bigQueryLifecycleFacts(value)
+  const detailsTitle = kind === 'bqRoutine' ? 'Routine' : kind === 'bqDataset' ? 'Dataset' : 'Storage & Layout'
   return <>
     {ratio.length > 0 && value.storage?.logicalBytes !== undefined && (
       <div className="vitals-block">
@@ -476,7 +532,7 @@ function VitalsRail({ value }: { readonly value: BigQueryProperties }) {
     )}
     {storageFacts.length > 0 && (
       <div className="vitals-block">
-        <h3 className="vitals-block-title">Storage &amp; Layout</h3>
+        <h3 className="vitals-block-title">{detailsTitle}</h3>
         <FactGrid compact facts={storageFacts} />
       </div>
     )}
@@ -491,7 +547,16 @@ function VitalsRail({ value }: { readonly value: BigQueryProperties }) {
 
 function explorerNodeFor(view: BigQueryPropertiesView, live: boolean): ExplorerMenuNode {
   const rawType = view.value?.type?.trim().toLowerCase()
-  const subtype = view.subtype ?? (rawType === 'snapshot' ? 'snapshot' : rawType === 'clone' ? 'clone' : undefined)
+  const subtype = view.subtype ?? (
+    rawType === 'snapshot' ? 'snapshot'
+      : rawType === 'clone' ? 'clone'
+        : view.kind === 'bqRoutine' && rawType === 'procedure' ? 'procedure'
+          : view.kind === 'bqRoutine' && rawType === 'table function' ? 'tableValued'
+            : undefined
+  )
+  const object: ObjectRef = view.kind === 'bqDataset'
+    ? { kind: 'bqDataset', project: view.project, name: view.name }
+    : { kind: view.kind, project: view.project, dataset: view.dataset, name: view.name }
   return {
     id: 0,
     connectionId: view.connectionId,
@@ -500,29 +565,47 @@ function explorerNodeFor(view: BigQueryPropertiesView, live: boolean): ExplorerM
     kind: view.kind,
     ...(subtype ? { subtype } : {}),
     label: view.name,
-    ref: { type: 'object', object: { kind: view.kind, project: view.project, dataset: view.dataset, name: view.name } }
+    ref: { type: 'object', object }
   }
 }
 
-/**
- * BigQuery's Properties tab (OP-2b): unified `ObjectInspectorFrame` (`surface="full"`) presenting structured
- * `tables.get` metadata across canonical tabs (Overview, Definition, Storage & Layout, Columns, Labels, Preview Rows),
- * Hero KPIs, and a collapsible/resizable Vitals rail. Zero billed SQL runs automatically.
- */
-export default function BigQueryPropertiesTab({ documentId }: { readonly documentId: string }) {
-  const { bigQueryProperties, connections } = useWorkbench()
-  const view = useServiceSnapshot(bigQueryProperties).views[documentId]
-  const connectionList = useServiceSnapshot(connections)
-  if (!view) return null
+export interface BigQueryInspectorBodyProps {
+  readonly controller: BigQueryInspectorController
+  readonly idPrefix: string
+  readonly surface: InspectorSurface
+  readonly tools?: ReactNode
+  readonly extraVerbs?: readonly HeaderVerb[]
+  readonly beforeScript?: () => void
+  readonly attributes?: Readonly<Record<`data-${string}`, string>>
+  readonly className?: string
+  readonly style?: CSSProperties
+  readonly role?: 'region' | 'dialog'
+  readonly ariaLabel?: string
+  readonly ariaModal?: boolean
+  readonly tabIndex?: number
+  readonly onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void
+  readonly rootRef?: Ref<HTMLDivElement>
+}
 
+/**
+ * Shared BigQuery inspector body rendered by both `BigQueryPropertiesTab` (`surface="full"`) and floating
+ * `PeekCard` (`surface="peek"`). Zero billed SQL runs automatically.
+ */
+export function BigQueryInspectorBody({
+  controller, idPrefix, surface, tools, extraVerbs, beforeScript, attributes, className, style,
+  role, ariaLabel, ariaModal, tabIndex, onKeyDown, rootRef
+}: BigQueryInspectorBodyProps) {
+  const workbench = useWorkbench()
+  const connectionList = useServiceSnapshot(workbench.connections)
+  const { view } = controller
   const connection = connectionList.find(item => item.id === view.connectionId)
   const live = isLiveConnection(connection)
   const value = view.value
-  const crumbs = [
-    { label: connection?.displayName || connection?.server || 'Not connected' },
-    { label: view.project },
-    { label: view.dataset }
-  ]
+  const crumbs = surface === 'full'
+    ? (view.kind === 'bqDataset'
+      ? [{ label: connection?.displayName || connection?.server || 'Not connected' }, { label: view.project }]
+      : [{ label: connection?.displayName || connection?.server || 'Not connected' }, { label: view.project }, { label: view.dataset }])
+    : undefined
   const subtitle = formatBigQuerySubtitle(view.kind, value?.type, view.subtype)
   const pills = bigQueryHeaderPills(view.kind, value, view.subtype)
   const state = <span className="bq-props-pills">
@@ -535,31 +618,50 @@ export default function BigQueryPropertiesTab({ documentId }: { readonly documen
     target: { kind: 'explorer', node },
     state: selectionContextOf(live ? node : undefined, { insertable: insertTextFor(node.ref) !== undefined })
   }
-  const verbs: Verb[] = [{ command: 'explorer.scriptAs', args: scriptArgs, label: 'Script As…' }]
-  const refreshTool = (
-    <button type="button" className="document-verb" aria-label="Refresh" title="Refresh" disabled={!live || view.loading}
-      onClick={() => { void bigQueryProperties.refresh(documentId) }}>
-      <Icon name="refresh" spin={view.loading} />
-      <span className="document-verb-label">Refresh</span>
-    </button>
-  )
+  const verbs: Verb[] | undefined = surface === 'full' && view.kind !== 'bqDataset'
+    ? [{ command: 'explorer.scriptAs', args: scriptArgs, label: 'Script As…' }]
+    : undefined
+  const leadingVerbs: HeaderVerb[] | undefined = surface === 'full' ? [{
+    key: 'refresh',
+    label: 'Refresh',
+    title: 'Refresh',
+    icon: 'refresh',
+    disabled: !live || view.loading,
+    run: () => controller.refresh()
+  }] : undefined
 
-  const kpis = bigQueryKpis(value)
+  const kpis = surface === 'full' ? bigQueryKpis(value) : []
   const schemaStats = countSchemaStats(value?.schema)
   const columnCount = value?.schema?.length ? schemaStats.topLevel : value?.columns?.length
+  const paramCount = value?.routine?.arguments?.length
   const labelCount = value?.labels?.length ?? 0
+  const gridPreset: LocalGridPreset = surface === 'full' ? 'page' : 'card'
+  const objectKey = `${view.connectionId}:${view.kind}:${view.project}:${view.dataset}:${view.name}`
 
   const tabs: InspectorTab[] = [
-    { id: 'overview', title: 'Overview', layout: 'flow', content: <OverviewPane view={view} /> },
-    { id: 'definition', title: 'Definition', layout: 'fill', content: <DefinitionPane documentId={documentId} view={view} connection={connection} live={live} /> },
-    ...value && hasStorageOrLayout(value) ? [{ id: 'storage', title: 'Storage & Layout', layout: 'flow' as const, content: <StoragePane value={value} /> }] : [],
+    { id: 'overview', title: 'Overview', layout: 'flow', content: <OverviewPane key={objectKey} view={view} onFollow={live ? controller.onFollow : undefined} /> },
+    ...hasDefinitionTab(view.kind) ? [{
+      id: 'definition',
+      title: 'Definition',
+      layout: 'fill' as const,
+      content: <DefinitionPane key={objectKey} controller={controller} connection={connection} live={live} inEditorPane={surface === 'full'} beforeOpenQuery={beforeScript} />
+    }] : [],
+    ...value && hasStorageOrLayout(value) ? [{ id: 'storage', title: 'Storage & Layout', layout: 'flow' as const, content: <StoragePane key={objectKey} value={value} /> }] : [],
     ...value && hasColumnsTab(value) ? [{
       id: 'columns',
       title: 'Columns',
       layout: 'fill' as const,
       count: columnCount,
       countLabel: columnCount !== undefined ? `${formatCount(columnCount)} ${plural(columnCount, 'column')}` : undefined,
-      content: <ColumnsPane view={view} value={value} />
+      content: <ColumnsPane key={objectKey} view={view} value={value} preset={gridPreset} />
+    }] : [],
+    ...value && hasParametersTab(value) ? [{
+      id: 'parameters',
+      title: 'Parameters',
+      layout: 'fill' as const,
+      count: value.routine?.argumentsTruncated ? `${formatCount(paramCount!)}+` : paramCount,
+      countLabel: paramCount !== undefined ? `${formatCount(paramCount)} ${plural(paramCount, 'parameter')}` : undefined,
+      content: <ParametersPane key={objectKey} view={view} value={value} preset={gridPreset} />
     }] : [],
     ...value && labelCount > 0 ? [{
       id: 'labels',
@@ -567,9 +669,9 @@ export default function BigQueryPropertiesTab({ documentId }: { readonly documen
       layout: 'flow' as const,
       count: labelCount,
       countLabel: `${formatCount(labelCount)} ${plural(labelCount, 'label')}`,
-      content: <LabelsPane labels={value.labels!} />
+      content: <LabelsPane key={objectKey} labels={value.labels!} />
     }] : [],
-    ...supportsPreviewTab(view.kind) ? [{ id: 'preview', title: 'Preview Rows', layout: 'fill' as const, content: <PreviewPane documentId={documentId} view={view} live={live} /> }] : []
+    ...supportsPreviewTab(view.kind) ? [{ id: 'preview', title: 'Preview Rows', layout: 'fill' as const, content: <PreviewPane key={objectKey} controller={controller} live={live} /> }] : []
   ]
 
   const hasVitals = !!value && (
@@ -578,26 +680,67 @@ export default function BigQueryPropertiesTab({ documentId }: { readonly documen
     || bigQueryLifecycleFacts(value).length > 0
   )
 
+  const errorContext = view.kind === 'bqDataset'
+    ? `BigQuery Properties - ${view.project}.${view.dataset}`
+    : `BigQuery Properties - ${view.project}.${view.dataset}.${view.name}`
   const banner = view.error
-    ? <InlineError message={view.error} context={`BigQuery Properties - ${view.project}.${view.dataset}.${view.name}`}
-      actions={live ? [{ label: 'Retry', run: () => { void bigQueryProperties.refresh(documentId) } }] : []} />
+    ? <InlineError message={view.error} context={errorContext}
+      actions={live ? [{ label: 'Retry', run: () => controller.refresh() }] : []} />
     : undefined
 
-  return <ObjectInspectorFrame
-    id={`bq-properties-${documentId}`}
-    title={displayText(view.name)}
-    subtitle={subtitle}
-    crumbs={crumbs}
-    state={state}
-    tools={refreshTool}
-    verbs={verbs}
+  const frameProps = {
+    id: idPrefix,
+    title: displayText(view.name),
+    subtitle,
+    crumbs,
+    state,
+    tools,
+    surface,
+    kpis,
+    banner,
+    tabs,
+    activeTab: view.activeTab,
+    onSelectTab: (id: string) => controller.selectTab(id as BigQueryPropertiesTabId),
+    vitals: hasVitals ? <VitalsRail kind={view.kind} value={value} /> : undefined,
+    attributes,
+    className,
+    style,
+    role,
+    ariaLabel,
+    ariaModal,
+    tabIndex,
+    onKeyDown,
+    rootRef
+  }
+
+  return workbench.inspector
+    ? <ObjectInspectorFrame {...frameProps} leadingVerbs={leadingVerbs} verbs={verbs} extraVerbs={extraVerbs} />
+    : <ObjectInspectorFrameView {...frameProps} verbs={[...(leadingVerbs ?? []), ...(extraVerbs ?? [])]} />
+}
+
+/**
+ * BigQuery's Properties tab: unified `ObjectInspectorFrame` (`surface="full"`) presenting structured free metadata
+ * across canonical tabs (Overview, Definition, Storage & Layout, Columns, Parameters, Labels, Preview Rows),
+ * Hero KPIs, and a collapsible/resizable Vitals rail. Zero billed SQL runs automatically.
+ */
+export default function BigQueryPropertiesTab({ documentId }: { readonly documentId: string }) {
+  const { bigQueryProperties } = useWorkbench()
+  const view = useServiceSnapshot(bigQueryProperties).views[documentId]
+  const controller = useMemo<BigQueryInspectorController | undefined>(() => view ? {
+    view,
+    selectTab: tab => bigQueryProperties.selectTab(documentId, tab),
+    refresh: () => { void bigQueryProperties.refresh(documentId) },
+    canLoadDdl: () => bigQueryProperties.canLoadDdl(documentId),
+    loadDdl: () => { void bigQueryProperties.loadDdl(documentId) },
+    cancelDdl: () => bigQueryProperties.cancelDdl(documentId),
+    reloadPreview: () => { void bigQueryProperties.reloadPreview(documentId) },
+    cancelPreview: () => bigQueryProperties.cancelPreview(documentId)
+  } : undefined, [bigQueryProperties, documentId, view])
+  if (!controller) return null
+  return <BigQueryInspectorBody
+    controller={controller}
+    idPrefix={`bq-properties-${documentId}`}
     surface="full"
-    kpis={kpis}
-    banner={banner}
-    tabs={tabs}
-    activeTab={view.activeTab}
-    onSelectTab={id => bigQueryProperties.selectTab(documentId, id as BigQueryPropertiesTabId)}
-    vitals={hasVitals ? <VitalsRail value={value} /> : undefined}
     attributes={{ 'data-bigquery-properties': documentId }}
   />
 }

@@ -2,6 +2,7 @@ import type { AgentRole } from '../../../shared/agent/profile.ts'
 import type { ExplorerNode as WireNode, VariaApi } from '../../../shared/contracts'
 import { cloudEngineEditions, explorerLimits, filterProperties, folderFilterFor, folderSpecs, kindSpecs, nodeStatuses, parentKinds, serverEngineOf, systemFolderIds, type FolderId, type FilterProperty, type NodeKind, type NodeStatus, type ServerEngine } from '../../../shared/explorer/catalog.ts'
 import { displayText, insertTextFor, refKey, type ExplorerFilter, type ExplorerNodeRef, type ExplorerTarget, type ObjectRef, type ParentRef } from '../../../shared/explorer/refs.ts'
+import { isBigQueryPropertyKind } from '../../../shared/bigquery/objects'
 import { isPeekKind } from '../../../shared/explorer/peek.ts'
 import { explorerNodeProvider, type ProviderContext } from '../../../shared/providers.ts'
 import { isDependencyKind } from '../../../shared/explorer/dependencies.ts'
@@ -82,7 +83,7 @@ export function selectionContextOf(target: ExplorerTarget | undefined, row: { re
     explorerSelectionStatus: target?.status && (nodeStatuses as readonly string[]).includes(target.status) ? target.status : '',
     explorerSelectionServerEngine: target?.engine ?? '',
     explorerSelectionServerLinux: !!target?.linux,
-    explorerSelectionPeekable: !!target && target.kind !== 'folder' && isPeekKind(target.kind),
+    explorerSelectionPeekable: !!target && target.kind !== 'folder' && (isPeekKind(target.kind) || isBigQueryPropertyKind(target.kind)),
     explorerSelectionDependencies: !!target && target.kind !== 'folder' && isDependencyKind(target.kind),
     // No Agent node is served before AG-1 (docs/agent-plan.md › Object Explorer).
     explorerSelectionAgentRole: '',

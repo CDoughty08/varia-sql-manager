@@ -12,6 +12,7 @@ import {
 } from '../../../shared/actions/agent-schedule.ts'
 import type { ActionError, ActionExecuteResult } from '../../../shared/actions/schema.ts'
 import { agentLimits } from '../../../shared/agent/catalog.ts'
+import type { TimelineSpan } from '../../../shared/agent/timeline.ts'
 import { defaultSchedule, scheduleMatches, scheduleProblems, scheduleSavable, type AgentMoment, type AgentScheduleFields, type ScheduleServer } from '../../../shared/agent/schedule.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import { onUnexpectedError } from '../core/errors'
@@ -25,6 +26,8 @@ import type { QueryDocument } from '../documents'
 import { liveConnectionOn } from './kept-documents'
 
 export type SchedulesView = 'all' | 'unused' | 'disabled'
+/** The grid with the selected schedule's editor, or the Timeline of when jobs run (AG-14). */
+export type SchedulesMode = 'grid' | 'timeline'
 /** The key of the new schedule's draft (one at a time); a schedule's own draft is keyed by its id. */
 export const newScheduleKey = 'new'
 /** A schedule's edits (or the new one's), with the jobs to attach or detach when it is saved. `base` is the schedule as the draft
@@ -52,6 +55,9 @@ export interface SchedulesState {
   readonly revision: number
   /** Reopened by hot exit or AutoRecover (AG-6g) and not read since: the drafts keep the schedules they began from (their save guards). */
   readonly restored?: true
+  /** Grid (the default) or Timeline, and the Timeline's window (AG-14). */
+  readonly mode?: SchedulesMode
+  readonly span?: TimelineSpan
   /** The login is in msdb's SQLAgentOperatorRole (agent.profile, read once below sysadmin; AG-10): it may enable or disable a schedule it does
    *  not own, sending only the schedule and @enabled, as msdb's sp_update_schedule allows that role. */
   readonly operatorRole?: true
@@ -62,8 +68,11 @@ export interface SchedulesServiceOptions extends CustomDocumentTargetOptions {
   readonly api: Pick<VariaApi, 'describeObject' | 'executeObjectAction' | 'cancelObjectActions'> & Partial<Pick<VariaApi, 'agentProfile'>>
   readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'setDirty' | 'activate' | 'getSnapshot'> & Partial<Pick<DocumentService, 'openKeptCustom' | 'subscribe' | 'update'>>
   readonly connections: ExternalStore<readonly LiveConnection[]>
+  /** Opens a job's document (the Timeline's click and Enter, AG-14); throws when it cannot. */
+  readonly openJob?: (connectionId: string, name: string) => void
   /** Focus the document: its filter, or (`name`) the selected schedule's Name field, where New schedule puts the caret. */
-  readonly focus?: (id: string, target?: 'name') => void
+  /** Focus a new schedule's Name, the selected schedule's row (after the Timeline's Open schedule unmounts the focused control), or the filter. */
+  readonly focus?: (id: string, target?: 'name' | 'selected') => void
   readonly newId?: () => string
 }
 
@@ -88,7 +97,8 @@ export const schedulesText = {
   jobsDropped: (count: number) => count === 1 ? 'One job change no longer applies (the job is gone, no longer yours to change, or already changed), so it is left out.'
     : `${count} job changes no longer apply (the jobs are gone, no longer yours to change, or already changed), so they are left out.`,
   staleKept: 'Someone changed this schedule or one of its jobs after it was read, so nothing was saved. It now shows their change with yours on top: check it, then save again.',
-  copyName: (name: string) => `${name} (copy)`.slice(0, agentLimits.nameChars)
+  copyName: (name: string) => `${name} (copy)`.slice(0, agentLimits.nameChars),
+  openFailed: 'The job could not be opened.'
 } as const
 
 const sameGuard = (a: AgentScheduleRecord, b: AgentScheduleRecord) => a.version === b.version && a.modified === b.modified
@@ -100,6 +110,17 @@ export function visibleSchedules(model: AgentSchedulesModel | undefined, view: S
   const jobNames = jobNamesBySchedule(model)
   const words = filter.trim().toLowerCase()
   return rows.filter(record => scheduleMatches(record, filter) || (jobNames.get(record.id) ?? []).some(name => name.toLowerCase().includes(words)))
+}
+/** The read the Timeline draws under the filter: jobs (sysadmin) whose name or one of whose schedules' names holds it, else schedules
+ *  whose name does; with no filter, the read as it is. */
+export function timelineFiltered(model: AgentSchedulesModel, filter: string): AgentSchedulesModel {
+  const words = filter.trim().toLowerCase()
+  if (!words) return model
+  const named = (name: string) => name.toLowerCase().includes(words)
+  if (!model.links || !model.jobs) return { ...model, schedules: model.schedules.filter(record => named(record.name)) }
+  const scheduleNames = new Map(model.schedules.map(record => [record.id, record.name]))
+  const matching = new Set(model.links.filter(link => named(scheduleNames.get(link.scheduleId) ?? '')).map(link => link.jobId.toLowerCase()))
+  return { ...model, jobs: model.jobs.filter(job => named(job.name) || matching.has(job.id.toLowerCase())) }
 }
 /** Which jobs use each schedule, by name, where the read has the links (sysadmin). */
 function jobNamesBySchedule(model: AgentSchedulesModel | undefined): Map<number, string[]> {
@@ -366,6 +387,29 @@ ${scheduleId}`, pending = this.jobReads.get(key)
   // --- Editing ---------------------------------------------------------------------------------------------------------
 
   setView(id: string, view: SchedulesView): void { if (this.get(id)) this.patch(id, { view }) }
+  setMode(id: string, mode: SchedulesMode): void { if (this.get(id)) this.patch(id, { mode }) }
+  setSpan(id: string, span: TimelineSpan): void { if (this.get(id)) this.patch(id, { span }) }
+  /** The Timeline's Open: the job's document, on this document's connection. */
+  openJob(id: string, name: string): void {
+    const connectionId = this.connectionOf(id)
+    if (!this.get(id)) return
+    try {
+      if (!connectionId || !this.live(id) || !this.options.openJob) throw new Error(schedulesText.disconnected)
+      this.options.openJob(connectionId, name)
+    } catch (error) {
+      this.patch(id, { error: fallback('SQL_ERROR', error instanceof Error ? error.message : schedulesText.openFailed), notice: undefined })
+    }
+  }
+  /** The Timeline's Open schedule: back to the grid with the schedule selected (the filter and view cleared where they would hide it). */
+  openSchedule(id: string, scheduleId: number): void {
+    const state = this.get(id)
+    const record = state?.model?.schedules.find(item => item.id === scheduleId)
+    if (!state || !record) return
+    const shown = visibleSchedules(state.model, state.view, state.filter).includes(record)
+    this.patch(id, { mode: 'grid', ...shown ? {} : { view: 'all' as const, filter: '' } })
+    this.select(id, String(scheduleId))
+    this.options.focus?.(id, 'selected')
+  }
   setFilter(id: string, filter: string): void { if (this.get(id)) this.patch(id, { filter: filter.slice(0, agentLimits.nameChars) }) }
   select(id: string, key: string | undefined): void {
     const state = this.get(id)
@@ -377,9 +421,10 @@ ${scheduleId}`, pending = this.jobReads.get(key)
   newSchedule(id: string, from?: AgentScheduleFields): void {
     const state = this.get(id)
     if (!state || state.busy) return
-    if (state.drafts[newScheduleKey]) { this.patch(id, { selected: newScheduleKey, confirmDelete: undefined, notice: schedulesText.newPending }); this.options.focus?.(id, 'name'); return }
+    // The editor shows only in the grid view, so New schedule (and Duplicate, and New › Schedule… on the Agent node) switches to it.
+    if (state.drafts[newScheduleKey]) { this.patch(id, { mode: 'grid', selected: newScheduleKey, confirmDelete: undefined, notice: schedulesText.newPending }); this.options.focus?.(id, 'name'); return }
     const fields = from ? { ...from, name: schedulesText.copyName(from.name) } : defaultSchedule(this.now(id).date)
-    this.patch(id, { drafts: { ...state.drafts, [newScheduleKey]: { fields, jobs: [] } }, selected: newScheduleKey, confirmDelete: undefined, error: undefined, notice: undefined })
+    this.patch(id, { mode: 'grid', drafts: { ...state.drafts, [newScheduleKey]: { fields, jobs: [] } }, selected: newScheduleKey, confirmDelete: undefined, error: undefined, notice: undefined })
     this.dirtyChanged(id)
     this.options.focus?.(id, 'name')
   }
@@ -512,7 +557,7 @@ ${scheduleId}`, pending = this.jobReads.get(key)
     this.patch(id, { drafts: { ...current.drafts, [key]: { base: record, fields: rebaseScheduleFields(draft.base, record, draft.fields), jobs } }, error: { ...error, message: message(schedulesText.staleKept) } })
     this.dirtyChanged(id)
   }
-  askDelete(id: string): void { if (this.canDelete(id)) this.patch(id, { confirmDelete: true, error: undefined }) }
+  askDelete(id: string): void { if (this.canDelete(id)) this.patch(id, { mode: 'grid', confirmDelete: true, error: undefined }) }
   cancelDelete(id: string): void { if (this.get(id)?.confirmDelete) this.patch(id, { confirmDelete: undefined }) }
   /** Delete, after its confirmation: sp_delete_schedule without @force_delete, so one a job uses is refused (IN_USE) and kept. */
   async confirmDelete(id: string): Promise<boolean> {

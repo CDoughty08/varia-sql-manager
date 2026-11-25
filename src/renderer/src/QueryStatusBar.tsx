@@ -21,6 +21,11 @@ interface Props {
    * colour as a 3px edge on the side facing the query.
    */
   readonly variant?: 'segment' | 'bar'
+  /**
+   * When true on 'segment', collapses the redundant plug icon and "Connected." label visually (keeping the status text
+   * accessible for screen readers) so the online backend dot and connection facts read as one calm segment.
+   */
+  readonly compact?: boolean
 }
 
 /**
@@ -30,7 +35,7 @@ interface Props {
  * sentence is announced. In the bar, the connection's environment tag (PROD) leads the server segment; as a segment it
  * is left out, because the window's status bar already shows it just before, after the backend's state.
  */
-export default function QueryStatusBar({ tab, connection, versions, variant = 'segment' }: Props) {
+export default function QueryStatusBar({ tab, connection, versions, variant = 'segment', compact = false }: Props) {
   const { settings, queries, results, targets } = useWorkbench()
   const rememberedTargets = useServiceSnapshot(targets)
   const presentation = queryConnectionPresentation(tab, connection, rememberedTargets.find(target => target.id === tab.targetId))
@@ -49,8 +54,9 @@ export default function QueryStatusBar({ tab, connection, versions, variant = 's
   const session = liveQuerySession(query, presentation.disconnected ? undefined : connection)
   const statusConnection = presentation.server ? { ...connection, server: presentation.server, displayName: presentation.displayName, disconnected: presentation.disconnected } : undefined
   const model = queryStatusModel({ connection: statusConnection, database: tab.database, session, run, running, now, settings: values, variant })
-  return <div className={className} role="status" aria-label="Query status" data-tone={model.tone} data-location={location} style={edge} title={[model.place, versions].filter(Boolean).join('\n')}>
-    <span className="query-status-state"><Icon name={model.icon} spin={model.icon === 'loading'} /><span className="query-status-text">{model.text}</span></span>
+  const quietReady = !bar && compact && model.tone === 'ready'
+  return <div className={className} role="status" aria-label="Query status" data-tone={model.tone} data-location={location} data-compact={quietReady ? 'true' : undefined} style={edge} title={[model.place, versions].filter(Boolean).join('\n')}>
+    <span className={quietReady ? 'query-status-state visually-hidden' : 'query-status-state'}>{!quietReady && <Icon name={model.icon} spin={model.icon === 'loading'} />}<span className="query-status-text">{model.text}</span></span>
     <span className="query-status-segments">{bar && environmentTag(presentation.environment) && <span className="query-status-environment"><span className="visually-hidden">Environment: </span><EnvironmentTag environment={presentation.environment} place="queryStatus" /></span>}{model.segments.map(segment => <span key={segment.key} className={`query-status-segment query-status-${segment.key}`} aria-live={segment.key === 'time' || segment.key === 'rows' ? 'off' : undefined}>
       <span className="visually-hidden">{segment.label}: </span>{segment.key === 'login' ? <span className="status-session">{segment.text}</span> : segment.text}
     </span>)}</span>

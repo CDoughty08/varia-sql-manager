@@ -1,14 +1,18 @@
-import { useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import type { MemoryFeature } from '../../../shared/ipc/port-messages'
+import { SnapshotStore } from '../core/store'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { modalOpen } from '../core/modal'
 import { watchModals } from '../core/windows'
 import Icon from '../Icon'
-import { memoryLevel, type MemoryUsage, type MemoryUsageService } from './memory'
-import { anyCompressed, indexNerdMetrics, nerdMetrics, panelBytes, resultNames } from './memory-details'
+import { memoryLevel, memoryTotalLabel, type MemoryUsage, type MemoryUsageService } from './memory'
+import { anyCompressed, indexNerdMetrics, nerdMetrics, panelBytes, resultNames, resultTargets, type ResultTarget } from './memory-details'
 import { IndexDetails, NerdDetails, NerdMetrics } from './NerdMetrics'
 import { SavedTrend } from './SavedTrend'
+
+// Fallback store for isolated unit tests that mount MemoryIndicator without a QueriesService.
+const emptyQueries = new SnapshotStore<Readonly<Record<string, { readonly running?: unknown }>>>({})
 
 // Chromium handles Escape through close requests, independently of the panel's visual layer.
 declare const CloseWatcher: new () => EventTarget & { destroy(): void }
@@ -68,32 +72,83 @@ const nerdKey = 'environment.statusBar.memoryNerdMetrics'
 
 /** The section, mounted only while the panel shows: it follows the setting, so the status bar never re-renders for it
  *  while the panel is closed. Collapsed, it reads nothing else. */
-function NerdSection({ memory, service, pinned }: { memory: MemoryUsage; service: MemoryUsageService; pinned: boolean }) {
+function NerdSection({ memory, service, pinned, onFocusFallback }: { memory: MemoryUsage; service: MemoryUsageService; pinned: boolean; onFocusFallback: () => void }) {
   const { settings } = useWorkbench()
   const open = useServiceSnapshot(settings).values[nerdKey]
   // One NerdMetrics whatever the state, so the heading's button keeps focus when Enter or Space opens or closes it.
   return <NerdMetrics open={open} pinned={pinned} onToggle={() => void settings.toggle(nerdKey)}
     trend={open && anyCompressed(memory.detail) ? <SavedTrend memory={service} /> : undefined}>
-    {open && <OpenNerdBody memory={memory} />}
+    {open && <OpenNerdBody memory={memory} pinned={pinned} onFocusFallback={onFocusFallback} />}
   </NerdMetrics>
 }
 
 /** The open section's body: only now does it follow the Results tabs and documents that name the largest results, and
  *  the Search Indexer's detail below them. */
-function OpenNerdBody({ memory }: { memory: MemoryUsage }) {
-  const { results, documents, indexMemory } = useWorkbench()
+function OpenNerdBody({ memory, pinned, onFocusFallback }: { memory: MemoryUsage; pinned: boolean; onFocusFallback: () => void }) {
+  const { results, documents, indexMemory, queries } = useWorkbench()
   const { index } = useServiceSnapshot(indexMemory)
   const indexModel = useMemo(() => index && indexNerdMetrics(index), [index])
   const tabs = useServiceSnapshot(results)
+  const queryState = useServiceSnapshot(queries ?? emptyQueries)
   const { documents: docs } = useServiceSnapshot(documents)
   const { detail, generation } = memory
+  // Entries just released from this panel, hidden immediately so a removed row never flashes "Unlisted result" before
+  // the backend's next results.memory report arrives.
+  const [released, setReleased] = useState<ReadonlySet<string>>(() => new Set())
+  const isTabRunning = useCallback((tabId: string) => !!queryState[tabId]?.running, [queryState])
+  const targets = useMemo(() => typeof results.removeEntry === 'function' ? resultTargets(tabs, generation, isTabRunning) : undefined, [results, tabs, generation, isTabRunning])
+  const canCloseAll = useMemo(() => {
+    if (typeof results.closeAllResults !== 'function') return false
+    return Object.entries(tabs).some(([tabId, tab]) =>
+      !tab.bare && tab.status !== 'running' && tab.status !== 'closed' && !isTabRunning(tabId)
+      && (tab.sets.length > 0 || (tab.planSets?.length ?? 0) > 0))
+  }, [results, tabs, isTabRunning])
   const model = useMemo(() => {
     if (!detail) return undefined
+    const effective = generation !== undefined && released.size > 0
+      ? { ...detail, largest: detail.largest.filter(entry => !released.has(`${generation}:${entry.resultId}`)) }
+      : detail
     const names = new Map(docs.map(document => [document.id, document.name]))
-    return nerdMetrics(detail, resultNames(tabs, id => names.get(id), generation))
-  }, [detail, generation, tabs, docs])
+    return nerdMetrics(effective, resultNames(tabs, id => names.get(id), generation))
+  }, [detail, generation, tabs, docs, released])
+  const handleRemove = useCallback((resultId: number, target: ResultTarget) => {
+    if (typeof results.removeEntry !== 'function') return false
+    const owned = typeof results.closing === 'function'
+      ? results.closing(target.tabId, target.entryKey).map(entry => entry.descriptor.resultId)
+      : [resultId]
+    const removed = results.removeEntry(target.tabId, target.entryKey)
+    if (removed === false) return false
+    if (generation !== undefined) {
+      setReleased(current => {
+        const next = new Set(current)
+        next.add(`${generation}:${resultId}`)
+        for (const id of owned) next.add(`${generation}:${id}`)
+        return next
+      })
+    }
+    return true
+  }, [results, generation])
+  const handleCloseAll = useCallback(() => {
+    if (typeof results.closeAllResults !== 'function') return
+    const closingIds: number[] = []
+    if (generation !== undefined) {
+      for (const [tabId, tab] of Object.entries(tabs)) {
+        if (tab.bare || tab.status === 'running' || tab.status === 'closed' || isTabRunning(tabId)) continue
+        for (const set of tab.sets) if (set.descriptor.generation === generation) closingIds.push(set.descriptor.resultId)
+      }
+    }
+    const closed = results.closeAllResults(isTabRunning)
+    if (closed > 0 && generation !== undefined && closingIds.length > 0) {
+      setReleased(current => {
+        const next = new Set(current)
+        for (const id of closingIds) next.add(`${generation}:${id}`)
+        return next
+      })
+    }
+  }, [results, tabs, generation, isTabRunning])
   return <>
-    {model ? <NerdDetails model={model} /> : <p className="memory-nerd-empty">Waiting for the backend's first report.</p>}
+    {model ? <NerdDetails model={model} pinned={pinned} targets={targets} onRemove={targets ? handleRemove : undefined} canCloseAll={canCloseAll} onCloseAll={canCloseAll ? handleCloseAll : undefined} onFocusFallback={onFocusFallback} />
+      : <p className="memory-nerd-empty">Waiting for the backend's first report.</p>}
     {indexModel && <IndexDetails model={indexModel} />}
   </>
 }
@@ -112,10 +167,12 @@ function onward(from: HTMLElement, skip: HTMLElement, except?: HTMLElement | nul
 
 export default function MemoryIndicator() {
   const { indexMemory, resultMemory, menus } = useWorkbench()
-  const index = reading('index', useServiceSnapshot(indexMemory))
+  const indexUsage = useServiceSnapshot(indexMemory)
+  const index = reading('index', indexUsage)
   const resultUsage = useServiceSnapshot(resultMemory)
   const results = reading('results', resultUsage)
   const readings = [index, results]
+  const totalLabel = memoryTotalLabel(indexUsage, resultUsage)
   const alert = readings.some(item => item.level === 'critical') ? 'critical' : readings.some(item => item.level === 'warning') ? 'warning' : undefined
   const summary = readings.map(item => `${labels[item.feature]} ${item.level === 'unavailable' ? 'unavailable' : item.percentage}`).join(', ')
   const [mode, setMode] = useState<'preview' | 'pinned'>()
@@ -126,6 +183,11 @@ export default function MemoryIndicator() {
   /** Focus inside the panel goes back to the Memory control before the panel hides, rather than to the page's body. */
   const keepFocus = () => { if (panel.current?.contains(panel.current.ownerDocument.activeElement)) trigger.current?.focus({ preventScroll: true }) }
   const endPreview = () => { if (mode === 'preview') { keepFocus(); setMode(undefined) } }
+  const focusPanelHeader = useCallback(() => {
+    const headerButton = panel.current?.querySelector<HTMLElement>('.memory-nerd-toggle')
+    if (headerButton && headerButton.tabIndex >= 0) { headerButton.focus({ preventScroll: true }); return }
+    trigger.current?.focus({ preventScroll: true })
+  }, [])
 
   useLayoutEffect(() => {
     const trigger = group.current, details = panel.current
@@ -160,12 +222,12 @@ export default function MemoryIndicator() {
       if (!group.current?.matches(':hover') && !panel.current?.matches(':hover')) endPreview()
     }}>
     <button ref={trigger} type="button" className="memory-indicator" data-level={alert}
-      aria-label={`Memory usage. ${summary}.${alert ? ` ${levelLabels[alert]}.` : ''}`} aria-expanded={open} aria-controls={id}
+      aria-label={`Memory usage${totalLabel ? `, ${totalLabel}` : ''}. ${summary}.${alert ? ` ${levelLabels[alert]}.` : ''}`} aria-expanded={open} aria-controls={id}
       onFocus={event => { if (event.currentTarget.matches(':focus-visible')) peek() }}
       onClick={() => { if (!modalOpen() && !menus.ownsKeyboard()) setMode(current => current === 'pinned' ? undefined : 'pinned') }}>
       {alert && <Icon name="warning" />}
       {readings.map(item => <Ring key={item.feature} reading={item} />)}
-      <span>Memory</span>
+      <span className="memory-indicator-label">{totalLabel ?? 'Memory'}</span>
     </button>
     {/* The panel is portaled to the end of the page, so while it is pinned these stops carry Tab into it right after the
         Memory control, and out of it back to what follows the control. Each only hands focus on: no key listener. */}
@@ -187,12 +249,14 @@ export default function MemoryIndicator() {
       }} />}
       <div className="memory-heading"><h2 id={heading}>Memory usage</h2><span>SQL backend</span></div>
       {readings.map(item => <MemoryRow key={item.feature} item={item} />)}
-      {open && <NerdSection memory={resultUsage} service={resultMemory} pinned={mode === 'pinned'} />}
+      {open && <NerdSection memory={resultUsage} service={resultMemory} pinned={mode === 'pinned'} onFocusFallback={focusPanelHeader} />}
       {mode === 'pinned' && <span tabIndex={0} className="visually-hidden" onFocus={event => {
         const from = event.relatedTarget, details = panel.current!, leaving = from === null ? pressed.current : from instanceof Node && details.contains(from)
         pressed.current = false
-        if (!leaving) details.querySelector<HTMLElement>('.memory-nerd-toggle')?.focus({ preventScroll: true })
-        else onward(enter.current ?? details, details, enter.current)?.focus({ preventScroll: true })
+        if (!leaving) {
+          const inner = [...details.querySelectorAll<HTMLElement>('button:not(:disabled)')].filter(element => element.tabIndex >= 0)
+          ;(inner.at(-1) ?? details.querySelector<HTMLElement>('.memory-nerd-toggle'))?.focus({ preventScroll: true })
+        } else onward(enter.current ?? details, details, enter.current)?.focus({ preventScroll: true })
       }} />}
     </section>, document.body)}
   </div>

@@ -416,5 +416,23 @@ internal static class SsisOperationsChecks
             && Unavailable(windows with { Major = 12 }) is ("NOT_SUPPORTED", var old) && old.Contains("2016", StringComparison.Ordinal) && Unavailable(windows with { Major = 13 }) is null
             && Unavailable(windows with { Major = 12, EngineEdition = 5 }) is null && Unavailable(windows with { Major = 12, EngineEdition = 8 }) is null,
             "Operations is not supported on SQL Server on Linux (unless the checks' fake catalog says otherwise) nor before SQL Server 2016; Azure SQL Database and Managed Instance report their own versions");
+
+        // New filters mark the window's rows refiltered (no departed row lingers) until a sample under them returns rows: a
+        // sample that failed after taking them keeps the mark, a Reset (the same filters read again) never sets it.
+        var reader = new SsisOperationsReader(catalog, new SsisOperationsLiveArgs(Package: "a.dtsx"), () => "SSISDB");
+        reader.Take();
+        var first = reader.Table().Refiltered;
+        reader.Take();
+        var steady = reader.Table().Refiltered;
+        reader.Reset();
+        reader.Take();
+        var reset = reader.Table().Refiltered;
+        reader.Apply(new SsisOperationsLiveArgs(Package: "b.dtsx"));
+        var taken = reader.Take();
+        reader.Take();
+        var afterFailure = reader.Table().Refiltered;
+        var next = reader.Table().Refiltered;
+        check(first && !steady && !reset && taken.Package?.Contains("b.dtsx", StringComparison.Ordinal) == true && afterFailure && !next,
+            "new Operations filters mark the next rows returned refiltered, through a failed sample, and a Reset or a steady sample never does");
     }
 }

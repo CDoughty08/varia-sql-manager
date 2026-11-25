@@ -47,7 +47,7 @@ export const peekLists: { readonly [L in PeekListId]: PeekListSpec } = {
       column('computed', 'Computed', 'text'), column('default', 'Default', 'text'), column('declaration', 'Definition', 'text')]
   },
   tableObjects: {
-    id: 'tableObjects', title: 'Indexes & keys', empty: 'No indexes, keys, constraints or triggers.',
+    id: 'tableObjects', title: 'Indexes & Keys', empty: 'No indexes, keys, constraints or triggers.',
     columns: [column('kind', 'Kind', 'text'), column('name', 'Name', 'text'), column('summary', 'Summary', 'text'), column('status', 'Status', 'text')]
   },
   parameters: {

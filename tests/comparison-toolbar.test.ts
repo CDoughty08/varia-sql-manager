@@ -3,6 +3,7 @@
 // place, each control that runs it again is unavailable with the reason while an input is closed (D10), and a polite live
 // region reads what each new or changed comparison found, the same sentence twice included.
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { act, createElement, StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { ResultsJobProgress, VariaApi } from '../src/shared/contracts'
@@ -398,5 +399,12 @@ describe('a comparison\'s toolbar', () => {
     view.draw({ units: 0 })
     expect(view.button('Next difference')!.getAttribute('aria-disabled')).toBe('true')
     expect(view.button('Previous difference')!.title).toBe('Previous difference: no differences')
+  })
+
+  it('keeps the sides group wide enough for Swap sides while allowing labels to ellipsize', () => {
+    const css = readFileSync('src/renderer/src/styles.css', 'utf8')
+    expect(css).toMatch(/\.rg-compare-sides\s*\{[^}]*min-width:\s*48px/)
+    expect(css).toMatch(/\.rg-compare-sides\s*\{[^}]*overflow:\s*hidden/)
+    expect(css).toMatch(/\.rg-compare-match\s*\{[^}]*overflow:\s*hidden/)
   })
 })

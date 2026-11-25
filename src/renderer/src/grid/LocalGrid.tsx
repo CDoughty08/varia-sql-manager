@@ -138,6 +138,7 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
       : undefined
     latest.current.onActiveRow?.(row)
   }
+  const outerScroll = fit && !Number.isFinite(maxRows)
   const mount = (create: (spec: GridSpec) => GridView) => {
     // A kept state can come back over a table with fewer rows or columns (remounted after an owner's Refresh, or a table
     // with other columns; one with the same columns swaps in below): its selection is held to them, or Copy would copy
@@ -149,7 +150,7 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
     // wide card does not shrink and grow back on each new table.
     const view = create({
       handle: source, descriptor: localDescriptor(shown, shown.cutCells), state: own, entry: 'local', resultNumber: 1, resultCount: 1, label: latest.current.label,
-      showTypes: false, clipboardKeys: false, sortable, onWide: setWide,
+      showTypes: false, clipboardKeys: false, sortable, outerScroll, onWide: setWide,
       onSelection: selection => { reportActiveRow(sourceRef.current, selection) },
       // Edit › Copy's copy event: output.copy, as in a results grid.
       onCopy: headers => { void commands.execute(headers ? 'output.copyWithHeaders' : 'output.copy', undefined, 'keybinding') },
@@ -258,7 +259,7 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
     if (row < 0 || row >= source.table.rows.length) return false
     return activate(tableRow(source, row), column) === true
   }
-  return <GridShell mountKey={`local|${state ? columnsKey : instanceKey(bound)}|${instanceKey(own)}|${sortable ? 'sortable' : 'fixed'}|${label}`} mount={mount} onApi={onApi} contents="rows"
+  return <GridShell mountKey={`local|${state ? columnsKey : instanceKey(bound)}|${instanceKey(own)}|${sortable ? 'sortable' : 'fixed'}|${outerScroll ? 'outer' : 'inner'}|${label}`} mount={mount} onApi={onApi} contents="rows"
     frameProps={{ className: 'local-grid', 'data-local-grid': preset, ...fit ? { 'data-local-fit': '' } : {}, ...height !== undefined ? { style: { height, flex: 'none' } } : {} }}
     rootProps={{
       'aria-label': label, 'data-output-view': 'live',

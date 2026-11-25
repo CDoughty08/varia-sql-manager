@@ -1,18 +1,20 @@
 // SQL Server Agent's Schedules document (AG-6c, docs/agent-ui-rethink.md › rx-schedules-doc): the toolbar (filter, All / Unused / Disabled,
 // New schedule, Duplicate, Delete, Refresh), the schedules' grid with an Enabled box that saves at once, and beside it the selected
-// schedule's editor (the job document's ScheduleEditor), the jobs that use it with Attach and Detach, and "Save · n changes".
-// SchedulesService keeps every state; this only draws it.
-import { memo, useMemo, useState } from 'react'
+// schedule's editor (the job document's ScheduleEditor), the jobs that use it with Attach and Detach, and "Save · n changes"; or, with
+// Timeline chosen (AG-14), SchedulesTimeline: when the jobs run over the next 24 hours or 7 days. SchedulesService keeps every state; this
+// only draws it.
+import { memo, useDeferredValue, useMemo, useState } from 'react'
 import { scheduleFieldsOf, type AgentScheduleRecord, type AgentSchedulesModel } from '../../../shared/actions/agent-schedule.ts'
 import { agentLimits } from '../../../shared/agent/catalog.ts'
-import { scheduleProblems, scheduleWhen } from '../../../shared/agent/schedule.ts'
+import { agentNextRun, scheduleProblems, scheduleWhen } from '../../../shared/agent/schedule.ts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
 import InlineError from '../kit/InlineError'
 import Segmented from '../kit/Segmented'
 import Skeleton from '../kit/Skeleton'
 import ScheduleEditor from './ScheduleEditor'
-import { newScheduleKey, schedulesText, visibleSchedules, type SchedulesService, type SchedulesState, type SchedulesView } from './SchedulesService'
+import SchedulesTimeline from './SchedulesTimeline'
+import { newScheduleKey, schedulesText, timelineFiltered, visibleSchedules, type SchedulesMode, type SchedulesService, type SchedulesState, type SchedulesView } from './SchedulesService'
 
 function Detail({ state, service }: { readonly state: SchedulesState; readonly service: SchedulesService }) {
   const [attaching, setAttaching] = useState('')
@@ -40,7 +42,7 @@ function Detail({ state, service }: { readonly state: SchedulesState; readonly s
     </div>
     {readOnly && <p className="field-note" role="note"><Icon name="lock" />{readOnly}</p>}
     <ScheduleEditor idPrefix={idPrefix} fields={draft.fields} {...record ? { base: scheduleFieldsOf(record) } : {}} disabled={!!readOnly || busy}
-      problems={scheduleProblems(draft.fields, now, service.server(state.id))} now={now} platform={state.model?.platform} onChange={fields => service.update(state.id, fields)}
+      problems={scheduleProblems(draft.fields, now, service.server(state.id))} now={now} platform={state.model?.platform} {...record ? { anchor: agentNextRun(state.model?.links, record.id, record, now) } : {}} onChange={fields => service.update(state.id, fields)}
       aside={<section aria-label="Jobs using it">
         <h4>Jobs using it <span className="field-note">{jobs.length}</span></h4>
         {jobs.length ? <ul className="agent-schedule-jobs">{jobs.map(job => {
@@ -110,17 +112,25 @@ export default function SchedulesDocument({ documentId }: { readonly documentId:
   const state = documents[documentId]
   const model = state?.model
   const rows = useMemo(() => visibleSchedules(model, state?.view ?? 'all', state?.filter ?? ''), [model, state?.view, state?.filter])
+  // The Timeline rebuilds its model per filter (up to 40,000 runs): typing goes on at once and the Timeline follows when React has time.
+  const timelineFilter = useDeferredValue(state?.filter ?? '')
+  const timelineRead = useMemo(() => model && timelineFiltered(model, timelineFilter), [model, timelineFilter])
   if (!state) return null
   const counts = { all: model?.schedules.length ?? 0, unused: model?.schedules.filter(record => record.jobCount === 0).length ?? 0, disabled: model?.schedules.filter(record => !record.enabled).length ?? 0 }
   const viewId = `agent-schedules-view-${documentId}`
+  const modeId = `agent-schedules-mode-${documentId}`
   const busy = !!state.busy
+  const timeline = state.mode === 'timeline'
   return <div className="agent-schedules-doc" data-agent-schedules={documentId}>
     <div className="activity-pane-tools one-row agent-schedules-tools" role="toolbar" aria-label="Schedules">
       <input className="property-input" type="search" placeholder="Filter schedules or jobs" aria-label="Filter schedules or jobs" maxLength={agentLimits.nameChars} value={state.filter}
         data-agent-schedules-focus onChange={event => service.setFilter(documentId, event.target.value)} />
-      <span id={viewId} className="visually-hidden">Show</span>
+      <span id={modeId} className="visually-hidden">View</span>
+      <Segmented id={`${modeId}-seg`} labelledBy={modeId} value={state.mode ?? 'grid'} onChange={value => service.setMode(documentId, value as SchedulesMode)}
+        segments={[{ value: 'grid', label: 'Grid' }, { value: 'timeline', label: 'Timeline' }]} />
+      {!timeline && <><span id={viewId} className="visually-hidden">Show</span>
       <Segmented id={`${viewId}-seg`} labelledBy={viewId} value={state.view} onChange={value => service.setView(documentId, value as SchedulesView)}
-        segments={[{ value: 'all', label: `All ${counts.all}` }, { value: 'unused', label: `Unused ${counts.unused}` }, { value: 'disabled', label: `Disabled ${counts.disabled}` }]} />
+        segments={[{ value: 'all', label: `All ${counts.all}` }, { value: 'unused', label: `Unused ${counts.unused}` }, { value: 'disabled', label: `Disabled ${counts.disabled}` }]} /></>}
       <button type="button" disabled={busy || !model} onClick={() => service.newSchedule(documentId)}><Icon name="add" />New schedule</button>
       <button type="button" disabled={busy || !service.draft(documentId)} onClick={() => service.duplicate(documentId)}><Icon name="copy" />Duplicate</button>
       <button type="button" disabled={!service.canDelete(documentId)} onClick={() => service.askDelete(documentId)}><Icon name="trash" />Delete</button>
@@ -130,8 +140,10 @@ export default function SchedulesDocument({ documentId }: { readonly documentId:
     {state.error && <InlineError message={state.error.message} code={state.error.code} context={`Schedules on ${state.server}`} />}
     {!state.error && state.notice && <p className="document-status" role="status"><Icon name="pass" />{state.notice}</p>}
     {model?.truncated && <p className="field-note">{schedulesText.truncated}</p>}
-    {state.view === 'unused' && <p className="field-note">{schedulesText.unusedNote}</p>}
-    {state.phase === 'loading' && !model ? <Skeleton /> : model && <div className="agent-schedules-body">
+    {!timeline && state.view === 'unused' && <p className="field-note">{schedulesText.unusedNote}</p>}
+    {state.phase === 'loading' && !model ? <Skeleton /> : model && timeline && timelineRead ? <SchedulesTimeline documentId={documentId} model={timelineRead} span={state.span ?? 'day'}
+      onSpan={span => service.setSpan(documentId, span)} onOpenJob={name => service.openJob(documentId, name)} onOpenSchedule={id => service.openSchedule(documentId, id)} />
+      : model && <div className="agent-schedules-body">
       <div className="agent-schedules-grid-wrap">
         <ScheduleGrid documentId={documentId} rows={rows} {...state.selected ? { selected: state.selected } : {}} edited={Object.keys(state.drafts).sort().join(',')} busy={busy}
           service={service} model={model} operatorRole={!!state.operatorRole} />

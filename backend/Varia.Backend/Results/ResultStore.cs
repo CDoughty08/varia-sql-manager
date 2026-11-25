@@ -310,10 +310,16 @@ internal sealed partial class ResultStore
     }
     public int Count { get { lock (gate) return sets.Count; } }
 
-    /// <summary>The packing a new store starts with: off, but for the checks' second pass over the result suites, which
-    /// packs every complete result (<see cref="PagePacking.EveryComplete"/>). The backend process sets its own store's
+    private static readonly AsyncLocal<PagePacking?> defaultPacking = new();
+    /// <summary>The packing a new store starts with: off, but for the checks' packed pass over the result suites, which
+    /// packs every complete result (<see cref="PagePacking.EveryComplete"/>). Async-flow local so the packed suites can
+    /// share the offline lane pool with the raw pass. The backend process sets its own store's
     /// (SqlService's packHidden: <see cref="PagePacking.OnRequest"/>).</summary>
-    internal static PagePacking DefaultPacking { get; set; } = PagePacking.Off;
+    internal static PagePacking DefaultPacking
+    {
+        get => defaultPacking.Value ?? PagePacking.Off;
+        set => defaultPacking.Value = value;
+    }
 
     /// <summary>Whether and how complete results' pages are packed (<see cref="ResultSetBuffer.Pack"/>). An internal switch,
     /// on request in the product, where the hidden-result policy (<see cref="ResultPacker"/>) asks; the service that runs that
@@ -336,13 +342,23 @@ internal sealed partial class ResultStore
     /// <summary>The smallest page given an n-gram filter when packed (<see cref="PageFilter"/>).</summary>
     internal int FilterMinBytes { get; init; } = DefaultFilterMinBytes;
 
+    private static readonly AsyncLocal<int?> defaultFilterMinBytes = new();
     /// <summary>The checks' packed pass lowers it so the small pages of every suite there are filtered.</summary>
-    internal static int DefaultFilterMinBytes { get; set; } = PageFilter.MinPageBytes;
+    internal static int DefaultFilterMinBytes
+    {
+        get => defaultFilterMinBytes.Value ?? PageFilter.MinPageBytes;
+        set => defaultFilterMinBytes.Value = value;
+    }
 
     /// <summary>Whether a page's filter is capped by its packed size (<see cref="ResultSetBuffer.Pack"/>); the checks turn it
     /// off to filter pages of any size.</summary>
     internal bool FilterCapped { get; init; } = DefaultFilterCapped;
-    internal static bool DefaultFilterCapped { get; set; } = true;
+    private static readonly AsyncLocal<bool?> defaultFilterCapped = new();
+    internal static bool DefaultFilterCapped
+    {
+        get => defaultFilterCapped.Value ?? true;
+        set => defaultFilterCapped.Value = value;
+    }
     /// <summary>Whether packing types columns (PageCodec.Typed.cs): always in the product; the benchmarks compare both.</summary>
     internal bool TypedPacking { get; init; } = true;
     /// <summary>The rooms view reads unpack packed pages into, kept between reads (<see cref="RoomPool"/>).</summary>

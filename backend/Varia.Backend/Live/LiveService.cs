@@ -119,6 +119,10 @@ internal interface ILiveSampler : IDisposable
     LiveSampleBatch Resort(IReadOnlyList<LiveDue> probes) => new([], []);
     /// <summary>New args from live.update, already validated for the source.</summary>
     void Apply(object args);
+    /// <summary>Before Apply: the probes whose rows the args change from those in force, which read again at once; null for every
+    /// probe. A source whose args only change what is written, or only some probes' rows, names fewer, so no costly probe runs
+    /// early for nothing.</summary>
+    IReadOnlyCollection<string>? Rereads(object args) => null;
     /// <summary>The source has ended (after the tick just sent): the subscription answers sourceEnded.</summary>
     bool Ended { get; }
     /// <summary>On sourceEnded: releases what is not kept and returns the results that stay readable until closed.</summary>
@@ -678,7 +682,14 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
                 if (patch.View is not null || patch.Filter is not null || patch.Clear?.Any(setting => setting is "view" or "filter") == true) subscription.Reread(state, now);
             }
             foreach (var track in args.Track ?? []) subscription.Probes.Find(probe => probe.Spec.Id == track.Probe)!.Tracks[track.Table] = track;
-            if (sourceArgs is not null) subscription.Sampler.Apply(sourceArgs);
+            if (sourceArgs is not null)
+            {
+                var rereads = subscription.Sampler.Rereads(sourceArgs);
+                subscription.Sampler.Apply(sourceArgs);
+                // New args are a new filter for the probes they change: those read again as a view or filter change does, so
+                // their rows match without waiting out an interval (a filter chip on a 60 s view would otherwise).
+                foreach (var probe in subscription.Probes) if (rereads?.Contains(probe.Spec.Id) ?? true) subscription.Reread(probe, now);
+            }
             if (args.Paused is { } all) subscription.SetPaused(all, now);
             if (args.Refresh is true) subscription.Refresh(now);
             subscription.Signal();

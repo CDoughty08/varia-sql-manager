@@ -107,9 +107,13 @@ jobs:
       - name: Type check, offline .NET checks, vitest, production build
         id: check
         timeout-minutes: 20
-        # tsc reads only sources and installed types, the same everywhere; Linux's case-sensitive paths make its run the strictest.
+        # tsc and electron-vite build are OS-independent (Linux's case-sensitive paths are strictest; Smoke and Release also
+        # build on Windows/macOS). VARIA_CHECK_SCOPE=os runs every OS, main-process, FS, process, ICU and sidecar check on
+        # Windows and macOS while avoiding repeating pure JS/React/docs-lint and pure in-memory managed .NET suites that Linux
+        # already proved on the same commit.
         env:
-          VARIA_CHECK_SKIP: ${{ matrix.os != 'ubuntu-24.04' && 'typecheck' || '' }}
+          VARIA_CHECK_SKIP: ${{ matrix.os != 'ubuntu-24.04' && 'typecheck,build' || '' }}
+          VARIA_CHECK_SCOPE: ${{ matrix.os != 'ubuntu-24.04' && 'os' || '' }}
         run: npm run check
 
   live:
@@ -146,9 +150,10 @@ jobs:
         timeout-minutes: 5
         run: |
           if [ "${{ matrix.slot }}" = "1" ]; then
-            node scripts/ci-docker.mjs start-sql --name varia-sql --port 1433 --agent
+            node scripts/ci-docker.mjs start-sql --name varia-sql --port 1433 --agent --detach
+            node scripts/ci-docker.mjs start-bigquery --detach
           else
-            node scripts/ci-docker.mjs start-sql --name varia-sql-2 --port 1433 --name varia-sql-3 --port 1434 --agent --memory-mb 3072
+            node scripts/ci-docker.mjs start-sql --name varia-sql-2 --port 1433 --name varia-sql-3 --port 1434 --agent --memory-mb 3072 --detach
           fi
       # Only slot 1 runs node (live vitest, bundled SQL Tools Service and Kerberos); slot 2 runs only dotnet.
       - uses: actions/setup-node@v7
@@ -206,7 +211,7 @@ jobs:
           VARIA_TEST_BIGQUERY_ENDPOINT: http://localhost:9050
           VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT: http://localhost:9060
         run: |
-          node scripts/ci-docker.mjs start-bigquery
+          node scripts/ci-docker.mjs wait-bigquery
           dotnet run --no-build --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --bigquery-emulator-live
       - name: Integrated authentication without a Kerberos ticket
         # Linux connects with integrated authentication through GSSAPI (SqlClient's managed SNI). With no ticket, the backend
@@ -246,7 +251,17 @@ jobs:
           persist-credentials: false
       - name: Start SQL Server container in the background
         timeout-minutes: 5
-        run: node scripts/ci-docker.mjs start-sql --name varia-sql --port 1433 --agent
+        run: node scripts/ci-docker.mjs start-sql --name varia-sql --port 1433 --agent --detach
+      - name: Start the BigQuery emulator
+        # The connections suite's BigQuery phase drives the Connect dialog against the emulator BQ-1 pins by digest (anonymous
+        # credentials, never a Google project). Start it detached only in the shard that runs connections-smoke.mjs, so its
+        # pull overlaps setup and builds.
+        id: bigquery
+        timeout-minutes: 3
+        run: |
+          if node scripts/smoke-shards.mjs --has-suite scripts/connections-smoke.mjs ${{ matrix.shard }}/3; then
+            node scripts/ci-docker.mjs start-bigquery --detach
+          fi
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -273,18 +288,11 @@ jobs:
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           command -v xvfb-run || { sudo apt-get update && sudo apt-get install -y xvfb; }
-      - name: Start the BigQuery emulator
-        # The connections suite's BigQuery phase drives the Connect dialog against the emulator BQ-1 pins by digest (anonymous
-        # credentials, never a Google project). Start it only in the shard that runs connections-smoke.mjs, with pull retries.
-        id: bigquery
-        timeout-minutes: 3
-        run: |
-          if node scripts/smoke-shards.mjs --has-suite scripts/connections-smoke.mjs ${{ matrix.shard }}/3; then
-            node scripts/ci-docker.mjs start-bigquery
-          fi
       - name: Wait for SQL Server container
         timeout-minutes: 4
-        run: node scripts/ci-docker.mjs wait-sql --name varia-sql
+        run: |
+          node scripts/ci-docker.mjs wait-sql --name varia-sql
+          node scripts/ci-docker.mjs wait-bigquery
       - name: Electron smoke tests
         timeout-minutes: 25
         env:
@@ -378,7 +386,7 @@ jobs:
           persist-credentials: false
       - name: Start SQL Server container in the background
         timeout-minutes: 5
-        run: node scripts/ci-docker.mjs start-sql --name varia-sql --port 1433
+        run: node scripts/ci-docker.mjs start-sql --name varia-sql --port 1433 --detach
       - uses: actions/setup-node@v7
         with:
           node-version: 24

@@ -406,6 +406,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .dependencies-twisty { display: grid; place-items: center; flex: none; width: 16px; height: 16px; }
 .dependencies-status { display: flex; align-items: center; gap: var(--varia-space-1); min-height: var(--varia-row); padding-inline-end: var(--varia-space-2); color: var(--varia-descriptionForeground); }
 .dependencies-status.error { color: var(--varia-errorForeground); }
+.dependencies-selected .peek-group { margin: 0 0 var(--varia-space-1); }
 .connection-modal.about-dialog { width: min(520px, calc(100vw - 40px)); font-size: var(--varia-size-md); }
 .about-dialog .connection-scroll { display: flex; flex-direction: column; gap: var(--varia-space-4); padding: var(--varia-space-3) var(--varia-space-4) var(--varia-space-4); }
 .about-identity { display: flex; align-items: center; gap: var(--varia-space-3); }
@@ -754,10 +755,6 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .peek-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--varia-size-md); font-weight: 600; }
 .peek-kind { flex-shrink: 0; color: var(--varia-descriptionForeground); }
 .peek-spacer { flex: 1; }
-.peek-body { display: grid; flex: 1; min-height: 0; grid-template-columns: minmax(0, 1fr) minmax(220px, 300px); }
-.peek-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.peek-side { border-left: 1px solid var(--varia-editorWidget-border); }
-.peek-pane-title { display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); padding: var(--varia-space-1) var(--varia-space-2) var(--varia-space-1) var(--varia-space-3); font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); text-transform: uppercase; letter-spacing: 0.04em; }
 .peek-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); margin-left: auto; }
 .peek-action { padding: 0 var(--varia-space-2); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-xs); text-transform: none; letter-spacing: 0; white-space: nowrap; color: var(--varia-button-secondaryForeground); }
 .peek-action:disabled { opacity: 0.5; }
@@ -766,40 +763,19 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .peek-definition:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .peek-note { margin: var(--varia-space-2) var(--varia-space-3); color: var(--varia-descriptionForeground); overflow-wrap: anywhere; }
 .peek-note.error { color: var(--varia-errorForeground); }
-.peek-properties { padding-bottom: var(--varia-space-3); }
 .peek-group { margin: var(--varia-space-2) var(--varia-space-3) var(--varia-space-0); font-size: var(--varia-size-xs); font-weight: 600; color: var(--varia-descriptionForeground); }
-.peek-facts { margin: 0; user-select: text; }
 .peek-properties-pane:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
-.peek-fact { display: grid; grid-template-columns: minmax(96px, 46%) minmax(0, 1fr); gap: var(--varia-space-2); padding: 1px var(--varia-space-3); }
-.peek-fact dt { color: var(--varia-descriptionForeground); }
-.peek-tabs { display: flex; flex-wrap: wrap; min-width: 0; gap: var(--varia-space-1); text-transform: none; letter-spacing: 0; }
-.peek-tab { padding: 0 var(--varia-space-1); border-bottom: 2px solid transparent; font-size: var(--varia-size-xs); white-space: nowrap; color: var(--varia-descriptionForeground); }
-.peek-tab[aria-selected="true"] { border-bottom-color: var(--varia-tab-activeBorderTop); color: var(--varia-editorWidget-foreground); }
-.peek-tab:focus-visible, .peek-follow:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
-.peek-list { margin: 0; padding: var(--varia-space-0) 0 var(--varia-space-2); list-style: none; }
+.peek-follow:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .peek-item { display: flex; align-items: center; gap: var(--varia-space-1); min-width: 0; padding: 1px var(--varia-space-3); white-space: nowrap; }
 .peek-item-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; user-select: text; }
 .peek-item-note { flex-shrink: 0; color: var(--varia-descriptionForeground); }
 .peek-follow { display: flex; align-items: center; gap: var(--varia-space-1); min-width: 0; padding: 0; color: var(--varia-list-highlightForeground); }
 .peek-follow:hover .peek-item-name { text-decoration: underline; }
-/* Top rows: the results grid fills the panel, which does not scroll itself. */
-.peek-grid { display: flex; flex-direction: column; overflow: hidden; }
 /* Peek's definition: the query editor (peek-editor.ts) fills the panel and scrolls itself. */
 .peek-editor { position: relative; flex: 1; min-height: 0; }
 .peek-editor-host { position: absolute; inset: 0; }
-.peek-grid > .peek-note { flex-shrink: 0; }
 .peek-rows { display: flex; flex: 1; flex-direction: column; min-height: 0; }
-/* A promoted tab: the card's body with the room of a document. */
-.peek-tab-body { display: flex; flex: 1; flex-direction: column; min-height: 0; border-top: 1px solid var(--varia-editorWidget-border); }
-.document-frame[data-peek-tab] .document-content { display: flex; flex-direction: column; overflow: hidden; }
-.peek-tab-body .peek-body { grid-template-columns: minmax(0, 1fr) minmax(260px, 360px); }
-/* A narrow card or tab (a slim popped-out Object Explorer) stacks Properties under the definition rather than squeezing it to nothing. */
-.peek-card, .peek-tab-body { container-type: inline-size; }
-@container (max-width: 560px) {
-  .peek-body, .peek-tab-body .peek-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 3fr) minmax(0, 2fr); }
-  .peek-side { border-left: 0; border-top: 1px solid var(--varia-editorWidget-border); }
-}
-.peek-fact dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; user-select: text; }
+.peek-card { container-type: inline-size; }
 .explorer-error { flex-shrink: 0; font-size: var(--varia-size-xs); color: var(--varia-errorForeground); line-height: 1.6; padding: 0 12px; margin: 5px 0 8px; overflow-wrap: anywhere; }
 @media (forced-colors: active) {
   .explorer-row[aria-selected="true"], .explorer-tree:focus .explorer-row[aria-selected="true"] { background: Highlight; color: HighlightText; forced-color-adjust: none; }
@@ -926,16 +902,18 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .query-status-state .codicon { font-size: var(--varia-glyph-sm); }
 .query-status-segments { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; margin-left: auto; }
 .query-status-segment { flex-shrink: 0; }
-.query-status-segment + .query-status-segment::before { content: '|'; margin: 0 10px; opacity: 0.55; }
+.query-status-bar .query-status-segment + .query-status-segment::before { content: '|'; margin: 0 10px; opacity: 0.55; }
+.query-status .query-status-segment + .query-status-segment::before { content: '·'; margin: 0 6px; opacity: 0.55; }
+.query-status[data-compact="true"] .query-status-server { font-weight: 600; }
 /* Short of room, the server gives way first, then the login, then the database (each whole in the bar's tooltip); the
    time and rows keep their size. The weights make the shrinking all but sequential. */
 .query-status-server, .query-status-login, .query-status-database { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .query-status-server { flex-shrink: 1000000; }
 .query-status-login { flex-shrink: 1000; }
 .query-status-database { flex-shrink: 1; }
-/* A query's own bar: Execute, Cancel, Actual Plan, Live Plan, Estimated Plan and Client Statistics, then the connection pill. A narrow
-   editor drops button words and key hints, then the lists give up width, then a long environment label is cut
-   short, and the pill never wraps. Its own size keeps the tag's 12em as wide as elsewhere. */
+/* A query's own bar: Execute (morphing to Cancel with live elapsed time while running), anchored Execution Scope pill,
+   unified Plan ▾ menu, Client Statistics and the connection pill. A narrow editor drops button words and key hints,
+   then the lists give up width, then a long environment label is cut short, and the pill never wraps. */
 .query-bar { position: relative; isolation: isolate; display: flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-bar); padding: 0 var(--varia-space-2); flex-shrink: 0; min-width: 0; overflow: hidden; container-type: inline-size; font-size: var(--varia-size-sm); background: var(--varia-editor-background); border-bottom: 1px solid var(--varia-editorGroup-border); }
 .query-bar > * { position: relative; z-index: 1; }
 /* Connection-color hairline + soft leading wash for any preset or custom accent; neutral when unset. */
@@ -946,7 +924,32 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .query-bar-actions { display: flex; align-items: center; flex-shrink: 0; gap: var(--varia-space-1); }
 .query-bar-action { flex-shrink: 0; }
 .query-bar-action.execute kbd { color: inherit; border-color: currentColor; }
+.query-bar-action.cancel { background: var(--varia-banner-errorBackground); color: var(--varia-banner-errorForeground); border-color: var(--varia-errorForeground); font-weight: 600; transition: none; }
+.query-bar-action.cancel:hover:not(:disabled) { background: var(--varia-banner-errorBackground); color: var(--varia-banner-errorForeground); border-color: var(--varia-banner-errorForeground); }
+.query-elapsed { display: inline-flex; align-items: center; padding: 0 var(--varia-space-1); border: 1px solid currentColor; border-radius: var(--varia-radius-sm); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; opacity: 0.9; }
 .query-scope { flex-shrink: 0; max-width: 15em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
+.query-bar .query-scope { --ui-control-height: var(--varia-control); display: inline-flex; align-items: center; height: var(--ui-control-height); padding: 0 var(--varia-space-2); border-radius: var(--varia-radius-sm); border: 1px solid transparent; line-height: var(--varia-line-xs); background: var(--varia-statusPill-neutralBackground); color: var(--varia-statusPill-neutralForeground); }
+.query-bar .query-scope[data-selection] { background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); border-color: var(--varia-warningForeground); font-weight: 600; }
+.query-bar-sep { width: 1px; height: 16px; flex-shrink: 0; background: var(--varia-toolbar-separatorBackground); margin: 0 var(--varia-space-0); }
+.query-bar-action.plan-menu-trigger { border-color: var(--varia-button-border); }
+.query-bar-action.plan-menu-trigger:hover:not(:disabled) { border-color: var(--varia-descriptionForeground); }
+.query-bar-action.plan-menu-trigger[aria-expanded="true"]:not([data-active]) { background: var(--varia-button-secondaryHoverBackground); color: var(--varia-button-secondaryHoverForeground); border-color: var(--varia-descriptionForeground); transition: none; }
+.query-bar-action.plan-menu-trigger[data-active] { background: var(--varia-chip-activeBackground); color: var(--varia-chip-activeForeground); border-color: var(--varia-chip-activeBorder); font-weight: 500; transition: none; }
+.query-bar-action.plan-menu-trigger[data-active]:hover:not(:disabled) { background: var(--varia-chip-activeBackground); color: var(--varia-chip-activeForeground); border-color: var(--varia-chip-activeBorder); }
+.plan-menu-chevron { opacity: 0.8; }
+.plan-menu-popover { position: fixed; z-index: 13000; display: flex; flex-direction: column; gap: var(--varia-space-0); min-width: 240px; max-width: calc(100vw - 16px); padding: var(--varia-space-1); background: var(--varia-menu-background); color: var(--varia-menu-foreground); border: 1px solid var(--varia-menu-border); border-radius: var(--varia-radius-lg); box-shadow: var(--varia-shadow-menu) var(--varia-widget-shadow); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); user-select: none; animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease); }
+.plan-menu-header { padding: var(--varia-space-1) var(--varia-space-2); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--varia-descriptionForeground); }
+.plan-menu-item { width: 100%; display: flex; align-items: center; gap: var(--varia-space-2); padding: 6px var(--varia-space-2); border: 1px solid transparent; border-radius: var(--varia-radius-sm); background: transparent; color: var(--varia-menu-foreground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); text-align: left; }
+.plan-menu-item:hover:not(:disabled) { background: var(--varia-menu-selectionBackground); color: var(--varia-menu-selectionForeground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
+.plan-menu-item:focus-visible { background: var(--varia-menu-selectionBackground); color: var(--varia-menu-selectionForeground); outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; transition: none; }
+.plan-menu-item[aria-checked="true"] { background: var(--varia-menu-selectionBackground); color: var(--varia-menu-selectionForeground); font-weight: 500; transition: none; }
+.plan-menu-item:disabled { color: var(--varia-disabledForeground); opacity: 0.6; cursor: default; }
+.plan-menu-body { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.plan-menu-title { white-space: nowrap; }
+.plan-menu-sub { font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); color: var(--varia-descriptionForeground); font-weight: 400; white-space: nowrap; }
+.plan-menu-item:hover:not(:disabled) .plan-menu-sub, .plan-menu-item:focus-visible .plan-menu-sub, .plan-menu-item[aria-checked="true"] .plan-menu-sub { color: inherit; }
+.plan-menu-check { margin-left: auto; flex-shrink: 0; }
+.plan-menu-sep { height: 1px; background: var(--varia-menu-separatorBackground); margin: var(--varia-space-1) var(--varia-space-0); }
 .editor-group-new-query { color: var(--varia-descriptionForeground); }
 .oe-recovery-action { margin-left: auto; flex-shrink: 0; padding: 0 var(--varia-space-1); font-size: var(--varia-size-xs); line-height: var(--varia-line-sm); color: var(--varia-objectExplorer-actionForeground); }
 .object-search-database-scope { display: flex; align-items: center; gap: var(--varia-space-1); margin: var(--varia-space-1) 0; min-width: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
@@ -980,6 +983,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 @container (max-width: 500px) {
   .query-bar-label { display: none; }
   .query-bar-action { padding: 0 2px; }
+  .query-bar-action.cancel { padding: 0 var(--varia-space-1); }
   .query-connection { --query-connection-start: calc(var(--varia-space-1) + 1px); gap: var(--varia-space-0); }
   /* Reserve compact space for the environment label and both selectors. */
   .query-connection-icon { display: none; }
@@ -988,6 +992,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
   .query-bar-actions { gap: 0; }
   .query-bar-action { padding: 0; min-width: var(--varia-space-4); }
   .query-bar-action .codicon { font-size: var(--varia-glyph-sm); }
+  .query-bar-sep, .query-elapsed { display: none; }
   .query-connection { --query-connection-start: 0px; gap: 0; }
   .query-bar-environment .status-pill.small { padding: 0 var(--varia-space-0); }
   .query-connection-divider, .query-connection .connection-swatch { display: none; }
@@ -995,7 +1000,13 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 @container (min-width: 300px) {
   .query-bar-environment:has(.environment-tag:not([data-custom])) { flex-shrink: 0; }
 }
-@media (forced-colors: active) { .query-bar[data-connection-accent]::before, .query-bar[data-connection-accent]::after, .query-connection[data-connection-accent]::before { display: none; } .query-connection .connection-swatch { forced-color-adjust: none; } .query-connection::after { border-color: CanvasText; } }
+@media (forced-colors: active) {
+  .query-bar[data-connection-accent]::before, .query-bar[data-connection-accent]::after, .query-connection[data-connection-accent]::before { display: none; }
+  .query-connection .connection-swatch { forced-color-adjust: none; }
+  .query-connection::after, .query-bar-action.cancel, .query-bar .query-scope[data-selection], .query-bar-action.plan-menu-trigger[data-active], .plan-menu-popover { border-color: CanvasText; }
+  .plan-menu-item:hover:not(:disabled), .plan-menu-item:focus-visible { background: Highlight; color: HighlightText; forced-color-adjust: none; }
+  .plan-menu-item:disabled { color: GrayText; opacity: 1; }
+}
 .editor-container { flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
 .editor-loading { padding: 30px; color: var(--varia-emptyState-foreground); }
 .output-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; background: var(--varia-panel-background); }
@@ -1568,7 +1579,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
    2 px padding each side, 1 px border); the sides' names are cut first. */
 .rg-compare-bar { flex-shrink: 0; display: flex; align-items: center; gap: var(--varia-space-2); height: 29px; box-sizing: border-box; padding: 2px 8px; overflow: hidden; border-bottom: 1px solid var(--varia-panel-border); font: var(--varia-size-xs)/16px var(--varia-font-ui); color: var(--varia-panelTitle-activeForeground); }
 .rg-compare-title { flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px; font-weight: 600; }
-.rg-compare-sides { display: inline-flex; align-items: center; gap: 2px; min-width: 0; }
+.rg-compare-sides { flex-shrink: 1; min-width: 48px; overflow: hidden; display: inline-flex; align-items: center; gap: 2px; }
 .rg-compare-side { min-width: 0; max-width: 220px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; padding: 0 4px; border: 0; background: none; color: var(--varia-resultsGrid-linkForeground); font: inherit; text-decoration: underline; cursor: pointer; }
 .rg-compare-side.is-closed { color: var(--varia-panelTitle-inactiveForeground); text-decoration: none; cursor: default; }
 .rg-compare-swap, .rg-compare-exact { flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 4px; border: 1px solid transparent; border-radius: var(--varia-radius-sm); background: none; color: var(--varia-panelTitle-inactiveForeground); font: inherit; }
@@ -1581,7 +1592,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 @media (forced-colors: active) { .rg-compare-exact[aria-pressed="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText; } .rg-compare-bar [aria-disabled="true"] { color: GrayText; opacity: 1; } }
 /* The comparison toolbar's Match, Rows, chips, Profile and Save; a narrow pane folds them away in order (comparisonFolds),
    into More results tools; the chips first shrink to their sign and count. */
-.rg-compare-match { flex-shrink: 1; display: inline-flex; align-items: center; gap: 2px; min-width: 0; max-width: 200px; height: 22px; padding: 0 2px 0 6px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: none; color: var(--varia-panelTitle-activeForeground); font: inherit; }
+.rg-compare-match { flex-shrink: 1; display: inline-flex; align-items: center; gap: 2px; min-width: 0; max-width: 200px; height: 22px; overflow: hidden; padding: 0 2px 0 6px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: none; color: var(--varia-panelTitle-activeForeground); font: inherit; }
 .rg-compare-match > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Key columns' ⚷, which the button's name says as "key columns". */
 .rg-compare-match > .rg-compare-key::before { content: "\26B7\00a0" / ""; }
@@ -1772,14 +1783,16 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .client-statistics-tools { display: flex; align-items: center; flex-wrap: wrap; gap: var(--varia-space-3); }
 .client-statistics-tools label { display: flex; align-items: center; gap: var(--varia-space-2); }
 .client-statistics p { color: var(--varia-descriptionForeground); margin: var(--varia-space-2) 0; }
-.memory-status { margin-left: var(--varia-space-2); }
+.memory-status { display: flex; align-items: center; margin-left: var(--varia-space-2); }
+.memory-status::before { content: ''; width: 1px; height: 12px; margin-right: var(--varia-space-2); background: var(--varia-statusBar-separatorForeground); opacity: 0.35; flex-shrink: 0; }
 /* Discard results after execution (DiscardStatus): shown only while it is on, as plain as the memory control beside it. */
 .discard-status { display: flex; margin-left: var(--varia-space-2); }
 .discard-status-button { display: flex; align-items: center; gap: var(--varia-space-1); padding: 0 var(--varia-space-2); color: inherit; font-size: inherit; border-color: transparent; background: transparent; cursor: pointer; }
 .discard-status-button:focus-visible { outline-offset: -2px; }
 .discard-status-button .codicon { font-size: var(--varia-glyph-sm); }
-.memory-indicator { anchor-name: --status-memory; display: flex; align-items: center; gap: var(--varia-space-1); padding: 0 var(--varia-space-2); color: inherit; font-size: inherit; }
+.memory-indicator { anchor-name: --status-memory; display: flex; align-items: center; gap: var(--varia-space-1); height: 20px; padding: 0 var(--varia-space-2); border: 0; border-radius: var(--varia-radius-sm); color: inherit; font-size: inherit; font-variant-numeric: tabular-nums; }
 .memory-indicator:focus-visible { outline-offset: -2px; }
+.memory-indicator-label { font-variant-numeric: tabular-nums; }
 .memory-status > .memory-indicator[aria-expanded="true"] { background: var(--varia-menu-selectionBackground); color: var(--varia-menu-selectionForeground); }
 .memory-indicator .codicon { font-size: var(--varia-glyph-sm); }
 .memory-status > .memory-indicator[data-level="warning"] { background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); }
@@ -1790,7 +1803,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .memory-ring[data-feature="results"] { color: var(--varia-charts-purple); }
 .memory-ring[data-level="unavailable"] { color: var(--varia-disabledForeground); }
 /* Over the dock and below notifications, quick input, dialogs, and menus. */
-.memory-details { position: fixed; z-index: 13000; position-anchor: --status-memory; inset: auto max(8px, anchor(right)) anchor(top) auto; margin: 0; width: min(384px, calc(100% - 16px)); max-height: calc(100vh - var(--varia-status) - 8px); overflow: auto; padding: var(--varia-space-3); background: var(--varia-menu-background); color: var(--varia-menu-foreground); border: 1px solid var(--varia-widget-border); border-radius: var(--varia-radius-lg); box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow); font-size: var(--varia-size-sm); font-variant-numeric: tabular-nums; line-height: var(--varia-line-sm); white-space: normal; }
+.memory-details { position: fixed; z-index: 13000; position-anchor: --status-memory; inset: auto max(8px, anchor(right)) anchor(top) auto; margin: 0; width: min(416px, calc(100% - 16px)); max-height: calc(100vh - var(--varia-status) - 8px); overflow: auto; padding: var(--varia-space-3); background: var(--varia-menu-background); color: var(--varia-menu-foreground); border: 1px solid var(--varia-widget-border); border-radius: var(--varia-radius-lg); box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow); font-size: var(--varia-size-sm); font-variant-numeric: tabular-nums; line-height: var(--varia-line-sm); white-space: normal; }
 .memory-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--varia-space-2); padding-bottom: var(--varia-space-2); }
 .memory-heading h2, .memory-row h3 { margin: 0; font-size: inherit; font-weight: 600; }
 .memory-heading span, .memory-level, .memory-remaining, .memory-row p { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
@@ -1827,9 +1840,12 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .memory-tile-value small { margin-left: var(--varia-space-1); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); font-weight: 400; }
 .memory-tile[data-tone="saved"] .memory-tile-value { color: var(--varia-successForeground); }
 .memory-group { display: grid; gap: var(--varia-space-1); }
-.memory-group h4 { display: flex; justify-content: space-between; margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+.memory-group h4 { display: flex; align-items: center; justify-content: space-between; margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
 .memory-group-aside { display: flex; align-items: center; gap: var(--varia-space-0); font-weight: 400; letter-spacing: 0; text-transform: none; }
 .memory-group-aside > .codicon { font-size: var(--varia-glyph-sm); }
+.memory-close-all { margin-left: var(--varia-space-2); padding: 0 var(--varia-space-1); border: 0; border-radius: var(--varia-radius-sm); background: transparent; color: var(--varia-statusPill-runningForeground); font-size: var(--varia-size-xs); font-weight: 600; line-height: inherit; letter-spacing: 0; text-transform: none; cursor: pointer; }
+.memory-close-all:hover { background: var(--varia-toolbar-hoverBackground); transition: background var(--varia-motion-fast) var(--varia-motion-ease); }
+.memory-close-all:focus-visible { outline-offset: -1px; }
 .memory-bar-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--varia-space-0) var(--varia-space-2); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
 .memory-figure { text-align: end; white-space: nowrap; }
 .memory-bar { grid-column: 1 / -1; display: flex; height: 8px; overflow: hidden; border-radius: var(--varia-radius-pill); background: var(--varia-badge-background); }
@@ -1845,9 +1861,11 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .memory-legend { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--varia-space-1) var(--varia-space-4); margin: var(--varia-space-1) 0 0; padding: 0; list-style: none; font-size: var(--varia-size-xs); }
 .memory-legend li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--varia-space-2); }
 .memory-swatch { width: 8px; height: 8px; border-radius: 2px; }
-/* One grid for every row, so names, bars, sizes and states line up down the list. */
-.memory-biggest { display: grid; grid-template-columns: minmax(0, 1fr) 28px auto auto auto; align-items: center; gap: var(--varia-space-2); margin: 0; padding: 0; list-style: none; }
-.memory-biggest li { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; }
+/* One grid for every row, so names, bars, sizes, states and quick-free actions line up down the list. */
+.memory-biggest { display: grid; grid-template-columns: minmax(0, 1fr) 28px auto auto auto; align-items: center; gap: var(--varia-space-1) var(--varia-space-2); margin: 0; padding: 0; list-style: none; }
+.memory-biggest.memory-biggest-actionable { grid-template-columns: minmax(0, 1fr) 28px auto auto auto 20px; }
+.memory-biggest li { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; padding: var(--varia-space-0) var(--varia-space-1); margin: 0 calc(-1 * var(--varia-space-1)); border-radius: var(--varia-radius-sm); }
+.memory-biggest li:hover, .memory-biggest li:focus-within { background: var(--varia-toolbar-hoverBackground); }
 .memory-biggest-name { display: flex; min-width: 0; white-space: nowrap; }
 .memory-biggest-name > span { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
 .memory-biggest-name > .memory-biggest-tab { flex: 0 1 auto; max-width: 42%; }
@@ -1861,6 +1879,12 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .memory-state[data-state="raw"] { background: var(--varia-memoryPanel-rawBackground); color: var(--varia-memoryPanel-rawForeground); }
 .memory-state:is([data-state="packed"], [data-state="partial"]) { background: var(--varia-memoryPanel-packedBackground); color: var(--varia-memoryPanel-packedForeground); }
 .memory-state[data-state="unpacking"] { background: var(--varia-statusPill-warningBackground); color: var(--varia-statusPill-warningForeground); }
+.memory-biggest-close { display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: var(--varia-radius-sm); background: transparent; color: var(--varia-descriptionForeground); opacity: 0; cursor: pointer; }
+.memory-biggest li:hover .memory-biggest-close, .memory-biggest li:focus-within .memory-biggest-close, .memory-biggest-close:focus-visible { opacity: 1; }
+.memory-biggest-close:hover:not(:disabled) { background: var(--varia-menu-selectionBackground); color: var(--varia-menu-selectionForeground); transition: background var(--varia-motion-fast) var(--varia-motion-ease); }
+.memory-biggest-close:disabled { opacity: 0.35; cursor: default; }
+.memory-biggest-close:focus-visible { outline-offset: -1px; }
+.memory-biggest-close-spacer { width: 20px; height: 20px; }
 /* The Search Indexer's part follows the results' under its own rule, in the same tiles, bars and counters. */
 .memory-index { display: grid; gap: var(--varia-space-3); padding-top: var(--varia-space-3); border-top: 1px solid var(--varia-menu-separatorBackground); }
 .memory-index > h4 { display: flex; justify-content: space-between; margin: 0; font-size: var(--varia-size-xs); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
@@ -1897,24 +1921,32 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .layout-notice { color: var(--varia-successForeground); font-size: var(--varia-size-sm); }
 
 /* The bar shares the chrome fill with Object Explorer, so its own top line keeps it apart; a connection color replaces it. */
-.status-bar { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; height: var(--varia-status); overflow: hidden; background: var(--varia-statusBar-background); color: var(--varia-statusBar-foreground); border-top: 1px solid var(--varia-statusBar-border); font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; line-height: 16px; padding: 0 13px; }
+.status-bar { position: relative; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; height: var(--varia-status); overflow: hidden; background: var(--varia-statusBar-background); color: var(--varia-statusBar-foreground); border-top: 1px solid var(--varia-statusBar-border); font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; line-height: 16px; padding: 0 13px; }
 .status-bar[data-state="executing"] { background: var(--varia-statusBar-executingBackground); color: var(--varia-statusBar-executingForeground); }
 .status-bar[data-state="disconnected"] { background: var(--varia-statusBar-disconnectedBackground); color: var(--varia-statusBar-disconnectedForeground); }
 .status-bar[data-state="error"] { background: var(--varia-statusBar-errorBackground); color: var(--varia-statusBar-errorForeground); }
-.status-bar > .backend-status { display: flex; align-items: center; gap: 8px; }
+.status-bar > .backend-status { position: relative; display: flex; align-items: center; gap: 8px; }
+.status-bar > .backend-status.compact { align-self: stretch; gap: 0; padding: 0 2px; }
+.status-bar > .status-environment + .backend-status.compact { margin-left: 8px; }
 /* The outer segments keep their size. Scripting, in the middle, takes the space left over down to a floor that keeps
    Cancel and the start of its text; past that the server and database give way. The bar itself never widens the page.
    The segment clips what still does not fit, and its padding and full height leave room for a focus ring. */
 .status-bar > :not(.status-scripting) { flex-shrink: 0; white-space: nowrap; }
 /* The active query's facts, after the backend's state: its run, then server, login (SPID) and database, time and rows. */
-.status-bar > .query-status { display: flex; align-items: center; gap: 12px; flex-shrink: 1; min-width: 0; overflow: hidden; margin-left: 16px; }
+.status-bar > .query-status { position: relative; display: flex; align-items: center; gap: 12px; flex-shrink: 1; min-width: 0; overflow: hidden; margin-left: 16px; }
+.status-bar > .backend-status.compact + .query-status { margin-left: 6px; gap: 0; }
 .query-status .query-status-segments { margin-left: 0; }
 /* The editor's facts are short and keep their size: the query's facts give way (and ellipsize) first. */
-.status-bar > .editor-status { display: flex; align-items: center; gap: 12px; flex-shrink: 0; margin: 0 12px; }
-.editor-status-position { display: flex; gap: 10px; }
-.editor-status-action { padding: 0 var(--varia-space-0); font-size: inherit; line-height: inherit; color: inherit; border: 0; }
-.editor-status > * + *::before { content: '|'; margin-right: 12px; color: var(--varia-statusBar-separatorForeground); }
+.status-bar > .editor-status { position: relative; display: flex; align-items: center; gap: var(--varia-space-2); flex-shrink: 0; margin: 0 var(--varia-space-2); }
+.editor-status-group { display: flex; align-items: center; gap: var(--varia-space-2); }
+.editor-status-group + .editor-status-group::before { content: ''; width: 1px; height: 12px; background: var(--varia-statusBar-separatorForeground); opacity: 0.35; flex-shrink: 0; }
+.editor-status-position { display: flex; gap: 8px; }
+.editor-status-action { display: inline-flex; align-items: center; gap: var(--varia-space-1); height: 20px; padding: 0 var(--varia-space-1); border-radius: var(--varia-radius-sm); font-size: inherit; line-height: inherit; color: inherit; border: 0; }
+.editor-status-action:focus-visible { outline-offset: -2px; }
+.editor-status-file { gap: 0; }
+.editor-status-file > * + *::before { content: '·'; margin: 0 6px; opacity: 0.55; }
 .editor-status-readonly { display: flex; align-items: center; gap: 4px; }
+.editor-status-sql[data-tone="muted"] { opacity: 0.85; }
 .editor-status .codicon { font-size: var(--varia-glyph-sm); }
 .status-scripting { display: flex; align-items: center; align-self: stretch; justify-content: safe center; gap: 8px; flex: 1 1 0; min-width: 0; overflow: hidden; margin: 0 8px; padding: 0 4px; }
 .status-scripting:not(:empty) { min-width: 20em; }
@@ -2634,6 +2666,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 /* Apart from the backend's state, which it does not describe: beside it, outside its tooltip. */
 .status-environment { display: flex; align-items: center; min-width: 0; padding-left: 8px; border-left: 1px solid var(--varia-statusBar-border); }
 .status-bar > .status-environment { margin-left: 8px; }
+.status-bar > .status-environment:first-child { margin-left: 0; padding-left: 0; border-left: 0; }
 .environment-preview { display: inline-flex; align-items: center; gap: var(--varia-space-1); min-width: 0; max-width: 100%; white-space: nowrap; }
 .environment-preview .environment-tag { flex: 0 1 auto; }
 .connection-choice-title { display: flex; align-items: center; min-width: 0; }
@@ -2913,12 +2946,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .document-script-text:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .document-script-empty, .document-script-note { margin: 0; padding: var(--varia-space-2) var(--varia-space-3); color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
 .document-script-note { flex: none; border-top: 1px solid var(--varia-panel-border); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
-/* SSIS properties documents (src/renderer/src/ssis): General as label and value pairs, and read-only lists. */
-.ssis-properties { display: grid; grid-template-columns: minmax(120px, max-content) minmax(0, 1fr); gap: var(--varia-space-1) var(--varia-space-4); margin: 0; font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
-.ssis-properties > div { display: contents; }
-.ssis-properties dt { color: var(--varia-descriptionForeground); }
-.ssis-properties dd { min-width: 0; margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-/* A list is a fitted page LocalGrid (properties-view.tsx): as tall as its rows, since the section column scrolls. */
+/* SSIS properties documents (src/renderer/src/ssis): natural-height LocalGrid lists and status notes (General uses FactGrid). */
 .ssis-properties-grid { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--varia-panel-border); }
 .ssis-properties-note { margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
 .ssis-properties-none { color: var(--varia-descriptionForeground); }
@@ -2973,6 +3001,9 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 @container document-sections (max-width: 540px) {
   .property-field, .property-facts { grid-template-columns: minmax(0, 1fr); }
   .property-field-note, .property-field-error { grid-column: 1; }
+  .document-sections .fact-grid:not(.compact) { grid-template-columns: minmax(0, 1fr); }
+  .document-sections .fact-grid:not(.compact) .fact-grid-row > dt { border-bottom: 0; padding-bottom: 0; padding-top: var(--varia-space-2); }
+  .document-sections .fact-grid:not(.compact) .fact-grid-row > dd { padding-top: var(--varia-space-0); padding-bottom: var(--varia-space-2); }
 }
 /* The hint strip, pinned to the bottom of the sections column over its rows: it takes no room, so showing it never moves
    a row under the pointer (a click that moves focus would otherwise land on a row that just moved), and while it is empty
@@ -3436,10 +3467,6 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .search-details { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .search-details-empty { align-self: center; margin-top: var(--varia-space-4); }
 .search-details-properties { flex-shrink: 0; max-height: 40%; overflow: auto; padding: var(--varia-space-1) var(--varia-space-3) var(--varia-space-2); border-bottom: 1px solid var(--varia-editorGroup-border); }
-.search-details-facts { margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(10em, 1fr)); gap: var(--varia-space-1) var(--varia-space-3); }
-.search-details-fact { min-width: 0; }
-.search-details-fact dt { font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
-.search-details-fact dd { margin: 0; font-size: var(--varia-size-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .search-details-views { flex-shrink: 0; padding: var(--varia-space-2) var(--varia-space-3) 0; }
 /* The matched line's band sits behind the text: the definition is its own stacking context, and the band below its content. */
 .search-details-definition { position: relative; isolation: isolate; }
@@ -3906,12 +3933,14 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 }
 /* Unified FactGrid: flush 16 px left alignment, label rail matched with editable PropertyField. */
 .fact-grid { display: grid; grid-template-columns: minmax(156px, 28%) minmax(0, 1fr); margin: 0; font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
-.fact-grid.compact { grid-template-columns: minmax(96px, 42%) minmax(0, 1fr); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+.fact-grid.compact { grid-template-columns: minmax(84px, 38%) minmax(0, 1fr); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
 .fact-grid-row { display: contents; }
 .fact-grid-row > dt, .fact-grid-row > dd { min-width: 0; padding: var(--varia-space-1) 0; border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
 .fact-grid-row:last-child > dt, .fact-grid-row:last-child > dd { border-bottom: 0; }
 .fact-grid-row > dt { padding-right: var(--varia-space-4); color: var(--varia-descriptionForeground); overflow-wrap: anywhere; }
+.fact-grid.compact .fact-grid-row > dt { padding-right: var(--varia-space-2); }
 .fact-grid-row > dd { display: flex; align-items: center; gap: var(--varia-space-2); margin: 0; color: var(--varia-foreground); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; user-select: text; }
+.fact-grid.compact .fact-grid-row > dd { position: relative; }
 .fact-grid-row:hover > dt, .fact-grid-row:hover > dd { background: var(--varia-list-hoverBackground); }
 .fact-grid-val { flex: 1; min-width: 0; unicode-bidi: isolate; }
 .fact-grid-val.mono { font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
@@ -3920,8 +3949,11 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .fact-grid-link:hover:not(:disabled) { text-decoration: underline; }
 .fact-grid-link:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: 1px; transition: none; }
 .fact-grid-copy { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0; border: 1px solid transparent; border-radius: var(--varia-radius-sm); background: transparent; color: var(--varia-descriptionForeground); opacity: 0; }
+.fact-grid.compact .fact-grid-copy { position: absolute; top: 50%; right: 0; transform: translateY(-50%); background: var(--varia-sideBar-background); }
+.fact-grid.compact .fact-grid-row:hover .fact-grid-copy { background: var(--varia-list-hoverBackground); }
 .fact-grid-row:hover .fact-grid-copy, .fact-grid-copy:focus-visible, .fact-grid-copy.copied { opacity: 1; }
 .fact-grid-copy:hover:not(:disabled) { background: var(--varia-button-secondaryHoverBackground); color: var(--varia-button-secondaryHoverForeground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
+.fact-grid.compact .fact-grid-copy:hover:not(:disabled) { background: var(--varia-button-secondaryHoverBackground); }
 .fact-grid-copy:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; transition: none; }
 .fact-grid-copy.copied { color: var(--varia-successForeground); transition: none; }
 .fact-grid-copy > .codicon { font-size: var(--varia-glyph-sm); }
@@ -4030,6 +4062,39 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 @media (forced-colors: active) {
   .agent-several-cell[data-changed] { border-left-color: Highlight; }
   .agent-several-details .link-button, .agent-several-results .link-button, .agent-several-table .link-button { color: LinkText; }
+}
+/* The Schedules Timeline (AG-14, rx-timeline): TimelineView draws the bars, ticks and now line into the lanes. */
+.agent-timeline-wrap { display: flex; flex-direction: column; gap: var(--varia-space-2); flex: 1; min-height: 0; }
+.agent-timeline-tools { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); }
+.agent-timeline-zoom[aria-disabled="true"], .agent-timeline-scroll[aria-disabled="true"] { opacity: .4; cursor: default; pointer-events: none; }
+.agent-timeline-scroll { flex: 0 1 200px; min-width: 80px; }
+.agent-timeline-hint { flex: 1 1 260px; min-width: 0; }
+.agent-timeline { position: relative; display: flex; flex-direction: column; min-height: 0; overflow-y: auto; overflow-x: hidden; font-size: var(--varia-size-sm); background: var(--varia-editor-background); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); }
+.agent-timeline-row { display: flex; flex: none; height: calc(var(--varia-row) + var(--varia-space-1)); border-bottom: 1px solid var(--varia-panel-border); }
+.agent-timeline-row[data-disabled] .agent-timeline-title { color: var(--varia-descriptionForeground); }
+.agent-timeline-head { position: sticky; top: 0; z-index: 3; height: var(--varia-row); color: var(--varia-descriptionForeground); background: var(--varia-panel-background); font-size: var(--varia-size-xs); }
+.agent-timeline-name { display: flex; flex: 0 0 340px; align-items: center; gap: var(--varia-space-1); min-width: 0; padding: 0 var(--varia-space-2); overflow: hidden; white-space: nowrap; border-right: 1px solid var(--varia-panel-border); }
+.agent-timeline-title { overflow: hidden; text-overflow: ellipsis; }
+.agent-timeline-label { margin-left: auto; padding-left: var(--varia-space-2); overflow: hidden; text-overflow: ellipsis; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.agent-timeline-lane { position: relative; flex: 1; min-width: 0; overflow: hidden; }
+.agent-timeline-lane:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.agent-timeline-tick { position: absolute; top: 0; bottom: 0; display: flex; align-items: center; padding-left: var(--varia-space-1); white-space: nowrap; border-left: 1px solid var(--varia-panel-border); font-variant-numeric: tabular-nums; }
+.agent-timeline-midnight { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--varia-descriptionForeground); }
+.agent-timeline-bar { position: absolute; top: 25%; height: 50%; min-width: 2px; box-sizing: border-box; border-radius: var(--varia-radius-sm); background: var(--varia-charts-blue); opacity: 0.75; }
+.agent-timeline-bar[data-overlap] { z-index: 1; background: var(--varia-warningForeground); opacity: 1; }
+.agent-timeline-bar[data-off] { opacity: 1; background: transparent; border: 1px dashed var(--varia-descriptionForeground); }
+.agent-timeline-bar[data-active] { outline: 2px solid var(--varia-focusBorder); outline-offset: 1px; z-index: 2; }
+.agent-timeline-now { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--varia-errorForeground); z-index: 1; }
+.agent-timeline-tooltip { position: absolute; z-index: 4; max-width: 420px; padding: var(--varia-space-1) var(--varia-space-2); pointer-events: none; color: var(--varia-foreground); background: var(--varia-editorWidget-background); border: 1px solid var(--varia-widget-border); border-radius: var(--varia-radius-sm); box-shadow: var(--varia-widget-shadow); font-size: var(--varia-size-xs); }
+.agent-timeline-notes { display: flex; flex-direction: column; gap: var(--varia-space-1); }
+.agent-timeline-note { display: flex; align-items: flex-start; font-size: var(--varia-size-sm); gap: var(--varia-space-1); margin: 0; padding: var(--varia-space-1) var(--varia-space-2); color: var(--varia-banner-warningForeground); background: var(--varia-banner-warningBackground); border-radius: var(--varia-radius-sm); }
+.agent-timeline-note .agent-schedules-link { margin-left: var(--varia-space-1); white-space: nowrap; }
+@media (forced-colors: active) {
+  .agent-timeline-bar { background: CanvasText; forced-color-adjust: none; }
+  .agent-timeline-bar[data-overlap] { background: Mark; }
+  .agent-timeline-bar[data-off] { background: Canvas; border-color: GrayText; }
+  .agent-timeline-bar[data-active] { outline-color: Highlight; }
+  .agent-timeline-now { background: Highlight; forced-color-adjust: none; }
 }
 
 /* The Integration Services document: the history bar over the shown place's frame. */
@@ -4220,6 +4285,30 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .table-inspector-vitals-caps { display: flex; flex-wrap: wrap; gap: var(--varia-space-1); margin: 0; padding: 0; list-style: none; }
 @media (forced-colors: active) {
   .table-inspector-dep-link { color: LinkText; }
+}
+/* OP-4b: Foreign Key relationship diagram, Key Summary, and Constraint expression visuals. */
+.fk-section-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); }
+.fk-section-head > .peek-section-title { margin: 0; }
+.fk-status-pills { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); margin-left: auto; }
+.fk-diagram { display: flex; flex-wrap: wrap; align-items: stretch; gap: var(--varia-space-3); padding: var(--varia-space-3) var(--varia-space-4); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-lg); background: var(--varia-panel-background); min-width: 0; }
+.fk-box { flex: 1 1 180px; min-width: 0; display: flex; flex-direction: column; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-editor-background); }
+.fk-box-role { font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); color: var(--varia-descriptionForeground); text-transform: uppercase; letter-spacing: 0.04em; }
+.fk-box-tbl { display: flex; align-items: center; gap: var(--varia-space-2); min-width: 0; font-size: var(--varia-size-md); line-height: var(--varia-line-md); font-weight: 600; color: var(--varia-foreground); }
+.fk-box-name, .fk-box-link { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+.fk-arrow { flex: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--varia-space-1); padding: 0 var(--varia-space-1); }
+.fk-arrow-line { color: var(--varia-descriptionForeground); font-size: var(--varia-size-md); line-height: var(--varia-line-sm); font-weight: 600; }
+.fk-col-list { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); }
+.fk-col-pill { display: inline-flex; align-items: center; gap: var(--varia-space-1); max-width: 100%; padding: var(--varia-space-0) var(--varia-space-2); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-panel-background); color: var(--varia-foreground); font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); overflow-wrap: anywhere; }
+.fk-col-dir { color: var(--varia-descriptionForeground); font-weight: 600; }
+.fk-col-type { color: var(--varia-descriptionForeground); }
+.fk-col-more { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.key-summary-card { display: flex; flex-direction: column; gap: var(--varia-space-2); padding: var(--varia-space-3) var(--varia-space-4); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-panel-background); min-width: 0; }
+.key-summary-parent { display: flex; align-items: center; gap: var(--varia-space-2); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); color: var(--varia-foreground); }
+.peek-expression-code { margin: 0; padding: var(--varia-space-3) var(--varia-space-4); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-input-background); color: var(--varia-input-foreground); font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); line-height: var(--varia-line-md); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.peek-expression-fill { flex: 1; min-height: 0; margin: 0; padding: var(--varia-space-3) var(--varia-space-4); overflow: auto; background: var(--varia-input-background); color: var(--varia-input-foreground); font-family: var(--varia-font-mono); font-size: var(--varia-size-sm); line-height: var(--varia-line-md); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+@media (forced-colors: active) {
+  .fk-diagram, .fk-box, .fk-col-pill, .key-summary-card, .peek-expression-code { border-color: CanvasText; }
+  .fk-box-link { color: LinkText; }
 }
 /* SQL Server Agent overview (AG-15): header, tiles and the health checks. */
 .agent-overview { display: flex; flex-direction: column; gap: var(--varia-space-3); box-sizing: border-box; max-width: 980px; padding: var(--varia-space-3) var(--varia-space-4) var(--varia-space-4); }
