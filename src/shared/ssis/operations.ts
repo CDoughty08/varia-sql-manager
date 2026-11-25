@@ -86,7 +86,7 @@ export function operationsCommandEntries(): { readonly [K in OperationsCommandId
     'ssis.stopOperation': {
       title: 'Stop Operation', category: 'Integration Services', icon: 'debug-stop', keywords: ['ssis', 'stop', 'cancel', 'execution', 'package', 'validation'],
       precondition: 'backendReady && ssisOperationStoppable', unavailableHint: 'Select a running execution or validation in Integration Services Operations.',
-      menus: [{ menu: 'ssis.operation.context', group: '1_operation', order: 1, mnemonic: 's' }]
+      menus: [{ menu: 'ssis.operation.context', group: '1_operation', order: 2, mnemonic: 's' }]
     },
     // The document's own F5, as Refresh is in Object Explorer; a query's F5 (editorFocus, or its query bar's) still executes,
     // an Activity Monitor's F5 (activityMonitorFocus) is its Refresh Now, and a Peek's (peekFocus, peekTabFocus) refreshes it. The conflict check reads each state key on its

@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (444)
+## Commands (449)
 
 ### File
 
@@ -414,6 +414,11 @@ keys it uses are listed below.
 | Pause Operations | `ssis.pauseOperations` | — | — | — | `activeDocumentIsSsisOperations && ssisOperationsPausable`; checked when `ssisOperationsPaused` | Integration Services Operations context menu › Pause |
 | Copy Operations | `ssis.copyOperations` | — | — | — | `activeDocumentIsSsisOperations` | Integration Services Operations context menu › Copy |
 | Copy Operations with Headers | `ssis.copyOperationsWithHeaders` | — | — | — | `activeDocumentIsSsisOperations` | Integration Services Operations context menu › Copy with Headers |
+| Open Execution | `ssis.openExecution` | — | — | — | `backendReady && activeDocumentIsSsisOperations` | Integration Services Operations context menu › Open |
+| Go Back | `ssis.goBack` | Alt+Left (`activeDocumentIsSsisOperations && !textInputFocus`) | Alt+Left (`activeDocumentIsSsisOperations && !textInputFocus`) | ⌘[ (`activeDocumentIsSsisOperations && !textInputFocus`) | `activeDocumentIsSsisOperations && ssisCanGoBack` | — |
+| Go Forward | `ssis.goForward` | Alt+Right (`activeDocumentIsSsisOperations && !textInputFocus`) | Alt+Right (`activeDocumentIsSsisOperations && !textInputFocus`) | ⌘] (`activeDocumentIsSsisOperations && !textInputFocus`) | `activeDocumentIsSsisOperations && ssisCanGoForward` | — |
+| Package Executions | `ssis.packageExecutions` | — | — | — | `backendReady && ssisVerbPackageProperties == 'enabled'` | Object Explorer context menu › Executions |
+| Package Last Execution | `ssis.lastRun` | — | — | — | `backendReady && ssisVerbPackageProperties == 'enabled'` | Object Explorer context menu › Last Execution |
 | Folder Properties | `ssis.folderProperties` | — | — | — | `backendReady && ssisVerbFolderProperties == 'enabled'` | Object Explorer context menu › Properties |
 | Project Properties | `ssis.projectProperties` | — | — | — | `backendReady && ssisVerbProjectProperties == 'enabled'` | Object Explorer context menu › Properties |
 | Package Properties | `ssis.packageProperties` | — | — | — | `backendReady && ssisVerbPackageProperties == 'enabled'` | Object Explorer context menu › Properties |
@@ -818,7 +823,9 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `1_monitor` | View A**g**ent Log | `agent.viewAgentLog` | `((explorerNode == 'folder' && explorerFolder == 'agentErrorLogs') \|\| explorerNode == 'agentErrorLog') && !explorerServerLost` |
 | `1_monitor` | Rec**y**cle | `agent.recycleErrorLog` | `((explorerNode == 'folder' && explorerFolder == 'agentErrorLogs') \|\| explorerNode == 'agentErrorLog') && !explorerServerLost && explorerServerEngine == 'box'` |
 | `1_operations` | A**c**tive Operations | `ssis.activeOperations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
+| `1_operations` | E**x**ecutions | `ssis.packageExecutions` | `explorerNode == 'ssisPackage' && !explorerServerLost` |
 | `1_operations` | All E**x**ecutions | `ssis.allExecutions` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
+| `1_operations` | Last Exec**u**tion | `ssis.lastRun` | `explorerNode == 'ssisPackage' && !explorerServerLost` |
 | `1_operations` | All Vali**d**ations | `ssis.allValidations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_operations` | All O**p**erations | `ssis.allOperations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_query` | **N**ew Database… | `explorer.newDatabaseOnDatabase` | `explorerNode == 'database' && !explorerServerLost && explorerServerEngine == 'box'` |
@@ -1131,6 +1138,7 @@ Right-click the Integration Services Operations grid (a right-click outside the 
 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
+| `1_operation` | **O**pen | `ssis.openExecution` | Always |
 | `1_operation` | **S**top Operation | `ssis.stopOperation` | Always |
 | `5_copy` | **C**opy | `ssis.copyOperations` | Always |
 | `5_copy` | Copy with **H**eaders | `ssis.copyOperationsWithHeaders` | Always |
@@ -1282,7 +1290,7 @@ Right-click a job in Job Activity Monitor's list (a right-click outside the sele
 | `5_history` | View **H**istory | `agent.viewHistory` | Always |
 | `9_view` | Re**f**resh | `agent.refreshJobs` | Always |
 
-## Context keys (206)
+## Context keys (209)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1325,7 +1333,10 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `activeDocumentIsText` | boolean | state | The active document has text in the editor: a query or a value opened from the results, not a table designer, Database Properties, SSIS properties or an Activity Monitor. |
 | `activeDocumentIsDesigner` | boolean | state | The active document is a table designer. |
 | `activeDocumentIsSsis` | boolean | state | The active document is the properties of an SSIS Catalog folder, project, package or environment. |
-| `activeDocumentIsSsisOperations` | boolean | state | The active document is Integration Services Operations. |
+| `activeDocumentIsSsisOperations` | boolean | state | The active document is Integration Services: the catalog's operations, a package's runs or a run's page. |
+| `ssisPlace` | `'list'`, `'package'`, `'execution'`, `''` | state | What the active Integration Services document shows: list, package or execution (empty outside it). |
+| `ssisCanGoBack` | boolean | state | The active Integration Services document has a place to go Back to. |
+| `ssisCanGoForward` | boolean | state | The active Integration Services document has a place to go Forward to. |
 | `activeDocumentIsJobActivity` | boolean | state | The active document is SQL Server Agent's Job Activity Monitor. |
 | `activeDocumentIsAgentJob` | boolean | state | The active document is a SQL Server Agent job (Job Properties, or New Job). |
 | `activeDocumentIsAgentAlert` | boolean | state | The active document is a SQL Server Agent alert (Alert Properties, or New Alert). |

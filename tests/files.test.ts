@@ -623,7 +623,7 @@ describe('file commands', () => {
     await vi.waitFor(() => expect(documents.getSnapshot().busy).toBe(true))
     const flush = vi.fn(async () => {})
     const closing = files.closeWindow(flush)
-    await new Promise(resolve => setTimeout(resolve, 0))
+    await new Promise(resolve => setImmediate(resolve))
     expect(api.confirmClose).not.toHaveBeenCalled()
     save.resolve({ ok: true, value: { id: 'file-id', name: 'dbo.Orders.sql', path: 'C:/dbo.Orders.sql', encoding: 'utf8', readOnly: false } })
     await copy

@@ -12,19 +12,20 @@ the Measurements below with the new baseline.
   tested), every push to main and manual runs. Newer PR and main pushes cancel their earlier runs; manual runs always
   finish (tags run release.yml, not CI). The repository is public, so minutes cost nothing, but GitHub runs only 20 of its jobs at once (5 on
   macOS).
-- **Jobs.** A scope job classifies the complete change, then the 14 validation jobs start together, and a final
+- **Jobs.** A scope job classifies the complete change, then the 12 validation jobs start together, and a final
   `CI result` job checks their outcomes. Each validation job builds what it needs, so one failure hides nothing and the
   run takes as long as its longest job:
   - `npm run check` on Linux, Windows and macOS.
-  - The live .NET checks on Linux in three groups (`--live-group k/3`, each against its own SQL Server service); the
-    first also runs `tests/*-live.test.ts`, the bundled SQL Tools Service against the container, Kerberos, and BigQuery
-    against its emulator (`--bigquery-emulator-live`, the image pinned by digest: about 2 s of checks after the pull on a
-    developer machine). The other groups stay Node-free.
-  - The smoke suites in three shards on Linux (sandboxed, under xvfb, with SQL Server, and the same pinned BigQuery
-    emulator started in each shard for the connections suite's Connect dialog phase: about 2 s of that suite) and four on Windows
-    (`scripts/smoke-shards.mjs`, which splits `test:smoke` by each platform's times in its `suiteSeconds`). The other
-    BigQuery suites (results, Explorer, Job History) need no emulator: they run against loopback REST fakes on both
-    platforms. macOS skips the smoke tests until they cover its window chrome.
+  - The live .NET checks on Linux in two jobs (`slot: [1, 2]`): slot 1 runs `--live-group 1/3`, `tests/*-live.test.ts`,
+    the bundled SQL Tools Service against the container, Kerberos, and BigQuery against its emulator
+    (`--bigquery-emulator-live`, the image pinned by digest: about 2 s of checks after the pull on a developer machine).
+    Slot 2 starts two SQL Server containers (ports 1433 and 1434, 3 GB memory cap each) and runs groups `2/3` and `3/3`
+    concurrently after one Release build (`scripts/ci-live-pair.mjs`), skipping `setup-node` and `npm ci`.
+  - The smoke suites in three shards on Linux (sandboxed, under xvfb, with SQL Server; the pinned BigQuery emulator is
+    started only in the shard that owns `connections-smoke.mjs`) and three on Windows (`scripts/smoke-shards.mjs`, which
+    splits `test:smoke` by each platform's times in its `suiteSeconds`). The other BigQuery suites (results, Explorer,
+    Job History) need no emulator: they run against loopback REST fakes on both platforms. macOS skips the smoke tests
+    until they cover its window chrome.
   - Nothing in CI contacts a real BigQuery project: the real-project checks are local and opt-in (docs/testing.md).
   - The Linux benchmarks (floors enforced).
 - **Report-only work stays off PRs.** Linux's 1024x768 repeats of the scripting and results suites (Windows runners'
@@ -116,21 +117,39 @@ the Measurements below with the new baseline.
 
 - `scripts/check.mjs` runs tsc, the electron-vite build, vitest, and the .NET build followed by the offline checks and the
   Release-backend vitest files as concurrent lanes: all at once with 8 or more CPUs, two chains side by side on CI's 3 and
-  4 vCPU runners (all at once starved macOS until time-bounded tests failed). The electron-vite build runs after the
-  .NET chain, not after vitest. tsc runs only on Linux (`VARIA_CHECK_SKIP=typecheck` on Windows and macOS): it reads only
-  sources and installed types, and Linux's case-sensitive paths are the strictest. A check stopped by the step timeout
-  prints what its running lanes held.
+  4 vCPU runners (all at once starved macOS until time-bounded tests failed). On CI runners with fewer than 8 CPUs,
+  `VITEST_MAX_WORKERS` is capped (`Math.ceil(cpus / 2)`, capped below `cpus`) so vitest and the .NET lanes do not
+  oversubscribe the runner. The electron-vite build runs after the .NET chain, not after vitest. tsc runs only on Linux
+  (`VARIA_CHECK_SKIP=typecheck` on Windows and macOS): it reads only sources and installed types, and Linux's
+  case-sensitive paths are the strictest. A check stopped by the step timeout prints what its running lanes held.
+- `findConflicts(defaultRules(platform), platform)` memoizes its default-rule check per platform (returning a fresh copy)
+  and `contextRecord` clones a precomputed platform base record, so every `KeybindingService` instantiated across vitest
+  does not re-scan all rules and focus samples.
+- `tests/fixtures/settle.ts` settles microtasks and I/O via `setImmediate` rather than `setTimeout(0)` loops (Windows
+  rounds timers to 15.6 ms), and `tests/backend-sidecar.test.ts` shares one Release backend process across its stateless
+  tests.
 - On CI the Release .NET build compiles in its own processes (`-p:UseSharedCompilation=false`, `sharedCompilation()` in
   `scripts/check.mjs`). GitHub's Windows runner starts a job below normal priority, but the shared compiler server
   (VBCSCompiler) starts at normal priority and took every vCPU from vitest's workers for seconds at a time, timing out
   unrelated tests. Look for a process above the job's priority when a Windows test stalls with its worker using no CPU.
-- The offline .NET suites run in six concurrent lanes (`OfflineSuites.cs`) after the few that change or measure
-  process-wide state run alone; each prints its time. `OfflineSuites` names any suite still running after 3 minutes and
-  exits. The result suites run a second time with every result's pages packed (Program.cs `packedPass`), since only that
-  pass reaches every reader through packed pages.
+- The offline .NET suites run in six concurrent lanes (`OfflineSuites.cs`) with a raised `ThreadPool.SetMinThreads` floor
+  so synchronous lanes do not starve async checks, after the few suites that change or measure process-wide state run
+  alone; each prints its time. `FusedWhole` (`Diffs`, `DistinctsSearch`, `MixedServices`, `Faults`) and
+  `BigQueryExecution` (`Core`, `Residence`, `ViewsCopySave`, `Storage`) are split into four concurrent suites each, and
+  BigQuery residence checks poll asynchronously instead of busy-spinning on `SpinWait`. `OfflineSuites` names any suite
+  still running after 3 minutes
+  and exits. The result suites run a second time with every result's pages packed (Program.cs `packedPass`), since only
+  that pass reaches every reader through packed pages.
 - Offline checks fail their connections on a malformed named-pipe address on Windows instead of `tcp:127.0.0.1,1`
   (`Unreachable.cs`).
-- `npm run build:smoke` builds the Release backend and electron-vite side by side.
+- `npm run build:smoke` prepares Electron and SQL Tools Service in parallel with the Release backend and electron-vite
+  builds (`scripts/check.mjs --build`). Jobs that do not launch the SQL language server (Linux smoke shards 1 and 2,
+  Windows smoke shards, Linux benchmarks) pass `VARIA_CHECK_SKIP=sqltools`.
+- Linux jobs that need SQL Server (`live`, `smoke-linux`, `bench-linux`) start the container in the background right
+  after checkout via `scripts/ci-docker.mjs` (retrying transient Docker pulls up to three times) and wait for readiness
+  only before the first SQL step, hiding container boot behind setup and builds. The BigQuery emulator uses the same
+  pull-retry helper and starts only in the Linux smoke shard that owns `connections-smoke.mjs`
+  (`smoke-shards.mjs --has-suite`).
 - Smoke suites race `close()` through `within()` (`scripts/fixtures/smoke.mjs`), which clears its timer
   (`tests/idle-waits.test.ts`). A close not finished in 45 s kills the app and fails the suite with its own error
   (`boundedClose`; on Linux it names the processes left in the app's process group), and `smoke-shards.mjs` kills a
@@ -138,7 +157,8 @@ the Measurements below with the new baseline.
   for the stdio pipes the backend and its language server inherit, so the backend's exit waits for its language-server
   kill (`ExitGate`), and Linux and macOS kill that child with one signal instead of a tree kill. A process left behind
   after quit is a product bug.
-- Live groups 2 and 3 skip setup-node and `npm ci`; `npm ci --no-audit --no-fund` everywhere.
+- Live slot 2 skips `setup-node` and `npm ci` (running `scripts/ci-live-pair.mjs` with the runner's bundled Node);
+  `npm ci --no-audit --no-fund` everywhere.
 - `VARIA_TEST_SLOW_MS=<ms>` prints each offline or live .NET check reached later than that after the previous one
   (offline suites then run in one lane).
 - `offline-stress.mjs` strips the SQL and Entra variables, so its copies never run live suites against a shared server.
@@ -150,28 +170,14 @@ the Measurements below with the new baseline.
 Savings are estimates checked against CI logs. "Owner" marks changes that contradict a rule
 in CLAUDE.md, which the owner decides.
 
-1. **Settle vitest tests with `setImmediate`, not `setTimeout(0)` loops** (S). Windows rounds each timer to about
-   15.6 ms; ssis-tree-probe takes 16.7 s there against 2.2 s on Linux. 45 files use the pattern, about 32 s of Windows
-   test time. Put a shared `settle()` in `tests/fixtures/`.
-2. **Profile object-actions-smoke and the Windows-only slow checks** (M). object-actions is the longest suite (106 s
-   Linux, 149 s Windows), over the roughly 90 s split guideline; its login block is about 10 times slower per line than
+1. **Profile object-actions-smoke and the Windows-only slow checks** (M). object-actions is the longest suite (124 s
+   Linux, 179 s Windows), over the roughly 90 s split guideline; its login block is about 10 times slower per line than
    its neighbours. A Windows excess of about 15 s usually means an assertion runs out its 15 s Windows expect timeout.
    Use `VARIA_SMOKE_PROFILE`.
-3. **Start the SQL Server container in the background** (M). `services: sql` spends 20 to 24 s in "Initialize
-   containers" before checkout; a `docker run -d` first step and a health wait before the first SQL step hide it behind
-   `npm ci` and the build (about 45 to 60 s a push).
-4. **Two SQL Server containers in one live job** (M). Keeps a server per group and removes a job (about 1 runner-min and
-   a slot a push). First give the live checks with hard sub-2 s bounds (ExplorerLiveChecks, ScriptingLiveChecks) load
-   tolerance (`LiveResultChecks.CancelBound`/`OnceMore`).
-5. **Cross-build osx-x64 on arm64, or `--dir` packaging on non-tag macOS runs** (M). Ends the Intel image GitHub is
+2. **Cross-build osx-x64 on arm64, or `--dir` packaging on non-tag macOS runs** (M). Ends the Intel image GitHub is
    retiring; `--dir` skips the DMG and hdiutil step behind 2 of the 3 infrastructure false failures.
-6. **Split the Host offline suite** (S). It is the floor of the offline lanes (its `Thread.Sleep(1200)` and budget waits).
-7. **Run the offline lanes on dedicated threads** (S). Synchronous suites block a pool thread each, starving async timing
-   checks; `TaskCreationOptions.LongRunning` lanes or a raised `ThreadPool.SetMinThreads` may let widened bounds tighten.
-   Measure with `scripts/offline-stress.mjs`.
-8. **Share one sidecar across backend-sidecar's stateless tests** (S, unmeasured). It spawns a backend per test (42, about
-   0.5 s each).
-9. **Non-isolated vitest for read-only catalogue and lint tests** (M, trial first). About 9 to 11 s off the vitest chain,
+3. **Split the Host offline suite** (S). It is the floor of the offline lanes (its `Thread.Sleep(1200)` and budget waits).
+4. **Non-isolated vitest for read-only catalogue and lint tests** (M, trial first). About 9 to 11 s off the vitest chain,
    but leaked module state can weaken coverage silently: trial with `sequence.shuffle` on an allowlist guarded against
    mocks, timers, globals and `process.env`.
 
@@ -181,8 +187,8 @@ Considered and rejected (do not re-propose without new numbers):
   any open (SNI error 25). A well-formed one sends every fake's open through the Named Pipes provider and SqlClient's
   throttle of non-pooled opens: under `offline-stress.mjs`, 5 to 7 of 15 copies crashed with "Timeout attempting to open
   the connection". The checks assert only that the failure is retryable, which both forms are.
-- **One shard per OS.** Makes 12 to 13 min jobs and smoke the critical path; Windows needs four shards to stay within
-  the 360-second shard budget (its suites take about 1,100 s).
+- **One shard per OS.** Makes 12 to 13 min jobs and smoke the critical path; three shards per platform keep every shard
+  within the 420-second shard budget (about 1,215 s on Linux, 1,197 s on Windows).
 - **Build once and fan out artifacts.** Needs `needs:` and adds 1 to 3 min of serial wall time before the smoke shards,
   the critical path, to save about 2 runner-min.
 - **Caching `node_modules` or the Electron download.** `npm ci` from the npm cache takes 4 to 8 s on Linux; the 637 MB tree
@@ -195,7 +201,7 @@ Considered and rejected (do not re-propose without new numbers):
 
 ## Rules for keeping CI lean
 
-- **Budget per push across all workflows.** A code-changing PR push starts at most 14 validation jobs, 1 of them macOS,
+- **Budget per push across all workflows.** A code-changing PR push starts at most 12 validation jobs, 1 of them macOS,
   plus the two short Linux scope and result jobs, which do not overlap their validation jobs (`tests/ci-workflow.test.ts`),
   plus at most 3 packaging jobs, only when it changes packaging (`tests/release-workflow.test.ts`). A PR over 3,000
   changed files may skip Release builds silently: run them by hand (`workflow_dispatch`) when it touches packaging.
@@ -234,8 +240,8 @@ Considered and rejected (do not re-propose without new numbers):
   smoke. A check more than 10 s slower on Windows usually runs out a timeout.
 - **Keep the tables current.** After adding or changing a smoke or live suite, copy its CI seconds (each shard's
   summary, each `Live suite name: n s` line) into `suiteSeconds` (Linux and Windows) or `LiveGroups.Suites`. Both budget
-  checks trust those tables: each smoke shard and live group has 360 s (`shardBudgetSeconds`,
-  `LiveGroups.BudgetSeconds`), and the per-suite watchdog (four times the weight, at least 300 s) rises with a weight.
+  checks trust those tables: each smoke shard has 420 s (`shardBudgetSeconds`) and each live group has 360 s
+  (`LiveGroups.BudgetSeconds`), and the per-suite watchdog (four times the weight, at least 300 s) rises with a weight.
   When a run skipped a suite (no SQL endpoint), keep its existing weight.
 - **Write down the numbers.** A CI change records before and after numbers from `scripts/ci-timings.mjs`
   (runner-minutes, job count, queue) in its PR, and replaces the baseline under Measurements.

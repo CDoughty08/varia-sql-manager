@@ -20,7 +20,7 @@ import { connectionInfo, workbenchFixture } from './fixtures/workbench'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { while (cleanups.length) cleanups.pop()!() })
-const settled = async () => { for (let turn = 0; turn < 16; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
+const settled = async () => { for (let turn = 0; turn < 16; turn++) await new Promise(resolve => setImmediate(resolve)) }
 const deferred = <T>() => { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done }); return { promise, resolve } }
 
 const uuid = (n: number) => `0000000${n}-0000-4000-8000-000000000000`
@@ -198,10 +198,9 @@ describe('Restore Files and Filegroups as a document', () => {
     expect(request()).toEqual({ problem: 'Sales_3: The file is in use by the database Simple.' })
     restore.updateDraft(id, { restoreAs: {} })
     restore.setFrame(id, setScriptOpen(state().frame, true))
-    await settled()
+    await vi.waitFor(() => expect(state().script).toMatchObject({ state: 'ready' }))
     expect(scripts().at(-1)).toMatchObject({ action: 'restoreFiles', restoreFiles: { files: ['Sales_3'] } })
     expect(validateRequest('actions.script', scripts().at(-1))).toEqual(scripts().at(-1))
-    expect(state().script).toMatchObject({ state: 'ready' })
   })
   it('names filegroups under Restore as filegroup, which starts the checks again', async () => {
     const { restore, id, state, draft, check, request } = await opened()

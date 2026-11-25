@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { maxClipboardText } from '../../../shared/contracts'
+import { gridTarget } from './anchor'
 import { boundTable, LocalCopyTooLarge, localCopyText, localTableLimits, type LocalTableData } from '../../../shared/results/local-table'
 import { onUnexpectedError } from '../core/errors'
 import { useWorkbench } from '../core/WorkbenchContext'
@@ -8,8 +9,9 @@ import { registerLiveOutput, type LiveOutput } from '../menus/targets'
 import type { GridViewState } from '../results/ResultsService'
 import { formatCount, plural } from '../results/status'
 import { gridLimits as g } from './constants'
-import GridShell, { GridErrorBoundary, instanceKey, type GridShellApi, type GridSpec } from './GridShell'
+import GridShell, { GridErrorBoundary, instanceKey, type GridFunnels, type GridShellApi, type GridSpec } from './GridShell'
 import type { GridView, HeaderSortKey } from './GridView'
+import { keptRows, localFilterSource, noFilters, withFilter, type LocalFilters } from './local-filter'
 import { localDescriptor, LocalSource, sortOrder, type LocalSortKey } from './local-source'
 import { beginCopy, latestCopy } from './copy-generation'
 import { scrollbarSize } from './scrollbar'
@@ -44,6 +46,9 @@ export interface LocalGridProps {
   readonly fill?: boolean
   /** Scroll, widths and selection, kept by the owner across remounts; the grid keeps its own otherwise. */
   readonly state?: GridViewState
+  /** Header funnels over the table's own values (a results grid's popover), filtering the rows in memory; Copy and Save
+   *  write the rows the filters keep. Off by default: most local tables are a handful of rows. */
+  readonly filterable?: boolean
   /** Called when the grid's active row changes (mapped to the table's own row index, or undefined). */
   readonly onActiveRow?: (row: number | undefined) => void
   /** Called when the user activates a row (Enter or double-click on a cell); returns true if handled. */
@@ -64,6 +69,23 @@ class CopySuperseded extends Error {}
 const unsorted: readonly LocalSortKey[] = []
 /** The sort an owner-kept state was saved with, so its selection and scroll come back over the rows they were in. */
 const keptSorts = new WeakMap<GridViewState, { readonly columns: string; readonly keys: readonly LocalSortKey[] }>()
+/** The filters an owner-kept state was saved with, as its sort. */
+const keptFilters = new WeakMap<GridViewState, { readonly columns: string; readonly filters: LocalFilters }>()
+type BoundTable = ReturnType<typeof boundTable>
+/** The rows the filters keep, with their cut cells renumbered to the rows they are now; the table itself when none filter. */
+function filteredTable(bound: BoundTable, filters: LocalFilters): BoundTable {
+  const kept = keptRows(bound, filters)
+  if (!kept) return bound
+  const columns = bound.columns.length, cut = new Set<number>()
+  if (bound.cut.size) kept.forEach((row, at) => { for (let column = 0; column < columns; column++) if (bound.cut.has(row * columns + column)) cut.add(at * columns + column) })
+  const shown = { ...bound, rows: kept.map(row => bound.rows[row]), cut, cutCells: cut.size }
+  keptOf.set(shown, kept)
+  return shown
+}
+/** A filtered table's rows in the table it was cut from, so a row callback names the owner's own row. */
+const keptOf = new WeakMap<object, readonly number[]>()
+/** The owner's row of a source's drawn row (its sort, then its filters). */
+const tableRow = (source: LocalSource, row: number): number => { const at = source.rowOf(row); return keptOf.get(source.table)?.[at] ?? at }
 /** A table's columns, which its sort keys name: a table with other columns starts unsorted. */
 const columnsOf = (table: LocalTableData) => table.columns.map(column => `${column.kind ?? ''}:${column.name}`).join('\u0000')
 
@@ -73,7 +95,7 @@ const columnsOf = (table: LocalTableData) => table.columns.map(column => `${colu
  * work as in a results grid; Copy and Save write the same text through the TypeScript twin of ResultTextWriter (copy
  * here, a save in main). The menu reaches it as a grid with its own source (OutputTarget view `live`, LiveOutput).
  */
-function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = true, maxRows = cardRows, fit = false, fill = false, state, onActiveRow, onActivateRow }: LocalGridProps) {
+function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = true, maxRows = cardRows, fit = false, fill = false, state, filterable = false, onActiveRow, onActivateRow }: LocalGridProps) {
   const { commands, platform } = useWorkbench()
   const bound = useMemo(() => boundTable(table), [table])
   const columnsKey = useMemo(() => columnsOf(bound), [bound])
@@ -86,6 +108,15 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
   const keys = sortable && sorted.columns === columnsKey ? sorted.keys : unsorted
   const setKeys = useCallback((next: (current: readonly LocalSortKey[]) => readonly LocalSortKey[]) => setSorted(current => ({ columns: columnsKey, keys: next(current.columns === columnsKey ? current.keys : unsorted) })), [columnsKey])
   useEffect(() => { if (state) keptSorts.set(state, sorted) }, [state, sorted])
+  // The column filters, kept as the sort is: they belong to the columns they were chosen for.
+  const [filtering, setFiltering] = useState(() => (state && keptFilters.get(state)) ?? { columns: columnsKey, filters: noFilters })
+  if ((!filterable || filtering.columns !== columnsKey) && filtering.filters !== noFilters) setFiltering({ columns: columnsKey, filters: noFilters })
+  const filters = filterable && filtering.columns === columnsKey ? filtering.filters : noFilters
+  useEffect(() => { if (state) keptFilters.set(state, filtering) }, [state, filtering])
+  const setFilter = useCallback((column: number | undefined, filter?: Parameters<typeof withFilter>[2]) =>
+    setFiltering(current => ({ columns: columnsKey, filters: column === undefined ? noFilters : withFilter(current.columns === columnsKey ? current.filters : noFilters, column, filter) })), [columnsKey])
+  // What the grid shows: the rows the filters keep. The table itself still decides the grid's identity (its mount and kept state).
+  const shown = useMemo(() => filteredTable(bound, filters), [bound, filters])
   // A copy's or save's notice belongs to the grid it was for: a new table shows its own strip (its truncation) again, except
   // under an owner-kept state, where a table with the same columns is the same grid's next sample.
   const noticeOwner: unknown = state ? columnsKey : bound
@@ -98,12 +129,12 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
   const own = useMemo<GridViewState>(() => state ?? { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: false }, [state, bound])
   const latest = useRef({ label, suggestedName, onActiveRow, onActivateRow })
   latest.current = { label, suggestedName, onActiveRow, onActivateRow }
-  const rows = bound.rows.length, columns = bound.columns.length
+  const rows = shown.rows.length, columns = shown.columns.length
   /** The keys the current source was sorted by. */
   const sourceKeys = useRef(keys)
   const reportActiveRow = (source: LocalSource | undefined, selection: { readonly active: { readonly row: number } } | undefined) => {
     const row = source && selection && selection.active.row >= 0 && selection.active.row < source.table.rows.length
-      ? source.rowOf(selection.active.row)
+      ? tableRow(source, selection.active.row)
       : undefined
     latest.current.onActiveRow?.(row)
   }
@@ -112,12 +143,12 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
     // with other columns; one with the same columns swaps in below): its selection is held to them, or Copy would copy
     // rows that are gone and keys would move from there.
     if (own.selection) own.selection = remapSelection(own.selection, row => row, rows, columns)
-    const source = sourceRef.current = new LocalSource(bound, sortOrder(bound, keys), bound.cutCells, bound.cut)
+    const source = sourceRef.current = new LocalSource(shown, sortOrder(shown, keys), shown.cutCells, shown.cut)
     sourceKeys.current = keys
     // The card keeps the last view's width until this one reports its own on its first frame (GridView always does), so a
     // wide card does not shrink and grow back on each new table.
     const view = create({
-      handle: source, descriptor: localDescriptor(bound, bound.cutCells), state: own, entry: 'local', resultNumber: 1, resultCount: 1, label: latest.current.label,
+      handle: source, descriptor: localDescriptor(shown, shown.cutCells), state: own, entry: 'local', resultNumber: 1, resultCount: 1, label: latest.current.label,
       showTypes: false, clipboardKeys: false, sortable, onWide: setWide,
       onSelection: selection => { reportActiveRow(sourceRef.current, selection) },
       // Edit › Copy's copy event: output.copy, as in a results grid.
@@ -133,15 +164,16 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
   // and a drag, column resize or double-click under way survive it.
   useEffect(() => {
     const view = apiRef.current?.view(), old = sourceRef.current
-    if (!view || !old || (sourceKeys.current === keys && old.table === bound)) return
-    const order = sortOrder(bound, keys), sameTable = old.table === bound
+    if (!view || !old || (sourceKeys.current === keys && old.table === shown)) return
+    const order = sortOrder(shown, keys), sameTable = old.table === shown
     sourceKeys.current = keys
-    const next = new LocalSource(bound, order, bound.cutCells, bound.cut), place = new Int32Array(rows)
+    const next = new LocalSource(shown, order, shown.cutCells, shown.cut), place = new Int32Array(rows)
     for (let row = 0; row < rows; row++) place[next.rowOf(row)] = row
     sourceRef.current = next
-    view.swap(next, localDescriptor(bound, bound.cutCells), row => row < 0 || row >= rows ? -1 : sameTable ? place[old.rowOf(row)] : row)
+    // A filter keeps the selection where it was on screen, held to the rows left (remapSelection at the next mount does the same).
+    view.swap(next, localDescriptor(shown, shown.cutCells), row => row < 0 || row >= rows ? -1 : sameTable ? place[old.rowOf(row)] : row)
     reportActiveRow(next, view.currentSelection())
-  }, [bound, keys, rows])
+  }, [shown, keys, rows])
   const sortBy = useCallback((column: number | undefined, descending = false, add = false) =>
     setKeys(current => column === undefined ? unsorted : sortKeysBy(current, column, descending ? 'descending' : 'ascending', add, maxSortKeys, desc => ({ column, descending: desc }))), [setKeys])
   const report = useCallback((what: string, error: unknown) => setNotice({ text: `Could not ${what}: ${error instanceof Error ? error.message : String(error)}`, error: true }), [setNotice])
@@ -149,12 +181,12 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
     const view = () => apiRef.current?.view()
     const hasRows = () => rows > 0 && columns > 0
     return {
-      sortable, filterable: false,
+      sortable, filterable,
       hasRows, hasSelection: () => hasRows() && !!view()?.currentSelection(),
       activeColumn: () => view()?.currentSelection()?.active.column,
       columnName: column => bound.columns[column]?.name,
       canSort: column => sortable && column >= 0 && column < columns,
-      canFilter: () => false, sorted: () => keys.length > 0, filtered: () => false,
+      canFilter: column => filterable && column >= 0 && column < columns, sorted: () => keys.length > 0, filtered: () => filters.size > 0,
       // Copy and Save read the shown source's table and order together, never this render's table with a later order: a
       // menu opened before a new table holds this LiveOutput.
       copy: headers => {
@@ -182,7 +214,7 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
       sort: (column, descending, add) => sortBy(column, descending, add),
       clearSort: () => sortBy(undefined),
       fitColumn: column => view()?.fitColumn(column),
-      filterColumn: () => {}, clearFilters: () => {},
+      filterColumn: column => { if (filterable) apiRef.current?.openFunnel(column) }, clearFilters: () => setFilter(undefined),
       canSave: () => preset === 'page',
       save: () => {
         const source = sourceRef.current
@@ -197,11 +229,18 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
       },
       canFind: () => false, find: () => {}
     }
-  }, [bound, rows, columns, keys, sortable, preset, platform, sortBy, report, setNotice])
+  }, [bound, rows, columns, keys, sortable, filterable, filters, setFilter, preset, platform, sortBy, report, setNotice])
   const [root, setRoot] = useState<HTMLDivElement | null>(null)
   useEffect(() => root ? registerLiveOutput(root, output) : undefined, [output, root])
   const onApi = useCallback((api: GridShellApi | undefined) => { apiRef.current = api }, [])
   const headerSort = useMemo<HeaderSortKey[]>(() => keys.map(key => ({ column: key.column, descending: key.descending })), [keys])
+  const filterState = useRef({ bound, filters })
+  filterState.current = { bound, filters }
+  const funnels = useMemo<GridFunnels | undefined>(() => filterable ? {
+    source: localFilterSource({ table: () => filterState.current.bound, filters: () => filterState.current.filters, apply: (column, filter) => setFilter(column, filter) }),
+    filtered: new Set(filters.keys()),
+    columnName: column => filterState.current.bound.columns[column]?.name
+  } : undefined, [filterable, filters, setFilter])
   // What the bounds left out is shown, as a results grid shows truncated values: rows past the first, and cut cells.
   const cut = bound.cutCells > 0 ? `${formatCount(bound.cutCells)} ${bound.cutCells === 1 ? 'value was' : 'values were'} cut to ${formatCount(localTableLimits.cellChars)} characters.` : undefined
   const dropped = bound.droppedColumns > 0 ? `Showing the first ${formatCount(columns)} ${plural(columns, 'column')}.` : undefined
@@ -217,7 +256,7 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
     if (!activate || !source || !selection) return false
     const { row, column } = selection.active
     if (row < 0 || row >= source.table.rows.length) return false
-    return activate(source.rowOf(row), column) === true
+    return activate(tableRow(source, row), column) === true
   }
   return <GridShell mountKey={`local|${state ? columnsKey : instanceKey(bound)}|${instanceKey(own)}|${sortable ? 'sortable' : 'fixed'}|${label}`} mount={mount} onApi={onApi} contents="rows"
     frameProps={{ className: 'local-grid', 'data-local-grid': preset, ...fit ? { 'data-local-fit': '' } : {}, ...height !== undefined ? { style: { height, flex: 'none' } } : {} }}
@@ -229,16 +268,22 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
           if (activateActive()) { event.preventDefault(); event.stopPropagation() }
         },
         onDoubleClick: event => {
-          if (event.button !== 0 || !(event.target as Element).closest('.rg-c')) return
+          // Only on a row: GridView's own hit test through its pointer layer (the event's target is that layer, not a cell),
+          // never a header, whose border's double-click fits its column.
+          const root = event.currentTarget
+          if (event.button !== 0 || !root.ownerDocument.elementsFromPoint(event.clientX, event.clientY).some(element => root.contains(element) && gridTarget(root, element).target?.row !== undefined)) return
           if (activateActive()) { event.preventDefault(); event.stopPropagation() }
         }
       } : {}
     }} rootRef={setRoot}
     sort={headerSort} onSort={(column, add) => setKeys(current => cycleSortKeys(current, column, add, maxSortKeys, descending => ({ column, descending })))}
+    {...funnels ? { funnels } : {}}
     // An empty table says so in the surface's words over the header, where a results grid says why its rows are gone.
-    gone={rows === 0 ? empty ?? 'No rows.' : undefined}
+    gone={rows === 0 ? filters.size > 0 ? localGridText.noneMatch : empty ?? 'No rows.' : undefined}
     strip={strip} />
 }
+
+export const localGridText = { noneMatch: 'No rows match the column filters. Clear Filters from the grid\'s menu shows them all again.' } as const
 
 /** A local table's grid: a throw while rendering it stays in its frame (GridErrorBoundary), whose Retry renders it again. */
 export function LocalGrid(props: LocalGridProps) {

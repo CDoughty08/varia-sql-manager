@@ -197,7 +197,8 @@ describe('idle waits', () => {
     }
     // Two chains: the build moved behind the .NET lanes balances them (vitest is the longest lane).
     expect(plan({ cpus: 4 })).toEqual({ all: [{ chain: ['Type check', 'vitest'] }, { chain: [{ gate: 'Release build (.NET)', then: { chain: ['Offline .NET checks', 'vitest (Release backend)'] } }, 'electron-vite build'] }] })
-    expect(order(plan({ cpus: 4, build: true }) as Node).sort()).toEqual(['Release backend', 'electron-vite build'])
+    expect(order(plan({ cpus: 4, build: true }) as Node).sort()).toEqual(['Prepare Electron', 'Prepare SQL Tools Service', 'Release backend', 'electron-vite build'])
+    expect(order(plan({ cpus: 4, build: true, skip: ['sqltools'] }) as Node).sort()).toEqual(['Prepare Electron', 'Release backend', 'electron-vite build'])
   })
   // GitHub's Windows runner starts the job below normal priority and the C# compiler server at normal priority: it took the
   // runner's four vCPUs during the build and starved vitest's workers past the 20 s test timeout.

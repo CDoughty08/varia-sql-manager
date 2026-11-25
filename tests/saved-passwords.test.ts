@@ -312,7 +312,7 @@ describe('safeStorage cipher', () => {
     const refused = safeStorageCipher(locked, 'linux')
     expect(await refused.state()).toEqual({ available: false, reason: 'unavailable' })
     locked.isAsyncEncryptionAvailable.mockResolvedValue(true)
-    await new Promise(resolve => setTimeout(resolve, 0))
+    await new Promise(resolve => setImmediate(resolve))
     expect(await refused.state()).toEqual({ available: true })
     expect(locked.isAsyncEncryptionAvailable).toHaveBeenCalledTimes(2)
     // Cached while it works; an encrypt failure (with the OS's own text) is a fixed message, and the next call asks again.

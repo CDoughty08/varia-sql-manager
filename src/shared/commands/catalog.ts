@@ -5,6 +5,7 @@ import { actionCommandEntries, newDatabaseCommandEntries, propertiesCommandEntri
 import { designerCommandEntries } from '../designer/catalog.ts'
 import { scriptCommandEntries, scriptUnavailableHint } from '../scripting/catalog.ts'
 import { operationsCommandEntries } from '../ssis/operations.ts'
+import { executionCommandEntries } from '../ssis/execution.ts'
 import { jobActivityCommandEntries } from '../agent/jobs.ts'
 import { agentJobCommandEntries } from '../actions/agent-job.ts'
 import { agentAlertCommandEntries } from '../actions/agent-alert.ts'
@@ -520,6 +521,8 @@ export const commandCatalog = {
   // The Integration Services Operations document: its presets on the SSISDB node and View, and its own commands, generated
   // from src/shared/ssis/operations.ts.
   ...operationsCommandEntries(),
+  // The Integration Services document's drill-down (AG-13): Open on an execution's row, Back and Forward, and a package node's Executions and Last Execution, from src/shared/ssis/execution.ts.
+  ...executionCommandEntries(),
   // SQL Server Agent's Job Activity Monitor (AG-3): the monitor and its verbs, generated from src/shared/agent/jobs.ts.
   ...jobActivityCommandEntries(),
   // The SQL Server Agent job document (AG-6a): Open Job, New Job and the document's verbs, from src/shared/actions/agent-job.ts.
