@@ -1,6 +1,6 @@
-import { useId, type CSSProperties, type ReactNode } from 'react'
+import { useId, useLayoutEffect, useRef, type CSSProperties, type ReactNode } from 'react'
 import Icon from '../Icon'
-import type { Bar, BytesFormat, Counter, IndexNerdModel, NerdMetricsModel, ResultLabel, Segment, Tile } from './memory-details'
+import type { Bar, BytesFormat, Counter, IndexNerdModel, NerdMetricsModel, ResultLabel, ResultTarget, Segment, Tile } from './memory-details'
 
 const width = (share: number) => ({ '--memory-share': `${Math.max(0, Math.min(1, share)) * 100}%` }) as CSSProperties
 
@@ -65,8 +65,69 @@ function Counters({ counters, label }: { counters: readonly Counter[]; label: st
   </dl>
 }
 
-export function NerdDetails({ model }: { model: NerdMetricsModel }) {
+export interface NerdDetailsProps {
+  readonly model: NerdMetricsModel
+  readonly pinned?: boolean
+  readonly targets?: ReadonlyMap<number, ResultTarget>
+  readonly onRemove?: (resultId: number, target: ResultTarget) => boolean | void
+  readonly canCloseAll?: boolean
+  readonly onCloseAll?: () => void
+  readonly onFocusFallback?: () => void
+}
+
+export function NerdDetails({ model, pinned = true, targets, onRemove, canCloseAll = false, onCloseAll, onFocusFallback }: NerdDetailsProps) {
   const { bytes } = model
+  const closeAllRef = useRef<HTMLButtonElement>(null)
+  const rowButtonsRef = useRef(new Map<number, HTMLButtonElement>())
+  const pendingFocusRef = useRef<{ readonly kind: 'row'; readonly removedId: number; readonly candidates: readonly number[] } | { readonly kind: 'all' } | null>(null)
+  const tabIndex = pinned ? undefined : -1
+
+  useLayoutEffect(() => {
+    const pending = pendingFocusRef.current
+    if (!pending) return
+    if (pending.kind === 'row') {
+      const removed = rowButtonsRef.current.get(pending.removedId)
+      // Still mounted and enabled (e.g. removal declined): keep focus where it is.
+      if (removed && removed.isConnected && !removed.disabled) return
+      pendingFocusRef.current = null
+      for (const id of pending.candidates) {
+        const next = rowButtonsRef.current.get(id)
+        if (next && next.isConnected && !next.disabled) { next.focus({ preventScroll: true }); return }
+      }
+      if (closeAllRef.current && closeAllRef.current.isConnected && !closeAllRef.current.disabled) {
+        closeAllRef.current.focus({ preventScroll: true })
+        return
+      }
+      onFocusFallback?.()
+      return
+    }
+    if (closeAllRef.current && closeAllRef.current.isConnected && !closeAllRef.current.disabled) return
+    pendingFocusRef.current = null
+    onFocusFallback?.()
+  }, [model.biggest, targets, canCloseAll, onFocusFallback])
+
+  const handleRemove = (resultId: number, target: ResultTarget) => {
+    if (target.running || !onRemove) return
+    const button = rowButtonsRef.current.get(resultId)
+    if (button && button.ownerDocument.activeElement === button) {
+      const enabledIds = model.biggest
+        .filter(item => { const candidate = targets?.get(item.resultId); return candidate && !candidate.running })
+        .map(item => item.resultId)
+      const at = enabledIds.indexOf(resultId)
+      const candidates = at === -1 ? [] : [...enabledIds.slice(at + 1), ...enabledIds.slice(0, at).reverse()]
+      pendingFocusRef.current = { kind: 'row', removedId: resultId, candidates }
+    }
+    if (onRemove(resultId, target) === false) pendingFocusRef.current = null
+  }
+
+  const handleCloseAll = () => {
+    if (!canCloseAll || !onCloseAll) return
+    if (closeAllRef.current && closeAllRef.current.ownerDocument.activeElement === closeAllRef.current)
+      pendingFocusRef.current = { kind: 'all' }
+    onCloseAll()
+  }
+
+  const hasActions = !!(targets && onRemove && model.biggest.some(row => targets.has(row.resultId)))
   return <>
     <Tiles tiles={model.tiles} />
     <div className="memory-group">
@@ -75,15 +136,28 @@ export function NerdDetails({ model }: { model: NerdMetricsModel }) {
       <Legend parts={model.legend} bytes={bytes} />
     </div>
     <div className="memory-group">
-      <h4>Biggest results<span className="memory-group-aside">rows <Icon name="arrow-right" /> stored</span></h4>
-      {model.biggest.length === 0 ? <p className="memory-nerd-empty">{model.biggestEmpty}</p> : <ul className="memory-biggest" aria-label="Biggest results">
-        {model.biggest.map(row => <li key={row.resultId}>
-          <ResultName name={row.name} label={row.label} />
-          <span className="memory-mini" aria-hidden="true"><span style={width(row.logicalShare)} /><span data-state={row.state} style={width(row.storedShare)} /></span>
-          <span className="memory-muted"><span className="visually-hidden">rows </span>{row.logical}</span>
-          <span className="memory-stored"><span className="visually-hidden">stored </span>{row.stored}</span>
-          <span className="memory-state" data-state={row.state}>{row.stateLabel}</span>
-        </li>)}
+      <h4>
+        <span>Biggest results</span>
+        <span className="memory-group-aside">
+          rows <Icon name="arrow-right" /> stored
+          {canCloseAll && onCloseAll && <button ref={closeAllRef} type="button" className="memory-close-all" tabIndex={tabIndex} onClick={handleCloseAll}>Close all</button>}
+        </span>
+      </h4>
+      {model.biggest.length === 0 ? <p className="memory-nerd-empty">{model.biggestEmpty}</p> : <ul className={hasActions ? 'memory-biggest memory-biggest-actionable' : 'memory-biggest'} aria-label="Biggest results">
+        {model.biggest.map(row => {
+          const target = onRemove ? targets?.get(row.resultId) : undefined
+          return <li key={row.resultId}>
+            <ResultName name={row.name} label={row.label} />
+            <span className="memory-mini" aria-hidden="true"><span style={width(row.logicalShare)} /><span data-state={row.state} style={width(row.storedShare)} /></span>
+            <span className="memory-muted"><span className="visually-hidden">rows </span>{row.logical}</span>
+            <span className="memory-stored"><span className="visually-hidden">stored </span>{row.stored}</span>
+            <span className="memory-state" data-state={row.state}>{row.stateLabel}</span>
+            {hasActions && (target ? <button ref={node => { if (node) rowButtonsRef.current.set(row.resultId, node); else rowButtonsRef.current.delete(row.resultId) }}
+              type="button" className="memory-biggest-close" tabIndex={tabIndex} disabled={target.running}
+              aria-label={`Close ${row.name} to free memory`} title={target.running ? 'Cannot close while query is running' : `Close ${row.name} to free memory`}
+              onClick={() => handleRemove(row.resultId, target)}><Icon name="close" /></button> : <span className="memory-biggest-close-spacer" aria-hidden="true" />)}
+          </li>
+        })}
       </ul>}
     </div>
     <div className="memory-group">
