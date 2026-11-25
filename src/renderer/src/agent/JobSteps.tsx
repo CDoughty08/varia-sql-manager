@@ -22,6 +22,7 @@ import { createQueryEditor, type QueryEditorInstance } from '../editor/create-ed
 import { registerSqlModel } from '../explorer/peek-editor'
 import Icon from '../Icon'
 import type { JobDocumentService, JobDocumentState } from './JobDocumentService'
+import JobStepsFlow, { useForcedColors } from './JobStepsFlow'
 
 /** The step types the Type switch shows first, as SSMS users reach for them; the rest are under More. */
 const mainTypes = ['TSQL', 'PowerShell', 'CmdExec', 'SSIS'] as const
@@ -345,6 +346,7 @@ function StepEditor(props: StepsProps & { readonly step: AgentStepDraft; readonl
   if (decided !== `${step.key} ${step.subsystem}`) { setDecided(`${step.key} ${step.subsystem}`); setSsisText(ssisAsText()) }
   const types = model.subsystems?.length ? model.subsystems : [...mainTypes]
   const more = types.filter(type => !(mainTypes as readonly string[]).includes(type))
+  const flowNote = problemText(problems, step.key, 'flow')
   const name = problemText(problems, step.key, 'name'), command = problemText(problems, step.key, 'command'), server = problemText(problems, step.key, 'server')
   const proxy = step.proxyId ? model.proxies?.find(item => item.id === step.proxyId) : undefined
   const account = proxy ? proxy.identity ?? proxy.name : 'the SQL Server Agent service account'
@@ -368,6 +370,7 @@ function StepEditor(props: StepsProps & { readonly step: AgentStepDraft; readonl
       <button type="button" disabled={!editable || state.draft!.steps.startKey === step.key} onClick={() => service.setStartStep(state.id, step.key)}><Icon name="pin" />Make Start step</button>
       <button type="button" className="danger" disabled={!editable} onClick={() => service.deleteStepOf(state.id, step.key)}><Icon name="trash" />Delete</button>
     </div>
+    <FieldMessages text={flowNote} id={`${id}-flow`} />
     <div className="agent-step-grid">
       <div className="agent-step-row">
         <label htmlFor={`${id}-name`}>Step name</label>
@@ -445,6 +448,17 @@ function StepEditor(props: StepsProps & { readonly step: AgentStepDraft; readonl
   </div>
 }
 
+/** List | Flow: the same draft as a list beside the step's editor, or as a graph (Flow, Later in docs/agent-ui-rethink.md). Every document
+ *  opens on List. Forced colours replace the graph's colours, so Flow is then unavailable and says why. */
+function ViewSwitch({ state, service, forced }: { readonly state: JobDocumentState; readonly service: JobDocumentService; readonly forced: boolean }) {
+  const flow = state.stepsView === 'flow' && !forced
+  return <span className="segmented agent-steps-view" role="radiogroup" aria-label="Steps view">
+    <button type="button" role="radio" className="segmented-option" aria-checked={!flow} onClick={() => service.setStepsView(state.id, 'list')}><Icon name="list-flat" />List</button>
+    <button type="button" role="radio" className="segmented-option" aria-checked={flow} disabled={forced} title={forced ? 'Flow draws in colours that forced colours replace; List shows the same steps.' : undefined}
+      onClick={() => service.setStepsView(state.id, 'flow')}><Icon name="type-hierarchy" />Flow</button>
+  </span>
+}
+
 /** The Steps section: the delete banner, the list and the selected step's editor. */
 export default function JobSteps(outer: StepsProps) {
   // A job with more steps than Varia reads keeps its steps as they are: they are listed, never saved.
@@ -467,6 +481,9 @@ export default function JobSteps(outer: StepsProps) {
   }
   const types = props.model.subsystems?.length ? props.model.subsystems : [...mainTypes]
   const retargeted = deletion ? deletion.retargeted.map(key => steps.findIndex(step => step.key === key) + 1).filter(at => at > 0) : []
+  const forced = useForcedColors()
+  const switcher = <ViewSwitch state={state} service={service} forced={forced} />
+  const flow = state.stepsView === 'flow' && !forced
   return <div className="agent-job-steps">
     {props.model.stepsTruncated && <p className="field-note" role="note"><Icon name="info" />{stepText.stepsTruncated}</p>}
     {deletion && <div className="agent-step-banner" role="status">
@@ -475,8 +492,9 @@ export default function JobSteps(outer: StepsProps) {
       <button type="button" disabled={!editable} onClick={() => service.undoDeleteStep(state.id)}>{stepText.undo}</button>
       <button type="button" aria-label="Dismiss" onClick={() => service.dismissDeletion(state.id)}><Icon name="close" /></button>
     </div>}
-    <div className="agent-step-body" data-agent-steps="">
+    {flow ? <JobStepsFlow {...props} switcher={switcher} editor={(step, position) => <StepEditor {...props} step={step} position={position} problems={problems} />} /> : <div className="agent-step-body" data-agent-steps="">
       <div className="agent-step-list">
+        <div className="agent-step-list-head"><span>Steps</span>{switcher}</div>
         <div role="listbox" aria-label="Steps" tabIndex={steps.length ? 0 : -1} aria-activedescendant={selected ? `agent-step-${state.id}-${selected.key}` : undefined}
           onKeyDown={event => {
             if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
@@ -522,6 +540,6 @@ export default function JobSteps(outer: StepsProps) {
         <p className="field-note">{stepText.dragHint}</p>
       </div>
       {selected ? <StepEditor {...props} step={selected} position={steps.indexOf(selected)} problems={problems} /> : <div className="agent-step-edit" />}
-    </div>
+    </div>}
   </div>
 }

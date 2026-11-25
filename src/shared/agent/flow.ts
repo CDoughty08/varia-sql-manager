@@ -44,6 +44,8 @@ export interface StepsFlow {
 }
 
 const flowWhich: readonly FlowWhich[] = ['success', 'fail']
+/** An edge's key, `${from}:${which}`: what the canvas's accent and hot sets and its chips name. */
+export const flowEdgeKey = (from: number, which: FlowWhich): string => `${from}:${which}`
 const targetOf = (draft: AgentStepsDraft, step: AgentStepDraft, at: number, which: FlowWhich): FlowTarget => {
   const action = which === 'success' ? step.onSuccess : step.onFail, key = which === 'success' ? step.onSuccessTarget : step.onFailTarget
   if (action === 1 || action === 2) return { kind: 'quit', success: action === 1 }

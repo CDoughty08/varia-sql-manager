@@ -94,6 +94,7 @@ import { SsisOperationsService } from '../../src/renderer/src/ssis/SsisOperation
 import { JobActivityService } from '../../src/renderer/src/agent/JobActivityService'
 import { LogViewerService } from '../../src/renderer/src/agent/LogViewerService'
 import { AgentOverviewService, type AgentOverviewFixes } from '../../src/renderer/src/agent/AgentOverviewService'
+import { stepMenuProviders } from '../../src/renderer/src/agent/step-menus'
 import { AgentJobStatusService } from '../../src/renderer/src/agent/AgentJobStatusService'
 import { JobDocumentService } from '../../src/renderer/src/agent/JobDocumentService'
 import { AlertOperatorDocumentService, alertSpec, operatorSpec, operatorsSpec } from '../../src/renderer/src/agent/AlertOperatorDocumentService'
@@ -554,7 +555,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   }
   // The menus over these services: resolution, enablement, and activation, without the DOM.
   const menuTargets = new MenuTargetService({ commandEnabled: () => true })
-  const menus = new MenuService({ platform, commands, context, keybindings, theme, recentFiles, settings: () => settings.getSnapshot().values, focus: focus.adapter, modalOpen: options.modal ?? (() => false), timers: options.timers, targets: menuTargets })
+  const menus = new MenuService({ platform, commands, context, keybindings, theme, recentFiles, dynamic: stepMenuProviders(jobDocuments), settings: () => settings.getSnapshot().values, focus: focus.adapter, modalOpen: options.modal ?? (() => false), timers: options.timers, targets: menuTargets })
   const sqlLanguage = { refreshCache: vi.fn(async (_id?: string) => true) }
   const sqlDiagnostics = { getSnapshot: () => ({ documents: new Map() }), subscribe: (_listener: () => void) => () => {}, status: (_id: string) => undefined }
   // BigQuery's estimate chip: no estimates (the cost service's own tests cover it).

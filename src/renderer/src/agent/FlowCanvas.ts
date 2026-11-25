@@ -5,7 +5,7 @@
 // Pixi's interpreter replaces generated functions, retaining the application's strict CSP.
 import 'pixi.js/unsafe-eval'
 import { Application, CanvasTextMetrics, Container, Graphics, GraphicsPath, Text, TextStyle, TexturePool } from 'pixi.js'
-import type { FlowLayout, FlowPoint, FlowWhich, StepsFlow } from '../../../shared/agent/flow'
+import { flowEdgeKey, type FlowLayout, type FlowPoint, type FlowWhich, type StepsFlow } from '../../../shared/agent/flow'
 import { svgIcons, iconStroke, type SvgIconId } from '../../../shared/icons'
 import { radii, typeScale } from '../../../shared/theme/metrics'
 import type { Disposable } from '../core/types'
@@ -63,7 +63,6 @@ export interface FlowCanvasOptions {
   cameraChanged(camera: Camera): void
   failed(): void
 }
-export const flowEdgeKey = (from: number, which: FlowWhich): string => `${from}:${which}`
 
 const iconPaths = new Map(Object.entries(svgIcons).map(([key, icon]) => [key, new GraphicsPath(icon.path)]))
 const portRadius = 7.5
@@ -191,6 +190,8 @@ export class FlowCanvas {
   }
   colors(colors: FlowCanvasColors): void { this.options.colors = colors; this.invalidate() }
   fit(): void { const { width, height } = this.options.model.layout; this.moveCamera(fit({ x: 0, y: 0, width, height }, this.width, this.height)) }
+  /** Back to where the graph first showed (100 %, centred, or Fit when wider than the view), once the view has its new size: the docked editor opening or closing. */
+  recenter(): void { this.owner.requestAnimationFrame(() => { if (!this.disposed && this.ready) { this.resize(); this.moveCamera(this.home()) } }) }
   zoom(factor: number): void { this.moveCamera(zoomAt(this.camera, this.width / 2, this.height / 2, factor)) }
   /** Scrolls a step into view (the keyboard's selection). */
   reveal(index: number): void {
@@ -469,7 +470,8 @@ export class FlowCanvas {
       const typeX = box.x + box.width - 10 - typeWidth
       label(`type:${at}`, node.type, typeX, box.y + 7, typeStyle, muted)
       const path = iconPaths.get(node.icon)
-      if (path) this.cards.context.save().translate(typeX - 16, box.y + 6).scale(0.75).path(path).stroke({ color: muted, width: iconStroke / 0.75, alpha: textAlpha }).restore()
+      // One matrix, since a scale after a translate in Pixi's context scales the translation too.
+      if (path) this.cards.context.save().setTransform(0.75, 0, 0, 0.75, typeX - 15, box.y + 5).path(path).stroke({ color: muted, width: iconStroke / 0.75, alpha: textAlpha }).restore()
       let tagRight = typeX - 24
       const tag = (key: string, text: string, color: string) => {
         const style = styled(this.styles.small, color), width = this.measure(text, style) + 10
