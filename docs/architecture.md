@@ -191,6 +191,10 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     `PeekCard placement="editor"`); Ctrl+click opens a Peek tab (`edit.openPeekTab`). A hover waits on Peek's own hover
     timer (`hoverAt`), skips reserved keywords and the name already shown, and never reports a miss. The keys run on
     `editorTextFocus || peekEditorFocus` with no query-tab precondition; Peek's own editors take no hover.
+  - A `googlesql` model never reaches `language.definition`: `IndexCompletionService.definition` resolves the name through
+    the Search Objects index with completion's dialect (`shared/completion/definition.ts`, `language.lookup` only). F12 opens
+    only `bigquery.properties`' free definition (`indexDefinitionOpener`, views, materialized views and routines), never
+    Script As' billed CREATE; Peek opens on that Definition tab (`peekAt`'s and `PeekTabService.open`'s `tab`).
 - **Query languages.** A query document's `provider` (absent for SQL Server) picks its Monaco language (`queryLanguages`:
   Monaco's `sql`, or Varia's `googlesql` from `languages/googlesql.ts`); the document kind stays `sql`, so
   `isQueryDocument` is unchanged. `DocumentService` sets it from the connection a query opens on or moves to, switches
@@ -201,9 +205,11 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
 - **SQL text transforms** (Toggle Brackets, Move Commas to Front/End: `editor/sql-transforms.ts`) work on tokens from
   `shared/sql/lexer.ts`, never regular expressions over the text, so strings, comments, variables and quoted names never
   change. They return offset edits applied as one undo step with selections mapped through them, refuse a model over
-  `textOpLimits.characters`, and are tested in `tests/sql-transforms.test.ts`. They are SQL Server only, with a handler
-  `when` on the bound model's language too, since a command target (an Explorer node) could supply SQL Server's context
-  while the editor shows a GoogleSQL query.
+  `textOpLimits.characters`, and are tested in `tests/sql-transforms.test.ts`. Toggle Brackets is SQL Server only, with a
+  handler `when` on the bound model's language too, since a command target (an Explorer node) could supply SQL Server's
+  context while the editor shows a GoogleSQL query. The comma commands serve both: the bound model's language picks
+  `lexSql` or `googleSqlTransformTokens` (`shared/googlesql/lexer.ts`'s tokens in the same shape) and the dialect's
+  `go` (whether a GO line ends a statement).
 - **Peek's language service** serves query documents and Peek's read-only definition models (`peekModelContext`:
   connection, database and the model's UUID as document id), nothing else. A Peek model gets hover and Go To Definition
   only, never completion or diagnostics, from its first request; its `onWillDispose` ends it as closing a query does

@@ -16,7 +16,7 @@ import { SnapshotStore } from '../src/renderer/src/core/store'
 import type { Timers } from '../src/renderer/src/core/timers'
 import type { LiveConnection } from '../src/renderer/src/services/connections'
 import type { WorkbenchEvent } from '../src/renderer/src/core/types'
-import { bigQueryChangesObjects, explorerSearchId, hitServer, mergeAnswers, ObjectSearchService, quickSearchHits, quickSearchId, revealPaths, serverGroups, shownHits, unknownKindReveal, type ObjectSearchOptions, type RevealHost } from '../src/renderer/src/search/ObjectSearchService'
+import { explorerSearchId, hitServer, mergeAnswers, ObjectSearchService, quickSearchHits, quickSearchId, revealPaths, serverGroups, shownHits, unknownKindReveal, type ObjectSearchOptions, type RevealHost } from '../src/renderer/src/search/ObjectSearchService'
 import { searchHitTarget } from '../src/renderer/src/search/hit-actions'
 import { insertTextFor } from '../src/shared/explorer/refs'
 import { indexSummary, searchHitPath, unindexedServers } from '../src/renderer/src/search/ObjectSearch'
@@ -379,18 +379,14 @@ describe('ObjectSearchService', () => {
     sql({ ok: true, value: { status: status(), elapsedMs: 1 } })
     await settle()
     expect(calls.index).toHaveLength(count)
-    // A query tab's DDL (or script) re-reads the datasets it marked; a SELECT, or a tab on another server, re-reads nothing.
+    // A query tab's run whose result names a stale mark re-reads the datasets DDL marked; one naming none (whatever it ran), or a tab
+    // on another server, re-reads nothing.
     vi.mocked(documents.get).mockImplementation(((tabId: string) => ({ id: tabId, connectionId: tabId === 'q1' ? 'bq' : 'a' })) as never)
-    events.emit({ type: 'query.finished', tabId: 'q1', queryId: 'x', summary: { job: { project: 'varia-alpha', jobId: 'j', statementType: 'SELECT' } } as never })
-    events.emit({ type: 'query.finished', tabId: 'q2', queryId: 'x', summary: { job: { project: 'varia-alpha', jobId: 'j', statementType: 'CREATE_TABLE' } } as never })
-    expect(calls.index).toHaveLength(count)
     events.emit({ type: 'query.finished', tabId: 'q1', queryId: 'x', summary: { job: { project: 'varia-alpha', jobId: 'j', statementType: 'CREATE_TABLE' } } as never })
+    events.emit({ type: 'query.finished', tabId: 'q2', queryId: 'x', summary: { indexStale: 4 } as never })
+    expect(calls.index).toHaveLength(count)
+    events.emit({ type: 'query.finished', tabId: 'q1', queryId: 'x', summary: { job: { project: 'varia-alpha', jobId: 'j', statementType: 'SELECT' }, indexStale: 4 } as never })
     expect(calls.index.at(-1)).toMatchObject({ connectionId: 'bq', stale: true })
-    expect(bigQueryChangesObjects('DROP_VIEW')).toBe(true)
-    expect(bigQueryChangesObjects('SCRIPT')).toBe(true)
-    expect(bigQueryChangesObjects('UNDROP_SCHEMA')).toBe(true)
-    expect(bigQueryChangesObjects('INSERT')).toBe(false)
-    expect(bigQueryChangesObjects(undefined)).toBe(false)
     // Two refreshes asked during a build each run once after it, in order, and the same one twice runs once.
     service.refreshBigQuery('bq', { stale: true })
     service.refreshBigQuery('bq', { scope: { project: 'varia-alpha' } })
@@ -419,21 +415,53 @@ describe('ObjectSearchService', () => {
     expect(fresh.calls.index).toHaveLength(0)
   })
 
-  it('re-reads after a failed BigQuery run, keeps a failed refresh off the index, queues the server\'s Refresh, and drops waiting refreshes on Stop', async () => {
-    const { service, calls, connections, pendingIndex, documents, events } = harness()
+  it('asks one stale-only build per new stale mark, keeps a failed refresh off the index, queues the server\'s Refresh, and drops waiting refreshes on Stop', async () => {
+    const { service, calls, connections, pendingIndex, pendingSearch, documents, events } = harness()
     const ok = { ok: true as const, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } }
     connections.set([bigQueryConnection('bq')])
     pendingIndex[0](ok)
     await settle()
-    // A run that failed reports no statement type, but DDL before the failure may have run.
+    // A run that failed outright (no result) asks nothing: a mark its job leaves is named by the next result, search or build.
     vi.mocked(documents.get).mockImplementation(((tabId: string) => ({ id: tabId, connectionId: 'bq' })) as never)
+    const before = calls.index.length
     events.emit({ type: 'query.finished', tabId: 'q1', queryId: 'x', error: 'boom' } as never)
+    expect(calls.index).toHaveLength(before)
+    // A tab closed (or stopped) before its job finished: the job's mark comes later, and the next search's status names it.
+    const id = service.open('bq', 'orders')!
+    pendingSearch.at(-1)!({ ok: true, value: { hits: [], total: 0, partial: false, elapsedMs: 1, index: status({ provider: 'bigquery', staleMark: 7 }) } })
+    await settle()
     expect(calls.index.at(-1)).toMatchObject({ connectionId: 'bq', stale: true })
+    expect(calls.index).toHaveLength(before + 1)
+    // A mark a failed read left keeps its number: neither the build's status nor the search it runs again asks another build.
+    pendingIndex.at(-1)!({ ok: true, value: { status: status({ provider: 'bigquery', staleMark: 7 }), elapsedMs: 1 } })
+    await settle()
+    for (const answer of pendingSearch.splice(0)) answer({ ok: true, value: { hits: [], total: 0, partial: false, elapsedMs: 1, index: status({ provider: 'bigquery', staleMark: 7 }) } })
+    await settle()
+    expect(calls.index).toHaveLength(before + 1)
+    // A newer mark (DDL while the build ran) asks once more.
+    void service.search(id)
+    pendingSearch.at(-1)!({ ok: true, value: { hits: [], total: 0, partial: false, elapsedMs: 1, index: status({ provider: 'bigquery', staleMark: 9 }) } })
+    await settle()
+    expect(calls.index).toHaveLength(before + 2)
+    events.emit({ type: 'query.finished', tabId: 'q1', queryId: 'x', summary: { indexStale: 9 } as never })
+    expect(calls.index).toHaveLength(before + 2)
+    events.emit({ type: 'query.finished', tabId: 'q1', queryId: 'x', summary: { indexStale: 10 } as never })
+    expect(calls.index).toHaveLength(before + 2)
+    pendingIndex.at(-1)!(ok)
+    await settle()
+    expect(calls.index.at(-1)).toMatchObject({ connectionId: 'bq', stale: true })
+    expect(calls.index).toHaveLength(before + 3)
     // That refresh failing leaves the index it refreshed searchable: no error on it.
     pendingIndex.at(-1)!({ ok: false, code: 'TIMEOUT', error: 'slow' })
     await settle()
     expect(service.getSnapshot().indexes.bq.error).toBeUndefined()
     expect(service.getSnapshot().indexes.bq.status?.state).toBe('ready')
+    // A stale-only build that failed is asked again at the next hint of the same mark.
+    events.emit({ type: 'query.finished', tabId: 'q1', queryId: 'x', summary: { indexStale: 10 } as never })
+    expect(calls.index).toHaveLength(before + 4)
+    expect(calls.index.at(-1)).toMatchObject({ connectionId: 'bq', stale: true })
+    pendingIndex.at(-1)!(ok)
+    await settle()
     // The server's Refresh during a build waits for it, then reads everything.
     service.build('bq')
     service.refreshNode('bq', { type: 'object', object: { kind: 'server' } })
@@ -445,16 +473,26 @@ describe('ObjectSearchService', () => {
     await settle()
     // Stop ends the refreshes waiting behind the build, and so does a build cancelled another way.
     service.build('bq')
-    service.refreshBigQuery('bq', { stale: true })
+    events.emit({ type: 'query.finished', tabId: 'q1', queryId: 'x', summary: { indexStale: 11 } as never })
     service.stopBuild('bq')
     pendingIndex.at(-1)!({ ok: false, code: 'CANCELLED', error: 'stopped' })
     await settle()
+    // A mark the user stopped reading is not asked again by the next hint of the same mark: only a newer one asks.
+    const afterStop = calls.index.length
+    events.emit({ type: 'query.finished', tabId: 'q1', queryId: 'x', summary: { indexStale: 11 } as never })
+    expect(calls.index).toHaveLength(afterStop)
     service.build('bq')
     service.refreshBigQuery('bq', { scope: { project: 'varia-alpha' } })
     const cancelled = calls.index.length
     pendingIndex.at(-1)!({ ok: false, code: 'CANCELLED', error: 'stopped' })
     await settle()
     expect(calls.index).toHaveLength(cancelled)
+    // A build cancelled other than by Stop drops the refreshes behind it, and the mark is asked again at the next hint.
+    events.emit({ type: 'query.finished', tabId: 'q1', queryId: 'x', summary: { indexStale: 11 } as never })
+    expect(calls.index).toHaveLength(cancelled + 1)
+    expect(calls.index.at(-1)).toMatchObject({ connectionId: 'bq', stale: true })
+    pendingIndex.at(-1)!(ok)
+    await settle()
     // A whole build's failure is the index's, and neither a refresh waiting behind it nor a later one hides it; a full one may.
     service.build('bq')
     service.refreshBigQuery('bq', { stale: true })

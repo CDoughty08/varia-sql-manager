@@ -419,6 +419,12 @@ export async function settleReused(prepared: PreparedRequest, connected: Connect
         if (!await deps.connections.setBigQueryCostPrompt?.(bigQueryOptions, bigQueryOptions.costPrompt)) throw new Error('The saved connection is unavailable.')
       } catch { info.historyWarning ??= 'Connected successfully, but the cost prompt choice could not be saved.' }
     }
+    // So is the connection's own threshold (0: back to Options').
+    if (context?.mode !== 'background' && bigQueryOptions?.costThreshold !== undefined) {
+      try {
+        if (!await deps.connections.setBigQueryCostThreshold?.(bigQueryOptions, bigQueryOptions.costThreshold)) throw new Error('The saved connection is unavailable.')
+      } catch { info.historyWarning ??= 'Connected successfully, but the cost threshold could not be saved.' }
+    }
     const policy = context?.mode === 'background' ? 'preserve' : context?.credentialPolicy ?? (context?.remember === undefined ? 'preserve' : context.remember ? 'remember' : 'forget')
     // BigQuery keeps no password: a reused BigQuery connection only records its reconnect preference.
     if (policy === 'preserve' || (params as ProviderConnectionOptions).provider === 'bigquery' || !canRememberPassword(params.authentication)) return { ok: true, value: info }

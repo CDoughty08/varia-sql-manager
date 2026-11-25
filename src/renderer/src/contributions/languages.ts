@@ -4,7 +4,11 @@ import type { Disposable } from '../core/types'
 import { isQueryDocument } from '../documents'
 import { triggerEditorAction } from '../editor/actions'
 import { definitionMessages } from '../languages/definition'
+import { googleSqlLanguageId } from '../languages/googlesql'
 import { registerPeekCardEscape, type DefinitionMode } from '../languages/EditorPeekService'
+
+/** SQL Server's language, and BigQuery's, whose names resolve through the Search Objects index (EditorPeekService). */
+const definitionLanguages: ReadonlySet<string> = new Set(['sql', googleSqlLanguageId])
 
 type LanguageWorkbench = Pick<Workbench, 'commands' | 'documents' | 'connections'> & {
   readonly sqlLanguage: Pick<Workbench['sqlLanguage'], 'refreshCache'>
@@ -31,7 +35,10 @@ export function languagesContribution({ commands, documents, connections, sqlLan
   const focused = () => {
     const editor = monaco?.editor.getEditors?.().find(editor => editor.hasWidgetFocus())
     const model = editor?.getModel(), position = editor?.getPosition()
-    return editor && model && position && model.getLanguageId() === 'sql' ? { editor, model, position } : undefined
+    if (!editor || !model || !position || !definitionLanguages.has(model.getLanguageId())) return undefined
+    // A GoogleSQL name resolves on its query tab's connection; BigQuery Properties' read-only Definition editor has none.
+    if (model.getLanguageId() === googleSqlLanguageId && !documents.getSnapshot().documents.some(document => documents.getModel(document.id) === model)) return undefined
+    return { editor, model, position }
   }
   const definition = (mode: DefinitionMode) => async () => { const place = focused(); if (place && editorPeek) await editorPeek.run(mode, place) }
   const registrations = [

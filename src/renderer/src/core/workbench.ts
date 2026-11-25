@@ -6,6 +6,7 @@ import { BigQueryCostService, costOptOut } from '../services/bigquery-cost'
 import { CostPromptService } from '../services/bigquery-cost-prompt'
 import { languagesContribution } from '../contributions/languages'
 import { EditorPeekService } from '../languages/EditorPeekService'
+import { indexDefinitionOpener } from '../languages/bigquery-definition'
 import type { ReloadPins, VariaApi } from '../../../shared/contracts'
 import { actsOnTab } from '../../../shared/commands/catalog'
 import { toPlatform, type Platform } from '../../../shared/commands/keybindings'
@@ -127,6 +128,8 @@ import { AgentJobStatusService } from '../agent/AgentJobStatusService'
 import { JobDocumentService } from '../agent/JobDocumentService'
 import { AlertOperatorDocumentService, alertSpec, operatorSpec, operatorsSpec, type AlertDocumentService, type OperatorDocumentService, type OperatorsDocumentService } from '../agent/AlertOperatorDocumentService'
 import { agentContribution } from '../contributions/agent'
+import { AgentOverviewService } from '../agent/AgentOverviewService'
+import { createAgentOverviewFixes } from '../agent/agent-overview-fixes'
 import { agentObjectsContribution } from '../contributions/agent-objects'
 import { SchedulesService } from '../agent/SchedulesService'
 import { ProxyDocumentService } from '../agent/ProxyDocumentService'
@@ -306,6 +309,8 @@ export interface Workbench extends Disposable {
   /** SQL Server Agent's Job Activity Monitors (AG-3): one per connection, each a live view of its jobs. */
   readonly jobActivity: JobActivityService
   readonly logViewer: LogViewerService
+  /** SQL Server Agent's overview and health checks (AG-15), one per connection. */
+  readonly agentOverview: AgentOverviewService
   /** The status bar's running Agent jobs this window started, followed while hidden (AG-3). */
   readonly agentJobs: AgentJobStatusService
   readonly jobDocuments: JobDocumentService
@@ -622,6 +627,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     // A Recycle renames every Agent error log: Object Explorer's Error Logs folder of that server, if listed, reloads.
     recycled: connectionId => { const folder = explorer.folderNode(connectionId, { kind: 'agent' }, 'agentErrorLogs'); if (folder !== undefined) explorer.reconcile(folder) }
   })
+  // SQL Server Agent's overview (AG-15): each check's fix runs through the surface that owns it; the overview itself writes nothing.
+  const agentOverview = new AgentOverviewService({
+    documents, panes, groups: editorGroups, live, connections, targetIdOf,
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-overview="${CSS.escape(id)}"] .agent-check button, [data-agent-overview="${CSS.escape(id)}"] .agent-overview-head button`)?.focus()),
+    fixes: createAgentOverviewFixes({ jobActivity, jobDocuments, dialogs, operatorsDocuments, schedules, explorer, commands: () => commands })
+  })
   const objectSearch = new ObjectSearchService({
     api, documents, connections, settings, targetIdOf, events,
     billedGate: (connectionId, estimate, signal) => bigQueryCost.beforeScript(connectionId, estimate, signal),
@@ -642,7 +653,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-peek-tab="${CSS.escape(id)}"] [role="tab"][aria-selected="true"]`)?.focus())
   })
   const inspector = new InspectorService({ api, platform })
-  const editorPeek = new EditorPeekService({ sqlLanguage, connections, scripting, peek, peekTabs })
+  const editorPeek = new EditorPeekService({
+    sqlLanguage, connections, scripting, peek, peekTabs, indexDefinition: indexCompletion,
+    openIndexDefinition: indexDefinitionOpener({ api, documents, connections, opened: () => focusLater(() => documents.focusActive()) })
+  })
   // A dependency is shown as Search Objects' Reveal shows a hit; a failed walk says why in the command banner.
   const dependencies = new DependenciesService({
     api, connections, explorer,
@@ -827,6 +841,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     jobHistory,
     jobActivity,
     logViewer,
+    agentOverview,
     agentJobs,
     jobDocuments,
     alertDocuments,
@@ -895,6 +910,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       jobHistory.dispose()
       jobActivity.dispose()
       logViewer.dispose()
+      agentOverview.dispose()
       agentJobs.dispose()
       jobDocuments.dispose()
       alertDocuments.dispose()

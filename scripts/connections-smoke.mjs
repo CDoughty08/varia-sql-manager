@@ -1709,6 +1709,7 @@ async function bigQueryEmulator() {
     await dialog.getByRole('tab', { name: /^Advanced/ }).click()
     await expectControlHeight(dialog.getByLabel('Maximum bytes billed', { exact: true }))
     await expectControlHeight(dialog.getByLabel('Maximum bytes billed unit', { exact: true }))
+    await expectControlHeight(dialog.getByLabel('Prompt above', { exact: true }))
     await dialog.getByRole('tab', { name: 'Connection Properties', exact: true }).click()
     await dialog.getByLabel('Project', { exact: true }).fill('varia-emulator')
     await dialog.getByRole('button', { name: 'Load datasets', exact: true }).click()

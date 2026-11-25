@@ -42,6 +42,7 @@ internal static class BigQueryJobHistoryChecks
         await DetailsAsync(check, key);
         await CancelAsync(check, key);
         await GateAsync(check, key);
+        await ExplorerAsync(check, key);
     }
 
     /// <summary>A fixture with its "T-n" times turned into epoch ms n seconds before <paramref name="now"/>.</summary>
@@ -392,8 +393,8 @@ internal static class BigQueryJobHistoryChecks
         var refresh = filtered.Listings().Skip(2).Where(query => !query.Contains("stateFilter=", StringComparison.Ordinal)).Select(MinCreated).FirstOrDefault();
         check(Status(first, "held") is 1 && refresh == filtered.Now - 30_000 - BigQueryJobHistory.OverlapMs,
             $"with a type filter a refresh still lists only since the newest job listed, filtered out or not ({filtered.Now - refresh} ms back)");
-        check(!LiveCatalog.Current.Probes[BigQueryJobsSampler.Probe].LoadGuard && LiveCatalog.Current.Probes.Values.Count(probe => !probe.LoadGuard) == 1 && !((ILiveSampler)loads).HasRates,
-            "Job History opts out of the load guard: its cost is network and quota waits, and its catalogue intervals hold");
+        check(!LiveCatalog.Current.Probes[BigQueryJobsSampler.Probe].LoadGuard && LiveCatalog.Current.Probes.Values.Where(probe => !probe.LoadGuard).Select(probe => probe.Id).Order(StringComparer.Ordinal).SequenceEqual([BigQueryJobsSampler.Probe, BigQueryExplorerSampler.Probe]) && !((ILiveSampler)loads).HasRates,
+            "Job History and the Object Explorer chip (both BigQuery API reads) are the only probes out of the load guard: their cost is network and quota waits, and Job History's catalogue intervals hold");
     }
 
     /// <summary>Pinned jobs months apart are classified one millisecond each, never by listing every job between them; a pinned
@@ -738,5 +739,69 @@ internal static class BigQueryJobHistoryChecks
         var invalid = await Subscribe(harness.ConnectionId, "bigquery.jobs", BigQueryJobsSampler.Probe, new JsonObject { ["scope"] = "everyone" });
         check(sql == "UNSUPPORTED_PROVIDER" && closed == "NOT_CONNECTED" && invalid == "INVALID_PARAMS",
             $"a SQL Server source on a BigQuery connection is UNSUPPORTED_PROVIDER, Job History on a closed id NOT_CONNECTED, bad args INVALID_PARAMS: {sql} {closed} {invalid}");
+    }
+
+    static LiveDue ExplorerDue(int budgetMs = 10_000) => new(new LiveProbeState(LiveCatalog.Current.Probes[BigQueryExplorerSampler.Probe], 10_000), null, null, null, null, new Dictionary<int, LiveTrackArgs>(), BudgetMs: budgetMs);
+
+    /// <summary>bigquery.explorer (BQ-12): Object Explorer's chip counts the principal's own open top-level jobs with minimal jobs.list
+    /// pages filtered to pending and running and without allUsers, stops at its cap with more = 1, and maps refusals as Job History does.</summary>
+    static async Task ExplorerAsync(Action<bool, string> check, JsonObject key)
+    {
+        var spec = LiveCatalog.Current.Probes[BigQueryExplorerSampler.Probe];
+        check(spec.Source == BigQueryExplorerSampler.Source && LiveCatalog.Current.Sources[BigQueryExplorerSampler.Source].Scope == "bigquery" && !spec.LoadGuard,
+            "explorer.bigquery belongs to the bigquery-scoped bigquery.explorer source and has no load guard");
+
+        using (var harness = new Harness())
+        {
+            await harness.ConnectAsync(key);
+            var sampler = new BigQueryExplorerSampler(harness.Service.BigQuery, harness.ConnectionId);
+            var batch = await sampler.SampleAsync([ExplorerDue()], CancellationToken.None);
+            var listings = harness.Listings();
+            check(batch.Errors.Count == 0 && batch.Samples is [var sample] && sample.Metrics is [1] && sample.Status is [{ Id: "more", Value: 0 }],
+                $"the chip counts the one open top-level job across both pages (errors {string.Join(",", batch.Errors.Select(error => error.Code))}, metrics {string.Join(",", batch.Samples.SelectMany(item => item.Metrics ?? []))})");
+            check(listings.Count == 2 && listings.All(query => query.Contains("stateFilter=pending", StringComparison.Ordinal) && query.Contains("stateFilter=running", StringComparison.Ordinal)
+                && query.Contains("projection=minimal", StringComparison.Ordinal) && query.Contains("maxResults=1000", StringComparison.Ordinal) && !query.Contains("allUsers", StringComparison.Ordinal))
+                && listings[1].Contains("pageToken=jobs-page-2", StringComparison.Ordinal),
+                "it lists pending and running jobs, minimal, in pages of 1,000, without allUsers: " + string.Join(" | ", listings));
+            check(harness.Fake.Unmatched.IsEmpty, "every explorer listing was one the fake answers");
+        }
+
+        // A listing that goes on past the cap stops there with more = 1; one that ends exactly at it is exact.
+        foreach (var endsAtCap in new[] { false, true })
+        {
+            using var capped = new Harness();
+            await capped.ConnectAsync(key);
+            var page = 0;
+            var pages = BigQueryExplorerSampler.MaxJobs / BigQueryExplorerSampler.PageJobs;
+            capped.Fake.On("GET", Jobs, _ =>
+            {
+                var at = Interlocked.Increment(ref page);
+                var jobs = new JsonArray();
+                for (var n = 0; n < BigQueryExplorerSampler.PageJobs; n++)
+                    jobs.Add(new JsonObject { ["jobReference"] = new JsonObject { ["projectId"] = "varia-alpha", ["jobId"] = $"open_{at}_{n}", ["location"] = "US" }, ["state"] = "RUNNING" });
+                var list = new JsonObject { ["kind"] = "bigquery#jobList", ["jobs"] = jobs };
+                if (!endsAtCap || at < pages) list["nextPageToken"] = "more-" + at;
+                return new BigQueryFake.Reply(200, list.ToJsonString());
+            });
+            var batch = await new BigQueryExplorerSampler(capped.Service.BigQuery, capped.ConnectionId).SampleAsync([ExplorerDue(30_000)], CancellationToken.None);
+            var more = endsAtCap ? 0 : 1;
+            check(batch.Errors.Count == 0 && batch.Samples is [{ Metrics: [BigQueryExplorerSampler.MaxJobs], Status: [{ Id: "more" } status] }] && Equals(status.Value, more) && page == pages,
+                $"a listing of {(endsAtCap ? "exactly" : "more than")} {BigQueryExplorerSampler.MaxJobs} open jobs reads {pages} pages and reports more = {more} (pages {page})");
+        }
+
+        var wrong = new List<string>();
+        foreach (var (fixture, status, code) in new (string, int, string)[] { ("error-access-denied", 403, "PERMISSION_DENIED"), ("error-quota-exceeded", 403, "QUOTA"), ("error-unauthenticated", 401, "AUTH_EXPIRED") })
+        {
+            using var harness = new Harness();
+            await harness.ConnectAsync(key);
+            harness.Fake.On("GET", Jobs, BigQueryFake.Fixture(fixture, status));
+            var batch = await new BigQueryExplorerSampler(harness.Service.BigQuery, harness.ConnectionId).SampleAsync([ExplorerDue()], CancellationToken.None);
+            if (batch.Samples.Count != 0 || batch.Errors is not [var error] || error.Code != code || error.Probe != BigQueryExplorerSampler.Probe) wrong.Add(fixture + " → " + string.Join(",", batch.Errors.Select(item => item.Code)));
+        }
+        check(wrong.Count == 0, "a refused explorer listing is the probe's error by Job History's codes: " + string.Join("; ", wrong));
+
+        using var spare = new Harness();
+        var gone = await new BigQueryExplorerSampler(spare.Service.BigQuery, Guid.NewGuid().ToString()).SampleAsync([ExplorerDue()], CancellationToken.None).ContinueWith(task => task.Exception?.InnerException);
+        check(gone is RequestException { Code: "NOT_CONNECTED" }, "a sample on a connection that went away ends the view as NOT_CONNECTED: " + gone?.GetType().Name);
     }
 }

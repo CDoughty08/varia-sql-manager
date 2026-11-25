@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { lexSql } from '../src/shared/sql/lexer'
-import { applyOffsetEdits, mapOffset, moveCommaEdits, sqlTransformOp, statementAt, toggleBracketEdits, transformText, sqlTransformMessages, type OffsetRange, type SqlTransformModel } from '../src/renderer/src/editor/sql-transforms'
+import { applyOffsetEdits, googleSqlTransformTokens, googleSqlTransforms, mapOffset, moveCommaEdits, sqlTransformOp, statementAt, toggleBracketEdits, transformText, sqlTransformMessages, type OffsetRange, type SqlTransformModel } from '../src/renderer/src/editor/sql-transforms'
 import { textOpLimits } from '../src/renderer/src/editor/text-ops'
 
 const toggle = (text: string, ranges?: readonly OffsetRange[]) => applyOffsetEdits(text, toggleBracketEdits(text, ranges).edits)
@@ -265,6 +265,38 @@ describe('Commas to Front and Commas to End', () => {
   })
   it('keeps CRLF line endings', () => {
     expect(commas('SELECT a,\r\n  b', 'front')).toBe('SELECT a\r\n ,b')
+  })
+})
+
+describe('Commas to Front and Commas to End in GoogleSQL', () => {
+  const google = (text: string, position: 'front' | 'end') =>
+    applyOffsetEdits(text, moveCommaEdits(text, [{ start: 0, end: text.length }], position, googleSqlTransformTokens(text), googleSqlTransforms))
+  it('covers the text with tokens end to end, splitting white space at line breaks', () => {
+    for (const text of ['SELECT a, # x\r\n  b -- y\r\n, `c`', "r'''a,\n''', b\"\"\"x\"\"\" /* ,\n */ @p, @@time_zone,\n[1, 2]"]) {
+      const tokens = googleSqlTransformTokens(text)
+      expect(tokens.map(token => text.slice(token.start, token.end)).join('')).toBe(text)
+      for (const token of tokens) {
+        if (token.kind === 'space') expect(text.slice(token.start, token.end)).not.toMatch(/[\r\n]/)
+        if (token.kind === 'lineComment') expect(text.slice(token.start, token.end)).not.toMatch(/\r/)
+      }
+    }
+    expect(googleSqlTransformTokens('a # b\r\nc').map(token => token.kind)).toEqual(['word', 'space', 'lineComment', 'newline', 'word'])
+  })
+  it('moves commas past # comments, raw and triple-quoted strings and backtick names, keeping those intact', () => {
+    expect(google('SELECT a, # first, note\n  r"x,y",\n  \'\'\'p,\nq\'\'\',\n  `d,e`\nFROM t', 'front'))
+      .toBe('SELECT a # first, note\n ,r"x,y"\n ,\'\'\'p,\nq\'\'\'\n ,`d,e`\nFROM t')
+    expect(google('SELECT a # one,\n  b', 'front')).toBe('SELECT a # one,\n  b')
+    expect(google('SELECT a\n  ,b # x\n  ,c', 'end')).toBe('SELECT a,\n   b, # x\n   c')
+  })
+  it('reads an array\'s brackets as brackets, and CRLF line endings stay', () => {
+    expect(google('SELECT [1,\n  2,\n]', 'front')).toBe('SELECT [1\n ,2,\n]')
+    expect(google('SELECT a,\r\n  b # c\r\nFROM t', 'front')).toBe('SELECT a\r\n ,b # c\r\nFROM t')
+  })
+  it('finds the statement without GO lines', () => {
+    const text = 'SELECT a,\n  b\nGO\n, c'
+    expect(statementAt(text, text.length, googleSqlTransformTokens(text), googleSqlTransforms)).toEqual({ start: 0, end: text.length })
+    // T-SQL's GO line ends the statement before it.
+    expect(statementAt(text, text.length)).toEqual({ start: text.indexOf('GO') + 2, end: text.length })
   })
 })
 

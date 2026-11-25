@@ -15,6 +15,7 @@ import { createFromCommandEntries } from '../agent/create-from.ts'
 import { agentProxyCommandEntries } from '../actions/agent-proxy.ts'
 import { logViewerCommandEntries } from '../agent/history.ts'
 import { errorLogCommandEntries } from '../agent/error-log.ts'
+import { agentOverviewCommandEntries } from '../agent/overview.ts'
 import { jobHistoryCommandEntries } from '../bigquery/history-catalog.ts'
 import type { IconId } from '../icons.ts'
 import { ssisCommandEntries } from '../ssis/catalog.ts'
@@ -542,6 +543,8 @@ export const commandCatalog = {
   ...agentScheduleCommandEntries(),
   // Create Job Like This (AG-6e): from src/shared/agent/create-from.ts.
   ...createFromCommandEntries(),
+  // SQL Server Agent's overview and health checks (AG-15).
+  ...agentOverviewCommandEntries(),
   // Script as › <verb> To › <destination>: 30 commands generated from src/shared/scripting/catalog.ts, which keep the
   // table menu's explorer.scriptCreateTo* ids. Each acts on its menu's node, else the selection.
   ...scriptCommandEntries(),
@@ -905,27 +908,28 @@ export const commandCatalog = {
   // SSMS's F12 scripts the object under the caret (CREATE) to a new query; Alt+F12 opens Peek's card at the caret, as SSMS's
   // inline Peek Definition does. Peek's own read-only editor takes both through its own focus key (peekEditorFocus), so
   // neither needs a query-tab key there. With the pointer, Ctrl+hover (gestures.ts editor.peekHover) opens the card as Object
-  // Explorer's does, and Ctrl+click (editor.goToDefinition) opens a Peek tab (edit.openPeekTab).
+  // Explorer's does, and Ctrl+click (editor.goToDefinition) opens a Peek tab (edit.openPeekTab). In a BigQuery tab F12 opens a
+  // view's or routine's free definition instead, and Peek opens on its Definition tab (EditorPeekService).
   'edit.goToDefinition': {
     title: 'Go To Definition', category: 'Edit', icon: 'go-to-file', keywords: ['goto', 'script', 'create', 'navigate', 'object'],
-    precondition: 'backendReady', unavailableHint: definitionHint,
+    precondition: 'backendReady', unavailableHint: definitionHint, providers: both,
     keybindings: [{ key: 'f12', when: 'editorTextFocus || peekEditorFocus' }],
     menus: [{ menu: 'editor.context', group: '2_definition', order: 1, mnemonic: 'g' }]
   },
   'edit.peekDefinition': {
     title: 'Peek Definition', category: 'Edit', icon: 'eye', keywords: ['peek', 'properties', 'preview', 'object'],
-    precondition: 'backendReady', unavailableHint: definitionHint,
+    precondition: 'backendReady', unavailableHint: definitionHint, providers: both,
     keybindings: [{ key: 'alt+f12', when: 'editorTextFocus || peekEditorFocus' }],
     menus: [{ menu: 'editor.context', group: '2_definition', order: 2, mnemonic: 'k' }]
   },
   'edit.openPeekTab': {
     title: 'Open Definition in Peek Tab', category: 'Edit', icon: 'link-external', keywords: ['peek', 'properties', 'preview', 'object', 'document', 'tab'],
-    precondition: 'backendReady', unavailableHint: definitionHint,
+    precondition: 'backendReady', unavailableHint: definitionHint, providers: both,
     menus: [{ menu: 'editor.context', group: '2_definition', order: 3, mnemonic: 'f' }]
   },
-  // SQL Server text commands that read the query's tokens, so strings, comments and variables never change
-  // (src/renderer/src/editor/sql-transforms.ts). Ctrl+[ is free in the query editor: Monaco's indent and outdent lines
-  // actions are not loaded, and Tab and Shift+Tab indent.
+  // Text commands that read the query's tokens, so strings, comments and variables never change
+  // (src/renderer/src/editor/sql-transforms.ts): Toggle Brackets is SQL Server's, the comma commands read GoogleSQL too. Ctrl+[
+  // is free in the query editor: Monaco's indent and outdent lines actions are not loaded, and Tab and Shift+Tab indent.
   'edit.toggleBrackets': {
     title: 'Toggle Brackets', category: 'Edit', keywords: ['brackets', 'quote', 'quotename', 'identifiers', 'names', 'delimit', 'square'],
     precondition: 'activeDocumentIsQuery', unavailableHint: 'Open a SQL Server query first.',
@@ -934,12 +938,12 @@ export const commandCatalog = {
   },
   'edit.commasToFront': {
     title: 'Move Commas to Front', category: 'Edit', keywords: ['commas', 'leading', 'select', 'list', 'format', 'style'],
-    precondition: 'activeDocumentIsQuery', unavailableHint: openFirst,
+    precondition: 'activeDocumentIsQuery', unavailableHint: openFirst, providers: both,
     menus: [{ menu: 'edit.advanced', group: '5_sql', order: 2, mnemonic: 'f' }, { menu: 'editor.context', group: '3_format', order: 2, mnemonic: 'm' }]
   },
   'edit.commasToEnd': {
     title: 'Move Commas to End', category: 'Edit', keywords: ['commas', 'trailing', 'select', 'list', 'format', 'style'],
-    precondition: 'activeDocumentIsQuery', unavailableHint: openFirst,
+    precondition: 'activeDocumentIsQuery', unavailableHint: openFirst, providers: both,
     menus: [{ menu: 'edit.advanced', group: '5_sql', order: 3, mnemonic: 'e' }, { menu: 'editor.context', group: '3_format', order: 3, mnemonic: 'v' }]
   },
   'edit.nextSqlIssue': {

@@ -89,6 +89,15 @@ internal static class GoogleSqlScanner
         return true;
     }
 
+    /// <summary>Words that start a statement able to change what a dataset lists: DDL, LOAD DATA, and the statements that run
+    /// other text (EXECUTE IMMEDIATE, CALL of a procedure).</summary>
+    static readonly HashSet<string> ObjectWords = new(StringComparer.OrdinalIgnoreCase) { "CREATE", "DROP", "ALTER", "UNDROP", "LOAD", "EXECUTE", "CALL" };
+
+    /// <summary>Whether <paramref name="sql"/> holds a word (outside strings, identifiers and comments) of a statement that can
+    /// change what a dataset lists (docs/object-search.md, BigQuery). When it does not, a job whose statements cannot all be read
+    /// changed no object, so the index marks nothing for it.</summary>
+    public static bool MayChangeObjects(string sql) => Tokens(sql).Any(token => token.Kind == Kind.Word && ObjectWords.Contains(sql.Substring(token.Start, token.Length)));
+
     static bool Is(string sql, Token token, string word) => token.Length == word.Length && string.Compare(sql, token.Start, word, 0, word.Length, StringComparison.OrdinalIgnoreCase) == 0;
 
     /// <summary>Words and parentheses with their depth; strings, identifiers in backticks and comments are skipped, and

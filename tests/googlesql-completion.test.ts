@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { completeFromIndex } from '../src/shared/completion/complete'
+import { definitionFromIndex, IndexUnavailableError } from '../src/shared/completion/definition'
 import { escapeMarkdown, hoverFromIndex } from '../src/shared/completion/hover'
 import { LookupCache, lookupCacheLimits } from '../src/shared/completion/lookup-cache'
 import type { CompletionItem, IndexLookup, ScopeSource } from '../src/shared/completion/model'
@@ -499,6 +500,48 @@ describe('hover from the index', () => {
 
   it('escapes every Markdown character in names', () => {
     expect(escapeMarkdown('a|b*c_[d](e)`f`')).toBe('a\\|b\\*c\\_\\[d\\]\\(e\\)\\`f\\`')
+  })
+})
+
+describe('Go To Definition from the index', () => {
+  const definition = async (source: string, defaults = dialect) => {
+    const { text, offset } = at(source)
+    const found = readGoogleSqlHover(text, offset)
+    return found && definitionFromIndex(found, defaults, fakeLookup())
+  }
+  const daily = { path: ['varia-alpha', 'sales', 'daily'], kind: 'bqView' }
+
+  it('finds a view where a table is written, through the default project and dataset as completion does', async () => {
+    expect(await definition('SELECT * FROM dai|ly')).toMatchObject(daily)
+    expect(await definition('SELECT * FROM sales.da|ily d')).toMatchObject(daily)
+    expect(await definition('SELECT * FROM `varia-alpha.sales.da|ily`')).toMatchObject(daily)
+    expect(await definition('SELECT * FROM varia-alpha.sales.dai|ly')).toMatchObject(daily)
+    expect(await definition('SELECT * FROM census.peo|ple', googleSqlDialect({ project: 'varia-beta' }))).toMatchObject({ path: ['varia-beta', 'census', 'people'], kind: 'bqTable' })
+    // Without a default dataset a bare name names nothing.
+    expect(await definition('SELECT * FROM dai|ly', googleSqlDialect({ project: 'varia-alpha' }))).toBeUndefined()
+    expect(await definition('SELECT * FROM sales.nob|ody')).toBeUndefined()
+  })
+
+  it('finds a routine where it is called, never a built-in function or a table called as one', async () => {
+    expect(await definition('SELECT sales.to_ce|nts(price) FROM sales.orders')).toMatchObject({ path: ['varia-alpha', 'sales', 'to_cents'], kind: 'bqRoutine', subtype: 'scalar' })
+    expect(await definition('SELECT COU|NT(*) FROM sales.orders')).toBeUndefined()
+    expect(await definition('SELECT NET.HO|ST(url) FROM sales.orders')).toBeUndefined()
+    expect(await definition('SELECT sales.dai|ly(1) FROM sales.orders')).toBeUndefined()
+  })
+
+  it('goes from an alias or a column to its object, and finds nothing for a WITH query', async () => {
+    expect(await definition('SELECT |d.day FROM sales.daily d')).toMatchObject(daily)
+    expect(await definition('SELECT d.d|ay FROM sales.daily d')).toMatchObject(daily)
+    expect(await definition('SELECT d|ay FROM sales.daily')).toMatchObject(daily)
+    expect(await definition('WITH daily AS (SELECT 1 AS x) SELECT * FROM dai|ly')).toBeUndefined()
+    expect(await definition('SELECT x.|a FROM (SELECT 1 AS a) x')).toBeUndefined()
+  })
+
+  it('tells an index that could not answer from one that holds no such object', async () => {
+    const { text, offset } = at('SELECT * FROM dai|ly')
+    await expect(definitionFromIndex(readGoogleSqlHover(text, offset)!, dialect, async () => undefined)).rejects.toBeInstanceOf(IndexUnavailableError)
+    const column = at('SELECT d.d|ay FROM sales.daily d')
+    await expect(definitionFromIndex(readGoogleSqlHover(column.text, column.offset)!, dialect, async () => undefined)).rejects.toBeInstanceOf(IndexUnavailableError)
   })
 })
 

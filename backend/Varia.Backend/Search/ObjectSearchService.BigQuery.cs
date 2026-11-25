@@ -26,6 +26,29 @@ internal sealed partial class ObjectSearchService
             if (state.BigQuery) state.Stale[(project, dataset)] = ++state.StaleMarks;
     }
 
+    /// <summary>Records that DDL may have changed any dataset of a project, which ones unknown (a script whose statements could not
+    /// all be read): the next stale-only build lists the project again and reads each of its datasets whole.</summary>
+    public void MarkProjectStale(string connectionId, string project)
+    {
+        if (!BqNames.IsProject(project) || !states.TryGetValue(connectionId, out var state)) return;
+        lock (state.Gate)
+            if (state.BigQuery) state.StaleProjects[project] = ++state.StaleMarks;
+    }
+
+    /// <summary>Test seam: a connection's index counts as a BigQuery one, so DDL marks land on it without a build.</summary>
+    internal void TrackBigQuery(string connectionId)
+    {
+        var state = states.GetOrAdd(connectionId, _ => new State(pool, resources));
+        lock (state.Gate) state.BigQuery = true;
+    }
+
+    /// <summary>The newest stale mark not yet spent on a connection, or null (a query's result carries it, docs/object-search.md).</summary>
+    public long? StaleMarkOf(string connectionId)
+    {
+        if (!states.TryGetValue(connectionId, out var state)) return null;
+        lock (state.Gate) return state.BigQuery ? state.StaleMark : null;
+    }
+
     /// <summary>The editor's lookup into a BigQuery connection's index (<see cref="BigQueryLookup"/>): a snapshot of its build's state
     /// and the reads held now. A connection with no index yet still answers its projects (<paramref name="billing"/> first).</summary>
     internal BigQueryLookup LookupBigQuery(string connectionId, string billing, IReadOnlyList<string> extras)
@@ -47,6 +70,13 @@ internal sealed partial class ObjectSearchService
     {
         if (!states.TryGetValue(connectionId, out var state)) return [];
         lock (state.Gate) return [.. state.Stale.Keys];
+    }
+
+    /// <summary>The projects marked stale whole on a connection (the checks read it).</summary>
+    internal IReadOnlyCollection<string> StaleProjectsOf(string connectionId)
+    {
+        if (!states.TryGetValue(connectionId, out var state)) return [];
+        lock (state.Gate) return [.. state.StaleProjects.Keys];
     }
 
     public async Task<ObjectIndexResult> IndexBigQueryAsync(ObjectIndexArgs args, IBigQueryIndexSource source, CancellationToken token, Action<object>? progress = null)
@@ -126,7 +156,43 @@ internal sealed partial class ObjectSearchService
             var targets = new List<(string Project, string Dataset)>();
             // Each listed dataset's location, for the bulk path's regions.
             var located = new Dictionary<(string, string), string>();
-            if (staleOnly) targets.AddRange(stale.Where(item => projects.Contains(item.Project, StringComparer.Ordinal)).OrderBy(item => item.Project, StringComparer.Ordinal).ThenBy(item => item.Dataset, StringComparer.Ordinal));
+            // A project marked whole: each dataset its listing names takes the project's mark (so a failed read keeps it marked and
+            // a full build reads it whole too), and the project's own mark is spent once a listing is read.
+            Dictionary<string, long> wholeProjects;
+            lock (state.Gate) wholeProjects = state.StaleProjects.Where(pair => projects.Contains(pair.Key, StringComparer.Ordinal)).ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+            void Spread(string project, BigQueryDatasetList list)
+            {
+                if (!wholeProjects.TryGetValue(project, out var mark)) return;
+                lock (state.Gate)
+                {
+                    foreach (var name in list.Datasets)
+                        if (!state.Stale.TryGetValue((project, name), out var had) || had < mark) state.Stale[(project, name)] = mark;
+                    if (state.StaleProjects.TryGetValue(project, out var current) && current == mark) state.StaleProjects.Remove(project);
+                }
+                foreach (var name in list.Datasets) stale.Add((project, name));
+            }
+            if (staleOnly)
+            {
+                foreach (var project in wholeProjects.Keys.Order(StringComparer.Ordinal))
+                {
+                    BigQueryDatasetList list;
+                    try { list = await source.DatasetsAsync(args.ConnectionId, project, stop); }
+                    catch (Exception error) when (!stop.IsCancellationRequested && error is not RequestException { Code: "NOT_CONNECTED" })
+                    {
+                        Skip(SkipOf(error, project, "", "bigquery.datasets.get"));
+                        continue;
+                    }
+                    if (list.Cut) Skip(new("", "TOO_LARGE", "The project has more datasets than the index lists; it keeps the first " + (BigQueryIndexLimits.ListPages * 1000).ToString("N0", System.Globalization.CultureInfo.InvariantCulture) + ".", Project: project));
+                    var names = list.Datasets.ToHashSet(StringComparer.Ordinal);
+                    // Datasets the listing no longer names leave the index, and their marks go with them.
+                    state.Index.KeepWhere(read => read.Database != project || read.Dataset is not { } dataset || names.Contains(dataset) || list.Cut);
+                    if (!list.Cut)
+                        lock (state.Gate)
+                            foreach (var gone in state.Stale.Keys.Where(key => key.Project == project && !names.Contains(key.Dataset)).ToList()) { state.Stale.Remove(gone); stale.Remove(gone); }
+                    Spread(project, list);
+                }
+                targets.AddRange(stale.Where(item => projects.Contains(item.Project, StringComparer.Ordinal)).OrderBy(item => item.Project, StringComparer.Ordinal).ThenBy(item => item.Dataset, StringComparer.Ordinal));
+            }
             else
                 foreach (var project in scope is null ? projects : [scope.Project])
                 {
@@ -145,6 +211,7 @@ internal sealed partial class ObjectSearchService
                     state.Index.KeepWhere(read => read.Database != project || read.Dataset is not { } dataset || names.Contains(dataset) || list.Cut
                         || scope?.Dataset is { } kept && kept != dataset);
                     targets.AddRange(listed.Select(name => (project, name)));
+                    if (scope?.Dataset is null) Spread(project, list);
                     foreach (var name in listed)
                         if (list.Locations?.GetValueOrDefault(name) is { } where) located[(project, name)] = where;
                 }

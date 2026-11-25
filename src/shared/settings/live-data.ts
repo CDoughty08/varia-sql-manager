@@ -23,8 +23,8 @@ export const liveDataSettings = [
   },
   {
     key: 'liveData.explorerStatus', page: 'environment.liveData', group: 'Object Explorer', label: 'Show live status in Object Explorer', type: 'boolean', default: true, varia: true,
-    keywords: ['live', 'object explorer', 'status', 'chips', 'restoring', 'offline', 'read-only', 'single user', 'agent', 'jobs', 'availability group', 'server load'],
-    description: 'While Object Explorer shows, reads each connected server\'s database states, restore progress, running SQL Server Agent jobs and availability group health every few seconds, on one session of its own per server, and shows them as chips on the nodes. It pauses while Object Explorer or the window is hidden, and never reloads the tree. While it is False, nodes show only what their list said when it loaded.'
+    keywords: ['live', 'object explorer', 'status', 'chips', 'restoring', 'offline', 'read-only', 'single user', 'agent', 'jobs', 'availability group', 'server load', 'bigquery'],
+    description: 'While Object Explorer shows, reads each connected server\'s database states, restore progress, running SQL Server Agent jobs and availability group health every few seconds, on one session of its own per server, and each BigQuery connection\'s running jobs (a free job listing, never a query), and shows them as chips on the nodes. It pauses while Object Explorer or the window is hidden, and never reloads the tree. While it is False, nodes show only what their list said when it loaded.'
   },
   {
     key: 'liveData.historyMinutes', page: 'environment.liveData', group: 'Charts', label: 'Keep chart history for', type: 'integer', min: 5, max: 120, default: 60, unit: 'minutes', varia: true,

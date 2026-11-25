@@ -74,6 +74,33 @@ try {
   await page.screenshot({ path: 'artifacts/agent-jobs-dark.png' })
   console.log('Open passed: the Agent node\'s menu opens Job Activity Monitor with the jobs, their tones and the counts.')
 
+  step = 'overview'
+  // The Agent overview (AG-15) from the Agent node's menu: the fake server's service, tiles and checks, and a fix opening the owner
+  // of what it fixes (Show them: Job Activity Monitor on its Failed view).
+  await chooseExplorerMenuItem(page, ['server-a', 'SQL Server Agent'], 'Agent Overview')
+  await expect(documentTab(page, 'Agent Overview - server-a')).toHaveAttribute('aria-selected', 'true')
+  const overview = documentFrame(page, 'SQL Server Agent')
+  await expect(overview.getByRole('status', { name: 'SQL Server Agent: Running', exact: true })).toBeVisible()
+  await expect(overview.getByRole('listitem', { name: 'Problem: 1 job failed in the last 24 hours', exact: true })).toBeVisible()
+  await expect(overview.getByRole('listitem', { name: 'Warning: 1 job is owned by a disabled login', exact: true })).toBeVisible()
+  await expect(overview.getByRole('listitem', { name: 'Warning: 1 job notifies no one when it fails', exact: true })).toBeVisible()
+  await expect(overview.getByRole('listitem', { name: 'Warning: Recommended alerts are missing', exact: true })).toBeVisible()
+  await expect(overview.getByRole('listitem', { name: 'Note: 1 schedule is unused', exact: true })).toBeVisible()
+  await expect(overview.getByRole('heading', { name: 'Needs attention', exact: true })).toBeVisible()
+  expect((await calls('live.subscribe')).find(call => call.source === 'agent.overview')).toMatchObject({ source: 'agent.overview', probes: [{ probe: 'agent.overview.read' }] })
+  await page.screenshot({ path: 'artifacts/agent-overview-dark.png' })
+  // The tiles share one height whether or not they have a subline (Running has none here), and a name links inside its check's sentence.
+  const tileHeights = await overview.getByRole('group', { name: 'SQL Server Agent at a glance', exact: true }).getByRole('group').evaluateAll(tiles => tiles.map(tile => Math.round(tile.getBoundingClientRect().height)))
+  expect(tileHeights).toHaveLength(4)
+  expect(new Set(tileHeights).size).toBe(1)
+  await expect(overview.getByRole('listitem', { name: 'Warning: 1 job notifies no one when it fails', exact: true }).getByRole('button', { name: 'Backup', exact: true })).toBeVisible()
+  await overview.getByRole('listitem', { name: 'Problem: 1 job failed in the last 24 hours', exact: true }).getByRole('button', { name: 'Show them', exact: true }).click()
+  await expect(documentTab(page, tabName)).toHaveAttribute('aria-selected', 'true')
+  await expect(chip('Failed')).toHaveAttribute('aria-pressed', 'true')
+  await chip('All').click()
+  await page.getByRole('button', { name: 'Close Agent Overview - server-a', exact: true }).click()
+  await expect.poll(async () => (await page.evaluate(() => window.__variaLive.snapshot().handles.filter(handle => handle.source === 'agent.overview'))).length).toBe(0)
+  console.log("Overview passed: the Agent node's menu opens the Agent overview with its checks, and Show them opens Job Activity Monitor on its failed jobs.")
   step = 'tree'
   // AG-12: the expanded Agent node watches agent.tree; the expanded Jobs folder opens its own agent.jobs view (beside the
   // document's) whose rows give each job's chip, and collapsing the folder ends that view.
