@@ -320,7 +320,8 @@ table.g td.c, table.dtable td.c, table.dtable th.c, table.g th.c { text-align: c
 .rx-card.sel { border-color: var(--accent); background: var(--sel) }
 /* Flow view of a job's steps (later tier): rx-flow* scenes */
 .rx-body.flow { grid-template-columns: minmax(0, 1fr) 380px; position: relative }
-.rx-body.flow.wide { grid-template-columns: minmax(0, 1fr) 500px }
+.rx-body.flow.wide { grid-template-columns: minmax(0, 1fr) 560px }
+.rx-body.flow .rx-seg span { white-space: nowrap }
 .rx-body.flow > .rx-edit { border-left: 1px solid var(--border) }
 .fl-canvas { overflow: auto; position: relative; background-color: var(--panel); background-image: radial-gradient(var(--borderStrong) 1px, transparent 1px); background-size: 16px 16px; min-width: 0 }
 .fl-draw { position: relative; width: 700px; height: 640px; margin: 0 auto }
@@ -1467,7 +1468,7 @@ const rxFlowLegend = () => `<div class="rx-sec"><div class="h">Key</div><div cla
 const rxFlowChecks = (loop = true) => `<div class="rx-sec"><div class="h">Flow checks<span class="r">1 problem</span></div>
   <div class="rx-check"><span class="i rx-warn">${ic('warn', 14)}</span><span class="t">Step 1 never runs</span><span class="a"><span class="btn">Make Start step</span></span><span class="d">The Start step is 2 and no step goes to step 1, so Archive old extracts is skipped on every scheduled run. Start at step can still run it.</span></div>
   ${loop ? `<div class="rx-check"><span class="i rx-mut">${ic('loop', 14)}</span><span class="t">Steps 3 and 4 can repeat</span><span class="a"></span><span class="d">A failed row count goes back to the load. Agent does not count passes: the loop ends when step 3 fails (to step 6) or step 4 succeeds.</span></div>` : ''}
-  <div class="rx-check"><span class="i rx-ok">${ic('check', 14)}</span><span class="t">Every path ends in a Quit</span><span class="a"></span><span class="d">No step goes to a step that no longer exists.</span></div></div>`
+  <div class="rx-check"><span class="i rx-ok">${ic('check', 14)}</span><span class="t">Every go-to target exists</span><span class="a"></span><span class="d">No step goes to a step that no longer exists.</span></div></div>`
 const rxFlowSel = () => `<div class="rx-sec"><div class="h">Selected step<span class="r">${ic('code', 12)}T-SQL</span></div>
   <div class="fl-sname"><span class="no">4</span>Validate row counts</div>
   <dl class="rx-kv"><dt>Database</dt><dd>StagingDW</dd><dt>Retries</dt><dd>None</dd><dt>On success</dt><dd><span class="rx-ok">✓</span> Go to the next step · 5 Merge facts</dd><dt>On failure</dt><dd><span class="rx-bad">✗</span> Go to step 3 · Load staging package <span class="rx-tag">Loop</span></dd><dt>Reached from</dt><dd>Step 3 on success</dd></dl>
@@ -1499,7 +1500,7 @@ Object.assign(RX, {
     const hot = ['2ok', '3ok', '4fail', '4ok', '5fail', '6ok']
     return rxFinTabs(false) + rxFinHead() + rxSections('Steps', rxFinCounts) + rxFlowBar('last', `<span class="inp sel" style="height:24px;width:230px;margin-left:6px;font-size:12px">today 02:30 · Failed · 00:41:11</span>`) + `<div class="rx-body flow">${rxFlowDraw({ sel: 5, unreach: [1], loops: ['4fail'], rest: 'faded', startHot: 1, state: st, edge: Object.fromEntries(hot.map(k => [k, 'hot'])), quit: { '6ok': 'hot' }, seq: { '2ok': '1', '3ok': '2 · 4', '4fail': '3', '4ok': '5', '5fail': '6' } })}<div class="rx-edit">
       <div class="rx-sec"><div class="h">Run<span class="r">${ic('history', 12)}<span class="rx-more">Open in History</span></span></div>
-        <dl class="rx-kv"><dt>Started</dt><dd>15/11/2026 02:30:00 (server time)</dd><dt>Duration</dt><dd>00:41:11 · usual 00:37:00 (includes a 1-minute retry wait)</dd><dt>Invoked by</dt><dd>Schedule 9 (Nightly 02:30)</dd><dt>Outcome</dt><dd class="rx-bad">The job failed. The last step to run was step 6 (Notify on failure).</dd></dl></div>
+        <dl class="rx-kv"><dt>Started</dt><dd>15/11/2026 02:30:00 (server time)</dd><dt>Duration</dt><dd>00:41:11 · usual 00:37:00 (includes a 1-minute retry wait)</dd><dt>Invoked by</dt><dd>Schedule 9 (Nightly 02:30)</dd><dt>Outcome</dt><dd><span class="rx-bad">Failed at step 5 (Merge facts)</span><div class="rx-mut" style="font-size:11px">Agent: The job failed. The last step to run was step 6 (Notify on failure).</div></dd></dl></div>
       <table class="dtable" style="margin-top:0"><thead><tr><th class="c" style="width:28px">#</th><th>Step</th><th>Outcome</th><th>Duration</th></tr></thead><tbody>
         ${[['2 · Wait for source files', 'ok:Succeeded, 1 retry', '00:04:10'], ['3 · Load staging package', 'ok:Succeeded', '00:16:31'], ['4 · Validate row counts', 'bad:Failed', '00:00:41'], ['3 · Load staging package', 'ok:Succeeded', '00:15:58'], ['4 · Validate row counts', 'ok:Succeeded', '00:00:39'], ['5 · Merge facts', 'bad:Failed', '00:02:09'], ['6 · Notify on failure', 'ok:Succeeded', '00:00:03']].map((r, i) => { const [k, t] = r[1].split(':'); return `<tr class="${i === 5 ? 'sel' : ''}"><td class="c">${i + 1}</td><td>${r[0]}</td><td class="rx-${k}">${t}</td><td class="mono">${r[2]}</td></tr>` }).join('')}</tbody></table>
       <div class="rx-sec"><div class="h">Step 5 message<span class="r"><span class="tb">${ic('copy', 12)}Copy</span></span></div><div class="mono" style="font-size:12px;line-height:18px;white-space:pre-wrap;color:var(--text)">Executed as user: NT SERVICE\\SQLSERVERAGENT. Violation of PRIMARY KEY constraint 'PK_FactLedger'. Cannot insert duplicate key in object 'dbo.FactLedger'. [SQLSTATE 23000] (Error 2627). The step failed.</div></div>

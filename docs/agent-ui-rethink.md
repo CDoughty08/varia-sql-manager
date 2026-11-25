@@ -221,7 +221,8 @@ failure goes, or whether a step can ever run, you check one step at a time. The 
 
 ### Decisions proposed
 
-1. **Where it lives**: a List | Flow switch at the top of the job document's Steps section (rx-job-steps already draws it).
+1. **Where it lives**: a List | Flow switch at the top left of the job document's Steps section. In List it sits in the steps
+   list's header (rx-job-steps already draws it); in Flow, which has no list, it leads the graph's toolbar at the same corner.
    It is not a new section or tab: both views show the same draft, and the selection carries across.
 2. **Layout**: steps stay in step order, top to bottom, and are never auto-arranged. That way the numbers match List, History
    and Start at step, and a move in List moves the node. Edges run in lanes. Where two cross, the one on top gets a small gap.
@@ -250,8 +251,8 @@ failure goes, or whether a step can ever run, you check one step at a time. The 
    - the live run state the header and History's live run already receive, with no polling.
 
    Confirm all three when the view is built. Two rules need work there:
-   - **The failed step**: the header and the Last run panel name the step that failed (step 5 in the mock), not the last step
-     to run. History's run summary takes the step from the outcome message's "last step to run", which for a job with a
+   - **The failed step**: the header and the Last run panel's outcome name the step that failed (step 5 in the mock), not the
+     last step to run; Agent's own message is shown under it. History's run summary takes the step from the outcome message's "last step to run", which for a job with a
      notify step is the notify step (step 6). Both should use the failed step, so they agree.
    - **Usual time per pass**: the usual time adds up all of a step's rows in a run, so a step that a loop ran twice gets a
      doubled usual time. Live run's bar needs the usual time of one pass.
