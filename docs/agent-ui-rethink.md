@@ -246,10 +246,10 @@ failure goes, or whether a step can ever run, you check one step at a time. The 
    in the renderer from:
    - the step fields from the job document's describe (`start_step_id`, `on_success_action`, `on_success_step_id`,
      `on_fail_action`, `on_fail_step_id`);
-   - the History section's `agent.history` view, for both overlays. Today that view opens only when History first shows and
-     pauses whenever History is not the open section, so it must also run while Flow shows Last run or Live run. It returns
-     step rows for **one selected run only**; the section reads up to 200 of them and says when it cut them. So the Last run box and History's
-     selected run are one shared selection: picking a run in either picks it in both. A pass is a step's rows up to and
+   - the History section's `agent.history` view, for both overlays. Today that view opens when History first shows and
+     pauses while the History section is collapsed or the document is not the active tab, so it must also run while Flow
+     shows Last run or Live run, even with History collapsed. It returns step rows for **one selected run only**; the section
+     reads up to 200 of them and says when it cut them. So the Last run box and History's selected run are one shared selection: picking a run in either picks it in both. A pass is a step's rows up to and
      including its first row that is not a Retry. Earlier Retry rows count as that pass's retries, so ×N counts passes, not
      rows. A run with more rows than the cap says so in the panel;
    - the header's live run state, which gives only the current step (and whether it is retrying). Live run's finished steps
