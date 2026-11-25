@@ -1,9 +1,12 @@
+import type { BigQueryDryRunResult } from '../../../shared/bigquery/dry-run'
+import { bigQueryPath, isBigQueryName } from '../../../shared/bigquery/names'
+import { bigQueryPreviewRows, isBigQueryPropertyKind, type BigQueryPropertyKind } from '../../../shared/bigquery/objects'
 import { maxClipboardText, type ApiResult, type ExplorerError, type VariaApi } from '../../../shared/contracts'
 import { isPeekKind, peekHas, peekLimits, peekSpecs, peekTabsOf, type PeekDependency, type PeekKind, type PeekResult, type PeekTab } from '../../../shared/explorer/peek.ts'
 import { childParentKinds, kindSpecs, scopeFields, type NodeSubtype } from '../../../shared/explorer/catalog.ts'
 import type { ObjectRef } from '../../../shared/explorer/refs.ts'
 import { scriptMenuState } from '../../../shared/scripting/catalog.ts'
-import type { ScriptingOptions } from '../../../shared/scripting/options.ts'
+import { defaultScriptingOptions, type ScriptingOptions } from '../../../shared/scripting/options.ts'
 import { selectTopRowsScript } from '../../../shared/sql/identifiers'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
@@ -11,7 +14,17 @@ import type { ExternalStore } from '../core/types'
 import type { ExplorerMenuNode } from '../menus/targets'
 import type { ResultsService } from '../results/ResultsService'
 import { isLiveConnection, type ConnectionAvailability } from '../services/connection-availability'
+import {
+  hasDefinitionTab, isBigQueryPropertiesTabId, isBigQueryTabAvailable, supportsPreviewTab,
+  type BigQueryPropertiesTabId
+} from './bigquery-properties-format'
+import { bigQueryObjectIdentity, type BigQueryDdlState, type BigQueryPreviewState, type BigQueryPropertiesView } from './BigQueryPropertiesService'
 import { peekObjectName } from './peek-format'
+
+/** Every Object Explorer kind the floating Peek Card describes: SQL Server peek kinds + BigQuery properties kinds. */
+export type AnyPeekKind = PeekKind | BigQueryPropertyKind
+export type AnyPeekTab = PeekTab | BigQueryPropertiesTabId
+export const isAnyPeekKind = (kind: string): kind is AnyPeekKind => isPeekKind(kind) || isBigQueryPropertyKind(kind)
 
 /** How a peek was asked for: a hover opens the card without moving focus; the keyboard and the menu focus it. */
 export type PeekSource = 'hover' | 'keyboard' | 'menu'
@@ -35,14 +48,14 @@ export interface PeekDependencies {
 }
 /** Top rows: the ResultsService entry the view's run owns, by its key, which the results grid shows. */
 export interface PeekRows { readonly key: string }
-/** A card the user moved on from by following a dependency, which Back returns to. */
-export interface PeekStep { readonly node: ExplorerMenuNode; readonly kind: PeekKind; readonly tab: PeekTab }
+/** A card the user moved on from by following a dependency or cross-object link, which Back returns to. */
+export interface PeekStep { readonly node: ExplorerMenuNode; readonly kind: AnyPeekKind; readonly tab: AnyPeekTab }
 export interface OpenPeek {
   /** Increments with every peek, so the card knows a new one from a refresh of the same. */
   readonly id: number
   readonly rowId: number
   readonly node: ExplorerMenuNode
-  readonly kind: PeekKind
+  readonly kind: AnyPeekKind
   readonly source: PeekSource
   readonly facts: PeekPart<PeekResult['facts']>
   /** The kind's lists and the optional groups the login was refused, which come with the facts. */
@@ -50,13 +63,15 @@ export interface OpenPeek {
   readonly refused?: PeekResult['refused']
   readonly definition: PeekPart<PeekDefinition>
   /**
-   * The tab shown; Dependencies and Top rows are read the first time they are chosen, and again when chosen after failing.
-   * The kind's lists (Columns or Parameters among them) come with the facts.
+   * The tab shown; Dependencies and Top rows (or BigQuery Preview Rows) are read the first time they are chosen,
+   * and again when chosen after failing.
    */
-  readonly tab: PeekTab
+  readonly tab: AnyPeekTab
   readonly dependencies?: PeekPart<PeekDependencies>
   readonly rows?: PeekPart<PeekRows>
-  /** The cards before this one, oldest first, when a dependency was followed. */
+  /** BigQuery metadata state when peeking a BigQuery object (`bqTable`, `bqView`, `bqMaterializedView`, `bqExternalTable`, `bqRoutine`, `bqDataset`). */
+  readonly bigQuery?: BigQueryPropertiesView
+  /** The cards before this one, oldest first, when a dependency or cross-object link was followed. */
   readonly back: readonly PeekStep[]
   /** Where a card not beside an Object Explorer row is anchored: a name in a query editor (`peekAt`). */
   readonly anchor?: PeekAnchor
@@ -87,12 +102,14 @@ export type PeekResults = Pick<ResultsService, 'begin' | 'finish' | 'release'>
 
 export interface PeekServiceOptions {
   readonly api: Pick<VariaApi, 'explorerPeek' | 'explorerPeekDependencies' | 'explorerPeekDefinition' | 'explorerCancel' | 'scriptObjects' | 'cancelScripting' | 'writeClipboardText'
-    | 'tableColumns' | 'execute' | 'closeQuerySession'>
+    | 'tableColumns' | 'execute' | 'closeQuerySession'> & Partial<Pick<VariaApi, 'bigQueryProperties' | 'cancel'>>
   readonly connections: ExternalStore<readonly (ConnectionAvailability & { readonly id: string })[]>
   /** Tools › Options › Scripting, which a table's CREATE script follows, as Script As does. */
   readonly scriptingOptions: ExternalStore<{ readonly options: ScriptingOptions }>
-  /** Where Top rows' result sets live; without it the tab says it cannot read them. */
+  /** Where Top rows' and BigQuery Preview Rows' result sets live; without it the tab says it cannot read them. */
   readonly results?: PeekResults
+  /** BigQuery's cost prompts before on-demand CREATE DDL runs its billed INFORMATION_SCHEMA query (BigQueryCostService.beforeScript). */
+  readonly billedGate?: (connectionId: string, estimate: BigQueryDryRunResult, signal: AbortSignal) => Promise<{ readonly run: boolean; readonly maximumBytesBilled?: number }>
   readonly timers?: { setTimeout(callback: () => void, ms: number): unknown; clearTimeout(handle: unknown): void }
   readonly newId?: () => string
   /** Ctrl+hover peeks; on macOS ⌘+hover, as ⌘ is macOS's Ctrl. */
@@ -399,19 +416,30 @@ export class PeekReads {
   }
 }
 
+/** A view's BigQuery on-demand DDL flight (estimate + cost prompt + script), cancelled on close/switch/refresh. */
+interface BigQueryDdlFlight { requestId?: string; prompt?: AbortController; cancelled: boolean }
+/** A view's BigQuery Preview Rows run (free tabledata.list into a bare ResultsService entry). */
+interface BigQueryPreviewRun { readonly key: string; readonly queryId: string; running: boolean }
+
+const bigQueryPreviewTimeoutSeconds = 110
+const bigQueryDdlUnavailableMessage = 'Loading DDL is not available on this connection.'
+const bigQueryPreviewUnavailableMessage = 'Preview Rows is not available for this object.'
+const bigQueryPreviewSql = (view: Pick<BigQueryPropertiesView, 'project' | 'dataset' | 'name'>): string =>
+  `SELECT *\nFROM ${bigQueryPath(view.project, view.dataset, view.name)}\nLIMIT ${bigQueryPreviewRows};\n`
+
 /**
  * One object's Peek, as the card or a promoted tab shows it: its properties and definition, its tabs' parts, the dependencies
- * followed (Back), and its Top rows run. Top rows runs `selectTopRowsScript` (Select Top N Rows' script, with
- * `peekLimits.rows`) through query.execute in a session of its own, which closes as soon as the run settles: the backend keeps
- * the run's results until they are released (results.close), so the view owns only a ResultsService entry under its run's key.
- * It releases that entry, and closes the session if the run still holds it, when it closes, moves to another object, refreshes
- * or reads the rows again after a failure, and when its server is lost (a lost backend loses its connections too).
+ * followed (Back), and its Top rows run (or BigQuery's free `bigquery.properties`, on-demand DDL and free `tabledata.list`
+ * Preview Rows).
  */
 export class PeekView extends SnapshotStore<PeekSnapshot> {
   private detached = false
   private next = 0
   private requests: Requests = {}
   private rowsRun: RowsRun | undefined
+  private bqRequestId: string | undefined
+  private bqDdlFlight: BigQueryDdlFlight | undefined
+  private bqPreviewRun: BigQueryPreviewRun | undefined
   protected disposed = false
   private readonly unsubscribeConnections: () => void
 
@@ -430,19 +458,148 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
   /** Whether the view's server is live, so Refresh can read it again. */
   get connected(): boolean { const open = this.getSnapshot().open; return !this.detached && !!open && this.reads.isLive(open.node.connectionId) }
 
-  /** Shows `node` (an object of a kind the catalogue describes), replacing whatever the view showed, on `tab` when its kind has it. */
-  show(node: ExplorerMenuNode, tab?: PeekTab): void {
-    if (this.disposed || node.ref.type !== 'object' || node.kind === 'folder' || !isPeekKind(node.kind)) return
+  /** Shows `node` (an object Peek describes), replacing whatever the view showed, on `tab` when its kind has it. */
+  show(node: ExplorerMenuNode, tab?: AnyPeekTab): void {
+    if (this.disposed || node.ref.type !== 'object' || node.kind === 'folder' || !isAnyPeekKind(node.kind)) return
     this.detached = false
     this.load(node, node.kind, 'keyboard', false, tab ? { tab } : {})
   }
 
   /** Shows another tab, reading it the first time; choosing a tab whose read failed reads it again. */
-  selectTab(tab: PeekTab): void {
+  selectTab(tab: AnyPeekTab): void {
     const open = this.getSnapshot().open
-    if (!open || !peekTabsOf(open.kind).includes(tab)) return
+    if (!open) return
+    if (open.bigQuery) {
+      if (!isBigQueryPropertiesTabId(tab)) return
+      const view = open.bigQuery
+      if (tab === 'definition' && !hasDefinitionTab(view.kind)) return
+      if (tab === 'preview' && !supportsPreviewTab(view.kind)) return
+      if (view.value && !isBigQueryTabAvailable(tab, view.kind, view.value)) return
+      if (open.tab !== tab || view.activeTab !== tab) {
+        this.publish({ open: { ...open, tab, bigQuery: { ...view, activeTab: tab } } })
+      }
+      if (tab === 'preview' && view.kind === 'bqTable') {
+        const latest = this.getSnapshot().open?.bigQuery
+        if (latest && (!latest.preview || latest.preview.status === 'error')) {
+          void this.loadBigQueryPreview(open.id)
+        }
+      }
+      return
+    }
+    if (!isPeekKind(open.kind) || !peekTabsOf(open.kind).includes(tab as PeekTab)) return
     if (open.tab !== tab) this.publish({ open: { ...open, tab } })
     this.loadTab()
+  }
+
+  /** Whether on-demand billed CREATE DDL can be loaded for the current BigQuery Peek object. */
+  canLoadBigQueryDdl(): boolean {
+    const open = this.getSnapshot().open
+    const view = open?.bigQuery
+    return !this.disposed && !this.detached && !!open && !!view && hasDefinitionTab(view.kind)
+      && !view.loading && !!view.value && view.value.definition === undefined && view.ddl?.status !== 'loading'
+      && !!this.reads.api.scriptObjects && !!this.reads.options.billedGate && this.reads.isLive(view.connectionId)
+  }
+
+  /** Explicitly loads a BigQuery object's CREATE DDL on demand (free dry-run estimate + cost prompts first). */
+  async loadBigQueryDdl(): Promise<void> {
+    const open = this.getSnapshot().open
+    const view = open?.bigQuery
+    const gate = this.reads.options.billedGate
+    if (this.disposed || this.detached || !open || !view || !hasDefinitionTab(view.kind) || view.loading || !view.value || view.value.definition !== undefined) return
+    const openId = open.id
+    const updateDdl = (ddl: BigQueryDdlState | undefined) => {
+      const latest = this.getSnapshot().open
+      if (latest && latest.id === openId && latest.bigQuery && !this.disposed && !this.detached) {
+        this.publish({ open: { ...latest, bigQuery: { ...latest.bigQuery, ddl } } })
+      }
+    }
+    if (!gate) {
+      updateDdl({ status: 'error', message: bigQueryDdlUnavailableMessage })
+      return
+    }
+    if (!this.reads.isLive(view.connectionId)) {
+      updateDdl({ status: 'error', message: peekMessages.notConnected })
+      return
+    }
+    this.stopBigQueryDdl()
+    const flight: BigQueryDdlFlight = { cancelled: false }
+    this.bqDdlFlight = flight
+    const active = () => !this.disposed && !this.detached && !flight.cancelled && this.bqDdlFlight === flight && this.getSnapshot().open?.id === openId
+    const finish = (ddl: BigQueryDdlState | undefined) => {
+      if (this.bqDdlFlight === flight) this.bqDdlFlight = undefined
+      if (active()) updateDdl(ddl)
+    }
+    const target: ObjectRef = { kind: view.kind, project: view.project, dataset: view.dataset, name: view.name }
+    const options = this.reads.options.scriptingOptions.getSnapshot().options ?? defaultScriptingOptions
+    const request = { connectionId: view.connectionId, targets: [target], verb: 'create' as const, options }
+
+    updateDdl({ status: 'loading', phase: 'estimating' })
+    let requestId = this.reads.newId()
+    flight.requestId = requestId
+    const estimated = await settle(this.reads.api.scriptObjects({ ...request, requestId, estimateOnly: true }))
+    if (!active() || flight.requestId !== requestId) return
+    flight.requestId = undefined
+    if (!estimated.ok) { finish({ status: 'error', message: estimated.error }); return }
+    if (estimated.value.error) { finish({ status: 'error', message: estimated.value.error.message }); return }
+
+    let answer: { readonly run: boolean; readonly maximumBytesBilled?: number } = { run: true }
+    if (estimated.value.estimate) {
+      const prompt = new AbortController()
+      flight.prompt = prompt
+      try {
+        answer = await gate(view.connectionId, estimated.value.estimate, prompt.signal).catch(() => ({ run: false }))
+      } finally {
+        if (flight.prompt === prompt) flight.prompt = undefined
+      }
+      if (!active() || prompt.signal.aborted) return
+    }
+    if (!answer.run) { finish(undefined); return }
+    if (!this.reads.isLive(view.connectionId)) { finish({ status: 'error', message: peekMessages.notConnected }); return }
+
+    updateDdl({ status: 'loading', phase: 'reading' })
+    requestId = this.reads.newId()
+    flight.requestId = requestId
+    const result = await settle(this.reads.api.scriptObjects({
+      ...request,
+      requestId,
+      ...(answer.maximumBytesBilled === undefined ? {} : { maximumBytesBilled: answer.maximumBytesBilled })
+    }))
+    if (!active() || flight.requestId !== requestId) return
+    flight.requestId = undefined
+    if (!result.ok) { finish({ status: 'error', message: result.error }); return }
+    if (result.value.error) { finish({ status: 'error', message: result.value.error.message }); return }
+    if (result.value.text === undefined) {
+      finish({ status: 'error', message: `BigQuery produced no CREATE statement for ${view.name}.` })
+      return
+    }
+    finish({ status: 'ready', text: result.value.text, warnings: result.value.warnings })
+  }
+
+  /** Cancels any in-flight BigQuery DDL request or open cost prompt. */
+  cancelBigQueryDdl(): void {
+    this.stopBigQueryDdl()
+    const open = this.getSnapshot().open
+    if (open?.bigQuery?.ddl?.status === 'loading') {
+      this.publish({ open: { ...open, bigQuery: { ...open.bigQuery, ddl: undefined } } })
+    }
+  }
+
+  /** Reloads free BigQuery Preview Rows via `tabledata.list`. */
+  async reloadBigQueryPreview(): Promise<void> {
+    const open = this.getSnapshot().open
+    if (!open?.bigQuery) return
+    await this.loadBigQueryPreview(open.id)
+  }
+
+  /** Cancels an in-flight BigQuery Preview Rows read. */
+  cancelBigQueryPreview(): void {
+    const run = this.bqPreviewRun
+    if (!run || !run.running) return
+    this.releaseBigQueryPreview()
+    const open = this.getSnapshot().open
+    if (open?.bigQuery?.preview?.status === 'loading') {
+      this.publish({ open: { ...open, bigQuery: { ...open.bigQuery, preview: { status: 'error', message: 'Preview cancelled.' } } } })
+    }
   }
 
   /**
@@ -468,11 +625,16 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
 
   /**
    * Navigates in-place to another peekable object on the same connection (such as a child's parent table, a foreign key's
-   * referenced table, or a login's default database), pushing the current object onto the Back stack.
+   * referenced table, a login's default database, or a BigQuery table's dataset / snapshot base table), pushing the current
+   * object onto the Back stack.
    */
   followObject(target: ObjectRef, label?: string): void {
     const open = this.getSnapshot().open
-    if (!open || !this.connected || !isPeekKind(target.kind) || !validPeekObjectRef(target)) return
+    if (!open || !this.connected) return
+    const valid = isPeekKind(target.kind)
+      ? validPeekObjectRef(target)
+      : isBigQueryPropertyKind(target.kind) && validBigQueryPeekRef(target) && !!this.reads.api.bigQueryProperties
+    if (!valid || !isAnyPeekKind(target.kind)) return
     const { subtype: _subtype, status: _status, database: _database, listedAt: _listedAt, filtered: _filtered, insertable: _insertable, ...rest } = open.node
     const node: ExplorerMenuNode = { ...rest, kind: target.kind, ref: { type: 'object', object: target }, label: label ?? peekObjectName(target) }
     const back = [...open.back, { node: open.node, kind: open.kind, tab: open.tab }].slice(-peekLimits.backSteps)
@@ -496,7 +658,14 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
     if (this.disposed || !open || !this.detached && open.node.connectionId === connectionId) return
     this.detached = false
     const move = (node: ExplorerMenuNode): ExplorerMenuNode => ({ ...node, connectionId, lost: false })
-    this.publish({ open: { ...open, node: move(open.node), back: open.back.map(step => ({ ...step, node: move(step.node) })) } })
+    this.publish({
+      open: {
+        ...open,
+        node: move(open.node),
+        ...(open.bigQuery ? { bigQuery: { ...open.bigQuery, connectionId } } : {}),
+        back: open.back.map(step => ({ ...step, node: move(step.node) }))
+      }
+    })
     this.refresh()
   }
 
@@ -519,15 +688,26 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
 
   /** Copies the definition, once the view has all of it and the clipboard takes it (`maxClipboardText`). */
   async copyDefinition(): Promise<void> {
-    const definition = this.getSnapshot().open?.definition
-    if (definition?.status !== 'ready' || !copyableDefinition(definition.value.text)) return
-    const result = await this.reads.api.writeClipboardText(definition.value.text)
+    const open = this.getSnapshot().open
+    if (!open) return
+    const definition = open.definition
+    const fallback = open.kind === 'constraint' && open.facts.status === 'ready' && typeof open.facts.value.expression === 'string' && open.facts.value.expression.length > 0
+      ? open.facts.value.expression
+      : undefined
+    const text = definition.status === 'ready'
+      ? (definition.value.text ?? fallback)
+      : definition.status === 'error'
+        ? fallback
+        : undefined
+    if (!copyableDefinition(text)) return
+    const result = await this.reads.api.writeClipboardText(text)
     if (!result.ok) throw new Error(result.error)
   }
 
   close(): void {
     this.reads.release(this.requests, true)
     this.releaseRows()
+    this.stopBigQuery()
     if (this.getSnapshot().open) this.publish({})
   }
 
@@ -535,6 +715,7 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
     if (this.disposed) return
     this.reads.release(this.requests, false)
     this.releaseRows()
+    this.stopBigQuery()
     if (this.getSnapshot().open) this.publish({})
     this.disposed = true
     this.unsubscribeConnections()
@@ -542,18 +723,96 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
   }
 
   /** `carry.anchor`: the new card's anchor, `null` for a row's; left out, Back, a followed dependency and Refresh keep the card's. */
-  protected load(node: ExplorerMenuNode, kind: PeekKind, source: PeekSource, fresh: boolean, carry: { readonly back?: readonly PeekStep[]; readonly tab?: PeekTab; readonly anchor?: PeekAnchor | null } = {}): void {
+  protected load(node: ExplorerMenuNode, kind: AnyPeekKind, source: PeekSource, fresh: boolean, carry: { readonly back?: readonly PeekStep[]; readonly tab?: AnyPeekTab; readonly anchor?: PeekAnchor | null } = {}): void {
     if (node.ref.type !== 'object' || this.detached || this.disposed) return
+    const bqIdentity = isBigQueryPropertyKind(kind) ? bigQueryObjectIdentity(node.ref.object) : undefined
+    const bqFetch = isBigQueryPropertyKind(kind) ? this.reads.api.bigQueryProperties : undefined
+    if (isBigQueryPropertyKind(kind) && (!bqIdentity || !bqFetch)) return
     // A refresh asks for the same script again, so the one running is not worth keeping.
     this.reads.release(this.requests, !fresh)
     this.releaseRows()
+    this.stopBigQuery()
     const id = ++this.next
     const requests: Requests = this.requests = {}
-    // A row's own card opens on Overview (canonical tab 1); Back and Refresh keep the tab they had.
-    const tab = carry.tab && peekTabsOf(kind).includes(carry.tab) ? carry.tab : 'overview'
     // Rows the row's card does not own (a followed dependency) still anchor at that row.
     const rowId = carry.back?.length ? carry.back[0]!.node.id : node.id
     const anchor = carry.anchor === undefined ? this.getSnapshot().open?.anchor : carry.anchor ?? undefined
+
+    if (isBigQueryPropertyKind(kind)) {
+      const identity = bqIdentity!, fetch = bqFetch!
+      const tab: BigQueryPropertiesTabId = carry.tab && isBigQueryPropertiesTabId(carry.tab)
+        && (carry.tab !== 'definition' || hasDefinitionTab(kind))
+        && (carry.tab !== 'preview' || supportsPreviewTab(kind))
+        ? carry.tab
+        : 'overview'
+      const initialView: BigQueryPropertiesView = {
+        connectionId: node.connectionId,
+        kind: identity.kind,
+        ...(node.subtype === undefined ? {} : { subtype: node.subtype }),
+        project: identity.project,
+        dataset: identity.dataset,
+        name: identity.name,
+        activeTab: tab,
+        loading: true
+      }
+      this.publish({
+        open: {
+          id, rowId, node, kind, source,
+          facts: { status: 'loading' },
+          definition: { status: 'loading' },
+          tab,
+          bigQuery: initialView,
+          back: carry.back ?? [],
+          ...anchor ? { anchor } : {}
+        }
+      })
+      const requestId = this.reads.newId()
+      this.bqRequestId = requestId
+      // Free metadata only: zero billed queries on Peek open.
+      void settle(fetch({
+        connectionId: node.connectionId,
+        requestId,
+        kind: identity.kind,
+        project: identity.project,
+        dataset: identity.dataset,
+        name: identity.name
+      })).then(result => {
+        if (this.disposed || this.detached || this.bqRequestId !== requestId) return
+        this.bqRequestId = undefined
+        const current = this.getSnapshot().open
+        if (!current || current.id !== id || !current.bigQuery) return
+        if (result.ok) {
+          if (result.value.definition !== undefined) this.stopBigQueryDdl()
+          const nextTab = isBigQueryTabAvailable(current.bigQuery.activeTab, current.bigQuery.kind, result.value) ? current.bigQuery.activeTab : 'overview'
+          this.publish({
+            open: {
+              ...current,
+              tab: nextTab,
+              bigQuery: {
+                ...current.bigQuery,
+                loading: false,
+                value: result.value,
+                error: undefined,
+                activeTab: nextTab,
+                ...(result.value.definition !== undefined ? { ddl: undefined } : {})
+              }
+            }
+          })
+        } else {
+          this.publish({
+            open: {
+              ...current,
+              bigQuery: { ...current.bigQuery, loading: false, error: result.error }
+            }
+          })
+        }
+      }).catch(onUnexpectedError)
+      if (tab === 'preview' && kind === 'bqTable') void this.loadBigQueryPreview(id)
+      return
+    }
+
+    // A row's own card opens on Overview (canonical tab 1); Back and Refresh keep the tab they had.
+    const tab = carry.tab && peekTabsOf(kind).includes(carry.tab as PeekTab) ? carry.tab as PeekTab : 'overview'
     this.publish({ open: { id, rowId, node, kind, source, facts: { status: 'loading' }, definition: { status: 'loading' }, tab, back: carry.back ?? [], ...anchor ? { anchor } : {} } })
     this.reads.begin({ connectionId: node.connectionId, object: node.ref.object, kind, ...(node.subtype === undefined ? {} : { subtype: node.subtype }) }, fresh, requests, () => !this.disposed && !this.detached && this.getSnapshot().open?.id === id, change => {
       const open = this.getSnapshot().open
@@ -567,10 +826,19 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
     // Nothing is kept for a lost server: its table script is cancelled, not left to finish for the cache.
     this.reads.release(this.requests, false)
     this.releaseRows()
+    this.stopBigQuery()
     if (this.onLost === 'close') { this.close(); return }
     const gone = <T>(part: PeekPart<T> | undefined): PeekPart<T> | undefined => part && part.status === 'loading' ? { status: 'error', message: peekMessages.notConnected } : part
     const rows: PeekPart<PeekRows> | undefined = open.rows && { status: 'error', message: peekMessages.notConnected }
-    this.publish({ open: { ...open, facts: gone(open.facts)!, definition: gone(open.definition)!, dependencies: gone(open.dependencies), rows } })
+    const bigQuery: BigQueryPropertiesView | undefined = open.bigQuery
+      ? {
+          ...open.bigQuery,
+          ...(open.bigQuery.loading ? { loading: false, error: peekMessages.notConnected } : {}),
+          ...(open.bigQuery.ddl?.status === 'loading' ? { ddl: { status: 'error', message: peekMessages.notConnected } } : {}),
+          ...(open.bigQuery.preview !== undefined ? { preview: { status: 'error', message: peekMessages.notConnected } } : {})
+        }
+      : undefined
+    this.publish({ open: { ...open, facts: gone(open.facts)!, definition: gone(open.definition)!, dependencies: gone(open.dependencies), rows, ...(bigQuery ? { bigQuery } : {}) } })
   }
 
   /**
@@ -579,7 +847,7 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
    */
   private loadTab(): void {
     const open = this.getSnapshot().open
-    if (!open || open.node.ref.type !== 'object' || this.disposed || this.detached || open.tab === 'definition') return
+    if (!open || open.bigQuery || open.node.ref.type !== 'object' || !isPeekKind(open.kind) || this.disposed || this.detached || open.tab === 'definition') return
     const connectionId = open.node.connectionId, target = open.node.ref.object
     switch (open.tab) {
       case 'dependencies': return peekHas(open.kind, 'dependencies') ? this.loadPart(open, 'dependencies', requestId => this.reads.api.explorerPeekDependencies({ connectionId, requestId, target }),
@@ -588,6 +856,109 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
       // The kind's lists come with the facts: when those failed, choosing the tab (or its Retry) reads the object again.
       default: return open.facts.status === 'error' ? this.load(open.node, open.kind, open.source, false, { back: open.back, tab: open.tab }) : undefined
     }
+  }
+
+  private async loadBigQueryPreview(openId: number): Promise<void> {
+    const open = this.getSnapshot().open
+    const view = open?.bigQuery
+    if (this.disposed || this.detached || !open || open.id !== openId || !view) return
+    const updatePreview = (preview: BigQueryPreviewState | undefined) => {
+      const latest = this.getSnapshot().open
+      if (latest && latest.id === openId && latest.bigQuery && !this.disposed && !this.detached) {
+        this.publish({ open: { ...latest, bigQuery: { ...latest.bigQuery, preview } } })
+      }
+    }
+    const results = this.reads.results
+    if (view.kind !== 'bqTable' || !results) {
+      updatePreview({ status: 'error', message: bigQueryPreviewUnavailableMessage })
+      return
+    }
+    if (!this.reads.isLive(view.connectionId)) {
+      updatePreview({ status: 'error', message: peekMessages.notConnected })
+      return
+    }
+    this.releaseBigQueryPreview()
+    const run: BigQueryPreviewRun = { key: this.reads.newId(), queryId: this.reads.newId(), running: true }
+    this.bqPreviewRun = run
+    updatePreview({ status: 'loading' })
+    try {
+      results.begin(run.key, run.queryId, undefined, { bare: true })
+    } catch (error) {
+      onUnexpectedError(error)
+      if (this.bqPreviewRun === run) this.bqPreviewRun = undefined
+      updatePreview({ status: 'error', message: error instanceof Error && error.message ? error.message : bigQueryPreviewUnavailableMessage })
+      return
+    }
+
+    const response = await settle(this.reads.api.execute({
+      connectionId: view.connectionId,
+      sessionId: run.key,
+      sql: bigQueryPreviewSql(view),
+      queryId: run.queryId,
+      maxRows: bigQueryPreviewRows,
+      timeoutSeconds: bigQueryPreviewTimeoutSeconds,
+      maxResultSets: 1,
+      preview: { project: view.project, dataset: view.dataset, table: view.name }
+    }))
+    run.running = false
+    const summary = response.ok ? response.value : undefined
+    try {
+      await results.finish(run.key, run.queryId, response.ok
+        ? { summary }
+        : { error: response.error, ...(response.code ? { code: response.code } : {}) })
+    } catch (error) {
+      onUnexpectedError(error)
+      const isCurrent = this.bqPreviewRun === run
+      if (isCurrent) this.bqPreviewRun = undefined
+      this.safeReleaseResults(run.key)
+      if (isCurrent) updatePreview({ status: 'error', message: error instanceof Error && error.message ? error.message : bigQueryPreviewUnavailableMessage })
+      return
+    }
+    if (this.disposed || this.detached || this.bqPreviewRun !== run || this.getSnapshot().open?.id !== openId) {
+      this.safeReleaseResults(run.key)
+      return
+    }
+    if (summary?.resultSets.length) {
+      updatePreview({ status: 'ready', key: run.key, rowsRead: summary.resultSets[0].rowsRead })
+      return
+    }
+    this.releaseBigQueryPreview()
+    const message = !response.ok
+      ? response.error
+      : summary?.error?.message ?? summary?.messages.find(entry => entry.kind === 'error')?.text ?? bigQueryPreviewUnavailableMessage
+    updatePreview({ status: 'error', message })
+  }
+
+  private stopBigQuery(): void {
+    this.bqRequestId = undefined
+    this.stopBigQueryDdl()
+    this.releaseBigQueryPreview()
+  }
+
+  private stopBigQueryDdl(): void {
+    const flight = this.bqDdlFlight
+    if (!flight) return
+    this.bqDdlFlight = undefined
+    flight.cancelled = true
+    flight.prompt?.abort()
+    if (flight.requestId) {
+      try { report(this.reads.api.cancelScripting([flight.requestId])) } catch (error) { onUnexpectedError(error) }
+    }
+  }
+
+  private releaseBigQueryPreview(): void {
+    const run = this.bqPreviewRun
+    if (!run) return
+    this.bqPreviewRun = undefined
+    if (run.running && this.reads.api.cancel) {
+      run.running = false
+      try { report(this.reads.api.cancel(run.queryId)) } catch (error) { onUnexpectedError(error) }
+    }
+    this.safeReleaseResults(run.key)
+  }
+
+  private safeReleaseResults(key: string): void {
+    try { this.reads.results?.release(key) } catch (error) { onUnexpectedError(error) }
   }
 
   private loadPart<K extends TabPart, R extends { readonly error?: ExplorerError }>(open: OpenPeek, key: K, request: (requestId: string) => Promise<ApiResult<R>>, value: (result: R) => PartValue<K>): void {
@@ -687,22 +1058,24 @@ export class PeekService extends PeekView {
     this.timers = options.timers ?? { setTimeout: (callback, ms) => setTimeout(callback, ms), clearTimeout: handle => clearTimeout(handle as ReturnType<typeof setTimeout>) }
   }
 
-  /** Whether a node can be peeked: an object of a kind the catalogue describes (`peekKinds`) on a live server. */
+  /** Whether a node can be peeked: a SQL Server peek kind or BigQuery properties kind on a live connection. */
   canPeek(node: ExplorerMenuNode | undefined): node is ExplorerMenuNode {
-    return !!node && node.ref.type === 'object' && node.kind !== 'folder' && isPeekKind(node.kind) && !node.lost && this.reads.isLive(node.connectionId)
+    if (!node || node.ref.type !== 'object' || node.kind === 'folder' || node.lost || !this.reads.isLive(node.connectionId)) return false
+    if (isPeekKind(node.kind)) return true
+    return isBigQueryPropertyKind(node.kind) && bigQueryObjectIdentity(node.ref.object) !== undefined && !!this.reads.api.bigQueryProperties
   }
 
   /** Opens the card on `node`, replacing any other; peeking the object already shown only changes how it was asked for. */
   peek(node: ExplorerMenuNode | undefined, source: PeekSource): void {
     this.cancelHover()
-    if (this.disposed || !this.canPeek(node) || node.ref.type !== 'object') return
+    if (this.disposed || !this.canPeek(node) || node.ref.type !== 'object' || !isAnyPeekKind(node.kind)) return
     const open = this.getSnapshot().open
     // A card that followed a dependency keeps its row's place but shows another object: peeking the row shows the row's own.
     if (open && open.rowId === node.id && open.node.connectionId === node.connectionId && sameObject(open.node, node)) {
       if (source !== 'hover' && open.source === 'hover') this.publish({ open: { ...open, source } })
       return
     }
-    this.load(node, node.kind as PeekKind, source, false, { anchor: null })
+    this.load(node, node.kind, source, false, { anchor: null })
   }
 
   /**
@@ -711,13 +1084,13 @@ export class PeekService extends PeekView {
    */
   peekAt(node: ExplorerMenuNode, anchor: PeekAnchor, source: PeekSource): boolean {
     this.cancelHover()
-    if (this.disposed || !this.canPeek(node)) return false
+    if (this.disposed || !this.canPeek(node) || !isAnyPeekKind(node.kind)) return false
     const open = this.getSnapshot().open
     if (open?.anchor && !open.back.length && open.node.connectionId === node.connectionId && sameObject(open.node, node)) {
       this.publish({ open: { ...open, anchor, source: source === 'hover' ? open.source : source } })
       return true
     }
-    this.load(node, node.kind as PeekKind, source, false, { anchor })
+    this.load(node, node.kind, source, false, { anchor })
     return true
   }
 
@@ -842,7 +1215,18 @@ type TabPart = 'dependencies'
 type PartValue<K extends TabPart> = NonNullable<OpenPeek[K]> extends PeekPart<infer V> ? V : never
 const sameObject = (a: ExplorerMenuNode, b: ExplorerMenuNode) => a.ref.type === 'object' && b.ref.type === 'object' && a.kind === b.kind
   && a.ref.object.database === b.ref.object.database && a.ref.object.schema === b.ref.object.schema && a.ref.object.name === b.ref.object.name
+  && a.ref.object.project === b.ref.object.project && a.ref.object.dataset === b.ref.object.dataset && a.ref.object.table === b.ref.object.table
   && a.ref.object.parent?.kind === b.ref.object.parent?.kind && a.ref.object.parent?.schema === b.ref.object.parent?.schema && a.ref.object.parent?.name === b.ref.object.parent?.name
+/** Validates a BigQuery cross-object navigation ref against its scope and name rules. */
+function validBigQueryPeekRef(target: ObjectRef): boolean {
+  if (!isBigQueryPropertyKind(target.kind) || !target.project || !target.name) return false
+  if (!isBigQueryName('project', target.project)) return false
+  if (target.kind === 'bqDataset') {
+    return target.dataset === undefined && isBigQueryName('dataset', target.name)
+  }
+  return !!target.dataset && isBigQueryName('dataset', target.dataset)
+    && isBigQueryName(target.kind === 'bqRoutine' ? 'routine' : 'table', target.name)
+}
 /** Whether Script As writes CREATE for the target, as its menu would offer it. */
 const scriptable = (target: PeekTarget) => scriptMenuState({ kind: target.kind, ...(target.subtype === undefined ? {} : { subtype: target.subtype }),
   ...(target.object.parent ? { parentKind: target.object.parent.kind } : {}) }).verbs.create === 'enabled'

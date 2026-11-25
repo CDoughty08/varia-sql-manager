@@ -162,11 +162,14 @@ internal static class BigQueryPropertiesLimits
     public const int Labels = 64;
     public const int LabelKey = 128;
     public const int LabelValue = 256;
+    public const int RoutineArguments = 256;
+    public const int RoutineTypeText = 512;
+    public const int KmsKeyName = 1024;
     public const int DefinitionChars = 1_000_000;
 }
 
-/// <summary>bigquery.properties: a table-like object's facts from tables.get, or a routine's from routines.get (docs/bigquery.md,
-/// Properties; Search Objects' details pane asks for routines too).</summary>
+/// <summary>bigquery.properties: a table-like object's facts from tables.get, a routine's from routines.get, or a dataset's from datasets.get (docs/bigquery.md,
+/// Properties).</summary>
 internal sealed record BigQueryPropertiesArgs(string ConnectionId, string RequestId, string Kind, string Project, string Dataset, string Name);
 internal sealed record BigQueryFact(string Label, string Value);
 internal sealed record BigQueryFactGroup(string Title, List<BigQueryFact> Facts);
@@ -176,11 +179,29 @@ internal sealed record BigQueryStorageInfo(long? Rows = null, long? LogicalBytes
 internal sealed record BigQueryLayoutInfo(string? Partitioning = null, bool? RequirePartitionFilter = null, List<string>? Clustering = null);
 internal sealed record BigQuerySchemaField(string Name, string Type, string? Mode = null, string? Description = null, List<BigQuerySchemaField>? Fields = null);
 internal sealed record BigQueryLabel(string Key, string Value);
-/// <summary>Type: tables.get's type in words ("table", "snapshot", "view"…) or the routine's. Groups: Table, Storage, Layout, History
-/// (a routine's: Routine, History), in that order, each left out when it has no facts. Definition: a view's or materialized view's
+internal sealed record BigQueryRoutineArgument(string Name, string? Type = null, string? Mode = null, string? Kind = null);
+internal sealed record BigQueryRoutineInfo(
+    string? RoutineType = null,
+    string? Language = null,
+    string? Determinism = null,
+    string? ReturnType = null,
+    string? Signature = null,
+    List<BigQueryRoutineArgument>? Arguments = null,
+    bool? ArgumentsTruncated = null);
+internal sealed record BigQueryDatasetInfo(
+    string? FriendlyName = null,
+    long? DefaultTableExpirationMs = null,
+    long? DefaultPartitionExpirationMs = null,
+    string? KmsKeyName = null,
+    string? DefaultCollation = null,
+    bool? IsCaseInsensitive = null,
+    long? MaxTimeTravelHours = null,
+    string? StorageBillingModel = null);
+/// <summary>Type: tables.get's type in words ("table", "snapshot", "view"…), the routine's, or "dataset". Groups: Table, Storage, Layout, History
+/// (a routine's: Routine, History; a dataset's: Dataset, History), in that order, each left out when it has no facts. Definition: a view's or materialized view's
 /// query, or a routine's body, cut at 1,000,000 characters (DefinitionCut / DefinitionTruncated). Columns: the first 1,000 flattened
-/// columns and nested fields (ColumnsCut). Structured fields (Storage, Layout, Schema, Labels, identity/timestamps) carry rich
-/// free tables.get metadata for the inspector UI.</summary>
+/// columns and nested fields (ColumnsCut). Structured fields (Storage, Layout, Schema, Labels, Routine, Dataset, identity/timestamps) carry rich
+/// free metadata for the inspector UI.</summary>
 internal sealed record BigQueryProperties(
     string Name,
     string Type,
@@ -203,7 +224,9 @@ internal sealed record BigQueryProperties(
     List<BigQuerySchemaField>? Schema = null,
     bool? SchemaTruncated = null,
     List<BigQueryLabel>? Labels = null,
-    bool? DefinitionTruncated = null);
+    bool? DefinitionTruncated = null,
+    BigQueryRoutineInfo? Routine = null,
+    BigQueryDatasetInfo? Dataset = null);
 
 /// <summary>
 /// query.attach (docs/bigquery.md, Re-attaching to jobs): re-attaches the tab <c>SessionId</c> to a job a previous run (or
