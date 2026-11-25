@@ -143,7 +143,7 @@ describe('BigQuery connections in the workbench', () => {
     } finally { value.dispose() }
   })
 
-  it('attaches a waiting query to a BigQuery connection made from Execute without running it', async () => {
+  it('runs a waiting query on the BigQuery connection its Execute made, as a SQL Server one runs', async () => {
     const connection = { id: id(61), targetId: id(2), generation: 1, providerId: 'bigquery', options: { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' } }
     const execute = vi.fn(async () => {})
     await executePendingQuery({
@@ -152,7 +152,8 @@ describe('BigQuery connections in the workbench', () => {
       documents: { get: () => ({ kind: 'sql', connectionId: id(61), targetId: id(2), attachWanted: true }), getSnapshot: () => ({ busy: false }) } as never,
       targets: { changeConnection: vi.fn() } as never, queries: { isRunning: () => false, execute } as never
     })
-    expect(execute).not.toHaveBeenCalled()
+    // Execute itself asks for the estimate and the cost prompt (tests/queries.test.ts, BigQuery cost gate).
+    expect(execute).toHaveBeenCalledExactlyOnceWith('tab')
   })
 
   it('opens a new query on BigQuery with no default dataset, and never opens the SSMS T-SQL shortcuts there', async () => {

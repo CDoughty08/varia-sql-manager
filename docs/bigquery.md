@@ -180,7 +180,8 @@ BigQuery's rule refuses are dropped, and a location that is not a location id is
 takes an optional `dataset` (the query's default dataset; the connection's when absent) and ignores `database`. SQL
 Server's options (stop on error, actual and live plans, client statistics) are refused with `UNSUPPORTED_PROVIDER`, in
 main and in the backend, and `#legacySQL` is refused with `LEGACY_SQL` before any job. A BigQuery query tab sends its dataset (when it has one)
-and leaves out SQL Server's options whatever the tab and Tools › Options hold.
+and leaves out SQL Server's options whatever the tab and Tools › Options hold. Execute on a tab with no connection opens Connect and, once the
+connection is ready, runs the query as a SQL Server tab does, through the same estimate and cost prompt.
 
 - **One job, never two.** The backend sends `jobs.insert` with a client job id (`varia_` and 32 hex digits), GoogleSQL
   (`useLegacySql: false`), the default dataset, the connection's maximum bytes billed, the execution timeout as
@@ -617,7 +618,8 @@ Messages).
 - **The cap** is the hard guard: Cost's **Maximum bytes billed per query** (0, none, by default) goes out as the job's
   `maximumBytesBilled` when the connection's Advanced Properties set none; the connection's own cap wins. BigQuery fails a
   job past it at no charge (`COST_CAP`, which names the cap, in bytes alone under Bytes only). Varia's own session jobs
-  (`COMMIT TRANSACTION` and `ABORT_SESSION`) bill nothing but still carry a cap: 10 MiB, or the connection's when lower.
+  (`COMMIT TRANSACTION` and `ABORT_SESSION`) bill nothing but still carry a 10 MiB cap, BigQuery's minimum for a billed query,
+  so it can never refuse a commit.
 
 ## Object Explorer
 

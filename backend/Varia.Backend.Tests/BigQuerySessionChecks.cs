@@ -529,7 +529,8 @@ internal static partial class BigQuerySessionChecks
         check(ended is { Code: "ok", Result: { Closed: true, Note: null } } && bq.Aborts.Last() == "sess-2", $"a plain close ends the session: {ended.Code} {string.Join(",", bq.Aborts)}");
         check(harness.Fake.Unmatched.IsEmpty, "sessions send nothing the scripted BigQuery does not answer: " + string.Join(", ", harness.Fake.Unmatched.Select(request => request.Method + " " + request.Url)));
 
-        // Varia's own session jobs bill nothing, but none goes out uncapped: 10 MiB, or the connection's lower cap.
+        // Varia's own session jobs bill nothing, but none goes out uncapped: 10 MiB, even under a lower connection cap, which
+        // would otherwise refuse a commit and roll its transaction back.
         var own = bq.Inserts.Where(body => body["configuration"]!["query"]!["query"]!.GetValue<string>() is BigQuerySql.Commit or BigQuerySql.AbortSession).ToArray();
         check(own.Length == 3 && own.All(body => Cap(body) == "10485760"),
             "COMMIT TRANSACTION and ABORT_SESSION carry a 10 MiB maximumBytesBilled: " + string.Join(", ", own.Select(Cap)));
@@ -541,8 +542,8 @@ internal static partial class BigQuerySessionChecks
         await low.Execute(capped, "BEGIN TRANSACTION");
         await low.Close(capped, "commit");
         var lowOwn = lowBq.Inserts.Where(body => body["configuration"]!["query"]!["query"]!.GetValue<string>() is BigQuerySql.Commit or BigQuerySql.AbortSession).ToArray();
-        check(lowOwn.Length == 2 && lowOwn.All(body => Cap(body) == "1000"),
-            "a connection's cap below 10 MiB caps its session jobs too: " + string.Join(", ", lowOwn.Select(Cap)));
+        check(lowOwn.Length == 2 && lowOwn.All(body => Cap(body) == "10485760"),
+            "a connection's cap below 10 MiB leaves its session jobs at 10 MiB: " + string.Join(", ", lowOwn.Select(Cap)));
         static string? Cap(JsonNode body) => body["configuration"]!["query"]!["maximumBytesBilled"]?.ToString();
     }
 

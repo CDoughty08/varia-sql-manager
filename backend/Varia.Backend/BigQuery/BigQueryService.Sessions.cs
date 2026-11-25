@@ -361,11 +361,10 @@ internal sealed partial class BigQueryService
         error is not BigQueryJobMayExist && (NotSent(error) || error is GoogleApiException api && (int)api.HttpStatusCode is >= 400 and < 500
             && api.HttpStatusCode is not (HttpStatusCode.Conflict or HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests));
 
-    /// <summary>The byte cap on Varia's own session jobs (COMMIT TRANSACTION and ABORT_SESSION), which bill nothing: BigQuery's
-    /// 10 MiB minimum for a billed query, or the connection's own cap when that is lower, so no job Varia submits is uncapped.</summary>
+    /// <summary>The byte cap on Varia's own session jobs (COMMIT TRANSACTION and ABORT_SESSION), which bill nothing, so no job
+    /// Varia submits is uncapped: BigQuery's 10 MiB minimum for a billed query, whatever lower cap the connection sets, so the
+    /// cap can never refuse a commit (a refused commit rolls the transaction back).</summary>
     internal const long SessionControlCap = 10L << 20;
-
-    internal static long SessionControlCapFor(BigQueryConnection connection) => Math.Min(connection.Options.MaximumBytesBilled ?? SessionControlCap, SessionControlCap);
 
     Job SessionJob(BigQueryTabSession session, string sql, string jobId) => new()
     {
@@ -375,7 +374,7 @@ internal sealed partial class BigQueryService
             Labels = new Dictionary<string, string>(Labels),
             Query = new JobConfigurationQuery
             {
-                Query = sql, UseLegacySql = false, MaximumBytesBilled = SessionControlCapFor(session.Connection),
+                Query = sql, UseLegacySql = false, MaximumBytesBilled = SessionControlCap,
                 ConnectionProperties = [new ConnectionProperty { Key = "session_id", Value = session.Id }]
             }
         }
@@ -399,7 +398,7 @@ internal sealed partial class BigQueryService
                 Labels = new Dictionary<string, string>(Labels),
                 Query = new JobConfigurationQuery
                 {
-                    Query = BigQuerySql.AbortSession, UseLegacySql = false, ParameterMode = "NAMED", MaximumBytesBilled = SessionControlCapFor(connection),
+                    Query = BigQuerySql.AbortSession, UseLegacySql = false, ParameterMode = "NAMED", MaximumBytesBilled = SessionControlCap,
                     QueryParameters = [new QueryParameter
                     {
                         Name = BigQuerySql.AbortSessionParameter, ParameterType = new QueryParameterType { Type = "STRING" },

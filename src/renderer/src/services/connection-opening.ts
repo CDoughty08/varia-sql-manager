@@ -3,7 +3,6 @@ import { changedConnectionDetails, type ConnectionDetailField, type ConnectionDe
 import { detailsOf, type ConnectionAssociationHandoff, type ConnectionAttempt, type ConnectionService, type LiveConnection, type TargetConnectionInfo } from './connections'
 import type { ConnectionCompletion } from './connection-targets'
 import { isQueryDocument } from '../documents'
-import { isBigQueryConnection } from './connection-availability'
 import type { DocumentService } from './documents'
 import type { TargetService } from './targets'
 import type { QueryService } from './queries'
@@ -79,7 +78,8 @@ export function finishConnectionDetails(connections: ConnectionService, opened: 
   return connections.get(connection.id)
 }
 
-/** Only the query whose explicit Execute opened Connect may run after the accepted connection is ready. */
+/** Only the query whose explicit Execute opened Connect may run after the accepted connection is ready, on either engine: a
+ *  BigQuery query still goes through Execute's estimate and cost prompt, so a connect never starts a job the user did not see. */
 export async function executePendingQuery({ tabId, opened, connections, documents, targets, queries }: {
   tabId: string
   opened: OpenedConnection
@@ -101,7 +101,5 @@ export async function executePendingQuery({ tabId, opened, connections, document
   if (attached?.connectionId === opened.id && attached.targetId === opened.targetId && attached.attachWanted
     && connection?.id === opened.id && connection.generation === opened.generation && connections.isLive(opened.id)
     && connections.bindingRevision(connection) === opened.bindingRevision
-    // A BigQuery tab only attaches: a job may bill, so one never starts from a connect alone.
-    && !isBigQueryConnection(connection)
     && !documents.getSnapshot().busy && !queries.isRunning(tabId)) void queries.execute(tabId)
 }

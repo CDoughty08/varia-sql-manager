@@ -287,7 +287,8 @@ internal static partial class BigQueryRealProjectChecks
                 var cap = job.Configuration?.Query?.MaximumBytesBilled;
                 if (job.Configuration?.Query is { Query: { } text, DestinationTable: { } destination }) destinations[text] = destination;
                 Note($"{step}: job {job.JobReference!.JobId} ({job.Statistics?.Query?.StatementType}) billed {billed:N0} bytes under a cap of {cap?.ToString("N0") ?? "none"}.");
-                // Every job fails the run in Record without the cap, Varia's own COMMIT and ABORT_SESSION included (10 MiB).
+                // Every job counted fails the run in Record without the cap, Varia's own COMMIT included (10 MiB); ABORT_SESSION runs
+                // outside the session and is not counted.
                 budget.Record(step + " " + job.JobReference.JobId, cap, billed, scripts.GetValueOrDefault(job.JobReference.JobId, 1));
             }
         }
