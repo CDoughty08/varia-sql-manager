@@ -1,0 +1,3513 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" data-density="compact" data-borders="calm" data-mode="after" data-pins="off">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Varia SQL Manager — Workbench Polish Mock</title>
+<style>
+/* ============================================================================
+   VARIA SQL MANAGER — CALM PRO TOKENS (mirrors src/shared/theme/palette.ts & metrics.ts)
+   ============================================================================ */
+:root {
+  --font-ui: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", "Cascadia Code", Consolas, "SF Mono", Menlo, monospace;
+
+  /* Metrics — Compact (default) */
+  --h-header: 40px;
+  --h-bar: 36px;
+  --h-doc-tab: 40px;
+  --h-control: 26px;
+  --h-row: 22px;
+  --h-status: 24px;
+  --rad-sm: 4px;
+  --rad-lg: 8px;
+  --rad-pill: 999px;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+
+  /* Dark Palette (Varia Dark exact values) */
+  --canvas: #16181d;
+  --panel: #16181d;
+  --sidebar: #111317;
+  --chrome: #111317;
+  --raised: #1c1f25;
+  --overlay: #1d2026;
+  --input: #101216;
+  --hover: #262a32;
+  --active: #30343e;
+  --selection: #21273b;
+  --selection-strong: #29314f;
+  --accent-surface: #232842;
+  --text-selection: #2f3b66;
+
+  --text: #d9dce3;
+  --text-strong: #f5f6f8;
+  --text-secondary: #bcc1cb;
+  --text-tertiary: #a3a9b5;
+  --text-muted: #9298a4;
+  --text-accent: #bcc5ff;
+
+  --border: #262a31;
+  --border-subtle: #1f2228;
+  --border-strong: #2e323a;
+  --separator: #30343c;
+
+  /* Resting border calibration (overridden by data-borders) */
+  --control-border: #3a404d;
+  --control-border-hover: #525a6c;
+  --input-border: #3a404d;
+  --tonal-fill: rgba(255, 255, 255, 0.045);
+  --tonal-fill-hover: rgba(255, 255, 255, 0.08);
+  --tree-guide: #232730;
+
+  --accent: #8f9cff;
+  --accent-hover: #a8b2ff;
+  --on-accent: #0e1230;
+  --focus: #8f9cff;
+
+  --error: #f39a9a;
+  --error-surface: #3a1d22;
+  --error-surface-text: #f6bcc1;
+  --warning: #e4bb6a;
+  --warning-surface: #33291a;
+  --warning-surface-text: #f0d49e;
+  --success: #74d19c;
+  --success-surface: rgba(116, 209, 156, 0.14);
+  --success-text: #a6e8bf;
+
+  --icon: #a3a9b5;
+  --icon-muted: #7f8694;
+  --icon-folder: #bfa878;
+
+  --red: #e66767;
+  --red-pill-bg: rgba(230, 103, 103, 0.16);
+  --red-pill-border: rgba(230, 103, 103, 0.38);
+  --red-pill-text: #f6b2b2;
+  --blue: #6ea4ea;
+  --blue-pill-bg: rgba(110, 164, 234, 0.16);
+  --blue-pill-border: rgba(110, 164, 234, 0.36);
+  --blue-pill-text: #b7d3fa;
+  --purple: #ab95ea;
+  --chart-blue: #3987e5;
+  --chart-purple: #9085e9;
+  --chart-yellow: #c98500;
+  --chart-green: #199e70;
+
+  --syn-kw: #93a4ff;
+  --syn-str: #9fd4a9;
+  --syn-cmt: #868e9b;
+  --syn-num: #e8b97d;
+  --syn-fn: #d4a9f2;
+  --syn-op: #9ea6b4;
+
+  --grid-alt: rgba(217, 220, 227, 0.02);
+  --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.52);
+  --shadow-menu: 0 4px 12px rgba(0, 0, 0, 0.44);
+
+  /* Outer lab page chrome */
+  --lab-bg: #0b0d11;
+  --lab-surface: #12151c;
+  --lab-card: #161922;
+  --lab-border: #232836;
+}
+
+[data-theme="light"] {
+  --canvas: #ffffff;
+  --panel: #ffffff;
+  --sidebar: #f7f8fa;
+  --chrome: #f7f8fa;
+  --raised: #f1f3f6;
+  --overlay: #ffffff;
+  --input: #ffffff;
+  --hover: #dfe2e7;
+  --active: #d6dae0;
+  --selection: #e7ebfc;
+  --selection-strong: #d9e0fb;
+  --accent-surface: #dde1f9;
+  --text-selection: #c8d2fa;
+
+  --text: #1c1f26;
+  --text-strong: #0a0c10;
+  --text-secondary: #3a404b;
+  --text-tertiary: #4d5461;
+  --text-muted: #5c6370;
+  --text-accent: #3240b0;
+
+  --border: #e3e6eb;
+  --border-subtle: #eceef2;
+  --border-strong: #d4d8df;
+  --separator: #dcdfe5;
+
+  --control-border: #c2c8d4;
+  --control-border-hover: #9aa3b4;
+  --input-border: #c2c8d4;
+  --tonal-fill: rgba(15, 23, 42, 0.04);
+  --tonal-fill-hover: rgba(15, 23, 42, 0.075);
+  --tree-guide: #e2e5ec;
+
+  --accent: #4453d0;
+  --accent-hover: #3744b8;
+  --on-accent: #ffffff;
+  --focus: #4453d0;
+
+  --error: #b42229;
+  --error-surface: #fdecec;
+  --error-surface-text: #8f1d24;
+  --warning: #875800;
+  --warning-surface: #fff5dc;
+  --warning-surface-text: #6b4400;
+  --success: #146f3b;
+  --success-surface: rgba(20, 111, 59, 0.11);
+  --success-text: #0f5a2f;
+
+  --icon: #4d5461;
+  --icon-muted: #6b7280;
+  --icon-folder: #8a6d33;
+
+  --red: #c42b3c;
+  --red-pill-bg: rgba(196, 43, 60, 0.1);
+  --red-pill-border: rgba(196, 43, 60, 0.34);
+  --red-pill-text: #a11c2b;
+  --blue: #2563a8;
+  --blue-pill-bg: rgba(37, 99, 168, 0.1);
+  --blue-pill-border: rgba(37, 99, 168, 0.32);
+  --blue-pill-text: #1c4e8a;
+  --purple: #7a4bbf;
+  --chart-blue: #2a78d6;
+  --chart-purple: #6250d6;
+  --chart-yellow: #a87200;
+  --chart-green: #12936a;
+
+  --syn-kw: #3442c2;
+  --syn-str: #2c7440;
+  --syn-cmt: #636a76;
+  --syn-num: #965700;
+  --syn-fn: #8338b4;
+  --syn-op: #575e6b;
+
+  --grid-alt: rgba(28, 31, 38, 0.022);
+  --shadow-popover: 0 8px 24px rgba(16, 24, 40, 0.15);
+  --shadow-menu: 0 4px 12px rgba(16, 24, 40, 0.12);
+
+  --lab-bg: #eef1f6;
+  --lab-surface: #f8f9fc;
+  --lab-card: #ffffff;
+  --lab-border: #d8dde6;
+}
+
+/* Density override (mirrors metrics.ts comfortable) */
+[data-density="comfortable"] {
+  --h-header: 44px;
+  --h-bar: 40px;
+  --h-doc-tab: 44px;
+  --h-control: 28px;
+  --h-row: 26px;
+  --h-status: 26px;
+}
+
+/* Border contrast calibration
+   - wcag3 (Approach A): keeps input.border & button.border >= 3:1 (WCAG 1.4.11, passing tests/theme-contrast.test.ts),
+     uses commandCenter.border at 45% alpha (registry.ts:53), and removes wireframe box borders from resting toolbars.
+   - calm (Approach B): relaxes resting input/control borders below 3:1 (~1.6:1), keeping 3:1 on focus/hover.
+   - current: today's full wireframe baseline (#6a7184 / #878e9b + boxed toolbar groups). */
+[data-borders="wcag3"][data-theme="dark"] {
+  --control-border: #646b7d;
+  --control-border-hover: #7c8499;
+  --input-border: #646b7d;
+  --cmd-border: rgba(100, 107, 125, 0.45);
+}
+[data-borders="wcag3"][data-theme="light"] {
+  --control-border: #878e9b;
+  --control-border-hover: #6d7482;
+  --input-border: #878e9b;
+  --cmd-border: rgba(135, 142, 155, 0.45);
+}
+[data-borders="calm"][data-theme="dark"] {
+  --control-border: #3a404d;
+  --control-border-hover: #525a6c;
+  --input-border: #3a404d;
+  --cmd-border: #3a404d;
+}
+[data-borders="calm"][data-theme="light"] {
+  --control-border: #c2c8d4;
+  --control-border-hover: #9aa3b4;
+  --input-border: #c2c8d4;
+  --cmd-border: #c2c8d4;
+}
+[data-borders="current"][data-theme="dark"] {
+  --control-border: #6b7286;
+  --input-border: #6a7184;
+  --cmd-border: rgba(107, 114, 134, 0.45);
+  --tonal-fill: transparent;
+}
+[data-borders="current"][data-theme="light"] {
+  --control-border: #878e9b;
+  --input-border: #878e9b;
+  --cmd-border: rgba(135, 142, 155, 0.45);
+  --tonal-fill: transparent;
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--text);
+  background: var(--lab-bg);
+  -webkit-font-smoothing: antialiased;
+}
+button, input, select { font-family: inherit; color: inherit; }
+button { cursor: pointer; background: transparent; border: 0; padding: 0; }
+button:disabled { cursor: default; opacity: 0.42; }
+
+/* Themed thin scrollbars (toggled off in baseline mode for comparison!) */
+.themed-scroll ::-webkit-scrollbar,
+.themed-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.themed-scroll ::-webkit-scrollbar-track,
+.themed-scroll::-webkit-scrollbar-track { background: transparent; }
+.themed-scroll ::-webkit-scrollbar-thumb,
+.themed-scroll::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.themed-scroll ::-webkit-scrollbar-thumb:hover,
+.themed-scroll::-webkit-scrollbar-thumb:hover { background: var(--text-muted); border: 2px solid transparent; background-clip: content-box; }
+.themed-scroll ::-webkit-scrollbar-corner { background: transparent; }
+
+/* ============================================================================
+   LAB SHELL (TOP CONTROL BAR + SCENARIO STRIP + STAGE + CONFIGURATOR)
+   ============================================================================ */
+.lab-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.lab-topbar {
+  position: sticky; top: 0; z-index: 900;
+  background: var(--lab-surface);
+  border-bottom: 1px solid var(--lab-border);
+  padding: 8px 16px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+}
+
+.lab-brand {
+  display: flex; align-items: center; gap: 9px;
+  margin-right: 4px;
+}
+.lab-brand-mark {
+  width: 24px; height: 24px; border-radius: 6px;
+  background: var(--accent-surface); color: var(--accent);
+  display: grid; place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.lab-brand-title { font-weight: 600; font-size: 13px; color: var(--text-strong); letter-spacing: -0.01em; }
+.lab-brand-sub { font-size: 11px; color: var(--text-muted); padding: 1px 6px; border-radius: 99px; background: var(--tonal-fill); border: 1px solid var(--lab-border); }
+
+.lab-seg {
+  display: inline-flex; align-items: center; gap: 2px;
+  padding: 2px; border-radius: 6px;
+  background: var(--lab-bg);
+  border: 1px solid var(--lab-border);
+}
+.lab-seg button {
+  height: 24px; padding: 0 9px; border-radius: 4px;
+  font-size: 11.5px; font-weight: 500; color: var(--text-muted);
+  transition: background 90ms var(--ease), color 90ms var(--ease);
+  white-space: nowrap;
+}
+.lab-seg button:hover { color: var(--text-strong); }
+.lab-seg button.is-active {
+  background: var(--selection-strong);
+  color: var(--text-accent);
+  font-weight: 600;
+}
+
+.lab-spacer { flex: 1; }
+
+.lab-pill-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 28px; padding: 0 10px; border-radius: 6px;
+  font-size: 11.5px; font-weight: 500;
+  background: var(--lab-card);
+  border: 1px solid var(--lab-border);
+  color: var(--text-secondary);
+  transition: background 90ms var(--ease), border-color 90ms var(--ease), color 90ms var(--ease);
+}
+.lab-pill-btn:hover { background: var(--hover); color: var(--text-strong); }
+.lab-pill-btn.is-on {
+  background: var(--accent-surface);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--text-accent);
+}
+
+.lab-subbar {
+  background: color-mix(in srgb, var(--lab-surface) 75%, var(--lab-bg));
+  border-bottom: 1px solid var(--lab-border);
+  padding: 6px 16px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+}
+.lab-subbar-label {
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.lab-telemetry {
+  display: inline-flex; align-items: center; gap: 8px;
+  margin-left: auto;
+  font-size: 11.5px; color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.tel-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 8px; border-radius: 99px;
+  font-size: 11px; font-weight: 600;
+  background: var(--success-surface); color: var(--success-text);
+}
+.tel-badge.is-neutral { background: var(--tonal-fill); color: var(--text-secondary); border: 1px solid var(--lab-border); }
+
+/* Main workspace + right configurator layout */
+.lab-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  align-items: flex-start;
+}
+
+.lab-stage {
+  flex: 1;
+  min-width: 0;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.stage-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+[data-mode="compare"] .stage-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@media (max-width: 1320px) {
+  [data-mode="compare"] .stage-grid { grid-template-columns: 1fr; }
+}
+[data-mode="after"] .before-panel { display: none; }
+[data-mode="before"] .after-panel { display: none; }
+
+.stage-card {
+  background: var(--lab-card);
+  border: 1px solid var(--lab-border);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+}
+.stage-card-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 7px 12px;
+  background: var(--lab-surface);
+  border-bottom: 1px solid var(--lab-border);
+  font-size: 11.5px; color: var(--text-secondary);
+}
+.stage-card-head strong { color: var(--text-strong); font-weight: 600; }
+.stage-card-meta { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-muted); }
+
+.before-img-wrap {
+  background: #0d0f14;
+  display: flex; align-items: center; justify-content: center;
+  min-height: 540px;
+  overflow: auto;
+}
+.before-img-wrap img {
+  display: block; max-width: 100%; height: auto;
+}
+
+/* ============================================================================
+   MOCK WORKBENCH FRAME
+   ============================================================================ */
+.wb-viewport {
+  display: flex;
+  justify-content: center;
+  background: var(--lab-bg);
+  padding: 10px;
+  overflow-x: auto;
+}
+.wb-window {
+  position: relative;
+  width: 100%;
+  max-width: 1380px;
+  min-width: 960px;
+  height: 700px;
+  background: var(--canvas);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.35);
+  transition: max-width 220ms var(--ease);
+}
+.wb-window.is-narrow {
+  max-width: 980px;
+  min-width: 920px;
+}
+
+/* --- 1. TITLE BAR --- */
+.wb-titlebar {
+  height: var(--h-header);
+  flex-shrink: 0;
+  background: var(--chrome);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 0 0 10px;
+  gap: 8px;
+  user-select: none;
+}
+.wb-tb-left { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.wb-brand-icon {
+  width: 24px; height: 24px; display: grid; place-items: center;
+  color: var(--accent); margin-right: 2px;
+}
+.wb-menus { display: flex; align-items: center; gap: 1px; }
+.wb-menus button {
+  height: 26px; padding: 0 7px; border-radius: var(--rad-sm);
+  font-size: 12px; color: var(--text-secondary);
+}
+.wb-menus button:hover { background: var(--hover); color: var(--text-strong); }
+
+.wb-tb-center {
+  flex: 1; display: flex; justify-content: center; min-width: 140px;
+}
+.wb-cmd-centre {
+  width: min(410px, 100%);
+  height: var(--h-control);
+  padding: 0 8px 0 10px;
+  border-radius: var(--rad-sm);
+  background: var(--input);
+  border: 1px solid var(--cmd-border, var(--input-border));
+  color: var(--text-muted);
+  display: flex; align-items: center; gap: 7px;
+  font-size: 12px;
+  transition: border-color 90ms var(--ease), background 90ms var(--ease);
+}
+.wb-cmd-centre:hover { border-color: var(--control-border-hover); color: var(--text-secondary); }
+.wb-cmd-centre span { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-kbd {
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 18px; padding: 0 5px; border-radius: 3px;
+  font-family: var(--font-ui); font-size: 10.5px; font-weight: 500;
+  color: var(--text-muted);
+  background: var(--tonal-fill);
+  border: 1px solid var(--separator);
+}
+
+.wb-tb-actions {
+  display: flex; align-items: center; gap: 2px; flex-shrink: 0; padding-right: 4px;
+}
+.wb-tb-sep {
+  width: 1px; height: 15px; background: var(--separator); margin: 0 4px;
+}
+.wb-tb-actions.is-ungrouped .wb-tb-sep { display: none; }
+
+.wb-icon-btn {
+  position: relative;
+  width: 26px; height: 26px; border-radius: var(--rad-sm);
+  display: inline-grid; place-items: center;
+  color: var(--icon);
+  transition: background 80ms var(--ease), color 80ms var(--ease);
+}
+.wb-icon-btn:hover:not(:disabled) { background: var(--hover); color: var(--text-strong); }
+.wb-icon-btn.is-active { background: var(--selection); color: var(--text-accent); }
+.wb-icon-btn .save-badge {
+  position: absolute; top: 4px; right: 4px; width: 5px; height: 5px;
+  border-radius: 50%; background: var(--accent);
+}
+.wb-tb-actions.is-ungrouped .save-badge { display: none; }
+
+.wb-win-controls {
+  display: flex; align-items: stretch; height: 100%; margin-left: 6px;
+}
+.wb-win-controls span {
+  width: 40px; display: grid; place-items: center; color: var(--text-muted); font-size: 11px;
+}
+.wb-win-controls span:hover { background: var(--hover); color: var(--text-strong); }
+.wb-win-controls span.win-close:hover { background: #c42b1c; color: #fff; }
+
+/* --- 2. WORKBENCH BODY (OE + MAIN) --- */
+.wb-main-split {
+  flex: 1; min-height: 0;
+  display: flex;
+}
+
+/* OBJECT EXPLORER */
+.wb-oe {
+  width: var(--oe-w, 260px);
+  flex-shrink: 0;
+  background: var(--sidebar);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  position: relative;
+}
+.wb-oe-header {
+  height: var(--h-doc-tab);
+  flex-shrink: 0;
+  display: flex; align-items: center; gap: 2px;
+  padding: 0 6px 0 11px;
+  border-bottom: 1px solid var(--border);
+}
+.wb-oe-title {
+  flex: 1; min-width: 0;
+  font-size: 11px; font-weight: 600;
+  color: var(--text-tertiary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.wb-oe-tools { display: flex; align-items: center; gap: 1px; }
+
+/* Baseline 2-row wrapped OE header */
+.wb-oe.oe-current .wb-oe-header {
+  height: auto;
+  display: grid;
+  grid-template: "title menu" 30px "tools tools" 28px / 1fr auto;
+  padding: 2px 6px 4px 10px;
+  gap: 0;
+}
+.wb-oe.oe-current .wb-oe-title { grid-area: title; }
+.wb-oe.oe-current .wb-oe-menu { grid-area: menu; }
+.wb-oe.oe-current .wb-oe-tools { grid-area: tools; justify-content: flex-start; gap: 2px; }
+
+.wb-oe-search-row {
+  height: var(--h-bar);
+  flex-shrink: 0;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 4px;
+}
+.wb-oe.oe-current .wb-oe-search-row {
+  height: auto;
+  padding: 7px 8px 6px;
+  border-bottom-color: var(--border-subtle);
+}
+.wb-oe-search-box {
+  flex: 1; min-width: 0;
+  height: var(--h-control);
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 6px 0 8px;
+  border-radius: var(--rad-sm);
+  background: var(--input);
+  border: 1px solid var(--input-border);
+  color: var(--text-muted);
+}
+.wb-oe-search-box:focus-within { border-color: var(--focus); box-shadow: 0 0 0 1px var(--focus); }
+.wb-oe-search-box input {
+  flex: 1; min-width: 0; border: 0; outline: 0; background: transparent;
+  font-size: 12px; color: var(--text);
+}
+.wb-oe-search-box input::placeholder { color: var(--text-muted); }
+
+.wb-oe-tree-frame {
+  position: relative;
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column;
+}
+.wb-oe-tree {
+  flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
+  padding: 0;
+  user-select: none;
+}
+
+/* Sticky Top/Bottom Pinned Server Bands (mirrors ExplorerPinnedBand + tree-model.ts) */
+.oe-pin-band {
+  position: absolute; left: 0; right: 8px; z-index: 6;
+  overflow: clip;
+  background: var(--sidebar);
+  pointer-events: auto;
+}
+.oe-pin-band[data-edge="top"] { top: 0; box-shadow: 0 1px 0 var(--border); }
+.oe-pin-band[data-edge="bottom"] { bottom: 0; box-shadow: 0 -1px 0 var(--border); }
+.oe-pin-band:empty { display: none; box-shadow: none; }
+.oe-pin-band > .oe-server-card,
+.oe-pin-band > .oe-server-row-legacy {
+  position: absolute; left: 0; right: 0;
+}
+.oe-pin-overflow {
+  position: absolute; left: 0; right: 0; z-index: 2;
+  overflow: clip;
+  background: var(--chrome);
+  border-bottom: 1px solid var(--border);
+}
+.oe-pin-band[data-edge="top"] > .oe-pin-overflow { top: 0; }
+.oe-pin-band[data-edge="bottom"] > .oe-pin-overflow { bottom: 0; border-bottom: 0; border-top: 1px solid var(--border); }
+.oe-pin-more-btn {
+  width: 100%; height: 22px; padding: 0 10px;
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 11px; color: var(--text-muted);
+  background: var(--chrome);
+}
+.oe-pin-more-btn:hover { background: var(--hover); color: var(--text-strong); }
+.oe-pin-popover {
+  position: absolute; left: 4px; right: 4px; z-index: 40;
+  background: var(--overlay); border: 1px solid var(--control-border);
+  border-radius: 6px; box-shadow: var(--shadow-popover);
+  overflow: hidden; display: none;
+}
+.oe-pin-popover.is-open { display: block; }
+.oe-pin-popover[data-edge="top"] { top: 24px; }
+.oe-pin-popover[data-edge="bottom"] { bottom: 24px; }
+
+/* Server Header Band (Flush 44px 2-line for exact 1:1 sticky handoff, zero margin/corner jump) */
+.oe-server-card {
+  position: relative;
+  height: 44px;
+  padding: 5px 8px 5px 6px;
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--raised) 55%, var(--sidebar));
+  display: flex; flex-direction: column; justify-content: center;
+  cursor: pointer;
+  transition: background 80ms var(--ease), border-color 80ms var(--ease);
+}
+.oe-server-card:hover { background: var(--hover); }
+.oe-server-card.is-active-conn:not(.has-card-tint) {
+  background: color-mix(in srgb, var(--accent-surface) 38%, var(--sidebar));
+  border-top-color: color-mix(in srgb, var(--accent) 32%, var(--border));
+  border-bottom-color: color-mix(in srgb, var(--accent) 32%, var(--border));
+}
+.oe-server-card.has-card-tint {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--card-accent) 9%, transparent) 0%, transparent 72%), color-mix(in srgb, var(--raised) 48%, var(--sidebar));
+  border-top-color: color-mix(in srgb, var(--card-accent) 38%, var(--border));
+  border-bottom-color: color-mix(in srgb, var(--card-accent) 26%, var(--border));
+}
+[data-theme="light"] .oe-server-card.has-card-tint {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--card-accent) 7%, transparent) 0%, transparent 72%), color-mix(in srgb, var(--canvas) 78%, var(--sidebar));
+  border-top-color: color-mix(in srgb, var(--card-accent) 34%, var(--border));
+  border-bottom-color: color-mix(in srgb, var(--card-accent) 24%, var(--border));
+}
+.oe-server-card.has-card-tint:hover {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--card-accent) 13%, transparent) 0%, transparent 76%), var(--hover);
+}
+.oe-server-rail {
+  position: absolute; top: 0; bottom: 0; left: 0; width: 3px;
+}
+.oe-server-top {
+  display: flex; align-items: center; gap: 5px; min-width: 0;
+}
+.oe-server-name {
+  flex: 1; min-width: 0; font-size: 12.5px; font-weight: 600;
+  color: var(--text-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.oe-server-sub {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 3px; padding-left: 20px;
+  font-size: 11px; color: var(--text-muted);
+  min-width: 0;
+}
+.oe-server-host {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.oe-jobs-chip {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 0 5px; height: 16px; border-radius: 99px;
+  background: var(--selection); color: var(--text-accent);
+  font-size: 10.5px; font-weight: 600; flex-shrink: 0;
+}
+.oe-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+  background: var(--success);
+}
+.oe-active-glyph { color: var(--accent); display: inline-grid; place-items: center; flex-shrink: 0; }
+
+/* Baseline 1-line squished server row */
+.oe-server-row-legacy {
+  position: relative;
+  height: 30px; padding: 0 6px 0 4px;
+  display: flex; align-items: center; gap: 4px;
+  cursor: pointer;
+}
+.oe-server-row-legacy:hover { background: var(--hover); }
+.oe-server-row-legacy .oe-server-rail { top: 0; bottom: 0; border-radius: 0; }
+.oe-server-row-legacy .oe-server-name {
+  font-size: 12.5px; flex: 1 1 60px; max-width: 96px;
+}
+.oe-server-row-legacy .env-pill { max-width: 40px; justify-content: flex-start; overflow: hidden; text-overflow: ellipsis; }
+
+/* Tree Rows */
+.oe-row {
+  position: relative;
+  height: var(--h-row);
+  display: flex; align-items: center; gap: 4px;
+  padding-right: 8px;
+  font-size: 12.5px; color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.oe-row:hover { background: var(--hover); }
+.oe-row.is-selected { background: var(--selection); color: var(--text-strong); }
+.oe-row.is-system { color: var(--text-tertiary); }
+.oe-row.is-system .oe-folder-ic { opacity: 0.65; }
+.oe-indent-cell {
+  position: relative;
+  display: inline-block;
+  width: 14px; height: 100%; flex-shrink: 0;
+}
+.has-guides .oe-indent-cell::before {
+  content: "";
+  position: absolute; left: 7px; top: 0; bottom: 0;
+  width: 1px; background: var(--tree-guide);
+}
+.oe-chev {
+  width: 14px; height: 14px; display: grid; place-items: center;
+  color: var(--icon-muted); flex-shrink: 0;
+}
+.oe-ic { width: 15px; height: 15px; display: grid; place-items: center; color: var(--icon); flex-shrink: 0; }
+.oe-folder-ic { color: var(--icon-folder); }
+.oe-lbl { flex: 0 0 auto; max-width: 68%; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.oe-row.is-db .oe-lbl, .oe-row.is-table .oe-lbl { font-weight: 500; color: var(--text-strong); }
+.oe-col-meta {
+  flex: 1 1 0; min-width: 0;
+  font-size: 11px; color: var(--text-muted); margin-left: 4px;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.oe-pk-badge {
+  display: inline-flex; align-items: center; height: 14px; padding: 0 4px;
+  border-radius: 3px; font-size: 9.5px; font-weight: 700; letter-spacing: 0.03em;
+  background: var(--warning-surface); color: var(--warning);
+  margin-left: 2px; flex-shrink: 0;
+}
+.oe-count {
+  margin-left: auto; font-size: 11px; color: var(--text-muted);
+  font-variant-numeric: tabular-nums; padding-left: 6px;
+}
+.oe-status-txt {
+  margin-left: auto; font-size: 11px; font-weight: 500; color: var(--success);
+}
+
+.wb-oe-footer {
+  height: 28px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 0 10px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 11px; color: var(--text-muted);
+  overflow: hidden; white-space: nowrap;
+}
+.wb-oe-footer .oe-foot-left { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.wb-oe-footer .oe-foot-right { flex-shrink: 0; }
+.wb-oe.oe-current .wb-oe-footer .oe-foot-right { display: none; }
+
+/* Splitter */
+.wb-splitter-v {
+  width: 4px; flex-shrink: 0; cursor: col-resize;
+  background: transparent; position: relative; z-index: 5;
+  margin-left: -2px; margin-right: -2px;
+}
+.wb-splitter-v:hover, .wb-splitter-v.is-dragging { background: var(--focus); opacity: 0.65; }
+
+.wb-splitter-h {
+  height: 5px; flex-shrink: 0; cursor: row-resize;
+  background: var(--border); position: relative; z-index: 5;
+  border-top: 1px solid transparent; border-bottom: 1px solid transparent;
+}
+.wb-splitter-h:hover, .wb-splitter-h.is-dragging { background: var(--focus); }
+
+/* --- 3. RIGHT WORKSPACE (EDITOR + RESULTS) --- */
+.wb-right {
+  flex: 1; min-width: 0; min-height: 0;
+  display: flex; flex-direction: column;
+}
+
+.wb-editor-pane {
+  flex: 1 1 52%; min-height: 140px;
+  display: flex; flex-direction: column;
+  min-width: 0;
+  background: var(--canvas);
+}
+
+/* Split editor groups container */
+.wb-groups-row {
+  flex: 1; min-height: 0; min-width: 0;
+  display: flex;
+}
+.wb-editor-group {
+  flex: 1; min-width: 0; min-height: 0;
+  display: flex; flex-direction: column;
+}
+.wb-editor-group + .wb-editor-group {
+  border-left: 1px solid var(--border-strong);
+}
+
+/* ENVIRONMENT PILLS */
+.env-pill {
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 16px; padding: 0 5px; border-radius: 3px;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.04em;
+  text-transform: uppercase; white-space: nowrap; flex-shrink: 0;
+}
+.env-pill.prod { background: var(--red-pill-bg); color: var(--red-pill-text); border: 1px solid var(--red-pill-border); }
+.env-pill.staging { background: var(--blue-pill-bg); color: var(--blue-pill-text); border: 1px solid var(--blue-pill-border); }
+.env-pill.neutral { background: var(--tonal-fill); color: var(--text-secondary); border: 1px solid var(--border-strong); }
+
+/* DOCUMENT TAB STRIP */
+.wb-tab-shelf {
+  height: var(--h-doc-tab);
+  background: var(--chrome);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: stretch;
+  flex-shrink: 0;
+  overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: none;
+}
+.wb-tab-shelf::-webkit-scrollbar { display: none; }
+.wb-tab-shelf.is-pinned-shelf {
+  border-bottom: 1px solid var(--border-strong);
+  background: color-mix(in srgb, var(--chrome) 70%, var(--raised));
+}
+
+.wb-tabs-list {
+  display: flex; align-items: stretch; flex: 1; min-width: 0;
+}
+.wb-tab-pin-divider {
+  width: 1px; background: var(--separator); margin: 6px 2px; flex-shrink: 0;
+}
+
+.wb-doc-tab {
+  position: relative;
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 8px 0 10px;
+  border-right: 1px solid var(--border);
+  border-top: 2px solid transparent;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+  flex-shrink: 0;
+  user-select: none;
+  transition: background 80ms var(--ease), color 80ms var(--ease);
+}
+.wb-doc-tab:hover { background: var(--hover); color: var(--text); }
+.wb-doc-tab.is-active {
+  background: var(--canvas);
+  color: var(--text-strong);
+  transition: none;
+}
+.wb-doc-tab.is-pinned:not(.is-active) {
+  background: color-mix(in srgb, var(--selection) 42%, var(--chrome));
+}
+.wb-doc-tab.accent-prod.is-active { border-top-color: var(--red); }
+.wb-doc-tab.accent-staging.is-active { border-top-color: var(--blue); }
+.wb-doc-tab.accent-default.is-active { border-top-color: var(--accent); }
+.wb-doc-tab.accent-prod:not(.is-active) { border-top-color: color-mix(in srgb, var(--red) 45%, transparent); }
+.wb-doc-tab.accent-staging:not(.is-active) { border-top-color: color-mix(in srgb, var(--blue) 45%, transparent); }
+
+/* Tab Style Variants */
+.tabs-2line-refined .wb-doc-tab { height: 100%; min-width: 148px; max-width: 210px; }
+.tabs-1line-compact .wb-doc-tab { height: 100%; min-width: 120px; max-width: 225px; }
+.tabs-2line-current .wb-doc-tab { height: 100%; width: 226px; }
+
+.wb-tab-body {
+  display: flex; flex-direction: column; justify-content: center;
+  min-width: 0; flex: 1; gap: 2px;
+}
+.tabs-1line-compact .wb-tab-body {
+  flex-direction: row; align-items: center; gap: 6px;
+}
+.wb-tab-title-row {
+  display: flex; align-items: center; gap: 5px; min-width: 0;
+}
+.wb-tab-name {
+  font-size: 12px; font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.wb-doc-tab.is-active .wb-tab-name { font-weight: 600; }
+
+.wb-tab-meta-row {
+  display: flex; align-items: center; gap: 5px; min-width: 0;
+  font-size: 10.5px; color: var(--text-muted);
+}
+.wb-tab-sid {
+  font-size: 10.5px; font-variant-numeric: tabular-nums;
+  color: var(--text-muted); white-space: nowrap;
+}
+.tabs-2line-current .wb-tab-sid {
+  padding: 0 5px; border-radius: 3px; background: var(--active); color: var(--text-secondary);
+}
+
+.wb-tab-actions {
+  display: flex; align-items: center; gap: 1px; flex-shrink: 0;
+}
+.wb-tab-act {
+  width: 20px; height: 20px; border-radius: 3px;
+  display: grid; place-items: center;
+  color: var(--text-muted);
+}
+.wb-tab-act:hover { background: var(--active); color: var(--text-strong); }
+
+/* Fixed Pin button slot (zero layout shift on hover); subtle at rest when unpinned, crisp when hovered or pinned */
+.tabs-2line-refined .wb-doc-tab:not(.is-pinned) .act-pin,
+.tabs-1line-compact .wb-doc-tab:not(.is-pinned) .act-pin {
+  opacity: 0.52;
+  transition: opacity 80ms var(--ease), background 80ms var(--ease), color 80ms var(--ease);
+}
+.tabs-2line-refined .wb-doc-tab:not(.is-pinned):hover .act-pin,
+.tabs-1line-compact .wb-doc-tab:not(.is-pinned):hover .act-pin {
+  opacity: 1;
+}
+.wb-doc-tab.is-pinned .act-pin { color: var(--text-accent); }
+
+.wb-dirty-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted);
+}
+.wb-doc-tab.is-dirty .act-close .close-x { display: none; }
+.wb-doc-tab.is-dirty:hover .act-close .close-x { display: inline-flex; }
+.wb-doc-tab.is-dirty:hover .act-close .wb-dirty-dot { display: none; }
+
+.wb-tab-strip-end {
+  display: flex; align-items: center; gap: 2px; padding: 0 6px; flex-shrink: 0;
+}
+
+/* --- QUERY BAR --- */
+.wb-querybar {
+  position: relative;
+  height: var(--h-bar);
+  flex-shrink: 0;
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 8px;
+  background: var(--canvas);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.wb-querybar.has-conn-tint {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--qb-accent) 8%, transparent) 0%, transparent 48%), var(--canvas);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--qb-accent) 38%, transparent);
+}
+[data-theme="light"] .wb-querybar.has-conn-tint {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--qb-accent) 6.5%, transparent) 0%, transparent 48%), var(--canvas);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--qb-accent) 32%, transparent);
+}
+
+.wb-qb-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+
+.wb-exec-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: var(--h-control); padding: 0 10px;
+  border-radius: var(--rad-sm);
+  background: var(--accent); color: var(--on-accent);
+  font-size: 12px; font-weight: 600;
+  transition: background 80ms var(--ease);
+}
+.wb-exec-btn:hover { background: var(--accent-hover); }
+.wb-exec-btn.is-running {
+  background: var(--error-surface); color: var(--error-surface-text);
+  border: 1px solid color-mix(in srgb, var(--error) 45%, transparent);
+}
+.wb-exec-btn .exec-kbd {
+  font-size: 10px; font-weight: 600; padding: 0 4px; height: 16px; line-height: 14px;
+  border-radius: 3px; border: 1px solid color-mix(in srgb, currentColor 42%, transparent);
+  opacity: 0.9;
+}
+.wb-exec-scope-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: var(--h-control); padding: 0 7px;
+  border-radius: var(--rad-sm);
+  font-size: 11px; color: var(--text-muted);
+  background: var(--tonal-fill);
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+.wb-exec-scope-pill:hover { background: var(--tonal-fill-hover); color: var(--text); }
+.wb-exec-scope-pill.is-selection {
+  background: var(--warning-surface); color: var(--warning-surface-text);
+  border-color: color-mix(in srgb, var(--warning) 35%, transparent);
+  font-weight: 600;
+}
+
+.wb-qb-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: var(--h-control); padding: 0 8px;
+  border-radius: var(--rad-sm);
+  font-size: 12px; color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  transition: background 80ms var(--ease), color 80ms var(--ease);
+  white-space: nowrap;
+}
+.wb-qb-btn:hover:not(:disabled) { background: var(--hover); color: var(--text-strong); }
+.wb-qb-btn.is-tonal { background: var(--tonal-fill); border-color: var(--border); }
+.wb-qb-btn.is-tonal:hover:not(:disabled) { background: var(--tonal-fill-hover); border-color: var(--control-border); }
+.wb-qb-btn.is-pressed {
+  background: var(--selection); color: var(--text-accent);
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+  font-weight: 500;
+}
+.wb-qb-btn.is-cancel-live {
+  background: var(--error-surface); color: var(--error-surface-text);
+  border-color: color-mix(in srgb, var(--error) 40%, transparent);
+}
+.wb-qb-sep { width: 1px; height: 16px; background: var(--separator); margin: 0 2px; }
+
+/* Connection Pill */
+.wb-conn-pill {
+  margin-left: auto;
+  display: flex; align-items: center; gap: 6px;
+  height: var(--h-control);
+  padding: 0 4px 0 8px;
+  border-radius: var(--rad-sm);
+  background: var(--input);
+  border: 1px solid var(--input-border);
+  min-width: 0; max-width: 440px;
+}
+.wb-conn-pill.has-conn-tint-pill {
+  border-color: color-mix(in srgb, var(--qb-accent) 42%, var(--input-border));
+}
+.wb-conn-swatch { width: 3px; height: 14px; border-radius: 2px; flex-shrink: 0; }
+.wb-conn-select {
+  border: 0; outline: 0; background: transparent;
+  font-size: 12px; color: var(--text);
+  padding: 0 2px; height: 22px; min-width: 60px; max-width: 195px;
+  cursor: pointer; text-overflow: ellipsis;
+}
+.wb-conn-select option { background: var(--overlay); color: var(--text); }
+.wb-conn-div { width: 1px; height: 14px; background: var(--separator); flex-shrink: 0; }
+
+/* Dropdown Popovers inside workbench */
+.wb-popover {
+  position: absolute; z-index: 60;
+  background: var(--overlay);
+  border: 1px solid var(--control-border);
+  border-radius: var(--rad-lg);
+  box-shadow: var(--shadow-popover);
+  padding: 5px;
+  min-width: 215px;
+  display: none;
+}
+.wb-popover.is-open { display: block; }
+.wb-pop-hdr {
+  padding: 4px 8px 5px;
+  font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+.wb-pop-item {
+  width: 100%; display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; border-radius: 5px;
+  font-size: 12px; color: var(--text); text-align: left;
+}
+.wb-pop-item:hover { background: var(--hover); color: var(--text-strong); }
+.wb-pop-item.is-selected { background: var(--selection); color: var(--text-accent); font-weight: 500; }
+.wb-pop-item .pop-sub { display: block; font-size: 10.5px; color: var(--text-muted); font-weight: 400; }
+.wb-pop-item .pop-check { margin-left: auto; color: var(--accent); font-weight: 700; }
+.wb-pop-sep { height: 1px; background: var(--border); margin: 4px 2px; }
+
+/* --- SQL EDITOR SURFACE --- */
+.wb-sql-editor {
+  flex: 1; min-height: 0; overflow: auto;
+  padding: 8px 0;
+  font-family: var(--font-mono); font-size: 12.5px; line-height: 19px;
+  background: var(--canvas);
+  position: relative;
+}
+.sql-line {
+  display: flex; align-items: baseline; padding: 0 14px 0 0; min-height: 19px;
+}
+.sql-line.is-current { background: rgba(255, 255, 255, 0.025); }
+[data-theme="light"] .sql-line.is-current { background: rgba(15, 23, 42, 0.03); }
+.sql-line.is-sel .sql-code { background: var(--text-selection); border-radius: 2px; }
+.sql-ln {
+  width: 44px; padding-right: 14px; text-align: right; flex-shrink: 0;
+  color: var(--text-muted); opacity: 0.62; font-size: 11.5px; user-select: none;
+}
+.sql-line.is-current .sql-ln { color: var(--text-secondary); opacity: 1; }
+.sql-code { white-space: pre; }
+.kw { color: var(--syn-kw); font-weight: 500; }
+.fn { color: var(--syn-fn); }
+.str { color: var(--syn-str); }
+.num { color: var(--syn-num); }
+.cmt { color: var(--syn-cmt); font-style: italic; }
+.op { color: var(--syn-op); }
+
+/* Non-Query Tab View (Activity Monitor / Search Objects preview) */
+.wb-nonquery-view {
+  flex: 1; min-height: 0; overflow: auto; padding: 14px 16px;
+  background: var(--canvas); display: flex; flex-direction: column; gap: 12px;
+}
+.nq-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.nq-title { font-size: 14px; font-weight: 600; color: var(--text-strong); display: flex; align-items: center; gap: 8px; }
+.nq-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
+.nq-kpi-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.nq-kpi {
+  padding: 10px 12px; border-radius: 8px;
+  background: var(--raised); border: 1px solid var(--border);
+}
+.nq-kpi.is-alert { border-left: 3px solid var(--error); background: color-mix(in srgb, var(--error-surface) 45%, var(--raised)); }
+.nq-kpi-lbl { font-size: 11px; color: var(--text-muted); }
+.nq-kpi-val { font-size: 20px; font-weight: 600; color: var(--text-strong); margin-top: 3px; font-variant-numeric: tabular-nums; }
+.nq-kpi-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+/* --- 4. RESULTS / OUTPUT PANE --- */
+.wb-output-pane {
+  flex: 1 1 48%; min-height: 150px;
+  display: flex; flex-direction: column;
+  background: var(--panel);
+  min-width: 0;
+  position: relative;
+}
+
+/* Output Toolbar (Bar 1) */
+.wb-out-bar1 {
+  height: var(--h-bar);
+  flex-shrink: 0;
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 6px 0 8px;
+  background: var(--chrome);
+  border-bottom: 1px solid var(--border);
+  position: relative;
+}
+
+.out-views {
+  display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0;
+}
+.out-views.is-boxed {
+  padding: 1px; border: 1px solid var(--border); border-radius: var(--rad-sm);
+}
+.out-views.empty-bug {
+  padding: 1px; border: 1px solid var(--control-border); border-radius: var(--rad-sm);
+  width: 6px; height: 6px;
+}
+.out-view-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 24px; padding: 0 8px; border-radius: var(--rad-sm);
+  font-size: 12px; color: var(--text-muted);
+}
+.out-view-btn:hover { background: var(--hover); color: var(--text); }
+.out-view-btn.is-active {
+  background: var(--selection); color: var(--text-accent); font-weight: 600;
+}
+.out-badge {
+  min-width: 16px; height: 16px; padding: 0 5px; border-radius: 99px;
+  background: var(--active); color: var(--text-secondary);
+  font-size: 10.5px; font-weight: 600; display: inline-grid; place-items: center;
+}
+.out-badge.is-err { background: var(--error-surface); color: var(--error); }
+
+.out-div { width: 1px; height: 16px; background: var(--separator); flex-shrink: 0; }
+
+.res-tools {
+  display: flex; align-items: center; gap: 5px; min-width: 0; flex-shrink: 1;
+}
+.res-search {
+  display: flex; align-items: center; gap: 4px;
+  height: 24px; width: 175px; padding: 0 3px 0 7px;
+  border-radius: var(--rad-sm);
+  background: var(--input); border: 1px solid var(--input-border);
+  color: var(--text-muted); flex-shrink: 1; min-width: 110px;
+}
+.res-search:focus-within { border-color: var(--focus); }
+.res-search input {
+  flex: 1; min-width: 0; border: 0; outline: 0; background: transparent;
+  font-size: 11.5px; color: var(--text);
+}
+.res-search input::placeholder { color: var(--text-muted); }
+
+/* Segmented groups & icon groups */
+.res-seg {
+  display: inline-flex; align-items: center; gap: 1px; flex-shrink: 0;
+}
+.res-seg.is-boxed {
+  padding: 1px; border: 1px solid var(--control-border); border-radius: var(--rad-sm);
+}
+.res-seg.is-calmed {
+  padding: 1px; border: 1px solid var(--border); border-radius: var(--rad-sm);
+  background: var(--tonal-fill);
+}
+.res-seg button {
+  height: 20px; padding: 0 7px; border-radius: 3px;
+  font-size: 11px; color: var(--text-muted);
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.res-seg button:hover { background: var(--hover); color: var(--text-strong); }
+.res-seg button.is-on { background: var(--selection); color: var(--text-accent); font-weight: 600; }
+.res-seg button.ic-only { padding: 0 5px; width: 24px; height: 22px; justify-content: center; }
+
+.res-chip-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 24px; padding: 0 7px; border-radius: var(--rad-sm);
+  font-size: 11px; color: var(--text-muted);
+  border: 1px solid transparent; flex-shrink: 0;
+}
+.res-chip-btn:hover { background: var(--hover); color: var(--text-strong); }
+.res-chip-btn.is-nondefault {
+  background: var(--selection); color: var(--text-accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  font-weight: 600;
+}
+
+.out-status {
+  margin-left: auto;
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-width: 72px;
+}
+.out-status strong { color: var(--text); font-weight: 600; }
+.out-status .st-ok { color: var(--success); display: inline-grid; place-items: center; }
+.out-status .st-warn { color: var(--warning); display: inline-grid; place-items: center; }
+
+/* Result Set Tabs (Bar 2) */
+.wb-rt-bar2 {
+  height: 29px; flex-shrink: 0;
+  display: flex; align-items: center; gap: 4px;
+  padding: 0 8px 0 6px;
+  background: var(--chrome);
+  border-bottom: 1px solid var(--border);
+}
+.rt-tabs-strip { display: flex; align-items: flex-end; gap: 2px; height: 100%; padding-top: 4px; }
+.rt-tab {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 25px; padding: 0 6px 0 10px;
+  border-radius: 4px 4px 0 0;
+  border: 1px solid transparent; border-bottom: 0;
+  font-size: 12px; color: var(--text-muted);
+  cursor: pointer; user-select: none;
+}
+.rt-tab:hover { color: var(--text); background: var(--tonal-fill); }
+.rt-tab.is-selected {
+  background: var(--panel); color: var(--text-strong); font-weight: 600;
+  border-color: var(--border);
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+.rt-tab-x { width: 16px; height: 16px; border-radius: 3px; display: grid; place-items: center; opacity: 0.65; }
+.rt-tab-x:hover { opacity: 1; background: var(--hover); }
+.rt-pivot-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--warning); }
+
+.rt-inline-right {
+  margin-left: auto; display: flex; align-items: center; gap: 8px;
+  font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums;
+}
+.rt-save-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 22px; padding: 0 8px; border-radius: var(--rad-sm);
+  font-size: 11px; font-weight: 500; color: var(--text-secondary);
+  background: var(--tonal-fill); border: 1px solid var(--border);
+}
+.rt-save-btn:hover { background: var(--hover); color: var(--text-strong); border-color: var(--control-border); }
+
+/* Result View Sub-strip (Bar 3 — conditional in 2-bar mode!) */
+.wb-rt-bar3 {
+  height: 28px; flex-shrink: 0;
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 8px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 11px; color: var(--text-muted);
+}
+.wb-rt-bar3.is-compact-3 { height: 24px; }
+.rt-view-pill {
+  height: 20px; padding: 0 8px; border-radius: 3px;
+  font-size: 11.5px; color: var(--text-muted);
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.rt-view-pill:hover { background: var(--hover); color: var(--text); }
+.rt-view-pill.is-selected { background: var(--selection); color: var(--text-accent); font-weight: 600; }
+
+/* Results Main Body (Grid + Optional Side Drawer) */
+.wb-results-body {
+  flex: 1; min-height: 0; display: flex; min-width: 0;
+}
+.wb-grid-wrap {
+  flex: 1; min-width: 0; overflow: auto;
+  background: var(--panel);
+}
+
+.wb-grid {
+  width: 100%; border-collapse: collapse;
+  font-family: var(--font-mono); font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.wb-grid th {
+  position: sticky; top: 0; z-index: 2;
+  height: 24px; padding: 0 9px;
+  text-align: left; font-weight: 500;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border-subtle);
+  white-space: nowrap;
+}
+.wb-grid th.is-num-hdr, .wb-grid td.is-num { text-align: right; }
+.wb-grid.align-legacy th.is-num-hdr, .wb-grid.align-legacy td.is-num { text-align: left; }
+
+.col-name { font-family: var(--font-ui); font-size: 11.5px; font-weight: 600; color: var(--text-secondary); }
+.col-type { font-family: var(--font-mono); font-size: 10.5px; font-weight: 400; color: var(--text-muted); margin-left: 6px; opacity: 0.8; }
+.wb-grid.align-legacy .col-name { font-weight: 500; color: var(--text-tertiary); }
+.wb-grid.align-legacy .col-type { margin-left: 3px; opacity: 1; font-size: 11px; }
+
+.wb-grid td {
+  height: 22px; padding: 0 9px;
+  border-bottom: 1px solid var(--border-subtle);
+  border-right: 1px solid var(--border-subtle);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 240px;
+}
+.wb-grid tbody tr:nth-child(even) td { background: var(--grid-alt); }
+.wb-grid tbody tr:hover td { background: var(--hover); }
+.wb-grid tbody tr.is-cur-row td:not(.rn-cell) { background: color-mix(in srgb, var(--selection) 45%, transparent); }
+
+/* Row Number Cell & Row-Size Gutter Bar */
+.rn-cell {
+  position: relative; width: 36px; min-width: 36px;
+  text-align: right; color: var(--text-muted);
+  background: var(--panel) !important;
+  isolation: isolate;
+  padding: 0 7px 0 5px !important;
+  font-size: 11px;
+}
+.rn-bar {
+  position: absolute; top: 0; bottom: 0; left: 0; z-index: -1;
+  pointer-events: none;
+}
+/* Polished row size bar: subtle neutral-iris for normal, crisp amber ONLY for true outlier (>4KB) */
+.rn-bar.is-normal { background: var(--chart-blue); opacity: 0.18; }
+.rn-bar.is-outlier { background: var(--warning); opacity: 0.36; }
+.rn-bar.is-outlier-edge {
+  position: absolute; top: 0; bottom: 0; left: 0; width: 2.5px;
+  background: var(--warning);
+}
+/* Legacy bug: ALL rows flagged amber! */
+.grid-gutter-bug .rn-bar { background: var(--warning); opacity: 0.38; width: 96% !important; }
+.grid-gutter-bug .rn-bar.is-outlier-edge { display: none; }
+
+.cell-null {
+  font-style: italic; font-size: 11px; color: var(--text-muted);
+  padding: 0 4px; border-radius: 3px; background: var(--tonal-fill);
+}
+.cell-neg { color: var(--error); }
+.wb-grid.align-legacy .cell-neg { color: inherit; }
+
+/* Side Drawer (Column Profile / Pivot) */
+.wb-side-drawer {
+  width: 268px; flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  background: var(--sidebar);
+  display: flex; flex-direction: column; min-height: 0;
+}
+.drawer-head {
+  height: 28px; padding: 0 8px 0 10px;
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 11px; font-weight: 600; color: var(--text-tertiary);
+  letter-spacing: 0.04em; text-transform: uppercase;
+}
+.drawer-body {
+  flex: 1; min-height: 0; overflow-y: auto; padding: 8px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.prof-card {
+  padding: 8px 9px; border-radius: 6px;
+  background: var(--canvas); border: 1px solid var(--border);
+  font-size: 11px;
+}
+.prof-card-top { display: flex; justify-content: space-between; font-weight: 600; color: var(--text-strong); margin-bottom: 5px; }
+.prof-card-top span:last-child { font-family: var(--font-mono); font-weight: 400; color: var(--text-muted); }
+.prof-kv { display: flex; justify-content: space-between; color: var(--text-muted); line-height: 17px; }
+.prof-kv strong { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+.prof-bars { display: flex; align-items: flex-end; gap: 2px; height: 26px; margin-top: 6px; }
+.prof-bars i { flex: 1; border-radius: 1.5px 1.5px 0 0; background: var(--chart-blue); opacity: 0.78; }
+
+.pivot-field { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--text-muted); }
+.pivot-field label { font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; font-size: 10px; }
+.pivot-field select {
+  height: 26px; padding: 0 7px; border-radius: var(--rad-sm);
+  background: var(--input); border: 1px solid var(--input-border);
+  font-size: 12px; color: var(--text);
+}
+.pivot-foot {
+  padding: 8px; border-top: 1px solid var(--border-subtle); display: flex; justify-content: flex-end;
+}
+
+/* Messages view */
+.wb-messages-view {
+  flex: 1; padding: 10px 14px; overflow: auto;
+  font-family: var(--font-mono); font-size: 12px; line-height: 18px;
+}
+.msg-err { color: var(--error); }
+.msg-meta { color: var(--text-muted); margin-top: 8px; }
+
+/* Empty Output State */
+.wb-empty-state {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; color: var(--text-muted); padding: 20px; text-align: center;
+}
+.wb-empty-state strong { color: var(--text-secondary); font-size: 13px; }
+
+/* --- 5. STATUS BAR --- */
+.wb-statusbar {
+  position: relative;
+  height: var(--h-status); flex-shrink: 0;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 10px;
+  background: var(--chrome);
+  border-top: 2px solid var(--red);
+  font-size: 11px; color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+.wb-statusbar.is-staging { border-top-color: var(--blue); }
+.wb-statusbar.is-disconnected { border-top-color: var(--border); }
+.wb-statusbar.is-executing {
+  background: var(--accent-surface); color: var(--text-strong);
+}
+
+.sb-left, .sb-right { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.sb-item { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.sb-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 20px; padding: 0 5px; border-radius: 3px;
+  font-size: 11px; color: inherit;
+}
+.sb-btn:hover { background: var(--hover); color: var(--text-strong); }
+.sb-btn.is-open { background: var(--selection-strong); color: var(--text-accent); }
+.sb-pipe { opacity: 0.4; }
+.sb-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+.sb-group-sep { width: 1px; height: 12px; background: var(--separator); }
+
+/* Memory Rings */
+.mem-ring {
+  width: 12px; height: 12px; border-radius: 50%; display: inline-block; flex-shrink: 0;
+  background: conic-gradient(var(--ring-c) var(--ring-p), color-mix(in srgb, var(--ring-c) 24%, transparent) 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.3px), #000 calc(100% - 1.8px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2.3px), #000 calc(100% - 1.8px));
+}
+
+/* Memory Popover */
+.wb-mem-popover {
+  position: absolute; right: 10px; bottom: 28px; z-index: 80;
+  width: 416px; max-height: 540px; overflow-y: auto;
+  padding: 12px;
+  background: var(--overlay);
+  border: 1px solid var(--control-border);
+  border-radius: var(--rad-lg);
+  box-shadow: var(--shadow-popover);
+  font-size: 12px; color: var(--text);
+  display: none;
+}
+.wb-mem-popover.is-open { display: block; }
+.mem-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.mem-head h3 { margin: 0; font-size: 12.5px; font-weight: 600; color: var(--text-strong); }
+.mem-sec { padding: 8px 0; border-top: 1px solid var(--border); }
+.mem-row-hdr { display: flex; align-items: center; gap: 7px; }
+.mem-row-hdr strong { font-size: 12px; color: var(--text-strong); }
+.mem-row-hdr span { margin-left: auto; font-size: 11px; color: var(--text-muted); }
+.mem-sub { display: flex; justify-content: space-between; padding-left: 19px; margin-top: 2px; font-size: 11.5px; color: var(--text-secondary); }
+.mem-packed {
+  display: inline-flex; align-items: center; gap: 6px; padding-left: 19px; margin-top: 4px;
+  font-size: 11px; color: var(--text-muted);
+}
+.mem-chip-green {
+  padding: 0 6px; height: 16px; border-radius: 99px;
+  background: var(--success-surface); color: var(--success-text);
+  font-weight: 600; font-size: 10.5px; display: inline-flex; align-items: center;
+}
+.mem-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 8px 0; }
+.mem-tile {
+  padding: 7px 8px; border-radius: 6px;
+  background: var(--raised); border: 1px solid var(--border);
+}
+.mem-tile small { display: block; font-size: 10.5px; color: var(--text-muted); }
+.mem-tile b { display: block; font-size: 16px; font-weight: 600; color: var(--text-strong); margin: 2px 0; }
+.mem-tile.is-saved b { color: var(--success); }
+
+.mem-big-hdr {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-muted); margin: 10px 0 6px;
+}
+.mem-big-list { display: flex; flex-direction: column; gap: 5px; }
+.mem-big-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 3px 5px; border-radius: 4px; font-size: 11.5px;
+}
+.mem-big-row:hover { background: var(--hover); }
+.mem-big-name {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; white-space: nowrap; overflow: hidden;
+}
+.mem-big-tab {
+  color: var(--text-muted); flex: 0 1 auto; max-width: 42%; overflow: hidden; text-overflow: ellipsis;
+}
+.mem-big-res {
+  color: var(--text); flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+}
+.mem-big-list.is-legacy-bug .mem-big-tab { flex-shrink: 1000; max-width: 10px; }
+.mem-state-pill {
+  padding: 0 6px; height: 17px; border-radius: 99px; font-size: 10px; font-weight: 600;
+  display: inline-flex; align-items: center; flex-shrink: 0;
+}
+.mem-state-pill.unpack { background: var(--warning-surface); color: var(--warning); }
+.mem-state-pill.packed { background: color-mix(in srgb, var(--chart-purple) 20%, transparent); color: var(--purple); }
+.mem-state-pill.raw { background: color-mix(in srgb, var(--chart-blue) 18%, transparent); color: var(--blue); }
+.mem-free-btn {
+  width: 18px; height: 18px; border-radius: 3px; display: grid; place-items: center;
+  color: var(--text-muted); opacity: 0; transition: opacity 80ms var(--ease);
+}
+.mem-big-row:hover .mem-free-btn { opacity: 1; }
+.mem-free-btn:hover { background: var(--error-surface); color: var(--error); }
+.mem-big-list.is-legacy-bug .mem-free-btn { display: none; }
+
+/* ============================================================================
+   ANNOTATION PINS + CALLOUT DECK
+   ============================================================================ */
+.pin-badge {
+  position: absolute; z-index: 50;
+  width: 21px; height: 21px; border-radius: 50%;
+  display: grid; place-items: center;
+  font-size: 11px; font-weight: 700;
+  color: #fff;
+  background: var(--accent);
+  border: 2px solid var(--canvas);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+  transition: transform 110ms var(--ease);
+}
+.pin-badge:hover, .pin-badge.is-hot { transform: scale(1.18); z-index: 55; }
+.pin-badge.sev-p0 { background: #d9534f; }
+.pin-badge.sev-new { background: #149669; }
+[data-pins="off"] .pin-badge,
+[data-pins="off"] .callout-deck { display: none; }
+
+.callout-deck {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(265px, 1fr));
+  gap: 8px;
+}
+.callout-card {
+  padding: 10px 11px; border-radius: 8px;
+  background: var(--lab-card); border: 1px solid var(--lab-border);
+  cursor: pointer;
+  transition: border-color 90ms var(--ease), background 90ms var(--ease);
+}
+.callout-card:hover, .callout-card.is-hot {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent-surface) 22%, var(--lab-card));
+}
+.callout-top { display: flex; align-items: center; gap: 7px; margin-bottom: 4px; }
+.callout-num {
+  width: 19px; height: 19px; border-radius: 50%; flex-shrink: 0;
+  display: grid; place-items: center; font-size: 10.5px; font-weight: 700; color: #fff;
+  background: var(--accent);
+}
+.callout-num.sev-p0 { background: #d9534f; }
+.callout-num.sev-new { background: #149669; }
+.callout-title { font-size: 12px; font-weight: 600; color: var(--text-strong); flex: 1; }
+.callout-tag {
+  font-size: 9.5px; font-weight: 700; padding: 1px 5px; border-radius: 3px;
+  background: var(--tonal-fill); color: var(--text-muted); border: 1px solid var(--lab-border);
+}
+.callout-desc { font-size: 11.5px; line-height: 1.45; color: var(--text-muted); }
+
+/* ============================================================================
+   RIGHT CONFIGURATOR PANEL (10 SELECTABLE DESIGN AXES)
+   ============================================================================ */
+.lab-config {
+  width: 348px;
+  flex-shrink: 0;
+  background: var(--lab-surface);
+  border-left: 1px solid var(--lab-border);
+  height: calc(100vh - 88px);
+  position: sticky; top: 88px;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.lab-config.is-collapsed { display: none; }
+.cfg-head {
+  padding: 11px 14px; border-bottom: 1px solid var(--lab-border);
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.cfg-head h2 { margin: 0; font-size: 12.5px; font-weight: 600; color: var(--text-strong); }
+.cfg-body {
+  flex: 1; overflow-y: auto; padding: 10px 14px 16px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.cfg-axis {
+  padding: 9px 10px; border-radius: 8px;
+  background: var(--lab-card); border: 1px solid var(--lab-border);
+}
+.cfg-axis-top {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  margin-bottom: 6px;
+}
+.cfg-axis-title { font-size: 11.5px; font-weight: 600; color: var(--text-strong); }
+.cfg-axis-tag {
+  font-size: 9.5px; font-weight: 700; padding: 1px 5px; border-radius: 99px;
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.cfg-axis-tag.tag-new { background: var(--success-surface); color: var(--success-text); }
+.cfg-axis-tag.tag-p1 { background: var(--accent-surface); color: var(--text-accent); }
+.cfg-axis-tag.tag-p0 { background: var(--error-surface); color: var(--error-surface-text); }
+
+.cfg-choices { display: flex; flex-direction: column; gap: 4px; }
+.cfg-choice {
+  width: 100%; text-align: left;
+  padding: 6px 8px; border-radius: 5px;
+  border: 1px solid var(--lab-border);
+  background: transparent;
+  transition: background 80ms var(--ease), border-color 80ms var(--ease);
+}
+.cfg-choice:hover { background: var(--tonal-fill-hover); }
+.cfg-choice.is-picked {
+  background: color-mix(in srgb, var(--accent-surface) 55%, var(--lab-card));
+  border-color: var(--accent);
+}
+.cfg-choice-name {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  font-size: 11.5px; font-weight: 600; color: var(--text-strong);
+}
+.cfg-choice.is-picked .cfg-choice-name { color: var(--text-accent); }
+.cfg-choice-note {
+  margin-top: 2px; font-size: 10.5px; line-height: 1.38; color: var(--text-muted);
+}
+
+.cfg-foot {
+  padding: 10px 14px; border-top: 1px solid var(--lab-border);
+  display: flex; gap: 8px; background: var(--lab-surface);
+}
+.cfg-foot button {
+  flex: 1; height: 30px; border-radius: 6px; font-size: 11.5px; font-weight: 600;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+}
+.btn-primary-lab { background: var(--accent); color: var(--on-accent); }
+.btn-primary-lab:hover { background: var(--accent-hover); }
+.btn-ghost-lab { border: 1px solid var(--lab-border); color: var(--text-secondary); background: var(--lab-card); }
+.btn-ghost-lab:hover { background: var(--hover); color: var(--text-strong); }
+
+.lab-toast {
+  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%) translateY(20px);
+  z-index: 1200; padding: 8px 14px; border-radius: 8px;
+  background: var(--overlay); color: var(--text-strong);
+  border: 1px solid var(--accent); box-shadow: var(--shadow-popover);
+  font-size: 12px; font-weight: 500; opacity: 0; pointer-events: none;
+  transition: opacity 160ms var(--ease), transform 160ms var(--ease);
+}
+.lab-toast.is-show { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body class="themed-scroll">
+<div class="lab-shell">
+  <!-- TOP REVIEW BAR -->
+  <header class="lab-topbar">
+    <div class="lab-brand">
+      <div class="lab-brand-mark">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2.5" width="12" height="11" rx="2"/><path d="M5 6.5l3 3.5 3-3.5"/></svg>
+      </div>
+      <span class="lab-brand-title">Varia SQL Manager · Workbench v2</span>
+      <span class="lab-brand-sub">Interactive Options Lab</span>
+    </div>
+
+    <!-- Presets -->
+    <div class="lab-seg" role="group" aria-label="Design presets" id="presetBar">
+      <button type="button" data-preset="approachB" class="is-active">Approach B (Agreed)</button>
+      <button type="button" data-preset="approachA">Approach A (WCAG 3:1)</button>
+      <button type="button" data-preset="maxspace">Max Space</button>
+      <button type="button" data-preset="baseline">Today (Baseline)</button>
+    </div>
+
+    <!-- Theme & Density -->
+    <div class="lab-seg" role="group" aria-label="Theme" id="themeBar">
+      <button type="button" data-theme="dark" class="is-active">Dark</button>
+      <button type="button" data-theme="light">Light</button>
+    </div>
+    <div class="lab-seg" role="group" aria-label="Density" id="densityBar">
+      <button type="button" data-density="compact" class="is-active">Compact</button>
+      <button type="button" data-density="comfortable">Comfortable</button>
+    </div>
+
+    <div class="lab-spacer"></div>
+
+    <button type="button" class="lab-pill-btn is-on" id="pinsBtn">Pins: On</button>
+    <button type="button" class="lab-pill-btn is-on" id="configToggleBtn">Design Choices (10)</button>
+  </header>
+
+  <!-- SCENARIO & TELEMETRY SUBBAR -->
+  <div class="lab-subbar">
+    <span class="lab-subbar-label">Scenario</span>
+    <div class="lab-seg" role="group" aria-label="Workbench scenario" id="scenarioBar">
+      <button type="button" data-scenario="populated" class="is-active">Populated Query (PROD)</button>
+      <button type="button" data-scenario="split">Split Editor Groups</button>
+      <button type="button" data-scenario="nonquery">Non-Query Tab (Activity)</button>
+      <button type="button" data-scenario="narrow">Narrow (1024 px)</button>
+      <button type="button" data-scenario="executing">Executing / Selection</button>
+      <button type="button" data-scenario="empty">Empty Startup</button>
+    </div>
+
+    <div class="lab-telemetry" id="telemetry"></div>
+  </div>
+
+  <!-- MAIN BODY -->
+  <div class="lab-body">
+    <main class="lab-stage">
+      <div class="stage-grid">
+        <!-- INTERACTIVE WORKBENCH CARD -->
+        <section class="stage-card after-panel">
+          <div class="stage-card-head">
+            <div><strong id="stageHeadline">Workbench Polish — Approach A (WCAG 3:1 Inputs + Borderless Toolbars)</strong></div>
+            <div class="stage-card-meta">
+              <span>Click tabs, Execute, Plan ▾, Profile, Pivot, Memory, scroll OE, or drag splitters</span>
+            </div>
+          </div>
+          <div class="wb-viewport">
+            <div class="wb-window" id="wbWindow"></div>
+          </div>
+        </section>
+      </div>
+
+      <!-- CALLOUT AUDIT DECK -->
+      <section class="callout-deck" id="calloutDeck"></section>
+    </main>
+
+    <!-- RIGHT DESIGN CHOICES DRAWER -->
+    <aside class="lab-config" id="configPanel">
+      <div class="cfg-head">
+        <h2>Selectable Design Options (10)</h2>
+        <button type="button" class="lab-pill-btn" style="height:24px;padding:0 8px;font-size:11px;" id="resetRecBtn">Reset</button>
+      </div>
+      <div class="cfg-body" id="configBody"></div>
+      <div class="cfg-foot">
+        <button type="button" class="btn-primary-lab" id="exportBtn">Copy Choices (Markdown)</button>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<div class="lab-toast" id="labToast"></div>
+
+<script>
+(() => {
+  /* ==========================================================================
+     ICON LIBRARY (clean inline 16x16 / 12x12 SVGs matching Varia codicons)
+     ========================================================================== */
+  const ICONS = {
+    varia: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2.5" width="12" height="11" rx="2"/><path d="M5 6.3L8 10l3-3.7"/></svg>`,
+    search: `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>`,
+    plug: `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M6 2v3M10 2v3M4.5 5h7v2.5a3.5 3.5 0 0 1-7 0V5zM8 11v3"/></svg>`,
+    newFile: `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M4 2h5l3 3v9H4V2z"/><path d="M8 7v4M6 9h4"/></svg>`,
+    folderOpen: `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4.5h4l1.5 1.5H14v7H2V4.5z"/></svg>`,
+    save: `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 2.5h8l2 2v9H3v-11z"/><path d="M5.5 2.5v3.5h5V2.5M5.5 13.5v-4h5v4"/></svg>`,
+    saveAll: `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2.5 4h7l2 2v7.5h-9V4z"/><path d="M5 2h7l2 2v7"/></svg>`,
+    pulse: `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1.5 8.5h3l1.7-4.5 2.6 8 1.7-3.5h4"/></svg>`,
+    play: `<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M4 2.8v10.4L13 8 4 2.8z"/></svg>`,
+    stop: `<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><rect x="3.5" y="3.5" width="9" height="9" rx="1.5"/></svg>`,
+    plan: `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="4" height="3.5" rx="0.8"/><rect x="10" y="2.5" width="4" height="3.5" rx="0.8"/><rect x="6" y="10" width="4" height="3.5" rx="0.8"/><path d="M4 6v2h8V6M8 8v2"/></svg>`,
+    planActual: `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="4.5" height="4" rx="0.8"/><rect x="9.5" y="9.5" width="4.5" height="4" rx="0.8"/><path d="M6.5 4.5h3v5"/><path d="M10.5 3.5l1.2 1.2 2.3-2.3" stroke-width="1.5"/></svg>`,
+    planLive: `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="8" cy="8" r="2" fill="currentColor"/><path d="M4.8 4.8a4.5 4.5 0 0 0 0 6.4M11.2 4.8a4.5 4.5 0 0 1 0 6.4"/><path d="M2.6 2.8a7.4 7.4 0 0 0 0 10.4M13.4 2.8a7.4 7.4 0 0 1 0 10.4" opacity="0.6"/></svg>`,
+    planEst: `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="4.5" height="4" rx="0.8" stroke-dasharray="2 1.2"/><rect x="9.5" y="9.5" width="4.5" height="4" rx="0.8" stroke-dasharray="2 1.2"/><path d="M6.5 4.5h3v5" stroke-dasharray="2 1.2"/></svg>`,
+    stats: `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 13V8M7 13V4M11 13V6.5M14 13H2"/></svg>`,
+    db: `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><ellipse cx="8" cy="4" rx="5" ry="2"/><path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4"/><path d="M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/></svg>`,
+    server: `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35"><rect x="2.5" y="2.5" width="11" height="4.5" rx="1"/><rect x="2.5" y="9" width="11" height="4.5" rx="1"/><circle cx="5" cy="4.75" r="0.7" fill="currentColor"/><circle cx="5" cy="11.25" r="0.7" fill="currentColor"/></svg>`,
+    table: `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="3" width="12" height="10" rx="1"/><path d="M2 6.5h12M6 6.5V13M10 6.5V13"/></svg>`,
+    key: `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="5.5" cy="8" r="2.8"/><path d="M8.3 8H14v2M11.8 8v1.8"/></svg>`,
+    col: `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="3" y="3" width="10" height="10" rx="1.5"/><path d="M3 6.5h10"/></svg>`,
+    doc: `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35"><path d="M4 2h5.5L13 5.5V14H4V2z"/><path d="M6 8h4M6 10.5h3"/></svg>`,
+    pin: `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M9.5 2.5l4 4-2.5 2.5.5 2.5-3.5-3.5L4 12l4-4L4.5 4.5l2.5.5 2.5-2.5z"/></svg>`,
+    pinned: `<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M9.6 2l4.4 4.4-2.4 2.4.4 2.6-3.4-3.4-4.2 4.2-.8-.8 4.2-4.2-3.4-3.4 2.6.4L9.6 2z"/></svg>`,
+    close: `<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4l8 8M12 4l-8 8"/></svg>`,
+    add: `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 3v10M3 8h10"/></svg>`,
+    more: `<svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><circle cx="3.5" cy="8" r="1.2"/><circle cx="8" cy="8" r="1.2"/><circle cx="12.5" cy="8" r="1.2"/></svg>`,
+    refresh: `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13 8a5 5 0 1 1-1.4-3.5L13 6"/><path d="M13 2.8V6H9.8"/></svg>`,
+    filter: `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 3.5h11l-4.2 5v4l-2.6-1.3V8.5l-4.2-5z"/></svg>`,
+    schema: `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M5 3.5C3.8 3.5 3.5 4.2 3.5 5v1.8c0 .7-.5 1.2-1.2 1.2.7 0 1.2.5 1.2 1.2V11c0 .8.3 1.5 1.5 1.5M11 3.5c1.2 0 1.5.7 1.5 1.5v1.8c0 .7.5 1.2 1.2 1.2-.7 0-1.2.5-1.2 1.2V11c0 .8-.3 1.5-1.5 1.5"/></svg>`,
+    collapse: `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3" y="4.5" width="10" height="8.5" rx="1"/><path d="M5.5 8.8h5M5 2.5h8"/></svg>`,
+    disconnect: `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 13.5l11-11M6 4l4 4M5 10l2-2"/></svg>`,
+    chevDown: `<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6l4 4 4-4"/></svg>`,
+    chevRight: `<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 4l4 4-4 4"/></svg>`,
+    check: `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="8" cy="8" r="6" opacity="0.25" fill="currentColor" stroke="none"/><path d="M5 8.2l2 2.2 4.2-4.6"/></svg>`,
+    ws: `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M10 3v10M12.5 3v10M10 3H7.2a2.7 2.7 0 0 0 0 5.4H10"/></svg>`,
+    ruler: `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35"><rect x="2.5" y="5" width="11" height="6" rx="1"/><path d="M5.5 5v2.5M8 5v3.5M10.5 5v2.5"/></svg>`,
+    rowSize: `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2.5 4h11M2.5 8h7.5M2.5 12h4.5"/></svg>`,
+    pivot: `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 6h11M6 2.5v11"/><path d="M8.5 10.5h3v-2" stroke-width="1.4"/></svg>`,
+    compare: `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35"><circle cx="4.5" cy="4.5" r="1.8"/><circle cx="11.5" cy="11.5" r="1.8"/><path d="M4.5 6.3V12M11.5 9.7V4.5H8.5"/></svg>`,
+    transpose: `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35"><path d="M3 5h8M9 3l2 2-2 2M13 11H5M7 9l-2 2 2 2"/></svg>`,
+    tabs: `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35"><rect x="2" y="3" width="12" height="10" rx="1.2"/><path d="M2 6.5h12M6.5 3v3.5"/></svg>`,
+    clock: `<svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="5.5"/><path d="M8 5v3.5l2.2 1.2"/></svg>`,
+    sparkle: `<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 2l1.4 4.2L13.5 8l-4.1 1.8L8 14l-1.4-4.2L2.5 8l4.1-1.8L8 2z"/></svg>`
+  };
+
+  /* ==========================================================================
+     10 SELECTABLE DESIGN AXES & 4 PRESETS
+     ========================================================================== */
+  const AXES = [
+    {
+      id: 'tabOrder',
+      title: '1. Document Tabs vs QueryBar',
+      tag: 'P1', tagClass: 'tag-p1',
+      choices: [
+        { id: 'tabsAbove', label: 'Tabs Above (Per-Query Bar)', rec: true, note: 'Eliminates 36px tab jump on Activity/Search tabs & removes Split ambiguity.' },
+        { id: 'barAbove', label: 'QueryBar Above (Current)', note: 'Shared top bar; switching to Activity Monitor shifts tab strip up 36px.' }
+      ]
+    },
+    {
+      id: 'tabStyle',
+      title: '2. Document Tab Style',
+      tag: 'New', tagClass: 'tag-new',
+      choices: [
+        { id: 'refined2', label: 'Refined 2-Line (40 px)', rec: true, note: 'Keeps [PROD] + SID cleanly, omits empty "—", fixed Pin slot (no hover shift), auto-fits width.' },
+        { id: 'compact1', label: 'Compact 1-Line (34 px)', note: 'Inline [PROD] + filename + SID with fixed Pin slot; reclaims +10px per tab row.' },
+        { id: 'current2', label: 'Current 2-Line (44 px)', note: 'Fixed 226px tabs, permanent Pin icon, boxed [—] when no session.' }
+      ]
+    },
+    {
+      id: 'pinnedLayout',
+      title: '3. Pinned Tabs Placement',
+      tag: 'P1', tagClass: 'tag-p1',
+      choices: [
+        { id: 'inline', label: 'Inline w/ Divider', rec: true, note: 'Pinned tabs anchor left beside a 1px divider; reclaims 40–44px height.' },
+        { id: 'shelf', label: 'Dedicated Pinned Row', note: 'Separate top shelf (TabShelves today) when any tab is pinned.' }
+      ]
+    },
+    {
+      id: 'queryBarStyle',
+      title: '4. QueryBar Plan & Cancel Controls',
+      tag: 'New', tagClass: 'tag-new',
+      choices: [
+        { id: 'unified', label: 'Unified Plan ▾ + Morph Cancel', rec: true, note: 'Fixes narrow 3-identical-icons bug, saves ~160px, morphs Execute→Cancel while running.' },
+        { id: 'distinct', label: 'Distinct Plan Icons + Compact Cancel', note: 'Keeps all 4 tools 1-click visible with distinct Actual / Live / Estimated glyphs.' },
+        { id: 'current', label: 'Current (3 Identical Plan Icons)', note: 'All labels visible at wide width; collapses to 3 identical icons at 1024px.' }
+      ]
+    },
+    {
+      id: 'oeStyle',
+      title: '5. Object Explorer Chrome & Cards',
+      tag: 'P0+New', tagClass: 'tag-p0',
+      choices: [
+        { id: 'cardsInline', label: '1-Row Header + Inline Filter + 2-Line Cards', rec: true, note: 'Unclipped "Production ERP [PROD]", tree indent guides, Filter/Schema beside Search.' },
+        { id: 'cardsMinimal', label: '1-Row Minimal Header + 2-Line Cards', note: 'Ultra-clean sidebar; Filter & Schema inside ⋯ menu.' },
+        { id: 'current', label: 'Current (2-Row Header + 1-Line Squished)', note: 'Wraps 8 icons onto 2 rows & clips "Production E... PR..." + footer server count.' }
+      ]
+    },
+    {
+      id: 'resultsBar1',
+      title: '6. Results Toolbar Density',
+      tag: 'New', tagClass: 'tag-new',
+      choices: [
+        { id: 'progressive', label: 'Progressive Disclosure (Calm)', rec: true, note: 'Whitespace (¶) & Sort (📏) stay compact until non-default; frees ~220px so timing never clips.' },
+        { id: 'fullCalmed', label: 'Full Segments (Calmed Borders)', note: 'All controls 1-click visible without heavy wireframe boxes around icon groups.' },
+        { id: 'current', label: 'Current (7 Bordered Boxes)', note: 'All 7 boxed groups compete; truncates "Completed · 130 rows · ...".' }
+      ]
+    },
+    {
+      id: 'resultsGrid',
+      title: '7. Results Header & Grid Polish',
+      tag: 'P0+New', tagClass: 'tag-p0',
+      choices: [
+        { id: 'smart2bar', label: 'Smart 2-Bar + Right-Aligned Numbers + Outlier Gutter', rec: true, note: 'Merges solo Table row (+28px), aligns decimals right, flags only true >4KB outliers.' },
+        { id: 'compact3bar', label: 'Compact 3-Bar + Right-Aligned Numbers', note: 'Keeps 24px view strip always visible; keeps grid & outlier fixes.' },
+        { id: 'current', label: 'Current (3-Bar + Left Numbers + Amber Bug)', note: 'Reproduces 92px 3-bar stack, left-aligned decimals, and all-rows amber gutter bug.' }
+      ]
+    },
+    {
+      id: 'statusMemory',
+      title: '8. Status Bar & Memory Popover',
+      tag: 'P0+New', tagClass: 'tag-new',
+      choices: [
+        { id: 'calmLive', label: 'Grouped Calm + Live 147 MB + Quick-Free ×', rec: true, note: 'Retires 8 pipes, condenses SQL status, fixes "." tab clip & adds hover × free button.' },
+        { id: 'current', label: 'Current (8 Pipes + Static "Memory")', note: 'Reproduces redundant Ready/Connected, 8 pipes, and "." tab truncation in popover.' }
+      ]
+    },
+    {
+      id: 'borders',
+      title: '9. Resting Border Contrast',
+      tag: 'P1', tagClass: 'tag-p1',
+      choices: [
+        { id: 'calm', label: 'Approach B — Relaxed (#3a404d / #c2c8d4)', rec: true, note: 'Eliminates harsh 1px resting border aliasing; keeps crisp >= 3:1 focus/hover outlines.' },
+        { id: 'wcag3', label: 'Approach A — WCAG 3:1 Inputs + Borderless Toolbars', note: 'Keeps input.border >= 3:1 (#646b7d / #878e9b) at rest; removes toolbar wireframe boxes.' },
+        { id: 'current', label: 'Today — Wireframe Baseline (#6a7184 / #878e9b)', note: 'Today’s full contrast borders plus 7 boxed Results toolbar groups.' }
+      ]
+    },
+    {
+      id: 'prodGuard',
+      title: '10. Connection Color Hairline & Tint',
+      tag: 'New', tagClass: 'tag-new',
+      choices: [
+        { id: 'subtle', label: 'Unified Hairline & Tint (QueryBar + Server Cards)', rec: true, note: 'Applies a calm 1px tinted hairline & soft wash on QueryBar and OE Server Cards for any connection color (no thick left stripe).' },
+        { id: 'standard', label: 'Standard (Swatch & Status Border Only)', note: 'Matches today’s connection swatch + tab/status bar accent without tinting the QueryBar or Server Cards.' }
+      ]
+    }
+  ];
+
+  const PRESETS = {
+    approachA: {
+      name: 'Approach A — WCAG 3:1 Inputs + Borderless Toolbars',
+      tabOrder: 'tabsAbove', tabStyle: 'refined2', pinnedLayout: 'shelf',
+      queryBarStyle: 'unified', oeStyle: 'cardsInline', resultsBar1: 'progressive',
+      resultsGrid: 'smart2bar', statusMemory: 'calmLive', borders: 'wcag3', prodGuard: 'subtle'
+    },
+    approachB: {
+      name: 'Approach B — Relaxed Resting Borders (#3a404d / #c2c8d4)',
+      tabOrder: 'tabsAbove', tabStyle: 'refined2', pinnedLayout: 'shelf',
+      queryBarStyle: 'unified', oeStyle: 'cardsInline', resultsBar1: 'progressive',
+      resultsGrid: 'smart2bar', statusMemory: 'calmLive', borders: 'calm', prodGuard: 'subtle'
+    },
+    maxspace: {
+      name: 'Max Vertical Space (Inline Pins + 1-Line Tabs)',
+      tabOrder: 'tabsAbove', tabStyle: 'compact1', pinnedLayout: 'inline',
+      queryBarStyle: 'unified', oeStyle: 'cardsMinimal', resultsBar1: 'progressive',
+      resultsGrid: 'smart2bar', statusMemory: 'calmLive', borders: 'wcag3', prodGuard: 'subtle'
+    },
+    baseline: {
+      name: 'Today (Current Baseline)',
+      tabOrder: 'barAbove', tabStyle: 'current2', pinnedLayout: 'shelf',
+      queryBarStyle: 'current', oeStyle: 'current', resultsBar1: 'current',
+      resultsGrid: 'current', statusMemory: 'current', borders: 'current', prodGuard: 'standard'
+    }
+  };
+
+  /* ==========================================================================
+     APPLICATION STATE
+     ========================================================================== */
+  const state = {
+    preset: 'approachB',
+    mode: 'after',
+    theme: 'dark',
+    density: 'compact',
+    pins: false,
+    configOpen: true,
+    scenario: 'populated',
+    oeWidth: 264,
+    activeTab: 'q1',
+    splitRightTab: 'q2',
+    selectedResult: 'r1',
+    selectedResultView: 'table', // 'table' | 'pivot' (for r2)
+    outputView: 'results', // 'results' | 'messages' | 'stats'
+    drawer: null, // null | 'profile' | 'pivot'
+    openPopover: null, // null | 'plan' | 'ws' | 'sort' | 'memory'
+    actualPlan: false,
+    livePlan: false,
+    clientStats: false,
+    whitespace: 'none', // 'none' | 'spaces' | 'all'
+    sortText: 'value', // 'value' | 'chars' | 'bytes'
+    rowSizeOn: true,
+    selectionActive: false,
+    executing: false,
+    execElapsed: '0.0',
+    oeFilter: '',
+    oeSchemaGroup: false,
+    oeExpanded: { prod: true, db: true, appdata: true, tables: true, orders: true, cols: true, stg: false },
+    activeDb: 'AppData',
+    memItems: [
+      { id: 'm1', tab: 'SQLQuery1.sql', res: 'Validation Cases · Result 2', raw: '92 MB', stored: '38 MB', state: 'unpack', label: 'Unpacking 62%' },
+      { id: 'm2', tab: 'SQLQuery1.sql', res: 'Summary Metrics · Result 3', raw: '92 MB', stored: '38 MB', state: 'packed', label: 'Packed' },
+      { id: 'm3', tab: 'SQLQuery2.sql', res: 'Active Orders · Result 1', raw: '38 MB', stored: '38 MB', state: 'raw', label: 'Raw' }
+    ],
+    opts: { ...PRESETS.approachB }
+  };
+
+  let execTimer = null;
+
+  /* ==========================================================================
+     SCENARIO DATA & BEFORE SCREENSHOT MAPPING
+     ========================================================================== */
+  const BEFORE_MAP = {
+    populated: { dark: '03-workbench-hero-dark.png', light: '03-workbench-hero-light.png' },
+    split:     { dark: 'split-editor-groups-dark.png', light: 'split-editor-groups-dark.png' },
+    nonquery:  { dark: '06-activity-monitor-dark.png', light: '06-activity-monitor-dark.png' },
+    narrow:    { dark: '03b-workbench-narrow-dark.png', light: '03b-workbench-narrow-dark.png' },
+    executing: { dark: '03-workbench-hero-dark.png', light: '03-workbench-hero-light.png' },
+    empty:     { dark: '01-empty-dark.png', light: '01-empty-light.png' }
+  };
+
+  const TABS = [
+    { id: 'q1', name: 'SQLQuery1.sql', kind: 'sql', env: 'prod', sid: 'SID 51', pinned: true, dirty: true, server: 'Production ERP', host: 'prod-sql-01.corp.local', db: 'AppData' },
+    { id: 'q2', name: 'SQLQuery2.sql', kind: 'sql', env: 'staging', sid: '', pinned: false, dirty: false, server: 'Staging Analytics', host: 'stg-sql-02.corp.local', db: 'AnalyticsStg' },
+    { id: 'q3', name: 'SQLQuery3.sql', kind: 'sql', env: 'prod', sid: '', pinned: false, dirty: false, server: 'Production ERP', host: 'prod-sql-01.corp.local', db: 'master' },
+    { id: 'act', name: 'Production ERP - Activity Monitor', kind: 'activity', env: 'prod', sid: '', pinned: false, dirty: false }
+  ];
+
+  const RESULT_SETS = {
+    r1: {
+      name: 'Active Orders', num: 'Result 1', rows: '100 rows', cols: '6 cols', hasPivot: false,
+      columns: [
+        { k: 'id', name: 'OrderId', type: 'int', num: true },
+        { k: 'cust', name: 'CustomerName', type: 'nvarchar(50)', num: false },
+        { k: 'status', name: 'OrderStatus', type: 'varchar(16)', num: false },
+        { k: 'amt', name: 'TotalAmount', type: 'decimal(18,2)', num: true },
+        { k: 'created', name: 'CreatedAt', type: 'datetime2(3)', num: false },
+        { k: 'note', name: 'PayloadNote', type: 'nvarchar(max)', num: false }
+      ],
+      data: [
+        { rn: 1, id: '10492', cust: 'Northwind Industrial Supply', status: 'Shipped', amt: '14,820.50', created: '2026-11-22 18:42:01', note: 'Standard pallet manifest', bytes: 182, outlier: false },
+        { rn: 2, id: '10491', cust: 'Contoso Freight & Logistics', status: 'Processing', amt: '6,410.00', created: '2026-11-22 18:39:14', note: 'Dock B priority dispatch', bytes: 179, outlier: false },
+        { rn: 3, id: '10490', cust: 'Société Générale SARL', status: 'Refund', amt: '-395.95', created: '2026-11-22 18:31:08', note: null, bytes: 164, outlier: false },
+        { rn: 4, id: '10489', cust: 'Fabrikam Medical Instruments', status: 'Flagged', amt: '42,190.75', created: '2026-11-22 18:22:50', note: '{"audit_blob":"14.2 KB XML compliance payload…"}', bytes: 14540, outlier: true },
+        { rn: 5, id: '10488', cust: 'Litware Packaging Co.', status: 'Shipped', amt: '3,295.20', created: '2026-11-22 18:14:33', note: 'Verified customs ref #884', bytes: 184, outlier: false },
+        { rn: 6, id: '10487', cust: 'Adventure Works Distribution', status: 'Shipped', amt: '8,740.00', created: '2026-11-22 17:58:19', note: 'Batch auto-settled', bytes: 176, outlier: false },
+        { rn: 7, id: '10486', cust: 'Blue Yonder Aviation Parts', status: 'Processing', amt: '19,540.90', created: '2026-11-22 17:41:04', note: 'Awaiting QA sign-off', bytes: 181, outlier: false }
+      ]
+    },
+    r2: {
+      name: 'Validation Cases', num: 'Result 2', rows: '10 rows', cols: '4 cols', hasPivot: true,
+      columns: [
+        { k: 'rule', name: 'RuleCode', type: 'varchar(16)', num: false },
+        { k: 'sev', name: 'Severity', type: 'varchar(12)', num: false },
+        { k: 'cnt', name: 'MatchCount', type: 'int', num: true },
+        { k: 'delta', name: 'VarianceUsd', type: 'decimal(12,2)', num: true }
+      ],
+      data: [
+        { rn: 1, rule: 'CHK_NEG_BAL', sev: 'Warning', cnt: '3', delta: '-395.95', bytes: 96, outlier: false },
+        { rn: 2, rule: 'CHK_LARGE_DOC', sev: 'Info', cnt: '1', delta: '42,190.75', bytes: 102, outlier: false },
+        { rn: 3, rule: 'CHK_NULL_NOTE', sev: 'Info', cnt: '4', delta: '0.00', bytes: 91, outlier: false },
+        { rn: 4, rule: 'CHK_TAX_DRIFT', sev: 'Error', cnt: '2', delta: '-18.40', bytes: 98, outlier: false }
+      ],
+      pivotData: [
+        { rn: 1, rule: 'Warning', sev: '1 rule', cnt: '3', delta: '-395.95', bytes: 80, outlier: false },
+        { rn: 2, rule: 'Info', sev: '2 rules', cnt: '5', delta: '42,190.75', bytes: 84, outlier: false },
+        { rn: 3, rule: 'Error', sev: '1 rule', cnt: '2', delta: '-18.40', bytes: 82, outlier: false }
+      ]
+    },
+    r3: {
+      name: 'Summary Metrics', num: 'Result 3', rows: '20 rows', cols: '4 cols', hasPivot: false,
+      columns: [
+        { k: 'region', name: 'Region', type: 'nvarchar(24)', num: false },
+        { k: 'orders', name: 'OrderCount', type: 'int', num: true },
+        { k: 'rev', name: 'GrossRevenue', type: 'decimal(18,2)', num: true },
+        { k: 'margin', name: 'MarginPct', type: 'decimal(5,1)', num: true }
+      ],
+      data: [
+        { rn: 1, region: 'US-West', orders: '38', rev: '184,210.40', margin: '28.4', bytes: 112, outlier: false },
+        { rn: 2, region: 'EU-Central', orders: '29', rev: '142,890.00', margin: '24.1', bytes: 114, outlier: false },
+        { rn: 3, region: 'US-East', orders: '21', rev: '98,415.75', margin: '31.8', bytes: 109, outlier: false },
+        { rn: 4, region: 'APAC', orders: '12', rev: '53,120.10', margin: '19.5', bytes: 108, outlier: false }
+      ]
+    }
+  };
+
+  /* ==========================================================================
+     CALLOUTS (P0, P1, NEW DISCOVERIES)
+     ========================================================================== */
+  const CALLOUTS = [
+    { n: 1, sev: 'p1', tag: 'P1', title: 'Tabs Above Per-Query Bar', desc: 'Keeps document tabs locked at a constant Y position when switching to Activity Monitor or Search Objects, and removes split-editor execution ambiguity.', pos: { top: '49px', left: '955px' } },
+    { n: 2, sev: 'new', tag: 'NEW', title: 'Unified Plan ▾ & Morph Cancel', desc: 'Fixes the narrow-width 3-identical-plan-icons bug, removes dead idle Cancel weight, and pairs execution scope cleanly beside Execute.', pos: { top: '87px', left: '615px' } },
+    { n: 3, sev: 'p0', tag: 'P0', title: '2-Line Unclipped Server Cards + Guides', desc: 'Replaces squished "Production E... PR..." single rows with calm 2-line cards + 1-row OE header + wired tree.indentGuidesStroke guides.', pos: { top: '124px', left: '252px' } },
+    { n: 4, sev: 'new', tag: 'NEW', title: 'Calm Results Toolbar (No 7-Box Soup)', desc: 'Collapses rarely-changed Whitespace & Sort segments into compact state chips when default, reclaiming ~220px so "Completed · 130 rows · 0.042 s" never clips.', pos: { top: '381px', left: '720px' } },
+    { n: 5, sev: 'p1', tag: 'P1', title: 'Smart 2-Bar Results Header', desc: 'Merges solo Table metadata + Save ▾ inline with Result Tabs (+28px), expanding the view strip only on results that have a Pivot (click Validation Cases!).', pos: { top: '414px', right: '210px' } },
+    { n: 6, sev: 'p0', tag: 'P0+NEW', title: 'Outlier-Only Gutter & Aligned Numbers', desc: 'Fixes row-sizes.ts flagging normal ~180 B rows muddy amber (highlights only true 14.2 KB Row 4) and right-aligns numeric columns with tabular-nums.', pos: { top: '536px', left: '306px' } },
+    { n: 7, sev: 'p0', tag: 'P0+NEW', title: 'Grouped Status Bar & Actionable Memory', desc: 'Removes 8 pipe separators, shows live 147 MB, fixes "." tab clipping in BIGGEST RESULTS, and adds hover × buttons to free memory directly.', pos: { bottom: '20px', right: '96px' } },
+    { n: 8, sev: 'new', tag: 'NEW', title: 'Grouped Header Icons & Connection Tint', desc: 'Separates Connect | Files | Monitor in the Title Bar and applies a calm top hairline & wash on QueryBar for any set connection color.', pos: { top: '9px', right: '325px' } }
+  ];
+
+  /* ==========================================================================
+     VERTICAL SPACE TELEMETRY CALCULATOR
+     ========================================================================== */
+  function computeReclaimedPx() {
+    let saved = 0;
+    const o = state.opts;
+    if (o.tabStyle === 'refined2') saved += 4;
+    if (o.tabStyle === 'compact1') saved += 10;
+    if (o.pinnedLayout === 'inline') saved += (o.tabStyle === 'compact1' ? 34 : 40);
+    if (o.resultsGrid === 'smart2bar') saved += 28;
+    else if (o.resultsGrid === 'compact3bar') saved += 4;
+    return saved;
+  }
+
+  function detectPreset() {
+    for (const [k, p] of Object.entries(PRESETS)) {
+      const match = AXES.every(ax => state.opts[ax.id] === p[ax.id]);
+      if (match) return k;
+    }
+    return 'custom';
+  }
+
+  /* ==========================================================================
+     RENDERERS
+     ========================================================================== */
+  function renderTitleBar() {
+    const o = state.opts;
+    const ungrouped = o.statusMemory === 'current' && o.borders === 'current';
+    return `
+      <header class="wb-titlebar">
+        <div class="wb-tb-left">
+          <span class="wb-brand-icon" title="Varia SQL Manager">${ICONS.varia}</span>
+          <nav class="wb-menus" aria-label="Application menu">
+            <button type="button">File</button>
+            <button type="button">Edit</button>
+            <button type="button">View</button>
+            <button type="button">Query</button>
+            <button type="button">Tools</button>
+            <button type="button">Window</button>
+            <button type="button">Help</button>
+          </nav>
+        </div>
+        <div class="wb-tb-center">
+          <button type="button" class="wb-cmd-centre" data-act="toast" data-msg="Command Centre (Ctrl+Q) — searches open queries, commands & indexed server objects">
+            ${ICONS.search}
+            <span>Search commands, queries and objects</span>
+            <kbd class="wb-kbd">Ctrl+Q</kbd>
+          </button>
+        </div>
+        <div class="wb-tb-actions ${ungrouped ? 'is-ungrouped' : ''}">
+          <button type="button" class="wb-icon-btn" title="Connect to Server…">${ICONS.plug}</button>
+          <span class="wb-tb-sep"></span>
+          <button type="button" class="wb-icon-btn" title="New Query (Ctrl+N)">${ICONS.newFile}</button>
+          <button type="button" class="wb-icon-btn" title="Open File… (Ctrl+O)">${ICONS.folderOpen}</button>
+          <button type="button" class="wb-icon-btn" title="Save (Ctrl+S)">${ICONS.save}<i class="save-badge"></i></button>
+          <button type="button" class="wb-icon-btn" title="Save All (Ctrl+Shift+S)">${ICONS.saveAll}</button>
+          <span class="wb-tb-sep"></span>
+          <button type="button" class="wb-icon-btn ${state.activeTab === 'act' ? 'is-active' : ''}" data-act="openTab" data-tab="act" title="Activity Monitor">${ICONS.pulse}</button>
+        </div>
+        <div class="wb-win-controls" aria-hidden="true">
+          <span>&#x2013;</span><span>&#x25A1;</span><span class="win-close">&#x2715;</span>
+        </div>
+      </header>`;
+  }
+
+  function renderOE() {
+    const o = state.opts;
+    const isCurrent = o.oeStyle === 'current';
+    const isInline = o.oeStyle === 'cardsInline';
+    const isEmpty = state.scenario === 'empty';
+    const q = state.oeFilter.trim().toLowerCase();
+    const guides = !isCurrent ? 'has-guides' : '';
+
+    const indent = (n) => Array.from({ length: n }, () => `<span class="oe-indent-cell"></span>`).join('');
+    const rowMatch = (txt) => !q || txt.toLowerCase().includes(q);
+
+    let headerTools = '';
+    if (isCurrent) {
+      headerTools = `
+        <div class="wb-oe-tools">
+          <button type="button" class="wb-icon-btn" title="Connect">${ICONS.plug}</button>
+          <button type="button" class="wb-icon-btn" title="Disconnect">${ICONS.disconnect}</button>
+          <button type="button" class="wb-icon-btn" title="Remove">${ICONS.close}</button>
+          <button type="button" class="wb-icon-btn" disabled title="Stop">${ICONS.stop}</button>
+          <button type="button" class="wb-icon-btn" title="Filter Settings">${ICONS.filter}</button>
+          <button type="button" class="wb-icon-btn" title="Refresh">${ICONS.refresh}</button>
+          <button type="button" class="wb-icon-btn ${state.oeSchemaGroup ? 'is-active' : ''}" data-act="toggleSchema" title="Group by Schema">${ICONS.schema}</button>
+          <button type="button" class="wb-icon-btn" title="Collapse All">${ICONS.collapse}</button>
+        </div>`;
+    } else {
+      headerTools = `
+        <div class="wb-oe-tools">
+          <button type="button" class="wb-icon-btn" title="Connect Object Explorer">${ICONS.plug}</button>
+          <button type="button" class="wb-icon-btn" title="Refresh">${ICONS.refresh}</button>
+          <button type="button" class="wb-icon-btn" title="Collapse All">${ICONS.collapse}</button>
+        </div>`;
+    }
+
+    let treeHtml = '';
+    if (isEmpty) {
+      treeHtml = `
+        <div class="wb-empty-state">
+          <span style="color:var(--icon-muted);">${ICONS.server}</span>
+          <div style="font-size:12px;">Connect to SQL Server to browse databases and objects.</div>
+          <button type="button" class="wb-exec-btn" style="margin-top:6px;" data-act="setScenario" data-scenario="populated">Connect to server</button>
+        </div>`;
+    } else {
+      const useCardTint = o.prodGuard === 'subtle';
+      const OE_SERVERS = [
+        { id: 'prod', name: 'Production ERP', sub: 'prod-sql-01 · SQL 16.0', env: 'PROD', envCls: 'prod', accent: 'var(--red)', jobs: '2 jobs', active: true },
+        { id: 'stg', name: 'Staging Analytics', sub: 'stg-sql-02 · Windows Auth', env: 'STAGING', envCls: 'staging', accent: 'var(--blue)', jobs: '', active: false },
+        { id: 'qa', name: 'QA Reporting', sub: 'qa-rpt-01 · SQL Auth', env: 'TEST', envCls: 'neutral', accent: 'var(--warning)', jobs: '', active: false },
+        { id: 'dev', name: 'Local Dev SQL', sub: 'localhost,1433 · Integrated', env: 'DEV', envCls: 'neutral', accent: 'var(--success)', jobs: '', active: false },
+        { id: 'arch', name: 'Warehouse Archive', sub: 'arch-sql-04 · Read-only', env: '', envCls: '', accent: '', jobs: '', active: false }
+      ];
+      window.__OE_SERVERS = OE_SERVERS;
+
+      const renderServerBand = (srv, pinnedEdge, topOffset) => {
+        const exp = !!state.oeExpanded[srv.id];
+        const chev = pinnedEdge === 'top' ? ICONS.chevRight : pinnedEdge === 'bottom' ? ICONS.chevRight : (exp ? ICONS.chevDown : ICONS.chevRight);
+        const topStyle = topOffset !== undefined ? `top:${topOffset}px;` : '';
+        if (isCurrent) {
+          return `
+            <div class="oe-server-row-legacy" ${topStyle ? `style="${topStyle}"` : ''} data-oe-server="${srv.id}" ${pinnedEdge ? `data-jump-server="${srv.id}"` : `data-act="toggleOe" data-node="${srv.id}"`}>
+              ${srv.accent ? `<span class="oe-server-rail" style="background:${srv.accent};"></span>` : ''}
+              <span class="oe-chev">${chev}</span>
+              <span class="oe-ic">${ICONS.server}</span>
+              <span class="oe-server-name">${srv.name}</span>
+              ${srv.jobs ? `<span class="oe-jobs-chip">${ICONS.clock}</span>` : ''}
+              ${srv.env ? `<span class="env-pill ${srv.envCls}">${srv.env}</span>` : ''}
+              ${srv.active ? `<span class="oe-active-glyph">${ICONS.doc}</span>` : ''}
+              <span class="oe-dot"></span>
+            </div>`;
+        }
+        const styleVal = `${topStyle}${srv.accent ? `--card-accent:${srv.accent};` : ''}`;
+        return `
+          <div class="oe-server-card ${srv.active ? 'is-active-conn' : ''} ${useCardTint && srv.accent ? 'has-card-tint' : ''}" ${styleVal ? `style="${styleVal}"` : ''} data-oe-server="${srv.id}" ${pinnedEdge ? `data-jump-server="${srv.id}"` : `data-act="toggleOe" data-node="${srv.id}"`}>
+            <div class="oe-server-top">
+              <span class="oe-chev">${chev}</span>
+              <span class="oe-ic">${ICONS.server}</span>
+              <span class="oe-server-name">${srv.name}</span>
+              ${srv.env ? `<span class="env-pill ${srv.envCls}">${srv.env}</span>` : ''}
+              <span class="oe-dot" title="Connected"></span>
+            </div>
+            <div class="oe-server-sub">
+              <span class="oe-server-host">${srv.sub}</span>
+              ${srv.jobs ? `<span class="oe-jobs-chip" title="2 Agent jobs running">${ICONS.clock} ${srv.jobs}</span>` : ''}
+              ${srv.active ? `<span class="oe-active-glyph" title="Active query server">${ICONS.doc}</span>` : ''}
+            </div>
+          </div>`;
+      };
+      window.__renderServerBand = renderServerBand;
+
+      const colsHtml = state.oeExpanded.cols ? [
+        { n: 'OrderId', pk: true, meta: 'int, not null' },
+        { n: 'CustomerName', pk: false, meta: 'nvarchar(50)' },
+        { n: 'TotalAmount', pk: false, meta: 'decimal(18,2)' },
+        { n: 'CreatedAt', pk: false, meta: 'datetime2(3)' }
+      ].filter(c => rowMatch(c.n)).map(c => `
+        <div class="oe-row">
+          ${indent(5)}<span class="oe-chev"></span>
+          <span class="oe-ic" style="color:${c.pk ? 'var(--warning)' : 'var(--icon)'};">${c.pk ? ICONS.key : ICONS.col}</span>
+          <span class="oe-lbl">${c.n}</span>
+          ${!isCurrent && c.pk ? `<span class="oe-pk-badge">PK</span>` : ''}
+          <span class="oe-col-meta">${isCurrent ? `(${c.pk ? 'PK, ' : ''}${c.meta})` : c.meta}</span>
+        </div>`).join('') : '';
+
+      const children = state.oeExpanded.prod ? `
+        ${rowMatch('Databases') ? `<div class="oe-row" data-act="toggleOe" data-node="db">${indent(1)}<span class="oe-chev">${state.oeExpanded.db ? ICONS.chevDown : ICONS.chevRight}</span><span class="oe-ic oe-folder-ic">${ICONS.folderOpen}</span><span class="oe-lbl">Databases</span><span class="oe-count">2</span></div>` : ''}
+        ${state.oeExpanded.db ? `
+          ${rowMatch('System Databases') ? `<div class="oe-row ${isCurrent ? '' : 'is-system'}">${indent(2)}<span class="oe-chev">${ICONS.chevRight}</span><span class="oe-ic oe-folder-ic">${ICONS.folderOpen}</span><span class="oe-lbl">System Databases</span></div>` : ''}
+          ${rowMatch('AppData') ? `<div class="oe-row is-db" data-act="toggleOe" data-node="appdata">${indent(2)}<span class="oe-chev">${state.oeExpanded.appdata ? ICONS.chevDown : ICONS.chevRight}</span><span class="oe-ic">${ICONS.db}</span><span class="oe-lbl">AppData</span></div>` : ''}
+          ${state.oeExpanded.appdata ? `
+            ${rowMatch('Tables') ? `<div class="oe-row" data-act="toggleOe" data-node="tables">${indent(3)}<span class="oe-chev">${state.oeExpanded.tables ? ICONS.chevDown : ICONS.chevRight}</span><span class="oe-ic oe-folder-ic">${ICONS.folderOpen}</span><span class="oe-lbl">Tables</span><span class="oe-count">14</span></div>` : ''}
+            ${state.oeExpanded.tables ? `
+              ${rowMatch('System Tables') ? `<div class="oe-row ${isCurrent ? '' : 'is-system'}">${indent(4)}<span class="oe-chev">${ICONS.chevRight}</span><span class="oe-ic oe-folder-ic">${ICONS.folderOpen}</span><span class="oe-lbl">System Tables</span></div>` : ''}
+              ${rowMatch('dbo.Orders') ? `<div class="oe-row is-table is-selected" data-act="toggleOe" data-node="orders">${indent(4)}<span class="oe-chev">${state.oeExpanded.orders ? ICONS.chevDown : ICONS.chevRight}</span><span class="oe-ic">${ICONS.table}</span><span class="oe-lbl">${state.oeSchemaGroup ? 'Orders' : 'dbo.Orders'}</span></div>` : ''}
+              ${state.oeExpanded.orders ? `
+                <div class="oe-row" data-act="toggleOe" data-node="cols">${indent(5)}<span class="oe-chev">${state.oeExpanded.cols ? ICONS.chevDown : ICONS.chevRight}</span><span class="oe-ic oe-folder-ic">${ICONS.folderOpen}</span><span class="oe-lbl">Columns</span><span class="oe-count">4</span></div>
+                ${colsHtml}
+                <div class="oe-row">${indent(5)}<span class="oe-chev">${ICONS.chevRight}</span><span class="oe-ic oe-folder-ic">${ICONS.folderOpen}</span><span class="oe-lbl">Keys</span></div>
+                <div class="oe-row">${indent(5)}<span class="oe-chev">${ICONS.chevRight}</span><span class="oe-ic oe-folder-ic">${ICONS.folderOpen}</span><span class="oe-lbl">Indexes</span></div>
+              ` : ''}
+              ${rowMatch('dbo.OrderItems') ? `<div class="oe-row is-table">${indent(4)}<span class="oe-chev">${ICONS.chevRight}</span><span class="oe-ic">${ICONS.table}</span><span class="oe-lbl">${state.oeSchemaGroup ? 'OrderItems' : 'dbo.OrderItems'}</span></div>` : ''}
+              ${rowMatch('dbo.Customers') ? `<div class="oe-row is-table">${indent(4)}<span class="oe-chev">${ICONS.chevRight}</span><span class="oe-ic">${ICONS.table}</span><span class="oe-lbl">${state.oeSchemaGroup ? 'Customers' : 'dbo.Customers'}</span></div>` : ''}
+              ${rowMatch('dbo.Shipments') ? `<div class="oe-row is-table">${indent(4)}<span class="oe-chev">${ICONS.chevRight}</span><span class="oe-ic">${ICONS.table}</span><span class="oe-lbl">${state.oeSchemaGroup ? 'Shipments' : 'dbo.Shipments'}</span></div>` : ''}
+            ` : ''}
+            ${rowMatch('Views') ? `<div class="oe-row">${indent(3)}<span class="oe-chev">${ICONS.chevRight}</span><span class="oe-ic oe-folder-ic">${ICONS.folderOpen}</span><span class="oe-lbl">Views</span><span class="oe-count">6</span></div>` : ''}
+            ${rowMatch('Programmability') ? `<div class="oe-row">${indent(3)}<span class="oe-chev">${ICONS.chevRight}</span><span class="oe-ic oe-folder-ic">${ICONS.folderOpen}</span><span class="oe-lbl">Programmability</span></div>` : ''}
+          ` : ''}
+          ${rowMatch('AnalyticsWarehouse') ? `<div class="oe-row is-db">${indent(2)}<span class="oe-chev">${ICONS.chevRight}</span><span class="oe-ic">${ICONS.db}</span><span class="oe-lbl">AnalyticsWarehouse</span></div>` : ''}
+        ` : ''}
+        ${rowMatch('Security') ? `<div class="oe-row">${indent(1)}<span class="oe-chev">${ICONS.chevRight}</span><span class="oe-ic oe-folder-ic">${ICONS.folderOpen}</span><span class="oe-lbl">Security</span></div>` : ''}
+        ${rowMatch('SQL Server Agent') ? `<div class="oe-row">${indent(1)}<span class="oe-chev">${ICONS.chevRight}</span><span class="oe-ic">${ICONS.pulse}</span><span class="oe-lbl">SQL Server Agent</span><span class="oe-status-txt">Running</span></div>` : ''}
+      ` : '';
+
+      const stgChildren = state.oeExpanded.stg ? `
+        <div class="oe-row">${indent(1)}<span class="oe-chev">${ICONS.chevDown}</span><span class="oe-ic oe-folder-ic">${ICONS.folderOpen}</span><span class="oe-lbl">Databases</span><span class="oe-count">3</span></div>
+        <div class="oe-row is-db">${indent(2)}<span class="oe-chev">${ICONS.chevRight}</span><span class="oe-ic">${ICONS.db}</span><span class="oe-lbl">AnalyticsStg</span></div>
+        <div class="oe-row is-db">${indent(2)}<span class="oe-chev">${ICONS.chevRight}</span><span class="oe-ic">${ICONS.db}</span><span class="oe-lbl">BillingStg</span></div>
+        <div class="oe-row">${indent(1)}<span class="oe-chev">${ICONS.chevRight}</span><span class="oe-ic oe-folder-ic">${ICONS.folderOpen}</span><span class="oe-lbl">Security</span></div>
+      ` : '';
+
+      treeHtml = renderServerBand(OE_SERVERS[0]) + children
+        + renderServerBand(OE_SERVERS[1]) + stgChildren
+        + renderServerBand(OE_SERVERS[2])
+        + renderServerBand(OE_SERVERS[3])
+        + renderServerBand(OE_SERVERS[4]);
+    }
+
+    return `
+      <aside class="wb-oe ${isCurrent ? 'oe-current' : ''}" style="--oe-w:${state.oeWidth}px;">
+        <div class="wb-oe-header">
+          <span class="wb-oe-title">Object Explorer</span>
+          ${headerTools}
+          <button type="button" class="wb-icon-btn wb-oe-menu" title="Object Explorer options">${ICONS.more}</button>
+        </div>
+        ${!isEmpty ? `
+          <div class="wb-oe-search-row">
+            <div class="wb-oe-search-box">
+              ${ICONS.search}
+              <input type="text" id="oeSearchInput" value="${state.oeFilter}" placeholder="Search objects…" aria-label="Search objects" />
+            </div>
+            ${isInline ? `
+              <button type="button" class="wb-icon-btn" title="Filter selected folder">${ICONS.filter}</button>
+              <button type="button" class="wb-icon-btn ${state.oeSchemaGroup ? 'is-active' : ''}" data-act="toggleSchema" title="Group by Schema">${ICONS.schema}</button>
+            ` : ''}
+          </div>` : ''}
+        <div class="wb-oe-tree-frame">
+          <div class="oe-pin-band" id="oePinTop" data-edge="top"></div>
+          <div class="wb-oe-tree ${guides}" id="oeTreeScroll">${treeHtml}</div>
+          <div class="oe-pin-band" id="oePinBottom" data-edge="bottom"></div>
+          <div class="oe-pin-popover" id="oePinPopTop" data-edge="top"></div>
+          <div class="oe-pin-popover" id="oePinPopBottom" data-edge="bottom"></div>
+        </div>
+        <div class="wb-oe-footer">
+          <span class="oe-foot-left">${isEmpty ? 'Windows & SQL authentication' : 'dbo.Orders · Updated 2s ago'}</span>
+          ${!isEmpty ? `<span class="oe-foot-right">5 servers</span>` : ''}
+        </div>
+      </aside>`;
+  }
+
+  function renderSingleTab(tab, activeId) {
+    const o = state.opts;
+    const isAct = tab.id === activeId;
+    const accentCls = tab.env === 'prod' ? 'accent-prod' : tab.env === 'staging' ? 'accent-staging' : 'accent-default';
+    const isCurrent = o.tabStyle === 'current2';
+    const isCompact = o.tabStyle === 'compact1';
+    const showEmptyDash = isCurrent && tab.kind === 'sql' && !tab.sid;
+    const sidHtml = tab.sid
+      ? `<span class="wb-tab-sid">${tab.sid}</span>`
+      : (showEmptyDash ? `<span class="wb-tab-sid">—</span>` : '');
+    const envHtml = tab.env
+      ? `<span class="env-pill ${tab.env}">${tab.env === 'prod' ? 'PROD' : 'STAGING'}</span>`
+      : '';
+    const hasMeta = !!(envHtml || sidHtml);
+
+    return `
+      <div class="wb-doc-tab ${accentCls} ${isAct ? 'is-active' : ''} ${tab.pinned ? 'is-pinned' : ''} ${tab.dirty ? 'is-dirty' : ''}" data-act="openTab" data-tab="${tab.id}">
+        <span class="oe-ic" style="color:${isAct ? 'var(--text-accent)' : 'var(--icon)'};">${tab.kind === 'activity' ? ICONS.pulse : ICONS.doc}</span>
+        <div class="wb-tab-body">
+          ${isCompact ? `
+            ${envHtml}
+            <span class="wb-tab-name" title="${tab.name}">${tab.name}</span>
+            ${tab.sid ? `<span class="wb-tab-sid">${tab.sid}</span>` : ''}
+          ` : `
+            <div class="wb-tab-title-row"><span class="wb-tab-name" title="${tab.name}">${tab.name}</span></div>
+            ${hasMeta ? `<div class="wb-tab-meta-row">${envHtml}${sidHtml}</div>` : ''}
+          `}
+        </div>
+        <div class="wb-tab-actions">
+          ${tab.kind === 'sql' ? `<button type="button" class="wb-tab-act act-pin" data-act="togglePin" data-tab="${tab.id}" title="${tab.pinned ? 'Unpin' : 'Pin'} tab">${tab.pinned ? ICONS.pinned : ICONS.pin}</button>` : ''}
+          <button type="button" class="wb-tab-act act-close" title="Close ${tab.name}">
+            ${tab.dirty ? `<span class="wb-dirty-dot"></span><span class="close-x">${ICONS.close}</span>` : ICONS.close}
+          </button>
+        </div>
+      </div>`;
+  }
+
+  function renderTabBar(tabs, activeId) {
+    const o = state.opts;
+    const cls = o.tabStyle === 'compact1' ? 'tabs-1line-compact' : o.tabStyle === 'current2' ? 'tabs-2line-current' : 'tabs-2line-refined';
+    const pinned = tabs.filter(t => t.pinned);
+    const unpinned = tabs.filter(t => !t.pinned);
+
+    if (o.pinnedLayout === 'shelf' && pinned.length > 0 && unpinned.length > 0) {
+      return `
+        <div class="wb-tab-shelf is-pinned-shelf ${cls}">
+          <div class="wb-tabs-list">${pinned.map(t => renderSingleTab(t, activeId)).join('')}</div>
+          <div class="wb-tab-strip-end" style="font-size:10px;color:var(--text-muted);padding-right:10px;">Pinned shelf</div>
+        </div>
+        <div class="wb-tab-shelf ${cls}">
+          <div class="wb-tabs-list">${unpinned.map(t => renderSingleTab(t, activeId)).join('')}</div>
+          <div class="wb-tab-strip-end">
+            <button type="button" class="wb-icon-btn" title="New Query">${ICONS.add}</button>
+            <button type="button" class="wb-icon-btn" title="Editor group menu">${ICONS.more}</button>
+          </div>
+        </div>`;
+    }
+
+    return `
+      <div class="wb-tab-shelf ${cls}">
+        <div class="wb-tabs-list">
+          ${pinned.map(t => renderSingleTab(t, activeId)).join('')}
+          ${pinned.length && unpinned.length ? `<span class="wb-tab-pin-divider"></span>` : ''}
+          ${unpinned.map(t => renderSingleTab(t, activeId)).join('')}
+        </div>
+        <div class="wb-tab-strip-end">
+          <button type="button" class="wb-icon-btn" title="New Query">${ICONS.add}</button>
+          <button type="button" class="wb-icon-btn" title="Editor group menu">${ICONS.more}</button>
+        </div>
+      </div>`;
+  }
+
+  function renderQueryBar(tab, compactGroup = false) {
+    const o = state.opts;
+    const isEmpty = state.scenario === 'empty';
+    const isNarrow = state.scenario === 'narrow' || compactGroup;
+    const isProd = !isEmpty && tab.env === 'prod';
+    const connAccent = isEmpty ? '' : isProd ? 'var(--red)' : tab.env === 'staging' ? 'var(--blue)' : '';
+    const connTint = !!connAccent && o.prodGuard === 'subtle';
+    const running = state.executing;
+    const sel = state.selectionActive;
+    const planActive = state.actualPlan || state.livePlan;
+    const planLabel = state.actualPlan && state.livePlan ? 'Actual + Live' : state.actualPlan ? 'Actual Plan' : state.livePlan ? 'Live Plan' : 'Plan';
+
+    let execCluster = '';
+    if (o.queryBarStyle === 'unified') {
+      execCluster = `
+        ${running ? `
+          <button type="button" class="wb-exec-btn is-running" data-act="cancelExec">
+            ${ICONS.stop}<span>Cancel</span><span class="exec-kbd">${state.execElapsed}s</span>
+          </button>
+        ` : `
+          <button type="button" class="wb-exec-btn" data-act="runExec">
+            ${ICONS.play}<span>${sel ? 'Run Selection' : 'Execute'}</span>${!isNarrow ? `<span class="exec-kbd">F5</span>` : ''}
+          </button>
+        `}
+        ${!isNarrow ? `
+          <button type="button" class="wb-exec-scope-pill ${sel ? 'is-selection' : ''}" data-act="toggleSel" title="Toggle simulated line selection">
+            ${sel ? 'Lines 4–9' : 'All'}
+          </button>` : ''}
+        <span class="wb-qb-sep"></span>
+        <div style="position:relative;">
+          <button type="button" class="wb-qb-btn is-tonal ${planActive ? 'is-pressed' : ''}" data-act="togglePop" data-pop="plan">
+            ${state.livePlan ? ICONS.planLive : ICONS.planActual}
+            ${!compactGroup ? `<span>${planLabel}</span>` : ''}
+            ${ICONS.chevDown}
+          </button>
+          <div class="wb-popover ${state.openPopover === 'plan' && !compactGroup ? 'is-open' : ''}" style="top:30px;left:0;">
+            <div class="wb-pop-hdr">Execution Plan Options</div>
+            <button type="button" class="wb-pop-item ${state.actualPlan ? 'is-selected' : ''}" data-act="toggleActual">
+              ${ICONS.planActual}
+              <div>Include Actual Plan<span class="pop-sub">Ctrl+M · Captures runtime stats</span></div>
+              ${state.actualPlan ? '<span class="pop-check">✓</span>' : ''}
+            </button>
+            <button type="button" class="wb-pop-item ${state.livePlan ? 'is-selected' : ''}" data-act="toggleLive">
+              ${ICONS.planLive}
+              <div>Include Live Plan<span class="pop-sub">Streams operator progress live</span></div>
+              ${state.livePlan ? '<span class="pop-check">✓</span>' : ''}
+            </button>
+            <div class="wb-pop-sep"></div>
+            <button type="button" class="wb-pop-item" data-act="toast" data-msg="Estimated Execution Plan compiled (Ctrl+L)">
+              ${ICONS.planEst}
+              <div>Display Estimated Plan<span class="pop-sub">Ctrl+L · Compile without executing</span></div>
+            </button>
+          </div>
+        </div>
+        <button type="button" class="wb-qb-btn ${state.clientStats ? 'is-pressed' : ''}" data-act="toggleStats" title="Include Client Statistics">
+          ${ICONS.stats}${!isNarrow ? '<span>Client Stats</span>' : ''}
+        </button>`;
+    } else if (o.queryBarStyle === 'distinct') {
+      execCluster = `
+        <button type="button" class="wb-exec-btn" data-act="runExec" ${running ? 'disabled' : ''}>
+          ${ICONS.play}<span>Execute</span>${!isNarrow ? '<span class="exec-kbd">F5</span>' : ''}
+        </button>
+        ${!isNarrow ? `<button type="button" class="wb-exec-scope-pill ${sel ? 'is-selection' : ''}" data-act="toggleSel">${sel ? 'Lines 4–9' : 'Entire query'}</button>` : ''}
+        <button type="button" class="wb-qb-btn ${running ? 'is-cancel-live' : ''}" ${running ? 'data-act="cancelExec"' : 'disabled'} title="Cancel Executing Query">
+          ${ICONS.stop}${running ? '<span>Cancel</span>' : ''}
+        </button>
+        <span class="wb-qb-sep"></span>
+        <button type="button" class="wb-qb-btn ${state.actualPlan ? 'is-pressed' : ''}" data-act="toggleActual" title="Include Actual Plan (distinct icon!)">${ICONS.planActual}${!isNarrow ? '<span>Actual</span>' : ''}</button>
+        <button type="button" class="wb-qb-btn ${state.livePlan ? 'is-pressed' : ''}" data-act="toggleLive" title="Include Live Plan (distinct icon!)">${ICONS.planLive}${!isNarrow ? '<span>Live</span>' : ''}</button>
+        <button type="button" class="wb-qb-btn" data-act="toast" data-msg="Estimated Plan (distinct icon!)" title="Estimated Execution Plan">${ICONS.planEst}${!isNarrow ? '<span>Est.</span>' : ''}</button>
+        <button type="button" class="wb-qb-btn ${state.clientStats ? 'is-pressed' : ''}" data-act="toggleStats" title="Client Statistics">${ICONS.stats}${!isNarrow ? '<span>Stats</span>' : ''}</button>`;
+    } else {
+      // CURRENT BASELINE — shows 3 identical plan icons at narrow width!
+      execCluster = `
+        <button type="button" class="wb-exec-btn" data-act="runExec" ${running ? 'disabled' : ''}>
+          ${ICONS.play}<span>Execute</span>${!isNarrow ? '<span class="exec-kbd">F5</span>' : ''}
+        </button>
+        ${!isNarrow ? `<span style="font-size:11px;color:var(--text-muted);padding:0 3px;">${sel ? 'Lines 4–9' : 'Entire query'}</span>` : ''}
+        <button type="button" class="wb-qb-btn" ${running ? 'data-act="cancelExec"' : 'disabled'}>${ICONS.stop}<span>Cancel</span></button>
+        <button type="button" class="wb-qb-btn ${state.actualPlan ? 'is-pressed' : ''}" data-act="toggleActual" title="Actual Plan">${ICONS.plan}${!isNarrow ? '<span>Actual Plan</span>' : ''}</button>
+        <button type="button" class="wb-qb-btn ${state.livePlan ? 'is-pressed' : ''}" data-act="toggleLive" title="Live Plan">${ICONS.plan}${!isNarrow ? '<span>Live Plan</span>' : ''}</button>
+        <button type="button" class="wb-qb-btn" data-act="toast" data-msg="Estimated Plan" title="Estimated Plan">${ICONS.plan}${!isNarrow ? '<span>Estimated Plan</span>' : ''}</button>
+        <button type="button" class="wb-qb-btn ${state.clientStats ? 'is-pressed' : ''}" data-act="toggleStats" title="Client Statistics">${ICONS.stats}${!isNarrow ? '<span>Client Statistics</span>' : ''}</button>`;
+    }
+
+    const serverLabel = isEmpty ? 'Disconnected'
+      : o.queryBarStyle === 'current'
+        ? `${tab.server} (${tab.host.slice(0, 14)}…)`
+        : tab.server;
+
+    return `
+      <div class="wb-querybar ${connTint ? 'has-conn-tint' : ''}" ${connAccent ? `style="--qb-accent:${connAccent};"` : ''}>
+        <div class="wb-qb-actions">${execCluster}</div>
+        <div class="wb-conn-pill ${connTint ? 'has-conn-tint-pill' : ''}">
+          ${!isEmpty ? `<span class="wb-conn-swatch" style="background:${isProd ? 'var(--red)' : 'var(--blue)'};"></span>` : ''}
+          ${!isEmpty && tab.env ? `<span class="env-pill ${tab.env}">${isProd ? 'PROD' : 'STAGING'}</span>` : ''}
+          <select class="wb-conn-select" aria-label="Query server" title="${isEmpty ? 'Disconnected' : tab.server + ' (' + tab.host + ')'}">
+            <option selected>${serverLabel}</option>
+            ${!isEmpty ? `<option>${isProd ? 'Staging Analytics' : 'Production ERP'}</option>` : ''}
+          </select>
+          <span class="wb-conn-div"></span>
+          <span class="oe-ic" style="width:13px;">${ICONS.db}</span>
+          <select class="wb-conn-select" style="max-width:118px;" aria-label="Query database" data-act="changeDb">
+            ${tab.env === 'staging' ? `
+              <option selected>AnalyticsStg</option>
+              <option>master</option>
+            ` : `
+              <option ${state.activeDb === 'AppData' ? 'selected' : ''}>AppData</option>
+              <option ${state.activeDb === 'master' ? 'selected' : ''}>master</option>
+              <option ${state.activeDb === 'AnalyticsWarehouse' ? 'selected' : ''}>AnalyticsWarehouse</option>
+            `}
+          </select>
+        </div>
+      </div>`;
+  }
+
+  function renderSqlEditor(tab) {
+    const isEmpty = state.scenario === 'empty';
+    const sel = state.selectionActive;
+    const lines = isEmpty ? [
+      `<span class="cmt">-- Connect this query to a server and press F5 to execute.</span>`,
+      `<span class="cmt">-- A #Name comment names the result set that follows it.</span>`,
+      ``,
+      `<span class="cmt">/* #Name="Sample Query" */</span>`,
+      `<span class="kw">SELECT</span>`,
+      `    <span class="fn">@@SERVERNAME</span> <span class="kw">AS</span> server_name,`,
+      `    <span class="fn">DB_NAME</span>()    <span class="kw">AS</span> database_name,`,
+      `    <span class="fn">SYSDATETIME</span>() <span class="kw">AS</span> server_time;`
+    ] : tab.id === 'q2' ? [
+      `<span class="cmt">-- Staging reconciliation check against AnalyticsStg</span>`,
+      `<span class="kw">SELECT TOP</span> (<span class="num">50</span>)`,
+      `    s.BatchId, s.OrderCount, s.VarianceUsd`,
+      `<span class="kw">FROM</span> staging.DailyReconciliation <span class="kw">AS</span> s`,
+      `<span class="kw">WHERE</span> s.VarianceUsd <span class="op">&lt;&gt;</span> <span class="num">0</span>`,
+      `<span class="kw">ORDER BY</span> s.BatchId <span class="kw">DESC</span>;`
+    ] : [
+      `<span class="cmt">/* #Name="Active Orders" */</span>`,
+      `<span class="cmt">-- Active order telemetry &amp; backlog summary (${tab.server})</span>`,
+      `<span class="kw">SELECT TOP</span> (<span class="num">100</span>)`,
+      `    o.OrderId, o.CustomerName, o.OrderStatus,`,
+      `    o.TotalAmount, o.CreatedAt, o.PayloadNote`,
+      `<span class="kw">FROM</span> dbo.Orders <span class="kw">AS</span> o`,
+      `<span class="kw">WHERE</span> o.CreatedAt <span class="op">&gt;=</span> <span class="fn">DATEADD</span>(<span class="kw">DAY</span>, <span class="op">-</span><span class="num">30</span>, <span class="fn">SYSUTCDATETIME</span>())`,
+      `  <span class="kw">AND</span> o.OrderStatus <span class="kw">IN</span> (<span class="str">'Shipped'</span>, <span class="str">'Processing'</span>, <span class="str">'Flagged'</span>, <span class="str">'Refund'</span>)`,
+      `<span class="kw">ORDER BY</span> o.OrderId <span class="kw">DESC</span>;`
+    ];
+
+    return `
+      <div class="wb-sql-editor">
+        ${lines.map((code, idx) => {
+          const ln = idx + 1;
+          const isSel = sel && ln >= 4 && ln <= 9;
+          const isCur = !sel && ln === 9;
+          return `<div class="sql-line ${isSel ? 'is-sel' : ''} ${isCur ? 'is-current' : ''}"><span class="sql-ln">${ln}</span><span class="sql-code">${code}</span></div>`;
+        }).join('')}
+      </div>`;
+  }
+
+  function renderActivityView() {
+    return `
+      <div class="wb-nonquery-view">
+        <div class="nq-header">
+          <div class="nq-title">
+            <span>Production ERP › Activity Monitor</span>
+            <span class="env-pill prod">PROD</span>
+            <span class="nq-live-dot"></span>
+            <span style="font-size:11px;font-weight:400;color:var(--text-muted);">Live · every 1s</span>
+          </div>
+          <div style="font-size:11px;color:var(--text-accent);background:var(--accent-surface);padding:3px 9px;border-radius:99px;">
+            ${state.opts.tabOrder === 'tabsAbove'
+              ? 'Notice: Tab strip stayed rock-solid at Y=40px (no 36px jump!)'
+              : 'Notice: Tab strip jumped UP 36px when QueryBar disappeared!'}
+          </div>
+        </div>
+        <div class="nq-kpi-grid">
+          <div class="nq-kpi"><div class="nq-kpi-lbl">% Processor Time</div><div class="nq-kpi-val">54.4%</div><div class="nq-kpi-sub">Scheduler delay 5 ms</div></div>
+          <div class="nq-kpi"><div class="nq-kpi-lbl">Batch Requests/sec</div><div class="nq-kpi-val">999/s</div><div class="nq-kpi-sub">Compilations 12/s</div></div>
+          <div class="nq-kpi is-alert"><div class="nq-kpi-lbl" style="color:var(--error);">Blocked Sessions</div><div class="nq-kpi-val">2</div><div class="nq-kpi-sub">Longest block 41,200 ms</div></div>
+          <div class="nq-kpi"><div class="nq-kpi-lbl">Database I/O</div><div class="nq-kpi-val">4 MB/s</div><div class="nq-kpi-sub">Read latency 4 ms</div></div>
+        </div>
+        <div style="font-size:11.5px;color:var(--text-muted);padding:10px 12px;border-radius:6px;border:1px solid var(--border);background:var(--raised);">
+          Click <strong>SQLQuery1.sql</strong> in the tab bar above to switch back and watch the tab strip stability live.
+        </div>
+      </div>`;
+  }
+
+  function renderOutputPane() {
+    const o = state.opts;
+    const isEmpty = state.scenario === 'empty';
+    const isNarrow = state.scenario === 'narrow';
+    const rs = RESULT_SETS[state.selectedResult];
+    const showPivotView = rs.hasPivot && state.selectedResultView === 'pivot';
+    const rows = showPivotView ? rs.pivotData : rs.data;
+    const isProg = o.resultsBar1 === 'progressive';
+    const isCurrBar1 = o.resultsBar1 === 'current';
+    const isSmart2 = o.resultsGrid === 'smart2bar';
+    const isCurrGrid = o.resultsGrid === 'current';
+    const showBar3 = !isEmpty && state.outputView === 'results' && (!isSmart2 || rs.hasPivot);
+
+    // Bar 1
+    let viewsHtml = '';
+    if (isEmpty) {
+      viewsHtml = isCurrBar1 ? `<div class="out-views empty-bug" title="P0.1 Live Bug: empty .output-views border dot"></div>` : '';
+    } else {
+      viewsHtml = `
+        <div class="out-views ${isCurrBar1 ? 'is-boxed' : ''}">
+          <button type="button" class="out-view-btn ${state.outputView === 'results' ? 'is-active' : ''}" data-act="setOutView" data-view="results">Results <span class="out-badge">3</span></button>
+          <button type="button" class="out-view-btn ${state.outputView === 'messages' ? 'is-active' : ''}" data-act="setOutView" data-view="messages">Messages <span class="out-badge">4</span></button>
+          ${state.clientStats ? `<button type="button" class="out-view-btn ${state.outputView === 'stats' ? 'is-active' : ''}" data-act="setOutView" data-view="stats">Client Stats <span class="out-badge">1</span></button>` : ''}
+        </div>`;
+    }
+
+    let toolsHtml = '';
+    if (!isEmpty && state.outputView === 'results') {
+      const segCls = isCurrBar1 ? 'is-boxed' : isProg ? '' : 'is-calmed';
+      const wsLabel = state.whitespace === 'none' ? '' : state.whitespace === 'spaces' ? 'Spaces' : 'All';
+      const sortLabel = state.sortText === 'value' ? '' : state.sortText === 'chars' ? 'Chars' : 'Bytes';
+
+      toolsHtml = `
+        <span class="out-div"></span>
+        <div class="res-tools">
+          <div class="res-search" style="width:${isNarrow ? '138px' : isProg ? '170px' : '155px'};">
+            ${ICONS.search}
+            <input type="text" placeholder="Search results…" aria-label="Search all results" />
+          </div>
+
+          ${isProg ? `
+            <div style="position:relative;">
+              <button type="button" class="res-chip-btn ${wsLabel ? 'is-nondefault' : ''}" data-act="togglePop" data-pop="ws" title="Whitespace visibility (currently ${state.whitespace})">
+                ${ICONS.ws}${wsLabel ? `<span>${wsLabel}</span>` : ''}
+              </button>
+              <div class="wb-popover ${state.openPopover === 'ws' ? 'is-open' : ''}" style="top:28px;left:0;min-width:168px;">
+                <div class="wb-pop-hdr">Show Whitespace</div>
+                ${[['none','Off','Default'],['spaces','Spaces','Show spaces & tabs'],['all','All','Also CR, LF, NBSP']].map(([m,l,s]) => `
+                  <button type="button" class="wb-pop-item ${state.whitespace === m ? 'is-selected' : ''}" data-act="setWs" data-val="${m}">
+                    <div>${l}<span class="pop-sub">${s}</span></div>
+                    ${state.whitespace === m ? '<span class="pop-check">✓</span>' : ''}
+                  </button>`).join('')}
+              </div>
+            </div>
+            <div style="position:relative;">
+              <button type="button" class="res-chip-btn ${sortLabel ? 'is-nondefault' : ''}" data-act="togglePop" data-pop="sort" title="Sort text by (currently ${state.sortText})">
+                ${ICONS.ruler}${sortLabel ? `<span>${sortLabel}</span>` : ''}
+              </button>
+              <div class="wb-popover ${state.openPopover === 'sort' ? 'is-open' : ''}" style="top:28px;left:0;min-width:176px;">
+                <div class="wb-pop-hdr">Sort Text By</div>
+                ${[['value','Value','Collation order (default)'],['chars','Chars','Character length'],['bytes','Bytes','Byte length (DATALENGTH)']].map(([m,l,s]) => `
+                  <button type="button" class="wb-pop-item ${state.sortText === m ? 'is-selected' : ''}" data-act="setSort" data-val="${m}">
+                    <div>${l}<span class="pop-sub">${s}</span></div>
+                    ${state.sortText === m ? '<span class="pop-check">✓</span>' : ''}
+                  </button>`).join('')}
+              </div>
+            </div>
+          ` : `
+            ${!isNarrow ? `
+              <span style="color:var(--text-muted);display:inline-grid;place-items:center;" title="Whitespace">${ICONS.ws}</span>
+              <div class="res-seg ${isCurrBar1 ? 'is-boxed' : 'is-calmed'}">
+                ${[['none','Off'],['spaces','Spaces'],['all','All']].map(([m,l]) => `<button type="button" class="${state.whitespace === m ? 'is-on' : ''}" data-act="setWs" data-val="${m}">${l}</button>`).join('')}
+              </div>
+              <span style="color:var(--text-muted);display:inline-grid;place-items:center;" title="Sort text by">${ICONS.ruler}</span>
+              <div class="res-seg ${isCurrBar1 ? 'is-boxed' : 'is-calmed'}">
+                ${[['value','Value'],['chars','Chars'],['bytes','Bytes']].map(([m,l]) => `<button type="button" class="${state.sortText === m ? 'is-on' : ''}" data-act="setSort" data-val="${m}">${l}</button>`).join('')}
+              </div>` : ''}
+          `}
+
+          <span class="out-div"></span>
+          <div class="res-seg ${segCls}">
+            <button type="button" class="ic-only ${state.drawer === 'profile' ? 'is-on' : ''}" data-act="toggleDrawer" data-drawer="profile" title="Column Profile">${ICONS.stats}</button>
+            <button type="button" class="ic-only ${state.rowSizeOn ? 'is-on' : ''}" data-act="toggleRowSize" title="Row size gutter bar">${ICONS.rowSize}</button>
+            <button type="button" class="ic-only ${state.drawer === 'pivot' ? 'is-on' : ''}" data-act="toggleDrawer" data-drawer="pivot" title="Pivot Builder">${ICONS.pivot}</button>
+            <button type="button" class="ic-only" data-act="toast" data-msg="Compare results picker" title="Compare Results">${ICONS.compare}</button>
+            <button type="button" class="ic-only" data-act="toast" data-msg="Transposed grid view" title="Transpose Grid">${ICONS.transpose}</button>
+          </div>
+          <div class="res-seg ${isCurrBar1 ? 'is-boxed' : ''}">
+            <button type="button" class="ic-only is-on" title="Tabs / Stacked layout">${ICONS.tabs}</button>
+            <button type="button" class="ic-only" data-act="toast" data-msg="Close all results to free memory" title="Close Results">${ICONS.close}</button>
+            <button type="button" class="ic-only" title="More results tools">${ICONS.more}</button>
+          </div>
+        </div>`;
+    }
+
+    const statusHtml = isEmpty ? `<div style="flex:1;"></div>` : `
+      <div class="out-status" style="${isCurrBar1 ? 'max-width:126px;' : ''}" title="Query executed successfully · 130 rows · 0.042 s">
+        <span class="st-ok">${ICONS.check}</span>
+        <strong>Completed</strong> · 130 rows · 0.042 s
+      </div>`;
+
+    let bodyHtml = '';
+    if (isEmpty) {
+      bodyHtml = `
+        <div class="wb-empty-state">
+          <span style="color:var(--icon-muted);">${ICONS.table}</span>
+          <strong>Query results</strong>
+          <div style="font-size:12px;">Connect this query to a server to execute it.</div>
+        </div>`;
+    } else if (state.outputView === 'messages') {
+      bodyHtml = `
+        <div class="wb-messages-view">
+          <div>(100 rows affected)</div>
+          <div>(10 rows affected)</div>
+          <div>(20 rows affected)</div>
+          <div class="msg-meta">Completion time: 2026-11-22T21:14:02.0420000-06:00</div>
+        </div>`;
+    } else if (state.outputView === 'stats') {
+      bodyHtml = `
+        <div class="wb-messages-view" style="font-family:var(--font-ui);">
+          <strong style="color:var(--text-strong);">Client Statistics — Trial 1</strong>
+          <div style="margin-top:6px;color:var(--text-muted);">Server round trips: 1 · TDS packets received: 14 · Bytes received: 29,482 · Total execution time: 42 ms</div>
+        </div>`;
+    } else {
+      const gutterBugCls = isCurrGrid ? 'grid-gutter-bug' : '';
+      const alignCls = isCurrGrid ? 'align-legacy' : '';
+
+      const drawerHtml = state.drawer === 'profile' ? `
+        <aside class="wb-side-drawer">
+          <div class="drawer-head">
+            <span>Column Profile · ${rs.name}</span>
+            <button type="button" class="wb-tab-act" data-act="toggleDrawer" data-drawer="profile">${ICONS.close}</button>
+          </div>
+          <div class="drawer-body">
+            <div style="font-size:11px;color:var(--text-muted);padding:0 2px;">Row size: largest <strong style="color:var(--warning);">14.2 KB</strong> (Row 4) · avg 182 B</div>
+            <div class="prof-card">
+              <div class="prof-card-top"><span>TotalAmount</span><span>decimal(18,2)</span></div>
+              <div class="prof-kv"><span>NULLs</span><strong>0 (0%)</strong></div>
+              <div class="prof-kv"><span>Distinct</span><strong>98</strong></div>
+              <div class="prof-kv"><span>Min / Max</span><strong>-395.95 / 42,190.75</strong></div>
+              <div class="prof-bars">
+                <i style="height:22%"></i><i style="height:55%"></i><i style="height:88%"></i><i style="height:100%"></i>
+                <i style="height:68%"></i><i style="height:45%"></i><i style="height:30%"></i><i style="height:18%"></i>
+              </div>
+            </div>
+            <div class="prof-card">
+              <div class="prof-card-top"><span>OrderStatus</span><span>varchar(16)</span></div>
+              <div class="prof-kv"><span>NULLs</span><strong>0</strong></div>
+              <div class="prof-kv"><span>Distinct</span><strong>4</strong></div>
+              <div class="prof-kv"><span>Top value</span><strong>Shipped (54%)</strong></div>
+              <div class="prof-bars">
+                <i style="height:100%"></i><i style="height:62%"></i><i style="height:28%"></i><i style="height:14%"></i>
+              </div>
+            </div>
+          </div>
+        </aside>` : state.drawer === 'pivot' ? `
+        <aside class="wb-side-drawer">
+          <div class="drawer-head">
+            <span>Pivot · ${rs.rows}</span>
+            <button type="button" class="wb-tab-act" data-act="toggleDrawer" data-drawer="pivot">${ICONS.close}</button>
+          </div>
+          <div class="drawer-body">
+            <div style="font-size:11px;color:var(--text-muted);">Source: <strong style="color:var(--text);">${rs.name}</strong></div>
+            <div class="pivot-field"><label>Rows</label><select><option>OrderStatus</option><option>CustomerName</option></select></div>
+            <div class="pivot-field"><label>Columns</label><select><option>(None)</option><option>OrderStatus</option></select></div>
+            <div class="pivot-field"><label>Values</label><select><option>Sum(TotalAmount)</option><option>Count(Rows)</option></select></div>
+          </div>
+          <div class="pivot-foot">
+            <button type="button" class="wb-exec-btn" data-act="selectResult" data-res="r2">Build Pivot</button>
+          </div>
+        </aside>` : '';
+
+      bodyHtml = `
+        <div class="wb-rt-bar2">
+          <div class="rt-tabs-strip">
+            ${Object.entries(RESULT_SETS).map(([id, item]) => `
+              <div class="rt-tab ${state.selectedResult === id ? 'is-selected' : ''}" data-act="selectResult" data-res="${id}">
+                <span>${item.name}</span>
+                ${item.hasPivot ? `<span class="rt-pivot-dot" title="Includes Pivot view"></span>` : ''}
+                <span class="rt-tab-x">${ICONS.close}</span>
+              </div>`).join('')}
+          </div>
+          ${isSmart2 && !rs.hasPivot ? `
+            <div class="rt-inline-right">
+              <span>${rs.num} · ${rs.rows} · ${rs.cols}</span>
+              <button type="button" class="rt-save-btn" data-act="toast" data-msg="Save ${rs.name} As… (CSV / JSON / Excel)">${ICONS.save}<span>Save</span>${ICONS.chevDown}</button>
+            </div>` : ''}
+        </div>
+        ${showBar3 ? `
+          <div class="wb-rt-bar3 ${o.resultsGrid === 'compact3bar' ? 'is-compact-3' : ''}">
+            <button type="button" class="rt-view-pill ${!showPivotView ? 'is-selected' : ''}" data-act="setResView" data-val="table">Table</button>
+            ${rs.hasPivot ? `<button type="button" class="rt-view-pill ${showPivotView ? 'is-selected' : ''}" data-act="setResView" data-val="pivot">Pivot <span class="rt-pivot-dot"></span></button>` : ''}
+            <span>${rs.num} · ${rs.rows} · ${rs.cols}</span>
+            <button type="button" class="rt-save-btn" style="margin-left:auto;" data-act="toast" data-msg="Save ${rs.name} As…">${ICONS.save}<span>Save</span></button>
+          </div>` : ''}
+        <div class="wb-results-body">
+          <div class="wb-grid-wrap">
+            <table class="wb-grid ${alignCls} ${gutterBugCls}">
+              <thead>
+                <tr>
+                  <th class="rn-cell">#</th>
+                  ${rs.columns.map(c => `<th class="${c.num ? 'is-num-hdr' : ''}"><span class="col-name">${c.name}</span><span class="col-type">${c.type}</span></th>`).join('')}
+                </tr>
+              </thead>
+              <tbody>
+                ${rows.map((r, i) => `
+                  <tr class="${i === 0 ? 'is-cur-row' : ''}">
+                    <td class="rn-cell" title="Row ${r.rn} · ${r.bytes.toLocaleString()} bytes${r.outlier ? ' (Outlier > 4 KB)' : ''}">
+                      ${state.rowSizeOn ? `
+                        <span class="rn-bar ${r.outlier ? 'is-outlier' : 'is-normal'}" style="width:${r.outlier ? '94%' : '22%'};"></span>
+                        ${r.outlier ? `<span class="rn-bar is-outlier-edge"></span>` : ''}
+                      ` : ''}
+                      ${r.rn}
+                    </td>
+                    ${rs.columns.map(c => {
+                      const v = r[c.k];
+                      if (v === null || v === undefined) return `<td class="${c.num ? 'is-num' : ''}"><span class="cell-null">NULL</span></td>`;
+                      const isNeg = c.num && String(v).startsWith('-');
+                      return `<td class="${c.num ? 'is-num' : ''} ${isNeg ? 'cell-neg' : ''}">${v}</td>`;
+                    }).join('')}
+                  </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>
+          ${drawerHtml}
+        </div>`;
+    }
+
+    return `
+      <section class="wb-output-pane">
+        <div class="wb-out-bar1">
+          ${viewsHtml}
+          ${toolsHtml}
+          ${statusHtml}
+          <button type="button" class="wb-icon-btn" title="Results panel menu">${ICONS.more}</button>
+        </div>
+        ${bodyHtml}
+      </section>`;
+  }
+
+  function renderStatusBar() {
+    const o = state.opts;
+    const isEmpty = state.scenario === 'empty';
+    const isCurrent = o.statusMemory === 'current';
+    const curTab = TABS.find(t => t.id === state.activeTab) || TABS[0];
+    const isStaging = !isEmpty && curTab.env === 'staging';
+    const totalMb = 32 + state.memItems.reduce((a, m) => a + parseInt(m.stored, 10), 0);
+
+    const barCls = state.executing ? 'is-executing' : isEmpty ? 'is-disconnected' : isStaging ? 'is-staging' : '';
+
+    const leftHtml = isCurrent ? `
+      <div class="sb-left">
+        <span class="sb-item"><span class="sb-dot"></span>Ready</span>
+        ${!isEmpty && curTab.env ? `<span class="env-pill ${curTab.env}">${curTab.env === 'prod' ? 'PROD' : 'STAGING'}</span>` : ''}
+        <span class="sb-item">${ICONS.plug} ${isEmpty ? 'Disconnected.' : `Connected. ${curTab.server} (16.0) <span class="sb-pipe">|</span> sa (51) <span class="sb-pipe">|</span> ${state.activeDb}`}</span>
+      </div>` : `
+      <div class="sb-left">
+        ${!isEmpty && curTab.env ? `<span class="env-pill ${curTab.env}">${curTab.env === 'prod' ? 'PROD' : 'STAGING'}</span>` : ''}
+        <span class="sb-item">
+          <span class="sb-dot" style="${isEmpty ? 'background:var(--text-muted);' : ''}"></span>
+          ${state.executing ? `<strong>Executing query…</strong> (${state.execElapsed}s)` : isEmpty ? 'Disconnected' : `<strong>${curTab.server}</strong> <span style="opacity:.7">· ${state.activeDb} · sa (51)</span>`}
+        </span>
+      </div>`;
+
+    const rightHtml = isCurrent ? `
+      <div class="sb-right">
+        <span class="sb-item">Ln 9 Col 28 Ch 28</span>
+        <span class="sb-pipe">|</span><span>INS</span>
+        <span class="sb-pipe">|</span><span>CRLF</span>
+        <span class="sb-pipe">|</span><span>UTF-8</span>
+        <span class="sb-pipe">|</span><span>IntelliSense off</span>
+        <span class="sb-pipe">|</span><span>SQL analysis paused</span>
+        <button type="button" class="sb-btn ${state.openPopover === 'memory' ? 'is-open' : ''}" data-act="togglePop" data-pop="memory">
+          <span class="mem-ring" style="--ring-c:var(--chart-blue);--ring-p:12%;"></span>
+          <span class="mem-ring" style="--ring-c:var(--chart-purple);--ring-p:${Math.min(95, Math.round(totalMb/2.5))}%;"></span>
+          <span>Memory</span>
+        </button>
+      </div>` : `
+      <div class="sb-right">
+        <button type="button" class="sb-btn" data-act="toast" data-msg="Go to Line (Ctrl+G)">Ln 9, Col 28</button>
+        <span class="sb-group-sep"></span>
+        <span class="sb-item">UTF-8 · CRLF</span>
+        <span class="sb-group-sep"></span>
+        <button type="button" class="sb-btn" data-act="toast" data-msg="SQL IntelliSense & Analysis settings">${ICONS.sparkle} SQL: Paused</button>
+        <span class="sb-group-sep"></span>
+        <button type="button" class="sb-btn ${state.openPopover === 'memory' ? 'is-open' : ''}" data-act="togglePop" data-pop="memory" title="Backend memory budget (click for Nerd metrics & quick-free)">
+          <span class="mem-ring" style="--ring-c:var(--chart-blue);--ring-p:14%;"></span>
+          <span class="mem-ring" style="--ring-c:var(--chart-purple);--ring-p:${Math.min(95, Math.round((totalMb-32)/2.56))}%;"></span>
+          <span>${isEmpty ? '32 MB' : `${totalMb} MB`}</span>
+        </button>
+      </div>`;
+
+    const resMb = state.memItems.reduce((a, m) => a + parseInt(m.stored, 10), 0);
+    const memPopover = `
+      <div class="wb-mem-popover ${state.openPopover === 'memory' ? 'is-open' : ''}">
+        <div class="mem-head">
+          <h3>Memory usage</h3>
+          <span style="font-size:11px;color:var(--text-muted);">SQL backend</span>
+        </div>
+        <div class="mem-sec">
+          <div class="mem-row-hdr">
+            <span class="mem-ring" style="--ring-c:var(--chart-blue);--ring-p:6%;"></span>
+            <strong>Search Indexer</strong>
+            <span>6% · Normal</span>
+          </div>
+          <div class="mem-sub"><span>32 MB / 512 MB</span><span style="color:var(--text-muted);">480 MB left</span></div>
+        </div>
+        <div class="mem-sec">
+          <div class="mem-row-hdr">
+            <span class="mem-ring" style="--ring-c:var(--chart-purple);--ring-p:${Math.round(resMb/2.56)}%;"></span>
+            <strong>Results</strong>
+            <span>${Math.round(resMb/2.56)}% · Normal</span>
+          </div>
+          <div class="mem-sub"><span>${resMb} MB / 256 MB</span><span style="color:var(--text-muted);">${256 - resMb} MB left</span></div>
+          <div class="mem-packed"><span class="mem-chip-green">−108 MB packed</span> 223 MB of rows held in ${resMb} MB</div>
+          <div class="mem-tiles">
+            <div class="mem-tile"><small>Compressed</small><b>83%</b><small>of rows, by size</small></div>
+            <div class="mem-tile"><small>Ratio</small><b>2.58×</b><small>zstd · level 2</small></div>
+            <div class="mem-tile is-saved"><small>Saved</small><b>108 MB</b><small>48% of 223 MB</small></div>
+          </div>
+          <div class="mem-big-hdr">
+            <span>Biggest Results</span>
+            ${!isCurrent && state.memItems.length ? `<button type="button" style="color:var(--text-accent);font-size:10.5px;text-transform:none;letter-spacing:0;" data-act="freeAllMem">Close all</button>` : `<span>rows → stored</span>`}
+          </div>
+          <div class="mem-big-list ${isCurrent ? 'is-legacy-bug' : ''}">
+            ${state.memItems.length ? state.memItems.map(m => `
+              <div class="mem-big-row">
+                <span class="mem-big-name" title="${m.tab} · ${m.res}">
+                  <span class="mem-big-tab">${m.tab}</span>
+                  <span style="color:var(--text-muted);">·</span>
+                  <span class="mem-big-res">${m.res}</span>
+                </span>
+                <span style="color:var(--text-muted);font-size:11px;">${m.raw}</span>
+                <strong style="font-size:11px;">${m.stored}</strong>
+                <span class="mem-state-pill ${m.state}">${m.label}</span>
+                <button type="button" class="mem-free-btn" data-act="freeMem" data-id="${m.id}" title="Release ${m.res}">${ICONS.close}</button>
+              </div>`).join('') : `<div style="font-size:11.5px;color:var(--text-muted);padding:4px 0;">No cached result sets. <button type="button" style="color:var(--text-accent);text-decoration:underline;" data-act="restoreMem">Restore sample</button></div>`}
+          </div>
+        </div>
+      </div>`;
+
+    return `<footer class="wb-statusbar ${barCls}">${leftHtml}${rightHtml}${memPopover}</footer>`;
+  }
+
+  function renderWorkbench() {
+    const o = state.opts;
+    const wb = document.getElementById('wbWindow');
+    wb.classList.toggle('is-narrow', state.scenario === 'narrow');
+
+    const isSplit = state.scenario === 'split';
+    const isEmpty = state.scenario === 'empty';
+    const visibleTabs = isEmpty ? [TABS[0]] : TABS;
+    const curTab = visibleTabs.find(t => t.id === state.activeTab) || visibleTabs[0];
+    const isQuery = curTab.kind === 'sql';
+
+    let editorPaneHtml = '';
+    if (isSplit) {
+      const leftTabs = [TABS[0], TABS[2]];
+      const rightTabs = [TABS[1]];
+      if (o.tabOrder === 'tabsAbove') {
+        editorPaneHtml = `
+          <div class="wb-groups-row">
+            <div class="wb-editor-group">
+              ${renderTabBar(leftTabs, 'q1')}
+              ${renderQueryBar(TABS[0], true)}
+              ${renderSqlEditor(TABS[0])}
+            </div>
+            <div class="wb-editor-group">
+              ${renderTabBar(rightTabs, 'q2')}
+              ${renderQueryBar(TABS[1], true)}
+              ${renderSqlEditor(TABS[1])}
+            </div>
+          </div>`;
+      } else {
+        editorPaneHtml = `
+          ${renderQueryBar(TABS[0], false)}
+          <div class="wb-groups-row">
+            <div class="wb-editor-group">
+              ${renderTabBar(leftTabs, 'q1')}
+              ${renderSqlEditor(TABS[0])}
+            </div>
+            <div class="wb-editor-group">
+              ${renderTabBar(rightTabs, 'q2')}
+              ${renderSqlEditor(TABS[1])}
+            </div>
+          </div>`;
+      }
+    } else {
+      if (o.tabOrder === 'tabsAbove') {
+        editorPaneHtml = `
+          ${renderTabBar(visibleTabs, curTab.id)}
+          ${isQuery ? renderQueryBar(curTab, false) : ''}
+          ${isQuery ? renderSqlEditor(curTab) : renderActivityView()}`;
+      } else {
+        editorPaneHtml = `
+          ${isQuery ? renderQueryBar(curTab, false) : ''}
+          ${renderTabBar(visibleTabs, curTab.id)}
+          ${isQuery ? renderSqlEditor(curTab) : renderActivityView()}`;
+      }
+    }
+
+    const pinsHtml = CALLOUTS.map(c => {
+      const st = Object.entries(c.pos).map(([k, v]) => `${k}:${v}`).join(';');
+      return `<button type="button" class="pin-badge sev-${c.sev}" data-pin="${c.n}" style="${st}" title="${c.title}">${c.n}</button>`;
+    }).join('');
+
+    wb.innerHTML = `
+      ${renderTitleBar()}
+      <div class="wb-main-split">
+        ${renderOE()}
+        <div class="wb-splitter-v" id="oeSplitter" title="Drag to resize Object Explorer"></div>
+        <div class="wb-right">
+          <div class="wb-editor-pane">${editorPaneHtml}</div>
+          ${isQuery ? `<div class="wb-splitter-h" title="Splitter"></div>${renderOutputPane()}` : ''}
+        </div>
+      </div>
+      ${renderStatusBar()}
+      ${pinsHtml}`;
+
+    bindWorkbenchInteractions();
+  }
+
+  function renderConfigPanel() {
+    const body = document.getElementById('configBody');
+    body.innerHTML = AXES.map(ax => `
+      <div class="cfg-axis">
+        <div class="cfg-axis-top">
+          <span class="cfg-axis-title">${ax.title}</span>
+          <span class="cfg-axis-tag ${ax.tagClass}">${ax.tag}</span>
+        </div>
+        <div class="cfg-choices">
+          ${ax.choices.map(ch => `
+            <button type="button" class="cfg-choice ${state.opts[ax.id] === ch.id ? 'is-picked' : ''}" data-axis="${ax.id}" data-val="${ch.id}">
+              <div class="cfg-choice-name">
+                <span>${ch.label}</span>
+                ${ch.rec ? `<span style="font-size:9.5px;opacity:.75;font-weight:600;">REC</span>` : ''}
+              </div>
+              <div class="cfg-choice-note">${ch.note}</div>
+            </button>`).join('')}
+        </div>
+      </div>`).join('');
+
+    body.querySelectorAll('.cfg-choice').forEach(btn => {
+      btn.addEventListener('click', () => {
+        state.opts[btn.dataset.axis] = btn.dataset.val;
+        state.preset = detectPreset();
+        syncChrome();
+        renderWorkbench();
+        renderConfigPanel();
+      });
+    });
+  }
+
+  function renderCalloutDeck() {
+    const deck = document.getElementById('calloutDeck');
+    deck.innerHTML = CALLOUTS.map(c => `
+      <div class="callout-card" data-card="${c.n}">
+        <div class="callout-top">
+          <span class="callout-num sev-${c.sev}">${c.n}</span>
+          <span class="callout-title">${c.title}</span>
+          <span class="callout-tag">${c.tag}</span>
+        </div>
+        <div class="callout-desc">${c.desc}</div>
+      </div>`).join('');
+
+    deck.querySelectorAll('.callout-card').forEach(card => {
+      const n = card.dataset.card;
+      card.addEventListener('mouseenter', () => highlightPin(n, true));
+      card.addEventListener('mouseleave', () => highlightPin(n, false));
+    });
+  }
+
+  function highlightPin(n, on) {
+    document.querySelectorAll(`[data-pin="${n}"], [data-card="${n}"]`).forEach(el => el.classList.toggle('is-hot', on));
+  }
+
+  function syncChrome() {
+    const root = document.documentElement;
+    root.dataset.theme = state.theme;
+    root.dataset.density = state.density;
+    root.dataset.borders = state.opts.borders;
+    root.dataset.mode = state.mode;
+    root.dataset.pins = state.pins ? 'on' : 'off';
+
+    // Sync shared row-1 baseline height (--h-doc-tab) so OE Header and Document Tab Strip align 1:1 with zero stair-step
+    const tabBase = state.opts.tabStyle === 'compact1' ? 34 : state.opts.tabStyle === 'current2' ? 44 : 40;
+    const densityBump = state.density === 'comfortable' ? 4 : 0;
+    root.style.setProperty('--h-doc-tab', `${tabBase + densityBump}px`);
+
+    // Toggle themed scrollbars off when in full baseline
+    document.body.classList.toggle('themed-scroll', state.opts.borders !== 'current' || state.opts.resultsGrid !== 'current');
+
+    // Update topbar buttons
+    document.querySelectorAll('#presetBar button').forEach(b => b.classList.toggle('is-active', b.dataset.preset === state.preset));
+    document.querySelectorAll('#themeBar button').forEach(b => b.classList.toggle('is-active', b.dataset.theme === state.theme));
+    document.querySelectorAll('#densityBar button').forEach(b => b.classList.toggle('is-active', b.dataset.density === state.density));
+    document.querySelectorAll('#scenarioBar button').forEach(b => b.classList.toggle('is-active', b.dataset.scenario === state.scenario));
+
+    document.getElementById('pinsBtn').classList.toggle('is-on', state.pins);
+    document.getElementById('pinsBtn').textContent = state.pins ? 'Pins: On' : 'Pins: Off';
+    document.getElementById('configToggleBtn').classList.toggle('is-on', state.configOpen);
+    document.getElementById('configPanel').classList.toggle('is-collapsed', !state.configOpen);
+
+    // Headline & telemetry
+    const presetLabel = PRESETS[state.preset]?.name || 'Custom Mix';
+    document.getElementById('stageHeadline').textContent = `Workbench Polish — ${presetLabel}`;
+    const saved = computeReclaimedPx();
+    document.getElementById('telemetry').innerHTML = `
+      <span class="tel-badge ${saved === 0 ? 'is-neutral' : ''}">${saved > 0 ? `+${saved} px vertical workspace reclaimed` : '0 px delta (Baseline heights)'}</span>
+      <span>OE: ${state.oeWidth}px</span>`;
+  }
+
+  /* ==========================================================================
+     WORKBENCH EVENT BINDING
+     ========================================================================== */
+  function bindWorkbenchInteractions() {
+    const wb = document.getElementById('wbWindow');
+
+    wb.querySelectorAll('[data-act]').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const act = el.dataset.act;
+        if (act === 'openTab') {
+          state.activeTab = el.dataset.tab;
+          state.openPopover = null;
+          renderWorkbench();
+        } else if (act === 'togglePin') {
+          const t = TABS.find(x => x.id === el.dataset.tab);
+          if (t) t.pinned = !t.pinned;
+          renderWorkbench();
+        } else if (act === 'toggleOe') {
+          const k = el.dataset.node;
+          state.oeExpanded[k] = !state.oeExpanded[k];
+          renderWorkbench();
+        } else if (act === 'toggleSchema') {
+          state.oeSchemaGroup = !state.oeSchemaGroup;
+          renderWorkbench();
+        } else if (act === 'togglePop') {
+          const p = el.dataset.pop;
+          state.openPopover = state.openPopover === p ? null : p;
+          renderWorkbench();
+        } else if (act === 'toggleActual') {
+          state.actualPlan = !state.actualPlan;
+          renderWorkbench();
+        } else if (act === 'toggleLive') {
+          state.livePlan = !state.livePlan;
+          renderWorkbench();
+        } else if (act === 'toggleStats') {
+          state.clientStats = !state.clientStats;
+          renderWorkbench();
+        } else if (act === 'toggleSel') {
+          state.selectionActive = !state.selectionActive;
+          renderWorkbench();
+        } else if (act === 'runExec') {
+          startExecution();
+        } else if (act === 'cancelExec') {
+          stopExecution(true);
+        } else if (act === 'setOutView') {
+          state.outputView = el.dataset.view;
+          renderWorkbench();
+        } else if (act === 'selectResult') {
+          state.selectedResult = el.dataset.res;
+          state.selectedResultView = 'table';
+          state.outputView = 'results';
+          renderWorkbench();
+        } else if (act === 'setResView') {
+          state.selectedResultView = el.dataset.val;
+          renderWorkbench();
+        } else if (act === 'toggleDrawer') {
+          const d = el.dataset.drawer;
+          state.drawer = state.drawer === d ? null : d;
+          renderWorkbench();
+        } else if (act === 'toggleRowSize') {
+          state.rowSizeOn = !state.rowSizeOn;
+          renderWorkbench();
+        } else if (act === 'setWs') {
+          state.whitespace = el.dataset.val;
+          state.openPopover = null;
+          renderWorkbench();
+        } else if (act === 'setSort') {
+          state.sortText = el.dataset.val;
+          state.openPopover = null;
+          renderWorkbench();
+        } else if (act === 'freeMem') {
+          state.memItems = state.memItems.filter(m => m.id !== el.dataset.id);
+          showToast('Released result set from backend memory');
+          renderWorkbench();
+        } else if (act === 'freeAllMem') {
+          state.memItems = [];
+          showToast('Closed all cached result sets');
+          renderWorkbench();
+        } else if (act === 'restoreMem') {
+          state.memItems = [
+            { id: 'm1', tab: 'SQLQuery1.sql', res: 'Validation Cases · Result 2', raw: '92 MB', stored: '38 MB', state: 'unpack', label: 'Unpacking 62%' },
+            { id: 'm2', tab: 'SQLQuery1.sql', res: 'Summary Metrics · Result 3', raw: '92 MB', stored: '38 MB', state: 'packed', label: 'Packed' },
+            { id: 'm3', tab: 'SQLQuery2.sql', res: 'Active Orders · Result 1', raw: '38 MB', stored: '38 MB', state: 'raw', label: 'Raw' }
+          ];
+          renderWorkbench();
+        } else if (act === 'setScenario') {
+          applyScenario(el.dataset.scenario);
+        } else if (act === 'toast') {
+          showToast(el.dataset.msg);
+        }
+      });
+    });
+
+    const dbSel = wb.querySelector('[data-act="changeDb"]');
+    if (dbSel) {
+      dbSel.addEventListener('change', () => {
+        state.activeDb = dbSel.value;
+        renderWorkbench();
+      });
+    }
+
+    const searchInput = document.getElementById('oeSearchInput');
+    if (searchInput) {
+      searchInput.addEventListener('input', () => {
+        const pos = searchInput.selectionStart;
+        state.oeFilter = searchInput.value;
+        renderWorkbench();
+        const next = document.getElementById('oeSearchInput');
+        if (next) { next.focus(); next.setSelectionRange(pos, pos); }
+      });
+    }
+
+    // Pins hover link
+    wb.querySelectorAll('.pin-badge').forEach(pin => {
+      const n = pin.dataset.pin;
+      pin.addEventListener('mouseenter', () => highlightPin(n, true));
+      pin.addEventListener('mouseleave', () => highlightPin(n, false));
+      pin.addEventListener('click', (e) => {
+        e.stopPropagation();
+        document.querySelector(`[data-card="${n}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      });
+    });
+
+    // OE Splitter Drag
+    const splitter = document.getElementById('oeSplitter');
+    if (splitter) {
+      splitter.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        const startX = e.clientX;
+        const startW = state.oeWidth;
+        splitter.classList.add('is-dragging');
+        const onMove = (ev) => {
+          state.oeWidth = Math.max(210, Math.min(380, startW + (ev.clientX - startX)));
+          const oeEl = wb.querySelector('.wb-oe');
+          if (oeEl) oeEl.style.setProperty('--oe-w', `${state.oeWidth}px`);
+          syncChrome();
+        };
+        const onUp = () => {
+          splitter.classList.remove('is-dragging');
+          window.removeEventListener('mousemove', onMove);
+          window.removeEventListener('mouseup', onUp);
+        };
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', onUp);
+      });
+    }
+
+    // Object Explorer Sticky Top/Bottom Pinned Server Bands (exact tree-model.ts pinnedServerBands math!)
+    const treeEl = document.getElementById('oeTreeScroll');
+    const topBand = document.getElementById('oePinTop');
+    const botBand = document.getElementById('oePinBottom');
+    const popTop = document.getElementById('oePinPopTop');
+    const popBot = document.getElementById('oePinPopBottom');
+    if (treeEl && topBand && botBand && window.__OE_SERVERS && window.__renderServerBand) {
+      if (state.oeScrollTop) treeEl.scrollTop = state.oeScrollTop;
+      const serverEls = [...treeEl.querySelectorAll('[data-oe-server]')];
+      const headerHeight = state.opts.oeStyle === 'current' ? 30 : 44;
+      const overflowH = 22;
+      const topLimit = 2, bottomLimit = 2;
+
+      const computeEdge = (items, distanceFn, limit, wholeHeaders) => {
+        const viewport = treeEl.clientHeight;
+        const budget = Math.max(0, Math.min(Math.floor(viewport / 3), Math.floor((viewport - headerHeight) / 2)));
+        if (!limit || budget < overflowH) return { headers: [], offsets: [], overflow: [], overflowHeight: 0, height: 0 };
+        const fit = (count) => {
+          const slots = Math.min(limit, Math.floor(budget / headerHeight));
+          const shown = Math.min(count, items.length <= slots ? slots : Math.floor((budget - overflowH) / headerHeight), limit);
+          return { shown, height: shown * headerHeight + (count > shown ? overflowH : 0) };
+        };
+        let count = 0;
+        while (count < items.length && distanceFn(items[count]) < fit(count).height) count++;
+        if (!count) return { headers: [], offsets: [], overflow: [], overflowHeight: 0, height: 0 };
+        const next = fit(count), prev = fit(count - 1);
+        const overflow = items.slice(0, count - next.shown);
+        if (!next.shown) {
+          const h = Math.min(overflowH, Math.max(0, -distanceFn(items[0])));
+          return { headers: [], offsets: [], overflow, overflowHeight: h, height: h };
+        }
+        const incoming = distanceFn(items[count - 1]), travel = prev.height - (next.height - headerHeight);
+        if (!wholeHeaders && prev.shown && travel > 0 && incoming > next.height - headerHeight) {
+          const moved = prev.height - incoming, start = prev.height - prev.shown * headerHeight;
+          const headers = items.slice(count - 1 - prev.shown, count);
+          const offsets = headers.map((_, idx) => start + idx * headerHeight - moved);
+          const oh = prev.height > prev.shown * headerHeight ? overflowH : overflowH * moved / travel;
+          return { headers, offsets, overflow, overflowHeight: oh, height: incoming + headerHeight };
+        }
+        const headers = items.slice(count - next.shown, count);
+        const oh = overflow.length ? overflowH : 0;
+        return { headers, offsets: headers.map((_, idx) => oh + idx * headerHeight), overflow, overflowHeight: oh, height: next.height };
+      };
+
+      const renderBand = (bandEl, popEl, edgeName, band) => {
+        bandEl.style.height = band.height ? `${band.height}px` : '';
+        if (!band.height) { bandEl.innerHTML = ''; popEl.classList.remove('is-open'); return; }
+        const moreBtn = band.overflow.length > 0 ? `
+          <div class="oe-pin-overflow" style="height:${band.overflowHeight}px;">
+            <button type="button" class="oe-pin-more-btn" data-pin-more="${edgeName}">
+              <span>… ${band.overflow.length} more ${edgeName === 'top' ? 'above' : 'below'}</span>
+              ${edgeName === 'top' ? ICONS.chevDown : ICONS.chevRight}
+            </button>
+          </div>` : '';
+        const cards = band.headers.map((item, i) => window.__renderServerBand(item.srv, edgeName, band.offsets[i])).join('');
+        bandEl.innerHTML = (edgeName === 'top' ? moreBtn : '') + cards + (edgeName === 'bottom' ? moreBtn : '');
+
+        bandEl.querySelectorAll('[data-jump-server]').forEach(btn => {
+          btn.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            const target = serverEls.find(s => s.dataset.oeServer === btn.dataset.jumpServer);
+            if (target) treeEl.scrollTo({ top: Math.max(0, target.offsetTop - (edgeName === 'top' ? 0 : 44)), behavior: 'smooth' });
+          });
+        });
+        const moreEl = bandEl.querySelector('[data-pin-more]');
+        if (moreEl) {
+          moreEl.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            const isOpen = popEl.classList.contains('is-open');
+            popTop.classList.remove('is-open'); popBot.classList.remove('is-open');
+            if (!isOpen) {
+              popEl.innerHTML = band.overflow.map(item => window.__renderServerBand(item.srv, edgeName)).join('');
+              popEl.classList.add('is-open');
+              popEl.querySelectorAll('[data-jump-server]').forEach(btn => {
+                btn.addEventListener('click', (e2) => {
+                  e2.stopPropagation();
+                  popEl.classList.remove('is-open');
+                  const target = serverEls.find(s => s.dataset.oeServer === btn.dataset.jumpServer);
+                  if (target) treeEl.scrollTo({ top: target.offsetTop, behavior: 'smooth' });
+                });
+              });
+            }
+          });
+        }
+      };
+
+      const syncBands = () => {
+        const scrollTop = treeEl.scrollTop;
+        state.oeScrollTop = scrollTop;
+        const viewport = treeEl.clientHeight;
+        const items = serverEls.map(el => ({
+          el,
+          top: el.offsetTop,
+          srv: window.__OE_SERVERS.find(s => s.id === el.dataset.oeServer)
+        })).filter(x => x.srv);
+        const top = computeEdge(items, it => it.top - scrollTop, topLimit, false);
+        const lower = computeEdge([...items].reverse(), it => scrollTop + viewport - it.top - headerHeight, bottomLimit, true);
+        const bottom = {
+          ...lower,
+          headers: [...lower.headers].reverse(),
+          offsets: [...lower.offsets].reverse().map(off => lower.height - off - headerHeight),
+          overflow: [...lower.overflow].reverse()
+        };
+        renderBand(topBand, popTop, 'top', top);
+        renderBand(botBand, popBot, 'bottom', bottom);
+      };
+
+      treeEl.addEventListener('scroll', syncBands, { passive: true });
+      [topBand, botBand].forEach(b => b.addEventListener('wheel', (ev) => {
+        ev.preventDefault();
+        treeEl.scrollTop += ev.deltaY;
+      }, { passive: false }));
+      syncBands();
+    }
+  }
+
+  function startExecution() {
+    clearInterval(execTimer);
+    state.executing = true;
+    state.openPopover = null;
+    let ms = 0;
+    state.execElapsed = '0.0';
+    renderWorkbench();
+    execTimer = setInterval(() => {
+      ms += 100;
+      state.execElapsed = (ms / 1000).toFixed(1);
+      if (ms >= 1600) stopExecution(false);
+      else renderWorkbench();
+    }, 100);
+  }
+
+  function stopExecution(cancelled) {
+    clearInterval(execTimer);
+    state.executing = false;
+    showToast(cancelled ? 'Query execution cancelled' : 'Query completed · 130 rows · 0.042 s');
+    renderWorkbench();
+  }
+
+  function applyScenario(sc) {
+    clearInterval(execTimer);
+    state.scenario = sc;
+    state.executing = false;
+    state.openPopover = null;
+    if (sc === 'nonquery') {
+      state.activeTab = 'act';
+    } else if (sc === 'executing') {
+      state.activeTab = 'q1';
+      state.selectionActive = true;
+      state.executing = true;
+      state.execElapsed = '1.4';
+    } else if (sc === 'empty') {
+      state.activeTab = 'q1';
+      state.selectionActive = false;
+      state.drawer = null;
+    } else {
+      state.activeTab = 'q1';
+      state.selectionActive = false;
+    }
+    syncChrome();
+    renderWorkbench();
+  }
+
+  function showToast(msg) {
+    const t = document.getElementById('labToast');
+    t.textContent = msg;
+    t.classList.add('is-show');
+    clearTimeout(t._tid);
+    t._tid = setTimeout(() => t.classList.remove('is-show'), 2200);
+  }
+
+  function exportChoicesMarkdown() {
+    const lines = [
+      `## Selected Workbench v2 Choices (${PRESETS[state.preset]?.name || 'Custom'})`,
+      `- **Theme / Density:** ${state.theme} / ${state.density}`,
+      `- **Vertical Space Reclaimed:** +${computeReclaimedPx()} px`,
+      '',
+      '| Axis | Chosen Option |',
+      '| --- | --- |',
+      ...AXES.map(ax => {
+        const ch = ax.choices.find(c => c.id === state.opts[ax.id]);
+        return `| ${ax.title} | **${ch?.label}** |`;
+      })
+    ];
+    const md = lines.join('\n');
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(md).then(() => showToast('Copied selected choices as Markdown!'), () => showToast('Ready — see console for Markdown'));
+    } else {
+      showToast('Exported to console');
+    }
+    console.log(md);
+  }
+
+  /* ==========================================================================
+     GLOBAL CHROME WIRING
+     ========================================================================== */
+  document.querySelectorAll('#presetBar button').forEach(b => b.addEventListener('click', () => {
+    state.preset = b.dataset.preset;
+    state.opts = { ...PRESETS[state.preset] };
+    syncChrome(); renderWorkbench(); renderConfigPanel();
+  }));
+  document.querySelectorAll('#modeBar button').forEach(b => b.addEventListener('click', () => {
+    state.mode = b.dataset.mode; syncChrome();
+  }));
+  document.querySelectorAll('#themeBar button').forEach(b => b.addEventListener('click', () => {
+    state.theme = b.dataset.theme; syncChrome();
+  }));
+  document.querySelectorAll('#densityBar button').forEach(b => b.addEventListener('click', () => {
+    state.density = b.dataset.density; syncChrome();
+  }));
+  document.querySelectorAll('#scenarioBar button').forEach(b => b.addEventListener('click', () => {
+    applyScenario(b.dataset.scenario);
+  }));
+  document.getElementById('pinsBtn').addEventListener('click', () => {
+    state.pins = !state.pins; syncChrome();
+  });
+  document.getElementById('configToggleBtn').addEventListener('click', () => {
+    state.configOpen = !state.configOpen; syncChrome();
+  });
+  document.getElementById('resetRecBtn').addEventListener('click', () => {
+    state.preset = 'approachB';
+    state.opts = { ...PRESETS.approachB };
+    syncChrome(); renderWorkbench(); renderConfigPanel();
+    showToast('Reset to Approach B (Agreed)');
+  });
+  document.getElementById('exportBtn').addEventListener('click', exportChoicesMarkdown);
+
+  document.addEventListener('click', () => {
+    if (state.openPopover) { state.openPopover = null; renderWorkbench(); }
+  });
+
+  // Initial URL query param support (?preset=baseline&theme=light&scenario=narrow&pop=memory&drawer=profile)
+  const qp = new URLSearchParams(location.search);
+  if (qp.get('preset') && PRESETS[qp.get('preset')]) { state.preset = qp.get('preset'); state.opts = { ...PRESETS[state.preset] }; }
+  if (qp.get('theme') === 'light') state.theme = 'light';
+  if (qp.get('density') === 'comfortable') state.density = 'comfortable';
+  if (qp.get('mode')) state.mode = qp.get('mode');
+  if (qp.get('pins') === 'off') state.pins = false;
+  if (qp.get('config') === 'off') state.configOpen = false;
+  if (qp.get('scenario')) applyScenario(qp.get('scenario'));
+  if (qp.get('pop')) state.openPopover = qp.get('pop');
+  if (qp.get('drawer')) state.drawer = qp.get('drawer');
+  if (qp.get('oeScroll')) state.oeScrollTop = Number(qp.get('oeScroll')) || 0;
+
+  renderCalloutDeck();
+  renderConfigPanel();
+  syncChrome();
+  renderWorkbench();
+})();
+</script>
+</body>
+</html>

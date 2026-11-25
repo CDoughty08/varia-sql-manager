@@ -81,6 +81,8 @@ interface GridProps {
   readonly service: SchedulesService
   /** The read the rows came from: whether each is read-only follows it. */
   readonly model: AgentSchedulesModel
+  /** Whether the login is in SQLAgentOperatorRole, read after the schedules (AG-10): its Enabled boxes follow the answer. */
+  readonly operatorRole: boolean
 }
 const ScheduleGrid = memo(function ScheduleGrid({ documentId, rows, selected: current, edited, busy, service }: GridProps) {
   const drafts = new Set(edited.split(',').filter(Boolean))
@@ -89,12 +91,12 @@ const ScheduleGrid = memo(function ScheduleGrid({ documentId, rows, selected: cu
     <tbody>
       {rows.map(record => {
         const key = String(record.id), selected = current === key
-        const readOnly = !!service.readOnly(documentId, record)
+        const toggle = service.canToggle(documentId, record)
         return <tr key={key} aria-selected={selected} data-disabled={record.enabled ? undefined : true} onClick={() => service.select(documentId, key)}>
           <td><button type="button" className="agent-schedules-row" aria-current={selected || undefined} onClick={event => { event.stopPropagation(); service.select(documentId, key) }}>
             {record.name}{drafts.has(key) && <span className="agent-schedule-tag"> · edited</span>}</button></td>
           <td>{scheduleWhen(record)}</td>
-          <td><input type="checkbox" aria-label={`Enabled: ${record.name}`} checked={record.enabled} disabled={readOnly || busy}
+          <td><input type="checkbox" aria-label={`Enabled: ${record.name}`} checked={record.enabled} disabled={!toggle || busy}
             onClick={event => event.stopPropagation()} onChange={event => { void service.setEnabled(documentId, record.id, event.target.checked) }} /></td>
           <td>{record.jobCount || <span className="agent-schedule-tag">unused</span>}</td>
           <td>{record.owner ?? ''}</td>
@@ -144,7 +146,7 @@ export default function SchedulesDocument({ documentId }: { readonly documentId:
       : model && <div className="agent-schedules-body">
       <div className="agent-schedules-grid-wrap">
         <ScheduleGrid documentId={documentId} rows={rows} {...state.selected ? { selected: state.selected } : {}} edited={Object.keys(state.drafts).sort().join(',')} busy={busy}
-          service={service} model={model} />
+          service={service} model={model} operatorRole={!!state.operatorRole} />
         {!rows.length && <p className="field-note">{model.schedules.length ? 'No schedule matches.' : 'This server has no schedule yet.'}</p>}
       </div>
       <Detail key={state.selected ?? ''} state={state} service={service} />

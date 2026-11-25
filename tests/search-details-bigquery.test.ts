@@ -10,7 +10,7 @@ import { bigQueryColumnsTable, bigQueryFacts, hitProperties, Properties } from '
 import { bigQueryDetailKind, columnsOf, SearchDetailsService } from '../src/renderer/src/search/SearchDetailsService'
 
 const ok = <T>(value: T): ApiResult<T> => ({ ok: true, value })
-const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+const flush = () => new Promise(resolve => setImmediate(resolve))
 const connectionId = 'bq'
 const table: ObjectSearchHit = { object: { kind: 'bqTable', project: 'varia-alpha', dataset: 'sales', name: 'orders' }, folder: 'bqTables', label: 'sales.orders' }
 const view: ObjectSearchHit = { object: { kind: 'bqView', project: 'varia-alpha', dataset: 'sales', name: 'daily' }, folder: 'bqViews', label: 'sales.daily' }

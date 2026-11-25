@@ -22,7 +22,34 @@ internal static partial class BigQueryExecutionChecks
     static void Windowed(JsonObject args) => args["residence"] = "windowed";
     static readonly WireKind[] OneText = [WireKind.Text];
 
-    static async Task ResidenceAsync(Action<bool, string> check)
+    /// <summary>Polls <paramref name="condition"/> asynchronously without pinning a ThreadPool worker in a CPU spin loop.</summary>
+    static async Task<bool> WaitUntilAsync(Func<bool> condition, int timeoutMs = 15_000)
+    {
+        if (condition()) return true;
+        var deadline = System.Diagnostics.Stopwatch.GetTimestamp() + (long)(timeoutMs * (System.Diagnostics.Stopwatch.Frequency / 1000.0));
+        await Task.Yield();
+        while (!condition())
+        {
+            if (System.Diagnostics.Stopwatch.GetTimestamp() >= deadline) return condition();
+            await Task.Delay(5);
+        }
+        return true;
+    }
+
+    /// <summary>Synchronous yielding wait for test hooks invoked on synchronous callbacks, avoiding SpinWait CPU burn.</summary>
+    static bool WaitUntil(Func<bool> condition, int timeoutMs = 15_000)
+    {
+        if (condition()) return true;
+        var deadline = System.Diagnostics.Stopwatch.GetTimestamp() + (long)(timeoutMs * (System.Diagnostics.Stopwatch.Frequency / 1000.0));
+        while (!condition())
+        {
+            if (System.Diagnostics.Stopwatch.GetTimestamp() >= deadline) return condition();
+            Thread.Sleep(1);
+        }
+        return true;
+    }
+
+    public static async Task RunResidenceAsync(Action<bool, string> check)
     {
         Trace("RemoteBlocks");
         await RemoteBlocksAsync(check);
@@ -63,6 +90,10 @@ internal static partial class BigQueryExecutionChecks
         await LoadWhileRunningAsync(check);
         Trace("ForkedPlans");
         ForkedPlans(check);
+    }
+
+    public static async Task RunViewsCopySaveAsync(Action<bool, string> check)
+    {
         Trace("RemoteViews");
         await RemoteViewsAsync(check);
         await CopySaveAsync(check);
@@ -251,7 +282,7 @@ internal static partial class BigQueryExecutionChecks
             var blocks = new Blocks();
             using var remote = Remote(store, blocks, cache: 64L << 20);
             await ReadRemote(remote, 0, 10);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             var before = remote.CachedBlocks().ToList();
             Volatile.Write(ref low, true);
             string refused;
@@ -270,7 +301,7 @@ internal static partial class BigQueryExecutionChecks
             string refused;
             try { await ReadRemote(remote, 0, 100); refused = "read"; }
             catch (RequestException error) { refused = error.Code == "TOO_LARGE" && error.Message == SqlService.LowMemory ? "low" : error.Message; }
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             check(store.IsSystemMemoryLow() && store.WindowCacheBytes == 0 && refused == "low",
                 $"no block is cached while the system is low on memory, and the read says so: {refused} cache={store.WindowCacheBytes} blocks=[{string.Join(",", remote.CachedBlocks())}]");
         }
@@ -296,7 +327,7 @@ internal static partial class BigQueryExecutionChecks
                 $"seeded rows read from the cache, charged to the global budget as the window cache: {next} {rows.Count} {cached}");
             check(bytes.Length == 10 && bytes.All(value => value > 0) && uncached.Length == 0, "rowBytes answers only as far as the cached rows go");
             // Read-ahead from the seeded read may have started block 1's fetch; rowBytes itself never fetches.
-            SpinWait.SpinUntil(() => remote.CachedBlocks() is var ahead && ahead.Contains(1) && ahead.Contains(2), 15_000);
+            await WaitUntilAsync(() => remote.CachedBlocks() is var ahead && ahead.Contains(1) && ahead.Contains(2), 15_000);
             var before = remote.Fetches;
             var listed = remote.ListedBlocks();
             remote.RowBytes(50_000, 100);
@@ -311,13 +342,13 @@ internal static partial class BigQueryExecutionChecks
             using var remote = Remote(store, blocks);
             var (next, rows) = await ReadRemote(remote, 1000, 100, viewer: 1);
             check(next >= 1100 && Consecutive(rows, 1000, 100), $"a read across blocks 3 and 4 answers its rows in order: {next} {rows.Count}");
-            var ahead = SpinWait.SpinUntil(() => remote.CachedBlocks() is var cached && new long[] { 2, 3, 4, 5, 6 }.All(cached.Contains), 15_000);
+            var ahead = await WaitUntilAsync(() => remote.CachedBlocks() is var cached && new long[] { 2, 3, 4, 5, 6 }.All(cached.Contains), 15_000);
             check(ahead, "the viewer's read-ahead fetches the blocks either side and one more in the direction of travel: " + string.Join(",", remote.CachedBlocks()));
             check(blocks.MaxRunning <= RemoteResult.FetchesPerResult && blocks.Calls.All(call => call.First % 256 == 0 && call.Rows == 256),
                 $"fetches run at most {RemoteResult.FetchesPerResult} at a time per result, one whole block each: {blocks.MaxRunning}");
             // Scrolling back reads ahead backwards.
             await ReadRemote(remote, 300, 10, viewer: 1);
-            check(SpinWait.SpinUntil(() => remote.CachedBlocks().Contains(0), 15_000), "a read moving up reads ahead towards the top");
+            check(await WaitUntilAsync(() => remote.CachedBlocks().Contains(0), 15_000), "a read moving up reads ahead towards the top");
         }
 
         // The connection's lane bounds fetches across its results.
@@ -354,7 +385,7 @@ internal static partial class BigQueryExecutionChecks
             await ReadRemote(remote, 100 * 256, 10, viewer: 7, waitMs: 50);
             var cancelledBefore = blocks.Cancelled;
             blocks.Gate.SetResult();
-            var settled = SpinWait.SpinUntil(() => remote.CachedBlocks() is var cached && new long[] { 99, 100, 101, 102 }.All(cached.Contains), 15_000);
+            var settled = await WaitUntilAsync(() => remote.CachedBlocks() is var cached && new long[] { 99, 100, 101, 102 }.All(cached.Contains), 15_000);
             var cachedAfter = remote.CachedBlocks();
             check(settled && new long[] { 9, 10, 11, 12 }.All(block => !cachedAfter.Contains(block)),
                 $"a jump cancels the viewer's earlier read-ahead and a short-answered read's block, and keeps the new read's own: {string.Join(",", cachedAfter)} (cancelled in flight: {cancelledBefore})");
@@ -369,7 +400,7 @@ internal static partial class BigQueryExecutionChecks
             await ReadRemote(remote, 10 * 256, 10, viewer: 7, waitMs: 50);
             await ReadRemote(remote, 13 * 256, 10, viewer: 7, waitMs: 50);
             blocks.Gate.SetResult();
-            var kept = SpinWait.SpinUntil(() => remote.CachedBlocks() is var cached && new long[] { 12, 13, 14, 15 }.All(cached.Contains), 15_000);
+            var kept = await WaitUntilAsync(() => remote.CachedBlocks() is var cached && new long[] { 12, 13, 14, 15 }.All(cached.Contains), 15_000);
             check(kept, "a jump keeps fetching the earlier read-ahead block its new read-ahead wants: " + string.Join(",", remote.CachedBlocks()));
         }
 
@@ -381,7 +412,7 @@ internal static partial class BigQueryExecutionChecks
             using var remote = Remote(store, blocks);
             using var stop = new CancellationTokenSource();
             var reading = remote.ReadAsync(20 * 256, 10, 3, _ => ValueTask.CompletedTask, TimeSpan.FromSeconds(15), stop.Token);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() >= 4, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() >= 4, 15_000);
             stop.Cancel();
             try { await reading; } catch (OperationCanceledException) { }
             var again = ReadRemote(remote, 20 * 256 + 5, 10, viewer: 3);
@@ -394,12 +425,12 @@ internal static partial class BigQueryExecutionChecks
             using var jumped = Remote(store, held);
             using var stopJump = new CancellationTokenSource();
             var first = jumped.ReadAsync(40 * 256, 10, 4, _ => ValueTask.CompletedTask, TimeSpan.FromSeconds(15), stopJump.Token);
-            SpinWait.SpinUntil(() => jumped.FetchingBlocks() >= 4, 15_000);
+            await WaitUntilAsync(() => jumped.FetchingBlocks() >= 4, 15_000);
             stopJump.Cancel();
             try { await first; } catch (OperationCanceledException) { }
             await ReadRemote(jumped, 300 * 256, 10, viewer: 4, waitMs: 50);
             held.Gate.SetResult();
-            SpinWait.SpinUntil(() => jumped.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => jumped.FetchingBlocks() == 0, 15_000);
             var cached = jumped.CachedBlocks();
             check(!cached.Contains(40) && cached.Contains(300),
                 $"a jump after a cancelled read stops that read's fetch: {string.Join(",", cached)} fetching {jumped.FetchingBlocks()} cancelled {held.Cancelled} calls {string.Join(",", held.Calls.Select(c => c.First / 256))}");
@@ -414,12 +445,12 @@ internal static partial class BigQueryExecutionChecks
             using var jumped = Remote(store, held);
             using var stopJump = new CancellationTokenSource();
             var first = jumped.ReadAsync(40 * 256, 10, 0, _ => ValueTask.CompletedTask, TimeSpan.FromSeconds(15), stopJump.Token);
-            SpinWait.SpinUntil(() => jumped.FetchingBlocks() >= 4, 15_000);
+            await WaitUntilAsync(() => jumped.FetchingBlocks() >= 4, 15_000);
             stopJump.Cancel();
             try { await first; } catch (OperationCanceledException) { }
             await ReadRemote(jumped, 300 * 256, 10, viewer: 0, waitMs: 50);
             held.Gate.SetResult();
-            SpinWait.SpinUntil(() => jumped.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => jumped.FetchingBlocks() == 0, 15_000);
             var cached = jumped.CachedBlocks();
             check(!cached.Contains(40) && cached.Contains(300),
                 $"a viewerless jump after a cancelled viewerless read stops that read's fetch: {string.Join(",", cached)} cancelled {held.Cancelled}");
@@ -432,14 +463,14 @@ internal static partial class BigQueryExecutionChecks
             var held = new Blocks { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously), Before = first => first == 40 * 256 ? release.Task : Task.CompletedTask };
             using var jumped = Remote(store, held);
             using var stopJump = new CancellationTokenSource();
-            var first = jumped.ReadAsync(40 * 256, 10, 0, _ => ValueTask.CompletedTask, TimeSpan.FromSeconds(15), stopJump.Token);
-            var entered = SpinWait.SpinUntil(() => held.Calls.Any(call => call.First == 40 * 256), 15_000);
+            var first = jumped.ReadAsync(40 * 256, 10, 0, _ => ValueTask.CompletedTask, TimeSpan.FromSeconds(30), stopJump.Token);
+            var entered = await WaitUntilAsync(() => held.Calls.Any(call => call.First == 40 * 256), 30_000);
             stopJump.Cancel();
             try { await first; } catch (OperationCanceledException) { }
             await ReadRemote(jumped, 300 * 256, 10, viewer: 0, waitMs: 50);
             held.Gate.SetResult();
             release.SetResult();
-            SpinWait.SpinUntil(() => jumped.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => jumped.FetchingBlocks() == 0, 15_000);
             var cached = jumped.CachedBlocks();
             check(entered && !cached.Contains(40) && cached.Contains(300),
                 $"a fetch stopped before it reaches an open gate writes nothing: {string.Join(",", cached)} entered {entered}");
@@ -451,13 +482,13 @@ internal static partial class BigQueryExecutionChecks
             var blocks = new Blocks();
             using var remote = Remote(store, blocks);
             await ReadRemote(remote, 10 * 256, 10, viewer: 1);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0 && remote.CachedBlocks().Length >= 4, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0 && remote.CachedBlocks().Length >= 4, 15_000);
             blocks.Expire = true;
             string outcome;
             try { await ReadRemote(remote, 30 * 256, 10, viewer: 2); outcome = "ok"; }
             catch (RemoteExpiredException) { outcome = "REMOTE_EXPIRED"; }
             catch (RequestException error) { outcome = error.Code; }
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             var (next, _) = await ReadRemote(remote, 12 * 256, 10, viewer: 1);
             check(outcome == "REMOTE_EXPIRED" && next > 12 * 256 && remote.ListedBlocks() == remote.CachedBlocks().Length,
                 $"after expiry a cached read lists no read-ahead it cannot fetch: {outcome} {next} {remote.ListedBlocks()} listed, {remote.CachedBlocks().Length} cached");
@@ -470,16 +501,16 @@ internal static partial class BigQueryExecutionChecks
             using var remote = Remote(store, blocks, rowBytes: 32_768, cache: 16L << 20);
             // The read-ahead tries for room just after the read's own block reserved its own: it counts that block once.
             int ownReserved = 0, aheadTried = 0;
-            remote.Reserving = index => { if (index == 6) { SpinWait.SpinUntil(() => Volatile.Read(ref ownReserved) == 1, 15_000); Interlocked.Exchange(ref aheadTried, 1); } };
-            remote.Reserved = index => { if (index == 5) Interlocked.Exchange(ref ownReserved, 1); if (index == 5) SpinWait.SpinUntil(() => Volatile.Read(ref aheadTried) == 1 && (remote.CachedBlocks().Contains(6) || remote.FetchingBlocks() == 1), 15_000); };
+            remote.Reserving = index => { if (index == 6) { WaitUntil(() => Volatile.Read(ref ownReserved) == 1, 15_000); Interlocked.Exchange(ref aheadTried, 1); } };
+            remote.Reserved = index => { if (index == 5) Interlocked.Exchange(ref ownReserved, 1); if (index == 5) WaitUntil(() => Volatile.Read(ref aheadTried) == 1 && (remote.CachedBlocks().Contains(6) || remote.FetchingBlocks() == 1), 15_000); };
             var (next, _) = await ReadRemote(remote, 5 * remote.BlockRows, 10, viewer: 1);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             var cached = remote.CachedBlocks();
             check(next > 5L * remote.BlockRows && cached.Contains(5) && blocks.Calls.Count == 2 && remote.Evictions == 0,
                 $"a two-block cache reads ahead one block and keeps the one read: {string.Join(",", cached)} {blocks.Calls.Count} fetches, {remote.Evictions} evictions");
             // Scrolling down one block, its one block of read-ahead is the next one down, not the one behind it (cached already).
             await ReadRemote(remote, 6 * remote.BlockRows, 10, viewer: 1);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             var starts = blocks.Calls.Select(call => call.First / remote.BlockRows).ToArray();
             check(starts.Contains(7) && remote.CachedBlocks().Contains(7),
                 $"a two-block cache scrolling down reads ahead the block below, not the one behind: fetched {string.Join(",", starts)}, cached {string.Join(",", remote.CachedBlocks())}");
@@ -493,16 +524,16 @@ internal static partial class BigQueryExecutionChecks
             using var remote = Remote(store, blocks, rows: 16_384L * 100, rowBytes: CostPerRow(200), cache: 16L << 20);
             var size = remote.BlockRows;
             await ReadRemote(remote, 10L * size + 5, 40, viewer: 1);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             await ReadRemote(remote, 30L * size + 5, 40, viewer: 2);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             await ReadRemote(remote, 60L * size + 5, 40, viewer: 2);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             var afterJump = remote.CachedBlocks();
             var fetches = blocks.Calls.Count;
             await ReadRemote(remote, 10L * size + 6, 40, viewer: 1);
             var refetched = blocks.Calls.Skip(fetches).Any(call => call.First / size == 10);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             check(afterJump.Contains(10) && afterJump.Contains(60) && !refetched,
                 $"a read keeps another grid's rows on screen while blocks off screen can go: cached [{string.Join(",", afterJump)}] after the jump, block 10 refetched {refetched}");
         }
@@ -522,7 +553,7 @@ internal static partial class BigQueryExecutionChecks
             remote.OverrunWaiting = index => { if (index == 0) { waited = true; blocks.Gate.TrySetResult(); } };
             var (next, rows) = await ReadRemote(remote, size - 5, 10, viewer: 1);
             blocks.Gate.TrySetResult();
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             var second = blocks.Calls.Count(call => call.First == size);
             check(waited && next >= size + 5 && Consecutive(rows, size - 5, 10) && blocks.Cancelled == 0 && second == 1,
                 $"an overrun waits for a block a read waits for rather than stop it: waited {waited}, next {next}, {blocks.Cancelled} cancelled, block 1 fetched {second} times");
@@ -537,7 +568,7 @@ internal static partial class BigQueryExecutionChecks
             for (var i = 0; i < 3; i++)
             {
                 await ReadRemote(remote, 0, 200, viewer: 1);
-                SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+                await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             }
             var within = blocks.Calls.Count(call => call.First < remote.BlockRows);
             check(within == 1, $"a table shorter than BigQuery said is read once: block 0 fetched {within} times");
@@ -558,7 +589,7 @@ internal static partial class BigQueryExecutionChecks
             var (next, rows) = await ReadRemote(remote, 0, 10, viewer: 1, waitMs: 10_000);
             var took = clock.ElapsedMilliseconds;
             blocks.Gate.TrySetResult();
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             check(next >= 10 && Consecutive(rows, 0, 10) && blocks.Cancelled >= 1 && took < 8_000,
                 $"an overrun stops read-ahead holding the room instead of waiting on it: next {next}, {blocks.Cancelled} cancelled, {took} ms");
         }
@@ -570,9 +601,9 @@ internal static partial class BigQueryExecutionChecks
             var blocks = new Blocks { Pad = 32_000 };
             using var remote = Remote(store, blocks, rowBytes: 32_768, cache: 16L << 20);
             // Block 1 is read ahead once block 0, the read's own, is cached.
-            remote.Reserving = index => { if (index == 1) SpinWait.SpinUntil(() => remote.CachedBlocks().Contains(0), 15_000); };
+            remote.Reserving = index => { if (index == 1) WaitUntil(() => remote.CachedBlocks().Contains(0), 15_000); };
             await ReadRemote(remote, 0, 10, viewer: 1);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             var before = remote.CachedBlocks();
             await ReadRemote(remote, 0, 10, viewer: 1);
             // The second grid's read-ahead of block 21 tries for room before its own block 20 does: it waits behind the read
@@ -581,10 +612,10 @@ internal static partial class BigQueryExecutionChecks
             remote.Reserving = index =>
             {
                 if (index == 21) Interlocked.Exchange(ref aheadTried, 1);
-                if (index == 20) SpinWait.SpinUntil(() => remote.CachedBlocks().Contains(21) || (Volatile.Read(ref aheadTried) == 1 && remote.FetchingBlocks() == 1), 15_000);
+                if (index == 20) WaitUntil(() => remote.CachedBlocks().Contains(21) || (Volatile.Read(ref aheadTried) == 1 && remote.FetchingBlocks() == 1), 15_000);
             };
             await ReadRemote(remote, 20 * remote.BlockRows, 10, viewer: 2);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             var after = remote.CachedBlocks();
             check(before.SequenceEqual(new long[] { 0, 1 }) && after.Contains(0) && after.Contains(20) && !after.Contains(1),
                 $"the least recently used block goes first, and a read-ahead never takes the room of the read it follows: before [{string.Join(",", before)}], after [{string.Join(",", after)}]");
@@ -598,23 +629,23 @@ internal static partial class BigQueryExecutionChecks
             using var remote = Remote(store, blocks, rowBytes: 32_768, cache: 16L << 20);
             remote.Reserving = index =>
             {
-                if (index == 1) SpinWait.SpinUntil(() => remote.CachedBlocks().Contains(0), 15_000);
-                if (index == 51) SpinWait.SpinUntil(() => remote.CachedBlocks().Contains(50), 15_000);
+                if (index == 1) WaitUntil(() => remote.CachedBlocks().Contains(0), 15_000);
+                if (index == 51) WaitUntil(() => remote.CachedBlocks().Contains(50), 15_000);
             };
             await ReadRemote(remote, 0, 10, viewer: 1);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             await ReadRemote(remote, 50 * remote.BlockRows, 10, viewer: 3);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             var before = remote.CachedBlocks();
             var evicted = remote.Evictions;
             var aheadTried = 0;
             remote.Reserving = index =>
             {
                 if (index == 21) Interlocked.Exchange(ref aheadTried, 1);
-                if (index == 20) SpinWait.SpinUntil(() => remote.CachedBlocks().Contains(21) || (Volatile.Read(ref aheadTried) == 1 && remote.FetchingBlocks() == 1), 15_000);
+                if (index == 20) WaitUntil(() => remote.CachedBlocks().Contains(21) || (Volatile.Read(ref aheadTried) == 1 && remote.FetchingBlocks() == 1), 15_000);
             };
             await ReadRemote(remote, 20 * remote.BlockRows, 10, viewer: 2);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             var after = remote.CachedBlocks();
             check(before.SequenceEqual(new long[] { 0, 1, 50, 51 }) && new long[] { 0, 1, 20, 50, 51 }.All(after.Contains) && remote.Evictions == evicted,
                 $"a read-ahead that cannot fit evicts nothing for it: before [{string.Join(",", before)}], after [{string.Join(",", after)}], {remote.Evictions - evicted} evicted");
@@ -638,7 +669,7 @@ internal static partial class BigQueryExecutionChecks
             using var remote = Remote(store, blocks, rowBytes: 32_768, cache: 64L << 20);
             var size = remote.BlockRows;
             await ReadRemote(remote, 0, 10, viewer: 1);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             foreach (var index in remote.CachedBlocks()) if (index != 0) remote.EvictForChecks(index);
             var evicted = remote.Evictions;
             long other = 0;
@@ -650,12 +681,12 @@ internal static partial class BigQueryExecutionChecks
             remote.Reserving = index => { if (index != 20) ownReserved.Task.Wait(15_000); };
             var reading = ReadRemote(remote, 20L * size, 10, viewer: 1);
             await ownReserved.Task;
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 1, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 1, 15_000);
             var cachedWhile = remote.CachedBlocks();
             var evictedWhile = remote.Evictions - evicted;
             blocks.Gate.TrySetResult();
             var (next, _) = await reading;
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             store.ReturnCache(ref other, other);
             check(cachedWhile.Contains(0) && evictedWhile == 0 && next > 20L * size,
                 $"a read-ahead the global budget refuses evicts nothing: cached [{string.Join(",", cachedWhile)}] while block 20 is read, {evictedWhile} evicted, next {next}");
@@ -668,13 +699,13 @@ internal static partial class BigQueryExecutionChecks
             using var remote = Remote(store, blocks, rows: 100_000, rowBytes: CostPerRow(32_000), cache: 64L << 20);
             var size = remote.BlockRows;
             await ReadRemote(remote, 0, 10, viewer: 1);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             foreach (var index in remote.CachedBlocks()) if (index != 0) remote.EvictForChecks(index);
             await ReadRemote(remote, 50L * size, 10, viewer: 2);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             var before = remote.CachedBlocks();
             await ReadRemote(remote, 20L * size, 10, viewer: 2);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             var after = remote.CachedBlocks();
             check(before.Contains(0) && after.Contains(0) && after.Contains(20),
                 $"read-ahead never evicts an older block on screen: before [{string.Join(",", before)}], after [{string.Join(",", after)}]");
@@ -707,16 +738,16 @@ internal static partial class BigQueryExecutionChecks
             var sending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var reading = remote.ReadAsync(0, 10, 1, async _ => { sending.TrySetResult(); await hold.Task; }, TimeSpan.FromSeconds(15), CancellationToken.None);
             await sending.Task;
-            SpinWait.SpinUntil(() => blocks.Calls.Any(call => call.First == size) && remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => blocks.Calls.Any(call => call.First == size) && remote.FetchingBlocks() == 0, 15_000);
             var heldWhile = remote.CachedBytes;
             hold.TrySetResult();
             await reading;
             for (var i = 0; i < 5; i++)
             {
-                SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+                await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
                 await ReadRemote(remote, 0, 10, viewer: 1);
             }
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             var zero = blocks.Calls.Count(call => call.First == 0);
             var one = blocks.Calls.Count(call => call.First == size);
             check(heldWhile <= remote.CacheLimit && remote.PeakBytes <= remote.CacheLimit && zero == 1 && one == 1 && remote.CachedBlocks().Contains(0) && store.WindowCacheBytes == remote.CachedBytes,
@@ -729,10 +760,10 @@ internal static partial class BigQueryExecutionChecks
             using var remote = Remote(store, new Blocks());
             var chosen = new List<long>();
             await ReadRemote(remote, 10 * remote.BlockRows, 10, viewer: 1);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             remote.AheadChosen = index => { lock (chosen) chosen.Add(index); };
             await ReadRemote(remote, 9 * remote.BlockRows, 10, viewer: 1);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             long[] order;
             lock (chosen) order = [.. chosen];
             check(order.SequenceEqual(new long[] { 8, 10, 7 }), $"scrolling up reads ahead the block above first: {string.Join(",", order)}");
@@ -810,13 +841,13 @@ internal static partial class BigQueryExecutionChecks
             using var remote = Remote(store, new Blocks());
             var size = remote.BlockRows;
             await ReadRemote(remote, 10 * size, 10, viewer: 1);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             await ReadRemote(remote, 9 * size + 100, 10, viewer: 1);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             var chosen = new List<long>();
             remote.AheadChosen = index => { lock (chosen) chosen.Add(index); };
             await ReadRemote(remote, 9 * size + 50, 10, viewer: 1);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             long[] order;
             lock (chosen) order = [.. chosen];
             check(order.Length > 0 && order[0] == 8, $"scrolling up keeps its direction while reads stay inside one block: read ahead [{string.Join(",", order)}]");
@@ -831,7 +862,7 @@ internal static partial class BigQueryExecutionChecks
             var chosen = new List<long>();
             remote.AheadChosen = index => { lock (chosen) chosen.Add(index); };
             await ReadRemote(remote, 10L * size + size - 50, 100, viewer: 1);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             long[] order;
             lock (chosen) order = [.. chosen];
             check(order.SequenceEqual(new long[] { 12 }), $"read-ahead takes only the room beside a two-block read: read ahead [{string.Join(",", order)}]");
@@ -844,13 +875,13 @@ internal static partial class BigQueryExecutionChecks
             using var remote = Remote(store, blocks, rowBytes: 32_768, cache: 16L << 20);
             remote.Reserving = index =>
             {
-                if (index == 1) SpinWait.SpinUntil(() => remote.CachedBlocks().Contains(0), 15_000);
-                if (index == 51) SpinWait.SpinUntil(() => remote.CachedBlocks().Contains(50), 15_000);
+                if (index == 1) WaitUntil(() => remote.CachedBlocks().Contains(0), 15_000);
+                if (index == 51) WaitUntil(() => remote.CachedBlocks().Contains(50), 15_000);
             };
             await ReadRemote(remote, 0, 10, viewer: 1);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             await ReadRemote(remote, 50 * remote.BlockRows, 10, viewer: 3);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             var evicted = remote.Evictions;
             var aheadTried = 0;
             var aheadReserved = 0;
@@ -860,12 +891,12 @@ internal static partial class BigQueryExecutionChecks
             remote.Reserving = index =>
             {
                 if (index == 21) Interlocked.Exchange(ref aheadTried, 1);
-                if (index == 20) SpinWait.SpinUntil(() => Volatile.Read(ref aheadReserved) == 1 || (Volatile.Read(ref aheadTried) == 1 && remote.FetchingBlocks() == 1), 15_000);
+                if (index == 20) WaitUntil(() => Volatile.Read(ref aheadReserved) == 1 || (Volatile.Read(ref aheadTried) == 1 && remote.FetchingBlocks() == 1), 15_000);
             };
             var reading = ReadRemote(remote, 20 * remote.BlockRows, 10, viewer: 2);
             var (next, _) = await reading;
             blocks.Gate.TrySetResult();
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             check(aheadReserved == 0 && remote.PeakBytes <= remote.CacheLimit && remote.Evictions == evicted && next > 20L * remote.BlockRows,
                 $"a refused read-ahead estimate is never taken past the limit: reserved {aheadReserved}, peak {remote.PeakBytes} of {remote.CacheLimit}, {remote.Evictions - evicted} evicted, next {next}");
         }
@@ -876,18 +907,18 @@ internal static partial class BigQueryExecutionChecks
             var blocks = new Blocks();
             using var remote = Remote(store, blocks);
             await ReadRemote(remote, 0, 10, viewer: 1);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             blocks.Expire = true;
             string first;
             try { await ReadRemote(remote, 40L * remote.BlockRows, 10, viewer: 1); first = "ok"; }
             catch (RemoteExpiredException) { first = "expired"; }
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             var calls = blocks.Calls.Count;
             string second;
             long next = -1;
             try { (next, _) = await ReadRemote(remote, 70L * remote.BlockRows, 10, viewer: 1); second = "ok"; }
             catch (RemoteExpiredException) { second = "expired"; }
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             check(remote.Expired && first == "expired" && second == "expired" && blocks.Calls.Count == calls,
                 $"after the table expired a read of rows never cached is REMOTE_EXPIRED and asks BigQuery nothing: first {first}, second {second} next {next}, calls {calls} -> {blocks.Calls.Count}");
         }
@@ -898,11 +929,11 @@ internal static partial class BigQueryExecutionChecks
             var blocks = new Blocks { Pad = 16_000 };
             var remote = Remote(store, blocks, cache: 16L << 20);
             foreach (var block in new long[] { 0, 40, 80, 120, 160, 200 }) await ReadRemote(remote, block * 256, 10, viewer: (uint)(block + 1));
-            SpinWait.SpinUntil(() => remote.Fetches >= 6 && remote.FetchingBlocks() == 0 && remote.CachedBytes <= remote.CacheLimit, 15_000);
+            await WaitUntilAsync(() => remote.Fetches >= 6 && remote.FetchingBlocks() == 0 && remote.CachedBytes <= remote.CacheLimit, 15_000);
             check(remote.Evictions > 0 && remote.CachedBytes <= remote.CacheLimit + (5L << 20) && store.WindowCacheBytes == remote.CachedBytes,
                 $"the cache evicts least recent blocks to stay near its limit, and the store counts what it holds: {remote.Evictions} {remote.CachedBytes} {store.WindowCacheBytes}");
             remote.Dispose();
-            SpinWait.SpinUntil(() => store.WindowCacheBytes == 0, 15_000);
+            await WaitUntilAsync(() => store.WindowCacheBytes == 0, 15_000);
             check(store.WindowCacheBytes == 0 && store.UsedBytes == 0, "a released window gives back every cached byte: " + store.UsedBytes);
         }
 
@@ -1195,7 +1226,7 @@ internal static partial class BigQueryExecutionChecks
             var (code, read, _, _) = await ReadRows(harness, id, 2500, 100);
             var remote = harness.Service.Results.Find(id)!.Remote!;
             // Unbounded, twelve attempts back off for about 22 seconds in all.
-            var stopped = SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 5_000);
+            var stopped = await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 5_000);
             harness.Service.RemoteReadWait = TimeSpan.FromSeconds(20);
             lock (harness.Jobs.TableDataReplies) harness.Jobs.TableDataReplies.Clear();
             check(code == "ok" && read is { Rows: 0 } && stopped, $"a rate-limited block stops backing off once its reads have given up: {code} {read?.Rows} {remote.FetchingBlocks()}");
@@ -1214,7 +1245,7 @@ internal static partial class BigQueryExecutionChecks
             while (harness.Jobs.TableReads.TryDequeue(out _)) { }
             var (code, _, _, _) = await ReadRows(harness, id, 2500, 1);
             var remote = harness.Service.Results.Find(id)!.Remote!;
-            var stopped = SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var stopped = await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             var covering = harness.Jobs.TableReads.Count(read => read.StartIndex is { } start && start <= 2500 && 2500 < start + read.MaxResults);
             harness.Service.BigQuery.RetryDelay = TimeSpan.FromMilliseconds(1);
             harness.Service.RemoteReadWait = TimeSpan.FromSeconds(20);
@@ -1234,9 +1265,9 @@ internal static partial class BigQueryExecutionChecks
             while (harness.Jobs.TableReads.TryDequeue(out _)) { }
             var remote = harness.Service.Results.Find(id)!.Remote!;
             var stalled = 0;
-            remote.AheadChosen = _ => { if (Interlocked.Exchange(ref stalled, 1) == 0) SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 5_000); };
+            remote.AheadChosen = _ => { if (Interlocked.Exchange(ref stalled, 1) == 0) WaitUntil(() => remote.FetchingBlocks() == 0, 5_000); };
             var (code, _, _, _) = await ReadRows(harness, id, 20000, 1);
-            var stopped = SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var stopped = await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             var covering = harness.Jobs.TableReads.Count(read => read.StartIndex is { } start && start <= 20000 && 20000 < start + read.MaxResults);
             harness.Service.BigQuery.RetryDelay = TimeSpan.FromMilliseconds(1);
             harness.Service.RemoteReadWait = TimeSpan.FromSeconds(20);
@@ -1309,7 +1340,7 @@ internal static partial class BigQueryExecutionChecks
             var (code, result, events, message) = await Run(harness, "query.execute", harness.Query("SELECT n, s FROM t"));
             var set = result?.ResultSets.Single();
             var (readCode, _, rows, _) = await ReadRows(harness, set!.ResultId, 2900, 10);
-            SpinWait.SpinUntil(() => harness.Service.Results.Find(set.ResultId)?.Remote?.FetchingBlocks() is null or 0, 15_000);
+            await WaitUntilAsync(() => harness.Service.Results.Find(set.ResultId)?.Remote?.FetchingBlocks() is null or 0, 15_000);
             check(code == "ok" && set is { Residence: not "remote" } && harness.Service.Results.WindowCacheBytes == 0 && !Says(result, "larger than estimated"),
                 $"low system memory does not turn a result windowed and keep caching blocks: {code} {set?.Residence} {set?.Truncated} read={readCode} {rows.Count} cache={harness.Service.Results.WindowCacheBytes} msgs={Texts(result?.Messages ?? [])}");
         }
@@ -1834,14 +1865,14 @@ internal static partial class BigQueryExecutionChecks
             using var remote = Remote(store, blocks, rows: 1000, rowBytes: 200_016, cache: 16L << 20);
             var size = remote.BlockRows;
             await ReadRemote(remote, size, 2 * size, viewer: 1);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             var outcomes = new List<string>();
             for (var attempt = 0; attempt < 3; attempt++)
             {
                 try { outcomes.Add((await ReadRemote(remote, size - 5L, 2 * size, viewer: 1)).Next - (size - 5L) + ""); }
                 catch (RequestException error) { outcomes.Add(error.Code); }
             }
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             check(outcomes.All(outcome => outcome == (2 * size).ToString(Inv)) && remote.CachedBytes <= remote.CacheLimit && store.WindowCacheBytes == remote.CachedBytes,
                 $"a read of three blocks near half the cache each passes the limit for the read, never answers no rows: {string.Join(",", outcomes)} of {2 * size}, cached {remote.CachedBytes} of {remote.CacheLimit}");
         }
@@ -1861,9 +1892,9 @@ internal static partial class BigQueryExecutionChecks
             using var remote = RemoteResult.Create(store, 1, OneText, 100_000, false, 50_000, 16L << 20, new SemaphoreSlim(RemoteResult.FetchesPerConnection), fetch);
             blockRows = remote.BlockRows;
             await ReadRemote(remote, 0, 10, viewer: 1);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             var first = ReadRemote(remote, 2L * blockRows - 5, 10, viewer: 1);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() >= 1, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() >= 1, 15_000);
             string other;
             try { other = "next " + ((await ReadRemote(remote, 50L * blockRows, 10, viewer: 2)).Next - 50L * blockRows); }
             catch (RequestException error) { other = error.Code; }
@@ -1908,11 +1939,11 @@ internal static partial class BigQueryExecutionChecks
             var sendingZ = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var v3 = Held(0, 3, holdSeed.Task, sendingSeed);
             await sendingSeed.Task;
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             var v1 = Held(5L * blockRows, 1);
             var v2 = Held(10L * blockRows, 2, holdZ.Task, sendingZ);
             // Both fetches hold their estimates before either lands.
-            SpinWait.SpinUntil(() => gates.Count == 2, 15_000);
+            await WaitUntilAsync(() => gates.Count == 2, 15_000);
             GateOf(5).TrySetResult();
             GateOf(10).TrySetResult();
             var outcome = await v1;
@@ -1922,7 +1953,7 @@ internal static partial class BigQueryExecutionChecks
             check(outcome.StartsWith("next ", StringComparison.Ordinal) || outcome.Contains("window cache", StringComparison.Ordinal),
                 "a read refused past twice the window cache names the cache, not the global budget: " + outcome);
             // A refused overrun gives back its block's estimate too: the cache charges only the pages it holds.
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             check(store.WindowCacheBytes == remote.CachedBytes && remote.CachedBytes == remote.CachedPageCost(),
                 $"a refused overrun leaves no charge behind: window cache {store.WindowCacheBytes}, held {remote.CachedBytes}, pages {remote.CachedPageCost()}");
         }
@@ -1936,7 +1967,7 @@ internal static partial class BigQueryExecutionChecks
             string outcome;
             try { outcome = "next " + (await ReadRemote(remote, 0, 10, viewer: 1)).Next; }
             catch (RequestException error) { outcome = error.Code + (error.Message.Contains("too wide", StringComparison.Ordinal) ? " too wide" : ""); }
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             check(outcome == "TOO_LARGE too wide" && store.WindowCacheBytes == 0, $"a block just past its cache is refused as too wide: {outcome}, {store.WindowCacheBytes} held");
         }
 
@@ -1951,7 +1982,7 @@ internal static partial class BigQueryExecutionChecks
             blocks.PadOf = row => row < size ? (int)(0.7 * (16L << 20) / size) : (int)(0.4 * (16L << 20) / size);
             var first = size - 10L;
             var (next, rows) = await ReadRemote(remote, first, 128);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             var zero = blocks.Calls.Count(call => call.First == 0);
             check(next >= first + 128 && Consecutive(rows.Where(row => row >= first && row < first + 128).ToList(), first, 128) && zero == 1 && remote.CachedBytes <= remote.CacheLimit && store.WindowCacheBytes == remote.CachedBytes,
                 $"a read's own blocks past the cache are read once and the cache trims back: next {next - first} of 128, block 0 fetched {zero}x, cached {remote.CachedBytes} of {remote.CacheLimit}");
@@ -1980,7 +2011,7 @@ internal static partial class BigQueryExecutionChecks
                     if (!Consecutive(rows.Distinct().Order().ToList(), first, count)) failures.Add($"{first}: short {rows.Count}");
                 }
                 catch (RequestException error) { failures.Add($"{first}: {error.Code}"); }
-                SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+                await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
                 if (remote.CachedBytes > remote.CacheLimit) failures.Add($"{first}: cache {remote.CachedBytes}");
                 // A read-ahead overrun refused (or stopped) gives back its block's estimate: only cached pages stay charged.
                 if (store.WindowCacheBytes != remote.CachedPageCost()) failures.Add($"{first}: charged {store.WindowCacheBytes}, pages {remote.CachedPageCost()}");
@@ -2023,7 +2054,7 @@ internal static partial class BigQueryExecutionChecks
                     if (!Consecutive(rows, 0, 10)) refused.Add("short");
                 }
                 catch (RequestException error) { refused.Add(error.Code); }
-                SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+                await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
                 if (store.WindowCacheBytes != remote.CachedPageCost()) refused.Add($"charged {store.WindowCacheBytes}, pages {remote.CachedPageCost()}");
             }
             check(refused.Count == 0, "rows wider than measured still read with a block ahead: " + string.Join(",", refused));
@@ -2035,7 +2066,7 @@ internal static partial class BigQueryExecutionChecks
             var blocks = new Blocks { Pad = 3000 };
             using var remote = Remote(store, blocks, rows: 5000, rowBytes: 1000, cache: 64L << 20);
             await ReadRemote(remote, 0, 10, viewer: 1);
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             var cost = remote.CachedPageCost();
             check(cost > 0 && store.WindowCacheBytes == cost && remote.CachedBytes == cost && store.UsedBytes == cost,
                 $"rows wider than measured are charged what their pages cost: pages {cost}, window cache {store.WindowCacheBytes}, held {remote.CachedBytes}, used {store.UsedBytes}");
@@ -2050,7 +2081,7 @@ internal static partial class BigQueryExecutionChecks
             var most = remote.CachedBytes;
             // Sampled until the read-ahead's fetches have all settled: the cache holds two of these blocks, so the read's block
             // and one block ahead.
-            var settled = SpinWait.SpinUntil(() => { most = Math.Max(most, remote.CachedBytes); return blocks.Calls.Count >= 2 && remote.FetchingBlocks() == 0; }, 15_000);
+            var settled = await WaitUntilAsync(() => { most = Math.Max(most, remote.CachedBytes); return blocks.Calls.Count >= 2 && remote.FetchingBlocks() == 0; }, 15_000);
             check(settled && next >= 10 && Consecutive(rows, 0, 10) && remote.BlockRows < RemoteResult.MinBlockRows && most <= remote.CacheLimit && store.WindowCacheBytes <= remote.CacheLimit,
                 $"very wide rows read in blocks that fit the cache, which stays within its limit: {settled} {blocks.Calls.Count} {next} {remote.BlockRows} {most} {remote.CacheLimit}");
         }
@@ -2065,7 +2096,7 @@ internal static partial class BigQueryExecutionChecks
             try { await ReadRemote(remote, 0, 10); outcome = "ok"; }
             catch (RequestException error) { outcome = error.Code; }
             // The read-ahead blocks may still be building (and later refused) on a starved machine: wait for them to settle.
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0 && store.WindowCacheBytes == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0 && store.WindowCacheBytes == 0, 15_000);
             check(outcome == "TOO_LARGE" && remote.BlockRows == RemoteResult.MaxBlockRows && blocks.Written < remote.BlockRows && store.WindowCacheBytes == 0,
                 $"a block of rows far wider than estimated stops at the cache's limit and is refused: {outcome} {blocks.Written} of {remote.BlockRows} {store.WindowCacheBytes}");
         }
@@ -2080,7 +2111,7 @@ internal static partial class BigQueryExecutionChecks
             try { (next, rows) = await ReadRemote(remote, 0, 10 * remote.BlockRows); outcome = "ok"; }
             catch (RequestException error) { outcome = error.Code; }
             // The blocks the read answered without are still settling (each refused in turn): the cache is measured after.
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             check(outcome == "ok" && next > 0 && next < 10L * remote.BlockRows && Consecutive(rows, 0, (int)next) && remote.CachedBytes <= remote.CacheLimit,
                 $"a read across more blocks than the cache holds answers short with the rows that fit: {outcome} {next} {remote.BlockRows} {remote.CachedBytes}");
         }
@@ -2094,13 +2125,13 @@ internal static partial class BigQueryExecutionChecks
             using var remote = Remote(store, blocks, rows: 100_000, rowBytes: 16_384, cache: 16L << 20);
             var awaiting = 0;
             remote.AwaitingRoom = _ => Interlocked.Increment(ref awaiting);
-            remote.Reserving = index => { if (index == 0) SpinWait.SpinUntil(() => Volatile.Read(ref awaiting) > 0 || remote.FetchingBlocks() == 1, 15_000); };
+            remote.Reserving = index => { if (index == 0) WaitUntil(() => Volatile.Read(ref awaiting) > 0 || remote.FetchingBlocks() == 1, 15_000); };
             string outcome;
             long next = -1;
             List<long> rows = [];
             try { (next, rows) = await ReadRemote(remote, 0, 10 * remote.BlockRows); outcome = "ok"; }
             catch (RequestException error) { outcome = error.Code; }
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             check(outcome == "ok" && awaiting > 0 && next > 0 && Consecutive(rows, 0, (int)next),
                 $"a read's later blocks never take the room its first block needs: {outcome} next {next}, {awaiting} waited");
         }
@@ -2117,17 +2148,17 @@ internal static partial class BigQueryExecutionChecks
             var zeroReserved = 0;
             // Block 1 reserves after block 0, so its overrun finds block 0 holding room (else it would find nothing to wait for).
             remote.Reserved = index => { if (index == 0) Volatile.Write(ref zeroReserved, 1); };
-            remote.Reserving = index => { if (index == 1) SpinWait.SpinUntil(() => Volatile.Read(ref zeroReserved) == 1, 15_000); };
+            remote.Reserving = index => { if (index == 1) WaitUntil(() => Volatile.Read(ref zeroReserved) == 1, 15_000); };
             remote.OverrunWaiting = index => { if (index == 1) { Volatile.Write(ref overrunWaited, true); blocks.Gate.TrySetResult(); } };
             var settled = false;
             var sends = 0;
             var next = await remote.ReadAsync(0, 10, 1, _ =>
             {
-                if (Interlocked.Increment(ref sends) == 1) settled = SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+                if (Interlocked.Increment(ref sends) == 1) settled = WaitUntil(() => remote.FetchingBlocks() == 0, 15_000);
                 return ValueTask.CompletedTask;
             }, TimeSpan.FromSeconds(30), CancellationToken.None);
             blocks.Gate.TrySetResult();
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);
             check(overrunWaited && settled && next >= 10 && store.WindowCacheBytes == remote.CachedPageCost(),
                 $"a read resumes off its fetch's thread, so an overrun waiting on that fetch settles while the read sends: waited {overrunWaited}, settled {settled}, next {next}, charged {store.WindowCacheBytes}, pages {remote.CachedPageCost()}");
         }
@@ -2137,7 +2168,7 @@ internal static partial class BigQueryExecutionChecks
             var blocks = new Blocks();
             using var remote = Remote(store, blocks);
             await ReadRemote(remote, 0, 10);
-            SpinWait.SpinUntil(() => remote.CachedBlocks() is [0, 1, 2], 10_000);
+            await WaitUntilAsync(() => remote.CachedBlocks() is [0, 1, 2], 10_000);
             blocks.Expire = true;
             string outcome;
             long next = -1;
@@ -2152,7 +2183,7 @@ internal static partial class BigQueryExecutionChecks
             var blocks = new Blocks { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
             var remote = Remote(store, blocks);
             var waiting = ReadRemote(remote, 0, 10);
-            SpinWait.SpinUntil(() => !blocks.Calls.IsEmpty, 5000);
+            await WaitUntilAsync(() => !blocks.Calls.IsEmpty, 5000);
             remote.Dispose();
             string outcome;
             long next = -1;
@@ -2198,10 +2229,10 @@ internal static partial class BigQueryExecutionChecks
             await ReadRemote(remote, 0, 10);
             if (again is not null) await again;
             // Every fetch settled (the second read reads ahead too): a stray second fetch of block 1 would have started by now.
-            var settled = SpinWait.SpinUntil(() => remote.CachedBlocks() is [0, 1, 2, ..] && remote.FetchingBlocks() == 0, 15_000);
+            var settled = await WaitUntilAsync(() => remote.CachedBlocks() is [0, 1, 2, ..] && remote.FetchingBlocks() == 0, 15_000);
             var cached = string.Join(",", remote.CachedBlocks());
             remote.Dispose();
-            var freed = SpinWait.SpinUntil(() => store.WindowCacheBytes == 0 && store.UsedBytes == 0, 5000);
+            var freed = await WaitUntilAsync(() => store.WindowCacheBytes == 0 && store.UsedBytes == 0, 5000);
             check(settled && fired == 1 && freed && blocks.Calls.Count(call => call.First == remote.BlockRows) == 1,
                 $"a block evicted between the read-ahead's choice and its fetch is not fetched, and nothing stays charged: {settled} {cached} {fired} {store.WindowCacheBytes} {blocks.Calls.Count(call => call.First == remote.BlockRows)}");
         }

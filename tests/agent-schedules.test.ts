@@ -484,6 +484,33 @@ describe('the Schedules document', () => {
     expect(executes()[1]).toMatchObject({ agentSchedule: { op: 'update', schedule: { id: 1, version: 4 }, name: 'Mine' } })
     expect(executes()[1]).not.toHaveProperty('agentSchedule.timing')
   })
+  it('lets SQLAgentOperatorRole enable or disable a schedule it does not own, sending only the schedule and Enabled (AG-10)', async () => {
+    const { schedules, executes, api } = schedulesWorkbench(schedulesModel({ sysadmin: false, login: 'sa', links: undefined }))
+    const profile = { platform: 'windows', engineEdition: 3, msdbAccess: true, sysadmin: false, userRole: false, readerRole: false, operatorRole: true, purgeHistory: true, serverServices: false, sessions: false, alterAnyCredential: false, clustered: false, databaseMail: false } as const
+    api.agentProfile.mockResolvedValue({ ok: true, value: { elapsedMs: 1, profile } })
+    const id = schedules.open('c1')
+    await settled()
+    expect(api.agentProfile).toHaveBeenCalledTimes(1)
+    // Schedule 3 is dana's: its settings stay read-only, but the operator role may toggle it.
+    expect(schedules.readOnly(id, schedules.record(id, '3'))).toBe(schedulesText.operatorReadOnly('dana'))
+    expect(schedules.canToggle(id, schedules.record(id, '3'))).toBe(true)
+    await schedules.setEnabled(id, 3, true)
+    expect(executes()).toEqual([expect.objectContaining({ action: 'agentSchedule', agentSchedule: { op: 'enable', schedule: { id: 3, version: expect.any(Number), modified: expect.any(String) } } })])
+  })
+  it('keeps the Enabled box greyed below sysadmin without SQLAgentOperatorRole (AG-10)', async () => {
+    const { schedules, executes, api } = schedulesWorkbench(schedulesModel({ sysadmin: false, login: 'sa', links: undefined }))
+    api.agentProfile.mockResolvedValue({ ok: true, value: { elapsedMs: 1, profile: { platform: 'windows', engineEdition: 3, msdbAccess: true, sysadmin: false, userRole: true, readerRole: false, operatorRole: false, purgeHistory: false, serverServices: false, sessions: false, alterAnyCredential: false, clustered: false, databaseMail: false } } })
+    const id = schedules.open('c1')
+    await settled()
+    expect(schedules.canToggle(id, schedules.record(id, '3'))).toBe(false)
+    expect(schedules.readOnly(id, schedules.record(id, '3'))).toBe(schedulesText.readOnly('dana'))
+    await schedules.setEnabled(id, 3, true)
+    expect(executes()).toHaveLength(0)
+    // The answer settles it for the document: Refresh reads the schedules again but not the role.
+    await schedules.refresh(id)
+    await settled()
+    expect(api.agentProfile).toHaveBeenCalledTimes(1)
+  })
   it('reads the chosen jobs again after a STALE Create, keeps a pending new schedule, and drops a jobs read from before a re-read', async () => {
     const { schedules, setModel, executes, answers, api } = schedulesWorkbench()
     const id = schedules.open('c1', true)

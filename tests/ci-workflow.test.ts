@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { pullWithRetry } from '../scripts/ci-docker.mjs'
 import { shardBudgetSeconds, shardSuites, smokeSuites, suiteSeconds } from '../scripts/smoke-shards.mjs'
 
 // CI's own contract (docs/ci.md, Layout): validation jobs start together after scope detection, so one run reports every suite it reaches, the
@@ -45,7 +46,7 @@ function jobs(path: string): Map<string, Job> {
   }
   return found
 }
-const smoke = (step: Step) => /test:smoke|-smoke\.mjs|smoke-shards\.mjs/.test(step.run)
+const smoke = (step: Step) => !step.run.includes('--has-suite') && /test:smoke|-smoke\.mjs|smoke-shards\.mjs/.test(step.run)
 const bench = (step: Step) => /npm run bench|check-bench/.test(step.run)
 const runAlways = "needs.scope.outputs.mode == 'full'"
 const liveGroups = Number(/CiGroups = (\d+);/.exec(readFileSync('backend/Varia.Backend.Tests/LiveGroups.cs', 'utf8'))?.[1])
@@ -66,19 +67,24 @@ describe('CI workflow', () => {
     expect(workflow.get('check')!.matrix.get('os')).toBe('ubuntu-24.04, windows-latest, macos-latest')
     expect(workflow.get('check')!.steps.find(step => step.run.trim() === 'npm run check')?.id).toBe('check')
     const live = workflow.get('live')!
-    expect(live.matrix.get('group')!.split(', ').map(Number)).toEqual(Array.from({ length: liveGroups }, (_, index) => index + 1))
-    expect(live.steps.find(step => step.run.trim().endsWith('--live-group ${{ matrix.group }}/' + liveGroups))?.id).toBe('test')
-    for (const suite of ['tests/*-live.test.ts', 'kerberos-live']) expect(live.steps.find(step => step.run.includes(suite))?.if).toBe('matrix.group == 1 && (success() || failure())')
-    // BigQuery's emulator checks ride in the first live group, with no job of their own, against the emulator pinned by digest.
+    expect(live.matrix.get('slot')!.split(', ').map(Number)).toEqual([1, 2])
+    const liveTest = live.steps.find(step => step.id === 'test')!
+    expect(liveTest.run).toContain(`--live-group 1/${liveGroups}`)
+    expect(liveTest.run).toContain(`ci-live-pair.mjs 2/${liveGroups}@1433 3/${liveGroups}@1434`)
+    for (const suite of ['tests/*-live.test.ts', 'kerberos-live']) expect(live.steps.find(step => step.run.includes(suite))?.if).toBe('matrix.slot == 1 && (success() || failure())')
+    // BigQuery's emulator checks ride in live slot 1, with no job of their own, against the emulator pinned by digest.
     const emulator = live.steps.find(step => step.run.includes('--bigquery-emulator-live'))!
-    expect(emulator.if?.startsWith('matrix.group == 1 && (success() || failure())')).toBe(true)
-    expect(emulator.run).toMatch(/ghcr\.io\/goccy\/bigquery-emulator@sha256:[\da-f]{64} --project=varia-emulator --dataset=varia_fixture/)
-    // Its Storage Read checks reach the emulator's gRPC port.
-    expect(emulator.run).toContain('-p 9060:9060')
-    expect(readFileSync('.github/workflows/ci.yml', 'utf8')).toContain('          VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT: http://localhost:9060\n        run: |\n          docker run -d --name varia-bigquery -p 9050:9050 -p 9060:9060 ')
-    // And the Connect dialog's BigQuery phase (connections-smoke.mjs) runs against the same emulator in every Linux smoke shard.
-    const linux = workflow.get('smoke-linux')!.steps, start = linux.findIndex(step => step.id === 'bigquery'), shards = linux.findIndex(step => step.run.includes('smoke-shards.mjs'))
-    expect(linux[start]?.run).toBe(emulator.run.split('\n').find(line => line.includes('docker run'))!.trim())
+    expect(emulator.if?.startsWith('matrix.slot == 1 && (success() || failure())')).toBe(true)
+    expect(emulator.run).toContain('node scripts/ci-docker.mjs start-bigquery')
+    const dockerScript = readFileSync('scripts/ci-docker.mjs', 'utf8')
+    expect(dockerScript).toMatch(/ghcr\.io\/goccy\/bigquery-emulator@sha256:[\da-f]{64}/)
+    expect(dockerScript).toContain("'-p', '9060:9060'")
+    expect(dockerScript).toContain("'--project=varia-emulator', '--dataset=varia_fixture'")
+    expect(readFileSync('.github/workflows/ci.yml', 'utf8')).toContain('          VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT: http://localhost:9060\n        run: |\n          node scripts/ci-docker.mjs start-bigquery')
+    // And the Connect dialog's BigQuery phase (connections-smoke.mjs) runs against the same emulator in the Linux smoke shard that owns it.
+    const linux = workflow.get('smoke-linux')!.steps, start = linux.findIndex(step => step.id === 'bigquery'), shards = linux.findIndex(step => step.run.includes('smoke-shards.mjs ${{ matrix.shard }}'))
+    expect(linux[start]?.run).toContain('smoke-shards.mjs --has-suite scripts/connections-smoke.mjs')
+    expect(linux[start]?.run).toContain('node scripts/ci-docker.mjs start-bigquery')
     expect(start).toBeGreaterThan(-1)
     expect(start).toBeLessThan(shards)
     expect(readFileSync('.github/workflows/ci.yml', 'utf8')).toContain('          VARIA_TEST_BIGQUERY_ENDPOINT: http://localhost:9050\n        run: xvfb-run -a -s "-screen 0 1600x1000x24" node scripts/smoke-shards.mjs')
@@ -142,25 +148,26 @@ describe('CI workflow', () => {
     expect(step?.timeout).toBe(5)
     expect(workflow.get('smoke-windows')!.steps.some(step => step.run.includes('language-services-live-smoke.mjs'))).toBe(false)
     const yaml = readFileSync('.github/workflows/ci.yml', 'utf8'), job = yaml.slice(yaml.indexOf('  smoke-linux:'), yaml.indexOf('  smoke-windows:'))
-    expect(job).toContain('image: mcr.microsoft.com/mssql/server:2022-latest')
+    expect(job).toContain('node scripts/ci-docker.mjs start-sql --name varia-sql --port 1433 --agent')
+    expect(readFileSync('scripts/ci-docker.mjs', 'utf8')).toContain('mcr.microsoft.com/mssql/server:2022-latest')
     expect(job).toContain('VARIA_TEST_SQL_USER: sa')
   })
   it('runs SQL Server Agent in the live and Linux smoke containers, not the benchmarks\', and requires it in the live job', () => {
     const yaml = readFileSync('.github/workflows/ci.yml', 'utf8'), slice = (from: string, to: string) => yaml.slice(yaml.indexOf(`  ${from}:`), yaml.indexOf(`  ${to}:`))
-    for (const job of [slice('live', 'smoke-linux'), slice('smoke-linux', 'smoke-windows')]) expect(job).toContain("MSSQL_AGENT_ENABLED: 'true'")
-    expect(slice('bench-linux', 'regressions')).not.toContain('MSSQL_AGENT_ENABLED')
+    for (const job of [slice('live', 'smoke-linux'), slice('smoke-linux', 'smoke-windows')]) expect(job).toContain('--agent')
+    expect(slice('bench-linux', 'regressions')).not.toContain('--agent')
     expect(slice('live', 'smoke-linux')).toContain("VARIA_TEST_SQL_AGENT: '1'")
     expect(readFileSync('.claude/hooks/session-start.sh', 'utf8')).toMatch(/-e MSSQL_AGENT_ENABLED=true[\s\S]*export VARIA_TEST_SQL_AGENT=1/)
   })
-  it('runs every platform on every code-changing pull request, drafts included, in at most 13 jobs', () => {
+  it('runs every platform on every code-changing pull request, drafts included, in at most 12 validation jobs', () => {
     expect([...workflow.values()].map(job => job.if ?? '').filter(condition => /draft/.test(condition))).toEqual([])
     for (const [name, job] of own) expect(job.if, name).toBe(runAlways)
     const pullRequest = own.filter(([, job]) => job.if === runAlways)
     const platforms = new Set(pullRequest.flatMap(([, job]) => job.runsOn === '${{ matrix.os }}' ? job.matrix.get('os')!.split(', ') : [job.runsOn!]))
     expect([...platforms].sort()).toEqual(['macos-latest', 'ubuntu-24.04', 'windows-latest'])
-    // Three smoke shards per platform keep the growing suites within their time budget, below the account's 20-job concurrency.
+    // Three smoke shards per platform and two live jobs (groups 2/3 & 3/3 side by side) stay well below GitHub's 20-job cap.
     const size = (job: Job) => [...job.matrix.values()].reduce((product, axis) => product * axis.split(',').length, 1)
-    expect(pullRequest.reduce((sum, [, job]) => sum + size(job), 0)).toBeLessThanOrEqual(13)
+    expect(pullRequest.reduce((sum, [, job]) => sum + size(job), 0)).toBeLessThanOrEqual(12)
     // Linux repeats at 1024x768 only on main: the Windows shards run those suites at that size on every pull request.
     for (const step of workflow.get('smoke-linux')!.steps.filter(step => /1024x768x24/.test(step.run))) expect(step.if, step.name).toMatch(/github\.event_name == 'push'/)
   })
@@ -214,5 +221,19 @@ describe('CI workflow', () => {
     const size = (job: Job) => [...job.matrix.values()].reduce((product, axis) => product * axis.split(',').length, 1)
     const count = own.filter(([, job]) => job.if === runAlways).reduce((sum, [, job]) => sum + size(job), 0)
     expect(yaml).toContain(`runs ${count + 2} jobs: ${count} validation jobs plus scope and result.`)
+  })
+  it('retries transient Docker pulls and surfaces persistent failures', async () => {
+    let calls = 0
+    await pullWithRetry('example/image:latest', {
+      attempts: 3,
+      delayMs: 1,
+      run: () => { if (++calls < 3) throw new Error('transient pull error') }
+    })
+    expect(calls).toBe(3)
+    await expect(pullWithRetry('example/image:latest', {
+      attempts: 2,
+      delayMs: 1,
+      run: () => { throw new Error('permanent pull error') }
+    })).rejects.toThrow('permanent pull error')
   })
 })

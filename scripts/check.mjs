@@ -43,7 +43,9 @@ export const steps = {
   'Release build (.NET)': `dotnet build backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release --nologo -v q${sharedCompilation()}`,
   'Offline .NET checks': 'dotnet run --no-build --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release',
   'vitest (Release backend)': `npx vitest run ${needsBackend.join(' ')}`,
-  'Release backend': 'dotnet build backend/Varia.Backend/Varia.Backend.csproj --configuration Release --nologo -v q'
+  'Release backend': 'dotnet build backend/Varia.Backend/Varia.Backend.csproj --configuration Release --nologo -v q',
+  'Prepare Electron': 'npm run electron:prepare -- --install',
+  'Prepare SQL Tools Service': 'npm run sqltools:prepare'
 }
 
 /**
@@ -51,7 +53,7 @@ export const steps = {
  * outcome, so one failure hides nothing) or `{ gate, then }` (`then` only if `gate` passed: nothing runs on a failed build).
  */
 export function plan({ cpus, build = false, skip = [] }) {
-  if (build) return { all: ['Release backend', 'electron-vite build'] }
+  if (build) return { all: ['Release backend', 'electron-vite build', 'Prepare Electron', ...(skip.includes('sqltools') ? [] : ['Prepare SQL Tools Service'])] }
   const wide = cpus >= 8
   const typecheck = skip.includes('typecheck') ? [] : ['Type check']
   const dotnet = { gate: 'Release build (.NET)', then: wide ? { all: ['Offline .NET checks', 'vitest (Release backend)'] } : { chain: ['Offline .NET checks', 'vitest (Release backend)'] } }
@@ -75,14 +77,17 @@ export function cpuBudget(env = process.env, machine = availableParallelism()) {
  * get two; vitest's own default (every CPU but one, per lane) would put one check at about twice its budget.
  */
 export function vitestWorkers(cpus) {
-  return { vitest: Math.max(1, cpus - 3), 'vitest (Release backend)': Math.min(2, Math.max(1, cpus - 1)) }
+  return {
+    vitest: cpus >= 8 ? Math.max(1, cpus - 3) : Math.max(1, Math.min(cpus - 1, Math.ceil(cpus / 2))),
+    'vitest (Release backend)': Math.min(2, Math.max(1, cpus - 1))
+  }
 }
 
 /** Each lane's extra environment: set in the main block when the machine lock applies. */
 const laneEnv = {}
 
 /** The lanes VARIA_CHECK_SKIP may leave out, by the name it takes. */
-export const skippable = { typecheck: 'Type check' }
+export const skippable = { typecheck: 'Type check', sqltools: 'Prepare SQL Tools Service' }
 
 /**
  * VARIA_CHECK_SKIP's entries, trimmed. Any name other than the skippable ones is refused, so a typo cannot skip nothing
@@ -156,7 +161,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   }
   const build = process.argv.includes('--build')
   const { others } = await acquire('shared', { label: build ? 'npm run build:smoke' : 'npm run check' })
-  if (lockEnabled() && !process.env.VITEST_MAX_WORKERS) for (const [lane, workers] of Object.entries(vitestWorkers(cpus))) laneEnv[lane] = { VITEST_MAX_WORKERS: String(workers) }
+  if ((lockEnabled() || process.env.CI) && !process.env.VITEST_MAX_WORKERS) for (const [lane, workers] of Object.entries(vitestWorkers(cpus))) laneEnv[lane] = { VITEST_MAX_WORKERS: String(workers) }
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => {
     console.log(`\nCheck stopped by ${signal}; the lanes still running held:`)
     flushRunning()
@@ -166,7 +171,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const layout = plan({ cpus, build, skip })
   const results = await execute(layout)
   const failed = results.filter(result => result.code)
-  const skipped = build ? '' : skippedNote(layout, skip)
+  const skipped = skippedNote(layout, skip)
   console.log(`
 ${failed.length ? 'Check failed' : 'Check passed'} in ${((performance.now() - started) / 1000).toFixed(1)} s (${cpus} CPUs, ${cpus >= 8 ? 'every lane at once' : 'two chains'}${others ? `, beside ${others} other ${others > 1 ? 'checks' : 'check'}` : ''})${skipped}: ` + results.map(({ name, seconds, code }) => `${name} ${seconds.toFixed(1)} s${code ? ' FAILED' : ''}`).join(', '))
   process.exitCode = failed.length ? 1 : 0

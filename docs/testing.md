@@ -124,8 +124,46 @@ npm run test:smoke:wsl -- --all
   `-- --bigquery-emulator-live` runs the emulator checks (docs/bigquery.md#testing has the `docker run` line; on Windows use
   `127.0.0.1`). `VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT` (the emulator's gRPC port, such as `http://localhost:9060`, read only
   by the backend and only with the emulator endpoint) adds the Storage Read checks. The offline checks need nothing:
-  `-- --bigquery-checks` runs them alone, and `-- --bigquery-read-bench` is the hand-run read throughput benchmark. No check ever contacts a real
-  Google Cloud project, and none reads a project id or credential from the environment.
+  `-- --bigquery-checks` runs them alone, and `-- --bigquery-read-bench` is the hand-run read throughput benchmark. No
+  check in `npm run check`, a live group or a smoke suite contacts a real Google Cloud project, and none of them reads a
+  project id or credential from the environment; only the opt-in group below does.
+- **Real BigQuery project (opt-in, billed).** `-- --bigquery-real-project` (`BigQueryRealProjectChecks`) answers what only
+  Google can, following the open real-project checklist (R1 to R21; each check prints its id). It is run by hand by the
+  owner, never in CI (it refuses when `CI` is set) and never with `VARIA_TEST_BIGQUERY_ENDPOINT`. It needs
+  `VARIA_TEST_BIGQUERY_PROJECT` and `VARIA_TEST_BIGQUERY_CONFIRM` set to the same project id, which stays out of the
+  repository, and ADC (`gcloud auth application-default login`) or `VARIA_TEST_BIGQUERY_KEY_FILE` (a service account key).
+  `VARIA_TEST_BIGQUERY_TIER` picks how far it goes, each tier including the ones before it:
+  - `free` (the default): no job. The connect probe and identity pin (R2), Varia's dry-run estimate, All users'
+    `jobs.list` fields and a page token reused with a smaller page (R1), `tables.get` with `fields` and with
+    `selectedFields` (R5), and dry runs of `INFORMATION_SCHEMA` (R8), a value-list filter (R9) and a parameterised
+    `TABLESAMPLE` (R10).
+  - `zero`: jobs that read no table and bill nothing. JSON-number job fields and the 409 body (R11), the REST shape of
+    RANGE, DATETIME and TIME (R12), and a session: a dry run with its id (R7), a failure inside its transaction, its
+    children's minimal projection and `CALL BQ.ABORT_SESSION` with a STRING parameter (R13).
+  - `billed`: jobs that scan a small public table, 10 MiB minimum each, about 100 MiB in all. A query's bytes billed
+    and a script's cap per statement or per script (R15), `TABLESAMPLE` over the run's own anonymous result table (R17),
+    Show CREATE Statement's estimate against its bill (R18), a DML script's children (R20) and Varia's tab session keeping
+    its temp table (dry-run with the session id its first job reported).
+
+  The rest it prints as by hand: Google's error bodies (R3), impersonation and federation (R4), a UDAF's type (R6), a busy
+  or 24-hour-idle session (R13, R14), Storage Read billing (R16), the bulk index's rows (R19). Fixtures change only by hand
+  from what a run printed (R21). The spending guard (`BigQueryRealProjectChecks.Budget`, held offline by the
+  `BigQueryRealProjectGuard` suite):
+  - every job is dry-run first, and one estimated over 100 MiB, incomplete or faked is skipped; a script runs only once
+    each statement that reads a table was admitted on its own;
+  - the run stops before its estimates (each at least BigQuery's 10 MiB minimum, `INFORMATION_SCHEMA` included) or its
+    bytes billed pass 1 GiB in total, so it can pass 1 GiB by at most one job's cap;
+  - queries read only the small public tables in `PublicTables` (`bigquery-public-data.samples.shakespeare`), the
+    public dataset's `INFORMATION_SCHEMA.TABLES`, the run's own result tables and, for the checks that make them, its
+    own temp tables, checked in the text and in the dry run's referenced tables;
+  - the connection and every query job carry `maximumBytesBilled` of at most 100 MiB, and after each step the run lists
+    the jobs it created (and Varia's jobs in its sessions, never another tool's or window's) and fails if one billed bytes without that cap or past it (a script: its cap for each statement, within 100 MiB), or was never counted; each job is counted before the next is admitted, and one still running after its wait stops the run; it prints
+    each job's bytes billed and the total. Varia's own `CALL BQ.ABORT_SESSION` job carries no cap; it runs outside the
+    session and bills nothing, so the run does not count it. A comment unique to the run keeps the query cache from answering a rerun.
+
+  Before the first run, set a custom "Query usage per day" quota of 10–50 GiB on the project and a budget alert (a
+  lowered quota takes minutes to apply; a budget only alerts). Neither limits Storage Read bytes, so the group reads no
+  result through Storage Read.
 - **Password tracing.** `VARIA_TEST_SQL_XE=1` (set only for CI's disposable SQL Server container) runs the live check that an
   Extended Events session cannot read a password from the RPC; docs/object-actions.md has what it records.
 - **Restore fixtures.** `VARIA_UPDATE_RESTORE_FIXTURES=1` makes `RestoreLiveChecks` rewrite the scrubbed restore-planner

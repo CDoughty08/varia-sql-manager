@@ -31,7 +31,8 @@ env:
 # the benchmarks run side by side, so a failure in one hides nothing in the others and the run takes as long as its
 # longest job. Every code-changing pull request runs every platform, drafts included: the repository is public, so runners cost nothing.
 # What a public repository does pay in is concurrency (20 jobs at once across the account, 5 of them macOS). A code-changing PR
-# runs 15 jobs: 13 validation jobs plus scope and result. A third Windows smoke shard keeps language-service coverage within the per-shard time budget; no job repeats
+# runs 14 jobs: 12 validation jobs plus scope and result. Three smoke shards per platform and two live jobs (the second running
+# groups 2/3 and 3/3 concurrently against two SQL containers) keep every job within budget while freeing runner slots; no job repeats
 # another's work. Report-only work stays off pull requests: Linux's 1024x768 repeats of suites the
 # Windows shards already run at that size run on main only, and the desktop benchmarks run daily (bench-desktop.yml).
 # Scope detection and the final required result add two short Linux jobs.
@@ -112,38 +113,23 @@ jobs:
         run: npm run check
 
   live:
-    name: Live SQL Server checks (Linux ${{ matrix.group }}/3)
+    name: Live SQL Server checks (Linux ${{ matrix.slot == 1 && '1/3' || '2-3/3' }})
     needs: scope
     if: needs.scope.outputs.mode == 'full'
     strategy:
       fail-fast: false
       matrix:
-        # LiveGroups.cs splits the live .NET suites by measured time, each group against a server of its own; the count here
-        # is LiveGroups.CiGroups. Check (ubuntu) runs the offline .NET checks and the rest of vitest.
-        group: [1, 2, 3]
+        # LiveGroups.cs splits the live .NET suites into 3 balanced groups (LiveGroups.CiGroups), each against a SQL Server
+        # container of its own. Slot 1 runs group 1/3 plus the Node/language/BigQuery/Kerberos live checks; slot 2 builds once
+        # and runs groups 2/3 and 3/3 side by side against two SQL containers (ports 1433 and 1434), removing a full job slot.
+        slot: [1, 2]
     runs-on: ubuntu-24.04
     # Room for every timed step below (tests/ci-workflow.test.ts) plus the setup before them.
-    timeout-minutes: 45
-    services:
-      sql:
-        image: mcr.microsoft.com/mssql/server:2022-latest
-        env:
-          ACCEPT_EULA: 'Y'
-          # A fixed development password is fine here: the container is created for this job, holds no data, and is discarded with the runner.
-          MSSQL_SA_PASSWORD: 'Varia_Dev_Pw1!'
-          # Agent starts after the health check passes; the Agent suites wait for it (AgentLiveChecks.UpAsync).
-          MSSQL_AGENT_ENABLED: 'true'
-        ports:
-          - 1433:1433
-        options: >-
-          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P $MSSQL_SA_PASSWORD -Q 'SELECT 1' -b -o /dev/null"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 12
-          --health-start-period 20s
+    timeout-minutes: 60
     env:
       VARIA_TEST_SQL_SERVER: localhost
       VARIA_TEST_SQL_USER: sa
+      # A fixed development password is fine here: the container is created for this job, holds no data, and is discarded with the runner.
       VARIA_TEST_SQL_PASSWORD: 'Varia_Dev_Pw1!'
       # Live tests may create and drop a uniquely named scratch database (graph tables cannot be temporary).
       VARIA_TEST_SQL_SCRATCH: '1'
@@ -156,9 +142,17 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      # Only group 1 runs node (live vitest, bundled SQL Tools Service and Kerberos); the others run only dotnet.
+      - name: Start SQL Server container(s) in the background
+        timeout-minutes: 5
+        run: |
+          if [ "${{ matrix.slot }}" = "1" ]; then
+            node scripts/ci-docker.mjs start-sql --name varia-sql --port 1433 --agent
+          else
+            node scripts/ci-docker.mjs start-sql --name varia-sql-2 --port 1433 --name varia-sql-3 --port 1434 --agent --memory-mb 3072
+          fi
+      # Only slot 1 runs node (live vitest, bundled SQL Tools Service and Kerberos); slot 2 runs only dotnet.
       - uses: actions/setup-node@v7
-        if: matrix.group == 1
+        if: matrix.slot == 1
         with:
           node-version: 24
           cache: npm
@@ -168,21 +162,36 @@ jobs:
           cache: true
           cache-dependency-path: backend/Varia.Backend/packages.lock.json
       - run: npm ci --no-audit --no-fund
-        if: matrix.group == 1
+        if: matrix.slot == 1
+      - name: Build the Release backend tests
+        timeout-minutes: 5
+        run: dotnet build backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release --nologo -v q
+      - name: Wait for SQL Server container(s)
+        timeout-minutes: 4
+        run: |
+          if [ "${{ matrix.slot }}" = "1" ]; then
+            node scripts/ci-docker.mjs wait-sql --name varia-sql
+          else
+            node scripts/ci-docker.mjs wait-sql --name varia-sql-2 --name varia-sql-3
+          fi
       - name: Live .NET checks against SQL Server
         id: test
-        # All the live .NET suites took 11 minutes in one job on PR #96's run; each group prints its suites' times.
         timeout-minutes: 20
-        run: dotnet run --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --live-group ${{ matrix.group }}/3
+        run: |
+          if [ "${{ matrix.slot }}" = "1" ]; then
+            dotnet run --no-build --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --live-group 1/3
+          else
+            node scripts/ci-live-pair.mjs 2/3@1433 3/3@1434
+          fi
       - name: Live vitest suites against SQL Server
         # Only the vitest files that use SQL Server (tests/*-live.test.ts); Check runs the others. After a failed group too:
         # the Release backend they start was built either way.
-        if: matrix.group == 1 && (success() || failure())
+        if: matrix.slot == 1 && (success() || failure())
         timeout-minutes: 5
         run: npx vitest run tests/*-live.test.ts
       - name: Bundled SQL language service against SQL Server
         # Runs after other checks fail too, provided their Release build exists; the SQL container is disposable.
-        if: matrix.group == 1 && (success() || failure()) && hashFiles('backend/Varia.Backend.Tests/bin/Release/net11.0/Varia.Backend.Tests.dll') != ''
+        if: matrix.slot == 1 && (success() || failure()) && hashFiles('backend/Varia.Backend.Tests/bin/Release/net11.0/Varia.Backend.Tests.dll') != ''
         timeout-minutes: 5
         run: |
           node scripts/prepare-sqltools-service.mjs --rid linux-x64
@@ -191,20 +200,20 @@ jobs:
         # BigQuery in emulator mode against goccy/bigquery-emulator 0.8.1, pinned by digest (docs/bigquery.md, Testing):
         # anonymous credentials, so no Google project or credential is ever involved. Its gRPC port (9060) serves the Storage
         # Read checks. The checks wait for it to answer. Runs after other checks fail too, provided their Release build exists.
-        if: matrix.group == 1 && (success() || failure()) && hashFiles('backend/Varia.Backend.Tests/bin/Release/net11.0/Varia.Backend.Tests.dll') != ''
+        if: matrix.slot == 1 && (success() || failure()) && hashFiles('backend/Varia.Backend.Tests/bin/Release/net11.0/Varia.Backend.Tests.dll') != ''
         timeout-minutes: 5
         env:
           VARIA_TEST_BIGQUERY_ENDPOINT: http://localhost:9050
           VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT: http://localhost:9060
         run: |
-          docker run -d --name varia-bigquery -p 9050:9050 -p 9060:9060 ghcr.io/goccy/bigquery-emulator@sha256:f4e428d265a93dc5ce36c294e1c584c7c9b384117d47ab8ddbb63d8d50b7f393 --project=varia-emulator --dataset=varia_fixture
+          node scripts/ci-docker.mjs start-bigquery
           dotnet run --no-build --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --bigquery-emulator-live
       - name: Integrated authentication without a Kerberos ticket
         # Linux connects with integrated authentication through GSSAPI (SqlClient's managed SNI). With no ticket, the backend
         # must say to run kinit (AUTH_KERBEROS) with the failure's details, not refuse the mode or show SqlClient's bare
         # "Cannot generate SSPI context.". The cache named here never exists; the suite fails rather than skips if it cannot run.
         # It runs after a failed check too: the Release backend it starts was built either way.
-        if: matrix.group == 1 && (success() || failure())
+        if: matrix.slot == 1 && (success() || failure())
         timeout-minutes: 5
         env:
           KRB5CCNAME: FILE:/tmp/varia-no-kerberos-ticket
@@ -225,23 +234,7 @@ jobs:
         shard: [1, 2, 3]
     runs-on: ubuntu-24.04
     # Room for every timed step below (tests/ci-workflow.test.ts) plus the setup before them.
-    timeout-minutes: 65
-    services:
-      sql:
-        image: mcr.microsoft.com/mssql/server:2022-latest
-        env:
-          ACCEPT_EULA: 'Y'
-          MSSQL_SA_PASSWORD: 'Varia_Dev_Pw1!'
-          # Agent starts after the health check passes; the Agent suites wait for it (AgentLiveChecks.UpAsync).
-          MSSQL_AGENT_ENABLED: 'true'
-        ports:
-          - 1433:1433
-        options: >-
-          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P $MSSQL_SA_PASSWORD -Q 'SELECT 1' -b -o /dev/null"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 12
-          --health-start-period 20s
+    timeout-minutes: 75
     env:
       VARIA_TEST_SQL_SERVER: localhost
       VARIA_TEST_SQL_USER: sa
@@ -251,6 +244,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - name: Start SQL Server container in the background
+        timeout-minutes: 5
+        run: node scripts/ci-docker.mjs start-sql --name varia-sql --port 1433 --agent
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -264,6 +260,9 @@ jobs:
       - name: Build the app and the Release backend
         id: build
         timeout-minutes: 10
+        env:
+          # Only shard 3 runs language-services-live-smoke.mjs; the other shards do not launch the bundled SQL Tools Service.
+          VARIA_CHECK_SKIP: ${{ matrix.shard != 3 && 'sqltools' || '' }}
         run: npm run build:smoke
       - name: Prepare the Electron sandbox and display
         id: display
@@ -276,11 +275,16 @@ jobs:
           command -v xvfb-run || { sudo apt-get update && sudo apt-get install -y xvfb; }
       - name: Start the BigQuery emulator
         # The connections suite's BigQuery phase drives the Connect dialog against the emulator BQ-1 pins by digest (anonymous
-        # credentials, never a Google project). A service container cannot take the emulator's arguments, so it starts here,
-        # in every shard, since the shard that runs the connections suite follows measured times.
+        # credentials, never a Google project). Start it only in the shard that runs connections-smoke.mjs, with pull retries.
         id: bigquery
-        timeout-minutes: 2
-        run: docker run -d --name varia-bigquery -p 9050:9050 -p 9060:9060 ghcr.io/goccy/bigquery-emulator@sha256:f4e428d265a93dc5ce36c294e1c584c7c9b384117d47ab8ddbb63d8d50b7f393 --project=varia-emulator --dataset=varia_fixture
+        timeout-minutes: 3
+        run: |
+          if node scripts/smoke-shards.mjs --has-suite scripts/connections-smoke.mjs ${{ matrix.shard }}/3; then
+            node scripts/ci-docker.mjs start-bigquery
+          fi
+      - name: Wait for SQL Server container
+        timeout-minutes: 4
+        run: node scripts/ci-docker.mjs wait-sql --name varia-sql
       - name: Electron smoke tests
         timeout-minutes: 25
         env:
@@ -342,6 +346,8 @@ jobs:
       - name: Build the app and the Release backend
         id: build
         timeout-minutes: 10
+        env:
+          VARIA_CHECK_SKIP: sqltools
         run: npm run build:smoke
       - name: Electron smoke tests
         timeout-minutes: 25
@@ -361,21 +367,7 @@ jobs:
     if: needs.scope.outputs.mode == 'full'
     runs-on: ubuntu-24.04
     # Room for every timed step below (tests/ci-workflow.test.ts) plus the setup before them.
-    timeout-minutes: 40
-    services:
-      sql:
-        image: mcr.microsoft.com/mssql/server:2022-latest
-        env:
-          ACCEPT_EULA: 'Y'
-          MSSQL_SA_PASSWORD: 'Varia_Dev_Pw1!'
-        ports:
-          - 1433:1433
-        options: >-
-          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P $MSSQL_SA_PASSWORD -Q 'SELECT 1' -b -o /dev/null"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 12
-          --health-start-period 20s
+    timeout-minutes: 50
     env:
       VARIA_TEST_SQL_SERVER: localhost
       VARIA_TEST_SQL_USER: sa
@@ -384,6 +376,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - name: Start SQL Server container in the background
+        timeout-minutes: 5
+        run: node scripts/ci-docker.mjs start-sql --name varia-sql --port 1433
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -397,6 +392,8 @@ jobs:
       - name: Build the app and the Release backend
         id: build
         timeout-minutes: 10
+        env:
+          VARIA_CHECK_SKIP: sqltools
         run: npm run build:smoke
       - name: Prepare the Electron sandbox and display
         id: display
@@ -408,6 +405,9 @@ jobs:
         # As package.yml publishes it for a release, so the node bench can check it is precompiled and time its start.
         timeout-minutes: 5
         run: dotnet publish backend/Varia.Backend/Varia.Backend.csproj -c Release -r linux-x64 --self-contained true -p:RestoreLockedMode=true -o artifacts/bench-backend
+      - name: Wait for SQL Server container
+        timeout-minutes: 4
+        run: node scripts/ci-docker.mjs wait-sql --name varia-sql
       - name: IPC benchmarks
         # Floors are enforced on Linux only; the table goes to the job summary.
         timeout-minutes: 15

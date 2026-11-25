@@ -242,7 +242,7 @@ noted where it matters.
 | `bigquery.account`, `bigquery.projects` | invoke | unary | control | 30 s, sensitive. BigQuery before connecting: `{ authentication, keyFile?, impersonateServiceAccount? }` (`.projects` adds `pageToken?` ≤ 1,024). Main adds `credential` (`{ source: 'file' \| 'adc' \| 'metadata' \| 'anonymous', json? ≤ 64 KiB }`), which the renderer never holds. Answers `{ kind, account ≤ 256, impersonated? }` and `{ projects: { id, friendlyName? ≤ 256 }[] ≤ 1,000, nextPageToken? }` ([BigQuery](bigquery.md#pre-connect-methods)). |
 | `bigquery.endIdleSessions` | main only | unary | control | 10 s (main gives up after 15 s). Before every backend stop main makes, except of a backend that is not responding: `{ keepJobKeys?: uuid[] ≤ 1,024 }`; ends every idle BigQuery session but a kept key's with an open or unknown transaction, and answers `{ failedAborts }` ([Re-attaching to jobs](bigquery.md#re-attaching-to-jobs)) |
 | `bigquery.cancelJobs` | main only | unary | control | 60 s, sensitive. A saved profile's jobs without a handle: the credential fields of `bigquery.account` plus `project` and `jobs: { jobId ≤ 1,024, location? ≤ 64 }[] ≤ 64`; cancels each, waits for DONE, lists its children and aborts its session, answering `{ jobs: { jobId, cancelled, note?, error? }[] }` |
-| `bigquery.dryRun` | invoke | unary | metadata | 30 s. A free dry run on a connected BigQuery handle: `{ connectionId, sql ≤ 1,000,000, dataset? ≤ 1,024 }`, or `{ connectionId, remote }` for a sort, filter or value list of a windowed result ([Remote results](#remote-results)). Answers `{ bytesProcessed, incomplete?: 'script' \| 'lowerBound' \| 'unknown' \| 'zeroBytes', statementType?, faked?, fallback? }`; a query BigQuery refuses is `SQL_ERROR` with its `[line:column]` ([BigQuery's Cost](bigquery.md#cost)) |
+| `bigquery.dryRun` | invoke | unary | metadata | 30 s. A free dry run on a connected BigQuery handle: `{ connectionId, sql ≤ 1,000,000, dataset? ≤ 1,024, sessionId? }` (the tab's id: a tab that holds a BigQuery session dry-runs in it; none is created), or `{ connectionId, remote }` for a sort, filter or value list of a windowed result ([Remote results](#remote-results)). Answers `{ bytesProcessed, incomplete?: 'script' \| 'lowerBound' \| 'unknown' \| 'zeroBytes', statementType?, faked?, fallback? }`; a query BigQuery refuses is `SQL_ERROR` with its `[line:column]` ([BigQuery's Cost](bigquery.md#cost)) |
 | `databases.list` | invoke | unary | metadata | 45 s; for a BigQuery handle, the billing project's datasets |
 | `tables.columns` | invoke | unary | metadata | 45 s; the backend stops its own query after 30 s, answering with an envelope error (`TIMEOUT`, or `SQL_ERROR` when SqlClient reports the cancel), not a result `error` value. Tables and views, read through `QUOTENAME(@db) + '.sys.sp_executesql'` so no pooled connection stays in the database |
 | `language.status`, `language.close` | invoke | unary | control | 10 s |
@@ -293,6 +293,8 @@ noted where it matters.
 | `actions.execute` | invoke; `cancelObjectActions` (Stop); progress via `onActionProgress` | unary with EVENTs | actions | none, no backstop (note 2 below). Sensitive. Main checks the answer (`actionExecuteResultSchema`, every step field bounded). Never re-sent |
 | `ssis.describe` | invoke; `cancelSsis` | unary | ssis | 45 s, budget 40 s (lock wait ≤ 5 s, role checks 1 s: `BLOCKED`) |
 | `ssis.execute` | invoke; `cancelSsis` (Stop) | unary | ssis | none, no backstop: waits for locks as SSMS does; only CANCEL (reason 1) ends it, answered with its steps once SQL Server ends the statement (≤ 10 s later); preflight budget 25 s (lock timeout 10 s: `BLOCKED`). Sensitive. Never re-sent. Create Catalog: see **Create Catalog** below |
+| `ssis.execution` | invoke; `cancelSsis` | unary | ssis | 45 s, budget 40 s (lock wait ≤ 5 s: `BLOCKED`) |
+| `ssis.packageRuns` | invoke; `cancelSsis` | unary | ssis | 45 s, budget 40 s (lock wait ≤ 5 s: `BLOCKED`) |
 | `ssis.catalogSetup` | invoke; `cancelSsis` | unary | ssis | 45 s, budget 40 s (lock timeout 10 s: `BLOCKED`) |
 | `activity.details` | invoke; `cancelActivity` (closing Details) | unary | live (live gates) | 15 s, budget 10 s |
 | `activity.kill` | invoke | unary | actions (own gates) | 30 s, budget 25 s, answered with the outcomes of the sessions tried. Never re-sent |
@@ -471,6 +473,14 @@ the SSIS read pool (program name + " - Integration Services", Initial Catalog th
 - The SSIS profile is read once per connection (role checks `LOCK_TIMEOUT 1000`). `result.error` codes:
   `CATALOG_MISSING`, `NO_DB_ACCESS`, `DATABASE_UNAVAILABLE`, `BLOCKED`, `TIMEOUT`, `PERMISSION_DENIED`, `NOT_FOUND`,
   `NOT_SUPPORTED` (before 2016, Linux), `CONNECTION_LOST`, `AUTH_KERBEROS`, `AUTH_UNSUPPORTED`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `SQL_ERROR`.
+- `ssis.execution { connectionId, requestId, executionId: 1 – 2^53 − 1, types?: message type codes [1..all, distinct], source?: task name ≤ 4,000 }`
+  answers `{ model?, elapsedMs, error? }` on the same pool and prologue as `ssis.describe`: the execution's overview, its
+  messages counted by type, the newest ≤ 5,000 of the chosen types and task (all when left out), each message and path
+  ≤ 4,000 characters (a longer one ends in "…"; past the row bound or about 4,000,000 bytes, `truncated`), its tasks
+  (≤ 1,000), the parameter values it used (≤ 1,000, never a sensitive value), the package's runs up to this one (≤ 16)
+  and its next run. A missing (purged) execution is `NOT_FOUND`; the other codes are describe's.
+- `ssis.packageRuns { connectionId, requestId, folder, project ≤ 128, package ≤ 260 }` answers `{ model?, elapsedMs, error? }`:
+  one package's runs, newest first (≤ 1,000, then `truncated`), each with its error and warning counts; the codes are describe's.
 - **SSIS cancellation** is `varia:ssis-cancel`: an attention, answered `CANCELLED`.
 
 **SSIS writes.** `ssis.execute { connectionId, requestId, action: { verb: 'stopOperation', operationId: 1 – 2^53 − 1 },
@@ -922,8 +932,10 @@ gets Cancel.
 - BigQuery job records, all main-only: `varia:job-records-drop` (a job key), `varia:quit-keep-jobs` (the job keys a quit
   keeps, ≤ 1,024; their drops wait until the quit ends or stops), `varia:jobs-cancel-restored` (≤ 1,024 job keys; cancels
   their running jobs through their saved profiles with `bigquery.cancelJobs`, 64 jobs per call, answering each job's outcome and
-  the ids that cannot be cancelled without a connection) and `varia:jobs-without-tab` (the open tabs' job keys; main
-  adds AutoRecover's, asks Cancel Jobs or Keep for running jobs no tab holds, and answers what it did, or null). Main
+  the ids that cannot be cancelled without a connection) and `varia:jobs-without-tab` (`{ keys, liveProjects }`: the open tabs' job keys, ≤ 1,024, and
+  the BigQuery projects the page is connected to; main adds AutoRecover's, asks Cancel Jobs, Show in Job History (offered
+  only when a project is connected or has the saved connection that started its jobs) or Keep for running jobs no tab
+  holds, and answers what it did, Show's projects each with that saved connection's id or why it cannot be shown, or null). Main
   sends `varia:failed-aborts` (a count) for idle sessions whose end failed at a Reload or backend restart, once the page is
   ready.
 

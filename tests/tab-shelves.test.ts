@@ -125,6 +125,16 @@ afterEach(() => {
 })
 
 describe('editor group tab shelves', () => {
+  it('uses the tightened 196 px cell width target and 40 px default compact tab height', () => {
+    const view = fixture(0, 4)
+    view.list.style.removeProperty('--varia-documentTab')
+    view.resize(784, 864)
+    expect(view.shelf(false).cellWidth).toBe(196)
+    expect(view.shelf(false).height).toBe(40)
+    expect(view.nodes.get('q1')!.style.width).toBe('196px')
+    expect(view.nodes.get('q1')!.style.height).toBe('40px')
+  })
+
   it('uses the two-line document height for both shelves and every tab slot, independently of toolbar height', () => {
     const view = fixture()
     view.list.style.setProperty('--varia-documentTab', '44px')

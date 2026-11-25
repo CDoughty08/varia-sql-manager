@@ -7,7 +7,7 @@ import type { VariaApi } from '../../../shared/contracts'
 import { agentLimits, runStatuses } from '../../../shared/agent/catalog.ts'
 import { agentHistoryProbe, agentHistorySource, historyRunKeyText, parseHistoryRunKey, type HistoryRunKey } from '../../../shared/agent/history.ts'
 import {
-  durationSeconds, failedStep, jobHistoryArgs, jobHistoryLimits, sameRun, ssisExecutionQuery, type JobHistoryRun, type JobHistoryStep, type JobUsual
+  durationSeconds, failedStep, jobHistoryArgs, jobHistoryLimits, sameRun, type JobHistoryRun, type JobHistoryStep, type JobUsual
 } from '../../../shared/agent/job-history.ts'
 import { liveProbes } from '../../../shared/live/catalog.ts'
 import { onUnexpectedError } from '../core/errors'
@@ -57,8 +57,8 @@ export interface JobHistoryServiceOptions {
   /** Tells when connectionOf or visible may have changed. */
   readonly subscribe: (listener: () => void) => () => void
   readonly newId: () => string
-  /** A new query tab on the connection (an SSIS step's execution messages; never run by itself). */
-  readonly openQuery?: (sql: string, name: string, connectionId: string, database?: string) => void
+  /** An SSIS step's execution in the SSIS execution messages view (AG-13), on the connection. */
+  readonly openSsisExecution?: (connectionId: string, executionId: number) => void
 }
 
 export const jobHistoryText = {
@@ -163,15 +163,15 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     if (this.get(id) && this.get(id)!.step === step && this.get(id)!.message !== undefined) this.patch(id, { notice: result.ok ? jobHistoryText.copied : result.error })
   }
 
-  /** An SSIS step's execution: its catalog messages in a new query window, in SSISDB (not run). */
+  /** An SSIS step's execution: its overview and catalog messages in the SSIS execution messages view. */
   openSsisExecution(id: string, executionId: number): void {
     const connectionId = this.options.connectionOf(id)
-    if (!connectionId || !this.options.openQuery) return
-    this.options.openQuery(ssisExecutionQuery(executionId), `SSIS execution ${executionId}.sql`, connectionId, 'SSISDB')
+    if (!connectionId || !this.options.openSsisExecution) return
+    this.options.openSsisExecution(connectionId, executionId)
   }
   /** The document's connection is usable now. */
   connected(id: string): boolean { return !!this.options.connectionOf(id) }
-  canOpenQuery(id: string): boolean { return !!this.options.openQuery && !!this.options.connectionOf(id) }
+  canOpenSsisExecution(id: string): boolean { return !!this.options.openSsisExecution && !!this.options.connectionOf(id) }
 
   closed(id: string): void {
     this.views.get(id)?.stop()

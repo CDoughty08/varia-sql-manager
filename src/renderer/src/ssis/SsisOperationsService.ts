@@ -1,9 +1,11 @@
 import { CustomDocumentTargets, type CustomDocumentTargetOptions } from '../services/custom-document-targets'
-// Integration Services Operations (D-ssis 6.2): one document per connection that shows the SSIS Catalog's operations live,
-// replacing SSMS's Active Operations dialog and its All Executions, All Validations and All Operations reports. The backend
-// keeps the window (the ssis.operations live source); this service owns each document's filters, its live view, its grid's
-// kept state, the selected operation, the tiles' counts and Stop Operation. Failures are values in the snapshot; nothing
-// throws into React.
+// The Integration Services document (D-ssis 6.2): one document per connection that drills in place from the SSIS Catalog's
+// operations, live (SSMS's Active Operations dialog and its All Executions, All Validations and All Operations reports), to a
+// package's runs and one run's page (SSMS's Overview, All Messages and Execution Performance reports), with Back and Forward
+// through every place visited. The backend keeps the operations window (the ssis.operations live source); this service owns
+// each document's history, its filters, its live view (reading only while the list is shown), its grid's kept state, the
+// selected operation, the tiles' counts and Stop Operation; SsisPlacesService reads the package and run pages. Failures are
+// values in the snapshot; nothing throws into React.
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import { liveProbes } from '../../../shared/live/catalog'
 import type { SettingsValues } from '../../../shared/settings/catalog'
@@ -12,6 +14,11 @@ import {
   operationStatusByLabel, operationStoppable, operationsPresetSpecs, operationsTabName, operationTypeByLabel, type OperationsPreset
 } from '../../../shared/ssis/operations'
 import type { SsisExecuteResult, SsisOperationsArgs } from '../../../shared/ssis/schema'
+import { executionOperationType, executionText, isExecutionId } from '../../../shared/ssis/execution'
+import {
+  canGoBack, canGoForward, currentPlace, keptKeys, pushPlace, startTrail, stepTrail, updatePlace, type SsisPlace, type SsisPlaceTarget, type SsisTrail
+} from '../../../shared/ssis/navigation'
+import type { SsisPlacesService } from './SsisPlacesService'
 import type { SsisOperationsContextState, SsisOperationsKeys } from '../core/contextkeys'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
@@ -60,6 +67,8 @@ export interface SsisOperationsState {
   readonly notice?: SsisOperationsNotice
   /** The tiles' counts from the last sample, in the catalogue's tile order (null where the source has none yet). */
   readonly counts?: readonly (number | null)[]
+  /** The places visited and the one shown: the list, a package's runs or a run's page. */
+  readonly trail: SsisTrail
 }
 /** How a document's view ended by failing: the catalog is missing (nothing to retry until one exists), or another failure
  *  that Retry (Refresh) may get past, such as access granted since. */
@@ -74,6 +83,8 @@ export interface SsisOperationsServiceOptions extends CustomDocumentTargetOption
   /** The editor groups: a document shown in any group is visible. */
   readonly groups?: Pick<EditorGroupService, 'getSnapshot' | 'subscribe'>
   readonly live: Pick<LiveService, 'open'>
+  /** Reads the package and run pages. */
+  readonly places: SsisPlacesService
   readonly connections: ExternalStore<readonly LiveConnection[]>
   readonly settings: ExternalStore<{ readonly values: SettingsValues }>
   /** Focuses a document's grid (the app's DOM); tests leave it out. */
@@ -88,6 +99,7 @@ export const operationsText = {
   notStoppable: (id: number) => `Operation ${id} cannot be stopped: only an execution or validation that is running or pending can be.`,
   noCatalog: 'This server has no SSIS Catalog. Create it on the Integration Services Catalogs node, or connect to a server that has one, then open Operations again.',
   failed: 'Operations stopped reading the catalog.',
+  noRuns: (name: string) => `The catalog has no runs of ${name} that this login may read.`,
   copyFailed: (message: string) => `Could not copy the rows: ${message}`
 } as const
 
@@ -228,19 +240,141 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
     if (this.disposed) throw new Error('Integration Services Operations is not available.')
     const connection = this.options.connections.getSnapshot().find(item => item.id === connectionId && !item.lost && (!item.lifecycle || item.lifecycle.state === 'connected'))
     if (!connection) throw new Error('Connect to the server first.')
-    const existing = Object.values(this.getSnapshot().documents).find(state => state.connectionId === connectionId)
+    const existing = this.documentFor(connectionId)
     if (existing) {
       this.setFilters(existing.id, this.presetFilters(preset), preset)
+      this.go(existing.id, { kind: 'list' })
       this.options.documents.activate(existing.id)
       return existing.id
     }
+    return this.create(connection, preset)
+  }
+
+  /** An execution's run page in its connection's document (opened on the list when there is none, so Back reaches it). */
+  openExecution(connectionId: string, executionId: number): string {
+    if (!isExecutionId(executionId)) throw new Error('An SSIS execution id is a positive integer.')
+    const id = this.ensure(connectionId)
+    this.go(id, { kind: 'execution', executionId })
+    this.options.documents.activate(id)
+    return id
+  }
+  /** A package's runs in its connection's document. */
+  openPackage(connectionId: string, folder: string, project: string, name: string): string {
+    const id = this.ensure(connectionId)
+    this.go(id, { kind: 'package', folder, project, package: name })
+    this.options.documents.activate(id)
+    return id
+  }
+  /** A package's newest run: its runs show at once, and its newest run's page follows when they arrive (still shown, with runs). */
+  openLastRun(connectionId: string, folder: string, project: string, name: string): string {
+    const id = this.openPackage(connectionId, folder, project, name)
+    const place = this.place(id)
+    if (place?.kind !== 'package') return id
+    const settle = () => {
+      const read = this.options.places.package(place.key)
+      if (read?.loading !== false) return false
+      stop()
+      if (this.place(id)?.key !== place.key) return true
+      const newest = read.model?.runs[0]
+      if (newest) this.go(id, { kind: 'execution', executionId: newest.id })
+      else if (read.model) this.patch(id, { notice: { tone: 'info', text: operationsText.noRuns(name) } })
+      return true
+    }
+    const stop = this.options.places.subscribe(() => { try { settle() } catch (failure) { onUnexpectedError(failure) } })
+    settle()
+    return id
+  }
+
+  private documentFor(connectionId: string): SsisOperationsState | undefined {
+    return Object.values(this.getSnapshot().documents).find(state => state.connectionId === connectionId)
+  }
+  /** The connection's document, opened on the list with All Executions' filters when there is none. */
+  private ensure(connectionId: string): string {
+    if (this.disposed) throw new Error('Integration Services is not available.')
+    const existing = this.documentFor(connectionId)
+    if (existing) return existing.id
+    const connection = this.options.connections.getSnapshot().find(item => item.id === connectionId && !item.lost && (!item.lifecycle || item.lifecycle.state === 'connected'))
+    if (!connection) throw new Error('Connect to the server first.')
+    return this.create(connection, 'executions')
+  }
+  private create(connection: LiveConnection, preset: OperationsPreset): string {
     const label = connection.displayName || connection.server
     const document = this.options.documents.openCustom('ssisOperations', operationsTabName(label), connection.id, 'SSISDB')
     this.targetBindings.bind(document.id, connection.id)
-    const state: SsisOperationsState = { id: document.id, connectionId: connection.id, server: connection.server, label, preset, filters: this.presetFilters(preset), stopping: [] }
+    const state: SsisOperationsState = { id: document.id, connectionId: connection.id, server: connection.server, label, preset, filters: this.presetFilters(preset), stopping: [], trail: startTrail(this.newId()) }
     this.put(state)
     this.subscribeLive(state)
     return document.id
+  }
+
+  // --- Places and history ------------------------------------------------------------------------------------------------
+
+  /** The place the document shows. */
+  place(id: string): SsisPlace | undefined { const state = this.get(id); return state ? currentPlace(state.trail) : undefined }
+  canGoBack(id: string): boolean { const state = this.get(id); return !!state && canGoBack(state.trail) }
+  canGoForward(id: string): boolean { const state = this.get(id); return !!state && canGoForward(state.trail) }
+  /** Go to a place: a new step after the shown one (the steps ahead are dropped); the place shown already stays as it is. */
+  go(id: string, target: SsisPlaceTarget): void {
+    const state = this.get(id)
+    if (!state) return
+    const { trail } = pushPlace(state.trail, target, this.newId())
+    if (trail === state.trail) { this.show(id); return }
+    this.moved(id, trail)
+  }
+  /** Back (-1) or Forward (1) one step. */
+  step(id: string, delta: -1 | 1): void {
+    const state = this.get(id)
+    const trail = state && stepTrail(state.trail, delta)
+    if (trail) this.moved(id, trail)
+  }
+  /** The run page's event chips or task changed: the shown step remembers them, and the page reads again under them. */
+  setRunFilters(id: string, change: { readonly types?: readonly number[] | null; readonly source?: string | null }): void {
+    const state = this.get(id), place = state && currentPlace(state.trail)
+    if (!state || place?.kind !== 'execution') return
+    // undefined keeps what the place had; null clears it (All, or every task).
+    const types = change.types === undefined ? place.types : change.types ?? undefined
+    const source = change.source === undefined ? place.source : change.source ?? undefined
+    const next: SsisPlace = { kind: 'execution', key: place.key, executionId: place.executionId, ...types ? { types } : {}, ...source ? { source } : {}, ...place.view ? { view: place.view } : {} }
+    this.patch(id, { trail: updatePlace(state.trail, () => next) })
+    if (this.live(id)) this.options.places.refresh(place.key, next.types, next.source)
+  }
+  /** The run page's Messages (undefined) or Details, kept by its step; nothing is read again. */
+  setRunView(id: string, view: 'details' | undefined): void {
+    const state = this.get(id), place = state && currentPlace(state.trail)
+    if (!state || place?.kind !== 'execution' || place.view === view) return
+    const { view: _view, ...rest } = place
+    this.patch(id, { trail: updatePlace(state.trail, () => view ? { ...rest, view } : rest) })
+  }
+
+  private moved(id: string, trail: SsisTrail): void {
+    const state = this.get(id)
+    if (!state) return
+    const before = state.trail.places.map(place => place.key)
+    this.patch(id, { trail, notice: undefined, confirm: undefined })
+    // Places far from the shown one, or no longer in the history, give up what they read.
+    this.options.places.keepOnly(keptKeys(trail), before)
+    this.show(id)
+  }
+  /** The shown place reads what it needs: a package's runs or a run's page, unless its read is kept; the list is live. */
+  private show(id: string): void {
+    const state = this.get(id), place = state && currentPlace(state.trail)
+    if (!state?.connectionId || !place || !this.live(id)) return
+    if (place.kind === 'execution') this.options.places.showRun(place.key, state.connectionId, place.executionId, place.types, place.source)
+    else if (place.kind === 'package') this.options.places.showPackage(place.key, state.connectionId, place.folder, place.project, place.package)
+  }
+  /** Refresh (F5): the shown place reads again (the list's live view, or the page's read). */
+  refreshPlace(id: string): void {
+    const place = this.place(id)
+    if (!place) return
+    if (place.kind === 'list') { this.refresh(id); return }
+    if (!this.live(id)) return
+    if (!this.options.places.get(place.key)) this.show(id)
+    else this.options.places.refresh(place.key, place.kind === 'execution' ? place.types : undefined, place.kind === 'execution' ? place.source : undefined)
+  }
+  /** Whether Refresh applies to the shown place: the list's view, or a page on a connected server. */
+  placeRefreshable(id: string): boolean {
+    const place = this.place(id)
+    return !!place && (place.kind === 'list' ? this.refreshable(id) : this.live(id))
   }
 
   private presetFilters(preset: OperationsPreset): SsisOperationsFilters {
@@ -253,9 +387,14 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
 
   private subscribeLive(state: SsisOperationsState): void {
     const owner = documentOwner(state.id, this.options.documents, this.options.panes, this.options.groups)
+    // The list reads only while it is shown: a package or run page pauses it, as a hidden tab does, and Back resumes it.
     const handle = this.options.live.open({
       connectionId: state.connectionId!, source: operationsSource, args: operationsArgs(state.filters), probes: [{ probe: operationsProbe, intervalMs: this.intervalMs }]
-    }, { ...owner, connectionId: () => this.live(state.id) ? this.options.documents.get(state.id)?.connectionId : undefined })
+    }, {
+      ...owner, connectionId: () => this.live(state.id) ? this.options.documents.get(state.id)?.connectionId : undefined,
+      visible: () => owner.visible() && this.place(state.id)?.kind === 'list',
+      subscribe: listener => { const stopOwner = owner.subscribe(listener), stopSelf = this.subscribe(listener); return () => { stopOwner(); stopSelf() } }
+    })
     this.handles.set(state.id, handle)
     // The view's status decides the Pause, Refresh and Stop Operation keys (an ended view says why in place of its rows);
     // each sample's metrics are the tiles' counts.
@@ -271,8 +410,14 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
   private following(): void {
     for (const state of Object.values(this.getSnapshot().documents)) {
       const connectionId = this.options.documents.get(state.id)?.connectionId
-      if (connectionId !== state.connectionId) this.patch(state.id, { connectionId, selected: undefined, confirm: undefined, stopping: [] })
+      if (connectionId !== state.connectionId) {
+        this.patch(state.id, { connectionId, selected: undefined, confirm: undefined, stopping: [] })
+        // A Reconnect: the shown page reads again on the new connection (its kept read was the old one's).
+        this.show(state.id)
+      }
       else if (!this.live(state.id) && (state.selected || state.confirm || state.stopping.length)) this.patch(state.id, { selected: undefined, confirm: undefined, stopping: [] })
+      // A lost connection ends the pages' reads; they keep what they showed.
+      if (!this.live(state.id)) this.options.places.stopReads(state.trail.places.map(place => place.key))
     }
     this.publishContext()
   }
@@ -368,6 +513,21 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
   }
   paused(id: string): boolean { return this.handles.get(id)?.getSnapshot().pausedBy === 'user' }
 
+  /** Whether Open can act on the selected operation: an execution (or a row whose cells are still being read), on a live view. */
+  executionSelected(id: string): boolean {
+    const state = this.get(id), selected = state?.selected
+    return !!selected && !!state.connectionId && (selected.pending || selected.type === executionOperationType) && this.live(id) && this.place(id)?.kind === 'list'
+  }
+  /** The selected execution once its cells are read, with the connection to read it on; an operation of another type says why
+   *  in the document's notice instead. */
+  async selectedExecution(id: string): Promise<{ readonly connectionId: string; readonly executionId: number } | undefined> {
+    await this.grids.get(id)?.reading
+    const state = this.get(id), selected = state?.selected
+    if (!selected || selected.pending || !state.connectionId || !this.live(id)) return undefined
+    if (selected.type !== executionOperationType) { this.patch(id, { notice: { tone: 'info', text: executionText.notExecution(selected.id) } }); return undefined }
+    return { connectionId: state.connectionId, executionId: selected.id }
+  }
+
   /** Stop Operation on the selected operation, once its cells are read: asks first unless Tools › Options says not to. */
   async requestStop(id: string): Promise<void> {
     await this.grids.get(id)?.reading
@@ -423,6 +583,8 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
     if (result && !result.ok && result.code !== 'CANCELLED') this.patch(id, { notice: { tone: 'error', text: operationsText.copyFailed(result.error), code: result.code } })
   }
 
+  /** Whether the document's server is connected, so its pages can read. */
+  connected(id: string): boolean { return this.live(id) }
   private live(id: string): boolean {
     const connectionId = this.get(id)?.connectionId
     return this.targetBindings.matchesConnection(id, connectionId) && this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost && (!connection.lifecycle || connection.lifecycle.state === 'connected'))
@@ -441,6 +603,8 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
   coalesceTarget(id: string, fromTargetId: string, toTargetId: string): boolean { return this.targetBindings.coalesceTarget(id, fromTargetId, toTargetId) }
   /** A Stop Operation the user confirmed still goes through when its document closes: only its answer is dropped. */
   closed(id: string): void {
+    const keys = this.get(id)?.trail.places.map(place => place.key) ?? []
+    this.options.places.keepOnly(new Set(), keys)
     this.targetBindings.forget(id)
     this.stopRequests.delete(id)
     this.attachGrid(id, undefined)
@@ -483,7 +647,13 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
   }
   private publishContext(): void {
     const byDocument: Record<string, SsisOperationsKeys> = {}
-    for (const id of Object.keys(this.getSnapshot().documents)) byDocument[id] = { stoppable: this.stoppable(id), paused: this.paused(id), refreshable: this.refreshable(id), pausable: this.pausable(id) }
+    for (const id of Object.keys(this.getSnapshot().documents)) {
+      const list = this.place(id)?.kind === 'list'
+      byDocument[id] = {
+        stoppable: list && this.stoppable(id), paused: this.paused(id), refreshable: this.placeRefreshable(id), pausable: list && this.pausable(id),
+        place: this.place(id)?.kind ?? 'list', canGoBack: this.canGoBack(id), canGoForward: this.canGoForward(id)
+      }
+    }
     const current = this.contextStore.getSnapshot().byDocument
     const same = Object.keys(byDocument).length === Object.keys(current).length
       && Object.entries(byDocument).every(([id, keys]) => (Object.keys(keys) as (keyof SsisOperationsKeys)[]).every(key => current[id]?.[key] === keys[key]))

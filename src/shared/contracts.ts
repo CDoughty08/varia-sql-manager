@@ -5,11 +5,12 @@ import type { ConnectContext, ConnectionEnvironmentInput, ConnectionLibraryView,
 import type { ConnectionAuthentication, ConnectionFailureReason } from './connection-targets'
 import type { ConnectionBindingsChanged } from './connection-bindings'
 import type { BigQueryLibraryView, BigQueryProfileInput, PickedKeyFile } from './bigquery-connections'
+import type { StepScriptSubsystem } from './agent/step-file'
 import type { BigQueryDryRunRequest, BigQueryDryRunResult } from './bigquery/dry-run'
 import type { ResultsRemoteQueryParams } from './bigquery/remote-view'
 import type { BigQueryPreviewTarget, BigQueryProperties, BigQueryPropertiesRequest } from './bigquery/objects'
 import type { JobHistoryCancelResult, JobHistoryDetails, JobHistoryGetParams, JobHistoryJobParams } from './bigquery/history'
-import type { CancelJobsResult, JobsWithoutTabReview, QueryAttachParams, RecordedJobsCancel } from './bigquery/jobs'
+import type { CancelJobsResult, JobsWithoutTabRequest, JobsWithoutTabReview, QueryAttachParams, RecordedJobsCancel } from './bigquery/jobs'
 import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } from './theme/types'
 import type { CommandId, RendererRole } from './commands/catalog'
 import type { ContextMenuCommand, ContextMenuRequest, MenuState } from './commands/menus'
@@ -28,7 +29,7 @@ import type { ActionPromptAnswer, ActionPromptRequest } from './actions/prompts.
 import type { LongRunState } from './long-runs.ts'
 import type { ScriptRequest, ScriptResult } from './scripting/schema.ts'
 import type { ActionDescribeRequest, ActionDescribeResult, ActionExecuteRequest, ActionExecuteResult, ActionProgress, ActionScriptRequest, ActionScriptResult } from './actions/schema.ts'
-import type { SsisCatalogSetupRequest, SsisCatalogSetupResult, SsisDescribeRequest, SsisDescribeResult, SsisExecuteRequest, SsisExecuteResult } from './ssis/schema.ts'
+import type { SsisCatalogSetupRequest, SsisCatalogSetupResult, SsisDescribeRequest, SsisDescribeResult, SsisExecuteRequest, SsisExecuteResult, SsisExecutionRequest, SsisExecutionResult, SsisPackageRunsRequest, SsisPackageRunsResult } from './ssis/schema.ts'
 import type { AgentProfileRequest, AgentProfileResult } from './agent/profile.ts'
 import type { AgentHistoryMessageRequest, AgentHistoryMessageResult } from './agent/history.ts'
 import type { AgentCounterValuesRequest, AgentCounterValuesResult } from './actions/agent-alert.ts'
@@ -741,6 +742,9 @@ export interface RpcMethods {
   'ssis.execute': { params: SsisExecuteRequest; result: SsisExecuteResult }
   /** What Create Catalog would do on the server (its dialog's read), on the SSIS read pool; it changes nothing. */
   'ssis.catalogSetup': { params: SsisCatalogSetupRequest; result: SsisCatalogSetupResult }
+  /** One SSIS Catalog execution's overview and newest messages (the execution messages view), on the SSIS read pool; it changes nothing. */
+  'ssis.execution': { params: SsisExecutionRequest; result: SsisExecutionResult }
+  'ssis.packageRuns': { params: SsisPackageRunsRequest; result: SsisPackageRunsResult }
   /** One session's Details flyout, read on the Activity Monitor's pool under the live gates; closing it cancels the read (varia:activity-cancel). */
   'activity.details': { params: ActivityDetailsRequest; result: ActivityDetailsResult }
   /** Kill Process: each session's identity is checked and KILL runs in one guarded batch on the object actions' own connection; never re-sent. */
@@ -968,6 +972,10 @@ export interface VariaApi {
   pickKeyFile(authentication: 'serviceAccountKey' | 'externalAccount'): Promise<ApiResult<PickedKeyFile | null>>
   /** Decision 49: the user confirmed the token file a picked federation configuration reads. */
   confirmFederationSource(keyFile: string, source: string): Promise<ApiResult<void>>
+  /** agentStepScript.open (AG-11): Load from file… on a CmdExec or PowerShell job step. Main shows its open dialog, filtered to the step
+   *  type's scripts plus All files, and reads the chosen file under the step command's limit. Resolves its text only (never its path), or
+   *  null when the user cancelled. */
+  openAgentStepScript(subsystem: StepScriptSubsystem): Promise<ApiResult<string | null>>
   disconnect(connectionId: string): Promise<ApiResult<RpcMethods['connections.disconnect']['result']>>
   /** BigQuery before connecting: the account the credential signs in as, and a page of the projects it can see. */
   bigQueryAccount(params: BigQueryCredentialParams): Promise<ApiResult<BigQueryAccount>>
@@ -1028,6 +1036,9 @@ export interface VariaApi {
   executeSsis(params: SsisExecuteRequest): Promise<ApiResult<SsisExecuteResult>>
   /** Reads what Create Catalog would do on a server, or why it cannot (`result.error`). */
   catalogSetupSsis(params: SsisCatalogSetupRequest): Promise<ApiResult<SsisCatalogSetupResult>>
+  /** Reads one SSIS Catalog execution and its messages, or why it cannot (`result.error`: NOT_FOUND once the catalog purged it). */
+  executionSsis(params: SsisExecutionRequest): Promise<ApiResult<SsisExecutionResult>>
+  packageRunsSsis(params: SsisPackageRunsRequest): Promise<ApiResult<SsisPackageRunsResult>>
   /** Reads what this login may do with SQL Server Agent on a server, or why it cannot (`result.error`). */
   agentProfile(params: AgentProfileRequest): Promise<ApiResult<AgentProfileResult>>
   agentHistoryMessage(params: AgentHistoryMessageRequest): Promise<ApiResult<AgentHistoryMessageResult>>
@@ -1142,7 +1153,7 @@ export interface VariaApi {
   cancelRestoredJobs(jobKeys: readonly string[]): Promise<ApiResult<RecordedJobsCancel>>
   /** After a restore: asks once about running jobs recorded under no open tab's key (Cancel Jobs or Keep), in main's box;
    *  null when there are none. Finished jobs without a tab are dropped. */
-  reviewJobsWithoutTab(openJobKeys: readonly string[]): Promise<ApiResult<JobsWithoutTabReview | null>>
+  reviewJobsWithoutTab(request: JobsWithoutTabRequest): Promise<ApiResult<JobsWithoutTabReview | null>>
   /** Writes text to the clipboard through main, which works while the window is unfocused; there is no read. */
   /** At most `maxClipboardText` characters: main refuses a longer text. */
   writeClipboardText(text: string): Promise<ApiResult<void>>

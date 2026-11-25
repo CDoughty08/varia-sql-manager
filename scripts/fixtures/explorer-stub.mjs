@@ -189,7 +189,7 @@ export function installExplorerStub({ ipcMain }, { statics }) {
           ? [['Id', 'int', false, 'PK', '1, 1', null, null, '[Id] int IDENTITY(1,1) NOT NULL'], ['CustomerName', 'nvarchar(50)', true, null, null, null, "(N'')", "[CustomerName] nvarchar(50) NULL DEFAULT (N'')"]]
           : [['Id', 'int', false, null, null, null, null, '[Id] int NOT NULL']] },
           ...params.target.kind === 'table' ? { tableObjects: { rows: params.target.name === 'Orders'
-            ? [['Primary key', 'PK_Orders', 'Clustered (Id)', 'Active']] : [] } } : {} } } : {},
+            ? [['Primary key', 'PK_Orders', 'Clustered ([Id])', 'Active']] : [] } } : {} } } : {},
         // A module's text comes with its facts, as the backend reads it from sys.sql_modules (Peek's followed view has its own).
         ...(() => {
           const definition = searchObjects.find(item => item.object.kind === params.target.kind && item.object.name === params.target.name)?.definition
@@ -207,6 +207,17 @@ export function installExplorerStub({ ipcMain }, { statics }) {
         : { items: params.target.name === 'Orders' ? [{ name: 'OrderLines', schema: 'dbo', kind: 'table', type: 'U', foreignKey: true }, { name: 'vOrders', schema: 'dbo', kind: 'view', type: 'V', schemaBound: true }]
           : params.target.name === 'vOrders' ? [{ name: 'Orders', schema: 'dbo', kind: 'table', type: 'U' }] : [], elapsedMs: 1 })
       case 'tables.columns': return ok({ columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false })
+      case 'actions.describe': if (params.dialog === 'tableProperties') return ok({
+        tableProperties: {
+          general: { name: params.target.name ?? 'Orders', schema: params.target.schema ?? 'dbo', created: '2024-01-02T03:04:05.000', modified: '2024-02-03T04:05:06.000', systemObject: false, ansiNulls: true, replicated: false, lockEscalation: 'TABLE', memoryOptimized: false, fileTable: false, external: false, id: 901 },
+          storage: { rowCount: 12345, dataSpaceKb: 2048, indexSpaceKb: 64, compression: 'NONE', filegroup: 'PRIMARY', partitioned: false, partitions: [{ number: 1, rows: 12345, compression: 'NONE', filegroup: 'PRIMARY' }], partitionsTruncated: false },
+          changeTracking: { databaseEnabled: true, enabled: false, trackColumnsUpdated: false, primaryKey: true },
+          permissions: [], permissionsTruncated: false, securityPredicates: [], securityPredicatesTruncated: false,
+          extendedProperties: [], extendedPropertiesTruncated: false, level: 16
+        },
+        elapsedMs: 1
+      })
+      return { ok: false, error: 'Unsupported stub operation.' }
       case 'scripting.script': return ok({ text: `CREATE TABLE [${params.targets[0].schema}].[${params.targets[0].name}](\n\t[Id] [int] NOT NULL\n)\nGO\n`, database: params.targets[0].database ?? 'master', warnings: [], commands: 1, elapsedMs: 1 })
       case 'query.session.close': return ok({ closed: true })
       case 'query.session.state': return ok({ transactionCount: 0, checked: true })

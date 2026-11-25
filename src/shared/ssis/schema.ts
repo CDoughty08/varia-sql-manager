@@ -4,7 +4,7 @@ import { z } from 'zod'
 import type { ObjectRef } from '../explorer/refs.ts'
 import { objectRefSchema } from '../explorer/schema.ts'
 import {
-  describeTargets, describeViews, operationKinds, operationStatuses, ssisActions, ssisLimits, type OperationKind, type SsisActionVerb, type SsisDescribeView, type SsisErrorCode, type SsisFeature
+  describeTargets, describeViews, messageTypes, operationKinds, operationStatuses, ssisActions, ssisLimits, type OperationKind, type SsisActionVerb, type SsisDescribeView, type SsisErrorCode, type SsisFeature
 } from './catalog.ts'
 import type { ActionStep } from '../actions/schema.ts'
 
@@ -80,6 +80,33 @@ export const ssisOperationsArgsSchema = z.object({
   windowHours: z.number().int().min(1).max(ssisLimits.operationsWindowHours).optional(),
   limit: z.number().int().min(1).max(ssisLimits.operationsRows).optional()
 }).strict() satisfies z.ZodType<SsisOperationsArgs>
+
+/**
+ * One execution's run page (ssis.execution): `executionId` is `catalog.executions.execution_id`; `types` keeps the messages of those
+ * message types (every type when absent; -1, Unknown, also keeps the types the catalogue does not name), and `source` the messages
+ * one task logged (`message_source_name`, the task timeline's filter). The counts always cover every message of the execution.
+ */
+export interface SsisExecutionRequest {
+  readonly connectionId: string
+  readonly requestId: string
+  readonly executionId: number
+  readonly types?: readonly number[]
+  readonly source?: string
+}
+const messageTypeCodes = messageTypes.map(type => type.code) as [number, ...number[]]
+export const ssisExecutionSchema = z.object({
+  connectionId: z.uuid(), requestId: z.uuid(), executionId: operationId,
+  types: z.array(z.number().int().refine(code => messageTypeCodes.includes(code), 'Unknown message type.')).min(1).max(messageTypeCodes.length)
+    .refine(distinct, 'Each type may be named once.').optional(),
+  source: z.string().min(1).max(ssisLimits.executionMessageChars).optional()
+}).strict() satisfies z.ZodType<SsisExecutionRequest>
+
+/** One package's runs, newest first (ssis.packageRuns: the Integration Services document's package step). */
+export interface SsisPackageRunsRequest { readonly connectionId: string; readonly requestId: string; readonly folder: string; readonly project: string; readonly package: string }
+export const ssisPackageRunsSchema = z.object({
+  connectionId: z.uuid(), requestId: z.uuid(),
+  folder: z.string().min(1).max(ssisLimits.name), project: z.string().min(1).max(ssisLimits.name), package: z.string().min(1).max(ssisLimits.packageName)
+}).strict() satisfies z.ZodType<SsisPackageRunsRequest>
 
 export const ssisCancelSchema = z.object({
   requestIds: z.array(z.uuid()).min(1).max(ssisLimits.cancelIds).refine(ids => new Set(ids).size === ids.length, 'Duplicate request id.')
@@ -187,6 +214,124 @@ export type SsisModel = SsisCatalogModel | SsisFolderModel | SsisProjectModel | 
 export interface SsisDescribeResult {
   readonly model?: SsisModel
   readonly revision?: string
+  readonly elapsedMs: number
+  readonly error?: SsisError
+}
+/** One execution (`catalog.executions`), as the execution messages view's header and General show it. Times keep their offset;
+ *  `now` is the server's clock when it was read, so a running execution's duration needs no local clock. */
+export interface SsisExecutionOverview {
+  readonly id: number
+  readonly folder: string
+  readonly project: string
+  readonly package: string
+  readonly environmentFolder?: string
+  readonly environment?: string
+  readonly executedAs: string
+  readonly caller: string
+  readonly use32bit: boolean
+  /** catalog.operations.status's codes (operationStatuses). */
+  readonly status: number
+  readonly created?: string
+  readonly started?: string
+  readonly ended?: string
+  readonly stoppedBy?: string
+  readonly server?: string
+  readonly machine?: string
+  readonly now: string
+}
+/** One message (`catalog.event_messages`); the event columns are absent for an operation-only message, and `message` is at most
+ *  ssisLimits.executionMessageChars characters, the last an ellipsis when it was cut. */
+export interface SsisExecutionMessage {
+  readonly id?: number
+  readonly time: string
+  /** catalog.operation_messages.message_type (messageTypes). */
+  readonly type: number
+  readonly sourceType?: number
+  readonly source?: string
+  readonly package?: string
+  readonly event?: string
+  readonly path?: string
+  readonly code?: number
+  readonly message: string
+}
+/** One executable of the run (`catalog.executables`, with its `catalog.executable_statistics` rows summed): the task timeline. A task
+ *  the run never reached has no times. `usualMs` is the median duration in the package's earlier succeeded runs (the run strip's). */
+export interface SsisExecutionTask {
+  /** `package_path`, such as `\Package\Load facts`; its depth places the task under its container. */
+  readonly path: string
+  readonly name: string
+  readonly started?: string
+  readonly ended?: string
+  /** The executable's statistics rows summed: a task in a loop runs more than once. */
+  readonly durationMs?: number
+  readonly runs: number
+  /** One of its runs failed (`execution_result` 1). */
+  readonly failed: boolean
+  readonly usualMs?: number
+}
+/** One parameter value the run used (`catalog.execution_parameter_values`); a sensitive parameter's value is never read. */
+export interface SsisExecutionParameter {
+  /** 20 project, 30 package, 50 execution (system) parameters (parameterObjectTypes). */
+  readonly objectType: number
+  readonly name: string
+  readonly dataType: string
+  readonly value?: string
+  readonly sensitive: boolean
+  readonly required: boolean
+  readonly valueSet: boolean
+  readonly runtimeOverride: boolean
+}
+/** One run of a package: the run strip's bar, or the package step's row. */
+export interface SsisPackageRun {
+  readonly id: number
+  readonly status: number
+  readonly created?: string
+  readonly started?: string
+  readonly ended?: string
+  readonly caller?: string
+  readonly errors?: number
+  readonly warnings?: number
+}
+export interface SsisExecutionModel {
+  readonly overview: SsisExecutionOverview
+  /** Every message of the execution by type, whatever `types` kept. */
+  readonly counts: readonly { readonly type: number; readonly count: number }[]
+  /** The types the messages were read for (absent: every type). */
+  readonly types?: readonly number[]
+  /** The task the messages were read for (absent: every source). */
+  readonly source?: string
+  /** The newest messages of those types, newest first. */
+  readonly messages: readonly SsisExecutionMessage[]
+  /** More messages of those types than one read holds (ssisLimits.executionMessages, or the answer's size): the oldest are left out. */
+  readonly truncated: boolean
+  /** The executables in the order they started (those that never ran last, by path). */
+  readonly tasks: readonly SsisExecutionTask[]
+  readonly tasksTruncated: boolean
+  readonly parameters: readonly SsisExecutionParameter[]
+  /** This run and the package's runs before it, newest first (ssisLimits.executionRuns). */
+  readonly runs: readonly SsisPackageRun[]
+  /** The package's next run after this one, for Newer run. */
+  readonly newer?: number
+}
+export interface SsisPackageRunsModel {
+  readonly folder: string
+  readonly project: string
+  readonly package: string
+  /** Newest first, with each run's error and warning counts. */
+  readonly runs: readonly SsisPackageRun[]
+  readonly truncated: boolean
+  readonly now: string
+}
+/** `model` (no runs is an empty list: the catalog keeps none, or this login may read none), or `error`: the catalog's failures. */
+export interface SsisPackageRunsResult {
+  readonly model?: SsisPackageRunsModel
+  readonly elapsedMs: number
+  readonly error?: SsisError
+}
+/** `model`, or `error`: NOT_FOUND for an execution the catalog no longer has (its retention cleanup removed it) or this login may
+ *  not read, CATALOG_MISSING without SSISDB, PERMISSION_DENIED or NO_DB_ACCESS without access. */
+export interface SsisExecutionResult {
+  readonly model?: SsisExecutionModel
   readonly elapsedMs: number
   readonly error?: SsisError
 }

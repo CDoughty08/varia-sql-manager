@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -31,6 +32,13 @@ describe('smoke shards', () => {
     }
     expect(shardSuites(['b', 'a', 'c'], 2, { a: 5, b: 5, c: 9 })).toEqual([['c'], ['b', 'a']])
     expect(shardSuites(['new'], 1, {})).toEqual([['new']])
+  })
+  it('reports whether a shard owns a given suite via --has-suite', () => {
+    const suite = 'scripts/connections-smoke.mjs'
+    const statuses = [1, 2, 3].map(shard => spawnSync(process.execPath, ['scripts/smoke-shards.mjs', '--has-suite', suite, `${shard}/3`]).status)
+    expect(statuses.filter(status => status === 0)).toHaveLength(1)
+    expect(statuses.filter(status => status === 1)).toHaveLength(2)
+    expect(spawnSync(process.execPath, ['scripts/smoke-shards.mjs', '--has-suite', suite, '4/3']).status).toBe(2)
   })
   // Runs the hung suite, stopped by `stop`, and waits for its grandchild to have gone. On POSIX the grandchild leads its own
   // process group and the suite ignores SIGINT and SIGTERM, as Playwright's Electron and a suite whose close hangs do.

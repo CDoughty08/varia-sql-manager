@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CommandId } from '../src/shared/commands/catalog'
 import { platforms } from '../src/shared/commands/keybindings'
 import type { DatabaseInfo } from '../src/shared/contracts'
-import { databaseItems } from '../src/renderer/src/contributions/query'
+import { databaseItems, noDefaultDataset } from '../src/renderer/src/contributions/query'
 import { CommandHistory, historyKey } from '../src/renderer/src/quickinput/history'
 import { QuickInputService, quickInputLimits, type QuickPickItem, type QuickPickOptions } from '../src/renderer/src/quickinput/QuickInputService'
 import { objectRow, seeAllObjects } from '../src/renderer/src/contributions/palette'
@@ -14,7 +14,7 @@ import { connectionInfo, connectionOptions, fakeFocus, manualTimers, memoryStora
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()); vi.restoreAllMocks(); vi.unstubAllGlobals() })
-const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+const settle = () => new Promise(resolve => setImmediate(resolve))
 /** Waits for a search's answer: it is asked after the service's pause in typing, on real timers, so the wait is generous. */
 const landed = (check: () => void) => vi.waitFor(check, { timeout: 15_000 })
 
@@ -377,6 +377,9 @@ describe('quick input loading', () => {
     const { service, labels } = controller()
     service.show(options({ noun: 'databases', items: rows }))
     expect(labels().slice(0, 4)).toEqual(['master', 'model', 'msdb', 'tempdb'])
+    // A BigQuery query's datasets keep BigQuery's order, after no default dataset, which clears the query's.
+    const datasets = databaseItems([{ name: 'sales', isSystem: false, isSnapshot: false }, { name: 'archive', isSystem: false, isSnapshot: false }], true)
+    expect(datasets.map(row => [row.id, row.label])).toEqual([['', noDefaultDataset], ['sales', 'sales'], ['archive', 'archive']])
   })
 })
 
@@ -982,6 +985,19 @@ describe('server and database pickers', () => {
     expect(view().rows.map(row => row.item.label)).toEqual(['AppData', 'AppData_snap'])
     quickInput.accept()
     expect(documents.get(tab.id)?.database).toBe('AppData')
+  })
+  it("clears a BigQuery tab's default dataset when <no default dataset> is picked", async () => {
+    const { commands, quickInput, view, connections, documents, api } = palette()
+    api.databases.mockResolvedValue({ ok: true, value: [{ name: 'sales', isSystem: false, isSnapshot: false }] })
+    connections.add({ ...connectionInfo('bq-a'), serverVersion: 'BigQuery', providerId: 'bigquery' }, { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' })
+    const tab = documents.create('a.sql', '', 'sales', 'bq-a')
+    await commands.execute('query.changeDatabase', undefined, 'keybinding')
+    await settle()
+    expect(view()).toMatchObject({ placeholder: 'Select a default dataset for this query' })
+    expect(view().rows[0].item.label).toBe(noDefaultDataset)
+    quickInput.filter('no default')
+    quickInput.accept()
+    expect(documents.get(tab.id)?.database).toBe('')
   })
   it('ignores a database picked after the query moved, and reports a failed load', async () => {
     const { commands, quickInput, view, connections, documents, api, targets } = palette()

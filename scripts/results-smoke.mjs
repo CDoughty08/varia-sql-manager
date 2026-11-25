@@ -13,8 +13,8 @@ import { enlargeOutput, pinStackedResults, sizeResultStack } from './fixtures/re
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, anyResultGrid, captionFits, comparisonTools, nameCut, namedResultGrid, resultFacts, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, explorerTree, gridCell, gridCellSelector, gridPart, jobNotice,
-  jobProgress, kindIcon, localGrid, localGridFrame, operationAnnouncer, operationCancel, operationNotice, operationProgress, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
-  outputPaneIds, outputPanel, outputToolbar, outputView, pane, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultsToolbarFit, resultToggle, statusBar,
+  jobProgress, kindIcon, localGrid, localGridFrame, moreResultsTools, operationAnnouncer, operationCancel, operationNotice, operationProgress, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
+  outputPaneIds, outputPanel, outputToolbar, outputView, pane, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultsToolbarFit, resultsToolsMenu, resultToggle, statusBar,
   pivotFacts, pivotPanel, pivotSource, profileCard, resultEntryKey, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark, connectDialogWindow, dialogClosed, dialogWindow, pressToClose, submitConnect
 } from './fixtures/ui.mjs'
 
@@ -2834,7 +2834,16 @@ try {
   await cell(0, 2, diff).click()
   await expect(cell(0, 2, diff)).toHaveAttribute('aria-label', 'Price, changed from 1.50 to 1.75')
   await expect(diffTools.getByRole('button', { name: 'One row', exact: true })).toHaveAttribute('aria-pressed', 'true')
-  await expect(diffTools.getByRole('button', { name: 'Exact text', exact: true })).toHaveAttribute('aria-pressed', 'false')
+  // Exact text is the first control ComparisonToolbar folds into ⋯ on a narrow pane (Linux 1024x768 has wider fonts).
+  const exactButton = diffTools.getByRole('button', { name: 'Exact text', exact: true })
+  if (await exactButton.isVisible()) {
+    await expect(exactButton).toHaveAttribute('aria-pressed', 'false')
+  } else {
+    await moreResultsTools(page).click()
+    await expect(resultsToolsMenu(page).getByRole('menuitemcheckbox', { name: 'Exact Text', exact: true })).toHaveAttribute('aria-checked', 'false')
+    await page.keyboard.press('Escape')
+    await expect(resultsToolsMenu(page)).toHaveCount(0)
+  }
   await expect(diffTools.getByRole('status')).toContainText('Comparison ready: matched by ItemId, 1 changed, 1 added, 1 removed.')
   await diffTools.getByRole('button', { name: 'Two rows', exact: true }).click()
   await expect(cell(5, 0, diff)).toHaveText('5')

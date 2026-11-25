@@ -449,6 +449,9 @@ count and connection dot keep their size, and the label gives up the row's empty
 | agent | PAUSING | running | the Agent service's state 6: SQL Server Agent is pausing. |
 | agent | PAUSED | warning | the Agent service's state 7: SQL Server Agent is paused. |
 | agent | n jobs running | running | as the server's chip; the node's sublabel says "Agent XPs disabled" while that option is 0, and an unknown service state shows no chip |
+| agentJob | Running · step n/m | running | the job is executing, waiting for a worker thread or performing completion actions (Job Activity Monitor's agent.jobs read, while its Jobs folder is open); the step count where msdb gives it |
+| agentJob | Between retries / Suspended | warning | that is the job's execution status |
+| agentJob | Failed | critical | the job is not running and its last run failed. While SQL Server Agent cannot run jobs (stopped, Agent XPs off, or neither readable) only this chip shows. A job the read finds disabled, or enabled, is dimmed with the disabled badge, or not, unless the row was listed after that read (a Disable or Enable lists it again at once), until the next read |
 
 ## Peek
 
@@ -463,10 +466,18 @@ the pointer is only resting there, so the press peeks nothing until it moves. Re
 can move into it.
 Esc (in the card, the tree, or a query editor that kept focus while a row was hovered), a click elsewhere or another peek
 closes the card, and
-cancels a read still running. Each kind declares its tabs in the catalogue (`peekSpecs`), and the card shows exactly those.
-Properties sit beside the definition; a card or tab narrower than 560px (a slim popped-out Object Explorer) stacks them
-under it, so the editor of the definition always has room. Their text can be selected, and their menu's **Copy** puts the
-selected properties, or all of them when none is selected, on the clipboard as `Name<TAB>Value` lines.
+cancels a read still running. Both the floating Peek Card (`surface="peek"`) and a promoted Peek Tab (`surface="full"`)
+share the unified `ObjectInspectorFrame` shell with canonical tab order (`Overview`, `Definition`, `Storage & Layout` for
+tables or `Usage Telemetry` for indexes, the kind's lists, `Dependencies`, and `Top rows`), horizontal tab overflow
+controls, and focus-scoped `Ctrl+1`–`9` (`⌘1`–`9` on macOS, `9` = last tab) tab switching (numeric badges stay visible on
+Peek Card and appear on modifier hold in Peek Tab). **Overview** shows identity facts in `FactGrid` (with click-to-copy
+and clickable cross-object links such as parent table, referenced table and login default database pushing onto Peek's Back
+stack) and signal-first `CapabilityChips`. **Storage & Layout** (tables) shows a Data vs. Index space `RatioBar` and storage
+facts; **Usage Telemetry** (indexes) shows a Seeks/Scans vs. Updates `RatioBar` and usage facts. The collapsible, resizable
+right **Vitals** rail shows compact key facts, flat meters and notable flags, remembers width and open state separately for
+Peek Card and Full Tab, and hides below 680 px container width instead of stacking a second vertical scroller. Fact text can
+be selected, and the pane's menu **Copy** puts the selected facts, or all of them when none is selected, on the clipboard as
+`Name<TAB>Value` lines.
 
 Database-scoped kinds are read in their database, as the tree reads them; a database, a login and a server trigger on the
 server (sys.databases and sys.master_files, so an offline or restoring database still peeks). An index or a trigger is found
@@ -477,9 +488,8 @@ and its user mapping, read after the batch in each database the login may enter 
 `QUOTENAME` as every database statement is, on the same connection; a database it cannot read is counted, not shown. Nothing
 reads LOGINPROPERTY or a password hash. An index's usage comes from `sys.dm_db_index_usage_stats` in a statement of its own,
 last in the batch, inside TRY…CATCH: a login without VIEW SERVER STATE gets the other facts and the card says why usage is missing.
-Each list shows in the results grid as a local table: cells, rows and columns select, Ctrl+C and Copy with Headers copy
-as a result's cells do, and columns sort and resize. A card's list is as tall as its rows (up to 12, then it scrolls); in a
-Peek tab the list fills the tab and Save Results As saves it.
+Each list shows in the results grid as a local table filling its tab pane edge-to-edge: cells, rows and columns select,
+Ctrl+C and Copy with Headers copy as a result's cells do, and columns sort and resize; in a Peek tab Save Results As saves it.
 
 A column's row shows its name, type (as the tree writes it), nullability, key (PK, FK), identity seed and increment, computed
 expression and default, and **Definition**, its declaration as T-SQL built by the backend: the name through `QUOTENAME`, the
@@ -492,10 +502,16 @@ its header, so an encrypted one shows none). Copying the Definition column gives
 a module's parameter lines for a `CREATE PROCEDURE` or `CREATE FUNCTION` header. Constraints (keys, checks), Always Encrypted's
 `ENCRYPTED WITH` and a vector's base type other than the default are left to Script As.
 
+A table's **Indexes & keys** list shows each key, index, constraint and trigger with its kind, name, status and **Summary**: a key's
+or index's type and columns, a foreign key's columns and referenced table, a check's or default's expression, a trigger's
+timing and events. Names are bracketed as scripts write them (`[Order]]Id]`). A summary is a description, not T-SQL to paste;
+Script As writes that. The columns, foreign-key pairs and trigger events behind the summaries are read up to a fixed number of rows;
+when a table has more, the summaries the cap reached partway or not at all end in `…`, and the cut removes no row from the list.
+
 | List | Kinds | Columns |
 | --- | --- | --- |
 | Columns | `table`, `view`, `tableType` | Name, Type, Nullable, Key, Identity, Computed, Default, Definition |
-| Indexes & keys | `table` | Kind, Name, Definition, Status |
+| Indexes & keys | `table` | Kind, Name, Summary, Status |
 | Parameters | `procedure`, `function` | Name, Type, Direction, Default, Definition |
 | Columns | `index` | Column, Included, Descending, Type |
 | Key columns | `key` | Column, Referenced column, Descending, Type |
@@ -540,27 +556,28 @@ keeps its results until they are released), and a results entry of its own, whic
 shows another object or refreshes, and when the server or the backend is lost.
 
 Open Peek as Tab (the card's button, Ctrl+Enter in the card or the tree, or Ctrl+click on a row, Cmd on macOS) shows the
-same parts in a document tab with more room, with Refresh, Script As… and, for a kind that has one, the Properties dialog. A
-tab owns its reads and its Top rows run as the card does; closing it releases them.
+same unified inspector in a document tab (`surface="full"`) with breadcrumbs, a Hero KPI strip, Back, Refresh, Script As…
+and, for a kind that has one, the Properties verb. A tab owns its reads and its Top rows run as the card does; closing it
+releases them.
 
 | Kind | Definition | Tabs |
 | --- | --- | --- |
-| `table` | Script As | Definition, Columns, Indexes & keys, Dependencies, Top rows |
-| `view` | sys.sql_modules | Definition, Columns, Dependencies, Top rows |
-| `procedure` | sys.sql_modules | Definition, Parameters, Dependencies |
-| `function` | sys.sql_modules | Definition, Parameters, Dependencies |
-| `index` | Script As | Definition, Columns |
-| `key` | Script As | Definition, Key columns |
-| `constraint` | Script As | Definition |
-| `trigger` | sys.sql_modules | Definition, Events, Dependencies |
-| `databaseTrigger` | sys.sql_modules | Definition, Events |
-| `serverTrigger` | sys.server_sql_modules | Definition, Events |
-| `database` | Script As | Definition, Files |
-| `login` | Script As | Definition, Server roles, User mapping |
-| `synonym` | Script As | Definition, Dependencies |
-| `sequence` | Script As | Definition, Dependencies |
-| `type` | Script As | Definition, Dependencies |
-| `tableType` | Script As | Definition, Columns, Dependencies |
+| `table` | Script As | Overview, Definition, Storage & Layout, Columns, Indexes & keys, Dependencies, Top rows |
+| `view` | sys.sql_modules | Overview, Definition, Columns, Dependencies, Top rows |
+| `procedure` | sys.sql_modules | Overview, Definition, Parameters, Dependencies |
+| `function` | sys.sql_modules | Overview, Definition, Parameters, Dependencies |
+| `index` | Script As | Overview, Definition, Usage Telemetry, Columns |
+| `key` | Script As | Overview, Definition, Key columns |
+| `constraint` | Script As | Overview, Definition |
+| `trigger` | sys.sql_modules | Overview, Definition, Events, Dependencies |
+| `databaseTrigger` | sys.sql_modules | Overview, Definition, Events |
+| `serverTrigger` | sys.server_sql_modules | Overview, Definition, Events |
+| `database` | Script As | Overview, Definition, Files |
+| `login` | Script As | Overview, Definition, Server roles, User mapping |
+| `synonym` | Script As | Overview, Definition, Dependencies |
+| `sequence` | Script As | Overview, Definition, Dependencies |
+| `type` | Script As | Overview, Definition, Dependencies |
+| `tableType` | Script As | Overview, Definition, Columns, Dependencies |
 
 | Kind | Group | Facts |
 | --- | --- | --- |
@@ -641,7 +658,7 @@ connection leaves the tree read-only; reconnect and open View Dependencies again
 | `typeAheadMs` | 1,000 | Type-ahead buffer reset, in ms |
 | `typeAheadMax` | 64 | Type-ahead buffer length |
 | `rowHeight` | 22 | Row height, in px |
-| `serverRowHeight` | 30 | Height of a server row, in px |
+| `serverRowHeight` | 44 | Height of a server row, in px |
 | `indent` | 16 | Indentation per level, in px |
 | `overscan` | 10 | Rows rendered beyond each edge of the viewport |
 | `deleteSlice` | 10,000 | Nodes removed per task when a subtree is dropped |

@@ -17,7 +17,6 @@ export interface ColorKeyInfo {
 
 type Entry = readonly [origin: 'V' | 'X', fallback: ColorDefault, description: string, consumers: string, extra?: { reserved?: string; opaqueOver?: string }]
 const pair = (dark: string, light: string) => ({ dark, light })
-const tree = 'the Object Explorer tree'
 const searchable = 'the command palette and the Object Explorer tree'
 
 const groups = {
@@ -36,8 +35,8 @@ const groups = {
     'textPreformat.foreground': ['V', '$textSecondary', 'Preformatted text in the editor.', 'monaco'],
     'sash.hoverBorder': ['V', '$focus', 'Dock splitter while it is hovered or dragged.', 'css'],
     'scrollbarSlider.background': ['V', '$textMuted/40', 'Scrollbar thumb.', 'css monaco'],
-    'scrollbarSlider.hoverBackground': ['V', '$textMuted/55', 'Scrollbar thumb when hovered.', 'monaco'],
-    'scrollbarSlider.activeBackground': ['V', '$textMuted/70', 'Scrollbar thumb while it is dragged.', 'monaco']
+    'scrollbarSlider.hoverBackground': ['V', '$textMuted/55', 'Scrollbar thumb when hovered.', 'css monaco'],
+    'scrollbarSlider.activeBackground': ['V', '$textMuted/70', 'Scrollbar thumb while it is dragged.', 'css monaco']
   },
   'Title bar, menus, and toolbar': {
     'titleBar.activeBackground': ['V', '$chrome', 'Title bar, and the native window-controls overlay on Windows and Linux.', 'css native', { opaqueOver: 'editor.background' }],
@@ -50,7 +49,7 @@ const groups = {
     'commandCenter.background': ['V', '$raised', 'Search box in the title bar (the command centre).', 'css'],
     'commandCenter.foreground': ['V', '$textTertiary', 'Search box text, icon and key.', 'css'],
     'commandCenter.activeBackground': ['V', '$active', 'Search box while hovered.', 'css'],
-    'commandCenter.border': ['V', '$controlBorder/45', 'Outline of the search box.', 'css'],
+    'commandCenter.border': ['V', '$controlBorder', 'Outline of the search box.', 'css'],
     'menubar.selectionBackground': ['V', '$active', 'Open title-bar menu.', 'css'],
     'menubar.selectionForeground': ['V', '$textStrong', 'Label of the open title-bar menu.', 'css'],
     'menubar.selectionBorder': ['V', '$accent/0', 'Outline of the open, hovered, or focused title-bar menu; none by default.', 'css'],
@@ -97,7 +96,7 @@ const groups = {
     'list.highlightForeground': ['V', '$accent', 'Characters that match a filter, such as in the command palette.', 'css monaco'],
     'list.focusHighlightForeground': ['V', '@quickInputList.focusForeground', 'Matching characters on the focused row of the editor\'s suggestions. The row\'s own text color by default, as the command palette\'s active row does: the match color is faint on that fill.', 'monaco'],
     'list.filterMatchBackground': ['V', '$accent/20', 'Rows that match a filter.', '', { reserved: searchable }],
-    'tree.indentGuidesStroke': ['V', '$borderSubtle', 'Tree indent guides.', '', { reserved: tree }],
+    'tree.indentGuidesStroke': ['V', '$borderSubtle', 'Tree indent guides in Object Explorer.', 'css'],
     'objectExplorer.activeConnectionBackground': ['X', '$sideBar', 'Row of the active query\'s server, under hover and selection; untinted by default, as its glyph marks it (a tint would read as a selection).', 'css'],
     'objectExplorer.activeConnectionForeground': ['X', '$accent', 'Glyph at the end of the active query\'s server row.', 'css'],
     'objectExplorer.headingForeground': ['X', '$text', 'Folder row labels.', 'css'],
@@ -241,7 +240,7 @@ const groups = {
     'resultsGrid.headerSelectionBackground': ['X', '$selection', 'Column and row headers of selected cells.', 'css'],
     'resultsGrid.headerSelectionForeground': ['X', '$textAccent', 'Text of the headers of selected cells.', 'css'],
     'resultsGrid.linkForeground': ['X', '$accent', 'XML, JSON and plan values that open in a new tab.', 'css'],
-    'resultsGrid.splitterBackground': ['X', '$controlBorder', 'Splitters between stacked result grids; hovered or dragged, they take sash.hoverBorder.', 'css'],
+    'resultsGrid.splitterBackground': ['X', '$iconMuted', 'Splitters between stacked result grids; hovered or dragged, they take sash.hoverBorder.', 'css'],
     'resultsMessages.foreground': ['X', '$text', 'Text of the Messages tab.', 'css']
   },
   'Status bar': {
@@ -307,7 +306,7 @@ const groups = {
     'memoryPanel.packedForeground': ['X', '$purple', 'Text of the Packed state in the Memory panel.', 'css'],
     'chip.background': ['X', '$text/0', 'Filter chips (toggle buttons such as All, Active, Blocked) while off; transparent by default.', 'css'],
     'chip.foreground': ['X', '$textSecondary', 'Label of a filter chip while off.', 'css'],
-    'chip.border': ['X', '$controlBorder/45', 'Outline of a filter chip while off.', 'css'],
+    'chip.border': ['X', '$controlBorder', 'Outline of a filter chip while off.', 'css'],
     'chip.activeBackground': ['X', '$selection', 'A filter chip while on.', 'css'],
     'chip.activeForeground': ['X', '$textAccent', 'Label and check mark of a filter chip while on.', 'css'],
     'chip.activeBorder': ['X', '$accent', 'Outline of a filter chip while on; with the fill and the check mark, it shows the chip is on.', 'css'],

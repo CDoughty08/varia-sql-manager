@@ -27,7 +27,7 @@ const model: TableDesignerModel = { database: 'AppData', band: 16, schemas: ['db
 const tables = (connectionId: string, database = 'AppData'): ExplorerMenuNode => ({
   id: 5, lost: false, kind: 'folder', folder: 'tables', connectionId, label: 'Tables', ref: { type: 'folder', owner: { kind: 'database', name: database }, folder: 'tables' }
 })
-const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
+const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setImmediate(resolve)) }
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 
