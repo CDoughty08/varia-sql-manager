@@ -32,11 +32,12 @@ export function placeMenu(anchor: Anchor, size: Size, viewport: Size, avoid?: Re
   } else if (anchor.kind === 'below') {
     const { rect } = anchor
     x = fitX(rect.left + w > vw - m ? rect.right - w : rect.left)
-    const below = vh - m - rect.bottom, above = rect.top - m
+    const topLimit = avoid && x < avoid.right && avoid.left < x + w ? Math.max(m, avoid.bottom + m) : m
+    const below = Math.max(0, vh - m - rect.bottom), above = Math.max(0, rect.top - topLimit)
     if (h <= below) y = rect.bottom
     else if (h <= above) y = rect.top - h
     else if (below >= above) { y = rect.bottom; maxHeight = below }
-    else { y = Math.max(m, rect.top - h); maxHeight = above }
+    else { y = topLimit; maxHeight = above }
   } else {
     const { rect } = anchor
     x = rect.right - 2

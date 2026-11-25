@@ -175,7 +175,9 @@ describe('results toolbar Sort text by', () => {
     const { results, tab, container, draw, settings } = await ran()
     results.operations.begin('elsewhere', { kind: 'sort', target: 'Result 3', entry: 'e3' as never, cancel: () => {} })
     await draw(() => createElement(ResultsToolbar, { tabId: tab.id }))
-    const chars = [...container.querySelectorAll<HTMLButtonElement>('[aria-label="Sort text by"] button')].find(button => button.textContent === 'Chars')!
+    const trigger = container.querySelector<HTMLButtonElement>('button[aria-label^="Sort text by:"]')!
+    await act(async () => { trigger.click() })
+    const chars = [...document.querySelectorAll<HTMLButtonElement>('[role="menu"][aria-label="Sort text by"] [role="menuitemradio"]')].find(button => button.textContent?.startsWith('Chars'))!
     await act(async () => { chars.click() })
     expect(settings.getSnapshot().values['queryResults.grid.sortText']).toBe('value')
     expect(results.operations.getSnapshot()[tab.id]?.announcement).toBe('Sorting Result 3. Sort Text By waits until it finishes.')

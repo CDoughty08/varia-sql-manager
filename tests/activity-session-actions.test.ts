@@ -29,9 +29,9 @@ const present = (overrides: Partial<ActivityDetailsResult> = {}): ActivityDetail
 
 describe('session rows', () => {
   it('reads the identity every session pane carries, by the live layer\'s column ids', () => {
-    expect(sessionColumns('sessions')).toEqual(['sessionId', 'loginTime', 'hostProcessId', 'login', 'hostName', 'openTransactions', 'varia'])
-    expect(sessionColumns('blocking')).toEqual(['chainSessionId', 'chainLoginTime', 'chainHostProcessId', 'chainLogin', 'chainHostName', 'chainOpenTransactions', 'chainVaria'])
-    expect(sessionColumns('activeQueries')).toEqual(['activeSessionId', 'activeLoginTime', 'activeHostProcessId', 'activeLogin', 'activeHostName', 'activeOpenTransactions', 'activeVaria'])
+    expect(sessionColumns('sessions')).toEqual(['sessionId', 'loginTime', 'hostProcessId', 'login', 'hostName', 'openTransactions', 'varia', 'application', 'job', 'jobName'])
+    expect(sessionColumns('blocking')).toEqual(['chainSessionId', 'chainLoginTime', 'chainHostProcessId', 'chainLogin', 'chainHostName', 'chainOpenTransactions', 'chainVaria', 'chainApplication', 'chainJob', 'chainJobName'])
+    expect(sessionColumns('activeQueries')).toEqual(['activeSessionId', 'activeLoginTime', 'activeHostProcessId', 'activeLogin', 'activeHostName', 'activeOpenTransactions', 'activeVaria', 'activeApplication', 'activeJob', 'activeJobName'])
     // Every one of them is a column of the live table the pane's grid shows.
     const tables = liveProbes['activity.sessions'].tables!
     for (const [index, table] of (['sessions', 'blocking', 'activeQueries'] as const).entries())
@@ -218,6 +218,41 @@ describe('ActivityMonitorService session actions', () => {
     expect(activity.activeSessionRows(id)).toBe(first)
     one.dispose()
     expect(activity.activeSessionRows(id)).toBe(second)
+  })
+  it('opens a session\'s Agent job at its History and stops it by the id its program name carries (AG-16)', async () => {
+    const { activity, api, id, jobDocuments } = monitorFixture()
+    const opened = vi.spyOn(jobDocuments, 'openJob').mockImplementation(() => 'job-1')
+    const job = { jobId: 'A1B2C3D4-0000-4000-8000-000000000001', step: 2, text: 'Nightly, step 2 (Load)', name: 'Nightly' }
+    const agent = { ...session57, job }
+    expect(activity.openJob(id, agent)).toBeUndefined()
+    expect(opened).toHaveBeenCalledWith('c1', 'Nightly', 'history')
+    // Without msdb's names, or for a session that runs no job, neither verb acts, and each says why.
+    expect(activity.openJob(id, { ...session57, job: { ...job, name: undefined } })).toContain('msdb did not name')
+    expect(activity.jobUnavailable(id, session57, 'stop')).toContain('runs a SQL Server Agent job step')
+    await activity.stopJob(id, agent)
+    expect(api.executeObjectAction).toHaveBeenLastCalledWith({ action: 'stopJob', connectionId: 'c1', requestId: expect.any(String), target: { kind: 'agentJob', name: 'Nightly' }, agentIdentity: { jobId: job.jobId } })
+    expect(activity.get(id)).toMatchObject({ stopping: undefined, killReport: { tone: 'success', title: 'Stop requested for job Nightly.' } })
+    api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'JOB_STATE', message: 'Nightly is not running.', retryable: false } } })
+    await activity.stopJob(id, agent)
+    expect(activity.get(id)?.killReport).toMatchObject({ tone: 'error', title: 'Job Nightly was not stopped.', detail: 'Nightly is not running.' })
+    // A second Stop of the same job while the first is in flight is refused, not sent.
+    let answer!: (value: Awaited<ReturnType<typeof api.executeObjectAction>>) => void
+    api.executeObjectAction.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    const calls = api.executeObjectAction.mock.calls.length
+    const first = activity.stopJob(id, agent)
+    expect(activity.jobUnavailable(id, agent, 'stop')).toBe('Stop Job is already stopping Nightly.')
+    await activity.stopJob(id, agent)
+    expect(api.executeObjectAction.mock.calls.length).toBe(calls + 1)
+    expect(activity.get(id)?.killReport).toMatchObject({ tone: 'error', title: 'Stop Job did not run.', detail: 'Stop Job is already stopping Nightly.' })
+    answer({ ok: true, value: { steps: [], messages: [], elapsedMs: 1 } })
+    await first
+    expect(activity.get(id)).toMatchObject({ stopping: undefined, killReport: { tone: 'success' } })
+    // A lost backend or connection may have come after sp_stop_job ran: the outcome is unknown, not a failure.
+    for (const code of ['BACKEND_LOST', 'CONNECTION_LOST', 'CANCELLED'] as const) {
+      api.executeObjectAction.mockResolvedValueOnce({ ok: false, error: 'The connection was lost.', code })
+      await activity.stopJob(id, agent)
+      expect(activity.get(id)?.killReport).toMatchObject({ tone: 'error', title: 'Whether job Nightly stopped is unknown.' })
+    }
   })
   it('reports a kill the backend could not try as nothing killed', async () => {
     const { activity, api, id } = monitorFixture()

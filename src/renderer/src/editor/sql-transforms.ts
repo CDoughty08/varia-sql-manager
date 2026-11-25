@@ -1,6 +1,8 @@
-// Toggle Brackets and Commas to Front or End: token-aware SQL Server text transforms as pure functions over a string, so
-// they are tested without Monaco. Each returns offset edits on the original text; `sqlTransformOp` turns them into a TextOp
+// Toggle Brackets and Commas to Front or End: token-aware text transforms as pure functions over a string, so they are
+// tested without Monaco. Toggle Brackets is SQL Server's; the comma commands read GoogleSQL too, through
+// `googleSqlTransformTokens`. Each returns offset edits on the original text; `sqlTransformOp` turns them into a TextOp
 // (one undo step) with the selections moved along with the text.
+import { scanGoogleSql } from '../../../shared/googlesql/lexer.ts'
 import { contextualKeywords, isSignificant, keywordLikeWords, lexSql, reservedKeywords, systemTypeNames, type SqlToken } from '../../../shared/sql/lexer.ts'
 import { maxIdentifierLength } from '../../../shared/sql/identifiers.ts'
 import { textOpLimits, type TextOp, type TextSelection } from './text-ops'
@@ -243,14 +245,70 @@ export function toggleBracketEdits(text: string, ranges?: readonly OffsetRange[]
   return { mode: edits.length ? 'remove' : 'none', edits }
 }
 
-/** The statement around `offset`: between semicolons, GO lines, SQLCMD lines and blank lines. */
-export function statementAt(text: string, offset: number, tokens: readonly SqlToken[] = lexSql(text)): OffsetRange {
+/** The query languages the comma commands read: `go` is whether a line holding only GO ends a statement (T-SQL's batch separator). */
+export interface TransformDialect { readonly go: boolean }
+export const tsqlTransforms: TransformDialect = { go: true }
+export const googleSqlTransforms: TransformDialect = { go: false }
+
+/**
+ * GoogleSQL's tokens (`shared/googlesql/lexer.ts`) in the shape the comma commands read: `#` and `--` comments, triple-quoted
+ * and raw strings and backtick names each stay one token, so no comma inside them ever moves. White space is split at line
+ * breaks, a line comment ends before a `\r`, and `[`/`]` are brackets as `(`/`)` are.
+ */
+export function googleSqlTransformTokens(text: string): SqlToken[] {
+  const tokens: SqlToken[] = []
+  const space = (start: number, end: number) => {
+    let at = start
+    while (at < end) {
+      const char = text[at]
+      if (char === '\n' || char === '\r') {
+        const stop = char === '\r' && text[at + 1] === '\n' && at + 1 < end ? at + 2 : at + 1
+        tokens.push({ kind: 'newline', start: at, end: stop })
+        at = stop
+      } else {
+        let stop = at + 1
+        while (stop < end && text[stop] !== '\n' && text[stop] !== '\r') stop++
+        tokens.push({ kind: 'space', start: at, end: stop })
+        at = stop
+      }
+    }
+  }
+  const punctuation: Readonly<Record<string, SqlToken['kind']>> = { ',': 'comma', ';': 'semicolon', '.': 'dot', '(': 'open', '[': 'open', ')': 'close', ']': 'close', ':': 'colon' }
+  // A line comment's `\r` is held back for the white space after it, so `\r\n` stays one line break.
+  let held: number | undefined
+  for (const token of scanGoogleSql(text)) {
+    const { start, end } = token
+    if (held !== undefined && token.kind !== 'whitespace') { space(held, start); held = undefined }
+    switch (token.kind) {
+      case 'whitespace': space(held ?? start, end); held = undefined; break
+      case 'comment':
+        if (text.startsWith('/*', start)) tokens.push({ kind: 'blockComment', start, end })
+        else {
+          const stop = end > start && text[end - 1] === '\r' ? end - 1 : end
+          tokens.push({ kind: 'lineComment', start, end: stop })
+          if (stop < end) held = stop
+        }
+        break
+      case 'string': tokens.push({ kind: 'string', start, end }); break
+      case 'quotedIdentifier': tokens.push({ kind: 'quoted', start, end }); break
+      case 'number': tokens.push({ kind: 'number', start, end }); break
+      case 'word': tokens.push({ kind: 'word', start, end }); break
+      case 'parameter': case 'systemVariable': tokens.push({ kind: 'variable', start, end }); break
+      default: tokens.push({ kind: punctuation[text[start]!] ?? 'operator', start, end })
+    }
+  }
+  if (held !== undefined) space(held, text.length)
+  return tokens
+}
+
+/** The statement around `offset`: between semicolons, GO lines (T-SQL), SQLCMD lines and blank lines. */
+export function statementAt(text: string, offset: number, tokens: readonly SqlToken[] = lexSql(text), dialect: TransformDialect = tsqlTransforms): OffsetRange {
   const boundaries: OffsetRange[] = []
   for (let index = 0; index < tokens.length; index++) {
     const token = tokens[index]!
     if (token.kind === 'semicolon') boundaries.push({ start: token.end, end: token.end })
     else if (token.kind === 'sqlcmd') boundaries.push(token)
-    else if (token.kind === 'word' && text.slice(token.start, token.end).toUpperCase() === 'GO' && firstOnLine(tokens, index) && lastOnLine(tokens, index)) boundaries.push(token)
+    else if (dialect.go && token.kind === 'word' && text.slice(token.start, token.end).toUpperCase() === 'GO' && firstOnLine(tokens, index) && lastOnLine(tokens, index)) boundaries.push(token)
     else if (token.kind === 'newline') {
       let next = index + 1
       if (tokens[next]?.kind === 'space') next++
@@ -299,13 +357,14 @@ function lineIndex(text: string, starts: readonly number[] = lineStarts(text)): 
  * Commas to Front or Commas to End: every comma (outside strings and comments) in the ranges that ends a line moves to the
  * start of the next item's line (`front`, SSMS's `      ,[b]` shape: into the indent's last space), or every comma that
  * starts a line moves to the end of the item before it (`end`, ahead of a trailing comment). A comma before a closing
- * parenthesis, a semicolon or GO, or after an opening one, stays.
+ * parenthesis, a semicolon or GO (T-SQL), or after an opening one, stays. GoogleSQL passes `googleSqlTransformTokens` and
+ * `googleSqlTransforms`.
  */
-export function moveCommaEdits(text: string, ranges: readonly OffsetRange[], position: 'front' | 'end', tokens: readonly SqlToken[] = lexSql(text)): OffsetEdit[] {
+export function moveCommaEdits(text: string, ranges: readonly OffsetRange[], position: 'front' | 'end', tokens: readonly SqlToken[] = lexSql(text), dialect: TransformDialect = tsqlTransforms): OffsetEdit[] {
   const lineOf = lineIndex(text)
   const edits: OffsetEdit[] = []
   const significant = (from: number, step: 1 | -1) => { for (let at = from + step; at >= 0 && at < tokens.length; at += step) if (isSignificant(tokens[at]!)) return at; return undefined }
-  const isGo = (index: number) => tokens[index]!.kind === 'word' && text.slice(tokens[index]!.start, tokens[index]!.end).toUpperCase() === 'GO'
+  const isGo = (index: number) => dialect.go && tokens[index]!.kind === 'word' && text.slice(tokens[index]!.start, tokens[index]!.end).toUpperCase() === 'GO'
   for (let index = 0; index < tokens.length; index++) {
     const comma = tokens[index]!
     if (comma.kind !== 'comma' || !inRanges(comma, ranges)) continue

@@ -1080,9 +1080,10 @@ export class PeekService extends PeekView {
 
   /**
    * Opens the card on `node` beside `anchor` (a name in a query editor), replacing any other; the object already shown there
-   * moves to the new anchor without reading it again. False when Peek cannot describe the object.
+   * moves to the new anchor without reading it again (on the tab it shows). False when Peek cannot describe the object. `tab`
+   * is the tab a new card opens on (a BigQuery view's or routine's Definition), when the object has it.
    */
-  peekAt(node: ExplorerMenuNode, anchor: PeekAnchor, source: PeekSource): boolean {
+  peekAt(node: ExplorerMenuNode, anchor: PeekAnchor, source: PeekSource, tab?: AnyPeekTab): boolean {
     this.cancelHover()
     if (this.disposed || !this.canPeek(node) || !isAnyPeekKind(node.kind)) return false
     const open = this.getSnapshot().open
@@ -1090,7 +1091,7 @@ export class PeekService extends PeekView {
       this.publish({ open: { ...open, anchor, source: source === 'hover' ? open.source : source } })
       return true
     }
-    this.load(node, node.kind, source, false, { anchor })
+    this.load(node, node.kind, source, false, tab === undefined ? { anchor } : { anchor, tab })
     return true
   }
 

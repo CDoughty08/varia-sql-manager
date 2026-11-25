@@ -4,12 +4,13 @@ Varia connects to Google BigQuery beside SQL Server. This page describes how it 
 connections, sign-in, identity pins, connect and disconnect, the pre-connect methods, execution, Object Explorer, Job
 History, errors, emulator mode, what Varia does not do yet and testing. Search Objects indexes BigQuery connections too
 ([Search Objects › BigQuery](object-search.md#bigquery)), docs/googlesql.md describes GoogleSQL editing, and
-docs/language-services.md its [completion](language-services.md#completion-from-the-index).
+docs/language-services.md its [completion](language-services.md#completion-from-the-index),
+[Go To Definition and Peek](language-services.md#go-to-definition) and [Move Commas](language-services.md#toggle-brackets-and-comma-placement).
 
 Varia runs GoogleSQL only; legacy SQL is refused (`LEGACY_SQL`). SQL Server-only features are hidden for a BigQuery
 connection rather than half-working, through the catalogues' `providers` and the method gate (docs/architecture.md,
 Provider gating): Activity Monitor, Integration Services, SQL Server Agent, Table Designer, object actions other than
-Properties, execution plans, client statistics, Go To Definition, and Object Explorer's live status chips (their
+Properties, execution plans, client statistics, Toggle Brackets, and Object Explorer's live status chips (their
 probes are SQL Server's). A BigQuery connection's icon is Varia's own (a magnifier over bars), not Google's logo.
 [docs/mockups/bigquery-ui.html](mockups/bigquery-ui.html) mocks the BigQuery screens on Varia's own renderer; where it and
 this page differ, this page describes what ships.
@@ -683,6 +684,11 @@ queries: metadata comes solely from free `bigquery.properties`, **Preview Rows**
 selected, and native table **Definition** stays on-demand with dry-run estimate and cost prompts. **Open as Tab**
 (`Ctrl+Enter`, button, or `Ctrl+click`) promotes BigQuery Peek directly into the unified `BigQueryPropertiesTab` on the
 matching canonical tab instead of opening a duplicate Peek tab.
+
+In a BigQuery query, the same card opens from a name (`Alt+F12`, Ctrl+hover / ⌘+hover) and the tab from Ctrl+click,
+on the **Definition** tab for a view, materialized view or routine; F12 opens that free definition in a new query
+([Go To Definition](language-services.md#go-to-definition) has the rules). The name resolves through the connection's
+Search Objects index, as completion does, so a name the index has not read yet finds nothing.
 
 Sections appear in canonical order, omitting tabs that do not apply to the object:
 
