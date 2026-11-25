@@ -133,7 +133,7 @@ export class BigQueryStarredService extends SnapshotStore<BigQueryStarredProject
 interface ScanTok extends GoogleSqlToken { readonly text: string; readonly upper: string }
 
 /** Keywords immediately preceding a BigQuery table, view, routine or model reference. */
-const objectLeadWords = new Set(['FROM', 'JOIN', 'INTO', 'INSERT', 'UPDATE', 'DELETE', 'MERGE', 'USING', 'TABLE', 'VIEW', 'FUNCTION', 'PROCEDURE', 'MODEL', 'CALL', 'CLONE', 'COPY', 'EXISTS'])
+const objectLeadWords = new Set(['FROM', 'JOIN', 'INTO', 'INSERT', 'UPDATE', 'DELETE', 'MERGE', 'TABLE', 'VIEW', 'FUNCTION', 'PROCEDURE', 'MODEL', 'CALL', 'CLONE', 'COPY', 'EXISTS'])
 /** Keywords that end a FROM clause's comma-separated table list (ON and USING stay inside FROM so `JOIN t2 USING (id), proj.ds.tbl` still parses). */
 const fromEndWords = new Set(['WHERE', 'GROUP', 'HAVING', 'QUALIFY', 'WINDOW', 'ORDER', 'LIMIT', 'SET', 'SELECT', 'WHEN', 'OPTIONS', 'UNION', 'INTERSECT', 'EXCEPT', 'PIVOT', 'UNPIVOT'])
 /** Optional modifiers between CREATE and TABLE in GoogleSQL DDL. */
@@ -207,6 +207,7 @@ export function referencedBigQueryProjects(sql: string): string[] {
   }
 
   let inFrom = false
+  let inMerge = false
   let createHeader: 'none' | 'create' | 'table' = 'none'
   // Per-delimiter-depth stack for `inFrom` and whether `(` belongs to EXTRACT(...), so `FROM UNNEST(a) x, proj.ds.tbl`,
   // `FROM (SELECT 1) a, proj.ds.tbl`, and array literals `[a, b.c.d]` inside JOIN ... ON work without false positives.
@@ -230,6 +231,7 @@ export function referencedBigQueryProjects(sql: string): string[] {
     }
     if (isPunct(token, ';')) {
       inFrom = false
+      inMerge = false
       createHeader = 'none'
       fromStack.length = 0
       parenExtract.length = 0
@@ -250,6 +252,8 @@ export function referencedBigQueryProjects(sql: string): string[] {
         if (token.upper === 'CREATE') createHeader = 'create'
         else if (createHeader === 'create') createHeader = token.upper === 'TABLE' ? 'table' : createTableModifiers.has(token.upper) ? 'create' : 'none'
         else if (createHeader === 'table' && createTableEndWords.has(token.upper)) createHeader = 'none'
+        if (token.upper === 'MERGE') inMerge = true
+        else if (token.upper === 'WHEN') inMerge = false
       }
       if (token.upper === 'FROM' && !parenExtract.at(-1) && !(prev?.kind === 'word' && prev.upper === 'DISTINCT')) { inFrom = true; continue }
       if (token.upper === 'JOIN') { inFrom = true; continue }
@@ -262,10 +266,13 @@ export function referencedBigQueryProjects(sql: string): string[] {
 
     const isDistinctFrom = prev?.kind === 'word' && prev.upper === 'FROM' && toks[index - 2]?.kind === 'word' && toks[index - 2].upper === 'DISTINCT'
     const isCreateTableLike = createHeader === 'table' && fromStack.length === 0 && prev?.kind === 'word' && prev.upper === 'LIKE'
+    const isMergeUsing = inMerge && fromStack.length === 0 && prev?.kind === 'word' && prev.upper === 'USING'
     const isObjectPos = (prev?.kind === 'word' && objectLeadWords.has(prev.upper) && !(prev.upper === 'FROM' && parenExtract.at(-1)) && !isDistinctFrom)
       || isCreateTableLike
+      || isMergeUsing
       || (inFrom && isPunct(prev, ','))
     if (isCreateTableLike) createHeader = 'none'
+    if (isMergeUsing) inMerge = false
 
     // Read a possibly dashed segment (`my-proj-2`, `region-us`), digit-leading segment (`2026_sales`), or backtick-quoted token.
     const readSegment = (at: number): { parts: string[]; next: number; singleMultiPart: boolean } => {

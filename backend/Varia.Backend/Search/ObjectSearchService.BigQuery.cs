@@ -207,6 +207,11 @@ internal sealed partial class ObjectSearchService
                 foreach (var gone in state.StaleProjects.Keys.Where(project => !allowed.Contains(project)).ToList())
                     state.StaleProjects.Remove(gone);
                 state.PartialProjects.RemoveWhere(project => !allowed.Contains(project));
+                if (state.NamesOnly is { Count: > 0 } currentNamesOnly)
+                {
+                    var remaining = currentNamesOnly.Where(allowed.Contains).ToList();
+                    state.NamesOnly = remaining.Count > 0 ? remaining : null;
+                }
             }
         }
         void Skip(ObjectIndexSkip skip)
@@ -673,13 +678,14 @@ internal sealed partial class ObjectSearchService
                 var wave2DiscoveredTargets = new List<(string Project, string Dataset)>();
                 var noiseFilteredProjects = new HashSet<string>(StringComparer.Ordinal);
                 var wave2ListedProjects = new HashSet<string>(StringComparer.Ordinal);
+                var wave2ListingIncompleteProjects = new HashSet<string>(StringComparer.Ordinal);
                 var wave2IncompleteProjects = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
                 var wave2CompletedTargets = new ConcurrentDictionary<(string Project, string Dataset), byte>();
                 for (var index = 0; index < wave2Projects.Count; index++)
                 {
                     var (project, isDiscovered) = wave2Projects[index];
                     var (list, skip) = wave2DatasetResults[index];
-                    if (skip is not null) { Skip(skip); wave2IncompleteProjects[project] = 0; continue; }
+                    if (skip is not null) { Skip(skip); wave2ListingIncompleteProjects.Add(project); wave2IncompleteProjects[project] = 0; continue; }
                     if (list is null)
                     {
                         if (isDiscovered) noiseFilteredProjects.Add(project);
@@ -688,6 +694,7 @@ internal sealed partial class ObjectSearchService
                     wave2ListedProjects.Add(project);
                     if (list.Cut)
                     {
+                        wave2ListingIncompleteProjects.Add(project);
                         wave2IncompleteProjects[project] = 0;
                         Skip(new("", "TOO_LARGE", "The project has more datasets than the index lists; it keeps the first " + (BigQueryIndexLimits.ListPages * 1000).ToString("N0", CultureInfo.InvariantCulture) + ".", Project: project));
                     }
@@ -718,6 +725,11 @@ internal sealed partial class ObjectSearchService
                         {
                             state.StaleProjects.Remove(gone);
                             state.PartialProjects.Remove(gone);
+                        }
+                        if (state.NamesOnly is { Count: > 0 } currentNamesOnly)
+                        {
+                            var remaining = currentNamesOnly.Where(project => !noiseFilteredProjects.Contains(project)).ToList();
+                            state.NamesOnly = remaining.Count > 0 ? remaining : null;
                         }
                     }
                 }
@@ -797,39 +809,43 @@ internal sealed partial class ObjectSearchService
                         if (budgetStopped)
                         {
                             foreach (var target in wave2DiscoveredTargets)
-                                if (!wave2AttemptedTargets.ContainsKey(target) && heldProjects.Contains(target.Project))
+                                if (!wave2AttemptedTargets.ContainsKey(target) && !budgetExcluded.Contains(target.Project))
                                     nextPartial.Add(target.Project);
                         }
                     }
+                    var unattemptedWave2 = new HashSet<string>(StringComparer.Ordinal);
                     if (priorPartialProjects.Count > 0)
                     {
-                        var incompleteWave2 = new HashSet<string>(StringComparer.Ordinal);
                         foreach (var target in wave2StarredTargets)
-                            if (!wave2CompletedTargets.ContainsKey(target)) incompleteWave2.Add(target.Project);
+                            if (!wave2AttemptedTargets.ContainsKey(target)) unattemptedWave2.Add(target.Project);
                         foreach (var target in wave2DiscoveredTargets)
-                            if (!wave2CompletedTargets.ContainsKey(target)) incompleteWave2.Add(target.Project);
-                        foreach (var prior in priorPartialProjects)
-                        {
-                            if (prior == billing || !heldProjects.Contains(prior)) continue;
-                            if (!wave2ListedProjects.Contains(prior) || wave2IncompleteProjects.ContainsKey(prior) || incompleteWave2.Contains(prior))
-                                nextPartial.Add(prior);
-                        }
+                            if (!wave2AttemptedTargets.ContainsKey(target)) unattemptedWave2.Add(target.Project);
                     }
                     lock (state.Gate)
                     {
                         if (Current())
                         {
                             if (finalDiscovered is not null) state.DiscoveredProjects = finalDiscovered;
-                            state.PartialProjects = nextPartial;
-                            if (budgetExcluded.Count > 0)
+                            // Canonical post-commit tracked set: any project outside it drops orphaned stale/partial marks.
+                            var tracked = new HashSet<string>(StringComparer.Ordinal) { billing };
+                            foreach (var project in state.StarredProjects) tracked.Add(project);
+                            foreach (var project in state.DiscoveredProjects) tracked.Add(project);
+                            foreach (var read in state.Index.Databases)
+                                if (read.Dataset is not null) tracked.Add(read.Database);
+                            foreach (var prior in priorPartialProjects)
                             {
-                                foreach (var gone in state.Stale.Keys.Where(key => budgetExcluded.Contains(key.Project)).ToList())
-                                {
-                                    state.Stale.Remove(gone);
-                                    stale.Remove(gone);
-                                }
-                                foreach (var gone in budgetExcluded) state.StaleProjects.Remove(gone);
+                                if (prior == billing || !tracked.Contains(prior)) continue;
+                                if (!wave2ListedProjects.Contains(prior) || wave2ListingIncompleteProjects.Contains(prior) || unattemptedWave2.Contains(prior))
+                                    nextPartial.Add(prior);
                             }
+                            state.PartialProjects = nextPartial;
+                            foreach (var gone in state.Stale.Keys.Where(key => !tracked.Contains(key.Project)).ToList())
+                            {
+                                state.Stale.Remove(gone);
+                                stale.Remove(gone);
+                            }
+                            foreach (var gone in state.StaleProjects.Keys.Where(project => !tracked.Contains(project)).ToList())
+                                state.StaleProjects.Remove(gone);
                         }
                     }
                 }

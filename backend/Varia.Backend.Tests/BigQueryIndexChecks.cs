@@ -823,13 +823,23 @@ internal static partial class BigQueryIndexChecks
             source.CustomDatasets["disc-mid"] = ["ds1", "ds2"];
             source.TablesPerDataset = new Dictionary<(string, string), int> { [("disc-mid", "ds1")] = 1, [("disc-mid", "ds2")] = 1 };
             source.FailDiscovery = true;
+            // First verify PartialProjects surviving a discovery-failed build (without memory-limit skip) still reports Dataset.Skipped (TOO_LARGE), not Absent.
+            await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString()), source, CancellationToken.None);
+            var survivedLookup = search.LookupBigQuery(id, "varia-alpha");
+            var survivedMissing = survivedLookup.Dataset("disc-mid", "ds2");
+            check(survivedLookup.ProjectState("disc-mid") == LookupState.Partial
+                && survivedMissing is { State: LookupState.Skipped, Skip.Code: "TOO_LARGE" }
+                && survivedMissing.Skip!.Message.Contains("memory limit", StringComparison.OrdinalIgnoreCase),
+                $"PartialProjects surviving a discovery-failed build still reports memory-limit Skipped ({survivedMissing.State}/{survivedMissing.Skip?.Code})");
+
             await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), StarredProjects: ["disc-mid"]), source, CancellationToken.None);
             var promotedLookup = search.LookupBigQuery(id, "varia-alpha");
             check(promotedLookup.ProjectState("disc-mid") == LookupState.Ready,
                 $"clean starred rebuild clears PartialProjects even when discovery fails ({promotedLookup.ProjectState("disc-mid")})");
         }
 
-        // 12. Wave 2 budget-stop does not conflate NOT_FOUND or PERMISSION_DENIED on earlier projects with budget cuts.
+        // 12. Wave 2 budget-stop does not conflate NOT_FOUND or PERMISSION_DENIED on earlier projects with budget cuts,
+        // and marks 0-held budget-cut projects Partial in BigQueryLookup; discoveryCut prunes stale marks for dropped projects.
         {
             var source = new FakeBudgetSource(discoveredProjects: ["disc-a", "disc-b", "disc-c"], tablesPerDiscovered: 1, columnsPerTable: 0)
             {
@@ -837,7 +847,7 @@ internal static partial class BigQueryIndexChecks
                 {
                     ["disc-a"] = ["ds_ok", "ds_gone"],
                     ["disc-b"] = ["ds_denied"],
-                    ["disc-c"] = ["ds_huge1", "ds_huge2"]
+                    ["disc-c"] = ["ds_gone2", "ds_huge1", "ds_huge2"]
                 },
                 TablesPerDataset = new Dictionary<(string, string), int>
                 {
@@ -848,7 +858,8 @@ internal static partial class BigQueryIndexChecks
                 FailObjectsForDataset = new Dictionary<(string, string), string>
                 {
                     [("disc-a", "ds_gone")] = "NOT_FOUND",
-                    [("disc-b", "ds_denied")] = "PERMISSION_DENIED"
+                    [("disc-b", "ds_denied")] = "PERMISSION_DENIED",
+                    [("disc-c", "ds_gone2")] = "NOT_FOUND"
                 }
             };
             using var search = new ObjectSearchService(new UnusedHost(), new ObjectIndexLimits { MemoryBytes = 6_000, NamesReserveBytes = 0 });
@@ -856,8 +867,24 @@ internal static partial class BigQueryIndexChecks
             await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString()), source, CancellationToken.None);
             var lookup = search.LookupBigQuery(id, "varia-alpha");
             check(lookup.ProjectState("disc-a") == LookupState.Ready
-                && lookup.Dataset("disc-b", "ds_denied") is { State: LookupState.Skipped, Skip.Code: "PERMISSION_DENIED" },
-                $"Wave 2 budget-stop keeps NOT_FOUND project Ready ({lookup.ProjectState("disc-a")}) and preserves PERMISSION_DENIED dataset skip ({lookup.Dataset("disc-b", "ds_denied").State}/{lookup.Dataset("disc-b", "ds_denied").Skip?.Code})");
+                && lookup.Dataset("disc-b", "ds_denied") is { State: LookupState.Skipped, Skip.Code: "PERMISSION_DENIED" }
+                && lookup.ProjectState("disc-c") == LookupState.Partial
+                && lookup.Dataset("disc-c", "ds_huge1") is { State: LookupState.Skipped, Skip.Code: "TOO_LARGE" },
+                $"Wave 2 budget-stop keeps NOT_FOUND project Ready ({lookup.ProjectState("disc-a")}), preserves PERMISSION_DENIED skip ({lookup.Dataset("disc-b", "ds_denied").State}/{lookup.Dataset("disc-b", "ds_denied").Skip?.Code}), and marks 0-held budget-cut project Partial ({lookup.ProjectState("disc-c")})");
+
+            // Discovery-cut rebuild dropping a 0-dataset discovered project prunes its stale mark cleanly.
+            var dropSource = new FakeBudgetSource(discoveredProjects: ["disc-keep", "disc-drop"], tablesPerDiscovered: 1, columnsPerTable: 0)
+            {
+                CustomDatasets = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal) { ["disc-keep"] = [], ["disc-drop"] = [] }
+            };
+            using var dropSearch = new ObjectSearchService(new UnusedHost());
+            var dropId = Guid.NewGuid().ToString();
+            await dropSearch.IndexBigQueryAsync(new ObjectIndexArgs(dropId, Guid.NewGuid().ToString()), dropSource, CancellationToken.None);
+            dropSearch.MarkStale(dropId, "disc-drop", "ds1");
+            var hadDropMark = dropSearch.StaleMarkOf(dropId) is not null;
+            var cutRebuild = await dropSearch.IndexBigQueryAsync(new ObjectIndexArgs(dropId, Guid.NewGuid().ToString(), MaxProjects: 1), dropSource, CancellationToken.None);
+            check(hadDropMark && dropSearch.StaleMarkOf(dropId) is null && cutRebuild.Status.StaleMark is null,
+                "discovery-cut rebuild dropping a 0-dataset discovered project prunes its orphaned stale mark");
         }
     }
 
