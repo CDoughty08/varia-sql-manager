@@ -260,6 +260,8 @@ export interface FlowLayout {
   readonly chipLeft: number
   readonly chipRight: number
 }
+/** The Flow canvas's sizes at 100 % (rx-flow): a 340 × 50 node every 84 px, lanes 18 px apart starting 26 px from the column, room for the Start pill. */
+export const flowMetrics: FlowMetrics = { nodeWidth: 340, nodeHeight: 50, pitch: 84, top: 40, laneGap: 26, laneStep: 18, margin: 16, startWidth: 76 }
 /** The share of a node's width at which its ✓ and ✗ ports sit. */
 export const flowPortShare = { success: 0.3, fail: 0.7 } as const
 /** How far below the node's bottom an edge leaves its port (past the port circle), and how far down it runs before it turns into its lane. */
