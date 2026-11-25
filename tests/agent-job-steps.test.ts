@@ -125,9 +125,28 @@ describe('the step save planner', () => {
     let draft = addStep({ steps: [] }, first)
     draft = addStep(draft, newStepDraft(draft.steps, 'CmdExec'))
     expect(draft.steps.map(item => item.name)).toEqual(['Step 1', 'Step 2'])
-    expect(planAgentSteps(undefined, draft, undefined)).toEqual({ writes: [expect.objectContaining({ id: 1, onSuccessAction: 3 }), expect.objectContaining({ id: 2, subsystem: 'CmdExec', databaseName: '' })] })
+    expect(planAgentSteps(undefined, draft, undefined)).toEqual({ writes: [expect.objectContaining({ id: 1, onSuccessAction: 3 }), expect.objectContaining({ id: 2, subsystem: 'CmdExec', databaseName: '', onSuccessAction: 1 })] })
     expect(planAgentSteps(undefined, { ...draft, startKey: draft.steps[1]!.key }, undefined)).toMatchObject({ startStepId: 2 })
     expect(planAgentSteps(undefined, { steps: [] }, undefined)).toBeUndefined()
+  })
+  it('gives a step added last Quit reporting success, and the new step it follows Go to the next step, so the job never runs past its end', () => {
+    // Agent fails every run whose last step goes to the next step ("JobManager tried to run a non-existent step"), even when it succeeds.
+    const one = addStep({ steps: [] }, newStepDraft([]))
+    expect(one.steps.map(item => item.onSuccess)).toEqual([1])
+    const two = addStep(one, newStepDraft(one.steps))
+    expect(two.steps.map(item => item.onSuccess)).toEqual([3, 1])
+    expect(stepTargetShort(two, two.steps[1]!, 'success')).toBe('Quit, success')
+    // A step chosen to go somewhere else keeps it.
+    const failed = { ...two, steps: two.steps.map((item, at) => at === 1 ? { ...item, onSuccess: 2 as const } : item) }
+    expect(addStep(failed, newStepDraft(failed.steps)).steps.map(item => item.onSuccess)).toEqual([3, 2, 1])
+    // A step read from the job keeps its action; one inserted before the end goes to the next step.
+    const read = opened()
+    const lastRead = read.steps[read.steps.length - 1]!
+    const appended = addStep({ ...read, steps: read.steps.map(item => item.key === lastRead.key ? { ...item, onSuccess: 1 as const } : item) }, newStepDraft(read.steps))
+    expect(appended.steps.slice(-2).map(item => item.onSuccess)).toEqual([1, 1])
+    expect(addStep(read, newStepDraft(read.steps), 1).steps[1]).toMatchObject({ onSuccess: 3 })
+    const lone = { ...newStepDraft([]), onSuccess: 3 as const }
+    expect(stepTargetShort({ steps: [lone] }, lone, 'success')).toBe('Next step (none: the job fails)')
   })
   it('checks a save is in the planner\'s shape, and the job save stays under 255 calls at the caps', () => {
     const swap = plan(moveStep(opened(), 's4', 0))!

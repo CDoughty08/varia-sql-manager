@@ -292,7 +292,7 @@ internal static partial class BigQuerySessionChecks
         await harness.ConnectAsync(key);
         // A poll held by the fake while the job ran is answered again once its call limit passes.
         harness.BigQuery.CallLimit = TimeSpan.FromMilliseconds(500);
-        // A restored tab keeps its id, and re-attaches with the record's transaction (decision 54).
+        // A restored tab keeps its id, and re-attaches with the record's transaction.
         var events = new System.Collections.Concurrent.ConcurrentQueue<string>();
         using var context = new Protocol.RequestContext(1, "query.attach", Protocol.RequestLane.Query, 0, sendEvent: (_, body, _) =>
             events.Enqueue(System.Text.Json.JsonSerializer.Serialize(body, body.GetType(), new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))));

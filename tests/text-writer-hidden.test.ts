@@ -25,4 +25,13 @@ describe('the TypeScript text writer and hidden columns', () => {
     const copied = await copyText({ columns, pageAt: () => page, available: 3, parts: [{ rows: [[0, 2]], columns: [[0, 6]] }], headers: true, crlf: false })
     expect(decode(copied.text)).toBe('ItemId\tName\tPrice\n2\tb\t2\n2\tb\t3\n3\tc\t3')
   })
+  it('copies and saves a live table without its hidden identity columns', async () => {
+    const live: LocalTableData = { columns: ['State', 'Job', 'Mine'].map(name => ({ name })), rows: [['DONE', 'job_1', 'true'], ['RUNNING', 'job_2', 'false']] }
+    const liveColumns: TextColumn[] = live.columns.map((column, at) => ({ name: column.name, dataType: 'nvarchar', wire: 'text', ...at > 0 ? { role: 'hidden' as const } : {} }))
+    const livePage = localPage(live)
+    const copied = await copyText({ columns: liveColumns, pageAt: () => livePage, available: 2, parts: [{ rows: [[0, 1]], columns: [[0, 2]] }], headers: true, crlf: false })
+    expect(decode(copied.text)).toBe('State\nDONE\nRUNNING')
+    const saved = await exportText({ columns: liveColumns, pageAt: () => livePage, rows: 2, format: 'csv', headers: true, nullText: 'empty' })
+    expect(decode(saved.out.bytes()).replace('﻿', '').split('\r\n')).toEqual(['State', 'DONE', 'RUNNING', ''])
+  })
 })

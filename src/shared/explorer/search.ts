@@ -219,6 +219,8 @@ export interface ObjectIndexStatus {
   readonly namesOnly?: readonly string[]
   /** BigQuery: the last full build's billed bulk path, when it ran. */
   readonly bulk?: BigQueryBulkStatus
+  /** BigQuery: the newest DDL stale mark no stale-only build has spent yet (absent when none is left). */
+  readonly staleMark?: number
 }
 export interface ObjectIndexResult { readonly status: ObjectIndexStatus; readonly elapsedMs: number }
 

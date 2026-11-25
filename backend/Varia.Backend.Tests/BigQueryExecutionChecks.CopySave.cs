@@ -78,7 +78,7 @@ internal static partial class BigQueryExecutionChecks
             // Transposed: a line per column, a field per row.
             (code, text, copied, message, _) = await Copy(harness, CopyRequest(id, 0, 2, 1, 1000, transposed: true));
             check(code == "ok" && text == "0\t1\t2\nrow 0\trow 1\trow 2" && copied is { Rows: 3, Capped: 0 }, $"a transposed Copy of a windowed result writes its rows as columns: {code} {message} [{text}]");
-            // A view id: a windowed result has none (BQ-3c-2's derived results are results of their own).
+            // A view id: a windowed result has none (a sort's or filter's derived result is a result of its own).
             var withView = CopyRequest(id, 0, 1, 1, 1000);
             withView["viewId"] = 7;
             (code, _, _, _, _) = await Copy(harness, withView);

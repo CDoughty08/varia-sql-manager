@@ -208,7 +208,7 @@ describe('BigQuery credential material (main)', () => {
     expect(main).toContain('await connectionOpen.connect(validated as ProviderConnectionOptions, context)')
     expect(main).toContain(`backend.request('connections.connect', await withBigQueryCredential(params) as ConnectionOptions`)
     expect(main).toContain(`backend.request('connections.databases', await withBigQueryCredential(params) as ConnectionOptions`)
-    // A background reconnect never asks about an ADC token file (decision 49 fails closed); a request the user waits on may.
+    // A background reconnect never asks about an ADC token file (an unasked file fails closed); a request the user waits on may.
     expect(main).toContain('credential: await bigQueryCredentials.material(params as BigQueryConnectionOptions, { interactive: !(params as { nonInteractive?: boolean }).nonInteractive })')
     expect(main).toContain(`if (method === 'bigquery.account' || method === 'bigquery.projects') {`)
     // The account line reads itself as fields change, so it never asks; Browse may.

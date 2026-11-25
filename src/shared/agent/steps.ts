@@ -125,10 +125,17 @@ export function newStepDraft(steps: readonly AgentStepDraft[], subsystem = 'TSQL
     onSuccess: 3, onFail: 2, retryAttempts: 0, retryInterval: 0, outputFileName: '', flags: 0, cmdexecSuccessCode: 0, proxyId: 0, server: '', osRunPriority: 0
   }
 }
-/** Adds `step` at `index` (the end by default); the first step becomes the Start step. The previous last step's "next step" now reaches it. */
+/**
+ * Adds `step` at `index` (the end by default); the first step becomes the Start step. A step added last that would go to the next step
+ * quits reporting success instead: Agent fails every run whose last step goes to the next step ("JobManager tried to run a non-existent
+ * step"), even when it succeeds. The step it follows then goes to it, when that step is new in this draft and quits reporting success (as
+ * an earlier add left it), so a job built step by step runs through; a step read from the job keeps its action.
+ */
 export function addStep(draft: AgentStepsDraft, step: AgentStepDraft, index = draft.steps.length): AgentStepsDraft {
-  const steps = [...draft.steps]
-  steps.splice(Math.max(0, Math.min(index, steps.length)), 0, step)
+  const at = Math.max(0, Math.min(index, draft.steps.length))
+  const last = at === draft.steps.length
+  const steps = draft.steps.map((item, position) => last && position === at - 1 && item.from === undefined && item.onSuccess === 1 ? { ...item, onSuccess: 3 as const } : item)
+  steps.splice(at, 0, last && step.onSuccess === 3 ? { ...step, onSuccess: 1 } : step)
   return { steps, startKey: draft.startKey ?? step.key }
 }
 /** Moves the step `key` to `index` (its position after the move). Go-to targets are keys, so they follow; the Start step stays the same step. */
@@ -237,7 +244,8 @@ export function stepTargetShort(draft: AgentStepsDraft, step: AgentStepDraft, wh
   const code = which === 'success' ? step.onSuccess : step.onFail, target = which === 'success' ? step.onSuccessTarget : step.onFailTarget
   if (code === 1) return 'Quit, success'
   if (code === 2) return 'Quit, failure'
-  if (code === 3) return draft.steps[draft.steps.length - 1]?.key === step.key ? 'Next step (none: quits)' : 'Next step'
+  // Agent fails the job when the last step goes to the next step, whatever the step's outcome.
+  if (code === 3) return draft.steps[draft.steps.length - 1]?.key === step.key ? 'Next step (none: the job fails)' : 'Next step'
   const at = target ? draft.steps.findIndex(item => item.key === target) : -1
   return at >= 0 ? `Step ${at + 1}` : `Step ${target ? describedId(target) ?? '?' : '?'} (missing)`
 }

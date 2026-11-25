@@ -3,8 +3,9 @@
 // table revision's few rows (only databases that are not plainly online and open, running restores, availability groups),
 // turns them into chips (src/shared/explorer/status.ts) and publishes them for every connection the view serves. It never
 // reloads the tree, and never samples by itself: LiveService pauses the views while Object Explorer or the window is hidden.
-import { statusChipKinds } from '../../../shared/explorer/catalog'
-import { agentChips, databaseChips, serverChips, type AgentServiceState, type DatabaseStatusRow, type GroupRow, type ProgressRow, type StatusChip } from '../../../shared/explorer/status'
+// A connected BigQuery connection gets its own view, of the `bigquery.explorer` source: its node's running-jobs chip.
+import { bigQueryStatusChipKinds, statusChipKinds } from '../../../shared/explorer/catalog'
+import { agentChips, bigQueryChips, databaseChips, serverChips, type AgentServiceState, type DatabaseStatusRow, type GroupRow, type ProgressRow, type StatusChip } from '../../../shared/explorer/status'
 import type { LiveProbeId } from '../../../shared/live/catalog'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
@@ -61,6 +62,8 @@ export interface StatusVisibility {
 
 /** The probes a view samples: each once, though the server and Agent rows both show running jobs. */
 const probes = [...new Set([...statusChipKinds.database, ...statusChipKinds.server, ...statusChipKinds.agent])] as LiveProbeId[]
+/** A BigQuery connection's probes: its node's running jobs. */
+const bigQueryProbes = [...bigQueryStatusChipKinds.server] as LiveProbeId[]
 type TableProbe = 'explorer.databases' | 'explorer.progress' | 'explorer.availability'
 /** At most this many rows of a status table are read: the catalogue caps them at 1,000, a window at 4,096. */
 const maxRows = 1000
@@ -70,6 +73,8 @@ const noChips: readonly StatusChip[] = []
 /** A database the probe does not list: online, writable and open to everyone. */
 export const onlineStatus: RowStatus = { chips: noChips, live: true, words: '' }
 const usable = new Set(['fresh', 'stale'])
+/** Prefixes a BigQuery connection's view key, so it never shares a view with a SQL Server one. */
+const bigQueryKey = 'bigquery\u0000'
 
 /** The Agent node's status: its chips and sublabel, and the words its accessible name says ("Stopped, Agent XPs disabled"). */
 const agentStatusOf = (chips: readonly StatusChip[], sublabel: string | undefined): RowStatus | undefined => chips.length || sublabel
@@ -121,6 +126,8 @@ class ServerView {
   private progress: Map<string, ProgressRow> | undefined
   private groups: GroupRow[] | undefined
   private jobs: number | null | undefined
+  /** explorer.bigquery's count stopped at its cap (status more). */
+  private more = false
   private agentService: AgentServiceState | undefined
   /** The newest read per probe: an older read that finishes later is dropped. */
   private readonly reads = new Map<LiveProbeId, number>()
@@ -130,12 +137,19 @@ class ServerView {
   /** What was published last, so unchanged rows keep their objects (rows are memoised on them). */
   private published: ServerStatus = { server: undefined, databases: undefined, complete: false }
 
-  constructor(connectionId: string, live: LiveService, owner: LiveOwner, private readonly changed: () => void) {
-    this.handle = live.open({ connectionId, source: 'explorer', probes: probes.map(probe => ({ probe })), background: true }, owner)
+  constructor(connectionId: string, live: LiveService, owner: LiveOwner, private readonly changed: () => void, private readonly bigQuery = false) {
+    this.handle = live.open(bigQuery
+      ? { connectionId, source: 'bigquery.explorer', probes: bigQueryProbes.map(probe => ({ probe })), background: true }
+      : { connectionId, source: 'explorer', probes: probes.map(probe => ({ probe })), background: true }, owner)
     const disposeTick = this.handle.onTick(({ subscriptionId, tick }) => {
       this.follow(subscriptionId)
       for (const sample of tick.samples) {
         if (sample.probe === 'explorer.agent') { this.jobs = sample.metrics?.[0] ?? null; continue }
+        if (sample.probe === 'explorer.bigquery') {
+          this.jobs = sample.metrics?.[0] ?? null
+          this.more = sample.status?.find(item => item.id === 'more')?.value === 1
+          continue
+        }
         if (sample.probe === 'explorer.agentService') { this.agentService = agentServiceOf(sample.status); continue }
         const entry = sample.tables?.find(table => table.table === 0)
         if (!entry) continue
@@ -177,6 +191,7 @@ class ServerView {
     this.subscriptionId = subscriptionId
     for (const probe of ['explorer.databases', 'explorer.progress', 'explorer.availability'] as const) this.forget(probe)
     this.jobs = undefined
+    this.more = false
     this.agentService = undefined
     this.reads.clear()
   }
@@ -224,6 +239,15 @@ class ServerView {
   update(): void {
     const fresh = (probe: LiveProbeId) => this.fresh(probe)
     const previous = this.published
+    if (this.bigQuery) {
+      // A BigQuery node has only its running-jobs chip: no databases, availability groups or Agent.
+      const chips = bigQueryChips(fresh('explorer.bigquery') ? this.jobs : undefined, this.more)
+      const server = chips.length === 0 ? undefined : previous.server && sameChips(previous.server.chips, chips) ? previous.server : statusOf(chips)
+      if (server === previous.server) return
+      this.published = { server, databases: undefined, complete: false }
+      this.changed()
+      return
+    }
     const databases = fresh('explorer.databases') && this.databases ? this.databaseMap(previous.databases, fresh('explorer.progress') ? this.progress : undefined) : undefined
     const complete = !!databases && this.complete
     const chips = serverChips(fresh('explorer.agent') ? this.jobs : undefined, fresh('explorer.availability') ? this.groups : undefined)
@@ -337,10 +361,11 @@ export class ExplorerStatusService extends SnapshotStore<ExplorerStatusSnapshot>
     if (reopen) this.sync()
   }
 
-  /** Only connected Explorer members sample metadata. Pending connects and disconnect preflights have no probes, and nor does
-   *  a BigQuery server (its probes are SQL Server's). */
+  /** Only connected Explorer members sample metadata. Pending connects and disconnect preflights have no probes. A BigQuery
+   *  connection's view reads its own source (`bigquery.explorer`), keyed apart from any SQL Server view. */
   private wanted(): Map<string, string> {
-    return new Map(this.enabled ? this.o.connections.getSnapshot().filter(connection => !connection.lost && connection.inExplorer !== false && (!connection.lifecycle || connection.lifecycle.state === 'connected') && !isBigQueryConnection(connection)).map(connection => [connection.id, statusKey(connection)]) : [])
+    return new Map(this.enabled ? this.o.connections.getSnapshot().filter(connection => !connection.lost && connection.inExplorer !== false && (!connection.lifecycle || connection.lifecycle.state === 'connected'))
+      .map(connection => [connection.id, (isBigQueryConnection(connection) ? bigQueryKey : '') + statusKey(connection)]) : [])
   }
 
   /** The live connections a view serves, oldest first: the first is the one it reads through. */
@@ -362,7 +387,7 @@ export class ExplorerStatusService extends SnapshotStore<ExplorerStatusSnapshot>
       for (const key of keys) {
         if (this.views.has(key)) continue
         const first = this.members(key)[0]
-        if (first !== undefined) this.views.set(key, new ServerView(first, this.o.live, this.owner(key, first), () => this.changed()))
+        if (first !== undefined) this.views.set(key, new ServerView(first, this.o.live, this.owner(key, first), () => this.changed(), key.startsWith(bigQueryKey)))
       }
     }
     this.changed()

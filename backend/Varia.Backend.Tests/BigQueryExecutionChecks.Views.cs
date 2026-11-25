@@ -195,6 +195,15 @@ internal static partial class BigQueryExecutionChecks
         var values = (window as ResultsDistinctReadResult)?.Values ?? [];
         check(read == "ok" && values.Select(value => value.Text + ":" + value.Count + ":" + value.Checked + ":" + value.Row).SequenceEqual(["pear:30:False:3", "apple:7:True:1", "kiwi:2:False:2"]),
             "a value list reads most frequent first, each value's row its rank in the list: " + string.Join(", ", values.Select(value => value.Text + ":" + value.Count + ":" + value.Checked + ":" + value.Row)));
+        // Its estimate only reads the ticks: a declined cost prompt runs nothing and leaves the checklist free to tick again.
+        var estimateArgs = new JsonObject
+        {
+            ["connectionId"] = harness.ConnectionId,
+            ["remote"] = new JsonObject { ["resultId"] = id, ["generation"] = 1, ["kind"] = "view", ["filters"] = new JsonArray(new JsonObject { ["op"] = "groups", ["column"] = 1, ["list"] = list.ResultId, ["snapshotId"] = answer.SnapshotId }) }
+        };
+        var (estimated, _, estimateMessage) = await harness.Call("bigquery.dryRun", estimateArgs);
+        var (retick, _, retickMessage) = await harness.Call("results.distinctTick", new JsonObject { ["resultId"] = list.ResultId, ["snapshotId"] = answer.SnapshotId, ["checked"] = true, ["nulls"] = true });
+        check(estimated == "ok" && retick == "ok", $"a value list's estimate leaves its checklist unfrozen, so a declined prompt can be ticked again: {estimated} {estimateMessage} {retick} {retickMessage}");
         // The ticks filter the view in BigQuery: only apple and NULL ticked, so the complete list keeps them by row.
         var (filtered, view, _, viewMessage) = await Run(harness, "results.remoteQuery", View(id, filters: [new JsonObject { ["op"] = "groups", ["column"] = 1, ["list"] = list.ResultId, ["snapshotId"] = answer.SnapshotId }]));
         var parameters = harness.Jobs.InsertBodies.Last()["configuration"]!["query"]!["queryParameters"]!.AsArray();

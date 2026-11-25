@@ -67,6 +67,8 @@ const profile = await mkdtemp(resolve('artifacts', 'bigquery-jobs-profile-'))
 const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, VARIA_TEST_BIGQUERY_ENDPOINT: endpoint }
 delete env.ELECTRON_RUN_AS_NODE
 delete env.VARIA_TEST_BACKEND
+// The fake has no Storage Read endpoint: a local emulator's must not reach the app.
+delete env.VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT
 // Playwright adds --no-sandbox on Linux unless chromiumSandbox is set; only root (cloud sessions) needs it, as Chromium will not start sandboxed there.
 const app = await electron.launch({ args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 })
 const watchdog = setTimeout(() => { console.error('BigQuery Job History suite exceeded its time limit.'); app.process()?.kill(); process.exitCode = 1 }, 180000)
@@ -90,7 +92,9 @@ const rows = () => page.evaluate(({ grid, row, cell, tones }) => {
 }, parts)
 const jobCell = id => grid().locator(gridPart.row, { has: page.locator(gridPart.cell, { hasText: new RegExp(`^(?:[▸▾] )?${id}$`) }) }).locator(gridPart.cell).nth(2)
 const views = () => page.evaluate(() => window.__variaLive.snapshot().handles.filter(handle => handle.source === 'bigquery.jobs'))
-const listings = () => requests.filter(request => request.method === 'GET' && request.path.endsWith('/jobs'))
+// Job History's listings, not Object Explorer's running-jobs chip (minimal pages of 1,000 filtered to open jobs).
+const chipListing = request => request.query.get('projection') === 'minimal' && request.query.get('maxResults') === '1000' && request.query.getAll('stateFilter').length > 0
+const listings = () => requests.filter(request => request.method === 'GET' && request.path.endsWith('/jobs') && !chipListing(request))
 
 try {
   step = 'connect'

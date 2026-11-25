@@ -16,7 +16,7 @@ const principal = { provider: 'bigquery' as const, project: 'varia-alpha', princ
 const target = (): PersistedConnectionTarget => ({ id: id(1), options: { provider: 'bigquery', project: 'varia-alpha', dataset: 'sales', extraProjects: ['varia-beta'], authentication: 'gcloud' },
   details: { autoReconnect: 'inherit', environment: 'Production' }, inExplorer: true, resumeWanted: true, expectedPrincipal: principal })
 
-describe('BigQuery connections in the workbench (BQ-2)', () => {
+describe('BigQuery connections in the workbench', () => {
   // The comma commands read GoogleSQL by its own tokens (editing-commands.test.ts runs them). A command that targets a SQL Server
   // object still edits the bound GoogleSQL model by GoogleSQL's rules, so both stay enabled in either engine's query.
   it('offers Move Commas in a GoogleSQL query, from its own tab or a command that targets a SQL Server object', () => {
@@ -143,16 +143,17 @@ describe('BigQuery connections in the workbench (BQ-2)', () => {
     } finally { value.dispose() }
   })
 
-  it('attaches a waiting query to a BigQuery connection made from Execute without running it', async () => {
+  it('runs a waiting query on the BigQuery connection its Execute made, as a SQL Server one runs', async () => {
     const connection = { id: id(61), targetId: id(2), generation: 1, providerId: 'bigquery', options: { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' } }
     const execute = vi.fn(async () => {})
     await executePendingQuery({
       tabId: 'tab', opened: { id: id(61), targetId: id(2), generation: 1, bindingRevision: 1 } as never,
       connections: { get: () => connection, isLive: () => true, bindingRevision: () => 1 } as never,
       documents: { get: () => ({ kind: 'sql', connectionId: id(61), targetId: id(2), attachWanted: true }), getSnapshot: () => ({ busy: false }) } as never,
-      targets: { changeConnection: vi.fn() } as never, queries: { isRunning: () => false, execute } as never
+      targets: { changeConnection: vi.fn() } as never, queries: { isRunning: () => false, execute, holdsUnattachedJobs: () => false } as never
     })
-    expect(execute).not.toHaveBeenCalled()
+    // Execute itself asks for the estimate and the cost prompt (tests/queries.test.ts, BigQuery cost gate).
+    expect(execute).toHaveBeenCalledExactlyOnceWith('tab')
   })
 
   it('opens a new query on BigQuery with no default dataset, and never opens the SSMS T-SQL shortcuts there', async () => {

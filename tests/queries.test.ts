@@ -6,6 +6,7 @@ import type { WorkbenchEvent } from '../src/renderer/src/core/types'
 import type { ResultsService } from '../src/renderer/src/results/ResultsService'
 import { EventBus } from '../src/renderer/src/core/events'
 import { deferred, documentFixture } from './fixtures/documents'
+import { executePendingQuery } from '../src/renderer/src/services/connection-opening'
 import { defaultSettings, type SettingsValues } from '../src/shared/settings/catalog'
 
 const output = (patch: Partial<QueryResult> = {}): QueryResult => ({
@@ -814,6 +815,26 @@ describe('BigQuery execution', () => {
 })
 
 describe('BigQuery cost gate', () => {
+  it('gates a query that runs once the Connect its Execute opened is ready, as any Execute is', async () => {
+    const f = fixture()
+    Object.assign(f.connection, { providerId: 'bigquery' })
+    const { id, generation } = f.connection
+    const pending = () => executePendingQuery({
+      tabId: f.tab.id, opened: { id, targetId: 'target', generation, bindingRevision: 1 } as never,
+      connections: { get: () => ({ ...f.connection, targetId: 'target' }), isLive: () => true, bindingRevision: () => 1 } as never,
+      documents: { get: () => ({ kind: 'sql', connectionId: id, targetId: 'target', attachWanted: true }), getSnapshot: () => ({ busy: false }) } as never,
+      targets: { changeConnection: vi.fn() } as never, queries: f.queries
+    })
+    const declined = vi.fn(async () => false)
+    f.queries.setCostGate(declined)
+    await pending()
+    await vi.waitFor(() => expect(declined).toHaveBeenCalledOnce())
+    await vi.waitFor(() => expect(f.queries.getSnapshot()[f.tab.id]?.running).toBeUndefined())
+    expect(f.queryApi.execute).not.toHaveBeenCalled()
+    f.queries.setCostGate(async () => true)
+    await pending()
+    await vi.waitFor(() => expect(f.queryApi.execute).toHaveBeenCalledOnce())
+  })
   it('sends nothing when the cost prompt is declined, and leaves the tab as it was', async () => {
     const f = fixture()
     Object.assign(f.connection, { providerId: 'bigquery' })

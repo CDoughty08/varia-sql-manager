@@ -133,23 +133,64 @@ internal static partial class BigQueryIndexChecks
             "a column's type text carries precision and scale, ARRAY for REPEATED and STRUCT for RECORD: " + BigQueryEntries.TypeText(field));
     }
 
-    /// <summary>DDL marks its target's dataset; DDL inside a script marks the tab's dataset; queries mark nothing.</summary>
+    /// <summary>DDL marks its target's dataset (a temp table's anonymous dataset nothing); a script's DDL marks each statement's own target;
+    /// what cannot be known marks the project whole; queries mark nothing.</summary>
     static void Ddl(Action<bool, string> check)
     {
-        var job = new Google.Apis.Bigquery.v2.Data.Job
+        static Google.Apis.Bigquery.v2.Data.Job Table(string dataset) => new()
         {
-            Statistics = new() { Query = new() { DdlTargetTable = new() { ProjectId = "varia-alpha", DatasetId = "staging", TableId = "t" } } }
+            Statistics = new() { Query = new() { DdlTargetTable = new() { ProjectId = "varia-alpha", DatasetId = dataset, TableId = "t" } } }
         };
+        static string Text(BigQueryIndexMarks marks) => string.Join(",", marks.Datasets.Select(item => item.Project + "." + item.Dataset).Order()) + (marks.WholeProject ? " +project" : "");
+        var job = Table("staging");
         var none = new Google.Apis.Bigquery.v2.Data.Job();
-        var marked = SqlService.DdlDatasets(job, "CREATE_TABLE", null, "varia-alpha", "sales").ToList();
-        var script = SqlService.DdlDatasets(none, "SCRIPT", [new BigQueryChild("c", null, 0, true, "DROP_VIEW", null, null, "DROP")], "varia-alpha", "sales").ToList();
-        var select = SqlService.DdlDatasets(job, "SELECT", [new BigQueryChild("c", null, 0, true, "INSERT", null, null, null)], "varia-alpha", "sales").ToList();
-        check(marked is [("varia-alpha", "staging")] && script is [("varia-alpha", "sales")] && select.Count == 0,
-            "DDL marks its target's dataset, a script's DDL the tab's dataset, and DML or SELECT nothing");
+        var marked = SqlService.DdlMarks(job, "CREATE_TABLE", null, false, "varia-alpha", "sales", true);
+        var select = SqlService.DdlMarks(job, "SELECT", null, false, "varia-alpha", "sales", true);
+        check(Text(marked) == "varia-alpha.staging" && select == BigQueryIndexMarks.None, "DDL marks its target's dataset, and SELECT nothing: " + Text(marked));
         var restored = new Google.Apis.Bigquery.v2.Data.Job { Statistics = new() { Query = new() { DdlTargetDataset = new() { ProjectId = "varia-alpha", DatasetId = "archive" } } } };
-        check(SqlService.DdlDatasets(restored, "UNDROP_SCHEMA", null, "varia-alpha", null).ToList() is [("varia-alpha", "archive")], "UNDROP SCHEMA marks the dataset it restored");
-        check(SqlService.DdlDatasets(none, "SCRIPT", null, "varia-alpha", "sales").ToList() is [("varia-alpha", "sales")] && SqlService.DdlDatasets(none, "SELECT", null, "varia-alpha", "sales").ToList().Count == 0,
-            "a script whose child jobs could not be listed marks the tab's dataset; a SELECT still marks nothing");
+        check(Text(SqlService.DdlMarks(restored, "UNDROP_SCHEMA", null, false, "varia-alpha", null, true)) == "varia-alpha.archive", "UNDROP SCHEMA marks the dataset it restored");
+        // A temp table lives in the session's anonymous dataset, which no index lists: it marks nothing, and no fallback.
+        check(SqlService.DdlMarks(Table("_8f2c0d1e"), "CREATE_TABLE", null, false, "varia-alpha", "sales", true) == BigQueryIndexMarks.None,
+            "a temp table's DDL (its target in an anonymous _ dataset) marks nothing");
+        // LOAD DATA counts: its target table's dataset, or its destination table's.
+        var load = new Google.Apis.Bigquery.v2.Data.Job { Configuration = new() { Query = new() { DestinationTable = new() { ProjectId = "varia-alpha", DatasetId = "landing", TableId = "raw" } } } };
+        check(!SqlService.ChangesObjects("CREATE_ROW_ACCESS_POLICY") && !SqlService.ChangesObjects("DROP_ALL_ROW_ACCESS_POLICIES") && !SqlService.ChangesObjects("CREATE_SEARCH_INDEX")
+            && !SqlService.ChangesObjects("ALTER_PROJECT") && !SqlService.ChangesObjects("CREATE_RESERVATION") && SqlService.ChangesObjects("CREATE_TABLE_AS_SELECT") && SqlService.ChangesObjects("ALTER_TABLE"),
+            "row access policies, search indexes, reservations and project options change nothing the index lists");
+        check(Text(SqlService.DdlMarks(load, "LOAD_DATA", null, false, "varia-alpha", null, true)) == "varia-alpha.landing" && SqlService.ChangesObjects("LOAD_DATA"),
+            "LOAD DATA marks its destination table's dataset");
+        // DDL with no target: the default dataset (from the job's configuration when the request named none), else the project.
+        var defaulted = new Google.Apis.Bigquery.v2.Data.Job { Configuration = new() { Query = new() { DefaultDataset = new() { ProjectId = "varia-alpha", DatasetId = "sales" } } } };
+        check(Text(SqlService.DdlMarks(defaulted, "CREATE_FUNCTION", null, false, "varia-alpha", null, true)) == "varia-alpha.sales"
+            && Text(SqlService.DdlMarks(none, "CREATE_FUNCTION", null, false, "varia-alpha", null, true)) == " +project",
+            "DDL that names no target marks the default dataset, or the project when there is none");
+        // A script: each DDL statement's entry in the child listing names its target, in any dataset, with or without a default dataset.
+        List<BigQueryChild> children = [new("c1", null, 1, true, "DROP_VIEW", null, null, "DROP", "varia-alpha", "marketing"), new("c2", null, 2, true, "INSERT", null, 3, null),
+            new("c3", null, 3, true, "CREATE_TABLE", null, null, "CREATE", "varia-alpha", "_session_temp")];
+        check(Text(SqlService.DdlMarks(none, "SCRIPT", children, true, "varia-alpha", null, true)) == "varia-alpha.marketing",
+            "a script's DDL marks each statement's own target (another dataset, no default dataset), and its temp table nothing: " + Text(SqlService.DdlMarks(none, "SCRIPT", children, true, "varia-alpha", null, true)));
+        // A DDL statement that names no target (LOAD DATA: its destination is configuration) marks the default dataset, else the project.
+        List<BigQueryChild> loads = [.. children, new("c4", null, 4, true, "LOAD_DATA", null, null, null)];
+        check(Text(SqlService.DdlMarks(none, "SCRIPT", loads, true, "varia-alpha", "sales", true)) == "varia-alpha.marketing,varia-alpha.sales"
+            && Text(SqlService.DdlMarks(none, "SCRIPT", loads, true, "varia-alpha", null, true)) == "varia-alpha.marketing +project",
+            "a script statement that names no target marks the default dataset, or the project when there is none");
+        // With deferred reads asked for, an untargeted statement waits for its job's own read instead.
+        var deferred = new List<BigQueryChild>();
+        check(Text(SqlService.DdlMarks(none, "SCRIPT", loads, true, "varia-alpha", null, true, deferred)) == "varia-alpha.marketing" && deferred.Select(child => child.Id).SequenceEqual(["c4"]),
+            "a script statement that names no target is deferred to a jobs.get when asked, and marks nothing yet");
+        // Unknown: a listing cut short marks the project whole; one that failed the default dataset, or the project with none.
+        check(SqlService.DdlMarks(none, "SCRIPT", children, false, "varia-alpha", "sales", true).WholeProject
+            && Text(SqlService.DdlMarks(none, "SCRIPT", null, false, "varia-alpha", "sales", true)) == "varia-alpha.sales"
+            && SqlService.DdlMarks(none, "SCRIPT", null, false, "varia-alpha", null, true).WholeProject,
+            "a capped child listing marks the project whole, and an unread listing the default dataset, or the project with none");
+        // ...unless the script's text has no word of a statement that changes objects.
+        check(SqlService.DdlMarks(none, "SCRIPT", null, false, "varia-alpha", "sales", false) == BigQueryIndexMarks.None
+            && SqlService.DdlMarks(none, "SCRIPT", [new("c", null, 0, true, "INSERT", null, null, null)], true, "varia-alpha", "sales", true) == BigQueryIndexMarks.None,
+            "an unread script whose text changes no object, and a script of DML only, mark nothing");
+        check(!GoogleSqlScanner.MayChangeObjects("SELECT 'CREATE TABLE x' AS t -- DROP TABLE y\n/* ALTER */ FROM `create`")
+            && GoogleSqlScanner.MayChangeObjects("DECLARE x INT64; create temp table t AS SELECT 1") && GoogleSqlScanner.MayChangeObjects("LOAD DATA INTO d.t FROM FILES(format = 'CSV', uris = ['gs://b/f.csv'])")
+            && GoogleSqlScanner.MayChangeObjects("EXECUTE IMMEDIATE 'x'"),
+            "the scanner finds DDL words only outside strings, comments and backtick identifiers");
     }
 
     /// <summary>A dataset that does not fit with its columns is read again without them, and one that still does not fit is refused, giving back what it took.</summary>
@@ -310,6 +351,26 @@ internal static partial class BigQueryIndexChecks
         await harness.Index(more => more["stale"] = true);
         check(marked == 1 && harness.Gets(Sales + "/tables/daily") == daily + 1 && harness.Gets(Alpha + "/datasets") == datasets && harness.Service.Search.StaleOf(harness.ConnectionId).Count == 0,
             "a stale-only build re-reads the dataset DDL marked, lists nothing else, and spends the mark");
+        // DDL whose datasets cannot be known marks the project whole: a stale-only build lists the project again and reads each
+        // dataset whole, and the status numbers the mark until it is spent, so the renderer asks once per mark.
+        harness.Service.Search.MarkProjectStale(harness.ConnectionId, "varia-alpha");
+        var projectMark = harness.Service.Search.StaleMarkOf(harness.ConnectionId);
+        daily = harness.Gets(Sales + "/tables/daily");
+        datasets = harness.Gets(Alpha + "/datasets");
+        var wholeRead = await harness.Index(more => more["stale"] = true);
+        // The project's dataset listing is two pages.
+        check(projectMark > 0 && harness.Gets(Alpha + "/datasets") == datasets + 2 && harness.Gets(Sales + "/tables/daily") == daily + 1 && wholeRead.Status.StaleMark is null
+            && harness.Service.Search.StaleProjectsOf(harness.ConnectionId).Count == 0 && harness.Service.Search.StaleOf(harness.ConnectionId).Count == 0,
+            $"a project marked whole is listed again and each dataset read whole by a stale-only build, spending every mark (mark {projectMark}, status {wholeRead.Status.StaleMark}, datasets {harness.Gets(Alpha + "/datasets") - datasets}, daily {harness.Gets(Sales + "/tables/daily") - daily}, projects {harness.Service.Search.StaleProjectsOf(harness.ConnectionId).Count}, left {string.Join(",", harness.Service.Search.StaleOf(harness.ConnectionId))})");
+        // A dataset whose read fails keeps the project's mark (numbered the same), so the status keeps it and no new build is asked for it.
+        harness.Service.Search.MarkProjectStale(harness.ConnectionId, "varia-alpha");
+        var failingMark = harness.Service.Search.StaleMarkOf(harness.ConnectionId);
+        harness.Fake.On("GET", Sales + "/tables", BigQueryFake.Fixture("error-access-denied", 403));
+        var failedWhole = await harness.Index(more => more["stale"] = true);
+        harness.Fake.On("GET", Sales + "/tables", new BigQueryFake.Reply(200, recreated));
+        check(failedWhole.Status.StaleMark == failingMark && harness.Service.Search.StaleOf(harness.ConnectionId).SequenceEqual([("varia-alpha", "sales")]) && harness.Service.Search.StaleProjectsOf(harness.ConnectionId).Count == 0,
+            "a dataset of a project marked whole whose read fails keeps the project's mark number; the project's own mark is spent");
+        await harness.Index(more => more["stale"] = true);
         // DDL that lands while a build reads the dataset keeps its mark: the build read the listing from before it.
         harness.Fake.On("GET", Sales + "/tables", _ =>
         {

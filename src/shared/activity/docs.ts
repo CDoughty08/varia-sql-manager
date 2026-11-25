@@ -104,7 +104,7 @@ const limitNotes: Readonly<Record<keyof typeof activityLimits, string>> = {
 
 function columnsTable(columns: readonly ColumnSpec[]): string {
   return table(['Column', 'Id', 'Type', 'Unit', 'Shown', 'Parity', 'Notes'], columns.map(column =>
-    [column.caption, code(column.id), column.type, columnUnit(column), column.visible ? 'Yes' : '', parityLabel[column.parity], column.note + (column.capability ? ` Needs ${code(column.capability)}.` : '')]))
+    [column.caption, code(column.id), column.type, columnUnit(column), column.visible ? 'Yes' : column.hidden ? 'Never' : '', parityLabel[column.parity], column.note + (column.capability ? ` Needs ${code(column.capability)}.` : '')]))
 }
 
 /** How the query statistics probe builds Recent Expensive Queries (backend/Varia.Backend/Activity/ActivityQueries.cs). */

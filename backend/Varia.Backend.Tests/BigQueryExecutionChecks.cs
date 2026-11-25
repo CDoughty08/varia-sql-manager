@@ -39,6 +39,15 @@ internal static partial class BigQueryExecutionChecks
         public string StatementType = "SELECT";
         /// <summary>A script (statementType SCRIPT) whose one SELECT child, child_1, answers these rows: jobs.list names it.</summary>
         public bool ScriptChild;
+        /// <summary>With <see cref="ScriptChild"/>, how many SELECT children the script has (child_1, child_2, …), each answering
+        /// these rows.</summary>
+        public int ScriptChildren = 1;
+        bool IsChild(string id) => id == ChildId || ScriptChild && id.StartsWith("child_", StringComparison.Ordinal) && int.TryParse(id[6..], out var n) && n >= 1 && n <= ScriptChildren;
+        /// <summary>The script child's statement type and statistics, as jobs.list and jobs.get answer them.</summary>
+        public string ChildStatementType = "SELECT";
+        public JsonNode? ChildStatistics;
+        /// <summary>Whether jobs.list carries the child's DDL target; off, only its own jobs.get does.</summary>
+        public bool ListChildTarget = true;
         /// <summary>The script child's own statement, as jobs.get answers it (configuration.query.query); set, the child is
         /// known to jobs.get even once ScriptChild is off.</summary>
         public string? ChildQuery;
@@ -110,11 +119,11 @@ internal static partial class BigQueryExecutionChecks
                 : new(200, new JsonObject
                 {
                     ["kind"] = "bigquery#jobList",
-                    ["jobs"] = new JsonArray(new JsonObject
+                    ["jobs"] = new JsonArray([.. Enumerable.Range(1, ScriptChildren).Select(n => (JsonNode)new JsonObject
                     {
-                        ["jobReference"] = Reference(ChildId), ["state"] = "DONE", ["status"] = new JsonObject { ["state"] = "DONE" },
-                        ["statistics"] = new JsonObject { ["creationTime"] = "1", ["parentJobId"] = parent, ["query"] = new JsonObject { ["statementType"] = "SELECT" } },
-                    }),
+                        ["jobReference"] = Reference("child_" + n), ["state"] = "DONE", ["status"] = new JsonObject { ["state"] = "DONE" },
+                        ["statistics"] = ListedChildStatistics(parent, n),
+                    })]),
                 }.ToJsonString()));
             // Stop's jobs.cancel, best-effort.
             fake.On("POST", Base + "/jobs/[^/]+/cancel", request =>
@@ -209,16 +218,25 @@ internal static partial class BigQueryExecutionChecks
 
         string Id(BigQueryFake.Request request) => request.Url[(request.Url.LastIndexOf('/') + 1)..];
 
+        /// <summary>The script child's statistics as jobs.list (minimal) gives them: ChildStatistics' query, with its statement type.</summary>
+        JsonObject ListedChildStatistics(string parent, int n = 1)
+        {
+            var query = (ListChildTarget ? ChildStatistics?["query"]?.DeepClone().AsObject() : null) ?? new JsonObject();
+            query["statementType"] = ChildStatementType;
+            return new JsonObject { ["creationTime"] = n.ToString(System.Globalization.CultureInfo.InvariantCulture), ["parentJobId"] = parent, ["query"] = query };
+        }
+
         public BigQueryFake.Reply Get(BigQueryFake.Request request)
         {
             var id = Id(request);
             bool known;
-            lock (Created) known = Created.Contains(id) || (ScriptChild || ChildQuery is not null) && id == ChildId;
+            lock (Created) known = Created.Contains(id) || (ScriptChild || ChildQuery is not null) && IsChild(id);
             if (!known) return BigQueryFake.Fixture("error-not-found", 404);
-            var query = new JsonObject { ["statementType"] = ScriptChild && id == ChildId ? "SELECT" : StatementType };
+            var child = ScriptChild && IsChild(id);
+            var query = new JsonObject { ["statementType"] = child ? ChildStatementType : StatementType };
             if (DmlAffected is { } dml) query["numDmlAffectedRows"] = dml.ToString(System.Globalization.CultureInfo.InvariantCulture);
             if (DdlOperation is not null) query["ddlOperationPerformed"] = DdlOperation;
-            var statistics = Statistics?.DeepClone().AsObject() ?? new JsonObject();
+            var statistics = (child ? ChildStatistics : Statistics)?.DeepClone().AsObject() ?? new JsonObject();
             if (statistics["query"] is JsonObject given) foreach (var (name, value) in query) given[name] ??= value?.DeepClone();
             else statistics["query"] = query;
             var job = Job(id, "DONE", Failure, statistics);
@@ -380,6 +398,8 @@ internal static partial class BigQueryExecutionChecks
         await RetriesAsync(check);
         Trace("StatementsAsync");
         await StatementsAsync(check);
+        Trace("IndexMarksAsync");
+        await IndexMarksAsync(check);
         Trace("RefusalsAsync");
         await RefusalsAsync(check);
         Trace("EdgesAsync");
@@ -738,6 +758,31 @@ internal static partial class BigQueryExecutionChecks
                 $"the row limit stops storing and reading pages, and the rows past it are counted from BigQuery's total: {set?.RowsRead} {set?.RowsStored} {set?.Truncated} {jobs.Reads.Count}");
         }
 
+        // Rows kept per execution counts over a script's result sets, as SQL Server's reader does: the second SELECT keeps what
+        // the first left, and the third, with nothing left, keeps none (in memory, cut by the row limit, its rows counted).
+        foreach (var residence in new[] { "memory", "windowed" })
+        {
+            jobs = new Jobs { Schema = jobs.Schema, Rows = jobs.Rows, PageCap = 400, StatementType = "SCRIPT", ScriptChild = true, ScriptChildren = 3, Destination = Destination };
+            using var harness = new Harness(jobs);
+            await harness.ConnectAsync();
+            var (code, result, message) = await harness.Execute("SELECT n, s FROM t; SELECT n, s FROM t; SELECT n, s FROM t", args => { args["maxRows"] = 1500; args["residence"] = residence; });
+            var shown = result?.ResultSets.Select(set => (set.Residence, Rows: set.Residence == "remote" ? set.RowsAvailable : set.RowsStored, set.Truncated, set.RowsRead)).ToList() ?? [];
+            var remote = residence == "windowed" ? "remote" : "memory";
+            check(code == "ok" && shown is [var first, var second, var third]
+                && first == (remote, 1203, null, 1203) && second == (remote, 297, "rowLimit", 1203) && third == ("memory", 0, "rowLimit", 1203),
+                $"{residence}: Rows kept per execution counts over every result set of a script: {code} {message} {string.Join(" | ", shown)}");
+            if (residence != "windowed" || result?.ResultSets is not [_, var windowedChild, _]) continue;
+            // A new query from that second result (a BigQuery-side sort here, a rerun alike) runs with Maximum rows, not the share
+            // the script left that result.
+            jobs.StatementType = "SELECT";
+            jobs.ScriptChild = false;
+            var (viewCode, view, _, viewMessage) = await Run(harness, "results.remoteQuery", View(windowedChild.ResultId, sort: [Key(0, descending: true)]));
+            var viewSet = view?.ResultSets.SingleOrDefault();
+            var viewRows = viewSet?.Residence == "remote" ? viewSet.RowsAvailable : viewSet?.RowsStored;
+            check(viewCode == "ok" && viewRows == 1203 && viewSet?.Truncated is null,
+                $"a script child's BigQuery-side view keeps Maximum rows, not the child's share: {viewCode} {viewMessage} {viewSet?.Residence} {viewRows} {viewSet?.Truncated}");
+        }
+
         // A limit that lands on a page's last row reads no further page.
         jobs = new Jobs { Schema = jobs.Schema, Rows = jobs.Rows, PageCap = 400 };
         using (var harness = new Harness(jobs))
@@ -757,10 +802,17 @@ internal static partial class BigQueryExecutionChecks
             var (code, result, message) = await harness.Execute("SELECT n, s FROM t");
             var set = result?.ResultSets.Single();
             check(code == "ok" && result?.Status == "completed" && set is { RowsRead: 1203, Truncated: "queryBudget" } && set.RowsStored is > 0 and < 1203
-                && Says(result, "Results were truncated because the result memory budget (0 MB) is full."),
+                && Says(result, "Results were truncated because the result memory budget (<1 MB) is full."),
                 $"the result budget stops storing, the query completes, and the rows are counted: {code} {message} {set?.RowsStored} {set?.Truncated} {Texts(result?.Messages ?? [])}");
             check(harness.Service.Results.UsedBytes <= 256 * 1024, "the pages being decoded stay within the budget: " + harness.Service.Results.UsedBytes);
         }
+        // The note's figure (SQL Server's too) is written as the results strip writes it: never "(0 MB)".
+        var figures = new[] { 0L, 256 * 1024, 1L << 20, 3L << 19, 8L << 30, 10L << 30 }.Select(SqlService.MemoryFigure).ToList();
+        check(figures.SequenceEqual(["<1 MB", "<1 MB", "1 MB", "2 MB", "8,192 MB", "10.0 GB"]), "the budget note's figure matches the strip's: " + string.Join(", ", figures));
+        // SQL Server's Messages note is the same text, which SqlService's batch loop writes through BudgetFullNote.
+        check(SqlService.BudgetFullNote(256 * 1024) == "Results were truncated because the result memory budget (<1 MB) is full. Execution continued; close other query results to free memory."
+            && SqlService.BudgetFullNote(8L << 30).Contains("(8,192 MB) is full.", StringComparison.Ordinal),
+            "the budget note's whole text, SQL Server's and BigQuery's: " + SqlService.BudgetFullNote(256 * 1024));
 
         // A cell past its cap and a read error, through query.execute.
         jobs = new Jobs { Schema = Schema(Field("n", "INTEGER"), Field("s", "STRING")), Rows = [Row("x1", new string('a', ColumnPlan.TextCap + 1)), Row("x2", "b")] };
@@ -910,6 +962,79 @@ internal static partial class BigQueryExecutionChecks
         jobs.Rows = [Row("1")];
         (code, result, _) = await harness.Execute("DECLARE x INT64 DEFAULT 1; SELECT x;");
         check(result is { Status: "completed", ResultSets.Count: 1 } && Says(result, "BigQuery returns the rows of a script's last statement only."), $"a script returns its last statement's rows and says so: {Texts(result?.Messages ?? [])}");
+    }
+
+    /// <summary>A run's DDL marks the Search Objects index (docs/object-search.md, BigQuery): a finished statement its target, a script's
+    /// DDL each statement's own target, a temp table nothing, and a stopped run once BigQuery reports its job DONE. The result numbers
+    /// the newest unspent mark, so the renderer asks one stale-only build per mark.</summary>
+    static async Task IndexMarksAsync(Action<bool, string> check)
+    {
+        static JsonObject Target(string dataset) => new() { ["query"] = new JsonObject { ["ddlTargetTable"] = new JsonObject { ["projectId"] = "varia-emulator", ["datasetId"] = dataset, ["tableId"] = "t" } } };
+        var jobs = new Jobs { StatementType = "CREATE_TABLE", Statistics = Target("staging") };
+        using var harness = new Harness(jobs);
+        await harness.ConnectAsync();
+        harness.Service.Search.TrackBigQuery(harness.ConnectionId);
+        var (code, result, _) = await harness.Execute("CREATE TABLE staging.t (a INT64)");
+        var first = result?.IndexStale;
+        check(code == "ok" && first > 0 && harness.Service.Search.StaleOf(harness.ConnectionId).SequenceEqual([("varia-emulator", "staging")]),
+            $"a finished CREATE TABLE marks its target's dataset, and the result numbers the mark: {code} {first}");
+        // A temp table's target is the session's anonymous dataset: nothing more is marked.
+        jobs.Statistics = Target("_session_8f2c");
+        (_, result, _) = await harness.Execute("CREATE TEMP TABLE t AS SELECT 1");
+        check(result?.IndexStale == first && harness.Service.Search.StaleOf(harness.ConnectionId).Count == 1, $"a temp table marks nothing: {result?.IndexStale}");
+        // LOAD DATA counts, by its target table.
+        jobs.StatementType = "LOAD_DATA";
+        jobs.Statistics = Target("landing");
+        (_, result, _) = await harness.Execute("LOAD DATA INTO landing.t FROM FILES (format = 'CSV', uris = ['gs://example/f.csv'])");
+        check(result?.IndexStale > first && harness.Service.Search.StaleOf(harness.ConnectionId).Contains(("varia-emulator", "landing")), $"LOAD DATA marks its table's dataset: {result?.IndexStale}");
+        // A script's DDL statement in another dataset: its entry in the child listing names the target, with no jobs.get of its own.
+        jobs.StatementType = "SCRIPT";
+        jobs.Statistics = null;
+        jobs.ScriptChild = true;
+        jobs.ChildStatementType = "DROP_TABLE";
+        jobs.ChildStatistics = Target("marketing");
+        var childGets = harness.Fake.To(Base + "/jobs/" + Jobs.ChildId + @"(\?.*)?").Count(request => request.Method == "GET");
+        (code, result, _) = await harness.Execute("DECLARE n INT64 DEFAULT 1; DROP TABLE marketing.t;");
+        check(code == "ok" && harness.Service.Search.StaleOf(harness.ConnectionId).Contains(("varia-emulator", "marketing")) && harness.Service.Search.StaleProjectsOf(harness.ConnectionId).Count == 0
+            && harness.Fake.To(Base + "/jobs/" + Jobs.ChildId + @"(\?.*)?").Count(request => request.Method == "GET") == childGets,
+            $"a script's DDL on another dataset marks that dataset, read from the child listing without a jobs.get: {code} {string.Join(",", harness.Service.Search.StaleOf(harness.ConnectionId))}");
+        // A listing that names no target: the statement's own job is read in the background, and its target marked.
+        jobs.ListChildTarget = false;
+        jobs.ChildStatistics = Target("finance");
+        (code, _, _) = await harness.Execute("DECLARE n INT64 DEFAULT 1; DROP TABLE finance.t;");
+        var resolved = await BigQuerySessionChecks.Poll(() => harness.Service.Search.StaleOf(harness.ConnectionId).Contains(("varia-emulator", "finance")));
+        check(code == "ok" && resolved && harness.Service.Search.StaleProjectsOf(harness.ConnectionId).Count == 0 && await BigQuerySessionChecks.Poll(() => harness.Service.IndexMarkWatches == 0),
+            $"a script statement whose listing names no target is read with jobs.get in the background and marks its dataset: {code} {resolved}");
+        // A target in a project the index does not read marks nothing.
+        jobs.ListChildTarget = true;
+        jobs.ChildStatistics = new JsonObject { ["query"] = new JsonObject { ["ddlTargetTable"] = new JsonObject { ["projectId"] = "elsewhere-project", ["datasetId"] = "d", ["tableId"] = "t" } } };
+        var before = harness.Service.Search.StaleMarkOf(harness.ConnectionId);
+        await harness.Execute("DECLARE n INT64 DEFAULT 1; DROP TABLE `elsewhere-project.d.t`;");
+        check(harness.Service.Search.StaleMarkOf(harness.ConnectionId) == before, "DDL on a project the index does not read leaves no mark");
+        jobs.ScriptChild = false;
+        jobs.ChildStatementType = "SELECT";
+        jobs.ChildStatistics = null;
+        // Stop before the job finishes: the mark lands once BigQuery reports it DONE, in the background.
+        jobs.StatementType = "CREATE_TABLE";
+        jobs.Statistics = Target("archive");
+        jobs.Hang = true;
+        var args = harness.Query("CREATE TABLE archive.t AS SELECT 1");
+        var running = harness.Call("query.execute", args);
+        await Task.WhenAny(jobs.Polling.Task, running).WaitAsync(TimeSpan.FromSeconds(30));
+        await harness.Call("query.cancel", new JsonObject { ["queryId"] = args["queryId"]!.GetValue<string>() });
+        var (stopCode, stopped, _) = await running.WaitAsync(TimeSpan.FromSeconds(30));
+        var marked = await BigQuerySessionChecks.Poll(() => harness.Service.Search.StaleOf(harness.ConnectionId).Contains(("varia-emulator", "archive")));
+        check(stopCode == "ok" && (stopped as QueryResult)?.Status == "cancelled" && marked && await BigQuerySessionChecks.Poll(() => harness.Service.IndexMarkWatches == 0),
+            $"a stopped CREATE TABLE marks its dataset once the job is DONE: {stopCode} {(stopped as QueryResult)?.Status} {marked}");
+        // A stopped query with no DDL word follows nothing.
+        jobs.Polling = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        args = harness.Query("SELECT n FROM slow");
+        running = harness.Call("query.execute", args);
+        await Task.WhenAny(jobs.Polling.Task, running).WaitAsync(TimeSpan.FromSeconds(30));
+        await harness.Call("query.cancel", new JsonObject { ["queryId"] = args["queryId"]!.GetValue<string>() });
+        await running.WaitAsync(TimeSpan.FromSeconds(30));
+        check(harness.Service.IndexMarkWatches == 0, "a stopped query whose text changes no object starts no background follow");
+        jobs.Hang = false;
     }
 
     static async Task RefusalsAsync(Action<bool, string> check)

@@ -107,7 +107,7 @@ describe('session prompts', () => {
     expect(mixed).toContain('SHOWPLAN')
     expect(mixed).toContain('For a BigQuery query marked "not checked"')
   })
-  it('asks before a BigQuery query switches its session to another location (decision 18)', () => {
+  it('asks before a BigQuery query switches its session to another location', () => {
     const location = { dataset: 'sales_eu', from: 'US', to: 'EU' }
     const prompt = sessionPrompt({ action: 'switchLocation', tabs: [{ name: 'q.sql', transactions: 0, running: false, provider: 'bigquery' }], location })!
     expect(prompt.title).toBe('Switch this tab to EU?')

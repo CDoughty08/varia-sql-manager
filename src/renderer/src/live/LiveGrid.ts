@@ -22,6 +22,10 @@ import type { ResultHandle, RowWindow } from '../results/ResultClient'
 import type { GridViewState } from '../results/ResultsService'
 import { FLAG_CAPPED, FLAG_ERROR, FLAG_NULL } from '../results/worker-protocol'
 import { sameSort, type LiveHandle, type LiveTable } from './LiveService'
+import { visibleColumnCount } from '../grid/hidden-columns'
+
+/** A column the header sorts and a sibling's sort may name: neither the row's tone nor a hidden identity column. */
+const isDataColumn = (column: LiveTableSpec['columns'][number]): boolean => column.role !== 'tone' && column.role !== 'hidden'
 
 /** The parts of GridView a LiveGrid drives (tests use a stand-in). */
 export interface LiveGridView extends Disposable {
@@ -255,18 +259,19 @@ export class LiveGrid extends SnapshotStore<LiveGridSnapshot> implements Disposa
     const id = this.sortColumn(column)
     if (id) this.setSort(cycleSortKeys(this.sortOf() ?? [], id, add, limits.live.sortColumns, key(id)))
   }
-  /** Whether a shown column sorts (never the tone column). */
+  /** Whether a shown column sorts (never the tone or a hidden column). */
   canSort(column: number): boolean { return this.sortable && this.sortColumn(column) !== undefined }
   /** Whether the header sorts this table: snapshot tables only, since an append table keeps its arrival order. */
   get sortable(): boolean { return this.spec.mode === 'snapshot' }
   /** This table's sort as its header shows it: shown column indexes, in order. */
   headerSort(sort: readonly LiveSort[] | undefined = this.getSnapshot().sort): HeaderSortKey[] {
-    return (sort ?? []).flatMap(key => { const column = this.spec.columns.findIndex(item => item.id === key.column); return column < 0 ? [] : [{ column, descending: key.descending }] })
+    // A hidden column has no header to mark, so a key on it (or on the tone) shows nowhere.
+    return (sort ?? []).flatMap(key => { const column = this.spec.columns.findIndex(item => item.id === key.column); return column < 0 || !isDataColumn(this.spec.columns[column]!) ? [] : [{ column, descending: key.descending }] })
   }
-  /** A shown column index or catalogue id as a sortable column's id (never the tone column). */
+  /** A shown column index or catalogue id as a sortable column's id (never the tone or a hidden column). */
   private sortColumn(column: number | string): string | undefined {
     const spec = typeof column === 'number' ? this.spec.columns[column] : this.spec.columns.find(item => item.id === column)
-    return spec && spec.role !== 'tone' ? spec.id : undefined
+    return spec && isDataColumn(spec) ? spec.id : undefined
   }
   /** Replaces this table's keys in the probe's sort setting; the probe's other tables keep theirs. */
   private setSort(own: readonly { readonly column: string; readonly descending: boolean }[]): void {
@@ -540,8 +545,7 @@ export class LiveGrid extends SnapshotStore<LiveGridSnapshot> implements Disposa
   }
 
   private shownColumns(table: LiveTable): number {
-    const columns = table.descriptor.columns
-    return columns.length - (columns.at(-1)?.role === 'tone' ? 1 : 0)
+    return visibleColumnCount(table.descriptor)
   }
   private newId(): string { return this.o.newId?.() ?? crypto.randomUUID() }
   /** The probe's sort keys for its other tables, in order: theirs, and each probe-wide key as a key of every other snapshot
@@ -552,7 +556,7 @@ export class LiveGrid extends SnapshotStore<LiveGridSnapshot> implements Disposa
     for (const key of keys) {
       if (key.table !== undefined) { if (key.table !== this.index) out.push(key); continue }
       tables.forEach((table, at) => {
-        if (at !== this.index && table.mode === 'snapshot' && table.columns.some(column => column.id === key.column && column.role !== 'tone') && !has(at, key.column)) {
+        if (at !== this.index && table.mode === 'snapshot' && table.columns.some(column => column.id === key.column && isDataColumn(column)) && !has(at, key.column)) {
           out.push({ column: key.column, descending: key.descending, table: at })
         }
       })

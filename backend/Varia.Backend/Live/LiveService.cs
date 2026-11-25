@@ -823,6 +823,7 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
         SyntheticSampler.Source => new SyntheticSampler(host.Store, subscriptionId, (SyntheticLiveArgs?)args ?? new SyntheticLiveArgs(), Limits),
         BigQueryJobsSampler.Source when source.Scope == "bigquery" && host.BigQuery is { } bigQuery => new BigQueryJobsSampler(bigQuery, host.Store, subscriptionId, connectionId,
             (BigQuery.BigQueryJobHistoryArgs?)args, Limits),
+        BigQueryExplorerSampler.Source when source.Scope == "bigquery" && host.BigQuery is { } explorerBigQuery => new BigQueryExplorerSampler(explorerBigQuery, connectionId),
         "query.plan" => new Plans.LivePlanSampler(host, Gates, connectionId, args as Plans.LivePlanArgs ?? throw Invalid("A query id is required.")),
         SsisOperationsSource when source.Scope == "ssisdb" => new SqlSampler(host, Gates, subscriptionId, connectionId, source, Limits, TestText, null,
             new SsisOperationsReader(Ssis.SsisCatalog.Current, (SsisOperationsLiveArgs?)args, () => host.SsisCatalog, host.SsisIgnoresLinux)),

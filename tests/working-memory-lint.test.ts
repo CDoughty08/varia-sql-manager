@@ -232,7 +232,7 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   // window it reads from carries no state of its own (a positional record with no body).
   expect(delegate.slice(0, delegate.indexOf('\n    };'))).toMatch(/using \(page\)\n\s*\{\n\s*var count = page\.RowCount;\n\s*WriteRows\(page, plan, writer, \(int\)\(rows - writer\.Rows\)\);/)
   expect(count(delegate.slice(0, delegate.indexOf('\n    };')), /\bpage\b/g)).toBe(6)
-  expect(residence).toMatch(/internal sealed record BigQueryWindow\([^)]*long CacheBytes\);\n/)
+  expect(residence).toMatch(/internal sealed record BigQueryWindow\([^)]*long CacheBytes, int\? QueryMaxRows = null\);\n/)
   // Every mention of the writer type, however a writer is built (a target-typed new included), is one of these.
   expect(uses(/\bRemoteBlockWriter\b/g).sort()).toEqual([...Array(7).fill('Results/RemoteResult.cs'), ...Array(3).fill('SqlService.BigQueryExport.cs'), ...Array(3).fill('SqlService.BigQueryResidence.cs')])
   // A writer without a byte limit holds only the first page, already in memory: its measure and its seed blocks; and Save's,

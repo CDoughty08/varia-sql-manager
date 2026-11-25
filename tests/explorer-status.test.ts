@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ApiResult, ResultDescriptor } from '../src/shared/contracts'
-import { statusChipKinds } from '../src/shared/explorer/catalog'
-import { agentChips, agentXpsSublabel, databaseChips, serverChips, statusChipDocs } from '../src/shared/explorer/status'
+import { bigQueryStatusChipKinds, statusChipKinds } from '../src/shared/explorer/catalog'
+import { agentChips, agentXpsSublabel, bigQueryChips, databaseChips, serverChips, statusChipDocs } from '../src/shared/explorer/status'
 import { liveProbes, liveSources } from '../src/shared/live/catalog'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveTick } from '../src/shared/live/schema'
 import { defaultSettings, type SettingsValues } from '../src/shared/settings/catalog'
@@ -53,6 +53,17 @@ describe('Object Explorer status chips', () => {
     expect(databaseChips(row({ state: 1 }))[0].value).toBeUndefined()
     expect(serverChips(1200, [{ name: 'AG1', health: 2, role: 1 }]).map(chip => chip.value)).toEqual(['1,200', undefined])
   })
+  it('gives a BigQuery connection\'s node a chip for the principal\'s running jobs, none while none runs', () => {
+    expect(bigQueryChips(undefined)).toEqual([])
+    expect(bigQueryChips(null)).toEqual([])
+    expect(bigQueryChips(0)).toEqual([])
+    expect(bigQueryChips(1)).toEqual([{ id: 'jobs', tone: 'running', label: '1 job running', value: '1', words: 'BigQuery: 1 job running', title: 'BigQuery: 1 job running in the billing project, started by this account.', icon: 'agent-job' }])
+    expect(bigQueryChips(1200)[0]).toMatchObject({ label: '1,200 jobs running', value: '1,200' })
+    expect(bigQueryChips(10_000, true)[0]).toMatchObject({ label: '10,000+ jobs running', value: '10,000+' })
+    expect(statusChipDocs.filter(doc => doc.kind === 'BigQuery server').map(doc => doc.chip)).toEqual(['n jobs running'])
+    expect(bigQueryStatusChipKinds.server).toEqual(liveSources['bigquery.explorer'].probes)
+  })
+
   it('gives the server a running-jobs chip and its availability groups\' health, the least healthy first', () => {
     expect(serverChips(undefined, undefined)).toEqual([])
     expect(serverChips(0, [])).toEqual([])
@@ -390,10 +401,42 @@ describe('ExplorerStatusService', () => {
     expect(client.streams).toHaveLength(2)
   })
 
-  it('opens no view for a BigQuery server, whose probes would be SQL Server ones', () => {
+  it('opens a BigQuery connection\'s own view of bigquery.explorer, whose running jobs become its node\'s chip', async () => {
     connections.add({ ...info(first), providerId: 'bigquery' } as ConnectionInfo, { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' } as never)
     connections.add(info(second), { server: 'b' } as never)
-    expect(client.streams.map(stream => stream.params.connectionId)).toEqual([second])
+    expect(client.streams.map(stream => [stream.params.connectionId, stream.params.source, stream.params.probes.map(probe => [probe.probe, probe.intervalMs])])).toEqual([
+      [first, 'bigquery.explorer', [['explorer.bigquery', 10_000]]],
+      [second, 'explorer', [['explorer.databases', 5000], ['explorer.progress', 5000], ['explorer.agent', 10_000], ['explorer.availability', 10_000], ['explorer.agentService', 10_000]]]
+    ])
+    expect(live.getSnapshot().handles.map(handle => handle.ownerKey)).toEqual(['explorer:' + first, 'explorer:' + second])
+    const fake = streamOf(first)
+    open(fake)
+    const root = { parent: 0, kind: 'server', ref: { type: 'object', object: { kind: 'server' } } } as never
+    const jobs = (count: number, more = 0) => ({ probe: 'explorer.bigquery', costMs: 1, effectiveIntervalMs: 10_000, metrics: [count], status: [{ id: 'more', value: more }] })
+    // Nothing running: no chip.
+    fake.onEvent(tick([jobs(0)]), 10)
+    await settle()
+    expect(rowStatus(status.server(first), root)).toBeUndefined()
+    fake.onEvent(tick([jobs(3)]), 10)
+    await settle()
+    expect(rowStatus(status.server(first), root)).toMatchObject({ words: 'BigQuery: 3 jobs running', chips: [{ id: 'jobs', tone: 'running', label: '3 jobs running' }] })
+    // A dataset row has no chip.
+    expect(rowStatus(status.server(first), { parent: 2, kind: 'database', ref: { type: 'object', object: { kind: 'bqDataset', name: 'sales' } } } as never)).toBeUndefined()
+    // A count stopped at its cap reads "n+".
+    fake.onEvent(tick([jobs(10_000, 1)]), 10)
+    await settle()
+    expect(rowStatus(status.server(first), root)?.chips[0].label).toBe('10,000+ jobs running')
+    // A probe that failed for good says nothing.
+    fake.onEvent(tick([], [{ probe: 'explorer.bigquery', code: 'PERMISSION_DENIED', message: 'Denied.', retryInMs: 0, terminal: true }]), 10)
+    await settle()
+    expect(rowStatus(status.server(first), root)).toBeUndefined()
+    // Hidden Object Explorer pauses it, as a SQL Server view.
+    panes.set({ explorer: false, editor: true, results: false, messages: false, plan: false, statistics: false })
+    vi.advanceTimersByTime(defaultSettings['liveData.pauseAfterSeconds'] * 1000)
+    await settle()
+    expect(fake.updates).toEqual([{ paused: true }])
+    settings.set({ 'liveData.explorerStatus': false })
+    expect(fake.cancelled).toBe(true)
   })
 
   it('takes only background slots, so the documents a user opens always find one', () => {

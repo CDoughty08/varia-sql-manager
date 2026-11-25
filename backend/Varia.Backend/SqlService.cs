@@ -1853,8 +1853,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (reasons.Contains("rowLimit") || descriptors.Any(set => set.TruncatedCells > 0)) Note("Results were truncated by display limits. Display limits do not stop script execution.");
         if (reasons.Contains("queryBudget") || reasons.Contains("globalBudget"))
             // The figure the query stopped at, not today's: the limit may have changed since (results.setMemoryLimit).
-            Note("Results were truncated because the result memory budget (" + (budget?.StoppedBytes ?? (reasons.Contains("queryBudget") ? (budget is null ? store.QueryBytes : store.QueryLimit(budget)) : store.GlobalBytes)) / (1024 * 1024)
-                + " MB) is full. Execution continued; close other query results to free memory.");
+            Note(BudgetFullNote(budget?.StoppedBytes ?? (reasons.Contains("queryBudget") ? (budget is null ? store.QueryBytes : store.QueryLimit(budget)) : store.GlobalBytes)));
         if (reasons.Contains("systemMemory")) Note("Results were truncated because the computer is low on memory. Execution continued.");
         foreach (var note in tally.Notes(args.MaxResultSets)) Note(note);
         if (omittedPlans || plans.Any(set => set.Truncated is not null || set.TruncatedCells > 0))
@@ -2569,6 +2568,20 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     }
 
     internal const string DiffRowsTooLarge = "There is not enough result memory for all rows of the differences. Show changes only, or close other results and try again.";
+
+    /// <summary>Messages' note when the result memory budget stopped a query's rows (SQL Server and BigQuery alike), its figure
+    /// written as the results strip writes it (formatBytes in src/renderer/src/results/status.ts): "&lt;1 MB" below a MiB, whole
+    /// MB with thousands separators, then GB to one decimal, so a small budget never reads "(0 MB)".</summary>
+    internal static string BudgetFullNote(long bytes) =>
+        "Results were truncated because the result memory budget (" + MemoryFigure(bytes) + ") is full. Execution continued; close other query results to free memory.";
+
+    internal static string MemoryFigure(long bytes)
+    {
+        var mb = bytes / 1048576d;
+        if (mb < 1) return "<1 MB";
+        if (mb < 9999.5) return Math.Round(mb, MidpointRounding.AwayFromZero).ToString("N0", CultureInfo.InvariantCulture) + " MB";
+        return (bytes / 1073741824d).ToString("N1", CultureInfo.InvariantCulture) + " GB";
+    }
 
     /// <summary>What a refused diff answers once its sources are known to be there and its query storing (NotStored decides
     /// those first): DIFF_ROWS_TOO_LARGE only when a reservation that grows with the rows stored (the rows, their previous

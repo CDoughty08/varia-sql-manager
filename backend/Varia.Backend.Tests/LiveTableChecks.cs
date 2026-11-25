@@ -655,6 +655,17 @@ internal static class LiveTableChecks
         var byName = table.Write(Toned(50), new(Filter: new LiveFilterArgs("n5"))).Sample!.Descriptor;
         check(byTone.RowsAvailable == 0 && byName.RowsAvailable == 3,
             "a snapshot filter over every column leaves the hidden tone column out: " + byTone.RowsAvailable + " rows by tone text, " + byName.RowsAvailable + " by name");
+        {
+            // A hidden identity column (Job History's job id) is matched only by a filter that names it, and Copy leaves it out.
+            var keyed = new LiveTableSet(store, Guid.NewGuid().ToString(), Limits).Snapshot(Probe(new LiveTableJson("keyed", "snapshot", [Column("name", "nvarchar"), new LiveColumnJson("job", "Job", "nvarchar", "hidden")], ["job"])), 0);
+            List<LiveRow> Keyed(long first) => [.. Enumerable.Range(0, 3).Select(offset => new LiveRow([LiveCell.Of("n" + (first + offset)), LiveCell.Of("job_" + (first + offset))]))];
+            var byHidden = keyed.Write(Keyed(60), new(Filter: new LiveFilterArgs("job_6"))).Sample!.Descriptor;
+            var byNamedHidden = keyed.Write(Keyed(70), new(Filter: new LiveFilterArgs("job_71", ["job"]))).Sample!.Descriptor;
+            var keyedShown = keyed.Write(Keyed(1), new()).Sample!.Descriptor;
+            var keyedCopy = await TextChecks.Copy(jobs, new ResultsCopyArgs(keyedShown.ResultId, [new CopyPartArgs([[0, ResultJobs.MaxSafeInteger]], [[0, 1]])], true, "lf", ResultJobs.MaxCopyBytes));
+            check(byHidden.RowsAvailable == 0 && byNamedHidden.RowsAvailable == 1 && System.Text.Encoding.UTF8.GetString(keyedCopy.Text) == "name\nn1\nn2\nn3",
+                $"a hidden column matches only a filter that names it, and Copy leaves it out: {byHidden.RowsAvailable} {byNamedHidden.RowsAvailable} {System.Text.Encoding.UTF8.GetString(keyedCopy.Text)}");
+        }
         var shown = table.Write(Toned(1), new()).Sample!.Descriptor;
         // Every column, whole rows (the grid's Select All), with headers; then the tone column alone.
         var copy = await TextChecks.Copy(jobs, new ResultsCopyArgs(shown.ResultId, [new CopyPartArgs([[0, ResultJobs.MaxSafeInteger]], [[0, 2]])], true, "lf", ResultJobs.MaxCopyBytes));

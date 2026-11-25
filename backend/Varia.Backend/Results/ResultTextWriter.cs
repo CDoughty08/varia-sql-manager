@@ -76,9 +76,10 @@ internal sealed class ResultTextWriter
 
     /// <summary>A column that is not data: a live table's or a diff's row tone (role tone), which the grid shows as the row's
     /// colour, and a diff's hidden suffix (roles old, mark, leftRow, rightRow), which it draws in the row header. Copy, search,
-    /// sort, filters and profiles leave them out; only Save of a diff writes the marker and row numbers (ResultJobs). The
-    /// renderer's isHiddenColumn tests the same roles.</summary>
-    public static bool Hidden(ResultColumn column) => column.Role is "old" or "mark" or "leftRow" or "rightRow" or "tone";
+    /// sort, filters and profiles leave them out; only Save of a diff writes the marker and row numbers (ResultJobs). A live
+    /// table's identity columns (role hidden) are read by its owner's row actions and never shown. The renderer's
+    /// isHiddenColumn tests the same roles.</summary>
+    public static bool Hidden(ResultColumn column) => column.Role is "old" or "mark" or "leftRow" or "rightRow" or "tone" or "hidden";
 
     internal static ValueKind Kind(ResultColumn column)
     {

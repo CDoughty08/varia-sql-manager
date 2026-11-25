@@ -161,11 +161,16 @@ internal sealed partial class SqlService
         var startState = BigQueryTransaction.None;
         // The finished job's statements were applied to the session's transaction.
         var tracked = false;
+        // The finished job's DDL marked the index (MarkIndexAsync); a job left unsettled is marked once it is DONE instead.
+        var indexMarked = false;
         BigQueryJobSummary? summary = null;
         // A script's children read so far (DONE, in statement order), how many succeeded, and the rows their DML changed.
         var readChildren = new HashSet<string>(StringComparer.Ordinal);
         var succeededChildren = 0;
         long childRowsAffected = -1;
+        // The rows the script's result sets have kept so far: Maximum rows counts over every result set of the execution, as
+        // SQL Server's reader does, so a later SELECT keeps only what is left.
+        long keptRows = 0;
         // Stop (or the timeout) cancels the job in BigQuery too, best-effort; the session's next job waits for its DONE. Asked
         // once, from the token and again where the run sees the cancellation: a cancel whose continuations run inline can
         // unwind the run and dispose the registration before its callback runs (callbacks run newest first).
@@ -201,13 +206,18 @@ internal sealed partial class SqlService
                     messages.Add("The result has " + childPlan.SchemaColumns.ToString("N0", CultureInfo.InvariantCulture) + " columns; the first " + PageBuilder.MaxColumns.ToString("N0", CultureInfo.InvariantCulture) + " are shown.");
                 var set = store.Open(budget!, sets.Count, 1, 1, "rows", childPlan.Columns, childPlan.Wires, lengths: childPlan.Lengths);
                 if (set is null) { first.Dispose(); discarded++; return; }
+                // What Maximum rows leaves this result set. With nothing left it stays in memory and keeps no rows (counted from
+                // BigQuery's total, marked as cut by the row limit), since a window's MaxRows of 0 would show every row.
+                var left = args.MaxRows > 0 ? args.MaxRows - keptRows : long.MaxValue;
+                var childArgs = args.MaxRows <= 0 ? args : left > 0 ? args with { MaxRows = (int)left } : args with { Residence = "memory" };
+                var keptBefore = left > 0 ? 0 : keptRows;
                 sets.Add(set);
                 currentSet = set;
                 BigQueryWindow? window = null;
                 RemoteResult? windowed;
                 // The first page is the reader's only once the residence is decided: a failure or Stop while deciding frees it, and
                 // the set is still announced, so the run's end closes a set the grid heard open.
-                try { windowed = await DecideResidenceAsync(args, connection, project, child.Id, child.Location ?? location, null, true, childPlan, first, set, budget!, messages, value => window = value, token); }
+                try { windowed = await DecideResidenceAsync(childArgs, connection, project, child.Id, child.Location ?? location, null, true, childPlan, first, set, budget!, messages, value => window = value, token, args.MaxRows); }
                 catch
                 {
                     first.Dispose();
@@ -215,9 +225,10 @@ internal sealed partial class SqlService
                     throw;
                 }
                 events.Opened(set);
-                if (windowed is null) await ReadBigQueryRowsAsync(args, connection, project, child.Id, child.Location ?? location, childPlan, first, set, budget!, rows, roomWaited, events, warn, token, window, messages);
+                if (windowed is null) await ReadBigQueryRowsAsync(childArgs, connection, project, child.Id, child.Location ?? location, childPlan, first, set, budget!, rows, roomWaited, events, warn, token, window, messages, keptBefore);
                 else first.Dispose();
                 set.Complete();
+                keptRows += set.RowsAvailable;
                 events.Closed(set);
                 currentSet = null;
                 messages.Add(rows == 1 ? "(1 row affected)" : "(" + rows.ToString(CultureInfo.InvariantCulture) + " rows affected)");
@@ -290,7 +301,7 @@ internal sealed partial class SqlService
                 // The job already exists: after the identity check its session (when adopted) and state are taken over, and the
                 // poll below follows it as it would a job this request inserted.
                 Job own;
-                // The checked job's location and, when adopted, its session (with the record's transaction, decision 54).
+                // The checked job's location and, when adopted, its session (with the record's transaction).
                 void Adopt(Job checkedJob)
                 {
                     location = KnownLocation(checkedJob.JobReference?.Location) ?? location;
@@ -336,7 +347,7 @@ internal sealed partial class SqlService
                 sent = created = true;
                 // A Stop between the check and here found nothing sent to cancel: it is asked again now.
                 if (token.IsCancellationRequested && Interlocked.Exchange(ref stopAsked, 0) != 0) StopJob();
-                // The adopted session's transaction starts from the job record's (decision 54), not from a listing.
+                // The adopted session's transaction starts from the job record's, not from a listing.
                 Adopt(own);
                 // Set before the tail is cleared, so a close in between still sees a job to leave running; only a job in the
                 // tab's own session holds it.
@@ -458,8 +469,10 @@ internal sealed partial class SqlService
                     // A listing that fails leaves the children unread: the parent's own rows are shown, and the summary says so.
                     catch (Exception error) when (!token.IsCancellationRequested && error is not (BigQueryJobException or ChildReadFailure)) { children = null; }
                 }
-                // DDL changes what the Search Objects index holds: its datasets are re-read by the next build (MarkStale).
-                foreach (var (ddlProject, ddlDataset) in DdlDatasets(finished, statement, children, project, dataset)) search.MarkStale(args.ConnectionId, ddlProject, ddlDataset);
+                // DDL changes what the Search Objects index holds: its datasets are re-read by the next stale-only build.
+                // A re-attached job ran under its own default dataset (its configuration's), not this tab's.
+                MarkIndex(args.ConnectionId, connection, finished, statement, children, listedAll, project, attach is null ? dataset : null, attach is null ? args.Sql : null);
+                indexMarked = true;
                 if (sessionJob)
                 {
                     if (!script) session.Transaction = BigQueryService.Apply(startState, statement, jobFailed is not null);
@@ -557,6 +570,10 @@ internal sealed partial class SqlService
                 messages.Add("Varia asked BigQuery to cancel job " + JobName(project, location, jobId) + ", whose results could not be read. Cancelling is best-effort: BigQuery may still bill work done before the job stopped.");
             }
             if (currentSet is not null) currentSet.Incomplete = true;
+            // A job this run did not see through to its marks (Stop, a lost connection, a tab closed or left running, a failed read)
+            // marks the index once BigQuery reports it DONE.
+            if (sent && !indexMarked && (created || error is BigQueryJobMayExist { Exists: true }))
+                MarkIndexWhenDone(args.ConnectionId, connection, project, jobId, location, attach is null ? dataset : null, attach is null ? args.Sql : null);
             // A disconnect that closed the handle under the run (its client disposed) stopped it, as one that cancelled it does.
             if (!token.IsCancellationRequested && bigQuery.Find(args.ConnectionId) != connection) running.Cancel();
             // A job the session started and Varia stopped, or lost track of, holds the session until it is DONE.
@@ -648,14 +665,14 @@ internal sealed partial class SqlService
         if (budget?.Stopped is { } stopped and not TruncationReason.None) reasons.Add(ResultSetBuffer.Name(stopped));
         if (reasons.Contains("rowLimit") || descriptors.Any(set => set.TruncatedCells > 0)) Note("Results were truncated by display limits. Display limits do not stop script execution.");
         if (reasons.Contains("queryBudget") || reasons.Contains("globalBudget"))
-            Note("Results were truncated because the result memory budget (" + (budget?.StoppedBytes ?? (reasons.Contains("queryBudget") ? (budget is null ? store.QueryBytes : store.QueryLimit(budget)) : store.GlobalBytes)) / (1024 * 1024)
-                + " MB) is full. Execution continued; close other query results to free memory.");
+            Note(BudgetFullNote(budget?.StoppedBytes ?? (reasons.Contains("queryBudget") ? (budget is null ? store.QueryBytes : store.QueryLimit(budget)) : store.GlobalBytes)));
         if (reasons.Contains("systemMemory")) Note("Results were truncated because the computer is low on memory. Execution continued.");
         if (discarded > 0 && args.DiscardResults && attach?.Detached != true) Note("Results were discarded after execution, as Query Options ask.");
         if (context is not null) context.Unsent = () => store.Release(descriptors.Select(set => set.ResultId));
         var completedAt = DateTimeOffset.Now.ToString("yyyy-MM-ddTHH:mm:ss.fffffffzzz", CultureInfo.InvariantCulture);
         return new(descriptors, discarded, output, recordsAffected, watch.ElapsedMilliseconds, status, failure, status is "completed" ? 1 : 0, 1,
-            dataset ?? "", messages.Truncated, SummaryBudget(budget?.StoppedBytes), completedAt, Job: summary ?? (created ? new BigQueryJobSummary(project, jobId, location) : null));
+            dataset ?? "", messages.Truncated, SummaryBudget(budget?.StoppedBytes), completedAt, Job: summary ?? (created ? new BigQueryJobSummary(project, jobId, location) : null),
+            IndexStale: search.StaleMarkOf(args.ConnectionId));
     }
 
     /// <summary>The query.job event body (docs/ipc.md, Query events): the request's top-level job, never its session id.</summary>
@@ -665,8 +682,8 @@ internal sealed partial class SqlService
     /// <summary>
     /// Where the tab's job runs: its session's location once it has one; otherwise, when the connection's location is
     /// Automatic, its dataset's (datasets.get, free, kept per connection), else the connection's. A dataset in another
-    /// location than the tab's session is refused up front (LOCATION_MISMATCH): switching it ends the session first
-    /// (decision 18), which the tab's Dataset box asks about.
+    /// location than the tab's session is refused up front (LOCATION_MISMATCH): switching it ends the session first,
+    /// which the tab's Dataset box asks about.
     /// </summary>
     private async Task<string?> TabLocationAsync(BigQueryTabSession session, BigQueryConnection connection, string? dataset, CancellationToken token)
     {
@@ -700,11 +717,12 @@ internal sealed partial class SqlService
     /// it reads past. Each page's bytes are charged to the query's budget while its rows are decoded (one page at a time).</summary>
     private async Task ReadBigQueryRowsAsync(QueryArgs args, BigQueryConnection connection, string project, string jobId, string? location, BigQueryColumnPlan plan,
         BigQueryPage first, ResultSetBuffer set, QueryBudget budget, long totalRows, RoomWaited roomWaited, QueryEventSink events, Action<string> warn, CancellationToken token,
-        BigQueryWindow? window = null, QueryMessages? messages = null)
+        BigQueryWindow? window = null, QueryMessages? messages = null, long keptBefore = 0)
     {
         var page = first;
         long counted = 0;
-        long storedRows = 0;
+        // Maximum rows counts over the execution: a script's earlier result sets kept keptBefore of them.
+        long storedRows = keptBefore;
         var storing = true;
         try
         {
@@ -780,33 +798,6 @@ internal sealed partial class SqlService
 
     /// <summary><c>project:LOCATION.job_id</c>, the fully qualified id the console and bq show.</summary>
     internal static string JobName(string project, string? location, string jobId) => project + ":" + (location is null ? "" : location + ".") + jobId;
-
-    /// <summary>Whether a statement type is DDL that can change what an index lists (CREATE_TABLE, DROP_VIEW, ALTER_TABLE, CREATE_SCHEMA,
-    /// UNDROP_SCHEMA …).</summary>
-    internal static bool ChangesObjects(string? statement) =>
-        statement is not null && (statement.StartsWith("CREATE_", StringComparison.Ordinal) || statement.StartsWith("DROP_", StringComparison.Ordinal) || statement.StartsWith("ALTER_", StringComparison.Ordinal)
-            || statement.StartsWith("UNDROP_", StringComparison.Ordinal));
-
-    /// <summary>
-    /// The datasets a finished job's DDL changed: its target table's, routine's or dataset's, as the job's statistics name them. A
-    /// script's child jobs carry no target in their listing, so DDL among them marks the tab's default dataset (the one an unqualified
-    /// name lands in); DDL that names another dataset inside a script is found by the next full build or a Refresh.
-    /// </summary>
-    internal static IEnumerable<(string Project, string Dataset)> DdlDatasets(Google.Apis.Bigquery.v2.Data.Job job, string? statement, IReadOnlyList<BigQueryChild>? children, string project, string? dataset)
-    {
-        var query = job.Statistics?.Query;
-        var found = new HashSet<(string, string)>();
-        if (ChangesObjects(statement))
-        {
-            if (query?.DdlTargetTable is { ProjectId: { } tableProject, DatasetId: { } tableDataset }) found.Add((tableProject, tableDataset));
-            else if (query?.DdlTargetRoutine is { ProjectId: { } routineProject, DatasetId: { } routineDataset }) found.Add((routineProject, routineDataset));
-            else if (query?.DdlTargetDataset is { ProjectId: { } datasetProject, DatasetId: { } targetDataset }) found.Add((datasetProject, targetDataset));
-            else if (dataset is not null) found.Add((project, dataset));
-        }
-        // A script whose child jobs could not be listed (the Job User role cannot list them) may hold DDL: its dataset is marked too.
-        if (dataset is not null && (children is null ? statement == "SCRIPT" : children.Any(child => ChangesObjects(child.StatementType)))) found.Add((project, dataset));
-        return found;
-    }
 
     /// <summary>"CREATE TABLE completed." from a statement type and DDL operation BigQuery reports.</summary>
     internal static string StatementSentence(string statement, string? ddl)

@@ -367,7 +367,6 @@ Probe `activity.resources`; key `categoryId`; at most 24 rows. Default order: Wa
 
 | Column | Id | Type | Unit | Shown | Parity | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| Category ID | `categoryId` | text | — |  | New | The category's id in this catalogue. |
 | Wait Category | `category` | text | — | Yes | Fixed | Query Store's documented categories plus Varia's benign list, so every wait type counts. SSMS's 2008 table knows 241 of SQL Server 2025's 1,546 types and drops the rest. |
 | Wait Time (ms/sec) | `waitRate` | decimal | ms/s | Yes | SSMS | Wait time less signal wait, per second over the interval. |
 | Signal Wait (ms/sec) | `signalRate` | decimal | ms/s | Yes | New | Time runnable tasks waited for a CPU, per second (SSMS computes it but does not show it). |
@@ -376,6 +375,7 @@ Probe `activity.resources`; key `categoryId`; at most 24 rows. Default order: Wa
 | Current Waiters | `currentWaiters` | int | count | Yes | New | Tasks waiting in the category now. |
 | Cumulative Wait Time (sec) | `cumulativeSeconds` | decimal | s | Yes | SSMS | Wait time less signal wait since SQL Server started or the statistics were cleared. |
 | Top Wait Type | `topWaitType` | text | — | Yes | New | The category's largest wait type in the interval. |
+| Category ID | `categoryId` | text | — | Never | New | The category's id in this catalogue, which keys the row and its series. |
 
 ### Wait types (`waitTypes`)
 

@@ -231,8 +231,10 @@ export interface ResultColumn {
   wire: WireKind
   /** `xml`, `json`, `plan`, `udt`, `vector` and `link` (a live table's link column, whose cells open what they name) are data. The rest are hidden (isHiddenColumn) and always come last: `tone`, a
    *  live table's or a diff's row tone (src/shared/live/catalog.ts), and a diff's suffix, `old` (a previous value), `mark`
-   *  (the change marker) and `leftRow`/`rightRow` (each input's 1-based row). */
-  role?: 'xml' | 'json' | 'plan' | 'udt' | 'vector' | 'old' | 'mark' | 'leftRow' | 'rightRow' | 'tone' | 'link'
+   *  (the change marker) and `leftRow`/`rightRow` (each input's 1-based row); and `hidden`, a live table's identity column,
+   *  which its owner's row actions read but the grid never shows; and `link`, a live table's data column whose cells the grid
+   *  draws as links (src/shared/live/catalog.ts). */
+  role?: 'xml' | 'json' | 'plan' | 'udt' | 'vector' | 'old' | 'mark' | 'leftRow' | 'rightRow' | 'tone' | 'link' | 'hidden'
   /** A previous-value column's (role `old`) pair index: the data column it belongs to. */
   of?: number
   maxLength?: number
@@ -336,6 +338,9 @@ export interface QueryResult {
   clientStatistics?: import('./client-statistics').ClientStatisticsSample
   /** A BigQuery query's job (docs/bigquery.md, Execution); absent for SQL Server. */
   job?: BigQueryJobSummary
+  /** BigQuery: the newest stale mark the connection's Search Objects index has not spent; Object Search asks one stale-only build
+   *  per new mark (docs/object-search.md, BigQuery). */
+  indexStale?: number
 }
 /** A BigQuery query job: its id and the statistics BigQuery reported (each absent when it did not, as the emulator does not).
  *  Bytes are priced on demand by `src/shared/bigquery/cost.ts`. */
@@ -972,7 +977,7 @@ export interface VariaApi {
   /** connections.pickKeyFile: main's open dialog for a service account key or federation configuration. Resolves the
    *  reference to name it by and its file name (never the path), or null when the user cancelled. */
   pickKeyFile(authentication: 'serviceAccountKey' | 'externalAccount'): Promise<ApiResult<PickedKeyFile | null>>
-  /** Decision 49: the user confirmed the token file a picked federation configuration reads. */
+  /** The user confirmed the token file a picked federation configuration reads. */
   confirmFederationSource(keyFile: string, source: string): Promise<ApiResult<void>>
   /** agentStepScript.open (AG-11): Load from file… on a CmdExec or PowerShell job step. Main shows its open dialog, filtered to the step
    *  type's scripts plus All files, and reads the chosen file under the step command's limit. Resolves its text only (never its path), or

@@ -31,7 +31,10 @@ internal sealed class BigQueryTail(string jobId, string? location, bool cancelle
 }
 
 /// <summary>One finished or running child of a script job, as jobs.list reports it (statement type and status only).</summary>
-internal sealed record BigQueryChild(string Id, string? Location, long Created, bool Done, string? StatementType, ErrorProto? Error, long? DmlAffected, string? Ddl);
+/// <summary>A script statement's job. TargetProject and TargetDataset: where its DDL acted (statistics' ddlTargetTable, Routine or
+/// Dataset, which the minimal listing carries), for the Search Objects index's stale marks.</summary>
+internal sealed record BigQueryChild(string Id, string? Location, long Created, bool Done, string? StatementType, ErrorProto? Error, long? DmlAffected, string? Ddl,
+    string? TargetProject = null, string? TargetDataset = null);
 
 /// <summary>
 /// A query tab's BigQuery session (docs/bigquery.md, Sessions), keyed by Varia's tab id. BigQuery's own session id never
@@ -83,6 +86,8 @@ internal sealed partial class BigQueryService
 {
     private readonly ConcurrentDictionary<string, BigQueryTabSession> sessions = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource stopping = new();
+    /// <summary>Cancelled when the backend stops: background work outside a request (the index marks of an unsettled job) ends with it.</summary>
+    internal CancellationToken Stopping => stopping.Token;
 
     /// <summary>jobs.list's page size for a script's children, and how many pages a full listing reads before it counts as
     /// cut short (the transaction is then unknown).</summary>
@@ -92,7 +97,7 @@ internal sealed partial class BigQueryService
     internal int ChildPollMs { get; set; } = 2000;
     /// <summary>The wait between jobs.get calls on a job Varia waits to reach DONE.</summary>
     internal TimeSpan DonePoll { get; set; } = TimeSpan.FromSeconds(1);
-    /// <summary>A close's budgets inside query.session.close's deadlines (60 s for a commit, 30 s otherwise; decision 54): a
+    /// <summary>A close's budgets inside query.session.close's deadlines (60 s for a commit, 30 s otherwise): a
     /// cancelled job's DONE and listing, the commit's insert and lookups, and the abort.</summary>
     internal TimeSpan CloseWaitLimit { get; set; } = TimeSpan.FromSeconds(20);
     internal TimeSpan CommitWaitLimit { get; set; } = TimeSpan.FromSeconds(25);
@@ -189,13 +194,19 @@ internal sealed partial class BigQueryService
                 if (id is not { Length: > 0 and <= 1024 } || item.Statistics?.ParentJobId != parentId) continue;
                 if (known?.Contains(id) == true) { stop = true; continue; }
                 var done = item.State == "DONE" || item.Status?.State == "DONE";
+                var query = item.Statistics?.Query;
+                var (targetProject, targetDataset) = query?.DdlTargetTable is { } table ? (table.ProjectId, table.DatasetId)
+                    : query?.DdlTargetRoutine is { } routine ? (routine.ProjectId, routine.DatasetId)
+                    : query?.DdlTargetDataset is { } dataset ? (dataset.ProjectId, dataset.DatasetId) : (null, null);
                 children.Add(new(id, item.JobReference?.Location, item.Statistics?.CreationTime ?? 0, done, StatementOf(item.Statistics),
-                    done ? item.Status?.ErrorResult ?? item.ErrorResult : null, item.Statistics?.Query?.NumDmlAffectedRows, item.Statistics?.Query?.DdlOperationPerformed));
+                    done ? item.Status?.ErrorResult ?? item.ErrorResult : null, query?.NumDmlAffectedRows, query?.DdlOperationPerformed,
+                    Bounded(targetProject, 128), Bounded(targetDataset, 1024)));
             }
             pageToken = answer.NextPageToken is { Length: > 0 and <= BigQueryLimits.PageToken } next && !next.Any(char.IsControl) ? next : null;
             if (stop || pageToken is null) return (Order(children), true);
         }
 
+        static string? Bounded(string? name, int max) => name is { Length: > 0 } && name.Length <= max ? name : null;
         static List<BigQueryChild> Order(List<BigQueryChild> list) => [.. list.OrderBy(child => child.Created).ThenBy(child => child.Id, StringComparer.Ordinal)];
     }
 
@@ -350,6 +361,11 @@ internal sealed partial class BigQueryService
         error is not BigQueryJobMayExist && (NotSent(error) || error is GoogleApiException api && (int)api.HttpStatusCode is >= 400 and < 500
             && api.HttpStatusCode is not (HttpStatusCode.Conflict or HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests));
 
+    /// <summary>The byte cap on Varia's own session jobs (COMMIT TRANSACTION and ABORT_SESSION), which bill nothing, so no job
+    /// Varia submits is uncapped: BigQuery's 10 MiB minimum for a billed query, whatever lower cap the connection sets, so the
+    /// cap can never refuse a commit (a refused commit rolls the transaction back).</summary>
+    internal const long SessionControlCap = 10L << 20;
+
     Job SessionJob(BigQueryTabSession session, string sql, string jobId) => new()
     {
         JobReference = new JobReference { ProjectId = session.Connection.Options.Project, JobId = jobId, Location = session.Location },
@@ -358,7 +374,7 @@ internal sealed partial class BigQueryService
             Labels = new Dictionary<string, string>(Labels),
             Query = new JobConfigurationQuery
             {
-                Query = sql, UseLegacySql = false,
+                Query = sql, UseLegacySql = false, MaximumBytesBilled = SessionControlCap,
                 ConnectionProperties = [new ConnectionProperty { Key = "session_id", Value = session.Id }]
             }
         }
@@ -382,7 +398,7 @@ internal sealed partial class BigQueryService
                 Labels = new Dictionary<string, string>(Labels),
                 Query = new JobConfigurationQuery
                 {
-                    Query = BigQuerySql.AbortSession, UseLegacySql = false, ParameterMode = "NAMED",
+                    Query = BigQuerySql.AbortSession, UseLegacySql = false, ParameterMode = "NAMED", MaximumBytesBilled = SessionControlCap,
                     QueryParameters = [new QueryParameter
                     {
                         Name = BigQuerySql.AbortSessionParameter, ParameterType = new QueryParameterType { Type = "STRING" },
@@ -465,7 +481,7 @@ internal sealed partial class BigQueryService
     }
 
     /// <summary>
-    /// query.session.close for a BigQuery tab (docs/bigquery.md, Sessions; decision 54). Commit runs COMMIT TRANSACTION in
+    /// query.session.close for a BigQuery tab (docs/bigquery.md, Sessions). Commit runs COMMIT TRANSACTION in
     /// the session, then ends it; rollback and a plain close end it (ABORT_SESSION, which ends the transaction with it).
     /// A session holding a running job is never aborted: a commit or rollback close is refused with JOB_RUNNING, and a
     /// plain close leaves the session. A job Varia cancelled is waited for (20 s, or 25 s for a commit) so the abort never

@@ -1,7 +1,7 @@
 // Renders docs/object-explorer.md from the catalogue; tests/explorer-catalog.test.ts keeps the file in sync.
 import {
   childParentKinds, explorerLimits, filterPropertyLabels, folderIds, folderOwnerKinds, folderServed, folderSpecs, kindScopes, kindSpecs, laterFolders, maxBand, nodeKinds, schemaGroupList,
-  schemaGroupRoots, schemaPlacement, scopeFields, statusBadges, statusChipKinds, subfolders, folderGates, singletonOwners, type FolderId, type InsertStyle, type KindSpec, type LaterFolder, type NodeKind, type NodeSubtype
+  schemaGroupRoots, schemaPlacement, scopeFields, statusBadges, statusChipKinds, bigQueryStatusChipKinds, subfolders, folderGates, singletonOwners, type FolderId, type InsertStyle, type KindSpec, type LaterFolder, type NodeKind, type NodeSubtype
 } from './catalog.ts'
 import { loginChipDocs, statusChipDocs } from './status.ts'
 import { peekKinds, peekLimits, peekLists, peekListsOf, peekSpecs, peekTabsOf, peekTabTitle } from './peek.ts'
@@ -262,7 +262,12 @@ export function renderExplorerDocs(): string {
     'without chips until a slot frees. The chips are the only part of a row\'s end that gives way: the environment tag, item',
     'count and connection dot keep their size, and the label gives up the row\'s empty space first.',
     '',
-    table(['Kind', 'Probes'], (Object.keys(statusChipKinds) as (keyof typeof statusChipKinds)[]).map(kind => [code(kind), codes(statusChipKinds[kind])])),
+    'A connected BigQuery connection has its own background view, of the `bigquery.explorer` source, under the same rules: its',
+    'node\'s chip counts the principal\'s own pending and running jobs in the billing project, from jobs.list (a free API call,',
+    'never a query). Its datasets have no runtime state, so they show no chips ([docs/bigquery.md](bigquery.md#object-explorer)).',
+    '',
+    table(['Kind', 'Probes'], [...(Object.keys(statusChipKinds) as (keyof typeof statusChipKinds)[]).map(kind => [code(kind), codes(statusChipKinds[kind])]),
+      ...(Object.keys(bigQueryStatusChipKinds) as (keyof typeof bigQueryStatusChipKinds)[]).map(kind => [code(kind) + ' (BigQuery)', codes(bigQueryStatusChipKinds[kind])])]),
     '',
     table(['Node', 'Chip', 'Tone', 'When'], statusChipDocs.map(doc => [doc.kind, doc.chip, doc.tone, doc.when])),
     '',
