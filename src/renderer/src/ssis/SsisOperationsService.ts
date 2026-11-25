@@ -100,7 +100,9 @@ export const operationsText = {
   noCatalog: 'This server has no SSIS Catalog. Create it on the Integration Services Catalogs node, or connect to a server that has one, then open Operations again.',
   failed: 'Operations stopped reading the catalog.',
   noRuns: (name: string) => `The catalog has no runs of ${name} that this login may read.`,
-  copyFailed: (message: string) => `Could not copy the rows: ${message}`
+  copyFailed: (message: string) => `Could not copy the rows: ${message}`,
+  permissions: 'The catalog shows each login only the operations it has permission to read.',
+  wholeNames: 'Folder, Project and Package match whole names. Check Names start with to match names that start with the text.'
 } as const
 
 /** What a filter's text box may hold: the source's own bounds. */
@@ -154,6 +156,13 @@ export function withText(filters: SsisOperationsFilters, field: TextFilter, valu
 /** Whether the filters narrow anything beyond the window and limit, so Clear filters has something to do. */
 export const filtered = (filters: SsisOperationsFilters): boolean =>
   !!(filters.kinds?.length || filters.statuses?.length || filters.folder || filters.project || filters.package || filters.caller)
+
+/** Why an empty window may be empty: names match whole unless Names start with is on, which a partial name typed without it
+ *  would otherwise look like a filter that found nothing; and the catalog's row-level security. */
+export function emptyDetail(filters: SsisOperationsFilters): string {
+  const named = !!(filters.folder || filters.project || filters.package)
+  return named && !filters.prefix ? `${operationsText.wholeNames} ${operationsText.permissions}` : operationsText.permissions
+}
 
 /**
  * What Stop Operation's answer says. Nothing left to stop (ALREADY_FINAL: it ended or a stop is on its way; NOT_STARTED: it

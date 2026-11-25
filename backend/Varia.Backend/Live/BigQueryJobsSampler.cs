@@ -112,6 +112,12 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
         lock (gate) pending = (BigQueryJobHistoryArgs)value;
     }
 
+    /// <summary>Only a new listing (scope or filters) reads again at once: expanded scripts and prices change what is written.</summary>
+    public IReadOnlyCollection<string>? Rereads(object value)
+    {
+        lock (gate) return ((BigQueryJobHistoryArgs)value).SameListing(pending) ? [] : null;
+    }
+
     public Task<LiveOpening> OpenAsync(IReadOnlyList<LiveProbeState> probes, IReadOnlyList<LiveCursor> resume, CancellationToken token) =>
         Task.FromResult(new LiveOpening([.. probes.Select(probe => new LiveOpenedProbe(probe.Spec.Id, probe.IntervalMs, probe.Spec.IntervalMs.Min, probe.Spec.IntervalMs.Max, "ok"))]));
 

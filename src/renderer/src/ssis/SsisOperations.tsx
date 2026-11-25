@@ -30,7 +30,7 @@ import { useMenuTarget } from '../menus/useMenuTarget'
 import { gridTarget } from '../grid/anchor'
 import { formatCount } from '../results/status'
 import {
-  filterBounds, filtered, operationsProbe, operationsText, tilePressed, toggleKind, toggleStatus, toggleTile, withText,
+  emptyDetail, filterBounds, filtered, operationsProbe, operationsText, tilePressed, toggleKind, toggleStatus, toggleTile, withText,
   type SsisOperationsEnd, type SsisOperationsFilters, type SsisOperationsState, type TextFilter
 } from './SsisOperationsService'
 import type { SsisPackageState, SsisPlaceError, SsisRunState } from './SsisPlacesService'
@@ -185,7 +185,7 @@ function ListPage({ documentId, state }: { readonly documentId: string; readonly
               <LiveGridPane live={handle} probe={operationsProbe} label="Operations" contextMenu={false} sortable={false} state={service.gridState(documentId)} onGrid={grid => service.attachGrid(documentId, grid)} />
               {rows === 0 && <EmptyState className="ssis-operations-empty" icon="pulse"
                 title={isFiltered ? 'No operations match the filters' : `No operations in the ${windowLabel(state.filters.windowHours).toLowerCase()}`}
-                detail="The catalog shows each login only the operations it has permission to read."
+                detail={emptyDetail(state.filters)}
                 actions={isFiltered ? [{ label: 'Clear filters', run: () => service.clearFilters(documentId), primary: true }]
                   : [{ label: 'Choose window', run: () => document.getElementById(windowFieldId(documentId))?.focus() }]} />}
             </>}

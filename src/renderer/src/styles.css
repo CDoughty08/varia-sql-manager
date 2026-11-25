@@ -406,6 +406,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .dependencies-twisty { display: grid; place-items: center; flex: none; width: 16px; height: 16px; }
 .dependencies-status { display: flex; align-items: center; gap: var(--varia-space-1); min-height: var(--varia-row); padding-inline-end: var(--varia-space-2); color: var(--varia-descriptionForeground); }
 .dependencies-status.error { color: var(--varia-errorForeground); }
+.dependencies-selected .peek-group { margin: 0 0 var(--varia-space-1); }
 .connection-modal.about-dialog { width: min(520px, calc(100vw - 40px)); font-size: var(--varia-size-md); }
 .about-dialog .connection-scroll { display: flex; flex-direction: column; gap: var(--varia-space-4); padding: var(--varia-space-3) var(--varia-space-4) var(--varia-space-4); }
 .about-identity { display: flex; align-items: center; gap: var(--varia-space-3); }
@@ -754,10 +755,6 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .peek-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--varia-size-md); font-weight: 600; }
 .peek-kind { flex-shrink: 0; color: var(--varia-descriptionForeground); }
 .peek-spacer { flex: 1; }
-.peek-body { display: grid; flex: 1; min-height: 0; grid-template-columns: minmax(0, 1fr) minmax(220px, 300px); }
-.peek-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.peek-side { border-left: 1px solid var(--varia-editorWidget-border); }
-.peek-pane-title { display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); padding: var(--varia-space-1) var(--varia-space-2) var(--varia-space-1) var(--varia-space-3); font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); text-transform: uppercase; letter-spacing: 0.04em; }
 .peek-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); margin-left: auto; }
 .peek-action { padding: 0 var(--varia-space-2); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-xs); text-transform: none; letter-spacing: 0; white-space: nowrap; color: var(--varia-button-secondaryForeground); }
 .peek-action:disabled { opacity: 0.5; }
@@ -766,40 +763,19 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .peek-definition:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .peek-note { margin: var(--varia-space-2) var(--varia-space-3); color: var(--varia-descriptionForeground); overflow-wrap: anywhere; }
 .peek-note.error { color: var(--varia-errorForeground); }
-.peek-properties { padding-bottom: var(--varia-space-3); }
 .peek-group { margin: var(--varia-space-2) var(--varia-space-3) var(--varia-space-0); font-size: var(--varia-size-xs); font-weight: 600; color: var(--varia-descriptionForeground); }
-.peek-facts { margin: 0; user-select: text; }
 .peek-properties-pane:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
-.peek-fact { display: grid; grid-template-columns: minmax(96px, 46%) minmax(0, 1fr); gap: var(--varia-space-2); padding: 1px var(--varia-space-3); }
-.peek-fact dt { color: var(--varia-descriptionForeground); }
-.peek-tabs { display: flex; flex-wrap: wrap; min-width: 0; gap: var(--varia-space-1); text-transform: none; letter-spacing: 0; }
-.peek-tab { padding: 0 var(--varia-space-1); border-bottom: 2px solid transparent; font-size: var(--varia-size-xs); white-space: nowrap; color: var(--varia-descriptionForeground); }
-.peek-tab[aria-selected="true"] { border-bottom-color: var(--varia-tab-activeBorderTop); color: var(--varia-editorWidget-foreground); }
-.peek-tab:focus-visible, .peek-follow:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
-.peek-list { margin: 0; padding: var(--varia-space-0) 0 var(--varia-space-2); list-style: none; }
+.peek-follow:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .peek-item { display: flex; align-items: center; gap: var(--varia-space-1); min-width: 0; padding: 1px var(--varia-space-3); white-space: nowrap; }
 .peek-item-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; user-select: text; }
 .peek-item-note { flex-shrink: 0; color: var(--varia-descriptionForeground); }
 .peek-follow { display: flex; align-items: center; gap: var(--varia-space-1); min-width: 0; padding: 0; color: var(--varia-list-highlightForeground); }
 .peek-follow:hover .peek-item-name { text-decoration: underline; }
-/* Top rows: the results grid fills the panel, which does not scroll itself. */
-.peek-grid { display: flex; flex-direction: column; overflow: hidden; }
 /* Peek's definition: the query editor (peek-editor.ts) fills the panel and scrolls itself. */
 .peek-editor { position: relative; flex: 1; min-height: 0; }
 .peek-editor-host { position: absolute; inset: 0; }
-.peek-grid > .peek-note { flex-shrink: 0; }
 .peek-rows { display: flex; flex: 1; flex-direction: column; min-height: 0; }
-/* A promoted tab: the card's body with the room of a document. */
-.peek-tab-body { display: flex; flex: 1; flex-direction: column; min-height: 0; border-top: 1px solid var(--varia-editorWidget-border); }
-.document-frame[data-peek-tab] .document-content { display: flex; flex-direction: column; overflow: hidden; }
-.peek-tab-body .peek-body { grid-template-columns: minmax(0, 1fr) minmax(260px, 360px); }
-/* A narrow card or tab (a slim popped-out Object Explorer) stacks Properties under the definition rather than squeezing it to nothing. */
-.peek-card, .peek-tab-body { container-type: inline-size; }
-@container (max-width: 560px) {
-  .peek-body, .peek-tab-body .peek-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 3fr) minmax(0, 2fr); }
-  .peek-side { border-left: 0; border-top: 1px solid var(--varia-editorWidget-border); }
-}
-.peek-fact dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; user-select: text; }
+.peek-card { container-type: inline-size; }
 .explorer-error { flex-shrink: 0; font-size: var(--varia-size-xs); color: var(--varia-errorForeground); line-height: 1.6; padding: 0 12px; margin: 5px 0 8px; overflow-wrap: anywhere; }
 @media (forced-colors: active) {
   .explorer-row[aria-selected="true"], .explorer-tree:focus .explorer-row[aria-selected="true"] { background: Highlight; color: HighlightText; forced-color-adjust: none; }
@@ -2946,12 +2922,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .document-script-text:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .document-script-empty, .document-script-note { margin: 0; padding: var(--varia-space-2) var(--varia-space-3); color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
 .document-script-note { flex: none; border-top: 1px solid var(--varia-panel-border); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
-/* SSIS properties documents (src/renderer/src/ssis): General as label and value pairs, and read-only lists. */
-.ssis-properties { display: grid; grid-template-columns: minmax(120px, max-content) minmax(0, 1fr); gap: var(--varia-space-1) var(--varia-space-4); margin: 0; font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
-.ssis-properties > div { display: contents; }
-.ssis-properties dt { color: var(--varia-descriptionForeground); }
-.ssis-properties dd { min-width: 0; margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-/* A list is a fitted page LocalGrid (properties-view.tsx): as tall as its rows, since the section column scrolls. */
+/* SSIS properties documents (src/renderer/src/ssis): natural-height LocalGrid lists and status notes (General uses FactGrid). */
 .ssis-properties-grid { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--varia-panel-border); }
 .ssis-properties-note { margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
 .ssis-properties-none { color: var(--varia-descriptionForeground); }
@@ -3006,6 +2977,9 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 @container document-sections (max-width: 540px) {
   .property-field, .property-facts { grid-template-columns: minmax(0, 1fr); }
   .property-field-note, .property-field-error { grid-column: 1; }
+  .document-sections .fact-grid:not(.compact) { grid-template-columns: minmax(0, 1fr); }
+  .document-sections .fact-grid:not(.compact) .fact-grid-row > dt { border-bottom: 0; padding-bottom: 0; padding-top: var(--varia-space-2); }
+  .document-sections .fact-grid:not(.compact) .fact-grid-row > dd { padding-top: var(--varia-space-0); padding-bottom: var(--varia-space-2); }
 }
 /* The hint strip, pinned to the bottom of the sections column over its rows: it takes no room, so showing it never moves
    a row under the pointer (a click that moves focus would otherwise land on a row that just moved), and while it is empty
@@ -3469,10 +3443,6 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .search-details { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .search-details-empty { align-self: center; margin-top: var(--varia-space-4); }
 .search-details-properties { flex-shrink: 0; max-height: 40%; overflow: auto; padding: var(--varia-space-1) var(--varia-space-3) var(--varia-space-2); border-bottom: 1px solid var(--varia-editorGroup-border); }
-.search-details-facts { margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(10em, 1fr)); gap: var(--varia-space-1) var(--varia-space-3); }
-.search-details-fact { min-width: 0; }
-.search-details-fact dt { font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
-.search-details-fact dd { margin: 0; font-size: var(--varia-size-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .search-details-views { flex-shrink: 0; padding: var(--varia-space-2) var(--varia-space-3) 0; }
 /* The matched line's band sits behind the text: the definition is its own stacking context, and the band below its content. */
 .search-details-definition { position: relative; isolation: isolate; }

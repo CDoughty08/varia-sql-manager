@@ -16,7 +16,7 @@ import type { LiveSnapshot } from '../src/renderer/src/live/LiveService'
 import { probePillStatus } from '../src/renderer/src/live/status'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import {
-  filtered, operationsArgs, operationsText, stopNotice, tilePressed, toggleKind, toggleStatus, toggleTile, withText, type SsisOperationsFilters
+  emptyDetail, filtered, operationsArgs, operationsText, stopNotice, tilePressed, toggleKind, toggleStatus, toggleTile, withText, type SsisOperationsFilters
 } from '../src/renderer/src/ssis/SsisOperationsService'
 import { SnapshotStore } from '../src/renderer/src/core/store'
 import type { SsisOperationsArgs } from '../src/shared/ssis/schema'
@@ -148,6 +148,16 @@ describe('Integration Services Operations documents', () => {
     expect(handle().args).toHaveLength(1)
     service.clearFilters(id)
     expect(handle().args.at(-1)).toEqual({ windowHours: 24, limit: 1000 })
+    // A running view's new args are read at once by the backend (live.update args reads again), so no refresh goes with them.
+    expect(handle().refreshes).toBe(0)
+  })
+  it('says why an empty window may be empty: names match whole unless Names start with is on', () => {
+    expect(emptyDetail(base)).toBe(operationsText.permissions)
+    expect(emptyDetail({ ...base, statuses: [4], caller: 'sa' })).toBe(operationsText.permissions)
+    for (const field of ['folder', 'project', 'package'] as const) {
+      expect(emptyDetail(withText(base, field, 'Slow'))).toBe(`${operationsText.wholeNames} ${operationsText.permissions}`)
+      expect(emptyDetail({ ...withText(base, field, 'Slow'), prefix: true })).toBe(operationsText.permissions)
+    }
   })
   it('reads the selected operation from the grid and stops it after asking, saying what the catalog answered', async () => {
     const { operations: service, handle, api, context, commands } = operations()

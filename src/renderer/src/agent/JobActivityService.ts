@@ -373,8 +373,7 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
     // Set while disconnected too: the subscription after a reconnect takes the args set meanwhile.
     handle.setArgs(jobActivityArgs(next))
     if (!this.live(id)) return
-    // The backend applies new args at the next sample: read now so the last run shown is the job just picked, and a view that
-    // failed subscribes again with them.
+    // New args read again at once (live.update); refresh as well, so a view that failed subscribes again with them.
     if (changed || handle.getSnapshot().status === 'ended') handle.refresh()
   }
 
