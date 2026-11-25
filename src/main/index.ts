@@ -100,7 +100,7 @@ import { onWayland, placeWindow, WindowStateStore, WindowStateTracker, type Wind
 import { BigQueryCredentials, BigQueryKeyFiles, federationSource, readCredentialFile } from './bigquery-credentials'
 import { BigQueryConnectionStore } from './bigquery-connection-store'
 import { connectionHistory } from './connection-history'
-import { confirmSourceParamsSchema, pickKeyFileParamsSchema } from '../shared/bigquery-connections'
+import { bigQueryStarProjectInputSchema, bigQueryStarredProjectsInputSchema, confirmSourceParamsSchema, pickKeyFileParamsSchema } from '../shared/bigquery-connections'
 import { remoteResultIds, type RemoteDryRun } from '../shared/bigquery/remote-view'
 import { bigQueryEmulatorEndpoint } from './backend/spawn-spec'
 
@@ -1206,8 +1206,26 @@ app.whenReady().then(async () => {
   })
   handle('varia:connections-environment', value => library.setEnvironment(value))
   handle('varia:bigquery-cost-prompt', value => library.setBigQueryCostPrompt(value))
-  handle('varia:bigquery-starred-projects', () => bigQueryStore!.loadStarredProjects())
-  handle('varia:bigquery-star-project', value => bigQueryStore!.setProjectStar(value))
+  handle('varia:bigquery-starred-projects', async value => {
+    const input = bigQueryStarredProjectsInputSchema.parse(value)
+    if (!connectionOpen) return { byPrincipal: Object.create(null) }
+    if (input?.connectionId) {
+      const bq = connectionOpen.bigQueryHandle(input.connectionId)
+      if (!bq || bq.principal.startsWith('bigquery:anonymous:')) return { byPrincipal: Object.create(null) }
+      return bigQueryStore!.loadStarredProjects(new Set([bq.principal]))
+    }
+    const live = new Set([...connectionOpen.liveBigQueryPrincipals()].filter(principal => !principal.startsWith('bigquery:anonymous:')))
+    if (!live.size) return { byPrincipal: Object.create(null) }
+    return bigQueryStore!.loadStarredProjects(live)
+  })
+  handle('varia:bigquery-star-project', async value => {
+    const input = bigQueryStarProjectInputSchema.parse(value)
+    const bq = connectionOpen?.bigQueryHandle(input.connectionId)
+    if (!bq || bq.principal.startsWith('bigquery:anonymous:')) throw new Error('Connect to BigQuery with a verified account to star projects.')
+    if (input.project === bq.billingProject) throw new Error('The billing project is always shown in Object Explorer.')
+    const live = new Set([...connectionOpen!.liveBigQueryPrincipals()].filter(principal => !principal.startsWith('bigquery:anonymous:')))
+    return bigQueryStore!.setProjectStarForPrincipal(bq.principal, input.project, input.starred, live)
+  })
   // connections.pickKeyFile (docs/bigquery.md, Connect dialog): main's open dialog; the renderer gets a reference and the file's
   // name, never its path, and for a federation configuration the token file it reads, for the user to confirm.
   handle('varia:connections-pick-key-file', async value => {
@@ -1362,6 +1380,32 @@ app.whenReady().then(async () => {
       try {
       // Only main creates the compressed wire form; the renderer cannot supply compressed data or an encoding.
       if (method === 'plans.parse') prepared.params = await preparePlan((validated as { xml: string }).xml)
+      // Enforce persisted stars from main for BigQuery indexing and bulk estimates so unstarred projects never receive billed queries.
+      if ((method === 'bigquery.indexEstimate' || method === 'explorer.index') && bigQueryStore) {
+        const connectionId = (validated as { connectionId: string }).connectionId
+        const bq = connectionOpen?.bigQueryHandle(connectionId)
+        if (bq) {
+          const persisted = (await bigQueryStore.starredProjectsFor(bq.principal)).filter(project => project !== bq.billingProject)
+          const params = { ...(prepared.params as Record<string, unknown>) }
+          if (method === 'explorer.index') {
+            params.starredProjects = persisted
+            if (params.bulk) {
+              const bulk = params.bulk as NonNullable<RpcMethods['explorer.index']['params']['bulk']>
+              const allowed = new Set([bq.billingProject, ...persisted])
+              const locations = bulk.locations.filter(item => allowed.has(item.project))
+              if (locations.length) params.bulk = { ...bulk, locations }
+              else delete params.bulk
+            }
+          } else {
+            if (persisted.length) params.starredProjects = persisted
+            else delete params.starredProjects
+          }
+          prepared.params = params
+        } else if (method === 'explorer.index' && (prepared.params as { bulk?: unknown }).bulk) {
+          const { bulk: _bulk, ...rest } = prepared.params as Record<string, unknown>
+          prepared.params = rest
+        }
+      }
       // A script's events reach the results worker; its results become readable by this renderer.
       // A remote query (Load into memory, a sort or filter, a value list) is a query over a result: its events and summary go the
       // same way, and only results this renderer owns in the current generation may be named, the source and every value list
@@ -1547,7 +1591,6 @@ app.whenReady().then(async () => {
         if (generation !== rendererGeneration || generation !== pageGeneration) return { documents: [], activeIndex: -1, problems: [] }
         if (legacyExtra?.size && bigQueryStore) {
           const originalById = new Map(originalTargets.map(target => [target.id, target]))
-          const unclaimed: string[] = []
           for (const target of workspace.targets) {
             const extra = legacyExtra.get(target.id)
             if (!extra?.length) continue
@@ -1557,16 +1600,15 @@ app.whenReady().then(async () => {
             const hadPrincipal = originalById.get(target.id)?.expectedPrincipal !== undefined
             const principal = target.expectedPrincipal?.provider === 'bigquery' ? target.expectedPrincipal.principal : undefined
             if (principal) {
-              // Emulator anonymous principals never star projects and must not leak into unclaimed migratedProjects.
+              // Emulator anonymous principals never star projects and must not leak into unclaimed migrated targets.
               if (!principal.startsWith('bigquery:anonymous:')) {
                 await bigQueryStore.addStarredProjects(principal, projects).catch(() => {})
               }
             } else if (!hadPrincipal) {
-              // Only migrate as unclaimed when the target genuinely had no principal — never when seal verification stripped it.
-              for (const project of projects) if (!unclaimed.includes(project)) unclaimed.push(project)
+              // Only migrate per originating targetId when the target genuinely had no principal — never when seal verification stripped it.
+              await bigQueryStore.addMigratedTargetProjects(target.id, projects).catch(() => {})
             }
           }
-          if (unclaimed.length) await bigQueryStore.addMigratedProjects(unclaimed).catch(() => {})
           if (generation !== rendererGeneration || generation !== pageGeneration) return { documents: [], activeIndex: -1, problems: [] }
         }
         connectionAuthentication.restore(workspace)

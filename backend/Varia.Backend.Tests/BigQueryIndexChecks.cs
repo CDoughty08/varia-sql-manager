@@ -907,6 +907,141 @@ internal static partial class BigQueryIndexChecks
             check(hadDropMark && dropSearch.StaleMarkOf(dropId) is null && cutRebuild.Status.StaleMark is null,
                 "discovery-cut rebuild dropping a 0-dataset discovered project prunes its orphaned stale mark");
         }
+
+        // 13. DDL stale marks created after a project's DatasetsAsync completes during an in-flight rebuild are preserved.
+        {
+            using var search = new ObjectSearchService(new UnusedHost());
+            var id = Guid.NewGuid().ToString();
+            var listedA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var source = new FakeBudgetSource(discoveredProjects: ["disc-a", "disc-b"], tablesPerDiscovered: 1, columnsPerTable: 1)
+            {
+                CustomDatasets = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+                {
+                    ["varia-alpha"] = ["sales"],
+                    ["disc-a"] = ["ds1"],
+                    ["disc-b"] = ["ds1"]
+                }
+            };
+            source.OnDatasetsAsync = async (project, _) =>
+            {
+                if (project == "disc-b")
+                {
+                    await listedA.Task;
+                    // Simulate CREATE SCHEMA `disc-a.ds_new` arriving after disc-a's listing while disc-b is still listing.
+                    source.CustomDatasets!["disc-a"] = ["ds1", "ds_new"];
+                    search.MarkProjectStale(id, "disc-a");
+                    search.MarkStale(id, "disc-a", "ds_new");
+                }
+            };
+            source.AfterDatasetsAsync = project =>
+            {
+                if (project == "disc-a") listedA.TrySetResult();
+            };
+            var build = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString()), source, CancellationToken.None);
+            var preservedMark = search.StaleMarkOf(id) is not null
+                && search.StaleProjectsOf(id).Contains("disc-a")
+                && search.StaleOf(id).Contains(("disc-a", "ds_new"))
+                && build.Status.StaleMark is not null;
+            // A subsequent stale refresh finds ds_new and clears the stale mark.
+            source.OnDatasetsAsync = null;
+            source.AfterDatasetsAsync = null;
+            var staleRefresh = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), Stale: true), source, CancellationToken.None);
+            check(preservedMark
+                && search.HeldOf(id).Any(read => read.Database == "disc-a" && read.Dataset == "ds_new")
+                && search.StaleMarkOf(id) is null
+                && staleRefresh.Status.StaleMark is null,
+                $"DDL stale marks newer than a project's dataset listing survive rebuild ({preservedMark}) and are picked up by stale refresh");
+        }
+
+        // 14. Starring an empty project with discovery off updates tracked membership on scoped refresh for IntelliSense and DDL tracking.
+        {
+            var source = new FakeBudgetSource(discoveredProjects: [], tablesPerDiscovered: 1, columnsPerTable: 1)
+            {
+                CustomDatasets = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+                {
+                    ["varia-alpha"] = ["sales"],
+                    ["empty-star"] = []
+                }
+            };
+            using var search = new ObjectSearchService(new UnusedHost());
+            var id = Guid.NewGuid().ToString();
+            await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), AllProjects: false), source, CancellationToken.None);
+            await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), AllProjects: false, Scope: new("empty-star"), StarredProjects: ["empty-star"]), source, CancellationToken.None);
+            var lookup = search.LookupBigQuery(id, "varia-alpha");
+            search.MarkStaleIfTracked(id, "varia-alpha", "empty-star", "first_ds");
+            var ddlTracked = search.StaleOf(id).Contains(("empty-star", "first_ds"));
+            check(lookup.Projects.Contains("empty-star") && ddlTracked,
+                $"empty newly starred project tracked on scoped refresh with discovery off (inLookup={lookup.Projects.Contains("empty-star")}, ddlTracked={ddlTracked})");
+        }
+
+        // 15. Per-project dataset listing failure state is preserved past the 256-entry displayed SkipList cap.
+        {
+            var manyProjects = Enumerable.Range(1, 300).Select(i => $"disc-{i:D3}").ToList();
+            var source = new FakeBudgetSource(discoveredProjects: manyProjects, tablesPerDiscovered: 1, columnsPerTable: 0)
+            {
+                FailDatasetsSelector = project => project.StartsWith("disc-", StringComparison.Ordinal) ? "QUOTA" : null
+            };
+            using var search = new ObjectSearchService(new UnusedHost());
+            var id = Guid.NewGuid().ToString();
+            var result = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString()), source, CancellationToken.None);
+            var lookup = search.LookupBigQuery(id, "varia-alpha");
+            var p256 = lookup.ProjectState("disc-256");
+            var p257 = lookup.ProjectState("disc-257");
+            var p300 = lookup.ProjectState("disc-300");
+            var ds300 = lookup.Dataset("disc-300", "any_ds");
+            check(result.Status.Skipped.Count <= 260
+                && p256 == LookupState.Skipped
+                && p257 == LookupState.Skipped
+                && p300 == LookupState.Skipped
+                && ds300 is { State: LookupState.Skipped, Skip.Code: "QUOTA" },
+                $"project listing QUOTA failure stays Skipped past 256 displayed skips (shown={result.Status.Skipped.Count}, p256={p256}, p257={p257}, p300={p300}, ds300={ds300.State}/{ds300.Skip?.Code})");
+        }
+
+        // 16. Streaming Wave 2: ready starred project starts ObjectsAsync while a slow sibling is still listing, and Wave 2b early-stop cancels remaining DatasetsAsync calls.
+        {
+            var fastIndexed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var slowStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var slowCanFinish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var streamSource = new FakeBudgetSource(discoveredProjects: ["disc-after"], tablesPerDiscovered: 1, columnsPerTable: 0)
+            {
+                OnDatasetsAsync = async (project, _) =>
+                {
+                    if (project == "star-slow")
+                    {
+                        slowStarted.TrySetResult();
+                        await slowCanFinish.Task;
+                    }
+                },
+                OnObjectsAsync = (project, _) =>
+                {
+                    if (project == "star-fast") fastIndexed.TrySetResult();
+                    return Task.CompletedTask;
+                }
+            };
+            using var streamSearch = new ObjectSearchService(new UnusedHost());
+            var streamId = Guid.NewGuid().ToString();
+            var buildTask = streamSearch.IndexBigQueryAsync(new ObjectIndexArgs(streamId, Guid.NewGuid().ToString(), StarredProjects: ["star-slow", "star-fast"]), streamSource, CancellationToken.None);
+            await slowStarted.Task;
+            // star-fast must complete ObjectsAsync BEFORE star-slow finishes DatasetsAsync!
+            var fastFinishedFirst = await Task.WhenAny(fastIndexed.Task, Task.Delay(5_000)) == fastIndexed.Task;
+            slowCanFinish.TrySetResult();
+            await buildTask;
+
+            // Wave 2b memory early-stop cancels remaining discovered DatasetsAsync calls instead of listing every project up front.
+            var manyDisc = Enumerable.Range(1, 48).Select(i => $"disc-{i:D2}").ToList();
+            var stopSource = new FakeBudgetSource(discoveredProjects: manyDisc, tablesPerDiscovered: 80, columnsPerTable: 0)
+            {
+                OnDatasetsAsync = async (project, token) =>
+                {
+                    if (project.StartsWith("disc-", StringComparison.Ordinal)) await Task.Delay(5, token);
+                }
+            };
+            using var stopSearch = new ObjectSearchService(new UnusedHost(), new ObjectIndexLimits { MemoryBytes = 6_000, NamesReserveBytes = 0 });
+            var stopId = Guid.NewGuid().ToString();
+            await stopSearch.IndexBigQueryAsync(new ObjectIndexArgs(stopId, Guid.NewGuid().ToString()), stopSource, CancellationToken.None);
+            check(fastFinishedFirst && stopSource.DiscoveredDatasetCalls < manyDisc.Count,
+                $"streaming Wave 2 indexes ready starred project before slow sibling finishes listing ({fastFinishedFirst}) and cancels remaining discovered DatasetsAsync on memory stop ({stopSource.DiscoveredDatasetCalls}/{manyDisc.Count})");
+        }
     }
 
     sealed class UnusedHost : IObjectSearchHost
@@ -918,18 +1053,22 @@ internal static partial class BigQueryIndexChecks
 
     sealed class FakeBudgetSource(IReadOnlyList<string> discoveredProjects, int tablesPerDiscovered, int columnsPerTable) : IBigQueryIndexSource
     {
-        private int discoveredObjectCalls, discoveredDetailCalls;
+        private int discoveredDatasetCalls, discoveredObjectCalls, discoveredDetailCalls;
+        public int DiscoveredDatasetCalls => Volatile.Read(ref discoveredDatasetCalls);
         public int DiscoveredObjectCalls => Volatile.Read(ref discoveredObjectCalls);
         public int DiscoveredDetailCalls => Volatile.Read(ref discoveredDetailCalls);
         public int ColumnsPerTable { get; set; } = columnsPerTable;
         public bool FailDiscovery { get; set; }
         public string? FailTableForProject { get; set; }
         public (string Project, string Code)? FailDatasetsForProject { get; set; }
+        public Func<string, string?>? FailDatasetsSelector { get; set; }
         public (string Project, string Code)? FailObjectsForProject { get; set; }
         public Dictionary<(string Project, string Dataset), string>? FailObjectsForDataset { get; set; }
         public string? ThrowOnCancelObjectsProject { get; set; }
         public Dictionary<string, IReadOnlyList<string>>? CustomDatasets { get; set; }
         public Dictionary<(string Project, string Dataset), int>? TablesPerDataset { get; set; }
+        public Func<string, CancellationToken, Task>? OnDatasetsAsync { get; set; }
+        public Action<string>? AfterDatasetsAsync { get; set; }
         public Func<string, CancellationToken, Task>? OnObjectsAsync { get; set; }
 
         public string BillingProject(string connectionId) => "varia-alpha";
@@ -938,13 +1077,20 @@ internal static partial class BigQueryIndexChecks
             if (FailDiscovery) throw new RequestException("TIMEOUT", "Simulated discovery failure.");
             return Task.FromResult(new BigQueryProjectDiscovery([.. discoveredProjects.Take(maxProjects)], discoveredProjects.Count > maxProjects));
         }
-        public Task<BigQueryDatasetList> DatasetsAsync(string connectionId, string project, CancellationToken token)
+        public async Task<BigQueryDatasetList> DatasetsAsync(string connectionId, string project, CancellationToken token)
         {
+            token.ThrowIfCancellationRequested();
+            if (project != "varia-alpha") Interlocked.Increment(ref discoveredDatasetCalls);
+            if (OnDatasetsAsync is not null) await OnDatasetsAsync(project, token);
             if (FailDatasetsForProject is { } fail && fail.Project == project)
                 throw new RequestException(fail.Code, "Simulated datasets failure.");
-            if (CustomDatasets is not null && CustomDatasets.TryGetValue(project, out var custom))
-                return Task.FromResult(new BigQueryDatasetList([.. custom], false));
-            return Task.FromResult(new BigQueryDatasetList([project == "varia-alpha" ? "sales" : "ds"], false));
+            if (FailDatasetsSelector?.Invoke(project) is { } selectedCode)
+                throw new RequestException(selectedCode, "Simulated datasets failure.");
+            BigQueryDatasetList result = CustomDatasets is not null && CustomDatasets.TryGetValue(project, out var custom)
+                ? new BigQueryDatasetList([.. custom], false)
+                : new BigQueryDatasetList([project == "varia-alpha" ? "sales" : "ds"], false);
+            AfterDatasetsAsync?.Invoke(project);
+            return result;
         }
         public async Task<BigQueryListing> ObjectsAsync(string connectionId, string project, string dataset, CancellationToken token)
         {

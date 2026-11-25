@@ -124,8 +124,10 @@ const maxSessionProjectsPerConnection = 50
 /** Per-principal starred BigQuery projects source (`BigQueryStarredService`). */
 export interface BigQueryStarredSource {
   readonly loaded?: boolean
+  isLoadedFor?(principalId: string | undefined): boolean
   starredFor(principalId: string | undefined): readonly string[]
   isStarred(principalId: string | undefined, project: string): boolean
+  isConfirmedStarred?(principalId: string | undefined, project: string): boolean
   subscribe(listener: () => void): () => void
 }
 /** What the tree asks of the connection workspace, by target id. */
@@ -660,14 +662,28 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     const principal = bigQueryPrincipalOf(this.connectionOf(connectionId))
     return !!principal && !!this.bigQueryStarred?.isStarred(principal, project)
   }
-  /** Drops session-only projects that are now the connection's billing project or starred, reclaiming slots toward the per-connection cap. */
+  /** Whether `project` is confirmed persisted as starred for `connectionId`'s verified BigQuery principal (false while a star write is still optimistic/unconfirmed). */
+  private isBigQueryProjectConfirmedStarred(connectionId: string, project: string): boolean {
+    const principal = bigQueryPrincipalOf(this.connectionOf(connectionId))
+    if (!principal || !this.bigQueryStarred) return false
+    return this.bigQueryStarred.isConfirmedStarred
+      ? this.bigQueryStarred.isConfirmedStarred(principal, project)
+      : this.bigQueryStarred.isStarred(principal, project)
+  }
+  /** Whether starred projects for `connectionId`'s verified BigQuery principal have settled. */
+  private isBigQueryStarredLoaded(connectionId: string): boolean {
+    if (!this.bigQueryStarred) return true
+    const principal = bigQueryPrincipalOf(this.connectionOf(connectionId))
+    return this.bigQueryStarred.isLoadedFor ? this.bigQueryStarred.isLoadedFor(principal) : this.bigQueryStarred.loaded !== false
+  }
+  /** Drops session-only projects that are now the connection's billing project or confirmed starred, reclaiming slots only after persistence succeeds. */
   private pruneBigQuerySessionProjects(connectionId: string): void {
     const set = this.sessionProjects.get(connectionId)
     if (!set) return
     const connection = this.connectionOf(connectionId)
     const billing = connection?.options.provider === 'bigquery' ? connection.options.project : undefined
     for (const project of [...set]) {
-      if (project === billing || this.isBigQueryProjectStarred(connectionId, project)) set.delete(project)
+      if (project === billing || this.isBigQueryProjectConfirmedStarred(connectionId, project)) set.delete(project)
     }
     if (!set.size) this.sessionProjects.delete(connectionId)
   }
@@ -1442,7 +1458,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       this.failed(node, error, running.mode, outcome.ok ? outcome.result.nodes : [])
       if (root && (outcome.ok ? error.code === 'CONNECTION_LOST' : outcome.connectionLost)) { root.connectionError = error; root.rev++ }
     }
-    const deferBigQueryRestore = node.kind === 'server' && node.children !== undefined && this.bigQueryStarred?.loaded === false && this.connectionOf(node.connectionId)?.options.provider === 'bigquery'
+    const deferBigQueryRestore = node.kind === 'server' && node.children !== undefined && !this.isBigQueryStarredLoaded(node.connectionId) && this.connectionOf(node.connectionId)?.options.provider === 'bigquery'
     if (this.restoring.size && (!node.cursor || node.more !== 'auto') && !deferBigQueryRestore) this.restoreLoaded(node)
     // The page may have detached nodes a restore waits on (a reconcile dropping rows, Group by Schema moving folders), whose
     // aborted loads never settle.
@@ -1571,7 +1587,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     root.hasChildren = next.length > 0
     if (added) this.addDescendants(root, added)
     if (removed.length) this.detach(root, removed, false)
-    if (this.restoring.size && this.bigQueryStarred?.loaded !== false) {
+    if (this.restoring.size && this.isBigQueryStarredLoaded(connectionId)) {
       this.restoreLoaded(root)
       this.pruneRestores()
     }

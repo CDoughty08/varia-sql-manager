@@ -15,8 +15,8 @@ export interface ConnectionHistory {
   load(): Promise<{ library: ConnectionLibrary; warning?: string; trusted: boolean }>
   /** Saves a BigQuery connection's cost-prompt choice (docs/bigquery.md, Cost); resolves whether it holds. */
   setBigQueryCostPrompt?(options: BigQueryConnectionOptions, costPrompt: boolean): Promise<boolean>
-  /** Claims legacy migrated `extraProjects` into `principal`'s starred projects on BigQuery connect. */
-  claimBigQueryMigratedProjects?(principal: string): Promise<void>
+  /** Claims legacy migrated `extraProjects` belonging to the originating profile/target into `principal`'s starred projects on BigQuery connect. */
+  claimBigQueryMigratedProjects?(principal: string, match: { readonly profileId?: string; readonly options?: BigQueryConnectionOptions; readonly targetId?: string }): Promise<void>
   /** Saves a BigQuery connection's own cost-prompt threshold (0: Options'); resolves whether it holds. */
   setBigQueryCostThreshold?(options: BigQueryConnectionOptions, costThreshold: number): Promise<boolean>
 }
@@ -35,8 +35,8 @@ export function connectionHistory(sqlServer: ConnectionStore, bigQuery: BigQuery
       const library = await bigQuery.setCostPrompt({ options: rest, costPrompt })
       return library.profiles.some(profile => connectionKey(profile.options) === key && (profile.options.costPrompt !== false) === costPrompt)
     },
-    async claimBigQueryMigratedProjects(principal) {
-      await bigQuery.claimMigratedProjects(principal)
+    async claimBigQueryMigratedProjects(principal, match) {
+      await bigQuery.claimMigratedProjects(principal, match)
     },
     async setBigQueryCostThreshold(options, costThreshold) {
       const { costPrompt: _costPrompt, costThreshold: _costThreshold, ...rest } = options, key = connectionKey(rest)

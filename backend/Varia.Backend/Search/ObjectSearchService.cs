@@ -82,6 +82,8 @@ internal sealed partial class ObjectSearchService : IDisposable
         public List<string> DiscoveredProjects = [];
         /// <summary>BigQuery's discovered projects kept with some datasets held after Wave 2 memory early-stop cut remaining datasets (under Gate).</summary>
         public HashSet<string> PartialProjects = new(StringComparer.Ordinal);
+        /// <summary>Per-project dataset-listing skips (errors or dataset-list truncation) kept independently of the 256-entry displayed SkipList (under Gate).</summary>
+        public Dictionary<string, ObjectIndexSkip> ProjectListingSkips = new(StringComparer.Ordinal);
         /// <summary>BigQuery's last full build's bulk path, when it ran.</summary>
         public BigQueryBulkStatus? Bulk;
         /// <summary>BigQuery datasets DDL changed since their last read, by project and dataset (under Gate): the next build re-reads them whole.</summary>

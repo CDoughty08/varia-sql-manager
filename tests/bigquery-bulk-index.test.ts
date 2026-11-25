@@ -21,7 +21,7 @@ const status = (overrides: Partial<ObjectIndexStatus> = {}): ObjectIndexStatus =
 const estimate: BigQueryIndexEstimateResult = { locations: [{ project: 'varia-alpha', location: 'US' }], estimate: { bytesProcessed: 50 * 2 ** 20, statementType: 'SELECT' }, cut: false, elapsedMs: 3 }
 const settle = () => new Promise(resolve => setImmediate(resolve))
 
-function harness(options: { bulk?: boolean; allProjects?: boolean; starredProjects?: readonly string[]; estimate?: ApiResult<BigQueryIndexEstimateResult> | 'throw'; gate?: false } = {}) {
+function harness(options: { bulk?: boolean; allProjects?: boolean; starredProjects?: readonly string[] | (() => readonly string[]); estimate?: ApiResult<BigQueryIndexEstimateResult> | 'throw'; gate?: false } = {}) {
   const index: Parameters<VariaApi['explorerIndex']>[0][] = []
   const pending: ((result: ApiResult<ObjectIndexResult>) => void)[] = []
   const estimates: Parameters<VariaApi['bigQueryIndexEstimate']>[0][] = []
@@ -46,7 +46,7 @@ function harness(options: { bulk?: boolean; allProjects?: boolean; starredProjec
   let ids = 0
   const service = new ObjectSearchService({
     api, documents, connections, settings: { get: (key => values[key]) as ObjectSearchOptions['settings']['get'] }, newId: () => 'req' + ++ids,
-    ...options.starredProjects ? { starredProjects: () => options.starredProjects! } : {},
+    ...options.starredProjects ? { starredProjects: typeof options.starredProjects === 'function' ? options.starredProjects : () => options.starredProjects as readonly string[] } : {},
     ...options.gate === false ? {} : { billedGate: (connectionId, value, signal) => new Promise((answer, fail) => { gates.push({ connectionId, estimate: value, signal, answer, fail }) }) }
   })
   return { service, api, index, pending, estimates, gates, connections }
@@ -182,6 +182,41 @@ describe('BigQuery bulk index path (renderer)', () => {
     await settle()
     expect(ungated.estimates).toEqual([])
     expect(ungated.index).toHaveLength(1)
+  })
+
+  it('drops locations for projects unstarred while the estimate or cost prompt is open', async () => {
+    let starred: readonly string[] = ['varia-beta']
+    const twoLocations: BigQueryIndexEstimateResult = {
+      locations: [{ project: 'varia-alpha', location: 'US' }, { project: 'varia-beta', location: 'EU' }],
+      estimate: { bytesProcessed: 50 * 2 ** 20, statementType: 'SELECT' }, cut: false, elapsedMs: 3
+    }
+    const { index, gates, connections } = harness({ bulk: true, allProjects: false, starredProjects: () => starred, estimate: { ok: true, value: twoLocations } })
+    connections.set([bigQuery('bq')])
+    await settle()
+    expect(gates).toHaveLength(1)
+    // User unstars varia-beta before answering the cost prompt.
+    starred = []
+    gates[0].answer({ run: true })
+    await settle()
+    // Only the billing project location remains; varia-beta is dropped from both starredProjects and bulk.locations.
+    expect(index).toEqual([{
+      connectionId: 'bq', requestId: 'req1', definitions: true, allProjects: false,
+      bulk: { locations: [{ project: 'varia-alpha', location: 'US' }], budgetBytes: twoLocations.estimate.bytesProcessed }
+    }])
+
+    // If the only estimated location belonged to the unstarred project, bulk is omitted altogether.
+    starred = ['varia-beta']
+    const onlyStarred: BigQueryIndexEstimateResult = {
+      locations: [{ project: 'varia-beta', location: 'EU' }],
+      estimate: { bytesProcessed: 50 * 2 ** 20, statementType: 'SELECT' }, cut: false, elapsedMs: 3
+    }
+    const second = harness({ bulk: true, allProjects: false, starredProjects: () => starred, estimate: { ok: true, value: onlyStarred } })
+    second.connections.set([bigQuery('bq')])
+    await settle()
+    starred = []
+    second.gates[0].answer({ run: true })
+    await settle()
+    expect(second.index).toEqual([{ connectionId: 'bq', requestId: 'req1', definitions: true, allProjects: false }])
   })
 
   it('says when a location\'s billed read failed and its datasets were read with free calls', () => {

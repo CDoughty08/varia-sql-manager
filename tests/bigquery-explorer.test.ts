@@ -229,10 +229,11 @@ describe('BigQuery Starred & Session Projects in Object Explorer', () => {
     const starredApi: Pick<VariaApi, 'loadBigQueryStarredProjects' | 'setBigQueryProjectStar'> = {
       loadBigQueryStarredProjects: vi.fn(async () => ({ ok: true as const, value: { byPrincipal: Object.fromEntries(Object.entries(stored).map(([k, v]) => [k, [...v]])) } as BigQueryStarredProjectsView })),
       setBigQueryProjectStar: vi.fn(async input => {
-        const list = stored[input.principal] ?? []
+        if (input.connectionId !== connectionId) return { ok: false as const, error: 'Unknown connection.' }
+        const list = stored[ada] ?? []
         const next = input.starred ? (list.includes(input.project) ? list : [...list, input.project]) : list.filter(item => item !== input.project)
-        if (next.length) stored = { ...stored, [input.principal]: next }
-        else { const copy = { ...stored }; delete copy[input.principal]; stored = copy }
+        if (next.length) stored = { ...stored, [ada]: next }
+        else { const copy = { ...stored }; delete copy[ada]; stored = copy }
         return { ok: true as const, value: { byPrincipal: Object.fromEntries(Object.entries(stored).map(([k, v]) => [k, [...v]])) } }
       })
     }
@@ -289,7 +290,7 @@ describe('BigQuery Starred & Session Projects in Object Explorer', () => {
     const publicId = publicProject.id
 
     // Starring the session-only project upgrades its role in place without disrupting expansion or node identity.
-    await bigQueryStarred.setStarred(ada, 'bigquery-public-data', true)
+    await bigQueryStarred.setStarred(connectionId, ada, 'bigquery-public-data', true)
     expect(root.children!.find(child => child.label === 'bigquery-public-data')).toMatchObject({ id: publicId, expanded: true, bigQueryProjectRole: 'starred', detail: undefined })
 
     // syncBigQueryReferencedProjects adds unstarred referenced projects and deduplicates billing & starred.
@@ -499,19 +500,37 @@ describe('BigQuery Starred & Session Projects in Object Explorer', () => {
     expect(actions.click).not.toHaveBeenCalled()
   })
 
-  it('reclaims session project slots when session projects are starred', async () => {
-    const { explorer, bigQueryStarred } = setupExplorer([])
-    await bigQueryStarred.load()
+  it('reclaims session project slots only after star persistence succeeds, keeping the row and expanded subtree on failure', async () => {
+    const { explorer, bigQueryStarred, starredApi } = setupExplorer([])
+    await bigQueryStarred.load(connectionId, ada)
     await Promise.resolve()
     await Promise.resolve()
     const root = explorer.node(explorer.rootIds[0]!)!
-    // Fill all 50 session project slots.
+    // Fill all 50 session project slots and expand the first session project.
     for (let i = 0; i < 50; i++) explorer.ensureBigQueryProject(connectionId, `session-proj-${String(i).padStart(2, '0')}`)
+    const seekOutcome = await explorer.seek(connectionId, [[
+      { type: 'object', object: { kind: 'bqProject', name: 'session-proj-00' } },
+      { type: 'object', object: { kind: 'bqDataset', project: 'session-proj-00', name: 'samples' } }
+    ]])
+    expect(seekOutcome.ok).toBe(true)
+    const originalNode = root.children!.find(child => child.label === 'session-proj-00')!
+    expect(originalNode.expanded).toBe(true)
     // Cap blocks a 51st session project while 50 unstarred session projects exist.
     explorer.ensureBigQueryProject(connectionId, 'session-proj-50')
     expect(root.children?.map(child => child.label)).not.toContain('session-proj-50')
-    // Starring one of the session projects reclaims its slot so a new session project can be revealed.
-    await bigQueryStarred.setStarred(ada, 'session-proj-00', true)
+    // If starring fails (e.g. 200-star cap reached), the optimistic star rolls back and the session row + expanded subtree stay intact.
+    let resolveFail!: (value: ApiResult<BigQueryStarredProjectsView>) => void
+    vi.mocked(starredApi.setBigQueryProjectStar).mockImplementationOnce(() => new Promise(resolve => { resolveFail = resolve }))
+    const failedStar = bigQueryStarred.setStarred(connectionId, ada, 'session-proj-00', true)
+    // While in flight, the session slot is NOT prematurely reclaimed.
+    explorer.ensureBigQueryProject(connectionId, 'session-proj-50')
+    expect(root.children?.map(child => child.label)).not.toContain('session-proj-50')
+    resolveFail({ ok: false, error: 'You can star at most 200 projects per account.' })
+    await failedStar
+    const afterFailure = root.children!.find(child => child.label === 'session-proj-00')
+    expect(afterFailure).toMatchObject({ id: originalNode.id, expanded: true, bigQueryProjectRole: 'session', detail: sessionProjectDetail })
+    // Once starring succeeds, the session slot IS reclaimed so a 51st session project can be revealed.
+    await bigQueryStarred.setStarred(connectionId, ada, 'session-proj-00', true)
     explorer.ensureBigQueryProject(connectionId, 'session-proj-50')
     expect(root.children?.map(child => child.label)).toContain('session-proj-50')
     explorer.dispose()

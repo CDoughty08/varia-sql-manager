@@ -28,11 +28,13 @@ export class BigQueryStarredService extends SnapshotStore<BigQueryStarredProject
   private readonly api: BigQueryStarredServiceOptions['api']
   private disposed = false
   private _loaded = false
+  private readonly loadedPrincipals = new Set<string>()
   private authoritative: Record<string, string[]> = Object.create(null)
   /** Monotonic dispatch sequence shared across `load()` and `setStarred()`, compared against `appliedSeq` so out-of-order responses never overwrite newer authoritative state. */
   private requestSeq = 0
   private appliedSeq = 0
   private latestLoadSeq = 0
+  private readonly latestPrincipalLoadSeq = new Map<string, number>()
   private mutationSeq = 0
   private readonly pending = new Map<string, { readonly principal: string; readonly project: string; readonly starred: boolean; readonly seq: number }>()
 
@@ -41,8 +43,14 @@ export class BigQueryStarredService extends SnapshotStore<BigQueryStarredProject
     this.api = options.api
   }
 
-  /** Whether the latest initial load from main has settled (used to hold startup tree restore until starred projects arrive). */
+  /** Whether a global load from main has settled. */
   get loaded(): boolean { return this._loaded }
+
+  /** Whether starred projects for `principalId` have settled (used to hold per-connection Explorer tree restore until that principal's stars arrive). */
+  isLoadedFor(principalId: string | undefined): boolean {
+    if (!principalId || principalId.startsWith('bigquery:anonymous:')) return true
+    return this._loaded || this.loadedPrincipals.has(principalId)
+  }
 
   private compose(): BigQueryStarredProjectsView {
     const byPrincipal = copyByPrincipal(this.authoritative)
@@ -60,23 +68,54 @@ export class BigQueryStarredService extends SnapshotStore<BigQueryStarredProject
     return { byPrincipal }
   }
 
-  /** Loads starred projects from main, updating the authoritative base while preserving any in-flight optimistic edits. */
-  async load(): Promise<void> {
+  /**
+   * Loads starred projects from main, updating the authoritative base while preserving any in-flight optimistic edits.
+   * When `connectionId` is given, main resolves its verified principal and returns only that principal's stars, which are
+   * merged into `authoritative` without disturbing other live principals.
+   */
+  async load(connectionId?: string, principalId?: string): Promise<void> {
     if (this.disposed) return
     const seq = ++this.requestSeq
-    this.latestLoadSeq = seq
+    if (principalId) this.latestPrincipalLoadSeq.set(principalId, seq)
+    else this.latestLoadSeq = seq
     let result: ApiResult<BigQueryStarredProjectsView> | undefined
     try {
-      result = await this.api.loadBigQueryStarredProjects()
+      result = await this.api.loadBigQueryStarredProjects(connectionId ? { connectionId } : undefined)
     } catch {
       result = undefined
     }
     if (this.disposed) return
-    const becameLoaded = !this._loaded && seq === this.latestLoadSeq
-    if (becameLoaded) this._loaded = true
+    let becameLoaded = false
+    if (principalId) {
+      if (!this.loadedPrincipals.has(principalId) && seq === this.latestPrincipalLoadSeq.get(principalId)) {
+        this.loadedPrincipals.add(principalId)
+        becameLoaded = true
+      }
+    } else if (!this._loaded && seq === this.latestLoadSeq) {
+      this._loaded = true
+      becameLoaded = true
+    }
     if (result?.ok && seq > this.appliedSeq) {
       this.appliedSeq = seq
-      this.authoritative = copyByPrincipal(result.value.byPrincipal)
+      if (connectionId && principalId) {
+        const incoming = result.value.byPrincipal
+        if (Object.hasOwn(incoming, principalId) && incoming[principalId]!.length) {
+          this.authoritative[principalId] = [...incoming[principalId]!]
+        } else {
+          delete this.authoritative[principalId]
+        }
+        for (const [principal, projects] of Object.entries(incoming)) {
+          this.authoritative[principal] = [...projects]
+          const latest = this.latestPrincipalLoadSeq.get(principal)
+          if (latest === undefined || seq >= latest) this.loadedPrincipals.add(principal)
+        }
+      } else {
+        this.authoritative = copyByPrincipal(result.value.byPrincipal)
+        for (const principal of Object.keys(result.value.byPrincipal)) {
+          const latest = this.latestPrincipalLoadSeq.get(principal)
+          if (latest === undefined || seq >= latest) this.loadedPrincipals.add(principal)
+        }
+      }
       this.publish(this.compose())
       return
     }
@@ -91,15 +130,21 @@ export class BigQueryStarredService extends SnapshotStore<BigQueryStarredProject
     return Object.hasOwn(byPrincipal, principalId) ? byPrincipal[principalId]! : emptyProjects
   }
 
-  /** Whether `project` is starred for `principalId`. */
+  /** Whether `project` is starred for `principalId` (including optimistic in-flight mutations). */
   isStarred(principalId: string | undefined, project: string): boolean {
     if (!principalId) return false
     const byPrincipal = this.getSnapshot().byPrincipal
     return Object.hasOwn(byPrincipal, principalId) ? byPrincipal[principalId]!.includes(project) : false
   }
 
-  /** Optimistically updates starred state for `principalId` and persists through main. */
-  async setStarred(principalId: string, project: string, starred: boolean): Promise<ApiResult<BigQueryStarredProjectsView>> {
+  /** Whether `project` is confirmed persisted as starred in main for `principalId` (never true while a star write is only optimistic). */
+  isConfirmedStarred(principalId: string | undefined, project: string): boolean {
+    if (!principalId) return false
+    return Object.hasOwn(this.authoritative, principalId) ? this.authoritative[principalId]!.includes(project) : false
+  }
+
+  /** Optimistically updates starred state for `principalId` and persists through main bound to the verified live `connectionId`. */
+  async setStarred(connectionId: string, principalId: string, project: string, starred: boolean): Promise<ApiResult<BigQueryStarredProjectsView>> {
     if (this.disposed) return { ok: false, error: 'Service is disposed.' }
     const key = `${principalId}\u0000${project}`
     const seq = ++this.requestSeq
@@ -108,7 +153,7 @@ export class BigQueryStarredService extends SnapshotStore<BigQueryStarredProject
     this.publish(this.compose())
     let result: ApiResult<BigQueryStarredProjectsView>
     try {
-      result = await this.api.setBigQueryProjectStar({ principal: principalId, project, starred })
+      result = await this.api.setBigQueryProjectStar({ connectionId, project, starred })
     } catch (error) {
       result = { ok: false, error: error instanceof Error ? error.message : 'Could not update starred projects.' }
     }
@@ -117,6 +162,7 @@ export class BigQueryStarredService extends SnapshotStore<BigQueryStarredProject
     if (result.ok && seq > this.appliedSeq) {
       this.appliedSeq = seq
       this.authoritative = copyByPrincipal(result.value.byPrincipal)
+      for (const principal of Object.keys(result.value.byPrincipal)) this.loadedPrincipals.add(principal)
     }
     this.publish(this.compose())
     return result
@@ -126,6 +172,8 @@ export class BigQueryStarredService extends SnapshotStore<BigQueryStarredProject
     if (this.disposed) return
     this.disposed = true
     this.pending.clear()
+    this.loadedPrincipals.clear()
+    this.latestPrincipalLoadSeq.clear()
     this.clearListeners()
   }
 }
@@ -140,6 +188,21 @@ const fromEndWords = new Set(['WHERE', 'GROUP', 'HAVING', 'QUALIFY', 'WINDOW', '
 const createTableModifiers = new Set(['OR', 'REPLACE', 'TEMP', 'TEMPORARY', 'EXTERNAL', 'SNAPSHOT'])
 /** Keywords that end a CREATE TABLE header before any subsequent query clauses (non-reserved OPTIONS requires `(` and CLUSTER requires `BY`). */
 const createTableEndWords = new Set(['AS', 'SELECT', 'WHERE', 'PARTITION'])
+
+/** Keywords that cannot be an implicit (no-AS) table alias in a FROM clause. */
+const aliasStopWords = new Set([
+  'ON', 'USING', 'WHERE', 'JOIN', 'LEFT', 'RIGHT', 'FULL', 'INNER', 'CROSS', 'OUTER', 'NATURAL', 'GROUP', 'HAVING',
+  'QUALIFY', 'WINDOW', 'ORDER', 'LIMIT', 'UNION', 'INTERSECT', 'EXCEPT', 'PIVOT', 'UNPIVOT', 'TABLESAMPLE', 'FOR',
+  'WITH', 'SET', 'WHEN', 'VALUES', 'SELECT', 'FROM', 'INTO', 'OPTIONS', 'AND', 'OR', 'OFFSET'
+])
+
+/** Unquotes a single backticked alias token or returns a plain word token's text. */
+function aliasName(token: ScanTok | undefined): string | undefined {
+  if (!token) return undefined
+  if (token.kind === 'quotedIdentifier') return token.open ? undefined : token.text.slice(1, -1).replace(/\\(.)/g, '$1')
+  if (token.kind === 'word') return token.text
+  return undefined
+}
 
 /** Splits a backtick-quoted identifier into dotted parts while keeping domain-scoped projects (`example.com:proj`) intact. */
 function splitQuotedParts(token: ScanTok): string[] {
@@ -209,10 +272,25 @@ export function referencedBigQueryProjects(sql: string): string[] {
   let inFrom = false
   let inMerge = false
   let createHeader: 'none' | 'create' | 'table' = 'none'
-  // Per-delimiter-depth stack for `inFrom` and whether `(` belongs to EXTRACT(...), so `FROM UNNEST(a) x, proj.ds.tbl`,
-  // `FROM (SELECT 1) a, proj.ds.tbl`, and array literals `[a, b.c.d]` inside JOIN ... ON work without false positives.
+  // Per-delimiter-depth stack for `inFrom`, earlier FROM aliases (to exclude implicit UNNEST like `FROM t AS orders, orders.payload.items`),
+  // and whether `(` belongs to EXTRACT(...), so `FROM UNNEST(a) x, proj.ds.tbl`, `FROM (SELECT 1) a, proj.ds.tbl`, and array literals work cleanly.
   const fromStack: boolean[] = []
+  const fromAliasStack: Set<string>[] = []
   const parenExtract: boolean[] = []
+  let fromAliases = new Set<string>()
+
+  /** Records an explicit `[AS] alias` immediately following a FROM item (or `defaultName` when none is given). */
+  const recordFromAlias = (after: number, defaultName?: string) => {
+    const next = toks[after]
+    if (next?.kind === 'word' && next.upper === 'AS') {
+      const explicit = aliasName(toks[after + 1])
+      if (explicit) { fromAliases.add(explicit.toLowerCase()); return }
+    } else if (next && isNameTok(next) && !(next.kind === 'word' && aliasStopWords.has(next.upper))) {
+      const explicit = aliasName(next)
+      if (explicit) { fromAliases.add(explicit.toLowerCase()); return }
+    }
+    if (defaultName) fromAliases.add(defaultName.toLowerCase())
+  }
 
   for (let index = 0; index < toks.length && projects.length < bigQueryReferenceScanLimits.maxProjects; index++) {
     const token = toks[index]
@@ -220,13 +298,17 @@ export function referencedBigQueryProjects(sql: string): string[] {
 
     if (isPunct(token, '(') || isPunct(token, '[')) {
       fromStack.push(inFrom)
+      fromAliasStack.push(fromAliases)
       parenExtract.push(isPunct(token, '(') && prev?.kind === 'word' && prev.upper === 'EXTRACT')
       inFrom = false
+      fromAliases = new Set<string>()
       continue
     }
     if (isPunct(token, ')') || isPunct(token, ']')) {
       parenExtract.pop()
       inFrom = fromStack.pop() ?? false
+      fromAliases = fromAliasStack.pop() ?? new Set<string>()
+      if (inFrom && isPunct(token, ')')) recordFromAlias(index + 1)
       continue
     }
     if (isPunct(token, ';')) {
@@ -234,11 +316,14 @@ export function referencedBigQueryProjects(sql: string): string[] {
       inMerge = false
       createHeader = 'none'
       fromStack.length = 0
+      fromAliasStack.length = 0
       parenExtract.length = 0
+      fromAliases = new Set<string>()
       continue
     }
     if (isPunct(token, '|') && isPunct(toks[index + 1], '>')) {
       inFrom = false
+      fromAliases = new Set<string>()
       index++
       continue
     }
@@ -258,9 +343,9 @@ export function referencedBigQueryProjects(sql: string): string[] {
         if (token.upper === 'MERGE') inMerge = true
         else if (token.upper === 'WHEN') inMerge = false
       }
-      if (token.upper === 'FROM' && !parenExtract.at(-1) && !(prev?.kind === 'word' && prev.upper === 'DISTINCT')) { inFrom = true; continue }
+      if (token.upper === 'FROM' && !parenExtract.at(-1) && !(prev?.kind === 'word' && prev.upper === 'DISTINCT')) { inFrom = true; fromAliases = new Set<string>(); continue }
       if (token.upper === 'JOIN') { inFrom = true; continue }
-      if (fromEndWords.has(token.upper) || (token.upper === 'OPTIONS' && parenClause)) { inFrom = false; continue }
+      if (fromEndWords.has(token.upper) || (token.upper === 'OPTIONS' && parenClause)) { inFrom = false; fromAliases = new Set<string>(); continue }
     }
 
     if (!isNameTok(token)) continue
@@ -270,10 +355,11 @@ export function referencedBigQueryProjects(sql: string): string[] {
     const isDistinctFrom = prev?.kind === 'word' && prev.upper === 'FROM' && toks[index - 2]?.kind === 'word' && toks[index - 2].upper === 'DISTINCT'
     const isCreateTableLike = createHeader === 'table' && fromStack.length === 0 && prev?.kind === 'word' && prev.upper === 'LIKE'
     const isMergeUsing = inMerge && fromStack.length === 0 && prev?.kind === 'word' && prev.upper === 'USING'
+    const isCommaFrom = inFrom && isPunct(prev, ',')
     const isObjectPos = (prev?.kind === 'word' && objectLeadWords.has(prev.upper) && !(prev.upper === 'FROM' && parenExtract.at(-1)) && !isDistinctFrom)
       || isCreateTableLike
       || isMergeUsing
-      || (inFrom && isPunct(prev, ','))
+      || isCommaFrom
     if (isCreateTableLike) createHeader = 'none'
     if (isMergeUsing) inMerge = false
 
@@ -318,13 +404,151 @@ export function referencedBigQueryProjects(sql: string): string[] {
     }
 
     const followedByCall = isPunct(toks[cursor], '(')
+    // `FROM orders AS o, o.payload.items AS item`: a comma-FROM path starting with an earlier FROM alias is an implicit UNNEST, not a project.
+    const isImplicitUnnest = isCommaFrom && !singleBacktickMultiPart && parts.length >= 2 && fromAliases.has(parts[0].toLowerCase())
+    if (inFrom && isObjectPos && !followedByCall) recordFromAlias(cursor, parts.at(-1))
     if (followedByCall && parts.length >= 4 && parts[0].toUpperCase() === 'SAFE') {
       record(parts.slice(1))
-    } else if (parts.length >= 3 && (singleBacktickMultiPart || isObjectPos || followedByCall)) {
+    } else if (parts.length >= 3 && !isImplicitUnnest && (singleBacktickMultiPart || isObjectPos || followedByCall)) {
       record(parts)
     }
     index = cursor - 1
   }
 
   return projects
+}
+
+export interface BigQuerySyncModel {
+  getValue(): string
+  getAlternativeVersionId?(): number
+  onDidChangeContent?(listener: () => void): { dispose(): void }
+}
+
+export interface BigQuerySyncDocument {
+  readonly id: string
+  readonly kind?: string
+  readonly connectionId?: string | null
+}
+
+export interface BigQuerySyncConnection {
+  readonly id: string
+  readonly principalId?: string
+  readonly authentication?: { readonly principal: { readonly provider: string; readonly principal?: string } }
+}
+
+export interface BigQueryExplorerSyncDeps {
+  readonly connections: {
+    liveBigQuery(): readonly BigQuerySyncConnection[]
+    isLiveBigQuery(id: string): boolean
+    subscribe(listener: () => void): () => void
+  }
+  readonly documents: {
+    getSnapshot(): { readonly documents: readonly BigQuerySyncDocument[] }
+    get(id: string): BigQuerySyncDocument | undefined
+    getModel(id: string): BigQuerySyncModel | undefined
+    subscribe(listener: () => void): () => void
+  }
+  readonly events: {
+    subscribe(listener: (event: { readonly type: string; readonly tabId?: string }) => void): { dispose(): void }
+  }
+  readonly explorer: {
+    syncBigQueryReferencedProjects(connectionId: string, projects: readonly string[]): void
+  }
+  readonly loadStarred: (connectionId: string, principalId: string) => void
+  readonly debounceMs?: number
+}
+
+/**
+ * Keeps Object Explorer's BigQuery session projects and per-connection Starred Projects synchronized with live
+ * connections and open query tabs — scanning on open/connect, debounced content edits, and query execution.
+ */
+export function bindBigQueryExplorerSync(deps: BigQueryExplorerSyncDeps): { sync(): void; dispose(): void } {
+  const debounceMs = deps.debounceMs ?? 400
+  const seenConnections = new Set<string>()
+  const watchers = new Map<string, { connectionId: string; version: number; timer?: ReturnType<typeof setTimeout>; disposable: { dispose(): void } }>()
+  let disposed = false
+
+  const stopWatcher = (docId: string) => {
+    const existing = watchers.get(docId)
+    if (!existing) return
+    if (existing.timer !== undefined) clearTimeout(existing.timer)
+    existing.disposable.dispose()
+    watchers.delete(docId)
+  }
+
+  const scanTab = (docId: string, connectionId: string, force = false) => {
+    const model = deps.documents.getModel(docId)
+    if (!model) return
+    const watcher = watchers.get(docId)
+    const version = typeof model.getAlternativeVersionId === 'function' ? model.getAlternativeVersionId() : -1
+    if (!force && version >= 0 && watcher && watcher.connectionId === connectionId && watcher.version === version) return
+    if (watcher && watcher.connectionId === connectionId) watcher.version = version
+    const text = model.getValue()
+    if (!text) return
+    const referenced = referencedBigQueryProjects(text)
+    if (referenced.length) deps.explorer.syncBigQueryReferencedProjects(connectionId, referenced)
+  }
+
+  const sync = () => {
+    if (disposed) return
+    const liveBqIds = new Set<string>()
+    for (const connection of deps.connections.liveBigQuery()) {
+      liveBqIds.add(connection.id)
+      const principal = connection.authentication?.principal.provider === 'bigquery' ? connection.authentication.principal.principal : connection.principalId
+      if (principal?.startsWith('bigquery:') && !principal.startsWith('bigquery:anonymous:') && !seenConnections.has(connection.id)) {
+        seenConnections.add(connection.id)
+        deps.loadStarred(connection.id, principal)
+      }
+    }
+    for (const id of [...seenConnections]) if (!liveBqIds.has(id)) seenConnections.delete(id)
+
+    const activeTabIds = new Set<string>()
+    for (const doc of deps.documents.getSnapshot().documents) {
+      const connectionId = doc.connectionId
+      if ((doc.kind !== undefined && doc.kind !== 'sql') || !connectionId || !deps.connections.isLiveBigQuery(connectionId)) continue
+      activeTabIds.add(doc.id)
+      const existing = watchers.get(doc.id)
+      if (existing?.connectionId === connectionId) continue
+      stopWatcher(doc.id)
+      const model = deps.documents.getModel(doc.id)
+      if (!model) continue
+      const entry: { connectionId: string; version: number; timer?: ReturnType<typeof setTimeout>; disposable: { dispose(): void } } = {
+        connectionId,
+        version: -1,
+        disposable: typeof model.onDidChangeContent === 'function'
+          ? model.onDidChangeContent(() => {
+            if (entry.timer !== undefined) clearTimeout(entry.timer)
+            entry.timer = setTimeout(() => {
+              entry.timer = undefined
+              if (!disposed && deps.connections.isLiveBigQuery(connectionId)) scanTab(doc.id, connectionId)
+            }, debounceMs)
+          })
+          : { dispose: () => {} }
+      }
+      watchers.set(doc.id, entry)
+      scanTab(doc.id, connectionId, true)
+    }
+    for (const id of [...watchers.keys()]) if (!activeTabIds.has(id)) stopWatcher(id)
+  }
+
+  const offConnections = deps.connections.subscribe(sync)
+  const offDocuments = deps.documents.subscribe(sync)
+  const offEvents = deps.events.subscribe(event => {
+    if (event.type !== 'query.started' || !event.tabId) return
+    const doc = deps.documents.get(event.tabId)
+    if (doc && (doc.kind === undefined || doc.kind === 'sql') && doc.connectionId && deps.connections.isLiveBigQuery(doc.connectionId)) scanTab(doc.id, doc.connectionId, true)
+  })
+
+  return {
+    sync,
+    dispose() {
+      if (disposed) return
+      disposed = true
+      offConnections()
+      offDocuments()
+      offEvents.dispose()
+      for (const id of [...watchers.keys()]) stopWatcher(id)
+      seenConnections.clear()
+    }
+  }
 }

@@ -19,11 +19,12 @@ internal sealed class BigQueryLookup
     private readonly Dictionary<string, Dictionary<string, DatabaseIndex>> reads = new(StringComparer.Ordinal);
     private readonly HashSet<string> namesOnly;
     private readonly HashSet<string> partialProjects;
+    private readonly Dictionary<string, ObjectIndexSkip> projectListingSkips;
     private readonly List<ObjectIndexSkip> skips;
     private readonly bool building, built;
 
     internal BigQueryLookup(string billing, IReadOnlyList<string> extras, IEnumerable<DatabaseIndex> held, IEnumerable<string>? namesOnly, IEnumerable<ObjectIndexSkip> skips,
-        bool building, bool built, IndexBudget budget, Action? arraysBuilt = null, IEnumerable<string>? partialProjects = null)
+        bool building, bool built, IndexBudget budget, Action? arraysBuilt = null, IEnumerable<string>? partialProjects = null, IReadOnlyDictionary<string, ObjectIndexSkip>? projectListingSkips = null)
     {
         Projects = [billing, .. extras.Where(extra => extra != billing).Distinct(StringComparer.Ordinal)];
         foreach (var read in held)
@@ -34,6 +35,7 @@ internal sealed class BigQueryLookup
         }
         this.namesOnly = [.. namesOnly ?? []];
         this.partialProjects = new HashSet<string>(partialProjects ?? [], StringComparer.Ordinal);
+        this.projectListingSkips = projectListingSkips is null ? new(StringComparer.Ordinal) : new(projectListingSkips, StringComparer.Ordinal);
         this.skips = [.. skips];
         (this.building, this.built, this.budget, this.arraysBuilt) = (building, built, budget, arraysBuilt);
     }
@@ -56,7 +58,7 @@ internal sealed class BigQueryLookup
     public LookupState ProjectState(string project)
     {
         if (Project(project) is not { } known) return LookupState.Absent;
-        var listing = skips.Any(skip => skip.Project == known && skip.Database == "");
+        var listing = projectListingSkips.ContainsKey(known) || skips.Any(skip => skip.Project == known && skip.Database == "");
         // Datasets read before a listing that failed (or was cut) still answer, but the list may be short; so it is when a dataset
         // listed but never read is left out of it.
         if (reads.TryGetValue(known, out var held))
@@ -87,7 +89,7 @@ internal sealed class BigQueryLookup
             ?? (read is null ? skips.LastOrDefault(item => item.Project == known && item.Database != "" && string.Equals(item.Database, name, StringComparison.OrdinalIgnoreCase)) : null);
         if (read is not null)
             return new(known, name, read.ChildrenLeftOut || namesOnly.Contains(known) || own is not null ? LookupState.Partial : LookupState.Ready, read, own);
-        var skip = own ?? skips.LastOrDefault(item => item.Project == known && item.Database == "");
+        var skip = own ?? projectListingSkips.GetValueOrDefault(known) ?? skips.LastOrDefault(item => item.Project == known && item.Database == "");
         if (skip is not null) return new(known, own?.Database ?? name, LookupState.Skipped, null, skip);
         if (partialProjects.Contains(known))
         {

@@ -991,7 +991,7 @@ export interface VariaApi {
   /** Connected BigQuery handle: one page of accessible projects (free REST projects.list). */
   bigQueryConnectionProjects(params: { connectionId: string; pageToken?: string }): Promise<ApiResult<BigQueryProjectList>>
   /** Per-principal Starred Projects persisted in bigquery-connections.json (separate from connection identity). */
-  loadBigQueryStarredProjects(): Promise<ApiResult<BigQueryStarredProjectsView>>
+  loadBigQueryStarredProjects(input?: { readonly connectionId?: string }): Promise<ApiResult<BigQueryStarredProjectsView>>
   setBigQueryProjectStar(input: BigQueryStarProjectInput): Promise<ApiResult<BigQueryStarredProjectsView>>
   /** A free dry run of GoogleSQL text on a connected BigQuery handle: the bytes it would process (the estimate chip, the
    *  cost prompts and dry-run diagnostics). It sends the text to Google. */

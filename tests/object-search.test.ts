@@ -1277,6 +1277,28 @@ describe('ObjectSearchService', () => {
     service.dispose()
   })
 
+  it('triggers a scoped refresh when opening Search Objects on an unstarred, unindexed BigQuery project/dataset with discovery off', async () => {
+    const { service, calls, pendingIndex, connections } = harness({ allProjects: false, starredProjects: () => ['varia-beta'] })
+    connections.set([bigQueryConnection('bq')])
+    expect(calls.index).toHaveLength(1)
+    pendingIndex[0]({ ok: true, value: { status: status({ provider: 'bigquery', projects: 2 }), elapsedMs: 1 } })
+    await settle()
+    // Opening Search Objects scoped to the billing project or an already-starred project does NOT trigger a redundant scoped refresh.
+    service.open('bq', undefined, false, { project: 'varia-alpha', dataset: 'sales' })
+    service.open('bq', undefined, false, { project: 'varia-beta', dataset: 'census' })
+    expect(calls.index).toHaveLength(1)
+    // Opening Search Objects scoped to an unstarred session project/dataset triggers a free scoped refresh so matches are not falsely empty.
+    service.open('bq', undefined, false, { project: 'session-only-1', dataset: 'adhoc' })
+    expect(calls.index).toHaveLength(2)
+    expect(calls.index[1]).toMatchObject({ connectionId: 'bq', allProjects: false, scope: { project: 'session-only-1', dataset: 'adhoc' } })
+    pendingIndex[1]({ ok: true, value: { status: status({ provider: 'bigquery', projects: 3 }), elapsedMs: 1 } })
+    await settle()
+    // Opening the same scope again after it has been indexed does not redundantly re-fetch it.
+    service.open('bq', undefined, false, { project: 'session-only-1', dataset: 'adhoc' })
+    expect(calls.index).toHaveLength(2)
+    service.dispose()
+  })
+
   it('reveals a BigQuery hit below its project and dataset, a column below its table and the record columns above it', () => {
     const project = { type: 'object', object: { kind: 'bqProject', name: 'varia-alpha' } }
     const dataset = { kind: 'bqDataset', project: 'varia-alpha', name: 'sales' } as const

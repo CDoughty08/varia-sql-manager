@@ -103,21 +103,31 @@ describe('BigQuery connections through the connection owner', () => {
     expect(load.mock.calls[0]![0]).toMatchObject(options)
   })
 
-  it('deduplicates equivalent live BigQuery connections and auto-claims migrated projects on verified connect', async () => {
+  it('deduplicates equivalent live BigQuery connections, exposes verified live handles, and claims only matching target migrated projects', async () => {
     const { service, open, close, bigQuery, request } = await fixture()
-    await bigQuery.addMigratedProjects(['varia-beta', 'bigquery-public-data'])
-    const first = request()
+    const first = request(), otherTarget = randomUUID()
+    await bigQuery.addMigratedTargetProjects(first.targetId, ['varia-beta', 'bigquery-public-data'])
+    await bigQuery.addMigratedTargetProjects(otherTarget, ['other-only-project'])
     const firstResult = await service.connect(options, first)
     expect(firstResult).toMatchObject({ ok: true })
+    const liveId = (firstResult as { ok: true; value: ConnectionInfo }).value.id
     await service.accept(first.requestId)
-    // Migrated projects were claimed into starredProjects for the verified principal on connect.
+    // Main exposes the verified live BigQuery handle and live principals for star IPC and bulk validation.
+    expect(service.bigQueryHandle(liveId)).toEqual({ principal: ada, billingProject: 'varia-alpha' })
+    expect(service.bigQueryHandle(randomUUID())).toBeUndefined()
+    expect([...service.liveBigQueryPrincipals()]).toEqual([ada])
+    // Only the matching target's migrated projects were claimed; the other target's remain untouched.
     expect(await bigQuery.loadStarredProjects()).toEqual({ byPrincipal: { [ada]: ['varia-beta', 'bigquery-public-data'] } })
-    expect((await bigQuery.load()).library.migratedProjects).toBeUndefined()
+    expect((await bigQuery.load()).library.migratedTargets).toEqual([{ targetId: otherTarget, projects: ['other-only-project'] }])
     // Connecting again with identical BigQuery settings and principal reuses the live handle and disposes the duplicate.
     const second = request()
     const secondResult = await service.connect(options, second)
-    expect(secondResult).toMatchObject({ ok: true, value: { id: (firstResult as { ok: true; value: ConnectionInfo }).value.id, targetId: first.targetId } })
+    expect(secondResult).toMatchObject({ ok: true, value: { id: liveId, targetId: first.targetId } })
     expect(open).toHaveBeenCalledTimes(2)
     expect(close).toHaveBeenCalledTimes(1)
+    // Disconnecting drops the handle from bigQueryHandle / liveBigQueryPrincipals.
+    await service.disconnect(liveId)
+    expect(service.bigQueryHandle(liveId)).toBeUndefined()
+    expect([...service.liveBigQueryPrincipals()]).toEqual([])
   })
 })

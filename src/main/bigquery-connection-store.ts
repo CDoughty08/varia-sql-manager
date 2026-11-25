@@ -3,7 +3,7 @@ import { basename } from 'node:path'
 import { bigQueryProjectSchema, connectionAutoReconnectSchema, connectionKey } from '../shared/connections'
 import {
   bigQueryCostPromptInputSchema, bigQueryCostThresholdInputSchema, bigQueryEnvironmentInputSchema, bigQueryLibraryFileSchema, bigQueryLibraryLimits, bigQueryProfileInputSchema,
-  bigQueryStarProjectInputSchema, bigQueryStarredPrincipalSchema,
+  bigQueryStarredPrincipalSchema, bigQueryStoredProfileSchema,
   type BigQueryConnectionProfile, type BigQueryLibraryFile, type BigQueryLibraryView, type BigQueryProfileInput, type BigQueryStarredProjectsView, type BigQueryStoredProfile
 } from '../shared/bigquery-connections'
 import type { BigQueryConnectionOptions } from '../shared/contracts'
@@ -18,15 +18,16 @@ const keyOf = (options: BigQueryConnectionOptions) => connectionKey(options)
 
 /**
  * Tolerates pre-upgrade `bigquery-connections.json` files whose saved BigQuery profiles still carry `extraProjects`:
- * strips `extraProjects` from each profile's options and collects those valid project IDs into `migratedProjects`, so
- * they are claimed into `starredProjects` on the next BigQuery connect instead of quarantining the library.
+ * strips `extraProjects` from each profile's options and keeps those valid project IDs attached to that originating
+ * profile (`migratedProjects`), so each account claims only its own legacy projects on reconnect instead of pooling
+ * across accounts or quarantining the library.
  */
 function migrateLegacyLibrary(raw: unknown): { value: unknown; migrated: boolean } {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { value: raw, migrated: false }
   const record = raw as Record<string, unknown>
   if (record.version !== 1 || !Array.isArray(record.profiles)) return { value: raw, migrated: false }
-  const collected: string[] = []
   let migrated = false
+  let invalidExisting = false
   const profiles = record.profiles.map(profile => {
     if (!profile || typeof profile !== 'object' || Array.isArray(profile)) return profile
     const entry = profile as Record<string, unknown>
@@ -36,23 +37,23 @@ function migrateLegacyLibrary(raw: unknown): { value: unknown; migrated: boolean
     if (opts.provider !== 'bigquery' || !Object.hasOwn(opts, 'extraProjects')) return profile
     const extra = opts.extraProjects
     // Pre-upgrade bigQueryLimits.extraProjects was 16; oversized or malformed arrays still quarantine.
-    if (extra !== undefined && (!Array.isArray(extra) || extra.length > 16 || !extra.every(item => typeof item === 'string' && bigQueryProjectSchema.safeParse(item).success))) return profile
+    if (extra !== undefined && (!Array.isArray(extra) || extra.length > bigQueryLibraryLimits.legacyExtraProjects || !extra.every(item => typeof item === 'string' && bigQueryProjectSchema.safeParse(item).success))) return profile
+    const existingMigrated = bigQueryStoredProfileSchema.shape.migratedProjects.safeParse(entry.migratedProjects)
+    if (!existingMigrated.success) { invalidExisting = true; return profile }
     migrated = true
     const billing = typeof opts.project === 'string' ? opts.project : ''
+    const merged: string[] = [...existingMigrated.data ?? []]
     if (Array.isArray(extra)) {
-      for (const project of extra) if (project !== billing && !collected.includes(project)) collected.push(project)
+      for (const project of extra) if (project !== billing && !merged.includes(project) && merged.length < bigQueryLibraryLimits.legacyExtraProjects) merged.push(project)
     }
     const { extraProjects: _extraProjects, ...rest } = opts
-    return { ...entry, options: rest }
+    const nextEntry: Record<string, unknown> = { ...entry, options: rest }
+    if (merged.length) nextEntry.migratedProjects = merged
+    else delete nextEntry.migratedProjects
+    return nextEntry
   })
-  if (!migrated) return { value: raw, migrated: false }
-  const existingMigrated = bigQueryLibraryFileSchema.shape.migratedProjects.safeParse(record.migratedProjects)
-  if (!existingMigrated.success) return { value: raw, migrated: false }
-  const merged: string[] = [...existingMigrated.data ?? []]
-  for (const project of collected) if (!merged.includes(project) && merged.length < bigQueryLibraryLimits.starredPerPrincipal) merged.push(project)
-  const next: Record<string, unknown> = { ...record, profiles }
-  if (merged.length) next.migratedProjects = merged
-  return { value: next, migrated: true }
+  if (!migrated || invalidExisting) return { value: raw, migrated: false }
+  return { value: { ...record, profiles }, migrated: true }
 }
 
 /** Merges valid, deduplicated project IDs into `principal`'s starred list within `bigQueryLibraryLimits`. */
@@ -132,6 +133,8 @@ function prune(library: BigQueryLibraryFile) {
  */
 export class BigQueryConnectionStore {
   private writes: Promise<unknown> = Promise.resolve()
+  /** Retained when an internal startup read (e.g. starred projects) quarantines an invalid library so the Connect dialog still surfaces the recovery warning. */
+  private pendingWarning: string | undefined
   constructor(private readonly path: string, private readonly keyFiles: BigQueryKeyFiles) {}
 
   private async read(): Promise<{ library: BigQueryLibraryFile; warning?: string; migrated?: boolean }> {
@@ -147,7 +150,9 @@ export class BigQueryConnectionStore {
     }
     if (!library) {
       await quarantine(this.path)
-      return { library: empty(), warning: 'The saved BigQuery connections were invalid. Their original file was preserved.' }
+      const warning = 'The saved BigQuery connections were invalid. Their original file was preserved.'
+      this.pendingWarning = warning
+      return { library: empty(), warning }
     }
     // A path this platform cannot use (a Windows path read on Linux or macOS) makes the file invalid too, rather than
     // failing every later read.
@@ -157,24 +162,30 @@ export class BigQueryConnectionStore {
     }
     catch {
       await quarantine(this.path)
-      return { library: empty(), warning: 'The saved BigQuery connections were invalid. Their original file was preserved.' }
+      const warning = 'The saved BigQuery connections were invalid. Their original file was preserved.'
+      this.pendingWarning = warning
+      return { library: empty(), warning }
     }
     return { library, ...migrated ? { migrated: true } : {} }
   }
 
-  /** The library as the renderer sees it: key files by reference and name, never their paths. */
+  /** The library as the renderer sees it: key files by reference and name, never their paths or internal migration state. */
   static view(library: BigQueryLibraryFile): BigQueryLibraryView {
-    return { profiles: library.profiles.map(({ keyPath, ...profile }): BigQueryConnectionProfile => ({ ...profile, ...keyPath ? { keyFileName: basename(keyPath) } : {} })) }
+    return { profiles: library.profiles.map(({ keyPath, migratedProjects: _migratedProjects, ...profile }): BigQueryConnectionProfile => ({ ...profile, ...keyPath ? { keyFileName: basename(keyPath) } : {} })) }
   }
 
-  /** Starred projects indexed by verified principal, as the renderer sees them. */
-  static starredView(library: BigQueryLibraryFile): BigQueryStarredProjectsView {
+  /** Starred projects indexed by verified principal, optionally filtered to a live-connection allowlist. */
+  static starredView(library: BigQueryLibraryFile, allowedPrincipals?: ReadonlySet<string>): BigQueryStarredProjectsView {
     const byPrincipal: Record<string, readonly string[]> = Object.create(null)
-    for (const entry of library.starredProjects ?? []) byPrincipal[entry.principal] = [...entry.projects]
+    for (const entry of library.starredProjects ?? []) {
+      if (allowedPrincipals && !allowedPrincipals.has(entry.principal)) continue
+      byPrincipal[entry.principal] = [...entry.projects]
+    }
     return { byPrincipal }
   }
 
-  async load(): Promise<{ library: BigQueryLibraryFile; warning?: string }> {
+  /** Serialized read that persists legacy migration without consuming `pendingWarning` (used by internal callers). */
+  private readSerialized(): Promise<{ library: BigQueryLibraryFile; warning?: string }> {
     const next = this.writes.then(async () => {
       const result = await this.read()
       // Persist the stripped pre-upgrade library inside the same serialized slot so concurrent callers see the migrated state and never race on quarantine.
@@ -187,6 +198,13 @@ export class BigQueryConnectionStore {
     })
     this.writes = next.catch(() => {})
     return next
+  }
+
+  async load(): Promise<{ library: BigQueryLibraryFile; warning?: string }> {
+    const result = await this.readSerialized()
+    const warning = result.warning ?? this.pendingWarning
+    this.pendingWarning = undefined
+    return { library: result.library, ...warning ? { warning } : {} }
   }
 
   /** Reads, applies `update` and writes the result, unless `unchanged` says the update changed nothing. */
@@ -330,7 +348,7 @@ export class BigQueryConnectionStore {
 
   /** Whether the user confirmed `source` for the configuration at `keyPath`, so its token file goes to Google's STS only after a yes. */
   async sourceConfirmed(keyPath: string, source: string): Promise<boolean> {
-    const { library } = await this.load()
+    const { library } = await this.readSerialized()
     return !!library.confirmedSources?.some(item => item.keyPath === keyPath && item.source === source)
   }
 
@@ -343,31 +361,41 @@ export class BigQueryConnectionStore {
     })
   }
 
-  /** Per-principal starred projects persisted in `bigquery-connections.json`. */
-  async loadStarredProjects(): Promise<BigQueryStarredProjectsView> {
-    const { library } = await this.load()
-    return BigQueryConnectionStore.starredView(library)
+  /** Per-principal starred projects persisted in `bigquery-connections.json`, filtered to currently live verified principals when `allowedPrincipals` is provided. */
+  async loadStarredProjects(allowedPrincipals?: ReadonlySet<string>): Promise<BigQueryStarredProjectsView> {
+    const { library } = await this.readSerialized()
+    return BigQueryConnectionStore.starredView(library, allowedPrincipals)
   }
 
-  /** Stars or unstars `project` for a verified BigQuery principal, bounded by `bigQueryLibraryLimits`. */
-  async setProjectStar(value: unknown): Promise<BigQueryStarredProjectsView> {
-    const input = bigQueryStarProjectInputSchema.parse(value)
+  /** Authoritative persisted starred projects for a single verified BigQuery principal (used by main to validate index and bulk requests). */
+  async starredProjectsFor(principal: string): Promise<readonly string[]> {
+    if (principal.startsWith('bigquery:anonymous:')) return []
+    const { library } = await this.readSerialized()
+    const entry = library.starredProjects?.find(item => item.principal === principal)
+    return entry ? [...entry.projects] : []
+  }
+
+  /** Stars or unstars `project` for a main-verified BigQuery principal, bounded by `bigQueryLibraryLimits`. */
+  async setProjectStarForPrincipal(principal: string, project: string, starred: boolean, allowedPrincipals?: ReadonlySet<string>): Promise<BigQueryStarredProjectsView> {
+    const validPrincipal = bigQueryStarredPrincipalSchema.parse(principal)
+    if (validPrincipal.startsWith('bigquery:anonymous:')) throw new Error('Connect to BigQuery with a verified account to star projects.')
+    const validProject = bigQueryProjectSchema.parse(project)
     const changed = await this.change(library => {
       const list = library.starredProjects ?? []
-      const entry = list.find(item => item.principal === input.principal)
-      if (input.starred) {
+      const entry = list.find(item => item.principal === validPrincipal)
+      if (starred) {
         if (entry) {
-          if (entry.projects.includes(input.project)) return false
+          if (entry.projects.includes(validProject)) return false
           if (entry.projects.length >= bigQueryLibraryLimits.starredPerPrincipal) throw new Error(`You can star at most ${bigQueryLibraryLimits.starredPerPrincipal} projects per account.`)
-          entry.projects.push(input.project)
+          entry.projects.push(validProject)
           return true
         }
         if (list.length >= bigQueryLibraryLimits.starredPrincipals) throw new Error(`Too many BigQuery accounts have starred projects (at most ${bigQueryLibraryLimits.starredPrincipals}).`)
-        library.starredProjects = [...list, { principal: input.principal, projects: [input.project] }]
+        library.starredProjects = [...list, { principal: validPrincipal, projects: [validProject] }]
         return true
       }
-      if (!entry || !entry.projects.includes(input.project)) return false
-      entry.projects = entry.projects.filter(project => project !== input.project)
+      if (!entry || !entry.projects.includes(validProject)) return false
+      entry.projects = entry.projects.filter(item => item !== validProject)
       if (!entry.projects.length) {
         const remaining = list.filter(item => item !== entry)
         if (remaining.length) library.starredProjects = remaining
@@ -375,7 +403,7 @@ export class BigQueryConnectionStore {
       }
       return true
     }, changed => !changed)
-    return BigQueryConnectionStore.starredView(changed.library)
+    return BigQueryConnectionStore.starredView(changed.library, allowedPrincipals)
   }
 
   /** Bulk-adds starred projects for a verified principal (used when migrating legacy workspace `extraProjects`). */
@@ -385,40 +413,77 @@ export class BigQueryConnectionStore {
     return BigQueryConnectionStore.starredView(changed.library)
   }
 
-  /** Records legacy `extraProjects` whose principal was not yet known, to be claimed on the next BigQuery connect. */
-  async addMigratedProjects(projects: readonly string[]): Promise<void> {
-    const valid = projects.filter(project => bigQueryProjectSchema.safeParse(project).success)
+  /** Records legacy `extraProjects` for an unpinned pre-upgrade session target, keyed by `targetId` so only that target claims them on reconnect. */
+  async addMigratedTargetProjects(targetId: string, projects: readonly string[]): Promise<void> {
+    const valid: string[] = []
+    for (const project of projects) if (bigQueryProjectSchema.safeParse(project).success && !valid.includes(project) && valid.length < bigQueryLibraryLimits.legacyExtraProjects) valid.push(project)
     if (!valid.length) return
     await this.change(library => {
-      const current = library.migratedProjects ?? []
-      let changed = false
-      const next = [...current]
-      for (const project of valid) {
-        if (next.includes(project)) continue
-        if (next.length >= bigQueryLibraryLimits.starredPerPrincipal) break
-        next.push(project)
-        changed = true
+      const list = library.migratedTargets ?? []
+      const existing = list.find(entry => entry.targetId === targetId)
+      if (existing) {
+        let changed = false
+        for (const project of valid) {
+          if (existing.projects.includes(project)) continue
+          if (existing.projects.length >= bigQueryLibraryLimits.legacyExtraProjects) break
+          existing.projects.push(project)
+          changed = true
+        }
+        return changed
       }
-      if (changed) library.migratedProjects = next
-      return changed
+      if (list.length >= bigQueryLibraryLimits.migratedTargets) return false
+      library.migratedTargets = [...list, { targetId, projects: valid }]
+      return true
     }, changed => !changed)
   }
 
-  /** Claims any pending `migratedProjects` into `principal`'s `starredProjects` on BigQuery connect (never for emulator anonymous pins, keeping any cap overflow in `migratedProjects`). */
-  async claimMigratedProjects(principal: string): Promise<{ claimed: readonly string[]; view: BigQueryStarredProjectsView }> {
+  /**
+   * Claims pending legacy `migratedProjects` belonging ONLY to the originating profile (`profileId` or matching connection
+   * options) and/or originating session target (`targetId`) into `principal`'s `starredProjects` (never across accounts,
+   * never for emulator anonymous pins, keeping any cap overflow on the originating entry).
+   */
+  async claimMigratedProjects(
+    principal: string,
+    match: { readonly profileId?: string; readonly options?: BigQueryConnectionOptions; readonly targetId?: string }
+  ): Promise<{ claimed: readonly string[]; view: BigQueryStarredProjectsView }> {
     const validPrincipal = bigQueryStarredPrincipalSchema.parse(principal)
     if (validPrincipal.startsWith('bigquery:anonymous:')) {
-      const { library } = await this.load()
+      const { library } = await this.readSerialized()
       return { claimed: [], view: BigQueryConnectionStore.starredView(library) }
     }
+    const normalizedKey = match.options ? keyOf(stored(match.options)) : undefined
     const changed = await this.change(library => {
-      const pending = library.migratedProjects
-      if (!pending?.length) return { changed: false, claimed: [] as string[] }
-      const merged = mergeStarred(library, validPrincipal, pending)
-      if (merged.remaining.length) library.migratedProjects = merged.remaining
-      else delete library.migratedProjects
-      const listChanged = merged.remaining.length !== pending.length
-      return { changed: merged.changed || listChanged, claimed: merged.claimed }
+      let anyChanged = false
+      const claimed: string[] = []
+      const matchedProfiles = match.profileId
+        ? library.profiles.filter(profile => profile.id === match.profileId && !!profile.migratedProjects?.length)
+        : normalizedKey
+          ? library.profiles.filter(profile => keyOf(profile.options) === normalizedKey && !!profile.migratedProjects?.length)
+          : []
+      for (const profile of matchedProfiles) {
+        const pending = profile.migratedProjects!
+        const merged = mergeStarred(library, validPrincipal, pending)
+        if (merged.remaining.length) profile.migratedProjects = merged.remaining
+        else delete profile.migratedProjects
+        if (merged.changed || merged.remaining.length !== pending.length) anyChanged = true
+        for (const project of merged.claimed) if (!claimed.includes(project)) claimed.push(project)
+      }
+      if (match.targetId && library.migratedTargets?.length) {
+        const targetEntry = library.migratedTargets.find(entry => entry.targetId === match.targetId)
+        if (targetEntry) {
+          const pending = targetEntry.projects
+          const merged = mergeStarred(library, validPrincipal, pending)
+          if (merged.remaining.length) targetEntry.projects = merged.remaining
+          else {
+            const remaining = library.migratedTargets.filter(entry => entry !== targetEntry)
+            if (remaining.length) library.migratedTargets = remaining
+            else delete library.migratedTargets
+          }
+          if (merged.changed || merged.remaining.length !== pending.length) anyChanged = true
+          for (const project of merged.claimed) if (!claimed.includes(project)) claimed.push(project)
+        }
+      }
+      return { changed: anyChanged, claimed }
     }, result => !result.changed)
     return { claimed: changed.value.claimed, view: BigQueryConnectionStore.starredView(changed.library) }
   }

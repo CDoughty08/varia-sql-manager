@@ -4,7 +4,7 @@ import { IndexCompletionService } from '../languages/IndexCompletionService'
 import { SqlDiagnosticsService } from '../languages/SqlDiagnosticsService'
 import { BigQueryCostService, costOptOut } from '../services/bigquery-cost'
 import { CostPromptService } from '../services/bigquery-cost-prompt'
-import { BigQueryStarredService, referencedBigQueryProjects } from '../services/bigquery-starred'
+import { BigQueryStarredService, bindBigQueryExplorerSync } from '../services/bigquery-starred'
 import { languagesContribution } from '../contributions/languages'
 import { EditorPeekService } from '../languages/EditorPeekService'
 import { indexDefinitionOpener } from '../languages/bigquery-definition'
@@ -14,7 +14,6 @@ import { toPlatform, type Platform } from '../../../shared/commands/keybindings'
 import { platformLineEnding } from '../../../shared/files/encoding'
 import { blockPrimaryPaste } from './primary-selection'
 import { DocumentService, settingsDocumentOptions, welcomeQueryText } from '../services/documents'
-import { isQueryDocument } from '../documents'
 import { QueryService } from '../services/queries'
 import { ConnectionService } from '../services/connections'
 import { ConnectionTargetService } from '../services/connection-targets'
@@ -383,10 +382,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   if (api.testMode) Object.assign(window, { __variaMotion: { refresh: () => reducedMotion.refresh() } })
   const bigQueryStarred = new BigQueryStarredService({ api })
   let onBigQueryStarredLoaded: (() => void) | undefined
-  const loadBigQueryStarred = () => {
-    void bigQueryStarred.load().then(() => { if (!disposed) onBigQueryStarredLoaded?.() }, onUnexpectedError)
+  const loadBigQueryStarred = (connectionId: string, principal: string) => {
+    void bigQueryStarred.load(connectionId, principal).then(() => { if (!disposed) onBigQueryStarredLoaded?.() }, onUnexpectedError)
   }
-  loadBigQueryStarred()
   const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame, groupBySchema, targets: connectionTargets, windowsClient: platform === 'win32', bigQueryStarred }), databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
   const notifications = new NotificationService()
@@ -497,44 +495,17 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // A tab holding BigQuery jobs it does not follow re-attaches once its connection is live (docs/bigquery.md, Re-attaching to jobs).
   let reattachQueued = false
   const reattachSoon = () => { if (reattachQueued) return; reattachQueued = true; queueMicrotask(() => { reattachQueued = false; queries.reattach() }) }
-  // Sync open BigQuery query tabs' explicitly referenced projects into Object Explorer's session projects on restore/open/connect,
-  // and reload starred projects once a BigQuery principal connects so legacy migrated projects claimed by main appear immediately.
-  const seenBigQueryPrincipals = new Set<string>()
-  const seenBigQueryTabConnections = new Map<string, string>()
-  const scanBigQueryTab = (docId: string, connectionId: string) => {
-    const text = documents.getModel(docId)?.getValue()
-    if (!text) return
-    seenBigQueryTabConnections.set(docId, connectionId)
-    const referenced = referencedBigQueryProjects(text)
-    if (referenced.length) explorer.syncBigQueryReferencedProjects(connectionId, referenced)
-  }
-  const syncBigQueryExplorerProjects = () => {
-    for (const connection of connections.liveBigQuery()) {
-      const principal = connection.authentication?.principal.provider === 'bigquery' ? connection.authentication.principal.principal : connection.principalId
-      if (principal?.startsWith('bigquery:') && !seenBigQueryPrincipals.has(principal)) {
-        seenBigQueryPrincipals.add(principal)
-        loadBigQueryStarred()
-      }
-    }
-    const openIds = new Set<string>()
-    for (const doc of documents.getSnapshot().documents) {
-      openIds.add(doc.id)
-      const connectionId = doc.connectionId
-      if (!isQueryDocument(doc) || !connectionId || !connections.isLiveBigQuery(connectionId)) continue
-      if (seenBigQueryTabConnections.get(doc.id) === connectionId) continue
-      scanBigQueryTab(doc.id, connectionId)
-    }
-    for (const id of seenBigQueryTabConnections.keys()) if (!openIds.has(id)) seenBigQueryTabConnections.delete(id)
-  }
-  const queryStartedBigQuerySync = events.subscribe(event => {
-    if (event.type !== 'query.started') return
-    const doc = documents.get(event.tabId)
-    if (doc && isQueryDocument(doc) && doc.connectionId && connections.isLiveBigQuery(doc.connectionId)) scanBigQueryTab(doc.id, doc.connectionId)
+  // Sync open BigQuery query tabs' explicitly referenced projects into Object Explorer's session projects on restore/open/connect
+  // and while editing (debounced), and load starred projects bound to each verified live BigQuery connection so legacy migrated
+  // projects claimed by main appear immediately without exposing other accounts.
+  const bigQueryExplorerSync = bindBigQueryExplorerSync({
+    connections, documents, events, explorer,
+    loadStarred: (connectionId, principalId) => { loadBigQueryStarred(connectionId, principalId) }
   })
   const reattachSubscriptions = [
-    connections.subscribe(() => { reattachSoon(); syncBigQueryExplorerProjects() }),
-    documents.subscribe(() => { reattachSoon(); syncBigQueryExplorerProjects() }),
-    () => queryStartedBigQuerySync.dispose()
+    connections.subscribe(reattachSoon),
+    documents.subscribe(reattachSoon),
+    () => bigQueryExplorerSync.dispose()
   ]
   const resultSelection = new ResultSelectionService(results)
   const targets = new TargetService(documents, queries, connections, files, connectionTargets, (connectionId, dataset) => databaseList.get(connectionId).find(entry => entry.name === dataset)?.location)

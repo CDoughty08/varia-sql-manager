@@ -197,7 +197,7 @@ export function explorerContribution({ commands, documents, connections, explore
             }
           }
           const starAndRefresh = async (projectId: string) => {
-            const result = await bigQueryStarred.setStarred(principal, projectId, true)
+            const result = await bigQueryStarred.setStarred(connection.id, principal, projectId, true)
             if (!result.ok) commands.reportError(result.error)
             else refreshPrincipalProject(projectId)
           }
@@ -326,7 +326,7 @@ export function explorerContribution({ commands, documents, connections, explore
           if (explorer.isBigQueryProjectBilling(node.connectionId, project)) return
           if (!principal) { commands.reportError('The BigQuery account could not be verified.'); return }
           if (!wantStarred) explorer.removeBigQuerySessionProject(node.connectionId, project)
-          const result = await bigQueryStarred.setStarred(principal, project, wantStarred)
+          const result = await bigQueryStarred.setStarred(node.connectionId, principal, project, wantStarred)
           if (!result.ok) commands.reportError(result.error)
           else if (wantStarred && objectSearch?.refreshBigQuery) {
             for (const candidate of connections.liveBigQuery()) {

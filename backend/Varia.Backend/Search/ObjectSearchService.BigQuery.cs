@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using System.Threading.Channels;
 using Varia.Backend.BigQuery;
 
 namespace Varia.Backend.Search;
@@ -93,7 +94,8 @@ internal sealed partial class ObjectSearchService
                 .. state.DiscoveredProjects,
                 .. databases.Where(read => read.Dataset is not null).Select(read => read.Database).Order(StringComparer.Ordinal)
             ];
-            return new(billing, others, databases, state.NamesOnly, state.Skipped.ToList(), state.Building, state.Built, budget, Changed, [.. state.PartialProjects]);
+            return new(billing, others, databases, state.NamesOnly, state.Skipped.ToList(), state.Building, state.Built, budget, Changed,
+                [.. state.PartialProjects], new Dictionary<string, ObjectIndexSkip>(state.ProjectListingSkips, StringComparer.Ordinal));
         }
     }
 
@@ -187,6 +189,19 @@ internal sealed partial class ObjectSearchService
             for (var at = 0; at < kept.Count; at++)
                 state.Skipped.Add(kept[at] is { Project: "", Database: "" } ? SkipList.Server : CarriedSkipOffset + at, kept[at]);
         }
+        long CurrentStaleMark()
+        {
+            lock (state.Gate) return state.StaleMarks;
+        }
+        void SetProjectListingSkip(string project, ObjectIndexSkip? skip)
+        {
+            lock (state.Gate)
+            {
+                if (!Current()) return;
+                if (skip is not null) state.ProjectListingSkips[project] = skip;
+                else state.ProjectListingSkips.Remove(project);
+            }
+        }
         // Records the dataset's mark as its read begins: a marked dataset is read whole, even when marked after this build began.
         bool Seen((string, string) target)
         {
@@ -197,12 +212,13 @@ internal sealed partial class ObjectSearchService
             lock (state.Gate)
                 if (state.Stale.TryGetValue(target, out var mark) && mark == seen.GetValueOrDefault(target)) state.Stale.Remove(target);
         }
-        void PruneProjectStale(string project, HashSet<string> keptDatasets)
+        void PruneProjectStale(string project, HashSet<string> keptDatasets, long beforeListing)
         {
             lock (state.Gate)
             {
                 if (!Current()) return;
-                foreach (var gone in state.Stale.Keys.Where(key => key.Project == project && !keptDatasets.Contains(key.Dataset)).ToList())
+                // Only prune stale marks that existed before the dataset listing began; DDL arriving mid-build stays marked.
+                foreach (var gone in state.Stale.Where(pair => pair.Key.Project == project && !keptDatasets.Contains(pair.Key.Dataset) && pair.Value <= beforeListing).Select(pair => pair.Key).ToList())
                 {
                     state.Stale.Remove(gone);
                     stale.Remove(gone);
@@ -225,6 +241,8 @@ internal sealed partial class ObjectSearchService
                     state.StaleProjects.Remove(gone);
                 state.DiscoveredProjects = [.. state.DiscoveredProjects.Where(allowed.Contains)];
                 state.PartialProjects.RemoveWhere(project => !allowed.Contains(project));
+                foreach (var gone in state.ProjectListingSkips.Keys.Where(project => !allowed.Contains(project)).ToList())
+                    state.ProjectListingSkips.Remove(gone);
                 if (state.NamesOnly is { Count: > 0 } currentNamesOnly)
                 {
                     var remaining = currentNamesOnly.Where(allowed.Contains).ToList();
@@ -341,8 +359,8 @@ internal sealed partial class ObjectSearchService
             }
 
             // Caller must hold state.Gate and verify Current(): when a project loses its last held dataset, drop NamesOnly
-            // and, if the project is no longer tracked anywhere else, drop any orphaned stale marks for sibling datasets.
-            void PruneEmptyProjectLocked(string project)
+            // and, if the project is no longer tracked anywhere else, drop any orphaned stale marks older than `before`.
+            void PruneEmptyProjectLocked(string project, long before)
             {
                 if (state.Index.Databases.Any(read => read.Dataset is not null && read.Database == project)) return;
                 if (state.NamesOnly is { Count: > 0 } currentNamesOnly && currentNamesOnly.Contains(project, StringComparer.Ordinal))
@@ -352,12 +370,13 @@ internal sealed partial class ObjectSearchService
                 }
                 if (project != billing && !state.StarredProjects.Contains(project, StringComparer.Ordinal) && !state.DiscoveredProjects.Contains(project, StringComparer.Ordinal))
                 {
-                    foreach (var gone in state.Stale.Keys.Where(key => key.Project == project).ToList())
+                    foreach (var gone in state.Stale.Where(pair => pair.Key.Project == project && pair.Value <= before).Select(pair => pair.Key).ToList())
                     {
                         state.Stale.Remove(gone);
                         stale.Remove(gone);
                     }
-                    state.StaleProjects.Remove(project);
+                    if (state.StaleProjects.TryGetValue(project, out var projectMark) && projectMark <= before)
+                        state.StaleProjects.Remove(project);
                 }
             }
 
@@ -365,6 +384,7 @@ internal sealed partial class ObjectSearchService
                 Func<int> tickDone, int total, CancellationToken loop, Action? onTooLarge = null, Action<string>? onChildrenLeftOut = null, Action<string>? onIncomplete = null, Action<(string, string)>? onDone = null, Action<(string, string)>? onAttempted = null)
             {
                 var (project, dataset) = target;
+                var beforeObjects = CurrentStaleMark();
                 var marked = Seen(target);
                 BigQueryListing listing;
                 try { listing = await source.ObjectsAsync(args.ConnectionId, project, dataset, loop); }
@@ -378,8 +398,10 @@ internal sealed partial class ObjectSearchService
                         {
                             if (Current())
                             {
-                                Forget(state, project, dataset);
-                                PruneEmptyProjectLocked(project);
+                                state.Index.KeepWhere(read => !(read.Database == project && read.Dataset == dataset));
+                                if (state.Stale.TryGetValue((project, dataset), out var mark) && mark <= beforeObjects)
+                                    state.Stale.Remove((project, dataset));
+                                PruneEmptyProjectLocked(project, beforeObjects);
                             }
                         }
                         onDone?.Invoke(target);
@@ -441,7 +463,7 @@ internal sealed partial class ObjectSearchService
                 Report(tickDone(), total, "names", false);
             }
 
-            void KeepProjectDatasets(string project, HashSet<string> names, bool cut, string? onlyDataset = null)
+            void KeepProjectDatasets(string project, HashSet<string> names, bool cut, long beforeListing, string? onlyDataset = null)
             {
                 stop.ThrowIfCancellationRequested();
                 lock (state.Gate)
@@ -449,16 +471,16 @@ internal sealed partial class ObjectSearchService
                     if (!Current()) throw new OperationCanceledException(stop);
                     state.Index.KeepWhere(read => read.Database != project || read.Dataset is not { } dataset || names.Contains(dataset) || cut
                         || onlyDataset is { } kept && kept != dataset);
-                    PruneEmptyProjectLocked(project);
+                    if (names.Count == 0) PruneEmptyProjectLocked(project, beforeListing);
                 }
                 if (!cut)
                 {
-                    if (onlyDataset is null) PruneProjectStale(project, names);
+                    if (onlyDataset is null) PruneProjectStale(project, names, beforeListing);
                     else if (!names.Contains(onlyDataset))
                     {
                         lock (state.Gate)
                         {
-                            if (Current())
+                            if (Current() && state.Stale.TryGetValue((project, onlyDataset), out var mark) && mark <= beforeListing)
                             {
                                 state.Stale.Remove((project, onlyDataset));
                                 stale.Remove((project, onlyDataset));
@@ -471,6 +493,15 @@ internal sealed partial class ObjectSearchService
             if (scope is not null || staleOnly)
             {
                 // Scoped refresh (any valid project: billing, starred, discovered, or session) or stale-only refresh.
+                stop.ThrowIfCancellationRequested();
+                if (args.StarredProjects is not null)
+                {
+                    lock (state.Gate)
+                    {
+                        if (!Current()) throw new OperationCanceledException(stop);
+                        state.StarredProjects = [.. starred];
+                    }
+                }
                 var targets = new List<(string Project, string Dataset)>();
                 var scopedClean = scope is { Dataset: null };
                 if (staleOnly)
@@ -482,16 +513,25 @@ internal sealed partial class ObjectSearchService
                         if (read.Dataset is not null) allowedStale.Add(read.Database);
                     foreach (var project in wholeProjects.Keys.Where(allowedStale.Contains).Order(StringComparer.Ordinal))
                     {
+                        var beforeListing = CurrentStaleMark();
                         BigQueryDatasetList list;
                         try { list = await source.DatasetsAsync(args.ConnectionId, project, stop); }
                         catch (Exception error) when (!stop.IsCancellationRequested && error is not RequestException { Code: "NOT_CONNECTED" })
                         {
-                            Skip(SkipOf(error, project, "", "bigquery.datasets.get"));
+                            var skip = SkipOf(error, project, "", "bigquery.datasets.get");
+                            Skip(skip);
+                            SetProjectListingSkip(project, skip);
                             continue;
                         }
-                        if (list.Cut) Skip(new("", "TOO_LARGE", "The project has more datasets than the index lists; it keeps the first " + (BigQueryIndexLimits.ListPages * 1000).ToString("N0", CultureInfo.InvariantCulture) + ".", Project: project));
+                        if (list.Cut)
+                        {
+                            var cutSkip = new ObjectIndexSkip("", "TOO_LARGE", "The project has more datasets than the index lists; it keeps the first " + (BigQueryIndexLimits.ListPages * 1000).ToString("N0", CultureInfo.InvariantCulture) + ".", Project: project);
+                            Skip(cutSkip);
+                            SetProjectListingSkip(project, cutSkip);
+                        }
+                        else SetProjectListingSkip(project, null);
                         var names = list.Datasets.ToHashSet(StringComparer.Ordinal);
-                        KeepProjectDatasets(project, names, list.Cut);
+                        KeepProjectDatasets(project, names, list.Cut, beforeListing);
                         Spread(project, list);
                     }
                     targets.AddRange(stale.Where(item => allowedStale.Contains(item.Project))
@@ -499,19 +539,29 @@ internal sealed partial class ObjectSearchService
                 }
                 else
                 {
+                    var beforeListing = CurrentStaleMark();
                     BigQueryDatasetList? list = null;
                     try { list = await source.DatasetsAsync(args.ConnectionId, scope!.Project, stop); }
                     catch (Exception error) when (!stop.IsCancellationRequested && error is not RequestException { Code: "NOT_CONNECTED" })
                     {
                         scopedClean = false;
-                        Skip(SkipOf(error, scope!.Project, "", "bigquery.datasets.get"));
+                        var skip = SkipOf(error, scope!.Project, "", "bigquery.datasets.get");
+                        Skip(skip);
+                        SetProjectListingSkip(scope!.Project, skip);
                     }
                     if (list is not null)
                     {
-                        if (list.Cut) { scopedClean = false; Skip(new("", "TOO_LARGE", "The project has more datasets than the index lists; it keeps the first " + (BigQueryIndexLimits.ListPages * 1000).ToString("N0", CultureInfo.InvariantCulture) + ".", Project: scope!.Project)); }
+                        if (list.Cut)
+                        {
+                            scopedClean = false;
+                            var cutSkip = new ObjectIndexSkip("", "TOO_LARGE", "The project has more datasets than the index lists; it keeps the first " + (BigQueryIndexLimits.ListPages * 1000).ToString("N0", CultureInfo.InvariantCulture) + ".", Project: scope!.Project);
+                            Skip(cutSkip);
+                            SetProjectListingSkip(scope!.Project, cutSkip);
+                        }
+                        else SetProjectListingSkip(scope!.Project, null);
                         var listed = scope!.Dataset is { } scoped ? list.Datasets.Where(name => name == scoped).ToList() : list.Datasets;
                         var names = listed.ToHashSet(StringComparer.Ordinal);
-                        KeepProjectDatasets(scope.Project, names, list.Cut, scope.Dataset);
+                        KeepProjectDatasets(scope.Project, names, list.Cut, beforeListing, scope.Dataset);
                         if (scope.Dataset is null) Spread(scope.Project, list);
                         targets.AddRange(listed.Select(name => (scope.Project, name)));
                     }
@@ -560,7 +610,7 @@ internal sealed partial class ObjectSearchService
             else
             {
                 // Full build: 3 prioritized waves.
-                var located = new Dictionary<(string, string), string>();
+                var located = new ConcurrentDictionary<(string, string), string>();
                 var bulkBudget = bulk is not null ? new BigQueryBulkBudget(bulk.BudgetBytes!.Value) : null;
                 var bulkAsked = new HashSet<(string, string)>();
                 var bulkRead = 0;
@@ -604,17 +654,26 @@ internal sealed partial class ObjectSearchService
                 // Wave 1 — Billing project (Names + Details): ready for Search Objects and IntelliSense right away.
                 var wave1Targets = new List<(string Project, string Dataset)>();
                 {
+                    var beforeListing = CurrentStaleMark();
                     BigQueryDatasetList? list = null;
                     try { list = await source.DatasetsAsync(args.ConnectionId, billing, stop); }
                     catch (Exception error) when (!stop.IsCancellationRequested && error is not RequestException { Code: "NOT_CONNECTED" })
                     {
-                        Skip(SkipOf(error, billing, "", "bigquery.datasets.get"));
+                        var skip = SkipOf(error, billing, "", "bigquery.datasets.get");
+                        Skip(skip);
+                        SetProjectListingSkip(billing, skip);
                     }
                     if (list is not null)
                     {
-                        if (list.Cut) Skip(new("", "TOO_LARGE", "The project has more datasets than the index lists; it keeps the first " + (BigQueryIndexLimits.ListPages * 1000).ToString("N0", CultureInfo.InvariantCulture) + ".", Project: billing));
+                        if (list.Cut)
+                        {
+                            var cutSkip = new ObjectIndexSkip("", "TOO_LARGE", "The project has more datasets than the index lists; it keeps the first " + (BigQueryIndexLimits.ListPages * 1000).ToString("N0", CultureInfo.InvariantCulture) + ".", Project: billing);
+                            Skip(cutSkip);
+                            SetProjectListingSkip(billing, cutSkip);
+                        }
+                        else SetProjectListingSkip(billing, null);
                         var names = list.Datasets.ToHashSet(StringComparer.Ordinal);
-                        KeepProjectDatasets(billing, names, list.Cut);
+                        KeepProjectDatasets(billing, names, list.Cut, beforeListing);
                         Spread(billing, list);
                         foreach (var name in list.Datasets)
                         {
@@ -701,135 +760,250 @@ internal sealed partial class ObjectSearchService
                     PruneProjects(allowed);
                 }
 
-                List<(string Project, bool Discovered)> wave2Projects = [.. starred.Select(project => (project, false)), .. discovered.Select(project => (project, true))];
-                var wave2DatasetResults = new (BigQueryDatasetList? List, ObjectIndexSkip? Skip)[wave2Projects.Count];
-                if (wave2Projects.Count > 0)
-                {
-                    await Parallel.ForEachAsync(Enumerable.Range(0, wave2Projects.Count),
-                        new ParallelOptions { MaxDegreeOfParallelism = BigQueryIndexLimits.Projects, CancellationToken = stop },
-                        async (index, loop) =>
-                        {
-                            var (project, isDiscovered) = wave2Projects[index];
-                            try
-                            {
-                                wave2DatasetResults[index] = (await source.DatasetsAsync(args.ConnectionId, project, loop), null);
-                            }
-                            catch (Exception error) when (!loop.IsCancellationRequested && error is not RequestException { Code: "NOT_CONNECTED" })
-                            {
-                                var skip = SkipOf(error, project, "", "bigquery.datasets.get");
-                                // Noise filtering: auto-discovered projects without BigQuery enabled or dataset access are silently skipped.
-                                if (!isDiscovered || skip.Code is not ("API_DISABLED" or "PERMISSION_DENIED" or "NOT_FOUND"))
-                                    wave2DatasetResults[index] = (null, skip);
-                            }
-                        });
-                }
-                var wave2StarredTargets = new List<(string Project, string Dataset)>();
-                var wave2DiscoveredTargets = new List<(string Project, string Dataset)>();
-                var noiseFilteredProjects = new HashSet<string>(StringComparer.Ordinal);
-                var wave2ListedProjects = new HashSet<string>(StringComparer.Ordinal);
-                var wave2ListingIncompleteProjects = new HashSet<string>(StringComparer.Ordinal);
+                // Wave 2 — Stream dataset listings directly into Pass 1 (Names), starred projects first so a slow discovered
+                // project never delays a starred project and huge orgs never accumulate all listings before the memory budget stops them.
+                var wave2ListedProjects = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
+                var wave2ListingIncompleteProjects = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
                 var wave2IncompleteProjects = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
-                var wave2CompletedTargets = new ConcurrentDictionary<(string Project, string Dataset), byte>();
-                for (var index = 0; index < wave2Projects.Count; index++)
+                var projectListedCount = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
+                var projectAttemptedCount = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
+                var projectCompletedCount = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
+                var noiseFilteredProjects = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
+                var discoveredFailedProjects = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
+                var wave3StarredPending = new ConcurrentDictionary<(string, string), (List<BigQueryEntry> Listed, int[] Read, bool Cut)>();
+                var wave3DiscoveredPending = new ConcurrentDictionary<(string, string), (List<BigQueryEntry> Listed, int[] Read, bool Cut)>();
+                var wave2NamesOnly = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
+                var wave2Total = wave1Targets.Count;
+                var listedDone = wave1ListedDone;
+                var wave2BudgetExhausted = 0;
+
+                void RecordListedDatasets(int added)
                 {
-                    var (project, isDiscovered) = wave2Projects[index];
-                    var (list, skip) = wave2DatasetResults[index];
-                    if (skip is not null) { Skip(skip); wave2ListingIncompleteProjects.Add(project); wave2IncompleteProjects[project] = 0; continue; }
-                    if (list is null)
-                    {
-                        if (isDiscovered) noiseFilteredProjects.Add(project);
-                        continue;
-                    }
-                    wave2ListedProjects.Add(project);
-                    if (list.Cut)
-                    {
-                        wave2ListingIncompleteProjects.Add(project);
-                        wave2IncompleteProjects[project] = 0;
-                        Skip(new("", "TOO_LARGE", "The project has more datasets than the index lists; it keeps the first " + (BigQueryIndexLimits.ListPages * 1000).ToString("N0", CultureInfo.InvariantCulture) + ".", Project: project));
-                    }
-                    var names = list.Datasets.ToHashSet(StringComparer.Ordinal);
-                    KeepProjectDatasets(project, names, list.Cut);
-                    Spread(project, list);
-                    var bucket = isDiscovered ? wave2DiscoveredTargets : wave2StarredTargets;
-                    foreach (var name in list.Datasets)
-                    {
-                        bucket.Add((project, name));
-                        if (list.Locations?.GetValueOrDefault(name) is { } where) located[(project, name)] = where;
-                    }
+                    if (added <= 0) return;
+                    var totalNow = Interlocked.Add(ref wave2Total, added);
+                    lock (state.Gate) if (Current()) state.Databases = totalNow;
                 }
-                // Drop any previously held datasets/stale marks of discovered projects that are now noise-filtered (inaccessible/API_DISABLED).
-                if (noiseFilteredProjects.Count > 0)
+                void DropNoiseFilteredProject(string project)
                 {
                     stop.ThrowIfCancellationRequested();
                     lock (state.Gate)
                     {
                         if (!Current()) throw new OperationCanceledException(stop);
-                        state.Index.KeepWhere(read => !noiseFilteredProjects.Contains(read.Database));
-                        foreach (var gone in state.Stale.Keys.Where(key => noiseFilteredProjects.Contains(key.Project)).ToList())
+                        state.Index.KeepWhere(read => read.Database != project);
+                        foreach (var gone in state.Stale.Keys.Where(key => key.Project == project).ToList())
                         {
                             state.Stale.Remove(gone);
                             stale.Remove(gone);
                         }
-                        foreach (var gone in noiseFilteredProjects)
+                        state.StaleProjects.Remove(project);
+                        state.PartialProjects.Remove(project);
+                        state.ProjectListingSkips.Remove(project);
+                        state.DiscoveredProjects = [.. state.DiscoveredProjects.Where(item => item != project)];
+                        if (state.NamesOnly is { Count: > 0 } currentNamesOnly && currentNamesOnly.Contains(project, StringComparer.Ordinal))
                         {
-                            state.StaleProjects.Remove(gone);
-                            state.PartialProjects.Remove(gone);
-                        }
-                        state.DiscoveredProjects = [.. state.DiscoveredProjects.Where(project => !noiseFilteredProjects.Contains(project))];
-                        if (state.NamesOnly is { Count: > 0 } currentNamesOnly)
-                        {
-                            var remaining = currentNamesOnly.Where(project => !noiseFilteredProjects.Contains(project)).ToList();
+                            var remaining = currentNamesOnly.Where(item => item != project).ToList();
                             state.NamesOnly = remaining.Count > 0 ? remaining : null;
                         }
                     }
                 }
-                var wave2Total = wave1Targets.Count + wave2StarredTargets.Count + wave2DiscoveredTargets.Count;
-                lock (state.Gate) if (Current()) { state.Phase = "names"; state.Databases = wave2Total; }
-                var wave3StarredPending = new ConcurrentDictionary<(string, string), (List<BigQueryEntry> Listed, int[] Read, bool Cut)>();
-                var wave3DiscoveredPending = new ConcurrentDictionary<(string, string), (List<BigQueryEntry> Listed, int[] Read, bool Cut)>();
-                var wave2NamesOnly = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
-                var wave2AttemptedTargets = new ConcurrentDictionary<(string Project, string Dataset), byte>();
-                var wave2BudgetExhausted = 0;
-                if (wave2StarredTargets.Count + wave2DiscoveredTargets.Count > 0)
+
+                if (starred.Count > 0 || discovered.Count > 0)
                 {
-                    var listedDone = wave1ListedDone;
-                    Report(listedDone, wave2Total, "names", true);
-                    if (wave2StarredTargets.Count > 0)
+                    lock (state.Gate) if (Current()) state.Phase = "names";
+                    Report(listedDone, Volatile.Read(ref wave2Total), "names", true);
+                }
+
+                // Wave 2a — Starred projects: stream DatasetsAsync -> ReadPass1Async before starting discovered projects.
+                if (starred.Count > 0)
+                {
+                    using var wave2StarredStop = CancellationTokenSource.CreateLinkedTokenSource(stop);
+                    var starredChannel = Channel.CreateBounded<(string Project, string Dataset)>(new BoundedChannelOptions(BigQueryIndexLimits.Datasets * 4));
+                    var starredProducer = Task.Run(async () =>
                     {
-                        await Parallel.ForEachAsync(wave2StarredTargets, new ParallelOptions { MaxDegreeOfParallelism = BigQueryIndexLimits.Datasets, CancellationToken = stop },
-                            (target, loop) => new ValueTask(ReadPass1Async(target, wave3StarredPending, () => Interlocked.Increment(ref listedDone), wave2Total, loop,
-                                onIncomplete: project => wave2IncompleteProjects[project] = 0,
-                                onDone: doneTarget => wave2CompletedTargets[doneTarget] = 0,
-                                onAttempted: attemptedTarget => wave2AttemptedTargets[attemptedTarget] = 0)));
-                    }
-                    if (wave2DiscoveredTargets.Count > 0)
-                    {
-                        using var wave2DiscoveredStop = CancellationTokenSource.CreateLinkedTokenSource(stop);
                         try
                         {
-                            await Parallel.ForEachAsync(wave2DiscoveredTargets, new ParallelOptions { MaxDegreeOfParallelism = BigQueryIndexLimits.Datasets, CancellationToken = wave2DiscoveredStop.Token },
-                                (target, loop) => Volatile.Read(ref wave2BudgetExhausted) != 0 ? ValueTask.CompletedTask
-                                    : new ValueTask(ReadPass1Async(target, wave3DiscoveredPending, () => Interlocked.Increment(ref listedDone), wave2Total, loop,
-                                        onTooLarge: () =>
-                                        {
-                                            if (Interlocked.Exchange(ref wave2BudgetExhausted, 1) == 0)
-                                            {
-                                                Skip(new("", "TOO_LARGE", "Indexing stopped early for auto-discovered projects because the index reached its " + Size + " memory limit.", Project: ""));
-                                                wave2DiscoveredStop.Cancel();
-                                            }
-                                        },
-                                        onChildrenLeftOut: project => wave2NamesOnly[project] = 0,
-                                        onIncomplete: project => wave2IncompleteProjects[project] = 0,
-                                        onDone: doneTarget => wave2CompletedTargets[doneTarget] = 0,
-                                        onAttempted: attemptedTarget => wave2AttemptedTargets[attemptedTarget] = 0)));
+                            await Parallel.ForEachAsync(starred,
+                                new ParallelOptions { MaxDegreeOfParallelism = BigQueryIndexLimits.Projects, CancellationToken = wave2StarredStop.Token },
+                                async (project, loop) =>
+                                {
+                                    var beforeListing = CurrentStaleMark();
+                                    BigQueryDatasetList list;
+                                    try { list = await source.DatasetsAsync(args.ConnectionId, project, loop); }
+                                    catch (Exception error) when (!loop.IsCancellationRequested && error is not RequestException { Code: "NOT_CONNECTED" })
+                                    {
+                                        var skip = SkipOf(error, project, "", "bigquery.datasets.get");
+                                        Skip(skip);
+                                        SetProjectListingSkip(project, skip);
+                                        wave2ListingIncompleteProjects[project] = 0;
+                                        wave2IncompleteProjects[project] = 0;
+                                        return;
+                                    }
+                                    catch (Exception error) when (loop.IsCancellationRequested && error is not RequestException { Code: "NOT_CONNECTED" })
+                                    {
+                                        throw new OperationCanceledException(loop);
+                                    }
+                                    wave2ListedProjects[project] = 0;
+                                    if (list.Cut)
+                                    {
+                                        var cutSkip = new ObjectIndexSkip("", "TOO_LARGE", "The project has more datasets than the index lists; it keeps the first " + (BigQueryIndexLimits.ListPages * 1000).ToString("N0", CultureInfo.InvariantCulture) + ".", Project: project);
+                                        Skip(cutSkip);
+                                        SetProjectListingSkip(project, cutSkip);
+                                        wave2ListingIncompleteProjects[project] = 0;
+                                        wave2IncompleteProjects[project] = 0;
+                                    }
+                                    else SetProjectListingSkip(project, null);
+                                    var names = list.Datasets.ToHashSet(StringComparer.Ordinal);
+                                    var distinctDatasets = list.Datasets.Distinct(StringComparer.Ordinal).ToList();
+                                    projectListedCount[project] = distinctDatasets.Count;
+                                    KeepProjectDatasets(project, names, list.Cut, beforeListing);
+                                    Spread(project, list);
+                                    RecordListedDatasets(distinctDatasets.Count);
+                                    foreach (var name in distinctDatasets)
+                                    {
+                                        if (list.Locations?.GetValueOrDefault(name) is { } where) located[(project, name)] = where;
+                                        await starredChannel.Writer.WriteAsync((project, name), loop);
+                                    }
+                                });
+                            starredChannel.Writer.TryComplete();
                         }
-                        catch (OperationCanceledException) when (Volatile.Read(ref wave2BudgetExhausted) == 1 && !stop.IsCancellationRequested)
+                        catch (Exception error)
                         {
-                            // Wave 2 budget early-stop: Wave 1 and already-held Wave 2 datasets stay intact.
+                            starredChannel.Writer.TryComplete(error);
+                            wave2StarredStop.Cancel();
+                            throw;
                         }
-                    }
-                    Report(listedDone, wave2Total, "names", true);
+                    }, wave2StarredStop.Token);
+                    var starredConsumers = Enumerable.Range(0, BigQueryIndexLimits.Datasets).Select(_ => Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await foreach (var target in starredChannel.Reader.ReadAllAsync(wave2StarredStop.Token))
+                            {
+                                await ReadPass1Async(target, wave3StarredPending, () => Interlocked.Increment(ref listedDone), Volatile.Read(ref wave2Total), wave2StarredStop.Token,
+                                    onIncomplete: project => wave2IncompleteProjects[project] = 0,
+                                    onDone: doneTarget => projectCompletedCount.AddOrUpdate(doneTarget.Item1, 1, (_, count) => count + 1),
+                                    onAttempted: attemptedTarget => projectAttemptedCount.AddOrUpdate(attemptedTarget.Item1, 1, (_, count) => count + 1));
+                            }
+                        }
+                        catch
+                        {
+                            wave2StarredStop.Cancel();
+                            throw;
+                        }
+                    }, wave2StarredStop.Token)).ToArray();
+                    await Task.WhenAll([starredProducer, .. starredConsumers]);
                 }
+
+                // Wave 2b — Discovered projects: bounded streaming DatasetsAsync -> ReadPass1Async so early memory-limit stops halt listing too.
+                if (discovered.Count > 0)
+                {
+                    using var wave2DiscoveredStop = CancellationTokenSource.CreateLinkedTokenSource(stop);
+                    var discoveredChannel = Channel.CreateBounded<(string Project, string Dataset)>(new BoundedChannelOptions(BigQueryIndexLimits.Datasets * 4));
+                    var discoveredProducer = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await Parallel.ForEachAsync(discovered,
+                                new ParallelOptions { MaxDegreeOfParallelism = BigQueryIndexLimits.Projects, CancellationToken = wave2DiscoveredStop.Token },
+                                async (project, loop) =>
+                                {
+                                    if (Volatile.Read(ref wave2BudgetExhausted) != 0) return;
+                                    var beforeListing = CurrentStaleMark();
+                                    BigQueryDatasetList list;
+                                    try { list = await source.DatasetsAsync(args.ConnectionId, project, loop); }
+                                    catch (Exception error) when (!loop.IsCancellationRequested && error is not RequestException { Code: "NOT_CONNECTED" })
+                                    {
+                                        var skip = SkipOf(error, project, "", "bigquery.datasets.get");
+                                        // Noise filtering: auto-discovered projects without BigQuery enabled or dataset access are silently skipped.
+                                        if (skip.Code is "API_DISABLED" or "PERMISSION_DENIED" or "NOT_FOUND")
+                                        {
+                                            noiseFilteredProjects[project] = 0;
+                                            DropNoiseFilteredProject(project);
+                                        }
+                                        else
+                                        {
+                                            Skip(skip);
+                                            SetProjectListingSkip(project, skip);
+                                            discoveredFailedProjects[project] = 0;
+                                            wave2ListingIncompleteProjects[project] = 0;
+                                            wave2IncompleteProjects[project] = 0;
+                                        }
+                                        return;
+                                    }
+                                    catch (Exception error) when (loop.IsCancellationRequested && error is not RequestException { Code: "NOT_CONNECTED" })
+                                    {
+                                        throw new OperationCanceledException(loop);
+                                    }
+                                    wave2ListedProjects[project] = 0;
+                                    if (list.Cut)
+                                    {
+                                        var cutSkip = new ObjectIndexSkip("", "TOO_LARGE", "The project has more datasets than the index lists; it keeps the first " + (BigQueryIndexLimits.ListPages * 1000).ToString("N0", CultureInfo.InvariantCulture) + ".", Project: project);
+                                        Skip(cutSkip);
+                                        SetProjectListingSkip(project, cutSkip);
+                                        wave2ListingIncompleteProjects[project] = 0;
+                                        wave2IncompleteProjects[project] = 0;
+                                    }
+                                    else SetProjectListingSkip(project, null);
+                                    var names = list.Datasets.ToHashSet(StringComparer.Ordinal);
+                                    var distinctDatasets = list.Datasets.Distinct(StringComparer.Ordinal).ToList();
+                                    projectListedCount[project] = distinctDatasets.Count;
+                                    KeepProjectDatasets(project, names, list.Cut, beforeListing);
+                                    Spread(project, list);
+                                    RecordListedDatasets(distinctDatasets.Count);
+                                    foreach (var name in distinctDatasets)
+                                    {
+                                        if (Volatile.Read(ref wave2BudgetExhausted) != 0) break;
+                                        await discoveredChannel.Writer.WriteAsync((project, name), loop);
+                                    }
+                                });
+                            discoveredChannel.Writer.TryComplete();
+                        }
+                        catch (Exception error)
+                        {
+                            discoveredChannel.Writer.TryComplete(error);
+                            if (error is not OperationCanceledException) wave2DiscoveredStop.Cancel();
+                            throw;
+                        }
+                    }, wave2DiscoveredStop.Token);
+                    var discoveredConsumers = Enumerable.Range(0, BigQueryIndexLimits.Datasets).Select(_ => Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await foreach (var target in discoveredChannel.Reader.ReadAllAsync(wave2DiscoveredStop.Token))
+                            {
+                                if (Volatile.Read(ref wave2BudgetExhausted) != 0) break;
+                                await ReadPass1Async(target, wave3DiscoveredPending, () => Interlocked.Increment(ref listedDone), Volatile.Read(ref wave2Total), wave2DiscoveredStop.Token,
+                                    onTooLarge: () =>
+                                    {
+                                        if (Interlocked.Exchange(ref wave2BudgetExhausted, 1) == 0)
+                                        {
+                                            Skip(new("", "TOO_LARGE", "Indexing stopped early for auto-discovered projects because the index reached its " + Size + " memory limit.", Project: ""));
+                                            wave2DiscoveredStop.Cancel();
+                                        }
+                                    },
+                                    onChildrenLeftOut: project => wave2NamesOnly[project] = 0,
+                                    onIncomplete: project => wave2IncompleteProjects[project] = 0,
+                                    onDone: doneTarget => projectCompletedCount.AddOrUpdate(doneTarget.Item1, 1, (_, count) => count + 1),
+                                    onAttempted: attemptedTarget => projectAttemptedCount.AddOrUpdate(attemptedTarget.Item1, 1, (_, count) => count + 1));
+                            }
+                        }
+                        catch
+                        {
+                            wave2DiscoveredStop.Cancel();
+                            throw;
+                        }
+                    }, wave2DiscoveredStop.Token)).ToArray();
+                    try
+                    {
+                        await Task.WhenAll([discoveredProducer, .. discoveredConsumers]);
+                    }
+                    catch (OperationCanceledException) when (Volatile.Read(ref wave2BudgetExhausted) == 1 && !stop.IsCancellationRequested)
+                    {
+                        // Wave 2 budget early-stop: Wave 1 and already-held Wave 2 datasets stay intact.
+                    }
+                }
+                if (starred.Count > 0 || discovered.Count > 0)
+                    Report(listedDone, Volatile.Read(ref wave2Total), "names", true);
 
                 // Commit discovered projects and PartialProjects after Wave 2: exclude noise-filtered projects and truly budget-cut projects.
                 {
@@ -838,45 +1012,41 @@ internal sealed partial class ObjectSearchService
                     var budgetStopped = Volatile.Read(ref wave2BudgetExhausted) != 0;
                     var nextPartial = new HashSet<string>(StringComparer.Ordinal);
                     List<string>? finalDiscovered = null;
-                    var budgetExcluded = new HashSet<string>(StringComparer.Ordinal);
                     if (allProjects && discoverySucceeded)
                     {
                         finalDiscovered = new List<string>(discovered.Count);
-                        for (var index = 0; index < wave2Projects.Count; index++)
+                        foreach (var project in discovered)
                         {
-                            var (project, isDiscovered) = wave2Projects[index];
-                            if (!isDiscovered) continue;
-                            var (list, skip) = wave2DatasetResults[index];
-                            if (list is null && skip is null) continue; // noise-filtered
-                            if (budgetStopped && list is { Datasets.Count: > 0 } && !heldProjects.Contains(project)
-                                && !list.Datasets.Any(ds => wave2AttemptedTargets.ContainsKey((project, ds))))
+                            if (noiseFilteredProjects.ContainsKey(project)) continue;
+                            if (discoveredFailedProjects.ContainsKey(project))
                             {
-                                budgetExcluded.Add(project);
+                                finalDiscovered.Add(project);
                                 continue;
                             }
+                            if (!projectListedCount.TryGetValue(project, out var listedCount))
+                            {
+                                // Listing never completed (budget early-stop cancelled remaining projects): keep only if datasets are already held.
+                                if (heldProjects.Contains(project))
+                                {
+                                    finalDiscovered.Add(project);
+                                    nextPartial.Add(project);
+                                }
+                                continue;
+                            }
+                            var attemptedCount = projectAttemptedCount.GetValueOrDefault(project);
+                            if (budgetStopped && listedCount > 0 && !heldProjects.Contains(project) && attemptedCount == 0)
+                                continue;
                             finalDiscovered.Add(project);
+                            if (budgetStopped && attemptedCount < listedCount)
+                                nextPartial.Add(project);
                         }
-                        if (budgetStopped)
-                        {
-                            foreach (var target in wave2DiscoveredTargets)
-                                if (!wave2AttemptedTargets.ContainsKey(target) && !budgetExcluded.Contains(target.Project))
-                                    nextPartial.Add(target.Project);
-                        }
-                    }
-                    var unattemptedWave2 = new HashSet<string>(StringComparer.Ordinal);
-                    if (priorPartialProjects.Count > 0)
-                    {
-                        foreach (var target in wave2StarredTargets)
-                            if (!wave2AttemptedTargets.ContainsKey(target)) unattemptedWave2.Add(target.Project);
-                        foreach (var target in wave2DiscoveredTargets)
-                            if (!wave2AttemptedTargets.ContainsKey(target)) unattemptedWave2.Add(target.Project);
                     }
                     lock (state.Gate)
                     {
                         if (Current())
                         {
                             if (finalDiscovered is not null) state.DiscoveredProjects = finalDiscovered;
-                            // Canonical post-commit tracked set: any project outside it drops orphaned stale/partial marks.
+                            // Canonical post-commit tracked set: any project outside it drops orphaned stale/partial/listing-skip marks.
                             var tracked = new HashSet<string>(StringComparer.Ordinal) { billing };
                             foreach (var project in state.StarredProjects) tracked.Add(project);
                             foreach (var project in state.DiscoveredProjects) tracked.Add(project);
@@ -885,7 +1055,8 @@ internal sealed partial class ObjectSearchService
                             foreach (var prior in priorPartialProjects)
                             {
                                 if (prior == billing || !tracked.Contains(prior)) continue;
-                                if (!wave2ListedProjects.Contains(prior) || wave2ListingIncompleteProjects.Contains(prior) || unattemptedWave2.Contains(prior))
+                                var unattempted = projectListedCount.TryGetValue(prior, out var listedCount) && projectAttemptedCount.GetValueOrDefault(prior) < listedCount;
+                                if (!wave2ListedProjects.ContainsKey(prior) || wave2ListingIncompleteProjects.ContainsKey(prior) || unattempted)
                                     nextPartial.Add(prior);
                             }
                             state.PartialProjects = nextPartial;
@@ -896,6 +1067,8 @@ internal sealed partial class ObjectSearchService
                             }
                             foreach (var gone in state.StaleProjects.Keys.Where(project => !tracked.Contains(project)).ToList())
                                 state.StaleProjects.Remove(gone);
+                            foreach (var gone in state.ProjectListingSkips.Keys.Where(project => !tracked.Contains(project)).ToList())
+                                state.ProjectListingSkips.Remove(gone);
                         }
                     }
                 }
@@ -964,15 +1137,11 @@ internal sealed partial class ObjectSearchService
                 if (priorNamesOnly.Count > 0)
                 {
                     var heldNow = state.Index.Databases.Where(read => read.Dataset is not null).Select(read => read.Database).ToHashSet(StringComparer.Ordinal);
-                    var incompleteTargets = new HashSet<string>(StringComparer.Ordinal);
-                    foreach (var target in wave2StarredTargets)
-                        if (!wave2CompletedTargets.ContainsKey(target)) incompleteTargets.Add(target.Project);
-                    foreach (var target in wave2DiscoveredTargets)
-                        if (!wave2CompletedTargets.ContainsKey(target)) incompleteTargets.Add(target.Project);
                     foreach (var prior in priorNamesOnly)
                     {
                         if (prior == billing || !heldNow.Contains(prior)) continue;
-                        if (!wave2ListedProjects.Contains(prior) || wave2IncompleteProjects.ContainsKey(prior) || incompleteTargets.Contains(prior))
+                        var incomplete = projectListedCount.TryGetValue(prior, out var listedCount) && projectCompletedCount.GetValueOrDefault(prior) < listedCount;
+                        if (!wave2ListedProjects.ContainsKey(prior) || wave2IncompleteProjects.ContainsKey(prior) || incomplete)
                             namesOnly.Add(prior);
                     }
                 }
@@ -1041,11 +1210,5 @@ internal sealed partial class ObjectSearchService
         return new(dataset, "TOO_LARGE", old is not null
             ? "The dataset's updated details would take the index past its " + Size + " memory limit; earlier names were kept."
             : "The dataset was not indexed: it would take the index past its " + Size + " memory limit.", Project: project);
-    }
-
-    private static void Forget(State state, string project, string dataset)
-    {
-        state.Index.KeepWhere(read => !(read.Database == project && read.Dataset == dataset));
-        lock (state.Gate) state.Stale.Remove((project, dataset));
     }
 }

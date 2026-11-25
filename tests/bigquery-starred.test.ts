@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { BigQueryStarredProjectsView } from '../src/shared/bigquery-connections'
 import type { ApiResult, VariaApi } from '../src/shared/contracts'
-import { BigQueryStarredService, bigQueryReferenceScanLimits, referencedBigQueryProjects } from '../src/renderer/src/services/bigquery-starred'
+import { BigQueryStarredService, bigQueryReferenceScanLimits, bindBigQueryExplorerSync, referencedBigQueryProjects } from '../src/renderer/src/services/bigquery-starred'
 
 const ada = 'bigquery:user:ada@example.com'
 const grace = 'bigquery:user:grace@example.com'
+const connAda = '00000000-0000-4000-8000-000000000001'
+const connGrace = '00000000-0000-4000-8000-000000000002'
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -13,9 +15,14 @@ function deferred<T>() {
 }
 
 describe('BigQueryStarredService', () => {
-  it('loads starred projects per principal and notifies subscribers', async () => {
+  it('loads starred projects per connection/principal, tracks per-principal load state, and notifies subscribers', async () => {
     const api: Pick<VariaApi, 'loadBigQueryStarredProjects' | 'setBigQueryProjectStar'> = {
-      loadBigQueryStarredProjects: vi.fn(async () => ({ ok: true as const, value: { byPrincipal: { [ada]: ['varia-beta', 'bigquery-public-data'] } } })),
+      loadBigQueryStarredProjects: vi.fn(async input => {
+        const byPrincipal: Record<string, readonly string[]> = input?.connectionId === connGrace
+          ? { [grace]: ['varia-gamma'] }
+          : { [ada]: ['varia-beta', 'bigquery-public-data'] }
+        return { ok: true as const, value: { byPrincipal } }
+      }),
       setBigQueryProjectStar: vi.fn()
     }
     const service = new BigQueryStarredService({ api })
@@ -24,27 +31,40 @@ describe('BigQueryStarredService', () => {
     expect(service.starredFor(ada)).toEqual([])
     expect(service.starredFor(undefined)).toEqual([])
     expect(service.isStarred(ada, 'varia-beta')).toBe(false)
-    await service.load()
+    expect(service.isLoadedFor(ada)).toBe(false)
+    await service.load(connAda, ada)
+    expect(api.loadBigQueryStarredProjects).toHaveBeenCalledWith({ connectionId: connAda })
+    expect(service.isLoadedFor(ada)).toBe(true)
+    expect(service.isLoadedFor(grace)).toBe(false)
     expect(service.starredFor(ada)).toEqual(['varia-beta', 'bigquery-public-data'])
     expect(service.isStarred(ada, 'varia-beta')).toBe(true)
+    expect(service.isConfirmedStarred(ada, 'varia-beta')).toBe(true)
     expect(service.isStarred(grace, 'varia-beta')).toBe(false)
-    expect(listener).toHaveBeenCalledTimes(1)
+    // Loading a second connection merges its principal without erasing the first principal.
+    await service.load(connGrace, grace)
+    expect(service.starredFor(ada)).toEqual(['varia-beta', 'bigquery-public-data'])
+    expect(service.starredFor(grace)).toEqual(['varia-gamma'])
+    expect(service.isLoadedFor(grace)).toBe(true)
+    expect(listener).toHaveBeenCalledTimes(2)
     stop()
     service.dispose()
   })
 
-  it('applies optimistic updates on setStarred and rolls back on persistence failure', async () => {
+  it('applies optimistic updates on setStarred (distinguishing confirmed vs pending) and rolls back on persistence failure', async () => {
     const save = deferred<ApiResult<BigQueryStarredProjectsView>>()
     const api: Pick<VariaApi, 'loadBigQueryStarredProjects' | 'setBigQueryProjectStar'> = {
       loadBigQueryStarredProjects: vi.fn(async () => ({ ok: true as const, value: { byPrincipal: { [ada]: ['varia-beta'] } } })),
       setBigQueryProjectStar: vi.fn(() => save.promise)
     }
     const service = new BigQueryStarredService({ api })
-    await service.load()
-    const pending = service.setStarred(ada, 'bigquery-public-data', true)
-    // Optimistically visible immediately before IPC settles.
+    await service.load(connAda, ada)
+    const pending = service.setStarred(connAda, ada, 'bigquery-public-data', true)
+    expect(api.setBigQueryProjectStar).toHaveBeenCalledWith({ connectionId: connAda, project: 'bigquery-public-data', starred: true })
+    // Optimistically visible immediately before IPC settles, but not yet confirmed persisted.
     expect(service.starredFor(ada)).toEqual(['varia-beta', 'bigquery-public-data'])
     expect(service.isStarred(ada, 'bigquery-public-data')).toBe(true)
+    expect(service.isConfirmedStarred(ada, 'bigquery-public-data')).toBe(false)
+    expect(service.isConfirmedStarred(ada, 'varia-beta')).toBe(true)
     save.resolve({ ok: false, error: 'Disk full.' })
     expect(await pending).toEqual({ ok: false, error: 'Disk full.' })
     // Rolled back on error.
@@ -53,9 +73,10 @@ describe('BigQueryStarredService', () => {
 
     // Successful unstar removes the project and reconciles with main's authoritative snapshot.
     api.setBigQueryProjectStar = vi.fn(async () => ({ ok: true as const, value: { byPrincipal: {} } }))
-    const unstar = await service.setStarred(ada, 'varia-beta', false)
+    const unstar = await service.setStarred(connAda, ada, 'varia-beta', false)
     expect(unstar).toEqual({ ok: true, value: { byPrincipal: {} } })
     expect(service.starredFor(ada)).toEqual([])
+    expect(service.isConfirmedStarred(ada, 'varia-beta')).toBe(false)
     service.dispose()
   })
 
@@ -66,11 +87,12 @@ describe('BigQueryStarredService', () => {
       setBigQueryProjectStar: vi.fn(async () => ({ ok: true as const, value: { byPrincipal: { [ada]: ['bigquery-public-data'] } } }))
     }
     const service = new BigQueryStarredService({ api })
-    const loading = service.load()
-    await service.setStarred(ada, 'bigquery-public-data', true)
+    const loading = service.load(connAda, ada)
+    await service.setStarred(connAda, ada, 'bigquery-public-data', true)
     initialLoad.resolve({ ok: true, value: { byPrincipal: {} } })
     await loading
     expect(service.starredFor(ada)).toEqual(['bigquery-public-data'])
+    expect(service.isConfirmedStarred(ada, 'bigquery-public-data')).toBe(true)
     service.dispose()
   })
   it('does not leave ghost starred projects when concurrent mutations both fail and tolerates IPC rejections', async () => {
@@ -82,13 +104,13 @@ describe('BigQueryStarredService', () => {
       setBigQueryProjectStar: vi.fn(() => (++call === 1 ? first.promise : second.promise))
     }
     const service = new BigQueryStarredService({ api })
-    await service.load()
-    expect(service.loaded).toBe(true)
+    await service.load(connAda, ada)
+    expect(service.isLoadedFor(ada)).toBe(true)
     expect(service.starredFor('toString')).toEqual([])
     expect(service.isStarred('toString', 'x')).toBe(false)
 
-    const p1 = service.setStarred(ada, 'proj-alpha', true)
-    const p2 = service.setStarred(ada, 'proj-beta', true)
+    const p1 = service.setStarred(connAda, ada, 'proj-alpha', true)
+    const p2 = service.setStarred(connAda, ada, 'proj-beta', true)
     expect(service.starredFor(ada)).toEqual(['proj-alpha', 'proj-beta'])
     first.resolve({ ok: false, error: 'Fail 1' })
     second.resolve({ ok: false, error: 'Fail 2' })
@@ -108,9 +130,9 @@ describe('BigQueryStarredService', () => {
       setBigQueryProjectStar: vi.fn(() => (++call === 1 ? first.promise : second.promise))
     }
     const service = new BigQueryStarredService({ api })
-    await service.load()
-    const p1 = service.setStarred(ada, 'proj-alpha', true)
-    const p2 = service.setStarred(ada, 'proj-beta', true)
+    await service.load(connAda, ada)
+    const p1 = service.setStarred(connAda, ada, 'proj-alpha', true)
+    const p2 = service.setStarred(connAda, ada, 'proj-beta', true)
     // Newer request settles first with both projects; older response arrives late with only proj-alpha.
     second.resolve({ ok: true, value: { byPrincipal: { [ada]: ['proj-alpha', 'proj-beta'] } } })
     await p2
@@ -132,16 +154,16 @@ describe('BigQueryStarredService', () => {
     const service = new BigQueryStarredService({ api })
     const listener = vi.fn()
     service.subscribe(listener)
-    const l1 = service.load()
-    const l2 = service.load()
-    // First load resolves while second is still in flight: loaded must remain false until l2 settles.
+    const l1 = service.load(connAda, ada)
+    const l2 = service.load(connAda, ada)
+    // First load resolves while second is still in flight: isLoadedFor must remain false until l2 settles.
     first.resolve({ ok: true, value: { byPrincipal: { [ada]: ['proj-old'] } } })
     await l1
-    expect(service.loaded).toBe(false)
-    // Second load fails: loaded transitions to true and subscribers are notified so deferred Explorer restores release.
+    expect(service.isLoadedFor(ada)).toBe(false)
+    // Second load fails: isLoadedFor transitions to true and subscribers are notified so deferred Explorer restores release.
     second.resolve({ ok: false, error: 'Failed to read' })
     await l2
-    expect(service.loaded).toBe(true)
+    expect(service.isLoadedFor(ada)).toBe(true)
     expect(listener).toHaveBeenCalledTimes(2)
     service.dispose()
   })
@@ -246,5 +268,93 @@ describe('referencedBigQueryProjects', () => {
     const padding = ' '.repeat(bigQueryReferenceScanLimits.maxChars)
     expect(referencedBigQueryProjects(`${padding}SELECT * FROM \`beyond-cap-proj.ds.t\`;`)).toEqual([])
     expect(referencedBigQueryProjects('SELECT * FROM `Invalid_Project.ds.t` JOIN `short.ds.t`;')).toEqual([])
+  })
+
+  it('excludes earlier FROM table aliases used in implicit UNNEST paths from referenced projects', () => {
+    const sql = [
+      'SELECT item',
+      'FROM `billing-proj.sales.orders` AS orders, orders.payload.items AS item;',
+      'SELECT i FROM `billing-proj-2.sales.orders`, orders.payload.items AS i;',
+      'SELECT t FROM `billing-proj-3.sales.orders` order_rows, UNNEST(order_rows.items) AS line_items, line_items.nested.tags AS t;',
+      'SELECT * FROM `billing-proj-4.sales.orders` AS orders, `real-other-proj.sales.customers` AS customers;'
+    ].join('\n')
+    expect(referencedBigQueryProjects(sql)).toEqual([
+      'billing-proj',
+      'billing-proj-2',
+      'billing-proj-3',
+      'billing-proj-4',
+      'real-other-proj'
+    ])
+  })
+})
+
+describe('bindBigQueryExplorerSync', () => {
+  it('loads starred projects per verified live connection and detects newly typed project references while editing', () => {
+    vi.useFakeTimers()
+    try {
+      const connListeners = new Set<() => void>()
+      const docListeners = new Set<() => void>()
+      const eventListeners = new Set<(event: { readonly type: string; readonly tabId?: string }) => void>()
+      let contentListeners = new Set<() => void>()
+      let sql = 'SELECT '
+      let version = 1
+      let live = true
+      const model = {
+        getValue: () => sql,
+        getAlternativeVersionId: () => version,
+        onDidChangeContent: (listener: () => void) => {
+          contentListeners.add(listener)
+          return { dispose: () => { contentListeners.delete(listener) } }
+        }
+      }
+      const doc = { id: 'tab-1', kind: 'sql', connectionId: connAda }
+      const syncBigQueryReferencedProjects = vi.fn()
+      const loadStarred = vi.fn()
+      const binding = bindBigQueryExplorerSync({
+        connections: {
+          liveBigQuery: () => live ? [{ id: connAda, principalId: ada }] : [],
+          isLiveBigQuery: id => live && id === connAda,
+          subscribe: listener => { connListeners.add(listener); return () => connListeners.delete(listener) }
+        },
+        documents: {
+          getSnapshot: () => ({ documents: [doc] }),
+          get: id => id === doc.id ? doc : undefined,
+          getModel: id => id === doc.id ? model : undefined,
+          subscribe: listener => { docListeners.add(listener); return () => docListeners.delete(listener) }
+        },
+        events: {
+          subscribe: listener => { eventListeners.add(listener); return { dispose: () => { eventListeners.delete(listener) } } }
+        },
+        explorer: { syncBigQueryReferencedProjects },
+        loadStarred,
+        debounceMs: 400
+      })
+
+      // Initial connection triggers verified per-connection starred load and initial scan of 'SELECT ' (no projects yet).
+      for (const listener of connListeners) listener()
+      expect(loadStarred).toHaveBeenCalledExactlyOnceWith(connAda, ada)
+      expect(syncBigQueryReferencedProjects).not.toHaveBeenCalled()
+
+      // Typing a 3-part reference later triggers a debounced rescan without requiring query execution.
+      sql = 'SELECT * FROM `edited-project-1.sales.orders`'
+      version = 2
+      for (const listener of contentListeners) listener()
+      vi.advanceTimersByTime(399)
+      expect(syncBigQueryReferencedProjects).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(1)
+      expect(syncBigQueryReferencedProjects).toHaveBeenCalledExactlyOnceWith(connAda, ['edited-project-1'])
+
+      // Disposing cleans up the content listener and any pending timer.
+      sql = 'SELECT * FROM `after-dispose-proj.sales.orders`'
+      version = 3
+      for (const listener of contentListeners) listener()
+      binding.dispose()
+      expect(contentListeners.size).toBe(0)
+      vi.advanceTimersByTime(500)
+      expect(syncBigQueryReferencedProjects).toHaveBeenCalledTimes(1)
+      live = false
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

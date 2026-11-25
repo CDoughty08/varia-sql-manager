@@ -740,8 +740,9 @@ both, each source only the engines its catalogue entry names (Job History's `big
 `varia:connections-pick-key-file` (main's file picker; answers an opaque reference and the file's name) and
 `varia:connections-confirm-source` (records a federation token file the user confirmed), one serves the cost prompt:
 `varia:bigquery-cost-prompt` (`{ options, costPrompt }`, strict; sets only the saved entry's cost-prompt choice and answers
-whether the entry holds it), and two serve per-principal Starred Projects: `varia:bigquery-starred-projects` and
-`varia:bigquery-star-project` (`{ principal, project, starred }`, strict). Main records each connection's provider at connect and refuses a method whose `providers` lack the connection's
+whether the entry holds it), and two serve per-principal Starred Projects: `varia:bigquery-starred-projects` (`{ connectionId? }`,
+optional strict; returns only live verified principals) and `varia:bigquery-star-project` (`{ connectionId, project, starred }`,
+strict; main resolves the verified principal from the live BigQuery handle). Main records each connection's provider at connect and refuses a method whose `providers` lack the connection's
 with `UNSUPPORTED_PROVIDER` before sending (`requestProvider`, `methodAllows`). `query.execute` serves both, refusing each engine the other's options (`optionsAllow`). `system.health`, `query.cancel`,
 `query.session.close`, `query.session.state` and every other `results.*` method name no connection and are declared for
 both engines; `SqlService.DispatchAsync` resolves their provider from the query, session or result and checks every request
