@@ -295,6 +295,15 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       void run.finally(() => { if (this.runs.get(tabId) === run) this.runs.delete(tabId) })
     }
   }
+  /** Whether the tab holds a job `reattach` would still take over on its BigQuery connection (one not tried there, not
+   *  passed over): a new run first would have its results and session replaced once that job re-attaches. */
+  holdsUnattachedJobs(tabId: string): boolean {
+    const state = this.getSnapshot()[tabId], document = this.documents.get(tabId)
+    const connection = document?.connectionId ? this.getConnection(document.connectionId) : undefined
+    if (!state?.jobs?.length || !connection || connection.providerId !== 'bigquery') return false
+    const tried = this.attachTried.get(tabId), passed = this.passedOver.get(tabId)
+    return state.jobs.some(job => !tried?.has(this.attachKey(job, connection)) && !passed?.has(job.jobId))
+  }
   /** Idle BigQuery sessions whose end failed: a notification, since their tabs may be gone. */
   failedAborts(count: number, retried = true): void { if (!this.disposed && count > 0) this.notify?.(failedAbortsText(count, retried)) }
   /** The ids of the BigQuery jobs the tab holds: its running request's, then those it holds without following. */

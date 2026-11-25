@@ -79,14 +79,14 @@ export function finishConnectionDetails(connections: ConnectionService, opened: 
 }
 
 /** Only the query whose explicit Execute opened Connect may run after the accepted connection is ready, on either engine: a
- *  BigQuery query still goes through Execute's estimate and cost prompt, so a connect never starts a job the user did not see. */
+ *  BigQuery query still goes through Execute's estimate and cost prompts, so a connect starts a job only as Execute would. */
 export async function executePendingQuery({ tabId, opened, connections, documents, targets, queries }: {
   tabId: string
   opened: OpenedConnection
   connections: Pick<ConnectionService, 'get' | 'isLive' | 'bindingRevision'>
   documents: Pick<DocumentService, 'get' | 'getSnapshot'>
   targets: Pick<TargetService, 'changeConnection'>
-  queries: Pick<QueryService, 'isRunning' | 'execute'>
+  queries: Pick<QueryService, 'isRunning' | 'execute' | 'holdsUnattachedJobs'>
 }): Promise<void> {
   const accepted = connections.get(opened.targetId ?? opened.id), waiting = documents.get(tabId)
   if (accepted?.id !== opened.id || accepted.generation !== opened.generation || !connections.isLive(opened.id)) return
@@ -101,5 +101,7 @@ export async function executePendingQuery({ tabId, opened, connections, document
   if (attached?.connectionId === opened.id && attached.targetId === opened.targetId && attached.attachWanted
     && connection?.id === opened.id && connection.generation === opened.generation && connections.isLive(opened.id)
     && connections.bindingRevision(connection) === opened.bindingRevision
-    && !documents.getSnapshot().busy && !queries.isRunning(tabId)) void queries.execute(tabId)
+    // A restored BigQuery tab whose held job has not re-attached yet only attaches: that job re-attaches next, and a run
+    // started first would have its results and session replaced by it.
+    && !documents.getSnapshot().busy && !queries.isRunning(tabId) && !queries.holdsUnattachedJobs(tabId)) void queries.execute(tabId)
 }

@@ -3,6 +3,7 @@ import type { ApiResult, ConnectionInfo, QueryResult, VariaApi } from '../src/sh
 import { attachExpiredRerun, failedAbortsText, heldAfter, jobHeldAfterFailure, jobStillRunning, QueryService, restoredJobRunning, type QueryApi, type TabJob } from '../src/renderer/src/services/queries'
 import type { ResultsService } from '../src/renderer/src/results/ResultsService'
 import { deferred, documentFixture } from './fixtures/documents'
+import { executePendingQuery } from '../src/renderer/src/services/connection-opening'
 import { defaultSettings } from '../src/shared/settings/catalog'
 import type { RecordedJobsCancel } from '../src/shared/bigquery/jobs'
 
@@ -37,6 +38,32 @@ function fixture({ connected = true }: { connected?: boolean } = {}) {
   return { ...docs, queries, queryApi: api, connection, tab, results, job: (event: Omit<JobEvent, 'type' | 'auxiliary' | 'project' | 'transaction'> & Partial<JobEvent>) => onJob?.({ type: 'query.job', project: 'example-project', auxiliary: false, transaction: 'none', ...event }), connect: () => { live = true } }
 }
 const settle = () => new Promise(resolve => { setTimeout(resolve, 0) })
+
+describe('Execute after Connect on a restored BigQuery tab', () => {
+  it('only attaches while the tab holds a job that has not re-attached, so that job is not replaced by a new run', async () => {
+    const f = fixture({ connected: false })
+    f.queries.restoreJobs(f.tab.id, [job('job_1')])
+    expect(f.queries.holdsUnattachedJobs(f.tab.id)).toBe(false)
+    f.connect()
+    expect(f.queries.holdsUnattachedJobs(f.tab.id)).toBe(true)
+    const pending = () => executePendingQuery({
+      tabId: f.tab.id, opened: { id: f.connection.id, generation: 1, bindingRevision: 1 } as never,
+      connections: { get: () => f.connection, isLive: () => true, bindingRevision: () => 1 } as never,
+      documents: { get: () => ({ kind: 'sql', connectionId: f.connection.id, attachWanted: true }), getSnapshot: () => ({ busy: false }) } as never,
+      targets: { changeConnection: vi.fn() } as never, queries: f.queries
+    })
+    await pending()
+    await settle()
+    expect(f.queryApi.execute).not.toHaveBeenCalled()
+    // Once the held job has re-attached, the next Execute after a Connect runs.
+    f.queries.reattach()
+    await settle(); await settle()
+    expect(f.queryApi.attach).toHaveBeenCalledOnce()
+    expect(f.queries.holdsUnattachedJobs(f.tab.id)).toBe(false)
+    await pending()
+    await vi.waitFor(() => expect(f.queryApi.execute).toHaveBeenCalledOnce())
+  })
+})
 
 describe('BigQuery job keys', () => {
   it("gives a BigQuery tab a job key at its first run, sends it with every run, and keeps it on the tab", async () => {

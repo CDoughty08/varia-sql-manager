@@ -150,7 +150,7 @@ describe('BigQuery connections in the workbench', () => {
       tabId: 'tab', opened: { id: id(61), targetId: id(2), generation: 1, bindingRevision: 1 } as never,
       connections: { get: () => connection, isLive: () => true, bindingRevision: () => 1 } as never,
       documents: { get: () => ({ kind: 'sql', connectionId: id(61), targetId: id(2), attachWanted: true }), getSnapshot: () => ({ busy: false }) } as never,
-      targets: { changeConnection: vi.fn() } as never, queries: { isRunning: () => false, execute } as never
+      targets: { changeConnection: vi.fn() } as never, queries: { isRunning: () => false, execute, holdsUnattachedJobs: () => false } as never
     })
     // Execute itself asks for the estimate and the cost prompt (tests/queries.test.ts, BigQuery cost gate).
     expect(execute).toHaveBeenCalledExactlyOnceWith('tab')
