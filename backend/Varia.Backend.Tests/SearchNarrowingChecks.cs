@@ -356,23 +356,28 @@ internal static class SearchNarrowingChecks
         check(planned > held && firstYield && secondYield && !holds && afterYields == held && latchStore.UsedBytes == held,
             "every refused run of a search asks again once its memo's room went back, which goes back once, its arrays let go: " + held + " " + planned + " " + afterYields + " " + latchStore.UsedBytes);
         // Runs refused together: every run told the room went back finds it back when it asks again, not only the run that
-        // gave it back (two threads at a time, many times, as the window between the two is short).
+        // gave it back (two threads at a time, many times, as the window between the two is short). A dedicated thread keeps
+        // the 2,000 barrier rounds off the ThreadPool queue so starved offline lanes cannot stall SignalAndWait.
         var early = 0;
+        Narrowing? racing = null;
         using (var start = new Barrier(2))
+        using (var done = new Barrier(2))
         {
+            void Yield()
+            {
+                start.SignalAndWait();
+                if (racing!.YieldMemo(latchSet) && latchStore.UsedBytes != held) Interlocked.Increment(ref early);
+                done.SignalAndWait();
+            }
+            var other = new Thread(() => { for (var round = 0; round < 2000; round++) Yield(); }) { IsBackground = true };
+            other.Start();
             for (var round = 0; round < 2000; round++)
             {
-                var racing = Narrowing.Plan(latchSet, null, "ab", [ResultSearcher.MatcherFor(latchSet.Columns[0], latchSet.Wires[0], "ab")], 1000)!;
-                void Yield()
-                {
-                    start.SignalAndWait();
-                    if (racing.YieldMemo(latchSet) && latchStore.UsedBytes != held) Interlocked.Increment(ref early);
-                }
-                var other = Task.Run(Yield);
+                racing = Narrowing.Plan(latchSet, null, "ab", [ResultSearcher.MatcherFor(latchSet.Columns[0], latchSet.Wires[0], "ab")], 1000)!;
                 Yield();
-                other.Wait();
                 racing.Dispose(latchSet);
             }
+            other.Join();
         }
         check(early == 0 && latchStore.UsedBytes == held, "a run told its search's memo room went back finds it back when it asks again: " + early + " early");
         latchStore.Release(latchSet.ResultId);

@@ -210,18 +210,22 @@ describe('idle waits', () => {
     expect(steps['Release build (.NET)'].endsWith(sharedCompilation())).toBe(true)
   })
   // VARIA_CHECK_SKIP=tsc used to skip nothing while the summary reported it skipped.
-  it('refuse an unknown VARIA_CHECK_SKIP name and report only the lanes left out', async () => {
-    const { parseSkip, plan, skippedNote } = await import('../scripts/check.mjs')
+  it('refuse an unknown VARIA_CHECK_SKIP name or VARIA_CHECK_SCOPE and report only the lanes left out', async () => {
+    const { parseScope, parseSkip, plan, skippedNote } = await import('../scripts/check.mjs')
     expect(parseSkip('')).toEqual([])
     expect(parseSkip(undefined)).toEqual([])
-    expect(parseSkip(' typecheck , ')).toEqual(['typecheck'])
+    expect(parseSkip(' typecheck , build ')).toEqual(['typecheck', 'build'])
     expect(() => parseSkip('tsc')).toThrow(/unknown name 'tsc'.*typecheck/)
     expect(() => parseSkip('typecheck,vitest')).toThrow(/'vitest'/)
-    expect(skippedNote(plan({ cpus: 4, skip: ['typecheck'] }), ['typecheck'])).toBe(' (skipped: typecheck, VARIA_CHECK_SKIP)')
+    expect(parseScope('')).toBe('full')
+    expect(parseScope('full')).toBe('full')
+    expect(parseScope('os')).toBe('os')
+    expect(() => parseScope('mac')).toThrow(/unknown scope 'mac'/)
+    expect(skippedNote(plan({ cpus: 4, skip: ['typecheck', 'build'] }), ['typecheck', 'build'])).toBe(' (skipped: typecheck, build, VARIA_CHECK_SKIP)')
     expect(skippedNote(plan({ cpus: 4 }), ['typecheck'])).toBe('')
     expect(skippedNote(plan({ cpus: 24 }), [])).toBe('')
     const source = readFileSync('scripts/check.mjs', 'utf8')
-    expect(source).toMatch(/parseSkip\(process\.env\.VARIA_CHECK_SKIP\)[\s\S]{0,80}process\.exit\(2\)/)
+    expect(source).toMatch(/parseSkip\(process\.env\.VARIA_CHECK_SKIP\)[\s\S]{0,160}process\.exit\(2\)/)
   })
   // A check stopped by CI's step timeout used to lose every running lane's held output: the hung suite left no trace.
   it('print what a running lane held when the check is stopped', async () => {

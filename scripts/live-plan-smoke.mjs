@@ -37,8 +37,8 @@ try {
   await expect(toggle).toHaveAttribute('aria-pressed', 'true')
   await queryBarButton(page, 'Include Client Statistics').click()
   step = 'first live sample'
-  // Bound the work independently of the SQL Server version's metadata count while retaining observable live progress.
-  const aggregate = "WITH source AS (SELECT TOP (2000) object_id FROM sys.all_objects ORDER BY object_id) SELECT SUM(CONVERT(bigint,CHECKSUM(HASHBYTES('SHA2_256',CONCAT(a.object_id,':',b.object_id))))) AS measured FROM source a CROSS JOIN source b OPTION(MAXDOP 1);"
+  // Bound the work independently of the SQL Server version's metadata count while retaining observable live progress (~7 s on CI).
+  const aggregate = "WITH source AS (SELECT TOP (950) object_id FROM sys.all_objects ORDER BY object_id) SELECT SUM(CONVERT(bigint,CHECKSUM(HASHBYTES('SHA2_256',CONCAT(a.object_id,':',b.object_id))))) AS measured FROM source a CROSS JOIN source b OPTION(MAXDOP 1);"
   await sql('SET STATISTICS XML ON; ' + aggregate)
   await expect(outputStatus(page)).toContainText(/^Executing/)
   await outputView(page, /^Execution plan/).click()

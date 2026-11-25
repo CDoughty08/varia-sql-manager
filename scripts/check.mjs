@@ -56,10 +56,11 @@ export function plan({ cpus, build = false, skip = [] }) {
   if (build) return { all: ['Release backend', 'electron-vite build', 'Prepare Electron', ...(skip.includes('sqltools') ? [] : ['Prepare SQL Tools Service'])] }
   const wide = cpus >= 8
   const typecheck = skip.includes('typecheck') ? [] : ['Type check']
+  const viteBuild = skip.includes('build') ? [] : ['electron-vite build']
   const dotnet = { gate: 'Release build (.NET)', then: wide ? { all: ['Offline .NET checks', 'vitest (Release backend)'] } : { chain: ['Offline .NET checks', 'vitest (Release backend)'] } }
   return wide
-    ? { all: [...typecheck, 'electron-vite build', 'vitest', dotnet] }
-    : { all: [{ chain: [...typecheck, 'vitest'] }, { chain: [dotnet, 'electron-vite build'] }] }
+    ? { all: [...typecheck, ...viteBuild, 'vitest', dotnet] }
+    : { all: [{ chain: [...typecheck, 'vitest'] }, { chain: [dotnet, ...viteBuild] }] }
 }
 
 /**
@@ -87,7 +88,15 @@ export function vitestWorkers(cpus) {
 const laneEnv = {}
 
 /** The lanes VARIA_CHECK_SKIP may leave out, by the name it takes. */
-export const skippable = { typecheck: 'Type check', sqltools: 'Prepare SQL Tools Service' }
+export const skippable = { typecheck: 'Type check', sqltools: 'Prepare SQL Tools Service', build: 'electron-vite build' }
+
+/** VARIA_CHECK_SCOPE: '' / 'full' runs every Vitest and offline .NET suite; 'os' runs only OS-sensitive suites on CI Windows/macOS. */
+export function parseScope(value = '') {
+  const scope = value.trim().toLowerCase()
+  if (!scope || scope === 'full') return 'full'
+  if (scope === 'os') return 'os'
+  throw new Error(`VARIA_CHECK_SCOPE: unknown scope '${value.trim()}'; expected 'full' or 'os'`)
+}
 
 /**
  * VARIA_CHECK_SKIP's entries, trimmed. Any name other than the skippable ones is refused, so a typo cannot skip nothing
@@ -154,14 +163,21 @@ const execute = node => {
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const cpus = cpuBudget()
-  let skip
-  try { skip = parseSkip(process.env.VARIA_CHECK_SKIP) } catch (error) {
+  let skip, scope
+  try {
+    skip = parseSkip(process.env.VARIA_CHECK_SKIP)
+    scope = parseScope(process.env.VARIA_CHECK_SCOPE)
+  } catch (error) {
     console.error(error.message)
     process.exit(2)
   }
   const build = process.argv.includes('--build')
   const { others } = await acquire('shared', { label: build ? 'npm run build:smoke' : 'npm run check' })
   if ((lockEnabled() || process.env.CI) && !process.env.VITEST_MAX_WORKERS) for (const [lane, workers] of Object.entries(vitestWorkers(cpus))) laneEnv[lane] = { VITEST_MAX_WORKERS: String(workers) }
+  if (!build && scope === 'os') {
+    laneEnv.vitest = { ...laneEnv.vitest, VARIA_VITEST_SCOPE: 'os' }
+    laneEnv['Offline .NET checks'] = { ...laneEnv['Offline .NET checks'], VARIA_TEST_OFFLINE_SCOPE: 'os' }
+  }
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => {
     console.log(`\nCheck stopped by ${signal}; the lanes still running held:`)
     flushRunning()
@@ -172,7 +188,8 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const results = await execute(layout)
   const failed = results.filter(result => result.code)
   const skipped = skippedNote(layout, skip)
+  const scoped = !build && scope === 'os' ? ' (scope: os, VARIA_CHECK_SCOPE)' : ''
   console.log(`
-${failed.length ? 'Check failed' : 'Check passed'} in ${((performance.now() - started) / 1000).toFixed(1)} s (${cpus} CPUs, ${cpus >= 8 ? 'every lane at once' : 'two chains'}${others ? `, beside ${others} other ${others > 1 ? 'checks' : 'check'}` : ''})${skipped}: ` + results.map(({ name, seconds, code }) => `${name} ${seconds.toFixed(1)} s${code ? ' FAILED' : ''}`).join(', '))
+${failed.length ? 'Check failed' : 'Check passed'} in ${((performance.now() - started) / 1000).toFixed(1)} s (${cpus} CPUs, ${cpus >= 8 ? 'every lane at once' : 'two chains'}${others ? `, beside ${others} other ${others > 1 ? 'checks' : 'check'}` : ''})${skipped}${scoped}: ` + results.map(({ name, seconds, code }) => `${name} ${seconds.toFixed(1)} s${code ? ' FAILED' : ''}`).join(', '))
   process.exitCode = failed.length ? 1 : 0
 }
